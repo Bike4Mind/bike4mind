@@ -458,6 +458,35 @@ describe('lifecycle', () => {
     expect(exited.pty.signals).toEqual([]);
   });
 
+  it('opens a WSL folder in its distro through wsl.exe, from the Windows home', async () => {
+    const terminals = manager({
+      platform: 'win32',
+      home: 'C:\\Users\\someone',
+      shell: { file: 'C:\\Windows\\System32\\cmd.exe', args: [] },
+      isDirectory: async () => true,
+    });
+    cwdFor.s1 = '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo';
+    const { info, pty } = await open(terminals);
+    expect(pty.file).toBe('wsl.exe');
+    expect(pty.args).toEqual(['-d', 'Ubuntu', '--cd', '/home/me/repo']);
+    expect(pty.options.cwd).toBe('C:\\Users\\someone');
+    expect(pty.options.env?.WSL_UTF8).toBe('1');
+    expect(info.cwd).toBe('\\\\wsl.localhost\\Ubuntu\\home\\me\\repo');
+  });
+
+  it('keeps the usual shell for a Windows folder', async () => {
+    const terminals = manager({
+      platform: 'win32',
+      shell: { file: 'C:\\Windows\\System32\\cmd.exe', args: [] },
+      isDirectory: async () => true,
+    });
+    cwdFor.s1 = 'C:\\repo';
+    const { pty } = await open(terminals);
+    expect(pty.file).toBe('C:\\Windows\\System32\\cmd.exe');
+    expect(pty.options.cwd).toBe('C:\\repo');
+    expect(pty.options.env?.WSL_UTF8).toBeUndefined();
+  });
+
   it('never names a signal on Windows, where node-pty refuses one', async () => {
     const terminals = manager({ platform: 'win32' });
     const { info, pty } = await open(terminals);

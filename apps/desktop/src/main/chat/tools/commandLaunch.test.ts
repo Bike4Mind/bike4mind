@@ -5,6 +5,12 @@ import { COMMAND_TAG_ENV } from './commandTree';
 
 vi.mock('./gitBash', () => ({ resolveGitBash: async () => 'C:\\Program Files\\Git\\bin\\bash.exe' }));
 vi.mock('./userPath', () => ({ resolveUserPath: async () => 'C:\\Tools' }));
+// The distro's user environment probe.
+vi.mock('node:child_process', async importOriginal => ({
+  ...(await importOriginal<typeof import('node:child_process')>()),
+  execFile: (_file: string, _args: string[], _options: unknown, callback: (e: Error | null, out: string) => void) =>
+    callback(null, '__B4M_ENV__/home/me/.nvm/bin:/usr/bin__B4M_ENV__/home/me__B4M_ENV__'),
+}));
 
 const platform = Object.getOwnPropertyDescriptor(process, 'platform');
 const onWindows = () => Object.defineProperty(process, 'platform', { value: 'win32' });
@@ -58,6 +64,30 @@ describe('launchCommand on Windows', () => {
     expect(env[COMMAND_ENV]).toBe('echo one');
     expect(env.B4M_DESKTOP_BACKGROUND).toBe('1');
     expect(env.PATH).toBe('C:\\Tools');
+  });
+});
+
+describe('launchCommand in a WSL folder', () => {
+  afterEach(() => {
+    if (platform) Object.defineProperty(process, 'platform', platform);
+  });
+
+  it("runs the distro's bash in the folder and passes only the named variables into Linux", async () => {
+    onWindows();
+    const launch = await launchCommand('pnpm test', [], [], '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo');
+    expect(launch.executable).toBe('wsl.exe');
+    expect(launch.wslDistro).toBe('Ubuntu');
+    expect(launch.args.slice(0, 2)).toEqual(['-d', 'Ubuntu']);
+    expect(launch.args.slice(-4)).toEqual(['/home/me/repo', 'bash', '-c', 'pnpm test']);
+
+    const env = await commandEnv(launch, { B4M_DESKTOP_BACKGROUND: '1' });
+    expect(env.WSLENV?.split(':')).toEqual(
+      expect.arrayContaining(['B4M_DESKTOP_BACKGROUND', COMMAND_TAG_ENV, 'B4M_DESKTOP_LINUX_PATH'])
+    );
+    expect(env.WSLENV?.split(':')).not.toContain('PATH');
+    expect(env[COMMAND_TAG_ENV]).toBe(launch.processTag);
+    expect(env.B4M_DESKTOP_LINUX_PATH).toBe('/home/me/.nvm/bin:/usr/bin');
+    expect(env.WSL_UTF8).toBe('1');
   });
 });
 

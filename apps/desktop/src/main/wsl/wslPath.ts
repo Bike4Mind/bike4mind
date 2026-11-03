@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 
 /** A folder inside a WSL distro, reached from Windows over `\\wsl.localhost\<distro>\...` or `\\wsl$\<distro>\...`. */
 export interface WslLocation {
@@ -12,8 +12,9 @@ export interface WslLocation {
 /** Carries the distro user's PATH into a `wslCommand`; see `wslCommandEnv`. */
 const LINUX_PATH_ENV = 'B4M_DESKTOP_LINUX_PATH';
 
-const WSL_UNC = /^[\\/]{2}(wsl\.localhost|wsl\$)[\\/]+([^\\/]+)(?:[\\/]+(.*))?$/i;
+const WSL_UNC = /^(?:[\\/]{2}[?.][\\/]UNC[\\/]|[\\/]{2})(wsl\.localhost|wsl\$)[\\/]+([^\\/]+)(?:[\\/]+(.*))?$/i;
 
+/** Also reads the `\\?\UNC\...` and `\\.\UNC\...` spellings of the share. */
 export function parseWslPath(path: string): WslLocation | null {
   const match = WSL_UNC.exec(path);
   if (!match) return null;
@@ -36,14 +37,19 @@ export function wslUncPath(location: Pick<WslLocation, 'host' | 'distro'>, linux
 }
 
 /** A path a Linux program printed, as Windows reaches it; anything not absolute is returned as is. */
-export function toWindowsPath(location: WslLocation, path: string): string {
+export function toWindowsPath(location: Pick<WslLocation, 'host' | 'distro'>, path: string): string {
   return path.startsWith('/') ? wslUncPath(location, path) : path;
 }
 
-/** An argument naming a folder in the same distro, as the Linux program must see it. */
+/** A Windows path to a folder in the same distro, as a Linux program there must be given it. */
 export function toLinuxArgument(location: WslLocation, argument: string): string {
   const named = parseWslPath(argument);
   return named && named.distro.toLowerCase() === location.distro.toLowerCase() ? named.linuxPath : argument;
+}
+
+/** wsl.exe writes its own messages as UTF-16 unless told otherwise. Set on every wsl.exe spawn. */
+export function wslSpawnEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return { ...env, WSL_UTF8: '1' };
 }
 
 /**
@@ -52,7 +58,7 @@ export function toLinuxArgument(location: WslLocation, argument: string): string
  */
 const ENTER_FOLDER = `cd -- "$1" || exit 125; shift; [ -z "$${LINUX_PATH_ENV}" ] || export PATH="$${LINUX_PATH_ENV}"; exec "$@"`;
 
-/** `file args...` run by the distro's own toolchain in `location`. Folder arguments are mapped to Linux paths. */
+/** `file args...` run by the distro's own toolchain in `location`. Arguments reach Linux as given. */
 export function wslCommand(
   location: WslLocation,
   file: string,
@@ -70,35 +76,59 @@ export function wslCommand(
       'b4m-wsl',
       location.linuxPath,
       file,
-      ...args.map(argument => toLinuxArgument(location, argument)),
+      ...args,
     ],
   };
 }
 
-const USER_PATH_TIMEOUT_MS = 20_000;
-const PATH_MARKER = '__B4M_PATH__';
-const userPaths = new Map<string, Promise<string | null>>();
+export interface WslUserEnvironment {
+  path: string;
+  /** The distro user's home, as a Linux path. */
+  home: string;
+}
+
+const USER_ENV_TIMEOUT_MS = 20_000;
+/** A failed probe is asked again after this long, so a distro that was starting up is not given up on. */
+const USER_ENV_RETRY_MS = 30_000;
+const MARKER = '__B4M_ENV__';
 
 /**
- * The PATH an interactive shell in the distro has, where nvm and similar put node and pnpm;
- * `--exec` alone starts with the bare system PATH. Null when the shell cannot be asked.
+ * Asks the user's login shell from the passwd entry, as a terminal in the distro would start it.
+ * The printf is quoted to work in sh, bash, zsh and fish alike.
  */
-export function wslUserPath(distro: string): Promise<string | null> {
-  let found = userPaths.get(distro);
-  if (!found) {
-    found = new Promise(resolve => {
-      execFile(
-        'wsl.exe',
-        ['-d', distro, '--exec', 'bash', '-ilc', `printf '%s' "${PATH_MARKER}\${PATH}${PATH_MARKER}"`],
-        { timeout: USER_PATH_TIMEOUT_MS, killSignal: 'SIGKILL', windowsHide: true },
-        (error, stdout) => {
-          resolve(error ? null : (new RegExp(`${PATH_MARKER}(.*)${PATH_MARKER}`).exec(stdout)?.[1] ?? null));
-        }
-      );
-    });
-    userPaths.set(distro, found);
-  }
-  return found;
+export const USER_ENV_SCRIPT = `shell=$(getent passwd "$(id -un)" | cut -d: -f7); [ -x "$shell" ] || shell=/bin/sh; exec "$shell" -ilc "$1"`;
+export const USER_ENV_PRINT = `printf '%s' '${MARKER}' "$PATH" '${MARKER}' "$HOME" '${MARKER}'`;
+
+/** What `USER_ENV_PRINT` wrote, past whatever the shell's startup files printed around it. */
+export function parseUserEnvironment(stdout: string): WslUserEnvironment | null {
+  const [, path, home] = stdout.split(MARKER);
+  return path && home?.startsWith('/') ? { path, home } : null;
+}
+
+const userEnvironments = new Map<string, { at: number; found: Promise<WslUserEnvironment | null> }>();
+
+/**
+ * The PATH and home the user's login shell in the distro has, where nvm and similar put node and
+ * pnpm; `--exec` alone starts with the bare system PATH. Null when the shell cannot be asked.
+ */
+export function wslUserEnvironment(distro: string, now: () => number = Date.now): Promise<WslUserEnvironment | null> {
+  const cached = userEnvironments.get(distro);
+  if (cached && (cached.at === Infinity || now() - cached.at < USER_ENV_RETRY_MS)) return cached.found;
+  const entry = { at: now(), found: Promise.resolve<WslUserEnvironment | null>(null) };
+  entry.found = new Promise(resolve => {
+    execFile(
+      'wsl.exe',
+      ['-d', distro, '--exec', '/bin/sh', '-c', USER_ENV_SCRIPT, 'b4m-env', USER_ENV_PRINT],
+      { timeout: USER_ENV_TIMEOUT_MS, killSignal: 'SIGKILL', windowsHide: true, env: wslSpawnEnv() },
+      (error, stdout) => {
+        const found = error ? null : parseUserEnvironment(stdout);
+        if (found) entry.at = Infinity;
+        resolve(found);
+      }
+    );
+  });
+  userEnvironments.set(distro, entry);
+  return entry.found;
 }
 
 /** Adds names to WSLENV, the list of Windows variables wsl.exe passes into Linux. */
@@ -117,7 +147,80 @@ export async function wslCommandEnv(
   distro: string,
   names: readonly string[] = []
 ): Promise<NodeJS.ProcessEnv> {
-  const path = await wslUserPath(distro);
-  if (!path) return withWslEnv(env, names);
-  return withWslEnv({ ...env, [LINUX_PATH_ENV]: path }, [...names, LINUX_PATH_ENV]);
+  const user = await wslUserEnvironment(distro);
+  if (!user) return wslSpawnEnv(withWslEnv(env, names));
+  return wslSpawnEnv(withWslEnv({ ...env, [LINUX_PATH_ENV]: user.path }, [...names, LINUX_PATH_ENV]));
+}
+
+const REALPATH_TIMEOUT_MS = 5_000;
+const REALPATH_IDLE_MS = 10_000;
+
+/** Answers each NUL-terminated path with its physical form, or an empty answer when it has none. */
+export const REALPATH_SCRIPT = `while IFS= read -r -d '' p; do r=$(realpath -m -- "$p" 2>/dev/null) || r=; printf '%s\\0' "$r"; done`;
+
+interface RealpathSession {
+  child: ChildProcess;
+  pending: ((path: string | null) => void)[];
+  buffered: string;
+  idle?: NodeJS.Timeout;
+}
+
+const realpathSessions = new Map<string, RealpathSession>();
+
+function endSession(distro: string, session: RealpathSession): void {
+  if (realpathSessions.get(distro) === session) realpathSessions.delete(distro);
+  if (session.idle) clearTimeout(session.idle);
+  for (const answer of session.pending.splice(0)) answer(null);
+  session.child.kill('SIGKILL');
+}
+
+function realpathSession(distro: string): RealpathSession {
+  const open = realpathSessions.get(distro);
+  if (open) return open;
+  const child = spawn('wsl.exe', ['-d', distro, '--exec', 'bash', '-c', REALPATH_SCRIPT], {
+    stdio: ['pipe', 'pipe', 'ignore'],
+    windowsHide: true,
+    env: wslSpawnEnv(),
+  });
+  const session: RealpathSession = { child, pending: [], buffered: '' };
+  child.stdout?.setEncoding('utf8');
+  child.stdout?.on('data', (chunk: string) => {
+    session.buffered += chunk;
+    let end = session.buffered.indexOf('\0');
+    while (end !== -1) {
+      const answer = session.buffered.slice(0, end);
+      session.buffered = session.buffered.slice(end + 1);
+      session.pending.shift()?.(answer.startsWith('/') ? answer : null);
+      end = session.buffered.indexOf('\0');
+    }
+  });
+  child.on('error', () => endSession(distro, session));
+  child.on('exit', () => endSession(distro, session));
+  child.stdin?.on('error', () => endSession(distro, session));
+  child.unref();
+  realpathSessions.set(distro, session);
+  return session;
+}
+
+/**
+ * Where `linuxPath` lands inside `distro` with every symlink followed, as a Linux path; null when
+ * it cannot be resolved. Windows cannot follow a Linux symlink over the share, so the distro is
+ * asked. One wsl.exe per distro answers every lookup until it has been idle for a while.
+ */
+export function wslRealpath(distro: string, linuxPath: string): Promise<string | null> {
+  if (linuxPath.includes('\0')) return Promise.resolve(null);
+  const session = realpathSession(distro);
+  if (session.idle) clearTimeout(session.idle);
+  return new Promise(resolve => {
+    const timer = setTimeout(() => endSession(distro, session), REALPATH_TIMEOUT_MS);
+    session.pending.push(path => {
+      clearTimeout(timer);
+      resolve(path);
+      if (session.pending.length === 0 && realpathSessions.get(distro) === session) {
+        session.idle = setTimeout(() => endSession(distro, session), REALPATH_IDLE_MS);
+        session.idle.unref?.();
+      }
+    });
+    session.child.stdin?.write(`${linuxPath}\0`);
+  });
 }

@@ -1,4 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { wslSpawnEnv } from '../../wsl/wslPath';
 import { system32 } from './gitBash';
 import type { SandboxedCommand } from './sandbox';
 
@@ -40,6 +41,7 @@ exit 0
 interface Invocation {
   file: string;
   args: string[];
+  env?: NodeJS.ProcessEnv;
 }
 
 function tagsOf(trees: readonly CommandTree[]): string[] {
@@ -67,6 +69,7 @@ export function windowsSignalCommands(trees: readonly CommandTree[], signal: Nod
     commands.push({
       file: 'wsl.exe',
       args: ['-d', distro, '--exec', 'bash', '-c', WINDOWS_TREE_SCRIPT, 'b4m-signal', '', name, ...tagsOf(inDistro)],
+      env: wslSpawnEnv(),
     });
   }
   return commands;
@@ -162,6 +165,7 @@ export function signalCommandTree(tree: CommandTree, signal: NodeJS.Signals): vo
   for (const launcher of launchers) killed.add(launcher.child);
   for (const command of windowsSignalCommands([tree], signal)) {
     const sweep = spawn(command.file, command.args, {
+      env: command.env,
       stdio: 'ignore',
       windowsHide: true,
       timeout: WINDOWS_SIGNAL_TIMEOUT_MS,
@@ -179,6 +183,7 @@ export function signalCommandTreesSync(trees: readonly CommandTree[], signal: No
   }
   for (const command of windowsSignalCommands(trees, signal)) {
     spawnSync(command.file, command.args, {
+      env: command.env,
       stdio: 'ignore',
       windowsHide: true,
       timeout: WINDOWS_SIGNAL_TIMEOUT_MS,

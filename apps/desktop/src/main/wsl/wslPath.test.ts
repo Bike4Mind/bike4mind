@@ -1,6 +1,13 @@
 import { spawnSync } from 'node:child_process';
-import { describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
+  REALPATH_SCRIPT,
+  USER_ENV_PRINT,
+  USER_ENV_SCRIPT,
+  parseUserEnvironment,
   parseWslPath,
   toLinuxArgument,
   toWindowsPath,
@@ -8,6 +15,7 @@ import {
   wslCommand,
   wslLocation,
   wslUncPath,
+  wslUserEnvironment,
 } from './wslPath';
 
 describe('parseWslPath', () => {
@@ -24,6 +32,20 @@ describe('parseWslPath', () => {
     });
     expect(parseWslPath('//WSL.LOCALHOST/Ubuntu/tmp')?.linuxPath).toBe('/tmp');
     expect(parseWslPath('\\\\wsl.localhost\\Ubuntu')?.linuxPath).toBe('/');
+  });
+
+  it('reads the long and device spellings of the share', () => {
+    expect(parseWslPath('\\\\?\\UNC\\wsl.localhost\\Ubuntu\\home\\me')).toEqual({
+      host: 'wsl.localhost',
+      distro: 'Ubuntu',
+      linuxPath: '/home/me',
+    });
+    expect(parseWslPath('\\\\.\\UNC\\wsl$\\Ubuntu\\srv')).toEqual({
+      host: 'wsl$',
+      distro: 'Ubuntu',
+      linuxPath: '/srv',
+    });
+    expect(parseWslPath('\\\\?\\C:\\Users')).toBeNull();
   });
 
   it('leaves other paths alone', () => {
@@ -74,20 +96,83 @@ describe('wslCommand', () => {
     expect(inLinux('/', { B4M_DESKTOP_LINUX_PATH: '/usr/bin:/bin' }).stdout.split('\n')[1]).toBe('/usr/bin:/bin');
   });
 
-  it('runs the program through --exec in the folder, with folder arguments mapped', () => {
+  it('runs the program through --exec in the folder, passing every argument through as given', () => {
     const location = parseWslPath('\\\\wsl.localhost\\Ubuntu\\home\\me\\repo');
     if (!location) throw new Error('unparsed');
-    const command = wslCommand(location, 'git', ['worktree', 'add', '\\\\wsl.localhost\\Ubuntu\\home\\me\\wt', 'main']);
+    const pattern = '\\\\wsl.localhost\\Ubuntu\\home\\me\\wt';
+    const command = wslCommand(location, 'rg', ['--regexp', pattern, '--', '.']);
     expect(command.file).toBe('wsl.exe');
     expect(command.args.slice(0, 4)).toEqual(['-d', 'Ubuntu', '--exec', '/bin/sh']);
-    expect(command.args.slice(-7)).toEqual([
-      'b4m-wsl',
-      '/home/me/repo',
-      'git',
-      'worktree',
-      'add',
-      '/home/me/wt',
-      'main',
+    expect(command.args.slice(-7)).toEqual(['b4m-wsl', '/home/me/repo', 'rg', '--regexp', pattern, '--', '.']);
+  });
+});
+
+describe('the user environment probe', () => {
+  it('reads PATH and home past whatever the startup files printed', () => {
+    expect(
+      parseUserEnvironment('Welcome!\n__B4M_ENV__/home/me/.nvm/bin:/usr/bin__B4M_ENV__/home/me__B4M_ENV__bye')
+    ).toEqual({ path: '/home/me/.nvm/bin:/usr/bin', home: '/home/me' });
+    expect(parseUserEnvironment('no markers')).toBeNull();
+    expect(parseUserEnvironment('__B4M_ENV__/usr/bin__B4M_ENV____B4M_ENV__')).toBeNull();
+  });
+
+  // What wsl.exe hands to Linux, run here directly.
+  it.runIf(process.platform === 'linux')('asks the login shell from the passwd entry', () => {
+    const run = spawnSync('/bin/sh', ['-c', USER_ENV_SCRIPT, 'b4m-env', USER_ENV_PRINT], {
+      encoding: 'utf8',
+      env: { PATH: '/usr/bin:/bin', HOME: process.env.HOME, TERM: 'dumb' },
+      timeout: 20_000,
+    });
+    const found = parseUserEnvironment(run.stdout);
+    expect(found?.home).toMatch(/^\//);
+    expect(found?.path.split(':').length).toBeGreaterThan(0);
+  });
+
+  it('asks again after a failure instead of keeping it', async () => {
+    let clock = 0;
+    const distro = `b4m-missing-${Date.now()}`;
+    vi.stubEnv('PATH', '');
+    try {
+      expect(await wslUserEnvironment(distro, () => clock)).toBeNull();
+      const again = wslUserEnvironment(distro, () => clock);
+      expect(again).toBe(wslUserEnvironment(distro, () => clock));
+      clock += 60_000;
+      expect(wslUserEnvironment(distro, () => clock)).not.toBe(again);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe.runIf(process.platform === 'linux')('REALPATH_SCRIPT', () => {
+  let root: string;
+  beforeAll(() => {
+    root = realpathSync(mkdtempSync(join(tmpdir(), 'b4m-wsl-realpath-')));
+    mkdirSync(join(root, 'project', 'src'), { recursive: true });
+    mkdirSync(join(root, 'outside'));
+    symlinkSync(join(root, 'outside'), join(root, 'project', 'docs'));
+    symlinkSync('../..', join(root, 'project', 'src', 'up'));
+  });
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  const answers = (paths: string[]) =>
+    spawnSync('bash', ['-c', REALPATH_SCRIPT], { input: paths.map(path => `${path}\0`).join(''), encoding: 'utf8' })
+      .stdout.split('\0')
+      .slice(0, -1);
+
+  it('follows links to an outside folder and up the tree, as the kernel would, one answer per path', () => {
+    expect(
+      answers([
+        `${root}/project/docs/new-file`,
+        `${root}/project/src/up/outside`,
+        `${root}/project/src/up/../x`,
+        `${root}/project/src/file`,
+      ])
+    ).toEqual([
+      `${root}/outside/new-file`,
+      `${root}/outside`,
+      `${root.slice(0, root.lastIndexOf('/'))}/x`,
+      `${root}/project/src/file`,
     ]);
   });
 });

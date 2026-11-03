@@ -28,6 +28,8 @@ export interface RipgrepSearch {
   signal: AbortSignal;
   /** Called once per matching file, in path order. Returning false stops the search. */
   onFile(file: RipgrepFile): boolean;
+  /** The host platform; defaults to this process's. */
+  platform?: NodeJS.Platform;
 }
 
 /**
@@ -53,7 +55,8 @@ interface RipgrepRecord {
   data?: { path?: RipgrepText; lines?: RipgrepText; line_number?: number };
 }
 
-let unavailableUntil = 0;
+/** Keyed by WSL distro, '' for this host's own rg. */
+const unavailableUntil = new Map<string, number>();
 
 /** git lists dotfiles and rg skips them by default, so --hidden is only right inside a work tree. */
 function insideGitWorkTree(directory: string): boolean {
@@ -69,7 +72,11 @@ function decode(field: RipgrepText | undefined): string {
 }
 
 export async function ripgrepSearch(search: RipgrepSearch): Promise<RipgrepOutcome> {
-  if (process.env.B4M_DISABLE_RIPGREP === '1' || Date.now() < unavailableUntil) return 'unavailable';
+  const wsl = wslLocation(search.cwd, search.platform);
+  const engine = wsl?.distro ?? '';
+  if (process.env.B4M_DISABLE_RIPGREP === '1' || Date.now() < (unavailableUntil.get(engine) ?? 0)) {
+    return 'unavailable';
+  }
 
   const args = [
     '--json',
@@ -91,11 +98,10 @@ export async function ripgrepSearch(search: RipgrepSearch): Promise<RipgrepOutco
   // An explicit "." rather than none: with no path rg may read stdin instead of searching cwd.
   args.push('--', '.');
 
-  const wsl = wslLocation(search.cwd);
   const env = wsl ? await wslCommandEnv(process.env, wsl.distro) : { ...process.env, PATH: await resolveUserPath() };
   const rg = wsl ? 'rg' : await hostProgram('rg', env.PATH);
   if (!rg) {
-    unavailableUntil = Date.now() + UNAVAILABLE_RETRY_MS;
+    unavailableUntil.set(engine, Date.now() + UNAVAILABLE_RETRY_MS);
     return 'unavailable';
   }
   const command = wsl ? wslCommand(wsl, 'rg', args) : { file: rg, args };
@@ -133,7 +139,7 @@ export async function ripgrepSearch(search: RipgrepSearch): Promise<RipgrepOutco
     else search.signal.addEventListener('abort', onAbort, { once: true });
 
     child.on('error', (err: NodeJS.ErrnoException) => {
-      if (err.code === 'ENOENT') unavailableUntil = Date.now() + UNAVAILABLE_RETRY_MS;
+      if (err.code === 'ENOENT') unavailableUntil.set(engine, Date.now() + UNAVAILABLE_RETRY_MS);
       finish('unavailable');
     });
     child.stderr.on('data', (chunk: Buffer) => {
@@ -176,7 +182,10 @@ export async function ripgrepSearch(search: RipgrepSearch): Promise<RipgrepOutco
       if (stopped) return finish('stopped');
       if (timedOut) return finish('timed-out');
       // The folder's distro has no rg; the shell wrapping it exits 127.
-      if (wsl && code === 127) return finish('unavailable');
+      if (wsl && code === 127) {
+        unavailableUntil.set(engine, Date.now() + UNAVAILABLE_RETRY_MS);
+        return finish('unavailable');
+      }
       // Exit 2 is "an error occurred". With nothing found it cannot be told from "no match", so
       // the caller searches again itself rather than report a clean miss: a size-limited or
       // otherwise rejected pattern would look exactly like that.

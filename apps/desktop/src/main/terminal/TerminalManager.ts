@@ -76,6 +76,8 @@ export interface TerminalManagerDeps {
   baseEnv: NodeJS.ProcessEnv;
   locale?: string;
   platform?: NodeJS.Platform;
+  /** Defaults to a stat of the folder. */
+  isDirectory?(path: string): Promise<boolean>;
   /** One conversation's tab list changed; goes to every window. */
   changed(sessionId: string, terminals: TerminalInfo[]): void;
 }
@@ -380,7 +382,7 @@ export class TerminalManager {
     this.spawnFn ??= await this.deps.loadSpawn();
     const wanted = await this.deps.workingDirectory(live.info.sessionId);
     // A worktree removed since, or a folder unmounted: the shell still opens, at home.
-    const cwd = wanted && (await isDirectory(wanted)) ? wanted : this.deps.home;
+    const cwd = wanted && (await (this.deps.isDirectory ?? isDirectory)(wanted)) ? wanted : this.deps.home;
     const env = terminalEnv(this.deps.baseEnv, await this.deps.userPath(), this.deps.locale);
     // A Finder launch has no SHELL, and tools run from the terminal read it to pick a shell.
     if (this.deps.platform !== 'win32') env.SHELL ||= this.deps.shell.file;
@@ -393,7 +395,7 @@ export class TerminalManager {
       cols: live.size.cols,
       rows: live.size.rows,
       cwd: wsl ? this.deps.home : cwd,
-      env,
+      env: wsl ? { ...env, WSL_UTF8: '1' } : env,
     });
     live.pty = pty;
     live.info = { ...live.info, cwd };
