@@ -4187,7 +4187,7 @@ export const settingsMap = {
     name: 'Free-Tier Model Gate Scope',
     defaultValue: 'all',
     description:
-      'Which models the Free-Tier Model Gate covers. "all" (default): every model outside the allowlist is paid-only. "media": text models are open to free accounts, paid from their credit balance, and only media models (image, video, music, sound and voice) need the allowlist or a paid plan. A model the catalog does not report as text stays gated.',
+      'Which models the Free-Tier Model Gate covers. "all" (default): every model outside the allowlist is paid-only. "media": text models are open to free accounts, paid from their credit balance (only while Enforce Credits is on; with it off they run unbilled), and only media models (image, video, music, sound and voice) need the allowlist or a paid plan. A model the catalog does not report as text stays gated.',
     options: ['all', 'media'],
     category: 'SecOps',
     group: API_SERVICE_GROUPS.FREE_TIER_MODELS.id,
@@ -4208,7 +4208,7 @@ export const settingsMap = {
       ChatModels.GEMINI_2_5_FLASH_LITE,
     ],
     description:
-      'Model IDs free accounts may call across all modalities while the Free-Tier Model Gate is on, one per line (with the gate scope set to "media", text models pass without being listed). Media models are paid-only unless explicitly listed. Conversational voice uses the ID elevenlabs. A model missing here, including a newly added one and the Default API Model, is paid-only. A free account that calls the chat or agent-execution API without a model starts on the first text model listed here that it can use.',
+      'Model IDs free accounts may call across all modalities while the Free-Tier Model Gate is on, one per line (with the gate scope set to "media", text models pass without being listed). Media models are paid-only unless explicitly listed. Conversational voice uses the ID elevenlabs. A model missing here, including a newly added one and the Default API Model, is paid-only (with the scope set to "media", only a missing media model is). A free account that calls the chat or agent-execution API without a model starts on the first text model listed here that it can use.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.FREE_TIER_MODELS.id,
     order: 3,
