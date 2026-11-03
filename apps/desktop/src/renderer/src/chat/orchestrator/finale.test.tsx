@@ -148,6 +148,17 @@ describe('useFinale', () => {
     expect(latest?.shown).toBe(true);
   });
 
+  it('does not celebrate again when an agent of a finished run is archived or deleted', () => {
+    render([agent('a', 'working'), agent('b', 'working')]);
+    render([agent('a', 'done'), agent('b', 'done')]);
+    settle();
+    act(() => latest?.dismiss());
+
+    render([agent('a', 'done')]);
+    settle();
+    expect(latest?.shown).toBe(false);
+  });
+
   it('hides the banner if an agent picks up work again', () => {
     render([agent('a', 'working')]);
     render([agent('a', 'done')]);

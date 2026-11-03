@@ -62,7 +62,8 @@ export function runKey(agents: readonly AgentView[]): string {
 /**
  * Whether the "Quest complete" finale is showing: once per run, when every agent has settled and the
  * parent has stopped, and only after an agent was seen working while mounted, so reopening a
- * finished run never replays it. `rootId` scopes the remembered run.
+ * finished run never replays it. Showing it spends that sighting, so archiving or deleting an agent
+ * afterwards (which changes the run key) never brings it back. `rootId` scopes the remembered run.
  */
 export function useFinale(
   rootId: string | undefined,
@@ -70,22 +71,25 @@ export function useFinale(
   parent: ParentView
 ): { shown: boolean; dismiss(): void } {
   const active = agents.some(isActive);
+  const parentBusy = isParentBusy(parent);
   const [sawWork, setSawWork] = useState(active);
   if (active && !sawWork) setSawWork(true);
+  const [shown, setShown] = useState(false);
+  if (shown && (active || parentBusy)) setShown(false);
 
-  const complete = sawWork && agents.length > 0 && !active && !isParentBusy(parent);
+  const complete = sawWork && agents.length > 0 && !active && !parentBusy;
   const run = complete ? runKey(agents) : null;
-  const [shownRun, setShownRun] = useState<string | null>(null);
 
   useEffect(() => {
     if (run === null || rootId === undefined || readFinaleSeen(rootId) === run) return;
     const timer = window.setTimeout(() => {
       writeFinaleSeen(rootId, run);
-      setShownRun(run);
+      setSawWork(false);
+      setShown(true);
     }, FINALE_SETTLE_MS);
     return () => window.clearTimeout(timer);
   }, [rootId, run]);
 
-  const dismiss = useCallback(() => setShownRun(null), []);
-  return { shown: shownRun !== null && shownRun === run, dismiss };
+  const dismiss = useCallback(() => setShown(false), []);
+  return { shown, dismiss };
 }
