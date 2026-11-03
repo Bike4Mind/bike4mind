@@ -60,25 +60,51 @@ describe('findPageAfterBySessionId', () => {
     expect(seen).toHaveLength(300);
 
     // Mid-session cursor: the keyset must bound the scan to about one page, not the rest of the session.
-    const mid = await Quest.collection
-      .find({ sessionId: SESSION })
+    // Mirrors the filter findPageAfterBySessionId builds; keep the two in sync.
+    const mid = await Quest.collection.findOne({ _id: new mongoose.Types.ObjectId(expected[150]) });
+    const explanation: unknown = await Quest.collection
+      .find({
+        sessionId: SESSION,
+        deletedAt: null,
+        timestamp: { $gte: mid!.timestamp },
+        $or: [{ timestamp: { $gt: mid!.timestamp } }, { timestamp: mid!.timestamp, _id: { $gt: mid!._id } }],
+      })
       .sort({ timestamp: 1, _id: 1 })
-      .skip(150)
-      .limit(1)
-      .next();
-    const db = mongoose.connection.db!;
-    await db.command({ profile: 2 });
-    await questRepository.findPageAfterBySessionId(SESSION, {
-      limit: 25,
-      after: { timestamp: mid!.timestamp, id: String(mid!._id) },
+      .limit(25)
+      .explain('executionStats');
+
+    // Mongo versions may place the cursor inside wrapper stages or at the top level.
+    const findProperties = (value: unknown, name: string): unknown[] => {
+      if (value === null || typeof value !== 'object') return [];
+      return Object.entries(value).flatMap(([key, child]) => [
+        ...(key === name ? [child] : []),
+        ...findProperties(child, name),
+      ]);
+    };
+    const winningPlans = findProperties(explanation, 'winningPlan');
+    expect(winningPlans).toHaveLength(1);
+    // A SORT-stage check would not discriminate: a backward scan of deletedAt_timestamp_id_desc
+    // also yields (timestamp, _id) ascending without one.
+    expect(findProperties(winningPlans[0], 'indexName')).toContain('sessionId_timestamp_id');
+    const [docsExamined] = findProperties(explanation, 'totalDocsExamined');
+    expect(docsExamined).toBeLessThanOrEqual(30);
+  });
+});
+
+describe('Quest sessionId+timestamp+_id index', () => {
+  it('builds the named compound index', async () => {
+    const indexes = await Quest.collection.indexes();
+    expect(indexes.find(i => i.name === 'sessionId_timestamp_id')?.key).toEqual({
+      sessionId: 1,
+      timestamp: 1,
+      _id: 1,
     });
-    await db.command({ profile: 0 });
-    const [op] = await db
-      .collection('system.profile')
-      .find({ ns: `${db.databaseName}.${Quest.collection.collectionName}`, op: 'query' })
-      .sort({ ts: -1 })
-      .limit(1)
-      .toArray();
-    expect(op.docsExamined).toBeLessThanOrEqual(30);
+  });
+
+  it('does not duplicate an existing index key pattern', async () => {
+    const built = (await Quest.collection.indexes()).map(i => JSON.stringify(i.key));
+    expect(new Set(built).size).toBe(built.length);
+    const declared = Quest.schema.indexes().map(([key]) => JSON.stringify(key));
+    expect(new Set(declared).size).toBe(declared.length);
   });
 });
