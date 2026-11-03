@@ -1,5 +1,5 @@
 import { exec } from 'node:child_process';
-import type { PrRef, PrSnapshot } from '@shared/pullRequest';
+import type { PrMergeMethod, PrRef, PrSnapshot } from '@shared/pullRequest';
 import { DEFAULT_HOLD_LABELS, type LoopMergePolicy, type LoopSmokeCheck } from '@shared/loopRunner';
 import { SET_SESSION_PULL_REQUEST_TOOL_NAME } from '../chat/tools/pullRequestTool';
 import { desktopMergeReadiness } from '../pr/autoMerge';
@@ -24,7 +24,9 @@ export function loopRunnerToolRefusal(name: string, input: Record<string, unknow
 }
 
 export type MergeDecision =
-  { merge: true; via: 'queue' } | { merge: true; via: 'merge' } | { merge: false; reason: string };
+  | { merge: true; via: 'queue' }
+  | { merge: true; via: 'merge'; method: PrMergeMethod }
+  | { merge: false; reason: string };
 
 /**
  * Whether loop_merge_pr may merge this PR under the stage's policy. Hold labels and every CI,
@@ -42,7 +44,8 @@ export function mergeDecision(
   if (held) return { merge: false, reason: `The pull request has the "${held}" label.` };
   const readiness = desktopMergeReadiness(snapshot, { requireReview: policy === 'review' });
   if (!readiness.ready) return { merge: false, reason: readiness.reason };
-  return { merge: true, via: readiness.via };
+  const { ready: _ready, ...how } = readiness;
+  return { merge: true, ...how };
 }
 
 /** The labels on a PR, through the user's own gh. */

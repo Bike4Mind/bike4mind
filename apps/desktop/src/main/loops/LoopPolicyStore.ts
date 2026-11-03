@@ -4,6 +4,8 @@ import type { PrivateFile } from '../privateFile';
 /** A worktree a runner session cut, so cleanup only ever touches its own. */
 export interface RunnerWorktree {
   sessionId: string;
+  /** The checkout the worktree was cut from. */
+  directory: string;
   path: string;
   branch: string;
   ticketId: string;

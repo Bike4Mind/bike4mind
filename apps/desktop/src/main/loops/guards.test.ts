@@ -30,8 +30,8 @@ describe('mergeDecision', () => {
       merge: false,
       reason: 'Waiting: needs an approving review.',
     });
-    expect(mergeDecision(unapproved, [], 'green-ci')).toEqual({ merge: true, via: 'merge' });
-    expect(mergeDecision(green(), [], 'review')).toEqual({ merge: true, via: 'merge' });
+    expect(mergeDecision(unapproved, [], 'green-ci')).toEqual({ merge: true, via: 'merge', method: 'squash' });
+    expect(mergeDecision(green(), [], 'review')).toEqual({ merge: true, via: 'merge', method: 'squash' });
   });
 
   it('never merges under never', () => {

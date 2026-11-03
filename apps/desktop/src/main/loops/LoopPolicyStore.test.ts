@@ -37,7 +37,14 @@ describe('LoopPolicyStore', () => {
 
   it('records, finishes and forgets runner worktrees', async () => {
     const store = new LoopPolicyStore(memoryFile());
-    const worktree = { sessionId: 's1', path: '/w', branch: 'b4m/x', ticketId: 't', createdAt: 'then' };
+    const worktree = {
+      sessionId: 's1',
+      directory: '/repo',
+      path: '/w',
+      branch: 'b4m/x',
+      ticketId: 't',
+      createdAt: 'then',
+    };
     await store.recordWorktree(worktree);
     await store.finishWorktree('s1', 'later');
     expect(await store.worktrees()).toEqual([{ ...worktree, finishedAt: 'later' }]);
