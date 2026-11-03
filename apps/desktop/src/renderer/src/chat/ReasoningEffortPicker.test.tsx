@@ -102,6 +102,17 @@ describe('ReasoningEffortPicker', () => {
     expect(markup(budget.id, [budget])).toContain('Effort: n/a');
   });
 
+  it('points a model that thinks with a budget to the budget under Params', () => {
+    const budget: ChatModelOption = {
+      id: 'claude-opus-4-1',
+      name: 'Claude Opus 4.1',
+      controls: { thinkingBudgetTokens: { min: 1024, max: 31_000, step: 1024, scope: 'request' } },
+    };
+    expect(markup(budget.id, [budget])).toContain(
+      'thinks with a token budget instead of an effort. Set it under Params.'
+    );
+  });
+
   it('shows a stored level the model does not list as the nearest level it sends instead', () => {
     const listed: ChatModelOption = {
       id: 'gpt-5',

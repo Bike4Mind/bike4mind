@@ -1,15 +1,15 @@
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
-import Dropdown from '@mui/joy/Dropdown';
 import Input from '@mui/joy/Input';
 import Link from '@mui/joy/Link';
-import Menu from '@mui/joy/Menu';
-import MenuButton from '@mui/joy/MenuButton';
+import Modal from '@mui/joy/Modal';
+import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { ChatModelOption } from '@shared/chat';
 import {
+  effectiveControls,
   GENERATION_FIELDS,
   requestGeneration,
   type GenerationField,
@@ -27,67 +27,91 @@ const LABELS: Record<GenerationField, string> = {
   thinkingBudgetTokens: 'Thinking budget',
 };
 
+const WIDTH = 340;
 const numberFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 3 });
 
 function shown(value: number | undefined): string {
   return value === undefined ? '' : String(value);
 }
 
-/** One override: blank is the model default, a number is clamped into the control's range when it is committed. */
+function defaultText(control: NumericControl): string {
+  if (control.default !== undefined) return `Model default: ${numberFormat.format(control.default)}`;
+  return control.unlimitedDefault ? 'Model default: no limit' : 'Model default';
+}
+
+/** The line under a field: its default or lock, a stored value this model adjusts, and whether thinking counts. */
+function noteFor(control: NumericControl, stored: number | undefined, sent: number | undefined): string {
+  if (control.locked) return control.locked.reason;
+  const parts = [defaultText(control)];
+  if (stored !== undefined && sent !== undefined && sent !== stored) {
+    parts.push(
+      `Saved as ${numberFormat.format(stored)}, outside this model's range, so it sends ${numberFormat.format(sent)}`
+    );
+  }
+  if (control.includesThinking) parts.push('The limit includes thinking');
+  return `${parts.join('. ')}.`;
+}
+
+/**
+ * One override. It shows what the next turn sends; a typed number is clamped into the control's
+ * range when committed, and blank is the model default. A field left as shown commits nothing.
+ */
 function FieldRow({
   field,
   control,
-  value,
+  stored,
+  sent,
+  autoFocus,
   disabled,
   onCommit,
 }: {
   field: GenerationField;
   control: NumericControl;
-  value: number | undefined;
+  stored: number | undefined;
+  sent: number | undefined;
+  autoFocus: boolean;
   disabled?: boolean;
   onCommit: (value: number | undefined) => void;
 }) {
-  const [draft, setDraft] = useState(shown(value));
-  useEffect(() => setDraft(shown(value)), [value]);
+  const noteId = useId();
+  const [draft, setDraft] = useState(shown(sent));
+  useEffect(() => setDraft(shown(sent)), [sent]);
   const locked = control.locked;
 
   const commit = () => {
     const text = draft.trim();
+    if (text === shown(sent)) return;
     if (!text) {
-      if (value !== undefined) onCommit(undefined);
+      onCommit(undefined);
       return;
     }
     const next = requestGeneration({ [field]: Number(text) }, { [field]: control })[field];
-    setDraft(shown(next ?? value));
-    if (next !== undefined && next !== value) onCommit(next);
+    setDraft(shown(next ?? sent));
+    if (next !== undefined && next !== sent) onCommit(next);
   };
 
-  const fallback =
-    control.default === undefined ? 'Model default' : `Model default: ${numberFormat.format(control.default)}`;
   return (
     <Stack
       direction="row"
       alignItems="center"
       justifyContent="space-between"
       spacing={2}
-      sx={{ px: 1, py: 0.5 }}
+      sx={{ py: 0.5 }}
       data-testid={`generation-settings-${field}-row`}
     >
       <Stack sx={{ minWidth: 0 }}>
         <Typography level="body-sm">{LABELS[field]}</Typography>
-        <Typography
-          level="body-xs"
-          textColor="text.tertiary"
-          sx={{ maxWidth: 200 }}
-          data-testid={`generation-settings-${field}-default`}
-        >
-          {locked ? locked.reason : fallback}
-          {!locked && value !== undefined && (
+        <Typography level="body-xs" textColor="text.tertiary" sx={{ maxWidth: 200 }}>
+          <span id={noteId} data-testid={`generation-settings-${field}-default`}>
+            {noteFor(control, stored, sent)}
+          </span>
+          {!locked && stored !== undefined && (
             <Link
               component="button"
               level="body-xs"
               disabled={disabled}
               onClick={() => onCommit(undefined)}
+              aria-label={`Reset ${LABELS[field]}`}
               sx={{ ml: 1 }}
               data-testid={`generation-settings-${field}-reset-btn`}
             >
@@ -100,14 +124,20 @@ function FieldRow({
         size="sm"
         type="number"
         value={locked ? String(locked.value) : draft}
-        placeholder={control.default === undefined ? 'Default' : String(control.default)}
-        disabled={disabled || locked !== undefined}
+        placeholder={
+          control.default !== undefined
+            ? numberFormat.format(control.default)
+            : control.unlimitedDefault
+              ? 'No limit'
+              : 'Default'
+        }
+        disabled={disabled}
+        readOnly={locked !== undefined}
+        autoFocus={autoFocus}
         onChange={event => setDraft(event.target.value)}
-        onBlur={commit}
+        onBlur={locked ? undefined : commit}
         onKeyDown={event => {
-          if (event.key === 'Enter') commit();
-          // Joy's menu reads printable and arrow keys as list navigation; Escape still closes it.
-          if (event.key !== 'Escape') event.stopPropagation();
+          if (event.key === 'Enter' && !locked) commit();
         }}
         sx={{ width: 112, flexShrink: 0 }}
         slotProps={{
@@ -116,6 +146,7 @@ function FieldRow({
             max: control.max,
             step: control.step,
             'aria-label': LABELS[field],
+            'aria-describedby': noteId,
             'data-testid': `generation-settings-${field}-input`,
           },
         }}
@@ -125,8 +156,10 @@ function FieldRow({
 }
 
 /**
- * This conversation's sampling and output overrides, beside the effort picker. Draws only the
- * fields the model's `controls` list; a blank field sends nothing, so the model's own default applies.
+ * This conversation's sampling and output overrides, beside the effort picker: a button that opens
+ * a dialog of the fields the model's `controls` list. The button and every field show what the next
+ * turn sends, which across a model switch can differ from what is stored (see requestGeneration).
+ * `onChange` answers false when the set was not saved.
  */
 export function GenerationSettingsPicker({
   model,
@@ -137,69 +170,132 @@ export function GenerationSettingsPicker({
   model: ChatModelOption | undefined;
   generation: GenerationSettings | undefined;
   disabled?: boolean;
-  onChange: (generation: GenerationSettings) => void;
+  onChange: (generation: GenerationSettings) => Promise<boolean> | void;
 }) {
-  const controls = model?.controls;
+  const titleId = useId();
+  const introId = useId();
+  const anchor = useRef<HTMLButtonElement>(null);
+  const [place, setPlace] = useState<{ left: number; bottom: number; maxHeight: number } | null>(null);
+  // The set last sent, so an edit made before main answers builds on it rather than on stale props.
+  const pending = useRef<GenerationSettings | undefined>(undefined);
+  useEffect(() => {
+    pending.current = undefined;
+  }, [generation]);
+
+  const controls = effectiveControls(model?.controls, generation);
   const fields = GENERATION_FIELDS.flatMap(field => {
     const control = controls?.[field];
     return control ? [{ field, control }] : [];
   });
   if (fields.length === 0) return null;
 
-  const applied = Object.keys(requestGeneration(generation, controls)).length;
-  const touched = fields.some(({ field, control }) => !control.locked && generation?.[field] !== undefined);
+  const sent = requestGeneration(generation, controls);
+  const applied = Object.keys(sent).length;
+  const resettable = fields.some(({ field, control }) => !control.locked && generation?.[field] !== undefined);
+  const firstEditable = fields.find(({ control }) => !control.locked)?.field;
+
+  const save = (next: GenerationSettings) => {
+    pending.current = next;
+    void Promise.resolve(onChange(next)).then(saved => {
+      if (saved === false && pending.current === next) pending.current = undefined;
+    });
+  };
   const set = (field: GenerationField, value: number | undefined) => {
-    const next: GenerationSettings = { ...generation };
+    const next: GenerationSettings = { ...(pending.current ?? generation) };
     if (value === undefined) delete next[field];
     else next[field] = value;
-    onChange(next);
+    save(next);
+  };
+  const open = () => {
+    const rect = anchor.current?.getBoundingClientRect();
+    if (!rect) return;
+    setPlace({
+      left: Math.max(8, Math.min(rect.left, window.innerWidth - WIDTH - 8)),
+      bottom: window.innerHeight - rect.top + 6,
+      maxHeight: Math.max(160, rect.top - 16),
+    });
   };
 
   return (
-    <Dropdown>
-      <MenuButton
+    <>
+      <Button
+        ref={anchor}
         size="sm"
         variant="plain"
         color="neutral"
         disabled={disabled}
+        aria-haspopup="dialog"
+        aria-expanded={place !== null}
+        onClick={open}
         sx={{ fontWeight: 'normal', minWidth: 0 }}
-        slotProps={{ root: { 'data-testid': 'generation-settings-btn' } }}
+        data-testid="generation-settings-btn"
       >
         <Typography level="body-xs" noWrap textColor="inherit">
           Params: {applied > 0 ? `${applied} set` : 'Default'}
         </Typography>
-      </MenuButton>
-      <Menu size="sm" placement="top-start" sx={{ minWidth: 320, py: 0.5 }} data-testid="generation-settings-menu">
-        <Typography level="body-xs" textColor="text.tertiary" sx={{ px: 1, pt: 0.5, pb: 0.75 }}>
-          For this chat only. A blank field uses the model default.
-        </Typography>
-        {fields.map(({ field, control }) => (
-          <FieldRow
-            key={field}
-            field={field}
-            control={control}
-            value={generation?.[field]}
-            disabled={disabled}
-            onCommit={value => set(field, value)}
-          />
-        ))}
-        {touched && (
-          <Box sx={{ display: 'flex', justifyContent: 'flex-end', px: 0.5, pt: 0.5 }}>
-            <Button
-              size="sm"
-              variant="plain"
-              color="neutral"
+      </Button>
+      <Modal
+        open={place !== null}
+        onClose={() => setPlace(null)}
+        slotProps={{ backdrop: { sx: { backgroundColor: 'transparent', backdropFilter: 'none' } } }}
+      >
+        <Sheet
+          role="dialog"
+          aria-labelledby={titleId}
+          aria-describedby={introId}
+          tabIndex={-1}
+          variant="outlined"
+          sx={{
+            position: 'fixed',
+            left: place?.left,
+            bottom: place?.bottom,
+            maxHeight: place?.maxHeight,
+            width: WIDTH,
+            overflowY: 'auto',
+            borderRadius: 'md',
+            boxShadow: 'md',
+            px: 1.5,
+            py: 1,
+            outline: 'none',
+          }}
+          data-testid="generation-settings-menu"
+        >
+          <Typography id={titleId} level="title-sm">
+            Params
+          </Typography>
+          <Typography id={introId} level="body-xs" textColor="text.tertiary" sx={{ pb: 0.75 }}>
+            For this chat only. A blank field uses the model default.
+          </Typography>
+          {fields.map(({ field, control }) => (
+            <FieldRow
+              key={field}
+              field={field}
+              control={control}
+              stored={generation?.[field]}
+              sent={sent[field]}
+              autoFocus={field === firstEditable}
               disabled={disabled}
-              onClick={() => onChange({})}
-              data-testid="generation-settings-reset-all-btn"
-            >
-              <Typography level="body-xs" textColor="inherit">
-                Reset all
-              </Typography>
-            </Button>
-          </Box>
-        )}
-      </Menu>
-    </Dropdown>
+              onCommit={value => set(field, value)}
+            />
+          ))}
+          {resettable && (
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', pt: 0.5 }}>
+              <Button
+                size="sm"
+                variant="plain"
+                color="neutral"
+                disabled={disabled}
+                onClick={() => save({})}
+                data-testid="generation-settings-reset-all-btn"
+              >
+                <Typography level="body-xs" textColor="inherit">
+                  Reset all
+                </Typography>
+              </Button>
+            </Box>
+          )}
+        </Sheet>
+      </Modal>
+    </>
   );
 }
