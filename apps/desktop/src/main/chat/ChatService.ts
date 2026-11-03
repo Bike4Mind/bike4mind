@@ -930,7 +930,11 @@ export class ChatService {
   async setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null> {
     if (archived) this.archiveCleanup(sessionId);
     const updated = await this.deps.store.setArchived(sessionId, archived);
-    if (updated && archived) await this.announceSuggestions(sessionId);
+    if (updated && archived) {
+      // Delivering to an archived target is what tells each sender it never arrived.
+      for (const entry of this.heldRelaysFor(sessionId)) await this.resolveHeldRelay(sessionId, entry.id, true);
+      await this.announceSuggestions(sessionId);
+    }
     return updated;
   }
 
