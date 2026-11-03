@@ -19,17 +19,20 @@ import { describeReplyCost, formatCreditsSpent, type TurnProgress } from './stat
 export const RAIL_ROW_HEIGHT = 18;
 
 /**
- * The least distance from the end of one reply to the start of the next, in px: the thread's 24px
- * gap, the shortest turn that can sit between two replies (a one-line relay row), and the gap again.
+ * How far a rail may run past the end of its reply, in px: the thread's 24px gap, the shortest
+ * turn that can sit between two replies (a 22px relay or automatic row) and the gap again, less
+ * a row's worth of space so two rails never touch.
  */
-const NEXT_REPLY_CLEARANCE = 72;
+const NEXT_REPLY_CLEARANCE = 24 + 22 + 24 - 12;
 
 /**
  * How tall a reply has to be for a rail of `rows` to end before the next reply's begins. The
  * rail is out of flow, so a one-line answer with a full rail would otherwise run into the next.
+ * The last reply holds its whole rail: one hanging past the thread's end would lengthen the
+ * scroll beyond what the thread follows to, and a reader at the bottom would stop following.
  */
-export function railReserve(rows: number): number {
-  return Math.max(0, rows * RAIL_ROW_HEIGHT - NEXT_REPLY_CLEARANCE);
+export function railReserve(rows: number, last = false): number {
+  return Math.max(0, rows * RAIL_ROW_HEIGHT - (last ? 0 : NEXT_REPLY_CLEARANCE));
 }
 
 interface RailContent {
@@ -65,12 +68,17 @@ export function railContent(
 }
 
 /** The minimum height a reply needs while its rail is drawn; see railReserve. */
-export function useRailReserve(message: ChatMessage, turn: TurnProgress | null | undefined, rail: boolean): number {
+export function useRailReserve(
+  message: ChatMessage,
+  turn: TurnProgress | null | undefined,
+  rail: boolean,
+  last: boolean
+): number {
   const { hidden } = useReplyStatsPrefs();
   if (!rail) return 0;
   // The row count does not depend on the clock, so the last stamp stands in for it.
   const { shown, credits } = railContent(message, turn, turn?.lastEventAt ?? turn?.startedAt ?? 0, hidden);
-  return railReserve(shown.length + (credits ? 1 : 0));
+  return railReserve(shown.length + (credits ? 1 : 0), last);
 }
 
 /** Ticks once a second while a turn runs, as the status line's own clock does. */
