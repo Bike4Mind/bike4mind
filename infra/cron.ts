@@ -29,6 +29,7 @@ import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
 import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
 import './businessMetricAlerts';
+import './imageModerationReviewSweep';
 
 const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
   schedule: 'rate(5 minutes)',

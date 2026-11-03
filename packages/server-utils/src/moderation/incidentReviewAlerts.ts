@@ -59,7 +59,20 @@ export function renderIncidentReviewAlert(
 const needsReview = (incident: RecordedIncident) =>
   !incident.reviewStatus || incident.reviewStatus === 'pending_review';
 
-async function alertReviewers(incident: RecordedIncident, deps: IncidentReviewAlertDeps): Promise<void> {
+/** The deps the alert needs to render and send, without the incident store. */
+export type IncidentReviewDelivery = Omit<IncidentReviewAlertDeps, 'incidents'>;
+
+export type IncidentAlertOutcome = 'delivered' | 'no_recipients' | 'failed';
+
+/**
+ * Sends the metadata-only alert for one incident to every configured reviewer, without stamping
+ * anything: the caller decides which timestamp a delivery records. Shared by the request path
+ * (withReviewerAlerts) and the scheduled sweep so both render and log identically.
+ */
+export async function deliverIncidentAlert(
+  incident: RecordedIncident,
+  deps: IncidentReviewDelivery
+): Promise<IncidentAlertOutcome> {
   const meta = { incidentId: incident.id };
   const { valid: recipients, invalid } = partitionEmailList(await deps.getRecipients());
   if (invalid.length > 0) {
@@ -73,7 +86,7 @@ async function alertReviewers(incident: RecordedIncident, deps: IncidentReviewAl
       '[ImageModeration] incident needs review but no reviewer is configured (ImageModerationReviewerEmails)',
       meta
     );
-    return;
+    return 'no_recipients';
   }
 
   const path = adminModerationIncidentPath(incident.id);
@@ -93,19 +106,26 @@ async function alertReviewers(incident: RecordedIncident, deps: IncidentReviewAl
     const outcome = await Promise.race([deliver(), timedOut]);
     if (outcome === 'timeout') {
       deps.logger.error('[ImageModeration] reviewer alert did not complete in time', meta);
-      return;
+      return 'failed';
     }
     if (outcome === false) {
       deps.logger.error('[ImageModeration] reviewer alert failed to send', meta);
-      return;
+      return 'failed';
     }
+    return 'delivered';
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function alertReviewers(incident: RecordedIncident, deps: IncidentReviewAlertDeps): Promise<void> {
+  if ((await deliverIncidentAlert(incident, deps)) !== 'delivered') return;
   try {
     await deps.incidents.markAlerted(incident.id);
   } catch {
-    deps.logger.error('[ImageModeration] reviewer alert sent but alertedAt was not recorded', meta);
+    deps.logger.error('[ImageModeration] reviewer alert sent but alertedAt was not recorded', {
+      incidentId: incident.id,
+    });
   }
 }
 

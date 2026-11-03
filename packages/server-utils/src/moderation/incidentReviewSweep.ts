@@ -1,0 +1,126 @@
+import { partitionEmailList } from '@bike4mind/common';
+import { REVIEW_REMINDER_INTERVAL_HOURS, REVIEW_SWEEP_MIN_INCIDENT_AGE_MINUTES } from '@bike4mind/infra';
+import { deliverIncidentAlert, type IncidentReviewDelivery, type RecordedIncident } from './incidentReviewAlerts';
+
+const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
+
+// Per-run cap on each kind of send, oldest first; a backlog drains over successive runs. Each send
+// has its own timeout budget, so the cap also bounds the run's duration.
+export const REVIEW_SWEEP_BATCH_LIMIT = 20;
+
+export interface IncidentReviewSweepDeps extends IncidentReviewDelivery {
+  incidents: {
+    /** Unreviewed incidents created at or before the cutoff with no delivered alert, oldest first. */
+    findUnalerted(createdBefore: Date, limit: number): Promise<RecordedIncident[]>;
+    /** Alerted, unreviewed incidents whose last alert or reminder is at or before the cutoff, oldest first. */
+    findDueForReminder(notifiedBefore: Date, limit: number): Promise<RecordedIncident[]>;
+    /** The oldest unreviewed incident of any age. */
+    findOldestPending(): Promise<RecordedIncident | undefined>;
+    markAlerted(id: string, at: Date): Promise<void>;
+    markReminded(id: string, at: Date): Promise<void>;
+  };
+}
+
+export interface IncidentReviewSweepResult {
+  alerted: number;
+  reminded: number;
+  failed: number;
+  /** Age of the oldest incident still unalerted once the run is done; 0 when there is none. */
+  oldestUnalertedAgeMinutes: number;
+  /** Age of the oldest incident still awaiting a verdict; 0 when there is none. */
+  oldestPendingAgeMinutes: number;
+  /** True when an incident awaits a verdict and no valid reviewer address is configured. */
+  pendingWithoutReviewers: boolean;
+}
+
+const ageMinutes = (incident: RecordedIncident | undefined, now: Date) =>
+  incident ? Math.max(0, Math.floor((now.getTime() - new Date(incident.createdAt).getTime()) / MINUTE_MS)) : 0;
+
+/**
+ * Reconciles reviewer alerts for image moderation incidents. The request path alerts once and
+ * never retries, so an incident recorded while no reviewer was configured, or while the send
+ * failed, stays unalerted. This re-sends that alert for incidents past a short grace period, and
+ * sends one reminder per interval for incidents still awaiting a verdict. It reuses the request
+ * path's delivery, so the email stays metadata only, and it logs incident ids and counts, never a
+ * recipient. A failure on one incident never stops the rest; the next run retries it.
+ */
+export async function runIncidentReviewSweep(
+  deps: IncidentReviewSweepDeps,
+  now: Date = new Date()
+): Promise<IncidentReviewSweepResult> {
+  const { incidents, logger } = deps;
+  const result: IncidentReviewSweepResult = {
+    alerted: 0,
+    reminded: 0,
+    failed: 0,
+    oldestUnalertedAgeMinutes: 0,
+    oldestPendingAgeMinutes: 0,
+    pendingWithoutReviewers: false,
+  };
+
+  const reviewersConfigured = partitionEmailList(await deps.getRecipients()).valid.length > 0;
+  const oldestPending = await incidents.findOldestPending();
+
+  if (reviewersConfigured) {
+    const graceCutoff = new Date(now.getTime() - REVIEW_SWEEP_MIN_INCIDENT_AGE_MINUTES * MINUTE_MS);
+    const unalerted = await incidents.findUnalerted(graceCutoff, REVIEW_SWEEP_BATCH_LIMIT);
+    for (const incident of unalerted) {
+      if (await send(incident, deps, 'alert')) {
+        result.alerted++;
+        await stamp(() => incidents.markAlerted(incident.id, now), 'alertedAt', incident.id, deps);
+      } else {
+        result.failed++;
+      }
+    }
+
+    const reminderCutoff = new Date(now.getTime() - REVIEW_REMINDER_INTERVAL_HOURS * HOUR_MS);
+    const due = await incidents.findDueForReminder(reminderCutoff, REVIEW_SWEEP_BATCH_LIMIT);
+    for (const incident of due) {
+      if (await send(incident, deps, 'reminder')) {
+        result.reminded++;
+        await stamp(() => incidents.markReminded(incident.id, now), 'lastReminderAt', incident.id, deps);
+      } else {
+        result.failed++;
+      }
+    }
+  } else if (oldestPending) {
+    logger.warn(
+      '[ImageModeration] incidents await review but no reviewer is configured (ImageModerationReviewerEmails)',
+      { oldestIncidentId: oldestPending.id }
+    );
+  }
+
+  // Read after the sends so an incident this run alerted does not count against the alarm.
+  const [oldestUnalerted] = await incidents.findUnalerted(now, 1);
+  result.oldestUnalertedAgeMinutes = ageMinutes(oldestUnalerted, now);
+  result.oldestPendingAgeMinutes = ageMinutes(oldestPending, now);
+  result.pendingWithoutReviewers = !reviewersConfigured && oldestPending !== undefined;
+  return result;
+}
+
+async function send(
+  incident: RecordedIncident,
+  deps: IncidentReviewSweepDeps,
+  kind: 'alert' | 'reminder'
+): Promise<boolean> {
+  try {
+    return (await deliverIncidentAlert(incident, deps)) === 'delivered';
+  } catch {
+    deps.logger.error(`[ImageModeration] review sweep ${kind} failed`, { incidentId: incident.id });
+    return false;
+  }
+}
+
+async function stamp(
+  write: () => Promise<void>,
+  field: string,
+  incidentId: string,
+  deps: IncidentReviewSweepDeps
+): Promise<void> {
+  try {
+    await write();
+  } catch {
+    deps.logger.error(`[ImageModeration] review sweep sent but ${field} was not recorded`, { incidentId });
+  }
+}

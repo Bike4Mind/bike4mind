@@ -64,6 +64,8 @@ export const ImageModerationIncidentSchema = z.object({
   // When the reviewer alert was delivered. Absent means no alert went out (none configured, or the
   // send failed), so a later sweep can find the incidents nobody was told about.
   alertedAt: z.union([z.string(), z.date()]).optional(),
+  // When the scheduled sweep last re-sent the alert for an incident still awaiting a verdict.
+  lastReminderAt: z.union([z.string(), z.date()]).optional(),
   createdAt: z.union([z.string(), z.date()]).optional(),
   updatedAt: z.union([z.string(), z.date()]).optional(),
 });

@@ -53,6 +53,56 @@ describe('ImageModerationIncidentRepository', () => {
     });
   });
 
+  describe('review sweep queries', () => {
+    const NOW = new Date('2026-10-20T12:00:00.000Z');
+    const hoursAgo = (hours: number) => new Date(NOW.getTime() - hours * 3_600_000);
+    const seed = async (fields: Record<string, unknown>) => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      await ImageModerationIncident.collection.updateOne({ _id: inc._id }, { $set: fields });
+      return String(inc._id);
+    };
+
+    it('markReminded stamps lastReminderAt and leaves it absent until then', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      expect((await ImageModerationIncident.findById(inc._id).lean())?.lastReminderAt).toBeUndefined();
+
+      await imageModerationIncidentRepository.markReminded(inc.id, NOW);
+
+      expect((await ImageModerationIncident.findById(inc._id).lean())?.lastReminderAt).toEqual(NOW);
+    });
+
+    it('findUnalerted returns old-enough unreviewed incidents with no alert, oldest first', async () => {
+      const newer = await seed({ createdAt: hoursAgo(2) });
+      const older = await seed({ createdAt: hoursAgo(3), reviewStatus: 'pending_review' });
+      await seed({ createdAt: hoursAgo(0.1) });
+      await seed({ createdAt: hoursAgo(5), alertedAt: hoursAgo(4) });
+      await seed({ createdAt: hoursAgo(6), reviewStatus: 'reported' });
+      await seed({ createdAt: hoursAgo(7), reviewStatus: 'false_positive' });
+
+      const found = await imageModerationIncidentRepository.findUnalerted(hoursAgo(0.25), 10);
+
+      expect(found.map(incident => String(incident._id))).toEqual([older, newer]);
+      expect(await imageModerationIncidentRepository.findUnalerted(hoursAgo(0.25), 1)).toHaveLength(1);
+    });
+
+    it('findDueForReminder returns alerted unreviewed incidents whose last notice is a day old', async () => {
+      const neverReminded = await seed({ createdAt: hoursAgo(50), alertedAt: hoursAgo(30) });
+      const remindedLongAgo = await seed({
+        createdAt: hoursAgo(80),
+        alertedAt: hoursAgo(70),
+        lastReminderAt: hoursAgo(25),
+      });
+      await seed({ createdAt: hoursAgo(40), alertedAt: hoursAgo(20) });
+      await seed({ createdAt: hoursAgo(90), alertedAt: hoursAgo(80), lastReminderAt: hoursAgo(2) });
+      await seed({ createdAt: hoursAgo(60) });
+      await seed({ createdAt: hoursAgo(60), alertedAt: hoursAgo(50), reviewStatus: 'reported' });
+
+      const found = await imageModerationIncidentRepository.findDueForReminder(hoursAgo(24), 10);
+
+      expect(found.map(incident => String(incident._id))).toEqual([remindedLongAgo, neverReminded]);
+    });
+  });
+
   describe('findPendingReview', () => {
     it('returns incidents with absent reviewStatus', async () => {
       await imageModerationIncidentRepository.record(baseIncident());

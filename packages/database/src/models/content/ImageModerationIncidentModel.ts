@@ -51,6 +51,7 @@ const ImageModerationIncidentSchema = new Schema(
     falsePositiveBy: { type: String, required: false },
     falsePositiveAt: { type: Date, required: false },
     alertedAt: { type: Date, required: false },
+    lastReminderAt: { type: Date, required: false },
   },
   {
     timestamps: true,
@@ -106,6 +107,39 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
   /** Stamps the time the reviewer alert for this incident was delivered. */
   async markAlerted(id: string, alertedAt = new Date()): Promise<void> {
     await this.model.updateOne({ _id: id }, { $set: { alertedAt } });
+  }
+
+  /** Stamps the time the scheduled sweep last re-sent the alert for a still-unreviewed incident. */
+  async markReminded(id: string, lastReminderAt = new Date()): Promise<void> {
+    await this.model.updateOne({ _id: id }, { $set: { lastReminderAt } });
+  }
+
+  /**
+   * Unreviewed incidents created at or before `createdBefore` that no alert has been delivered
+   * for, oldest first. A missing alertedAt is the only signal: none configured, or the send failed.
+   */
+  async findUnalerted(createdBefore: Date, limit: number): Promise<IImageModerationIncidentDocument[]> {
+    return this.model
+      .find({ reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES }, alertedAt: null, createdAt: { $lte: createdBefore } })
+      .sort({ createdAt: 1 })
+      .limit(limit)
+      .lean() as unknown as IImageModerationIncidentDocument[];
+  }
+
+  /**
+   * Unreviewed incidents that were alerted and are due another reminder: both the alert and the
+   * last reminder (when there is one) are at or before `notifiedBefore`. Oldest first.
+   */
+  async findDueForReminder(notifiedBefore: Date, limit: number): Promise<IImageModerationIncidentDocument[]> {
+    return this.model
+      .find({
+        reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES },
+        alertedAt: { $ne: null, $lte: notifiedBefore },
+        $or: [{ lastReminderAt: null }, { lastReminderAt: { $lte: notifiedBefore } }],
+      })
+      .sort({ createdAt: 1 })
+      .limit(limit)
+      .lean() as unknown as IImageModerationIncidentDocument[];
   }
 
   /** Returns unreviewed incidents (reviewStatus absent or 'pending_review'), oldest first. */
