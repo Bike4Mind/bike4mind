@@ -1392,7 +1392,25 @@ export class ChatService {
 
     const granted = await this.deps.access.list();
     const owned = union([project.workingDirectory, ...project.contextDirectories], own);
-    return { roots: union(owned, granted), workingDirectory: project.workingDirectory };
+    const agents = await this.agentWorktrees(session.id);
+    return { roots: union(union(owned, agents), granted), workingDirectory: project.workingDirectory };
+  }
+
+  /**
+   * The worktrees of the agents this session started and that still exist, which the parent can
+   * read and write without asking: reviewing and combining their work is its job, and they sit
+   * under the repository's shared `.b4m/worktrees` (appWorktreeRoot), outside the parent's own
+   * folder whenever the parent is itself a linked worktree. Only a worktree the app cut for the
+   * child counts; a child that shares the parent's folder adds nothing. launchSpawned and
+   * cleanupDeletedSession bump the parent's scope so a running turn picks a change up.
+   */
+  private async agentWorktrees(parentId: string): Promise<string[]> {
+    const sessions = await this.deps.store.list();
+    return sessions.flatMap(entry => {
+      const project = entry.project;
+      if (entry.origin?.parentSessionId !== parentId || !project?.workspace || !project.workspaceBranch) return [];
+      return project.workingDirectory === project.directory ? [] : [project.workingDirectory];
+    });
   }
 
   /**
@@ -1830,7 +1848,10 @@ export class ChatService {
     // Video polling stops first, so a download landing afterwards cannot recreate the folder.
     this.deps.videoJobs?.forgetSession(sessionId);
     await this.deps.media?.forgetSession(sessionId);
+    // Read before the delete: its parent's running turn drops this worktree from its roots (agentWorktrees).
+    const parentId = (await this.deps.store.get(sessionId))?.origin?.parentSessionId;
     if (deleteStoredSession) await this.deps.store.delete(sessionId);
+    if (parentId) this.bumpScope(parentId);
     // The stopped reply can settle and reindex while process/browser cleanup is awaiting I/O.
     // Once the serialized delete has finished, no later append can resurrect the session.
     this.deps.history?.removeSession(sessionId, historyScope);
@@ -4854,7 +4875,8 @@ export class ChatService {
       if (worktree) {
         const unprepared = await this.ensureWorkspace(child, seed, timer);
         if (unprepared) failure = `The worktree could not be created: ${unprepared.error}`;
-        else if (child.project) {
+        else this.bumpScope(parentId);
+        if (!unprepared && child.project) {
           const workingDirectory = child.project.workingDirectory;
           text = `${worktreePreamble(projectDirectory, { ...worktree, workingDirectory })}\n\n${seed}`;
         }

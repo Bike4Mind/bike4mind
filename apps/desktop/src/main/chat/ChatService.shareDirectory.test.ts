@@ -388,6 +388,56 @@ describe('ChatService.shareDirectory', () => {
     await h.awaitRound(2);
     expect(h.lastToolResult(1)).toContain(`no longer shared: ${outside}`);
   });
+  describe("an agent's worktree", () => {
+    async function agentSession(parentSessionId: string, folder: string) {
+      await mkdir(folder, { recursive: true });
+      return store.create(undefined, {
+        mode: 'code',
+        project: {
+          directory: project,
+          name: 'project',
+          branch: '',
+          workspace: true,
+          workspaceBranch: `b4m/${folder.split('/').pop()}`,
+          workingDirectory: folder,
+          contextDirectories: [],
+        },
+        origin: { parentSessionId, depth: 1, seedPrompt: 'do a piece' },
+      });
+    }
+
+    it('is open to the parent that started it, without asking, until the agent is deleted', async () => {
+      const parent = await codeSession();
+      const worktree = join(base, 'worktrees', 'agent');
+      const agent = await agentSession(parent, worktree);
+      await writeFile(join(worktree, 'AGENT.md'), 'agent work', 'utf8');
+
+      expect(await h.service.shareDirectory(parent, worktree)).toMatchObject({ status: 'already' });
+      await h.service.send(parent, 'review the agent');
+      await h.awaitRound(1);
+      streams[0].write(toolTurn('agent-read', 'file_read', { path: join(worktree, 'AGENT.md') }));
+      streams[0].write(frame('[DONE]'));
+      expect((await awaitSettled('agent-read')).preview).toContain('agent work');
+      await h.awaitRound(2);
+      streams[1].write(frame({ type: 'content', text: 'Done.' }));
+      streams[1].write(frame('[DONE]'));
+      await vi.waitUntil(() => events.some(event => event.type === 'done'), { timeout: 5000, interval: 10 });
+
+      await h.service.deleteSession(agent.id);
+      expect(await h.service.shareDirectory(parent, worktree)).toMatchObject({ status: 'added' });
+    });
+
+    it('is not open to a session that did not start it', async () => {
+      const parent = await codeSession();
+      const other = await codeSession();
+      const worktree = join(base, 'worktrees', 'someone-else');
+      await agentSession(other, worktree);
+
+      expect(await h.service.shareDirectory(parent, worktree)).toMatchObject({ status: 'added' });
+      const roots = (await store.get(parent))?.project?.contextDirectories;
+      expect(roots).toEqual([worktree]);
+    });
+  });
 });
 
 /** A spawned session's seed run has nobody to answer a card; a turn the user types into it does. */
