@@ -4,6 +4,10 @@ import { Config } from '../utils/config';
 
 export const APPLE_ISSUER = 'https://appleid.apple.com';
 
+/** Bounds on Apple's untrusted `user` form field and the display name derived from it. */
+export const APPLE_USER_FIELD_MAX_LENGTH = 2048;
+export const APPLE_DISPLAY_NAME_MAX_LENGTH = 120;
+
 export type AppleConfig = {
   /** The Services ID registered for Sign in with Apple. */
   clientId: string;

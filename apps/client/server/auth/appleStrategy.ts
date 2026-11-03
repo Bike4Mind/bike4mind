@@ -5,7 +5,13 @@ import OAuth2Strategy from 'passport-oauth2';
 import { z } from 'zod';
 import { AuthStrategy, type IAuthProviders } from '@bike4mind/common';
 import { encryptAtRest } from '@bike4mind/utils/security';
-import { APPLE_ISSUER, generateAppleClientSecret, type AppleConfig } from '@bike4mind/server-utils/auth/appleConfig';
+import {
+  APPLE_DISPLAY_NAME_MAX_LENGTH,
+  APPLE_ISSUER,
+  APPLE_USER_FIELD_MAX_LENGTH,
+  generateAppleClientSecret,
+  type AppleConfig,
+} from '@bike4mind/server-utils/auth/appleConfig';
 import { authenticateSelfServeProfile } from '@server/utils/auth/verifyCallback';
 import { appleOAuthStateStore } from './passportOAuthStateStore';
 
@@ -45,7 +51,7 @@ const appleFirstAuthUserSchema = z.object({
 });
 
 export function parseAppleDisplayName(rawUser: unknown): string | undefined {
-  if (typeof rawUser !== 'string' || rawUser.length > 2048) return undefined;
+  if (typeof rawUser !== 'string' || rawUser.length > APPLE_USER_FIELD_MAX_LENGTH) return undefined;
   let json: unknown;
   try {
     json = JSON.parse(rawUser);
@@ -59,7 +65,7 @@ export function parseAppleDisplayName(rawUser: unknown): string | undefined {
     .map(part => part?.trim())
     .filter(Boolean)
     .join(' ');
-  return fullName ? fullName.slice(0, 120) : undefined;
+  return fullName ? fullName.slice(0, APPLE_DISPLAY_NAME_MAX_LENGTH) : undefined;
 }
 
 type AppleOAuth2Client = { _clientSecret: string };

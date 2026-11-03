@@ -30,6 +30,7 @@ import { AuthEvents } from '@bike4mind/common';
 import { resolveOAuthFailureReason, oauthFailureLoginErrorCode } from '@server/utils/auth/oauthFailureReason';
 import { isLocalAppUrl } from '@server/utils/validators';
 import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
+import { APPLE_DISPLAY_NAME_MAX_LENGTH, APPLE_USER_FIELD_MAX_LENGTH } from '@bike4mind/server-utils/auth/appleConfig';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 
 /**
@@ -51,6 +52,7 @@ const APPLE_FORM_POST_FIELDS = ['code', 'state', 'user', 'error', 'error_descrip
  * email comes from the verified id_token), so forward just the name and keep the address out of the URL.
  */
 function appleUserNameOnly(rawUser: string): string | undefined {
+  if (rawUser.length > APPLE_USER_FIELD_MAX_LENGTH) return undefined;
   let parsed: unknown;
   try {
     parsed = JSON.parse(rawUser);
@@ -63,8 +65,8 @@ function appleUserNameOnly(rawUser: string): string | undefined {
   const { firstName, lastName } = name as { firstName?: unknown; lastName?: unknown };
   return JSON.stringify({
     name: {
-      ...(typeof firstName === 'string' ? { firstName } : {}),
-      ...(typeof lastName === 'string' ? { lastName } : {}),
+      ...(typeof firstName === 'string' ? { firstName: firstName.slice(0, APPLE_DISPLAY_NAME_MAX_LENGTH) } : {}),
+      ...(typeof lastName === 'string' ? { lastName: lastName.slice(0, APPLE_DISPLAY_NAME_MAX_LENGTH) } : {}),
     },
   });
 }

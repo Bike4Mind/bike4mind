@@ -679,6 +679,17 @@ describe('POST /api/auth/apple/callback (form_post bounce)', () => {
     expect(malformed.res._getRedirectUrl()).toBe('/api/auth/apple/callback?code=c&state=s');
   });
 
+  it('drops an oversized user field and truncates oversized name parts', () => {
+    const huge = post('apple', { code: 'c', state: 's', user: JSON.stringify({ name: { firstName: 'a'.repeat(3000) } }) });
+    huge.run();
+    expect(huge.res._getRedirectUrl()).toBe('/api/auth/apple/callback?code=c&state=s');
+
+    const long = post('apple', { code: 'c', state: 's', user: JSON.stringify({ name: { firstName: 'b'.repeat(500) } }) });
+    long.run();
+    const forwarded = new URL(long.res._getRedirectUrl(), 'http://localhost').searchParams.get('user');
+    expect(JSON.parse(forwarded!).name.firstName).toHaveLength(120);
+  });
+
   it('refuses a POST for any other strategy', () => {
     expect(post('github', { code: 'c' }).run).toThrow(/Invalid auth strategy/);
   });
