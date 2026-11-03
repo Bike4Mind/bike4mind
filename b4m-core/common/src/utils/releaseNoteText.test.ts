@@ -10,7 +10,7 @@ describe('findDenied', () => {
   );
 
   it('matches Cyrillic lookalike letters', () => {
-    expect(findDenied('Built with Асmе', ['acme'])).toBe('acme');
+    expect(findDenied('Built with \u0410\u0441m\u0435', ['acme'])).toBe('acme');
   });
 
   it.each(['Session quest history', 'listSessionQuests', 'A reaction queue'])(
