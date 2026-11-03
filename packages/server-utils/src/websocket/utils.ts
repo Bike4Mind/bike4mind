@@ -15,7 +15,7 @@ import { Config } from '../utils/config';
 import { connectDB } from '@bike4mind/database';
 import { contextToLogs } from '../utils/logger';
 import { JsonWebTokenError } from 'jsonwebtoken';
-import { ForbiddenError, HTTPError, UnauthorizedError } from '@bike4mind/common';
+import { ACCOUNT_DELETION_PENDING_CODE, ForbiddenError, HTTPError, UnauthorizedError } from '@bike4mind/common';
 import { isConnectionLostError } from '@bike4mind/db-core';
 import { ServiceUnavailableError } from '../utils/errors';
 import { AUTH_UNAVAILABLE_RETRY_AFTER_SECONDS } from '../auth/apiKeyAuthFailure';
@@ -202,6 +202,11 @@ export function withWebSocketContext<T>(
         logger.info(`Auth rejected for WebSocket ${context.functionName}: ${(error as Error).message}`);
       } else {
         logger.error(`Error in WebSocket handler ${context.functionName}:`, error);
+      }
+
+      if (error instanceof ForbiddenError && error.additionalInfo?.code === ACCOUNT_DELETION_PENDING_CODE) {
+        const { code, scheduledFor } = error.additionalInfo;
+        return { statusCode: 403, body: JSON.stringify({ error: error.message, code, scheduledFor }) };
       }
 
       return {
