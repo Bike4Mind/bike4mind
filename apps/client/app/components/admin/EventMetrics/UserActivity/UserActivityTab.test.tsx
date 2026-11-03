@@ -14,7 +14,7 @@ vi.mock('@client/app/utils/organizationAPICalls', () => ({ useGetAllOrganization
 vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 
 import { UserActivityTab } from './UserActivityTab';
-import { useAnalyticsStore, ALL_VALUE } from '../store';
+import { useAnalyticsStore, ALL_VALUE } from './store';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (

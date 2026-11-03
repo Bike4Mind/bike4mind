@@ -32,12 +32,12 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useExportToCSV } from '@client/app/hooks/useExportToCSV';
 import { fetchCounterLogs, type CounterLogRow } from '@client/app/utils/userAPICalls';
-import { useAnalyticsStore, ALL_VALUE, isAllOrganizations } from '../store';
+import { useAnalyticsStore, ALL_VALUE, isAllOrganizations } from './store';
 import { useGetAllOrganizations } from '@client/app/utils/organizationAPICalls';
-import { UserActivityFilters } from '../filters/UserActivityFilters';
-import { collectUserActivityRows, MAX_EXPORT_ROWS } from '../exportUserActivity';
-import { buildUserActivityRequest } from '../userActivityRequest';
-import { AnalyticsErrorCard } from '../AnalyticsErrorCard';
+import { UserActivityFilters } from './filters/UserActivityFilters';
+import { collectUserActivityRows, MAX_EXPORT_ROWS } from './exportUserActivity';
+import { buildUserActivityRequest } from './userActivityRequest';
+import { AnalyticsErrorCard } from './AnalyticsErrorCard';
 
 interface UserActivityTabProps {
   rows: CounterLogRow[];
