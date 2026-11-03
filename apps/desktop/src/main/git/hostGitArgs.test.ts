@@ -2,8 +2,13 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { hostGitArgs, hostNetworkGitArgs, type ScopedConfigReader } from './hostGitArgs';
+import { describe, expect, it, vi } from 'vitest';
+import { gitArgumentPath, gitCommand, hostGitArgs, hostNetworkGitArgs, type ScopedConfigReader } from './hostGitArgs';
+
+vi.mock('../chat/tools/userPath', async importOriginal => ({
+  ...(await importOriginal<typeof import('../chat/tools/userPath')>()),
+  hostProgram: async (name: string) => name,
+}));
 
 describe('hostGitArgs', () => {
   it('prefixes the config overrides and keeps the args in order', () => {
@@ -102,6 +107,59 @@ describe('hostGitArgs', () => {
         GIT_ASKPASS: '/bin/ask',
       });
       expect(withEnv.some(a => a.startsWith('core.sshCommand=') || a.startsWith('core.askPass='))).toBe(false);
+    });
+
+    it('in a WSL folder, reads only the variables that cross into Linux, and uses its null device', async () => {
+      const read = config([
+        ['local', 'core.sshcommand', 'touch marker'],
+        ['local', 'core.askpass', 'touch marker'],
+      ]);
+      const wsl = '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo';
+      const hostOnly = { GIT_SSH_COMMAND: 'ssh -v', GIT_ASKPASS: 'C:\\ask.exe', SSH_ASKPASS: 'C:\\ask.exe' };
+      const pinned = await hostNetworkGitArgs(['fetch'], wsl, read, hostOnly, 'win32');
+      expect(pinned).toContain('core.sshCommand=ssh');
+      expect(pinned).toContain('core.askPass=');
+      expect(pinned).toContain('core.hooksPath=/dev/null');
+
+      const crossing = { ...hostOnly, WSLENV: 'GIT_SSH_COMMAND/u:SSH_ASKPASS' };
+      const deferred = await hostNetworkGitArgs(['fetch'], wsl, read, crossing, 'win32');
+      expect(deferred.some(a => a.startsWith('core.sshCommand='))).toBe(false);
+      expect(deferred).toContain('core.askPass=C:\\ask.exe');
+    });
+
+    describe('git in a WSL folder', () => {
+      const wsl = '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo';
+
+      it('runs Linux git through wsl.exe in the folder, with Linux path arguments', async () => {
+        const worktree = gitArgumentPath(wsl, '\\\\wsl.localhost\\Ubuntu\\home\\me\\wt', 'win32');
+        expect(worktree).toBe('/home/me/wt');
+        const command = await gitCommand(wsl, hostGitArgs(['worktree', 'add', worktree], wsl, 'win32'), 'win32');
+        expect(command?.file).toBe('wsl.exe');
+        expect(command?.cwd).toBeUndefined();
+        expect(command?.args.slice(0, 2)).toEqual(['-d', 'Ubuntu']);
+        expect(command?.args.slice(-9)).toEqual([
+          '/home/me/repo',
+          'git',
+          '-c',
+          'core.fsmonitor=false',
+          '-c',
+          'core.hooksPath=/dev/null',
+          'worktree',
+          'add',
+          '/home/me/wt',
+        ]);
+      });
+
+      it('leaves other folders, other distros and other hosts alone', async () => {
+        expect(await gitCommand('C:\\repo', ['status'], 'win32')).toEqual({
+          file: 'git',
+          args: ['status'],
+          cwd: 'C:\\repo',
+        });
+        expect((await gitCommand(wsl, ['status'], 'linux'))?.file).toBe('git');
+        expect(gitArgumentPath(wsl, '\\\\wsl.localhost\\Debian\\x', 'win32')).toBe('\\\\wsl.localhost\\Debian\\x');
+        expect(gitArgumentPath(wsl, '\\\\wsl.localhost\\Ubuntu\\x', 'linux')).toBe('\\\\wsl.localhost\\Ubuntu\\x');
+      });
     });
 
     it.skipIf(process.platform === 'win32')('still fills a credential from a URL-scoped global helper', async () => {

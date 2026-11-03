@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { gitCommand, hostGitArgs } from '../../git/hostGitArgs';
+import { gitArgumentPath, gitCommand, gitCommandEnv, hostGitArgs } from '../../git/hostGitArgs';
 import { parseRemoteLocation, type RemoteLocation, type RepositoryName } from '../../fleet/repository';
 
 /**
@@ -206,10 +206,12 @@ export function ghReadFiles(tokens: readonly string[]): string[] {
 }
 
 const runGit: GitReader = async (cwd, args) => {
-  const command = await gitCommand(cwd, hostGitArgs(['-C', cwd, ...args], cwd));
+  const env = await gitCommandEnv(cwd);
+  const command = await gitCommand(cwd, hostGitArgs(['-C', gitArgumentPath(cwd, cwd), ...args], cwd));
   if (!command) return null;
   return new Promise(resolve => {
-    execFile(command.file, command.args, { timeout: 2000, windowsHide: true }, (error, stdout) => {
+    // wsl.exe can spend seconds starting a distro that is not running yet.
+    execFile(command.file, command.args, { env, timeout: env ? 10_000 : 2000, windowsHide: true }, (error, stdout) => {
       resolve(error ? null : stdout.trim() || null);
     });
   });

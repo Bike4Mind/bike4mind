@@ -3,8 +3,8 @@ import { realpath, stat } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { BranchCheckout } from '@shared/chat';
-import { gitCommand, hostGitArgs, hostNetworkGitArgs } from '../../git/hostGitArgs';
-import { toWindowsPath, wslCommandEnv, wslLocation } from '../../wsl/wslPath';
+import { gitCommand, gitCommandEnv, hostGitArgs, hostNetworkGitArgs } from '../../git/hostGitArgs';
+import { toWindowsPath, wslLocation } from '../../wsl/wslPath';
 
 const execFileAsync = promisify(execFile);
 
@@ -50,8 +50,8 @@ export function git(directory: string, args: readonly string[]): Promise<string>
 }
 
 /** A path git printed for `directory`, as this host reaches it: git in a WSL folder prints Linux paths. */
-export function gitPath(directory: string, path: string): string {
-  const location = wslLocation(directory);
+export function gitPath(directory: string, path: string, platform: NodeJS.Platform = process.platform): string {
+  const location = wslLocation(directory, platform);
   return location ? toWindowsPath(location, path) : path;
 }
 
@@ -64,9 +64,7 @@ async function runGit(directory: string, args: readonly string[], fullArgs: read
   try {
     const command = await gitCommand(directory, fullArgs);
     if (!command) throw new Error('git is not installed');
-    const wsl = wslLocation(directory);
-    // The distro user's PATH, so a credential helper such as `gh` resolves as it does in their shell.
-    const env = wsl ? await wslCommandEnv(process.env, wsl.distro) : undefined;
+    const env = await gitCommandEnv(directory);
     const { stdout } = await execFileAsync(command.file, command.args, {
       cwd: command.cwd,
       env,
@@ -231,10 +229,16 @@ export async function isGitDirectory(path: string): Promise<boolean> {
  * made it win a lookup for the branch the main worktree actually holds.
  */
 async function worktreeRecords(directory: string): Promise<PorcelainWorktree[]> {
-  return parseWorktreePorcelain(await git(directory, ['worktree', 'list', '--porcelain'])).map(entry => ({
-    ...entry,
-    path: gitPath(directory, entry.path),
-  }));
+  return worktreeRecordsFrom(directory, await git(directory, ['worktree', 'list', '--porcelain']));
+}
+
+/** The records of a porcelain listing git printed in `directory`, their paths as this host reaches them. */
+export function worktreeRecordsFrom(
+  directory: string,
+  porcelain: string,
+  platform: NodeJS.Platform = process.platform
+): PorcelainWorktree[] {
+  return parseWorktreePorcelain(porcelain).map(entry => ({ ...entry, path: gitPath(directory, entry.path, platform) }));
 }
 
 export async function listWorktrees(directory: string): Promise<WorktreeEntry[]> {
