@@ -3,8 +3,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const { updateOne } = vi.hoisted(() => ({ updateOne: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({ OAuthClientModel: { updateOne } }));
 
+import { NATIVE_OAUTH_CLIENT_ID } from '@bike4mind/common';
 import migration, {
-  NATIVE_OAUTH_CLIENT_ID,
   NATIVE_OAUTH_REDIRECT_URI,
   resolveNativeOAuthRedirectUris,
 } from './20260921236950_ensure-first-party-native-oauth-client';

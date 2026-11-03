@@ -1,13 +1,21 @@
 import { defineEndpoint } from '../defineEndpoint';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 import {
+  BulkDeleteFilesRequestSchema,
+  BulkDeleteFilesResponseSchema,
+  ChunkFileRequestSchema,
+  ChunkFileResponseSchema,
   CreateFileUploadRequestSchema,
   CreateFileUploadResponseSchema,
   FileIdParamSchema,
   FileResponseSchema,
+  FilesByIdsQuerySchema,
+  FilesByIdsResponseSchema,
   FileSummarySchema,
   ListFilesQuerySchema,
   ListFilesResponseSchema,
+  SearchFilesQuerySchema,
+  SearchFilesResponseSchema,
   UpdateFileRequestSchema,
 } from '../../schemas/publicFile';
 import { ApiErrorSchema, ScopeForbiddenErrorSchema, StorageLimitErrorSchema } from '../../schemas/chat';
@@ -230,4 +238,171 @@ export const deleteFileContract = defineEndpoint({
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
   },
   codeSample: { authToken: 'b4m_live_<key>', streaming: false },
+});
+
+const CHUNK_EXAMPLE = { chunk_size: 512 };
+
+export const chunkFileContract = defineEndpoint({
+  method: 'post',
+  path: '/api/v1/files/{id}/chunk',
+  operationId: 'chunkFile',
+  summary: 'Re-chunk a file',
+  description:
+    'Queues the chunking and embedding pipeline for a file you can edit: a file you own, or one shared ' +
+    'with you with edit (`update`) permission. `chunk_size` is the passage target in tokens, an integer ' +
+    'between 64 and 1500 inclusive; a value outside that range is rejected rather than adjusted. ' +
+    'Work is asynchronous and there is nothing to poll: a `200` only acknowledges that the job is queued, ' +
+    'and its passages appear on the file once it finishes. A file that is already being ' +
+    'chunked is refused with 409. Authenticate with an API key (`b4m_live_`) carrying `files:write`, or a JWT.',
+  tags: ['Files'],
+  auth: 'apiKeyOrJwt',
+  scopes: [ApiKeyScope.WRITE_FILES],
+  pathParams: FileIdParamSchema,
+  request: ChunkFileRequestSchema,
+  requestExample: CHUNK_EXAMPLE,
+  emitsRateLimitHeaders: true,
+  responses: {
+    200: {
+      description: 'The chunking job is queued.',
+      schema: ChunkFileResponseSchema,
+      example: { message_id: '<messageId>' },
+    },
+    403: { description: WRITE_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    404: {
+      description:
+        'No file with that id is yours to edit. A file you cannot edit, one that does not exist and a ' +
+        'malformed id are all reported as 404.',
+      schema: ApiErrorSchema,
+    },
+    409: { description: 'The file is already being chunked.', schema: ApiErrorSchema },
+    422: {
+      description: 'Request body failed validation, including a `chunk_size` out of range.',
+      schema: ApiErrorSchema,
+    },
+    429: {
+      description:
+        'Per-user rate limit exceeded, or the hourly file allowance shared with uploads is spent: a re-chunk costs one file.',
+      schema: ApiErrorSchema,
+    },
+  },
+  codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: CHUNK_EXAMPLE },
+});
+
+export const searchFilesContract = defineEndpoint({
+  method: 'get',
+  path: '/api/v1/files/search',
+  operationId: 'searchFiles',
+  summary: 'Search files',
+  description:
+    'Searches the files you own, plus files shared with you and, for a key that also holds `datalake:read`, ' +
+    'data-lake files you can read. `q` keeps only files whose name contains it, ignoring case; omit it to list by name. `type` ' +
+    'narrows to one kind of file. Returns the first `limit` matches (default 25, maximum 100) and is not ' +
+    'paginated, so narrow with `q` and `type` rather than paging; use `GET /api/v1/files` to walk every ' +
+    'file you own. Each file carries a `download_url` once it is downloadable. Safe (GET) requests are exempt ' +
+    'from the per-day API-key quota; only the per-minute burst limit applies. Authenticate with an API key ' +
+    '(`b4m_live_`) carrying `files:read`, or a JWT.',
+  tags: ['Files'],
+  auth: 'apiKeyOrJwt',
+  scopes: [ApiKeyScope.READ_FILES],
+  queryParams: SearchFilesQuerySchema,
+  emitsRateLimitHeaders: true,
+  responses: {
+    200: {
+      description: 'The best matches, up to `limit`.',
+      schema: SearchFilesResponseSchema,
+      example: {
+        files: [
+          {
+            id: '<fileId>',
+            file_name: 'q3-notes.pdf',
+            mime_type: 'application/pdf',
+            file_size: 482133,
+            moderation_status: 'clean',
+            download_url: 'https://<cdn>/<key>?Signature=...',
+            download_url_expires_at: '2026-09-30T12:00:00.000Z',
+            created_at: '2026-09-29T12:00:00.000Z',
+          },
+        ],
+      },
+    },
+    403: { description: READ_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    422: { description: '`q`, `type` or `limit` is out of range.', schema: ApiErrorSchema },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: {} },
+});
+
+export const getFilesByIdsContract = defineEndpoint({
+  method: 'get',
+  path: '/api/v1/files/by-ids',
+  operationId: 'getFilesByIds',
+  summary: 'Get several files by id',
+  description:
+    'Returns the files with the given ids, each with a `download_url` once it is downloadable. `ids` is ' +
+    'a comma-separated list of at most 100 file ids. An id that does not exist, is malformed, or is not ' +
+    'visible to you is left out of `files` rather than failing the request, so compare the ids you got ' +
+    'back against the ones you sent. Data-lake files are returned only to a key that also holds ' +
+    '`datalake:read`. Safe (GET) requests are exempt from the per-day API-key quota; only the per-minute ' +
+    'burst limit applies. Authenticate with an API key (`b4m_live_`) carrying `files:read`, or a JWT.',
+  tags: ['Files'],
+  auth: 'apiKeyOrJwt',
+  scopes: [ApiKeyScope.READ_FILES],
+  queryParams: FilesByIdsQuerySchema,
+  emitsRateLimitHeaders: true,
+  responses: {
+    200: {
+      description: 'The visible files among the requested ids.',
+      schema: FilesByIdsResponseSchema,
+      example: {
+        files: [
+          {
+            id: '<fileId>',
+            file_name: 'reference.png',
+            mime_type: 'image/png',
+            file_size: 482133,
+            moderation_status: 'clean',
+            download_url: 'https://<cdn>/<key>?Signature=...',
+            download_url_expires_at: '2026-09-30T12:00:00.000Z',
+            created_at: '2026-09-29T12:00:00.000Z',
+          },
+        ],
+      },
+    },
+    403: { description: READ_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    422: { description: '`ids` is empty, or lists more than 100 ids.', schema: ApiErrorSchema },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: {} },
+});
+
+const BULK_DELETE_EXAMPLE = { file_ids: ['<fileId>', '<otherFileId>'] };
+
+export const bulkDeleteFilesContract = defineEndpoint({
+  method: 'post',
+  path: '/api/v1/files/bulk-delete',
+  operationId: 'bulkDeleteFiles',
+  summary: 'Delete several files',
+  description:
+    'Deletes up to 100 files in one call, as `DELETE /api/v1/files/{id}` would for each: a file you own ' +
+    'is deleted and its storage freed; on a file shared with you only your access is removed. The ' +
+    'request is not atomic. Every requested id lands in exactly one of `deleted`, `unshared`, ' +
+    '`not_found` or `failed`, so a partial failure still answers `200`: retry the ids in `failed`. ' +
+    'Authenticate with an API key (`b4m_live_`) carrying `files:write`, or a JWT.',
+  tags: ['Files'],
+  auth: 'apiKeyOrJwt',
+  scopes: [ApiKeyScope.WRITE_FILES],
+  request: BulkDeleteFilesRequestSchema,
+  requestExample: BULK_DELETE_EXAMPLE,
+  emitsRateLimitHeaders: true,
+  responses: {
+    200: {
+      description: 'The outcome for each requested id.',
+      schema: BulkDeleteFilesResponseSchema,
+      example: { deleted: ['<fileId>'], unshared: [], not_found: ['<otherFileId>'], failed: [] },
+    },
+    403: { description: WRITE_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    422: { description: '`file_ids` is empty, or lists more than 100 ids.', schema: ApiErrorSchema },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: BULK_DELETE_EXAMPLE },
 });
