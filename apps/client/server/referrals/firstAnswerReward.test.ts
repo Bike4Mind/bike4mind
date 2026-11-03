@@ -25,7 +25,11 @@ vi.mock('@bike4mind/utils', () => ({
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: mockSlack }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { error: vi.fn() } }));
 
-import { REFERRAL_REWARD_REASON, rewardInviterForFirstAnswer } from './firstAnswerReward';
+import {
+  alertForReleasedReferralRewards,
+  REFERRAL_REWARD_REASON,
+  rewardInviterForFirstAnswer,
+} from './firstAnswerReward';
 
 const lean = (value: unknown) => ({ select: () => ({ lean: () => Promise.resolve(value) }) });
 const verifiedFriend = {
@@ -147,5 +151,23 @@ describe('rewardInviterForFirstAnswer', () => {
   it('never throws when a dependency fails', async () => {
     mockAddCredits.mockRejectedValue(new Error('db down'));
     await expect(rewardInviterForFirstAnswer('friend1')).resolves.toBeUndefined();
+  });
+});
+
+describe('alertForReleasedReferralRewards', () => {
+  it('runs the spike alert for each reward the held release paid', async () => {
+    mockCountDocuments.mockImplementation(async (filter: { _id: { $lt: string } }) =>
+      filter._id.$lt === 'released2' ? 50 : 10
+    );
+    await alertForReleasedReferralRewards(['released1', 'released2']);
+    expect(mockCountDocuments).toHaveBeenCalledTimes(2);
+    expect(mockSlack).toHaveBeenCalledTimes(1);
+    expect(mockSlack.mock.calls[0][0]).toContain('51');
+  });
+
+  it('reads nothing when the release paid no referral reward', async () => {
+    await alertForReleasedReferralRewards([]);
+    expect(mockGetSettingsMap).not.toHaveBeenCalled();
+    expect(mockSlack).not.toHaveBeenCalled();
   });
 });

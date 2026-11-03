@@ -11,6 +11,7 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
 import { buildHeldGrantAdapters } from '@server/credits/heldSignupGrantAdapters';
 import { buildCreditRewardAdapters } from '@server/credits/creditRewardAdapters';
+import { alertForReleasedReferralRewards } from '@server/referrals/firstAnswerReward';
 
 const logger = new Logger({ metadata: { service: 'signupGrantHeldRelease' } });
 const MAX_USERS_PER_RUN = 500;
@@ -19,10 +20,21 @@ export async function runSignupGrantHeldRelease(
   now: Date = new Date()
 ): Promise<userService.HeldReleaseCronResult & { heldUnlocks: userService.HeldUnlockReleaseResult }> {
   // Queued gear/referral rewards go first: they are owed from the trickle pool before new drips.
-  const rewards = await creditService.releaseHeldCreditRewards(buildCreditRewardAdapters(), {
-    limit: MAX_USERS_PER_RUN,
-  });
-  if (rewards.scanned > 0) logger.info('[signupGrantHeldRelease] held rewards done', rewards);
+  // A failure here must not stall the held signup grants and unlocks below.
+  try {
+    const rewards = await creditService.releaseHeldCreditRewards(
+      { ...buildCreditRewardAdapters(), logger },
+      {
+        limit: MAX_USERS_PER_RUN,
+      }
+    );
+    if (rewards.scanned > 0) logger.info('[signupGrantHeldRelease] held rewards done', rewards);
+    await alertForReleasedReferralRewards(
+      rewards.paidRewards.filter(paid => paid.source === 'referral_first_answer').map(paid => paid.creditTransactionId)
+    );
+  } catch (error) {
+    logger.error('[signupGrantHeldRelease] held rewards failed', error);
+  }
   const adapters = buildHeldGrantAdapters(logger);
   const result = await userService.releaseHeldGrantsAgainstBudget(
     {

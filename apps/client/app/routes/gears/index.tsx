@@ -103,6 +103,10 @@ const GearsPage = () => {
     claimGear(gear.key, {
       onSuccess: result => {
         if (result.creditsAwarded) toast.success(`Reward claimed - ${creditText(gear)} for ${gear.title}`);
+        else if (result.queued)
+          toast.success(
+            `Reward claimed - ${creditText(gear)} for ${gear.title} will arrive once today's free credits allow`
+          );
       },
       onError: () => toast.error("Couldn't claim the reward. Try again."),
     });

@@ -24,7 +24,12 @@ import {
 } from './signupRisk';
 import { accountBlockReasons, isAiAccessRevoked } from './accountState';
 import { protectSignupCredits } from './signupProtection';
-import { reserveSignupGrantBudget, signupGrantBudgetDay, type SignupGrantBudgetReservation } from './signupGrantBudget';
+import {
+  queueHeadBlocks,
+  reserveSignupGrantBudget,
+  signupGrantBudgetDay,
+  type SignupGrantBudgetReservation,
+} from './signupGrantBudget';
 
 type GrantAdapters = FreeCreditAdapters & {
   audit?: (input: { userId: string; credits: number; creditTransactionId?: string }) => Promise<void>;
@@ -210,9 +215,15 @@ async function releaseStage(
       if (amount > 0) {
         if (!BUDGET_EXEMPT_REASONS.has(reason) && !adapters.bypassBudget) {
           // An account already in the queue is drained by the held-release cron in order; a new one waits behind it.
-          // A drip likewise waits while queued rewards are owed from the trickle pool.
+          // A drip likewise waits while it would leave the trickle pool unable to pay the oldest queued reward.
           const queued = dripDay
-            ? !!(await db.signupProtection?.grantBudget?.heldRewards?.hasHeld())
+            ? await queueHeadBlocks(
+                db,
+                'trickle',
+                await db.signupProtection?.grantBudget?.heldRewards?.oldestHeldCredits(),
+                amount,
+                dripDay
+              )
             : expected === 'pending_email' &&
               !user.signupGrantHeldReason &&
               (await hasSignupBacklog(db.users, signupGrantBudgetDay(grantClock(db))));
@@ -572,7 +583,9 @@ export async function resolveDripLimits(adminSettings: GrantAdapters['db']['admi
 /**
  * Pays a UTC day's activity drip, or a trusted preview period within it. The caller establishes eligibility; this owns
  * the rate, the cap, the once-per-day ledger id and the draw from the trickle pool. A dry trickle pool
- * skips the day (withheld, not queued); signup tranches held on the signup pool do not stop it.
+ * skips the day (withheld, not queued); signup tranches held on the signup pool do not stop it. The pool is
+ * shared with gear/referral rewards (creditService.payCreditReward), and a drip waits while it would leave
+ * the pool unable to pay the oldest queued reward.
  */
 export async function dripSignupGrant(
   userId: string,

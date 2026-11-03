@@ -88,8 +88,11 @@ export type SignupGrantBudgetAlert = {
 export type SignupGrantBudget = {
   repository: SignupGrantBudgetRepository;
   notify?: (alert: SignupGrantBudgetAlert) => Promise<void>;
-  /** Queued gear/referral rewards (creditService.payCreditReward); daily drips wait behind them on the trickle pool. */
-  heldRewards?: { hasHeld(): Promise<boolean> };
+  /**
+   * Queued gear/referral rewards (creditService.payCreditReward). A daily drip waits only when the trickle
+   * pool could no longer cover the oldest of them after the drip (queueHeadBlocks).
+   */
+  heldRewards?: { oldestHeldCredits(): Promise<number | null> };
   /** Clock override for the budget's UTC day; tests only. */
   now?: () => Date;
 };

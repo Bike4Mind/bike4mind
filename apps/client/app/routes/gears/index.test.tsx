@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { GearStatus } from '@client/app/hooks/useGearsStatus';
+import { toast } from 'sonner';
 
 const { state, logEvent } = vi.hoisted(() => ({
   state: {
@@ -123,6 +124,15 @@ describe('GearsPage reward markers', () => {
     expect(state.mutate).toHaveBeenCalledTimes(1);
     expect(state.mutate.mock.calls[0][0]).toBe('projects');
     expect(state.navigate).not.toHaveBeenCalled();
+  });
+
+  it('tells the user a queued claim will pay later', async () => {
+    renderPage();
+    await userEvent.click(screen.getByTestId('gear-claim-projects'));
+    vi.mocked(toast.success).mockClear();
+    state.mutate.mock.calls[0][1].onSuccess({ key: 'projects', queued: true });
+    expect(toast.success).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(toast.success).mock.calls[0][0]).toMatch(/will arrive once today's free credits allow/);
   });
 
   it('a click on the card itself acts on its CTA and claims nothing', async () => {

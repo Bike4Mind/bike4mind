@@ -4498,7 +4498,7 @@ export const settingsMap = {
     min: 0,
     int: true,
     description:
-      'Absolute free credits paid per UTC day for daily activity grants. Grants past it are skipped for the day. 0 pauses these grants; there is no unlimited mode, and a missing or invalid value also pauses them and alerts.',
+      'Absolute free credits paid per UTC day for daily activity grants and gear and referral rewards. Activity grants past it are skipped for the day; rewards past it are queued and paid oldest first on a later day. 0 pauses all of them; there is no unlimited mode, and a missing or invalid value also pauses them and alerts.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),

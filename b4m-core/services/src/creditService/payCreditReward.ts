@@ -1,6 +1,6 @@
 import { CreditHolderType, type IAdminSettingsRepository, type SignupProtection } from '@bike4mind/common';
 import { accountBlockReasons, type AccountStateFields } from '../userService/accountState';
-import { reserveSignupGrantBudget } from '../userService/signupGrantBudget';
+import { queueHeadBlocks, reserveSignupGrantBudget } from '../userService/signupGrantBudget';
 import { addCreditsWithLedgerRow, type AddCreditsAdapters } from './addCredits';
 
 export type CreditRewardSource = 'gear' | 'referral_first_answer';
@@ -22,26 +22,59 @@ export type HeldCreditRewardRow = HeldCreditRewardInput & { status: 'held' | 'pa
 export interface HeldCreditRewardRepository {
   hold(reward: HeldCreditRewardInput): Promise<void>;
   findByTransactionIds(transactionIds: string[]): Promise<HeldCreditRewardRow[]>;
-  hasHeld(): Promise<boolean>;
+  /** Credits of the oldest held reward, or null when none is queued. */
+  oldestHeldCredits(): Promise<number | null>;
   listHeld(limit: number): Promise<HeldCreditRewardRow[]>;
   settle(transactionId: string, status: 'paid' | 'void'): Promise<void>;
 }
 
+export type RewardPartyFields = AccountStateFields & { isSynthetic?: boolean | null; deletedAt?: Date | null };
+
+/**
+ * The money-path account gate, stricter than accountBlockReasons: a deleted, synthetic or
+ * suspend_pending account is not paid either. Hold time (apps/client/server/referrals/firstAnswerReward.ts)
+ * and release time both use it, so a reward never pays on release what it would have refused up front.
+ */
+export const isRewardPartyBlocked = (party: RewardPartyFields) =>
+  !!party.deletedAt ||
+  !!party.isSynthetic ||
+  accountBlockReasons(party).length > 0 ||
+  party.moderation?.status === 'suspend_pending';
+
+/** Metadata key naming the invited friend on a referral reward; that friend is re-checked before paying. */
+export const REFERRED_USER_ID_METADATA_KEY = 'referredUserId';
+
 export type PayCreditRewardAdapters = AddCreditsAdapters & {
   heldRewards: HeldCreditRewardRepository;
-  users: { findById(id: string): Promise<AccountStateFields | null> };
+  users: { findById(id: string): Promise<RewardPartyFields | null> };
   adminSettings: Pick<IAdminSettingsRepository, 'findBySettingName'>;
   signupProtection?: SignupProtection;
+  logger?: { error(message: string, ...context: unknown[]): void };
 };
 
 export type PayCreditRewardOutcome =
   { outcome: 'paid'; creditTransactionId: string } | { outcome: 'queued' | 'duplicate' | 'blocked' };
 
-async function payNow(reward: HeldCreditRewardInput, adapters: PayCreditRewardAdapters) {
+async function partiesBlocked(reward: HeldCreditRewardInput, adapters: PayCreditRewardAdapters) {
+  const user = await adapters.users.findById(reward.userId);
+  if (!user || isRewardPartyBlocked(user)) return true;
+  const friendId = reward.metadata?.[REFERRED_USER_ID_METADATA_KEY];
+  if (reward.source !== 'referral_first_answer' || typeof friendId !== 'string') return false;
+  const friend = await adapters.users.findById(friendId);
+  return !friend || isRewardPartyBlocked(friend);
+}
+
+type PayNowResult =
+  { status: 'paid'; creditTransactionId: string } | { status: 'exhausted' | 'contended' | 'duplicate' };
+
+async function payNow(reward: HeldCreditRewardInput, adapters: PayCreditRewardAdapters): Promise<PayNowResult> {
   const reservation = await reserveSignupGrantBudget(adapters, reward.transactionId, reward.credits, {
     pool: 'trickle',
   });
-  if (reservation.outcome === 'exhausted') return null;
+  if (reservation.outcome === 'exhausted') return { status: 'exhausted' };
+  // A non-fresh draw belongs to a concurrent attempt (double claim, overlapping cron) that may still pay
+  // or refund it; paying here could pay unmetered, and losing its ledger insert would refund its draw.
+  if (reservation.outcome === 'reserved' && !reservation.fresh) return { status: 'contended' };
   try {
     const { creditTransactionId } = await addCreditsWithLedgerRow(
       {
@@ -56,8 +89,11 @@ async function payNow(reward: HeldCreditRewardInput, adapters: PayCreditRewardAd
       },
       adapters
     );
-    if (!creditTransactionId) await reservation.release();
-    return creditTransactionId ?? '';
+    if (!creditTransactionId) {
+      await reservation.release();
+      return { status: 'duplicate' };
+    }
+    return { status: 'paid', creditTransactionId };
   } catch (error) {
     await reservation.release();
     throw error;
@@ -65,9 +101,9 @@ async function payNow(reward: HeldCreditRewardInput, adapters: PayCreditRewardAd
 }
 
 /**
- * Pays a free reward (gear, referral) from the trickle pool. A dry pool, or an older reward still
- * queued, holds it for releaseHeldCreditRewards; a blocked account gets nothing and nothing is queued.
- * Idempotent on `transactionId`.
+ * Pays a free reward (gear, referral) from the trickle pool. A dry pool, or a queued older reward the
+ * pool could no longer cover after this one, holds it for releaseHeldCreditRewards; a blocked account
+ * gets nothing and nothing is queued. Idempotent on `transactionId`.
  */
 export async function payCreditReward(
   reward: HeldCreditRewardInput,
@@ -75,16 +111,17 @@ export async function payCreditReward(
 ): Promise<PayCreditRewardOutcome> {
   if (await adapters.db.creditTransactions.findOne({ transactionId: reward.transactionId }))
     return { outcome: 'duplicate' };
-  const user = await adapters.users.findById(reward.userId);
-  if (!user || accountBlockReasons(user).length > 0) return { outcome: 'blocked' };
+  if (await partiesBlocked(reward, adapters)) return { outcome: 'blocked' };
 
   const [own] = await adapters.heldRewards.findByTransactionIds([reward.transactionId]);
-  if (own) return { outcome: own.status === 'held' ? 'queued' : 'duplicate' };
+  // A voided row was refused at release; answering 'duplicate' would read as claimed and loop the user.
+  if (own) return { outcome: own.status === 'held' ? 'queued' : own.status === 'void' ? 'blocked' : 'duplicate' };
 
-  if (!(await adapters.heldRewards.hasHeld())) {
-    const creditTransactionId = await payNow(reward, adapters);
-    if (creditTransactionId) return { outcome: 'paid', creditTransactionId };
-    if (creditTransactionId === '') return { outcome: 'duplicate' };
+  const oldest = await adapters.heldRewards.oldestHeldCredits();
+  if (!(await queueHeadBlocks(adapters, 'trickle', oldest, reward.credits))) {
+    const paid = await payNow(reward, adapters);
+    if (paid.status === 'paid') return { outcome: 'paid', creditTransactionId: paid.creditTransactionId };
+    if (paid.status !== 'exhausted') return { outcome: 'duplicate' };
   }
   await adapters.heldRewards.hold(reward);
   return { outcome: 'queued' };
@@ -94,7 +131,11 @@ export type ReleaseHeldCreditRewardsResult = {
   scanned: number;
   paid: number;
   voided: number;
+  /** Rewards whose release threw; they stay held for the next run. */
+  failed: number;
   budgetExhausted: boolean;
+  /** Ledger ids of the rewards this run paid, so callers can run their post-payout checks. */
+  paidRewards: Array<{ source: CreditRewardSource; creditTransactionId: string }>;
 };
 
 /** Pays queued rewards oldest first against today's trickle pool, stopping at the first that does not fit. */
@@ -102,26 +143,45 @@ export async function releaseHeldCreditRewards(
   adapters: PayCreditRewardAdapters,
   { limit }: { limit: number }
 ): Promise<ReleaseHeldCreditRewardsResult> {
-  const result: ReleaseHeldCreditRewardsResult = { scanned: 0, paid: 0, voided: 0, budgetExhausted: false };
+  const result: ReleaseHeldCreditRewardsResult = {
+    scanned: 0,
+    paid: 0,
+    voided: 0,
+    failed: 0,
+    budgetExhausted: false,
+    paidRewards: [],
+  };
   for (const reward of await adapters.heldRewards.listHeld(limit)) {
     result.scanned++;
-    if (await adapters.db.creditTransactions.findOne({ transactionId: reward.transactionId })) {
+    try {
+      if (await adapters.db.creditTransactions.findOne({ transactionId: reward.transactionId })) {
+        await adapters.heldRewards.settle(reward.transactionId, 'paid');
+        continue;
+      }
+      if (await partiesBlocked(reward, adapters)) {
+        await adapters.heldRewards.settle(reward.transactionId, 'void');
+        result.voided++;
+        continue;
+      }
+      const paid = await payNow(reward, adapters);
+      if (paid.status === 'exhausted') {
+        result.budgetExhausted = true;
+        break;
+      }
+      // Another attempt owns today's draw; it settles the row, or a later run retries.
+      if (paid.status === 'contended') continue;
       await adapters.heldRewards.settle(reward.transactionId, 'paid');
-      continue;
+      if (paid.status === 'paid') {
+        result.paid++;
+        result.paidRewards.push({ source: reward.source, creditTransactionId: paid.creditTransactionId });
+      }
+    } catch (error) {
+      // One bad row must not stall the rest of the queue, or the signup grants the same cron releases.
+      result.failed++;
+      adapters.logger?.error('[releaseHeldCreditRewards] reward release failed', error, {
+        transactionId: reward.transactionId,
+      });
     }
-    const user = await adapters.users.findById(reward.userId);
-    if (!user || accountBlockReasons(user).length > 0) {
-      await adapters.heldRewards.settle(reward.transactionId, 'void');
-      result.voided++;
-      continue;
-    }
-    const creditTransactionId = await payNow(reward, adapters);
-    if (creditTransactionId === null) {
-      result.budgetExhausted = true;
-      break;
-    }
-    await adapters.heldRewards.settle(reward.transactionId, 'paid');
-    if (creditTransactionId) result.paid++;
   }
   return result;
 }

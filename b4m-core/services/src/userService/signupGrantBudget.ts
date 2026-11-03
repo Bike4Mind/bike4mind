@@ -24,6 +24,9 @@ export type SignupGrantBudgetReservation = {
 const noop = async () => {};
 
 const refundScope = new AsyncLocalStorage<Array<() => Promise<void>>>();
+// Fresh draws made inside a refundBudgetOnFailure scope, by counter key and transaction id, so a
+// transaction retry inside that scope still recognises its own earlier draw as fresh.
+const scopeDraws = new WeakMap<Array<() => Promise<void>>, Map<string, () => Promise<void>>>();
 
 /**
  * Hands back every budget draw made inside `fn` if it throws. The counter commits outside any ambient
@@ -90,6 +93,25 @@ async function alertCrossing(
  * 'unmetered' remains only for a non-positive amount or when no counter is wired. `day` pins the draw
  * to a caller-chosen UTC day so a payout keyed by that day books against it.
  */
+/**
+ * True when a newer grant must wait behind the queue: the pool's day could no longer cover the oldest
+ * held reward (`oldestHeld` credits) once `amount` is drawn. No queue, or no wired budget, never blocks.
+ */
+export async function queueHeadBlocks(
+  adapters: BudgetAdapters,
+  pool: SignupGrantPool,
+  oldestHeld: number | null | undefined,
+  amount: number,
+  dayOverride?: string
+): Promise<boolean> {
+  const budgetConfig = adapters.signupProtection?.grantBudget;
+  if (!budgetConfig || !oldestHeld) return false;
+  const day = dayOverride ?? signupGrantBudgetDay(budgetConfig.now?.());
+  const { budget } = await resolvePoolBudget(adapters.adminSettings, pool);
+  const spent = await budgetConfig.repository.getSpent(counterKey(pool, day));
+  return budget - spent < oldestHeld + amount;
+}
+
 export async function reserveSignupGrantBudget(
   adapters: BudgetAdapters,
   transactionId: string,
@@ -110,6 +132,10 @@ export async function reserveSignupGrantBudget(
     await alertCrossing(budgetConfig, pool, day, 100, readSpent, budget);
     return { outcome: 'exhausted', release: noop };
   }
+  const scope = refundScope.getStore();
+  const drawKey = `${key}|${transactionId}`;
+  const ownDraw = !reservation.fresh && scope ? scopeDraws.get(scope)?.get(drawKey) : undefined;
+  if (ownDraw) return { outcome: 'reserved', release: ownDraw, fresh: true };
   const reservedSpent = async () => reservation.spent;
   if (reservation.spent * 2 >= budget) await alertCrossing(budgetConfig, pool, day, 50, reservedSpent, budget);
   if (reservation.spent >= budget) await alertCrossing(budgetConfig, pool, day, 100, reservedSpent, budget);
@@ -119,6 +145,11 @@ export async function reserveSignupGrantBudget(
         budgetConfig.repository.refund(key, transactionId, amount).catch(error => {
           console.warn('[signup-grant-budget] Refund failed; the day may under-report remaining budget', error);
         });
-  refundScope.getStore()?.push(release);
+  if (scope && reservation.fresh) {
+    scope.push(release);
+    const draws = scopeDraws.get(scope) ?? new Map<string, () => Promise<void>>();
+    draws.set(drawKey, release);
+    scopeDraws.set(scope, draws);
+  }
   return { outcome: 'reserved', release, fresh: reservation.fresh };
 }
