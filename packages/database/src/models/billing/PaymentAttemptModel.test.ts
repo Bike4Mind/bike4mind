@@ -165,4 +165,46 @@ describe('PaymentAttemptModel', () => {
       await paymentAttemptRepository.findLinkedUserIds({ userId: 'u1', cardFingerprints: [], ipHashes: [], limit: 10 })
     ).toEqual({ byCard: [], byNetwork: [] });
   });
+
+  it('summarizes a window of attempts without exposing users or cards', async () => {
+    await paymentAttemptRepository.recordStart({ paymentIntentId: 'pi_1', ...start });
+    await paymentAttemptRepository.recordOutcome({ ...outcome('pi_1', 'u1', 'fp_1'), outcome: 'failed' });
+    await paymentAttemptRepository.recordOutcome(outcome('pi_1', 'u1', 'fp_2'));
+    await paymentAttemptRepository.recordOutcome({
+      ...outcome('pi_2', 'u2', 'fp_2'),
+      outcome: 'failed',
+      riskLevel: 'highest',
+      radarBlocked: true,
+    });
+    await paymentAttemptRepository.recordOutcome({ ...outcome('pi_3', 'u3', null), riskLevel: 'elevated' });
+    await paymentAttemptRepository.recordStart({ paymentIntentId: 'pi_4', ...start, hostingNetwork: false });
+    await PaymentAttemptModel.collection.insertOne({
+      paymentIntentId: 'pi_old',
+      userId: 'u9',
+      kind: 'credits',
+      outcome: 'succeeded',
+      cardFingerprints: ['fp_9'],
+      createdAt: new Date('2020-01-01T00:00:00Z'),
+    });
+
+    const summary = await paymentAttemptRepository.summarizeWindow(new Date(Date.now() - 60_000));
+    expect(summary).toEqual({
+      attempts: 4,
+      succeeded: 2,
+      failed: 1,
+      radarBlocked: 1,
+      elevatedRisk: 2,
+      hostingNetwork: 1,
+      distinctCards: 2,
+    });
+    expect(await paymentAttemptRepository.summarizeWindow(new Date(Date.now() + 60_000))).toEqual({
+      attempts: 0,
+      succeeded: 0,
+      failed: 0,
+      radarBlocked: 0,
+      elevatedRisk: 0,
+      hostingNetwork: 0,
+      distinctCards: 0,
+    });
+  });
 });

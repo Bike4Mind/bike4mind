@@ -311,21 +311,13 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/retrieval-rate` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/RetrievalRateTab.tsx` |
 | `/api/admin/scoped-settings` | GET, PUT, DELETE | jwt+key | `admin:*` | no | - | 1: `hooks/data/settings.ts` |
 | `/api/admin/scoped-settings/effective` | GET | jwt+key | `admin:*` | no | - | 0 |
-| `/api/admin/security-dashboard/ai-assessment` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
 | `/api/admin/security-dashboard/attack-simulation` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
 | `/api/admin/security-dashboard/attack-simulation-ingest` | POST | handler | - | no | - | 0 |
 | `/api/admin/security-dashboard/cloud` | GET, POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
 | `/api/admin/security-dashboard/cloud-prowler` | GET, POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
 | `/api/admin/security-dashboard/cloud-prowler-ingest` | POST | handler | - | no | - | 0 |
-| `/api/admin/security-dashboard/code` | GET, POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
-| `/api/admin/security-dashboard/code-semgrep-ingest` | POST | handler | - | no | - | 0 |
 | `/api/admin/security-dashboard/overview` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
-| `/api/admin/security-dashboard/packages` | GET, POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
-| `/api/admin/security-dashboard/packages-ingest` | POST | handler | - | no | - | 0 |
 | `/api/admin/security-dashboard/run-attack-simulation` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
-| `/api/admin/security-dashboard/secrets` | GET, POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
-| `/api/admin/security-dashboard/secrets-ingest` | POST | handler | - | no | - | 0 |
-| `/api/admin/security-dashboard/waf` | GET, POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
 | `/api/admin/security-dashboard/waf-blocked-requests` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
 | `/api/admin/security-dashboard/waf-logs-insights` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
 | `/api/admin/security-dashboard/waf-traffic` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |

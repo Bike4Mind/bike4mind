@@ -79,8 +79,9 @@ dmg:
 win:
   icon: build/icon.ico
   target:
+    # One setup.exe carries both app archives and extracts the one matching the native CPU.
     - target: nsis
-      arch: [x64]
+      arch: [x64, arm64]
   # Same shape as macOS: no certificate is named here. electron-builder picks one up
   # from WIN_CSC_LINK + WIN_CSC_KEY_PASSWORD (or the platform-neutral CSC_LINK +
   # CSC_KEY_PASSWORD). Unsigned installers work, behind a SmartScreen warning.
@@ -100,6 +101,7 @@ nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
+  # Adding ${arch} here would also build a separate installer per arch beside the combined one.
   artifactName: ${productName}-${version}-setup.${ext}
 
 # The auto-updater does not publish from here yet, and `--publish never`
