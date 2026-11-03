@@ -72,6 +72,7 @@ export class ModelCatalog {
   private cache: { environmentUrl: string; models: ChatModelOption[]; expiresAt: number } | null = null;
 
   private localCache: { models: ChatModelOption[]; expiresAt: number } | null = null;
+  private localGeneration = 0;
 
   /** Separate from `cache` because the two views are read on different paths; see listImageModels. */
   private imageCache: { environmentUrl: string; models: string[]; expiresAt: number } | null = null;
@@ -121,7 +122,7 @@ export class ModelCatalog {
           )
         : null,
     ]);
-    if (hostedHit) return { models: this.mergeLocal(hostedHit) };
+    if (hostedHit) return { models: this.mergeLocal(hostedHit, local) };
     if (!api || !hosted) return local.length ? { models: local } : { models: [], error: 'Sign in to see models.' };
 
     if (!hosted.ok) {
@@ -145,15 +146,19 @@ export class ModelCatalog {
       expiresAt: Date.now() + CACHE_TTL_MS,
     };
     this.deps.logger.debug(`CHAT: ${models.length} model(s) available`);
-    return { models: this.mergeLocal(models) };
+    return { models: this.mergeLocal(models, local) };
   }
 
   /** Device discovery never depends on the configured server or account. */
   async listLocal(force = false): Promise<ChatModelOption[]> {
-    if (force || !this.localCache || Date.now() >= this.localCache.expiresAt) {
-      this.localCache = { models: await this.local.models(), expiresAt: Date.now() + 5_000 };
+    if (!force && this.localCache && Date.now() < this.localCache.expiresAt) {
+      return withCurrentContexts(this.localCache.models);
     }
-    return withCurrentContexts(this.localCache.models);
+    const generation = this.localGeneration;
+    const models = await this.local.models();
+    // A forgetLocal() during the read means a newer list is due; this one must not replace it.
+    if (generation === this.localGeneration) this.localCache = { models, expiresAt: Date.now() + 5_000 };
+    return withCurrentContexts(models);
   }
 
   /** The last local list however old, without a round trip; null before the first list or after forgetLocal. */
@@ -164,14 +169,15 @@ export class ModelCatalog {
   /** After the local context setting changes or a model turns out removed, so the next list reads Ollama again. */
   forgetLocal(): void {
     this.localCache = null;
+    this.localGeneration++;
   }
 
-  private mergeLocal(hosted: ChatModelOption[]): ChatModelOption[] {
-    const local = this.localCache && Date.now() < this.localCache.expiresAt ? this.localCache.models : [];
-    return [
-      ...hosted.filter(model => !local.some(candidate => candidate.id === model.id)),
-      ...withCurrentContexts(local),
-    ];
+  private mergeLocal(hosted: ChatModelOption[], local = this.freshLocal()): ChatModelOption[] {
+    return [...hosted.filter(model => !local.some(candidate => candidate.id === model.id)), ...local];
+  }
+
+  private freshLocal(): ChatModelOption[] {
+    return this.localCache && Date.now() < this.localCache.expiresAt ? withCurrentContexts(this.localCache.models) : [];
   }
 
   /**

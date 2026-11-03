@@ -893,13 +893,17 @@ export function findModelOption<T extends { id: string; aliasIds?: readonly stri
   return models.find(model => model.id === id) ?? models.find(model => model.aliasIds?.includes(id));
 }
 
-/** The device-local model a conversation moves to: the remembered pick if listed, else the first. */
+/**
+ * The device-local model a conversation moves to: the remembered pick if listed, else the first ready one. A
+ * remembered pick on a server still listing is kept; the fallback never lands on such a model unasked.
+ */
 export function pickLocalModel(
-  models: readonly { id: string; aliasIds?: readonly string[]; unavailable?: string }[],
+  models: readonly { id: string; aliasIds?: readonly string[]; unavailable?: string; pending?: boolean }[],
   remembered?: string | null
 ): string | null {
   const usable = models.filter(model => !model.unavailable);
-  if (remembered && findModelOption(usable, remembered)) return remembered;
+  const remembers = models.filter(model => !model.unavailable || model.pending);
+  if (remembered && findModelOption(remembers, remembered)) return remembered;
   return usable[0]?.id ?? null;
 }
 

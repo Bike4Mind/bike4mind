@@ -73,11 +73,7 @@ export const PICKER_CHECK_WAIT_MS = 2_000;
  * Ollama lists in well under a second; this leaves room for an SSH server's connection setup.
  */
 export const PICKER_LIST_WAIT_MS = 3_000;
-/**
- * How long a listing that finished after the picker stopped waiting is served instead of asking the server again,
- * counted from that listing or from the last late-listing notice, whichever is newer. The reload a notice causes
- * then starts no new slow listing on any server; 5s matches the chat model catalog's device-side cache.
- */
+/** Counted from the last late-listing notice too, so the reload a notice causes starts no new slow listing. */
 export const LISTED_FRESH_MS = 5_000;
 
 interface ServerClient extends LocalChat {
@@ -105,9 +101,10 @@ interface Entry {
   listing?: Promise<Listing>;
   /** A listing that finished after the picker stopped waiting, served instead of a new listing while fresh. */
   listed?: { models: ChatModelOption[]; at: number };
+  /** The listing a picker stopped waiting for; its result is kept and announced when it lands. */
   reporting?: Promise<Listing>;
-  /** The last listing a models() call handed out. */
-  returned?: Listing;
+  /** The last failed listing applied to health, so a failure two callers see is applied once. */
+  failed?: Listing;
 }
 
 type Listing = { ok: true; models: ChatModelOption[] } | { ok: false; error: unknown };
@@ -421,16 +418,18 @@ export class ModelServerRegistry {
           const result: Listing | undefined = listing
             ? await within(listing, PICKER_LIST_WAIT_MS, undefined)
             : { ok: true, models: fresh ?? [] };
+          if (!this.current(entry)) return [];
           if (result?.ok) {
-            entry.returned = result;
+            if (listing) this.keepLate(entry, listing, result);
             if (entry.health.state === 'unknown') void this.check(entry.record.id);
             return result.models.map(model => ({ ...model, server }));
           }
           if (result === undefined && listing) {
             this.reportLate(entry, listing);
             reason = `${entry.record.name} is still listing its models`;
-          } else if (result && this.current(entry)) this.listingFailed(entry, result.error);
+          } else if (result) this.failOnce(entry, result);
         }
+        if (!this.current(entry)) return [];
         const pending = reason !== null;
         reason ??= unavailableReason(entry);
         const runtimeId = serverRuntimeId(entry.record.id);
@@ -454,7 +453,11 @@ export class ModelServerRegistry {
   /** A pull or removal changed what the server holds, so its last listing is no longer served. */
   private forget(id: string): void {
     const entry = this.entries.get(id);
-    if (entry) entry.listed = undefined;
+    if (!entry) return;
+    entry.listed = undefined;
+    // A listing started before the change may hold the old names; let it finish without being kept.
+    entry.listing = undefined;
+    entry.reporting = undefined;
   }
 
   /** False once update() or remove() replaced this entry; its late results then change nothing. */
@@ -472,11 +475,12 @@ export class ModelServerRegistry {
   private listEntry(entry: Entry): Promise<Listing> {
     if (entry.listing) return entry.listing;
     entry.listed = undefined;
-    entry.listing = entry.client
+    const listing: Promise<Listing> = entry.client
       .listModels()
       .then(
         async (models): Promise<Listing> => {
           if (!this.current(entry)) return { ok: false, error: new Error(`${entry.record.name} was changed.`) };
+          if (entry.listing !== listing) return { ok: true, models };
           const names = models.map(model => model.name);
           entry.record = { ...entry.record, models: names };
           entry.aliasIds = aliasIdsOf(models);
@@ -486,9 +490,22 @@ export class ModelServerRegistry {
         (error: unknown): Listing => ({ ok: false, error })
       )
       .finally(() => {
-        entry.listing = undefined;
+        if (entry.listing === listing) entry.listing = undefined;
       });
-    return entry.listing;
+    entry.listing = listing;
+    return listing;
+  }
+
+  /** Keeps a listing a picker gave up on, whoever received it, so the reload its notice causes is served from it. */
+  private keepLate(entry: Entry, listing: Promise<Listing>, result: Listing & { ok: true }): void {
+    if (entry.reporting !== listing || entry.listing || !this.current(entry)) return;
+    if (entry.listed?.models !== result.models) entry.listed = { models: result.models, at: Date.now() };
+  }
+
+  private failOnce(entry: Entry, result: Listing & { ok: false }): void {
+    if (entry.failed === result || !this.current(entry)) return;
+    entry.failed = result;
+    this.listingFailed(entry, result.error);
   }
 
   private listingFailed(entry: Entry, raw: unknown): void {
@@ -507,8 +524,8 @@ export class ModelServerRegistry {
   }
 
   /**
-   * After a listing the picker stopped waiting for finishes, says so once, unless a models() call already handed it
-   * out. Deferred a turn so a models() call that was waiting on the same listing gets there first.
+   * After a listing the picker stopped waiting for finishes, keeps it and says so once, even when another caller
+   * received it in time: the picker still shows it pending. Deferred a turn so a waiting caller gets there first.
    */
   private reportLate(entry: Entry, listing: Promise<Listing>): void {
     if (entry.reporting === listing) return;
@@ -516,12 +533,11 @@ export class ModelServerRegistry {
     void listing.then(result =>
       setTimeout(() => {
         try {
-          if (!this.current(entry)) return;
-          if (result.ok) {
-            if (entry.returned === result) return;
-            entry.listed = { models: result.models, at: Date.now() };
-          } else {
-            this.listingFailed(entry, result.error);
+          if (entry.reporting !== listing || !this.current(entry)) return;
+          if (result.ok) this.keepLate(entry, listing, result);
+          else {
+            this.failOnce(entry, result);
+            // Settings and the Models screen show the new health; the picker reloads on listedLate.
             this.emit();
           }
           this.lateNoticeAt = Date.now();

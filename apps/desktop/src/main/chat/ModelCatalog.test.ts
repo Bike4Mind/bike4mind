@@ -185,6 +185,48 @@ describe('ModelCatalog', () => {
     expect(catalog.lastLocal()).toBeNull();
   });
 
+  it('keeps a local list read after forgetLocal over one that started before it', async () => {
+    const finishes: ((models: unknown[]) => void)[] = [];
+    const local = { models: vi.fn(() => new Promise<unknown[]>(resolve => finishes.push(resolve))) };
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => null,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      local as never
+    );
+    const older = catalog.listLocal(true);
+    catalog.forgetLocal();
+    const newer = catalog.listLocal(true);
+    finishes[1]([{ id: 'local:srv-a:qwen', name: 'qwen' }]);
+    await newer;
+    finishes[0]([
+      { id: 'local:srv-a:qwen', name: 'qwen', unavailable: 'a is still listing its models', pending: true },
+    ]);
+    await older;
+    expect(catalog.lastLocal()).toEqual([{ id: 'local:srv-a:qwen', name: 'qwen' }]);
+  });
+
+  it('merges the local list it read, even when forgetLocal runs during the hosted read', async () => {
+    let finishHosted: (value: unknown) => void = () => undefined;
+    get.mockImplementation(() => new Promise(resolve => (finishHosted = resolve)));
+    const local = { models: vi.fn().mockResolvedValue([{ id: 'local:ollama:qwen', name: 'qwen' }]) };
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => ({ get }) as unknown as AuthenticatedApiClient,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      local as never
+    );
+    const listed = catalog.list();
+    await vi.waitFor(() => expect(catalog.lastLocal()).not.toBeNull());
+    catalog.forgetLocal();
+    finishHosted({ models: [wireModel()] });
+    expect((await listed).models.map(model => model.id)).toEqual(['claude-sonnet-4-5-20250929', 'local:ollama:qwen']);
+  });
+
   it('discovers a newly started local runtime without expiring or refetching the hosted list', async () => {
     const local = { models: vi.fn().mockResolvedValue([]) };
     catalog = new ModelCatalog(
