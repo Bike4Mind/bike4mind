@@ -13,7 +13,6 @@ import {
   SERVER_CREDENTIALS_STOP,
   SESSION_EXPIRED_STOP,
   type ChatMessage,
-  type ChatUsage,
 } from '@shared/chat';
 import { ArtifactList } from './ArtifactCard';
 import { presentReply } from './codeStream';
@@ -28,8 +27,10 @@ import { automaticSummary, displayText, relaySummary } from './relayRows';
 import { callsIn, roundsOf } from './replyRounds';
 import { skillChipColor, skillSourceLabel } from './skillMenu';
 import { useShowDollarCosts } from './costDisplay';
-import { describeReplyCost, formatCreditsSpent } from './statusLine';
-import { describeTokenRate, formatTokenRate, useShowTokenRate } from './tokenRate';
+import { describeReplyCost, formatCreditsSpent, type TurnProgress } from './statusLine';
+import { describeReplyStats, messageStats, REPLY_STAT_TEXT } from './replyStats';
+import { useReplyStatsPrefs } from './replyStatsPrefs';
+import { ReplyStatsRail, useRailReserve } from './ReplyStatsRail';
 import { clampWindow, extendWindow, initialWindow, WINDOW_STEP, type ThreadWindow } from './threadWindow';
 import { ToolCallList, type MoveCallToBackground, type RespondToApproval } from './ToolCallList';
 import { OrphanVideoJobs } from './VideoJobCard';
@@ -223,21 +224,31 @@ const REPLY_COST_CLASS = 'b4m-reply-cost';
  * thread above - is a render per mouse move across a transcript that can be hundreds of turns
  * long. The parent's `:hover` does the same job for nothing; see AssistantTurn.
  *
- * Credits show only when the server reported them. Absent is not zero - a turn that failed,
- * and every reply stored before credits were captured, would otherwise claim to have been free.
- * A self-hosted reply shows its generation speed in the same place. Nothing at all when neither
- * is there.
+ * Nothing at all when the server reported no credits and the reply has no stat to show. Absent is
+ * not zero - a turn that failed, and every reply stored before this was captured, would otherwise
+ * claim to have been free.
+ *
+ * Where the stats rail is off or does not fit, the reply's stats are here instead: the ones ticked
+ * in Settings on the line, cut short with an ellipsis rather than wrapped, and all of them in the title.
  */
-function ReplyCost({ usage }: { usage?: ChatUsage }) {
+function ReplyCost({ message }: { message: ChatMessage }) {
   const showDollars = useShowDollarCosts();
-  const showRate = useShowTokenRate();
-  const credits = formatCreditsSpent(usage);
-  const rate = showRate ? formatTokenRate(usage?.rate) : null;
-  if (!credits && !rate) return null;
-  const details = [
-    describeReplyCost(usage, showDollars),
-    rate ? describeTokenRate(usage?.rate, usage?.outputTokens) : null,
-  ].filter((line): line is string => line !== null);
+  const { hidden } = useReplyStatsPrefs();
+  const credits = formatCreditsSpent(message.usage);
+  const rows = messageStats(message);
+  const shown = rows.filter(row => !hidden.has(row.id));
+  if (!credits && shown.length === 0) return null;
+  const details = [describeReplyCost(message.usage, showDollars), describeReplyStats(rows)].filter(
+    (line): line is string => line !== null
+  );
+  const parts = [
+    ...(credits ? [<span key="credits">{credits}</span>] : []),
+    ...shown.map(row => (
+      <span key={row.id} data-testid={`chat-message-stat-${row.id}`}>
+        {REPLY_STAT_TEXT[row.id].inline(row.value)}
+      </span>
+    )),
+  ];
 
   return (
     <Typography
@@ -247,12 +258,20 @@ function ReplyCost({ usage }: { usage?: ChatUsage }) {
       // Native, like the turn status line's own split: a Joy tooltip per reply would mount a
       // popper for every turn in the thread to serve the one the pointer is over.
       title={details.length > 0 ? details.join('\n') : undefined}
-      sx={{ position: 'absolute', top: '100%', right: 0, mt: 0.5, whiteSpace: 'nowrap' }}
+      sx={{
+        position: 'absolute',
+        top: '100%',
+        right: 0,
+        // Clear of Copy, which sits at the other end of the same gap.
+        maxWidth: 'calc(100% - 40px)',
+        mt: 0.5,
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+      }}
       data-testid="chat-message-cost"
     >
-      {credits}
-      {credits && rate && ' \xb7 '}
-      {rate && <span data-testid="chat-message-rate">{rate}</span>}
+      {parts.flatMap((part, index) => (index === 0 ? [part] : [' \xb7 ', part]))}
     </Typography>
   );
 }
@@ -271,6 +290,9 @@ function ReplyCost({ usage }: { usage?: ChatUsage }) {
  * under the turn. It copies `content`, the markdown source of every round's prose, and is not
  * offered while the reply is still being written.
  *
+ * With the stats rail on, the reply's stats sit left of it and the cost moves there with them,
+ * leaving Copy alone in the gap. A short reply is held tall enough for its rail; see railReserve.
+ *
  * Memoized, as every turn is: a streaming reply re-renders the thread once a frame, and only the
  * last turn's props change on those frames.
  */
@@ -282,6 +304,8 @@ const AssistantTurn = memo(function AssistantTurn({
   status,
   live = false,
   skipRounds = 0,
+  rail = false,
+  liveTurn = null,
 }: {
   message: ChatMessage;
   onRespond: RespondToApproval;
@@ -295,7 +319,12 @@ const AssistantTurn = memo(function AssistantTurn({
   status?: ReactNode;
   /** Leading stored rounds not drawn yet, when the thread's window ends inside this reply. */
   skipRounds?: number;
+  /** Draw the stats rail beside the reply rather than the stats in its hover footer. */
+  rail?: boolean;
+  /** The turn in flight, while this is the reply it is writing; the rail's live figures. */
+  liveTurn?: TurnProgress | null;
 }) {
+  const reserve = useRailReserve(message, liveTurn, rail);
   const toolCalls = message.toolCalls ?? [];
   const rounds = roundsOf(message);
   // Hidden from the front of the WHOLE list rather than drawn from a slice of it, so a round
@@ -307,6 +336,7 @@ const AssistantTurn = memo(function AssistantTurn({
     <Box
       sx={{
         minWidth: 0,
+        ...(reserve > 0 ? { minHeight: reserve } : {}),
         position: 'relative',
         [`& .${REPLY_COST_CLASS}`]: { opacity: 0, pointerEvents: 'none', transition: 'opacity 120ms' },
         [`&:hover .${REPLY_COST_CLASS}`]: { opacity: 1, pointerEvents: 'auto' },
@@ -364,7 +394,7 @@ const AssistantTurn = memo(function AssistantTurn({
           than of the answer being written. */}
       {status && <Box sx={{ mt: 1 }}>{status}</Box>}
 
-      <ReplyCost {...(message.usage ? { usage: message.usage } : {})} />
+      {rail ? <ReplyStatsRail message={message} turn={liveTurn} /> : <ReplyCost message={message} />}
 
       {!live && message.content.trim().length > 0 && (
         <Box sx={{ position: 'absolute', top: '100%', left: 0 }}>
@@ -678,6 +708,8 @@ export function MessageThread({
   onContinue,
   status,
   footer,
+  statsRail = false,
+  liveTurn = null,
 }: {
   messages: ChatMessage[];
   /** Needed to read attachment bytes back; they are stored per conversation. */
@@ -710,6 +742,10 @@ export function MessageThread({
    * what this conversation set going, so it reads as the last thing that happened in it.
    */
   footer?: ReactNode;
+  /** Each reply's stats in a rail beside it: on, and wide enough. Off puts them in the hover footer. */
+  statsRail?: boolean;
+  /** The turn in flight, for the live figures on the reply it is writing. */
+  liveTurn?: TurnProgress | null;
 }) {
   const bottom = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
@@ -740,8 +776,9 @@ export function MessageThread({
         // Only the last turn, and only while nothing is running: resuming writes back
         // into its own message, so a Continue on an older one would edit history.
         {...(index === messages.length - 1 && !streaming ? { onContinue } : {})}
-        {...(index === messages.length - 1 && streaming ? { status, live: true } : {})}
+        {...(index === messages.length - 1 && streaming ? { status, live: true, liveTurn } : {})}
         {...(skipRounds > 0 ? { skipRounds } : {})}
+        {...(statsRail ? { rail: true } : {})}
       />
     );
   };

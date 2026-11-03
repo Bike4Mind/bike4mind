@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
+import Checkbox from '@mui/joy/Checkbox';
 import IconButton from '@mui/joy/IconButton';
 import List from '@mui/joy/List';
 import ListItem from '@mui/joy/ListItem';
@@ -33,17 +34,24 @@ import {
   ContrastIcon,
   DownloadIcon,
   FolderIcon,
-  ModelsIcon,
   ServerIcon,
   ShieldIcon,
   SlidersIcon,
   SparkIcon,
+  StatsIcon,
   SubSessionsIcon,
 } from './icons';
 import { nestedSessionsSummary, useNestedSessions } from './nestedSessions';
 import { columnStackSx, contentColumnSx, thinScrollbarSx } from './layout';
 import { useCostDisplayPreference } from './costDisplay';
-import { tokenRateSummary, useTokenRateSetting } from './tokenRate';
+import { REPLY_STAT_TEXT, REPLY_STATS } from './replyStats';
+import {
+  replyStatsSummary,
+  setReplyStatShown,
+  setReplyStatsRail,
+  useReplyStatsPrefs,
+  type ReplyStatsPrefs,
+} from './replyStatsPrefs';
 import { PermissionsSettings, permissionsSummary, usePermissions } from './PermissionsSettings';
 import { promptSuggestionsSummary, usePromptSuggestionModel, usePromptSuggestions } from './promptSuggestions';
 import { SuggestionModelPicker } from './SuggestionModelPicker';
@@ -178,27 +186,43 @@ function dollarCostsEntry(enabled: boolean, setEnabled: (enabled: boolean) => vo
   };
 }
 
-function tokenRateEntry(enabled: boolean, toggle: () => void): ConfigEntry {
+function replyStatsEntry(prefs: ReplyStatsPrefs): ConfigEntry {
   return {
-    id: 'token-rate',
-    icon: <ModelsIcon />,
-    label: 'Self-hosted model speed',
-    summary: tokenRateSummary(enabled),
+    id: 'reply-stats',
+    icon: <StatsIcon />,
+    label: 'Reply stats',
+    summary: replyStatsSummary(prefs),
     control: (
       <Stack spacing={1.25}>
         <Typography level="body-xs" textColor="text.tertiary">
-          Show tokens per second where hosted models show credits. Hover it for prompt speed, load time and draft
-          acceptance when the server reports them; a figure starting with ~ was timed by this app.
+          Timing, tokens and speed for each reply, beside it when the window is wide enough and under it on hover
+          otherwise. Each shows only where the model or server reports it; a figure starting with ~ is an estimate.
         </Typography>
         <Switch
           size="sm"
-          checked={enabled}
-          onChange={toggle}
+          checked={prefs.rail}
+          onChange={event => setReplyStatsRail(event.target.checked)}
+          endDecorator="Beside the conversation"
           sx={{ alignSelf: 'flex-start' }}
           slotProps={{
-            input: { 'aria-label': 'Self-hosted model speed', 'data-testid': 'settings-token-rate-switch' },
+            input: {
+              'aria-label': 'Show reply stats beside the conversation',
+              'data-testid': 'settings-reply-stats-rail-switch',
+            },
           }}
         />
+        <Stack spacing={0.75} role="group" aria-label="Stats to show">
+          {REPLY_STATS.map(id => (
+            <Checkbox
+              key={id}
+              size="sm"
+              label={REPLY_STAT_TEXT[id].setting}
+              checked={!prefs.hidden.has(id)}
+              onChange={event => setReplyStatShown(id, event.target.checked)}
+              slotProps={{ input: { 'data-testid': `settings-reply-stat-${id}-checkbox` } }}
+            />
+          ))}
+        </Stack>
       </Stack>
     ),
   };
@@ -384,7 +408,7 @@ const SECTION_ICON: Record<SettingsSection, ReactNode> = {
 function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, ConfigEntry[]> {
   const showDollarCosts = useCostDisplayPreference(state => state.showDollarCosts);
   const setShowDollarCosts = useCostDisplayPreference(state => state.setShowDollarCosts);
-  const [showTokenRate, toggleTokenRate] = useTokenRateSetting();
+  const replyStatsPrefs = useReplyStatsPrefs();
   const update = useAppUpdate();
   const { mode, setMode } = useColorScheme();
   const theme = useTheme();
@@ -405,7 +429,7 @@ function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, Con
       worktreeEntry(worktreeDefault, toggleWorktreeDefault),
       nestedSessionsEntry(nestedSessions, toggleNestedSessions),
       localContextEntry(localContext, next => void setLocalContext(next), localContextError, localContextFit),
-      tokenRateEntry(showTokenRate, toggleTokenRate),
+      replyStatsEntry(replyStatsPrefs),
       curatedListEntry(
         curatedList.settings,
         enabled => void curatedList.setEnabled(enabled),

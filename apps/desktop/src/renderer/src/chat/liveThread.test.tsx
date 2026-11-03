@@ -7,7 +7,7 @@ import { MessageThread } from './MessageThread';
 import { TurnStatus } from './TurnStatus';
 import { presentReply } from './codeStream';
 import { roundsOf } from './replyRounds';
-import { setShowTokenRate } from './tokenRate';
+import { setReplyStatShown } from './replyStatsPrefs';
 import { STALL_AFTER_MS, describeActivity, writingProse } from './statusLine';
 import { useConversation } from './useChat';
 
@@ -47,6 +47,15 @@ function Harness() {
 function PhaseProbe() {
   const { phase } = useConversation(SESSION, () => undefined);
   return <output data-testid="chat-phase-probe">{phase ? JSON.stringify(phase) : 'none'}</output>;
+}
+
+function TurnProbe() {
+  const { turn, messages } = useConversation(SESSION, () => undefined);
+  const { firstTokenAt, thinkingMs, thinkingSince } = turn ?? {};
+  const stats = messages.at(-1)?.stats ?? null;
+  return (
+    <output data-testid="chat-turn-probe">{JSON.stringify({ firstTokenAt, thinkingMs, thinkingSince, stats })}</output>
+  );
 }
 
 describe('the live thread, driven by stream events', () => {
@@ -119,6 +128,44 @@ describe('the live thread, driven by stream events', () => {
     phase({ kind: 'thinking' });
     emit({ type: 'done', sessionId: SESSION, messageId: MESSAGE, content: '' });
     expect(shown()).toBe('none');
+  });
+
+  it('runs the stats rail clock off the phases, and settles to the stats main sends', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(1000);
+      await act(async () => root.render(<TurnProbe />));
+      await act(async () => undefined);
+      const probe = () => JSON.parse(container.querySelector('[data-testid="chat-turn-probe"]')?.textContent ?? '{}');
+      const phaseAt = (at: number, kind: 'waiting' | 'thinking' | 'responding') => {
+        vi.setSystemTime(at);
+        emit({ type: 'phase', sessionId: SESSION, messageId: MESSAGE, phase: { kind } });
+      };
+
+      emit({ type: 'start', sessionId: SESSION, messageId: MESSAGE });
+      phaseAt(1500, 'waiting');
+      phaseAt(2000, 'thinking');
+      expect(probe()).toMatchObject({ firstTokenAt: 2000, thinkingSince: 2000 });
+      phaseAt(5000, 'responding');
+      expect(probe()).toEqual({ firstTokenAt: 2000, thinkingMs: 3000, stats: null });
+
+      // A call that arrives mid-think ends the think: the tool's time is not the model's.
+      phaseAt(6000, 'thinking');
+      vi.setSystemTime(6500);
+      emit({ type: 'tool-start', sessionId: SESSION, messageId: MESSAGE, call: call('a') });
+      expect(probe().thinkingMs).toBe(3500);
+
+      const stats = { startedAt: 1000, endedAt: 9000, totalMs: 8000, modelMs: 7000, streamMs: 6000, toolMs: 1000 };
+      emit({ type: 'done', sessionId: SESSION, messageId: MESSAGE, content: 'Done.', stats });
+      expect(probe().stats).toEqual(stats);
+
+      const failed = { ...stats, endedAt: 4000, totalMs: 3000 };
+      emit({ type: 'start', sessionId: SESSION, messageId: 'm2' });
+      emit({ type: 'error', sessionId: SESSION, messageId: 'm2', message: 'The server went away', stats: failed });
+      expect(probe().stats).toEqual(failed);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   const text = (delta: string): ChatStreamEvent => ({
@@ -233,7 +280,7 @@ describe('the live thread, driven by stream events', () => {
 
   it('leaves the rate off the line and its title when the setting is off', async () => {
     const usage = { inputTokens: 100, outputTokens: 48, rate: { evalTokens: 48, evalMs: 2000 } };
-    act(() => setShowTokenRate(false));
+    act(() => setReplyStatShown('speed', false));
     try {
       await act(async () =>
         root.render(
@@ -245,7 +292,7 @@ describe('the live thread, driven by stream events', () => {
       expect(statusText()).not.toContain('tok/s');
       expect(line?.getAttribute('title') ?? '').not.toContain('tok/s');
     } finally {
-      act(() => setShowTokenRate(true));
+      act(() => setReplyStatShown('speed', true));
     }
   });
 

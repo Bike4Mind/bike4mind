@@ -2,6 +2,7 @@ import { CssVarsProvider } from '@mui/joy/styles';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { AuthState } from '@shared/auth';
+import { REPLY_STATS } from './replyStats';
 import { isSettingsSection, SETTINGS_SECTIONS, SettingsScreen, type SettingsSection } from './SettingsPanel';
 
 /** Rendered to a string, like CustomizePanel's tests and for the same reason: vitest runs on `node`. */
@@ -82,8 +83,10 @@ describe('the Settings screen', () => {
     expect(html).toContain('data-testid="settings-worktree-default-switch"');
   });
 
-  it('offers the self-hosted model speed preference', () => {
-    expect(html).toContain('data-testid="settings-token-rate-switch"');
+  it('offers the reply stats rail and a checkbox per stat, in place of the old speed switch', () => {
+    expect(html).toContain('data-testid="settings-reply-stats-rail-switch"');
+    for (const id of REPLY_STATS) expect(html).toContain(`data-testid="settings-reply-stat-${id}-checkbox"`);
+    expect(html).not.toContain('settings-token-rate-switch');
   });
 
   it('mounts the same server picker and updater, not copies of them', () => {

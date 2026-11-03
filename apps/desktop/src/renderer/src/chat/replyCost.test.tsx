@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import type { ChatMessage } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MessageThread } from './MessageThread';
-import { setShowTokenRate } from './tokenRate';
+import { reloadReplyStatsPrefs, setReplyStatShown } from './replyStatsPrefs';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -21,6 +21,8 @@ describe('the cost on a reply', () => {
   let root: Root;
 
   beforeEach(() => {
+    window.localStorage.clear();
+    reloadReplyStatsPrefs();
     Element.prototype.scrollIntoView = () => undefined;
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -51,8 +53,8 @@ describe('the cost on a reply', () => {
     render([message('m1', { usage: { inputTokens: 1200, outputTokens: 300, creditsUsed: 54, usdCost: 0.027 } })]);
 
     const row = costs()[0];
-    expect(row?.textContent).toBe('54 credits');
-    expect(row?.getAttribute('title')).toBe('1.2k new input, 300 output');
+    expect(row?.textContent).toBe('54 credits \xb7 300 tokens');
+    expect(row?.getAttribute('title')).toBe('1.2k new input, 300 output\nTotal tokens: 300');
   });
 
   // jsdom cannot hover, so the half worth pinning is that the turn's rule reached this row at
@@ -77,25 +79,59 @@ describe('the cost on a reply', () => {
   describe('on a self-hosted model reply', () => {
     const usage = { inputTokens: 300, outputTokens: 48, rate: { evalTokens: 48, evalMs: 2000, loadMs: 1200 } };
 
-    afterEach(() => act(() => setShowTokenRate(true)));
-
     it('shows the generation rate where credits would be, with details in the title', () => {
       render([message('m1', { usage })]);
 
       const row = costs()[0];
-      expect(row?.textContent).toBe('24.0 tok/s');
-      expect(row?.querySelector('[data-testid="chat-message-rate"]')).not.toBeNull();
+      expect(row?.textContent).toBe('48 tokens \xb7 24.0 tok/s \xb7 1.2s load');
+      expect(row?.querySelector('[data-testid="chat-message-stat-speed"]')).not.toBeNull();
       expect(row?.getAttribute('title')).toBe(
-        '300 new input, 48 output\nGeneration: 24.0 tok/s (48 tokens in 2.0s)\nLoad (total): 1.2s'
+        '300 new input, 48 output\nTotal tokens: 48\nSpeed: 24.0 tok/s\nLoad time: 1.2s'
       );
     });
 
-    it('shows nothing when the setting is off', () => {
-      act(() => setShowTokenRate(false));
+    it('leaves out a stat unticked in Settings, and keeps it in the title', () => {
+      act(() => setReplyStatShown('speed', false));
+      render([message('m1', { usage })]);
+
+      const row = costs()[0];
+      expect(row?.textContent).toBe('48 tokens \xb7 1.2s load');
+      expect(row?.getAttribute('title')).toContain('Speed: 24.0 tok/s');
+    });
+
+    it('shows nothing with every stat unticked and no credits', () => {
+      act(() => {
+        setReplyStatShown('tokens', false);
+        setReplyStatShown('speed', false);
+        setReplyStatShown('load', false);
+      });
       render([message('m1', { usage })]);
 
       expect(costs()).toHaveLength(0);
     });
+  });
+
+  it("lists a reply's timing stats in one line, the estimates marked", () => {
+    render([
+      message('m1', {
+        usage: { inputTokens: 100, outputTokens: 400, cacheReadInputTokens: 900, creditsUsed: 12 },
+        stats: {
+          startedAt: 0,
+          firstTokenAt: 1500,
+          endedAt: 10_000,
+          totalMs: 10_000,
+          modelMs: 10_000,
+          streamMs: 8000,
+          toolMs: 0,
+          reasoningMs: 1500,
+          derived: ['reasoningMs'],
+        },
+      }),
+    ]);
+
+    expect(costs()[0]?.textContent).toBe(
+      '12 credits \xb7 ~1.5s thinking \xb7 10.0s total \xb7 ~15% thinking \xb7 400 tokens \xb7 ~50.0 tok/s \xb7 90% cached \xb7 1.5s to first token'
+    );
   });
 
   it('leaves the user, relay and system turns alone', () => {

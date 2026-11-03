@@ -125,6 +125,15 @@ describe('applyReplyDone', () => {
     expect(applyReplyDone(message, done({ content: 'x', promptCache: stamp })).promptCache).toEqual(stamp);
   });
 
+  it('takes the stats, so the rail shows the settled figures without a reload', () => {
+    const stats = { startedAt: 1000, endedAt: 5000, totalMs: 4000, modelMs: 4000, streamMs: 3000, toolMs: 0 };
+    const message = streaming([{ text: 'x', toolCallIds: [] }]);
+    const settled = applyReplyDone(message, done({ content: 'x', stats }));
+
+    expect(settled.stats).toEqual(stats);
+    expect(applyReplyDone(settled, done({ content: 'x' })).stats).toEqual(stats);
+  });
+
   it('leaves the text a reply with no artifact in it streamed', () => {
     const message = streaming([{ text: 'Plain answer.', toolCallIds: [] }]);
     const settled = applyReplyDone(message, done({ content: 'Plain answer.' }));

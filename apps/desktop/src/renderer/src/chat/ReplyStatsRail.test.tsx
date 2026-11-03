@@ -1,0 +1,165 @@
+// @vitest-environment jsdom
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import type { ChatMessage, ChatReplyStats } from '@shared/chat';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MessageThread } from './MessageThread';
+import { RAIL_ROW_HEIGHT, railReserve } from './ReplyStatsRail';
+import { reloadReplyStatsPrefs, setReplyStatShown } from './replyStatsPrefs';
+import type { TurnProgress } from './statusLine';
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const stats: ChatReplyStats = {
+  startedAt: 0,
+  firstTokenAt: 800,
+  endedAt: 12_000,
+  totalMs: 12_000,
+  modelMs: 12_000,
+  streamMs: 11_200,
+  toolMs: 0,
+  reasoningMs: 3000,
+};
+
+function message(id: string, fields: Partial<ChatMessage> = {}): ChatMessage {
+  return { id, role: 'assistant', content: 'done', createdAt: '2026-01-01T00:00:00.000Z', ...fields };
+}
+
+describe('railReserve', () => {
+  it('holds a short reply tall enough that its rail ends before the next one starts', () => {
+    expect(railReserve(4)).toBe(0);
+    expect(railReserve(9)).toBe(9 * RAIL_ROW_HEIGHT - 72);
+  });
+});
+
+describe('the reply stats rail and its footer fallback', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    reloadReplyStatsPrefs();
+    Element.prototype.scrollIntoView = () => undefined;
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.useRealTimers();
+  });
+
+  const render = (
+    messages: ChatMessage[],
+    props: { statsRail?: boolean; streaming?: boolean; liveTurn?: TurnProgress | null } = {}
+  ) =>
+    act(() => {
+      root.render(
+        <MessageThread
+          messages={messages}
+          sessionId="s1"
+          streaming={props.streaming ?? false}
+          onRespond={() => undefined}
+          onContinue={() => undefined}
+          {...(props.statsRail !== undefined ? { statsRail: props.statsRail } : {})}
+          {...(props.liveTurn !== undefined ? { liveTurn: props.liveTurn } : {})}
+        />
+      );
+    });
+
+  const rails = () => Array.from(container.querySelectorAll('[data-testid="chat-reply-stats-rail"]'));
+  const footers = () => Array.from(container.querySelectorAll('[data-testid="chat-message-cost"]'));
+  const statValue = (id: string) =>
+    container.querySelector(`[data-testid="chat-reply-stat-${id}"]`)?.lastElementChild?.textContent;
+
+  const settled = [
+    message('u1', { role: 'user', content: 'Is 221 prime?' }),
+    message('a1', { content: 'No: 13 x 17.', stats, usage: { inputTokens: 40, outputTokens: 300, creditsUsed: 3 } }),
+  ];
+
+  it('draws the rail beside each reply and leaves the footer to Copy', () => {
+    render(settled, { statsRail: true });
+
+    expect(rails()).toHaveLength(1);
+    expect(footers()).toHaveLength(0);
+    expect(container.querySelector('[data-testid="chat-message-assistant-copy-btn"]')).not.toBeNull();
+    expect(statValue('thinking')).toBe('3.0s');
+    expect(statValue('total')).toBe('12.0s');
+    expect(statValue('thinkingShare')).toBe('25%');
+    expect(statValue('cost')).toBe('3 credits');
+  });
+
+  it('falls back to the hover footer when the rail is off or does not fit', () => {
+    render(settled, { statsRail: false });
+
+    expect(rails()).toHaveLength(0);
+    expect(footers()[0]?.textContent).toContain('3.0s thinking');
+  });
+
+  it('draws no rail for the user turn, nor for a reply with nothing measured', () => {
+    render([...settled, message('u2', { role: 'user', content: 'Thanks' }), message('a2', { content: 'Sure.' })], {
+      statsRail: true,
+    });
+
+    expect(rails()).toHaveLength(1);
+  });
+
+  it('leaves out the stats unticked in Settings', () => {
+    act(() => setReplyStatShown('thinkingShare', false));
+    render(settled, { statsRail: true });
+
+    expect(statValue('thinkingShare')).toBeUndefined();
+    expect(statValue('thinking')).toBe('3.0s');
+  });
+
+  it('holds a short reply open to its rail height, and only while the rail is drawn', () => {
+    const reply = () => container.querySelectorAll<HTMLElement>('[data-testid="chat-message-assistant"]')[0];
+    const local = message('a1', {
+      content: 'No.',
+      stats: { ...stats, reasoningTokens: 90, derived: ['reasoningTokens'] },
+      usage: {
+        inputTokens: 40,
+        outputTokens: 300,
+        rate: { evalTokens: 300, evalMs: 11_000, promptTokens: 40, promptMs: 80, loadMs: 900 },
+      },
+    });
+
+    render([local], { statsRail: true });
+    // Thinking, total, share, thinking tokens, tokens, speed, prompt, first token, load.
+    expect(getComputedStyle(reply()!).minHeight).toBe(`${railReserve(9)}px`);
+
+    render([local], { statsRail: false });
+    expect(getComputedStyle(reply()!).minHeight).not.toBe(`${railReserve(9)}px`);
+  });
+
+  it('ticks the live reply off its own clock and shows thinking so far', () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    vi.setSystemTime(20_000);
+    const turn: TurnProgress = { startedAt: 15_000, tokens: null, firstTokenAt: 15_500, thinkingSince: 16_000 };
+
+    render([message('u1', { role: 'user', content: 'Think hard' }), message('a1', { content: '' })], {
+      statsRail: true,
+      streaming: true,
+      liveTurn: turn,
+    });
+    expect(statValue('total')).toBe('5s');
+    expect(statValue('thinking')).toBe('4s');
+    expect(statValue('firstToken')).toBe('500ms');
+
+    act(() => vi.advanceTimersByTime(2000));
+    expect(statValue('total')).toBe('7s');
+    expect(statValue('thinking')).toBe('6s');
+  });
+
+  it('switches the live figures for the stored ones when the reply settles', () => {
+    const live: TurnProgress = { startedAt: Date.now() - 4000, tokens: null };
+    render([message('a1', { content: 'Partial' })], { statsRail: true, streaming: true, liveTurn: live });
+    expect(statValue('thinking')).toBeUndefined();
+
+    render([message('a1', { content: 'Done.', stats })], { statsRail: true, streaming: false, liveTurn: null });
+    expect(statValue('total')).toBe('12.0s');
+    expect(statValue('thinking')).toBe('3.0s');
+  });
+});
