@@ -352,6 +352,7 @@ describe('scanShell', () => {
       'dig example.com',
       'nslookup example.com',
       'docker pull x/y',
+      'command -v ssh',
     ])('does not flag %s', async command => {
       expect((await scan(command)).outbound).toEqual([]);
     });
@@ -645,6 +646,9 @@ describe('scanShell', () => {
       expect(await opaque('cmd.exe /?')).toEqual([null]);
       expect(await opaque('powershell.exe -ExecutionPolicy Bypass -File build.ps1')).toEqual([null]);
       expect(await opaque('echo x | sh')).toEqual([null, 'sh']);
+      expect(await opaque('command -v bash')).toEqual([null]);
+      expect(await opaque('command -pV sh')).toEqual([null]);
+      expect(await opaque("command bash -c 'rm x'")).toEqual(['command bash -c']);
       expect(await opaque('node script.js && python3 -m pytest && git status')).toEqual([null, null, null]);
     });
 

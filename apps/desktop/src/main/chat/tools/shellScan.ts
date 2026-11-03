@@ -330,6 +330,8 @@ interface Wrapper {
   assignments?: boolean;
   /** Words after the options that come before the command: timeout's duration. */
   operands?: number;
+  /** Option letters that make it describe the command instead of running it: `command -v`. */
+  describes?: string;
 }
 
 const WRAPPERS: ReadonlyMap<string, Wrapper> = new Map([
@@ -395,7 +397,7 @@ const WRAPPERS: ReadonlyMap<string, Wrapper> = new Map([
       assignments: true,
     },
   ],
-  ['command', { values: '' }],
+  ['command', { values: '', describes: 'vV' }],
   ['exec', { values: 'a' }],
   ['nohup', { values: '', flags: ['help', 'version'] }],
   // bash's `time` keyword times a whole simple command, assignments included.
@@ -493,10 +495,20 @@ function wrapperOptionsEnd(name: string, tokens: readonly string[], from: number
   return Math.min(at, tokens.length);
 }
 
-/** The index past the wrapper at `tokens[at]` and its own words: options and their values, assignments, timeout's duration. */
+/**
+ * The index past the wrapper at `tokens[at]` and its own words: options and their values, assignments, timeout's
+ * duration. The end of `tokens` when the wrapper runs nothing.
+ */
 export function pastWrapper(tokens: readonly string[], at: number): number {
   const name = basename(unquote(tokens[at] ?? ''));
-  return Math.min(wrapperOptionsEnd(name, tokens, at + 1) + (WRAPPERS.get(name)?.operands ?? 0), tokens.length);
+  const wrapper = WRAPPERS.get(name);
+  const end = wrapperOptionsEnd(name, tokens, at + 1);
+  const describes = wrapper?.describes ?? '';
+  const options = tokens.slice(at + 1, end).map(unquote);
+  if (options.some(word => /^-[^-]/.test(word) && [...word.slice(1)].some(letter => describes.includes(letter)))) {
+    return tokens.length;
+  }
+  return Math.min(end + (wrapper?.operands ?? 0), tokens.length);
 }
 
 /** Where the command a run of leading wrappers (`sudo`, `env X=1`, `timeout 5`) runs starts in `tokens`. */

@@ -160,6 +160,7 @@ describe('sessionScriptRun', () => {
     'echo "$(cat run.sh)"',
     'diff <(cat run.sh) data.txt',
     'cat run.sh | sudo tee out.txt',
+    'command -v ./run.sh',
   ])('ignores %s', async command => {
     expect(await runs(command)).toBeNull();
   });
