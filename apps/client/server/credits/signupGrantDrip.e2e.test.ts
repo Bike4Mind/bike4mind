@@ -277,8 +277,7 @@ describe('signup activity drip', () => {
     expect((await drip(user.id, 2)).creditsGranted).toBe(0);
   });
 
-  it('alerts once a day when the cap falls back to the registry default', async () => {
-    delete config.verifiedUnlockCredits;
+  it('alerts once a day when the cap falls back to the activity max registry default', async () => {
     delete config.signupGrantActivityMaxCredits;
     const user = await createSignupStageUser();
     await drip(user.id, 0);
@@ -288,7 +287,6 @@ describe('signup activity drip', () => {
   });
 
   it('does not alert on the default cap while the daily amount is 0', async () => {
-    delete config.verifiedUnlockCredits;
     delete config.signupGrantActivityMaxCredits;
     config.signupGrantDailyCredits = '0';
     const user = await createSignupStageUser();
@@ -297,7 +295,6 @@ describe('signup activity drip', () => {
   });
 
   it('retries the unset-cap alert on the next drip after an undelivered post', async () => {
-    delete config.verifiedUnlockCredits;
     delete config.signupGrantActivityMaxCredits;
     notifyConfig.mockRejectedValueOnce(new Error('not delivered'));
     const user = await createSignupStageUser();

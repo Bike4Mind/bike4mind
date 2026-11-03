@@ -36,13 +36,13 @@ describe('signup grant configuration', () => {
   });
 
   it.each(['0', '75', '-1', 'invalid'])(
-    'preserves a restricted legacy setting %s and falls back to the default drip cap',
+    'preserves a restricted legacy setting %s and locks nothing without a verification unlock row',
     async value => {
       const result = await resolveSignupGrantSettings(
         settings({ stagedSignupGrantEnabled: 'true', defaultFreeCredits: value })
       );
       expect(result.signupCredits).toBe(value === '75' ? 75 : 0);
-      expect(result.unlockCredits).toBe(9000);
+      expect(result.unlockCredits).toBe(0);
     }
   );
 
@@ -131,14 +131,14 @@ describe('signup grant schedule', () => {
     expect(schedule.dripCapSource).toBe('legacy');
   });
 
-  it('takes the smaller legacy cap, or the one that is set', async () => {
+  it('takes the smaller legacy cap, reading an absent activity max as its default', async () => {
     const staged = { stagedSignupGrantEnabled: 'true' };
     const both = await resolveSignupGrantSchedule(
       settings({ ...staged, signupGrantActivityMaxCredits: '9000', verifiedUnlockCredits: '5000' })
     );
     expect(both.dripCap).toBe(5000);
     const one = await resolveSignupGrantSchedule(settings({ ...staged, verifiedUnlockCredits: '7000' }));
-    expect([one.dripCap, one.dripCapSource]).toEqual([7000, 'legacy']);
+    expect([one.dripCap, one.dripCapSource]).toEqual([7000, 'default']);
   });
 
   it.each([
@@ -199,16 +199,43 @@ describe('signup grant schedule', () => {
     ).toBe(1000);
   });
 
-  it('reports the registry default when staging is on and no cap key is set', async () => {
+  it('locks and drips nothing when staging is on and both legacy cap rows are absent', async () => {
     const schedule = await resolveSignupGrantSchedule(settings({ stagedSignupGrantEnabled: 'true' }));
     expect(schedule).toEqual({
       initialCredits: 0,
       dailyCredits: 0,
-      dripCap: 9000,
-      unlockCredits: 9000,
+      dripCap: 0,
+      unlockCredits: 0,
       paysFlat: false,
       inviteBonusCredits: 0,
       dripCapSource: 'default',
+    });
+  });
+
+  it('reads an absent verification unlock as 0 next to a stored activity max', async () => {
+    const values = { stagedSignupGrantEnabled: 'true', signupGrantActivityMaxCredits: '5000' };
+    expect(await resolveSignupGrantSchedule(settings(values))).toMatchObject({
+      dripCap: 0,
+      unlockCredits: 0,
+      dripCapSource: 'legacy',
+    });
+  });
+
+  it('caps the drip at the activity max default when only the verification unlock is stored', async () => {
+    const values = { stagedSignupGrantEnabled: 'true', verifiedUnlockCredits: '20000' };
+    expect(await resolveSignupGrantSchedule(settings(values))).toMatchObject({
+      dripCap: 9000,
+      unlockCredits: 20000,
+      dripCapSource: 'default',
+    });
+  });
+
+  it('leaves a stored drip cap in charge of both drip and unlock', async () => {
+    const values = { stagedSignupGrantEnabled: 'true', signupGrantDripCap: '12000', verifiedUnlockCredits: '20000' };
+    expect(await resolveSignupGrantSchedule(settings(values))).toMatchObject({
+      dripCap: 12000,
+      unlockCredits: 12000,
+      dripCapSource: 'setting',
     });
   });
 });

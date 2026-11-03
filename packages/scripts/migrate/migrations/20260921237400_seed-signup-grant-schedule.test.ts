@@ -147,10 +147,17 @@ describe('seed signup grant schedule migration', () => {
     });
   });
 
-  it('seeds the default cap for a staged environment with no legacy cap keys', async () => {
+  it('seeds a 0 cap for a staged environment with no legacy cap keys, which never unlocked or dripped', async () => {
     await seed({ stagedSignupGrantEnabled: 'true', signupGrantActivityEnabled: 'true' });
     await migration.up();
-    expect(await stored()).toMatchObject({ signupGrantDripCap: '9000', signupGrantDailyCredits: '0' });
+    expect(await stored()).toMatchObject({ signupGrantDripCap: '0', signupGrantDailyCredits: '0' });
+  });
+
+  it('keeps the 9000 activity max default under a larger verification unlock', async () => {
+    await seed({ ...dripping, verifiedUnlockCredits: '20000' });
+    await migration.up();
+    expect(await stored()).not.toHaveProperty('signupGrantDripCap');
+    expect(await resolveSignupGrantSchedule(repo)).toMatchObject({ dripCap: 9000, unlockCredits: 20000 });
   });
 
   it('seeds every key with no old rows at all', async () => {

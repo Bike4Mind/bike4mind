@@ -162,15 +162,17 @@ export function signupGrantScheduleFromValues(
   toggles: SignupGrantLegacyToggles
 ): SignupGrantSchedule {
   const cap = read('signupGrantDripCap');
-  const verifiedUnlock = read('verifiedUnlockCredits');
-  const legacyCaps = [read('signupGrantActivityMaxCredits'), verifiedUnlock].filter(
-    (value): value is number => value !== undefined
-  );
+  // An absent legacy row reads as its registry default (unlock 0, activity max 9000), as the pre-schedule
+  // payout did; the drip was bounded by both because it could not pass the enrolled unlock.
+  const verifiedUnlock = read('verifiedUnlockCredits') ?? settingsMap.verifiedUnlockCredits.defaultValue ?? 0;
+  const activityMax = read('signupGrantActivityMaxCredits');
   // Unset schedule keys with staging off keep the flat grant: nothing locked, no drip.
-  const legacyCap = !toggles.staged ? 0 : legacyCaps.length ? Math.min(...legacyCaps) : undefined;
-  const dripCap = cap ?? legacyCap ?? settingsMap.signupGrantDripCap.defaultValue ?? 0;
+  const legacyCap = !toggles.staged
+    ? 0
+    : Math.min(activityMax ?? settingsMap.signupGrantActivityMaxCredits.defaultValue ?? 0, verifiedUnlock);
+  const dripCap = cap ?? legacyCap;
   const dripCapSource: SignupGrantDripCapSource =
-    cap !== undefined ? 'setting' : legacyCap !== undefined ? 'legacy' : 'default';
+    cap !== undefined ? 'setting' : toggles.staged && activityMax === undefined ? 'default' : 'legacy';
   return {
     initialCredits:
       read('signupGrantInitialCredits') ??
@@ -181,7 +183,7 @@ export function signupGrantScheduleFromValues(
       read('signupGrantDailyCredits') ?? (toggles.activity ? read('signupGrantActivityDailyCredits') : 0) ?? 0,
     dripCap,
     // Without a stored cap, verification releases verifiedUnlockCredits as before, even where a 0 activity max stops the drip.
-    unlockCredits: cap !== undefined || !toggles.staged ? dripCap : (verifiedUnlock ?? dripCap),
+    unlockCredits: cap !== undefined || !toggles.staged ? dripCap : verifiedUnlock,
     paysFlat: cap !== undefined ? cap === 0 : !toggles.staged,
     inviteBonusCredits: read('signupGrantInviteBonusCredits') ?? 0,
     dripCapSource,

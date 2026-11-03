@@ -470,6 +470,7 @@ describe('staged signup ledger', () => {
       signupGrantActivityMinActiveSeconds: '600',
       signupGrantActivityDailyCredits: '10',
       signupGrantActivityMaxCredits: '28',
+      verifiedUnlockCredits: config.verifiedUnlockCredits,
       ...overrides,
     };
     vi.spyOn(adminSettingsRepository, 'findBySettingNames').mockImplementation(
