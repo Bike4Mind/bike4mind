@@ -300,6 +300,19 @@ describe('signup grant daily budget', () => {
     expect(await spentToday()).toBe(0);
   });
 
+  it('does not queue new signups behind a hold the release cron would never pay', async () => {
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '100';
+    config.defaultFreeCredits = '12';
+    clock = new Date('2030-03-02T10:00:00Z');
+    const orphan = await createUser(false, 0);
+    await User.updateOne(
+      { _id: orphan.id },
+      { $set: { signupGrantHeldReason: 'budget_exhausted', signupGrantHeldAt: new Date('2030-03-01T10:00:00Z') } }
+    );
+    const newcomer = await createUser(false, 1);
+    expect(await userService.grantFreeCredits(newcomer, adapters)).toMatchObject({ creditsGranted: 12 });
+  });
+
   const createInbox = async (email: string, enrolled: boolean) =>
     User.create({
       username: email.replace(/\W/g, '-'),

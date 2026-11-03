@@ -336,6 +336,8 @@ describe('active session heartbeat', () => {
       username: 'held',
       name: 'Held',
       email: 'held@example.test',
+      emailVerified: true,
+      tags: ['pending-free-credits'],
       signupGrantHeldReason: 'budget_exhausted',
       signupGrantHeldAt: at(0),
       signupGrant: { ...(await newSignupGrant(adminSettingsRepository)), stage: 'pending_email' },

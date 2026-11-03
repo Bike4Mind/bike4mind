@@ -352,6 +352,10 @@ export async function hasSignupBacklog(users: FreeCreditAdapters['db']['users'],
   const held = await users.findOne({
     // $type repeats the user_signupGrantHeldReason partial filter so the planner can use that index.
     signupGrantHeldReason: { $eq: 'budget_exhausted', $type: 'string' },
+    // Same payable set the held-release cron drains (SignupGrantReleaseBatchModel listHeld payableOnly):
+    // a hold that cron never pays would otherwise queue every new grant behind it indefinitely.
+    tags: PENDING_FREE_CREDITS_TAG,
+    emailVerified: true,
     isBanned: { $ne: true },
     isModerated: { $ne: true },
     disputePending: { $ne: true },
