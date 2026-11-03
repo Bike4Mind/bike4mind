@@ -38,6 +38,14 @@ describe('noLocalModels', () => {
     expect(noLocalModels({ models: [model], loading: false, runtime: down })).toMatchObject({ fix: null });
   });
 
+  it('counts a saved server still listing its models as usable, but not one that is down', () => {
+    const server = { id: 'abc', name: 'gpu box' };
+    const listing = { ...model, server, unavailable: 'gpu box is still listing its models', pending: true };
+    expect(noLocalModels({ models: [listing], loading: false, runtime: down })).toBeNull();
+    const unreachable = { ...model, server, unavailable: 'gpu box is unreachable' };
+    expect(noLocalModels({ models: [unreachable], loading: false, runtime: down })).toMatchObject({ fix: null });
+  });
+
   it('does not block while a saved server offers a model, even with Ollama on this computer down', () => {
     const remote: ChatModelOption = {
       id: localModelId('srv-abc123', 'qwen2.5:0.5b'),

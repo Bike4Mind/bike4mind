@@ -409,6 +409,8 @@ export function useModelCatalog(local = false): ModelCatalogController {
 
   // A model pulled or removed on the Models screen changes the local half of the list.
   useEffect(() => window.b4m.models.onInstalledChanged(() => void load(true)), [load]);
+  // Main already dropped its device-side cache, so an unforced read lists servers again but keeps the hosted half.
+  useEffect(() => window.b4m.chat.onModelsChanged(() => void load(false, true)), [load]);
 
   const reload = useCallback(() => forcedLoad.current ?? load(true), [load]);
 

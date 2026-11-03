@@ -694,7 +694,7 @@ export function ChatShell({
       const option = catalog.models.find(
         model =>
           isLocalBackend(model) &&
-          !model.unavailable &&
+          (!model.unavailable || model.pending) &&
           (model.server?.id ?? LOCAL_SERVER_ID) === serverId &&
           model.name.toLowerCase() === wanted
       );

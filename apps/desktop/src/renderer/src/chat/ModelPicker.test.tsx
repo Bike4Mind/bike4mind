@@ -208,6 +208,26 @@ describe('ModelPicker server groups', () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
+  it('warns about a down server for the current model, but not about one still listing', () => {
+    const current = 'local:srv-def456:llama3';
+    mount(grouped, current);
+    expect(document.querySelector('[data-testid="model-picker-server-down"]')?.textContent).toContain(
+      'lab is unreachable'
+    );
+    act(() => root?.unmount());
+    host?.remove();
+
+    const listing = grouped.map(model =>
+      model.id === current ? { ...model, unavailable: 'lab is still listing its models', pending: true } : model
+    );
+    const { onSelect } = mount(listing, current);
+    expect(document.querySelector('[data-testid="model-picker-server-down"]')).toBeNull();
+    const row = options().find(option => option.dataset.unavailable === 'true')!;
+    expect(row.textContent).toContain('lab is still listing its models');
+    act(() => row.click());
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
   it('selects the first available match on Enter when a disabled row is listed above it', async () => {
     const { onSelect } = mount([
       { id: 'local:srv-def456:sonnet-local', name: 'Sonnet local', server: lab, unavailable: 'lab is unreachable' },
