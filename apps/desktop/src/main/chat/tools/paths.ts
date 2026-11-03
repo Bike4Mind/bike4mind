@@ -1,6 +1,16 @@
 import { readlink, realpath, stat } from 'node:fs/promises';
-import { dirname, isAbsolute, join, parse, resolve, sep } from 'node:path';
-import { parseWslPath, wslLocation, wslRealpath, wslUncPath, type WslLocation } from '../../wsl/wslPath';
+import { dirname, isAbsolute, join, parse, posix, resolve, sep } from 'node:path';
+import {
+  parseWslPath,
+  wslLocation,
+  wslOperandPlaces,
+  wslRealpath,
+  wslUncPath,
+  type OperandReader,
+  type WslLocation,
+} from '../../wsl/wslPath';
+
+export type { OperandReader } from '../../wsl/wslPath';
 
 /** The kernel's own limit (MAXSYMLINKS); past it the open fails with ELOOP anyway. */
 const MAX_LINK_HOPS = 32;
@@ -104,18 +114,88 @@ export async function resolveWithinRoots(
 export async function resolveWithinRootsPhysically(
   requested: string,
   roots: readonly string[],
-  baseDirectory: string
+  baseDirectory: string,
+  reader: OperandReader = 'program'
 ): Promise<string> {
   if (!requested) throw new PathAccessDenied(requested);
   if (roots.length === 0) throw new PathAccessDenied(requested);
 
-  const wsl = wslLocation(baseDirectory);
-  if (wsl && !roots.some(root => sameDistro(wslLocation(root), wsl))) throw new PathAccessDenied(requested);
-  const realRoots = await Promise.all(roots.map(root => realRoot(root, wsl)));
-  const current = wsl ? await physicallyInDistro(wsl, requested) : await physicallyOnHost(requested, baseDirectory);
-  if (current === null || !realRoots.some(root => isWithin(root, current))) throw new PathAccessDenied(requested);
-  return current;
+  const [landed, ...others] = await operandPlaces(requested, roots, baseDirectory, reader);
+  if (!landed?.inside || landed.physical === null || others.some(place => !place.inside)) {
+    throw new PathAccessDenied(requested);
+  }
+  return landed.physical;
 }
+
+export interface OperandPlace {
+  /** Where the operand lands as written. */
+  lexical: string;
+  /** With every symlink followed; null when it cannot be resolved, or would start a distro to find out. */
+  physical: string | null;
+  /** Whether `physical` lies inside one of the roots the place was checked against. */
+  inside: boolean;
+}
+
+/**
+ * Each place a command run in `baseDirectory` reaches with `operand`, resolved as the kernel will
+ * (see `resolveWithinRootsPhysically`) and checked against `roots`; the first is where the shell
+ * itself lands. In a WSL folder the operand is read by Linux rules, plus every other way
+ * `wslOperandPlaces` lists, so it is inside only when every reading is.
+ */
+export async function operandPlaces(
+  operand: string,
+  roots: readonly string[],
+  baseDirectory: string,
+  reader: OperandReader = 'program'
+): Promise<OperandPlace[]> {
+  const wsl = wslLocation(baseDirectory);
+  const realRoots = await Promise.all(roots.map(root => realRoot(root, wsl)));
+  // Asking a distro no root lives in would start it only to refuse.
+  const rooted = (place: string): boolean => {
+    const distro = wslLocation(place);
+    return !distro || roots.some(root => sameDistro(wslLocation(root), distro));
+  };
+  const resolved = wsl
+    ? await Promise.all(
+        wslOperandPlaces(wsl, operand, reader).map(async place => ({
+          lexical: lexicalPlace(place),
+          physical: rooted(place) ? await physicalPlace(wsl, place) : null,
+        }))
+      )
+    : [
+        {
+          lexical: resolve(baseDirectory, operand),
+          physical: rooted(resolve(baseDirectory, operand))
+            ? await physicallyOnHost(operand, baseDirectory).catch(() => null)
+            : null,
+        },
+      ];
+  return resolved.map(({ lexical, physical }) => ({
+    lexical,
+    physical,
+    inside: physical !== null && realRoots.some(root => isWithin(root, physical)),
+  }));
+}
+
+/** Where `operand` lands from `directory` as written: the places `operandPlaces` checks, symlinks left as they are. */
+export function operandTargets(directory: string, operand: string, reader: OperandReader = 'program'): string[] {
+  const wsl = wslLocation(directory);
+  return wsl ? wslOperandPlaces(wsl, operand, reader).map(lexicalPlace) : [resolve(directory, operand)];
+}
+
+/** `path.resolve` for a command's operands, which a command in a WSL folder reads by Linux rules. */
+export function resolveOperand(directory: string, ...operands: string[]): string {
+  return operands.reduce((from, operand) => operandTargets(from, operand, 'shell')[0] ?? from, resolve(directory));
+}
+
+/** A place from `wslOperandPlaces` with its `..` applied to the names before it. */
+function lexicalPlace(place: string): string {
+  const wsl = parseWslPath(place);
+  return wsl ? wslUncPath(wsl, posix.resolve(wsl.linuxPath)) : resolve(place);
+}
+
+/** A Windows path to another computer, which a command in a WSL folder names without opening a connection to it. */
+export const onAnotherComputer = (path: string): boolean => /^[\\/]{2}/.test(path) && !parseWslPath(path);
 
 async function physicallyOnHost(requested: string, baseDirectory: string): Promise<string> {
   const prefix = parse(requested).root;
@@ -134,19 +214,14 @@ async function physicallyOnHost(requested: string, baseDirectory: string): Promi
 }
 
 /**
- * A command running in a WSL folder is a Linux process: its argument is resolved by Linux rules,
- * against the folder's Linux path, by the distro itself. A share path to the same distro is read
- * as the Linux path it names.
+ * A place from `wslOperandPlaces` for a command in the WSL folder `base`, with every symlink
+ * followed: by the distro itself for a place in it. A place in another distro is not on the
+ * command's filesystem, and a Windows path to another computer is not looked at; both are null.
  */
-async function physicallyInDistro(base: WslLocation, requested: string): Promise<string | null> {
-  const named = parseWslPath(requested);
-  if (named && named.distro.toLowerCase() !== base.distro.toLowerCase()) return null;
-  const linux = named
-    ? named.linuxPath
-    : requested.startsWith('/')
-      ? requested
-      : `${base.linuxPath.replace(/\/$/, '')}/${requested}`;
-  return inDistro(base, linux);
+async function physicalPlace(base: WslLocation, place: string): Promise<string | null> {
+  const named = parseWslPath(place);
+  if (named) return sameDistro(named, base) ? inDistro(named, named.linuxPath) : null;
+  return onAnotherComputer(place) ? null : physicallyOnHost(place, place).catch(() => null);
 }
 
 /**
@@ -177,6 +252,15 @@ export async function hostRealpath(path: string): Promise<string> {
   if (real === null) throw new Error(`Cannot resolve ${path} in its WSL distro`);
   // The distro also answers for a path that does not exist, which realpath refuses.
   await stat(real);
+  return real;
+}
+
+/** `physicalTarget`, except that a WSL path has its symlinks followed by its distro. */
+export async function hostPhysicalTarget(target: string): Promise<string> {
+  const wsl = wslLocation(target);
+  if (!wsl) return physicalTarget(target);
+  const real = await inDistro(wsl, wsl.linuxPath);
+  if (real === null) throw new Error(`Cannot resolve ${target} in its WSL distro`);
   return real;
 }
 

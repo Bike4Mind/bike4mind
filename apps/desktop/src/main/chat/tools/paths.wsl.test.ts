@@ -33,6 +33,7 @@ vi.mock('../../wsl/wslPath', async importOriginal => {
 
 const { PathAccessDenied, hostRealpath, isWithin, resolveWithinRoots, resolveWithinRootsPhysically } =
   await import('./paths');
+const { shareName } = await import('../../wsl/wslPath');
 
 const REPO = '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo';
 const denied = (promise: Promise<unknown>) => expect(promise).rejects.toBeInstanceOf(PathAccessDenied);
@@ -103,7 +104,7 @@ describe('paths in a WSL folder', () => {
 
   it('refuses a path in a distro no root is in without asking that distro', async () => {
     await denied(resolveWithinRootsPhysically('\\\\wsl.localhost\\Debian\\home\\me\\repo', [REPO], REPO));
-    expect(asked).toEqual(['Ubuntu:/home/me/repo']);
+    expect(asked).toEqual(['Ubuntu:/home/me/repo', 'Ubuntu:/home/me/repo/\\\\wsl.localhost\\Debian\\home\\me\\repo']);
     asked.length = 0;
     await denied(resolveWithinRoots('\\\\wsl.localhost\\Debian\\etc\\hosts', [REPO]));
     await denied(resolveWithinRoots('\\\\wsl$\\Debian\\etc\\hosts', ['C:\\Users\\me\\proj']));
@@ -116,12 +117,32 @@ describe('paths in a WSL folder', () => {
       '\\\\wsl$\\ubuntu\\home\\me\\repo\\src'
     );
     expect(asked).toEqual(['Ubuntu:/home/me/repo', 'ubuntu:/home/me/repo/src']);
-    expect(
-      await resolveWithinRootsPhysically('\\\\?\\UNC\\wsl.localhost\\Ubuntu\\home\\me\\repo\\src', [REPO], REPO)
-    ).toBe(`${REPO}\\src`);
+    // To bash it is a name in the folder; the share place it also names is checked too.
+    const long = '\\\\?\\UNC\\wsl.localhost\\Ubuntu\\home\\me\\repo\\src';
+    expect(await resolveWithinRootsPhysically(long, [REPO], REPO)).toBe(`${REPO}\\${shareName(long)}`);
+    await denied(resolveWithinRootsPhysically('\\\\?\\UNC\\wsl.localhost\\Ubuntu\\home\\me\\other', [REPO], REPO));
     await denied(resolveWithinRoots('\\\\wsl$\\ubuntu\\home\\me\\repository', [REPO]));
     expect(isWithin(REPO, '\\\\wsl$\\UBUNTU\\home\\me\\repo\\x')).toBe(true);
     expect(isWithin(REPO, '\\\\wsl$\\Ubuntu\\home\\me\\Repo\\x')).toBe(false);
+  });
+
+  it('reads a share path given to a command as the Linux name bash takes it for, and as the share place', async () => {
+    await denied(resolveWithinRootsPhysically('//wsl.localhost/Ubuntu/home/me/repo/x', [REPO], REPO));
+    expect(asked).toContain('Ubuntu:/wsl.localhost/Ubuntu/home/me/repo/x');
+    await denied(resolveWithinRootsPhysically('\\\\wsl.localhost\\Ubuntu\\home\\me\\notes.txt', [REPO], REPO));
+
+    const named = '\\\\wsl.localhost\\Ubuntu\\home\\me\\notes.txt';
+    expect(await resolveWithinRootsPhysically(named, [REPO], REPO, 'shell')).toBe(`${REPO}\\${shareName(named)}`);
+  });
+
+  it("reads a Windows program's operand as Windows would as well, from the folder's share path", async () => {
+    await denied(resolveWithinRootsPhysically('C:\\Users\\me\\notes.txt', [REPO], REPO, 'windows'));
+    await denied(resolveWithinRootsPhysically('..\\notes.txt', [REPO], REPO, 'windows'));
+    await denied(resolveWithinRootsPhysically('C:notes.txt', [REPO], REPO, 'windows'));
+    expect(await resolveWithinRootsPhysically('src\\a.ts', [REPO], REPO, 'windows')).toBe(`${REPO}\\src\u{f05c}a.ts`);
+    expect(await resolveWithinRootsPhysically('C:\\Users\\me\\notes.txt', [REPO], REPO)).toBe(
+      `${REPO}\\C\u{f03a}\u{f05c}Users\u{f05c}me\u{f05c}notes.txt`
+    );
   });
 
   it('reads a Linux absolute path from a WSL folder as a path in its distro', async () => {

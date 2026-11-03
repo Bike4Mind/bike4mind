@@ -1,10 +1,11 @@
 import { stat } from 'node:fs/promises';
-import { basename, join, relative, resolve } from 'node:path';
+import { basename, join, posix, relative, resolve } from 'node:path';
 import type { Node } from 'web-tree-sitter';
+import { parseWslPath, wslLocation } from '../../wsl/wslPath';
 import { directoryOptionValues } from './bashArity';
 import { parseBash } from './bashParser';
-import { isWithin, physicalTarget } from './paths';
-import { expandHome, unquote, words } from './shellScan';
+import { hostPhysicalTarget, isWithin, operandTargets, resolveOperand } from './paths';
+import { expandHome, shellHome, unquote, words } from './shellScan';
 import { repositoryRoot } from './shellWrites';
 import type { ToolContext } from './types';
 
@@ -141,7 +142,7 @@ function save(sessionId: string, record: SessionWrites): Promise<void> {
 async function recordWrite(context: ToolContext, target: string, kind: 'files' | 'trees'): Promise<void> {
   const id = context.sessionId;
   if (!id) return;
-  const physical = await physicalTarget(target).catch(() => resolve(target));
+  const physical = await hostPhysicalTarget(target).catch(() => resolve(target));
   const record = remember(
     id,
     (await sessionRecord(id)) ?? {
@@ -362,6 +363,22 @@ export async function sessionScriptRun(
 
 type FoundRuns = Map<string, { name: string; generation: number | '*' }>;
 
+const inSameDistro = (a: string, b: string): boolean =>
+  wslLocation(a)?.distro.toLowerCase() === wslLocation(b)?.distro.toLowerCase();
+
+/** `target` with every symlink followed, except one in a WSL distro other than `base`'s, which would have to be started to look. */
+async function physicalFrom(base: string, target: string): Promise<string> {
+  if (wslLocation(target) && !inSameDistro(base, target)) return target;
+  return hostPhysicalTarget(target).catch(() => target);
+}
+
+/** `path` as an operand of a command in `from`, relative to it; by Linux rules in a WSL folder. */
+function operandFrom(from: string, path: string): string {
+  const base = wslLocation(from);
+  const target = base && inSameDistro(from, path) ? parseWslPath(path) : null;
+  return base && target ? posix.relative(base.linuxPath, target.linuxPath) : relative(from, path);
+}
+
 /** Adds what `command` runs to `found` and `hooks`; a nested `sh -c` string adds to the same maps. */
 async function scanScripts(
   command: string,
@@ -381,6 +398,7 @@ async function scanScripts(
   // An unparsable command is already asked about by shellApproval.
   if (!tree) return;
 
+  const { home } = await shellHome(startDirectory);
   let cwd = startDirectory;
 
   const treeGeneration = async (physical: string): Promise<number | undefined> => {
@@ -393,17 +411,19 @@ async function scanScripts(
 
   // Also resolved from the starting folder, since a `cd` inside a subshell is not undone here.
   const consider = async (raw: string, directory: string, exact = false): Promise<void> => {
-    const text = expandHome(unquote(raw));
+    const text = expandHome(unquote(raw), home);
     if (!text || text.includes('$') || text.includes('`')) return;
     for (const base of new Set(exact ? [directory] : [directory, startDirectory])) {
-      const physical = await physicalTarget(resolve(base, text)).catch(() => resolve(base, text));
-      if (found.has(physical)) continue;
-      const own = written.get(physical);
-      const inTree = await treeGeneration(physical);
-      const generation = own === undefined ? inTree : Math.max(own, inTree ?? own);
-      if (generation !== undefined) found.set(physical, { name: text, generation });
-      else if (overflowed && (await stat(physical).catch(() => null))?.isFile()) {
-        found.set(physical, { name: text, generation: '*' });
+      for (const target of operandTargets(base, text)) {
+        const physical = await physicalFrom(base, target);
+        if (found.has(physical)) continue;
+        const own = written.get(physical);
+        const inTree = await treeGeneration(physical);
+        const generation = own === undefined ? inTree : Math.max(own, inTree ?? own);
+        if (generation !== undefined) found.set(physical, { name: text, generation });
+        else if (overflowed && (await stat(physical).catch(() => null))?.isFile()) {
+          found.set(physical, { name: text, generation: '*' });
+        }
       }
     }
   };
@@ -418,7 +438,7 @@ async function scanScripts(
 
   const gitHooks = async (directories: string[]): Promise<void> => {
     for (const directory of directories) {
-      const physical = await physicalTarget(directory).catch(() => directory);
+      const physical = await hostPhysicalTarget(directory).catch(() => directory);
       for (const [repository, generation] of record?.hooks ?? []) {
         if (isWithin(repository, physical)) hooks.set(repository, generation);
       }
@@ -432,12 +452,12 @@ async function scanScripts(
     if (executable === undefined) return;
     const program = basename(executable);
     if (!wrapped && (program === 'cd' || program === 'pushd')) {
-      const target = args.find(arg => !arg.startsWith('-'));
-      if (target && !target.includes('$')) cwd = resolve(cwd, expandHome(target));
+      const target = expandHome(args.find(arg => !arg.startsWith('-')) ?? '', home);
+      if (target && !target.includes('$')) cwd = resolveOperand(cwd, target);
       return;
     }
     if (program === 'git') {
-      await gitHooks([cwd, ...directoryOptionValues(tokens.slice(start)).map(value => resolve(cwd, value))]);
+      await gitHooks([cwd, ...directoryOptionValues(tokens.slice(start)).map(value => resolveOperand(cwd, value))]);
       for (const value of leadingOptionValues(args, ['-c']))
         for (const path of pathsIn(value)) await consider(path, cwd);
     }
@@ -472,16 +492,16 @@ async function scanScripts(
     const project = PROJECT_FILES[runner];
     if (project) {
       const named = [...directoryOptionValues(tokens.slice(start)), ...cwdOptionValues(args)];
-      for (const directory of [cwd, ...named.map(value => resolve(cwd, value))]) {
+      for (const directory of [cwd, ...named.map(value => resolveOperand(cwd, value))]) {
         for (const file of project)
-          await consider(relative(startDirectory, join(directory, file)), startDirectory, true);
+          await consider(operandFrom(startDirectory, join(directory, file)), startDirectory, true);
       }
       // pytest also loads a conftest.py from any folder below the one it starts in.
       if (project === PYTEST_FILES) {
-        const below = await physicalTarget(cwd).catch(() => cwd);
+        const below = await hostPhysicalTarget(cwd).catch(() => cwd);
         for (const file of written.keys()) {
           if (basename(file) === 'conftest.py' && isWithin(below, file)) {
-            await consider(relative(startDirectory, file), startDirectory, true);
+            await consider(operandFrom(startDirectory, file), startDirectory, true);
           }
         }
       }

@@ -46,9 +46,11 @@ vi.doMock('../../wsl/wslPath', async () => {
 });
 
 const { scanShell } = await import('./shellScan');
+const { shareName } = await import('../../wsl/wslPath');
 
 const OTHER = '\\\\wsl.localhost\\Debian\\etc\\hosts';
-const inDebian = (paths: string[]) => paths.filter(path => /debian/i.test(path));
+/** Paths read over the Debian share or asked of Debian; a name in another distro may still spell `Debian`. */
+const inDebian = (paths: string[]) => paths.filter(path => /^(\\\\wsl\.localhost\\debian\\|debian:)/i.test(path));
 
 describe('a path in a distro no root is in', () => {
   it.each([
@@ -110,10 +112,20 @@ describe('a path in a distro no root is in', () => {
     unresolvable.current = true;
     try {
       await expect(scanShell('sed -n p notes.txt', root, [root])).rejects.toThrow();
-      await expect(scanShell('sed C:/out', root, [root])).resolves.not.toBeNull();
+      await expect(scanShell('sed -n p C:/out', root, [root])).rejects.toThrow();
+      await expect(scanShell('sed --version', root, [root])).resolves.not.toBeNull();
     } finally {
       unresolvable.current = false;
     }
+  });
+
+  it('reads a Windows-looking operand of a Linux program as the Linux path it is, in the folder', async () => {
+    const root = '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo';
+
+    const scan = await scanShell('node build.js C:/out', root, [root]);
+
+    expect(scan?.paths).toContain(`${root}\\C\u{f03a}\\out`);
+    expect(scan?.directories).toEqual([]);
   });
 });
 
@@ -164,6 +176,75 @@ describe('the folders a command in a WSL project may reach unasked', () => {
 
     expect(toolchain?.directories).toEqual([]);
     expect(secret?.directories).toEqual(['\\\\wsl.localhost\\Ubuntu\\home\\me\\.cargo']);
+  });
+});
+
+describe('where a command in a WSL project lands after a cd, by Linux rules', () => {
+  const root = '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo';
+  const HOME = '\\\\wsl.localhost\\Ubuntu\\home\\me';
+
+  it.each([
+    ['a share path', `mkdir -p '${root}\\a\\b' && cd '${root}\\a\\b' && cat ../../notes.txt`, [HOME]],
+    ['a share path', `mkdir -p '${root}\\a\\b' && cd '${root}\\a\\b' && echo x >> ../../notes.txt`, [HOME]],
+    ['a ~ path', "mkdir -p ~/repo/'a\\b' && cd ~/repo/'a\\b' && cat ../../notes.txt", [HOME]],
+    ['a ~ path', "mkdir -p ~/repo/'a\\b' && cd ~/repo/'a\\b' && echo x >> ../../notes.txt", [HOME]],
+    ['a ~ path', "cd ~/'q\\..\\repo\\sub' && cat ../notes.txt", [HOME]],
+    ['a $HOME path', "cd $HOME/'q\\..\\repo\\sub' && cat ../notes.txt", [HOME]],
+    ['a // path', 'cd //home/me/repo/sub && cat ../../notes.txt', [HOME]],
+  ])(
+    'names the folder outside the project that a relative operand reaches after a cd to %s: %s',
+    async (_kind, command, expected) => {
+      const scan = await scanShell(command, root, [root]);
+
+      expect(scan?.directories).toEqual(expected);
+    }
+  );
+
+  it.each([
+    'cd src && cat ../package.json',
+    `cd '${root}\\src' && cat ../package.json`,
+    "cd 'a\\b' && cat ../package.json",
+    'cd ~/repo/src && cat ../package.json',
+    "grep -rn 'foo\\|bar' src",
+    "printf 'a\\n'",
+  ])('still scans %s as contained in the project', async command => {
+    const scan = await scanShell(command, root, [root]);
+
+    expect(scan?.directories).toEqual([]);
+    expect(scan?.ungranted).toEqual([]);
+    expect(scan?.contained).toBe(true);
+  });
+
+  it('checks a share path given to a program at the place the share names too', async () => {
+    const scan = await scanShell(`cat '${HOME}\\notes.txt'`, root, [root]);
+
+    expect(scan?.directories).toEqual([HOME]);
+  });
+
+  it('records a write to a share-spelled name at the Linux name bash writes, and at the share place', async () => {
+    const scan = await scanShell(`echo x > '${root}\\out.txt'`, root, [root]);
+
+    expect(scan?.writes).toEqual([`${root}\\${shareName(`${root}\\out.txt`)}`, `${root}\\out.txt`]);
+  });
+
+  it('records a write after a cd at the Linux place bash writes', async () => {
+    const scan = await scanShell("cd 'a\\b' && echo x > ../s.sh && cp 'x\\run.sh' ../bin/", root, [root]);
+
+    expect(scan?.writes).toEqual([`${root}\\s.sh`, `${root}\\bin`, `${root}\\bin\\x\u{f05c}run.sh`]);
+  });
+
+  it('joins a home whose Linux name holds a backslash by Linux rules', async () => {
+    distroUser.current = { path: '/usr/bin', home: '/home/a\\b' };
+    try {
+      const inside = '\\\\wsl.localhost\\Ubuntu\\home\\a\u{f05c}b\\repo';
+
+      expect((await scanShell('cat ~/repo/notes.txt', inside, [inside]))?.directories).toEqual([]);
+      expect((await scanShell('cat ~/notes.txt', inside, [inside]))?.directories).toEqual([
+        '\\\\wsl.localhost\\Ubuntu\\home\\a\u{f05c}b',
+      ]);
+    } finally {
+      distroUser.current = { path: '/usr/bin', home: '/home/me' };
+    }
   });
 });
 

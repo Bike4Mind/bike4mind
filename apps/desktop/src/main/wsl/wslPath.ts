@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { win32 } from 'node:path';
 import { system32 } from '../chat/tools/gitBash';
 
 /** A folder inside a WSL distro, reached from Windows over `\\wsl.localhost\<distro>\...` or `\\wsl$\<distro>\...`. */
@@ -54,6 +55,25 @@ export function wslLocation(directory: string, platform: NodeJS.Platform = proce
 export function wslUncPath(location: Pick<WslLocation, 'host' | 'distro'>, linuxPath: string): string {
   const rest = linuxPath.split('/').filter(Boolean).map(shareName).join('\\');
   return `\\\\${location.host}\\${location.distro}\\${rest}`;
+}
+
+/** How an operand is read: by bash itself (`cd`, a redirect), by a program, or by a Windows program run through interop. */
+export type OperandReader = 'shell' | 'program' | 'windows';
+
+/**
+ * The places `operand` names for a command whose folder is `cwd`, each a share path with any `..`
+ * left for the distro to apply; the first is where bash lands. bash reads a share path as a Linux
+ * name, while a Windows program reads it, and with `windows` any operand, as Windows does.
+ */
+export function wslOperandPlaces(cwd: WslLocation, operand: string, reader: OperandReader = 'program'): string[] {
+  const linux = operand.startsWith('/') ? operand : `${cwd.linuxPath.replace(/\/$/, '')}/${operand}`;
+  const places = [wslUncPath(cwd, linux)];
+  if (reader === 'windows' || (reader === 'program' && parseWslPath(operand))) {
+    // A drive-relative `C:x` is relative to a per-drive folder no part of this app can see; its drive root stands in.
+    const windows = operand.replace(/^([A-Za-z]:)(?![\\/])/, '$1\\');
+    places.push(win32.resolve(wslUncPath(cwd, cwd.linuxPath), windows));
+  }
+  return places;
 }
 
 /** A path a Linux program printed, as Windows reaches it; anything not absolute is returned as is. */
