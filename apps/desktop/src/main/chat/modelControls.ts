@@ -217,7 +217,7 @@ export function hostedControls(
     : DEFAULT_THINKING_BUDGET_TOKENS;
   const budgetDefault = Math.min(DEFAULT_THINKING_BUDGET_TOKENS, budgetMax);
   const thinkingBudgetTokens =
-    budgeted && budgetMax > MIN_THINKING_BUDGET_TOKENS
+    budgeted && budgetMax >= MIN_THINKING_BUDGET_TOKENS
       ? {
           ...control({ min: MIN_THINKING_BUDGET_TOKENS, max: budgetMax, step: 1024 }, budgetDefault),
           ...(budgetDefault < DEFAULT_THINKING_BUDGET_TOKENS ? { sendsDefault: true as const } : {}),
