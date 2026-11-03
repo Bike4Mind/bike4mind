@@ -34,6 +34,7 @@ export const authHolders = {
   // The person's own sign-in trail: no accountability purpose for anyone else, so it goes with them.
   AuthEvent: {
     kind: 'holder',
+    // Erasure must run `retainDeletedSignupTraces` first, or the signup-abuse traces it keeps go too.
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
   },
   AuthFailLog: {
@@ -43,7 +44,7 @@ export const authHolders = {
         path: 'email',
         matchBy: 'email',
         action: 'anonymize',
-        alsoRedact: ['ip', 'username', 'userAgent', 'geo', 'device'],
+        alsoRedact: ['ip', 'username', 'userAgent', 'geo', 'device', 'headers'],
       },
     ],
   },
@@ -55,6 +56,7 @@ export const authHolders = {
       { path: 'impersonatedBy', matchBy: 'userId', action: 'anonymize' },
     ],
     secretPaths: [
+      'sid',
       'refreshTokenHash',
       'previousRefreshTokenHash',
       'stepUpEmailChallenge.tokenHash',
@@ -86,19 +88,16 @@ export const authHolders = {
   GithubUnlockClaim: {
     kind: 'holder',
     references: [
-      {
-        path: 'userId',
-        matchBy: 'userId',
-        action: 'retain',
-        reason: 'Anti-abuse claim keyed by GitHub account, kept to prevent repeat credit unlocks (legitimate interest)',
-      },
+      // The claim stays keyed by `githubId`, which is what blocks a repeat unlock; the link back to
+      // the person is not needed for that.
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
     ],
   },
   IdentityProvider: {
     kind: 'holder',
     references: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize' }],
     secretPaths: ['samlConfig.decryptionPvk', 'samlConfig.privateCert', 'oktaConfig.clientSecret'],
-    unrelatedPaths: ['emailDomain', 'samlConfig.attributeMappings.email'],
+    unrelatedPaths: ['emailDomain', 'samlConfig.attributeMappings.email', 'samlConfig.attributeMappings.username'],
   },
   OAuthAuthorizationCode: {
     kind: 'holder',
@@ -142,13 +141,13 @@ export const authHolders = {
     kind: 'viaParent',
     parent: 'SessionModel',
     foreignKey: 'sessionId',
-    unrelatedPaths: [
-      'signupActivity.userId',
-      'promptMeta.session.userId',
-      'promptMeta.humanReview.reviewedBy',
-      'promptMeta.citables.author',
-      'attachmentList.attachments.author',
+    attribution: [
+      { path: 'signupActivity.userId', matchBy: 'userId', action: 'anonymize' },
+      { path: 'promptMeta.session.userId', matchBy: 'userId', action: 'anonymize' },
+      { path: 'promptMeta.humanReview.reviewedBy', matchBy: 'userId', action: 'anonymize' },
     ],
+    // Authors of cited works and attachments, not platform users.
+    unrelatedPaths: ['promptMeta.citables.author', 'attachmentList.attachments.author'],
   },
   RegistrationInvite: {
     kind: 'holder',
@@ -231,6 +230,7 @@ export const authHolders = {
       { path: 'userId', matchBy: 'userId', action: 'anonymize' },
       { path: 'adminId', matchBy: 'userId', action: 'anonymize' },
     ],
+    secretPaths: ['sid'],
   },
   TrustedDevice: {
     kind: 'holder',
@@ -239,6 +239,12 @@ export const authHolders = {
   },
   User: {
     kind: 'subject',
+    references: [
+      { path: 'referredByUserId', matchBy: 'userId', action: 'anonymize' },
+      { path: 'throttle.changedBy', matchBy: 'userId', action: 'anonymize' },
+    ],
+    // Declared `ref: 'User'`, but `recordReferrals` stores the ids of the invites this user created.
+    unrelatedPaths: ['regInvites'],
     secretPaths: [
       'password',
       'mfa.totpSecret',

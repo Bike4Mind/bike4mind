@@ -3,30 +3,43 @@ import { mongoose } from '@bike4mind/database';
 // Registered outside the `@bike4mind/database` barrel, so they register only when imported.
 import '@bike4mind/server-utils/models/Subscription';
 import '@server/models/UserSubscription';
-import { DATA_HOLDER_REGISTRY } from './registry';
-import { listSchemaPaths, looksLikeUserReference, schemaDeclaresPath } from './schemaPaths';
+import { DATA_HOLDER_REGISTRY, findUnclassifiedModels } from './registry';
+import { listSchemaLeaves, listSchemaPaths, looksLikeUserReference, schemaDeclaresPath } from './schemaPaths';
 import type { DataHolder, UserReference } from './types';
 
 const registeredModels = mongoose.modelNames().sort();
 const classifiedModels = Object.keys(DATA_HOLDER_REGISTRY).sort();
 
 function referencePaths(reference: UserReference): string[] {
-  return [
-    reference.path,
-    ...Object.keys(reference.where ?? {}),
-    ...(reference.action === 'anonymize' ? (reference.alsoRedact ?? []) : []),
-  ];
+  return [reference.path, ...Object.keys(reference.where ?? {}), ...alsoRedactOf(reference)];
+}
+
+function alsoRedactOf(reference: UserReference): readonly string[] {
+  return reference.action === 'anonymize' || reference.action === 'retain' ? (reference.alsoRedact ?? []) : [];
+}
+
+function referencesOf(holder: DataHolder): readonly UserReference[] {
+  switch (holder.kind) {
+    case 'subject':
+    case 'holder':
+      return holder.references;
+    case 'viaParent':
+      return holder.attribution ?? [];
+    default:
+      return [];
+  }
 }
 
 function declaredPathsOf(holder: DataHolder): string[] {
   switch (holder.kind) {
     case 'subject':
-      return [...holder.secretPaths];
+      return [...holder.references.flatMap(referencePaths), ...holder.secretPaths, ...(holder.unrelatedPaths ?? [])];
     case 'holder':
       return [
         ...holder.references.flatMap(referencePaths),
         ...(holder.secretPaths ?? []),
         ...(holder.unrelatedPaths ?? []),
+        ...Object.keys(holder.unmatchedPaths ?? {}),
       ];
     case 'viaParent':
       return [
@@ -43,19 +56,29 @@ function declaredPathsOf(holder: DataHolder): string[] {
   }
 }
 
+/** Paths the entry has said how to erase, or said are not a person. A secret is neither. */
 function acknowledgedPathsOf(holder: DataHolder): Set<string> {
+  const handled = referencesOf(holder).flatMap(reference => [reference.path, ...alsoRedactOf(reference)]);
   switch (holder.kind) {
     case 'holder':
-      return new Set([...holder.references.map(reference => reference.path), ...(holder.unrelatedPaths ?? [])]);
+      return new Set([...handled, ...(holder.unrelatedPaths ?? []), ...Object.keys(holder.unmatchedPaths ?? {})]);
     case 'viaParent':
-      return new Set([
-        holder.foreignKey,
-        ...(holder.attribution ?? []).map(reference => reference.path),
-        ...(holder.unrelatedPaths ?? []),
-      ]);
-    default:
-      return new Set(declaredPathsOf(holder));
+      return new Set([holder.foreignKey, ...handled, ...(holder.unrelatedPaths ?? [])]);
+    case 'subject':
+      return new Set([...handled, ...(holder.unrelatedPaths ?? [])]);
+    case 'pseudonymous':
+    case 'noUserData':
+      return new Set(holder.unrelatedPaths ?? []);
+    case 'discriminator':
+      return new Set();
   }
+}
+
+/** Paths that name a person by their field name or by a declared `ref: 'User'`. */
+function userReferenceLikePaths(schema: mongoose.Schema): string[] {
+  return listSchemaLeaves(schema)
+    .filter(leaf => leaf.refsUser || looksLikeUserReference(leaf.path))
+    .map(leaf => leaf.path);
 }
 
 function baseModelNameOf(modelName: string): string | undefined {
@@ -69,7 +92,7 @@ describe('data holder registry', () => {
   });
 
   it('classifies every registered model', () => {
-    const unclassified = registeredModels.filter(name => !(name in DATA_HOLDER_REGISTRY));
+    const unclassified = findUnclassifiedModels(registeredModels);
     expect(
       unclassified,
       'Classify these models in apps/client/server/dataSubject/registry so data subject exports and erasure cover them'
@@ -112,15 +135,50 @@ describe('data holder registry', () => {
       name => registeredModels.includes(name) && name !== 'User' && DATA_HOLDER_REGISTRY[name].kind !== 'discriminator'
     )
   )('%s: every path that looks like a user reference is classified', modelName => {
-    const holder = DATA_HOLDER_REGISTRY[modelName];
-    const acknowledged = acknowledgedPathsOf(holder);
-    const unclassified = listSchemaPaths(mongoose.model(modelName).schema).filter(
-      path => looksLikeUserReference(path) && !acknowledged.has(path)
+    const acknowledged = acknowledgedPathsOf(DATA_HOLDER_REGISTRY[modelName]);
+    const unclassified = userReferenceLikePaths(mongoose.model(modelName).schema).filter(
+      path => !acknowledged.has(path)
     );
     expect(
       unclassified,
       'Add each path to the entry as a reference, or to unrelatedPaths if it does not identify a person'
     ).toEqual([]);
+  });
+
+  it('User: every field that references another user is a subject reference', () => {
+    // The person's own fields are covered by deleting the User document; a field naming another
+    // user is the person recorded on someone else's account, which outlives this erasure.
+    const acknowledged = acknowledgedPathsOf(DATA_HOLDER_REGISTRY.User);
+    const unclassified = listSchemaLeaves(mongoose.model('User').schema)
+      .filter(leaf => leaf.refsUser && !acknowledged.has(leaf.path))
+      .map(leaf => leaf.path);
+    expect(unclassified).toEqual([]);
+  });
+
+  it.each(
+    classifiedModels.flatMap(name => {
+      const holder = DATA_HOLDER_REGISTRY[name];
+      return holder.kind === 'discriminator' ? [[name, holder.base] as const] : [];
+    })
+  )('%s: adds no user-reference field its base %s does not already cover', (modelName, base) => {
+    // A discriminator shares its base's collection and entry, so a field only it declares is
+    // invisible to the base entry's checks.
+    const basePaths = new Set(listSchemaPaths(mongoose.model(base).schema));
+    const added = userReferenceLikePaths(mongoose.model(modelName).schema).filter(path => !basePaths.has(path));
+    expect(added).toEqual([]);
+  });
+
+  it.each(
+    classifiedModels.flatMap(name =>
+      referencesOf(DATA_HOLDER_REGISTRY[name]).flatMap(reference =>
+        Object.entries(reference.where ?? {}).map(([key, value]) => [name, key, value] as const)
+      )
+    )
+  )('%s: where %s = %s is a value the schema allows', (modelName, key, value) => {
+    const enumValues = (mongoose.model(modelName).schema.path(key) as { enumValues?: unknown[] } | undefined)
+      ?.enumValues;
+    if (value === null || !enumValues?.length) return;
+    expect(enumValues).toContain(value);
   });
 
   it.each(
@@ -135,10 +193,9 @@ describe('data holder registry', () => {
 
   it.each(
     classifiedModels.flatMap(name => {
-      const holder = DATA_HOLDER_REGISTRY[name];
-      return holder.kind === 'holder'
-        ? holder.references.filter(reference => reference.action === 'pullFromArray').map(r => [name, r.path] as const)
-        : [];
+      return referencesOf(DATA_HOLDER_REGISTRY[name])
+        .filter(reference => reference.action === 'pullFromArray')
+        .map(reference => [name, reference.path] as const);
     })
   )('%s: pullFromArray path %s is an array or a key inside one', (modelName, path) => {
     const { schema } = mongoose.model(modelName);
