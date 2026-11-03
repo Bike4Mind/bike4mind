@@ -25,6 +25,7 @@ import {
   type OllamaMessage,
 } from './localContext';
 import { ServerCredentialsError, ServerForbiddenError } from '../modelServers/errors';
+import { ollamaControls } from './modelControls';
 import type { CompletionStreamEvent } from './streamEvents';
 import { createThinkFilter, type ThinkSplit } from './thinkFilter';
 import { ollamaRate } from './tokenRate';
@@ -131,8 +132,14 @@ function withNoThinkSwitch(messages: OllamaMessage[]): OllamaMessage[] {
   );
 }
 
-function thinkField(inspection: Inspection, thinking: boolean | undefined): { think?: boolean | string } {
+function thinkField(
+  inspection: Inspection,
+  thinking: boolean | undefined,
+  effort: string | undefined
+): { think?: boolean | string } {
   if (thinking === undefined || !inspection.capabilities.includes('thinking')) return {};
+  // A level the template names (gpt-oss: low, medium, high) is sent as that level.
+  if (thinking && effort && inspection.thinking?.values.includes(effort)) return { think: effort };
   if (thinking) return { think: true };
   switch (thinkingOffMode(inspection)) {
     case 'think-false':
@@ -142,6 +149,18 @@ function thinkField(inspection: Inspection, thinking: boolean | undefined): { th
     default:
       return {};
   }
+}
+
+/** A conversation's sampling overrides as Ollama `options`; an untouched one is left to the Modelfile. */
+function ollamaSampling(generation: CompletionRequest['generation']): Record<string, number> {
+  if (!generation) return {};
+  return {
+    ...(generation.temperature !== undefined ? { temperature: generation.temperature } : {}),
+    ...(generation.topP !== undefined ? { top_p: generation.topP } : {}),
+    ...(generation.topK !== undefined ? { top_k: generation.topK } : {}),
+    ...(generation.minP !== undefined ? { min_p: generation.minP } : {}),
+    ...(generation.repeatPenalty !== undefined ? { repeat_penalty: generation.repeatPenalty } : {}),
+  };
 }
 
 /**
@@ -339,10 +358,11 @@ export class OllamaLocal {
           // reply stops at num_ctx instead, as done_reason 'length' (a visible max_tokens stop).
           truncate: false,
           shift: false,
-          ...thinkField(inspection, request.thinking),
+          ...thinkField(inspection, request.thinking, request.reasoningEffort),
           options: {
             num_ctx: numCtx,
             ...(maxTokens ? { num_predict: maxTokens } : {}),
+            ...ollamaSampling(request.generation),
           },
           ...(tools.length > 0 ? { tools } : {}),
         }),
@@ -594,6 +614,13 @@ export class OllamaLocal {
     // Advertised from what is known now; the context is settled on the model's first request.
     const footprint = this.sizing ? this.sizing.cachedFootprint(await this.facts(name, known)) : UNMEASURED;
     const contextWindow = contextByModel.get(id) ?? (await this.sized(known, footprint));
+    const canThink = capabilities?.includes('thinking') === true;
+    const controls = ollamaControls({
+      inspected: inspection !== undefined,
+      ...(inspection?.parameters !== undefined ? { parameters: inspection.parameters } : {}),
+      ...(canThink && inspection?.thinking ? { thinkingValues: inspection.thinking.values } : {}),
+      contextWindow,
+    });
     return {
       id,
       name,
@@ -602,12 +629,15 @@ export class OllamaLocal {
         ? { supportsTools: capabilities.includes('tools'), supportsVision: capabilities.includes('vision') }
         : {}),
       contextWindow,
-      ...(capabilities?.includes('thinking')
+      ...(canThink
         ? {
             thinkingToggle: true,
             ...(thinkingOffMode(known) === 'always-thinks' ? { thinkingAlwaysOn: true } : {}),
           }
         : {}),
+      // Stated once inspected, so a model that cannot think shows no effort menu that would do nothing.
+      ...(capabilities ? { supportsReasoningEffort: controls.effort !== undefined } : {}),
+      controls,
     };
   }
 

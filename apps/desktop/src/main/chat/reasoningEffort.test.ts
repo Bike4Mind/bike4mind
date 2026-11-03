@@ -1,4 +1,5 @@
 import { ChatModels } from '@bike4mind/common';
+import type { ChatModelOption } from '@shared/chat';
 import { describe, expect, it } from 'vitest';
 import {
   parseReasoningEffortSetting,
@@ -14,6 +15,8 @@ describe('parseReasoningEffortSetting', () => {
     expect(parseReasoningEffortSetting('low')).toBe('low');
     expect(parseReasoningEffortSetting('medium')).toBe('medium');
     expect(parseReasoningEffortSetting('HIGH')).toBe('high');
+    expect(parseReasoningEffortSetting('none')).toBe('none');
+    expect(parseReasoningEffortSetting('xhigh')).toBe('xhigh');
   });
 
   it('falls back to default for unset, blank and unknown values', () => {
@@ -39,6 +42,22 @@ describe('reasoningEffortFor', () => {
 
   it('never sends it to a Claude model that predates effort', () => {
     expect(reasoningEffortFor('low', ChatModels.CLAUDE_4_5_SONNET)).toBeUndefined();
+  });
+
+  it('sends only a level the model lists once its controls are known', () => {
+    const option: Pick<ChatModelOption, 'controls'> = {
+      controls: { effort: { levels: ['none', 'low', 'xhigh'], scope: 'request' } },
+    };
+    expect(reasoningEffortFor('none', ChatModels.GPT5, option)).toBe('none');
+    expect(reasoningEffortFor('xhigh', ChatModels.GPT5, option)).toBe('xhigh');
+    expect(reasoningEffortFor('minimal', ChatModels.GPT5, option)).toBeUndefined();
+    expect(reasoningEffortFor('high', ChatModels.GPT5, { controls: {} })).toBeUndefined();
+  });
+
+  it('keeps none and xhigh off a model whose levels are unknown', () => {
+    expect(reasoningEffortFor('none', ChatModels.GPT5)).toBeUndefined();
+    expect(reasoningEffortFor('xhigh', ChatModels.GPT5)).toBeUndefined();
+    expect(reasoningEffortFor('minimal', ChatModels.GPT5)).toBe('minimal');
   });
 });
 
@@ -80,5 +99,10 @@ describe('requestsThinking', () => {
   it('thinks on a model without the switch, or one the catalog does not know', () => {
     expect(requestsThinking('minimal', {})).toBe(true);
     expect(requestsThinking('minimal', undefined)).toBe(true);
+  });
+
+  it('does not think at an effort of none', () => {
+    expect(requestsThinking('none', {}, 'none')).toBe(false);
+    expect(requestsThinking('low', {}, 'low')).toBe(true);
   });
 });

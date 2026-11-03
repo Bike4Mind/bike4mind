@@ -66,6 +66,7 @@ import {
 } from '@shared/chat';
 import { AUTO_COMPACT_PERCENT, inputSide, occupiedTokens, shouldAutoCompact } from '@shared/contextLimit';
 import { estimateContextOverhead, type ContextSnapshot } from '@shared/contextBreakdown';
+import { requestGeneration, type GenerationSettings } from '@shared/generation';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { serverIdOfRuntime } from '@shared/modelServers';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
@@ -1451,6 +1452,11 @@ export class ChatService {
     return this.deps.store.setPromptCacheTtl(sessionId, ttl);
   }
 
+  /** Replaces this conversation's overrides; an empty set clears them. */
+  setSessionGeneration(sessionId: string, generation: GenerationSettings): Promise<ChatSessionSummary | null> {
+    return this.deps.store.setGeneration(sessionId, generation);
+  }
+
   setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null> {
     return this.deps.store.setPinned(sessionId, pinned);
   }
@@ -2728,12 +2734,18 @@ export class ChatService {
         const reason = modelOption.unavailable.replace(/\.$/, '');
         throw new Error(`${reason}. Pick another model, or check the server under Settings, Model servers.`);
       }
-      const maxTokens = modelOption?.maxOutputTokens;
+      // Only what this model's controls list, so a setting made on another model is never sent here.
+      const { maxOutputTokens: outputOverride, ...overrides } = requestGeneration(
+        session.generation,
+        modelOption?.controls
+      );
+      const generationField = Object.keys(overrides).length > 0 ? { generation: overrides } : {};
+      const maxTokens = outputOverride ?? modelOption?.maxOutputTokens;
       const thinkingToggle =
         modelOption?.thinkingToggle ??
         (catalog?.error ? this.deps.models?.lastKnownThinkingToggle(session.model) : undefined);
-      const askForThinking = requestsThinking(session.reasoningEffort, { thinkingToggle });
-      const effort = reasoningEffortFor(session.reasoningEffort, session.model);
+      const effort = reasoningEffortFor(session.reasoningEffort, session.model, modelOption);
+      const askForThinking = requestsThinking(session.reasoningEffort, { thinkingToggle }, effort);
       const effortField = effort ? { reasoningEffort: effort } : {};
       // The server keeps 5 minutes for a model without the hour, but sending it there says nothing.
       const cacheTtl: PromptCacheTtl =
@@ -3142,6 +3154,7 @@ export class ChatService {
                 // Dev log only; never sent on the wire. See CompletionRequest.sessionId.
                 sessionId,
                 ...effortField,
+                ...generationField,
                 ...(maxTokens ? { maxTokens } : {}),
                 ...(toolPromptTokens !== undefined ? { toolPromptTokens } : {}),
               },
@@ -3161,6 +3174,7 @@ export class ChatService {
                 // Ties the turn's ledger row to this session. See CompletionRequest.sessionId.
                 sessionId,
                 ...effortField,
+                ...generationField,
                 ...cacheTtlField,
                 ...(maxTokens ? { maxTokens } : {}),
               },

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { FetchLike } from '@bike4mind/local-models';
+import type { FetchLike, OpenAICompatibleProduct } from '@bike4mind/local-models';
 import type { CompletionStreamEvent } from '../chat/streamEvents';
 import { ServerCredentialsError, ServerForbiddenError } from './errors';
 import { OpenAICompatibleChat, toOpenAIMessages } from './OpenAICompatibleChat';
@@ -12,7 +12,7 @@ function sse(frames: readonly (object | string)[]): Response {
   return new Response(text, { status: 200, headers: { 'content-type': 'text/event-stream' } });
 }
 
-function chat(fetch: FetchLike, product: 'llama-server' | null = 'llama-server') {
+function chat(fetch: FetchLike, product: OpenAICompatibleProduct | null = 'llama-server', toolsChanged?: () => void) {
   return new OpenAICompatibleChat({
     runtimeId: 'srv-abc123',
     baseUrl: BASE,
@@ -21,6 +21,7 @@ function chat(fetch: FetchLike, product: 'llama-server' | null = 'llama-server')
     fetch,
     hasCredentials: () => false,
     redact: text => text,
+    ...(toolsChanged ? { toolsChanged } : {}),
   });
 }
 
@@ -272,6 +273,87 @@ describe('OpenAICompatibleChat', () => {
       );
     const [model] = await chat(fetch).listModels();
     expect(model).toMatchObject({ id: MODEL, name: 'qwen2.5-0.5b' });
+  });
+});
+
+describe('OpenAICompatibleChat generation settings', () => {
+  const generation = { temperature: 0.3, topP: 0.85, topK: 25, minP: 0.04, repeatPenalty: 1.08 };
+
+  function server(names: readonly string[] = ['qwen3-8b', 'gpt-oss-20b'], reasoning = false) {
+    const bodies: Record<string, unknown>[] = [];
+    const fetch = vi.fn<FetchLike>(async (url, init) => {
+      if (String(url).endsWith('/v1/models'))
+        return new Response(JSON.stringify({ object: 'list', data: names.map(id => ({ id, object: 'model' })) }));
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return sse([
+        ...(reasoning ? [delta({ reasoning_content: 'hmm' })] : []),
+        delta({ content: 'ok' }, 'stop'),
+        '[DONE]',
+      ]);
+    });
+    return { fetch, bodies };
+  }
+
+  const ask = (model: string, extra: Partial<Parameters<OpenAICompatibleChat['stream']>[0]> = {}) => ({
+    model: `local:srv-abc123:${model}`,
+    messages: [{ role: 'user' as const, content: 'hi' }],
+    ...extra,
+  });
+
+  it.each([
+    ['llama-server', { temperature: 0.3, top_p: 0.85, top_k: 25, repeat_penalty: 1.08, min_p: 0.04 }],
+    ['vllm', { temperature: 0.3, top_p: 0.85, top_k: 25, repetition_penalty: 1.08, min_p: 0.04 }],
+    ['lmstudio', { temperature: 0.3, top_p: 0.85, top_k: 25, repeat_penalty: 1.08 }],
+    [null, { temperature: 0.3, top_p: 0.85 }],
+  ] as const)('sends the sampling fields %s takes', async (product, expected) => {
+    const { fetch, bodies } = server();
+    await collect(chat(fetch, product), ask('qwen3-8b', { generation }));
+    const sampling = Object.fromEntries(
+      Object.entries(bodies[0] ?? {}).filter(([key]) =>
+        ['temperature', 'top_p', 'top_k', 'min_p', 'repeat_penalty', 'repetition_penalty'].includes(key)
+      )
+    );
+    expect(sampling).toEqual(expected);
+  });
+
+  it('sends no sampling or thinking field for an untouched conversation', async () => {
+    const { fetch, bodies } = server();
+    await collect(chat(fetch), ask('qwen3-8b', { thinking: true }));
+    expect(Object.keys(bodies[0] ?? {}).sort()).toEqual(['messages', 'model', 'stream', 'stream_options']);
+  });
+
+  it('turns thinking off through the chat template, and gives gpt-oss its effort level instead', async () => {
+    const { fetch, bodies } = server();
+    const client = chat(fetch);
+    await collect(client, ask('qwen3-8b', { thinking: false }));
+    await collect(client, ask('gpt-oss-20b', { thinking: false, reasoningEffort: 'high' }));
+    await collect(client, ask('gpt-oss-20b', { reasoningEffort: 'xhigh' }));
+    expect(bodies[0]).toMatchObject({ chat_template_kwargs: { enable_thinking: false } });
+    expect(bodies[1]).toMatchObject({ reasoning_effort: 'high' });
+    expect(bodies[1]).not.toHaveProperty('chat_template_kwargs');
+    expect(bodies[2]).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('lists a thinking switch for a model once it has replied with reasoning, and effort levels for gpt-oss', async () => {
+    const { fetch } = server(['qwen3-8b', 'gpt-oss-20b'], true);
+    const changed = vi.fn();
+    const client = chat(fetch, 'vllm', changed);
+    const before = await client.listModels();
+    expect(before.map(model => [model.name, model.thinkingToggle, model.supportsReasoningEffort])).toEqual([
+      ['qwen3-8b', undefined, false],
+      ['gpt-oss-20b', undefined, true],
+    ]);
+    expect(before[1]?.controls?.effort?.levels).toEqual(['low', 'medium', 'high']);
+    expect(before[0]?.controls).toMatchObject({ topK: {}, minP: {}, repeatPenalty: {} });
+
+    await collect(client, ask('qwen3-8b'));
+    await collect(client, ask('qwen3-8b'));
+    expect(changed).toHaveBeenCalledTimes(1);
+    const after = await client.listModels();
+    expect(after.map(model => [model.name, model.thinkingToggle])).toEqual([
+      ['qwen3-8b', true],
+      ['gpt-oss-20b', undefined],
+    ]);
   });
 });
 

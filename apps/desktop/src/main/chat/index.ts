@@ -32,6 +32,7 @@ import type {
 } from '@shared/chat';
 import type { CookieImportRequest } from '@shared/browserCookies';
 import type { CapabilitySubject } from '@shared/capabilities';
+import { normalizeGeneration } from '@shared/generation';
 import type {
   SkillMarketFilters,
   SkillMarketImportRequest,
@@ -794,6 +795,10 @@ export function registerChat(
   });
   ipcMain.handle(IPC_CHANNELS.chatSetSessionPromptCacheTtl, (_event, sessionId: string, ttl: unknown) =>
     isPromptCacheTtl(ttl) ? service.setSessionPromptCacheTtl(sessionId, ttl) : null
+  );
+  // Only known numeric fields reach the store; each turn clamps them to its model's ranges.
+  ipcMain.handle(IPC_CHANNELS.chatSetSessionGeneration, (_event, sessionId: string, generation: unknown) =>
+    service.setSessionGeneration(sessionId, normalizeGeneration(generation) ?? {})
   );
   ipcMain.handle(IPC_CHANNELS.chatSetSessionPinned, (_event, sessionId: string, pinned: boolean) =>
     service.setSessionPinned(sessionId, pinned)

@@ -114,4 +114,27 @@ describe('the local thinking switch', () => {
     expect(document.querySelector('[data-testid="effort-picker-option"]')).toBeNull();
     expect(onSelect).not.toHaveBeenCalled();
   });
+
+  it('offers only the levels a model lists, besides Default', async () => {
+    const gpt: ChatModelOption = {
+      id: 'gpt-5',
+      name: 'GPT-5',
+      supportsReasoningEffort: true,
+      controls: { effort: { levels: ['none', 'low', 'high', 'xhigh'], scope: 'request' } },
+    };
+    await act(async () =>
+      root.render(
+        <CssVarsProvider>
+          <ReasoningEffortPicker models={[gpt]} modelId="gpt-5" effort="default" onSelect={onSelect} />
+        </CssVarsProvider>
+      )
+    );
+    await act(async () => button().click());
+    const options = [...document.querySelectorAll<HTMLElement>('[data-testid="effort-picker-option"]')];
+    // The selected row leads with a bullet; only the label is compared.
+    const labels = options.map(option => option.querySelector('p')?.textContent?.replace(/^[^A-Za-z]+/, ''));
+    expect(labels).toEqual(['Default', 'None', 'Low', 'High', 'Extra high']);
+    await act(async () => options[4]?.click());
+    expect(onSelect).toHaveBeenLastCalledWith('xhigh');
+  });
 });
