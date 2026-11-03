@@ -23,6 +23,12 @@ export function loopRunnerToolRefusal(name: string, input: Record<string, unknow
   return null;
 }
 
+/** `owner/name` from an origin URL (https or ssh), lower-cased, or null. */
+export function repoSlug(remote: string): string | null {
+  const match = /github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i.exec(remote.trim());
+  return match ? `${match[1]}/${match[2]}`.toLowerCase() : null;
+}
+
 export type MergeDecision =
   | { merge: true; via: 'queue' }
   | { merge: true; via: 'merge'; method: PrMergeMethod }

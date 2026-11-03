@@ -1,4 +1,5 @@
 import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
+import type { LoopApproveRequest, LoopApproveResult, LoopRunnerSettings, LoopRunnerState } from './loopRunner';
 import type { PromptCacheTtl } from '@bike4mind/common';
 import type { AccountCredits, AccountProfile } from './account';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
@@ -318,6 +319,14 @@ export const IPC_CHANNELS = {
   updateInstall: 'update:install',
   /** main -> renderer push; a check, a download or an install offer changed state. */
   updateStateChanged: 'update:state-changed',
+  loopRunnerGetState: 'loops:get-state',
+  loopRunnerSetSettings: 'loops:set-settings',
+  loopRunnerSetOpenAtLogin: 'loops:set-open-at-login',
+  /** Asks for the loop's folder in a native dialog, then saves the policy. */
+  loopRunnerApprove: 'loops:approve',
+  loopRunnerRevoke: 'loops:revoke',
+  /** main -> renderer push of the whole LoopRunnerState. */
+  loopRunnerStateChanged: 'loops:state-changed',
   modelsGetStatus: 'models:get-status',
   modelsListInstalled: 'models:list-installed',
   modelsSearch: 'models:search',
@@ -593,6 +602,15 @@ export interface DesktopApi {
      */
     install(force: boolean): Promise<UpdateInstallResult>;
     onStateChanged(listener: (state: UpdateState) => void): () => void;
+  };
+  /** Settings > Loop runner. See shared/loopRunner.ts. */
+  loopRunner: {
+    getState(): Promise<LoopRunnerState>;
+    setSettings(patch: Partial<LoopRunnerSettings>): Promise<LoopRunnerState>;
+    setOpenAtLogin(on: boolean): Promise<LoopRunnerState>;
+    approve(request: LoopApproveRequest): Promise<LoopApproveResult>;
+    revoke(loopId: string): Promise<LoopRunnerState>;
+    onStateChanged(listener: (state: LoopRunnerState) => void): () => void;
   };
   /** The Models screen. `serverId` picks a saved model server; omitted means this computer. */
   models: {

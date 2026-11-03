@@ -22,6 +22,7 @@ import type {
 import type { CookieImportRequest, CookieImportState } from '@shared/browserCookies';
 import type { ClaudeImportState } from '@shared/claudeImport';
 import type { DevLogRecord } from '@shared/devLog';
+import type { LoopApproveRequest, LoopRunnerSettings, LoopRunnerState } from '@shared/loopRunner';
 import type { McpServerInput, McpServersState } from '@shared/mcp';
 import type {
   ModelServerAddInput,
@@ -62,6 +63,18 @@ const api: DesktopApi = {
       const handler = (_event: unknown, state: UpdateState) => listener(state);
       ipcRenderer.on(IPC_CHANNELS.updateStateChanged, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.updateStateChanged, handler);
+    },
+  },
+  loopRunner: {
+    getState: () => ipcRenderer.invoke(IPC_CHANNELS.loopRunnerGetState),
+    setSettings: (patch: Partial<LoopRunnerSettings>) => ipcRenderer.invoke(IPC_CHANNELS.loopRunnerSetSettings, patch),
+    setOpenAtLogin: (on: boolean) => ipcRenderer.invoke(IPC_CHANNELS.loopRunnerSetOpenAtLogin, on),
+    approve: (request: LoopApproveRequest) => ipcRenderer.invoke(IPC_CHANNELS.loopRunnerApprove, request),
+    revoke: (loopId: string) => ipcRenderer.invoke(IPC_CHANNELS.loopRunnerRevoke, loopId),
+    onStateChanged: listener => {
+      const handler = (_event: unknown, state: LoopRunnerState) => listener(state);
+      ipcRenderer.on(IPC_CHANNELS.loopRunnerStateChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.loopRunnerStateChanged, handler);
     },
   },
   models: {

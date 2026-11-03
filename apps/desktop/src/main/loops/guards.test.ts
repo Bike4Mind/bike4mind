@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { check, REF, snapshot } from '../pr/prTestSupport';
 import type { GhRunner } from '../pr/gh';
-import { loopRunnerToolRefusal, mergeDecision, runDeployCheck, runSmoke } from './guards';
+import { loopRunnerToolRefusal, mergeDecision, repoSlug, runDeployCheck, runSmoke } from './guards';
 
 const green = (overrides = {}) =>
   snapshot({
@@ -131,5 +131,13 @@ describe('runSmoke', () => {
       ok: false,
       reason: expect.stringMatching(/exit 1/),
     });
+  });
+});
+
+describe('repoSlug', () => {
+  it('reads owner/name from https and ssh remotes', () => {
+    expect(repoSlug('https://github.com/Example-Org/widgets.git\n')).toBe('example-org/widgets');
+    expect(repoSlug('git@github.com:example-org/widgets.git')).toBe('example-org/widgets');
+    expect(repoSlug('https://gitlab.com/a/b')).toBeNull();
   });
 });
