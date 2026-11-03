@@ -12,7 +12,7 @@ import {
   type OrchestratorViewId,
   type SessionSurface,
 } from './orchestratorPrefs';
-import { buildRoster, descendantIds, type AgentView } from './roster';
+import { buildRoster, descendantIds, type AgentView, type ParentView } from './roster';
 
 const NO_ACTIVITY: ReadonlyMap<string, AgentActivity> = new Map();
 // Untracked ids remembered at once; the stream carries every session, so this must stay bounded.
@@ -78,18 +78,35 @@ export function useAgentActivity(trackedIds: ReadonlySet<string>): ReadonlyMap<s
   return activity;
 }
 
+/** The roster plus the root session itself, which the Tavern draws as the Innkeeper. */
+export interface OrchestratorScene {
+  agents: AgentView[];
+  parent: ParentView;
+}
+
 export function useOrchestratorRoster(
   rootId: string | null,
   sessions: readonly ChatSessionSummary[],
   statuses: ReadonlyMap<string, ChatSessionStatus>,
   prSummaries: ReadonlyMap<string, PrSummary>
-): AgentView[] {
-  const trackedIds = useMemo(() => descendantIds(sessions, rootId), [sessions, rootId]);
+): OrchestratorScene {
+  const trackedIds = useMemo(() => {
+    const ids = descendantIds(sessions, rootId);
+    if (rootId !== null) ids.add(rootId);
+    return ids;
+  }, [sessions, rootId]);
   const activity = useAgentActivity(trackedIds);
-  return useMemo(
+  const agents = useMemo(
     () => (rootId === null ? [] : buildRoster({ sessions, statuses, activity, prSummaries, rootId })),
     [rootId, sessions, statuses, activity, prSummaries]
   );
+  const status = rootId === null ? undefined : statuses.get(rootId);
+  const rootActivity = rootId === null ? undefined : activity.get(rootId);
+  const parent = useMemo<ParentView>(
+    () => ({ ...(status && { status }), ...(rootActivity && { activity: rootActivity }) }),
+    [status, rootActivity]
+  );
+  return useMemo(() => ({ agents, parent }), [agents, parent]);
 }
 
 interface OrchestratorPrefs {

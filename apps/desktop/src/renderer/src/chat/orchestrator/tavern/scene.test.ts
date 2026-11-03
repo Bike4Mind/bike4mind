@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { AgentState, AgentView } from '../roster';
 import {
   DOOR_POINT,
+  INNKEEPER_POINT,
   LABEL_SPAN,
   NAME_LABEL_MAX_WIDTH,
   NAME_LABEL_MIN_WIDTH,
@@ -207,6 +208,16 @@ describe('nameLabelLayout', () => {
     const layout = nameLabelLayout(points);
     expect(overlapping(points, layout)).toEqual([]);
     for (const label of layout.values()) expect(label.maxWidth).toBeGreaterThanOrEqual(7);
+  });
+
+  it('keeps the Innkeeper behind the bar, off every seat, with its label clear of every other', () => {
+    const seats = allSeats();
+    expect([...seats.values()]).not.toContainEqual(INNKEEPER_POINT);
+    expect(INNKEEPER_POINT.y).toBeLessThan(Math.min(...TAVERN_SLOTS.bar.map(point => point.y)));
+    const points = new Map([...seats, ['innkeeper', INNKEEPER_POINT]]);
+    const layout = nameLabelLayout(points);
+    expect(overlapping(points, layout)).toEqual([]);
+    expect(layout.get('innkeeper')?.shown).toBe(true);
   });
 
   it('hides a label squeezed below the minimum rather than drawing an empty pill', () => {

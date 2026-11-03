@@ -4,10 +4,12 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { activityLabel, toolKind, type ToolKind } from '../activity';
 import { prefersReducedMotion } from '../motion';
 import type { OrchestratorViewProps } from '../OrchestratorStage';
-import { AGENT_STATE_LABEL, type AgentView } from '../roster';
+import { AGENT_STATE_LABEL, type AgentView, type ParentView } from '../roster';
 import type { AgentPersona } from './agentPersona';
+import { innkeeperAct, innkeeperBubble } from './innkeeper';
 import {
   DOOR_POINT,
+  INNKEEPER_POINT,
   LABEL_SPAN,
   characterFor,
   nameLabelLayout,
@@ -17,7 +19,7 @@ import {
   type Placement,
   type SlotPoint,
 } from './scene';
-import { TAVERN_BACKDROP, characterSprite } from './tavernArt';
+import { INNKEEPER_ART, TAVERN_BACKDROP, characterSprite, type InnkeeperPose } from './tavernArt';
 
 const BUBBLE_MAX = 28;
 const NAME_MAX = 26;
@@ -32,6 +34,22 @@ const LIFTED_Z = 102;
 
 type CssVars = CSSProperties & Record<`--${string}`, string | number>;
 const HIDDEN_LABEL: NameLabel = { lane: 0, maxWidth: 0, shown: false };
+const NO_PARENT: ParentView = {};
+// Not a session id shape, so it never collides with an agent in the label layout.
+const INNKEEPER_KEY = ' innkeeper';
+const INNKEEPER_NAME = 'Innkeeper';
+/** Shortest visit (ms): the walk over plus a moment beside the agent, however quick the read was. */
+const VISIT_HOLD_MS = 2400;
+/** How far beside a visited agent the Innkeeper stands, toward the middle (percent of scene width). */
+const VISIT_OFFSET = 4;
+
+const INNKEEPER_POSE_LABEL: Record<InnkeeperPose, string> = {
+  idle: 'Polishing the bar',
+  writing: 'Posting quests',
+  reading: 'Reading the reports',
+  walking: 'Checking on an agent',
+  cheering: 'Cheering',
+};
 
 const SPARK_COLOR: Record<ToolKind, string> = {
   edit: '#f28c28',
@@ -95,11 +113,10 @@ function useAfterFirstPaint(already: boolean) {
 /** During the intro everyone starts at the door and walks to their seats. Only the first mount plays it. */
 const useArrived = (introPlaying: boolean) => useAfterFirstPaint(!introPlaying || prefersReducedMotion());
 
-function Bubble({ agent, text }: { agent: AgentView; text: string }) {
-  const urgent = agent.state === 'needs-you';
+function Bubble({ testId, text, urgent }: { testId: string; text: string; urgent: boolean }) {
   return (
     <Box
-      data-testid={`orchestrator-tavern-bubble-${agent.id}`}
+      data-testid={testId}
       sx={{
         position: 'absolute',
         bottom: '88%',
@@ -154,6 +171,40 @@ function Spark({ kind }: { kind: ToolKind }) {
   );
 }
 
+function NameLabelPlate({ testId, label, text }: { testId: string; label: NameLabel; text: string }) {
+  return (
+    <Box
+      data-testid={testId}
+      data-name-label
+      data-lane={label.lane}
+      // cqw/cqh resolve against the scene box, the nearest size container.
+      style={{ '--label-max': `${label.maxWidth}cqw`, '--label-drop': `${label.lane * LABEL_SPAN}cqh` } as CssVars}
+      sx={{
+        display: label.shown ? 'block' : 'none',
+        position: 'absolute',
+        top: 'calc(96% + var(--label-drop))',
+        maxWidth: 'var(--label-max)',
+        maxHeight: `${LABEL_SPAN}cqh`,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        boxSizing: 'border-box',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+        px: '0.5em',
+        borderRadius: '4px',
+        bgcolor: 'rgba(20, 12, 6, 0.78)',
+        color: '#fbe9c8',
+        fontSize: 'clamp(9px, 1.9cqh, 12px)',
+        lineHeight: 1.4,
+        pointerEvents: 'none',
+      }}
+    >
+      {truncate(text, NAME_MAX)}
+    </Box>
+  );
+}
+
 function Sprite({
   agent,
   point,
@@ -161,6 +212,7 @@ function Sprite({
   persona,
   walkIn,
   selected,
+  visited,
   onSelect,
 }: {
   agent: AgentView;
@@ -170,6 +222,8 @@ function Sprite({
   /** Mount at the door and walk to `point`; read on mount only. */
   walkIn: boolean;
   selected: boolean;
+  /** The Innkeeper is checking on this agent but, under reduced motion, does not walk over. */
+  visited: boolean;
   onSelect(id: string): void;
 }) {
   const entered = useAfterFirstPaint(!walkIn);
@@ -186,6 +240,7 @@ function Sprite({
       data-testid={`orchestrator-tavern-agent-${agent.id}`}
       aria-label={`${fullName}: ${AGENT_STATE_LABEL[agent.state]}`}
       aria-pressed={selected}
+      data-innkeeper-visit={visited || undefined}
       title={tooltip}
       onClick={() => onSelect(agent.id)}
       style={{ left: `${at.x}%`, top: `${at.y}%`, '--sprite-z': Math.round(at.y) } as CssVars}
@@ -215,49 +270,111 @@ function Sprite({
           width: '100%',
           height: '100%',
           imageRendering: 'pixelated',
-          filter: selected ? 'drop-shadow(0 0 3px #f5c542) drop-shadow(0 0 1px #f5c542)' : undefined,
+          filter: selected || visited ? 'drop-shadow(0 0 3px #f5c542) drop-shadow(0 0 1px #f5c542)' : undefined,
           animation: pose === 'work' ? `${bob} 0.8s steps(1, end) infinite` : 'none',
           [NO_MOTION]: { animation: 'none' },
         }}
       />
       {agent.state === 'working' && <Spark kind={sparkKind(agent)} />}
-      {bubble && <Bubble agent={agent} text={bubble} />}
-      <Box
-        data-testid={`orchestrator-tavern-name-${agent.id}`}
-        data-name-label
-        data-lane={label.lane}
-        // cqw/cqh resolve against the scene box, the nearest size container.
-        style={{ '--label-max': `${label.maxWidth}cqw`, '--label-drop': `${label.lane * LABEL_SPAN}cqh` } as CssVars}
-        sx={{
-          display: label.shown ? 'block' : 'none',
-          position: 'absolute',
-          top: 'calc(96% + var(--label-drop))',
-          maxWidth: 'var(--label-max)',
-          maxHeight: `${LABEL_SPAN}cqh`,
-          left: '50%',
-          transform: 'translateX(-50%)',
-          boxSizing: 'border-box',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-          px: '0.5em',
-          borderRadius: '4px',
-          bgcolor: 'rgba(20, 12, 6, 0.78)',
-          color: '#fbe9c8',
-          fontSize: 'clamp(9px, 1.9cqh, 12px)',
-          lineHeight: 1.4,
-          pointerEvents: 'none',
-        }}
-      >
-        {truncate(displayName, NAME_MAX)}
-      </Box>
+      {bubble && (
+        <Bubble testId={`orchestrator-tavern-bubble-${agent.id}`} text={bubble} urgent={agent.state === 'needs-you'} />
+      )}
+      <NameLabelPlate testId={`orchestrator-tavern-name-${agent.id}`} label={label} text={displayName} />
     </Box>
   );
 }
 
-export function TavernView({ agents, onSelect, selectedId, introPlaying, personas }: OrchestratorViewProps) {
+/** Holds a visit for at least VISIT_HOLD_MS, so a read that returns at once still gets its walk. */
+function useHeldVisit(target: string | undefined): string | undefined {
+  const [held, setHeld] = useState(target);
+  const since = useRef(0);
+  useEffect(() => {
+    if (target !== undefined) {
+      if (target !== held) since.current = Date.now();
+      setHeld(target);
+      return;
+    }
+    if (held === undefined) return;
+    const timer = window.setTimeout(() => setHeld(undefined), Math.max(0, since.current + VISIT_HOLD_MS - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [target, held]);
+  return held;
+}
+
+function standBeside(point: SlotPoint): SlotPoint {
+  return { x: point.x + (point.x < 50 ? VISIT_OFFSET : -VISIT_OFFSET), y: point.y };
+}
+
+function Innkeeper({
+  point,
+  pose,
+  bubble,
+  urgent,
+  label,
+  onSelect,
+}: {
+  point: SlotPoint;
+  pose: InnkeeperPose;
+  bubble: string | undefined;
+  urgent: boolean;
+  label: NameLabel;
+  onSelect?(): void;
+}) {
+  return (
+    <Box
+      component="button"
+      type="button"
+      data-testid="orchestrator-tavern-innkeeper"
+      data-pose={pose}
+      aria-label={`${INNKEEPER_NAME}: ${INNKEEPER_POSE_LABEL[pose]}`}
+      title={`${INNKEEPER_NAME}: the conversation that posts the quests`}
+      onClick={onSelect}
+      style={{ left: `${point.x}%`, top: `${point.y}%`, '--sprite-z': Math.round(point.y) } as CssVars}
+      sx={{
+        position: 'absolute',
+        zIndex: 'var(--sprite-z)',
+        height: SPRITE_HEIGHT,
+        aspectRatio: '1',
+        transform: 'translate(-50%, -100%)',
+        p: 0,
+        border: 0,
+        bgcolor: 'transparent',
+        cursor: 'pointer',
+        transition: `left ${WALK}, top ${WALK}`,
+        [NO_MOTION]: { transition: 'none' },
+        '&:focus-visible': { outline: '2px solid #f5c542', outlineOffset: 2, borderRadius: '4px' },
+        [LIFTED]: { zIndex: LIFTED_Z, '& [data-name-label]': { display: 'block', maxWidth: 'none' } },
+      }}
+    >
+      <Box
+        component="img"
+        src={INNKEEPER_ART[pose]}
+        alt=""
+        draggable={false}
+        sx={{ display: 'block', width: '100%', height: '100%', imageRendering: 'pixelated' }}
+      />
+      {bubble && (
+        <Bubble testId="orchestrator-tavern-innkeeper-bubble" text={truncate(bubble, BUBBLE_MAX)} urgent={urgent} />
+      )}
+      <NameLabelPlate testId="orchestrator-tavern-innkeeper-name" label={label} text={INNKEEPER_NAME} />
+    </Box>
+  );
+}
+
+export function TavernView({
+  agents,
+  onSelect,
+  selectedId,
+  introPlaying,
+  personas,
+  parent = NO_PARENT,
+  onInnkeeperSelect,
+}: OrchestratorViewProps) {
   const placements = usePlacements(agents);
   const arrived = useArrived(introPlaying);
+  const act = innkeeperAct(parent, agents);
+  const visit = useHeldVisit(act.pose === 'walking' ? act.target : undefined);
+  const reducedMotion = prefersReducedMotion();
   const mounted = useRef(false);
   useEffect(() => {
     mounted.current = true;
@@ -286,7 +403,14 @@ export function TavernView({ agents, onSelect, selectedId, introPlaying, persona
     return placement && (placement.zone !== 'door' || agent === atDoor) ? [{ agent, placement }] : [];
   });
   // Laid out for where everyone stands once seated; labels may brush in passing while walking.
-  const labels = nameLabelLayout(new Map(visible.map(({ agent, placement }) => [agent.id, placement.point])));
+  const labels = nameLabelLayout(
+    new Map([
+      ...visible.map(({ agent, placement }) => [agent.id, placement.point] as const),
+      [INNKEEPER_KEY, INNKEEPER_POINT] as const,
+    ])
+  );
+  const visitedPoint = visit === undefined ? undefined : (placements.get(visit)?.point ?? DOOR_POINT);
+  const innkeeperPoint = visitedPoint && !reducedMotion && arrived ? standBeside(visitedPoint) : INNKEEPER_POINT;
 
   return (
     <Box
@@ -335,9 +459,18 @@ export function TavernView({ agents, onSelect, selectedId, introPlaying, persona
             persona={personas.get(agent.id)}
             walkIn={mounted.current && !prefersReducedMotion()}
             selected={agent.id === selectedId}
+            visited={reducedMotion && agent.id === visit}
             onSelect={onSelect}
           />
         ))}
+        <Innkeeper
+          point={innkeeperPoint}
+          pose={visit ? 'walking' : act.pose}
+          bubble={innkeeperBubble(parent)}
+          urgent={parent.status === 'needs-action'}
+          label={labels.get(INNKEEPER_KEY) ?? HIDDEN_LABEL}
+          onSelect={onInnkeeperSelect}
+        />
         {waiting > 0 && (
           <Box
             component="button"

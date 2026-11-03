@@ -306,6 +306,7 @@ export function ChatShell({
   const fillSeq = useRef(0);
   const fillComposer = useCallback((text: string) => setComposerFill({ id: ++fillSeq.current, text }), []);
   const clearComposerFill = useCallback(() => setComposerFill(null), []);
+  const [composerFocus, setComposerFocus] = useState(0);
   // Only the conversation screen counts as showing one: main polls what is on screen faster.
   const pullRequest = usePullRequest(screen === 'conversation' ? activeId : null);
   // What the browser pane trades width with; see BrowserPane.
@@ -537,6 +538,10 @@ export function ChatShell({
     // new session's intro still needs its full run.
   }, [introPhase, introEntry]);
   const orchestratorView = introPhase === 'off' ? orchestratorPrefs.view : 'tavern';
+  const focusParentChat = useCallback(() => {
+    setDockOpen(true);
+    setComposerFocus(request => request + 1);
+  }, [setDockOpen]);
   const changeOrchestratorView = useCallback(
     (view: OrchestratorViewId) => {
       setIntroPhase('off');
@@ -1211,6 +1216,7 @@ export function ChatShell({
                   actions={agentActions}
                   introPlaying={introPhase === 'playing'}
                   renderView={renderOrchestratorView}
+                  onParentFocus={focusParentChat}
                   delegate={
                     orchestrateCapable ? { on: delegating, onChange: on => void setOrchestrate(on) } : undefined
                   }
@@ -1416,6 +1422,7 @@ export function ChatShell({
             onReturnedConsumed={conversation.clearReturned}
             fill={composerFill}
             onFillConsumed={clearComposerFill}
+            focusRequest={composerFocus}
             skills={skills}
             leading={
               <ApprovalModePill

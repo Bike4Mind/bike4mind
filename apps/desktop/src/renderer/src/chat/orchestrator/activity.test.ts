@@ -36,6 +36,25 @@ describe('foldActivity', () => {
     expect(done.has('s1')).toBe(false);
   });
 
+  it('carries the session id a session tool targets, and only for those tools', () => {
+    const empty: ReadonlyMap<string, AgentActivity> = new Map();
+    const reading = foldActivity(empty, {
+      type: 'tool-start',
+      ...base,
+      call: call('session_read', { session_id: 'child-1' }),
+    });
+    expect(reading.get('s1')).toEqual({ kind: 'tool', tool: 'session_read', detail: '', target: 'child-1' });
+    const other = foldActivity(empty, { type: 'tool-start', ...base, call: call('bash', { session_id: 'x' }) });
+    expect(other.get('s1')).toEqual({ kind: 'tool', tool: 'bash', detail: '' });
+    const retarget = foldActivity(reading, {
+      type: 'tool-start',
+      ...base,
+      call: call('session_read', { session_id: 'child-2' }),
+    });
+    expect(retarget).not.toBe(reading);
+    expect(retarget.get('s1')).toMatchObject({ target: 'child-2' });
+  });
+
   it('drops the entry on error', () => {
     const current = new Map<string, AgentActivity>([['s1', { kind: 'phase', phase: 'thinking' }]]);
     expect(foldActivity(current, { type: 'error', ...base, message: 'boom' }).has('s1')).toBe(false);

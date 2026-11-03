@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { OrchestratorViewProps } from '../OrchestratorStage';
 import type { AgentView } from '../roster';
 import { agentFixture, createThemedMount, el, query } from '../testUtils';
 import { assignPersonas } from './agentPersona';
-import { DOOR_POINT, TAVERN_SLOTS } from './scene';
+import { DOOR_POINT, INNKEEPER_POINT, TAVERN_SLOTS } from './scene';
 import { TavernView } from './TavernView';
 
 type SceneModule = typeof import('./scene');
@@ -22,7 +23,12 @@ vi.mock('./scene', async importOriginal => {
 const onSelect = vi.fn();
 const themed = createThemedMount();
 
-const renderTavern = (agents: AgentView[], introPlaying = false, selectedId: string | null = null) =>
+const renderTavern = (
+  agents: AgentView[],
+  introPlaying = false,
+  selectedId: string | null = null,
+  extra: Partial<OrchestratorViewProps> = {}
+) =>
   themed.render(
     <TavernView
       agents={agents}
@@ -30,6 +36,7 @@ const renderTavern = (agents: AgentView[], introPlaying = false, selectedId: str
       selectedId={selectedId}
       introPlaying={introPlaying}
       personas={assignPersonas(agents)}
+      {...extra}
     />
   );
 
@@ -251,6 +258,81 @@ describe('TavernView', () => {
       await renderTavern([agentFixture('a', 'working')]);
       await renderTavern([agentFixture('a', 'working'), agentFixture('b', 'done')]);
       expect(el('orchestrator-tavern-agent-b').style.left).toBe(`${TAVERN_SLOTS.hearth[0].x}%`);
+    });
+  });
+
+  describe('the Innkeeper', () => {
+    const innkeeper = () => el('orchestrator-tavern-innkeeper');
+    const sessionRead = (target: string): OrchestratorViewProps['parent'] => ({
+      status: 'processing',
+      activity: { kind: 'tool', tool: 'session_read', detail: '', target },
+    });
+
+    it('stands behind the bar polishing, labelled, while the parent is not processing', async () => {
+      await renderTavern([agentFixture('a', 'working')], false, null, { parent: { status: 'done' } });
+      expect(innkeeper().style.left).toBe(`${INNKEEPER_POINT.x}%`);
+      expect(innkeeper().style.top).toBe(`${INNKEEPER_POINT.y}%`);
+      expect(innkeeper().getAttribute('data-pose')).toBe('idle');
+      expect(el('orchestrator-tavern-innkeeper-name').textContent).toBe('Innkeeper');
+      expect(query('orchestrator-tavern-innkeeper-bubble')).toBeNull();
+      expect(sprites()).toHaveLength(1);
+    });
+
+    it("writes while posting quests, with the parent's activity in a bubble", async () => {
+      await renderTavern([], false, null, {
+        parent: { status: 'processing', activity: { kind: 'tool', tool: 'session_spawn', detail: '' } },
+      });
+      expect(innkeeper().getAttribute('data-pose')).toBe('writing');
+      expect(el('orchestrator-tavern-innkeeper-bubble').textContent).toBe('session_spawn');
+    });
+
+    it('reads once every agent has settled while the parent is still processing', async () => {
+      await renderTavern([agentFixture('a', 'done')], false, null, {
+        parent: { status: 'processing', activity: { kind: 'phase', phase: 'thinking' } },
+      });
+      expect(innkeeper().getAttribute('data-pose')).toBe('reading');
+    });
+
+    it('walks over to the agent it reads, and back once the read is over', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+      try {
+        const agents = [agentFixture('a', 'working'), agentFixture('b', 'done')];
+        await renderTavern(agents, false, null, { parent: sessionRead('b') });
+        await renderTavern(agents, false, null, { parent: sessionRead('b') });
+        expect(innkeeper().getAttribute('data-pose')).toBe('walking');
+        const hearth = TAVERN_SLOTS.hearth[0];
+        expect(Math.abs(parseFloat(innkeeper().style.left) - hearth.x)).toBeLessThanOrEqual(6);
+        expect(innkeeper().style.top).toBe(`${hearth.y}%`);
+
+        // The read returns at once; the walk still finishes before heading back.
+        await renderTavern(agents, false, null, { parent: { status: 'processing' } });
+        expect(innkeeper().style.top).toBe(`${hearth.y}%`);
+        await act(async () => {
+          vi.advanceTimersByTime(5000);
+        });
+        expect(innkeeper().style.left).toBe(`${INNKEEPER_POINT.x}%`);
+        expect(innkeeper().style.top).toBe(`${INNKEEPER_POINT.y}%`);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('stays behind the bar under reduced motion and highlights the agent instead', async () => {
+      setReducedMotion(true);
+      const agents = [agentFixture('a', 'working'), agentFixture('b', 'done')];
+      await renderTavern(agents, false, null, { parent: sessionRead('b') });
+      await renderTavern(agents, false, null, { parent: sessionRead('b') });
+      expect(innkeeper().style.left).toBe(`${INNKEEPER_POINT.x}%`);
+      expect(el('orchestrator-tavern-agent-b').getAttribute('data-innkeeper-visit')).toBe('true');
+      expect(el('orchestrator-tavern-agent-a').getAttribute('data-innkeeper-visit')).toBeNull();
+    });
+
+    it('calls onInnkeeperSelect when clicked, never onSelect', async () => {
+      const onInnkeeperSelect = vi.fn();
+      await renderTavern([agentFixture('a', 'working')], false, null, { onInnkeeperSelect });
+      await act(async () => innkeeper().click());
+      expect(onInnkeeperSelect).toHaveBeenCalledTimes(1);
+      expect(onSelect).not.toHaveBeenCalled();
     });
   });
 });

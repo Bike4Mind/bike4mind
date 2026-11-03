@@ -8,7 +8,7 @@ import { useEffect, useMemo, type ReactNode, useState } from 'react';
 import { AgentPeekDrawer } from './AgentPeekDrawer';
 import { ORCHESTRATOR_VIEWS, type OrchestratorViewId } from './orchestratorPrefs';
 import { assignPersonas, type AgentPersona } from './tavern/agentPersona';
-import { formatAgentCost, summarizeRoster, type AgentView } from './roster';
+import { formatAgentCost, summarizeRoster, type AgentView, type ParentView } from './roster';
 import { TableView } from './TableView';
 
 export interface AgentActions {
@@ -23,10 +23,16 @@ export interface OrchestratorViewProps {
   selectedId: string | null;
   introPlaying: boolean;
   personas: ReadonlyMap<string, AgentPersona>;
+  /** The orchestrating session itself; the Tavern draws it as the Innkeeper. */
+  parent?: ParentView;
+  onInnkeeperSelect?(): void;
 }
 
 export interface OrchestratorStageProps {
   agents: readonly AgentView[];
+  parent?: ParentView;
+  /** Clicking the Innkeeper: bring the parent's own conversation forward. */
+  onParentFocus?(): void;
   view: OrchestratorViewId;
   onViewChange(view: OrchestratorViewId): void;
   actions: AgentActions;
@@ -48,6 +54,8 @@ const pulse = keyframes`
 
 export function OrchestratorStage({
   agents,
+  parent,
+  onParentFocus,
   view,
   onViewChange,
   actions,
@@ -78,7 +86,15 @@ export function OrchestratorStage({
   const needsYou = counts['needs-you'];
   const firstNeedsYou = agents.find(agent => agent.state === 'needs-you');
 
-  const viewProps: OrchestratorViewProps = { agents, onSelect: setSelectedId, selectedId, introPlaying, personas };
+  const viewProps: OrchestratorViewProps = {
+    agents,
+    onSelect: setSelectedId,
+    selectedId,
+    introPlaying,
+    personas,
+    parent,
+    onInnkeeperSelect: onParentFocus,
+  };
 
   return (
     <Box

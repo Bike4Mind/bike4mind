@@ -428,6 +428,18 @@ describe('orchestrate mode in the chat shell', () => {
     expect(query('orchestrator-delegate-switch')).toBeNull();
   });
 
+  it('brings the parent conversation forward when the Innkeeper is clicked, reopening a hidden dock', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    await openParent();
+    await enterOrchestrate();
+    act(() => el('orchestrator-dock-toggle-btn').click());
+    expect(query('orchestrator-dock')).toBeNull();
+
+    await act(async () => el('orchestrator-tavern-innkeeper').click());
+    expect(query('orchestrator-dock')).not.toBeNull();
+    expect(document.activeElement).toBe(el('chat-composer-input'));
+  });
+
   it('opens an agent session from the stage', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, 'table');

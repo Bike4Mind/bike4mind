@@ -46,6 +46,9 @@ export const TAVERN_SLOTS: Record<SeatZone, readonly SlotPoint[]> = {
 
 export const DOOR_POINT: SlotPoint = { x: 4, y: 46 };
 
+/** Behind the bar counter, above the stools, so the Innkeeper never takes an agent's seat. */
+export const INNKEEPER_POINT: SlotPoint = { x: 62, y: 34 };
+
 const ZONE: Record<AgentState, SeatZone> = {
   working: 'workbench',
   'needs-you': 'bar',

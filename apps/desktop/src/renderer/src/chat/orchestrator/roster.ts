@@ -44,6 +44,12 @@ export interface AgentView {
   branch?: string;
 }
 
+/** The orchestrating (root) session itself, as the stage sees it: no roster entry, just what it is doing. */
+export interface ParentView {
+  status?: ChatSessionStatus;
+  activity?: AgentActivity;
+}
+
 const OUTCOME_STATE: Record<ChildOutcome, AgentState> = {
   finished: 'done',
   'max-tokens': 'failed',

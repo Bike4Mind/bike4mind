@@ -36,3 +36,17 @@ const SPRITES: Record<CharacterId, Record<Pose, string>> = {
 export function characterSprite(character: CharacterId, pose: Pose): string {
   return SPRITES[character][pose];
 }
+
+export type InnkeeperPose = 'idle' | 'writing' | 'reading' | 'walking' | 'cheering';
+
+/**
+ * The one place the Innkeeper's art is chosen. Placeholders from the dwarf smith's sheet until the
+ * dedicated Innkeeper sprites land; swap each entry for its innkeeper-*.png import then.
+ */
+export const INNKEEPER_ART: Record<InnkeeperPose, string> = {
+  idle: char1Idle,
+  writing: char1Work,
+  reading: char1Rest,
+  walking: char1Idle,
+  cheering: char1Call,
+};

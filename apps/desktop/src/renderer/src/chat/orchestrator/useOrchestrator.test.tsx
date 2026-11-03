@@ -187,13 +187,29 @@ describe('useAgentActivity pruning', () => {
 
 describe('useOrchestratorRoster', () => {
   it('is empty without a root', () => {
-    let latest: unknown[] = [1];
+    let latest: ReturnType<typeof useOrchestratorRoster> | undefined;
     const Probe = () => {
       latest = useOrchestratorRoster(null, [], new Map(), new Map());
       return null;
     };
     act(() => root.render(<Probe />));
-    expect(latest).toEqual([]);
+    expect(latest).toEqual({ agents: [], parent: {} });
+  });
+
+  it("tracks the root's own activity and status as the parent, apart from the agents", () => {
+    let latest: ReturnType<typeof useOrchestratorRoster> | undefined;
+    const statuses = new Map([['root', 'processing' as const]]);
+    const Probe = () => {
+      latest = useOrchestratorRoster('root', [], statuses, new Map());
+      return null;
+    };
+    act(() => root.render(<Probe />));
+    act(() => listener?.(toolStart('root')));
+    expect(latest?.agents).toEqual([]);
+    expect(latest?.parent).toEqual({
+      status: 'processing',
+      activity: { kind: 'tool', tool: 'read_file', detail: 'file.ts' },
+    });
   });
 });
 

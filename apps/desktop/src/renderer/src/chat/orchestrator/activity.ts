@@ -4,12 +4,15 @@ import type { AgentView } from './roster';
 
 /** What a running agent is doing right now, as far as its stream shows. Status only, never stored. */
 export type AgentActivity =
-  | { kind: 'tool'; tool: string; detail: string }
+  /** `target` is the session a session tool (session_read, session_send) is pointed at. */
+  | { kind: 'tool'; tool: string; detail: string; target?: string }
   | { kind: 'phase'; phase: 'waiting' | 'thinking' | 'responding' | 'writing-tool'; tool?: string };
 
 const DETAIL_MAX = 60;
 const DETAIL_KEYS = ['path', 'file_path', 'command', 'pattern', 'query', 'url'] as const;
 const PATH_KEYS: ReadonlySet<string> = new Set(['path', 'file_path']);
+
+const SESSION_TOOL = /^session_/;
 
 function basename(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
@@ -25,15 +28,19 @@ export function describeToolInput(call: Pick<ChatToolCall, 'name' | 'input'>): s
 }
 
 function sameActivity(a: AgentActivity, b: AgentActivity): boolean {
-  if (a.kind === 'tool' && b.kind === 'tool') return a.tool === b.tool && a.detail === b.detail;
+  if (a.kind === 'tool' && b.kind === 'tool')
+    return a.tool === b.tool && a.detail === b.detail && a.target === b.target;
   if (a.kind === 'phase' && b.kind === 'phase') return a.phase === b.phase && a.tool === b.tool;
   return false;
 }
 
 function activityFor(event: ChatStreamEvent): AgentActivity | null | undefined {
   switch (event.type) {
-    case 'tool-start':
-      return { kind: 'tool', tool: event.call.name, detail: describeToolInput(event.call) };
+    case 'tool-start': {
+      const target = event.call.input.session_id;
+      const activity: AgentActivity = { kind: 'tool', tool: event.call.name, detail: describeToolInput(event.call) };
+      return SESSION_TOOL.test(event.call.name) && typeof target === 'string' ? { ...activity, target } : activity;
+    }
     case 'tool-end':
       return { kind: 'phase', phase: 'waiting' };
     case 'phase':

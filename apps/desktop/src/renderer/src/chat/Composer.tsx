@@ -89,6 +89,7 @@ export function Composer({
   onReturnedConsumed,
   fill,
   onFillConsumed,
+  focusRequest,
   footer,
   leading,
   skills,
@@ -163,6 +164,8 @@ export function Composer({
    */
   fill?: { id: number; text: string } | null;
   onFillConsumed?: () => void;
+  /** Bumped to move the keyboard into the box, caret at the end, without touching the draft. */
+  focusRequest?: number;
   /** Controls that belong to the next turn rather than to the app - the model picker. */
   footer?: ReactNode;
   /**
@@ -284,6 +287,9 @@ export function Composer({
     setCaretRequest(request => request + 1);
     onFillConsumed?.();
   }, [fill, onFillConsumed]);
+  useEffect(() => {
+    if (focusRequest) setCaretRequest(request => request + 1);
+  }, [focusRequest]);
   // After the commit that put the text in, so the caret lands past it and not at its old length.
   useLayoutEffect(() => {
     const el = textareaRef.current;
