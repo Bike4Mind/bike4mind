@@ -29,8 +29,7 @@ function errorText(error: unknown): string {
  * simulator_view; the user can open it from the toolbar and pick a device.
  */
 export function SimulatorPane({ state, onClose }: { state: SimulatorViewState; onClose: () => void }) {
-  const image = useRef<HTMLImageElement | null>(null);
-  const frameUrl = useRef<string | null>(null);
+  const canvas = useRef<HTMLCanvasElement | null>(null);
   const [hasFrame, setHasFrame] = useState(false);
   const [devices, setDevices] = useState<SimulatorViewDevice[]>([]);
   const [problem, setProblem] = useState('');
@@ -49,22 +48,32 @@ export function SimulatorPane({ state, onClose }: { state: SimulatorViewState; o
 
   useEffect(refreshDevices, [refreshDevices]);
 
-  // Frames bypass React state: at ten a second a re-render each would be wasted work.
+  // Frames bypass React state: at ten a second a re-render each would be wasted work. Drawn on a
+  // canvas from a decoded bitmap because the renderer's CSP allows no blob: image urls.
   useEffect(() => {
     setHasFrame(false);
+    let drawing = false;
     const unsubscribe = window.b4m.simulator.onFrame(frame => {
-      if (frame.udid !== udid || !image.current) return;
-      const next = URL.createObjectURL(new Blob([frame.bytes], { type: 'image/jpeg' }));
-      image.current.src = next;
-      if (frameUrl.current) URL.revokeObjectURL(frameUrl.current);
-      frameUrl.current = next;
-      setHasFrame(true);
+      if (frame.udid !== udid || drawing) return;
+      drawing = true;
+      createImageBitmap(new Blob([frame.bytes]))
+        .then(bitmap => {
+          const node = canvas.current;
+          if (node) {
+            if (node.width !== bitmap.width) node.width = bitmap.width;
+            if (node.height !== bitmap.height) node.height = bitmap.height;
+            node.getContext('2d')?.drawImage(bitmap, 0, 0);
+            setHasFrame(true);
+          }
+          bitmap.close();
+        })
+        // A frame that does not decode is skipped; the next one, a tenth of a second on, replaces it.
+        .catch(() => undefined)
+        .finally(() => {
+          drawing = false;
+        });
     });
-    return () => {
-      unsubscribe();
-      if (frameUrl.current) URL.revokeObjectURL(frameUrl.current);
-      frameUrl.current = null;
-    };
+    return unsubscribe;
   }, [udid]);
 
   const send = useCallback((input: SimulatorPaneInput) => {
@@ -87,7 +96,7 @@ export function SimulatorPane({ state, onClose }: { state: SimulatorViewState; o
   );
 
   const pointAt = (event: ReactPointerEvent) => {
-    const node = image.current;
+    const node = canvas.current;
     if (!node || !state.screen) return null;
     const rect = node.getBoundingClientRect();
     return toDevicePoints(
@@ -98,20 +107,20 @@ export function SimulatorPane({ state, onClose }: { state: SimulatorViewState; o
         top: rect.top,
         width: rect.width,
         height: rect.height,
-        naturalWidth: node.naturalWidth,
-        naturalHeight: node.naturalHeight,
+        naturalWidth: node.width,
+        naturalHeight: node.height,
       },
       state.screen
     );
   };
 
-  const onPointerDown = (event: ReactPointerEvent<HTMLImageElement>) => {
+  const onPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
     event.currentTarget.focus();
     press.current = { x: event.clientX, y: event.clientY, at: performance.now() };
   };
 
-  const onPointerUp = (event: ReactPointerEvent<HTMLImageElement>) => {
+  const onPointerUp = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const start = press.current;
     press.current = null;
     if (!start) return;
@@ -133,7 +142,7 @@ export function SimulatorPane({ state, onClose }: { state: SimulatorViewState; o
     if (text) send({ kind: 'type', text });
   }, [send]);
 
-  const onKeyDown = (event: React.KeyboardEvent<HTMLImageElement>) => {
+  const onKeyDown = (event: React.KeyboardEvent<HTMLCanvasElement>) => {
     if (event.metaKey || event.ctrlKey || event.altKey || event.key.length !== 1) return;
     event.preventDefault();
     typed.current += event.key;
@@ -225,11 +234,11 @@ export function SimulatorPane({ state, onClose }: { state: SimulatorViewState; o
         {shown ? (
           <>
             <Box
-              component="img"
-              ref={image}
-              alt={state.device ? `${state.device.name} screen` : 'Simulator screen'}
+              component="canvas"
+              ref={canvas}
+              role="img"
+              aria-label={state.device ? `${state.device.name} screen` : 'Simulator screen'}
               tabIndex={0}
-              draggable={false}
               onPointerDown={onPointerDown}
               onPointerUp={onPointerUp}
               onKeyDown={onKeyDown}
