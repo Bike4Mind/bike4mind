@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { AttachmentStore } from './AttachmentStore';
 import { PDF_INPUT_MAX, PDF_MAX_PAGES, TEXT_BYTE_CAP, looksLikePdf } from './attachments';
 import { makePdf } from './pdfFixtures';
@@ -20,6 +20,11 @@ describe('looksLikePdf', () => {
     expect(looksLikePdf('a', 'application/pdf', Buffer.from('x'))).toBe(true);
     expect(looksLikePdf('a', undefined, Buffer.from('%PDF-1.7\n'))).toBe(true);
     expect(looksLikePdf('a.txt', 'text/plain', Buffer.from('hello'))).toBe(false);
+  });
+
+  it('trusts the header only when the name has no extension', () => {
+    expect(looksLikePdf('notes.txt', undefined, Buffer.from('%PDF-1.7 is the version we target\n'))).toBe(false);
+    expect(looksLikePdf('notes.txt', 'text/plain', Buffer.from('%PDF-1.7\n'))).toBe(false);
   });
 });
 
@@ -129,5 +134,34 @@ describe('AttachmentStore PDF intake', () => {
     const result = await store.add('s1', inputs);
     expect(result.attachments).toHaveLength(10);
     expect(result.rejected[0].reason).toContain('Only 10 attachments');
+  });
+
+  it('serves the text extracted at intake without parsing the stored file again', async () => {
+    const { store, dir } = await storeIn();
+    const result = await store.add('s1', [
+      { source: 'bytes', name: 'a.pdf', data: new Uint8Array(makePdf(['cached'])) },
+    ]);
+    const { id } = result.attachments[0];
+    await writeFile(join(dir, 'a', 's1', id), 'no longer a pdf');
+
+    expect(await store.readPdfText('s1', id)).toMatchObject({ pages: 1, truncated: false });
+    expect((await store.readPdfText('s1', id))?.text).toContain('cached');
+  });
+
+  it('logs and returns null when a stored PDF no longer parses', async () => {
+    const { store, dir } = await storeIn();
+    const result = await store.add('s1', [{ source: 'bytes', name: 'a.pdf', data: new Uint8Array(makePdf(['x'])) }]);
+    const { id } = result.attachments[0];
+    await writeFile(join(dir, 'a', 's1', id), 'no longer a pdf');
+    const warn = vi.fn();
+    const fresh = new AttachmentStore(join(dir, 'a'), { debug: () => undefined, warn });
+
+    expect(await fresh.readPdfText('s1', id)).toBeNull();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`PDF attachment ${id}`));
+  });
+
+  it('returns null for a PDF whose file is gone', async () => {
+    const { store } = await storeIn();
+    expect(await store.readPdfText('s1', 'missing')).toBeNull();
   });
 });

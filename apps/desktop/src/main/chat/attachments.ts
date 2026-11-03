@@ -112,12 +112,14 @@ export function looksBinary(head: Buffer): boolean {
 /** Every PDF starts with this, whatever it is called. */
 const PDF_MAGIC = Buffer.from('%PDF-', 'latin1');
 
+/**
+ * The header is only trusted for a name with no extension (a paste, a download saved bare): a
+ * `.txt` or `.log` that happens to open with `%PDF-` is still the text file its name says.
+ */
 export function looksLikePdf(name: string, mediaType: string | undefined, head: Buffer): boolean {
-  return (
-    extname(name).toLowerCase() === '.pdf' ||
-    mediaType === 'application/pdf' ||
-    head.subarray(0, PDF_MAGIC.length).equals(PDF_MAGIC)
-  );
+  const extension = extname(name).toLowerCase();
+  if (extension === '.pdf' || mediaType === 'application/pdf') return true;
+  return extension === '' && head.subarray(0, PDF_MAGIC.length).equals(PDF_MAGIC);
 }
 
 export interface PreparedAttachment {
@@ -131,6 +133,8 @@ export interface PreparedAttachment {
   truncated?: boolean;
   /** Set for a PDF: the page count read at intake. */
   pages?: number;
+  /** Set for a PDF: the capped text the model is sent, kept so the first turn need not parse it again. */
+  promptText?: string;
 }
 
 export type PrepareResult = { ok: true; prepared: PreparedAttachment } | { ok: false; reason: string };

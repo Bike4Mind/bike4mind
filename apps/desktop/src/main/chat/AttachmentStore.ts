@@ -17,10 +17,13 @@ import {
   type PrepareResult,
   type ShrinkImage,
 } from './attachments';
-import { preparePdf } from './pdfText';
+import { extractPdfPromptText, preparePdf, type PdfPromptText } from './pdfText';
 
 /** Same shape as a session id, and validated for the same reason - both become path components. */
 const ATTACHMENT_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** Entries are capped text (at most TEXT_BYTE_CAP each), so this bounds the cache's memory too. */
+const PDF_TEXT_CACHE_MAX = 16;
 
 export interface AttachmentStoreLogger {
   debug(message: string): void;
@@ -45,6 +48,12 @@ export class AttachmentStore {
     /** Absent in tests; images are then stored as-is and only the byte cap applies. */
     private readonly shrink?: ShrinkImage
   ) {}
+
+  /**
+   * Keyed by attachment id, so replaying history does not re-parse every PDF on every turn.
+   * Seeded at intake, which has just extracted the text; least recently used goes first.
+   */
+  private readonly pdfTexts = new Map<string, PdfPromptText>();
 
   private sessionDirectory(sessionId: string): string {
     if (!isValidSessionId(sessionId)) throw new Error(`invalid session id: ${sessionId}`);
@@ -85,6 +94,10 @@ export class AttachmentStore {
       const path = this.filePath(sessionId, id);
       await mkdir(this.sessionDirectory(sessionId), { recursive: true });
       await writeFile(path, prepared.prepared.bytes);
+      const { promptText, pages, truncated } = prepared.prepared;
+      if (promptText !== undefined && pages) {
+        this.rememberPdfText(id, { text: promptText, pages, truncated: truncated ?? false });
+      }
 
       result.attachments.push({
         id,
@@ -115,6 +128,40 @@ export class AttachmentStore {
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw err;
+    }
+  }
+
+  /**
+   * A stored PDF's text as the model receives it, or null when the file is gone or no longer
+   * parses. A failure here is logged: the turn goes out without the PDF, and the log is the only
+   * place that says why.
+   */
+  async readPdfText(sessionId: string, attachmentId: string): Promise<PdfPromptText | null> {
+    const cached = this.pdfTexts.get(attachmentId);
+    if (cached) {
+      this.rememberPdfText(attachmentId, cached);
+      return cached;
+    }
+
+    const bytes = await this.read(sessionId, attachmentId);
+    if (!bytes) return null;
+    try {
+      const extracted = await extractPdfPromptText(bytes);
+      this.rememberPdfText(attachmentId, extracted);
+      return extracted;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`CHAT: could not extract text from PDF attachment ${attachmentId}: ${message}`);
+      return null;
+    }
+  }
+
+  private rememberPdfText(attachmentId: string, text: PdfPromptText): void {
+    this.pdfTexts.delete(attachmentId);
+    this.pdfTexts.set(attachmentId, text);
+    if (this.pdfTexts.size > PDF_TEXT_CACHE_MAX) {
+      const oldest = this.pdfTexts.keys().next();
+      if (!oldest.done) this.pdfTexts.delete(oldest.value);
     }
   }
 

@@ -13,6 +13,11 @@ export interface PdfText {
   pages: number;
 }
 
+/** A PDF's text as the model receives it: capped, with truncation marked inside the text. */
+export interface PdfPromptText extends PdfText {
+  truncated: boolean;
+}
+
 /** A PDF that cannot be turned into text; `reason` is written for the user. */
 export class PdfExtractionError extends Error {}
 
@@ -59,9 +64,15 @@ export function capPdfText(text: string): { text: string; truncated: boolean } {
   return { text: capped.bytes.toString('utf8'), truncated: capped.truncated };
 }
 
+export async function extractPdfPromptText(bytes: Uint8Array): Promise<PdfPromptText> {
+  const { text, pages } = await extractPdfText(bytes);
+  return { ...capPdfText(text), pages };
+}
+
 /**
  * Validate a PDF at intake. The ORIGINAL bytes are what is stored, so a later change to send the
- * document natively needs no re-attach; the text is re-extracted when a turn is sent.
+ * document natively needs no re-attach; the extracted text rides along as `promptText` for
+ * AttachmentStore to cache, and is re-extracted from the bytes once that cache has let it go.
  */
 export async function preparePdf(name: string, bytes: Buffer): Promise<PrepareResult> {
   const sourceBytes = bytes.length;
@@ -87,6 +98,7 @@ export async function preparePdf(name: string, bytes: Buffer): Promise<PrepareRe
     };
   }
 
+  const capped = capPdfText(extracted.text);
   return {
     ok: true,
     prepared: {
@@ -96,7 +108,8 @@ export async function preparePdf(name: string, bytes: Buffer): Promise<PrepareRe
       bytes,
       sourceBytes,
       pages: extracted.pages,
-      ...(capPdfText(extracted.text).truncated ? { truncated: true } : {}),
+      promptText: capped.text,
+      ...(capped.truncated ? { truncated: true } : {}),
     },
   };
 }

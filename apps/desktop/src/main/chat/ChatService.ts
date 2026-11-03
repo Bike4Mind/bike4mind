@@ -122,7 +122,7 @@ import {
   type WorkspaceOutcome,
 } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
-import { capPdfText, extractPdfText, type PdfText } from './pdfText';
+import type { PdfPromptText } from './pdfText';
 import type { AttachmentStore } from './AttachmentStore';
 import type { SidebarSectionStore } from './SidebarSectionStore';
 import { childOutcomeDisplay, classifyChildOutcome } from './childOutcome';
@@ -2792,8 +2792,10 @@ export class ChatService {
       const contextBlock = this.projectContext.get(session.id, project?.workingDirectory, project?.directory);
       const skillsBlock = this.skillsPrompt?.get(session.id, skillRoot) ?? Promise.resolve('');
       if (!resume) await this.reportSuggestionOutcomes(session);
-      const readAttachment = (attachment: ChatAttachment) =>
-        this.deps.attachments?.read(session.id, attachment.id) ?? Promise.resolve(null);
+      const readAttachment: AttachmentReader = {
+        bytes: attachment => this.deps.attachments?.read(session.id, attachment.id) ?? Promise.resolve(null),
+        pdfText: attachment => this.deps.attachments?.readPdfText(session.id, attachment.id) ?? Promise.resolve(null),
+      };
       const projectContext = await contextBlock;
       const skillsSection = await skillsBlock;
       let toolsSupported = modelOption?.supportsTools !== false && (!localTurn || !!modelOption);
@@ -7036,7 +7038,7 @@ function parseArguments(raw: string | undefined): Record<string, unknown> {
  */
 async function toCompletionMessages(
   session: ChatSession,
-  readAttachment: ReadAttachment,
+  readAttachment: AttachmentReader,
   /** Deferred-tools turns only: tool-state reminders are rendered and each one's position is pushed here. */
   toolStateMarks?: ToolStateMark[],
   /** Deferred-tools turns only: the wire index of every assistant message a deferred turn sent. */
@@ -7269,25 +7271,10 @@ function automaticDisplay(automatic: ChatAutomaticOrigin): string {
     : `Auto-fix: ${automatic.summary}`;
 }
 
-/** Reads one attachment's stored bytes, or null when the file is gone. */
-type ReadAttachment = (attachment: ChatAttachment) => Promise<Buffer | null>;
-
-const PDF_TEXT_CACHE_MAX = 16;
-/** Keyed by attachment id, so replaying history does not re-parse every PDF on every turn. */
-const pdfTextCache = new Map<string, PdfText>();
-
-async function pdfTextFor(attachment: ChatAttachment, bytes: Buffer): Promise<PdfText | null> {
-  const cached = pdfTextCache.get(attachment.id);
-  if (cached) return cached;
-  let extracted: PdfText;
-  try {
-    extracted = await extractPdfText(bytes);
-  } catch {
-    return null;
-  }
-  if (pdfTextCache.size >= PDF_TEXT_CACHE_MAX) pdfTextCache.delete(pdfTextCache.keys().next().value as string);
-  pdfTextCache.set(attachment.id, extracted);
-  return extracted;
+/** Reads one attachment's stored content; null when the file is gone or, for a PDF, unreadable. */
+interface AttachmentReader {
+  bytes(attachment: ChatAttachment): Promise<Buffer | null>;
+  pdfText(attachment: ChatAttachment): Promise<PdfPromptText | null>;
 }
 
 /**
@@ -7305,13 +7292,23 @@ async function pdfTextFor(attachment: ChatAttachment, bytes: Buffer): Promise<Pd
 async function toAttachedContent(
   prompt: string,
   attachments: readonly ChatAttachment[],
-  readAttachment: ReadAttachment
+  readAttachment: AttachmentReader
 ): Promise<unknown[]> {
   const blocks: unknown[] = [];
   const sections: string[] = [];
 
   for (const attachment of attachments) {
-    const bytes = await readAttachment(attachment);
+    if (attachment.kind === 'pdf') {
+      const pdf = await readAttachment.pdfText(attachment);
+      if (pdf) {
+        sections.push(
+          textAttachmentBlock({ ...attachment, pages: pdf.pages, truncated: pdf.truncated || undefined }, pdf.text)
+        );
+      }
+      continue;
+    }
+
+    const bytes = await readAttachment.bytes(attachment);
     if (!bytes) continue;
 
     if (attachment.kind === 'image') {
@@ -7321,19 +7318,6 @@ async function toAttachedContent(
         type: 'image',
         source: { type: 'base64', media_type: attachment.mediaType, data: bytes.toString('base64') },
       });
-      continue;
-    }
-
-    if (attachment.kind === 'pdf') {
-      const extracted = await pdfTextFor(attachment, bytes);
-      if (!extracted) continue;
-      const capped = capPdfText(extracted.text);
-      sections.push(
-        textAttachmentBlock(
-          { ...attachment, pages: extracted.pages, truncated: capped.truncated || undefined },
-          capped.text
-        )
-      );
       continue;
     }
 
