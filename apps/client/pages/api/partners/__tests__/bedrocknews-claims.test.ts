@@ -19,7 +19,8 @@ vi.mock('@bike4mind/server-utils/auth/mfaEnforcement', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   isMfaEnrollmentOwed: async () => false,
 }));
-vi.mock('@server/partners/bedrocknewsTickets', () => ({
+vi.mock('@server/partners/bedrocknewsTickets', async orig => ({
+  ...(await orig<Record<string, unknown>>()),
   previewTicket: (...a: unknown[]) => mockPreview(...a),
   redeemTicket: (...a: unknown[]) => mockRedeem(...a),
 }));
@@ -58,26 +59,24 @@ const FOREIGN_RESULT = { ...RESULT, balance: 999999 };
 
 const dbUser = (user: unknown) => mockFindById.mockReturnValue({ select: () => ({ lean: async () => user }) });
 
-function fire(
-  method: 'POST',
-  { signedIn = true, body = { ticket: TICKET } }: { signedIn?: boolean; body?: unknown } = {}
-) {
+type Opts = { signedIn?: boolean; body?: unknown };
+
+function fire({ signedIn = true, body = { ticket: TICKET } }: Opts = {}) {
   const { req, res } = createMocks(
-    { method, url: '/api/partners/bedrocknews/claims/x', body: body as Record<string, unknown>, headers: {} },
+    { method: 'POST', url: '/api/partners/bedrocknews/claims/x', body: body as Record<string, unknown>, headers: {} },
     { eventEmitter: EventEmitter }
   );
   if (signedIn) (req as { user?: unknown }).user = SESSION_USER;
   return { req: req as any, res: res as any };
 }
 
-type Opts = { signedIn?: boolean; body?: unknown };
-const get = async (opts?: Opts) => {
-  const { req, res } = fire('POST', opts);
+const preview = async (opts?: Opts) => {
+  const { req, res } = fire(opts);
   await previewHandler(req, res);
   return res;
 };
-const post = async (opts?: Opts) => {
-  const { req, res } = fire('POST', opts);
+const redeem = async (opts?: Opts) => {
+  const { req, res } = fire(opts);
   await redeemHandler(req, res);
   return res;
 };
@@ -95,8 +94,8 @@ describe('BedrockNews claim routes', () => {
   afterEach(() => warn.mockRestore());
 
   it.each([
-    ['preview', get],
-    ['redeem', post],
+    ['preview', preview],
+    ['redeem', redeem],
   ])('%s answers 401 without a session', async (_m, run) => {
     const res = await run({ signedIn: false });
     expect(res._getStatusCode()).toBe(401);
@@ -105,8 +104,8 @@ describe('BedrockNews claim routes', () => {
   });
 
   describe.each([
-    ['preview', get],
-    ['redeem', post],
+    ['preview', preview],
+    ['redeem', redeem],
   ])('%s request handling', (_name, run) => {
     it.each([['short'], ['has spaces in it!!!!!!'], [123], [undefined]])(
       'rejects ticket %j with 400 not-found',
@@ -131,7 +130,7 @@ describe('BedrockNews claim routes', () => {
       'is unavailable for the malformed body %j without a 500',
       async body => {
         mockPreview.mockResolvedValue({ ok: true, preview: body });
-        const res = await get();
+        const res = await preview();
         expect(res._getStatusCode()).toBe(200);
         expect(res._getJSONData()).toEqual({ state: 'unavailable' });
         expect(warn).toHaveBeenCalled();
@@ -141,7 +140,7 @@ describe('BedrockNews claim routes', () => {
 
     it('is ready with the priced rungs and the session user own email', async () => {
       mockPreview.mockResolvedValue({ ok: true, preview: { status: 'open', expiresAt: 'x', rungs: RUNGS } });
-      const res = await get();
+      const res = await preview();
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData()).toEqual({ state: 'ready', credits: 130, rungs: RUNGS, account: EMAIL });
       expect(mockPreview).toHaveBeenCalledWith(TICKET);
@@ -151,9 +150,10 @@ describe('BedrockNews claim routes', () => {
       ]);
     });
 
-    it('reads a stale redeeming status as ready', async () => {
+    it('is in-progress while another redeem holds the ticket', async () => {
       mockPreview.mockResolvedValue({ ok: true, preview: { status: 'redeeming', expiresAt: 'x', rungs: RUNGS } });
-      expect((await get())._getJSONData()).toMatchObject({ state: 'ready' });
+      expect((await preview())._getJSONData()).toEqual({ state: 'in-progress' });
+      expect(mockRungCredits).not.toHaveBeenCalled();
     });
 
     it('is redeemed with the stored result and the session user own balance', async () => {
@@ -161,17 +161,17 @@ describe('BedrockNews claim routes', () => {
         ok: true,
         preview: { status: 'redeemed', expiresAt: 'x', rungs: RUNGS, result: FOREIGN_RESULT },
       });
-      expect((await get())._getJSONData()).toEqual({ state: 'redeemed', result: RESULT });
+      expect((await preview())._getJSONData()).toEqual({ state: 'redeemed', result: RESULT });
     });
 
     it('is expired for an expired status', async () => {
       mockPreview.mockResolvedValue({ ok: true, preview: { status: 'expired', expiresAt: 'x', rungs: RUNGS } });
-      expect((await get())._getJSONData()).toEqual({ state: 'expired' });
+      expect((await preview())._getJSONData()).toEqual({ state: 'expired' });
     });
 
     it('is unavailable for a redeemed ticket with no result', async () => {
       mockPreview.mockResolvedValue({ ok: true, preview: { status: 'redeemed', expiresAt: 'x', rungs: RUNGS } });
-      expect((await get())._getJSONData()).toEqual({ state: 'unavailable' });
+      expect((await preview())._getJSONData()).toEqual({ state: 'unavailable' });
     });
 
     it.each([
@@ -183,14 +183,14 @@ describe('BedrockNews claim routes', () => {
       ['unavailable', fail('INVALID_REQUEST', 400)],
     ])('answers %s for %j', async (state, failure) => {
       mockPreview.mockResolvedValue(failure);
-      const res = await get();
+      const res = await preview();
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData()).toEqual({ state });
     });
 
     it('warns server-side naming the code when the partner key or config is bad', async () => {
       mockPreview.mockResolvedValue(fail('PARTNER_KEY_INVALID', 401));
-      await get();
+      await preview();
       expect(JSON.stringify(warn.mock.calls)).toContain('PARTNER_KEY_INVALID');
     });
 
@@ -200,7 +200,7 @@ describe('BedrockNews claim routes', () => {
       ['missing user', null],
     ])('is verify-email for %s without calling BedrockNews', async (_l, user) => {
       dbUser(user);
-      const res = await get();
+      const res = await preview();
       expect(res._getJSONData()).toEqual({ state: 'verify-email' });
       expect(mockPreview).not.toHaveBeenCalled();
     });
@@ -209,14 +209,19 @@ describe('BedrockNews claim routes', () => {
   describe('redeem', () => {
     it('passes the session user id and the DB email, answering done', async () => {
       mockRedeem.mockResolvedValue({ ok: true, result: FOREIGN_RESULT });
-      const res = await post();
+      const res = await redeem();
       expect(res._getJSONData()).toEqual({ state: 'done', result: RESULT });
       expect(mockRedeem).toHaveBeenCalledWith(TICKET, { id: SESSION_USER.id, email: EMAIL });
     });
 
-    it('is unavailable for a result missing its fields', async () => {
-      mockRedeem.mockResolvedValue({ ok: true, result: {} });
-      const res = await post();
+    it.each([
+      [{}],
+      [{ claimed: [], total: 1 }],
+      [{ claimed: [], total: 1, firstSolveCredits: 0 }],
+      [{ claimed: [], total: 1, capped: 0 }],
+    ])('is unavailable for the result %j missing fields', async result => {
+      mockRedeem.mockResolvedValue({ ok: true, result });
+      const res = await redeem();
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData()).toEqual({ state: 'unavailable' });
       expect(warn).toHaveBeenCalled();
@@ -224,7 +229,7 @@ describe('BedrockNews claim routes', () => {
 
     it('is verify-email for an ineligible user and does not redeem', async () => {
       dbUser({ ...PAYABLE, emailVerified: false });
-      const res = await post();
+      const res = await redeem();
       expect(res._getJSONData()).toEqual({ state: 'verify-email' });
       expect(mockRedeem).not.toHaveBeenCalled();
     });
@@ -242,14 +247,14 @@ describe('BedrockNews claim routes', () => {
       ['unavailable', fail('NOT_CONFIGURED', 503)],
     ])('answers %s for %j', async (state, failure) => {
       mockRedeem.mockResolvedValue(failure);
-      const res = await post();
+      const res = await redeem();
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData()).toEqual({ state });
     });
 
     it('warns server-side naming the code when the partner key or config is bad', async () => {
       mockRedeem.mockResolvedValue(fail('NOT_CONFIGURED', 503));
-      await post();
+      await redeem();
       expect(JSON.stringify(warn.mock.calls)).toContain('NOT_CONFIGURED');
     });
   });
