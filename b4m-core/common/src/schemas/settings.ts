@@ -4445,7 +4445,7 @@ export const settingsMap = {
     defaultValue: false,
     userReadable: true,
     description:
-      'Enroll new self-serve accounts in staged grants. Existing accounts and explicit invite grants are unchanged.',
+      'Legacy fallback: every new signup is enrolled in a staged grant regardless of this switch. It only decides which older keys apply while Signup Grant Initial Credits or Signup Grant Drip Cap is unset (OFF keeps the flat grant: Default Free Credits, nothing locked).',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4500,7 +4500,7 @@ export const settingsMap = {
     defaultValue: false,
     userReadable: true,
     description:
-      'Allow enrolled accounts to request an unlock once they keep the app open and in use for the minimum active time in a UTC day.',
+      'Legacy fallback: only read while Signup Grant Daily Credits is unset, where ON applies Signup Activity Daily Credits as the daily drip and OFF pays no drip. Set Signup Grant Daily Credits instead.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4562,7 +4562,7 @@ export const settingsMap = {
     int: true,
     userReadable: true,
     description:
-      'Credits released for each UTC day of qualifying active time. Pays only from the unlock pool (Verified Unlock Credits) and pays nothing while that is 0. Zero disables the activity drip.',
+      'Legacy fallback: the daily drip amount while Signup Grant Daily Credits is unset and Signup Grant Activity Unlock is ON. Set Signup Grant Daily Credits instead.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4575,7 +4575,8 @@ export const settingsMap = {
     int: true,
     // The client resolves the legacy drip cap from it while signupGrantDripCap is unset.
     userReadable: true,
-    description: 'Total credits the activity drip may release per account. Zero disables the activity drip.',
+    description:
+      'Legacy fallback: while Signup Grant Drip Cap is unset, the drip cap is the smaller of this and Verified Unlock Credits. Set Signup Grant Drip Cap instead.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4679,7 +4680,7 @@ export const settingsMap = {
     name: 'Default Free Credits',
     defaultValue: 0,
     description:
-      'Flat credits granted after email verification to a user who registers WITHOUT an invite code and is not enrolled in staged grants (Staged Signup Grants OFF, or the account has no staged grant). Includes eligible partner signups when Allow Open Registration is OFF; partner-rule credits are added on top. Does not set the staged amount: that is Signup Grant Credits, which was copied from this value once and is edited separately. 0 grants nothing. An unverified account receives no credits.',
+      'Legacy fallback: the credits a signup WITHOUT an invite code receives after email verification while Signup Grant Initial Credits is unset and Staged Signup Grants is OFF. Once Signup Grant Initial Credits is set, editing this no longer changes open-signup grants. Includes eligible partner signups when Allow Open Registration is OFF; partner-rule credits are added on top. 0 grants nothing. An unverified account receives no credits.',
     category: 'Users',
   }),
   noCardUnlockEnabled: makeBooleanSetting({
