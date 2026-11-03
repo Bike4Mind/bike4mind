@@ -286,6 +286,7 @@ export const SettingKeySchema = z.enum([
   'typesafeApiKey',
   'FirecrawlApiKey',
   'FirecrawlApiUrl',
+  'FirecrawlFetchCostUsd',
   'PerplexityApiKey',
   'EnableDeepResearch',
   'EnableDeepResearchDefault',
@@ -401,6 +402,7 @@ export const SettingKeySchema = z.enum([
   'SerperKey',
   'SearxngUrl',
   'WebSearchProvider',
+  'SerpApiSearchCostUsd',
   'WolframAlphaKey',
   'FmpApiKey',
   'EnableFmpFinancialData',
@@ -1258,6 +1260,10 @@ export const DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_MAX = 500;
 export const DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_INDIVIDUAL_DEFAULT = 1;
 export const DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_ORGANIZATION_DEFAULT = 5;
 export const DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_MAX = 100;
+
+/** Public list prices, in USD per call, of the paid providers behind web_search and web_fetch. */
+export const SERPAPI_SEARCH_COST_USD_DEFAULT = 0.015;
+export const FIRECRAWL_FETCH_COST_USD_DEFAULT = 0.002;
 
 function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: number; int?: boolean } & BaseSetting) {
   let numberSchema = z.coerce.number();
@@ -2142,6 +2148,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'WolframAlphaKey', order: 4 },
       { key: 'FmpApiKey', order: 5 },
       { key: 'PotionQuestApiKey', order: 6 },
+      { key: 'SerpApiSearchCostUsd', order: 7 },
     ],
   },
   FEEDBACK: {
@@ -5730,6 +5737,18 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.SEARCH.id,
     order: 2,
   }),
+  SerpApiSearchCostUsd: makeNumberSetting({
+    key: 'SerpApiSearchCostUsd',
+    name: 'Web Search Cost per Call (USD)',
+    defaultValue: SERPAPI_SEARCH_COST_USD_DEFAULT,
+    min: 0,
+    max: 1,
+    description:
+      "Provider cost in USD of one web search served by the Serp Search API. The credits a user is charged per search are this cost times the platform credits-per-USD rate, rounded up. The default is the public list price; set it to your plan's real per-search cost. 0 makes SerpAPI searches free. Searches served by SearXNG or from cache are never charged.",
+    category: 'Tools',
+    group: API_SERVICE_GROUPS.SEARCH.id,
+    order: 7,
+  }),
   SearxngUrl: makeStringSetting({
     key: 'SearxngUrl',
     name: 'SearXNG Base URL',
@@ -6691,6 +6710,16 @@ export const settingsMap = {
     description:
       'Base URL for a self-hosted Firecrawl instance (e.g. http://firecrawl:3002). Leave blank to use the hosted Firecrawl cloud with the API key above.',
     defaultValue: '',
+    category: 'AI',
+  }),
+  FirecrawlFetchCostUsd: makeNumberSetting({
+    key: 'FirecrawlFetchCostUsd',
+    name: 'Web Fetch Cost per Call (USD)',
+    defaultValue: FIRECRAWL_FETCH_COST_USD_DEFAULT,
+    min: 0,
+    max: 1,
+    description:
+      "Provider cost in USD of one web page fetch through hosted Firecrawl. The credits a user is charged per fetch are this cost times the platform credits-per-USD rate, rounded up. The default is the public list price; set it to your plan's real per-fetch cost. 0 makes fetches free. Fetches through a self-hosted Firecrawl URL or the keyless direct fetch are never charged.",
     category: 'AI',
   }),
   PerplexityApiKey: makeStringSetting({

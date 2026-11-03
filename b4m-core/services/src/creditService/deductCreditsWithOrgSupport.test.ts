@@ -352,6 +352,30 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
       );
     });
 
+    it('should handle tool_usage type, carrying the per-call quest id and provider-tool model', async () => {
+      const params: DeductCreditsParams = {
+        type: 'tool_usage',
+        user: mockUser,
+        organization: null,
+        credits: 30,
+        sessionId: 'web-search-1',
+        questId: 'web-search-1',
+        model: 'serpapi-web_search',
+      };
+
+      await deductCreditsWithOrgSupport(params, mockAdapters);
+
+      expect(mockSubtractCredits).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'tool_usage',
+          credits: 30,
+          questId: 'web-search-1',
+          model: 'serpapi-web_search',
+        }),
+        expect.any(Object)
+      );
+    });
+
     it('should handle sound_effects_usage type (quest-less, questId omitted)', async () => {
       const params: DeductCreditsParams = {
         type: 'sound_effects_usage',
