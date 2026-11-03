@@ -435,7 +435,10 @@ export class OpenAICompatibleChat implements LocalChat {
     return this.recalled;
   }
 
-  /** Forgets a learned thinker whose name now serves other weights, which may not think. */
+  /**
+   * Forgets a learned thinker whose name now serves other weights, which may not think, and gives one
+   * stored without an identity the weights listed now.
+   */
   private learnIdentities(models: readonly InstalledModel[]): void {
     this.identities.clear();
     for (const model of models) {
@@ -444,19 +447,23 @@ export class OpenAICompatibleChat implements LocalChat {
     }
     for (const [name, identity] of this.thinkers) {
       const listed = this.identities.get(name);
-      if (identity === undefined || listed === undefined || listed === identity) continue;
-      this.thinkers.delete(name);
-      void this.server.learnedThinkers?.forget(name).catch(() => undefined);
+      if (listed === undefined || listed === identity) continue;
+      if (identity === undefined) {
+        this.thinkers.set(name, listed);
+        void this.server.learnedThinkers?.add(name, listed).catch(() => undefined);
+      } else {
+        this.thinkers.delete(name);
+        void this.server.learnedThinkers?.forget(name).catch(() => undefined);
+      }
     }
   }
 
   private learnThinking(model: string): void {
+    if (this.thinkers.has(model)) return;
     const identity = this.identities.get(model);
-    const known = this.thinkers.has(model);
-    if (known && (identity === undefined || this.thinkers.get(model) === identity)) return;
     this.thinkers.set(model, identity);
     void this.server.learnedThinkers?.add(model, identity).catch(() => undefined);
-    if (!known) this.server.toolsChanged?.();
+    this.server.toolsChanged?.();
   }
 
   private async readStream(
