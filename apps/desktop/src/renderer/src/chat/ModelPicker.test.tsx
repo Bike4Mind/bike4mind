@@ -34,12 +34,14 @@ afterEach(() => {
   host?.remove();
   root = null;
   host = null;
+  window.localStorage.clear();
 });
 
 function mount(
   models = MODELS,
   modelId = models[0]?.id ?? null,
-  switchCredits?: (model: ChatModelOption) => number | null
+  switchCredits?: (model: ChatModelOption) => number | null,
+  extra: { servers?: { id: string; name: string }[]; hasHistory?: boolean } = {}
 ) {
   const onSelect = vi.fn<(model: string) => void>();
   const catalog: ModelCatalogController = { models, loading: false, error: null, reload: vi.fn() };
@@ -49,7 +51,14 @@ function mount(
   act(() => {
     root?.render(
       <CssVarsProvider>
-        <ModelPicker catalog={catalog} modelId={modelId} onSelect={onSelect} switchCredits={switchCredits} />
+        <ModelPicker
+          catalog={catalog}
+          modelId={modelId}
+          onSelect={onSelect}
+          switchCredits={switchCredits}
+          servers={extra.servers}
+          hasHistory={extra.hasHistory}
+        />
       </CssVarsProvider>
     );
   });
@@ -143,7 +152,8 @@ describe('ModelPicker switch cost', () => {
     const costs = options().map(
       row => row.querySelector('[data-testid="model-picker-switch-cost"]')?.textContent ?? null
     );
-    expect(costs).toEqual([null, 'About 1,234 credits to re-read this chat', null]);
+    expect(costs).toEqual([null, '~1,234 cr', null]);
+    expect(el('model-picker-switch-cost').title).toBe('About 1,234 credits to re-read this chat');
   });
 });
 
@@ -157,21 +167,38 @@ describe('ModelPicker server groups', () => {
     { id: 'claude-sonnet', name: 'Claude Sonnet' },
   ];
 
-  it('orders hosted, this computer, then each server, and stays flat without servers', () => {
+  it('orders hosted, this computer, then each server, and heads them whenever more than one is listed', () => {
     expect(groupByServer(grouped).map(group => [group.label, group.models.map(model => model.id)])).toEqual([
       ['Hosted', ['claude-sonnet']],
       ['This computer', ['local:ollama:qwen3:8b']],
       ['gpu box', ['local:srv-abc123:qwen3:8b']],
       ['lab', ['local:srv-def456:llama3']],
     ]);
-    expect(groupByServer(grouped.filter(model => !model.server)).map(group => group.label)).toEqual([null]);
+    // No saved server contributes, and hosted and local are still told apart.
+    expect(groupByServer(grouped.filter(model => !model.server)).map(group => group.label)).toEqual([
+      'Hosted',
+      'This computer',
+    ]);
+    expect(groupByServer(grouped.filter(model => model.id === 'claude-sonnet')).map(group => group.label)).toEqual([
+      null,
+    ]);
+    expect(groupByServer([])).toEqual([]);
+  });
+
+  it('puts the local groups first for a conversation on a local model', () => {
+    expect(groupByServer(grouped, { localFirst: true }).map(group => group.key)).toEqual([
+      'local',
+      'abc123',
+      'def456',
+      'hosted',
+    ]);
   });
 
   it("lists an unreachable server's models disabled, saying why", () => {
     const { onSelect } = mount(grouped);
     expect(
       Array.from(document.querySelectorAll('[data-testid="model-picker-group-label"]')).map(node => node.textContent)
-    ).toEqual(['Hosted', 'This computer', 'gpu box', 'lab']);
+    ).toEqual(['This computer', 'gpu box', 'lab', 'Hosted']);
     const down = options().find(option => option.dataset.unavailable === 'true')!;
     expect(down.textContent).toContain('lab is unreachable');
     expect(down.getAttribute('aria-disabled')).toBe('true');
@@ -216,6 +243,20 @@ describe('ModelPicker recency order', () => {
       'undated-b',
     ]);
     expect(dated).toEqual(input);
+  });
+
+  it('keeps a model listed under several providers together, each row naming its provider', () => {
+    const twins: ChatModelOption[] = [
+      { id: 'haiku', name: 'Claude Haiku 5.5', backend: 'anthropic', releaseDate: '2026-05-01' },
+      { id: 'other', name: 'Other', backend: 'openai', releaseDate: '2026-05-01' },
+      { id: 'bedrock-haiku', name: 'Claude Haiku 5.5', backend: 'bedrock', releaseDate: '2026-05-01' },
+    ];
+    expect(sortByRecency(twins).map(model => model.id)).toEqual(['haiku', 'bedrock-haiku', 'other']);
+    expect(Object.fromEntries(rowDetails(twins))).toEqual({
+      haiku: 'anthropic',
+      other: 'openai',
+      'bedrock-haiku': 'bedrock',
+    });
   });
 
   it('lists rows newest first and hides the model id, showing the provider instead', () => {
@@ -288,8 +329,8 @@ describe('ModelPicker twin rows', () => {
       'gpt-4.1-2025-04-14': 'openai - gpt-4.1-2025-04-14',
       'gpt-4.1': 'openai - gpt-4.1',
       'gpt-4.1-mini': 'openai',
-      'local:srv-a:llama3': undefined,
-      'local:srv-b:llama3': undefined,
+      'local:srv-a:llama3': 'a',
+      'local:srv-b:llama3': 'b',
     });
   });
 
@@ -302,7 +343,7 @@ describe('ModelPicker twin rows', () => {
           { id: 'local:srv-v:sql-lora', name: 'sql-lora', server, baseModel: 'qwen-small' },
         ])
       )
-    ).toEqual({ 'local:srv-v:qwen-small': undefined, 'local:srv-v:sql-lora': 'LoRA on qwen-small' });
+    ).toEqual({ 'local:srv-v:qwen-small': 'gpu vllm', 'local:srv-v:sql-lora': 'gpu vllm - LoRA on qwen-small' });
   });
 
   it('selects the primary row for a conversation saved on one of its served-name aliases', () => {
@@ -342,5 +383,141 @@ describe('ModelPicker twin rows', () => {
 
     expect(options()).toHaveLength(count);
     expect(options().every(option => option.textContent?.toLowerCase().includes(query))).toBe(true);
+  });
+});
+
+describe('ModelPicker filters', () => {
+  const gpu = { id: 'abc123', name: 'gpu box' };
+  const mixed: ChatModelOption[] = [
+    { id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5', backend: 'anthropic', releaseDate: '2026-05-01' },
+    { id: 'gpt-6', name: 'GPT-6', backend: 'openai', releaseDate: '2026-06-01' },
+    { id: 'bedrock-claude-haiku-5-5', name: 'Claude Haiku 5.5', backend: 'bedrock', releaseDate: '2026-05-01' },
+    { id: 'local:ollama:qwen3:8b', name: 'qwen3:8b', backend: 'local-ollama' },
+    { id: 'local:srv-abc123:llama3', name: 'llama3', server: gpu, backend: 'local-srv-abc123' },
+    ...MODELS,
+  ];
+  const servers = [gpu, { id: 'mcsv', name: 'mcsv' }];
+  const names = () => options().map(option => option.textContent?.replace(`${String.fromCharCode(0x2022)} `, ''));
+  const click = (testId: string) => act(() => el(testId).click());
+  const reopen = () => {
+    act(() => el('model-picker-btn').click());
+    act(() => el('model-picker-btn').click());
+  };
+
+  it('narrows to local models, then to one server, and remembers the choice', () => {
+    mount(mixed, 'gpt-6', undefined, { servers });
+
+    click('model-picker-location-local');
+    expect(names()).toEqual(['qwen3:8blocal-ollama', 'llama3gpu box']);
+    expect(document.querySelector('[data-testid="model-picker-provider-any"]')).toBeNull();
+
+    click('model-picker-server-abc123');
+    expect(names()).toEqual(['llama3gpu box']);
+
+    act(() => root?.unmount());
+    host?.remove();
+    mount(mixed, 'gpt-6', undefined, { servers });
+    expect(names()).toEqual(['llama3gpu box']);
+    expect(el('model-picker-server-abc123').getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('filters hosted models by provider and keeps per-provider twins together', () => {
+    mount(mixed, 'gpt-6', undefined, { servers });
+
+    click('model-picker-location-hosted');
+    expect(names().slice(0, 3)).toEqual(['GPT-6openai', 'Claude Haiku 5.5anthropic', 'Claude Haiku 5.5bedrock']);
+    expect(document.querySelector('[data-testid="model-picker-server-any"]')).toBeNull();
+
+    click('model-picker-provider-bedrock');
+    expect(names()).toEqual(['Claude Haiku 5.5bedrock']);
+  });
+
+  it('says so when a saved server lists no chat models', () => {
+    mount(mixed, 'gpt-6', undefined, { servers });
+    click('model-picker-server-mcsv');
+    expect(options()).toHaveLength(0);
+    expect(el('model-picker-no-match').textContent).toBe('mcsv lists no chat models.');
+  });
+
+  it('ignores a remembered server that is no longer saved', () => {
+    window.localStorage.setItem(
+      'b4m.modelPicker.filters',
+      JSON.stringify({ location: 'local', provider: null, server: 'gone' })
+    );
+    mount(mixed, 'gpt-6', undefined, { servers });
+    expect(names()).toEqual(['qwen3:8blocal-ollama', 'llama3gpu box']);
+  });
+
+  it.each([
+    ['gpu box', ['llama3gpu box']],
+    ['bedrock', ['Claude Haiku 5.5bedrock']],
+    ['haiku bedrock', ['Claude Haiku 5.5bedrock']],
+    ['local', ['qwen3:8blocal-ollama', 'llama3gpu box']],
+  ])('matches the typed query %s against provider, server and hosted or local', (query, expected) => {
+    mount(mixed, 'gpt-6', undefined, { servers });
+    typeInto(filterBox(), query);
+    expect(names()).toEqual(expected);
+  });
+
+  it('finds every hosted model by typing hosted', () => {
+    mount(mixed, 'gpt-6', undefined, { servers });
+    typeInto(filterBox(), 'hosted');
+    expect(options()).toHaveLength(mixed.length - 2);
+    reopen();
+    expect(options()).toHaveLength(mixed.length);
+  });
+
+  it('marks each row hosted or local', () => {
+    mount(mixed, 'gpt-6', undefined, { servers });
+    const marks = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="model-picker-option-location"]'));
+    expect(marks.filter(mark => mark.dataset.location === 'local').map(mark => mark.title)).toEqual([
+      'Runs on this computer',
+      'Runs on gpu box',
+    ]);
+    expect(marks.filter(mark => mark.dataset.location === 'hosted')).toHaveLength(mixed.length - 2);
+  });
+});
+
+describe('ModelPicker hosted switch warning', () => {
+  const models: ChatModelOption[] = [
+    { id: 'local:ollama:qwen3:8b', name: 'qwen3:8b' },
+    { id: 'local:ollama:llama3', name: 'llama3' },
+    { id: 'claude-sonnet', name: 'Claude Sonnet', backend: 'anthropic' },
+  ];
+  const row = (name: string) => options().find(option => option.textContent?.includes(name))!;
+  const dialog = () => document.querySelector('[data-testid="model-picker-hosted-dialog"]');
+
+  it('asks before a local conversation with messages moves to a hosted model', () => {
+    const { onSelect } = mount(models, 'local:ollama:qwen3:8b', undefined, { hasHistory: true });
+    expect(el('model-picker-group-label').textContent).toBe('This computer');
+    expect(document.body.textContent).toContain('Hosted - sends this conversation to Bike4Mind');
+
+    act(() => row('Claude Sonnet').click());
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(dialog()?.textContent).toContain('this computer');
+    expect(dialog()?.textContent).toContain('Claude Sonnet (anthropic)');
+
+    act(() => el('model-picker-hosted-confirm-btn').click());
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith('claude-sonnet');
+    expect(dialog()).toBeNull();
+  });
+
+  it('keeps the conversation local when the warning is cancelled', () => {
+    const { onSelect } = mount(models, 'local:ollama:qwen3:8b', undefined, { hasHistory: true });
+    act(() => row('Claude Sonnet').click());
+    act(() => el('model-picker-hosted-cancel-btn').click());
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(dialog()).toBeNull();
+  });
+
+  it.each([
+    ['another local model', 'local:ollama:qwen3:8b', true, 'llama3'],
+    ['an empty local conversation', 'local:ollama:qwen3:8b', false, 'Claude Sonnet'],
+    ['a hosted conversation', 'claude-sonnet', true, 'qwen3:8b'],
+  ])('switches without asking for %s', (_case, current, hasHistory, target) => {
+    const { onSelect } = mount(models, current, undefined, { hasHistory });
+    act(() => row(target).click());
+    expect(dialog()).toBeNull();
+    expect(onSelect).toHaveBeenCalledOnce();
   });
 });
