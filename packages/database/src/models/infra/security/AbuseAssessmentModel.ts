@@ -88,6 +88,8 @@ export type SaveAbuseAssessmentInput = Omit<AbuseAssessmentItem, 'id' | 'attempt
 
 type LeanAbuseAssessment = Omit<IAbuseAssessmentDocument, keyof Document> & { _id: Types.ObjectId };
 
+export type LatestJudgedAssessment = Pick<AbuseAssessmentItem, 'detectionId' | 'result' | 'confidence' | 'assessedAt'>;
+
 const toItem = (doc: LeanAbuseAssessment): AbuseAssessmentItem => ({
   id: doc._id.toString(),
   detectionId: doc.detectionId,
@@ -134,14 +136,16 @@ export class AbuseAssessmentRepository {
   }
 
   /** The newest judged (not unknown) assessment of each detection; detections with none are absent. */
-  async findLatestJudgedForDetections(detectionIds: string[]): Promise<AbuseAssessmentItem[]> {
+  async findLatestJudgedForDetections(detectionIds: string[]): Promise<LatestJudgedAssessment[]> {
     if (detectionIds.length === 0) return [];
-    const rows = await AbuseAssessmentModel.aggregate<{ doc: LeanAbuseAssessment }>([
+    const rows = await AbuseAssessmentModel.aggregate<{ doc: LatestJudgedAssessment }>([
       { $match: { detectionId: { $in: detectionIds }, result: { $ne: 'unknown' } } },
+      // Only these fields are read; the feature summary can carry many accounts.
+      { $project: { detectionId: 1, result: 1, confidence: 1, assessedAt: 1 } },
       { $sort: { assessedAt: -1, _id: -1 } },
       { $group: { _id: '$detectionId', doc: { $first: '$$ROOT' } } },
     ]);
-    return rows.map(row => toItem(row.doc));
+    return rows.map(row => row.doc);
   }
 }
 

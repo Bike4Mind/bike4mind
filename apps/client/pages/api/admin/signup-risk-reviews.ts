@@ -9,6 +9,7 @@ import {
   signupRiskReviewDecisionSchema,
   signupRiskReviewListSchema,
   type SignupRiskAutoApprovalItem,
+  type SignupRiskReviewAdvisory,
   type SignupRiskReviewItem,
   type SignupRiskReviewState,
 } from '@bike4mind/common';
@@ -94,9 +95,9 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
         userApiKeyRepository.countCreatedByUserIds(ids),
         getSettingsMap({ adminSettings: adminSettingsRepository }),
         // Advisory only: a missing verdict must not fail the queue.
-        findRiskReviewAdvisories(ids).catch(error => {
+        findRiskReviewAdvisories(ids, req.logger).catch(error => {
           req.logger.warn('Signup risk review advisories unavailable', { error });
-          return new Map();
+          return new Map<string, SignupRiskReviewAdvisory>();
         }),
       ]);
       const { reviewThreshold } = getSettingsValue('signupRiskScoring', settings, SignupRiskScoringSchema.parse({}));

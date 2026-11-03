@@ -377,12 +377,29 @@ describe('SignupRiskReviewTab', () => {
             assessedAt: '2026-11-02T10:00:00.000Z',
           },
         }),
+        row({
+          userId: 'u3',
+          email: 'sam@example.net',
+          advisory: {
+            detectionId: 'd3',
+            detector: 'signupNetworkBurst',
+            result: 'insufficient_evidence',
+            confidence: 0.4,
+            assessedAt: '2026-11-02T10:00:00.000Z',
+          },
+        }),
       ])
     );
     renderTab();
 
-    expect(screen.getByTestId('signup-risk-advisory-u1').textContent).toBe('Model: abuse');
-    expect(screen.getByTestId('signup-risk-advisory-u2').textContent).toBe('Model: automation');
+    const chip = (userId: string) =>
+      within(screen.getByTestId(`signup-risk-advisory-${userId}`)).getByTestId('admin-status-chip');
+    expect(chip('u1').textContent).toBe('Model: abuse');
+    expect(chip('u1').getAttribute('data-tone')).toBe('bad');
+    expect(chip('u2').textContent).toBe('Model: automation');
+    expect(chip('u2').getAttribute('data-tone')).toBe('neutral');
+    expect(chip('u3').textContent).toBe('Model: unsure');
+    expect(chip('u3').getAttribute('data-tone')).toBe('neutral');
   });
 
   it('shows no advisory chip on a row with no verdict', () => {

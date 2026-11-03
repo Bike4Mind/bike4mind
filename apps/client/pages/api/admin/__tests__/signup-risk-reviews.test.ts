@@ -94,6 +94,7 @@ const pendingUser = (id: string, email: string, score: number) => ({
 
 beforeEach(() => {
   h.advisories.mockResolvedValue(new Map());
+  h.warn.mockReset();
   h.findPending.mockReset().mockResolvedValue([]);
   h.findAutoApprovals.mockReset().mockResolvedValue([]);
   h.setState.mockReset().mockResolvedValue(true);
@@ -190,7 +191,7 @@ describe('signup risk review queue', () => {
 
     await h.handlers.get(req, res);
 
-    expect(h.advisories).toHaveBeenCalledWith([USER_A, USER_B]);
+    expect(h.advisories).toHaveBeenCalledWith([USER_A, USER_B], expect.objectContaining({ warn: h.warn }));
     const body = res._getJSONData();
     expect(body.data[0].advisory).toEqual({
       detectionId: 'd1',
@@ -211,7 +212,7 @@ describe('signup risk review queue', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData().data[0].advisory).toBeNull();
-    expect(h.warn).toHaveBeenCalled();
+    expect(h.warn).toHaveBeenCalledWith('Signup risk review advisories unavailable', { error: expect.any(Error) });
   });
 
   it('returns the configured review threshold', async () => {
