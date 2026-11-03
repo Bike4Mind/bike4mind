@@ -126,7 +126,7 @@ export const USER_ENV_PRINT = `printf '%s' '${MARKER}' "$PATH" '${MARKER}' "$HOM
 /** What `USER_ENV_PRINT` wrote, past whatever the shell's startup files printed around it. */
 export function parseUserEnvironment(stdout: string): WslUserEnvironment | null {
   const [, path, home] = stdout.split(MARKER);
-  return path && home?.startsWith('/') && !home.includes('\\') ? { path, home } : null;
+  return path && home?.startsWith('/') ? { path, home } : null;
 }
 
 export interface UserEnvironmentProbe {

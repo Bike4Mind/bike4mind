@@ -148,8 +148,13 @@ describe('the user environment probe', () => {
     expect(parseUserEnvironment('__B4M_ENV__/usr/bin__B4M_ENV____B4M_ENV__')).toBeNull();
   });
 
-  it('does not report a home whose name holds a backslash', () => {
-    expect(parseUserEnvironment('__B4M_ENV__/usr/bin__B4M_ENV__/home/a\\b__B4M_ENV__')).toBeNull();
+  it('reads a home whose name holds a backslash as that Linux name, spelled on the share as the share spells it', () => {
+    const found = parseUserEnvironment('__B4M_ENV__/usr/bin__B4M_ENV__/home/a\\b__B4M_ENV__');
+
+    expect(found).toEqual({ path: '/usr/bin', home: '/home/a\\b' });
+    expect(wslUncPath({ host: 'wsl.localhost', distro: 'Ubuntu' }, found?.home ?? '')).toBe(
+      '\\\\wsl.localhost\\Ubuntu\\home\\a\u{f05c}b'
+    );
   });
 
   // What wsl.exe hands to Linux, run here directly.
