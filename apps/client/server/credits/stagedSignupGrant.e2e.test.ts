@@ -72,6 +72,11 @@ beforeEach(async () => {
   await Invite.collection.deleteMany({});
   await Organization.collection.deleteMany({});
   await AdminSettings.collection.deleteMany({});
+  // A missing pool setting pauses grants, so every test starts with both pools effectively uncapped.
+  await AdminSettings.insertMany([
+    { settingName: 'signupGrantSignupPoolDaily', settingValue: '1000000000' },
+    { settingName: 'signupGrantTricklePoolDaily', settingValue: '1000000000' },
+  ]);
 });
 
 async function createUser(enrolled = true) {
@@ -473,6 +478,7 @@ describe('staged signup ledger', () => {
               signupGrantActivityMinActiveSeconds: '600',
               signupGrantActivityDailyCredits: '10',
               signupGrantActivityMaxCredits: '28',
+              signupGrantTricklePoolDaily: '1000000000',
               ...overrides,
             } as Record<string, string | undefined>
           )[name],

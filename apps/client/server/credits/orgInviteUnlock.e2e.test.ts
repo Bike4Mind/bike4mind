@@ -42,7 +42,11 @@ beforeEach(async () => {
   for (const model of [User, CreditTransaction, Invite, Organization, AdminSettings]) {
     await model.collection.deleteMany({});
   }
-  await AdminSettings.create({ settingName: 'signupGrantOrgInviteEnabled', settingValue: 'true' });
+  await AdminSettings.insertMany([
+    { settingName: 'signupGrantOrgInviteEnabled', settingValue: 'true' },
+    { settingName: 'signupGrantSignupPoolDaily', settingValue: '1000000000' },
+    { settingName: 'signupGrantTricklePoolDaily', settingValue: '1000000000' },
+  ]);
 });
 
 async function createUser(name: string) {
