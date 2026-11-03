@@ -569,8 +569,8 @@ export function useConversation(
   const transcriptVersion = useRef(0);
   const workspaceVersion = useRef(0);
   const historyVersion = useRef(0);
-  // Each params save replaces the whole set, so only the latest answer may land.
-  const generationVersion = useRef(0);
+  // Each params save replaces the whole set, so only a chat's latest answer may land.
+  const generationVersions = useRef(new Map<string, number>());
 
   useEffect(() => {
     setSendError(null);
@@ -1185,20 +1185,25 @@ export function useConversation(
   const setGeneration = useCallback(
     async (generation: GenerationSettings): Promise<boolean> => {
       if (!sessionId || session?.id !== sessionId) return false;
-      const version = ++generationVersion.current;
+      const versions = generationVersions.current;
+      const version = (versions.get(sessionId) ?? 0) + 1;
+      versions.set(sessionId, version);
+      const latest = () => versions.get(sessionId) === version;
       try {
         const updated = await window.b4m.chat.setSessionGeneration(sessionId, generation);
         if (!updated) throw new Error('The conversation could not be found.');
-        if (version !== generationVersion.current) return true;
+        if (!latest()) return true;
         setSession(current => (current?.id === sessionId ? { ...current, generation: updated.generation } : current));
         onSummaryChanged(updated);
         return true;
       } catch (error) {
-        if (version !== generationVersion.current) return false;
-        setNotice(`Could not save this chat's params. ${error instanceof Error ? error.message : String(error)}`);
+        if (!latest()) return false;
+        if (activeSessionId.current === sessionId) {
+          setNotice(`Could not save this chat's params. ${error instanceof Error ? error.message : String(error)}`);
+        }
         // An older save skipped as stale may still have landed, so show what main holds now.
         const stored = await window.b4m.chat.getSession(sessionId).catch(() => null);
-        if (stored && version === generationVersion.current) {
+        if (stored && latest()) {
           setSession(current => (current?.id === sessionId ? { ...current, generation: stored.generation } : current));
         }
         return false;
