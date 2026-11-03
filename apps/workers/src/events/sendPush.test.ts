@@ -7,6 +7,8 @@ const h = vi.hoisted(() => ({
   withEventContextInner: vi.fn(),
   findByUser: vi.fn(),
   removeByToken: vi.fn(),
+  removeBySids: vi.fn(),
+  findLiveSids: vi.fn(),
   userFindById: vi.fn(),
   orgFindById: vi.fn(),
 }));
@@ -32,7 +34,8 @@ vi.mock('@server/utils/eventBus', async () => {
 });
 
 vi.mock('@bike4mind/database', () => ({
-  pushTokenRepository: { findByUser: h.findByUser, removeByToken: h.removeByToken },
+  pushTokenRepository: { findByUser: h.findByUser, removeByToken: h.removeByToken, removeBySids: h.removeBySids },
+  authSessionRepository: { findLiveSids: h.findLiveSids },
   userRepository: { findById: h.userFindById },
   organizationRepository: { findById: h.orgFindById },
 }));
@@ -53,21 +56,34 @@ const EVENT: PushNotificationEvent = {
   sessionId: 'session-1',
 };
 
-type Token = { token: string; environment: 'sandbox' | 'production' };
+type Token = { token: string; environment: 'sandbox' | 'production'; sid?: string };
 
 function makeDeps(
   tokens: Token[],
-  overrides: Partial<SendPushDeps> & { respond?: (request: ApnsRequest) => ApnsResponse } = {}
+  overrides: Partial<SendPushDeps> & {
+    respond?: (request: ApnsRequest) => ApnsResponse;
+    endedSids?: readonly string[];
+  } = {}
 ) {
   const sent: ApnsRequest[] = [];
   const removed: string[] = [];
+  const removedSids: string[] = [];
+  const endedSids = new Set(overrides.endedSids ?? []);
+  const stored = tokens.map(token => ({ sid: 'sid-live', ...token }));
   const deps: SendPushDeps = {
     tokens: {
-      findByUser: vi.fn(async () => tokens),
+      findByUser: vi.fn(async () => stored),
       removeByToken: vi.fn(async (token: string) => {
         removed.push(token);
         return true;
       }),
+      removeBySids: vi.fn(async (sids: readonly string[]) => {
+        removedSids.push(...sids);
+        return stored.filter(token => sids.includes(token.sid)).length;
+      }),
+    },
+    sessions: {
+      findLiveSids: vi.fn(async (sids: readonly string[]) => new Set(sids.filter(sid => !endedSids.has(sid)))),
     },
     loadRecipient: vi.fn(async () => ({ preferences: undefined, redactContent: false })),
     transport: {
@@ -81,7 +97,7 @@ function makeDeps(
     appUrl: 'https://app.example.test',
     ...overrides,
   };
-  return { deps, sent, removed };
+  return { deps, sent, removed, removedSids };
 }
 
 const payloadOf = (request: ApnsRequest) => JSON.parse(request.payload);
@@ -96,6 +112,47 @@ describe('deliverPush', () => {
     expect(deps.tokens.findByUser).toHaveBeenCalledWith(EVENT.userId, 'device');
     expect(deps.loadRecipient).not.toHaveBeenCalled();
     expect(deps.transport.send).not.toHaveBeenCalled();
+    expect(deps.sessions.findLiveSids).not.toHaveBeenCalled();
+  });
+
+  it('prunes and skips tokens whose session has ended, delivering only to live sessions', async () => {
+    const { deps, sent, removedSids } = makeDeps(
+      [
+        { token: 'tok-live', environment: 'production', sid: 'sid-live' },
+        { token: 'tok-expired-a', environment: 'production', sid: 'sid-expired' },
+        { token: 'tok-expired-b', environment: 'sandbox', sid: 'sid-expired' },
+      ],
+      { endedSids: ['sid-expired'] }
+    );
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toEqual({
+      status: 'sent',
+      delivered: 1,
+      pruned: 2,
+      failed: 0,
+    });
+    expect(deps.sessions.findLiveSids).toHaveBeenCalledTimes(1);
+    expect(deps.sessions.findLiveSids).toHaveBeenCalledWith(['sid-live', 'sid-expired']);
+    expect(removedSids).toEqual(['sid-expired']);
+    expect(sent.map(request => request.deviceToken)).toEqual(['tok-live']);
+  });
+
+  it('skips without reading the user when every token belongs to an ended session', async () => {
+    const { deps, removedSids } = makeDeps([{ token: 'tok-a', environment: 'production', sid: 'sid-gone' }], {
+      endedSids: ['sid-gone'],
+    });
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toEqual({ status: 'skipped', reason: 'no_tokens' });
+    expect(removedSids).toEqual(['sid-gone']);
+    expect(deps.loadRecipient).not.toHaveBeenCalled();
+    expect(deps.transport.send).not.toHaveBeenCalled();
+  });
+
+  it('does not prune when every session is live', async () => {
+    const { deps } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toMatchObject({ delivered: 1, pruned: 0 });
+    expect(deps.tokens.removeBySids).not.toHaveBeenCalled();
   });
 
   it('sends the title, body, deepLink and collapse id to every device token', async () => {
@@ -319,6 +376,7 @@ describe('handler', () => {
     await expect(handler(bridgeEvent)).resolves.toBeUndefined();
     expect(h.withEventContextInner).not.toHaveBeenCalled();
     expect(h.findByUser).not.toHaveBeenCalled();
+    expect(h.findLiveSids).not.toHaveBeenCalled();
   });
 
   it("treats the secrets' 'not-configured' placeholder as unset", async () => {
@@ -344,6 +402,7 @@ describe('handler', () => {
     await expect(handler(bridgeEvent)).resolves.toBeUndefined();
     expect(h.withEventContextInner).not.toHaveBeenCalled();
     expect(h.findByUser).not.toHaveBeenCalled();
+    expect(h.findLiveSids).not.toHaveBeenCalled();
   });
 
   it('delivers through the configured path when every APNS_* value is set', async () => {

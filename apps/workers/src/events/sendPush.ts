@@ -6,6 +6,7 @@ import {
   type PushNotificationPreferences,
 } from '@bike4mind/common';
 import {
+  authSessionRepository,
   organizationRepository,
   pushTokenRepository,
   userRepository,
@@ -80,8 +81,12 @@ export type SendPushDeps = {
     findByUser(
       userId: string,
       kind: 'device'
-    ): Promise<ReadonlyArray<{ token: string; environment: PushTokenEnvironment }>>;
+    ): Promise<ReadonlyArray<{ token: string; sid: string; environment: PushTokenEnvironment }>>;
     removeByToken(token: string): Promise<boolean>;
+    removeBySids(sids: readonly string[]): Promise<number>;
+  };
+  sessions: {
+    findLiveSids(sids: readonly string[]): Promise<ReadonlySet<string>>;
   };
   loadRecipient(userId: string): Promise<PushRecipient | null>;
   transport: ApnsTransport;
@@ -99,7 +104,8 @@ export async function deliverPush(
   deps: SendPushDeps,
   logger: Pick<Logger, 'info' | 'warn' | 'error'>
 ): Promise<PushDeliveryResult> {
-  const tokens = await deps.tokens.findByUser(event.userId, 'device');
+  const storedTokens = await deps.tokens.findByUser(event.userId, 'device');
+  const { tokens, pruned: orphansPruned } = await dropTokensOfEndedSessions(storedTokens, deps, logger);
   if (tokens.length === 0) {
     logger.info('[Push] user has no device tokens; nothing to send', { category: event.category });
     return { status: 'skipped', reason: 'no_tokens' };
@@ -124,7 +130,7 @@ export async function deliverPush(
   const payload = JSON.stringify(buildPayload(event, recipient.redactContent, deps.appUrl));
 
   let delivered = 0;
-  let pruned = 0;
+  let pruned = orphansPruned;
   let failed = 0;
   let retryable = 0;
   const configErrors = new Map<string, { status: number; hint: string }>();
@@ -182,6 +188,28 @@ export async function deliverPush(
   return { status: 'sent', delivered, pruned, failed };
 }
 
+/**
+ * Revokes prune tokens eagerly (AuthSessionRepository.revokeBySid), but an expired session is deleted
+ * by the TTL index on AuthSession.expiresAt (AuthSessionModel.ts) with no hook, so its tokens would
+ * keep receiving pushes. One query checks every candidate sid; tokens of ended sessions are deleted
+ * and not sent to.
+ */
+async function dropTokensOfEndedSessions<T extends { sid: string }>(
+  tokens: ReadonlyArray<T>,
+  deps: Pick<SendPushDeps, 'tokens' | 'sessions'>,
+  logger: Pick<Logger, 'info'>
+): Promise<{ tokens: T[]; pruned: number }> {
+  if (tokens.length === 0) return { tokens: [], pruned: 0 };
+  const liveSids = await deps.sessions.findLiveSids([...new Set(tokens.map(token => token.sid))]);
+  const live = tokens.filter(token => liveSids.has(token.sid));
+  if (live.length === tokens.length) return { tokens: live, pruned: 0 };
+
+  const endedSids = [...new Set(tokens.filter(token => !liveSids.has(token.sid)).map(token => token.sid))];
+  const pruned = await deps.tokens.removeBySids(endedSids);
+  logger.info('[Push] pruned device tokens whose session has ended', { pruned });
+  return { tokens: live, pruned };
+}
+
 function collapseIdFor(event: PushNotificationEvent): string {
   const id = event.collapseId ?? `${event.category}:${event.questId ?? event.sessionId ?? event.userId}`;
   return id.slice(0, MAX_COLLAPSE_ID_LENGTH);
@@ -233,6 +261,7 @@ const handleWithContext = withEventContext(async (event, logger) => {
       payload,
       {
         tokens: pushTokenRepository,
+        sessions: authSessionRepository,
         loadRecipient: loadPushRecipient,
         transport,
         topic: config.topic,

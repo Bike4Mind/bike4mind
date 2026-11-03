@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import mongoose from 'mongoose';
 import { PushTokenModel, pushTokenRepository } from './PushTokenModel';
-import { authSessionRepository } from './AuthSessionModel';
+import { AuthSessionModel, authSessionRepository } from './AuthSessionModel';
 import { setupMongoTest } from '../../__test__/utils';
 
 setupMongoTest();
@@ -126,5 +126,30 @@ describe('AuthSession revocation prunes push tokens', () => {
     await seed();
     await authSessionRepository.revokeAllByUserId(USER_A, { exceptSid: 'sid-2' });
     expect(await remaining()).toEqual(['a2', 'b3']);
+  });
+});
+
+describe('session liveness for push delivery', () => {
+  it('findLiveSids returns only unrevoked, unexpired sessions among the given sids', async () => {
+    await authSessionRepository.create(session('sid-live', USER_A));
+    await authSessionRepository.create(session('sid-expired', USER_A));
+    await AuthSessionModel.updateOne({ sid: 'sid-expired' }, { $set: { expiresAt: new Date(0) } });
+    await authSessionRepository.create(session('sid-revoked', USER_A));
+    await authSessionRepository.revokeBySid('sid-revoked');
+    await authSessionRepository.create(session('sid-unasked', USER_A));
+
+    const live = await authSessionRepository.findLiveSids(['sid-live', 'sid-expired', 'sid-revoked', 'sid-missing']);
+    expect([...live]).toEqual(['sid-live']);
+    expect(await authSessionRepository.findLiveSids([])).toEqual(new Set());
+  });
+
+  it('removeBySids removes only the tokens of the given sids', async () => {
+    await pushTokenRepository.upsert(registration({ token: 't1', sid: 'sid-1' }));
+    await pushTokenRepository.upsert(registration({ token: 't2', sid: 'sid-2' }));
+    await pushTokenRepository.upsert(registration({ token: 't3', sid: 'sid-3' }));
+
+    expect(await pushTokenRepository.removeBySids(['sid-1', 'sid-3'])).toBe(2);
+    expect((await PushTokenModel.find({})).map(t => t.token)).toEqual(['t2']);
+    expect(await pushTokenRepository.removeBySids([])).toBe(0);
   });
 });
