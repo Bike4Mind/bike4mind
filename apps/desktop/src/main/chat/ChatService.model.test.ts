@@ -166,7 +166,10 @@ describe('ChatService model selection', () => {
       thinkingToggle: true,
     };
 
-    async function turnOptions(model: string, effort?: 'default' | 'minimal'): Promise<Record<string, unknown>> {
+    async function turnOptions(
+      model: string,
+      effort?: 'default' | 'minimal' | 'none'
+    ): Promise<Record<string, unknown>> {
       const { id } = await service.createSession();
       await service.setSessionModel(id, model);
       if (effort) await service.setSessionReasoningEffort(id, effort);
@@ -177,7 +180,17 @@ describe('ChatService model selection', () => {
 
     it('leaves thinking out when the switch is Off, so the server tells Ollama think:false', async () => {
       available = [LOCAL_THINKER];
+      expect(await turnOptions('qwen3:8b', 'none')).not.toHaveProperty('thinking');
+    });
+
+    it('still reads the Minimal that Off was stored as before as Off', async () => {
+      available = [LOCAL_THINKER];
       expect(await turnOptions('qwen3:8b', 'minimal')).not.toHaveProperty('thinking');
+    });
+
+    it('keeps thinking for an older Minimal on a model where that was an ignored effort', async () => {
+      available = [{ ...LOCAL_THINKER, minimalThinks: true }];
+      expect((await turnOptions('qwen3:8b', 'minimal')).thinking).toEqual({ enabled: true });
     });
 
     it('still asks for thinking when the switch is On', async () => {

@@ -5,7 +5,7 @@ import {
 } from '@bike4mind/common';
 import {
   REASONING_EFFORT_SETTINGS,
-  THINKING_OFF_SETTING,
+  thinkingSwitchedOff,
   type ChatModelOption,
   type ReasoningEffortSetting,
 } from '@shared/chat';
@@ -54,16 +54,17 @@ export function reasoningEffortFor(
 }
 
 /**
- * Whether a turn asks for thinking. Every model does except a `thinkingToggle` one switched off,
- * and a turn sent at effort `none`: with thinking requested the server keeps a Claude thinking
- * and reads `none` as its lowest effort. Leaving the flag out is also what makes the server send
- * Ollama `think:false`, since a thinking-capable Ollama model otherwise thinks by default.
+ * Whether a turn asks for thinking. Every model does except a `thinkingToggle` one switched off
+ * (see thinkingSwitchedOff), and a turn sent at effort `none`: with thinking requested the server
+ * keeps a Claude thinking and reads `none` as its lowest effort. Leaving the flag out is also what
+ * makes the server send Ollama `think:false`, since a thinking-capable Ollama model otherwise thinks
+ * by default.
  */
 export function requestsThinking(
   setting: ReasoningEffortSetting | undefined,
-  option: Pick<ChatModelOption, 'thinkingToggle'> | undefined,
+  option: Pick<ChatModelOption, 'thinkingToggle' | 'minimalThinks' | 'controls'> | undefined,
   effort?: ReasoningEffort
 ): boolean {
   if (effort === 'none') return false;
-  return !(option?.thinkingToggle && setting === THINKING_OFF_SETTING);
+  return !thinkingSwitchedOff(setting, option);
 }

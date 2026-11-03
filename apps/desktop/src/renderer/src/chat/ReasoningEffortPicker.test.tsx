@@ -54,7 +54,14 @@ describe('ReasoningEffortPicker', () => {
     expect(on).toContain('Thinking: On');
     // The button's state class, not the word: Joy's inlined CSS mentions disabled on every control.
     expect(on).not.toMatch(/<button[^>]*Mui-disabled/);
+    expect(markup('qwen3:8b', [LOCAL_THINKER], 'none')).toContain('Thinking: Off');
     expect(markup('qwen3:8b', [LOCAL_THINKER], 'minimal')).toContain('Thinking: Off');
+  });
+
+  it('shows an older Minimal as On where it was an effort the server ignored, as the request does', () => {
+    const learned: ChatModelOption = { ...LOCAL_THINKER, minimalThinks: true };
+    expect(markup('qwen3:8b', [learned], 'minimal')).toContain('Thinking: On');
+    expect(markup('qwen3:8b', [learned], 'none')).toContain('Thinking: Off');
   });
 
   it('reads any effort but Off as thinking On, as the request does', () => {

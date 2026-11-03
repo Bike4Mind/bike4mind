@@ -11,6 +11,7 @@ import {
   findModelOption,
   isLocalModel,
   THINKING_OFF_SETTING,
+  thinkingSwitchedOff,
   type ChatModelOption,
   type ReasoningEffortSetting,
 } from '@shared/chat';
@@ -103,7 +104,7 @@ export function ReasoningEffortPicker({
   // A local model whose server takes no effort, only thinking on or off; any setting but Off thinks.
   if (option?.thinkingToggle && !option.controls?.effort) {
     const alwaysOn = option.thinkingAlwaysOn === true;
-    const thinkingOn = alwaysOn || effort !== THINKING_OFF_SETTING;
+    const thinkingOn = alwaysOn || !thinkingSwitchedOff(effort, option);
     return (
       <Dropdown>
         <MenuButton
