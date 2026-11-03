@@ -54,11 +54,8 @@ export function LocalUsageSection({ result }: { result: LocalUsageResult | null 
 }
 
 /**
- * Replies from self-hosted models in the window: how many, how much they wrote, and how fast.
- *
- * Every figure is counted in main from the conversations stored on this device; none of it comes
- * from, or goes to, a server. Renders nothing for a window with no local replies, and leaves out
- * each speed figure no server reported.
+ * Self-hosted replies in the window: how many, how much they wrote, how fast. Counted in main, sent nowhere.
+ * Renders nothing for a window with no local replies, and omits each speed figure no server reported.
  */
 export function LocalUsageCard({ usage }: { usage: LocalUsage }) {
   const { totals } = usage;

@@ -61,9 +61,8 @@ export interface AccountUsage {
 export type AccountUsageResult = { ok: true; usage: AccountUsage } | { ok: false; error: string };
 
 /**
- * Sums over replies from self-hosted models, counted in main from the conversations stored on
- * this device. Speeds stay as token and millisecond sums so a total's rate is tokens over time,
- * never a mean of per-reply rates.
+ * Sums over self-hosted replies, counted in main from this device's conversations. Speeds stay token
+ * and millisecond sums so a total's rate is tokens over time, never a mean of per-reply rates.
  */
 export interface LocalUsageFigures {
   replies: number;
