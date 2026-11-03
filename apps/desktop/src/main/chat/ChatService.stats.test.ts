@@ -310,7 +310,7 @@ describe('ChatService reply stats', () => {
     expect(thinkingPhases()).toBe(0);
   });
 
-  it('times bare markers on a self-hosted model without counting them as thinking tokens', async () => {
+  it('stores no thinking for bare markers from a self-hosted model, as the live rail shows none', async () => {
     localStream.mockImplementation(async (_request, emit) => {
       emit({ type: 'content', text: '<think>' });
       await pause(40);
@@ -323,8 +323,11 @@ describe('ChatService reply stats', () => {
     await settled();
 
     const reply = (await store.get(id))?.messages.find(message => message.role === 'assistant');
-    expect(reply?.stats?.reasoningMs).toBeGreaterThanOrEqual(35);
+    expect(reply?.content).toBe('Done.');
+    expect(reply?.stats).toBeDefined();
+    expect(reply?.stats?.reasoningMs).toBeUndefined();
     expect(reply?.stats?.reasoningTokens).toBeUndefined();
+    expect(thinkingPhases()).toBe(0);
   });
 
   it('stamps the first text even when the filter held all of it back until the stream ended', async () => {

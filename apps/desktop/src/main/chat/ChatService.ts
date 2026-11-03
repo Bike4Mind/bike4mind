@@ -3141,12 +3141,14 @@ export class ChatService {
             // An empty split is either a bare thinking marker or text the filter is holding
             // back as a possible partial marker; only the first is a thinking frame.
             const marker = !split.text && !split.reasoning && THINK_MARKER.test(event.text);
-            if (split.reasoning || marker) timer.reasoning(split.reasoning);
+            // A hosted provider's bare markers stand for thinking it omitted; a self-hosted server
+            // streams all of its own, so its bare markers are no thinking, live or stored.
+            const omitted = marker && !localTurn;
+            if (split.reasoning || omitted) timer.reasoning(split.reasoning);
             probe?.frame(split.text ? 'text' : split.reasoning ? 'reasoning' : marker ? 'marker' : 'text');
             if (split.text) setPhase(RESPONDING);
-            // Whitespace is the empty block of a model with thinking off. A hosted provider's bare
-            // markers stand for thinking it omitted; a self-hosted server streams all of its own.
-            else if (split.reasoning.trim() || (marker && !localTurn)) setPhase(THINKING);
+            // Whitespace is the empty block of a model with thinking off.
+            else if (split.reasoning.trim() || omitted) setPhase(THINKING);
             append(split);
           }
           if (event.toolStarted) {
