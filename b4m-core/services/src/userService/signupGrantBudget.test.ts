@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SignupProtection } from '@bike4mind/common';
-import { refundBudgetOnFailure, reserveSignupGrantBudget } from './signupGrantBudget';
+import { refundBudgetOnFailure, reserveSignupGrantBudget, resolvePoolBudget } from './signupGrantBudget';
 
 const buildAdapters = (overrides: Partial<NonNullable<SignupProtection['grantBudget']>> = {}, budget = '20') => {
   const repository = {
@@ -64,5 +64,32 @@ describe('budget alerts', () => {
     const { adapters } = buildAdapters({ notify });
     await expect(reserveSignupGrantBudget(adapters, 'tx-1', 10)).resolves.toMatchObject({ outcome: 'reserved' });
     expect(notify).toHaveBeenCalled();
+  });
+});
+
+describe('resolvePoolBudget', () => {
+  const settingsWith = (rows: Record<string, unknown>) => ({
+    findBySettingName: vi.fn(async (key: string) => (key in rows ? { settingValue: rows[key] } : null)),
+  });
+
+  it('reads each pool from its own key', async () => {
+    const settings = settingsWith({ signupGrantSignupPoolDaily: '500', signupGrantTricklePoolDaily: 40 });
+    await expect(resolvePoolBudget(settings as never, 'signup')).resolves.toEqual({ budget: 500, missing: false });
+    await expect(resolvePoolBudget(settings as never, 'trickle')).resolves.toEqual({ budget: 40, missing: false });
+  });
+
+  it('treats an explicit 0 as paused, not missing', async () => {
+    const settings = settingsWith({ signupGrantSignupPoolDaily: '0' });
+    await expect(resolvePoolBudget(settings as never, 'signup')).resolves.toEqual({ budget: 0, missing: false });
+  });
+
+  it.each([undefined, null, '', '  ', '-1', '1.5', 'abc'])('pauses and flags missing for %j', async value => {
+    const settings = settingsWith(value === undefined ? {} : { signupGrantTricklePoolDaily: value });
+    await expect(resolvePoolBudget(settings as never, 'trickle')).resolves.toEqual({ budget: 0, missing: true });
+  });
+
+  it('ignores the retired single daily budget', async () => {
+    const settings = settingsWith({ signupGrantDailyBudget: '1000' });
+    await expect(resolvePoolBudget(settings as never, 'signup')).resolves.toEqual({ budget: 0, missing: true });
   });
 });

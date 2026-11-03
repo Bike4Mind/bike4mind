@@ -1,5 +1,11 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { settingsMap, type IAdminSettingsRepository, type SignupProtection } from '@bike4mind/common';
+import {
+  isBlankSettingValue,
+  settingsMap,
+  type IAdminSettingsRepository,
+  type SignupGrantPool,
+  type SignupProtection,
+} from '@bike4mind/common';
 
 type BudgetAdapters = {
   adminSettings: Pick<IAdminSettingsRepository, 'findBySettingName'>;
@@ -30,6 +36,26 @@ export async function refundBudgetOnFailure<T>(fn: () => Promise<T>): Promise<T>
     await Promise.all(releases.map(release => release()));
     throw error;
   }
+}
+
+const POOL_SETTING = {
+  signup: 'signupGrantSignupPoolDaily',
+  trickle: 'signupGrantTricklePoolDaily',
+} as const satisfies Record<SignupGrantPool, keyof typeof settingsMap>;
+
+/**
+ * A pool's daily budget. An absent, blank or invalid row resolves to 0 with `missing` set, so the pool
+ * pauses (and alerts) rather than paying unmetered; an explicit 0 also pauses but is not missing.
+ */
+export async function resolvePoolBudget(
+  adminSettings: BudgetAdapters['adminSettings'],
+  pool: SignupGrantPool
+): Promise<{ budget: number; missing: boolean }> {
+  const key = POOL_SETTING[pool];
+  const raw = (await adminSettings.findBySettingName(key))?.settingValue;
+  if (isBlankSettingValue(raw)) return { budget: 0, missing: true };
+  const parsed = settingsMap[key].schema.safeParse(raw);
+  return parsed.success ? { budget: parsed.data, missing: false } : { budget: 0, missing: true };
 }
 
 export const signupGrantBudgetDay = (now: Date = new Date()) => now.toISOString().slice(0, 10);
@@ -78,7 +104,8 @@ export async function reserveSignupGrantBudget(
     await alertCrossing(budgetConfig, day, 100, () => budgetConfig.repository.getSpent(day), budget);
     return { outcome: 'exhausted', release: noop };
   }
-  if (reservation.spent * 2 >= budget) await alertCrossing(budgetConfig, day, 50, async () => reservation.spent, budget);
+  if (reservation.spent * 2 >= budget)
+    await alertCrossing(budgetConfig, day, 50, async () => reservation.spent, budget);
   if (reservation.spent >= budget) await alertCrossing(budgetConfig, day, 100, async () => reservation.spent, budget);
   const release = !reservation.fresh
     ? noop

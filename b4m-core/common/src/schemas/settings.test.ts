@@ -931,6 +931,24 @@ describe('Credits System group', () => {
   it('is not repeated in the User Management index', () => {
     expect(API_SERVICE_GROUPS.USER_MANAGEMENT.settings.map(entry => entry.key)).not.toContain('enforceCredits');
   });
+
+  describe.each(['signupGrantSignupPoolDaily', 'signupGrantTricklePoolDaily'] as const)('%s', key => {
+    it.each([-1, 1.5, '-5', 'abc'])('rejects %j', value => {
+      expect(settingsMap[key].schema.safeParse(value).success).toBe(false);
+    });
+
+    it('accepts 0 and positive whole credits', () => {
+      expect(settingsMap[key].schema.safeParse(0).success).toBe(true);
+      expect(settingsMap[key].schema.safeParse(2500).success).toBe(true);
+      expect(settingsMap[key].schema.safeParse('2500').success).toBe(true);
+    });
+
+    it('is indexed in the Credits group with an order no sibling reuses', () => {
+      expect(API_SERVICE_GROUPS.CREDITS.settings.map(entry => entry.key)).toContain(key);
+      const orders = API_SERVICE_GROUPS.CREDITS.settings.map(entry => entry.order);
+      expect(new Set(orders).size).toBe(orders.length);
+    });
+  });
 });
 
 describe('kbSearchDefaultResults agrees with the search_knowledge_base tool fallback (#1831)', () => {
@@ -1533,6 +1551,7 @@ describe('stageHiddenSettingKeys', () => {
       'signupGrantActivityMinDays',
       'signupGrantActivityMinMessages',
       'signupGrantActivityPreviewTestMode',
+      'signupGrantDailyBudget',
     ]);
   });
 

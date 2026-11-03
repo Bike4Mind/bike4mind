@@ -47,6 +47,9 @@ export type SignupProtectionRepository = {
 };
 
 /** Per-UTC-day spend counter for free signup grants. `day` is 'YYYY-MM-DD'. */
+/** Free-credit pools with separate daily budgets: initial grants vs the daily activity drip. */
+export type SignupGrantPool = 'signup' | 'trickle';
+
 export type SignupGrantBudgetRepository = {
   /**
    * Adds `amount` to the day's spend only while it stays within `budget`, keyed by `transactionId`
