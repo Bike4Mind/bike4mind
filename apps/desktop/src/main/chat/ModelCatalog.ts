@@ -59,16 +59,22 @@ interface WireModel {
 }
 
 /**
- * The public projection of the same list, read only for `reasoning_efforts`: the server computes
- * those in llm-adapters, which this client cannot import, and `/api/models` does not carry them.
+ * The public projection of the same list, read only for `reasoning_efforts` and
+ * `reasons_within_output_budget`: the server computes those in llm-adapters, which this client
+ * cannot import, and `/api/models` does not carry them.
  */
 const PUBLIC_MODELS_PATH = '/api/v1/models';
 const PUBLIC_MODELS_PAGE = 100;
 const PUBLIC_MODELS_MAX_PAGES = 5;
 const PUBLIC_MODELS_TIMEOUT_MS = 5_000;
 
-/** Effort levels by model id, as `/api/v1/models` lists them. */
-export type HostedEfforts = ReadonlyMap<string, readonly ReasoningEffort[]>;
+/** How a model reasons, as one `/api/v1/models` row states it; a field the row lacks is absent. */
+export interface HostedReasoning {
+  efforts?: readonly ReasoningEffort[];
+  reasonsWithinOutputBudget?: boolean;
+}
+
+export type HostedReasoningById = ReadonlyMap<string, HostedReasoning>;
 
 export interface ModelCatalogLogger {
   debug(message: string): void;
@@ -140,7 +146,7 @@ export class ModelCatalog {
         ? entry.models
         : null;
     // The device and the server are asked at the same time; neither waits on the other.
-    const [local, hosted, efforts] = await Promise.all([
+    const [local, hosted, reasoning] = await Promise.all([
       this.listLocal(force !== false),
       api && !hostedHit
         ? api.get<{ models?: WireModel[] }>(MODELS_PATH).then(
@@ -148,7 +154,7 @@ export class ModelCatalog {
             (err: unknown) => ({ ok: false as const, err })
           )
         : null,
-      api && !hostedHit ? this.readEfforts(api) : null,
+      api && !hostedHit ? this.readReasoning(api) : null,
     ]);
     if (hostedHit) return { models: this.mergeLocal(hostedHit, local) };
     if (!api || !hosted) return local.length ? { models: local } : { models: [], error: 'Sign in to see models.' };
@@ -160,7 +166,7 @@ export class ModelCatalog {
         ? { models: local }
         : { models: [], error: 'Could not load the model list from this server.' };
     }
-    const models = selectUsableModels(hosted.wire, efforts ?? undefined);
+    const models = selectUsableModels(hosted.wire, reasoning ?? undefined);
 
     if (models.length === 0) {
       this.cache = null;
@@ -178,12 +184,12 @@ export class ModelCatalog {
   }
 
   /**
-   * Every listed model's effort levels, or null when the server publishes none (an older server, a
+   * How every listed model reasons, or null when the server publishes nothing (an older server, a
    * failed read). Any failure leaves the list itself alone: the models then keep the levels Desktop
    * always offered.
    */
-  private async readEfforts(api: AuthenticatedApiClient): Promise<HostedEfforts | null> {
-    const efforts = new Map<string, readonly ReasoningEffort[]>();
+  private async readReasoning(api: AuthenticatedApiClient): Promise<HostedReasoningById | null> {
+    const reasoning = new Map<string, HostedReasoning>();
     let cursor: string | null = null;
     try {
       for (let page = 0; page < PUBLIC_MODELS_MAX_PAGES; page++) {
@@ -191,9 +197,9 @@ export class ModelCatalog {
           params: { limit: PUBLIC_MODELS_PAGE, ...(cursor ? { cursor } : {}) },
           timeout: PUBLIC_MODELS_TIMEOUT_MS,
         });
-        const read = parseEffortsPage(response);
+        const read = parseReasoningPage(response);
         if (!read) return null;
-        for (const [id, levels] of read.efforts) efforts.set(id, levels);
+        for (const [id, row] of read.rows) reasoning.set(id, row);
         cursor = read.nextCursor;
         if (!cursor) break;
       }
@@ -201,7 +207,7 @@ export class ModelCatalog {
       this.deps.logger.debug(`CHAT: effort levels unavailable: ${err instanceof Error ? err.message : 'unknown'}`);
       return null;
     }
-    return efforts;
+    return reasoning;
   }
 
   /** Device discovery never depends on the configured server or account. */
@@ -331,7 +337,7 @@ export function selectImageModels(wire: unknown): string[] {
  * claims it read your files. Image, video and speech models are filtered for the same reason
  * the CLI filters them: they cannot answer a completion request at all.
  */
-export function selectUsableModels(wire: unknown, efforts?: HostedEfforts): ChatModelOption[] {
+export function selectUsableModels(wire: unknown, reasoning?: HostedReasoningById): ChatModelOption[] {
   if (!Array.isArray(wire)) return [];
 
   return wire
@@ -341,6 +347,7 @@ export function selectUsableModels(wire: unknown, efforts?: HostedEfforts): Chat
       const id = model.id as string;
       const maxOutputTokens =
         typeof model.max_tokens === 'number' && model.max_tokens > 0 ? model.max_tokens : undefined;
+      const stated = reasoning?.get(id);
       const controls = hostedControls(
         {
           id,
@@ -349,8 +356,11 @@ export function selectUsableModels(wire: unknown, efforts?: HostedEfforts): Chat
           ...(typeof model.thinkingStyle === 'string' ? { thinkingStyle: model.thinkingStyle } : {}),
           ...(maxOutputTokens ? { maxOutputTokens } : {}),
           maxCompletionTokens: maxTokensParamOf(model.dispatchProfile) === 'max_completion_tokens',
+          ...(stated?.reasonsWithinOutputBudget !== undefined
+            ? { reasonsWithinOutputBudget: stated.reasonsWithinOutputBudget }
+            : {}),
         },
-        efforts?.get(id),
+        stated?.efforts,
         supportsReasoningEffort(id)
       );
       return {
@@ -385,18 +395,28 @@ function maxTokensParamOf(profile: unknown): unknown {
 const KNOWN_EFFORTS: ReadonlySet<string> = new Set(CompletionReasoningEffortSchema.options);
 
 /** One page of `/api/v1/models`, or null when the answer is not that shape. */
-export function parseEffortsPage(
+export function parseReasoningPage(
   wire: unknown
-): { efforts: [string, ReasoningEffort[]][]; nextCursor: string | null } | null {
+): { rows: [string, HostedReasoning][]; nextCursor: string | null } | null {
   if (!wire || typeof wire !== 'object') return null;
   const { data, next_cursor: nextCursor } = wire as { data?: unknown; next_cursor?: unknown };
   if (!Array.isArray(data)) return null;
-  const efforts = data.flatMap((row): [string, ReasoningEffort[]][] => {
-    const { id, reasoning_efforts: levels } = (row ?? {}) as { id?: unknown; reasoning_efforts?: unknown };
-    if (typeof id !== 'string' || !Array.isArray(levels)) return [];
-    return [[id, levels.filter((level): level is ReasoningEffort => KNOWN_EFFORTS.has(level))]];
+  const rows = data.flatMap((row): [string, HostedReasoning][] => {
+    const {
+      id,
+      reasoning_efforts: levels,
+      reasons_within_output_budget: withinBudget,
+    } = (row ?? {}) as { id?: unknown; reasoning_efforts?: unknown; reasons_within_output_budget?: unknown };
+    if (typeof id !== 'string') return [];
+    const read: HostedReasoning = {
+      ...(Array.isArray(levels)
+        ? { efforts: levels.filter((level): level is ReasoningEffort => KNOWN_EFFORTS.has(level)) }
+        : {}),
+      ...(typeof withinBudget === 'boolean' ? { reasonsWithinOutputBudget: withinBudget } : {}),
+    };
+    return Object.keys(read).length > 0 ? [[id, read]] : [];
   });
-  return { efforts, nextCursor: typeof nextCursor === 'string' && nextCursor ? nextCursor : null };
+  return { rows, nextCursor: typeof nextCursor === 'string' && nextCursor ? nextCursor : null };
 }
 
 /** Only well-formed tiers, so a malformed row prices nothing rather than a wrong figure. */

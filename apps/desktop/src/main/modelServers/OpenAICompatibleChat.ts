@@ -239,6 +239,7 @@ export class OpenAICompatibleChat implements LocalChat {
       const controls = openAICompatibleControls(this.server.product, {
         ...(this.contexts.has(model.name) ? { contextWindow: this.contexts.get(model.name) } : {}),
         effortLevels: takesReasoningEffort(model.name),
+        thinks,
       });
       return {
         id: localModelId(this.server.runtimeId, model.name),

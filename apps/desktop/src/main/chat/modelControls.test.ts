@@ -162,6 +162,40 @@ describe('hostedControls', () => {
     expect(hostedControls(gpt, [], true)).not.toHaveProperty('effort');
   });
 
+  it('floors max output where reasoning is spent from it, by the server word or else the known sets', () => {
+    const reasoner = { id: ChatModels.GPT5, backend: 'openai', canThink: true, maxOutputTokens: 128_000 };
+    expect(hostedControls(reasoner, undefined, true).maxOutputTokens).toMatchObject({
+      min: 64_000,
+      max: 128_000,
+      includesThinking: true,
+    });
+    expect(
+      hostedControls({ ...reasoner, reasonsWithinOutputBudget: false }, undefined, true).maxOutputTokens
+    ).toMatchObject({ min: 1024 });
+    const kimi = { id: 'kimi-k3', backend: 'kimi', canThink: true, maxOutputTokens: 32_768 };
+    expect(hostedControls(kimi, [], false)).toHaveProperty('maxOutputTokens.min', 1024);
+    expect(hostedControls({ ...kimi, reasonsWithinOutputBudget: true }, [], false)).not.toHaveProperty(
+      'maxOutputTokens'
+    );
+    expect(hostedControls(budgetClaude, undefined, false).maxOutputTokens?.includesThinking).toBe(true);
+  });
+
+  it('says when a local limit includes thinking', () => {
+    expect(ollamaControls({ inspected: true, contextWindow: 8192, thinks: true }).maxOutputTokens).toMatchObject({
+      includesThinking: true,
+    });
+    expect(ollamaControls({ inspected: true, contextWindow: 8192 }).maxOutputTokens).not.toHaveProperty(
+      'includesThinking'
+    );
+    expect(openAICompatibleControls('vllm', { effortLevels: false, thinks: true }).maxOutputTokens).toMatchObject({
+      includesThinking: true,
+    });
+    expect(openAICompatibleControls('vllm', { effortLevels: true }).maxOutputTokens?.includesThinking).toBe(true);
+    expect(openAICompatibleControls('vllm', { effortLevels: false }).maxOutputTokens).not.toHaveProperty(
+      'includesThinking'
+    );
+  });
+
   it('bounds max output by the catalog cap and offers none without one', () => {
     const gpt = { id: 'gpt-4.1', backend: 'openai', canThink: false };
     expect(hostedControls({ ...gpt, maxOutputTokens: 8192 }, undefined, false).maxOutputTokens).toEqual({

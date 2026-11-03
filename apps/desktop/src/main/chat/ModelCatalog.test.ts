@@ -2,7 +2,7 @@ import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { ChatModels } from '@bike4mind/common';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { publicVideoModel } from './media/__fixtures__/videoModels';
-import { ModelCatalog, parseEffortsPage, resolveDefaultModel, selectUsableModels } from './ModelCatalog';
+import { ModelCatalog, parseReasoningPage, resolveDefaultModel, selectUsableModels } from './ModelCatalog';
 import { GIB, stubArch, unifiedMachine } from './fitStub.testHelper';
 import { forgetLocalContexts, OllamaLocal } from './OllamaLocal';
 
@@ -106,16 +106,32 @@ describe('selectUsableModels', () => {
 
   it('offers the effort levels the server publishes, and the old four where it publishes none', () => {
     const gpt = wireModel({ id: ChatModels.GPT5, backend: 'openai', can_think: true });
-    const [listed] = selectUsableModels([gpt], new Map([[ChatModels.GPT5, ['none', 'low', 'xhigh'] as const]]));
+    const [listed] = selectUsableModels(
+      [gpt],
+      new Map([[ChatModels.GPT5, { efforts: ['none', 'low', 'xhigh'] as const }]])
+    );
     expect(listed).toMatchObject({
       supportsReasoningEffort: true,
       controls: { effort: { levels: ['none', 'low', 'xhigh'] } },
     });
     expect(selectUsableModels([gpt])[0]?.controls?.effort?.levels).toEqual(['minimal', 'low', 'medium', 'high']);
 
-    const [none] = selectUsableModels([gpt], new Map([[ChatModels.GPT5, []]]));
+    const [none] = selectUsableModels([gpt], new Map([[ChatModels.GPT5, { efforts: [] }]]));
     expect(none).toMatchObject({ supportsReasoningEffort: false });
     expect(none?.controls).not.toHaveProperty('effort');
+  });
+
+  it('keeps max output above the reasoning floor where the server says reasoning spends it', () => {
+    const row = wireModel({ id: 'some-reasoner', backend: 'openai', can_think: true, max_tokens: 128_000 });
+    const output = (reasons?: boolean) =>
+      selectUsableModels(
+        [row],
+        reasons === undefined ? undefined : new Map([['some-reasoner', { reasonsWithinOutputBudget: reasons }]])
+      )[0]?.controls?.maxOutputTokens;
+    expect(output(true)).toMatchObject({ min: 64_000, max: 128_000, includesThinking: true });
+    expect(output(false)).toMatchObject({ min: 1024, max: 128_000 });
+    expect(output(false)).not.toHaveProperty('includesThinking');
+    expect(output(undefined)).toMatchObject({ min: 1024 });
   });
 
   it('pins temperature for a model the catalog dispatches with max_completion_tokens', () => {
@@ -131,25 +147,32 @@ describe('selectUsableModels', () => {
   });
 });
 
-describe('parseEffortsPage', () => {
-  it('reads each row that states its levels and drops levels it does not know', () => {
+describe('parseReasoningPage', () => {
+  it('reads what each row states and drops levels it does not know', () => {
     expect(
-      parseEffortsPage({
+      parseReasoningPage({
         data: [
-          { id: 'a', reasoning_efforts: ['none', 'turbo', 'high'] },
+          { id: 'a', reasoning_efforts: ['none', 'turbo', 'high'], reasons_within_output_budget: true },
           { id: 'b' },
+          { id: 'c', reasons_within_output_budget: false, reasoning_efforts: 'high' },
           { reasoning_efforts: ['low'] },
           null,
         ],
         next_cursor: 'next',
       })
-    ).toEqual({ efforts: [['a', ['none', 'high']]], nextCursor: 'next' });
+    ).toEqual({
+      rows: [
+        ['a', { efforts: ['none', 'high'], reasonsWithinOutputBudget: true }],
+        ['c', { reasonsWithinOutputBudget: false }],
+      ],
+      nextCursor: 'next',
+    });
   });
 
   it('answers null for anything that is not a page', () => {
-    expect(parseEffortsPage({ models: [] })).toBeNull();
-    expect(parseEffortsPage(undefined)).toBeNull();
-    expect(parseEffortsPage({ data: [], next_cursor: '' })).toEqual({ efforts: [], nextCursor: null });
+    expect(parseReasoningPage({ models: [] })).toBeNull();
+    expect(parseReasoningPage(undefined)).toBeNull();
+    expect(parseReasoningPage({ data: [], next_cursor: '' })).toEqual({ rows: [], nextCursor: null });
   });
 });
 

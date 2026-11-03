@@ -620,6 +620,7 @@ export class OllamaLocal {
       ...(inspection?.parameters !== undefined ? { parameters: inspection.parameters } : {}),
       ...(canThink && inspection?.thinking ? { thinkingValues: inspection.thinking.values } : {}),
       contextWindow,
+      thinks: canThink,
     });
     return {
       id,
