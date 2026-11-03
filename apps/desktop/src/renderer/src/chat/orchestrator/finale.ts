@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import type { ChatMessage } from '@shared/chat';
 import { readFinaleSeen, writeFinaleSeen } from './orchestratorPrefs';
 import {
   formatAgentCost,
@@ -59,16 +60,44 @@ export function runKey(agents: readonly AgentView[]): string {
   return `${agents.length}-${hash.toString(36)}`;
 }
 
+/** The parent's closing reply: the message "Read the report" lands on. `createdAt` is when its turn settled. */
+export interface ParentReport {
+  id: string;
+  createdAt: string;
+}
+
 /**
- * Whether the "Quest complete" finale is showing: once per run, when every agent has settled and the
- * parent has stopped, and only after an agent was seen working while mounted, so reopening a
- * finished run never replays it. Showing it spends that sighting, so archiving or deleting an agent
- * afterwards (which changes the run key) never brings it back. `rootId` scopes the remembered run.
+ * The parent's summary, when its transcript ends on one: an assistant reply with text that neither
+ * failed nor was stopped. Anything after it (an agent's "has finished" notice, a new prompt) means
+ * the parent has not answered since, so there is no report yet.
+ */
+export function latestParentReport(messages: readonly ChatMessage[]): ParentReport | undefined {
+  const last = messages.at(-1);
+  if (!last || last.role !== 'assistant' || last.system) return undefined;
+  if (last.error || last.stopReason === 'aborted' || last.content.trim() === '') return undefined;
+  return { id: last.id, createdAt: last.createdAt };
+}
+
+/** Whether the report was written after every agent last changed, so it speaks for their final work. */
+export function reportFollowsAgents(report: ParentReport, agents: readonly AgentView[]): boolean {
+  const written = Date.parse(report.createdAt);
+  if (Number.isNaN(written)) return false;
+  return agents.every(agent => !(Date.parse(agent.updatedAt) > written));
+}
+
+/**
+ * Whether the "Quest complete" finale is showing: when every agent has settled, the parent has stopped,
+ * and the parent's last turn ended on a summary written after the agents finished; and only after an
+ * agent was seen working while mounted, so reopening a finished run never replays it. Showing it spends
+ * that sighting, so archiving or deleting an agent afterwards never brings it back. The remembered run
+ * pairs the agent set with the summary's id, so re-running the same agents to a new summary celebrates
+ * again while a reload of the same completion does not. `rootId` scopes the remembered run.
  */
 export function useFinale(
   rootId: string | undefined,
   agents: readonly AgentView[],
-  parent: ParentView
+  parent: ParentView,
+  report: ParentReport | undefined
 ): { shown: boolean; dismiss(): void } {
   const active = agents.some(isActive);
   const parentBusy = isParentBusy(parent);
@@ -77,8 +106,14 @@ export function useFinale(
   const [shown, setShown] = useState(false);
   if (shown && (active || parentBusy)) setShown(false);
 
-  const complete = sawWork && agents.length > 0 && !active && !parentBusy;
-  const run = complete ? runKey(agents) : null;
+  const complete =
+    sawWork &&
+    agents.length > 0 &&
+    !active &&
+    !parentBusy &&
+    report !== undefined &&
+    reportFollowsAgents(report, agents);
+  const run = complete ? `${runKey(agents)}@${report.id}` : null;
 
   useEffect(() => {
     if (run === null || rootId === undefined || readFinaleSeen(rootId) === run) return;

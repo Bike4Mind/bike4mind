@@ -8,7 +8,7 @@ import { useEffect, useMemo, type ReactNode, useState } from 'react';
 import { AgentPeekDrawer } from './AgentPeekDrawer';
 import { playChime } from './chime';
 import { ExampleQuestButtons } from './exampleQuests';
-import { useFinale } from './finale';
+import { useFinale, type ParentReport } from './finale';
 import { FinaleBanner } from './FinaleBanner';
 import { ORCHESTRATOR_VIEWS, type OrchestratorViewId } from './orchestratorPrefs';
 import { assignPersonas, type AgentPersona } from './tavern/agentPersona';
@@ -32,6 +32,8 @@ export interface OrchestratorViewProps {
   onInnkeeperSelect?(): void;
   /** The run's finale is up: the Tavern raises its mugs. */
   celebrating?: boolean;
+  /** Drawn over the top of the scene by a view that has one (the Tavern); other views leave it to the stage. */
+  sceneOverlay?: ReactNode;
 }
 
 export interface OrchestratorStageProps {
@@ -41,8 +43,10 @@ export interface OrchestratorStageProps {
   onParentFocus?(): void;
   /** The orchestrating session; scopes the remembered finale. Without it the finale never plays. */
   rootId?: string;
-  /** The finale's "Read the report": show the parent's final answer. */
-  onReadReport?(): void;
+  /** The parent's closing summary, once its transcript ends on one; the finale waits for it. */
+  report?: ParentReport;
+  /** The finale's "Read the report": show that summary. */
+  onReadReport?(reportId: string): void;
   /** An agent to open in the peek drawer (a clicked needs-you notice); reported back once opened. */
   focusAgent?: string | null;
   onFocusAgentConsumed?(): void;
@@ -74,6 +78,7 @@ export function OrchestratorStage({
   parent = NO_PARENT,
   onParentFocus,
   rootId,
+  report,
   onReadReport,
   focusAgent = null,
   onFocusAgentConsumed,
@@ -111,13 +116,28 @@ export function OrchestratorStage({
 
   const { total, counts, usdCost, credits, hasUsd, hasCost, costPartial } = summarizeRoster(agents);
   const cost = hasCost ? formatAgentCost(hasUsd ? usdCost : undefined, credits) : '-';
-  const needsYou = counts['needs-you'];
+  // The parent waiting on an approval counts too, as it does on the app badge.
+  const parentNeedsYou = parent.status === 'needs-action';
+  const needsYou = counts['needs-you'] + (parentNeedsYou ? 1 : 0);
   const firstNeedsYou = agents.find(agent => agent.state === 'needs-you');
 
-  const finale = useFinale(rootId, agents, parent);
+  const finale = useFinale(rootId, agents, parent, report);
   useEffect(() => {
     if (finale.shown) playChime();
   }, [finale.shown]);
+
+  const banner = finale.shown && report && (
+    <FinaleBanner
+      agents={agents}
+      onRead={() => {
+        finale.dismiss();
+        onReadReport?.(report.id);
+      }}
+      onDismiss={finale.dismiss}
+    />
+  );
+  // The Tavern seats the banner on its scene rather than in the letterbox above it.
+  const bannerInScene = view === 'tavern' && renderView !== undefined && agents.length > 0;
 
   const viewProps: OrchestratorViewProps = {
     agents,
@@ -128,6 +148,7 @@ export function OrchestratorStage({
     parent,
     onInnkeeperSelect: onParentFocus,
     celebrating: finale.shown,
+    sceneOverlay: bannerInScene ? banner : undefined,
   };
 
   return (
@@ -152,13 +173,13 @@ export function OrchestratorStage({
         <Typography level="body-sm" data-testid="orchestrator-summary-strip">
           {`${total} ${total === 1 ? 'agent' : 'agents'} \u00B7 ${counts.working} working \u00B7 ${needsYou} need you \u00B7 ${counts.done} done \u00B7 ${counts.failed} failed \u00B7 ${costPartial ? '~' : ''}${cost}`}
         </Typography>
-        {needsYou > 0 && firstNeedsYou && (
+        {needsYou > 0 && (firstNeedsYou || onParentFocus) && (
           <Button
             size="sm"
             color="warning"
             variant="solid"
             data-testid="orchestrator-needs-you-pill"
-            onClick={() => setSelectedId(firstNeedsYou.id)}
+            onClick={() => (firstNeedsYou ? setSelectedId(firstNeedsYou.id) : onParentFocus?.())}
             sx={{
               animation: `${pulse} 1.6s ease-in-out infinite`,
               '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
@@ -194,16 +215,7 @@ export function OrchestratorStage({
             overflow: 'auto',
           }}
         >
-          {finale.shown && (
-            <FinaleBanner
-              agents={agents}
-              onRead={() => {
-                finale.dismiss();
-                onReadReport?.();
-              }}
-              onDismiss={finale.dismiss}
-            />
-          )}
+          {!bannerInScene && banner}
           {agents.length === 0 ? (
             <EmptyStage
               tavern={view === 'tavern' && renderView ? renderView(view, viewProps) : null}

@@ -97,6 +97,7 @@ import { OrchestratorSurface } from './orchestrator/OrchestratorSurface';
 import { readIntroSeen, writeIntroSeen, writeSurface, type OrchestratorViewId } from './orchestrator/orchestratorPrefs';
 import { TableView } from './orchestrator/TableView';
 import { TavernView } from './orchestrator/tavern/TavernView';
+import { latestParentReport } from './orchestrator/finale';
 import { agentStates } from './orchestrator/roster';
 import { prefersReducedMotion } from './orchestrator/motion';
 import { useOrchestratorPrefs } from './orchestrator/useOrchestrator';
@@ -107,12 +108,12 @@ import { useNeedsYouAlerts } from './orchestrator/useNeedsYouAlerts';
  * else the first of the agent reports that came in since (spawned agents never resume their parent,
  * so a finished run usually ends on those). Must stay in sync with the data attributes MessageThread sets.
  */
-function reportAnchor(thread: HTMLElement | null): Element | undefined {
-  const turns = [...(thread?.querySelectorAll('[data-assistant-reply], [data-child-report]') ?? [])];
-  const isReport = (index: number) => turns[index]?.hasAttribute('data-child-report') ?? false;
-  let anchor = turns.length - 1;
-  while (isReport(anchor) && isReport(anchor - 1)) anchor -= 1;
-  return turns[anchor];
+/** How long the orchestrator's "Read the report" keeps the summary highlighted (ms). */
+const REPORT_HIGHLIGHT_MS = 2400;
+
+function reportReply(thread: HTMLElement | null, reportId: string): HTMLElement | undefined {
+  const replies = thread?.querySelectorAll<HTMLElement>('[data-assistant-reply]') ?? [];
+  return [...replies].find(reply => reply.dataset.messageId === reportId);
 }
 
 function SessionHeader({ title, onRename }: { title: string; onRename: (title: string) => void }) {
@@ -555,16 +556,24 @@ export function ChatShell({
   }, [introPhase, introEntry]);
   const orchestratorView = introPhase === 'off' ? orchestratorPrefs.view : 'tavern';
   const threadHost = useRef<HTMLDivElement | null>(null);
-  const readParentReport = useCallback(() => {
-    setDockOpen(true);
-    // After the dock is shown again, or a hidden dock would scroll nothing into view.
-    window.requestAnimationFrame(() => {
-      reportAnchor(threadHost.current)?.scrollIntoView({
-        block: 'start',
-        behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+  const parentReport = useMemo(
+    () => (conversation.session?.id === activeId ? latestParentReport(conversation.messages) : undefined),
+    [conversation.session?.id, activeId, conversation.messages]
+  );
+  const readParentReport = useCallback(
+    (reportId: string) => {
+      setDockOpen(true);
+      // After the dock is shown again, or a hidden dock would scroll nothing into view.
+      window.requestAnimationFrame(() => {
+        const reply = reportReply(threadHost.current, reportId);
+        if (!reply) return;
+        reply.scrollIntoView({ block: 'start', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+        reply.setAttribute('data-report-highlight', '');
+        window.setTimeout(() => reply.removeAttribute('data-report-highlight'), REPORT_HIGHLIGHT_MS);
       });
-    });
-  }, [setDockOpen]);
+    },
+    [setDockOpen]
+  );
   const focusParentChat = useCallback(() => {
     setDockOpen(true);
     setComposerFocus(request => request + 1);
@@ -1265,6 +1274,7 @@ export function ChatShell({
                   introPlaying={introPhase === 'playing'}
                   renderView={renderOrchestratorView}
                   onParentFocus={focusParentChat}
+                  report={parentReport}
                   onReadReport={readParentReport}
                   focusAgent={noticeFocus?.rootId === activeId ? noticeFocus.agentId : null}
                   onFocusAgentConsumed={clearNoticeFocus}

@@ -476,7 +476,7 @@ describe('orchestrate mode in the chat shell', () => {
     parentMessages = [
       { id: 'a1', role: 'assistant', content: 'Spawning agents', createdAt: at },
       { id: 'r1', role: 'user', content: 'Report from agent one', createdAt: at, system: true },
-      { id: 'a2', role: 'assistant', content: 'The combined report', createdAt: at },
+      { id: 'a2', role: 'assistant', content: 'The combined report', createdAt: '2026-10-01T00:10:00.000Z' },
     ] as ChatMessage[];
     statusSnapshot = [{ sessionId: CHILD.id, status: 'processing' }];
     const scrolled: Element[] = [];
@@ -502,22 +502,22 @@ describe('orchestrate mode in the chat shell', () => {
     expect(query('orchestrator-finale')).toBeNull();
     expect(query('orchestrator-dock')).not.toBeNull();
     expect(scrolled.at(-1)?.textContent).toContain('The combined report');
+    expect(scrolled.at(-1)?.hasAttribute('data-report-highlight')).toBe(true);
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(scrolled.at(-1)?.hasAttribute('data-report-highlight')).toBe(false);
   });
 
-  it('reads the report from the first agent report when the parent has not answered since the agents reported', async () => {
+  it('holds the finale while the parent has not answered since the agents reported', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     const at = '2026-10-01T00:00:00.000Z';
-    // Spawned agents never resume their parent: their reports land after its last reply.
     parentMessages = [
       { id: 'a1', role: 'assistant', content: 'Spawning agents', createdAt: at },
       { id: 'r1', role: 'user', content: 'Report from agent one', createdAt: at, system: true },
       { id: 'r2', role: 'user', content: 'Report from agent two', createdAt: at, system: true },
     ] as ChatMessage[];
     statusSnapshot = [{ sessionId: CHILD.id, status: 'processing' }];
-    const scrolled: Element[] = [];
-    Element.prototype.scrollIntoView = function (this: Element) {
-      scrolled.push(this);
-    };
     await openParent();
     await enterOrchestrate();
 
@@ -526,12 +526,7 @@ describe('orchestrate mode in the chat shell', () => {
     await act(async () => {
       vi.advanceTimersByTime(5000);
     });
-    scrolled.length = 0;
-    await act(async () => el('orchestrator-finale-read-btn').click());
-    await act(async () => {
-      vi.advanceTimersByTime(100);
-    });
-    expect(scrolled.at(-1)?.textContent).toContain('Report from agent one');
+    expect(query('orchestrator-finale')).toBeNull();
   });
 
   it("opens a clicked notice's agent: selects its parent, orchestrates, and peeks the agent", async () => {

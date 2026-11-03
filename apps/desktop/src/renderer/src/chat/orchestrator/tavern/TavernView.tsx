@@ -383,6 +383,7 @@ export function TavernView({
   parent = NO_PARENT,
   onInnkeeperSelect,
   celebrating = false,
+  sceneOverlay,
 }: OrchestratorViewProps) {
   const placements = usePlacements(agents);
   const arrived = useArrived(introPlaying);
@@ -519,6 +520,7 @@ export function TavernView({
             {`${urgent ? '!' : ''}+${waiting}`}
           </Box>
         )}
+        {sceneOverlay}
       </Box>
     </Box>
   );

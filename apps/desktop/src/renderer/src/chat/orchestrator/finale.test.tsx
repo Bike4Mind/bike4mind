@@ -2,7 +2,17 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { FINALE_SETTLE_MS, finaleStats, formatWallTime, runKey, useFinale } from './finale';
+import type { ChatMessage } from '@shared/chat';
+import {
+  FINALE_SETTLE_MS,
+  finaleStats,
+  formatWallTime,
+  latestParentReport,
+  reportFollowsAgents,
+  runKey,
+  useFinale,
+  type ParentReport,
+} from './finale';
 import type { AgentState, AgentView, ParentView } from './roster';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -58,16 +68,69 @@ describe('runKey', () => {
   });
 });
 
+describe('latestParentReport', () => {
+  const at = '2026-10-01T00:05:00.000Z';
+  const message = (extra: Partial<ChatMessage>): ChatMessage => ({
+    id: 'm',
+    role: 'assistant',
+    content: 'All done.',
+    createdAt: at,
+    ...extra,
+  });
+
+  it("is the parent's last reply when it has text", () => {
+    expect(latestParentReport([message({ id: 'p', role: 'user' }), message({ id: 's' })])).toEqual({
+      id: 's',
+      createdAt: at,
+    });
+  });
+
+  it('is absent while an agent notice or a prompt follows the last reply', () => {
+    expect(latestParentReport([message({}), message({ id: 'n', role: 'user', system: true })])).toBeUndefined();
+    expect(latestParentReport([message({}), message({ id: 'u', role: 'user' })])).toBeUndefined();
+    expect(latestParentReport([])).toBeUndefined();
+  });
+
+  it('is absent for a reply that is empty, failed or stopped', () => {
+    expect(latestParentReport([message({ content: '  ' })])).toBeUndefined();
+    expect(latestParentReport([message({ error: 'boom' })])).toBeUndefined();
+    expect(latestParentReport([message({ stopReason: 'aborted' })])).toBeUndefined();
+  });
+});
+
+describe('reportFollowsAgents', () => {
+  it('holds only when the report was written at or after every agent last changed', () => {
+    const report = { id: 's', createdAt: '2026-10-01T00:05:00.000Z' };
+    expect(reportFollowsAgents(report, [agent('a', 'done', { updatedAt: '2026-10-01T00:05:00.000Z' })])).toBe(true);
+    expect(reportFollowsAgents(report, [agent('a', 'done', { updatedAt: '2026-10-01T00:06:00.000Z' })])).toBe(false);
+    expect(reportFollowsAgents({ id: 's', createdAt: '' }, [agent('a', 'done')])).toBe(false);
+  });
+});
+
 describe('useFinale', () => {
   let container: HTMLDivElement;
   let root: Root;
   let latest: ReturnType<typeof useFinale> | undefined;
-  const Probe = ({ agents, parent, rootId = 'root' }: { agents: AgentView[]; parent: ParentView; rootId?: string }) => {
-    latest = useFinale(rootId, agents, parent);
+  // Written after the fixtures' agents last changed.
+  const summary = (id: string): ParentReport => ({ id, createdAt: '2026-10-01T00:10:00.000Z' });
+  const S1 = summary('s1');
+  const Probe = ({
+    agents,
+    parent,
+    report,
+    rootId = 'root',
+  }: {
+    agents: AgentView[];
+    parent: ParentView;
+    report?: ParentReport;
+    rootId?: string;
+  }) => {
+    latest = useFinale(rootId, agents, parent, report);
     return null;
   };
-  const render = (agents: AgentView[], parent: ParentView = {}, rootId?: string) =>
-    act(() => root.render(<Probe agents={agents} parent={parent} rootId={rootId} />));
+  // null: the parent has no summary yet (undefined would take the default).
+  const render = (agents: AgentView[], parent: ParentView = {}, report: ParentReport | null = S1) =>
+    act(() => root.render(<Probe agents={agents} parent={parent} report={report ?? undefined} />));
   const settle = () =>
     act(() => {
       vi.advanceTimersByTime(FINALE_SETTLE_MS + 10);
@@ -85,14 +148,52 @@ describe('useFinale', () => {
     vi.useRealTimers();
   });
 
-  it('celebrates once every agent settles and the parent stops, after one was seen working', () => {
-    render([agent('a', 'working'), agent('b', 'done')], { status: 'processing' });
-    render([agent('a', 'done'), agent('b', 'done')], { status: 'processing' });
+  it('celebrates once every agent settles and the parent stops on a summary, after one was seen working', () => {
+    render([agent('a', 'working'), agent('b', 'done')], { status: 'processing' }, null);
+    render([agent('a', 'done'), agent('b', 'done')], { status: 'processing' }, null);
     settle();
     expect(latest?.shown).toBe(false);
 
     render([agent('a', 'done'), agent('b', 'done')], { status: 'done' });
     expect(latest?.shown).toBe(false);
+    settle();
+    expect(latest?.shown).toBe(true);
+  });
+
+  it('waits when the agents settle but the parent has not written a summary since', () => {
+    render([agent('a', 'working')], { status: 'processing' }, null);
+    render([agent('a', 'done')], { status: 'done' }, null);
+    settle();
+    expect(latest?.shown).toBe(false);
+
+    // The last reply predates an agent's final change: it is not the report on that work.
+    render([agent('a', 'done', { updatedAt: '2026-10-01T00:20:00.000Z' })], { status: 'done' }, S1);
+    settle();
+    expect(latest?.shown).toBe(false);
+  });
+
+  it('celebrates when the parent writes its summary after the agents settle', () => {
+    render([agent('a', 'working')], { status: 'processing' }, null);
+    render([agent('a', 'done')], { status: 'done' }, null);
+    settle();
+    render([agent('a', 'done')], { status: 'processing' }, null);
+    render([agent('a', 'done')], { status: 'done' }, S1);
+    settle();
+    expect(latest?.shown).toBe(true);
+  });
+
+  it('celebrates again when the same agents re-run and the parent writes a new summary', () => {
+    render([agent('a', 'working')], {}, null);
+    render([agent('a', 'done')], {}, S1);
+    settle();
+    expect(latest?.shown).toBe(true);
+    act(() => latest?.dismiss());
+
+    render([agent('a', 'working')], { status: 'processing' }, null);
+    render([agent('a', 'done')], { status: 'done' }, null);
+    settle();
+    expect(latest?.shown).toBe(false);
+    render([agent('a', 'done')], { status: 'done' }, summary('s2'));
     settle();
     expect(latest?.shown).toBe(true);
   });
@@ -121,7 +222,7 @@ describe('useFinale', () => {
     expect(latest?.shown).toBe(false);
   });
 
-  it('remembers a seen run so it never replays, and dismiss hides it', () => {
+  it('remembers a seen completion so a reload never replays it, and dismiss hides it', () => {
     render([agent('a', 'working')]);
     render([agent('a', 'done')]);
     settle();
