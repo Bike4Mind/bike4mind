@@ -56,6 +56,30 @@ describe('commandExit', () => {
     await new Promise(resolve => other.on('exit', resolve));
     expect(commandExit(1, null, other, 'win32')).toEqual({ code: 1, signal: null });
   });
+
+  it('reads wsl.exe exit N or 128 + N back as signal N only for a WSL command this side sent N', () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    const stopped = {} as ChildProcess;
+    const other = {} as ChildProcess;
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    try {
+      const launch = {
+        executable: 'wsl.exe',
+        args: [],
+        processTag: randomUUID(),
+        wslDistro: `b4m-missing-${randomUUID()}`,
+        cleanup: async () => undefined,
+      };
+      signalCommandTree({ pid: 0, child: stopped, launch }, 'SIGTERM');
+    } finally {
+      if (platform) Object.defineProperty(process, 'platform', platform);
+    }
+    expect(commandExit(15, null, stopped, 'win32')).toEqual({ code: null, signal: 'SIGTERM' });
+    expect(commandExit(143, null, stopped, 'win32')).toEqual({ code: null, signal: 'SIGTERM' });
+    expect(commandExit(1, null, stopped, 'win32')).toEqual({ code: 1, signal: null });
+    expect(commandExit(15, null, other, 'win32')).toEqual({ code: 15, signal: null });
+    expect(commandExit(143, null, other, 'win32')).toEqual({ code: 143, signal: null });
+  });
 });
 
 describe('windowsSignalCommands', () => {

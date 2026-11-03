@@ -84,6 +84,17 @@ function launchersToEnd(trees: readonly CommandTree[], signal: NodeJS.Signals): 
 }
 
 /**
+ * Signals sent to a WSL command. wsl.exe reports death by signal N as exit code N, or 128 + N when
+ * a shell in between reported it (Linux numbering).
+ */
+const sentToDistro = new WeakMap<ChildProcess, NodeJS.Signals>();
+const LINUX_SIGNAL_NUMBERS: Partial<Record<NodeJS.Signals, number>> = { SIGKILL: 9, SIGTERM: 15 };
+
+function noteSent(trees: readonly CommandTree[], signal: NodeJS.Signals): void {
+  for (const tree of trees) if (tree.launch.wslDistro) sentToDistro.set(tree.child, signal);
+}
+
+/**
  * The spawned launcher (Git Bash's or wsl.exe) goes by its handle, never by pid: a pid passed to
  * taskkill could belong to another process by the time it runs. The tag sweep covers the rest.
  */
@@ -136,8 +147,9 @@ const MSYS_SIGNALS: Readonly<Record<number, NodeJS.Signals>> = {
 };
 
 /**
- * On Windows, reads Git Bash's `signal << 8` exit code (0x80 set for a core dump) back as the
- * signal, and reports SIGKILL for a child this side stopped.
+ * On Windows, reads Git Bash's `signal << 8` exit code (0x80 set for a core dump), or wsl.exe's N
+ * or 128 + N after this side sent signal N, back as the signal, and reports SIGKILL for a child
+ * this side force-stopped.
  */
 export function commandExit(
   code: number | null,
@@ -147,6 +159,11 @@ export function commandExit(
 ): { code: number | null; signal: NodeJS.Signals | null } {
   if (platform !== 'win32') return { code, signal };
   if (child && killed.has(child)) return { code: null, signal: 'SIGKILL' };
+  const sent = child && sentToDistro.get(child);
+  if (sent) {
+    const number = LINUX_SIGNAL_NUMBERS[sent];
+    return number && (code === number || code === 128 + number) ? { code: null, signal: sent } : { code, signal };
+  }
   if (code === null || code < 0x100 || code >= 0x10000 || (code & 0xff) !== 0) return { code, signal };
   const name = MSYS_SIGNALS[(code >> 8) & 0x7f];
   return name ? { code: null, signal: name } : { code, signal };
@@ -161,6 +178,7 @@ export function signalCommandTree(tree: CommandTree, signal: NodeJS.Signals): vo
     posixSignal(tree.pid, signal);
     return;
   }
+  noteSent([tree], signal);
   const launchers = launchersToEnd([tree], signal);
   for (const launcher of launchers) killed.add(launcher.child);
   for (const command of windowsSignalCommands([tree], signal)) {
@@ -181,6 +199,7 @@ export function signalCommandTreesSync(trees: readonly CommandTree[], signal: No
     for (const tree of trees) posixSignal(tree.pid, signal);
     return;
   }
+  noteSent(trees, signal);
   for (const command of windowsSignalCommands(trees, signal)) {
     spawnSync(command.file, command.args, {
       env: command.env,
