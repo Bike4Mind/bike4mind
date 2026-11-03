@@ -117,8 +117,9 @@ const MOVED_MODULES = [
   {
     from: 'apps/client/server/s3',
     to: 'apps/workers/src/s3',
-    stems: ['appFileUploadComplete', 'objectCreated'],
+    stems: ['appFileUploadComplete', 'historyUploadComplete', 'objectCreated'],
   },
+  { from: 'apps/client/server/utils', to: 'packages/server-utils/src/utils', stems: ['importHistoryProgress'] },
   {
     from: 'apps/client/server/utils',
     to: 'apps/workers/src/database',
@@ -247,6 +248,7 @@ describe('directories and modules moved out of apps/client/server stay moved', (
         'apps/workers/src/queueHandlers/agentExecutor.handler',
         // infra/buckets.ts
         'apps/workers/src/s3/appFileUploadComplete.func',
+        'apps/workers/src/s3/historyUploadComplete.dispatch',
         // infra/queues.ts (the bucket notification subscriber)
         'apps/workers/src/s3/objectCreated.func',
         // infra/database.ts
