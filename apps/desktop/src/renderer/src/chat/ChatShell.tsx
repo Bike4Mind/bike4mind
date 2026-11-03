@@ -764,7 +764,13 @@ export function ChatShell({
       } catch (error) {
         // The seed's own chain is longer than create()'s, so give a seed that landed in the same tick a turn to report.
         const seed = late.id ?? (seedAtClick ? await settledWithin(seedAtClick, 0) : null);
-        if (!unmounted.current && modeRef.current === 'chat' && seed && (openChatId.current ?? seed) === seed) {
+        if (
+          !unmounted.current &&
+          modeRef.current === 'chat' &&
+          seed &&
+          (openChatId.current ?? seed) === seed &&
+          !deletedChats.current.has(seed)
+        ) {
           await shareInto(seed, () => shareFolderTo(seed, path));
           return;
         }
@@ -777,15 +783,20 @@ export function ChatShell({
         ((sessionsRef.current.find(session => session.id === lateOpen)?.messageCount ?? 0) > 0 ||
           openMessageCount.current > 0);
       if (lateOpen && lateHasMessages) {
-        void shareInto(lateOpen, () => shareFolderTo(lateOpen, path));
+        await shareInto(lateOpen, () => shareFolderTo(lateOpen, path));
+        if (unmounted.current) return;
         await remove(created).catch(() => {
-          setAddFolderAlerts(current => ({
-            ...current,
-            [lateOpen]: {
-              text: 'Desktop could not remove the empty conversation it made. Delete it from the sidebar.',
-              color: 'warning',
-            },
-          }));
+          const warning = 'Desktop could not remove the empty conversation it made. Delete it from the sidebar.';
+          setAddFolderAlerts(current => {
+            const existing = current[lateOpen];
+            return {
+              ...current,
+              [lateOpen]: {
+                text: existing ? `${existing.text} ${warning}` : warning,
+                color: existing?.color ?? 'warning',
+              },
+            };
+          });
         });
         return;
       }

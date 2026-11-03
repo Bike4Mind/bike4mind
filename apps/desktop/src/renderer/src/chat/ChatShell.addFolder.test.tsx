@@ -862,15 +862,15 @@ describe('Add folder in a Chat composer', () => {
     try {
       await addFolderFromMenu();
       await act(async () => void (await vi.advanceTimersByTimeAsync(3_500)));
+      const seeded = summary('seeded');
+      stored.set('seeded', seeded);
+      seed.resolve({ session: seeded });
+      made.reject(new Error('disk full'));
+      await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+      await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
     } finally {
       vi.useRealTimers();
     }
-    const seeded = summary('seeded');
-    stored.set('seeded', seeded);
-    seed.resolve({ session: seeded });
-    made.reject(new Error('disk full'));
-    await act(async () => undefined);
-    await act(async () => undefined);
 
     expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('seeded', NOTES);
     expect(byTestId('chat-add-folder-error')).toBeNull();
@@ -972,6 +972,56 @@ describe('Add folder in a Chat composer', () => {
       await act(async () => undefined);
 
       expect(addContextDirectory).not.toHaveBeenCalledWith('seeded', NOTES);
+    });
+
+    it('shares nothing into a late first-run chat the user deleted before the new chat failed, and says so', async () => {
+      const { seed, made, seeded } = await waitOutSeed();
+      await act(async () => seed.resolve({ session: seeded }));
+      await act(async () => undefined);
+      await deleteOpenChat();
+      await act(async () => made.reject(new Error('disk full')));
+      await act(async () => undefined);
+
+      expect(addContextDirectory).not.toHaveBeenCalled();
+      expect(byTestId('chat-add-folder-error')?.textContent).toContain('could not start a conversation');
+    });
+
+    describe('with a late first-run chat that has messages and a new chat that cannot be removed', () => {
+      async function landLateSeed() {
+        const { stored, seed, made } = await waitOutSeed();
+        const seeded = { ...summary('seeded'), messageCount: 2 };
+        const fresh = summary('made');
+        stored.set('seeded', seeded);
+        stored.set('made', fresh);
+        deleteSession.mockRejectedValue(new Error('locked'));
+        const share = deferred<ShareDirectoryResult>();
+        addContextDirectory.mockReturnValue(share.promise);
+        await act(async () => seed.resolve({ session: seeded }));
+        await act(async () => undefined);
+        await act(async () => made.resolve({ session: fresh }));
+        await act(async () => undefined);
+        return { share };
+      }
+
+      it('keeps the removal warning when the share succeeds after the delete failed', async () => {
+        const { share } = await landLateSeed();
+        await act(async () =>
+          share.resolve({ status: 'added', path: NOTES, session: summary('seeded', 'chat', [NOTES]) })
+        );
+        await act(async () => undefined);
+
+        expect(byTestId('chat-add-folder-notice')?.textContent).toContain('could not remove the empty conversation');
+      });
+
+      it('shows both the share failure and the removal warning', async () => {
+        const { share } = await landLateSeed();
+        await act(async () => share.reject(new Error('main refused')));
+        await act(async () => undefined);
+
+        const text = (byTestId('chat-add-folder-error') ?? byTestId('chat-add-folder-notice'))?.textContent;
+        expect(text).toContain('could not share the folder');
+        expect(text).toContain('could not remove the empty conversation');
+      });
     });
   });
 
