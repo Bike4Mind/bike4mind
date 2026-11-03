@@ -258,7 +258,7 @@ export class BackgroundProcessRegistry {
         signal: NodeJS.Signals | null,
         error?: string
       ): void => {
-        const exit = commandExit(code, signal);
+        const exit = commandExit(code, signal, child);
         this.finish(tracked, status, exit.code, exit.signal, error);
         resolve();
       };
@@ -495,7 +495,7 @@ export class BackgroundProcessRegistry {
   }
 
   private treeOf(tracked: Tracked): CommandTree | null {
-    return tracked.pgid === null ? null : { pid: tracked.pgid, launch: tracked.launch };
+    return tracked.pgid === null ? null : { pid: tracked.pgid, child: tracked.child, launch: tracked.launch };
   }
 
   private signalGroup(tracked: Tracked, signal: NodeJS.Signals): void {

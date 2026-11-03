@@ -212,7 +212,7 @@ function runCommand(
     let withdrawMove: (() => void) | undefined;
 
     const signalGroup = (value: NodeJS.Signals) => {
-      if (child.pid !== undefined) signalCommandTree({ pid: child.pid, launch }, value);
+      if (child.pid !== undefined) signalCommandTree({ pid: child.pid, child, launch }, value);
     };
 
     const stopChild = () => {
@@ -266,7 +266,7 @@ function runCommand(
     };
     const onClose = (closeCode: number | null, closeSignal: NodeJS.Signals | null) => {
       finish();
-      const exit = commandExit(closeCode, closeSignal);
+      const exit = commandExit(closeCode, closeSignal, child);
       resolve({
         stdout: stdout.toString(),
         stderr: stderr.toString(),
