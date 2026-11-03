@@ -147,7 +147,7 @@ describe('OpenAICompatibleChat', () => {
       });
     });
 
-    it('leaves the first read\'s tokens out of the estimate', async () => {
+    it("leaves the first read's tokens out of the estimate", async () => {
       const burst = Array.from({ length: 40 }, () => delta({ content: 'a' }));
       const fetch: FetchLike = async () =>
         reads(

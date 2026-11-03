@@ -54,9 +54,7 @@ describe('describeTokenRate', () => {
     expect(describeTokenRate({ evalTokens: 40, evalMs: 2000 }, 100)).toBe(
       'Generation: 20.0 tok/s (timed 40 of 100 output tokens in 2.0s)'
     );
-    expect(describeTokenRate({ evalTokens: 40, evalMs: 2000 }, 40)).toBe(
-      'Generation: 20.0 tok/s (40 tokens in 2.0s)'
-    );
+    expect(describeTokenRate({ evalTokens: 40, evalMs: 2000 }, 40)).toBe('Generation: 20.0 tok/s (40 tokens in 2.0s)');
   });
 
   it('says an estimate was timed by the app', () => {
