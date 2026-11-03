@@ -106,6 +106,11 @@ describe('ProfileScreen local usage', () => {
     expect(find('profile-local-usage')).toBeNull();
   });
 
+  it('says so when the local read rejects outright', async () => {
+    const { find } = await render(() => Promise.reject(new Error('channel closed')));
+    expect(find('profile-local-error')?.textContent).toBe('Could not read local model usage.');
+  });
+
   it('drops the previous account figures when the account changes', async () => {
     let answer: (result: LocalUsageResult) => void = () => {};
     const { find, show } = await render(async () => ({ ok: true, usage: localUsageFixture({ replies: 2 }) }));
