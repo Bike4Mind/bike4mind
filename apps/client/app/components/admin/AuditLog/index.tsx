@@ -97,7 +97,9 @@ const AuditLogPage: React.FC = () => {
         relatedEntries={relatedEntries}
         onSelectRelated={entry => openEntry(entry.id)}
         reviewSection={
-          drawerEntry?.severity === 'critical' ? <AuditEntryReviewSection entry={drawerEntry} /> : undefined
+          drawerEntry?.severity === 'critical' ? (
+            <AuditEntryReviewSection key={drawerEntry.id} entry={drawerEntry} />
+          ) : undefined
         }
       />
     </Stack>
