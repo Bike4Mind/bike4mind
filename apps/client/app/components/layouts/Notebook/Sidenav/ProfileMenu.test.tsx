@@ -24,7 +24,13 @@ vi.mock('@client/app/components/inbox/Badge', () => ({
 const billing = vi.hoisted(() => ({ openView: vi.fn(), creditsEnabled: false }));
 const analytics = vi.hoisted(() => ({ mutate: vi.fn() }));
 const user = vi.hoisted(() => ({
-  current: { id: 'u1', name: 'Jane' } as { id: string; name: string; photoUrl?: string | null },
+  current: { id: 'u1', name: 'Jane' } as {
+    id: string;
+    name: string;
+    photoUrl?: string | null;
+    isAdmin?: boolean;
+    adminPermissions?: string[];
+  },
 }));
 const config = vi.hoisted(() => ({ cdnUrl: 'https://cdn.example.test' as string | undefined }));
 vi.mock('@client/app/components/subscription/BillingDeepLinkModals', () => ({
@@ -202,6 +208,29 @@ describe('closeSideNavOnOverlay', () => {
     closeSideNavOnOverlay(false, setOpenSideNav);
 
     expect(setOpenSideNav).not.toHaveBeenCalled();
+  });
+});
+
+describe('ProfileMenu - Admin entry', () => {
+  afterEach(() => {
+    user.current = { id: 'u1', name: 'Jane' };
+  });
+
+  it.each([
+    ['an admin', { isAdmin: true }, true],
+    ['a delegate with a tab to open', { isAdmin: false, adminPermissions: ['settings:manage'] }, true],
+    ['a delegate whose permissions open no tab', { isAdmin: false, adminPermissions: ['support:read'] }, false],
+    ['a user with no admin role', { isAdmin: false }, false],
+  ])('is shown to %s', (_case, role, shown) => {
+    user.current = { id: 'u1', name: 'Jane', ...role };
+    render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('profile-menu-card'));
+
+    expect(screen.queryByTestId('profile-menu-admin') !== null).toBe(shown);
   });
 });
 

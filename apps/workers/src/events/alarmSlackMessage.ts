@@ -80,7 +80,7 @@ export interface SlackAlarmMessage {
 
 /** Admin console pages, by key. Paths are relative to the app origin. */
 export const ADMIN_LINKS: Record<AlarmLinkKey, { label: string; path: string }> = {
-  'signup-activity': { label: 'Signup activity', path: '/admin?tab=users&recentSignups=hour' },
+  'signup-activity': { label: 'Signup activity', path: '/admin?tab=users&signedUp=hour' },
   'waf-block-list': { label: 'WAF block list', path: '/admin?tab=security-dashboard' },
   'dlq-replay': { label: 'DLQ replay', path: '/admin?tab=dlq-replay' },
   'live-ops-triage': { label: 'LiveOps triage', path: '/admin?tab=live-ops-triage' },

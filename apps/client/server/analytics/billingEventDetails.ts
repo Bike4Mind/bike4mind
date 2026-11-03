@@ -1,4 +1,5 @@
-import { userRepository } from '@bike4mind/database';
+import { paymentAttemptRepository, userRepository } from '@bike4mind/database';
+import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { SubscriptionOwnerType, type ISubscription } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { getEntitlingPlanByPriceId } from '@client/lib/userSubscriptions/utils';
 
@@ -82,5 +83,54 @@ export async function creditBuyerForEvents(customerId: string | undefined, metad
   } catch {
     console.warn('[b4m-analytics] billing event user lookup failed');
     return null;
+  }
+}
+
+// The visit a purchase was made in. A `purchase` arrives from a webhook or a worker, which has no
+// browser, so the visit is written where the payment starts, with the buyer's request in hand,
+// into core's own payment-attempt record, and read back here by a Stripe id. It is never put on
+// anything sent to Stripe. See emitPurchaseEvents for which purchases name one.
+
+/** The visit start-payment recorded for this credit-pack payment intent, if any. Never throws. */
+export async function purchaseVisitId(paymentIntentId: string): Promise<string | undefined> {
+  try {
+    return (await paymentAttemptRepository.findVisitId(paymentIntentId)) ?? undefined;
+  } catch {
+    console.warn('[b4m-analytics] purchase visit lookup failed');
+    return undefined;
+  }
+}
+
+/** Keep a subscription Checkout's visit for subscriptionCheckoutVisitId. Never throws. */
+export async function recordCheckoutVisit(input: {
+  checkoutSessionId: string;
+  userId: string;
+  visitId: string | undefined;
+}): Promise<void> {
+  if (!input.visitId) return;
+  try {
+    await paymentAttemptRepository.recordCheckoutStart({
+      checkoutSessionId: input.checkoutSessionId,
+      userId: input.userId,
+      visitId: input.visitId,
+    });
+  } catch {
+    console.warn('[b4m-analytics] checkout visit not recorded');
+  }
+}
+
+/**
+ * Stripe links a subscription to its Checkout session only from the session's side, hence the
+ * list call. One Stripe read, so callers ask only for an opening invoice. Never throws.
+ */
+export async function subscriptionCheckoutVisitId(subscriptionId: string): Promise<string | undefined> {
+  try {
+    const sessions = await stripe.checkout.sessions.list({ subscription: subscriptionId, limit: 1 });
+    const checkoutSessionId = sessions.data[0]?.id;
+    if (!checkoutSessionId) return undefined;
+    return (await paymentAttemptRepository.findVisitId(checkoutSessionId)) ?? undefined;
+  } catch {
+    console.warn('[b4m-analytics] subscription checkout visit lookup failed');
+    return undefined;
   }
 }

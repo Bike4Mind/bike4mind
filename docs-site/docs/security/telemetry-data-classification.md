@@ -22,6 +22,7 @@ personal information or secrets in campaign URLs.
 | Checkout consent         | Boolean `attributionConsent` in the checkout request                                             | Request only                                   | Permit or suppress reading attribution cookies |
 | Resolved consent         | App cookie `b4m_consent`, republished on every load                                              | 90 days, cleared when consent resolves unset   | Let the server read the browser's decision     |
 | Purchase attribution     | Stripe subscription metadata `acq_first_*` / `acq_last_*` and MongoDB `Subscription.acquisition` | No automatic expiry configured by this feature | Record the consenting buyer's checkout touches |
+| Purchase visit           | Random server-minted 30-minute visit id in MongoDB `PaymentAttempt.visitId` (not sent to Stripe) | 90 days, the payment attempt's TTL             | Name the visit a purchase was started in       |
 
 The app's three campaign cookies and `b4m_consent` use `path=/` and
 `SameSite=Lax`. They are JavaScript-readable and scoped to the app host. Lax,
@@ -81,6 +82,20 @@ billing reason. It is
 keyed on the Stripe invoice or payment intent, so a redelivered webhook does not
 count twice. Overwatch has no purchase stage in its funnel yet, so these events
 are stored as raw events only.
+
+The host product's copy of a credit-pack purchase, and of the invoice that opened
+a subscription, also names the browser visit the payment was started in. It sends
+the id from the app's visit cookie (`b4m_vid`) as the event's session id, the same
+way the host's `signup_completed` names the visit a signup happened in.
+
+The webhook and the invoice worker have no browser, so the app stores that id in
+its own payment-attempt record (`PaymentAttempt.visitId`) when the payment starts:
+under the payment intent for a credit pack, and under the Checkout session for a
+subscription. It is never sent to Stripe.
+
+Renewals, seat changes and other invoices Stripe raises on its own name no visit.
+The copies sent to credited products never carry a visit, since only the host's
+stream holds the visit it names.
 
 The rest of an individual subscription's lifecycle, and the account's, goes to the
 host product and to the same products in the same way:
@@ -195,6 +210,9 @@ already see the denial.
   warning in analytics logs. Organization subscriptions emit none of them.
 - For one missing from the host product, check the host's own ingest key: its copy
   needs no stored acquisition.
+- For a host `purchase` that names no visit, check that the payment was started
+  from a browser holding the visit cookie and that `PaymentAttempt.visitId` was
+  recorded under its payment intent or Checkout session. Renewals never name one.
 
 ## API-key usage log
 

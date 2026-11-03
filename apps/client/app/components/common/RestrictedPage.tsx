@@ -1,3 +1,4 @@
+import type { IUserDocument } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useEntitlementGate, EntitlementGateState } from '@client/app/hooks/useEntitlementGate';
 import { applyRedirect, buildRedirectTo } from '@client/app/utils/authRedirect';
@@ -6,6 +7,12 @@ import { FC, PropsWithChildren, useEffect } from 'react';
 
 interface RestrictedPageProps {
   requireAdmin?: boolean;
+  /**
+   * Admits the signed-in user only when this returns true. For gates that `requireAdmin` is too
+   * coarse for, such as the admin console admitting delegated admins. No admin/developer bypass:
+   * the predicate decides alone.
+   */
+  requireAccess?: (user: IUserDocument) => boolean;
   /** Grants when the user carries the tag (admins/developers bypass). */
   requireFeatureTag?: string;
   /**
@@ -29,6 +36,7 @@ interface RestrictedPageProps {
 const RestrictedPage: FC<PropsWithChildren<RestrictedPageProps>> = ({
   children,
   requireAdmin = false,
+  requireAccess,
   requireFeatureTag,
   requireEntitlement,
   fallbackPath = '/new',
@@ -54,6 +62,9 @@ const RestrictedPage: FC<PropsWithChildren<RestrictedPageProps>> = ({
   const requirementStates = [tagState, entitlementState].filter(
     (state): state is EntitlementGateState => state !== undefined
   );
+  const userDenied =
+    !!currentUser && ((requireAdmin && !currentUser.isAdmin) || (!!requireAccess && !requireAccess(currentUser)));
+
   const accessState: EntitlementGateState =
     requirementStates.length === 0 || requirementStates.includes('satisfied')
       ? 'satisfied'
@@ -83,7 +94,7 @@ const RestrictedPage: FC<PropsWithChildren<RestrictedPageProps>> = ({
       return;
     }
 
-    if (currentUser && requireAdmin && !currentUser.isAdmin) {
+    if (userDenied) {
       applyRedirect(router.history, fallbackPath, '/new');
       return;
     }
@@ -93,7 +104,7 @@ const RestrictedPage: FC<PropsWithChildren<RestrictedPageProps>> = ({
     if (currentUser && accessState === 'denied') {
       applyRedirect(router.history, fallbackPath, '/new');
     }
-  }, [currentUser, pathname, navigate, router, requireAdmin, accessState, fallbackPath]);
+  }, [currentUser, pathname, navigate, router, userDenied, accessState, fallbackPath]);
 
   // Show login page if on login route
   if (pathname === '/login') {
@@ -105,8 +116,8 @@ const RestrictedPage: FC<PropsWithChildren<RestrictedPageProps>> = ({
     return null;
   }
 
-  // Don't render if admin required but user isn't admin
-  if (requireAdmin && !currentUser.isAdmin) {
+  // Don't render for a user the admin or access requirement turns away
+  if (userDenied) {
     return null;
   }
 
