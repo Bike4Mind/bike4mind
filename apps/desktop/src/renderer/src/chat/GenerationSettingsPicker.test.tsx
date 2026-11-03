@@ -308,6 +308,21 @@ describe('GenerationSettingsPicker', () => {
     expect(onChange).toHaveBeenLastCalledWith({});
   });
 
+  it('keeps the saved value when a field holds text it cannot parse', async () => {
+    await render(LOCAL, { temperature: 0.3 });
+    await open();
+    const temperature = input('temperature');
+    // A browser reports a number input holding "1e" or "-" as bad input with a blank value; jsdom cannot hold one.
+    Object.defineProperty(temperature, 'validity', { configurable: true, value: { badInput: true } });
+    await fill('temperature', '');
+    await blur('temperature');
+    expect(temperature.value).toBe('0.3');
+    await fill('temperature', '');
+    await key(temperature, 'Enter');
+    expect(temperature.value).toBe('0.3');
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it('draws nothing for a model with no numeric controls, or before the catalog loads', async () => {
     await render({ id: 'gpt-5', name: 'GPT-5', controls: { effort: { levels: ['low'], scope: 'request' } } });
     expect(container.textContent).toBe('');

@@ -94,8 +94,14 @@ function FieldRow({
     });
   };
 
-  const commit = () => {
+  const commit = (input: HTMLInputElement) => {
     if (discarded.current) return;
+    // A number input reads text it cannot parse, such as "1e" or "-", as blank, which is not a clear.
+    if (input.validity.badInput) {
+      input.value = shown(sent);
+      setDraft(shown(sent));
+      return;
+    }
     const text = draft.trim();
     if (text === shown(sent)) return;
     if (!text) {
@@ -149,9 +155,9 @@ function FieldRow({
         readOnly={locked !== undefined}
         autoFocus={autoFocus}
         onChange={event => setDraft(event.target.value)}
-        onBlur={locked ? undefined : commit}
+        onBlur={locked ? undefined : event => commit(event.currentTarget)}
         onKeyDown={event => {
-          if (event.key === 'Enter' && !locked) commit();
+          if (event.key === 'Enter' && !locked) commit(event.currentTarget);
           // Escape closes the dialog, and the typed value goes with it even if a blur fires first.
           if (event.key === 'Escape' && !event.nativeEvent.isComposing) discarded.current = true;
         }}
