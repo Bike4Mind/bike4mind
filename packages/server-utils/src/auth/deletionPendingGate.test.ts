@@ -21,6 +21,16 @@ describe('isBlockedByPendingDeletion', () => {
     expect(isBlockedByPendingDeletion(frozen, '/api/users/u1', 'PUT')).toBe(true);
     expect(isBlockedByPendingDeletion(frozen, '/api/users/u2', 'GET')).toBe(true);
   });
+
+  it('lets a pending account download an export it requested, but not start a new one', () => {
+    const download = '/api/users/me/data-export/7d0c1f5e-9a7b-4c1e-8f0a-2b3c4d5e6f70';
+    expect(isBlockedByPendingDeletion(frozen, download, 'GET')).toBe(false);
+    expect(isBlockedByPendingDeletion(frozen, `${download}?x=1`, 'GET')).toBe(false);
+    expect(isBlockedByPendingDeletion(frozen, download, 'DELETE')).toBe(true);
+    expect(isBlockedByPendingDeletion(frozen, `${download}/extra`, 'GET')).toBe(true);
+    expect(isBlockedByPendingDeletion(frozen, '/api/users/me/data-export', 'POST')).toBe(true);
+    expect(isBlockedByPendingDeletion(frozen, '/api/users/me/data-export', 'GET')).toBe(true);
+  });
 });
 
 describe('assertNoPendingDeletion', () => {

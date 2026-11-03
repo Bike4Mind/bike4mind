@@ -19,8 +19,14 @@ export const formatScheduledDeletionDate = (value: Date | string | undefined | n
  * While the signed-in account is scheduled for deletion, renders only the cancel screen in place of
  * the app: the server refuses every other route then (deletionPendingGate), so nothing that fetches
  * app data may mount. Keyed on the user's `deletion` and on any deletion-pending 403.
+ *
+ * `exempt` renders the children anyway, for a page that only calls routes the server gate still
+ * allows (the data export download page).
  */
-const AccountDeletionPendingGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+const AccountDeletionPendingGate: React.FC<{ children: React.ReactNode; exempt?: boolean }> = ({
+  children,
+  exempt = false,
+}) => {
   const deletion = useUser(s => s.currentUser?.deletion);
   const [refusedScheduledFor, setRefusedScheduledFor] = useState<string | null>(null);
   const cancelDeletion = useCancelAccountDeletion();
@@ -28,7 +34,7 @@ const AccountDeletionPendingGate: React.FC<{ children: React.ReactNode }> = ({ c
 
   useEffect(() => registerAccountDeletionInterceptor(api, setRefusedScheduledFor), []);
 
-  if (!deletion && refusedScheduledFor === null) return <>{children}</>;
+  if (exempt || (!deletion && refusedScheduledFor === null)) return <>{children}</>;
 
   const date = formatScheduledDeletionDate(deletion?.scheduledFor ?? refusedScheduledFor);
 

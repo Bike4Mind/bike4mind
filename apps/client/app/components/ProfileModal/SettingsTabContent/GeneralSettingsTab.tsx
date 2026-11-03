@@ -30,6 +30,7 @@ import DocxTemplateSection from './DocxTemplateSection';
 import PromptCacheDefaultCard from './PromptCacheDefaultCard';
 import { DeleteAllKnowledgeFilesConfirm, DeleteAllNotebooksConfirm } from './DeleteAllConfirmModals';
 import { DeleteAccountConfirm } from './DeleteAccountConfirmModal';
+import DownloadAccountDataRow from './DownloadAccountDataRow';
 import WorkspaceVisibilitySection from './WorkspaceVisibilitySection';
 import ExperimentalFeatureToggle from '../ExperimentalFeatureToggle';
 import MfaCard from './MfaCard';
@@ -482,6 +483,7 @@ const GeneralSettingsTab = () => {
       <WorkspaceVisibilitySection />
 
       <SectionContainer title="Danger zone">
+        {!impersonating && <DownloadAccountDataRow />}
         <Box
           data-testid="settings-danger-zone"
           sx={{

@@ -87,6 +87,7 @@ const AuthSuccessPage = lazy(() => import('./routes/auth/success'));
 const LoginPage = lazy(() => import('./routes/login'));
 const RegisterPage = lazy(() => import('./routes/register'));
 const AcceptPoliciesPage = lazy(() => import('./routes/accept-policies'));
+const AccountDataExportPage = lazy(() => import('./routes/account-data-export/$jobId'));
 const VerifyEmailPage = lazy(() => import('./routes/verify-email'));
 const VerifyEmailChangePage = lazy(() => import('./routes/verify-change'));
 const SubscribePage = lazy(() => import('./routes/subscribe'));
@@ -228,11 +229,16 @@ function RootComponent() {
   // NotebookLayout draws its own main beside the sidebar nav, so only pages outside it get one here.
   // display: contents keeps the page a direct child of the providers' grid.
   const inNotebookLayout = useRouterState({ select: s => s.matches.some(m => m.routeId === layoutRoute.id) });
+  // The data export download page stays reachable so an export requested before the deletion can
+  // still be collected during the grace period (the server gate allows its GET).
+  const onDataExportDownload = useRouterState({
+    select: s => s.matches.some(m => m.routeId === accountDataExportRoute.id),
+  });
   // At the root so every route, including those outside ProviderBundle, shows only the cancel
   // screen for a deletion-pending session.
   return (
     <>
-      <AccountDeletionPendingGate>
+      <AccountDeletionPendingGate exempt={onDataExportDownload}>
         {inNotebookLayout ? (
           <Outlet />
         ) : (
@@ -943,6 +949,30 @@ const acceptPoliciesRoute = createRoute({
   },
 });
 
+// Download page linked from the data export email. A rootRoute child without the consent guard, and
+// exempt from AccountDeletionPendingGate in RootComponent, so an account pending deletion can still
+// collect an export it requested (the server's deletionPendingGate allows the GET).
+const accountDataExportRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/account-data-export/$jobId',
+  beforeLoad: async ({ location }) => {
+    await bootstrapSession();
+    if (!useUser.getState().currentUser) {
+      const redirectTo = buildRedirectTo(
+        location.pathname,
+        location.searchStr,
+        location.hash ? `#${location.hash}` : ''
+      );
+      throw redirect({ to: '/login', search: redirectTo ? { redirectTo } : undefined });
+    }
+  },
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <AccountDataExportPage />
+    </Suspense>
+  ),
+});
+
 // Verify email route (replaces /verify-email.tsx)
 const verifyEmailRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -1367,6 +1397,7 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   registerRoute,
   acceptPoliciesRoute,
+  accountDataExportRoute,
   verifyEmailRoute,
   verifyEmailChangeRoute,
   adminEmergencyRoute,

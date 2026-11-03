@@ -40,6 +40,11 @@ describe('DeleteAccountConfirm', () => {
     expect(text).toContain('cancel the deletion');
   });
 
+  it('suggests downloading the data before deleting', () => {
+    wrap(<DeleteAccountConfirm onCancel={vi.fn()} />);
+    expect(screen.getByTestId('delete-account-confirm').textContent).toContain('Download your data');
+  });
+
   it('enables the delete only once the account email is typed', () => {
     wrap(<DeleteAccountConfirm onCancel={vi.fn()} />);
     expect(confirmBtn().disabled).toBe(true);

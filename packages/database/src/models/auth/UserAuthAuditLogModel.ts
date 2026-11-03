@@ -56,7 +56,8 @@ export type UserAuthAuditEvent =
   | 'email_change_failed'
   | 'email_change_cancelled'
   | 'account_deletion_requested'
-  | 'account_deletion_cancelled';
+  | 'account_deletion_cancelled'
+  | 'account_data_export_requested';
 
 export const USER_AUTH_AUDIT_EVENTS: UserAuthAuditEvent[] = [
   'login_success',
@@ -86,6 +87,7 @@ export const USER_AUTH_AUDIT_EVENTS: UserAuthAuditEvent[] = [
   'email_change_cancelled',
   'account_deletion_requested',
   'account_deletion_cancelled',
+  'account_data_export_requested',
 ];
 
 export interface IUserAuthAuditLogDocument extends Document {

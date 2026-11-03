@@ -361,6 +361,14 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "accountDataExportQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "accountDataExportQueueDLQ": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
     "agentContinuationQueue": {
       "type": "sst.aws.Queue"
       "url": string
@@ -430,6 +438,7 @@ declare module "sst" {
       "url": string
     }
     "dlqUrls": {
+      "account-data-export": string
       "agent-continuation": string
       "agent-proactive-message": string
       "deep-agent-wake": string
@@ -674,6 +683,7 @@ declare module "sst" {
       "url": string
     }
     "sourceQueueUrls": {
+      "accountDataExportQueue": string
       "agentContinuationQueue": string
       "agentProactiveMessageQueue": string
       "deepAgentWakeQueue": string

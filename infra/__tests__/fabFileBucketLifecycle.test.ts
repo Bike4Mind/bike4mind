@@ -52,6 +52,16 @@ describe('fab-file bucket notebook export lifecycle', () => {
     expect(rulePrefix).toBe(keyTemplate?.split('${')[0]);
   });
 
+  it('keeps account data exports under the lifecycle prefix, since nothing else deletes them', () => {
+    const keyTemplate = read('packages/server-utils/src/utils/accountDataExport.ts').match(
+      /export const accountDataExportKey = [^`]*`([^`]+)`/
+    )?.[1];
+
+    expect(keyTemplate).toBeDefined();
+    expect(rulePrefix).toBeDefined();
+    expect(keyTemplate?.startsWith(rulePrefix!)).toBe(true);
+  });
+
   it('keeps the lifecycle prefix reserved from durable FabFile keys', () => {
     const reserved = CREATE_FAB_FILE_SOURCE.match(/export const RESERVED_FAB_FILE_KEY_PREFIX = '([^']+)'/)?.[1];
 

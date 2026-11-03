@@ -1,0 +1,413 @@
+import { createWriteStream, promises as fs } from 'fs';
+import os from 'os';
+import path from 'path';
+import { Readable } from 'stream';
+import archiver from 'archiver';
+import { z } from 'zod';
+import {
+  agentRepository,
+  artifactContentRepository,
+  artifactRepository,
+  fabFileRepository,
+  mementoRepository,
+  memoryLedgerRepository,
+  memoryPrincipalKeyRepository,
+  projectRepository,
+  questRepository,
+  sessionRepository,
+  toolRepository,
+  userRepository,
+} from '@bike4mind/database';
+import { isImageServeable, toSafeUser } from '@bike4mind/common';
+import { secureParameters } from '@bike4mind/utils';
+import { notebookExportService } from '@bike4mind/services';
+import type { Logger } from '@bike4mind/observability';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import {
+  ACCOUNT_DATA_EXPORT_TTL_MS,
+  accountDataExportKey,
+  isMissingObjectError,
+} from '@bike4mind/server-utils/utils/accountDataExport';
+import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
+import { createLedgerMemoryStore } from '@bike4mind/server-utils/memory/ledgerMemoryStore';
+import { EmailEvents } from '@server/utils/eventBus';
+import { buildAccountDataExportReadyEmail } from '@server/utils/mailer/accountDataExportEmail';
+
+const { NotebookExportService } = notebookExportService;
+
+const AccountDataExportPayload = z.object({
+  exportJobId: z.uuid(),
+  userId: z.string().min(1),
+});
+
+// Original file bytes past this total are listed in files/index.json but not copied, so the zip
+// stays under a single S3 PutObject (5 GB) and the function's ephemeral storage.
+export const MAX_FILE_BYTES = 3 * 1024 ** 3;
+// Left for the upload and the email once the file copy stops.
+const UPLOAD_RESERVE_MS = 5 * 60 * 1000;
+
+type Archiver = archiver.Archiver;
+type Storage = ReturnType<typeof getFilesStorage>;
+
+/** Zip entry names: no path separators or control characters from user-chosen names, never twice the same. */
+class ZipNames {
+  private used = new Set<string>();
+
+  name(dir: string, label: string | null | undefined, id: string, ext = ''): string {
+    const safe =
+      (label ?? '')
+        .normalize('NFKD')
+        .replace(/[^\w.\- ]+/g, '_')
+        .replace(/^[.\s_]+|[.\s_]+$/g, '')
+        .slice(0, 80) || 'untitled';
+    // Id first so a file keeps its own extension at the end of the name.
+    const base = `${dir}/${id.replace(/[^\w-]+/g, '_')}-${safe}`;
+    let candidate = `${base}${ext}`;
+    for (let n = 2; this.used.has(candidate); n++) candidate = `${dir}/${n}-${base.slice(dir.length + 1)}${ext}`;
+    this.used.add(candidate);
+    return candidate;
+  }
+}
+
+/** Appends one entry and waits for archiver to consume it, so at most one source is buffered at a time. */
+function appendEntry(archive: Archiver, source: string | Buffer | Readable, name: string, store = false) {
+  return new Promise<void>((resolve, reject) => {
+    const onEntry = () => {
+      archive.off('error', onError);
+      resolve();
+    };
+    const onError = (error: Error) => {
+      archive.off('entry', onEntry);
+      reject(error);
+    };
+    archive.once('entry', onEntry);
+    archive.once('error', onError);
+    archive.append(source, { name, store });
+  });
+}
+
+const json = (value: unknown) => JSON.stringify(value, null, 2);
+const iso = (value: Date | string | null | undefined) => (value ? new Date(value).toISOString() : undefined);
+
+async function writeProfile(archive: Archiver, userId: string) {
+  const user = await userRepository.findById(userId);
+  const safe = toSafeUser(user, 'self');
+  await appendEntry(archive, json({ ...safe, createdAt: iso(user?.createdAt) }), 'profile.json');
+}
+
+async function writeNotebooks(archive: Archiver, names: ZipNames, userId: string, logger: Logger) {
+  const service = new NotebookExportService({
+    sessionRepository,
+    chatHistoryRepository: questRepository,
+    knowledgeRepository: fabFileRepository,
+    artifactRepository,
+    artifactContentRepository,
+    toolRepository,
+    agentRepository,
+    fileStorageService: {
+      getFileContent: async (filePath: string) => {
+        try {
+          return await getFilesStorage().getContentAsBuffer(filePath);
+        } catch (error) {
+          logger.warn('Account data export: notebook file content unavailable', { filePath, error });
+          return null;
+        }
+      },
+      uploadFile: async () => {
+        throw new Error('The account data export never stores a notebook export on its own');
+      },
+      getSignedUrl: async () => null,
+    },
+    logger,
+  });
+
+  let count = 0;
+  for await (const notebook of service.buildNotebooks(userId, {
+    includeKnowledge: true,
+    includeArtifacts: true,
+    includeTools: true,
+    includeAgents: true,
+    anonymize: false,
+    includeMetadata: true,
+    includeImages: true,
+    // Knowledge bytes ship once, under files/, instead of base64 inside every notebook that uses them.
+    maxFileSize: 0,
+  })) {
+    await appendEntry(archive, json(notebook), names.name('notebooks', notebook.name, notebook.id, '.json'));
+    count++;
+  }
+  return count;
+}
+
+interface FileIndexEntry {
+  id: string;
+  name: string;
+  mimeType?: string;
+  size?: number;
+  createdAt?: string;
+  path?: string;
+  omitted?: 'moderation' | 'size_limit' | 'time_limit' | 'unavailable';
+}
+
+async function writeFiles(
+  archive: Archiver,
+  names: ZipNames,
+  userId: string,
+  storage: Storage,
+  remainingMs: () => number,
+  logger: Logger
+) {
+  const files = await fabFileRepository.find(
+    { userId, deletedAt: null },
+    { sort: { createdAt: 1 }, fileName: 1, fileSize: 1, mimeType: 1, filePath: 1, createdAt: 1, moderationStatus: 1 }
+  );
+
+  const index: FileIndexEntry[] = [];
+  let copiedBytes = 0;
+  for (const file of files) {
+    const entry: FileIndexEntry = {
+      id: file.id,
+      name: file.fileName,
+      mimeType: file.mimeType,
+      size: file.fileSize,
+      createdAt: iso(file.createdAt),
+    };
+    index.push(entry);
+
+    if (!isImageServeable(file)) {
+      entry.omitted = 'moderation';
+    } else if (!file.filePath) {
+      entry.omitted = 'unavailable';
+    } else if (copiedBytes + (file.fileSize ?? 0) > MAX_FILE_BYTES) {
+      entry.omitted = 'size_limit';
+    } else if (remainingMs() < UPLOAD_RESERVE_MS) {
+      entry.omitted = 'time_limit';
+    } else {
+      try {
+        const body = await storage.getContent(file.filePath);
+        if (!(body instanceof Readable)) throw new Error('Storage returned a non-stream body');
+        const zipPath = names.name('files', file.fileName, file.id);
+        await appendEntry(archive, body, zipPath, true);
+        entry.path = zipPath;
+        copiedBytes += file.fileSize ?? 0;
+      } catch (error) {
+        if (!isMissingObjectError(error)) throw error;
+        logger.warn('Account data export: file object missing', { fileId: file.id });
+        entry.omitted = 'unavailable';
+      }
+    }
+  }
+
+  await appendEntry(archive, json(index), 'files/index.json');
+  return { count: index.length, omitted: index.filter(f => f.omitted).length };
+}
+
+async function writeMemories(archive: Archiver, userId: string) {
+  const legacy = await mementoRepository.find({ userId }, { embedding: 0 });
+  const profile = await createLedgerMemoryStore({
+    ledger: memoryLedgerRepository,
+    keys: createKeyProvider(memoryPrincipalKeyRepository),
+    ownerUserId: userId,
+  }).readProfile({ kind: 'user', id: userId });
+
+  await appendEntry(
+    archive,
+    json({
+      mementos: legacy.map(m => ({
+        id: m.id,
+        type: m.type,
+        tier: m.tier,
+        summary: m.summary,
+        fullContent: m.fullContent,
+        tags: m.tags,
+        sessionId: m.sessionId,
+        createdAt: iso(m.createdAt),
+        updatedAt: iso(m.updatedAt),
+      })),
+      beliefs: (profile?.beliefs ?? [])
+        .filter(b => !b.shredded)
+        .map(b => ({
+          id: b.id,
+          fact: b.fact,
+          evidenceTier: b.evidenceTier,
+          confidence: b.confidence,
+          salience: b.salience,
+        })),
+    }),
+    'memories.json'
+  );
+}
+
+async function writeArtifacts(archive: Archiver, names: ZipNames, userId: string, remainingMs: () => number) {
+  const artifacts = await artifactRepository.find({ userId, deletedAt: null }, { sort: { createdAt: 1 } });
+  for (const artifact of artifacts) {
+    if (remainingMs() < UPLOAD_RESERVE_MS) throw new Error('Account data export run budget exhausted');
+    // Newest content row, the same rule the viewer and the notebook export resolve the body by.
+    const [latest] = await artifactContentRepository.find(
+      { artifactId: artifact.id },
+      { sort: { version: -1 }, limit: 1 }
+    );
+    await appendEntry(
+      archive,
+      json({
+        id: artifact.id,
+        title: artifact.title,
+        type: artifact.type,
+        sessionId: artifact.sessionId,
+        createdAt: iso(artifact.createdAt),
+        updatedAt: iso(artifact.updatedAt),
+        metadata: artifact.metadata,
+        content: latest?.content,
+      }),
+      names.name('artifacts', artifact.title, artifact.id, '.json')
+    );
+  }
+  return artifacts.length;
+}
+
+async function writeAgentsAndProjects(archive: Archiver, userId: string) {
+  const agents = await agentRepository.find({ userId, deletedAt: null });
+  await appendEntry(
+    archive,
+    json(
+      agents.map(a => ({
+        id: a.id,
+        name: a.name,
+        description: a.description,
+        type: a.type,
+        firstMessage: a.firstMessage,
+        triggerWords: a.triggerWords,
+        systemPrompt: a.systemPrompt,
+        allowedTools: a.allowedTools,
+        deniedTools: a.deniedTools,
+        defaultThoroughness: a.defaultThoroughness,
+        isPublic: a.isPublic,
+        createdAt: iso(a.createdAt),
+        updatedAt: iso(a.updatedAt),
+      }))
+    ),
+    'agents.json'
+  );
+
+  const projects = await projectRepository.find({ userId, deletedAt: null });
+  await appendEntry(
+    archive,
+    json(
+      projects.map(p => ({
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        sessionIds: p.sessionIds,
+        fileIds: p.fileIds,
+        createdAt: iso(p.createdAt),
+        updatedAt: iso(p.updatedAt),
+      }))
+    ),
+    'projects.json'
+  );
+}
+
+const readme = (exportedAt: Date) => `Your account data export
+Created: ${exportedAt.toISOString()}
+
+profile.json       Your profile: name, username, email, photo, and when the account was created.
+notebooks/         One JSON file per notebook: its messages, and the knowledge files, artifacts,
+                   tools and agents attached to it. Knowledge file bytes are under files/.
+files/             The original bytes of every file you uploaded. files/index.json lists each file;
+                   an "omitted" value says why a file's bytes are not included (moderation hold,
+                   the ${Math.round(MAX_FILE_BYTES / 1024 ** 3)} GB export limit, time limit, or missing from storage).
+memories.json      Memories saved about you, from both memory systems.
+artifacts/         One JSON file per artifact you own, with its latest content.
+agents.json        Agents you created.
+projects.json      Projects you own.
+
+Deleted items, data shared with you by others, and credentials (passwords, API keys, tokens,
+two-factor secrets and connected-app grants) are not included.
+`;
+
+async function buildArchive(
+  zipPath: string,
+  userId: string,
+  storage: Storage,
+  remainingMs: () => number,
+  logger: Logger
+) {
+  const output = createWriteStream(zipPath);
+  const archive = archiver('zip', { zlib: { level: 6 } });
+  const closed = new Promise<void>((resolve, reject) => {
+    output.on('close', resolve);
+    output.on('error', reject);
+    archive.on('error', reject);
+  });
+  // Observed here so a failure while entries are still being added is not an unhandled rejection.
+  closed.catch(() => undefined);
+  archive.pipe(output);
+
+  const names = new ZipNames();
+  try {
+    await appendEntry(archive, readme(new Date()), 'README.txt');
+    await writeProfile(archive, userId);
+    const notebooks = await writeNotebooks(archive, names, userId, logger);
+    const files = await writeFiles(archive, names, userId, storage, remainingMs, logger);
+    await writeMemories(archive, userId);
+    const artifacts = await writeArtifacts(archive, names, userId, remainingMs);
+    await writeAgentsAndProjects(archive, userId);
+    await archive.finalize();
+    await closed;
+    logger.info('Account data export built', { notebooks, files: files.count, filesOmitted: files.omitted, artifacts });
+  } catch (error) {
+    archive.abort();
+    output.destroy();
+    throw error;
+  }
+}
+
+async function existingExport(storage: Storage, key: string) {
+  try {
+    return await storage.getMetadata(key);
+  } catch (error) {
+    if (isMissingObjectError(error)) return null;
+    throw error;
+  }
+}
+
+export const dispatch = dispatchWithLogger(async (event, context, logger) => {
+  const { exportJobId, userId } = secureParameters(JSON.parse(event.Records[0].body), AccountDataExportPayload);
+  logger.updateMetadata({ exportJobId, userId });
+
+  const user = await userRepository.findById(userId);
+  if (!user?.email) {
+    logger.warn('Account data export skipped: the account is gone or has no email to deliver to');
+    return;
+  }
+
+  const appUrl = process.env.APP_URL?.trim();
+  if (!appUrl) throw new Error('APP_URL is required to link an account data export');
+
+  const storage = getFilesStorage();
+  const key = accountDataExportKey(userId, exportJobId);
+
+  // A redelivery after the upload only re-sends the email.
+  const existing = await existingExport(storage, key);
+  let builtAt = existing?.lastModified ?? null;
+  if (!builtAt) {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'account-data-export-'));
+    try {
+      const zipPath = path.join(dir, 'account-data.zip');
+      await buildArchive(zipPath, userId, storage, () => context.getRemainingTimeInMillis(), logger);
+      await storage.uploadFile(zipPath, key, { ContentType: 'application/zip' });
+      builtAt = new Date();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  } else {
+    logger.info('Account data export already built; re-sending the email');
+  }
+
+  const email = buildAccountDataExportReadyEmail({
+    downloadPageUrl: `${appUrl.replace(/\/+$/, '')}/account-data-export/${exportJobId}`,
+    expiresAt: new Date(builtAt.getTime() + ACCOUNT_DATA_EXPORT_TTL_MS),
+  });
+  await EmailEvents.Send.publish({ to: user.email, subject: email.subject, body: email.body });
+});

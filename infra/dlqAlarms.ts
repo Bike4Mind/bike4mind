@@ -39,6 +39,7 @@ import {
   webhookDeliveryQueueDLQ,
   slackExportQueueDLQ,
   questExportQueueDLQ,
+  accountDataExportQueueDLQ,
   publishThumbnailQueueDLQ,
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueueDLQ,
@@ -343,6 +344,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'QuestExport',
     sourceQueue: 'questExportQueue',
     queue: questExportQueueDLQ,
+  },
+  {
+    label: 'account-data-export',
+    displayName: 'Account Data Export',
+    application: 'AccountDataExport',
+    sourceQueue: 'accountDataExportQueue',
+    queue: accountDataExportQueueDLQ,
   },
   {
     label: 'data-lake-cleanup',

@@ -786,6 +786,35 @@ const questExportQueueSubscription = questExportQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
+// Account Data Export Queue
+// Self-service "download all my data": builds a zip of the user's data under the fabFileBucket
+// exports/ prefix (expired by its lifecycle rule) and emails a link to the app download page.
+const accountDataExportQueueDLQ = new sst.aws.Queue('accountDataExportQueueDLQ', {});
+const accountDataExportQueue = new sst.aws.Queue('accountDataExportQueue', {
+  visibilityTimeout: '16 minutes',
+  dlq: {
+    queue: accountDataExportQueueDLQ.arn,
+    retry: 2,
+  },
+});
+const accountDataExportQueueSubscription = accountDataExportQueue.subscribe(
+  {
+    handler: 'apps/workers/src/queueHandlers/accountDataExport.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '15 minutes',
+    memory: '2048 MB',
+    // The zip is written to /tmp before upload; sized for MAX_FILE_BYTES in accountDataExport.ts.
+    storage: '5 GB',
+    vpc: lambdaVpc,
+    link: [...allSecrets, fabFileBucket, eventBus],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+      APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
 // Publish Thumbnail Queue
 // Owner-only thumbnails of published bundles: one message per artifact version, enqueued by publish
 // finalize, restore and AI revise (enqueuePublishThumbnail in packages/server-utils). Hosted only -
@@ -1767,6 +1796,7 @@ export {
   githubWebhookQueue,
   webhookDeliveryQueue,
   questExportQueue,
+  accountDataExportQueue,
   publishThumbnailQueue,
   dataLakeCleanupQueue,
   dataLakeTaxonomyQueue,
@@ -1805,6 +1835,7 @@ export {
   githubWebhookQueueDLQ,
   webhookDeliveryQueueDLQ,
   questExportQueueDLQ,
+  accountDataExportQueueDLQ,
   publishThumbnailQueueDLQ,
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueueDLQ,
@@ -1845,6 +1876,7 @@ export {
   githubWebhookQueueSubscription,
   webhookDeliveryQueueSubscription,
   questExportQueueSubscription,
+  accountDataExportQueueSubscription,
   publishThumbnailQueueSubscription,
   publishThumbnailRenderer,
   dataLakeCleanupQueueSubscription,

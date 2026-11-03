@@ -1281,6 +1281,12 @@ Plain export artifacts use the requesting user, plan and export job ID as their 
 
 Docker-independent verification: `VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/queueHandlers/questExport.recovery.e2e.test.ts` uses disposable Mongo, actual ZIP serialization and access filtering, with storage, websocket and inference edges controlled. It checks permitted markdown/image bytes, excluded data, upload/notification recovery and organization-summary completion/replay. Unit tests cover enqueue rejection, metadata failures, midnight replay, redrive admission and ACK retention. Current live ElasticMQ/MinIO, selected Kubernetes deployment and external provider execution are not verified by these tests.
 
+### Account data exports
+
+`ACCOUNT_DATA_EXPORT_QUEUE` and `ACCOUNT_DATA_EXPORT_QUEUE_DLQ` enable the self-service "download your data" export offered in Settings. The worker writes a zip under the FabFile bucket's `exports/` prefix, so the same one-day MinIO lifecycle rule that expires notebook exports removes it, and emails the user a link to `APP_URL/account-data-export/<id>`. That page asks the API for a five-minute download link and refuses exports older than 24 hours. Without the queue variables the request endpoint answers 500 and nothing is queued; outgoing email must be configured for the link to arrive.
+
+The consumer uses the same redrive admission, one-at-a-time receive, 900-second visibility renewal and ten-minute cooperative budget as quest exports. The worker stops copying file bytes five minutes before the budget ends and lists the remaining files in `files/index.json` as omitted, so a very large account can receive a partial file set; every other category is always complete. A redelivery after the upload only re-sends the email.
+
 ## Kubernetes evaluation package
 
 For an independent package using the current application and worker entrypoints, see [the Kubernetes self-host guide](selfhost/kubernetes/README.md). It runs on portable Kubernetes, including EKS, with retained database/object/queue volumes and explicit image references. It is an evaluation deployment; complete workflow parity and production readiness remain separate validation work.

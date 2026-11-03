@@ -29,10 +29,10 @@ vi.mock('@client/app/hooks/data/accountDeletion', () => ({
 import AccountDeletionPendingGate from './AccountDeletionPendingGate';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
-const wrap = () =>
+const wrap = (exempt = false) =>
   render(
     <CssVarsProvider theme={appTheme}>
-      <AccountDeletionPendingGate>
+      <AccountDeletionPendingGate exempt={exempt}>
         <div data-testid="app-content" />
       </AccountDeletionPendingGate>
     </CssVarsProvider>
@@ -59,6 +59,13 @@ describe('AccountDeletionPendingGate', () => {
     expect(h.cancel).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByTestId('account-deletion-sign-out-btn'));
     expect(h.logout).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders an exempt page (the data export download) while a deletion is pending', () => {
+    h.currentUser = { id: 'u1', deletion: { scheduledFor: '2026-11-17T12:00:00.000Z' } };
+    wrap(true);
+    expect(screen.getByTestId('app-content')).toBeTruthy();
+    expect(screen.queryByTestId('account-deletion-pending-screen')).toBeNull();
   });
 
   it('switches to the cancel screen when an API answers 403 ACCOUNT_DELETION_PENDING', async () => {

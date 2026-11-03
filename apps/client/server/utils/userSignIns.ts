@@ -78,6 +78,8 @@ export const authEventSummary = (event: UserAuthAuditEvent, method: string | und
       return 'Scheduled the account for deletion';
     case 'account_deletion_cancelled':
       return 'Cancelled the account deletion';
+    case 'account_data_export_requested':
+      return 'Requested a copy of the account data';
   }
 };
 

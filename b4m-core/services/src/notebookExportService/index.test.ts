@@ -902,3 +902,28 @@ describe('notebook export - image bytes', () => {
     expect(payload.notebooks[0].chatHistory[0].images).toEqual(['images/user-1/shot.png']);
   });
 });
+
+describe('buildNotebooks', () => {
+  it('yields each notebook without storing a file', async () => {
+    const { adapters, uploaded } = makeAdapters();
+    const notebooks = [];
+    for await (const notebook of new NotebookExportService(adapters).buildNotebooks('user-1', OPTIONS)) {
+      notebooks.push(notebook);
+    }
+
+    expect(notebooks.map(n => n.id)).toEqual(['session-1']);
+    expect(notebooks[0].chatHistory).toHaveLength(1);
+    expect(uploaded).toHaveLength(0);
+    expect(adapters.sessionRepository.find).toHaveBeenCalledWith({ userId: 'user-1' });
+  });
+
+  it('yields nothing for a user with no notebooks instead of throwing', async () => {
+    const { adapters } = makeAdapters({ sessionRepository: { find: vi.fn().mockResolvedValue([]) } });
+    const notebooks = [];
+    for await (const notebook of new NotebookExportService(adapters).buildNotebooks('user-1', OPTIONS)) {
+      notebooks.push(notebook);
+    }
+
+    expect(notebooks).toEqual([]);
+  });
+});

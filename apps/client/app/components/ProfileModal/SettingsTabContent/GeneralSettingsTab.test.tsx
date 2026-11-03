@@ -55,6 +55,7 @@ vi.mock('../SecurityTab/tabs/SupportAccessActivity', () => ({
 vi.mock('./ApprovedAppsSection', () => ({ default: () => null }));
 vi.mock('./DocxTemplateSection', () => ({ default: () => null }));
 vi.mock('./WorkspaceVisibilitySection', () => ({ default: () => null }));
+vi.mock('./DownloadAccountDataRow', () => ({ default: () => <div data-testid="download-account-data-stub" /> }));
 vi.mock('../ExperimentalFeatureToggle', () => ({ default: () => null }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -153,12 +154,14 @@ describe('GeneralSettingsTab delete account', () => {
   it('shows the delete account button for the account owner', () => {
     renderTab();
     expect(screen.getByTestId('settings-delete-account-btn')).toBeTruthy();
+    expect(screen.getByTestId('download-account-data-stub')).toBeTruthy();
   });
 
   it('hides the delete account button while impersonating', () => {
     useAccessToken.setState({ impersonating: true });
     renderTab();
     expect(screen.queryByTestId('settings-delete-account-btn')).toBeNull();
+    expect(screen.queryByTestId('download-account-data-stub')).toBeNull();
     expect(screen.getByTestId('settings-delete-all-notebooks-btn')).toBeTruthy();
   });
 });

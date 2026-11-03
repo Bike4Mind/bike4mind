@@ -256,6 +256,18 @@ export class NotebookExportService {
     }
   }
 
+  /**
+   * Builds the user's notebooks one at a time without storing anything, so a caller that writes
+   * them elsewhere (the account data export) never holds the whole set in memory. Yields nothing
+   * when the user has no notebooks, rather than throwing NO_NOTEBOOKS.
+   */
+  async *buildNotebooks(userId: string, options: NotebookExportOptions): AsyncGenerator<ExportedNotebook> {
+    const sessions = await this.getSessionsToExport(userId, options);
+    for (const session of sessions) {
+      yield await this.exportSession(session, options, userId);
+    }
+  }
+
   private async getSessionsToExport(userId: string, options: NotebookExportOptions) {
     const query: SessionQuery = { userId };
 
