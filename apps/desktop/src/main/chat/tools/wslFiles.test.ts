@@ -1,9 +1,16 @@
 import { EventEmitter } from 'node:events';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const spawn = vi.hoisted(() => vi.fn());
-vi.mock('node:child_process', () => ({ spawn }));
+vi.mock('node:child_process', async importOriginal => ({
+  ...(await importOriginal<typeof import('node:child_process')>()),
+  spawn,
+}));
+const { spawnSync } = await vi.importActual<typeof import('node:child_process')>('node:child_process');
 vi.mock('../../wsl/wslPath', async importOriginal => {
   const actual = await importOriginal<typeof import('../../wsl/wslPath')>();
   return {
@@ -86,6 +93,33 @@ describe('listing the files of a WSL folder', () => {
   ])('hands back to the caller for %s', async (_name, code) => {
     spawn.mockReturnValueOnce(child('', code));
     expect(await listDistroFiles(FOLDER, IGNORED, 10, new AbortController().signal)).toBeNull();
+  });
+
+  // What wsl.exe hands to Linux, run here directly against a real folder.
+  it.runIf(process.platform === 'linux')('lists what the walk it stands in for lists, and no hidden file', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'b4m-distro-find-'));
+    try {
+      for (const file of ['top.md', 'a/b.ts', 'a/.npmrc', '.env', '.netrc', 'b/node_modules', 'x/.config.json']) {
+        mkdirSync(dirname(join(root, file)), { recursive: true });
+        writeFileSync(join(root, file), 'x');
+      }
+      for (const folder of ['.git/objects', '.hidden', 'node_modules/pkg', 'a/node_modules']) {
+        mkdirSync(join(root, folder), { recursive: true });
+        writeFileSync(join(root, folder, 'inside.ts'), 'x');
+      }
+      symlinkSync(join(root, 'top.md'), join(root, 'link.md'));
+      spawn.mockImplementationOnce((_file: string, args: string[]) => {
+        const [, , , shell, ...rest] = args;
+        return child(spawnSync(shell as string, rest, { encoding: 'utf8' }).stdout);
+      });
+
+      const folder = `\\\\wsl$\\Ubuntu${root.replaceAll('/', '\\')}`;
+      const listing = await listDistroFiles(folder, IGNORED, 100, new AbortController().signal);
+
+      expect(listing?.files.map(file => file.path).sort()).toEqual(['a/b.ts', 'b/node_modules', 'top.md']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('is not used for a folder outside a distro', async () => {

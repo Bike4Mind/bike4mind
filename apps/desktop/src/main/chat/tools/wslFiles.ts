@@ -19,9 +19,9 @@ export interface DistroListing {
 
 /**
  * The regular files under a WSL folder, listed by the distro's own `find` so the share is never
- * walked from Windows, with size and modification time in the same pass. Directories named in
- * `ignored` and hidden ones are not entered. Null when the distro cannot run `find` or the folder
- * is not in one, and the caller lists it itself.
+ * walked from Windows, with size and modification time in the same pass. Like the caller's own walk,
+ * it does not enter directories named in `ignored` or hidden ones, and leaves hidden files out. Null
+ * when the distro cannot run `find` or the folder is not in one, and the caller lists it itself.
  */
 export async function listDistroFiles(
   directory: string,
@@ -46,6 +46,9 @@ export async function listDistroFiles(
     '-o',
     '-type',
     'f',
+    '!',
+    '-name',
+    '.*',
     '-printf',
     '%s %T@ %p\\0',
   ];
