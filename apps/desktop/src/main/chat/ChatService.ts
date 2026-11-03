@@ -114,6 +114,7 @@ import { defaultUserInstructionsRoot } from './project/instructions';
 import { type MemoryStore, memoryStoreFor } from './project/memory';
 import { ProjectContextCache } from './project/projectContext';
 import {
+  appWorktreeRoot,
   hasAppWorkspaceBranch,
   inspectWorktreeRemoval,
   listAppWorktrees,
@@ -204,6 +205,7 @@ import {
 } from './tools/ApprovalGate';
 import { inspectDirectory, inspectDirectoryRequest } from './tools/requestDirectoryTool';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
+import { isWithin } from './tools/paths';
 import { BackgroundWake } from './backgroundWake';
 import type { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
 import { findTool, isOfferedEditTool, offeredMediaToolNames, toolsForRequest, usesApplyPatch } from './tools/registry';
@@ -1401,7 +1403,7 @@ export class ChatService {
 
     const granted = await this.deps.access.list();
     const owned = union([project.workingDirectory, ...project.contextDirectories], own);
-    const agents = await this.agentWorktrees(session.id);
+    const agents = await this.agentWorktrees(session.id, project.directory);
     return { roots: union(union(owned, agents), granted), workingDirectory: project.workingDirectory };
   }
 
@@ -1412,14 +1414,37 @@ export class ChatService {
    * folder whenever the parent is itself a linked worktree. Only a worktree the app cut for the
    * child counts; a child that shares the parent's folder adds nothing. launchSpawned and
    * cleanupDeletedSession bump the parent's scope so a running turn picks a change up.
+   *
+   * The child's stored fields are not trusted on their own, since a child can be re-pointed
+   * (updateProject): it must still be in the parent's repository, and its folder must exist
+   * under that repository's app worktree root once symlinks are resolved.
    */
-  private async agentWorktrees(parentId: string): Promise<string[]> {
+  private async agentWorktrees(parentId: string, parentDirectory: string): Promise<string[]> {
     const sessions = await this.deps.store.list();
-    return sessions.flatMap(entry => {
+    const candidates = sessions.flatMap(entry => {
       const project = entry.project;
       if (entry.origin?.parentSessionId !== parentId || !project?.workspace || !project.workspaceBranch) return [];
-      return project.workingDirectory === project.directory ? [] : [project.workingDirectory];
+      if (project.directory !== parentDirectory || project.workingDirectory === project.directory) return [];
+      return [project.workingDirectory];
     });
+    if (candidates.length === 0) return [];
+    let root: string;
+    try {
+      root = await realpath(appWorktreeRoot(await containerDirectory(parentDirectory)));
+    } catch {
+      return [];
+    }
+    const granted = await Promise.all(
+      candidates.map(async candidate => {
+        try {
+          const real = await realpath(candidate);
+          return real !== root && isWithin(root, real) ? [candidate] : [];
+        } catch {
+          return []; // Gone from disk.
+        }
+      })
+    );
+    return granted.flat();
   }
 
   /**

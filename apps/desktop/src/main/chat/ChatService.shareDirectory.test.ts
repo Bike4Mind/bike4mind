@@ -10,7 +10,8 @@ import { ChatService } from './ChatService';
 import { MessageQueue } from './MessageQueue';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
-import type { WorkspaceResolution } from './project/workspace';
+import { appWorktreeRoot, type WorkspaceResolution } from './project/workspace';
+import { git } from './project/git';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { CapabilityLedger } from './capabilities/CapabilityLedger';
 
@@ -389,12 +390,36 @@ describe('ChatService.shareDirectory', () => {
     expect(h.lastToolResult(1)).toContain(`no longer shared: ${outside}`);
   });
   describe("an agent's worktree", () => {
-    async function agentSession(parentSessionId: string, folder: string) {
+    /** The app's worktree root for `directory`, whose git dir lives in a container beside it as the app lays one out. */
+    async function containerRoot(directory: string, name: string): Promise<string> {
+      await mkdir(directory, { recursive: true });
+      await mkdir(join(base, name), { recursive: true });
+      await git(directory, ['init', '--quiet', `--separate-git-dir=${join(base, name, '.bare')}`]);
+      await git(directory, [
+        '-c',
+        'user.email=t@example.com',
+        '-c',
+        'user.name=T',
+        'commit',
+        '--quiet',
+        '--allow-empty',
+        '-m',
+        'first',
+      ]);
+      return appWorktreeRoot(join(base, name));
+    }
+
+    let worktrees: string;
+    beforeEach(async () => {
+      worktrees = await containerRoot(project, 'container');
+    });
+
+    async function agentSession(parentSessionId: string, folder: string, directory = project) {
       await mkdir(folder, { recursive: true });
       return store.create(undefined, {
         mode: 'code',
         project: {
-          directory: project,
+          directory,
           name: 'project',
           branch: '',
           workspace: true,
@@ -408,7 +433,7 @@ describe('ChatService.shareDirectory', () => {
 
     it('is open to the parent that started it, without asking, until the agent is deleted', async () => {
       const parent = await codeSession();
-      const worktree = join(base, 'worktrees', 'agent');
+      const worktree = join(worktrees, 'agent');
       const agent = await agentSession(parent, worktree);
       await writeFile(join(worktree, 'AGENT.md'), 'agent work', 'utf8');
 
@@ -430,12 +455,49 @@ describe('ChatService.shareDirectory', () => {
     it('is not open to a session that did not start it', async () => {
       const parent = await codeSession();
       const other = await codeSession();
-      const worktree = join(base, 'worktrees', 'someone-else');
+      const worktree = join(worktrees, 'someone-else');
       await agentSession(other, worktree);
 
       expect(await h.service.shareDirectory(parent, worktree)).toMatchObject({ status: 'added' });
       const roots = (await store.get(parent))?.project?.contextDirectories;
       expect(roots).toEqual([worktree]);
+    });
+
+    it('is not open once the agent is re-pointed to another project', async () => {
+      const parent = await codeSession();
+      const agent = await agentSession(parent, join(worktrees, 'moved'));
+      expect(await h.service.shareDirectory(parent, join(worktrees, 'moved'))).toMatchObject({ status: 'already' });
+
+      const elsewhere = join(base, 'elsewhere');
+      const elsewhereWorktree = join(await containerRoot(elsewhere, 'elsewhere-container'), 'agent');
+      await mkdir(elsewhereWorktree, { recursive: true });
+      expect(await h.service.updateProject({ sessionId: agent.id, directory: elsewhere })).toMatchObject({ ok: true });
+      // What the agent's next turn records once it cuts its worktree in the new repository.
+      await store.updateProjectWorkspace(agent.id, {
+        workspaceBranch: 'b4m/agent',
+        workingDirectory: elsewhereWorktree,
+      });
+      const moved = (await store.get(agent.id))?.project;
+      expect(moved).toMatchObject({ directory: elsewhere, workingDirectory: elsewhereWorktree });
+
+      expect(await h.service.shareDirectory(parent, elsewhereWorktree)).toMatchObject({ status: 'added' });
+    });
+
+    it('is not open when its folder is not under the app worktree root', async () => {
+      const parent = await codeSession();
+      await agentSession(parent, outside);
+
+      expect(await h.service.shareDirectory(parent, outside)).toMatchObject({ status: 'added' });
+    });
+
+    it('is not open through a symlink under the root that leads outside it', async () => {
+      const parent = await codeSession();
+      const link = join(worktrees, 'link');
+      await mkdir(worktrees, { recursive: true });
+      await symlink(outside, link);
+      await agentSession(parent, link);
+
+      expect(await h.service.shareDirectory(parent, outside)).toMatchObject({ status: 'added' });
     });
   });
 });
