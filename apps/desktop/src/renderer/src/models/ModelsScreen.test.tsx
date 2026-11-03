@@ -2391,6 +2391,46 @@ describe('ModelsScreen catalog refresh', () => {
     expect(reload).toHaveBeenCalledTimes(2);
   });
 
+  it('does not let a rejected reload escape the refresh button, and stops showing busy', async () => {
+    const reload = vi.fn(async () => {
+      throw new Error('ipc down');
+    });
+    await mount(undefined, 'installed', undefined, undefined, { models: [], loading: false, reload });
+    reload.mockClear();
+    // vitest fails the run on an unhandled rejection, so reaching the asserts is the check.
+    act(() => q('models-refresh-btn')?.click());
+    await flush();
+    await flush();
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(busy()).toBe(false);
+  });
+
+  describe('on an OpenAI-compatible server', () => {
+    const compatible = server('compat', 'compat box', { kind: 'openai-compatible' });
+    const noFlags = { tools: false, vision: false, thinking: false, embeddings: false, completion: false };
+
+    const reloadsFor = async (models: ReturnType<typeof installedModel>[]) => {
+      bridge.servers = [THIS_COMPUTER, compatible];
+      bridge.remote.compat = { status: remoteStatus(compatible), installed: { ok: true, models } };
+      const reload = vi.fn(async () => {});
+      await mount(undefined, 'installed', undefined, undefined, { models: [entry('other')], loading: false, reload });
+      await click(q('models-server-select'));
+      await click(q('models-server-option-compat'));
+      const calls = reload.mock.calls.length;
+      await click(q('models-server-select'));
+      await click(q('models-server-option-local'));
+      return calls;
+    };
+
+    it('reloads for a missing model that carries no completion flag', async () => {
+      expect(await reloadsFor([{ ...installedModel('plain'), capabilities: noFlags }])).toBe(1);
+    });
+
+    it('does not reload for a missing embeddings-only model', async () => {
+      expect(await reloadsFor([{ ...installedModel('embed'), capabilities: { ...noFlags, embeddings: true } }])).toBe(0);
+    });
+  });
+
   it('does not reload when the catalog lists every chat model', async () => {
     const reload = vi.fn(async () => {});
     bridge.installed = { ok: true, models: [installedModel('qwen'), installedModel('embed', { embeddings: true })] };

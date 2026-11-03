@@ -212,6 +212,30 @@ describe('useModelCatalog when a model finishes installing', () => {
     expect(catalog.models).toEqual([model]);
   });
 
+  it('reloads when the window becomes visible once the last load is older than the throttle', async () => {
+    await mount(false);
+    await tick(FOCUS_RELOAD_MIN_MS);
+    listModels.mockClear();
+    listModels.mockResolvedValue({ models: [model] });
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(listModels).toHaveBeenCalledTimes(1);
+    expect(listModels).toHaveBeenCalledWith('local');
+    expect(catalog.models).toEqual([model]);
+  });
+
+  it('reloads once when focus and visibilitychange arrive together on one return', async () => {
+    await mount(false);
+    await tick(FOCUS_RELOAD_MIN_MS);
+    listModels.mockClear();
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(listModels).toHaveBeenCalledTimes(1);
+  });
+
   it('does not reload on focus while the window is hidden or after unmount', async () => {
     await mount(false);
     await tick(FOCUS_RELOAD_MIN_MS);
