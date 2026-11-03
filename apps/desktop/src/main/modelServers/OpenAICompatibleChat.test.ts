@@ -324,7 +324,7 @@ describe('OpenAICompatibleChat generation settings', () => {
 
   it('turns thinking off through the chat template, and gives gpt-oss its effort level instead', async () => {
     const { fetch, bodies } = server();
-    const client = chat(fetch);
+    const client = chat(fetch, 'vllm');
     await collect(client, ask('qwen3-8b', { thinking: false }));
     await collect(client, ask('gpt-oss-20b', { thinking: false, reasoningEffort: 'high' }));
     await collect(client, ask('gpt-oss-20b', { reasoningEffort: 'xhigh' }));
@@ -332,6 +332,67 @@ describe('OpenAICompatibleChat generation settings', () => {
     expect(bodies[1]).toMatchObject({ reasoning_effort: 'high' });
     expect(bodies[1]).not.toHaveProperty('chat_template_kwargs');
     expect(bodies[2]).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('sends enable_thinking only for thinking switched off, never for on or unset', async () => {
+    const { fetch, bodies } = server();
+    const client = chat(fetch);
+    await collect(client, ask('qwen3-8b', { thinking: true }));
+    await collect(client, ask('qwen3-8b'));
+    expect(bodies[0]).not.toHaveProperty('chat_template_kwargs');
+    expect(bodies[1]).not.toHaveProperty('chat_template_kwargs');
+  });
+
+  it('gives llama-server the gpt-oss level in the template kwargs too, which older builds read', async () => {
+    const { fetch, bodies } = server();
+    await collect(chat(fetch), ask('gpt-oss-20b', { reasoningEffort: 'low' }));
+    expect(bodies[0]).toMatchObject({ reasoning_effort: 'low', chat_template_kwargs: { reasoning_effort: 'low' } });
+  });
+
+  it('finds gpt-oss behind a served name through a name that shares its weights', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetch: FetchLike = async (url, init) => {
+      if (String(url).endsWith('/v1/models'))
+        return new Response(
+          JSON.stringify({
+            object: 'list',
+            data: [
+              { id: 'house-model', object: 'model', root: '/weights/oss' },
+              { id: 'openai/gpt-oss-20b', object: 'model', root: '/weights/oss' },
+            ],
+          })
+        );
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return sse([delta({ content: 'ok' }, 'stop'), '[DONE]']);
+    };
+    const client = chat(fetch, 'vllm');
+    const [listed] = await client.listModels();
+    expect(listed).toMatchObject({ name: 'house-model', supportsReasoningEffort: true });
+    await collect(client, ask('house-model', { reasoningEffort: 'high' }));
+    expect(bodies[0]).toMatchObject({ reasoning_effort: 'high' });
+  });
+
+  it('lists a thinking switch learned on an earlier run, and saves one learned now', async () => {
+    const { fetch } = server(['qwen3-8b', 'phi-4'], true);
+    const add = vi.fn(async () => undefined);
+    const client = new OpenAICompatibleChat({
+      runtimeId: 'srv-abc123',
+      baseUrl: BASE,
+      label: 'llama box',
+      product: 'vllm',
+      fetch,
+      hasCredentials: () => false,
+      redact: text => text,
+      learnedThinkers: { read: async () => ['qwen3-8b'], add },
+    });
+    expect((await client.listModels()).map(model => [model.name, model.thinkingToggle])).toEqual([
+      ['qwen3-8b', true],
+      ['phi-4', undefined],
+    ]);
+    await collect(client, ask('qwen3-8b'));
+    expect(add).not.toHaveBeenCalled();
+    await collect(client, ask('phi-4'));
+    expect(add).toHaveBeenCalledWith('phi-4');
   });
 
   it('lists a thinking switch for a model once it has replied with reasoning, and effort levels for gpt-oss', async () => {
@@ -348,8 +409,10 @@ describe('OpenAICompatibleChat generation settings', () => {
 
     await collect(client, ask('qwen3-8b'));
     await collect(client, ask('qwen3-8b'));
-    expect(changed).toHaveBeenCalledTimes(1);
+    await collect(client, ask('gpt-oss-20b'));
+    expect(changed).toHaveBeenCalledTimes(2);
     const after = await client.listModels();
+    // gpt-oss reasons on every reply but cannot stop, so it keeps its levels and gets no switch.
     expect(after.map(model => [model.name, model.thinkingToggle])).toEqual([
       ['qwen3-8b', true],
       ['gpt-oss-20b', undefined],

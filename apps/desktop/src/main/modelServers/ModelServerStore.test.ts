@@ -286,6 +286,30 @@ describe('ModelServerStore', () => {
     expect(await reopened.localSpecs()).toBeNull();
   });
 
+  it('remembers the models a server found thinking across a restart, and forgets them with the server', async () => {
+    const file = memoryFile();
+    const store = new ModelServerStore(cipher(), file, logger);
+    const record = await store.add(base, { type: 'none' });
+    await store.addThinker(record.id, 'qwen3-8b');
+    const written = file.contents;
+    await store.addThinker(record.id, 'qwen3-8b');
+    await store.addThinker('gone', 'qwen3-8b');
+    expect(file.contents).toBe(written);
+
+    const reopened = new ModelServerStore(cipher(), file, logger);
+    expect(await reopened.thinkers(record.id)).toEqual(['qwen3-8b']);
+    await reopened.remove(record.id);
+    expect(await reopened.thinkers(record.id)).toEqual([]);
+    expect(JSON.parse(file.contents!)).not.toHaveProperty('thinkers');
+  });
+
+  it('reads only string model names from a stored thinkers map', async () => {
+    const file = memoryFile(JSON.stringify({ version: 1, servers: [], thinkers: { a: ['qwen3', 7, null], b: 'x' } }));
+    const store = new ModelServerStore(cipher(), file, logger);
+    expect(await store.thinkers('a')).toEqual(['qwen3']);
+    expect(await store.thinkers('b')).toEqual([]);
+  });
+
   it(`stops at ${MAX_MODEL_SERVERS} servers`, async () => {
     const store = new ModelServerStore(cipher(), memoryFile(), logger);
     for (let index = 0; index < MAX_MODEL_SERVERS; index++) {

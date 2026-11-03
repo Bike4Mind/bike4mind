@@ -1568,6 +1568,40 @@ describe('ModelServerRegistry', () => {
     });
   });
 
+  it('still lists the thinking switch a model earned before Desktop restarted', async () => {
+    const fetchFor = (): FetchLike => async input => {
+      if (new URL(String(input)).pathname === '/v1/models')
+        return json({ object: 'list', data: [{ id: 'qwen3-8b', object: 'model' }] });
+      const frames = [{ choices: [{ delta: { reasoning_content: 'hmm' }, finish_reason: 'stop' }] }];
+      return new Response(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join('') + 'data: [DONE]\n\n');
+    };
+    const file = memoryFile();
+    const quiet = { debug: () => undefined, warn: () => undefined };
+    const open = () =>
+      new ModelServerRegistry({
+        store: new ModelServerStore(cipher, file, quiet),
+        logger: quiet,
+        fetchFor,
+        localFetch: async () => json({ version: '0.12.0' }),
+        resolve: async () => ['93.184.216.34'],
+      });
+    const first = open();
+    await first.add({
+      address: 'https://gpu.example.test',
+      credential: none,
+      name: 'gpu',
+      kind: 'openai-compatible',
+      access: 'chat',
+      acceptOpen: true,
+    });
+    const [model] = await first.models();
+    expect(model?.thinkingToggle).toBeUndefined();
+    await first.chatFor(model!.id.split(':')[1]!)!.stream({ model: model!.id, messages: [] }, () => undefined);
+
+    const [relaunched] = await open().models();
+    expect(relaunched).toMatchObject({ id: model!.id, thinkingToggle: true });
+  });
+
   describe('credentials on a saved http host name that has not been checked yet', () => {
     const saved = {
       name: 'gpu box',

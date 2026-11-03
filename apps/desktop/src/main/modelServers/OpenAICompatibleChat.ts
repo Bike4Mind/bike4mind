@@ -36,6 +36,8 @@ export interface OpenAICompatibleServer {
   redact: (text: string, response: Response) => string;
   /** Tools went off or came back on, or a model first replied with reasoning, so the model list changed. */
   toolsChanged?: () => void;
+  /** The models that replied with reasoning on an earlier run; see ModelServerStore.thinkers. */
+  learnedThinkers?: { read(): Promise<readonly string[]>; add(model: string): Promise<void> };
 }
 
 const DESKTOP_HINTS: HintApp = {
@@ -159,9 +161,12 @@ async function overflowsContext(response: Response): Promise<boolean> {
   return /maximum context length|max_tokens|max_completion_tokens/i.test(await response.clone().text());
 }
 
-/** gpt-oss is the template family these servers pass `reasoning_effort` to; nothing else names its levels. */
-function takesReasoningEffort(model: string): boolean {
-  return /gpt-oss/i.test(model);
+/**
+ * gpt-oss is the template family these servers pass `reasoning_effort` to; nothing else names its
+ * levels. A served name can hide it, so its base model and the names sharing its weights count too.
+ */
+function takesReasoningEffort(model: { name: string; baseModel?: string; aliases?: readonly string[] }): boolean {
+  return [model.name, model.baseModel, ...(model.aliases ?? [])].some(name => name && /gpt-oss/i.test(name));
 }
 
 /**
@@ -215,6 +220,9 @@ export class OpenAICompatibleChat implements LocalChat {
   private listed: string[] = [];
   /** Models a reply came back from with reasoning split out, which is what earns them a thinking switch. */
   private readonly thinkers = new Set<string>();
+  private recalled: Promise<void> | null = null;
+  /** Served names, aliases included, of the gpt-oss models in the last listing. */
+  private readonly effortModels = new Set<string>();
 
   constructor(private readonly server: OpenAICompatibleServer) {
     this.runtime = new OpenAICompatibleRuntime({
@@ -228,17 +236,20 @@ export class OpenAICompatibleChat implements LocalChat {
 
   /** Rejects when the server cannot be listed, so the caller can mark it down. */
   async listModels(): Promise<ChatModelOption[]> {
-    const models = await this.runtime.list();
+    const [models] = await Promise.all([this.runtime.list(), this.recallThinkers()]);
     const before = this.smallKey();
     this.learnContexts(models);
     const chat = models.filter(model => isChatCapable(model.capabilities, 'openai-compatible'));
     this.listed = chat.map(model => model.name);
     this.smallChanged(before);
+    this.effortModels.clear();
     return chat.map(model => {
       const thinks = this.thinkers.has(model.name);
+      const effortLevels = takesReasoningEffort(model);
+      if (effortLevels) for (const name of [model.name, ...(model.aliases ?? [])]) this.effortModels.add(name);
       const controls = openAICompatibleControls(this.server.product, {
         ...(this.contexts.has(model.name) ? { contextWindow: this.contexts.get(model.name) } : {}),
-        effortLevels: takesReasoningEffort(model.name),
+        effortLevels,
         thinks,
       });
       return {
@@ -384,16 +395,29 @@ export class OpenAICompatibleChat implements LocalChat {
    * that think take Off as `chat_template_kwargs.enable_thinking`. Thinking left on sends nothing.
    */
   private thinkingFields(model: string, request: CompletionRequest): Record<string, unknown> {
-    if (takesReasoningEffort(model)) {
+    if (this.effortModels.has(model) || takesReasoningEffort({ name: model })) {
       const level = request.reasoningEffort;
-      return level && OPENAI_COMPATIBLE_EFFORT_LEVELS.includes(level) ? { reasoning_effort: level } : {};
+      if (!level || !OPENAI_COMPATIBLE_EFFORT_LEVELS.includes(level)) return {};
+      // llama-server builds before mid-2026 read the level only from the template kwargs.
+      return this.server.product === 'llama-server'
+        ? { reasoning_effort: level, chat_template_kwargs: { reasoning_effort: level } }
+        : { reasoning_effort: level };
     }
     return request.thinking === false ? { chat_template_kwargs: { enable_thinking: false } } : {};
+  }
+
+  private recallThinkers(): Promise<void> {
+    this.recalled ??= (this.server.learnedThinkers?.read() ?? Promise.resolve([])).then(
+      names => names.forEach(name => this.thinkers.add(name)),
+      () => undefined
+    );
+    return this.recalled;
   }
 
   private learnThinking(model: string): void {
     if (this.thinkers.has(model)) return;
     this.thinkers.add(model);
+    void this.server.learnedThinkers?.add(model).catch(() => undefined);
     this.server.toolsChanged?.();
   }
 
