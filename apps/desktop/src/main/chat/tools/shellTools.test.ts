@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatMoveToBackgroundResult } from '@shared/chat';
 import { BackgroundProcessRegistry } from './BackgroundProcessRegistry';
 import { ForegroundCommandRegistry } from './ForegroundCommandRegistry';
+import { UNNAMED_DISTRO } from './shellScan';
 import { bashExecute, bashExecuteRunOptions, doubleWrapRefusal, mainCheckoutOf, shellApproval } from './shellTools';
 import type { ToolContext } from './types';
 import { resolveUserPath } from './userPath';
@@ -272,6 +273,13 @@ describe('bash_execute', () => {
     const prompt = await bashExecute.approval?.({ command, cwd: root }, context);
     expect(prompt?.askInAuto).toBe(true);
     expect(prompt?.detail).toContain('Can send data off this computer');
+  });
+
+  it('asks even in auto mode before wsl runs a program in a distro the command does not name', async () => {
+    const prompt = await bashExecute.approval?.({ command: 'wsl.exe -e cat notes.txt', cwd: root }, context);
+    expect(prompt?.askInAuto).toBe(true);
+    expect(prompt?.detail).toContain('Runs wsl in a distro it does not name');
+    expect(prompt?.always?.ungranted).toEqual([UNNAMED_DISTRO]);
   });
 
   it('leaves a plain download to the mode', async () => {

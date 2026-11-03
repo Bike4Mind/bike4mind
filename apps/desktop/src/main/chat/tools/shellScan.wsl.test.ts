@@ -60,7 +60,7 @@ vi.doMock('../../wsl/wslPath', async () => {
   };
 });
 
-const { scanShell } = await import('./shellScan');
+const { scanShell, UNNAMED_DISTRO } = await import('./shellScan');
 const { shareName } = await import('../../wsl/wslPath');
 
 const OTHER = '\\\\wsl.localhost\\Debian\\etc\\hosts';
@@ -141,6 +141,47 @@ describe('a path in a distro no root is in', () => {
 
     expect(scan?.paths).toContain(`${root}\\C\u{f03a}\\out`);
     expect(scan?.directories).toEqual([]);
+  });
+});
+
+describe('a command wsl runs in a distro', () => {
+  const ubuntu = '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo';
+
+  it.each([
+    ['C:\\repo', 'wsl.exe -d Debian cat notes.txt', ['\\\\wsl.localhost\\Debian\\']],
+    ['C:\\repo', 'wsl.exe --distribution Debian -e cat notes.txt', ['\\\\wsl.localhost\\Debian\\']],
+    ['C:\\repo', 'wsl --distribution=Debian ls', ['\\\\wsl.localhost\\Debian\\']],
+    ['C:\\repo', 'timeout 5 WSL.EXE -u root -d Debian ls', ['\\\\wsl.localhost\\Debian\\']],
+    [ubuntu, 'wsl.exe -d Debian cat /etc/hosts', ['\\\\wsl.localhost\\Debian\\']],
+    [ubuntu, 'wsl.exe -d ubuntu -e ls', []],
+    [ubuntu, 'wsl.exe -l -v', []],
+    ['C:\\repo', 'wsl.exe --status', []],
+  ])('from %s, %s reaches %j', async (root, command, reached) => {
+    expect((await scanShell(command, root, [root]))?.ungranted).toEqual(reached);
+  });
+
+  it.each([
+    'wsl.exe ls',
+    'wsl.exe -e cat /etc/hosts',
+    'wsl.exe -d Ubuntu --system ls',
+    'wsl.exe --distribution-id {0a1b} ls',
+    'wsl.exe -d "$DISTRO" ls',
+    'echo ls | wsl.exe',
+  ])('takes %s as reaching a distro it does not name', async command => {
+    expect((await scanShell(command, ubuntu, [ubuntu]))?.ungranted).toEqual([UNNAMED_DISTRO]);
+  });
+
+  it('asks before running it, in auto mode too, and names the distro', async () => {
+    const { shellApproval } = await import('./shellTools');
+    const context = { roots: ['C:\\repo'], signal: new AbortController().signal, protectedPaths: [] };
+
+    const prompt = await shellApproval('bash_execute', { command: 'wsl.exe -d Debian -e cat notes.txt' }, context);
+
+    expect(prompt.askInAuto).toBe(true);
+    expect(prompt.detail).toContain(
+      'Reaches \\\\wsl.localhost\\Debian\\, in a WSL distro this project has no folder in.'
+    );
+    expect(prompt.always?.ungranted).toEqual(['\\\\wsl.localhost\\Debian\\']);
   });
 });
 

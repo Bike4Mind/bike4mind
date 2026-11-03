@@ -443,6 +443,14 @@ const WRAPPERS: ReadonlyMap<string, Wrapper> = new Map([
       ],
     },
   ],
+  [
+    'wsl',
+    {
+      values: 'du',
+      long: ['cd', 'distribution', 'distribution-id', 'shell-type', 'user'],
+      flags: ['exec', 'system'],
+    },
+  ],
 ]);
 
 const NO_OPTIONS: Wrapper = { values: '' };
@@ -548,22 +556,73 @@ export interface SplitString {
   command: string;
 }
 
+/**
+ * The value given to the wrapper option at `tokens[at]`, as written, and the index past it: after its `=`, after
+ * `letter` in a short cluster, or the next word.
+ */
+function optionArgument(
+  tokens: readonly string[],
+  at: number,
+  letter: string
+): { value: string | undefined; next: number } {
+  const word = unquote(tokens[at]);
+  const glued = word.startsWith('--')
+    ? word.includes('=')
+      ? word.slice(word.indexOf('=') + 1)
+      : undefined
+    : word.slice(word.indexOf(letter) + 1) || undefined;
+  return glued === undefined ? { value: tokens[at + 1], next: at + 2 } : { value: glued, next: at + 1 };
+}
+
+/** wsl's options that report on WSL itself instead of starting a distro. */
+const WSL_REPORTS = new Set(['-l', '--list', '-v', '--version', '--status', '--help']);
+
+/** What `ungranted` holds for a wsl run in a distro the command does not name: the default one, or one by id. */
+export const UNNAMED_DISTRO = 'a WSL distro the command does not name';
+
+interface WslRun {
+  /** The index of the `wsl` word, and the index past its own options. */
+  at: number;
+  end: number;
+  /** The distro `-d` names; undefined for the default distro or one the text does not name. */
+  distro: string | undefined;
+  /** Whether `-e` hands the words after its options to a program, not to the distro's shell as a command line. */
+  exec: boolean;
+}
+
+/** Each `wsl` in a run of leading wrappers that starts a distro. */
+function wslRuns(tokens: readonly string[]): WslRun[] {
+  const wsl = WRAPPERS.get('wsl') ?? NO_OPTIONS;
+  const runs: WslRun[] = [];
+  for (let at = 0; at < tokens.length && isWrapper(tokens[at]); at = pastWrapper(tokens, at)) {
+    if (programName(unquote(tokens[at])) !== 'wsl') continue;
+    const { options, end } = wrapperWords('wsl', tokens, at + 1);
+    if (WSL_REPORTS.has(unquote(tokens[options[0]] ?? ''))) break;
+    let distro: string | undefined;
+    let exec = false;
+    for (const index of options) {
+      const word = unquote(tokens[index]);
+      const name = word.startsWith('--') ? longOptionName(wsl, word.slice(2).split('=')[0]) : word.slice(1, 2);
+      if (name === 'e' || name === 'exec') exec = true;
+      if (name === 'distribution-id' || name === 'system') distro = undefined;
+      if (name !== 'd' && name !== 'distribution') continue;
+      const { value } = optionArgument(tokens, index, 'd');
+      distro = value === undefined || isDynamic(value) ? undefined : unquote(value);
+    }
+    runs.push({ at, end, distro, exec });
+  }
+  return runs;
+}
+
 /** The `env -S 'bash run.sh'` in a run of leading wrappers, which runs its value as a command line; null when none. */
 export function splitString(tokens: readonly string[]): SplitString | null {
   for (let at = 0; at < tokens.length && isWrapper(tokens[at]); at = pastWrapper(tokens, at)) {
     if (programName(unquote(tokens[at])) !== 'env') continue;
     const option = wrapperWords('env', tokens, at + 1).options.find(index => splitsString(unquote(tokens[index])));
     if (option === undefined) continue;
-    const word = unquote(tokens[option]);
-    const glued = word.startsWith('--')
-      ? word.includes('=')
-        ? word.slice(word.indexOf('=') + 1)
-        : undefined
-      : word.slice(word.indexOf('S') + 1) || undefined;
-    const value = glued ?? unquote(tokens[option + 1] ?? '');
-    const next = option + (glued === undefined ? 2 : 1);
+    const { value, next } = optionArgument(tokens, option, 'S');
     // env reads options and assignments in the value too, as `env -S '-i FOO=1 make'`.
-    return { env: at, option, command: [tokens[at], value, ...tokens.slice(next)].join(' ') };
+    return { env: at, option, command: [tokens[at], unquote(value ?? ''), ...tokens.slice(next)].join(' ') };
   }
   return null;
 }
@@ -858,6 +917,8 @@ export function opaqueForm(tokens: readonly string[]): string | null {
   const normalised = tokens.map(unquote);
   const split = splitString(normalised);
   if (split) return tokens.slice(0, split.option + 1).join(' ');
+  const wslShell = wslRuns(normalised).find(run => !run.exec);
+  if (wslShell) return tokens.slice(0, wslShell.end).join(' ');
   const start = wrappedStart(normalised);
   const executable = normalised[start];
   if (executable === undefined) return null;
@@ -949,6 +1010,13 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
     const option = tokens[split.option];
     const shown = option.startsWith('--') ? option.split('=')[0] : option.slice(0, option.indexOf('S') + 1);
     return `${basename(tokens[split.env])} ${shown}`;
+  }
+  // Without `-e`, wsl hands the words after its options to the distro's shell as one command line.
+  const wslShell = wslRuns(tokens).find(run => !run.exec);
+  if (wslShell) {
+    const wsl = basename(tokens[wslShell.at]);
+    if (wslShell.end < tokens.length) return `${wsl} running its arguments as a command`;
+    return stdin ? `${wsl} reading a script from stdin` : null;
   }
   const start = wrappedStart(tokens);
   if (start >= tokens.length) return null;
@@ -1673,6 +1741,10 @@ export async function scanShell(
         outbound.add(reason);
         const computed = tokens.some(isDynamic);
         sends.push({ reason, target: assigns || computed ? null : repositoryWrite(tokens.map(unquote), state.cwd) });
+      }
+      for (const { distro } of wslRuns(tokens)) {
+        const root = distro === undefined ? UNNAMED_DISTRO : wslUncPath({ host: 'wsl.localhost', distro }, '/');
+        if (distro === undefined || inUngrantedDistro(root, allowed)) ungranted.add(root);
       }
       for (const file of ghReadFiles(tokens.map(unquote))) await check(file, state.cwd);
       if (reason || assigns || arithmetic || !containedCommand(tokens)) contained = false;

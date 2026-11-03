@@ -6,7 +6,7 @@ import type { BackgroundProcessInfo } from '@shared/chat';
 import type { OutputStream } from './outputBuffer';
 import { isWithin, realpathNearest, resolveWithinRoots } from './paths';
 import { writesOwnRepository } from './ownRepository';
-import { inUngrantedDistro, scanShell } from './shellScan';
+import { inUngrantedDistro, scanShell, UNNAMED_DISTRO } from './shellScan';
 import {
   expectShellRun,
   gitRunsConfiguredProgram,
@@ -438,6 +438,7 @@ export async function shellApproval(
   const script = await sessionScriptRun(command, startDirectory, context.sessionId).catch(() => null);
   const gitProgram = gitRunsConfiguredProgram(scan.commands);
   const unreachable = [...new Set([...ungranted, ...scan.ungranted])];
+  const named = unreachable.filter(place => place !== UNNAMED_DISTRO);
   const reasons = [
     ...(scan.envFiles.length > 0 ? [`Reads ${scan.envFiles.join(', ')}, which usually holds secrets.`] : []),
     ...(scan.outbound.length > 0 ? [`Can send data off this computer (${scan.outbound.join(', ')}).`] : []),
@@ -450,8 +451,11 @@ export async function shellApproval(
       ? ['Runs git in a repository whose .git or .husky folder was changed in this session.']
       : []),
     ...(gitProgram ? [`Sets ${gitProgram}, which makes git run a program.`] : []),
-    ...(unreachable.length > 0
-      ? [`Reaches ${unreachable.map(shownPath).join(', ')}, in a WSL distro this project has no folder in.`]
+    ...(named.length > 0
+      ? [`Reaches ${named.map(shownPath).join(', ')}, in a WSL distro this project has no folder in.`]
+      : []),
+    ...(unreachable.includes(UNNAMED_DISTRO)
+      ? ['Runs wsl in a distro it does not name, which may be one this project has no folder in.']
       : []),
   ];
   // A push or gh write to the folder's own origin still says so on the card, but does not stop
