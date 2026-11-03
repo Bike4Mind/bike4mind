@@ -306,6 +306,7 @@ const AssistantTurn = memo(function AssistantTurn({
   live = false,
   skipRounds = 0,
   rail = false,
+  lastTurn = false,
   liveTurn = null,
 }: {
   message: ChatMessage;
@@ -322,10 +323,12 @@ const AssistantTurn = memo(function AssistantTurn({
   skipRounds?: number;
   /** Draw the stats rail beside the reply rather than the stats in its hover footer. */
   rail?: boolean;
+  /** The thread's last message, which nothing follows for its rail to run into; see railReserve. */
+  lastTurn?: boolean;
   /** The turn in flight, while this is the reply it is writing; the rail's live figures. */
   liveTurn?: TurnProgress | null;
 }) {
-  const reserve = useRailReserve(message, liveTurn, rail);
+  const reserve = useRailReserve(message, liveTurn, rail, lastTurn);
   const toolCalls = message.toolCalls ?? [];
   const rounds = roundsOf(message);
   // Hidden from the front of the WHOLE list rather than drawn from a slice of it, so a round
@@ -798,6 +801,7 @@ export function MessageThread({
         {...(message.id === liveReplyId ? { liveTurn } : {})}
         {...(skipRounds > 0 ? { skipRounds } : {})}
         {...(statsRail ? { rail: true } : {})}
+        {...(statsRail && index === messages.length - 1 ? { lastTurn: true } : {})}
       />
     );
   };

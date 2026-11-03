@@ -24,9 +24,15 @@ function message(id: string, fields: Partial<ChatMessage> = {}): ChatMessage {
 }
 
 describe('railReserve', () => {
-  it('holds a short reply tall enough that its rail ends before the next one starts', () => {
-    expect(railReserve(4)).toBe(0);
-    expect(railReserve(9)).toBe(9 * RAIL_ROW_HEIGHT - 72);
+  it('holds a short reply tall enough that its rail ends a row clear of the next one', () => {
+    // A 24px gap, a 22px relay row and the gap again, less 12px between the two rails.
+    expect(railReserve(3)).toBe(0);
+    expect(railReserve(9)).toBe(9 * RAIL_ROW_HEIGHT - 58);
+  });
+
+  it('holds the last reply open to its whole rail, which has nothing after it to run into', () => {
+    expect(railReserve(3, true)).toBe(3 * RAIL_ROW_HEIGHT);
+    expect(railReserve(9, true)).toBe(9 * RAIL_ROW_HEIGHT);
   });
 });
 
@@ -112,24 +118,28 @@ describe('the reply stats rail and its footer fallback', () => {
     expect(statValue('thinking')).toBe('3.0s');
   });
 
-  it('holds a short reply open to its rail height, and only while the rail is drawn', () => {
-    const reply = () => container.querySelectorAll<HTMLElement>('[data-testid="chat-message-assistant"]')[0];
+  it('holds a short reply open to its rail height, the cost row included, and only while the rail is drawn', () => {
+    const replies = () => container.querySelectorAll<HTMLElement>('[data-testid="chat-message-assistant"]');
     const local = message('a1', {
       content: 'No.',
       stats: { ...stats, reasoningTokens: 90, derived: ['reasoningTokens'] },
       usage: {
         inputTokens: 40,
         outputTokens: 300,
+        creditsUsed: 1,
         rate: { evalTokens: 300, evalMs: 11_000, promptTokens: 40, promptMs: 80, loadMs: 900 },
       },
     });
+    const thread = [local, message('u2', { role: 'user', content: 'And 223?' }), { ...local, id: 'a2' }];
 
-    render([local], { statsRail: true });
-    // Thinking, total, share, thinking tokens, tokens, speed, prompt, first token, load.
-    expect(getComputedStyle(reply()!).minHeight).toBe(`${railReserve(9)}px`);
+    render(thread, { statsRail: true });
+    // Thinking, total, share, thinking tokens, tokens, speed, prompt, first token, load, then the cost.
+    expect(getComputedStyle(replies()[0]!).minHeight).toBe(`${railReserve(10)}px`);
+    expect(getComputedStyle(replies()[1]!).minHeight).toBe(`${railReserve(10, true)}px`);
 
-    render([local], { statsRail: false });
-    expect(getComputedStyle(reply()!).minHeight).not.toBe(`${railReserve(9)}px`);
+    render(thread, { statsRail: false });
+    expect(getComputedStyle(replies()[0]!).minHeight).not.toBe(`${railReserve(10)}px`);
+    expect(getComputedStyle(replies()[1]!).minHeight).not.toBe(`${railReserve(10, true)}px`);
   });
 
   it('ticks the live reply off its own clock, leaving the total and speed to the status line', () => {
