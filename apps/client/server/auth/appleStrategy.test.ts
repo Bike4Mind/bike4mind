@@ -95,13 +95,13 @@ describe('Apple verify callback', () => {
     expect(authProvider).toEqual({ encrypted: true, accessToken: 'enc:acc', refreshToken: 'enc:ref' });
   });
 
-  it('repeat authorization: only sub arrives, so no email and no name are invented', async () => {
-    const idToken = signIdToken({ sub: 'sub-1' });
+  it('repeat authorization: the id_token still carries the email, but no name arrives', async () => {
+    const idToken = signIdToken({ sub: 'sub-1', email: 'a@b.co', email_verified: 'true' });
 
     await callback({ query: {} } as never, 'acc', 'ref', { id_token: idToken }, {}, done);
 
     const profile = authenticateSelfServeProfile.mock.calls[0][4];
-    expect(profile).toEqual({ id: 'sub-1', email: undefined, email_verified: false, displayName: undefined });
+    expect(profile).toEqual({ id: 'sub-1', email: 'a@b.co', email_verified: true, displayName: undefined });
   });
 
   it('refuses to authenticate when the id_token does not verify', async () => {

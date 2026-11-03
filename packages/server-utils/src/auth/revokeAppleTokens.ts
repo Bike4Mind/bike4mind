@@ -13,8 +13,8 @@ export type RevokeAppleTokensResult =
   | { status: 'not_configured' };
 
 /**
- * Revokes the user's Apple grant (Apple requires revoking the grant when the account is deleted). Prefers the refresh token, which
- * also ends the access token. Throws when Apple refuses, so a caller that must guarantee revocation
+ * Revokes the user's Apple grant (Apple requires revoking the grant when the account is deleted).
+ * Prefers the refresh token, which also ends the access token. Throws when Apple refuses, so a caller that must guarantee revocation
  * can fail loudly; on success the stored tokens are dropped and the `sub` stays for identity matching.
  */
 export async function revokeAppleTokens(userId: string): Promise<RevokeAppleTokensResult> {

@@ -13,7 +13,7 @@ const APPLE_AUTHORIZATION_URL = `${APPLE_ISSUER}/auth/authorize`;
 const APPLE_TOKEN_URL = `${APPLE_ISSUER}/auth/token`;
 const APPLE_JWKS_URL = `${APPLE_ISSUER}/auth/keys`;
 
-/** Apple signs the client-secret JWT we send; re-minted once it is this close to expiry. */
+/** The client-secret JWT is signed by us with the .p8 key and verified by Apple; re-minted near expiry. */
 const CLIENT_SECRET_TTL_SECONDS = 60 * 60;
 const CLIENT_SECRET_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
