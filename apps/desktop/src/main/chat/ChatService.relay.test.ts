@@ -731,6 +731,27 @@ describe('ChatService session_send', () => {
       );
     });
 
+    it('tells the sender when the receiving conversation is deleted with its message still held', async () => {
+      const sender = await codeSession('Sender');
+      const target = await codeSession('Elsewhere', other);
+
+      await service.send(sender.id, 'go');
+      await awaitStream(0);
+      requestSend(streams[0], target.id, 'please rebase onto main', 'x1');
+      await vi.waitUntil(() => service.heldRelaysFor(target.id).length === 1, { timeout: 5000, interval: 5 });
+      await awaitStream(1);
+      endTurn(streams[1]);
+      await vi.waitUntil(() => !service.isSessionBusy(sender.id), { timeout: 5000, interval: 5 });
+
+      await service.deleteSession(target.id);
+
+      expect(service.heldRelaysFor(target.id)).toHaveLength(0);
+      const stored = await store.get(sender.id);
+      expect(stored?.messages.some(message => message.system && /could not be delivered/.test(message.content))).toBe(
+        true
+      );
+    });
+
     it('holds a message to a conversation in a looser approval mode, even in the same project', async () => {
       const sender = await codeSession('Sender');
       const target = await codeSession('Loose');

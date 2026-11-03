@@ -1858,7 +1858,8 @@ export class ChatService {
     this.childReports.delete(sessionId);
     this.turnRelay.delete(sessionId);
     this.turnNotify.delete(sessionId);
-    if (this.heldRelays.delete(sessionId)) this.emitHeld(sessionId);
+    // The stored session is already gone here, so resolving takes the "could not be delivered" path.
+    for (const entry of this.heldRelaysFor(sessionId)) await this.resolveHeldRelay(sessionId, entry.id, true);
     for (const [childId, watch] of this.spawnWatch) {
       if (watch.parentSessionId === sessionId) this.spawnWatch.delete(childId);
     }
