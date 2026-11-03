@@ -68,6 +68,15 @@ flat-grant and staged-release boundaries. Recovery scripts use `mode: 'enforce'`
 without replaying signup observations or creating holds without notifications. External service consumers without that adapter retain their
 existing behavior.
 
+### Automated triage
+
+The `signupDomainHoldTriage` job (`apps/workers/src/cron/signupDomainHoldTriage.ts`, every 10 minutes) confirms
+`disposable-aggregate` holds while **Auto-Confirm Disposable-List Domain Holds** is on (default on). It only ever
+confirms, which keeps credits held; it never releases. Each confirmation writes a strict
+`signup_domain_hold.auto_confirmed` Admin Audit Log entry with a system actor in the same transaction, and the row
+shows "Auto-confirmed by the disposable list rule". An admin can still **Release** it, which clears the automated
+marker. Other reasons are left for an admin.
+
 ## Disposable lists and domain intelligence
 
 A daily job (`apps/workers/src/cron/disposableDomainRefresh.ts`) refreshes three upstream disposable-domain lists into MongoDB: the curated `disposable-email-domains/disposable-email-domains` list, `7c/fakefilter`, and the `disposable/disposable-email-domains` aggregate. A source that fails, returns nothing, or shrinks below half of its last good size keeps its previous entries. Per-source counts, last success and last error appear in **Admin > Signup Domain Holds**; the `disposableDomainRefreshFailures` alarm fires after two failing days. If an upstream genuinely shrinks by half, the floor refuses it every day; delete that source's `disposabledomainsources` document to accept the next snapshot.

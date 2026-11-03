@@ -1,6 +1,11 @@
 import mongoose, { Schema } from 'mongoose';
-import type { SignupDomainReview, SignupObservation, SignupProtectionRepository } from '@bike4mind/common';
-import { emailDomainCandidates } from '@bike4mind/common';
+import type {
+  SignupDomainHoldAutoPolicy,
+  SignupDomainReview,
+  SignupObservation,
+  SignupProtectionRepository,
+} from '@bike4mind/common';
+import { emailDomainCandidates, SIGNUP_DOMAIN_HOLD_AUTO_POLICIES } from '@bike4mind/common';
 import { PartnerSignupRule } from './PartnerSignupRuleModel';
 import { disposableDomainRepository } from './DisposableDomainModel';
 
@@ -13,7 +18,7 @@ const observationSchema = new Schema<SignupObservation>({
 observationSchema.index({ domain: 1, verifiedAt: -1 });
 observationSchema.index({ verifiedAt: 1 }, { expireAfterSeconds: 7 * 24 * 60 * 60 });
 
-const reviewSchema = new Schema<SignupDomainReview & { reviewedBy?: string; reviewedAt?: Date }>({
+const reviewSchema = new Schema<SignupDomainReview>({
   domain: { type: String, required: true, unique: true },
   status: { type: String, enum: ['held_pending_review', 'blocked', 'released'], required: true },
   reason: { type: String, required: true },
@@ -23,6 +28,16 @@ const reviewSchema = new Schema<SignupDomainReview & { reviewedBy?: string; revi
   signupCount: { type: Number, required: true },
   reviewedBy: String,
   reviewedAt: Date,
+  autoDecision: {
+    type: new Schema(
+      {
+        policy: { type: String, enum: SIGNUP_DOMAIN_HOLD_AUTO_POLICIES, required: true },
+        decidedAt: { type: Date, required: true },
+      },
+      { _id: false }
+    ),
+    default: undefined,
+  },
 });
 reviewSchema.index({ triggeredAt: -1 });
 
@@ -76,4 +91,34 @@ export const signupProtectionRepository: SignupProtectionRepository = {
   disposableSources: disposableDomainRepository.disposableSources,
   findDomainIntel: disposableDomainRepository.findDomainIntel,
   saveDomainIntel: disposableDomainRepository.saveDomainIntel,
+};
+
+/** Queue operations for the automated hold triage (apps/workers/src/cron/signupDomainHoldTriage.ts). */
+export const signupDomainReviewRepository = {
+  /** Oldest first, so a backlog drains in order across runs. */
+  async listPending(reason: string, limit: number): Promise<SignupDomainReview[]> {
+    return SignupDomainReviewModel.find({ status: 'held_pending_review', reason })
+      .sort({ triggeredAt: 1, _id: 1 })
+      .limit(limit)
+      .lean();
+  },
+  /**
+   * Moves a still-pending hold to `blocked` on behalf of an automated policy. False when an admin
+   * (or another run) decided it first, so a concurrent admin decision always wins.
+   */
+  async autoConfirm(
+    domain: string,
+    reason: string,
+    policy: SignupDomainHoldAutoPolicy,
+    decidedAt: Date
+  ): Promise<boolean> {
+    const result = await SignupDomainReviewModel.updateOne(
+      { domain, reason, status: 'held_pending_review' },
+      {
+        $set: { status: 'blocked', reviewedAt: decidedAt, autoDecision: { policy, decidedAt } },
+        $unset: { reviewedBy: 1 },
+      }
+    );
+    return result.modifiedCount === 1;
+  },
 };

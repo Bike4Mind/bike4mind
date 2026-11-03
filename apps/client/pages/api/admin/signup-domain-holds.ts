@@ -76,7 +76,8 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
                 : ['held_pending_review', 'blocked'],
           },
         },
-        { $set: { status, reviewedBy: req.user.id, reviewedAt: new Date() } },
+        // An admin decision supersedes an automated one (signupDomainHoldTriage), so its marker goes.
+        { $set: { status, reviewedBy: req.user.id, reviewedAt: new Date() }, $unset: { autoDecision: 1 } },
         { new: true }
       );
       if (!review) throw new BadRequestError('Hold not found or already resolved with another decision');

@@ -481,6 +481,7 @@ export const SettingKeySchema = z.enum([
   'signupBotChecksEnabled',
   'enableDomainIntelligence',
   'holdSignupsFromDomainsYoungerThanDays',
+  'autoConfirmDisposableAggregateHolds',
   'domainIntelligenceTimeoutMs',
   'paymentRiskAlertsEnabled',
   'paymentRiskYoungAccountMinutes',
@@ -2310,6 +2311,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'signupAnomaly', order: 28 },
       { key: 'enableDomainIntelligence', order: 29 },
       { key: 'holdSignupsFromDomainsYoungerThanDays', order: 30 },
+      { key: 'autoConfirmDisposableAggregateHolds', order: 30.5 },
       { key: 'domainIntelligenceTimeoutMs', order: 31 },
       { key: 'paymentRiskAlertsEnabled', order: 32 },
       { key: 'paymentRiskYoungAccountMinutes', order: 33 },
@@ -5242,6 +5244,15 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
       'Registration age (from RDAP) below which a signup domain is held for review. 0 turns the age check off.',
+  }),
+  autoConfirmDisposableAggregateHolds: makeBooleanSetting({
+    key: 'autoConfirmDisposableAggregateHolds',
+    name: 'Auto-Confirm Disposable-List Domain Holds',
+    defaultValue: true,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Confirm Signup Domain Holds whose reason is disposable-aggregate without waiting for an admin, keeping their free credits held. Each one is recorded in the Admin Audit Log as a system action, and an admin can still Release it from Signup Domain Holds.',
   }),
   domainIntelligenceTimeoutMs: makeNumberSetting({
     key: 'domainIntelligenceTimeoutMs',

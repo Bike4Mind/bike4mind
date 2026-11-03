@@ -101,7 +101,10 @@ describe('signup domain hold decisions', () => {
     await handlers.post(req, res);
     expect(reviewUpdate).toHaveBeenCalledWith(
       { domain: 'example.net', status: { $in: ['held_pending_review', 'blocked', 'released'] } },
-      { $set: { status: 'released', reviewedBy: 'admin-1', reviewedAt: expect.any(Date) } },
+      {
+        $set: { status: 'released', reviewedBy: 'admin-1', reviewedAt: expect.any(Date) },
+        $unset: { autoDecision: 1 },
+      },
       { new: true }
     );
     const filter = find.mock.calls[0][0];
@@ -173,6 +176,19 @@ describe('signup domain hold decisions', () => {
     expect(find.mock.calls[0][0]).toMatchObject({ _id: { $gt: cursor } });
     expect(next.res._getJSONData()).toMatchObject({ creditsReleased: 25, remaining: 0, nextCursor: null });
     expect(count).toHaveBeenCalledTimes(2);
+  });
+  it('lets an admin release a hold the triage job auto-confirmed, clearing its automated marker', async () => {
+    reviewUpdate.mockResolvedValue({ domain: 'example.net', status: 'released' });
+    const { req, res } = makeRequest({ domain: 'example.net', action: 'release' });
+    await handlers.post(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    const [filter, update] = reviewUpdate.mock.calls[0];
+    expect(filter.status.$in).toContain('blocked');
+    expect(update).toMatchObject({
+      $set: { status: 'released', reviewedBy: 'admin-1' },
+      $unset: { autoDecision: 1 },
+    });
+    expect(release).toHaveBeenCalled();
   });
   it('confirmation grants no credits', async () => {
     const { req, res } = makeRequest({ domain: 'example.net', action: 'confirm' });
