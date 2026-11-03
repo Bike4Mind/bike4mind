@@ -1,4 +1,4 @@
-import { own } from './ownKeys';
+import { own } from '@shared/ownKeys';
 
 /**
  * How many leading tokens name "the command" a person would recognise, so an "always allow" can

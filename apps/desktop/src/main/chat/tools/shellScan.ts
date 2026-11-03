@@ -11,7 +11,7 @@ import {
 } from './bashArity';
 import { parseBash } from './bashParser';
 import { isEnvFile } from './envFiles';
-import { own } from './ownKeys';
+import { own } from '@shared/ownKeys';
 import { ghReadFiles, repositoryWrite, type RepositoryWrite } from './ownRepository';
 import {
   PathAccessDenied,

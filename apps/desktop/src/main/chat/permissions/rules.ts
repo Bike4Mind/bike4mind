@@ -1,7 +1,7 @@
 import { basename, dirname, sep } from 'node:path';
 import type { PermissionList } from '@shared/permissions';
 import { MCP_TOOL_PREFIX, serverSlug } from '../mcp/names';
-import { own } from '../tools/ownKeys';
+import { own } from '@shared/ownKeys';
 
 type RuleKind = 'shell' | 'path' | 'domain' | 'plain';
 

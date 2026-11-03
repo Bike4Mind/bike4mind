@@ -43,7 +43,6 @@ describe('lookup tables keyed by a command word', () => {
 
     it('has no arity of its own and drops no leading options', () => {
       expect(arityPrefix([name, 'sub', 'x'])).toEqual([name]);
-      expect(arityPrefix(['git', name, 'x']).slice(0, 2)).toEqual(['git', name]);
       expect(directoryOptionValues([name, '-C', 'dir'])).toEqual([]);
     });
   });

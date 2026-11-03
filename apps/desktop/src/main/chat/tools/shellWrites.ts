@@ -2,7 +2,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import type { Node } from 'web-tree-sitter';
 import { resolveOperand } from './paths';
-import { own } from './ownKeys';
+import { own } from '@shared/ownKeys';
 
 /**
  * Paths a command rewrites in place: `files` are single files, `trees` are folders whose
