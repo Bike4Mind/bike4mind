@@ -1,8 +1,9 @@
 import { basename } from 'node:path';
 import type { ChatApprovalMode, ChatRelayHoldReason, ChatSession, ChatSessionSummary } from '@shared/chat';
 
-/** Shortest id prefix a model may address a session by; what session_list prints. */
+/** How many id characters session_list prints; the prefix a model is shown to address by. */
 export const SHORT_ID_LENGTH = 8;
+/** Shortest id prefix accepted when resolving a reference. */
 const MIN_PREFIX_LENGTH = 6;
 const MAX_LISTED_CANDIDATES = 5;
 
@@ -79,6 +80,8 @@ export function relayHoldReason(
   if (from.project?.directory !== to.project?.directory) return 'other-project';
   // Reporting to the session that spawned it widens nothing: parent reports were never held,
   // and a child is capped at its parent's mode when spawned (its user may loosen it later).
+  // If the parent is loosened above the child later, reports run unheld: accepted, since a
+  // report to the parent is the parent's own task coming back.
   if (from.origin?.parentSessionId === to.id) return null;
   // `?? 'ask'` for a session stored before the mode existed, which is what it is relaunched at.
   if (MODE_RANK[to.approvalMode ?? 'ask'] > MODE_RANK[from.approvalMode ?? 'ask']) return 'looser-mode';
