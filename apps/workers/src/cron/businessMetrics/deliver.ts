@@ -96,9 +96,8 @@ export async function deliverAnomalies(
     if (await store.claim(id, token, new Date())) claimed.push({ anomaly, id, token });
   }
   if (claimed.length === 0) return 0;
-  let posted = false;
   try {
-    posted = await post(
+    const posted = await post(
       formatBusinessMetricSlackMessage(
         window,
         claimed.map(({ anomaly }) => anomaly),
@@ -106,13 +105,18 @@ export async function deliverAnomalies(
       )
     );
     if (!posted) throw new Error('Slack rejected business metric alert');
-    // The alert is already in Slack: keep the leases so a retry cannot post it twice.
-    for (const { id, token } of claimed) {
-      await store.complete(id, token, new Date()).catch(() => store.complete(id, token, new Date()));
-    }
-    return claimed.length;
   } catch (error) {
-    if (!posted) await Promise.all(claimed.map(({ id, token }) => store.release(id, token)));
+    await Promise.allSettled(claimed.map(({ id, token }) => store.release(id, token)));
     throw error;
   }
+  // The alert is already in Slack: keep the leases so a retry cannot post it twice, and complete
+  // every receipt even when one fails so the others cannot be re-claimed and re-posted.
+  const results = await Promise.allSettled(
+    claimed.map(({ id, token }) =>
+      store.complete(id, token, new Date()).catch(() => store.complete(id, token, new Date()))
+    )
+  );
+  const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  if (failed) throw failed.reason;
+  return claimed.length;
 }

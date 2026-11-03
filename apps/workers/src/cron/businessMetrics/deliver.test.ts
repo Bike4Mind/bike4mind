@@ -146,6 +146,28 @@ describe('anomaly Slack delivery', () => {
     expect(store.complete).not.toHaveBeenCalled();
   });
 
+  it('still completes the other receipts when one complete keeps failing after an accepted post', async () => {
+    const post = vi.fn().mockResolvedValue(true);
+    const anomalies = [anomaly(), anomaly('activeUsers'), anomaly('verifiedSignups')];
+    let firstId: string | undefined;
+    vi.mocked(store.complete).mockImplementation(async id => {
+      firstId ??= id;
+      if (id === firstId) throw new Error('lease lost');
+    });
+    await expect(deliverAnomalies(window, anomalies, post, store)).rejects.toThrow('lease lost');
+    const completedIds = new Set(vi.mocked(store.complete).mock.calls.map(([id]) => id));
+    expect(completedIds.size).toBe(3);
+    expect(store.complete).toHaveBeenCalledTimes(4);
+    expect(store.release).not.toHaveBeenCalled();
+  });
+
+  it('rethrows the post error even when a release also fails', async () => {
+    const post = vi.fn().mockRejectedValue(new Error('network'));
+    vi.mocked(store.release).mockRejectedValueOnce(new Error('release failed'));
+    await expect(deliverAnomalies(window, [anomaly(), anomaly('activeUsers')], post, store)).rejects.toThrow('network');
+    expect(store.release).toHaveBeenCalledTimes(2);
+  });
+
   it('renders admin links and the stage from the formatter options', async () => {
     const post = vi.fn().mockResolvedValue(true);
     const withMovers = {
