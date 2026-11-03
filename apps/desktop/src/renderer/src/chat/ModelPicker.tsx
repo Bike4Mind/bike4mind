@@ -15,7 +15,7 @@ import ModalDialog from '@mui/joy/ModalDialog';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { ChatModelOption } from '@shared/chat';
-import { findModelOption, parseLocalModelId } from '@shared/chat';
+import { findModelOption, isLocalModel, parseLocalModelId } from '@shared/chat';
 import { LOCAL_SERVER_ID, serverIdOfRuntime } from '@shared/modelServers';
 import { CloudIcon, ServerIcon } from './icons';
 import {
@@ -203,7 +203,7 @@ function FilterChip({
       variant={selected ? 'soft' : 'plain'}
       color={selected ? 'primary' : 'neutral'}
       onClick={onClick}
-      slotProps={{ action: { 'data-testid': testId, 'aria-pressed': selected } }}
+      slotProps={{ action: { 'data-testid': testId, role: 'menuitemradio', 'aria-checked': selected } }}
     >
       {label}
     </Chip>
@@ -227,7 +227,7 @@ function FilterControls({
     <Box data-testid="model-picker-filters">
       {shown.location && (
         <Stack direction="row" role="group" aria-label="Location" sx={row}>
-          {(['all', 'hosted', 'local'] as const).map(location => (
+          {(options.hasLocal ? (['all', 'hosted', 'local'] as const) : (['all', 'hosted'] as const)).map(location => (
             <FilterChip
               key={location}
               selected={filters.location === location}
@@ -333,7 +333,7 @@ export function ModelPicker({
   local,
   switchCredits,
   servers,
-  hasHistory = false,
+  hasHistory,
   sessionId,
 }: {
   catalog: ModelCatalogController;
@@ -351,9 +351,9 @@ export function ModelPicker({
   /** Saved model servers, offered as filters even when they list no chat model. */
   servers?: readonly ServerRef[];
   /** The conversation has messages, so moving it from a local model to a hosted one sends them. */
-  hasHistory?: boolean;
+  hasHistory: boolean;
   /** The conversation the picker is acting for; a pending hosted-switch question is dropped when it changes. */
-  sessionId?: string | null;
+  sessionId: string | null;
 }) {
   const [filter, setFilter] = useState('');
   const [savedFilters, setFilters] = useModelPickerFilters();
@@ -415,7 +415,7 @@ export function ModelPicker({
     [models, details, filter, filters]
   );
   const groups = useMemo(() => groupByServer(matches), [matches]);
-  const warnHosted = hasHistory && !!modelId && !!parseLocalModelId(modelId);
+  const warnHosted = hasHistory && !!modelId && isLocalModel(modelId);
   const emptyServer =
     filters.server && !models.some(model => modelServer(model)?.id === filters.server)
       ? options.servers.find(server => server.id === filters.server)?.name

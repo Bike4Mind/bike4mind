@@ -58,8 +58,8 @@ function mount(
             onSelect={onSelect}
             switchCredits={switchCredits}
             servers={extra.servers}
-            hasHistory={extra.hasHistory}
-            sessionId={props.sessionId}
+            hasHistory={extra.hasHistory ?? false}
+            sessionId={props.sessionId ?? null}
           />
         </CssVarsProvider>
       );
@@ -447,7 +447,7 @@ describe('ModelPicker filters', () => {
     host?.remove();
     mount(mixed, 'gpt-6', undefined, { servers });
     expect(names()).toEqual(['llama3gpu box']);
-    expect(el('model-picker-server-abc123').getAttribute('aria-pressed')).toBe('true');
+    expect(el('model-picker-server-abc123').getAttribute('aria-checked')).toBe('true');
   });
 
   it('filters hosted models by provider and keeps per-provider twins together', () => {
@@ -469,7 +469,18 @@ describe('ModelPicker filters', () => {
 
     click('model-picker-clear-filters-btn');
     expect(options()).toHaveLength(mixed.length);
-    expect(el('model-picker-location-all').getAttribute('aria-pressed')).toBe('true');
+    expect(el('model-picker-location-all').getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('offers no Local chip when no local model is listed', () => {
+    mount(
+      mixed.filter(model => !model.id.startsWith('local:')),
+      'gpt-6',
+      undefined,
+      { servers }
+    );
+    expect(el('model-picker-location-hosted')).toBeTruthy();
+    expect(document.querySelector('[data-testid="model-picker-location-local"]')).toBeNull();
   });
 
   it('clears the provider and server when All is picked', () => {

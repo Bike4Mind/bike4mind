@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ChatModelOption } from '@shared/chat';
-import { isLocalModel, parseLocalModelId } from '@shared/chat';
+import { isLocalModel } from '@shared/chat';
 import { LOCAL_SERVER_ID, LOCAL_SERVER_NAME } from '@shared/modelServers';
 
 export type ModelLocation = 'hosted' | 'local';
@@ -145,7 +145,7 @@ export function needsHostedSwitchConfirm(
   target: Pick<ChatModelOption, 'id'>,
   hasHistory: boolean
 ): boolean {
-  if (!hasHistory || !currentModelId || !parseLocalModelId(currentModelId)) return false;
+  if (!hasHistory || !currentModelId || !isLocalModel(currentModelId)) return false;
   return modelLocation(target) === 'hosted';
 }
 
