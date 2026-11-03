@@ -645,6 +645,30 @@ export function ChatShell({
     if (created) setActiveId(created);
   }, [startSession, markSessionStart]);
 
+  /**
+   * The Chat composer's Add folder. With no conversation open it picks first, so a dismissed picker
+   * creates nothing, and shares into the new chat once it has loaded, where a refusal can show.
+   */
+  const [folderForNewChat, setFolderForNewChat] = useState<{ sessionId: string; path: string } | null>(null);
+  const shareFolder = conversation.project.addContextDirectory;
+  const addFolder = useCallback(async () => {
+    if (activeId) {
+      await shareFolder();
+      return;
+    }
+    const path = await window.b4m.chat.pickProjectDirectory();
+    if (!path) return;
+    markSessionStart('new');
+    const created = await create();
+    setFolderForNewChat({ sessionId: created, path });
+    setActiveId(created);
+  }, [activeId, shareFolder, create, markSessionStart]);
+  useEffect(() => {
+    if (!folderForNewChat || conversation.session?.id !== folderForNewChat.sessionId) return;
+    setFolderForNewChat(null);
+    void shareFolder(folderForNewChat.path);
+  }, [folderForNewChat, conversation.session?.id, shareFolder]);
+
   /** "Use in chat" on the Models screen: a new Chat conversation already on that model. */
   const [chatOnError, setChatOnError] = useState<string | null>(null);
   useEffect(() => {
@@ -1308,6 +1332,12 @@ export function ChatShell({
             onStop={conversation.stop}
             onRunCommand={(name, args) => void conversation.runCommand(name, args)}
             onBrowseSkillMarket={() => openSkillMarket()}
+            // A Code session shares folders from its workspace controls instead.
+            addFolder={
+              (conversation.session?.mode ?? mode) === 'chat'
+                ? { onClick: () => void addFolder(), disabled: opening }
+                : null
+            }
             sessionMode={conversation.session?.mode ?? 'chat'}
             suggestion={nextPrompt.suggestion}
             onSuggestionDismissed={nextPrompt.dismiss}

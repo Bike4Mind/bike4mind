@@ -441,7 +441,8 @@ export interface ProjectBindingController {
   moveToCheckout: (elsewhere: BranchElsewhere) => Promise<void>;
   /** Turn the worktree toggle on with `branch` as the base the first message cuts from. */
   worktreeFrom: (branch: string) => Promise<void>;
-  addContextDirectory: () => Promise<void>;
+  /** The folder picker, or `path` when one was already picked; both are checked in main. */
+  addContextDirectory: (path?: string) => Promise<void>;
   removeContextDirectory: (directory: string) => Promise<void>;
 }
 
@@ -1272,12 +1273,15 @@ export function useConversation(
     [changeProject]
   );
 
-  const addContextDirectory = useCallback(async () => {
-    setProjectError(null);
-    setSendError(null);
-    setNotice(null);
-    await shareDirectory(undefined, false);
-  }, [shareDirectory]);
+  const addContextDirectory = useCallback(
+    async (path?: string) => {
+      setProjectError(null);
+      setSendError(null);
+      setNotice(null);
+      await shareDirectory(path, false);
+    },
+    [shareDirectory]
+  );
 
   const removeContextDirectory = useCallback(
     async (directory: string) => {
