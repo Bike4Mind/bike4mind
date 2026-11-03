@@ -24,6 +24,7 @@ import { OPENAI_COMPATIBLE_EFFORT_LEVELS, openAICompatibleControls } from '../ch
 import type { CompletionStreamEvent } from '../chat/streamEvents';
 import { estimatedRate, llamaServerRate, type StreamTiming } from '../chat/tokenRate';
 import { ServerCredentialsError, ServerForbiddenError } from './errors';
+import type { LearnedThinker } from './ModelServerStore';
 
 export interface OpenAICompatibleServer {
   runtimeId: string;
@@ -37,7 +38,11 @@ export interface OpenAICompatibleServer {
   /** Tools went off or came back on, or a model first replied with reasoning, so the model list changed. */
   toolsChanged?: () => void;
   /** The models that replied with reasoning on an earlier run; see ModelServerStore.thinkers. */
-  learnedThinkers?: { read(): Promise<readonly string[]>; add(model: string): Promise<void> };
+  learnedThinkers?: {
+    read(): Promise<readonly LearnedThinker[]>;
+    add(model: string, identity: string | undefined): Promise<void>;
+    forget(model: string): Promise<void>;
+  };
 }
 
 const DESKTOP_HINTS: HintApp = {
@@ -170,6 +175,16 @@ function takesReasoningEffort(model: { name: string; baseModel?: string; aliases
 }
 
 /**
+ * What the listing says about the weights behind a name (llama-server's file size, LM Studio's
+ * arch and quantization), so a learned thinker is forgotten when other weights take its name.
+ * Undefined when the listing says nothing, as vLLM's does not.
+ */
+export function modelIdentity(model: InstalledModel): string | undefined {
+  const parts = [model.sizeBytes, model.family, model.parameterSize, model.quantization];
+  return parts.some(part => part !== null) ? JSON.stringify(parts) : undefined;
+}
+
+/**
  * A conversation's sampling overrides as the product's body fields. vLLM spells the repeat penalty
  * `repetition_penalty`; an unknown product gets only the OpenAI fields.
  */
@@ -218,8 +233,13 @@ export class OpenAICompatibleChat implements LocalChat {
   private readonly unlistedContexts = new Set<string>();
   /** Names from the last listing, for the server's hint. */
   private listed: string[] = [];
-  /** Models a reply came back from with reasoning split out, which is what earns them a thinking switch. */
-  private readonly thinkers = new Set<string>();
+  /**
+   * Models a reply came back from with reasoning split out, which is what earns them a thinking
+   * switch, each with the identity of its weights then.
+   */
+  private readonly thinkers = new Map<string, string | undefined>();
+  /** Each name's weights in the last listing, where it gives one; see modelIdentity. */
+  private readonly identities = new Map<string, string>();
   private recalled: Promise<void> | null = null;
   /** Served names, aliases included, of the gpt-oss models in the last listing. */
   private readonly effortModels = new Set<string>();
@@ -242,6 +262,7 @@ export class OpenAICompatibleChat implements LocalChat {
     const chat = models.filter(model => isChatCapable(model.capabilities, 'openai-compatible'));
     this.listed = chat.map(model => model.name);
     this.smallChanged(before);
+    this.learnIdentities(models);
     this.effortModels.clear();
     return chat.map(model => {
       const thinks = this.thinkers.has(model.name);
@@ -408,17 +429,34 @@ export class OpenAICompatibleChat implements LocalChat {
 
   private recallThinkers(): Promise<void> {
     this.recalled ??= (this.server.learnedThinkers?.read() ?? Promise.resolve([])).then(
-      names => names.forEach(name => this.thinkers.add(name)),
+      entries => entries.forEach(entry => this.thinkers.set(entry.model, entry.identity)),
       () => undefined
     );
     return this.recalled;
   }
 
+  /** Forgets a learned thinker whose name now serves other weights, which may not think. */
+  private learnIdentities(models: readonly InstalledModel[]): void {
+    this.identities.clear();
+    for (const model of models) {
+      const identity = modelIdentity(model);
+      if (identity) for (const name of [model.name, ...(model.aliases ?? [])]) this.identities.set(name, identity);
+    }
+    for (const [name, identity] of this.thinkers) {
+      const listed = this.identities.get(name);
+      if (identity === undefined || listed === undefined || listed === identity) continue;
+      this.thinkers.delete(name);
+      void this.server.learnedThinkers?.forget(name).catch(() => undefined);
+    }
+  }
+
   private learnThinking(model: string): void {
-    if (this.thinkers.has(model)) return;
-    this.thinkers.add(model);
-    void this.server.learnedThinkers?.add(model).catch(() => undefined);
-    this.server.toolsChanged?.();
+    const identity = this.identities.get(model);
+    const known = this.thinkers.has(model);
+    if (known && (identity === undefined || this.thinkers.get(model) === identity)) return;
+    this.thinkers.set(model, identity);
+    void this.server.learnedThinkers?.add(model, identity).catch(() => undefined);
+    if (!known) this.server.toolsChanged?.();
   }
 
   private async readStream(
