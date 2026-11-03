@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
-import { buildThumbnailDocument, type DroppedAssets } from '@server/services/publish/buildThumbnailDocument';
+import { buildThumbnailDocument, type DroppedAssets } from '@workers/services/publish/buildThumbnailDocument';
 import { PublishedArtifact, recordPublishedArtifactThumbnail } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';

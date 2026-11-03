@@ -1,9 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { BLESSED_SCRIPT_PATHS } from '@bike4mind/common';
-import { buildSignupGateHtml } from '@client/app/utils/shareFooter';
 import { buildThumbnailDocument } from './buildThumbnailDocument';
-import { PUBLISH_HOST } from './validateBundle';
+import { PUBLISH_HOST } from '@server/services/publish/validateBundle';
 
 const sha = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
 
@@ -94,8 +93,14 @@ describe('buildThumbnailDocument', () => {
   });
 
   it('renders a baked sign-up gate dismissed, as the owner sees the page', async () => {
+    // The baked gate's dismiss markup, as buildSignupGateHtml in apps/client/app/utils/shareFooter.ts
+    // emits it (its test pins the same opening tag). Workers must not import that module.
+    const gate =
+      '<input type="checkbox" id="b4m-gate-dismiss" style="display:none">' +
+      '<div id="b4m-gate-panel" role="region"><label for="b4m-gate-dismiss">No thanks</label></div>';
+    const styles = '#b4m-gate-dismiss:checked~#b4m-gate-panel{display:none!important}';
     const gated = Buffer.from(
-      `<!doctype html><html><head><style>${buildSignupGateHtml().styles}</style></head><body><h1>Report</h1>${buildSignupGateHtml().html}</body></html>`
+      `<!doctype html><html><head><style>${styles}</style></head><body><h1>Report</h1>${gate}</body></html>`
     );
     const doc = await buildThumbnailDocument({
       versionId: sha(gated),

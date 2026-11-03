@@ -1,9 +1,13 @@
 import { createHash } from 'node:crypto';
 import { BLESSED_SCRIPT_PATHS } from '@bike4mind/common';
-import { collectInlineAssets } from './collectInlineAssets';
-import { isBundlePagePath, renderSandboxedBundle, resolveBundlePath } from './renderSandboxedBundle';
-import { isStreamedFile } from './signedFiles';
-import { PUBLISH_HOST } from './validateBundle';
+import { collectInlineAssets } from '@server/services/publish/collectInlineAssets';
+import {
+  isBundlePagePath,
+  renderSandboxedBundle,
+  resolveBundlePath,
+} from '@server/services/publish/renderSandboxedBundle';
+import { isStreamedFile } from '@server/services/publish/signedFiles';
+import { PUBLISH_HOST } from '@server/services/publish/validateBundle';
 
 /**
  * Publish - the self-contained document an owner-only thumbnail is rendered from

@@ -88,7 +88,7 @@ import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/b
 import {
   buildSlackVideoToolConfig,
   type PendingSlackNotification,
-} from '@server/videoGenerations/slackVideoToolConfig';
+} from '@workers/videoGenerations/slackVideoToolConfig';
 import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
 
 // Cache static ChatCompletion options that don't change between invocations

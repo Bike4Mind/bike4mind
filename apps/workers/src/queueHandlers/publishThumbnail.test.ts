@@ -20,7 +20,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getPublishedArtifactsStorage: () => h.storage,
 }));
-vi.mock('@server/services/publish/buildThumbnailDocument', () => ({
+vi.mock('@workers/services/publish/buildThumbnailDocument', () => ({
   buildThumbnailDocument: h.buildThumbnailDocument,
 }));
 // The renderer function itself: the orchestrator reaches it only through a synchronous invoke.

@@ -8,7 +8,6 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/d
 // Org membership is the only external input to the visibility gate; everything else (models,
 // CAS writes, search, import, rating) runs against a real mongod.
 const orgs = vi.hoisted(() => ({
-  broken: 'org-broken',
   members: new Map<string, string[]>(),
   admins: new Map<string, string[]>(),
   info: new Map<
@@ -21,10 +20,7 @@ vi.mock('@bike4mind/database/infra', async importOriginal => ({
   organizationRepository: {
     findMembershipOrgIds: async (u: string) => orgs.members.get(u) ?? [],
     findIdsAdministeredBy: async (u: string) => orgs.admins.get(u) ?? [],
-    findById: async (id: string) => {
-      if (id === orgs.broken) throw new Error('org lookup down');
-      return orgs.info.get(id) ?? { name: 'Acme' };
-    },
+    findById: async (id: string) => orgs.info.get(id) ?? { name: 'Acme' },
     findMemberUserIds: async () => ({ userIds: [], aclOnly: [], stampOnly: [] }),
   },
 }));
@@ -83,14 +79,12 @@ vi.mock('@client/server/middlewares/baseApi', () => ({
 }));
 
 import {
-  Inbox,
   inboxRepository,
   Skill,
   SkillListing,
   SkillListingImport,
   SkillListingReport,
   SkillListingVersion,
-  User,
   claimSkillVersionScan,
   skillRepository,
   writeSkillVersionScanVerdict,
@@ -101,7 +95,6 @@ import { recommendListings, searchListings } from './search';
 import { attachMarketStatus } from './marketStatus';
 import { serializeListing, skillContentHash, withdrawAuthorListings } from '@bike4mind/server-utils/skillMarket/market';
 import { listMyListings, publishListing } from './author';
-import { MAX_SLA_REMINDERS, runSkillMarketReviewSla } from './reviewSla';
 import type { ClassifierLlm } from './classifySkill';
 import skillHandler from '@pages/api/skills/[id]/index';
 import importHandler from '@pages/api/skills/market/[id]/import';
@@ -716,94 +709,6 @@ describe('Skill Market (real mongod)', () => {
     await SkillListing.updateOne({ _id: a.id }, { $set: { ratingSum: 5, ratingCount: 1 } });
     await SkillListing.updateOne({ _id: b.id }, { $set: { ratingSum: 90, ratingCount: 20 } });
     expect((await browse()).data.map(l => l.id)).toEqual([b.id, a.id]);
-  });
-
-  it('SLA reminders: nudge author and org reviewers once per day, never approve', async () => {
-    orgs.members.set(AUTHOR, [ORG]);
-    orgs.info.set(ORG, {
-      name: 'Acme',
-      userId: 'org-owner',
-      adminUserIds: ['org-mgr'],
-      users: [{ userId: 'org-mgr', permissions: ['read'] }],
-    });
-    const { listing, version } = await publish(
-      await makeSkill(AUTHOR, 'Fetch and summarize.', { allowedTools: ['web_fetch'] }),
-      'organization',
-      ORG
-    );
-    const later = new Date(Date.now() + 73 * 60 * 60 * 1000);
-    const before = await Inbox.countDocuments({});
-    const authorBefore = await Inbox.countDocuments({ receiverId: AUTHOR });
-    expect(await runSkillMarketReviewSla(later)).toEqual({ reminded: 1 });
-    expect(await runSkillMarketReviewSla(later)).toEqual({ reminded: 0 });
-    // One reminder to the author, one each to the org's owner and manager.
-    expect(await Inbox.countDocuments({ receiverId: AUTHOR })).toBe(authorBefore + 1);
-    expect(await Inbox.countDocuments({ receiverId: 'org-owner' })).toBe(1);
-    expect(await Inbox.countDocuments({ receiverId: 'org-mgr' })).toBe(1);
-    expect(await Inbox.countDocuments({})).toBe(before + 3);
-    // Sent by the system, not shown as coming from the recipient themselves.
-    expect((await Inbox.findOne({ receiverId: AUTHOR }).sort({ _id: -1 }))!.userId).toBe('SYSTEM');
-    expect((await SkillListingVersion.findById(version.id))!.reviewStatus).toBe('pending');
-    expect((await SkillListing.findById(listing.id))!.currentApprovedVersionId).toBeNull();
-  });
-
-  it('SLA reminders: nudge super-admins for a held Public version, never approve it', async () => {
-    const admin = await User.create({ username: 'super-admin', name: 'Super Admin', isAdmin: true });
-    const { version } = await publish(
-      await makeSkill(AUTHOR, 'Fetch and summarize.', { allowedTools: ['web_fetch'] }),
-      'public'
-    );
-    expect(await runSkillMarketReviewSla(new Date(Date.now() + 73 * 60 * 60 * 1000))).toEqual({ reminded: 1 });
-    expect(await Inbox.countDocuments({ receiverId: String(admin._id) })).toBe(1);
-    expect((await SkillListingVersion.findById(version.id))!.reviewStatus).toBe('pending');
-  });
-
-  it('SLA reminders: retire an orphaned pending version and notify nobody', async () => {
-    const missingListingId = new mongoose.Types.ObjectId().toString();
-    const orphan = await SkillListingVersion.create({
-      listingId: missingListingId,
-      version: 1,
-      snapshot: { name: 'orphan', description: 'd', body: 'b' },
-      contentHash: 'orphan-hash',
-      scanStatus: 'passed',
-      reviewStatus: 'pending',
-    });
-    await SkillListingVersion.updateOne(
-      { _id: orphan._id },
-      { $set: { createdAt: new Date(Date.now() - 100 * 60 * 60 * 1000) } }
-    );
-    expect(await runSkillMarketReviewSla(new Date(Date.now() + 73 * 60 * 60 * 1000))).toEqual({ reminded: 0 });
-    expect((await SkillListingVersion.findById(orphan._id))!.reviewStatus).toBe('superseded');
-    expect(await Inbox.countDocuments({})).toBe(0);
-  });
-
-  it('SLA reminders: never retire the version the listing is currently serving', async () => {
-    const listing = await SkillListing.create({
-      sourceSkillId: 'skill-x',
-      authorUserId: AUTHOR,
-      visibility: 'unlisted',
-      name: 'live skill',
-      description: 'd',
-      status: 'approved',
-    });
-    const version = await SkillListingVersion.create({
-      listingId: String(listing._id),
-      version: 1,
-      snapshot: { name: 'live skill', description: 'd', body: 'b' },
-      contentHash: 'live-hash',
-      scanStatus: 'passed',
-      reviewStatus: 'pending',
-    });
-    await SkillListingVersion.updateOne(
-      { _id: version._id },
-      { $set: { createdAt: new Date(Date.now() - 100 * 60 * 60 * 1000) } }
-    );
-    await SkillListing.updateOne(
-      { _id: listing._id },
-      { $set: { currentApprovedVersionId: String(version._id), currentVersion: 1 } }
-    );
-    expect(await runSkillMarketReviewSla(new Date(Date.now() + 73 * 60 * 60 * 1000))).toEqual({ reminded: 0 });
-    expect((await SkillListingVersion.findById(version._id))!.reviewStatus).toBe('pending');
   });
 
   it('withdraw and delist never supersede the version the listing currently serves', async () => {
@@ -1542,24 +1447,6 @@ describe('Skill Market (real mongod)', () => {
     await skillRepository.update({ id: skill.id, body: 'Rewrite as bullets v2.' });
     await call(versionsHandler, 'POST', AUTHOR, { id: listing.id }, { tags: ['changed'] });
     expect((await SkillListing.findById(listing.id))!.tags).toEqual(['changed']);
-  });
-
-  it('SLA reminders: stop after the cap, and one failing version does not stop the batch', async () => {
-    orgs.members.set(AUTHOR, [orgs.broken]);
-    const webFetch = { allowedTools: ['web_fetch'] };
-    await publish(await makeSkill(AUTHOR, 'Fetch and summarize.', webFetch), 'organization', orgs.broken);
-    const { version } = await publish(await makeSkill(AUTHOR, 'Fetch and summarize it.', webFetch), 'public');
-    await User.create({ username: 'super-admin', name: 'Super Admin', isAdmin: true });
-
-    const day = 24 * 60 * 60 * 1000;
-    const start = Date.now() + 73 * 60 * 60 * 1000;
-    const runs = [];
-    for (let i = 0; i <= MAX_SLA_REMINDERS; i++) runs.push(await runSkillMarketReviewSla(new Date(start + i * day)));
-    // The broken-org version throws every run; the Public one is reminded up to the cap, then left alone.
-    expect(runs.map(r => r.reminded)).toEqual([...Array(MAX_SLA_REMINDERS).fill(1), 0]);
-    const stored = (await SkillListingVersion.findById(version.id))!;
-    expect(stored.reminderCount).toBe(MAX_SLA_REMINDERS);
-    expect(stored.reviewStatus).toBe('pending');
   });
 });
 

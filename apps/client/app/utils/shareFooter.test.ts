@@ -107,7 +107,8 @@ describe('buildSignupGateHtml', () => {
   it('keeps a keyboard-accessible dismiss control', async () => {
     const buildGate = await loadSignupGate();
     const { html } = buildGate();
-    expect(html).toContain('id="b4m-gate-dismiss"');
+    // apps/workers/src/services/publish/buildThumbnailDocument.ts matches this exact opening tag.
+    expect(html).toContain('<input type="checkbox" id="b4m-gate-dismiss"');
     expect(html).toContain('for="b4m-gate-dismiss"');
   });
 
