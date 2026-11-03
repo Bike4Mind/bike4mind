@@ -600,7 +600,7 @@ export function useConversation(
         // to say so, the 'workspace' one went out before this window was looking.
         setPreparing(current => current ?? loaded?.preparingWorkspace ?? null);
         setStreaming(!!live);
-        setTurn(live ? { startedAt: live.startedAt, tokens: null } : null);
+        setTurn(live ? { startedAt: live.startedAt, tokens: null, messageId: live.messageId } : null);
       });
     };
     load();
@@ -790,7 +790,13 @@ export function useConversation(
         setStreaming(true);
         reasoning = '';
         const startedAt = Date.now();
-        setTurn({ startedAt, tokens: null, lastEventAt: startedAt });
+        setTurn({
+          startedAt,
+          tokens: null,
+          lastEventAt: startedAt,
+          messageId: event.messageId,
+          ...(event.baseUsage ? { continued: true } : {}),
+        });
         setMessages(current => startReply(current, event.messageId));
         return;
       }

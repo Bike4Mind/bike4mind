@@ -158,6 +158,72 @@ describe('the reply stats rail and its footer fallback', () => {
     expect(statValue('thinking')).toBe('6s');
   });
 
+  describe('while a reply is continued', () => {
+    const at = 20_000;
+    const turn: TurnProgress = {
+      startedAt: at - 5000,
+      tokens: null,
+      messageId: 'a1',
+      continued: true,
+      requestAt: at - 4500,
+      firstTokenAt: at - 4000,
+      thinkingSince: at - 2000,
+    };
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+      vi.setSystemTime(at);
+    });
+
+    it('adds the live figures to what the earlier runs stored, and their usage until this run reports', () => {
+      const stored = message('a1', { content: 'Partial', stats, usage: { outputTokens: 300, creditsUsed: 3 } });
+      render([stored], { statsRail: true, streaming: true, liveTurn: turn });
+
+      expect(statValue('thinking')).toBe('5s');
+      expect(statValue('firstToken')).toBe('800ms');
+      expect(statValue('tokens')).toBe('300');
+      // The turn line shows the cost while it runs.
+      expect(statValue('cost')).toBeUndefined();
+
+      render([stored], {
+        statsRail: true,
+        streaming: true,
+        liveTurn: { ...turn, usage: { outputTokens: 520, creditsUsed: 5 } },
+      });
+      expect(statValue('tokens')).toBe('520');
+    });
+
+    it('shows no time for a reply stored before stats were kept, only its counts', () => {
+      const legacy = message('a1', { content: 'Partial', usage: { outputTokens: 300 } });
+      render([legacy], { statsRail: true, streaming: true, liveTurn: turn });
+
+      expect(statValue('thinking')).toBeUndefined();
+      expect(statValue('firstToken')).toBeUndefined();
+      expect(statValue('tokens')).toBe('300');
+    });
+  });
+
+  it('keeps the live figures on the reply being written when a queued message lands after it', () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    vi.setSystemTime(20_000);
+    const turn: TurnProgress = { startedAt: 15_000, tokens: null, messageId: 'a1', thinkingSince: 17_000 };
+
+    render(
+      [
+        message('u1', { role: 'user', content: 'Think hard' }),
+        message('a1', { content: 'Working' }),
+        message('r1', {
+          role: 'user',
+          content: 'Done over there',
+          relay: { fromSessionId: 's2', fromTitle: 'Other', hops: 1 },
+        }),
+      ],
+      { statsRail: true, streaming: true, liveTurn: turn }
+    );
+
+    expect(statValue('thinking')).toBe('3s');
+  });
+
   it('switches the live figures for the stored ones when the reply settles', () => {
     const live: TurnProgress = { startedAt: Date.now() - 4000, tokens: null };
     render([message('a1', { content: 'Partial' })], { statsRail: true, streaming: true, liveTurn: live });

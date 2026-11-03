@@ -757,6 +757,8 @@ export function MessageThread({
   // Only the LAST boundary divides the thread. Earlier ones fall inside the folded section and
   // draw their own divider there, which is what a conversation compacted twice should look like.
   const boundary = lastBoundaryIndex(messages);
+  // By id: a queued prompt or a relayed message can land after the reply while it is still written.
+  const liveReplyId = streaming ? (liveTurn?.messageId ?? last?.id) : undefined;
 
   // One function for both sides of the divider, taking each message's index in the WHOLE thread,
   // so a turn drawn inside the disclosure is the same turn with the same Continue and status
@@ -776,7 +778,8 @@ export function MessageThread({
         // Only the last turn, and only while nothing is running: resuming writes back
         // into its own message, so a Continue on an older one would edit history.
         {...(index === messages.length - 1 && !streaming ? { onContinue } : {})}
-        {...(index === messages.length - 1 && streaming ? { status, live: true, liveTurn } : {})}
+        {...(index === messages.length - 1 && streaming ? { status, live: true } : {})}
+        {...(message.id === liveReplyId ? { liveTurn } : {})}
         {...(skipRounds > 0 ? { skipRounds } : {})}
         {...(statsRail ? { rail: true } : {})}
       />

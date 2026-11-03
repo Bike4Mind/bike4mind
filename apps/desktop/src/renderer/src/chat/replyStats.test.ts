@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ChatReplyStats } from '@shared/chat';
+import type { ChatReplyStats, ChatUsage } from '@shared/chat';
 import {
   cacheReadShare,
   describeReplyStats,
@@ -267,6 +267,23 @@ describe('the live turn', () => {
 
   it('times the first token from the turn when no request was seen going out', () => {
     expect(liveReplyStats({ ...turn, firstTokenAt: 10_700 }, 12_000).firstTokenMs).toBe(700);
+  });
+
+  it("builds on a continued reply's earlier runs, taking the server's running thinking count over theirs", () => {
+    const earlier: ChatReplyStats = {
+      ...base,
+      firstTokenMs: 900,
+      reasoningMs: 2000,
+      reasoningTokens: 50,
+      derived: ['reasoningTokens'],
+    };
+    const live = liveReplyStats({ ...turn, firstTokenAt: 10_400, thinkingMs: 1500 }, 12_000, earlier);
+    expect(live).toMatchObject({ firstTokenMs: 900, reasoningMs: 3500 });
+
+    const value = (usage: ChatUsage) =>
+      replyStats({ stats: live, usage }, { live: true }).find(row => row.id === 'thinkingTokens');
+    expect(value({ outputTokens: 400, reasoningTokens: 120 })).toEqual({ id: 'thinkingTokens', value: '120' });
+    expect(value({ outputTokens: 400 })?.value).toBe('~50');
   });
 
   it('has no thinking time or first token for a turn that has neither', () => {
