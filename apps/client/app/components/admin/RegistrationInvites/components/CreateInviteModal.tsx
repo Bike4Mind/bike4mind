@@ -18,6 +18,7 @@ import { createPortal } from 'react-dom';
 import { PREDEFINED_USER_TAGS } from '@bike4mind/common';
 import { useGetUserTags } from '@client/app/hooks/data/user';
 import { getTagColor } from '../../InviteCenter/shared/tagColors';
+import GrantPackageSelect from '../../InviteCenter/shared/GrantPackageSelect';
 import { useRegistrationInvitesStore } from '../store';
 import { CreateInviteFormData } from '../types';
 
@@ -32,6 +33,7 @@ export const CreateInviteModal: React.FC<CreateInviteModalProps> = ({ onSubmit, 
   const [spicyConfirm, setSpicyConfirm] = useState('');
   const [tags, setTags] = useState<string[]>([]);
   const [startingCredits, setStartingCredits] = useState<string>('25000');
+  const [grantPackageId, setGrantPackageId] = useState<string | null>(null);
   const [startingStorage, setStartingStorage] = useState<string>('1000');
 
   // Tag picker state
@@ -123,6 +125,7 @@ export const CreateInviteModal: React.FC<CreateInviteModalProps> = ({ onSubmit, 
       ...(tags.length > 0 ? { tags } : {}),
       ...(Number.isFinite(parsedCredits) ? { startingCredits: parsedCredits } : {}),
       ...(Number.isFinite(parsedStorage) ? { startingStorage: parsedStorage } : {}),
+      ...(grantPackageId ? { grantPackageId } : {}),
     };
 
     onSubmit(payload);
@@ -132,6 +135,7 @@ export const CreateInviteModal: React.FC<CreateInviteModalProps> = ({ onSubmit, 
     setOpenCreate(false);
     clearErrors();
     setUnlimitedUse(false);
+    setGrantPackageId(null);
     setSpicyConfirm('');
     setTags([]);
     setStartingCredits('25000');
@@ -327,11 +331,21 @@ export const CreateInviteModal: React.FC<CreateInviteModalProps> = ({ onSubmit, 
                   </FormControl>
                 </Grid>
 
+                <Grid xs={12}>
+                  <GrantPackageSelect
+                    value={grantPackageId}
+                    onChange={setGrantPackageId}
+                    testId="create-invite-grant-package-select"
+                    helperText="A package supplies the credits and storage below and enforces its signup caps."
+                  />
+                </Grid>
+
                 {/* Credits & Storage */}
                 <Grid xs={6}>
                   <FormControl>
                     <FormLabel>Starting Credits</FormLabel>
                     <Input
+                      disabled={grantPackageId !== null}
                       type="number"
                       value={startingCredits}
                       onChange={e => setStartingCredits(e.target.value)}
@@ -348,6 +362,7 @@ export const CreateInviteModal: React.FC<CreateInviteModalProps> = ({ onSubmit, 
                   <FormControl>
                     <FormLabel>Starting Storage (MB)</FormLabel>
                     <Input
+                      disabled={grantPackageId !== null}
                       type="number"
                       value={startingStorage}
                       onChange={e => setStartingStorage(e.target.value)}

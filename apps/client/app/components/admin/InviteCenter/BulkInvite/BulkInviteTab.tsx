@@ -26,6 +26,7 @@ import { APP_NAME } from '@client/config/general'; // brand externalized
 import { toast } from 'sonner';
 import CopyButton from '../shared/CopyButton';
 import { getTagColor } from '../shared/tagColors';
+import GrantPackageSelect from '../shared/GrantPackageSelect';
 
 // --- Types ---
 
@@ -514,6 +515,7 @@ const BulkInviteTab = ({ quickAction }: BulkInviteTabProps) => {
   const [rows, setRows] = useState<DraftRow[]>([createEmptyRow()]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [sending, setSending] = useState(false);
+  const [grantPackageId, setGrantPackageId] = useState<string | null>(null);
   const [showCsvPanel, setShowCsvPanel] = useState(false);
   const [results, setResults] = useState<ImportResult[] | null>(null);
   const [sendProgress, setSendProgress] = useState<{ completed: number; total: number } | null>(null);
@@ -635,6 +637,7 @@ const BulkInviteTab = ({ quickAction }: BulkInviteTabProps) => {
       try {
         const response = await api.post<{ success: boolean; results: ImportResult[] }>('/api/admin/bulk-create-users', {
           users,
+          ...(grantPackageId ? { grantPackageId } : {}),
         });
 
         const apiResults = response.data.results;
@@ -670,7 +673,7 @@ const BulkInviteTab = ({ quickAction }: BulkInviteTabProps) => {
         setSelectedIds(new Set());
       }
     },
-    [draftRows, rows]
+    [draftRows, rows, grantPackageId]
   );
 
   const toggleSelect = useCallback((id: string) => {
@@ -906,6 +909,16 @@ const BulkInviteTab = ({ quickAction }: BulkInviteTabProps) => {
             );
           })}
         </Box>
+      </Box>
+
+      <Box sx={{ mt: 2, maxWidth: 480 }}>
+        <GrantPackageSelect
+          value={grantPackageId}
+          onChange={setGrantPackageId}
+          disabled={sending}
+          testId="bulk-invite-grant-package-select"
+          helperText="When set, every created user gets the package's credits and storage instead of the row amounts."
+        />
       </Box>
 
       {/* Send All button */}

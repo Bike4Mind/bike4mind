@@ -19,6 +19,8 @@ const api = vi.hoisted(() => ({
   runPartnerRuleBackfill: vi.fn(),
 }));
 vi.mock('@client/app/utils/partnerSignupRuleAPICalls', () => api);
+const packageApi = vi.hoisted(() => ({ fetchGrantPackages: vi.fn() }));
+vi.mock('@client/app/utils/grantPackageAPICalls', () => packageApi);
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import PartnerSignupRulesTab from './PartnerSignupRulesTab';
@@ -40,6 +42,27 @@ const makeRule = (over: Partial<IPartnerSignupRuleDocument> = {}): IPartnerSignu
 const listOf = (rules: IPartnerSignupRuleDocument[]) => ({
   data: rules,
   meta: { total: rules.length, page: 1, limit: 20, totalPages: 1 },
+});
+
+const cappedPackage = {
+  id: 'pkg1',
+  name: 'Launch pack',
+  credits: 100,
+  totalCap: 1,
+  dailyCap: null,
+  redeemedTotal: 1,
+  redeemedToday: 1,
+  capHits: 3,
+  lastCapHitAt: '2026-11-01T00:00:00.000Z',
+  active: true,
+};
+
+beforeEach(() => {
+  packageApi.fetchGrantPackages.mockResolvedValue({
+    data: [cappedPackage],
+    meta: { total: 1, page: 1, limit: 100, totalPages: 1 },
+    reasonPolicy: {},
+  });
 });
 
 const renderTab = () => {
@@ -167,5 +190,38 @@ describe('PartnerSignupRulesTab subscription', () => {
     await waitFor(() =>
       expect(screen.getByTestId('partner-rule-subscription-select')).toHaveTextContent('price_removed (unavailable)')
     );
+  });
+});
+
+describe('PartnerSignupRulesTab grant package', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.searchOrganizations.mockResolvedValue([]);
+    api.createPartnerSignupRule.mockResolvedValue(makeRule());
+  });
+
+  it('sends the selected package in the create payload and locks the credits input', async () => {
+    api.fetchPartnerSignupRules.mockResolvedValue(listOf([]));
+    renderTab();
+
+    await userEvent.click(await screen.findByTestId('partner-rule-add-btn'));
+    await userEvent.type(screen.getByTestId('partner-rule-domain-input').querySelector('input')!, 'new.com');
+    await waitFor(() => expect(screen.getByTestId('partner-rule-grant-package-select')).not.toBeDisabled());
+    await userEvent.click(screen.getByTestId('partner-rule-grant-package-select'));
+    await userEvent.click(await screen.findByTestId('partner-rule-grant-package-select-option-pkg1'));
+    expect(screen.getByTestId('partner-rule-grant-package-select-usage')).toHaveTextContent('cap hit 3 times');
+    expect(screen.getByTestId('partner-rule-credits-input').querySelector('input')).toBeDisabled();
+    await userEvent.click(screen.getByTestId('partner-rule-save-btn'));
+
+    await waitFor(() => expect(api.createPartnerSignupRule).toHaveBeenCalled());
+    expect(api.createPartnerSignupRule.mock.calls[0][0]).toMatchObject({ grantPackageId: 'pkg1' });
+  });
+
+  it('shows the linked package cap hits in the rules table', async () => {
+    api.fetchPartnerSignupRules.mockResolvedValue(listOf([makeRule({ grantPackageId: 'pkg1' })]));
+    renderTab();
+
+    expect(await screen.findByTestId('partner-rule-cap-hits-r1')).toHaveTextContent('3 cap hits');
+    expect(screen.getByTestId('partner-rule-package-r1')).toHaveTextContent('Launch pack');
   });
 });

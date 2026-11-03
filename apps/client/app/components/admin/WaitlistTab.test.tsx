@@ -9,9 +9,11 @@ import WaitlistTab from './WaitlistTab';
 const mocks = vi.hoisted(() => ({
   post: vi.fn(),
   fetchSubscribers: vi.fn(),
+  fetchGrantPackages: vi.fn(),
 }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: mocks.post } }));
+vi.mock('@client/app/utils/grantPackageAPICalls', () => ({ fetchGrantPackages: mocks.fetchGrantPackages }));
 vi.mock('@client/app/utils/subscriberAPICalls', () => ({
   fetchSubscribers: mocks.fetchSubscribers,
   deleteSubscriber: vi.fn(),
@@ -56,6 +58,13 @@ describe('WaitlistTab invite dialog', () => {
     vi.clearAllMocks();
     mocks.fetchSubscribers.mockResolvedValue({ data: [SUBSCRIBER], meta: { total: 1 } });
     mocks.post.mockResolvedValue({ data: { emailSent: true } });
+    mocks.fetchGrantPackages.mockResolvedValue({
+      data: [{ id: 'pkg1', name: 'Launch pack', credits: 750, storageMb: 2048, totalCap: 10, dailyCap: null }].map(
+        pkg => ({ ...pkg, redeemedTotal: 0, redeemedToday: 0, capHits: 0, active: true })
+      ),
+      meta: { total: 1, page: 1, limit: 100, totalPages: 1 },
+      reasonPolicy: {},
+    });
   });
 
   it('keeps the invite locked until a reason is given', async () => {
@@ -79,6 +88,24 @@ describe('WaitlistTab invite dialog', () => {
       ['email', 'emailBody', 'firstName', 'lastName', 'startingCredits', 'startingStorage', 'subscriberId'].sort()
     );
     expect(body).toMatchObject({ subscriberId: 'sub-1', startingCredits: 500, startingStorage: 1000 });
+  });
+
+  it('sends the selected grant package and describes its amounts in the default email', async () => {
+    const confirm = await openInviteDialog();
+
+    const select = screen.getByTestId('waitlist-invite-grant-package-select');
+    await waitFor(() => expect(select).not.toBeDisabled());
+    fireEvent.click(select);
+    fireEvent.click(await screen.findByTestId('waitlist-invite-grant-package-select-option-pkg1'));
+    fireEvent.click(screen.getByTestId('waitlist-invite-dialog-reason-input-preset-0'));
+    await waitFor(() => expect(confirm).toBeEnabled());
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(1));
+    const [, body] = mocks.post.mock.calls[0];
+    expect(body.grantPackageId).toBe('pkg1');
+    expect(body.emailBody).toContain('750 credits');
+    expect(body.emailBody).toContain('2048 MB');
   });
 });
 

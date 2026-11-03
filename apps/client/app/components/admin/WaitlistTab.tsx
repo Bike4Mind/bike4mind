@@ -41,6 +41,7 @@ import { toast } from 'sonner';
 import { ActionDialog } from './shared/ActionDialog';
 import { ADMIN_REASON_PRESETS } from './shared/adminReason';
 import { InviteCenterShell } from './InviteCenterShell';
+import GrantPackageSelect, { useGrantPackageOptions } from './InviteCenter/shared/GrantPackageSelect';
 
 const SOURCE_LABELS: Record<SubscriberSource, string> = {
   subscribe_page: 'Waitlist page',
@@ -74,6 +75,7 @@ const useGenerateSubscriberInvite = () => {
       lastName: string;
       startingCredits: number;
       startingStorage: number;
+      grantPackageId?: string;
       emailBody?: string;
     }) => {
       const response = await api.post('/api/subscribers/generate-invite', data);
@@ -101,16 +103,22 @@ interface GenerateInviteDialogProps {
 const GenerateInviteDialog = ({ open, onClose, subscriber }: GenerateInviteDialogProps) => {
   const [startingCredits, setStartingCredits] = useState(500);
   const [startingStorage, setStartingStorage] = useState(1000);
+  const [grantPackageId, setGrantPackageId] = useState<string | null>(null);
   const [emailBody, setEmailBody] = useState('');
   const [inviteIssued, setInviteIssued] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const generateInvite = useGenerateSubscriberInvite();
+  const { data: packageList } = useGrantPackageOptions();
+  const selectedPackage = grantPackageId ? packageList?.data.find(pkg => pkg.id === grantPackageId) : undefined;
+  const effectiveCredits = selectedPackage ? selectedPackage.credits : startingCredits;
+  const effectiveStorage = selectedPackage?.storageMb ?? startingStorage;
 
   const resetAndClose = () => {
     onClose();
     setStartingCredits(500);
     setStartingStorage(1000);
+    setGrantPackageId(null);
     setInviteIssued(false);
     setError(null);
     setEmailBody('');
@@ -126,8 +134,8 @@ const GenerateInviteDialog = ({ open, onClose, subscriber }: GenerateInviteDialo
 Thank you for your interest${APP_NAME ? ` in ${APP_NAME}` : ''}! We're excited to welcome you to our platform.
 
 Your account has been set up with:
-\u2022 ${startingCredits.toLocaleString()} credits to get you started
-\u2022 ${startingStorage} MB of storage space
+\u2022 ${effectiveCredits.toLocaleString()} credits to get you started
+\u2022 ${effectiveStorage} MB of storage space
 
 Use your invite code below to complete your registration and start exploring our AI-powered tools.
 
@@ -143,6 +151,7 @@ The${APP_NAME ? ` ${APP_NAME}` : ''} Team`;
         lastName: subscriber.lastName,
         startingCredits,
         startingStorage,
+        ...(grantPackageId ? { grantPackageId } : {}),
         emailBody: emailBody || defaultEmailBody,
       });
 
@@ -187,10 +196,18 @@ The${APP_NAME ? ` ${APP_NAME}` : ''} Team`;
       onConfirm={handleConfirm}
       data-testid="waitlist-invite-dialog"
     >
+      <GrantPackageSelect
+        value={grantPackageId}
+        onChange={setGrantPackageId}
+        testId="waitlist-invite-grant-package-select"
+        helperText="A package supplies the credits and storage and enforces its signup caps."
+      />
+
       <Box sx={{ display: 'flex', gap: 2 }}>
         <FormControl sx={{ flex: 1 }}>
           <FormLabel>Starting credits</FormLabel>
           <Input
+            disabled={grantPackageId !== null}
             type="number"
             value={startingCredits}
             onChange={e => setStartingCredits(parseInt(e.target.value) || 0)}
@@ -202,6 +219,7 @@ The${APP_NAME ? ` ${APP_NAME}` : ''} Team`;
         <FormControl sx={{ flex: 1 }}>
           <FormLabel>Starting storage</FormLabel>
           <Input
+            disabled={selectedPackage?.storageMb != null}
             type="number"
             value={startingStorage}
             onChange={e => setStartingStorage(parseInt(e.target.value) || 0)}
