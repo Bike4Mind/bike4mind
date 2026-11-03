@@ -696,6 +696,9 @@ export function ChatShell({
   modeRef.current = mode;
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
+  // The open chat's local count includes a message still being sent, which the summary count lacks until it lands.
+  const openMessageCount = useRef(0);
+  openMessageCount.current = conversation.session?.id === activeId ? conversation.messages.length : 0;
   const unmounted = useRef(false);
   useEffect(() => {
     unmounted.current = false;
@@ -734,7 +737,7 @@ export function ChatShell({
       if (!path || modeRef.current !== 'chat') return;
       // The first-run seed can land while the picker is open; share into that chat instead of making another.
       const open = openChatId.current;
-      if (open) {
+      if (open && !deletedChats.current.has(open)) {
         await shareInto(open, () => shareFolderTo(open, path));
         return;
       }
@@ -743,7 +746,7 @@ export function ChatShell({
       if (unmounted.current || (!joined && modeRef.current !== 'chat')) return;
       // A chat the user opened during the wait cannot be the seed, which has not landed.
       const openNow = openChatId.current;
-      if (!joined && openNow) {
+      if (!joined && openNow && !deletedChats.current.has(openNow)) {
         await shareInto(openNow, () => shareFolderTo(openNow, path));
         return;
       }
@@ -759,8 +762,9 @@ export function ChatShell({
       try {
         created = joined || (await create());
       } catch (error) {
-        const seed = late.id;
-        if (!unmounted.current && modeRef.current === 'chat' && seed && openChatId.current === seed) {
+        // The seed's own chain is longer than create()'s, so give a seed that landed in the same tick a turn to report.
+        const seed = late.id ?? (seedAtClick ? await settledWithin(seedAtClick, 0) : null);
+        if (!unmounted.current && modeRef.current === 'chat' && seed && (openChatId.current ?? seed) === seed) {
           await shareInto(seed, () => shareFolderTo(seed, path));
           return;
         }
@@ -768,9 +772,21 @@ export function ChatShell({
       }
       if (unmounted.current) return;
       const lateOpen = late.id && openChatId.current === late.id ? late.id : null;
-      if (lateOpen && (sessionsRef.current.find(session => session.id === lateOpen)?.messageCount ?? 0) > 0) {
+      const lateHasMessages =
+        lateOpen &&
+        ((sessionsRef.current.find(session => session.id === lateOpen)?.messageCount ?? 0) > 0 ||
+          openMessageCount.current > 0);
+      if (lateOpen && lateHasMessages) {
         void shareInto(lateOpen, () => shareFolderTo(lateOpen, path));
-        await remove(created).catch(() => undefined);
+        await remove(created).catch(() => {
+          setAddFolderAlerts(current => ({
+            ...current,
+            [lateOpen]: {
+              text: 'Desktop could not remove the empty conversation it made. Delete it from the sidebar.',
+              color: 'warning',
+            },
+          }));
+        });
         return;
       }
       void shareInto(created, () => shareFolderTo(created, path));

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react';
+import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import type { ChatSession, ChatSessionSummary, ChatStreamEvent } from '@shared/chat';
@@ -175,16 +175,17 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function renderShell(): Promise<void> {
+async function renderShell(strict = false): Promise<void> {
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
+  const shell = (
+    <CssVarsProvider theme={desktopTheme}>
+      <ChatShell />
+    </CssVarsProvider>
+  );
   await act(async () => {
-    root?.render(
-      <CssVarsProvider theme={desktopTheme}>
-        <ChatShell />
-      </CssVarsProvider>
-    );
+    root?.render(strict ? <StrictMode>{shell}</StrictMode> : shell);
   });
   await act(async () => undefined);
 }
@@ -805,6 +806,186 @@ describe('Add folder in a Chat composer', () => {
     expect(deleteSession).toHaveBeenCalledExactlyOnceWith('made', false);
     expect(document.querySelectorAll('[data-testid="chat-session-item"]')).toHaveLength(1);
     expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
+  });
+
+  it('shares into a late first-run chat the user sent in while the new chat was being made, and removes the new one', async () => {
+    const stored = stubBridge([], { sendMessage: async () => ({ ok: true }) });
+    const seed = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => seed.promise);
+    const made = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => made.promise);
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValue(NOTES);
+    addContextDirectory.mockResolvedValue({
+      status: 'added',
+      path: NOTES,
+      session: summary('seeded', 'chat', [NOTES]),
+    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      await addFolderFromMenu();
+      await act(async () => void (await vi.advanceTimersByTimeAsync(3_500)));
+    } finally {
+      vi.useRealTimers();
+    }
+    const seeded = summary('seeded');
+    const fresh = summary('made');
+    stored.set('seeded', seeded);
+    stored.set('made', fresh);
+    await act(async () => seed.resolve({ session: seeded }));
+    await act(async () => undefined);
+    heldLoads.set('seeded', new Promise(() => undefined));
+    await typeCommand('hello');
+    await act(async () => made.resolve({ session: fresh }));
+    await act(async () => undefined);
+
+    expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('seeded', NOTES);
+    expect(deleteSession).toHaveBeenCalledExactlyOnceWith('made', false);
+  });
+
+  it('shares into the late first-run chat when it lands in the same tick the new chat fails', async () => {
+    const stored = stubBridge([]);
+    const seed = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => seed.promise);
+    const made = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => made.promise);
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValue(NOTES);
+    addContextDirectory.mockResolvedValue({
+      status: 'added',
+      path: NOTES,
+      session: summary('seeded', 'chat', [NOTES]),
+    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      await addFolderFromMenu();
+      await act(async () => void (await vi.advanceTimersByTimeAsync(3_500)));
+    } finally {
+      vi.useRealTimers();
+    }
+    const seeded = summary('seeded');
+    stored.set('seeded', seeded);
+    seed.resolve({ session: seeded });
+    made.reject(new Error('disk full'));
+    await act(async () => undefined);
+    await act(async () => undefined);
+
+    expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('seeded', NOTES);
+    expect(byTestId('chat-add-folder-error')).toBeNull();
+  });
+
+  it('tells the user when the empty chat it made cannot be removed after sharing into the late first-run chat', async () => {
+    const stored = stubBridge([]);
+    const seed = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => seed.promise);
+    const made = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => made.promise);
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValue(NOTES);
+    addContextDirectory.mockResolvedValue({
+      status: 'added',
+      path: NOTES,
+      session: summary('seeded', 'chat', [NOTES]),
+    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      await addFolderFromMenu();
+      await act(async () => void (await vi.advanceTimersByTimeAsync(3_500)));
+    } finally {
+      vi.useRealTimers();
+    }
+    const seeded = { ...summary('seeded'), messageCount: 2 };
+    const fresh = summary('made');
+    stored.set('seeded', seeded);
+    stored.set('made', fresh);
+    await act(async () => seed.resolve({ session: seeded }));
+    await act(async () => undefined);
+    deleteSession.mockRejectedValue(new Error('locked'));
+    await act(async () => made.resolve({ session: fresh }));
+    await act(async () => undefined);
+
+    expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('seeded', NOTES);
+    expect(byTestId('chat-add-folder-notice')?.textContent).toContain('could not remove the empty conversation');
+  });
+
+  describe('when the new chat fails after the first-run wait', () => {
+    async function waitOutSeed() {
+      const stored = stubBridge([], { createCodeSession: () => new Promise(() => undefined) });
+      const seed = deferred<{ session: ChatSessionSummary }>();
+      createSession.mockImplementationOnce(() => seed.promise);
+      const made = deferred<{ session: ChatSessionSummary }>();
+      createSession.mockImplementationOnce(() => made.promise);
+      await renderShell();
+      pickProjectDirectory.mockResolvedValue(NOTES);
+      addContextDirectory.mockResolvedValue({
+        status: 'added',
+        path: NOTES,
+        session: summary('seeded', 'chat', [NOTES]),
+      });
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        await addFolderFromMenu();
+        await act(async () => void (await vi.advanceTimersByTimeAsync(3_500)));
+      } finally {
+        vi.useRealTimers();
+      }
+      const seeded = summary('seeded');
+      stored.set('seeded', seeded);
+      return { stored, seed, made, seeded };
+    }
+
+    it('shares nothing when the shell unmounted before the first-run chat landed', async () => {
+      const { seed, made, seeded } = await waitOutSeed();
+      act(() => root?.unmount());
+      root = null;
+      seed.resolve({ session: seeded });
+      made.reject(new Error('disk full'));
+      await tick();
+      await tick();
+
+      expect(addContextDirectory).not.toHaveBeenCalled();
+    });
+
+    it('shares nothing when the window is in Code mode when the first-run chat lands', async () => {
+      const { seed, made, seeded } = await waitOutSeed();
+      await act(async () => byTestId('mode-switch-code-btn')?.click());
+      await act(async () => undefined);
+      await act(async () => seed.resolve({ session: seeded }));
+      await act(async () => made.reject(new Error('disk full')));
+      await act(async () => undefined);
+
+      expect(addContextDirectory).not.toHaveBeenCalled();
+    });
+
+    it('shares nothing into the first-run chat when the user has another chat open', async () => {
+      const { stored, seed, made, seeded } = await waitOutSeed();
+      const other = summary('other', 'chat', undefined, 'Other');
+      stored.set('other', other);
+      createSession.mockResolvedValueOnce({ session: other });
+      await act(async () => byTestId('chat-new-session-btn')?.click());
+      await act(async () => undefined);
+      await act(async () => seed.resolve({ session: seeded }));
+      await act(async () => made.reject(new Error('disk full')));
+      await act(async () => undefined);
+
+      expect(addContextDirectory).not.toHaveBeenCalledWith('seeded', NOTES);
+    });
+  });
+
+  it('shares a folder from the no-chat path under StrictMode', async () => {
+    stubBridge([]);
+    seedFails();
+    await renderShell(true);
+
+    pickProjectDirectory.mockResolvedValueOnce(NOTES);
+    addContextDirectory.mockResolvedValue({ status: 'added', path: NOTES, session: summary('fresh', 'chat', [NOTES]) });
+    await addFolderFromMenu();
+    await act(async () => undefined);
+
+    expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('fresh', NOTES);
   });
 
   it('makes no chat when the shell unmounts while Add folder waits on the first-run seed', async () => {
