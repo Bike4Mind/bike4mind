@@ -25,11 +25,13 @@ import {
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 let server: Awaited<ReturnType<typeof createMongoReplSet>>;
+const UNCAPPED = '1000000000';
 const config: Record<string, string> = {
   stagedSignupGrantEnabled: 'true',
   signupGrantCredits: '12',
   verifiedUnlockCredits: '28',
-  signupGrantDailyBudget: '0',
+  signupGrantSignupPoolDaily: UNCAPPED,
+  signupGrantTricklePoolDaily: UNCAPPED,
 };
 const adminSettings = {
   findBySettingName: async (key: string) => (key in config ? { settingValue: config[key] } : null),
@@ -84,7 +86,7 @@ beforeEach(async () => {
   await Organization.collection.deleteMany({});
   await AdminSettings.collection.deleteMany({});
   await SignupGrantBudgetDayModel.deleteMany({});
-  config.signupGrantDailyBudget = '0';
+  config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = UNCAPPED;
   notify.mockClear();
   clock = new Date();
 });
@@ -123,7 +125,7 @@ const ledgerRows = (id: string) => CreditTransaction.countDocuments({ transactio
 
 /** Day one: budget for a single grant, so users after the first are held in creation order. */
 async function holdUsers(count: number) {
-  config.signupGrantDailyBudget = '12';
+  config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '12';
   clock = new Date('2030-01-01T10:00:00Z');
   const users = [];
   for (let n = 0; n < count; n++) {
@@ -138,7 +140,7 @@ describe('held signup grant release', () => {
   it('pays held grants oldest first against the new day budget, once across runs', async () => {
     const users = await holdUsers(4);
     clock = new Date('2030-01-02T00:00:01Z');
-    config.signupGrantDailyBudget = '24';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '24';
     expect(await cron()).toMatchObject({ released: 2, creditsPaid: 24, stoppedOnBudget: true });
     expect(await creditsOf(users[1].id)).toBe(12);
     expect(await creditsOf(users[2].id)).toBe(12);
@@ -152,7 +154,7 @@ describe('held signup grant release', () => {
     const users = await holdUsers(3);
     await User.updateOne({ _id: users[1].id }, { isBanned: true });
     clock = new Date('2030-01-02T00:00:01Z');
-    config.signupGrantDailyBudget = '12';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '12';
     expect(await cron()).toMatchObject({ released: 1, scanned: 1 });
     expect(await creditsOf(users[1].id)).toBe(0);
     expect(await creditsOf(users[2].id)).toBe(12);
@@ -227,7 +229,7 @@ describe('held signup grant release', () => {
     const users = await holdUsers(5);
     await User.updateMany({ _id: { $in: [users[1].id, users[2].id] } }, { isBanned: true });
     clock = new Date('2030-01-02T00:00:01Z');
-    config.signupGrantDailyBudget = '12';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '12';
     expect(await cron(1)).toMatchObject({ released: 1, scanned: 1 });
     expect(await creditsOf(users[3].id)).toBe(12);
   });

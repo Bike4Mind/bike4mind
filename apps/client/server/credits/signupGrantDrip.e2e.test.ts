@@ -21,11 +21,13 @@ import {
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 let server: Awaited<ReturnType<typeof createMongoReplSet>>;
+const UNCAPPED = '1000000000';
 const config: Record<string, string> = {
   stagedSignupGrantEnabled: 'true',
   signupGrantCredits: '1000',
   verifiedUnlockCredits: '9000',
-  signupGrantDailyBudget: '0',
+  signupGrantSignupPoolDaily: UNCAPPED,
+  signupGrantTricklePoolDaily: UNCAPPED,
   // Payment unlocks pay on the payment here; paymentUnlockHold.e2e.test.ts covers the hold.
   signupUnlockPaymentHoldHours: '0',
   signupGrantActivityDailyCredits: '1000',
@@ -78,7 +80,7 @@ beforeEach(async () => {
   await CreditTransaction.collection.deleteMany({});
   await AdminSettings.collection.deleteMany({});
   await SignupGrantBudgetDayModel.deleteMany({});
-  config.signupGrantDailyBudget = '0';
+  config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = UNCAPPED;
   config.signupGrantActivityDailyCredits = '1000';
   config.signupGrantActivityMaxCredits = '9000';
   config.verifiedUnlockCredits = '9000';
@@ -192,7 +194,7 @@ describe('signup activity drip', () => {
   it('draws the daily budget, and an exhausted budget pays nothing and retries on a later day', async () => {
     const first = await createSignupStageUser(0);
     const second = await createSignupStageUser(1);
-    config.signupGrantDailyBudget = '1500';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '1500';
     clock = new Date(`${day(0)}T09:00:00Z`);
     expect(await drip(first.id, 0)).toMatchObject({ creditsGranted: 1000 });
     expect(await spentToday()).toBe(1000);
@@ -209,7 +211,7 @@ describe('signup activity drip', () => {
   // A held tranche is paid by a card or subscription unlock; the test calls the release directly to stand in for it.
   it('pays held signup tranches before any drip', async () => {
     const dripper = await createSignupStageUser(0);
-    config.signupGrantDailyBudget = '1000';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '1000';
     clock = new Date(`${day(0)}T09:00:00Z`);
     await userService.releaseSignupTranche((await createUser(2)).id, adapters);
     const held = await createUser(1);
@@ -225,7 +227,7 @@ describe('signup activity drip', () => {
 
   it('is not stalled by a stale, banned or AI-revoked held tranche', async () => {
     const dripper = await createSignupStageUser(0);
-    config.signupGrantDailyBudget = '5000';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '5000';
     clock = new Date(`${day(0)}T09:00:00Z`);
     const held = await createUser(1);
     await User.collection.updateOne(
@@ -256,7 +258,7 @@ describe('signup activity drip', () => {
 
   it('does not pay a drip on a reservation another attempt still owns', async () => {
     const user = await createSignupStageUser();
-    config.signupGrantDailyBudget = '5000';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '5000';
     clock = new Date(`${day(0)}T09:00:00Z`);
     const repository = signupProtection.grantBudget.repository;
     vi.spyOn(repository, 'reserve').mockResolvedValueOnce({ spent: 1000, fresh: false });
@@ -267,7 +269,7 @@ describe('signup activity drip', () => {
 
   it('still pays when the payout transaction retries after its own fresh draw', async () => {
     const user = await createSignupStageUser();
-    config.signupGrantDailyBudget = '5000';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '5000';
     clock = new Date(`${day(0)}T09:00:00Z`);
     vi.spyOn(userRepository, 'claimFreeCreditGrant').mockRejectedValueOnce(
       Object.assign(new Error('write conflict'), { errorLabels: ['TransientTransactionError'] })
@@ -292,7 +294,7 @@ describe('signup activity drip', () => {
 
   it('hands a failed payout back to the budget', async () => {
     const user = await createSignupStageUser();
-    config.signupGrantDailyBudget = '1000';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '1000';
     clock = new Date(`${day(0)}T09:00:00Z`);
     vi.spyOn(userRepository, 'update').mockRejectedValueOnce(new Error('write failed'));
     await expect(drip(user.id, 0)).rejects.toThrow('write failed');
@@ -301,7 +303,7 @@ describe('signup activity drip', () => {
   });
 
   it('releases the full remainder on a subscription outside an exhausted budget, once', async () => {
-    config.signupGrantDailyBudget = '1000';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '1000';
     const user = await createSignupStageUser(0);
     const spent = await spentToday();
     expect(spent).toBe(1000);
@@ -318,7 +320,7 @@ describe('signup activity drip', () => {
   });
 
   it('pays a budget-held tranche first when the account subscribes', async () => {
-    config.signupGrantDailyBudget = '1000';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '1000';
     await createSignupStageUser(0);
     const held = await createUser(1);
     await userService.releaseSignupTranche(held.id, adapters);

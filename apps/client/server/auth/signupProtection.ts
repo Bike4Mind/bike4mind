@@ -14,10 +14,14 @@ export const signupProtection: SignupProtection = {
     },
     async notify(alert) {
       try {
+        const pool = `${alert.pool === 'signup' ? 'Signup' : 'Trickle'} pool`;
+        const paid = `${alert.spent.toLocaleString('en-US')} of ${alert.budget.toLocaleString('en-US')} credits paid`;
         const outcome = await postMessageToSlackWithOutcome(
-          alert.threshold === 100
-            ? `Signup grant budget exhausted for ${alert.day}: ${alert.spent.toLocaleString('en-US')} of ${alert.budget.toLocaleString('en-US')} credits paid; new grants are held.`
-            : `Signup grant budget at ${alert.threshold}% for ${alert.day}: ${alert.spent.toLocaleString('en-US')} of ${alert.budget.toLocaleString('en-US')} credits paid.`,
+          alert.threshold === 'missing'
+            ? `${pool} setting is missing or invalid for ${alert.day}; its free grants are paused until it is set.`
+            : alert.threshold === 100
+              ? `${pool} exhausted for ${alert.day}: ${paid}; new grants are held.`
+              : `${pool} at ${alert.threshold}% for ${alert.day}: ${paid}.`,
           'SlackSecurityAlertsWebhookUrl',
           { timeoutMs: 3000 }
         );

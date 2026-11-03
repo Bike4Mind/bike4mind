@@ -209,7 +209,10 @@ async function releaseStage(
       let creditTransactionId: string | undefined;
       if (amount > 0) {
         if (!BUDGET_EXEMPT_REASONS.has(reason) && !adapters.bypassBudget) {
-          const reservation = await reserveSignupGrantBudget(db, transactionId, amount, dripDay);
+          const reservation = await reserveSignupGrantBudget(db, transactionId, amount, {
+            pool: dripDay ? 'trickle' : 'signup',
+            day: dripDay,
+          });
           reservations.push(reservation);
           // A same-day drip that did not make the draw fresh belongs to a concurrent attempt that may
           // still refund it; paying on that reservation could pay unmetered.

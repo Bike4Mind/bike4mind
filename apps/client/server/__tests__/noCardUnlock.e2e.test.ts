@@ -150,7 +150,7 @@ describe('grantNoCardUnlock on a real replica set', () => {
   });
 
   it('refuses while the signup tranche is held, and draws the daily signup budget otherwise', async () => {
-    await seedSettings({ signupGrantDailyBudget: GITHUB });
+    await seedSettings({ signupGrantSignupPoolDaily: GITHUB });
     const held = await seedUser({ signupGrantHeldReason: 'budget_exhausted' });
     const base = await build();
     const budgeted = {

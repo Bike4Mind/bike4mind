@@ -153,7 +153,7 @@ async function grantFlatFreeCredits(
   const budget =
     bypassBudget || isExplicitGrant
       ? { outcome: 'unmetered' as const, release: async () => {} }
-      : await reserveSignupGrantBudget(db, transactionId, amount);
+      : await reserveSignupGrantBudget(db, transactionId, amount, { pool: 'signup' });
   if (budget.outcome === 'exhausted') {
     await db.users.addTagsToUser(user.id, [PENDING_FREE_CREDITS_TAG]);
     await db.users.update({ id: user.id, signupGrantHeldReason: 'budget_exhausted' });

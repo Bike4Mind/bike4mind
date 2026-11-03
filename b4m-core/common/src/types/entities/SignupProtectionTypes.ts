@@ -50,6 +50,9 @@ export type SignupProtectionRepository = {
 /** Free-credit pools with separate daily budgets: initial grants vs the daily activity drip. */
 export type SignupGrantPool = 'signup' | 'trickle';
 
+export type SignupGrantBudgetThreshold = 50 | 100 | 'missing';
+
+/** Each method's `day` is the counter key: the service passes `<pool>:<YYYY-MM-DD>`. */
 export type SignupGrantBudgetRepository = {
   /**
    * Adds `amount` to the day's spend only while it stays within `budget`, keyed by `transactionId`
@@ -66,12 +69,19 @@ export type SignupGrantBudgetRepository = {
   /** Returns a reservation. A no-op when `transactionId` holds none, so it never double-refunds. */
   refund: (day: string, transactionId: string, amount: number) => Promise<void>;
   /** True only for the call that first sets the day's alert flag. */
-  markAlerted: (day: string, threshold: 50 | 100) => Promise<boolean>;
+  markAlerted: (day: string, threshold: SignupGrantBudgetThreshold) => Promise<boolean>;
   /** The day's spend; 0 when no row exists. */
   getSpent: (day: string) => Promise<number>;
 };
 
-export type SignupGrantBudgetAlert = { day: string; threshold: 50 | 100; spent: number; budget: number };
+/** `missing` fires when the pool's setting is absent or invalid, which pauses the pool. */
+export type SignupGrantBudgetAlert = {
+  pool: SignupGrantPool;
+  day: string;
+  threshold: SignupGrantBudgetThreshold;
+  spent: number;
+  budget: number;
+};
 
 export type SignupGrantBudget = {
   repository: SignupGrantBudgetRepository;
@@ -84,6 +94,6 @@ export type SignupProtection = {
   repository: SignupProtectionRepository;
   mode?: 'observe' | 'enforce';
   notifyHold?: (review: SignupDomainReview) => Promise<void>;
-  /** Daily payout budget for free signup grants; absent means no budget is enforced. */
+  /** Daily per-pool payout budgets for free signup grants; absent means no budget is enforced. */
   grantBudget?: SignupGrantBudget;
 };
