@@ -13,7 +13,7 @@ export interface Passkey {
   lastUsedAt: string | null;
 }
 
-const QUERY_KEY = ['passkeys'];
+export const PASSKEYS_QUERY_KEY = ['passkeys'] as const;
 
 export const passkeysSupported = (): boolean => browserSupportsWebAuthn();
 
@@ -40,7 +40,7 @@ export function describePasskeyMfaError(error: unknown): string {
 
 export function usePasskeys(enabled = true) {
   return useQuery({
-    queryKey: QUERY_KEY,
+    queryKey: PASSKEYS_QUERY_KEY,
     queryFn: async () => {
       const response = await api.get<{ passkeys: Passkey[] }>('/api/auth/mfa/passkey');
       return response.data.passkeys;
@@ -58,7 +58,7 @@ export function useRegisterPasskey() {
       const { data } = await api.post<{ passkey: Passkey }>('/api/auth/mfa/passkey/register', { response, name });
       return data.passkey;
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEY }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: PASSKEYS_QUERY_KEY }),
   });
 }
 
@@ -69,7 +69,7 @@ export function useRemovePasskey() {
       const response = await api.delete(`/api/auth/mfa/passkey/${id}`);
       return response.data;
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEY }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: PASSKEYS_QUERY_KEY }),
   });
 }
 

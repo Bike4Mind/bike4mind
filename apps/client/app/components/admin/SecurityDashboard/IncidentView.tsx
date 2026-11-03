@@ -800,7 +800,7 @@ export function IncidentView() {
         />
         {generatedAt && <RelativeTime prefix="As of" at={generatedAt} data-testid="security-incident-as-of" />}
       </Stack>
-      {refreshing && <UpdatingBar testId="security-incident-updating" />}
+      <UpdatingBar active={refreshing} testId="security-incident-updating" />
       <AnomalyBanner
         snapshot={anomaly.data}
         onReview={() =>

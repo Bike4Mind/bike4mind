@@ -18,7 +18,7 @@ const ApiKeyUsageSection: React.FC = () => {
   const keysWithAlerts = keys.filter(k => k.alerts && k.alerts.length > 0);
 
   return (
-    <Box data-testid="api-key-status-tab">
+    <Box data-testid="api-key-usage-section">
       <SectionContainer
         title={
           <Stack direction="row" alignItems="center" gap={1}>
@@ -26,7 +26,7 @@ const ApiKeyUsageSection: React.FC = () => {
             <Chip
               size="sm"
               variant="soft"
-              data-testid="api-key-status-tab-count"
+              data-testid="api-key-usage-section-count"
               sx={{
                 backgroundColor:
                   keysWithAlerts.length > 0 ? theme.palette.security.high.softBg : theme.palette.security.good.softBg,
@@ -57,7 +57,7 @@ const ApiKeyUsageSection: React.FC = () => {
             No API keys
           </Typography>
         ) : (
-          <Box data-testid="api-key-status-tab-list" sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+          <Box data-testid="api-key-usage-section-list" sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
             {keys.map((key, idx) => {
               const hasAlerts = key.alerts && key.alerts.length > 0;
               const statusColor: 'good' | 'high' | 'neutral' = hasAlerts

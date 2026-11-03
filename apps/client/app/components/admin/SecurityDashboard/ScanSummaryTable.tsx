@@ -30,6 +30,8 @@ type ScanSummaryRow = {
   nextRunAt: string | null;
   /** The schedules failed to load, so a missing next run does not mean manual. */
   nextRunUnavailable?: boolean;
+  /** The schedules have not arrived yet, so the next run is not known. */
+  nextRunLoading?: boolean;
 };
 
 const CHECK_STATUS: Record<SecurityCheckStatus, ScanStatus> = {
@@ -106,7 +108,8 @@ function checkRow(
   check: SecurityCheckSummary | undefined,
   overview: { loading: boolean; failed: boolean },
   nextRunAt: string | null,
-  nextRunUnavailable: boolean
+  nextRunUnavailable: boolean,
+  nextRunLoading: boolean
 ): ScanSummaryRow {
   return {
     id,
@@ -117,6 +120,7 @@ function checkRow(
     findings: check?.lastCheckedAt ? compactSeverityCounts(check.severityCounts, SEVERITIES) : null,
     nextRunAt,
     nextRunUnavailable,
+    nextRunLoading,
   };
 }
 
@@ -139,6 +143,7 @@ export function ScanSummaryTable({
   const overviewState = { loading: !overview.data && !overview.isError, failed: !overview.data && overview.isError };
   const checks = overview.data?.checks ?? [];
   const schedulesFailed = !schedules.data && schedules.isError;
+  const schedulesLoading = !schedules.data && !schedules.isError;
   const scheduled = (key: 'web' | 'cloud') => {
     const schedule = schedules.data?.[key];
     return schedule?.enabled && schedule.nextRunAt ? schedule.nextRunAt : null;
@@ -164,7 +169,8 @@ export function ScanSummaryTable({
       checks.find(check => check.id === 'web'),
       overviewState,
       scheduled('web'),
-      schedulesFailed
+      schedulesFailed,
+      schedulesLoading
     ),
     checkRow(
       'cloud',
@@ -172,7 +178,8 @@ export function ScanSummaryTable({
       checks.find(check => check.id === 'cloud'),
       overviewState,
       scheduled('cloud'),
-      schedulesFailed
+      schedulesFailed,
+      schedulesLoading
     ),
     {
       id: 'prowler',
@@ -196,12 +203,12 @@ export function ScanSummaryTable({
     },
   ];
 
-  const allLoaded = rows.every(row => !row.loading);
-  const refreshing = overview.isFetching || schedules.isFetching || prowler.isFetching || attack.isFetching;
+  const allLoaded = !schedulesLoading && rows.every(row => !row.loading);
+  const refreshing = [overview, schedules, prowler, attack].some(query => query.isFetching && Boolean(query.data));
 
   return (
     <Stack gap={1}>
-      {allLoaded && refreshing && <UpdatingBar testId="security-scans-summary-updating" />}
+      <UpdatingBar active={allLoaded && refreshing} testId="security-scans-summary-updating" />
       <DataTable
         label="Scans"
         testId="security-scans-summary-table"
@@ -269,7 +276,7 @@ export function ScanSummaryTable({
             id: 'next-run',
             label: 'Next run',
             render: row =>
-              row.loading ? (
+              row.loading || row.nextRunLoading ? (
                 <Skeleton variant="text" level="body-sm" width="8ch" />
               ) : (
                 <NextRun

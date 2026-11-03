@@ -87,7 +87,7 @@ const BlockedIPsSection: React.FC = () => {
   const items = blockedIPs.data ?? [];
 
   return (
-    <Box data-testid="blocked-ips-tab">
+    <Box data-testid="blocked-ips-section">
       <SectionContainer
         title={
           <Stack direction="row" alignItems="center" gap={1}>
@@ -96,7 +96,7 @@ const BlockedIPsSection: React.FC = () => {
             <Chip
               size="sm"
               variant="soft"
-              data-testid="blocked-ips-tab-count"
+              data-testid="blocked-ips-section-count"
               sx={{
                 backgroundColor:
                   items.length > 0 ? theme.palette.security.high.softBg : theme.palette.security.good.softBg,
@@ -108,7 +108,7 @@ const BlockedIPsSection: React.FC = () => {
           </Stack>
         }
         action={
-          <Button size="sm" onClick={() => setBlockOpen(true)} data-testid="blocked-ips-tab-block-btn">
+          <Button size="sm" onClick={() => setBlockOpen(true)} data-testid="blocked-ips-section-block-btn">
             Block IP
           </Button>
         }
@@ -118,6 +118,10 @@ const BlockedIPsSection: React.FC = () => {
           <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
             <CircularProgress size="sm" />
           </Box>
+        ) : blockedIPs.isError ? (
+          <Typography level="body-sm" color="danger" role="alert">
+            Could not load blocked IP addresses.
+          </Typography>
         ) : items.length === 0 ? (
           <Stack direction="row" alignItems="center" gap={1}>
             <CheckCircle fontSize="small" sx={{ color: theme.palette.security.good.plainColor }} />
@@ -126,7 +130,7 @@ const BlockedIPsSection: React.FC = () => {
             </Typography>
           </Stack>
         ) : (
-          <Box data-testid="blocked-ips-tab-list" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          <Box data-testid="blocked-ips-section-list" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
             {items.map((item, index) => (
               <BlockedIPRow key={item._id} item={item} index={index} onUnblock={() => setUnblocking(item)} />
             ))}

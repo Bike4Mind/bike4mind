@@ -90,11 +90,7 @@ export const WafTrafficOverview = ({ isActive = true }: { isActive?: boolean }) 
             Traffic overview (Router WebACL)
           </Typography>
           <Typography level="title-md" sx={{ fontWeight: 700 }}>
-            {trafficQuery.data?.enabled === false
-              ? 'No WebACL attached for this stage'
-              : trafficQuery.isLoading
-                ? 'Loading traffic metrics…'
-                : 'Action totals'}
+            {trafficQuery.data?.enabled === false ? 'No WebACL attached for this stage' : 'Action totals'}
           </Typography>
         </Box>
 
@@ -153,15 +149,11 @@ export const WafTrafficOverview = ({ isActive = true }: { isActive?: boolean }) 
         </Stack>
       </Stack>
 
-      {trafficQuery.data && trafficQuery.isFetching && (
-        <Box sx={{ mt: 1.5 }}>
-          <UpdatingBar testId="waf-traffic-updating" />
-        </Box>
-      )}
+      <Box sx={{ mt: 1.5 }}>
+        <UpdatingBar active={Boolean(trafficQuery.data) && trafficQuery.isFetching} testId="waf-traffic-updating" />
+      </Box>
 
-      {trafficQuery.isLoading && !trafficQuery.data && (
-        <LoadingState label="Loading firewall traffic" testId="waf-traffic-loading" />
-      )}
+      {trafficQuery.isLoading && <LoadingState label="Loading firewall traffic" testId="waf-traffic-loading" />}
 
       {showCustomPicker && (
         <Sheet

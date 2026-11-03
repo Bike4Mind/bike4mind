@@ -159,7 +159,7 @@ const SecurityWebTab = () => {
 
   return (
     <Stack spacing={3} data-testid="security-dashboard-web-tab">
-      {isFetching && <UpdatingBar testId="security-scans-web-updating" />}
+      <UpdatingBar active={isFetching} testId="security-scans-web-updating" />
       <Stack direction="row" justifyContent="space-between" alignItems="center">
         <Box>
           <Typography level="title-lg">Website Security Scan</Typography>
@@ -658,7 +658,7 @@ const InfrastructureBaselineSubTab = ({ initialSnapshot }: { initialSnapshot?: S
 
   return (
     <Stack spacing={3}>
-      {isFetching && <UpdatingBar testId="security-scans-cloud-updating" />}
+      <UpdatingBar active={isFetching} testId="security-scans-cloud-updating" />
       <Stack direction="row" justifyContent="space-between" alignItems="center">
         <Typography level="body-sm" sx={{ color: 'neutral.600' }}>
           7 baseline checks across IAM, S3, CloudTrail, EC2, and Secrets Manager.
@@ -833,7 +833,7 @@ const ProwlerAuditSubTab = () => {
 
   return (
     <Stack spacing={3}>
-      {isFetching && <UpdatingBar testId="security-scans-prowler-updating" />}
+      <UpdatingBar active={isFetching} testId="security-scans-prowler-updating" />
       <Stack direction="row" justifyContent="space-between" alignItems="center">
         <Typography level="body-sm" sx={{ color: 'neutral.600' }}>
           Deep AWS audit via Prowler — 300+ checks across IAM, S3, EC2, GuardDuty, and more.

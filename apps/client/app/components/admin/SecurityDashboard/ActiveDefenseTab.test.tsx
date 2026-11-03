@@ -31,10 +31,13 @@ describe('ActiveDefenseTab loading', () => {
     mocks.data.mockReset();
   });
 
-  it('shows a labelled loading state instead of the run history and last run line on first load', () => {
+  it('shows skeleton tables and no findings count instead of the last run line on first load', () => {
     mocks.data.mockReturnValue({ data: undefined, isLoading: true, isFetching: true, error: null, refetch: vi.fn() });
     renderTab();
-    expect(screen.getByTestId('active-defense-loading')).toHaveTextContent('Loading probe runs');
+    expect(screen.getByRole('table', { name: 'Loading findings' })).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByRole('table', { name: 'Probe run history' })).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByText('Active findings')).toBeInTheDocument();
+    expect(screen.queryByText(/Active findings \(/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Last run:/)).not.toBeInTheDocument();
     expect(screen.queryByTestId('active-defense-updating')).not.toBeInTheDocument();
     expect(screen.getByTestId('active-defense-run-now-btn')).toBeInTheDocument();
@@ -44,7 +47,7 @@ describe('ActiveDefenseTab loading', () => {
     mocks.data.mockReturnValue({ data: loaded, isLoading: false, isFetching: true, error: null, refetch: vi.fn() });
     renderTab();
     expect(screen.getByTestId('active-defense-updating')).toHaveTextContent('Updating');
-    expect(screen.queryByTestId('active-defense-loading')).not.toBeInTheDocument();
+    expect(screen.getByRole('table', { name: 'Probe run history' })).not.toHaveAttribute('aria-busy');
     expect(screen.getByText(/Last run:/)).toBeInTheDocument();
   });
 });

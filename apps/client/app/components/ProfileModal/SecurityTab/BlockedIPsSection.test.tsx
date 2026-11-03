@@ -7,10 +7,10 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import { securityPaletteDark, securityPaletteLight } from '@client/app/theme/securityTheme';
 import BlockedIPsSection from './BlockedIPsSection';
 
-const h = vi.hoisted(() => ({ items: [] as Record<string, unknown>[] }));
+const h = vi.hoisted(() => ({ items: [] as Record<string, unknown>[], isError: false }));
 
 vi.mock('@client/app/hooks/data/admin', () => ({
-  useGetBlockedIPs: () => ({ data: h.items, isLoading: false }),
+  useGetBlockedIPs: () => ({ data: h.isError ? undefined : h.items, isLoading: false, isError: h.isError }),
   useBlockIP: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useUnblockIP: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
@@ -34,12 +34,21 @@ const renderTab = () => render(<BlockedIPsSection />, { wrapper: TestWrapper });
 describe('BlockedIPsSection', () => {
   beforeEach(() => {
     h.items = [];
+    h.isError = false;
+  });
+
+  it('shows an error instead of the empty state when the list fails to load', () => {
+    h.isError = true;
+    renderTab();
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not load blocked IP addresses.');
+    expect(screen.queryByText('No IPs are currently blocked')).not.toBeInTheDocument();
   });
 
   it('shows an empty state', () => {
     renderTab();
-    expect(screen.getByTestId('blocked-ips-tab-count')).toHaveTextContent('0 blocked');
-    expect(screen.queryByTestId('blocked-ips-tab-list')).not.toBeInTheDocument();
+    expect(screen.getByTestId('blocked-ips-section-count')).toHaveTextContent('0 blocked');
+    expect(screen.queryByTestId('blocked-ips-section-list')).not.toBeInTheDocument();
   });
 
   it('shows the scope, expiry, reason and who blocked each entry', () => {
@@ -65,7 +74,7 @@ describe('BlockedIPsSection', () => {
     ];
     renderTab();
 
-    expect(screen.getByTestId('blocked-ips-tab-count')).toHaveTextContent('2 blocked');
+    expect(screen.getByTestId('blocked-ips-section-count')).toHaveTextContent('2 blocked');
     const manual = screen.getByTestId('blocked-ip-0');
     expect(within(manual).getByTestId('blocked-ip-0-scope')).toHaveTextContent('Sign-in, signup, checkout and AI');
     expect(within(manual).getByTestId('blocked-ip-0-expiry')).toHaveTextContent('Never');
@@ -82,7 +91,7 @@ describe('BlockedIPsSection', () => {
     h.items = [{ _id: 'b1', ip: '203.0.113.9', scope: 'all', blockedAt: '2026-10-01', expiresAt: '2026-10-02' }];
     renderTab();
 
-    fireEvent.click(screen.getByTestId('blocked-ips-tab-block-btn'));
+    fireEvent.click(screen.getByTestId('blocked-ips-section-block-btn'));
     expect(screen.getByTestId('block-ip-dialog')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('block-ip-dialog-cancel-btn'));
 

@@ -2,7 +2,7 @@ import { Alert, Box, Button, Stack, Typography } from '@mui/joy';
 import PlayArrowOutlinedIcon from '@mui/icons-material/PlayArrowOutlined';
 import { useAttackSimulationData, useRunAttackSimulation } from '@client/app/hooks/data/admin';
 import { useSecurityScanCooldown } from '@client/app/hooks/useSecurityScanCooldown';
-import { AdminPageHeader, DataTable, ErrorState, LoadingState, SectionCard, StatusChip, UpdatingBar } from '../shared';
+import { AdminPageHeader, DataTable, ErrorState, SectionCard, StatusChip, UpdatingBar } from '../shared';
 import { SecurityFindingsTable } from './SecurityFindingsTable';
 
 const COOLDOWN_MS = 30 * 60 * 1000;
@@ -42,7 +42,7 @@ const ActiveDefenseTab = () => {
           </Button>
         }
       />
-      {data && isFetching && <UpdatingBar testId="active-defense-updating" />}
+      <UpdatingBar active={Boolean(data) && isFetching} testId="active-defense-updating" />
       {!isLoading && (
         <Typography level="body-sm">
           Last run: {formatDateTime(latestRun?.startedAt)}
@@ -66,7 +66,7 @@ const ActiveDefenseTab = () => {
         </Box>
       ) : (
         <>
-          <SectionCard title={`Active findings (${findings.length})`}>
+          <SectionCard title={isLoading ? 'Active findings' : `Active findings (${findings.length})`}>
             {isLoading ? (
               <DataTable
                 rows={[]}
@@ -116,49 +116,46 @@ const ActiveDefenseTab = () => {
             )}
           </SectionCard>
           <SectionCard title="Run history">
-            {isLoading ? (
-              <LoadingState label="Loading probe runs" testId="active-defense-loading" />
-            ) : (
-              <DataTable
-                rows={runs}
-                getRowId={run => run.runId}
-                label="Probe run history"
-                testId="active-defense-run-history-table"
-                onRetry={() => void refetch()}
-                columns={[
-                  { id: 'started', label: 'Started', render: run => formatDateTime(run.startedAt) },
-                  { id: 'trigger', label: 'Trigger', render: run => run.trigger },
-                  {
-                    id: 'status',
-                    label: 'Status',
-                    render: run => (
-                      <StatusChip
-                        tone={run.status === 'completed' ? 'good' : run.status === 'failed' ? 'bad' : 'warn'}
-                        label={run.status}
-                      />
-                    ),
-                  },
-                  { id: 'new', label: 'New', numeric: true, render: run => run.findingCounts?.new ?? 0 },
-                  {
-                    id: 'persisting',
-                    label: 'Persisting',
-                    numeric: true,
-                    render: run => run.findingCounts?.persisting ?? 0,
-                  },
-                  { id: 'resolved', label: 'Resolved', numeric: true, render: run => run.findingCounts?.resolved ?? 0 },
-                  { id: 'probes', label: 'Probes', numeric: true, render: run => run.probesRun?.length ?? 0 },
-                  {
-                    id: 'errors',
-                    label: 'Errors',
-                    render: run => (
-                      <Typography sx={{ overflowWrap: 'anywhere' }}>
-                        {[run.error, ...(run.probeErrors ?? [])].filter(Boolean).join('; ') || '0'}
-                      </Typography>
-                    ),
-                  },
-                ]}
-              />
-            )}
+            <DataTable
+              rows={runs}
+              loading={isLoading}
+              getRowId={run => run.runId}
+              label="Probe run history"
+              testId="active-defense-run-history-table"
+              onRetry={() => void refetch()}
+              columns={[
+                { id: 'started', label: 'Started', render: run => formatDateTime(run.startedAt) },
+                { id: 'trigger', label: 'Trigger', render: run => run.trigger },
+                {
+                  id: 'status',
+                  label: 'Status',
+                  render: run => (
+                    <StatusChip
+                      tone={run.status === 'completed' ? 'good' : run.status === 'failed' ? 'bad' : 'warn'}
+                      label={run.status}
+                    />
+                  ),
+                },
+                { id: 'new', label: 'New', numeric: true, render: run => run.findingCounts?.new ?? 0 },
+                {
+                  id: 'persisting',
+                  label: 'Persisting',
+                  numeric: true,
+                  render: run => run.findingCounts?.persisting ?? 0,
+                },
+                { id: 'resolved', label: 'Resolved', numeric: true, render: run => run.findingCounts?.resolved ?? 0 },
+                { id: 'probes', label: 'Probes', numeric: true, render: run => run.probesRun?.length ?? 0 },
+                {
+                  id: 'errors',
+                  label: 'Errors',
+                  render: run => (
+                    <Typography sx={{ overflowWrap: 'anywhere' }}>
+                      {[run.error, ...(run.probeErrors ?? [])].filter(Boolean).join('; ') || '0'}
+                    </Typography>
+                  ),
+                },
+              ]}
+            />
           </SectionCard>
         </>
       )}

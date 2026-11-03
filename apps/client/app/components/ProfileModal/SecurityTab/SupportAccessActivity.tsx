@@ -4,9 +4,11 @@ import { api } from '@client/app/contexts/apiClient';
 
 type Access = { id: string; message: string; startedAt: string; endedAt: string | null; durationMs: number };
 
+export const SUPPORT_ACCESS_QUERY_KEY = ['security', 'support-access'] as const;
+
 export function SupportAccessActivity() {
   const records = useQuery({
-    queryKey: ['security', 'support-access'],
+    queryKey: SUPPORT_ACCESS_QUERY_KEY,
     queryFn: async () => (await api.get<{ items: Access[] }>('/api/security/support-access')).data,
   });
   return (

@@ -22,14 +22,21 @@ describe('LoadingState', () => {
 });
 
 describe('UpdatingBar', () => {
-  it('renders the Updating label with default and custom test ids', () => {
+  it('renders the Updating label with default and custom test ids while active', () => {
     wrap(
       <>
-        <UpdatingBar />
-        <UpdatingBar testId="custom-updating" />
+        <UpdatingBar active />
+        <UpdatingBar active testId="custom-updating" />
       </>
     );
     expect(screen.getByTestId('admin-updating-bar')).toHaveTextContent('Updating');
-    expect(screen.getByTestId('custom-updating')).toHaveAttribute('role', 'status');
+    expect(screen.getByTestId('custom-updating')).toHaveAttribute('aria-hidden', 'false');
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('stays mounted but hidden and unlabelled when inactive', () => {
+    const { container } = wrap(<UpdatingBar active={false} />);
+    expect(screen.queryByTestId('admin-updating-bar')).not.toBeInTheDocument();
+    expect(container.querySelector('[aria-hidden="true"]')).toHaveStyle({ visibility: 'hidden' });
   });
 });

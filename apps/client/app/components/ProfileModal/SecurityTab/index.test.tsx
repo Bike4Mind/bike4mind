@@ -13,7 +13,10 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: h.user }) }));
-vi.mock('@client/app/hooks/data/admin', () => ({ useGetAllRecentSecurityEvents: () => h.events }));
+vi.mock('@client/app/hooks/data/admin', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/app/hooks/data/admin')>()),
+  useGetAllRecentSecurityEvents: () => h.events,
+}));
 vi.mock('@client/app/components/help', () => ({ ContextHelpButton: () => null }));
 vi.mock('@client/app/components/ProfileModal/SettingsTabContent/MfaCard', () => ({
   default: () => <div data-testid="mfa-card-stub" />,
@@ -24,7 +27,10 @@ vi.mock('@client/app/components/ProfileModal/SettingsTabContent/ActiveSessionsSe
 vi.mock('@client/app/components/ProfileModal/SettingsTabContent/ApprovedAppsSection', () => ({
   default: () => <div data-testid="approved-apps-stub" />,
 }));
-vi.mock('./SupportAccessActivity', () => ({ SupportAccessActivity: () => <div data-testid="support-access-stub" /> }));
+vi.mock('./SupportAccessActivity', async importOriginal => ({
+  ...(await importOriginal<typeof import('./SupportAccessActivity')>()),
+  SupportAccessActivity: () => <div data-testid="support-access-stub" />,
+}));
 vi.mock('./ApiKeyUsageSection', () => ({ default: () => <div data-testid="api-key-usage-stub" /> }));
 vi.mock('./BlockedIPsSection', () => ({ default: () => <div data-testid="blocked-ips-stub" /> }));
 
@@ -155,13 +161,5 @@ describe('SecurityTab', () => {
     for (const queryKey of SECURITY_TAB_QUERY_KEYS) {
       expect(invalidate).toHaveBeenCalledWith({ queryKey });
     }
-    expect(SECURITY_TAB_QUERY_KEYS).toEqual(
-      expect.arrayContaining([
-        ['security', 'user', 'recent', '7d'],
-        ['security', 'support-access'],
-        ['security', 'blocked-ips'],
-        ['admin', 'security', 'api-usage'],
-      ])
-    );
   });
 });

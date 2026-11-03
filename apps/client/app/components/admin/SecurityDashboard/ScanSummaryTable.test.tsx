@@ -141,6 +141,16 @@ describe('ScanSummaryTable', () => {
     expect(screen.getByTestId('security-scans-summary-prowler-next')).toHaveTextContent('Manual');
   });
 
+  it('skeletons the web and cloud next run, and hides the updating bar, until the schedules arrive', () => {
+    mocks.schedules.mockReturnValue({ data: undefined, isError: false, isFetching: true, refetch: vi.fn() });
+    renderTable();
+    for (const id of ['web', 'cloud']) {
+      expect(screen.queryByTestId(`security-scans-summary-${id}-next`)).not.toBeInTheDocument();
+    }
+    expect(screen.getByTestId('security-scans-summary-prowler-next')).toHaveTextContent('Manual');
+    expect(screen.queryByTestId('security-scans-summary-updating')).not.toBeInTheDocument();
+  });
+
   it('summarizes severity counts compactly', () => {
     expect(compactSeverityCounts({ critical: 1, low: 3 }, ['critical', 'high', 'medium', 'low'])).toBe(
       '1 critical, 3 low'

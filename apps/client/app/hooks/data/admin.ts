@@ -59,8 +59,8 @@ export type UserSecurityEvent =
       timestamp: string;
     };
 
-const USER_RECENT_7D_KEY = ['security', 'user', 'recent', '7d'] as const;
-const BLOCKED_IPS_KEY = ['security', 'blocked-ips'] as const;
+export const USER_RECENT_7D_KEY = ['security', 'user', 'recent', '7d'] as const;
+export const BLOCKED_IPS_KEY = ['security', 'blocked-ips'] as const;
 
 type UserRecentEventsData = {
   items: UserSecurityEvent[];
@@ -171,14 +171,16 @@ export interface ApiKeyUsageItem {
   }>;
 }
 
+export const API_USAGE_QUERY_KEY = ['admin', 'security', 'api-usage'] as const;
+
 export const useGetApiUsage = (options?: { refetchInterval?: number }) => {
   return useQuery<ApiKeyUsageItem[]>({
-    queryKey: ['admin', 'security', 'api-usage'],
+    queryKey: API_USAGE_QUERY_KEY,
     queryFn: async () => {
       const res = await api.get<{ items: ApiKeyUsageItem[] }>('/api/security/api-usage');
       return res.data.items;
     },
-    refetchInterval: options?.refetchInterval,
+    refetchInterval: query => (query.state.status === 'error' ? false : (options?.refetchInterval ?? false)),
   });
 };
 

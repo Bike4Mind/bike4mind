@@ -3,26 +3,31 @@ import { Box, Button, Stack, Typography } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useQueryClient } from '@tanstack/react-query';
 import { useUser } from '@client/app/contexts/UserContext';
+import { API_USAGE_QUERY_KEY, BLOCKED_IPS_KEY, USER_RECENT_7D_KEY } from '@client/app/hooks/data/admin';
+import { MFA_STATUS_QUERY_KEY } from '@client/app/hooks/data/mfa';
+import { OAUTH_GRANTS_QUERY_KEY } from '@client/app/hooks/data/oauthGrants';
+import { PASSKEYS_QUERY_KEY } from '@client/app/hooks/data/passkeys';
+import { TRUSTED_DEVICES_QUERY_KEY } from '@client/app/hooks/data/trustedDevices';
+import { ACTIVE_SESSIONS_KEY } from '@client/app/hooks/data/user';
 import SectionContainer from '@client/app/components/ProfileModal/SectionContainer';
 import MfaCard from '@client/app/components/ProfileModal/SettingsTabContent/MfaCard';
 import ActiveSessionsSection from '@client/app/components/ProfileModal/SettingsTabContent/ActiveSessionsSection';
 import ApprovedAppsSection from '@client/app/components/ProfileModal/SettingsTabContent/ApprovedAppsSection';
 import SignInActivitySection from './SignInActivitySection';
-import { SupportAccessActivity } from './SupportAccessActivity';
+import { SupportAccessActivity, SUPPORT_ACCESS_QUERY_KEY } from './SupportAccessActivity';
 import ApiKeyUsageSection from './ApiKeyUsageSection';
 import BlockedIPsSection from './BlockedIPsSection';
 
-// Must stay in sync with the query keys of the hooks the sections below use.
 export const SECURITY_TAB_QUERY_KEYS = [
-  ['mfa', 'status'],
-  ['passkeys'],
-  ['trusted-devices'],
-  ['users', 'me', 'sessions'],
-  ['security', 'user', 'recent', '7d'],
-  ['security', 'support-access'],
-  ['oauth-grants'],
-  ['admin', 'security', 'api-usage'],
-  ['security', 'blocked-ips'],
+  MFA_STATUS_QUERY_KEY,
+  PASSKEYS_QUERY_KEY,
+  TRUSTED_DEVICES_QUERY_KEY,
+  ACTIVE_SESSIONS_KEY,
+  USER_RECENT_7D_KEY,
+  SUPPORT_ACCESS_QUERY_KEY,
+  OAUTH_GRANTS_QUERY_KEY,
+  API_USAGE_QUERY_KEY,
+  BLOCKED_IPS_KEY,
 ] as const;
 
 const SecurityTab: React.FC = () => {
