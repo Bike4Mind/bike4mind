@@ -231,7 +231,10 @@ export async function resolveSignupGrantSettings(adminSettings: ScheduleSettings
  * Every signup enrolls a staged grant. A drip cap of 0 (seeded where staging used to be off) locks nothing,
  * so the grant pays the flat path's amount; unlike the flat path, an invite-resolved amount now takes the
  * canonical-inbox claim and the risk policy on payout, as a staged referral grant always did.
- * `totalCredits` fixes the whole entitlement (tranche first, remainder locked) instead of the signup settings.
+ * `totalCredits` sets the enrolled entitlement (tranche first, remainder locked) instead of the signup settings.
+ * It is a floor, not a ceiling: the drip and verification unlocks still grow the pool to the live drip cap
+ * (signupGrantUnlockCredits, the drip branch in stagedSignupGrant.ts), so an invitee gets the larger of
+ * `totalCredits` and the open-signup schedule. signupGrantInviteBonusCredits is the planned on-top bonus.
  */
 export async function newSignupGrant(adminSettings: ScheduleSettingsReader, totalCredits?: number) {
   const schedule = await resolveSignupGrantSchedule(adminSettings);
