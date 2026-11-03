@@ -1,16 +1,23 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, rm, utimes } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RUN_ROOT_PREFIX, STALE_ROOT_AGE_MS, removeDeadRunRoots } from '../../vitest.tempRoot';
+import {
+  RUN_ROOT_ENV,
+  RUN_ROOT_PREFIX,
+  STALE_ROOT_AGE_MS,
+  removeDeadRunRoots,
+  removeRoot,
+} from '../../vitest.tempRoot';
 
 describe('test temp root', () => {
-  it('points every tmpdir and homedir variable at this file own directories', () => {
+  it("points every tmpdir and homedir variable at this file's own directories", () => {
     const root = tmpdir();
     expect(basename(root)).toMatch(/^b4m-desktop-test-/);
     expect(basename(dirname(root))).toMatch(new RegExp(`^${RUN_ROOT_PREFIX}\\d+-`));
+    expect(dirname(root)).toBe(process.env[RUN_ROOT_ENV]);
     expect([process.env.TMPDIR, process.env.TEMP, process.env.TMP]).toEqual([root, root, root]);
 
     const home = join(root, 'home');
@@ -63,5 +70,19 @@ describe('removeDeadRunRoots', () => {
     await removeDeadRunRoots(parent);
 
     expect([fresh, old].map(name => existsSync(join(parent, name)))).toEqual([true, false]);
+  });
+});
+
+describe('removeRoot', () => {
+  it('removes a tree and resolves when removal fails', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'remove-root-'));
+    await mkdir(join(dir, 'nested'));
+    await writeFile(join(dir, 'file'), '');
+
+    await removeRoot(join(dir, 'file', 'child'));
+    expect(existsSync(join(dir, 'file'))).toBe(true);
+
+    await removeRoot(dir);
+    expect(existsSync(dir)).toBe(false);
   });
 });

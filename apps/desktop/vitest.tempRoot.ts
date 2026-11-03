@@ -2,7 +2,13 @@ import { readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export const RUN_ROOT_PREFIX = 'b4m-desktop-run-';
+export const RUN_ROOT_ENV = 'B4M_DESKTOP_TEST_RUN_ROOT';
 export const STALE_ROOT_AGE_MS = 60 * 60 * 1000;
+
+// A Windows handle or child process can outlive its run; the next run's sweep removes what is left.
+export function removeRoot(dir: string): Promise<void> {
+  return rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => undefined);
+}
 
 // os.tmpdir() reads TMPDIR on POSIX and TEMP/TMP on Windows.
 export function redirectTmpdir(dir: string): void {
@@ -45,7 +51,7 @@ export async function removeDeadRunRoots(parent: string): Promise<void> {
   await Promise.all(
     dead.map(async name => {
       const path = join(parent, name);
-      if (await isStale(path)) await rm(path, { recursive: true, force: true }).catch(() => undefined);
+      if (await isStale(path)) await removeRoot(path);
     })
   );
 }
