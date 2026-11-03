@@ -4,14 +4,12 @@ import AddIcon from '@mui/icons-material/Add';
 import DownloadIcon from '@mui/icons-material/Download';
 import HistoryIcon from '@mui/icons-material/History';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
-import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { api } from '@client/app/contexts/ApiContext';
+import { useSignupAnomaly } from '@client/app/hooks/data/admin';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { getServerErrorField } from '@client/app/utils/error';
 import type { AdminUsersListRow } from '@client/app/utils/adminUsersFilter';
 import type { AdminUsersBulkActionType, AdminUsersBulkTarget } from '@client/app/utils/adminUsersBulk';
-import type { SignupAnomalySnapshot } from '@client/app/utils/signupAnomaly';
 import type { SignupTimeseriesRange } from '@client/app/utils/signupSignals';
 import {
   AdminPageHeader,
@@ -114,12 +112,7 @@ const UsersTab: React.FC = () => {
   const usersQuery = useAdminUsersList(params);
   const groupsQuery = useAdminUsersDomainGroups(params);
   const summaryQuery = useAdminUsersSummary();
-  const anomalyQuery = useQuery({
-    queryKey: ['admin-signup-anomaly'],
-    queryFn: async () => (await api.get<SignupAnomalySnapshot>('/api/admin/signup-anomaly')).data,
-    staleTime: 60_000,
-    refetchInterval: 60_000,
-  });
+  const anomalyQuery = useSignupAnomaly();
 
   const rows = useMemo(() => usersQuery.data?.users ?? [], [usersQuery.data]);
   const totalUsers = usersQuery.data?.totalUsers ?? 0;

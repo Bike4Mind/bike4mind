@@ -493,6 +493,7 @@ export const SettingKeySchema = z.enum([
   'signupNetworkAlertMaxPerIp',
   'signupNetworkAlertMaxPerHostingAsn',
   'signupNetworkAlertMaxPerAsn',
+  'shadowDetectionRecordingEnabled',
   'paymentRiskAutoRefundEnabled',
   'paymentRiskAutoRefundMinUnspentPercent',
   'paymentRiskCheckoutMaxBlockedAttempts',
@@ -2314,6 +2315,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'signupNetworkAlertMaxPerIp', order: 42 },
       { key: 'signupNetworkAlertMaxPerHostingAsn', order: 43 },
       { key: 'signupNetworkAlertMaxPerAsn', order: 44 },
+      { key: 'shadowDetectionRecordingEnabled', order: 44.5 },
       { key: 'paymentRiskAutoRefundEnabled', order: 45 },
       { key: 'paymentRiskAutoRefundMinUnspentPercent', order: 46 },
       { key: 'paymentRiskCheckoutMaxBlockedAttempts', order: 47 },
@@ -5359,6 +5361,15 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
       'Alert when more self-serve accounts than this signed up from one network (ASN) within the window, hosting or not. Consumer ISPs are busy networks, so keep this well above normal traffic. 0 turns the check off.',
+  }),
+  shadowDetectionRecordingEnabled: makeBooleanSetting({
+    key: 'shadowDetectionRecordingEnabled',
+    name: 'Record Shadow Detections',
+    defaultValue: true,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Record what the abuse detectors (such as the signup network burst alerts) would have done to an account, for admin review on the Detections page. Recording never acts: no access, credits or API keys change.',
   }),
   paymentRiskAutoRefundEnabled: makeBooleanSetting({
     key: 'paymentRiskAutoRefundEnabled',
