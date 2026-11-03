@@ -66,6 +66,9 @@ export function buildReplyStats(input: ReplyStatsInput): ChatReplyStats {
   let modelMs = earlier?.modelMs ?? 0;
   let reasoningMs = earlier?.reasoningMs;
   let firstTokenMs = earlier?.firstTokenMs;
+  // Stats stored before firstTokenMs was kept have an epoch firstTokenAt, timed from the turn's
+  // setup; this run's first token is not the reply's, so the reply has none.
+  const firstTokenUnknown = earlier !== undefined && 'firstTokenAt' in earlier;
   let generation = earlier?.generation;
   // An earlier run's estimate stands in for the frames it was counted from.
   let reasoningFrames = earlier?.derived?.includes('reasoningTokens') ? (earlier.reasoningTokens ?? 0) : 0;
@@ -73,7 +76,9 @@ export function buildReplyStats(input: ReplyStatsInput): ChatReplyStats {
   for (const round of rounds) {
     const { timing } = round;
     modelMs += nonNegative(timing.endedAt - timing.startedAt);
-    if (timing.firstTokenAt !== undefined) firstTokenMs ??= nonNegative(timing.firstTokenAt - timing.startedAt);
+    if (timing.firstTokenAt !== undefined && !firstTokenUnknown) {
+      firstTokenMs ??= nonNegative(timing.firstTokenAt - timing.startedAt);
+    }
     reasoningFrames += round.reasoningFrames;
     const thinking = roundThinking(round);
     if (thinking) {
