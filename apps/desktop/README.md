@@ -26,7 +26,8 @@ No Node.js, pnpm, or source checkout is required.
    shell commands, search and the terminal inside that WSL distro instead, with the distro's own
    git and toolchain and the PATH of the user's login shell there; such a project does not need
    Git for Windows. `gh` still runs on Windows, so finding a project's open pull request by
-   branch needs `gh` installed and signed in on the Windows side.
+   branch needs `gh` installed and signed in on the Windows side; it is pointed at the
+   repository that the distro's `origin` remote names, so it needs no git on Windows.
    The rest of the local tool layer (file access, sandboxing) is not yet verified on Windows.
 
 New distribution releases require Developer ID signing and notarization. Legacy unsigned

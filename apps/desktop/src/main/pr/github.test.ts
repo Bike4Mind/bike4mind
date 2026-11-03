@@ -267,6 +267,46 @@ describe('PrGithub', () => {
     });
   });
 
+  describe('findOpenForBranch', () => {
+    const LIST = ['pr', 'list', '--head', 'feat/x', '--state', 'open', '--json', 'url', '--limit', '1'];
+    const WSL = '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo';
+
+    it('names the repo from the distro origin for a WSL project and runs gh outside the folder', async () => {
+      const gh = vi.fn().mockResolvedValue(JSON.stringify([{ url: REF.url }]));
+      const origin = vi.fn().mockResolvedValue('git@github.com:example-org/widgets.git');
+      const github = new PrGithub(gh, Date.now, origin, 'win32');
+
+      expect(await github.findOpenForBranch(WSL, 'feat/x')).toBe(REF.url);
+      expect(origin).toHaveBeenCalledWith(WSL);
+      expect(gh.mock.calls).toEqual([[[...LIST, '--repo', 'example-org/widgets']]]);
+    });
+
+    it('keeps the host of a remote on another server', async () => {
+      const gh = vi.fn().mockResolvedValue('[]');
+      const origin = vi.fn().mockResolvedValue('https://git.example.com/team/widgets.git');
+
+      expect(await new PrGithub(gh, Date.now, origin, 'win32').findOpenForBranch(WSL, 'feat/x')).toBeNull();
+      expect(gh.mock.calls[0]?.[0]).toEqual([...LIST, '--repo', 'git.example.com/team/widgets']);
+    });
+
+    it('finds no PR, without running gh, when the WSL origin cannot be read', async () => {
+      const gh = vi.fn();
+      const origin = vi.fn().mockResolvedValue(null);
+
+      expect(await new PrGithub(gh, Date.now, origin, 'win32').findOpenForBranch(WSL, 'feat/x')).toBeNull();
+      expect(gh).not.toHaveBeenCalled();
+    });
+
+    it('runs gh in the folder of any other project', async () => {
+      const gh = vi.fn().mockResolvedValue('[]');
+      const origin = vi.fn();
+
+      await new PrGithub(gh, Date.now, origin, 'win32').findOpenForBranch('C:\\repo', 'feat/x');
+      expect(gh.mock.calls).toEqual([[LIST, { cwd: 'C:\\repo' }]]);
+      expect(origin).not.toHaveBeenCalled();
+    });
+  });
+
   it('names each pull request by its own variables in the query', () => {
     const query = batchQuery(2);
     expect(query).toContain('p1: repository(owner: $o1, name: $n1)');

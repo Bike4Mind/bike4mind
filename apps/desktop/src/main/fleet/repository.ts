@@ -74,7 +74,8 @@ export function createRepositoryResolver(
   };
 }
 
-async function gitOriginUrl(directory: string): Promise<string | null> {
+/** `origin`'s URL as the folder's own git reads it: Linux git for a WSL folder. */
+export async function gitOriginUrl(directory: string): Promise<string | null> {
   const env = await gitCommandEnv(directory);
   const args = hostGitArgs(
     ['-C', gitArgumentPath(directory, directory), 'config', '--get', 'remote.origin.url'],

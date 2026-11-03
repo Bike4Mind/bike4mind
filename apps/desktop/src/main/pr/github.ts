@@ -11,6 +11,8 @@ import type {
   PrSnapshot,
   PrState,
 } from '@shared/pullRequest';
+import { gitOriginUrl, parseRemoteLocation, type RemoteLocation } from '../fleet/repository';
+import { wslLocation } from '../wsl/wslPath';
 import { GhError, type GhRunner } from './gh';
 
 /** PRs read in one query, at most. Each brings up to 100 checks, so this keeps a query well inside GitHub's node limit. */
@@ -281,6 +283,12 @@ function graphqlError(raw: Json, alias?: string): { type: string; message: strin
   return match ? { type: str(match.type), message: str(match.message) } : undefined;
 }
 
+/** A remote as gh's `--repo` takes it: `owner/name`, with the host first for any server but github.com. */
+export function ghRepository(location: RemoteLocation): string {
+  const name = `${location.owner}/${location.name}`;
+  return location.host === 'github.com' ? name : `${location.host}/${name}`;
+}
+
 /** The repo's merge method this app uses: GitHub's default for the viewer, else the first allowed. */
 export function mergeMethodFor(snapshot: Pick<PrSnapshot, 'repoSettings'>): PrMergeMethod | null {
   return snapshot.repoSettings.defaultMethod ?? snapshot.repoSettings.allowedMethods[0] ?? null;
@@ -294,7 +302,9 @@ export function mergeMethodFor(snapshot: Pick<PrSnapshot, 'repoSettings'>): PrMe
 export class PrGithub {
   constructor(
     private readonly gh: GhRunner,
-    private readonly now: () => number = Date.now
+    private readonly now: () => number = Date.now,
+    private readonly originUrl: (directory: string) => Promise<string | null> = gitOriginUrl,
+    private readonly platform: NodeJS.Platform = process.platform
   ) {}
 
   async snapshot(ref: PrRef, options: { threads: boolean; queue?: boolean }): Promise<PrSnapshot> {
@@ -363,9 +373,17 @@ export class PrGithub {
 
   /** The open PR whose head is `branch` in the repo at `cwd`, or null. */
   async findOpenForBranch(cwd: string, branch: string): Promise<string | null> {
-    const stdout = await this.gh(['pr', 'list', '--head', branch, '--state', 'open', '--json', 'url', '--limit', '1'], {
-      cwd,
-    });
+    const args = ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'url', '--limit', '1'];
+    let stdout: string;
+    if (wslLocation(cwd, this.platform)) {
+      // gh runs on Windows, whose git cannot read a checkout in a WSL distro; the distro's git names the repo.
+      const origin = await this.originUrl(cwd).catch(() => null);
+      const location = origin ? parseRemoteLocation(origin) : null;
+      if (!location) return null;
+      stdout = await this.gh([...args, '--repo', ghRepository(location)]);
+    } else {
+      stdout = await this.gh(args, { cwd });
+    }
     try {
       const list = JSON.parse(stdout) as unknown;
       const first = Array.isArray(list) ? obj(list[0]) : {};
