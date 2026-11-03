@@ -446,6 +446,9 @@ export async function shellApproval(
       ? ['Runs git in a repository whose .git or .husky folder was changed in this session.']
       : []),
     ...(gitProgram ? [`Sets ${gitProgram}, which makes git run a program.`] : []),
+    ...(scan.ungranted.length > 0
+      ? [`Reaches ${scan.ungranted.join(', ')}, in a WSL distro this project has no folder in.`]
+      : []),
   ];
   // A push or gh write to the folder's own origin still says so on the card, but does not stop
   // auto mode; a reply that has read untrusted content asks anyway, as these are never contained.
@@ -456,7 +459,8 @@ export async function shellApproval(
   // not reaching outside the project, so it does not need that folder granted first.
   const main = scan.readOnly && context.workingDirectory ? await mainCheckoutOf(context.workingDirectory) : null;
   const outside = main ? scan.directories.filter(directory => !isWithin(main, directory)) : scan.directories;
-  const asks = scan.envFiles.length > 0 || ownRepository.includes(false) || !!script || !!gitProgram;
+  const asks =
+    scan.envFiles.length > 0 || ownRepository.includes(false) || !!script || !!gitProgram || scan.ungranted.length > 0;
   // An exact "always" for the run lapses when the script is written again.
   const runKey = script ? `${key}\x00${script.generation}` : key;
   if (script && context.sessionId) expectShellRun(runKey, context.sessionId, script.hooks);

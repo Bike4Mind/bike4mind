@@ -55,8 +55,22 @@ describe('a path in a distro no root is in', () => {
 
     const scan = await scanShell(`cat '${OTHER}'`, root, [root]);
 
-    expect(scan?.directories).toEqual(['\\\\wsl.localhost\\Debian\\etc']);
+    expect(scan?.ungranted).toEqual([OTHER]);
+    expect(scan?.paths).toContain(OTHER);
     expect(inDebian(touched)).toEqual([]);
     expect(inDebian(asked)).toEqual([]);
+  });
+
+  it.each([
+    ['a file', OTHER],
+    ['a folder', '\\\\wsl.localhost\\Debian\\home\\me\\notes'],
+    ['the distro root', '\\\\wsl.localhost\\Debian\\'],
+  ])('offers no folder grant for %s', async (_kind, operand) => {
+    const root = '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo';
+
+    const scan = await scanShell(`ls '${operand}'`, root, [root]);
+
+    expect(scan?.ungranted).toHaveLength(1);
+    expect(scan?.directories).toEqual([]);
   });
 });

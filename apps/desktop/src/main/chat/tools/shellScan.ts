@@ -41,6 +41,8 @@ export interface ShellScan {
   paths?: string[];
   /** Directories the command reaches outside every granted root and the temp dirs. */
   directories: string[];
+  /** Paths in a WSL distro no root is in, named without reading them: asked every time, never offered as a grant. */
+  ungranted: string[];
   /** `.env` files named as an argument or an input redirect, which auto mode must not read unasked. */
   envFiles: string[];
   /** Why a command can send data off this computer, e.g. `curl --data`, which auto mode must not run unasked. */
@@ -1138,6 +1140,7 @@ export async function scanShell(
     const commands: ShellCommand[] = [];
     const paths = new Set<string>([await realpathNearest(startDirectory)]);
     const directories = new Set<string>();
+    const ungranted = new Set<string>();
     const envFiles = new Set<string>();
     const outbound = new Set<string>();
     const sends: ShellScan['sends'] = [];
@@ -1165,7 +1168,7 @@ export async function scanShell(
       if (inUngrantedDistro(target, allowed)) {
         // Outside without a look: reading it over the share would start that distro.
         paths.add(target);
-        directories.add(dirname(target));
+        ungranted.add(target);
         return target;
       }
       try {
@@ -1408,6 +1411,7 @@ export async function scanShell(
       commands,
       paths: [...paths],
       directories: [...directories],
+      ungranted: [...ungranted],
       envFiles: [...envFiles],
       outbound: [...outbound],
       sends: setsEnvironment ? sends.map(({ reason }) => ({ reason, target: null })) : sends,
