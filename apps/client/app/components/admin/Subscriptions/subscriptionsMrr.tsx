@@ -7,7 +7,7 @@ import { AnalyticsTermHelp } from '../EventMetrics/components/AnalyticsTermHelp'
 import { formatMoney } from '../shared/formatMoney';
 
 // Must stay in sync with the MRR definition in docs/admin-subscriptions-spec.md section 5.3 and
-// server/admin/subscriptionsList/subscriptionMrr.ts.
+// packages/server-utils/src/admin/subscriptionsList/subscriptionMrr.ts.
 const MRR_DEFINITION = [
   'Monthly recurring revenue: what Stripe bills each active or past due subscription, the price per seat times the seats, converted to a month (a yearly price counts one twelfth). Before discounts.',
   'Not counted: comps, trials, and canceled, unpaid, incomplete or paused subscriptions.',

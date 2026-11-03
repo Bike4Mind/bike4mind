@@ -106,10 +106,13 @@ describe('buildSignupGateHtml', () => {
 
   it('keeps a keyboard-accessible dismiss control', async () => {
     const buildGate = await loadSignupGate();
-    const { html } = buildGate();
-    // apps/workers/src/services/publish/buildThumbnailDocument.ts matches this exact opening tag.
+    const { styles, html } = buildGate();
+    // apps/workers/src/services/publish/buildThumbnailDocument.ts matches this exact opening tag and
+    // relies on this sibling rule to hide the gate; its test inlines the same markup and CSS.
     expect(html).toContain('<input type="checkbox" id="b4m-gate-dismiss"');
     expect(html).toContain('for="b4m-gate-dismiss"');
+    expect(styles).toContain('#b4m-gate-dismiss:checked~#b4m-gate-panel{display:none!important}');
+    expect(html.indexOf('id="b4m-gate-dismiss"')).toBeLessThan(html.indexOf('id="b4m-gate-panel"'));
   });
 
   it('states the starter-credit amount it is given', async () => {

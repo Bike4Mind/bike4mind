@@ -61,7 +61,7 @@ vi.mock('@bike4mind/server-utils/lib/entitlements/registry', async () => {
 });
 
 // Plan price ids are env-dependent, so the ladder read is a fixture; the real mapping is covered by
-// lib/userSubscriptions/utils.test.ts.
+// packages/server-utils/src/lib/userSubscriptions/utils.test.ts.
 vi.mock('@bike4mind/server-utils/lib/userSubscriptions/utils', () => ({
   getEntitlingPlanByPriceId: (priceId: string) =>
     ({ price_ladder_pro: { tier: 2 }, price_ladder_basic: { tier: 1 }, price_standalone: {} })[priceId],
@@ -173,7 +173,7 @@ describe('getUserEntitlements', () => {
       }
     );
 
-    // The fixture ladder price stands in for the Team price; the real mapping is lib/userSubscriptions/utils.test.ts.
+    // The fixture ladder price stands in for the Team price; server-utils pins the real mapping.
     it('is granted to a seat member through an org-owned Team subscription row', async () => {
       findActive.mockResolvedValue([]);
       findPlanHolderOrgIds.mockResolvedValue(['org1']);

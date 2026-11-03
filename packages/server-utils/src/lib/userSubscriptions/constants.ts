@@ -23,14 +23,14 @@ export const SUBSCRIPTION_PLANS: Array<SubscriptionPlanDetail> = [
     // priceId is the single source of truth from the entitlement registry
     // (both stages). Pricing settled: $19/mo (interval below), credits a
     // default launch allotment (below). Runtime-configurable credits are
-    // tracked in the "LibreOncology admin settings" quest (ACCESS_MODEL §8).
+    // tracked in the "LibreOncology admin settings" quest (ACCESS_MODEL section 8).
     priceId: LIBREONCOLOGY_PRO_PRICE_ID,
     interval: SubscriptionPlanInterval.Monthly,
     name: 'LibreOncology',
     // Default launch allotment at the uniform $0.0006/credit anchor
     // ($19 / 0.0006, matching the Professional plan); will become
     // runtime-configurable via the LibreOncology admin-settings quest
-    // (see ACCESS_MODEL §8 / §10).
+    // (see ACCESS_MODEL sections 8 and 10).
     credits: 31667,
     // No tier: LibreOncology is a separate product, not a rung on the B4M plan
     // ladder. Omitting tier keeps it out of the cross-plan change flow

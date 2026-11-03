@@ -2,7 +2,7 @@
  * riskEvidenceQueue worker: rebuilds an account's behavioral evidence summary off the request path.
  *
  * Two message shapes arrive:
- * - `{ kind: 'refresh', ... }` from requestRiskEvidenceRefresh (apps/client/server/auth/riskEvidence.ts),
+ * - `{ kind: 'refresh', ... }` from requestRiskEvidenceRefresh (packages/server-utils/src/auth/riskEvidence.ts),
  *   already debounced: it runs userService.refreshRiskEvidence.
  * - `{ kind: 'completion', userId }`, which the completion.completed rule's input transformer sends
  *   (infra/eventBus.ts), so the event's prompt never reaches the queue. Completions are frequent, so

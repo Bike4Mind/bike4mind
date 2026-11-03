@@ -6,7 +6,7 @@ import { createMocks } from 'node-mocks-http';
  * any repo call, the id param is validated before the lookup, a missing key
  * 404s before the reset, and a success clears the counters and writes the
  * audit event. The reset primitive itself (atomicity, per-counter failure
- * isolation) is covered by server/utils/apiKeyRateLimitCheck.test.ts and
+ * isolation) is covered by packages/server-utils/src/utils/apiKeyRateLimitCheck.test.ts and
  * apiKeyRateLimitReset.e2e.test.ts - only `resetApiKeyRateLimit` is mocked
  * here; `evaluateCounterLockout`, `resolveCounterLimit`, and
  * `MANAGEMENT_RATE_LIMIT` run for real so this route's ceiling-resolution

@@ -53,7 +53,9 @@ const OVERDUE = () => new Date(Date.now() + 73 * 60 * 60 * 1000);
 
 /**
  * A listing with one version held for human review (scan passed, review pending), the state
- * submitListingVersion leaves a high-risk-tool skill in.
+ * submitListingVersion leaves a high-risk-tool skill in. Seeded directly because workers may not
+ * import the client publish path; apps/client/server/skillMarket/skillMarket.e2e.test.ts pins that
+ * publish really produces this state (pendingVersionId set, review pending).
  */
 async function held(name: string, visibility: ISkillListing['visibility'], organizationId?: string) {
   const listing = await SkillListing.create({

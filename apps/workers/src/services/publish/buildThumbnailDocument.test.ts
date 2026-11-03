@@ -94,7 +94,8 @@ describe('buildThumbnailDocument', () => {
 
   it('renders a baked sign-up gate dismissed, as the owner sees the page', async () => {
     // The baked gate's dismiss markup, as buildSignupGateHtml in apps/client/app/utils/shareFooter.ts
-    // emits it (its test pins the same opening tag). Workers must not import that module.
+    // emits it (its test pins the same opening tag, sibling order and hide rule). Workers must not
+    // import that module.
     const gate =
       '<input type="checkbox" id="b4m-gate-dismiss" style="display:none">' +
       '<div id="b4m-gate-panel" role="region"><label for="b4m-gate-dismiss">No thanks</label></div>';
