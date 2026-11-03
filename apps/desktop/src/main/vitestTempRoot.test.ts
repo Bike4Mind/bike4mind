@@ -1,16 +1,20 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   RUN_ROOT_ENV,
   RUN_ROOT_PREFIX,
   STALE_ROOT_AGE_MS,
   removeDeadRunRoots,
   removeRoot,
+  startRootHeartbeat,
 } from '../../vitest.tempRoot';
+
+// A read-only directory blocks deletion only for a non-root user on POSIX.
+const canLockDirs = process.platform !== 'win32' && process.getuid?.() !== 0;
 
 describe('test temp root', () => {
   it("points every tmpdir and homedir variable at this file's own directories", () => {
@@ -38,6 +42,7 @@ describe('removeDeadRunRoots', () => {
     parent = await mkdtemp(join(tmpdir(), 'dead-run-roots-'));
   });
   afterEach(async () => {
+    vi.restoreAllMocks();
     await rm(parent, { recursive: true, force: true });
   });
 
@@ -71,18 +76,102 @@ describe('removeDeadRunRoots', () => {
 
     expect([fresh, old].map(name => existsSync(join(parent, name)))).toEqual([true, false]);
   });
+
+  it.skipIf(!canLockDirs)('warns and carries on when an old root cannot be removed', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const deadPid = spawnSync(process.execPath, ['-e', '']).pid;
+    const stuck = `${RUN_ROOT_PREFIX}${deadPid}-stuck1`;
+    const gone = `${RUN_ROOT_PREFIX}${deadPid}-gone12`;
+    const locked = join(parent, stuck, 'locked');
+    await mkdir(locked, { recursive: true });
+    await writeFile(join(locked, 'file'), '');
+    await chmod(locked, 0o555);
+    await mkdir(join(parent, gone, 'nested'), { recursive: true });
+    await Promise.all([stuck, gone].map(name => age(name, STALE_ROOT_AGE_MS + 60_000)));
+    try {
+      await removeDeadRunRoots(parent);
+
+      expect([stuck, gone].map(name => existsSync(join(parent, name)))).toEqual([true, false]);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(stuck));
+    } finally {
+      await chmod(locked, 0o755);
+    }
+  });
 });
 
 describe('removeRoot', () => {
-  it('removes a tree and resolves when removal fails', async () => {
+  afterEach(() => {
+    vi.doUnmock('node:fs/promises');
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  const removeRootFailingWith = async (code: string) => {
+    const failure = Object.assign(new Error(code), { code });
+    vi.resetModules();
+    vi.doMock('node:fs/promises', async importOriginal => ({
+      ...(await importOriginal<typeof import('node:fs/promises')>()),
+      rm: vi.fn().mockRejectedValue(failure),
+    }));
+    return (await import('../../vitest.tempRoot')).removeRoot('/some/dir');
+  };
+
+  it('removes a tree', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'remove-root-'));
     await mkdir(join(dir, 'nested'));
-    await writeFile(join(dir, 'file'), '');
-
-    await removeRoot(join(dir, 'file', 'child'));
-    expect(existsSync(join(dir, 'file'))).toBe(true);
+    await writeFile(join(dir, 'nested', 'file'), '');
 
     await removeRoot(dir);
+
     expect(existsSync(dir)).toBe(false);
+  });
+
+  it.each(['EBUSY', 'EPERM', 'ENOTEMPTY'])('warns and resolves when removal fails with %s', async code => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await expect(removeRootFailingWith(code)).resolves.toBeUndefined();
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('/some/dir'));
+  });
+
+  it('rejects when removal fails with any other error', async () => {
+    await expect(removeRootFailingWith('EACCES')).rejects.toMatchObject({ code: 'EACCES' });
+  });
+
+  it.skipIf(!canLockDirs)('rejects and leaves the tree when a subdirectory is read-only', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'remove-root-'));
+    const locked = join(dir, 'locked');
+    await mkdir(locked);
+    await writeFile(join(locked, 'file'), '');
+    await chmod(locked, 0o555);
+    try {
+      await expect(removeRoot(dir)).rejects.toMatchObject({ code: 'EACCES' });
+      expect(existsSync(join(locked, 'file'))).toBe(true);
+    } finally {
+      await chmod(locked, 0o755);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('startRootHeartbeat', () => {
+  it('refreshes the root mtime until stopped', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'heartbeat-'));
+    const old = new Date(Date.now() - STALE_ROOT_AGE_MS - 60_000);
+    await utimes(dir, old, old);
+    const stop = startRootHeartbeat(dir, 20);
+    try {
+      await vi.waitUntil(async () => (await stat(dir)).mtimeMs > old.getTime() + 60_000, {
+        timeout: 2000,
+        interval: 10,
+      });
+    } finally {
+      stop();
+    }
+
+    await utimes(dir, old, old);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect((await stat(dir)).mtimeMs).toBeLessThan(old.getTime() + 1000);
+    await rm(dir, { recursive: true, force: true });
   });
 });
