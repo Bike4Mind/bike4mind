@@ -19,6 +19,11 @@ import char4Idle from '../../../assets/orchestrator/tavern/char-4-idle.png';
 import char4Ko from '../../../assets/orchestrator/tavern/char-4-ko.png';
 import char4Rest from '../../../assets/orchestrator/tavern/char-4-rest.png';
 import char4Work from '../../../assets/orchestrator/tavern/char-4-work.png';
+import innkeeperCheering from '../../../assets/orchestrator/tavern/innkeeper-cheering.png';
+import innkeeperIdle from '../../../assets/orchestrator/tavern/innkeeper-idle.png';
+import innkeeperReading from '../../../assets/orchestrator/tavern/innkeeper-reading.png';
+import innkeeperWalking from '../../../assets/orchestrator/tavern/innkeeper-walking.png';
+import innkeeperWriting from '../../../assets/orchestrator/tavern/innkeeper-writing.png';
 
 /** 1 dwarf smith, 2 elf scholar, 3 human ranger, 4 gnome tinkerer (see the assets README). */
 export type CharacterId = 1 | 2 | 3 | 4;
@@ -39,14 +44,11 @@ export function characterSprite(character: CharacterId, pose: Pose): string {
 
 export type InnkeeperPose = 'idle' | 'writing' | 'reading' | 'walking' | 'cheering';
 
-/**
- * The one place the Innkeeper's art is chosen. Placeholders from the dwarf smith's sheet until the
- * dedicated Innkeeper sprites land; swap each entry for its innkeeper-*.png import then.
- */
+/** The one place the Innkeeper's art is chosen; the sprites come from their own sheet (see the assets README). */
 export const INNKEEPER_ART: Record<InnkeeperPose, string> = {
-  idle: char1Idle,
-  writing: char1Work,
-  reading: char1Rest,
-  walking: char1Idle,
-  cheering: char1Call,
+  idle: innkeeperIdle,
+  writing: innkeeperWriting,
+  reading: innkeeperReading,
+  walking: innkeeperWalking,
+  cheering: innkeeperCheering,
 };

@@ -166,5 +166,45 @@
     "size": "2048x1648",
     "background": "transparent",
     "note": "sliced from raw/sheet-all.png row 4 column 5"
+  },
+  "innkeeper-idle.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, cute chibi character about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 1 row of 5 sprites, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on one baseline. Each sprite is small, filling only about half of the image height.\nThe same character in all 5 sprites: a warm, jolly, stout human tavern keeper with a round belly, rosy cheeks, short curly black hair and a neat black moustache (no long beard, no helmet, no hat), a white shirt with rolled-up sleeves, a dark red vest, a long cream-colored apron tied at the waist and a small towel over one shoulder.\nThe 5 poses, left to right:\n1 IDLE: standing facing the viewer, polishing a pewter mug with a cloth, friendly smile.\n2 WRITING: facing right in side view, holding an open ledger book in one hand and writing in it with a feather quill.\n3 READING: standing facing the viewer, reading an unrolled parchment scroll held in both hands.\n4 WALKING: facing right in side view, mid-stride walking, arms swinging.\n5 CHEERING: facing the viewer, one arm raised high holding a foaming wooden mug of ale, mouth open laughing.",
+    "date": "2026-11-03T07:10:11.342Z",
+    "size": "2048x1152",
+    "background": "transparent",
+    "note": "sliced from raw/innkeeper.png column 1 at scale 0.4"
+  },
+  "innkeeper-writing.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, cute chibi character about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 1 row of 5 sprites, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on one baseline. Each sprite is small, filling only about half of the image height.\nThe same character in all 5 sprites: a warm, jolly, stout human tavern keeper with a round belly, rosy cheeks, short curly black hair and a neat black moustache (no long beard, no helmet, no hat), a white shirt with rolled-up sleeves, a dark red vest, a long cream-colored apron tied at the waist and a small towel over one shoulder.\nThe 5 poses, left to right:\n1 IDLE: standing facing the viewer, polishing a pewter mug with a cloth, friendly smile.\n2 WRITING: facing right in side view, holding an open ledger book in one hand and writing in it with a feather quill.\n3 READING: standing facing the viewer, reading an unrolled parchment scroll held in both hands.\n4 WALKING: facing right in side view, mid-stride walking, arms swinging.\n5 CHEERING: facing the viewer, one arm raised high holding a foaming wooden mug of ale, mouth open laughing.",
+    "date": "2026-11-03T07:10:11.342Z",
+    "size": "2048x1152",
+    "background": "transparent",
+    "note": "sliced from raw/innkeeper.png column 2 at scale 0.4"
+  },
+  "innkeeper-reading.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, cute chibi character about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 1 row of 5 sprites, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on one baseline. Each sprite is small, filling only about half of the image height.\nThe same character in all 5 sprites: a warm, jolly, stout human tavern keeper with a round belly, rosy cheeks, short curly black hair and a neat black moustache (no long beard, no helmet, no hat), a white shirt with rolled-up sleeves, a dark red vest, a long cream-colored apron tied at the waist and a small towel over one shoulder.\nThe 5 poses, left to right:\n1 IDLE: standing facing the viewer, polishing a pewter mug with a cloth, friendly smile.\n2 WRITING: facing right in side view, holding an open ledger book in one hand and writing in it with a feather quill.\n3 READING: standing facing the viewer, reading an unrolled parchment scroll held in both hands.\n4 WALKING: facing right in side view, mid-stride walking, arms swinging.\n5 CHEERING: facing the viewer, one arm raised high holding a foaming wooden mug of ale, mouth open laughing.",
+    "date": "2026-11-03T07:10:11.342Z",
+    "size": "2048x1152",
+    "background": "transparent",
+    "note": "sliced from raw/innkeeper.png column 3 at scale 0.4"
+  },
+  "innkeeper-walking.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, cute chibi character about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 1 row of 5 sprites, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on one baseline. Each sprite is small, filling only about half of the image height.\nThe same character in all 5 sprites: a warm, jolly, stout human tavern keeper with a round belly, rosy cheeks, short curly black hair and a neat black moustache (no long beard, no helmet, no hat), a white shirt with rolled-up sleeves, a dark red vest, a long cream-colored apron tied at the waist and a small towel over one shoulder.\nThe 5 poses, left to right:\n1 IDLE: standing facing the viewer, polishing a pewter mug with a cloth, friendly smile.\n2 WRITING: facing right in side view, holding an open ledger book in one hand and writing in it with a feather quill.\n3 READING: standing facing the viewer, reading an unrolled parchment scroll held in both hands.\n4 WALKING: facing right in side view, mid-stride walking, arms swinging.\n5 CHEERING: facing the viewer, one arm raised high holding a foaming wooden mug of ale, mouth open laughing.",
+    "date": "2026-11-03T07:10:11.342Z",
+    "size": "2048x1152",
+    "background": "transparent",
+    "note": "sliced from raw/innkeeper.png column 4 at scale 0.4"
+  },
+  "innkeeper-cheering.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, cute chibi character about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 1 row of 5 sprites, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on one baseline. Each sprite is small, filling only about half of the image height.\nThe same character in all 5 sprites: a warm, jolly, stout human tavern keeper with a round belly, rosy cheeks, short curly black hair and a neat black moustache (no long beard, no helmet, no hat), a white shirt with rolled-up sleeves, a dark red vest, a long cream-colored apron tied at the waist and a small towel over one shoulder.\nThe 5 poses, left to right:\n1 IDLE: standing facing the viewer, polishing a pewter mug with a cloth, friendly smile.\n2 WRITING: facing right in side view, holding an open ledger book in one hand and writing in it with a feather quill.\n3 READING: standing facing the viewer, reading an unrolled parchment scroll held in both hands.\n4 WALKING: facing right in side view, mid-stride walking, arms swinging.\n5 CHEERING: facing the viewer, one arm raised high holding a foaming wooden mug of ale, mouth open laughing.",
+    "date": "2026-11-03T07:10:11.342Z",
+    "size": "2048x1152",
+    "background": "transparent",
+    "note": "sliced from raw/innkeeper.png column 5 at scale 0.4"
   }
 }
