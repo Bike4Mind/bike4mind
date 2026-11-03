@@ -1,4 +1,5 @@
 import { ChatModels, MAX_THINKING_BUDGET_TOKENS } from '@bike4mind/common';
+import { effectiveControls, requestGeneration } from '@shared/generation';
 import { describe, expect, it } from 'vitest';
 import { hostedControls, modelfileParameter, ollamaControls, openAICompatibleControls } from './modelControls';
 
@@ -87,6 +88,27 @@ describe('hostedControls', () => {
     });
     expect(controls.temperature).toMatchObject({ min: 0, max: 1, locked: { value: 1 } });
     expect(controls).not.toHaveProperty('effort');
+  });
+
+  it('keeps the budget plus the answer room inside the cap, which the server never clamps back to', () => {
+    for (const id of [ChatModels.CLAUDE_4_OPUS, ChatModels.CLAUDE_4_1_OPUS]) {
+      const controls = hostedControls({ ...budgetClaude, id, maxOutputTokens: 32_000 }, undefined, false);
+      expect(controls.thinkingBudgetTokens?.max).toBe(31_000);
+    }
+    expect(hostedControls({ ...budgetClaude, maxOutputTokens: 2000 }, undefined, false)).not.toHaveProperty(
+      'thinkingBudgetTokens'
+    );
+  });
+
+  it('raises the max output floor to the budget the turn sends plus the answer room', () => {
+    const controls = hostedControls(budgetClaude, undefined, false);
+    expect(controls.maxOutputTokens).toMatchObject({ min: 1024, budgetHeadroom: 1000 });
+    expect(requestGeneration({ maxOutputTokens: 1024 }, controls)).toEqual({ maxOutputTokens: 17_000 });
+    expect(requestGeneration({ maxOutputTokens: 1024, thinkingBudgetTokens: 2048 }, controls)).toEqual({
+      maxOutputTokens: 3048,
+      thinkingBudgetTokens: 2048,
+    });
+    expect(effectiveControls(controls, { thinkingBudgetTokens: 99_999 })?.maxOutputTokens?.min).toBe(33_000);
   });
 
   it("offers a Claude that does not think the API's 0 to 1 temperature", () => {
