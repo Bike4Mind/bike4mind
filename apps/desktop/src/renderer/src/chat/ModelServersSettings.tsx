@@ -290,7 +290,7 @@ function SpecsFields({
         />
       )}
       <Typography level="body-xs" textColor="text.tertiary">
-        Ratings use the memory figures. Bandwidth is saved but does not change them yet.
+        Ratings use the memory figures. Bandwidth sets the reply speed a fit badge estimates.
       </Typography>
       {problem && (
         <Alert size="sm" color="danger" variant="soft" data-testid="model-servers-specs-error">
