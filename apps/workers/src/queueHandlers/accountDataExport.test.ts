@@ -277,7 +277,9 @@ describe('account data export worker', () => {
   });
 
   it('stops building notebooks on a low budget and lists the rest as omitted', async () => {
-    remainingMs = () => 7 * 60 * 1000;
+    // A full budget when the section starts, then seven minutes: past the notebook share, inside the file share.
+    let calls = 0;
+    remainingMs = () => (calls++ === 0 ? FULL_BUDGET_MS : 7 * 60 * 1000);
     h.notebooks = [
       { id: 'nb-1', name: 'Trip/plans' },
       { id: 'nb-2', name: 'Other' },

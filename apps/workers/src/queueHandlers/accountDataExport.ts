@@ -47,8 +47,9 @@ const AccountDataExportPayload = z.object({
 export const MAX_FILE_BYTES = 3 * 1024 ** 3;
 // Left for the upload and the email once the file copy stops.
 const UPLOAD_RESERVE_MS = 5 * 60 * 1000;
-// Notebooks stop earlier than the file copy, so files and artifacts still get time.
-const NOTEBOOK_RESERVE_MS = UPLOAD_RESERVE_MS + 3 * 60 * 1000;
+// Notebooks stop once two thirds of the time past the upload reserve is used, so files and
+// artifacts keep a share on both the 15-minute Lambda and the shorter self-host budget.
+const notebookReserveMs = (startingMs: number) => UPLOAD_RESERVE_MS + Math.max(0, startingMs - UPLOAD_RESERVE_MS) / 3;
 
 type Archiver = archiver.Archiver;
 type Storage = ReturnType<typeof getFilesStorage>;
@@ -202,6 +203,7 @@ async function writeNotebooks(
     logger,
   });
 
+  const reserveMs = notebookReserveMs(remainingMs());
   const generated = getGeneratedImageStorage();
   const copied = new Map<string, ImageRef>();
   const resolveImage = async (key: string): Promise<ImageRef> => {
@@ -211,7 +213,7 @@ async function writeNotebooks(
     if (known) return known;
 
     let ref: ImageRef;
-    if (remainingMs() < NOTEBOOK_RESERVE_MS) {
+    if (remainingMs() < reserveMs) {
       ref = { key, omitted: 'time_limit' };
     } else {
       try {
@@ -244,7 +246,7 @@ async function writeNotebooks(
   const iterator = service.buildNotebooks(userId, NOTEBOOK_OPTIONS);
   let stopped = false;
   for (;;) {
-    if (remainingMs() < NOTEBOOK_RESERVE_MS) {
+    if (remainingMs() < reserveMs) {
       stopped = true;
       break;
     }
@@ -253,8 +255,14 @@ async function writeNotebooks(
     const notebook = next.value;
     const chatHistory = [];
     for (const message of notebook.chatHistory) {
-      const images = message.images ? await Promise.all(message.images.map(resolveImage)) : undefined;
-      chatHistory.push(images ? { ...message, images } : message);
+      if (!message.images) {
+        chatHistory.push(message);
+        continue;
+      }
+      // One at a time: each copy is a zip entry, and appendEntry buffers a single source.
+      const images: ImageRef[] = [];
+      for (const key of message.images) images.push(await resolveImage(key));
+      chatHistory.push({ ...message, images });
     }
     const zipPath = names.name('notebooks', notebook.name, notebook.id, '.json');
     await appendEntry(archive, json({ ...notebook, chatHistory }), zipPath);
