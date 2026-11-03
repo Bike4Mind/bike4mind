@@ -35,8 +35,8 @@ export const REPLY_STAT_TEXT: Record<ReplyStatId, ReplyStatText> = {
   total: { label: 'Total time', setting: 'Total time, tools and approvals included' },
   thinkingShare: { label: 'Thinking share', setting: "Share of the model's time spent thinking" },
   thinkingTokens: { label: 'Thinking tokens', setting: 'Thinking tokens' },
-  tokens: { label: 'Total tokens', setting: 'Total tokens generated, thinking included' },
-  speed: { label: 'Speed', setting: 'Tokens per second' },
+  tokens: { label: 'Total tokens', setting: 'Total tokens generated, thinking and sub-agents included' },
+  speed: { label: 'Speed', setting: 'Tokens per second, sub-agents left out' },
   cacheShare: { label: 'Cache read', setting: 'Share of the prompt read from cache' },
   promptSpeed: { label: 'Prompt speed', setting: 'Prompt processing speed' },
   firstToken: { label: 'First token', setting: 'Time to first token' },
@@ -184,7 +184,12 @@ export function replyStats(source: ReplyStatsSource, { live = false }: { live?: 
       reasoningTokens !== undefined ? formatTokens(reasoningTokens) : null,
       usage?.reasoningTokens === undefined && derived.has('reasoningTokens') && ESTIMATES.thinkingTokens
     ),
-    tokens: stat('tokens', usage?.outputTokens !== undefined ? formatTokens(usage.outputTokens) : null),
+    tokens: stat(
+      'tokens',
+      usage?.outputTokens !== undefined ? formatTokens(usage.outputTokens) : null,
+      false,
+      'thinking and any sub-agents included'
+    ),
     speed: stat(
       'speed',
       generation && formatTokenRate({ evalTokens: generation.tokens, evalMs: generation.ms }),
