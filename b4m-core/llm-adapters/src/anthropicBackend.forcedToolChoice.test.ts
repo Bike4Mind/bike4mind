@@ -346,6 +346,44 @@ describe('AnthropicBackend json_schema on models without forced tool use', () =>
     expect(out.mode()).toBe('native');
   });
 
+  it.each([
+    [
+      'declares an open object',
+      false,
+      { type: 'object', properties: { name: { type: 'string' } }, additionalProperties: { type: 'number' } },
+    ],
+    [
+      'declares a nested open object',
+      false,
+      {
+        type: 'object',
+        properties: { meta: { type: 'object', properties: {}, additionalProperties: true } },
+        required: ['meta'],
+        additionalProperties: false,
+      },
+    ],
+    ['leaves additionalProperties out', true, { type: 'object', properties: { name: { type: 'string' } } }],
+  ])('when the schema %s, sends output_config.format: %s', async (_label, native, schema) => {
+    const { backend, captured } = buildBackend(() => textResponse(JSON.stringify(RESULT)));
+    const out = capture();
+    await run(
+      backend,
+      ChatModels.CLAUDE_5_5_OPUS,
+      { stream: false, responseFormat: { type: 'json_schema', json_schema: { name: 'n', schema } } },
+      out.cb
+    );
+
+    expectNoForcedChoice(captured[0]);
+    if (native) {
+      expect(captured[0].output_config).toEqual({ format: buildStructuredOutputFormat(schema) });
+      expect(out.mode()).toBe('native');
+    } else {
+      expect(captured[0]).not.toHaveProperty('output_config');
+      expect(systemText(captured[0].system)).toContain('Schema name: n');
+      expect(out.mode()).toBe('best-effort');
+    }
+  });
+
   it('tags every streamed JSON chunk with the native mode', async () => {
     const { backend } = buildBackend(() => textStream(JSON.stringify(RESULT)));
     const out = capture();

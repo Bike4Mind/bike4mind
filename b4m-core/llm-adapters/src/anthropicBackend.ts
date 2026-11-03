@@ -1259,8 +1259,8 @@ export class AnthropicBackend implements ICompletionBackend {
     // precedence; mixing forced-tool with executable tools can deadlock).
     const responseFormat = options.responseFormat;
     const wantsJsonSchema = responseFormat?.type === 'json_schema' && !hasCallerTools;
-    // Structured outputs close every object, so a schema that explicitly keeps one open stays on the
-    // unconstrained forced tool, where extra keys still come through.
+    // Structured outputs close every object, so a schema that explicitly keeps one open skips them for the
+    // unconstrained forced tool, or the prompt on a model without forced tool use, where extra keys come through.
     const schemaDeclaresOpenObject =
       responseFormat?.type === 'json_schema' && declaresOpenObject(responseFormat.json_schema.schema);
     // A caller's `strict: false` keeps the schema off native structured outputs and the strict tool alike.
@@ -1280,11 +1280,15 @@ export class AnthropicBackend implements ICompletionBackend {
             'adaptive'));
     const wantsNativeFormat = wantsJsonSchema && (!forcedToolChoiceSupported || callerWantsThinking);
     // Native structured outputs replace the synthesized tool unless a document asks for citations (that
-    // pairing is a 400) or the schema is one structured outputs reject. Then a model with forced tool
-    // use keeps the tool, and one without puts the schema in the prompt.
+    // pairing is a 400), the schema declares an open object, or it is one structured outputs reject. Then a
+    // model with forced tool use keeps the tool, and one without puts the schema in the prompt.
     const citationsBlockFormat = wantsNativeFormat && hasCitationsEnabled(apiParams.messages);
     const nativeFormat =
-      wantsNativeFormat && !citationsBlockFormat && !callerOptsOutOfStrict && responseFormat.type === 'json_schema'
+      wantsNativeFormat &&
+      !citationsBlockFormat &&
+      !callerOptsOutOfStrict &&
+      !schemaDeclaresOpenObject &&
+      responseFormat.type === 'json_schema'
         ? buildStructuredOutputFormat(responseFormat.json_schema.schema)
         : null;
     const usingResponseFormatNative = nativeFormat !== null;
