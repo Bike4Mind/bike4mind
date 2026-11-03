@@ -3,13 +3,14 @@ import { ACCOUNT_DELETION_PENDING_CODE } from '@bike4mind/common';
 
 /**
  * The scheduled purge date when `error` is the 403 the server returns for an account in its
- * deletion grace period (deletionPendingGate in @bike4mind/server-utils), otherwise null.
+ * deletion grace period (deletionPendingGate in @bike4mind/server-utils), otherwise null. A 403 with the
+ * code but no date is ignored too, so the gate never opens without a date to show.
  */
 export function accountDeletionPendingFrom(error: unknown): string | null {
   if (!isAxiosError(error) || error.response?.status !== 403) return null;
   const data = error.response.data as { code?: unknown; scheduledFor?: unknown } | undefined;
   if (data?.code !== ACCOUNT_DELETION_PENDING_CODE) return null;
-  return typeof data.scheduledFor === 'string' ? data.scheduledFor : '';
+  return typeof data.scheduledFor === 'string' && data.scheduledFor ? data.scheduledFor : null;
 }
 
 /** Calls `onPending` on every deletion-pending 403, then rejects as before. Returns the eject function. */
