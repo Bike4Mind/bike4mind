@@ -11,7 +11,8 @@ import type {
   PrSnapshot,
   PrState,
 } from '@shared/pullRequest';
-import { gitOriginUrl, parseRemoteLocation, type RemoteLocation } from '../fleet/repository';
+import { isRepositoryPart } from '../fleet/activityContract';
+import { gitRemoteSettings, parseRemoteLocation, type RemoteLocation } from '../fleet/repository';
 import { wslLocation } from '../wsl/wslPath';
 import { GhError, type GhRunner } from './gh';
 
@@ -283,10 +284,32 @@ function graphqlError(raw: Json, alias?: string): { type: string; message: strin
   return match ? { type: str(match.type), message: str(match.message) } : undefined;
 }
 
-/** A remote as gh's `--repo` takes it: `owner/name`, with the host first for any server but github.com. */
-export function ghRepository(location: RemoteLocation): string {
-  const name = `${location.owner}/${location.name}`;
-  return location.host === 'github.com' ? name : `${location.host}/${name}`;
+type RepositoryOnHost = Pick<RemoteLocation, 'host' | 'owner' | 'name'>;
+
+/**
+ * The repository gh aims a PR command at, from `gitRemoteSettings`: the remote `gh repo set-default`
+ * marked, else `upstream`, else `origin`.
+ */
+export function ghBaseRepository(settings: string): RepositoryOnHost | null {
+  const urls = new Map<string, string>();
+  const marks = new Map<string, string>();
+  for (const line of settings.split('\n')) {
+    const [, remote = '', key, value = ''] = /^remote\.(\S+)\.(url|gh-resolved)\s+(.+)$/.exec(line.trim()) ?? [];
+    const into = key === 'url' ? urls : key ? marks : null;
+    if (into && !into.has(remote)) into.set(remote, value.trim());
+  }
+  const located = (remote: string) => {
+    const url = urls.get(remote);
+    return url ? parseRemoteLocation(url) : null;
+  };
+  const [marked, mark] = [...marks][0] ?? [];
+  if (marked === undefined) return located('upstream') ?? located('origin');
+  const remote = located(marked);
+  if (mark === 'base') return remote;
+  const [owner = '', name = '', ...rest] = (mark ?? '').split('/');
+  return rest.length === 0 && isRepositoryPart(owner) && isRepositoryPart(name)
+    ? { host: remote?.host ?? 'github.com', owner, name }
+    : null;
 }
 
 /** The repo's merge method this app uses: GitHub's default for the viewer, else the first allowed. */
@@ -303,7 +326,7 @@ export class PrGithub {
   constructor(
     private readonly gh: GhRunner,
     private readonly now: () => number = Date.now,
-    private readonly originUrl: (directory: string) => Promise<string | null> = gitOriginUrl,
+    private readonly remoteSettings: (directory: string) => Promise<string | null> = gitRemoteSettings,
     private readonly platform: NodeJS.Platform = process.platform
   ) {}
 
@@ -371,16 +394,30 @@ export class PrGithub {
     });
   }
 
+  /** gh's `--repo` value: the host leads only when gh is signed in to it, so an SSH alias or proxy host is left out. */
+  private async repoFlag({ host, owner, name }: RepositoryOnHost): Promise<string> {
+    const repository = `${owner}/${name}`;
+    if (host === 'github.com') return repository;
+    try {
+      const status = obj(JSON.parse(await this.gh(['auth', 'status', '--hostname', host, '--json', 'hosts'])));
+      return Object.keys(obj(status.hosts)).some(known => known.toLowerCase() === host)
+        ? `${host}/${repository}`
+        : repository;
+    } catch {
+      return repository;
+    }
+  }
+
   /** The open PR whose head is `branch` in the repo at `cwd`, or null. */
   async findOpenForBranch(cwd: string, branch: string): Promise<string | null> {
     const args = ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'url', '--limit', '1'];
     let stdout: string;
     if (wslLocation(cwd, this.platform)) {
       // gh runs on Windows, whose git cannot read a checkout in a WSL distro; the distro's git names the repo.
-      const origin = await this.originUrl(cwd).catch(() => null);
-      const location = origin ? parseRemoteLocation(origin) : null;
-      if (!location) return null;
-      stdout = await this.gh([...args, '--repo', ghRepository(location)]);
+      const settings = await this.remoteSettings(cwd).catch(() => null);
+      const base = settings ? ghBaseRepository(settings) : null;
+      if (!base) return null;
+      stdout = await this.gh([...args, '--repo', await this.repoFlag(base)]);
     } else {
       stdout = await this.gh(args, { cwd });
     }

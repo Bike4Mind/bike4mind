@@ -74,13 +74,10 @@ export function createRepositoryResolver(
   };
 }
 
-/** `origin`'s URL as the folder's own git reads it: Linux git for a WSL folder. */
-export async function gitOriginUrl(directory: string): Promise<string | null> {
+/** `git config <args>` as the folder's own git reads it: Linux git for a WSL folder. */
+async function readGitConfig(directory: string, configArgs: readonly string[]): Promise<string | null> {
   const env = await gitCommandEnv(directory);
-  const args = hostGitArgs(
-    ['-C', gitArgumentPath(directory, directory), 'config', '--get', 'remote.origin.url'],
-    directory
-  );
+  const args = hostGitArgs(['-C', gitArgumentPath(directory, directory), 'config', ...configArgs], directory);
   const command = await gitCommand(directory, args);
   if (!command) return null;
   return new Promise(resolve => {
@@ -88,4 +85,14 @@ export async function gitOriginUrl(directory: string): Promise<string | null> {
       resolve(err ? null : stdout.trim() || null);
     });
   });
+}
+
+/** `origin`'s URL as the folder's own git reads it: Linux git for a WSL folder. */
+export function gitOriginUrl(directory: string): Promise<string | null> {
+  return readGitConfig(directory, ['--get', 'remote.origin.url']);
+}
+
+/** Every remote's `url` and `gh-resolved` entries, one `remote.<name>.<key> <value>` line each. */
+export function gitRemoteSettings(directory: string): Promise<string | null> {
+  return readGitConfig(directory, ['--get-regexp', '^remote\\..*\\.(url|gh-resolved)$']);
 }
