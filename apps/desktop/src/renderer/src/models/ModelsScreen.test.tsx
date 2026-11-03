@@ -32,6 +32,14 @@ import { DOWN_RECHECK_MS } from './useModelHub';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+const platform = vi.hoisted(() => ({ windows: false }));
+vi.mock('../chat/platform', () => ({
+  isMac: false,
+  get isWindows() {
+    return platform.windows;
+  },
+}));
+
 const GIB = 1024 ** 3;
 
 // jsdom ships no matchMedia, and Joy's colour-scheme provider asks for one on mount.
@@ -433,6 +441,7 @@ let host: HTMLElement | null = null;
 const openModelServers = vi.fn();
 
 afterEach(() => {
+  platform.windows = false;
   act(() => root?.unmount());
   host?.remove();
   root = null;
@@ -1307,6 +1316,23 @@ describe('ModelsScreen installed', () => {
 
     await click(q('models-point-at-server-btn'));
     expect(openModelServers).toHaveBeenCalledTimes(1);
+  });
+
+  it('hints at Ollama in WSL on Windows only', async () => {
+    bridge.status = DOWN;
+    platform.windows = false;
+    await mount(undefined, 'curated');
+    expect(q('models-no-runtime-wsl-hint')).toBeNull();
+    act(() => root?.unmount());
+    root = null;
+    host?.remove();
+
+    platform.windows = true;
+    await mount(undefined, 'curated');
+    const hint = q('models-no-runtime-wsl-hint')?.textContent ?? '';
+    expect(hint).toContain('If Ollama runs in WSL, start it there.');
+    expect(hint).toContain('127.0.0.1:11434');
+    expect(hint).toContain('Point at a server');
   });
 
   it('checks again on its own while Ollama looks down, and lists its models once it answers', async () => {
