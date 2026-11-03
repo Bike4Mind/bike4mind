@@ -25,7 +25,7 @@ describe('findPageAfterBySessionId', () => {
     const docs = Array.from({ length: 300 }, (_, i) => ({
       sessionId: SESSION,
       userId: 'u1',
-      // Every third pair shares a timestamp to exercise the _id tiebreak.
+      // Each consecutive pair shares a timestamp to exercise the _id tiebreak.
       timestamp: new Date(base + Math.floor(i / 2) * 1000),
       prompts: [`p${i}`],
     }));

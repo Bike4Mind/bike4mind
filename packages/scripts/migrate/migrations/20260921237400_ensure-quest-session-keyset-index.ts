@@ -8,7 +8,7 @@ import { type MigrationFile } from './index';
  * (questRepository.findPageAfterBySessionId). Without this index each page sorts every remaining
  * turn of the session in memory, or walks a global index and filters sessionId as a residual.
  *
- * Migration rather than autoIndex, for the same reason as 20260917000200_ensure-quest-corrects-index:
+ * Migration rather than autoIndex, for the same reason as 20260921235966_ensure-quest-signup-activity-index:
  * prod runs DocumentDB, where an index build takes a foreground collection lock.
  *
  * Idempotent: createIndexes is a no-op for indexes that already exist. Id backdated below
