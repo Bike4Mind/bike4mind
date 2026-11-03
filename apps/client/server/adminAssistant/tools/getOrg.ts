@@ -1,4 +1,8 @@
-import { organizationStorageLimitBytes, type IOrganizationDocument } from '@bike4mind/common';
+import {
+  orgAclRowConfersMembership,
+  organizationStorageLimitBytes,
+  type IOrganizationDocument,
+} from '@bike4mind/common';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { resolveUserNames } from '../../utils/resolveUserNames';
@@ -33,7 +37,8 @@ export const ADMIN_ASSISTANT_ORG_FIELDS = [
 
 const toOrgFieldValue = (org: IOrganizationDocument, field: (typeof ADMIN_ASSISTANT_ORG_FIELDS)[number]): unknown => {
   const value: unknown = org[field];
-  if (field === 'description' && typeof value === 'string') return Array.from(value).slice(0, MAX_DESCRIPTION_CHARS).join('');
+  if (field === 'description' && typeof value === 'string')
+    return Array.from(value).slice(0, MAX_DESCRIPTION_CHARS).join('');
   return value instanceof Date ? value.toISOString() : (value ?? null);
 };
 
@@ -47,7 +52,7 @@ export const getOrgTool = defineAdminTool({
     if (!resolved.ok) return resolved;
     const { org } = resolved;
 
-    const members = org.users ?? [];
+    const members = (org.users ?? []).filter(orgAclRowConfersMembership);
     const shownMembers = members.slice(0, MAX_MEMBERS);
     const [names, subscriptions] = await Promise.all([
       resolveUserNames([org.userId, ...shownMembers.map(member => member.userId)]),

@@ -52,7 +52,10 @@ const orgDoc = (extra: Record<string, unknown> = {}) => ({
   userId: 'owner-1',
   adminUserIds: ['manager-1'],
   // Matches organizationService.create: the owner is not stored in users[].
-  users: [{ userId: 'manager-1' }, { userId: 'member-1' }],
+  users: [
+    { userId: 'manager-1', permissions: ['read'] },
+    { userId: 'member-1', permissions: ['read'] },
+  ],
   ...extra,
 });
 
@@ -122,7 +125,13 @@ describe('getOrgTool', () => {
   it('does not count the owner twice when users[] also lists them', async () => {
     resolveAdminOrgRef.mockResolvedValue({
       ok: true,
-      org: orgDoc({ users: [{ userId: 'owner-1' }, { userId: 'manager-1' }, { userId: 'member-1' }] }),
+      org: orgDoc({
+        users: [
+          { userId: 'owner-1', permissions: ['read'] },
+          { userId: 'manager-1', permissions: ['read'] },
+          { userId: 'member-1', permissions: ['read'] },
+        ],
+      }),
     });
 
     const result = await runTool({ orgId: ORG_ID });
@@ -131,8 +140,26 @@ describe('getOrgTool', () => {
     expect(result.data.members[0]).toEqual({ userId: 'owner-1', name: 'Olive', role: 'owner' });
   });
 
+  it('neither lists nor counts a users[] row that does not confer membership', async () => {
+    resolveAdminOrgRef.mockResolvedValue({
+      ok: true,
+      org: orgDoc({
+        users: [
+          { userId: 'member-1', permissions: ['read'] },
+          { userId: 'ghost-1', permissions: [] },
+          { userId: 'ghost-2' },
+        ],
+      }),
+    });
+
+    const result = await runTool({ orgId: ORG_ID });
+
+    expect(result.data.memberCount).toBe(2);
+    expect(result.data.members).toEqual([{ userId: 'member-1', name: null, role: 'member' }]);
+  });
+
   it('caps the member list at 25 and resolves names only for the rows it shows', async () => {
-    const users = Array.from({ length: 30 }, (_, index) => ({ userId: `m${index}` }));
+    const users = Array.from({ length: 30 }, (_, index) => ({ userId: `m${index}`, permissions: ['read'] }));
     resolveAdminOrgRef.mockResolvedValue({ ok: true, org: orgDoc({ users }) });
 
     const result = await runTool({ orgId: ORG_ID });
