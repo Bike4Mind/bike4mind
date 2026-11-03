@@ -81,8 +81,8 @@ export function signupGrantRemaining(grant: SignupGrant): number {
 
 /** Credits the drip may still pay under `dripCap`; never negative when the cap was lowered below what was dripped. */
 export function signupGrantDripRemaining(grant: Pick<SignupGrant, 'dripCredits'>, dripCap: number): number {
-  const dripped = grant.dripCredits;
-  return Math.max(0, dripCap - (Number.isSafeInteger(dripped) && (dripped as number) > 0 ? (dripped as number) : 0));
+  const dripped = grant.dripCredits ?? 0;
+  return Math.max(0, dripCap - (Number.isSafeInteger(dripped) && dripped > 0 ? dripped : 0));
 }
 
 export function nonnegativeGrantCredits(value: unknown): number {
@@ -126,7 +126,10 @@ export interface SignupGrantSchedule {
   dripCapSource: SignupGrantDripCapSource;
 }
 
-/** The pre-schedule on/off switches; they only matter while the matching schedule key is unset. */
+/**
+ * The pre-schedule on/off switches. `staged` matters while signupGrantInitialCredits or signupGrantDripCap
+ * is unset (an unset cap with staging off keeps the flat grant); `activity` while signupGrantDailyCredits is unset.
+ */
 export interface SignupGrantLegacyToggles {
   staged: boolean;
   activity: boolean;
