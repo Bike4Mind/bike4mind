@@ -72,6 +72,7 @@ export type LoopFormPayload = Pick<ILoop, 'name' | 'goal' | 'intervalMinutes' | 
   agentId?: string | null;
   oversees?: string[] | null;
   budgetCreditsPerDay?: number | null;
+  stageConfig?: ILoop['stageConfig'];
 };
 
 const LIST_POLL_MS = 30_000;

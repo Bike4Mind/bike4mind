@@ -20,7 +20,7 @@ import {
   Typography,
   type ColorPaletteProp,
 } from '@mui/joy';
-import type { ILoop, WorkItemStatus } from '@bike4mind/common';
+import { desktopStagesOf, type ILoop, type WorkItemStatus } from '@bike4mind/common';
 import {
   useCreateLoopTicket,
   useMoveLoopTicket,
@@ -48,10 +48,13 @@ const STATUS_LABEL: Record<WorkItemStatus, string> = {
 function TicketCard({
   ticket,
   stages,
+  desktop,
   onViewRun,
 }: {
   ticket: ILoopTicket;
   stages: string[];
+  /** The ticket's stage is worked by a desktop runner, never by a cloud run. */
+  desktop: boolean;
   onViewRun: (executionId: string) => void;
 }) {
   const moveTicket = useMoveLoopTicket();
@@ -62,6 +65,11 @@ function TicketCard({
         <Chip size="sm" variant="soft" color={STATUS_COLOR[ticket.status]}>
           {STATUS_LABEL[ticket.status]}
         </Chip>
+        {desktop && ticket.status === 'open' && (
+          <Chip size="sm" variant="outlined" color="neutral" data-testid="loop-ticket-waiting-desktop">
+            Waiting for a desktop runner
+          </Chip>
+        )}
         {ticket.dependencies.length > 0 && (
           <Typography level="body-xs">
             {ticket.dependencies.length} {ticket.dependencies.length === 1 ? 'dep' : 'deps'}
@@ -203,6 +211,7 @@ export default function LoopTicketBoard({
   onViewRun: (executionId: string) => void;
 }) {
   const [adding, setAdding] = useState(false);
+  const desktopStages = new Set(desktopStagesOf(loop));
   const all = data?.stages.flatMap(group => group.tickets) ?? [];
   // Same order the scheduler picks in (WorkItemModel.findNextReadyForLoop): oldest created first.
   const ready = all.filter(t => t.ready).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
@@ -232,11 +241,24 @@ export default function LoopTicketBoard({
             sx={{ minWidth: 260, width: 260, flexShrink: 0 }}
             data-testid={`loop-stage-column-${group.stage}`}
           >
-            <Typography level="title-sm">
-              {group.stage} ({group.tickets.length})
-            </Typography>
+            <Stack direction="row" gap={1} alignItems="center">
+              <Typography level="title-sm">
+                {group.stage} ({group.tickets.length})
+              </Typography>
+              {desktopStages.has(group.stage) && (
+                <Chip size="sm" variant="soft" data-testid={`loop-board-stage-desktop-${group.stage}`}>
+                  Desktop
+                </Chip>
+              )}
+            </Stack>
             {group.tickets.map(ticket => (
-              <TicketCard key={ticket.id} ticket={ticket} stages={loop.stages} onViewRun={onViewRun} />
+              <TicketCard
+                key={ticket.id}
+                ticket={ticket}
+                stages={loop.stages}
+                desktop={!!ticket.stage && desktopStages.has(ticket.stage)}
+                onViewRun={onViewRun}
+              />
             ))}
           </Stack>
         ))}

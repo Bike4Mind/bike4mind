@@ -1,5 +1,8 @@
 import { useState } from 'react';
 import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
   Box,
   Button,
   Chip,
@@ -17,11 +20,12 @@ import {
   Textarea,
   Typography,
 } from '@mui/joy';
-import { DEFAULT_LOOP_STAGES, type ILoop } from '@bike4mind/common';
+import { DEFAULT_LOOP_STAGES, type ILoop, type ILoopStageConfig } from '@bike4mind/common';
 import { PICKABLE_TOOLS } from '@client/app/components/Agent/OrchestrationSection';
 import { getToolDisplayName } from '@client/app/utils/toolMapping';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
 import { useGetAgents } from '@client/app/hooks/data/agents';
+import { useAccessibleModels } from '@client/app/hooks/useAccessibleModels';
 import { useCreateLoop, useLoops, useUpdateLoop, type LoopFormPayload } from '@client/app/hooks/data/loops';
 
 // Limits mirror apps/client/server/utils/loopValidation.ts; keep in sync.
@@ -31,6 +35,7 @@ const TOOLS_MAX = 50;
 const STAGES_MAX = 20;
 const STAGE_NAME_MAX = 60;
 const OVERSEES_MAX = 5;
+const STAGE_INSTRUCTIONS_MAX = 4000;
 const INTERVAL_MIN = 5;
 const INTERVAL_MAX = 10_080;
 // Mirrors validateLoopStages (apps/client/server/utils/loopValidation.ts): the last stage means closed.
@@ -52,10 +57,14 @@ export interface LoopFormValues {
   oversees: string[];
   /** '' means no daily budget. */
   budget: string;
+  /** Keyed by stage name, so removing a stage (or it becoming the last) drops its config from the payload. */
+  stageConfig: Record<string, StageSettings>;
 }
 
+type StageSettings = Omit<ILoopStageConfig, 'stage'>;
+
 export type LoopFormErrors = Partial<
-  Record<'name' | 'goal' | 'interval' | 'tools' | 'stages' | 'oversees' | 'budget', string>
+  Record<'name' | 'goal' | 'interval' | 'tools' | 'stages' | 'oversees' | 'budget' | 'stageConfig', string>
 >;
 
 /** Checks the form against the API's limits; `payload` is set only when there are no errors. */
@@ -96,10 +105,33 @@ export function validateLoopForm(
     errors.budget = 'Budget must be a positive number of credits';
   }
 
+  // Mirrors validateLoopStageConfig (apps/client/server/utils/loopValidation.ts): blank fields are unset,
+  // and the last stage has no settings.
+  const stageConfig: ILoopStageConfig[] = [];
+  for (const stage of stages.slice(0, -1)) {
+    const settings = values.stageConfig[stage] ?? {};
+    const instructions = settings.instructions?.trim();
+    const entry: ILoopStageConfig = {
+      stage,
+      ...(instructions && { instructions }),
+      ...(settings.model && { model: settings.model }),
+      ...(settings.tools?.length && { tools: settings.tools }),
+      ...(settings.runner && { runner: settings.runner }),
+    };
+    if (Object.keys(entry).length === 1) continue;
+    if ((instructions?.length ?? 0) > STAGE_INSTRUCTIONS_MAX) {
+      errors.stageConfig = `Stage instructions must be ${STAGE_INSTRUCTIONS_MAX} characters or fewer`;
+    } else if ((settings.tools?.length ?? 0) > TOOLS_MAX) {
+      errors.stageConfig = `Pick ${TOOLS_MAX} tools or fewer per stage`;
+    }
+    stageConfig.push(entry);
+  }
+
   if (Object.keys(errors).length > 0) return { errors };
   const agentId = values.agentId || (mode === 'edit' ? null : undefined);
   const oversees = values.oversees.length > 0 ? values.oversees : mode === 'edit' ? null : undefined;
   const budgetCreditsPerDay = values.budget.trim() ? budget : mode === 'edit' ? null : undefined;
+  const stageConfigPayload = stageConfig.length > 0 ? stageConfig : mode === 'edit' ? null : undefined;
   return {
     errors,
     payload: {
@@ -111,6 +143,7 @@ export function validateLoopForm(
       ...(agentId !== undefined && { agentId }),
       ...(oversees !== undefined && { oversees }),
       ...(budgetCreditsPerDay !== undefined && { budgetCreditsPerDay }),
+      ...(stageConfigPayload !== undefined && { stageConfig: stageConfigPayload }),
     },
   };
 }
@@ -127,6 +160,7 @@ function initialValues(loop?: ILoop): LoopFormValues {
       agentId: '',
       oversees: [],
       budget: '',
+      stageConfig: {},
     };
   }
   const unit: IntervalUnit =
@@ -141,6 +175,7 @@ function initialValues(loop?: ILoop): LoopFormValues {
     agentId: loop.agentId ?? '',
     oversees: loop.oversees ?? [],
     budget: String(loop.budgetCreditsPerDay ?? ''),
+    stageConfig: Object.fromEntries((loop.stageConfig ?? []).map(({ stage, ...settings }) => [stage, settings])),
   };
 }
 
@@ -158,6 +193,7 @@ export default function LoopFormModal({ open, onClose, loop }: LoopFormModalProp
   const [newStage, setNewStage] = useState('');
   const { data: mcpServers = [] } = useMcpServers();
   const { data: agents = [] } = useGetAgents();
+  const { accessibleTextModels } = useAccessibleModels();
   const { data: loops = [], isSuccess: loopsLoaded } = useLoops();
   const otherLoops = loops.filter(other => other.id !== loop?.id);
   // Drop ids of loops deleted since this one was saved; the Select can't show them, and the API rejects them.
@@ -170,6 +206,11 @@ export default function LoopFormModal({ open, onClose, loop }: LoopFormModalProp
 
   const set = <K extends keyof LoopFormValues>(key: K, value: LoopFormValues[K]) =>
     setValues(prev => ({ ...prev, [key]: value }));
+  const setStage = (stage: string, patch: StageSettings) =>
+    setValues(prev => ({
+      ...prev,
+      stageConfig: { ...prev.stageConfig, [stage]: { ...prev.stageConfig[stage], ...patch } },
+    }));
 
   // The executor names MCP tools `<lowercased server>__<tool>` (toolGenerators generateMcpToolsFromCache).
   const mcpTools = mcpServers
@@ -177,6 +218,19 @@ export default function LoopFormModal({ open, onClose, loop }: LoopFormModalProp
     .flatMap(server =>
       server.tools.map(tool => ({ value: `${server.name.toLowerCase()}__${tool}`, label: `${server.name}: ${tool}` }))
     );
+  // Shared by the loop and per-stage tools pickers so both always offer the same list.
+  const toolOptions = () => [
+    ...PICKABLE_TOOLS.map(tool => (
+      <Option key={tool} value={tool}>
+        {getToolDisplayName(tool)}
+      </Option>
+    )),
+    ...mcpTools.map(tool => (
+      <Option key={tool.value} value={tool.value}>
+        {tool.label}
+      </Option>
+    )),
+  ];
   const removedStages = loop ? loop.stages.filter(s => !values.stages.includes(s)) : [];
 
   const addStage = () => {
@@ -256,16 +310,7 @@ export default function LoopFormModal({ open, onClose, loop }: LoopFormModalProp
               slotProps={{ listbox: { sx: { maxHeight: 320, overflow: 'auto' } } }}
               data-testid="loop-form-tools-select"
             >
-              {PICKABLE_TOOLS.map(tool => (
-                <Option key={tool} value={tool}>
-                  {getToolDisplayName(tool)}
-                </Option>
-              ))}
-              {mcpTools.map(tool => (
-                <Option key={tool.value} value={tool.value}>
-                  {tool.label}
-                </Option>
-              ))}
+              {toolOptions()}
             </Select>
             <FormHelperText>
               {errors.tools ?? 'Runs are unattended, so the tools picked here are pre-approved for every run.'}
@@ -319,6 +364,94 @@ export default function LoopFormModal({ open, onClose, loop }: LoopFormModalProp
               </Typography>
             )}
           </FormControl>
+          <Accordion data-testid="loop-form-stage-settings">
+            <AccordionSummary>Stage settings</AccordionSummary>
+            <AccordionDetails>
+              <Stack gap={2}>
+                {values.stages.slice(0, -1).map((stage, i) => {
+                  const settings = values.stageConfig[stage] ?? {};
+                  return (
+                    <Stack key={`${stage}-${i}`} gap={1} data-testid={`loop-form-stage-panel-${i}`}>
+                      <Stack direction="row" gap={1} alignItems="center">
+                        <Typography level="title-sm">{stage}</Typography>
+                        {settings.runner === 'desktop' && (
+                          <Chip size="sm" variant="soft">
+                            desktop
+                          </Chip>
+                        )}
+                      </Stack>
+                      <FormControl>
+                        <FormLabel>Runner</FormLabel>
+                        <Select
+                          value={settings.runner ?? 'cloud'}
+                          onChange={(_, runner) =>
+                            setStage(stage, { runner: runner === 'desktop' ? 'desktop' : undefined })
+                          }
+                          data-testid={`loop-form-stage-runner-${i}`}
+                        >
+                          <Option value="cloud">Cloud</Option>
+                          <Option value="desktop">Desktop</Option>
+                        </Select>
+                        {settings.runner === 'desktop' && (
+                          <FormHelperText>
+                            Tickets in this stage wait for your Desktop app to pick them up.
+                          </FormHelperText>
+                        )}
+                      </FormControl>
+                      <FormControl>
+                        <FormLabel>Model</FormLabel>
+                        <Select
+                          value={settings.model ?? ''}
+                          onChange={(_, model) => setStage(stage, { model: model || undefined })}
+                          data-testid={`loop-form-stage-model-${i}`}
+                        >
+                          <Option value="">Loop default</Option>
+                          {/* Keeps a saved model the picker no longer lists selectable, so an edit never drops it. */}
+                          {settings.model && !accessibleTextModels.some(model => model.id === settings.model) && (
+                            <Option value={settings.model}>{settings.model}</Option>
+                          )}
+                          {accessibleTextModels.map(model => (
+                            <Option key={model.id} value={model.id}>
+                              {model.name}
+                            </Option>
+                          ))}
+                        </Select>
+                      </FormControl>
+                      <FormControl>
+                        <FormLabel>Tools</FormLabel>
+                        <Select
+                          multiple
+                          placeholder="Loop default"
+                          value={settings.tools ?? []}
+                          onChange={(_, tools) => setStage(stage, { tools })}
+                          slotProps={{ listbox: { sx: { maxHeight: 320, overflow: 'auto' } } }}
+                          data-testid={`loop-form-stage-tools-${i}`}
+                        >
+                          {toolOptions()}
+                        </Select>
+                      </FormControl>
+                      <FormControl>
+                        <FormLabel>Instructions</FormLabel>
+                        <Textarea
+                          minRows={2}
+                          maxRows={8}
+                          placeholder="Added to the prompt of runs working a ticket in this stage"
+                          value={settings.instructions ?? ''}
+                          onChange={e => setStage(stage, { instructions: e.target.value })}
+                          slotProps={{ textarea: { 'data-testid': `loop-form-stage-instructions-${i}` } }}
+                        />
+                      </FormControl>
+                    </Stack>
+                  );
+                })}
+              </Stack>
+            </AccordionDetails>
+          </Accordion>
+          {errors.stageConfig && (
+            <Typography level="body-sm" color="danger">
+              {errors.stageConfig}
+            </Typography>
+          )}
           <FormControl>
             <FormLabel>Agent</FormLabel>
             <Select

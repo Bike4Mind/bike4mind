@@ -94,6 +94,43 @@ describe('LoopTicketBoard', () => {
     expect(moveTicket.mutate).toHaveBeenCalledWith({ id: 'older', stage: 'doing' });
   });
 
+  it('marks a desktop stage and its open tickets as waiting for a desktop runner', () => {
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <LoopTicketBoard
+          loop={
+            {
+              id: 'l1',
+              stages: ['todo', 'doing', 'done'],
+              stageConfig: [{ stage: 'doing', runner: 'desktop' }],
+            } as never
+          }
+          data={{
+            stages: [
+              { stage: 'todo', tickets: [ticket('cloud')] },
+              {
+                stage: 'doing',
+                tickets: [
+                  ticket('waiting', { stage: 'doing' }),
+                  ticket('busy', { stage: 'doing', status: 'in_progress' }),
+                ],
+              },
+              { stage: 'done', tickets: [] },
+            ],
+          }}
+          onViewRun={onViewRun}
+        />
+      </CssVarsProvider>
+    );
+    expect(screen.getByTestId('loop-board-stage-desktop-doing')).toBeInTheDocument();
+    expect(screen.queryByTestId('loop-board-stage-desktop-todo')).not.toBeInTheDocument();
+    expect(
+      within(screen.getByTestId('loop-ticket-waiting')).getByTestId('loop-ticket-waiting-desktop')
+    ).toBeInTheDocument();
+    expect(within(screen.getByTestId('loop-ticket-busy')).queryByTestId('loop-ticket-waiting-desktop')).toBeNull();
+    expect(within(screen.getByTestId('loop-ticket-cloud')).queryByTestId('loop-ticket-waiting-desktop')).toBeNull();
+  });
+
   it('labels a ticket left in a removed stage instead of showing an empty select', () => {
     const orphan: ILoopTicketsResponse = { stages: [{ stage: 'todo', tickets: [ticket('o', { stage: 'review' })] }] };
     render(
