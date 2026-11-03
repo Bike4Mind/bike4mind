@@ -24560,7 +24560,7 @@
             }
           },
           "429": {
-            "description": "Per-user rate limit exceeded.",
+            "description": "Per-user rate limit exceeded, or the hourly file allowance shared with uploads is spent: a re-chunk costs one file.",
             "content": {
               "application/json": {
                 "schema": {
