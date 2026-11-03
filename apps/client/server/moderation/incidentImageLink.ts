@@ -1,4 +1,5 @@
 import { fabFileRepository } from '@bike4mind/database';
+import { signedUrlExpiresAt } from '@bike4mind/utils';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 
@@ -18,7 +19,7 @@ export type IncidentImage =
  * upload incidents have one (generated and edited images are blocked before they are stored); the
  * read is signed on the existing files bucket and nothing else is opened up.
  */
-export async function signIncidentImage(incident: { fabFileId?: string }, now = new Date()): Promise<IncidentImage> {
+export async function signIncidentImage(incident: { fabFileId?: string }): Promise<IncidentImage> {
   if (!incident.fabFileId || !isValidObjectId(incident.fabFileId)) {
     return { availability: 'unavailable', reason: 'no_stored_image' };
   }
@@ -32,10 +33,13 @@ export async function signIncidentImage(incident: { fabFileId?: string }, now = 
     audience: 'browser',
     ResponseContentType: file.mimeType,
     ResponseContentDisposition: 'inline',
+    // The bytes are a blocked image: keep them out of the reviewer's browser cache.
+    ResponseCacheControl: 'no-store',
   });
   return {
     availability: 'ready',
     url,
-    expiresAt: new Date(now.getTime() + INCIDENT_IMAGE_LINK_TTL_SECONDS * 1000).toISOString(),
+    // The signer may shorten the lifetime to its credentials', so read it back from the URL.
+    expiresAt: signedUrlExpiresAt(url, INCIDENT_IMAGE_LINK_TTL_SECONDS).toISOString(),
   };
 }

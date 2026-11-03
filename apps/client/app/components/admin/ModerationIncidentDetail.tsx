@@ -9,6 +9,7 @@ import {
   FormHelperText,
   FormLabel,
   Input,
+  Skeleton,
   Stack,
   Typography,
 } from '@mui/joy';
@@ -105,7 +106,12 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
         }
       />
 
-      {view.isPending && <Typography level="body-sm">Loading incident</Typography>}
+      {view.isPending && (
+        <Stack gap={1} data-testid="moderation-incident-loading">
+          <Skeleton variant="text" sx={{ width: '40%' }} />
+          <Skeleton variant="rectangular" sx={{ width: '100%', maxWidth: 480, height: 320, borderRadius: 'sm' }} />
+        </Stack>
+      )}
       {view.error && (
         <Alert color="danger" data-testid="moderation-incident-error">
           {getErrorMessage(view.error)}
@@ -202,7 +208,7 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
               {data.reviewStatus === 'confirmed_csam'
                 ? 'A report submission for this incident was left in an unknown state. It needs recovery before a verdict can be recorded here.'
                 : data.reviewStatus === 'false_positive'
-                  ? 'This incident was marked as a false positive. If a report was filed after all, you can still record its id with Confirmed.'
+                  ? 'This incident was marked as a false positive. If a report was filed after all, you can still record its id with Record report.'
                   : 'A verdict has already been recorded for this incident.'}
             </Alert>
           )}
@@ -213,7 +219,7 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
               onClick={() => setDialog('false_positive')}
               data-testid="moderation-incident-false-positive-btn"
             >
-              False positive
+              Mark false positive
             </Button>
             <Button
               color="danger"
@@ -222,7 +228,7 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
               onClick={() => setDialog('confirmed')}
               data-testid="moderation-incident-confirmed-btn"
             >
-              Confirmed
+              Record report
             </Button>
           </Stack>
         </>
@@ -236,8 +242,8 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
       >
         <DialogContent>
           <Typography level="body-sm">
-            This closes the incident without a report. It stays on file, and a report id can still be recorded on it
-            with Confirmed.
+            This closes the incident without a report and takes it out of the queue. It stays on file: if a report is
+            filed after all, open the incident from its alert email link and use Record report.
           </Typography>
           {verdict.error && dialog === 'false_positive' && (
             <Alert color="danger" data-testid="moderation-incident-verdict-error">
@@ -253,7 +259,12 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
           >
             Mark false positive
           </Button>
-          <Button variant="plain" onClick={closeDialog} disabled={verdict.isPending}>
+          <Button
+            variant="plain"
+            onClick={closeDialog}
+            disabled={verdict.isPending}
+            data-testid="moderation-incident-dialog-cancel-btn"
+          >
             Cancel
           </Button>
         </DialogActions>
@@ -262,7 +273,7 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
       <AdminDialog
         open={dialog === 'confirmed'}
         onClose={closeDialog}
-        title="Confirmed"
+        title="Record a filed report"
         data-testid="moderation-incident-confirmed-dialog"
       >
         <DialogContent>
@@ -280,7 +291,9 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
                   input: { maxLength: REPORT_ID_MAX_LENGTH, 'data-testid': 'moderation-incident-report-id-input' },
                 }}
               />
-              {reportIdInvalid && <FormHelperText>Letters, digits and hyphens only.</FormHelperText>}
+              <FormHelperText data-testid="moderation-incident-report-id-hint">
+                {reportIdInvalid ? 'Letters, digits and hyphens only.' : 'Enter the report id the web form gave you.'}
+              </FormHelperText>
             </FormControl>
             {verdict.error && dialog === 'confirmed' && (
               <Alert color="danger" data-testid="moderation-incident-verdict-error">
@@ -299,7 +312,12 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
           >
             Record report
           </Button>
-          <Button variant="plain" onClick={closeDialog} disabled={verdict.isPending}>
+          <Button
+            variant="plain"
+            onClick={closeDialog}
+            disabled={verdict.isPending}
+            data-testid="moderation-incident-dialog-cancel-btn"
+          >
             Cancel
           </Button>
         </DialogActions>

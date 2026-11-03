@@ -17,6 +17,11 @@ const ALLOWED = new Set([
   'apps/client/pages/api/admin/users/[userId]/compliance.ts',
 ]);
 
+// Signing an incident image hands out a link to a blocked upload; only the view route may do it,
+// because it is the one that checks a full admin, step-up and audits the view first.
+const IMAGE_LINK_MODULE = 'apps/client/server/moderation/incidentImageLink.ts';
+const IMAGE_LINK_CALLER = 'apps/client/pages/api/admin/moderation-incidents/[id]/view.ts';
+
 function sourceFiles(dir: string): string[] {
   if (!existsSync(dir)) return [];
   return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
@@ -33,7 +38,9 @@ describe('image moderation incident wiring', () => {
     const scanned = ROOTS.flatMap(root => sourceFiles(join(REPO_ROOT, root)));
 
     expect(scanned.length).toBeGreaterThan(4_000);
-    for (const allowed of ALLOWED) expect(existsSync(join(REPO_ROOT, allowed))).toBe(true);
+    for (const allowed of [...ALLOWED, IMAGE_LINK_MODULE, IMAGE_LINK_CALLER]) {
+      expect(existsSync(join(REPO_ROOT, allowed))).toBe(true);
+    }
   });
 
   // The bare repository records silently; only the imageModerationIncidents wrapper alerts reviewers.
@@ -44,5 +51,14 @@ describe('image moderation incident wiring', () => {
       .filter(file => /\bimageModerationIncidentRepository\b/.test(readFileSync(join(REPO_ROOT, file), 'utf8')));
 
     expect(offenders).toEqual([]);
+  });
+
+  it('signs incident images from the audited view route only', () => {
+    const importers = ROOTS.flatMap(root => sourceFiles(join(REPO_ROOT, root)))
+      .map(file => relative(REPO_ROOT, file))
+      .filter(file => file !== IMAGE_LINK_MODULE)
+      .filter(file => /moderation\/incidentImageLink\b/.test(readFileSync(join(REPO_ROOT, file), 'utf8')));
+
+    expect(importers).toEqual([IMAGE_LINK_CALLER]);
   });
 });

@@ -7,11 +7,15 @@ const m = vi.hoisted(() => ({
   requireStepUp: vi.fn(),
   sign: vi.fn(),
   order: [] as string[],
+  adminApiOptions: undefined as unknown,
 }));
 
 vi.mock('@bike4mind/database', () => ({ imageModerationIncidentRepository: { findById: m.findById } }));
 vi.mock('@server/middlewares/adminApi', () => ({
-  adminApi: () => ({ get: (h: (...args: unknown[]) => unknown) => h }),
+  adminApi: (options: unknown) => {
+    m.adminApiOptions = options;
+    return { get: (h: (...args: unknown[]) => unknown) => h };
+  },
 }));
 vi.mock('@server/auth/stepUp', () => ({ requireStepUp: m.requireStepUp }));
 vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: m.record }));
@@ -80,6 +84,10 @@ describe('admin/moderation-incidents/[id]/view', () => {
       image: READY,
     });
     expect(JSON.stringify((res.json as ReturnType<typeof vi.fn>).mock.calls[0][0])).not.toMatch(/user-1|fabFile|bbbb/);
+  });
+
+  it('accepts JWT sessions only, never an API key', () => {
+    expect(m.adminApiOptions).toMatchObject({ auth: 'jwtOnly' });
   });
 
   it('refuses a delegated admin before any lookup, audit or signing', async () => {
