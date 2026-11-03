@@ -176,6 +176,19 @@ describe('replyStats', () => {
     expect(speed({ ...base, generation: { tokens: 2000, ms: 20_306 } }, 2000)).toBe('~98.5 tok/s');
   });
 
+  it("shows llama-server's draft acceptance, with the counts behind it", () => {
+    const rows = replyStats({
+      usage: { outputTokens: 120, rate: { evalTokens: 120, evalMs: 2000, draftTokens: 90, draftAccepted: 44 } },
+    });
+
+    expect(rows.find(row => row.id === 'draft')).toEqual({ id: 'draft', value: '49%', note: '44 of 90 draft tokens' });
+    expect(describeReplyStats(rows)?.split('\n').at(-1)).toBe('Draft accepted: 49% (44 of 90 draft tokens)');
+    const undrafted = replyStats({
+      usage: { rate: { evalTokens: 120, evalMs: 2000, draftTokens: 0, draftAccepted: 0 } },
+    });
+    expect(undrafted.map(row => row.id)).not.toContain('draft');
+  });
+
   it('times the first token from the request, as main stored it', () => {
     const rows = replyStats({ stats: { ...base, firstTokenMs: 1250 } });
     expect(rows.find(row => row.id === 'firstToken')?.value).toBe('1.3s');

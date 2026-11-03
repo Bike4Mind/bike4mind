@@ -197,6 +197,7 @@ function replyStatsEntry(prefs: ReplyStatsPrefs): ConfigEntry {
         <Typography level="body-xs" textColor="text.tertiary">
           Timing, tokens and speed for each reply, beside it when the window is wide enough and under it on hover
           otherwise. Each shows only where the model or server reports it; a figure starting with ~ is an estimate.
+          Draft acceptance is reported by llama-server running a draft model.
         </Typography>
         <Switch
           size="sm"
