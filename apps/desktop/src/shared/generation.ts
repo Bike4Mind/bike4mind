@@ -63,6 +63,8 @@ export interface NumericControl {
   budgetHeadroom?: number;
   /** Max output that the model's thinking is spent from, so a low limit can leave no room for the answer. */
   includesThinking?: true;
+  /** The backend's own default does not fit this model, so a turn sends `default` while the setting is untouched. */
+  sendsDefault?: true;
   scope: ControlScope;
 }
 
@@ -178,7 +180,8 @@ export function effectiveControls(
 
 /**
  * What one request for a model carries: only request-scope fields its controls list and do not
- * lock, clamped into range, integers where the backend wants one. Empty when nothing applies.
+ * lock, clamped into range, integers where the backend wants one, plus any `sendsDefault` default
+ * for a field left untouched. Empty when nothing applies.
  */
 export function requestGeneration(
   settings: GenerationSettings | undefined,
@@ -186,9 +189,10 @@ export function requestGeneration(
 ): GenerationSettings {
   const sent: GenerationSettings = {};
   const effective = effectiveControls(controls, settings);
-  if (!settings || !effective) return sent;
+  if (!effective) return sent;
   for (const field of GENERATION_FIELDS) {
-    const value = sentValue(field, settings[field], effective[field]);
+    const control = effective[field];
+    const value = sentValue(field, settings?.[field] ?? (control?.sendsDefault ? control.default : undefined), control);
     if (value !== undefined) sent[field] = value;
   }
   return sent;
