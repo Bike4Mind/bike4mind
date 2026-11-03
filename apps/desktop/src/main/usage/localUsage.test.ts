@@ -75,6 +75,87 @@ describe('sessionUsageBuckets', () => {
     ]);
   });
 
+  describe('a reply continued on another model', () => {
+    const at = '2026-11-02T15:05:00.000Z';
+    const round = (model: string | undefined, usage?: ChatUsage) => ({
+      text: 'x',
+      toolCallIds: [],
+      ...(model ? { model } : {}),
+      ...(usage ? { usage } : {}),
+    });
+    const totals = (result: LocalUsageBucket[]) => ({
+      outputTokens: result.reduce((sum, bucket) => sum + bucket.outputTokens, 0),
+      contextTokens: result.reduce((sum, bucket) => sum + bucket.contextTokens, 0),
+    });
+
+    it('splits it by the model each round went to, counting each token once', () => {
+      const result = buckets([
+        {
+          ...reply(at, {
+            inputTokens: 700,
+            outputTokens: 70,
+            rate: { evalTokens: 70, evalMs: 1400, loadMs: 300 },
+          }),
+          rounds: [
+            round(OLLAMA, { inputTokens: 100, outputTokens: 10, rate: { evalTokens: 10, evalMs: 400, loadMs: 300 } }),
+            round(OLLAMA, { inputTokens: 200, outputTokens: 20, rate: { evalTokens: 20, evalMs: 500 } }),
+            round(SERVER, { inputTokens: 400, outputTokens: 40, rate: { evalTokens: 40, evalMs: 500 } }),
+          ],
+        },
+      ]);
+      expect(result.map(bucket => [bucket.model, bucket.replies, bucket.outputTokens, bucket.contextTokens])).toEqual([
+        [OLLAMA, 1, 30, 300],
+        [SERVER, 1, 40, 400],
+      ]);
+      expect(totals(result)).toEqual({ outputTokens: 70, contextTokens: 700 });
+      expect(result[0]).toMatchObject({ timedReplies: 1, evalTokens: 30, evalMs: 900, loads: 1, loadMs: 300 });
+      expect(result[1]).toMatchObject({ timedReplies: 1, evalTokens: 40, evalMs: 500, loads: 0 });
+    });
+
+    it('counts a share untimed when its rounds carry no rate, even if the reply does', () => {
+      const result = buckets([
+        {
+          ...reply(at, { outputTokens: 30, rate: { evalTokens: 30, evalMs: 600 } }),
+          rounds: [round(OLLAMA, { outputTokens: 10 }), round(SERVER, { outputTokens: 20 })],
+        },
+      ]);
+      expect(result.map(bucket => [bucket.model, bucket.timedReplies, bucket.evalTokens])).toEqual([
+        [OLLAMA, 0, 0],
+        [SERVER, 0, 0],
+      ]);
+    });
+
+    it('keeps only the local share of a reply that also ran on a hosted model', () => {
+      const result = buckets([
+        {
+          // The 500 output tokens no round carries are an explore sub-loop's, which only a hosted turn runs.
+          ...reply(at, { inputTokens: 3000, outputTokens: 560 }),
+          rounds: [
+            round(OLLAMA, { inputTokens: 1000, outputTokens: 20 }),
+            round('claude-sonnet-5', { outputTokens: 40 }),
+          ],
+        },
+      ]);
+      expect(result.map(bucket => [bucket.model, bucket.outputTokens, bucket.contextTokens])).toEqual([
+        [OLLAMA, 20, 1000],
+      ]);
+    });
+
+    it('gives what no round carries to the reply model when every round ran locally', () => {
+      const result = buckets([
+        {
+          ...reply(at, { inputTokens: 900, outputTokens: 90 }, OLLAMA),
+          rounds: [round(undefined), round(SERVER, { inputTokens: 400, outputTokens: 40 })],
+        },
+      ]);
+      expect(result.map(bucket => [bucket.model, bucket.outputTokens, bucket.contextTokens])).toEqual([
+        [SERVER, 40, 400],
+        [OLLAMA, 50, 500],
+      ]);
+      expect(totals(result)).toEqual({ outputTokens: 90, contextTokens: 900 });
+    });
+  });
+
   it('skips hosted replies, replies without usage and unreadable timestamps', () => {
     expect(buckets([reply('2026-11-02T15:05:00.000Z', { outputTokens: 3 }, 'claude-sonnet-5')])).toEqual([]);
     const noUsage: ChatMessage = { id: 'n', role: 'assistant', content: 'x', createdAt: '2026-11-02T15:05:00.000Z' };
