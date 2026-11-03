@@ -2,10 +2,10 @@ import React, { useState } from 'react';
 import { Alert, Button, Stack, Tooltip, Typography } from '@mui/joy';
 import { Link } from '@tanstack/react-router';
 import {
-  STRIPE_DISPUTE_ADMIN_RESOLVABLE,
   STRIPE_DISPUTE_LIST_LIMIT,
   STRIPE_DISPUTE_STATES,
   STRIPE_DISPUTE_SUBJECTS,
+  isStripeDisputeAdminResolvable,
   type StripeDisputeSubject,
 } from '@bike4mind/common';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
@@ -60,9 +60,6 @@ const stripeStatusTone = (status: string): AdminStatusTone => {
   if (status === 'needs_response' || status === 'warning_needs_response') return 'warn';
   return 'neutral';
 };
-
-const isAdminResolvable = (row: StripeDisputeRow): boolean =>
-  row.state === 'open' && STRIPE_DISPUTE_ADMIN_RESOLVABLE.includes(row.subject);
 
 const canUndoContain = (row: StripeDisputeRow): boolean => !!row.contain && !row.contain.undoneAt;
 
@@ -168,7 +165,7 @@ const useActionFlow = (
     }
     onClose();
   };
-  return { conflict, submit, row };
+  return { conflict, submit };
 };
 
 const ResolveDialog: React.FC<DialogProps> = ({ row, onClose, onRowChange }) => {
@@ -187,6 +184,10 @@ const ResolveDialog: React.FC<DialogProps> = ({ row, onClose, onRowChange }) => 
       description="Resolving only closes this record. It does not change any account, flag or credits."
       reasonPresets={ADMIN_REASON_PRESETS.stripeDisputeResolve}
       confirmLabel="Resolve dispute"
+      // After a conflict the row is the server's current one, which may no longer take this action.
+      blockedReason={
+        isStripeDisputeAdminResolvable(row) ? null : 'This dispute is no longer open for an admin to resolve.'
+      }
       pending={mutation.isPending}
       onConfirm={submit}
       data-testid="stripe-dispute-resolve-dialog"
@@ -224,6 +225,7 @@ const UndoContainDialog: React.FC<DialogProps> = ({ row, onClose, onRowChange })
       description="The dispute flag stays set, so the account remains blocked until the flag is cleared."
       reasonPresets={ADMIN_REASON_PRESETS.stripeDisputeUndoContain}
       confirmLabel="Undo contain"
+      blockedReason={canUndoContain(row) ? null : 'There is no active contain to undo.'}
       pending={mutation.isPending}
       onConfirm={submit}
       data-testid="stripe-dispute-undo-dialog"
@@ -235,11 +237,11 @@ const UndoContainDialog: React.FC<DialogProps> = ({ row, onClose, onRowChange })
         </Typography>
         <Typography component="ul" level="body-sm" sx={{ m: 0, pl: 2.5 }}>
           {contain?.suspended && <li>The account is unsuspended.</li>}
-          {credits > 0 && <li>{credits.toLocaleString()} credits are returned to the balance.</li>}
+          {credits > 0 && <li>{credits.toLocaleString('en-US')} credits are returned to the balance.</li>}
           {contain && contain.apiKeysRevoked > 0 && (
             <li>
-              {contain.apiKeysRevoked.toLocaleString()} API keys are re-enabled, only once the account is no longer
-              blocked.
+              {contain.apiKeysRevoked.toLocaleString('en-US')} API keys are re-enabled, only once the account is no
+              longer blocked.
             </li>
           )}
           {contain && !contain.suspended && credits === 0 && contain.apiKeysRevoked === 0 && (
@@ -333,7 +335,7 @@ export const StripeDisputesTab: React.FC = () => {
 
   const rowActions = (row: StripeDisputeRow) => (
     <>
-      {isAdminResolvable(row) && (
+      {isStripeDisputeAdminResolvable(row) && (
         <Button
           size="sm"
           variant="plain"

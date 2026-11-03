@@ -184,6 +184,22 @@ describe('resolveLostUserDispute', () => {
     expect(await AdminAuditLogModel.countDocuments({ action: 'billing.dispute.resolved' })).toBe(1);
   });
 
+  it('sets the dispute flag when the close arrives without its open event', async () => {
+    const userId = await seedUser({ disputePending: false });
+    const keyId = await seedKey(userId);
+    const adminId = await seedUser({ isAdmin: true, disputePending: false });
+    const record = await closeFor(userId);
+
+    await resolveLostUserDispute(record, { id: userId }, logger);
+    expect((await User.findById(userId).lean())?.disputePending).toBe(true);
+
+    // So the undo still leaves the account blocked.
+    const dispute = await stripeDisputeRepository.findById(record.id);
+    await undoDisputeContain(dispute!, adminId, usersBulkUndoDeps(adminReq(adminId), logger));
+    expect((await User.findById(userId).lean())?.disputePending).toBe(true);
+    expect((await UserApiKey.findById(keyId).lean())?.status).not.toBe(ApiKeyStatus.ACTIVE);
+  });
+
   it('never contains an admin account automatically', async () => {
     const userId = await seedUser({ isAdmin: true });
     const record = await closeFor(userId);

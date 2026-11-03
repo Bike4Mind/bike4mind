@@ -92,6 +92,21 @@ describe('StripeDisputeModel', () => {
     ).toEqual({ status: 'not_found' });
   });
 
+  it('lets an admin resolve a user dispute only once Stripe has closed it', async () => {
+    const user = await stripeDisputeRepository.recordOpened(facts({ subject: 'user', subjectId: 'u1' }));
+    expect((await stripeDisputeRepository.resolveByAdmin({ id: user.id, adminId: 'admin1', note: 'x' })).status).toBe(
+      'conflict'
+    );
+
+    await stripeDisputeRepository.recordClosed(
+      facts({ subject: 'user', subjectId: 'u1', stripeStatus: 'warning_closed' }),
+      new Date()
+    );
+    const resolved = await stripeDisputeRepository.resolveByAdmin({ id: user.id, adminId: 'admin1', note: 'x' });
+
+    expect(resolved).toMatchObject({ status: 'updated', item: { state: 'resolved', stripeStatus: 'warning_closed' } });
+  });
+
   it('marks a Contain undone once', async () => {
     const opened = await stripeDisputeRepository.recordOpened(facts({ subject: 'user', subjectId: 'u1' }));
     expect((await stripeDisputeRepository.markContainUndone({ id: opened.id, adminId: 'admin1' })).status).toBe(

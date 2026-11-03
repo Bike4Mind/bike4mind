@@ -1,6 +1,6 @@
 import mongoose, { Document, Model, model, Schema, Types } from 'mongoose';
 import {
-  STRIPE_DISPUTE_ADMIN_RESOLVABLE,
+  isStripeDisputeAdminResolvable,
   STRIPE_DISPUTE_OUTCOMES,
   STRIPE_DISPUTE_STATES,
   STRIPE_DISPUTE_SUBJECTS,
@@ -198,9 +198,12 @@ class StripeDisputeRepository {
     return doc ? toItem(doc) : null;
   }
 
-  /** An admin closes an open organization or unmatched dispute; a user's dispute is refused as a conflict. */
+  /** An admin closes a dispute isStripeDisputeAdminResolvable allows; anything else is a conflict. */
   async resolveByAdmin(input: { id: string; adminId: string; note: string }): Promise<AdminStripeDisputeUpdateResult> {
     if (!Types.ObjectId.isValid(input.id)) return { status: 'not_found' };
+    const current = await StripeDisputeModel.findById(input.id).lean<LeanStripeDispute>();
+    if (!current) return { status: 'not_found' };
+    if (!isStripeDisputeAdminResolvable(toItem(current))) return { status: 'conflict', item: toItem(current) };
     const resolution: StripeDisputeResolution = {
       outcome: 'admin',
       resolvedBy: input.adminId,
@@ -208,7 +211,8 @@ class StripeDisputeRepository {
       resolvedAt: new Date(),
     };
     const updated = await StripeDisputeModel.findOneAndUpdate(
-      { _id: input.id, state: 'open', subject: { $in: STRIPE_DISPUTE_ADMIN_RESOLVABLE } },
+      // The subject never changes and closedAt is only ever set, so only `open` can be lost meanwhile.
+      { _id: input.id, state: 'open' },
       { $set: { state: 'resolved', resolution } },
       { new: true }
     ).lean<LeanStripeDispute>();

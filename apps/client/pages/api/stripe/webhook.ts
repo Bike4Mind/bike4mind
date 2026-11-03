@@ -619,11 +619,6 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         await reversePurchaseStanding({ paymentIntentId, reason: 'dispute_lost' }, req.logger);
       }
 
-      if (dispute.status !== 'won' && dispute.status !== 'lost') {
-        req.logger.debug(`Dispute ${dispute.id} closed with status ${dispute.status}, no action taken`);
-        break;
-      }
-
       // Same lookup as charge.dispute.created: payment intent -> credit transaction, then charge -> customer.
       let user = null;
       let orgId: string | null = null;
@@ -652,7 +647,12 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         : orgId
           ? disputeFacts(dispute, 'organization', orgId)
           : disputeFacts(dispute, 'unmatched', null);
+      // Every close is recorded, so a closed record an admin can resolve never stays stuck open.
       const record = await stripeDisputeRepository.recordClosed(facts, new Date());
+      if (dispute.status !== 'won' && dispute.status !== 'lost') {
+        req.logger.info(`Dispute ${dispute.id} closed with status ${dispute.status}, left for an admin to resolve`);
+        break;
+      }
       const amountLine = `*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}`;
 
       if (dispute.status === 'won') {

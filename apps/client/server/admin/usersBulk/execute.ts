@@ -106,7 +106,10 @@ export type ApplyContext = {
 };
 
 /** What one user's steps need: the batch-level seams (resolve, domains, summary) are not used. */
-export type ApplyDeps = Pick<ExecuteDeps, 'db' | 'store' | 'withTransaction' | 'audit' | 'endRealtimeConnections'>;
+export type ApplyDeps = Pick<
+  ExecuteDeps,
+  'db' | 'store' | 'withTransaction' | 'audit' | 'endRealtimeConnections' | 'logger'
+>;
 
 const isDoneEntry = (data: unknown): data is { state: 'done'; result: AdminUsersBulkResult } =>
   typeof data === 'object' &&
@@ -261,7 +264,14 @@ export async function applyActionToUser(
     if (applied) await onApplied(applied);
     return applied;
   });
-  if (snapshot && (snapshot.banned || snapshot.apiKeys)) await deps.endRealtimeConnections(userId);
+  if (snapshot && (snapshot.banned || snapshot.apiKeys)) {
+    // The action committed; a socket teardown failure must not make the caller treat it as failed.
+    try {
+      await deps.endRealtimeConnections(userId);
+    } catch (error) {
+      deps.logger?.error('Ending realtime connections failed after a committed action', { userId, error });
+    }
+  }
   return snapshot;
 }
 

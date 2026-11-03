@@ -862,11 +862,19 @@ describe('charge.dispute.closed', () => {
     expect(mocks.resolveLostUserDispute).not.toHaveBeenCalled();
   });
 
-  it('takes no action on any other closing status', async () => {
+  it('records any other closing status for an admin and takes no account action', async () => {
+    mocks.findByPaymentIntentId.mockResolvedValue({ id: 'tx_1', ownerId: 'user_1', credits: 50000 });
+
     await deliver(closed('warning_closed'));
 
-    expect(mocks.recordDisputeClosed).not.toHaveBeenCalled();
+    expect(mocks.recordDisputeClosed).toHaveBeenCalledWith(
+      { stripeDisputeId: 'dp_1', subject: 'user', subjectId: 'user_1' },
+      expect.any(Date)
+    );
     expect(mocks.updateUser).not.toHaveBeenCalled();
+    expect(mocks.resolveLostUserDispute).not.toHaveBeenCalled();
+    expect(mocks.resolveWonDispute).not.toHaveBeenCalled();
+    expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
   });
 });
 

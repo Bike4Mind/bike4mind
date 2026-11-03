@@ -214,6 +214,10 @@ describe('StripeDisputesTab', () => {
 
     expect((await screen.findByTestId('stripe-dispute-resolve-conflict')).textContent).toContain('Already resolved.');
     expect(screen.getByTestId('stripe-dispute-resolve-dialog')).toBeTruthy();
+    // The swapped-in row is resolved, so the dialog no longer offers to resolve it.
+    expect(
+      (within(dialog).getByTestId('stripe-dispute-resolve-dialog-confirm-btn') as HTMLButtonElement).disabled
+    ).toBe(true);
   });
 
   it('previews what Undo contain restores and submits it', async () => {

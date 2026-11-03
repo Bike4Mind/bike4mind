@@ -102,3 +102,41 @@ describe.each([
     await expect(submit(hook)).rejects.toBe(error);
   });
 });
+
+describe('cache refresh after an action', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const settle = async (hook: typeof useResolveStripeDispute) => {
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+    const { result } = renderHook(() => hook(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync(REQUEST);
+    });
+    return invalidate.mock.calls.map(([filters]) => filters?.queryKey);
+  };
+
+  it.each([
+    ['a success', () => post.mockResolvedValue({ data: row({ state: 'resolved' }) })],
+    ['a conflict', () => post.mockRejectedValue(httpError(409, { error: 'Already resolved.', item: row() }))],
+  ])('refreshes the dispute list after %s', async (_name, arrange) => {
+    arrange();
+    expect(await settle(useResolveStripeDispute)).toEqual([['admin-stripe-disputes']]);
+  });
+
+  it('also refreshes the contained user after an undo', async () => {
+    const userId = 'c'.repeat(24);
+    post.mockResolvedValue({ data: row({ subject: 'user', subjectId: userId, state: 'resolved' }) });
+
+    expect(await settle(useUndoContainStripeDispute)).toEqual([
+      ['admin-stripe-disputes'],
+      ['users'],
+      ['admin', 'users', userId],
+      ['admin', 'user-api-keys', userId],
+    ]);
+  });
+});

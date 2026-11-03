@@ -59,7 +59,15 @@ function useStripeDisputeAction(path: 'resolve' | 'undo-contain') {
       }
     },
     // A conflict also means the list is stale.
-    onSettled: () => queryClient.invalidateQueries({ queryKey: STRIPE_DISPUTES_QUERY_KEY }),
+    onSettled: result => {
+      void queryClient.invalidateQueries({ queryKey: STRIPE_DISPUTES_QUERY_KEY });
+      const userId = result?.item?.subject === 'user' ? result.item.subjectId : null;
+      if (path !== 'undo-contain' || !userId) return;
+      // The undo changed the account; same keys the user profile refreshes after its own writes.
+      void queryClient.invalidateQueries({ queryKey: ['users'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'users', userId] });
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'user-api-keys', userId] });
+    },
   });
 }
 

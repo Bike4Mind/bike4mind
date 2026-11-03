@@ -13,7 +13,7 @@ const ONE_MINUTE_MS = 60_000;
 export const STRIPE_DISPUTE_RESOLVE_RATE_LIMIT = 60;
 
 export const STRIPE_DISPUTE_NOT_RESOLVABLE_MESSAGE =
-  'This dispute is already resolved, or belongs to a user and resolves from its Stripe outcome.';
+  'This dispute is already resolved, or belongs to a user and resolves from its Stripe outcome once Stripe closes it.';
 
 const conflictSchema = z.object({ error: z.string(), item: stripeDisputeItemSchema });
 

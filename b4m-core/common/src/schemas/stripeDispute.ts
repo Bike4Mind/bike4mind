@@ -18,6 +18,19 @@ export type StripeDisputeSubject = (typeof STRIPE_DISPUTE_SUBJECTS)[number];
 /** Subjects an admin resolves by hand; a user's dispute resolves from its Stripe outcome. */
 export const STRIPE_DISPUTE_ADMIN_RESOLVABLE: readonly StripeDisputeSubject[] = ['organization', 'unmatched'];
 
+/**
+ * Whether an admin may close this dispute by hand: an open organization or unmatched dispute, or any
+ * open dispute Stripe has already closed without the system resolving it (an inquiry closed as
+ * warning_closed, or a user the close could no longer find). A user's dispute Stripe has not closed
+ * yet is refused, so a manual resolve never pre-empts the lost-dispute Contain.
+ */
+export const isStripeDisputeAdminResolvable = (dispute: {
+  state: StripeDisputeState;
+  subject: StripeDisputeSubject;
+  closedAt: Date | string | null;
+}): boolean =>
+  dispute.state === 'open' && (STRIPE_DISPUTE_ADMIN_RESOLVABLE.includes(dispute.subject) || dispute.closedAt !== null);
+
 export const STRIPE_DISPUTE_STATES = ['open', 'resolved'] as const;
 export type StripeDisputeState = (typeof STRIPE_DISPUTE_STATES)[number];
 

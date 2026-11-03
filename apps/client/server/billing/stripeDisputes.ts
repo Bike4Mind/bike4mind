@@ -1,4 +1,9 @@
-import { adminAuditLogRepository, stripeDisputeRepository, type StripeDisputeFacts } from '@bike4mind/database';
+import {
+  adminAuditLogRepository,
+  stripeDisputeRepository,
+  userRepository,
+  type StripeDisputeFacts,
+} from '@bike4mind/database';
 import type { AuditActor, StripeDisputeItem, StripeDisputeSubject } from '@bike4mind/common';
 import { adminAuditService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
@@ -109,6 +114,13 @@ export type LostDisputeOutcome =
 
 class DisputeAlreadyResolved extends Error {}
 
+/**
+ * Sets the dispute flag, which charge.dispute.created normally set already. A close whose open event
+ * never arrived would otherwise leave a contained account that an undo fully unblocks. Only after
+ * this delivery resolved the dispute, so a redelivery never re-sets a flag a won dispute cleared.
+ */
+const keepBlocked = (userId: string) => userRepository.update({ id: userId, disputePending: true });
+
 const containOf = (snapshot: UserUndoSnapshot, batchId: string) => ({
   batchId,
   containedAt: new Date(),
@@ -121,7 +133,7 @@ const containOf = (snapshot: UserUndoSnapshot, batchId: string) => ({
 /**
  * Resolves a lost dispute on a user's payment and contains the account: suspended, credits to zero
  * and live API keys revoked, as the admin bulk Contain does, attributed to the system. The dispute
- * flag stays set. The Contain and the resolution commit in one transaction, so a redelivered close (or
+ * flag is set (or stays set). The Contain and the resolution commit in one transaction, so a redelivered close (or
  * a concurrent one) finds the dispute resolved and changes nothing, and the record keeps the undo.
  * An admin account is never contained automatically; its dispute is resolved and left to a human.
  */
@@ -139,7 +151,7 @@ export async function resolveLostUserDispute(
     const batchId = `stripe-dispute:${stripeDisputeId}`;
     const reason = `Lost Stripe dispute ${stripeDisputeId}`;
     try {
-      await applyActionToUser(
+      const snapshot = await applyActionToUser(
         user.id,
         { action: { type: 'contain' }, actorId: DISPUTE_SYSTEM_ACTOR_ID, reason, batchId },
         usersBulkSystemApplyDeps(SYSTEM_ACTOR_NAME, reason, logger),
@@ -151,8 +163,11 @@ export async function resolveLostUserDispute(
           );
           // Rolls the Contain back: whoever resolved it first already acted.
           if (!contained.item) throw new DisputeAlreadyResolved();
+          await keepBlocked(user.id);
         }
       );
+      // A transaction retry can roll back an attempt that set the holder and then commit with no steps.
+      if (!snapshot) contained.item = null;
     } catch (error) {
       if (error instanceof DisputeAlreadyResolved) return { status: 'already_resolved' };
       throw error;
@@ -165,6 +180,7 @@ export async function resolveLostUserDispute(
 
   const resolved = await stripeDisputeRepository.resolveBySystem(stripeDisputeId, 'lost');
   if (!resolved) return { status: 'already_resolved' };
+  await keepBlocked(user.id);
   await auditSystemResolution(resolved, 'resolved a lost Stripe dispute; the account needed no Contain', logger);
   return { status: 'resolved_without_contain', item: resolved };
 }

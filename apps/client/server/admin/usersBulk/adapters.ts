@@ -211,6 +211,7 @@ export function usersBulkSystemApplyDeps(actorName: string, reason: string, logg
         { db: { adminAuditLog: adminAuditLogRepository }, logger }
       ),
     endRealtimeConnections: endUserRealtimeConnections(logger),
+    logger,
   };
 }
 
