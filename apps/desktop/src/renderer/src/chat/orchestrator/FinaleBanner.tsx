@@ -28,7 +28,7 @@ export function FinaleBanner({
     stats.cost,
     `${stats.done} done`,
     `${stats.failed} failed`,
-  ].join(' · ');
+  ].join(' \u00B7 ');
   return (
     <Box
       role="status"
