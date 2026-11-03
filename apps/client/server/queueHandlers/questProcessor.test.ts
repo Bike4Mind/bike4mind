@@ -6,6 +6,7 @@ import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium
 const mockProcess = vi.hoisted(() => vi.fn());
 const processOptions = vi.hoisted(() => vi.fn());
 const mockCapCheck = vi.hoisted(() => vi.fn());
+const mockRecordFirstChatValue = vi.hoisted(() => vi.fn(async () => false));
 
 // This exercises only the db-adapter assembly in getStaticOptions: the surface
 // save_content_to_data_lake (-> saveContentAdapters in adapters.ts) reads from. Mocks mirror
@@ -79,6 +80,8 @@ vi.mock('@server/billing/meterPlatformCompletion', async importOriginal => ({
 }));
 
 vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => ({}) }) }));
+
+vi.mock('@server/analytics/funnel', () => ({ recordFirstChatValue: mockRecordFirstChatValue }));
 
 vi.mock('@server/billing/freeTierDailyCapGate', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/billing/freeTierDailyCapGate')>()),
@@ -327,6 +330,34 @@ describe('processQuest', () => {
     expect(mockProcess).not.toHaveBeenCalled();
     settle.mockRestore();
   }, 120_000);
+
+  describe('first_value', () => {
+    const visitId = 'a'.repeat(32);
+    const run = async (extra: Record<string, unknown>) => {
+      const { processQuest } = await import('./questProcessor');
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+      await processQuest(
+        { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {}, ...extra } as never,
+        logger as never
+      );
+    };
+    const recordedVisits = () =>
+      mockRecordFirstChatValue.mock.calls
+        .map(call => (call as unknown[])[0] as { visitId?: string })
+        .map(o => o.visitId);
+
+    it('names the visit the queued turn carries', async () => {
+      mockRecordFirstChatValue.mockClear();
+      await run({ visitId });
+      expect(recordedVisits()).toEqual([visitId]);
+    }, 120_000);
+
+    it('names no visit for a turn queued without one', async () => {
+      mockRecordFirstChatValue.mockClear();
+      await run({});
+      expect(recordedVisits()).toEqual([undefined]);
+    }, 120_000);
+  });
 
   it('still throws an unrelated error from the cap check', async () => {
     mockCapCheck.mockRejectedValueOnce(new Error('boom'));
