@@ -1,8 +1,14 @@
+import { Resource } from 'sst';
+import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { signupGrantBudgetRepository, signupProtectionRepository } from '@bike4mind/database';
 import type { SignupProtection } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { escapeSlackText } from '@bike4mind/services';
 import { postMessageToSlackWithOutcome } from '@bike4mind/server-utils/integrations/slack/slack';
+import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
+
+/** Shared with the refresh job's SourceFailures metric (apps/workers/src/cron/disposableDomainRefresh.ts). */
+const DISPOSABLE_DOMAINS_NAMESPACE = 'Lumina5/DisposableDomains';
 
 export const signupProtection: SignupProtection = {
   get repository() {
@@ -50,5 +56,17 @@ export const signupProtection: SignupProtection = {
     } catch (error) {
       Logger.globalInstance.error('Signup domain hold alert failed', error);
     }
+  },
+  // One datum per matching source, so a list that starts refusing real users shows as its own series.
+  async recordDisposableRefusal({ sources }) {
+    await emitMetrics(
+      DISPOSABLE_DOMAINS_NAMESPACE,
+      sources.map(source => ({
+        name: 'SignupRefusals',
+        value: 1,
+        dimensions: { Stage: Resource.App.stage, Source: source },
+        unit: StandardUnit.Count,
+      }))
+    );
   },
 };

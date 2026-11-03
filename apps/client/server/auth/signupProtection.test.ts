@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Logger } from '@bike4mind/observability';
 import { postMessageToSlackWithOutcome } from '@bike4mind/server-utils/integrations/slack/slack';
+import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { signupProtection } from './signupProtection';
 
 vi.mock('@bike4mind/database', () => ({ signupProtectionRepository: {} }));
+vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics: vi.fn() }));
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlackWithOutcome: vi.fn() }));
 
 const review = {
@@ -49,5 +52,16 @@ describe('signup protection alerts', () => {
     expect(Logger.globalInstance.error).toHaveBeenCalledWith('Signup domain hold alert was not delivered', {
       domain: '<example.net>',
     });
+  });
+});
+
+describe('disposable refusal metric', () => {
+  it('emits one SignupRefusals datum per source, dimensioned by stage and source', async () => {
+    await signupProtection.recordDisposableRefusal!({ domain: 'burner.test', sources: ['curated', 'tompec'] });
+
+    expect(emitMetrics).toHaveBeenCalledExactlyOnceWith('Lumina5/DisposableDomains', [
+      { name: 'SignupRefusals', value: 1, dimensions: { Stage: 'test', Source: 'curated' }, unit: 'Count' },
+      { name: 'SignupRefusals', value: 1, dimensions: { Stage: 'test', Source: 'tompec' }, unit: 'Count' },
+    ]);
   });
 });
