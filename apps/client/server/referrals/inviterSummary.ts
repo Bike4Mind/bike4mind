@@ -59,7 +59,7 @@ const EMPTY_SUMMARY: InviterSummary = {
 export async function getInviterSummary(inviterId: string, now = new Date()): Promise<InviterSummary> {
   const settings = await getSettingsMap(
     { adminSettings: adminSettingsRepository },
-    { names: [...REWARD_AMOUNT_SETTINGS], skipCache: true }
+    { names: [...REWARD_AMOUNT_SETTINGS] }
   );
   const enabled = REWARD_AMOUNT_SETTINGS.some(name => getSettingsValue(name, settings, 0) > 0);
   if (!enabled) return EMPTY_SUMMARY;
