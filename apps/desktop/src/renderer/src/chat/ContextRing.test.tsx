@@ -305,6 +305,19 @@ describe('ContextRing', () => {
     );
   });
 
+  it('re-arms when the timer fires before the clock reaches the expiry', () => {
+    render();
+    act(() => vi.advanceTimersByTime(239_999));
+    const realNow = Date.now;
+    // The timer fires 1ms early relative to Date.now.
+    vi.spyOn(Date, 'now').mockImplementation(() => realNow() - 1);
+    act(() => vi.advanceTimersByTime(1));
+    expect(query('composer-context-cold')).toBeNull();
+    act(() => vi.advanceTimersByTime(1));
+    expect(query('composer-context-cold')).not.toBeNull();
+    vi.mocked(Date.now).mockRestore();
+  });
+
   it('shows the dot for an already expired cloud cache, but not mid-turn or without a prior reply', () => {
     render({ promptCache: { ...STAMP, cachedAt: NOW - 600_000 } });
     expect(query('composer-context-cold')).not.toBeNull();

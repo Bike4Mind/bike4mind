@@ -25,19 +25,21 @@ function useSecondTick(active: boolean): void {
   }, [active]);
 }
 
+const MAX_TIMEOUT_MS = 2 ** 31 - 1;
+
 /** Re-renders once when `at` passes, so the ring notices a cache going cold while its tooltip is closed. */
 function useRerenderAt(at: number | null): void {
-  const [, setTick] = useState(0);
+  const [tick, setTick] = useState(0);
   useEffect(() => {
     if (at === null) return;
-    const delay = at - Date.now();
-    if (delay <= 0 || delay > MAX_TIMEOUT_MS) return;
-    const timer = setTimeout(() => setTick(tick => tick + 1), delay);
+    const remaining = at - Date.now();
+    if (remaining <= 0) return;
+    // Each fire re-renders and re-arms until the clock really passes `at`; a timer can fire a
+    // millisecond early, and setTimeout cannot wait longer than MAX_TIMEOUT_MS.
+    const timer = setTimeout(() => setTick(count => count + 1), Math.min(remaining, MAX_TIMEOUT_MS));
     return () => clearTimeout(timer);
-  }, [at]);
+  }, [at, tick]);
 }
-
-const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
 /**
  * The composer's context ring: how full the conversation's context is, and in the tooltip what is

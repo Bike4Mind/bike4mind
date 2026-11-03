@@ -480,11 +480,9 @@ export function ChatShell({
   const closePanelPopover = useCallback(() => setPanelPopoverOpen(false), []);
   useEffect(() => setPanelPopoverOpen(false), [activeId, panelDocked, screen]);
 
-  const hasReply = useMemo(
-    () => conversation.messages.some(message => message.role === 'assistant'),
-    [conversation.messages]
-  );
-  const promptCache = useMemo(() => latestReply(conversation.messages)?.promptCache, [conversation.messages]);
+  const settledReply = useMemo(() => latestReply(conversation.messages), [conversation.messages]);
+  const hasReply = settledReply !== null;
+  const promptCache = settledReply?.promptCache;
   const composerUsage: ComposerUsage = useMemo(() => {
     const reply = latestReply(conversation.messages, turnOpen);
     // The figure ChatService.autoCompact decides on, so red means the same thing on both sides.

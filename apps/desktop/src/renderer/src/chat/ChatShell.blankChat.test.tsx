@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import type { AuthState } from '@shared/auth';
 import type { ChatMessage, ChatSession, ChatSessionSummary, CreationTool } from '@shared/chat';
+import type { LoadedModelState } from '@shared/models';
 import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
@@ -74,11 +75,13 @@ function stubBridge({
   mode = 'chat',
   messages = [],
   model = HOSTED,
+  loadedState,
 }: {
   tools: CreationTool[];
   mode?: 'chat' | 'code';
   messages?: ChatMessage[];
   model?: string;
+  loadedState?: LoadedModelState;
 }) {
   const session = summary(mode, model);
   listCreationTools.mockImplementation(async () => tools);
@@ -94,6 +97,7 @@ function stubBridge({
         listArtifacts: async () => ({ artifacts: [], total: 0 }),
         sendMessage,
       }),
+      ...(loadedState ? { models: quietBridge({ getLoadedState: async () => loadedState }) } : {}),
       sidebar: quietBridge({ getSections: async () => EMPTY_SIDEBAR_SECTIONS }),
       // A Code session's chips shorten paths against the home directory.
       getAppInfo: async () => ({ homeDirectory: '/home/test' }),
@@ -316,5 +320,32 @@ describe('the blank chat', () => {
       'Set up this workspace'
     );
     expect(listCreationTools).not.toHaveBeenCalled();
+  });
+});
+
+describe('the context ring cold dot', () => {
+  const LOCAL = 'local:ollama:qwen3:8b';
+  const user: ChatMessage = { id: 'u1', role: 'user', content: 'Hi', createdAt: '2026-10-01T00:00:01.000Z' };
+  const reply: ChatMessage = { id: 'a1', role: 'assistant', content: 'Hello', createdAt: '2026-10-01T00:00:02.000Z' };
+  const boundary: ChatMessage = {
+    id: 'b1',
+    role: 'user',
+    system: true,
+    content: '',
+    createdAt: '2026-10-01T00:00:03.000Z',
+    boundary: { kind: 'clear' },
+  };
+  const dot = () => document.querySelector('[data-testid="composer-context-cold"]');
+
+  it('shows for an unloaded local model once the conversation has a reply', async () => {
+    stubBridge({ tools: [], model: LOCAL, messages: [user, reply], loadedState: { kind: 'unloaded' } });
+    await openBlankSession();
+    expect(dot()).not.toBeNull();
+  });
+
+  it('does not show right after a clear, which leaves no reply to be warm from', async () => {
+    stubBridge({ tools: [], model: LOCAL, messages: [user, reply, boundary], loadedState: { kind: 'unloaded' } });
+    await openBlankSession();
+    expect(dot()).toBeNull();
   });
 });
