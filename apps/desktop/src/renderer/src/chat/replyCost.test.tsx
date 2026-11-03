@@ -53,7 +53,7 @@ describe('the cost on a reply', () => {
     render([message('m1', { usage: { inputTokens: 1200, outputTokens: 300, creditsUsed: 54, usdCost: 0.027 } })]);
 
     const row = costs()[0];
-    expect(row?.textContent).toBe('54 credits \xb7 300 tokens');
+    expect(row?.textContent).toBe('54 credits');
     expect(row?.getAttribute('title')).toBe('1.2k new input, 300 output\nTotal tokens: 300');
   });
 
@@ -83,35 +83,25 @@ describe('the cost on a reply', () => {
       render([message('m1', { usage })]);
 
       const row = costs()[0];
-      expect(row?.textContent).toBe('48 tokens \xb7 24.0 tok/s \xb7 1.2s load');
+      expect(row?.textContent).toBe('24.0 tok/s');
       expect(row?.querySelector('[data-testid="chat-message-stat-speed"]')).not.toBeNull();
       expect(row?.getAttribute('title')).toBe(
         '300 new input, 48 output\nTotal tokens: 48\nSpeed: 24.0 tok/s\nLoad time: 1.2s'
       );
     });
 
-    it('leaves out a stat unticked in Settings, and keeps it in the title', () => {
+    it('leaves out a stat unticked in Settings, keeps it in the title, and shows nothing with no other', () => {
       act(() => setReplyStatShown('speed', false));
       render([message('m1', { usage })]);
 
-      const row = costs()[0];
-      expect(row?.textContent).toBe('48 tokens \xb7 1.2s load');
-      expect(row?.getAttribute('title')).toContain('Speed: 24.0 tok/s');
-    });
-
-    it('shows nothing with every stat unticked and no credits', () => {
-      act(() => {
-        setReplyStatShown('tokens', false);
-        setReplyStatShown('speed', false);
-        setReplyStatShown('load', false);
-      });
-      render([message('m1', { usage })]);
-
       expect(costs()).toHaveLength(0);
+      render([message('m1', { usage: { ...usage, creditsUsed: 2 } })]);
+      expect(costs()[0]?.textContent).toBe('2 credits');
+      expect(costs()[0]?.getAttribute('title')).toContain('Speed: 24.0 tok/s');
     });
   });
 
-  it("lists a reply's timing stats in one line, the estimates marked", () => {
+  it('names speed, total and thinking time only, speed first and credits last, each with its kind', () => {
     render([
       message('m1', {
         usage: { inputTokens: 100, outputTokens: 400, cacheReadInputTokens: 900, creditsUsed: 12 },
@@ -127,9 +117,8 @@ describe('the cost on a reply', () => {
       }),
     ]);
 
-    expect(costs()[0]?.textContent).toBe(
-      '12 credits \xb7 ~1.5s thinking \xb7 10.0s total \xb7 ~15% of model time thinking \xb7 400 tokens \xb7 ~50.0 tok/s \xb7 90% cached \xb7 1.5s to first token'
-    );
+    expect(costs()[0]?.textContent).toBe('~50.0 tok/s \xb7 10.0s total \xb7 ~1.5s thinking \xb7 12 credits');
+    expect(costs()[0]?.getAttribute('title')).toContain('Thinking share: ~15%');
   });
 
   it('leaves the user, relay and system turns alone', () => {
