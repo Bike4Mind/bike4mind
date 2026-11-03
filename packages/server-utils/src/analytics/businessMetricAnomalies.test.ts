@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   anomalyAlerts,
-  anomalyMessages,
   compareMetric,
   comparisonWindow,
   createMetricAccumulator,
@@ -111,51 +110,48 @@ describe('business metric comparisons', () => {
       ])
     );
     expect(metrics[0].contributors).not.toContainEqual(expect.objectContaining({ label: 'user:older' }));
-    const message = anomalyMessages(metrics, comparisonWindow(new Date('2026-10-26T12:05:00Z')), {})[0];
-    expect(message).toContain('Top contributors: user:stopped=-200.00');
-    expect(message).not.toContain('user:steady');
-    expect(message).not.toContain('user:growing');
+    const [anomaly] = anomalyAlerts(metrics, {});
+    expect(anomaly.contributors).toEqual([{ label: 'user:stopped', value: -200 }]);
   });
 
-  it('ranks only contributors moving in the anomaly direction by the size of their change', () => {
+  it('keeps every contributor moving in the anomaly direction, largest change first', () => {
     const contributors = [
       { label: 'user:opposing', value: -1000 },
       { label: 'user:small', value: 10 },
       { label: 'user:large', value: 100 },
       { label: 'user:steady', value: 0 },
+      { label: 'model:mid', value: 50 },
     ];
-    const message = anomalyMessages(
-      [{ ...metric(200), contributors }],
-      comparisonWindow(new Date('2026-10-26T12:05:00Z')),
-      {}
-    )[0];
-    expect(message).toContain('Top contributors: user:large=+100.00, user:small=+10.00');
-    expect(message).not.toContain('user:opposing');
-    expect(message).not.toContain('user:steady');
+    const [anomaly] = anomalyAlerts([{ ...metric(200), contributors }], {});
+    expect(anomaly.contributors.map(row => row.label)).toEqual(['user:large', 'model:mid', 'user:small']);
+    const [fall] = anomalyAlerts([{ ...metric(50), contributors }], {});
+    expect(fall.contributors).toEqual([{ label: 'user:opposing', value: -1000 }]);
   });
 
   it('carries stable metric identity and direction separately from presentation', () => {
-    const window = comparisonWindow(new Date('2026-10-26T12:05:00Z'));
     expect(
-      anomalyAlerts([metric(120), { ...metric(80), name: 'credits' }], window, {
+      anomalyAlerts([metric(120), { ...metric(80), name: 'credits' }], {
         credits: { percent: 5, minimumDelta: 10 },
       })
     ).toEqual([
       expect.objectContaining({ metricName: 'requests:user', direction: 'increase' }),
       expect.objectContaining({ metricName: 'credits', direction: 'decrease' }),
     ]);
-    expect(anomalyAlerts([metric(10, 0)], window, {})[0].direction).toBe('increase');
+    expect(anomalyAlerts([metric(10, 0)], {})[0].direction).toBe('increase');
   });
 
-  it('provides current, previous, median and escaped top contributors in Slack', () => {
-    const messages = anomalyMessages(
-      [{ ...metric(200), contributors: [{ label: '<!channel>', value: 50 }] }],
-      comparisonWindow(new Date('2026-10-26T12:05:00Z')),
-      {}
-    );
-    expect(messages[0]).toContain('Current 200.00; previous 100.00');
-    expect(messages[0]).toContain('7-day median 110.00');
-    expect(messages[0]).toContain('&lt;!channel&gt;=+50.00');
-    expect(messages[0]).toContain('(12h)');
+  it('reports raw current, previous, delta, percent and median for the formatter', () => {
+    expect(anomalyAlerts([metric(200)], {})[0]).toEqual({
+      metricName: 'requests:user',
+      direction: 'increase',
+      current: 200,
+      previous: 100,
+      delta: 100,
+      percent: 100,
+      median: 110,
+      contributors: [],
+    });
+    expect(anomalyAlerts([metric(10, 0)], {})[0]).toMatchObject({ percent: null });
+    expect(anomalyAlerts([{ ...metric(200), values: [200, 100, 90, null] }], {})[0]).toMatchObject({ median: null });
   });
 });
