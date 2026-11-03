@@ -1,6 +1,6 @@
 import React, { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, fireEvent, waitFor } from '@testing-library/react';
+import { render, fireEvent, waitFor, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { AxiosError, AxiosHeaders } from 'axios';
@@ -66,9 +66,8 @@ function renderDropdown() {
   );
 }
 
-function pickFile(container: HTMLElement, file: File) {
-  const input = container.querySelector('input[type="file"]') as HTMLInputElement;
-  fireEvent.change(input, { target: { files: [file] } });
+function pickFile(file: File) {
+  fireEvent.change(screen.getByTestId('upload-actions-file-input'), { target: { files: [file] } });
 }
 
 describe('UploadDropdown - From device server refusal', () => {
@@ -91,12 +90,12 @@ describe('UploadDropdown - From device server refusal', () => {
     ],
   ])('shows the server message for a %s refusal', async (status, data, expected) => {
     createFabFileOnServerWithUpload.mockRejectedValue(serverRefusal(status, data));
-    const { container } = renderDropdown();
+    renderDropdown();
 
-    pickFile(container, new File(['x'], 'big.txt', { type: 'text/plain' }));
+    pickFile(new File(['x'], 'big.txt', { type: 'text/plain' }));
 
     await waitFor(() => expect(toastError).toHaveBeenCalled());
     expect(toastError).toHaveBeenCalledTimes(1);
-    expect(toastError.mock.calls[0][0]).toBe(expected);
+    expect(toastError).toHaveBeenCalledWith(expected);
   });
 });
