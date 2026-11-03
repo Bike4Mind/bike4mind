@@ -8,6 +8,12 @@ const HOUR_MS = 60 * MINUTE_MS;
 // Per-run cap on each kind of send, oldest first; a backlog drains over successive runs. Each send
 // has its own timeout budget, so the cap also bounds the run's duration.
 export const REVIEW_SWEEP_BATCH_LIMIT = 20;
+// Longer than the request path's 5 s: a slow SMTP send that still lands would otherwise count as
+// failed and be sent again 15 minutes later.
+export const REVIEW_SWEEP_SEND_TIMEOUT_MS = 20_000;
+// No new send starts past this, so one run stays inside the Lambda timeout (5 minutes) when SMTP
+// is slow; the rest is picked up by the next run.
+export const REVIEW_SWEEP_SEND_BUDGET_MS = 3 * MINUTE_MS;
 
 export interface IncidentReviewSweepDeps extends IncidentReviewDelivery {
   incidents: {
@@ -46,10 +52,16 @@ const ageMinutes = (incident: RecordedIncident | undefined, now: Date) =>
  * recipient. A failure on one incident never stops the rest; the next run retries it.
  */
 export async function runIncidentReviewSweep(
-  deps: IncidentReviewSweepDeps,
-  now: Date = new Date()
+  sweepDeps: IncidentReviewSweepDeps,
+  now: Date = new Date(),
+  clock: () => number = Date.now
 ): Promise<IncidentReviewSweepResult> {
+  // Read once: the delivery step reads the list per incident, and each read is an uncached settings query.
+  const recipients = await sweepDeps.getRecipients();
+  const deps: IncidentReviewSweepDeps = { ...sweepDeps, getRecipients: async () => recipients };
   const { incidents, logger } = deps;
+  const startedAt = clock();
+  const outOfBudget = () => clock() - startedAt >= REVIEW_SWEEP_SEND_BUDGET_MS;
   const result: IncidentReviewSweepResult = {
     alerted: 0,
     reminded: 0,
@@ -59,13 +71,14 @@ export async function runIncidentReviewSweep(
     pendingWithoutReviewers: false,
   };
 
-  const reviewersConfigured = partitionEmailList(await deps.getRecipients()).valid.length > 0;
+  const reviewersConfigured = partitionEmailList(recipients).valid.length > 0;
   const oldestPending = await incidents.findOldestPending();
 
   if (reviewersConfigured) {
     const graceCutoff = new Date(now.getTime() - REVIEW_SWEEP_MIN_INCIDENT_AGE_MINUTES * MINUTE_MS);
     const unalerted = await incidents.findUnalerted(graceCutoff, REVIEW_SWEEP_BATCH_LIMIT);
     for (const incident of unalerted) {
+      if (outOfBudget()) break;
       if (await send(incident, deps, 'alert')) {
         result.alerted++;
         await stamp(() => incidents.markAlerted(incident.id, now), 'alertedAt', incident.id, deps);
@@ -77,6 +90,7 @@ export async function runIncidentReviewSweep(
     const reminderCutoff = new Date(now.getTime() - REVIEW_REMINDER_INTERVAL_HOURS * HOUR_MS);
     const due = await incidents.findDueForReminder(reminderCutoff, REVIEW_SWEEP_BATCH_LIMIT);
     for (const incident of due) {
+      if (outOfBudget()) break;
       if (await send(incident, deps, 'reminder')) {
         result.reminded++;
         await stamp(() => incidents.markReminded(incident.id, now), 'lastReminderAt', incident.id, deps);
@@ -105,7 +119,7 @@ async function send(
   kind: 'alert' | 'reminder'
 ): Promise<boolean> {
   try {
-    return (await deliverIncidentAlert(incident, deps)) === 'delivered';
+    return (await deliverIncidentAlert(incident, deps, { timeoutMs: REVIEW_SWEEP_SEND_TIMEOUT_MS })) === 'delivered';
   } catch {
     deps.logger.error(`[ImageModeration] review sweep ${kind} failed`, { incidentId: incident.id });
     return false;

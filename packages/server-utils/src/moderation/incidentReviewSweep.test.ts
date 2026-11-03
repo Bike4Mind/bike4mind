@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { REVIEW_SWEEP_BATCH_LIMIT, runIncidentReviewSweep, type IncidentReviewSweepDeps } from './incidentReviewSweep';
+import {
+  REVIEW_SWEEP_BATCH_LIMIT,
+  REVIEW_SWEEP_SEND_BUDGET_MS,
+  runIncidentReviewSweep,
+  type IncidentReviewSweepDeps,
+} from './incidentReviewSweep';
 import type { RecordedIncident } from './incidentReviewAlerts';
 
 const NOW = new Date('2026-10-20T12:00:00.000Z');
@@ -164,5 +169,49 @@ describe('runIncidentReviewSweep', () => {
     expect(html).toContain('inc-9');
     expect(html).not.toContain('user-7f3a');
     expect(html).not.toContain('Category A');
+  });
+
+  it('reads the reviewer list once per run, however many incidents it sends', async () => {
+    const deps = setup({
+      unalerted: [incident('inc-10', 60), incident('inc-11', 50)],
+      due: [incident('inc-12', 3000)],
+    });
+
+    await runIncidentReviewSweep(deps, NOW);
+
+    expect(deps.sendEmail).toHaveBeenCalledTimes(3);
+    expect(deps.getRecipients).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits past the request-path send timeout before counting a slow send as failed', async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = setup(
+        { unalerted: [incident('inc-13', 60)] },
+        { sendEmail: vi.fn().mockImplementation(() => new Promise(resolve => setTimeout(() => resolve({}), 10_000))) }
+      );
+
+      const run = runIncidentReviewSweep(deps, NOW);
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      await expect(run).resolves.toMatchObject({ alerted: 1, failed: 0 });
+      expect(deps.incidents.markAlerted).toHaveBeenCalledWith('inc-13', NOW);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('starts no new send once the run budget is spent, leaving the rest for the next run', async () => {
+    const deps = setup({ unalerted: [incident('inc-14', 60), incident('inc-15', 50), incident('inc-16', 40)] });
+    let elapsed = 0;
+    vi.mocked(deps.sendEmail).mockImplementation(async () => {
+      elapsed += REVIEW_SWEEP_SEND_BUDGET_MS / 2;
+      return {};
+    });
+
+    const result = await runIncidentReviewSweep(deps, NOW, () => elapsed);
+
+    expect(deps.sendEmail).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ alerted: 2, failed: 0 });
   });
 });

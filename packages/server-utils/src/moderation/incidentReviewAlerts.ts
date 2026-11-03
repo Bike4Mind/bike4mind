@@ -71,7 +71,8 @@ export type IncidentAlertOutcome = 'delivered' | 'no_recipients' | 'failed';
  */
 export async function deliverIncidentAlert(
   incident: RecordedIncident,
-  deps: IncidentReviewDelivery
+  deps: IncidentReviewDelivery,
+  options: { timeoutMs?: number } = {}
 ): Promise<IncidentAlertOutcome> {
   const meta = { incidentId: incident.id };
   const { valid: recipients, invalid } = partitionEmailList(await deps.getRecipients());
@@ -95,7 +96,7 @@ export async function deliverIncidentAlert(
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timedOut = new Promise<'timeout'>(resolve => {
-    timer = setTimeout(() => resolve('timeout'), REVIEW_ALERT_TIMEOUT_MS);
+    timer = setTimeout(() => resolve('timeout'), options.timeoutMs ?? REVIEW_ALERT_TIMEOUT_MS);
   });
   // One message per reviewer: a shared To header would show each reviewer the others' addresses.
   const deliver = async () =>
