@@ -108,7 +108,7 @@ describe('names listed in a WSL folder, opened over the share', () => {
       files.set(`${PROJECT}\\${shared}`, 'needle\n');
     });
 
-    it('is left out of a distro listing', async () => {
+    it('is left out of a distro listing, which says so', async () => {
       listDistroFiles.mockResolvedValue({
         complete: true,
         files: [
@@ -117,16 +117,25 @@ describe('names listed in a WSL folder, opened over the share', () => {
         ],
       });
 
-      expect(count(await globFiles.run({ pattern: '*', path: PROJECT }, context()))).toBe(1);
+      const glob = await globFiles.run({ pattern: '*', path: PROJECT }, context());
+      const grep = await grepSearch.run({ pattern: 'needle', path: PROJECT, outputMode: 'files' }, context());
+
+      expect(count(glob)).toBe(1);
+      expect(glob).toContain('Left out 1 file(s) whose names no Windows path opens.');
+      expect(count(grep)).toBe(1);
+      expect(grep).toContain('Left out 1 file(s) whose names no Windows path opens.');
     });
 
-    it('is left out of a git listing', async () => {
+    it('is left out of a git listing, which says so', async () => {
       listed.tracked = `a\\b\0${shared}\0`;
 
-      expect(count(await globFiles.run({ pattern: '*', path: PROJECT }, context()))).toBe(1);
+      const glob = await globFiles.run({ pattern: '*', path: PROJECT }, context());
+
+      expect(count(glob)).toBe(1);
+      expect(glob).toContain('Left out 1 file(s) whose names no Windows path opens.');
     });
 
-    it('is left out of what ripgrep found and what git tracks and ignores', async () => {
+    it('is left out of what ripgrep found and what git tracks and ignores, which says so', async () => {
       listed.ignored = `${shared}\0`;
       ripgrepSearch.mockImplementation(async ({ onFile }) => {
         for (const path of ['a\\b', shared]) {
@@ -138,6 +147,25 @@ describe('names listed in a WSL folder, opened over the share', () => {
       const result = await grepSearch.run({ pattern: 'needle', path: PROJECT, outputMode: 'files' }, context());
 
       expect(count(result)).toBe(1);
+      expect(result).toContain('Left out 2 file(s) whose names no Windows path opens.');
+    });
+
+    it('says so when ripgrep found nothing else', async () => {
+      ripgrepSearch.mockImplementation(async ({ onFile }) => {
+        onFile({ path: shared, matches: 1, lines: [{ number: 1, text: 'needle', match: true }] });
+        return 'done';
+      });
+
+      const result = await grepSearch.run({ pattern: 'needle', path: PROJECT }, context());
+
+      expect(result).toContain('No matches');
+      expect(result).toContain('Left out 1 file(s) whose names no Windows path opens.');
+    });
+
+    it('says nothing of left-out names when none were', async () => {
+      listed.tracked = 'a\\b\0';
+
+      expect(await globFiles.run({ pattern: '*', path: PROJECT }, context())).not.toContain('Left out');
     });
   });
 

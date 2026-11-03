@@ -179,6 +179,8 @@ interface FileListing {
   files: string[];
   /** False when the fallback walk stopped at MAX_WALKED_FILES. */
   complete: boolean;
+  /** How many names were left out because no Windows path opens them over the share. */
+  dropped: number;
   /** Size and modification time by path, when the listing already carries them. */
   stats?: ReadonlyMap<string, { size: number; modified: number }>;
 }
@@ -193,7 +195,8 @@ async function listFiles(base: string, context: ToolContext): Promise<FileListin
   const tracked = await gitListing(base);
   if (tracked) {
     const spelled = hostSpelling(base);
-    return { files: tracked.flatMap(path => spelled(path) ?? []).sort(), complete: true };
+    const files = tracked.flatMap(path => spelled(path) ?? []);
+    return { files: files.sort(), complete: true, dropped: tracked.length - files.length };
   }
 
   const inDistro = await listDistroFiles(base, IGNORED, MAX_WALKED_FILES, context.signal);
@@ -205,6 +208,7 @@ async function listFiles(base: string, context: ToolContext): Promise<FileListin
     return {
       files: files.map(file => file.path).sort(),
       complete: inDistro.complete,
+      dropped: inDistro.files.length - files.length,
       stats: new Map(files.map(file => [file.path, { size: file.size, modified: file.modified }])),
     };
   }
@@ -218,7 +222,12 @@ async function listFiles(base: string, context: ToolContext): Promise<FileListin
     }
     files.push(relative(base, absolute));
   });
-  return { files: files.sort(), complete };
+  return { files: files.sort(), complete, dropped: 0 };
+}
+
+/** The sentence a result ends with when its listing left out names no Windows path opens. */
+function droppedNote(dropped: number): string {
+  return dropped > 0 ? ` Left out ${dropped} file(s) whose names no Windows path opens.` : '';
 }
 
 export const fileRead: ToolDefinition = {
@@ -390,7 +399,9 @@ export const globFiles: ToolDefinition = {
       );
     const shown =
       found.length > MAX_MATCHES ? `; showing the first ${MAX_MATCHES}, so narrow the pattern to see the rest` : '';
-    const partial = listing.complete ? '' : ` Only the first ${MAX_WALKED_FILES} files under ${base} were considered.`;
+    const partial =
+      (listing.complete ? '' : ` Only the first ${MAX_WALKED_FILES} files under ${base} were considered.`) +
+      droppedNote(listing.dropped);
     const header = `${found.length} file(s) in ${base}, sorted by ${bySize ? 'size' : 'modification time'}${shown}:${partial}`;
     const tail = folders.length > 0 ? ['', 'Folders:', ...folders] : [];
     return capOutput([header, ...rows, ...tail].join('\n'));
@@ -628,6 +639,7 @@ export const grepSearch: ToolDefinition = {
 
     const tally = createTally(filesOnly, maxResults);
     const spelled = hostSpelling(directory);
+    let dropped = 0;
 
     const viaRipgrep =
       !single &&
@@ -642,6 +654,7 @@ export const grepSearch: ToolDefinition = {
         // Filtered here rather than with rg --glob, which would also override .gitignore.
         onFile: file => {
           const path = spelled(file.path);
+          if (path === null) dropped += 1;
           return (
             path === null ||
             (include !== undefined && !matchesInclude(path, include)) ||
@@ -655,8 +668,13 @@ export const grepSearch: ToolDefinition = {
     const ranRipgrep = viaRipgrep === 'done' || viaRipgrep === 'stopped' || viaRipgrep === 'timed-out';
     if (ranRipgrep && viaRipgrep === 'done') {
       // rg honours .gitignore even for a file git tracks; the JavaScript listing does not.
-      for (const file of (await trackedButIgnored(directory)).flatMap(path => spelled(path) ?? [])) {
+      for (const name of await trackedButIgnored(directory)) {
         if (tally.truncated || context.signal.aborted) break;
+        const file = spelled(name);
+        if (file === null) {
+          dropped += 1;
+          continue;
+        }
         const absolute = listedPath(directory, file);
         if (!absolute || (include && !matchesInclude(file, include))) continue;
         const result = await scanFile(absolute, expression);
@@ -669,9 +687,10 @@ export const grepSearch: ToolDefinition = {
     }
     if (!ranRipgrep) {
       const listing: FileListing = single
-        ? { files: [basename(base)], complete: true }
+        ? { files: [basename(base)], complete: true, dropped: 0 }
         : await listFiles(base, context);
       complete = listing.complete;
+      dropped += listing.dropped;
       const candidates =
         include && !single ? listing.files.filter(file => matchesInclude(file, include)) : listing.files;
 
@@ -703,7 +722,8 @@ export const grepSearch: ToolDefinition = {
     const scope = include ? ` in files matching ${include}` : '';
     const timedOut = viaRipgrep === 'timed-out' ? ' The search timed out, so these results are partial.' : '';
     const partial =
-      timedOut || (complete ? '' : ` Only the first ${MAX_WALKED_FILES} files under ${base} were searched.`);
+      (timedOut || (complete ? '' : ` Only the first ${MAX_WALKED_FILES} files under ${base} were searched.`)) +
+      droppedNote(dropped);
     if (matchingFiles === 0) return `${note}No matches for ${expression} under ${base}${scope}.${partial}`;
 
     let header: string;
