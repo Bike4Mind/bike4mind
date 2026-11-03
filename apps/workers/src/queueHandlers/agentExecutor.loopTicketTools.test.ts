@@ -237,6 +237,18 @@ describe('loop_ticket_unsure', () => {
     );
   });
 
+  it('does not ask again while the ticket is already waiting on the owner', async () => {
+    items.findByIdForUser.mockResolvedValue(ticket({ status: 'blocked', statusReason: 'Unsure: EU or US?' }));
+    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
+
+    const result = await run(tools, 'loop_ticket_unsure', { id: 't1', question: 'And which city?' });
+
+    expect(result).not.toMatch(/^Error/);
+    expect(result).toContain('already waiting on the owner');
+    expect(events.recordUnsure).not.toHaveBeenCalled();
+    expect(items.updateForUser).not.toHaveBeenCalled();
+  });
+
   it("refuses an empty question, another loop's ticket and a closed ticket, writing nothing", async () => {
     const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
     items.findByIdForUser.mockResolvedValue(ticket());

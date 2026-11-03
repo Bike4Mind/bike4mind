@@ -19,7 +19,7 @@ import { loopEventRepository, loopRepository, workItemRepository } from '@bike4m
 import type { ToolDefinition } from '@bike4mind/services/llm';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ConflictError } from '@bike4mind/server-utils/utils/errors';
-import { makeDueIfReady, ticketMovePatch, unsureReason } from '@server/utils/loopTickets';
+import { makeDueIfReady, ticketMovePatch, UNSURE_PREFIX, unsureReason } from '@server/utils/loopTickets';
 import { assertDependenciesUsable } from '@server/utils/workItemDependencies';
 import {
   validateWorkItemDependencies,
@@ -287,6 +287,11 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
             typeof params.id === 'string' ? await workItemRepository.findByIdForUser(params.id, userId) : null;
           if (!existing || existing.loopId !== loopId) throw new NotFoundError(TICKET_NOT_FOUND);
           if (existing.status === 'closed') throw new BadRequestError('ticket is closed');
+          // A second question would replace the first in the ticket's reason, so answering the first could no
+          // longer reopen it. Not an error, so the model does not retry.
+          if (existing.status === 'blocked' && existing.statusReason?.startsWith(UNSURE_PREFIX)) {
+            return 'This ticket is already waiting on the owner. Their answer reaches your next run; do not ask again.';
+          }
           const loop = await ownLoop(loopId);
 
           // Event first: if the ticket write then fails, the question is still in the Log and answerable,

@@ -4,7 +4,20 @@ import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
-const { navigate, search, loopState, actions, eventsState, loopsState, overrideDirective, config } = vi.hoisted(() => ({
+const {
+  navigate,
+  search,
+  loopState,
+  actions,
+  eventsState,
+  loopsState,
+  overrideDirective,
+  resolveUnsure,
+  config,
+  toast,
+} = vi.hoisted(() => ({
+  toast: { info: vi.fn() },
+  resolveUnsure: { mutate: vi.fn(), isPending: false, variables: undefined },
   config: { toolAvailability: undefined as Record<string, boolean> | undefined },
   navigate: vi.fn(),
   loopsState: { data: [] as unknown[] },
@@ -20,6 +33,7 @@ vi.mock('@tanstack/react-router', () => ({
   useParams: () => ({ id: 'l1' }),
   useSearch: () => search,
 }));
+vi.mock('sonner', () => ({ toast }));
 vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: () => {} }));
 vi.mock('@client/app/components/Agent/AgentPageHeader', () => ({
   default: ({ rightActions }: { rightActions?: React.ReactNode }) => <div>{rightActions}</div>,
@@ -45,7 +59,7 @@ vi.mock('@client/app/hooks/data/loops', async importOriginal => ({
   useLoopEvents: () => eventsState,
   useLoops: () => loopsState,
   useOverrideDirective: () => overrideDirective,
-  useResolveUnsure: () => ({ mutate: vi.fn() }),
+  useResolveUnsure: () => resolveUnsure,
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({ useConfig: () => ({ data: config }) }));
 
@@ -241,5 +255,34 @@ describe('LoopDetailPage oversight', () => {
     fireEvent.click(screen.getByTestId('loop-log-directive-withdraw-btn'));
     fireEvent.click(screen.getByTestId('loop-log-directive-confirm-btn'));
     expect(overrideDirective.mutate).toHaveBeenCalledWith({ loopId: 'l1', eventId: 'd1', action: 'withdraw' });
+  });
+
+  it('tells the owner when their answer was saved but the ticket had moved on', () => {
+    eventsState.data = [
+      {
+        id: 'u1',
+        kind: 'unsure',
+        source: 'asked',
+        executionId: 'x',
+        workItemId: 't1',
+        ticketTitle: 'Pick a region',
+        reason: 'EU or US?',
+        createdAt: '2026-10-29T10:00:00.000Z',
+      },
+    ];
+    renderPage();
+    fireEvent.change(screen.getByTestId('loop-log-unsure-answer-input'), {
+      target: { value: 'EU' },
+    });
+    fireEvent.click(screen.getByTestId('loop-log-unsure-resume-btn'));
+    expect(resolveUnsure.mutate).toHaveBeenCalledWith(
+      { loopId: 'l1', eventId: 'u1', outcome: 'resumed', note: 'EU' },
+      expect.any(Object)
+    );
+    const { onSuccess } = resolveUnsure.mutate.mock.calls[0][1];
+    onSuccess({});
+    expect(toast.info).not.toHaveBeenCalled();
+    onSuccess({ ticketSkipped: true });
+    expect(toast.info).toHaveBeenCalledWith(expect.stringContaining('left as it is'));
   });
 });

@@ -87,7 +87,7 @@ function onLoopError(queryClient: QueryClient) {
   };
 }
 
-function useLoopMutation<TVars>(fn: (vars: TVars) => Promise<unknown>, onSuccess?: () => void) {
+function useLoopMutation<TVars, TData = unknown>(fn: (vars: TVars) => Promise<TData>, onSuccess?: () => void) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: fn,
@@ -188,7 +188,7 @@ export const useOverrideDirective = () =>
 /** The owner's answer to a question a run asked with loop_ticket_unsure; a resume needs the answer as `note`. */
 export const useResolveUnsure = () =>
   useLoopMutation(
-    ({
+    async ({
       loopId,
       eventId,
       outcome,
@@ -198,5 +198,11 @@ export const useResolveUnsure = () =>
       eventId: string;
       outcome: LoopGateOutcome;
       note?: string;
-    }) => api.post(`/api/loops/${loopId}/events/${eventId}/resolve`, { outcome, ...(note && { note }) })
+    }) =>
+      (
+        await api.post<ILoopUnsureRow & { ticketSkipped?: boolean }>(`/api/loops/${loopId}/events/${eventId}/resolve`, {
+          outcome,
+          ...(note && { note }),
+        })
+      ).data
   );
