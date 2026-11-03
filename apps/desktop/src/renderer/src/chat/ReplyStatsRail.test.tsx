@@ -5,6 +5,7 @@ import type { ChatMessage, ChatReplyStats } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageThread } from './MessageThread';
 import { RAIL_ROW_HEIGHT, railReserve } from './ReplyStatsRail';
+import { REPLY_STATS } from './replyStats';
 import { reloadReplyStatsPrefs, setReplyStatShown } from './replyStatsPrefs';
 import type { TurnProgress } from './statusLine';
 
@@ -116,6 +117,34 @@ describe('the reply stats rail and its footer fallback', () => {
 
     expect(statValue('thinkingShare')).toBeUndefined();
     expect(statValue('thinking')).toBe('3.0s');
+  });
+
+  it('still draws the cost with every stat unticked', () => {
+    act(() => REPLY_STATS.forEach(id => setReplyStatShown(id, false)));
+    render(settled, { statsRail: true });
+
+    expect(rails()).toHaveLength(1);
+    expect(statValue('thinking')).toBeUndefined();
+    expect(statValue('cost')).toBe('3 credits');
+  });
+
+  it('reads as one labelled sentence to a screen reader, the rows hidden and the estimates explained', () => {
+    const thought = { ...stats, toolMs: 2000, derived: ['reasoningMs' as const] };
+    render([message('a1', { content: 'No.', stats: thought, usage: { outputTokens: 300, creditsUsed: 3 } })], {
+      statsRail: true,
+    });
+
+    const group = container.querySelector<HTMLElement>('[role="group"][aria-label="Reply stats"]');
+    const rows = group?.querySelector('[aria-hidden="true"]');
+    expect(rows?.contains(container.querySelector('[data-testid="chat-reply-stat-thinking"]'))).toBe(true);
+    const spoken = container.querySelector('[data-testid="chat-reply-stats-spoken"]')?.textContent ?? '';
+    expect(group?.contains(container.querySelector('[data-testid="chat-reply-stats-spoken"]'))).toBe(true);
+    expect(spoken.startsWith('Thinking time about 3.0s, estimated from the wait before the first output; ')).toBe(true);
+    expect(spoken).toContain('Total time 12.0s, includes 2.0s running tools and waiting for approval;');
+    expect(spoken.endsWith('; Cost 3 credits.')).toBe(true);
+    expect(container.querySelector('[data-testid="chat-reply-stat-total"]')?.getAttribute('title')).toBe(
+      'includes 2.0s running tools and waiting for approval'
+    );
   });
 
   it('holds a short reply open to its rail height, the cost row included, and only while the rail is drawn', () => {

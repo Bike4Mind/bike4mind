@@ -22,10 +22,10 @@ describe('railFitsBesideThread', () => {
   const threshold = CONTENT_MAX_WIDTH + 2 * (REPLY_STATS_RAIL_WIDTH + 2 * REPLY_STATS_RAIL_INSET - 24);
   const sidebar = { collapsed: 45, standard: 281, widest: 481 };
 
-  it('fits from a 1160px thread region', () => {
-    expect(threshold).toBe(1160);
-    expect(railFitsBesideThread(1160)).toBe(true);
-    expect(railFitsBesideThread(1159)).toBe(false);
+  it('fits from a 1176px thread region', () => {
+    expect(threshold).toBe(1176);
+    expect(railFitsBesideThread(1176)).toBe(true);
+    expect(railFitsBesideThread(1175)).toBe(false);
   });
 
   it('turns on at the 1280 default window only once the sidebar is collapsed', () => {
@@ -34,9 +34,9 @@ describe('railFitsBesideThread', () => {
   });
 
   it('needs a wider window for a wider sidebar', () => {
-    expect(railFitsBesideThread(1641 - sidebar.widest)).toBe(true);
-    expect(railFitsBesideThread(1640 - sidebar.widest)).toBe(false);
-    expect(railFitsBesideThread(1441 - sidebar.standard)).toBe(true);
+    expect(railFitsBesideThread(1657 - sidebar.widest)).toBe(true);
+    expect(railFitsBesideThread(1656 - sidebar.widest)).toBe(false);
+    expect(railFitsBesideThread(1457 - sidebar.standard)).toBe(true);
   });
 });
 

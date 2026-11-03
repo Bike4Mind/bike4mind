@@ -484,7 +484,7 @@ describe('the reply stats rail in the shell', () => {
   });
 
   it('drops both below the breakpoint, and the stats go back to the hover footer', async () => {
-    paneWidth(1159);
+    paneWidth(1175);
     await open('chatting', 'chat');
 
     expect(find('chat-toggle-reply-stats-btn')).toBeNull();

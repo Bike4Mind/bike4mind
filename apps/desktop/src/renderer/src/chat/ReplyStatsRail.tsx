@@ -9,6 +9,8 @@ import {
   messageStats,
   replyStats,
   REPLY_STAT_TEXT,
+  speakReplyStats,
+  statDetail,
   type ReplyStat,
   type ReplyStatId,
 } from './replyStats';
@@ -96,18 +98,18 @@ function useClock(startedAt: number | null): number {
 function RailRow({
   label,
   value,
-  estimate,
+  detail,
   testId,
 }: {
   label: string;
   value: string;
-  estimate?: string;
+  detail?: string | null;
   testId: string;
 }) {
   return (
     <Box
       sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 1 }}
-      title={estimate}
+      title={detail ?? undefined}
       data-testid={testId}
     >
       <Typography level="body-xs" textColor="text.tertiary" noWrap sx={{ minWidth: 0 }}>
@@ -125,12 +127,25 @@ function RailRow({
   );
 }
 
+const visuallyHiddenSx = {
+  position: 'absolute',
+  width: '1px',
+  height: '1px',
+  overflow: 'hidden',
+  clip: 'rect(0 0 0 0)',
+  whiteSpace: 'nowrap',
+} as const;
+
 /**
  * A reply's stats as margin notes left of it, top-aligned with its first line.
  *
  * Absolute inside the turn, so it scrolls and windows with its reply and moves nothing; the
  * sticky block inside keeps it in view down a long reply and lets it leave with the reply's end.
- * No card or border, so it reads as notes rather than as a panel competing with the text.
+ * No card, only a hairline on the reply's side, so it reads as notes set apart from the text
+ * rather than as a panel competing with it.
+ *
+ * A screen reader gets one sentence per reply in place of a label and a value per row, so a long
+ * thread reads as its replies with a short note after each.
  */
 export const ReplyStatsRail = memo(function ReplyStatsRail({
   message,
@@ -165,18 +180,31 @@ export const ReplyStatsRail = memo(function ReplyStatsRail({
         aria-label="Reply stats"
         // Native, as the hover footer's: a Joy tooltip per reply would mount a popper for every turn.
         title={title.length > 0 ? title.join('\n') : undefined}
-        sx={{ position: 'sticky', top: 12 }}
+        sx={{
+          position: 'sticky',
+          top: 12,
+          pr: 1.25,
+          borderRight: '1px solid',
+          borderColor: 'divider',
+          // Margin notes: a drag across the reply should not pick them up.
+          userSelect: 'none',
+        }}
       >
-        {shown.map(row => (
-          <RailRow
-            key={row.id}
-            label={REPLY_STAT_TEXT[row.id].label}
-            value={row.value}
-            {...(row.estimate ? { estimate: row.estimate } : {})}
-            testId={`chat-reply-stat-${row.id}`}
-          />
-        ))}
-        {credits && <RailRow label="Cost" value={credits} testId="chat-reply-stat-cost" />}
+        <Box aria-hidden>
+          {shown.map(row => (
+            <RailRow
+              key={row.id}
+              label={REPLY_STAT_TEXT[row.id].label}
+              value={row.value}
+              detail={statDetail(row)}
+              testId={`chat-reply-stat-${row.id}`}
+            />
+          ))}
+          {credits && <RailRow label="Cost" value={credits} testId="chat-reply-stat-cost" />}
+        </Box>
+        <Typography component="span" sx={visuallyHiddenSx} data-testid="chat-reply-stats-spoken">
+          {speakReplyStats(shown, credits)}
+        </Typography>
       </Box>
     </Box>
   );

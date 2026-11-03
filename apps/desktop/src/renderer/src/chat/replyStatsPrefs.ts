@@ -4,8 +4,11 @@ import { isReplyStatId, REPLY_STATS, type ReplyStatId } from './replyStats';
 
 /** The stats rail's width, in px. */
 export const REPLY_STATS_RAIL_WIDTH = 200;
-/** Gap between the rail and the reply's text, and between the rail and the pane's edge, in px. */
-export const REPLY_STATS_RAIL_INSET = 12;
+/**
+ * Gap between the rail and the reply's text, and between the rail and the pane's edge, in px.
+ * Wider than the text's own spacing, so a rail value never reads as the start of the reply's line.
+ */
+export const REPLY_STATS_RAIL_INSET = 16;
 
 /**
  * Whether the stats rail fits left of the reading column without covering its text; the left-hand
