@@ -10,6 +10,7 @@ import { z } from 'zod';
 
 const handler = adminApi({
   adminPermissions: { PATCH: 'settings:manage' },
+  auth: 'jwtOnly',
   requiredScopes: [ApiKeyScope.ADMIN],
 }).patch(
   asyncHandler(async (req, res) => {

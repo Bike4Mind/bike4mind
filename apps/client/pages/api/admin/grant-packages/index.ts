@@ -13,6 +13,7 @@ const listQuerySchema = z.object({
 
 const handler = adminApi({
   adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  auth: 'jwtOnly',
   requiredScopes: [ApiKeyScope.ADMIN],
 })
   .get(
