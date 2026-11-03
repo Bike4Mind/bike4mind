@@ -289,6 +289,43 @@ export const delegatedSpawnSchema: ToolSchema = {
     'carry the whole task. Each one costs credits: never start several variations of one task.',
 };
 
+export const QUEST_COMPLETE_TOOL_NAME = 'quest_complete';
+
+/**
+ * Marks the reply that calls it as the orchestrated job's final summary, which is what the app's
+ * finale reads. Explicit because an interim reply ("waiting on X") looks just like a final one.
+ */
+export const questComplete: ToolDefinition = {
+  schema: {
+    name: QUEST_COMPLETE_TOOL_NAME,
+    description:
+      'Declare the whole orchestrated job finished and mark THIS reply as its final summary for ' +
+      'the user. Call it once, after every agent you started has finished and their work is ' +
+      'combined, in the same reply as that summary. Never call it for an interim update. It is ' +
+      'refused while an agent is still working or waiting on approval, or while a background ' +
+      'process you or your agents started is still running.',
+    parameters: {
+      type: 'object',
+      properties: {
+        summary: {
+          type: 'string',
+          description: 'One or two sentences on what the job achieved; the full report is your reply.',
+        },
+      },
+      required: ['summary'],
+      additionalProperties: false,
+    },
+  },
+  async run(input, context) {
+    const quest = requireHost(context).quest;
+    if (!quest) throw new Error('quest_complete is only available in a conversation with Orchestrate on.');
+    requireString(input, 'summary');
+    const blocked = await quest.blockers();
+    if (blocked) throw new Error(blocked);
+    return 'Marked this reply as the final summary of the job. Do not call quest_complete again unless more work is done.';
+  },
+};
+
 export const sessionSuggestionUpdate: ToolDefinition = {
   schema: {
     name: 'session_suggestion_update',

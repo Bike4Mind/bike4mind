@@ -86,6 +86,17 @@ describe('toolsForRequest', () => {
     expect(spawnDescription(false)).toContain('only SUGGESTS');
   });
 
+  it('offers quest_complete only to a session that orchestrates agents', () => {
+    const names = (delegates: boolean) =>
+      toolsForRequest({ roots: [], media: false, host: true, ask: true, suggestions: !delegates, delegates }).map(
+        entry => entry.toolSchema.name
+      );
+
+    expect(names(true)).toContain('quest_complete');
+    expect(names(false)).not.toContain('quest_complete');
+    expect(findTool('quest_complete')).toBeDefined();
+  });
+
   it('offers the browser without a folder, a project or anything else', () => {
     // The browser rides on nothing: a Chat session with no grant at all still gets it.
     expect(names({ roots: [], media: false, host: false, browser: true })).toEqual(

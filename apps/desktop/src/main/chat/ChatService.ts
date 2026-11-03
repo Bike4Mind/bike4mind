@@ -205,6 +205,7 @@ import {
 } from './tools/ApprovalGate';
 import { inspectDirectory, inspectDirectoryRequest } from './tools/requestDirectoryTool';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
+import { QUEST_COMPLETE_TOOL_NAME } from './tools/hostTools';
 import { isWithin } from './tools/paths';
 import { BackgroundWake } from './backgroundWake';
 import type { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
@@ -3079,6 +3080,9 @@ export class ChatService {
           ...(promptCache ? { promptCache } : {}),
           ...(contextSnapshot ? { contextSnapshot } : {}),
           ...(deferred ? { deferred } : {}),
+          ...(toolCalls.some(call => call.name === QUEST_COMPLETE_TOOL_NAME && call.status === 'done')
+            ? { questComplete: true as const }
+            : {}),
         };
         await this.settleReply(sessionId, !!resume, historyScope, message);
         this.emit({
@@ -3093,6 +3097,7 @@ export class ChatService {
           ...(keepRounds ? { rounds: withoutSent(rounds) } : {}),
           ...(artifacts.length > 0 ? { artifacts } : {}),
           ...(promptCache ? { promptCache } : {}),
+          ...(message.questComplete ? { questComplete: true as const } : {}),
         });
       };
 
@@ -4278,7 +4283,10 @@ export class ChatService {
       // A spawned session has no suggestion tray, so it keeps the approval-gated start. With
       // Orchestrate on, the user's switch is the approval and a spawn starts at once.
       ...(orchestratesAgents(session)
-        ? { delegates: { placement: (title, prompt) => this.delegatedPlacement(project, title, prompt) } }
+        ? {
+            delegates: { placement: (title, prompt) => this.delegatedPlacement(project, title, prompt) },
+            quest: { blockers: () => this.questBlockers(session.id) },
+          }
         : session.origin
           ? {}
           : { suggestions: this.suggestionHost(session.id, project) }),
@@ -4713,6 +4721,43 @@ export class ChatService {
       }
       this.emit({ type: 'message', sessionId, message });
     }
+  }
+
+  /** What still keeps an orchestrating parent's job from being complete; see quest_complete. */
+  private async questBlockers(parentId: string): Promise<string | null> {
+    const sessions = await this.deps.store.list();
+    const agents: ChatSessionSummary[] = [];
+    const parents = new Set([parentId]);
+    // Descendants, so an agent's own agents count too; origin chains are acyclic by construction.
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const entry of sessions) {
+        const parent = entry.origin?.parentSessionId;
+        if (!parent || !parents.has(parent) || parents.has(entry.id)) continue;
+        parents.add(entry.id);
+        agents.push(entry);
+        grew = true;
+      }
+    }
+    if (agents.length === 0) return 'No agents were started from this conversation, so there is no job to complete.';
+
+    const reasons: string[] = [];
+    const working = agents.filter(
+      agent =>
+        this.hasTurnInFlight(agent.id) ||
+        this.launching.has(agent.id) ||
+        (this.deps.activity?.statusOf(agent.id) ?? 'done') !== 'done'
+    );
+    if (working.length > 0) {
+      reasons.push(`Still working or waiting on approval: ${working.map(agent => `"${agent.title}"`).join(', ')}.`);
+    }
+    const running = [parentId, ...agents.map(agent => agent.id)].flatMap(id =>
+      (this.deps.background?.list(id) ?? []).filter(process => process.status === 'running')
+    );
+    if (running.length > 0) {
+      reasons.push(`Background processes still running: ${running.map(process => process.command).join(', ')}.`);
+    }
+    return reasons.length > 0 ? `${reasons.join(' ')} Call quest_complete again once they have finished.` : null;
   }
 
   private toHostView(entry: ChatSessionSummary): HostSessionView {
@@ -6922,6 +6967,9 @@ const ORCHESTRATOR_GUIDANCE: readonly string[] = [
   'has stopped running, the app wakes this conversation with how each one ended, so end your',
   'turn after starting them rather than polling or sleeping. When woken, review their results',
   'and either carry the plan on or combine them into one final answer for the user.',
+  'When the whole job is done - every agent settled and their work combined - write the final',
+  'summary for the user and call quest_complete in that same reply. Never call it for an interim',
+  'update such as "waiting on the install"; it is refused while anything is still running.',
   'If the request is too small or does not split - a question, a single-step change - handle it',
   'directly and say so in one short sentence, for example:',
   '"This is small enough to handle directly, so I didn\'t start any agents."',

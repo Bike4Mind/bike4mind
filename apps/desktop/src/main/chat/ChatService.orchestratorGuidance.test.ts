@@ -48,6 +48,13 @@ describe('ORCHESTRATOR_GUIDANCE', () => {
     expect(text).toContain('rather than polling or sleeping');
   });
 
+  it('asks for quest_complete with the final summary, and never for an interim update', () => {
+    const text = build(['/work'], true, true);
+    expect(text).toContain('write the final');
+    expect(text).toContain('call quest_complete in that same reply');
+    expect(text).toContain('Never call it for an interim');
+  });
+
   it('is left out when the session does not orchestrate', () => {
     expect(build(['/work'], true, false)).not.toContain('coordinating agents');
   });

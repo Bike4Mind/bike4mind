@@ -693,6 +693,11 @@ export interface ChatMessage {
   stopReason?: string;
   /** Set instead of a reply when the turn failed; the message is kept so the thread shows why. */
   error?: string;
+  /**
+   * On an orchestrating parent's reply that called quest_complete successfully: this reply is the
+   * job's final summary, and the finale points at it. Absent on every other message.
+   */
+  questComplete?: true;
   /** Files the user attached to this turn. Only ever on a user message. */
   attachments?: ChatAttachment[];
   /**
@@ -1404,6 +1409,8 @@ export type ChatStreamEvent =
       /** `content` has had their markup removed, so these ride with it rather than following it. */
       artifacts?: ChatArtifact[];
       promptCache?: ChatPromptCacheStamp;
+      /** See ChatMessage.questComplete. */
+      questComplete?: true;
     }
   | {
       type: 'error';

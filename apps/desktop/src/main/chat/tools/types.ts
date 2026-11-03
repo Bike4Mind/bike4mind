@@ -511,6 +511,13 @@ export interface HostContext {
    * with `suggestions`.
    */
   delegates?: DelegationHost;
+  /** Set with `delegates`: whether the orchestrated job may be declared complete (quest_complete). */
+  quest?: QuestHost;
+}
+
+export interface QuestHost {
+  /** Why the job cannot be declared complete yet, readable by the model, or null when it can. */
+  blockers(): Promise<string | null>;
 }
 
 export interface DelegationHost {
