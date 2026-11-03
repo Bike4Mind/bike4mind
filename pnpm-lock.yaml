@@ -1735,9 +1735,9 @@ importers:
       diff:
         specifier: ^9.0.0
         version: 9.0.0
-      disposable-email-domains:
-        specifier: ^1.0.62
-        version: 1.0.62
+      disposable-domains:
+        specifier: ^2.0.7
+        version: 2.0.7
       file-type:
         specifier: ^22.1.0
         version: 22.1.0
@@ -1790,9 +1790,6 @@ importers:
         specifier: ^5.0.0
         version: 5.0.0(zod@4.6.6)
     devDependencies:
-      '@types/disposable-email-domains':
-        specifier: ^1.0.6
-        version: 1.0.6
       '@types/lodash':
         specifier: ^4.17.24
         version: 4.17.24
@@ -6371,9 +6368,6 @@ packages:
   '@types/deep-eql@4.0.2':
     resolution: {integrity: sha512-c9h9dVVMigMPc4bwTvC5dxqtqJZwQPePsWjPlpSOnojbor6pGqdk541lfA7AqFQr5pB1BRdq0juY9db81BwyFw==}
 
-  '@types/disposable-email-domains@1.0.6':
-    resolution: {integrity: sha512-+jHw0Q4ERuVYIChlUaoSm/VEuuNFeW7JgUU8Rwa9V1ym6q+gkGmBK5sGTDKqlfmsSdI5bFMHKlEatirPFvd8Xw==}
-
   '@types/dom-mediacapture-record@1.0.22':
     resolution: {integrity: sha512-mUMZLK3NvwRLcAAT9qmcK+9p7tpU2FHdDsntR3YI4+GY88XrgG4XiE7u1Q2LAN2/FZOz/tdMDC3GQCR4T8nFuw==}
 
@@ -8534,8 +8528,8 @@ packages:
     resolution: {integrity: sha512-9S6m9Sukh1cZNknO1CWAr2QAWsbKLafQiyM5gZ7VgXHeuaoUwffKN4q6NC4A/Mf9iiPlOXQEKW/Mv/mh9/3YFA==}
     hasBin: true
 
-  disposable-email-domains@1.0.62:
-    resolution: {integrity: sha512-LBQvhRw7mznQTPoyZbsmYeNOZt1pN5aCsx4BAU/3siVFuiM9f2oyKzUaB8v1jbxFjE3aYqYiMo63kAL4pHgfWQ==}
+  disposable-domains@2.0.7:
+    resolution: {integrity: sha512-kWAEB/UbnAR+kXcF34zXYWp70opLZbZdtpY63N68Cc4tLPPJonosx85x/DMenn/0E2DF66GjmxVSWjd/O5IfnA==}
 
   dmg-builder@26.15.3:
     resolution: {integrity: sha512-O3zJUFUYHJKgzPqioHxfxzBzlSC1eXCSr79gMSBKBP5AgjjpmrydMsMLotEg9fAJF36vdUncb+4ndRNxoPdlSQ==}
@@ -12947,6 +12941,9 @@ packages:
     resolution: {integrity: sha512-dRXchy+C0IgK8WPC6xvCHFRIWYUbqqdEIKPaKo/AcTUNzwLTK6AH7RjdLWsEZcAN/TBdtfUw3PYEgPr5VPr6ww==}
     engines: {node: '>=14.16'}
 
+  top-level-domains@1.0.11:
+    resolution: {integrity: sha512-kBORlQjwwukFiPwOXWvZW8OvRgix6m3cUGREZPdi9LFN4oqJ01bRLch//BdMeGVPte1pYp4BDLKWZgwMn69z/A==}
+
   totalist@3.0.1:
     resolution: {integrity: sha512-sf4i37nQ2LBx4m3wB74y+ubopq6W/dIzXg0FDGjsYnZHVa1Da8FH853wlL2gtUhg+xJXjfk3kUZS3BRoQeoQBQ==}
     engines: {node: '>=6'}
@@ -13365,6 +13362,10 @@ packages:
 
   v8-compile-cache-lib@3.0.1:
     resolution: {integrity: sha512-wa7YjyUGfNZngI/vtK0UHAN+lgDCxBPCylVXGp0zu59Fz5aiGtNXaq3DhIov063MorB+VfufLh3JlF2KdTK3xg==}
+
+  validator@13.15.35:
+    resolution: {integrity: sha512-TQ5pAGhd5whStmqWvYF4OjQROlmv9SMFVt37qoCBdqRffuuklWYQlCNnEs2ZaIBD1kZRNnikiZOS1eqgkar0iw==}
+    engines: {node: '>= 0.10'}
 
   vary@1.1.2:
     resolution: {integrity: sha512-BNGbWLfd0eUPabhkXUVm0j8uuvREyTh5ovRa/dyow/BqAbZJyC+5fU+IzQOzmAKzYqYRAISoRhdQr3eIZ/PXqg==}
@@ -18344,8 +18345,6 @@ snapshots:
 
   '@types/deep-eql@4.0.2': {}
 
-  '@types/disposable-email-domains@1.0.6': {}
-
   '@types/dom-mediacapture-record@1.0.22': {}
 
   '@types/emscripten@1.41.5':
@@ -20560,7 +20559,11 @@ snapshots:
 
   direction@2.0.1: {}
 
-  disposable-email-domains@1.0.62: {}
+  disposable-domains@2.0.7:
+    dependencies:
+      lodash: 4.18.1
+      top-level-domains: 1.0.11
+      validator: 13.15.35
 
   dmg-builder@26.15.3(electron-builder-squirrel-windows@26.15.3):
     dependencies:
@@ -26091,6 +26094,8 @@ snapshots:
       '@tokenizer/token': 0.3.0
       ieee754: 1.2.1
 
+  top-level-domains@1.0.11: {}
+
   totalist@3.0.1: {}
 
   tough-cookie@6.0.1:
@@ -26535,6 +26540,8 @@ snapshots:
   uuid@14.0.2: {}
 
   v8-compile-cache-lib@3.0.1: {}
+
+  validator@13.15.35: {}
 
   vary@1.1.2: {}
 
