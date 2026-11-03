@@ -16,7 +16,10 @@ import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 
 // Skill authorization tests must not depend on the user's login-shell startup.
-vi.mock('./tools/userPath', () => ({ resolveUserPath: async () => process.env.PATH ?? '' }));
+vi.mock('./tools/userPath', async importOriginal => ({
+  ...(await importOriginal<typeof import('./tools/userPath')>()),
+  resolveUserPath: async () => process.env.PATH ?? '',
+}));
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;

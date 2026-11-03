@@ -56,14 +56,44 @@ describe('csrfProtection', () => {
         expect(next).toHaveBeenCalledOnce();
       }
     );
+  });
 
-    it('does NOT exempt a Bearer JWT (no b4m_ prefix) - it still gets the origin checks', () => {
+  describe('cookie-less bearer JWT exemption', () => {
+    const jwt = 'Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln';
+    const foreign = { origin: 'https://evil.example.com', 'sec-fetch-site': 'cross-site' };
+
+    it('allows a bearer JWT with a foreign Origin and no cookies', () => {
+      const next = makeNext();
+      csrfProtection()(makeReq({ headers: { authorization: jwt, ...foreign } }), makeRes(), next);
+      expect(next).toHaveBeenCalledOnce();
+    });
+
+    it('still rejects a cookie-bearing request with a foreign Origin', () => {
       expect(() =>
-        csrfProtection()(
-          makeReq({ headers: { authorization: 'Bearer eyJ.jwt.token', 'sec-fetch-site': 'cross-site' } }),
-          makeRes(),
-          makeNext()
-        )
+        csrfProtection()(makeReq({ headers: { cookie: 'other=1', ...foreign } }), makeRes(), makeNext())
+      ).toThrow(ForbiddenError);
+    });
+
+    it.each(['b4m_rt', '__Host-b4m_rt', 'b4m_rt_admin'])(
+      'still rejects a bearer JWT when the %s cookie is present',
+      cookieName => {
+        expect(() =>
+          csrfProtection()(
+            makeReq({ headers: { authorization: jwt, cookie: `${cookieName}=abc.def`, ...foreign } }),
+            makeRes(),
+            makeNext()
+          )
+        ).toThrow(ForbiddenError);
+      }
+    );
+
+    it('keeps current behavior with no auth header, no cookie and a foreign Origin', () => {
+      expect(() => csrfProtection()(makeReq({ headers: foreign }), makeRes(), makeNext())).toThrow(ForbiddenError);
+    });
+
+    it('does not exempt a malformed bearer value', () => {
+      expect(() =>
+        csrfProtection()(makeReq({ headers: { authorization: 'Bearer notajwt', ...foreign } }), makeRes(), makeNext())
       ).toThrow(ForbiddenError);
     });
   });

@@ -57,6 +57,12 @@ class PackageTests(unittest.TestCase):
         self.assertTrue(all(obj['metadata']['annotations']['helm.sh/resource-policy'] == 'keep' for obj in claims))
         self.assertTrue(all(obj['spec']['type'] == 'ClusterIP' for obj in objects if obj['kind'] == 'Service'))
         self.assertTrue(all('helm.sh/hook' not in obj['metadata'].get('annotations', {}) for obj in objects))
+        # The browser-facing ws Service never carries the management port; that has its own Service.
+        services = {obj['metadata']['name']: obj for obj in objects if obj['kind'] == 'Service'}
+        self.assertEqual([port['port'] for port in services['test-ws']['spec']['ports']], [3001])
+        self.assertEqual([port['port'] for port in services['test-ws-management']['spec']['ports']], [3002])
+        config = next(obj for obj in objects if obj['kind'] == 'ConfigMap' and obj['metadata']['name'] == 'test-config')
+        self.assertEqual(config['data']['WEBSOCKET_MANAGEMENT_ENDPOINT'], 'http://test-ws-management:3002')
 
     def test_mongo_guard_precedes_mongod_and_can_resolve_unready_self(self):
         objects = self.render()

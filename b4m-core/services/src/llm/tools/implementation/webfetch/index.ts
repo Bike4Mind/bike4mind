@@ -39,6 +39,10 @@ interface WebFetchResult {
   durationMs: number;
   /** When set, the origin advertises an llms.txt/llms-full.txt worth suggesting for long-form content. */
   llmsTxtUrl?: string;
+  /** Hosted URL of a first-screen (viewport, not full-page) screenshot, exactly as Firecrawl returned
+   *  it. Only set when the caller asked for one and Firecrawl produced one; never on the PDF or
+   *  plain-fetch paths, so callers must treat absence as "use the text". */
+  screenshot?: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -170,6 +174,12 @@ type FirecrawlFetchOptions = {
   onlyMainContent?: boolean;
   /** Fetch live and ask Firecrawl not to cache the result (maxAge 0, storeInCache false). */
   fresh?: boolean;
+  /** Also ask Firecrawl for a first-screen (viewport) screenshot, returned as WebFetchResult.screenshot.
+   *  Firecrawl-only: PDFs and the keyless plain-fetch fallback get none, and a scrape that comes back
+   *  without one simply has no `screenshot` field. */
+  screenshot?: boolean;
+  /** Render as a phone, so the screenshot is the mobile one. Only sent together with `screenshot`. */
+  mobile?: boolean;
 };
 
 /**
@@ -249,12 +259,16 @@ export async function firecrawlFetch(
     `📥 WebFetch Tool: Scraping URL with Firecrawl${isPdf ? ' (PDF mode, extended timeout)' : ''}...`
   );
 
+  // PDFs get no screenshot: Firecrawl parses them directly, there is no page to render.
+  const wantScreenshot = !!options?.screenshot && !isPdf;
+
   // PDF URLs skip the JS wait action - Firecrawl parses them directly
-  const baseParams = {
-    formats: ['markdown' as const],
+  const baseParams: FirecrawlScrapeParams = {
+    formats: wantScreenshot ? ['markdown', 'screenshot'] : ['markdown'],
     timeout: timeoutMs,
     ...(options?.onlyMainContent !== undefined && { onlyMainContent: options.onlyMainContent }),
     ...(options?.fresh && { maxAge: 0, storeInCache: false }),
+    ...(wantScreenshot && options?.mobile && { mobile: true }),
   };
 
   const startedAt = Date.now();
@@ -279,7 +293,14 @@ export async function firecrawlFetch(
     throw new NoExtractableContentError();
   }
 
-  return buildWebFetchResult(result.markdown, result.metadata?.title, url, options?.offset, durationMs);
+  return buildWebFetchResult(
+    result.markdown,
+    result.metadata?.title,
+    url,
+    options?.offset,
+    durationMs,
+    wantScreenshot ? result.screenshot : undefined
+  );
 }
 
 /**
@@ -298,7 +319,8 @@ async function buildWebFetchResult(
   title: string | undefined,
   url: string,
   rawOffset: number | undefined,
-  durationMs: number
+  durationMs: number,
+  screenshot?: string
 ): Promise<WebFetchResult> {
   // Coerce a non-finite offset (e.g. a model passing offset:"abc" on the unvalidated tool/CLI
   // paths) to 0 rather than letting slice(NaN, NaN) return a silent empty string.
@@ -334,6 +356,7 @@ async function buildWebFetchResult(
     cap: WEB_FETCH_CONTENT_CAP,
     durationMs,
     llmsTxtUrl,
+    ...(screenshot && { screenshot }),
   };
 }
 

@@ -4,8 +4,20 @@ import { chmod, lstat, mkdir, open, readFile, rename, rm } from 'node:fs/promise
 import { connect } from 'node:net';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
-import { lockFile, ModelFileBusyError, OllamaRuntime, probeModelHost } from '@bike4mind/local-models';
+import type { HubManifest } from '@bike4mind/common/modelHub';
+import {
+  HuggingFaceHub,
+  loadCuratedManifest,
+  lockFile,
+  ModelFileBusyError,
+  ollamaLibraryLayers,
+  OllamaRuntime,
+  probeModelHost,
+} from '@bike4mind/local-models';
 import { createHostApp, type HostApp } from './app';
+import { createAuditLog } from './audit';
+import { createJobStore } from './jobStore';
+import { JobManager, type JobManagerOptions } from './jobs';
 import { defaultSocketDir, defaultStateDir, lookupGroupId, socketSpecs, type HostMode } from './paths';
 import { HostServer, type ListenerSpec, type ServerLimits } from './server';
 import { HOST_VERSION } from './version';
@@ -24,6 +36,8 @@ export interface ServeOptions {
   probe?: typeof probeModelHost;
   /** How often the state lock is read back; a host whose lock was taken over stops (ms). */
   lockCheckMs?: number;
+  /** Replaces job manager parts, for tests only; no flag or environment variable reaches this. */
+  jobs?: Partial<JobManagerOptions>;
 }
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
@@ -228,6 +242,9 @@ export async function serve(options: ServeOptions): Promise<void> {
   const probe = options.probe ?? probeModelHost;
   let app: HostApp | null = null;
   let server: HostServer | null = null;
+  const { audit, flush: flushAudit } = createAuditLog(stateDir, options.log);
+  const hub = new HuggingFaceHub();
+  let curated: HubManifest | null = null;
   try {
     app = createHostApp({
       mode: options.mode,
@@ -237,7 +254,21 @@ export async function serve(options: ServeOptions): Promise<void> {
       probe: () => probe({ ollamaUrl, runtime }),
       health: () => runtime.health(),
       log: options.log,
+      jobs: hooks =>
+        new JobManager({
+          runtime,
+          hub: () => hub,
+          libraryLayers: (ref, layerOptions) => ollamaLibraryLayers(ref, layerOptions),
+          curated: () => (curated ??= loadCuratedManifest(options.log)),
+          store: createJobStore(stateDir, options.log),
+          audit,
+          hostName: hostname(),
+          log: options.log,
+          ...hooks,
+          ...options.jobs,
+        }),
     });
+    await app.jobs?.load();
     server = new HostServer(app.handler, options.limits, options.log);
     for (const spec of await listenerSpecs(options, socketDir)) {
       await clearStaleSocket(spec.path);
@@ -251,8 +282,11 @@ export async function serve(options: ServeOptions): Promise<void> {
   } finally {
     clearInterval(lockCheck);
     options.signal.removeEventListener('abort', stop);
-    app?.close();
+    // No new requests while the jobs stop; the audit lines they write go out before exit.
     await server?.close();
+    await app?.jobs?.close();
+    await flushAudit();
+    app?.close();
     for (const { lock } of locks) await lock.release();
   }
   if (lockLost) throw lockLost;

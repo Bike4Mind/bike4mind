@@ -102,6 +102,18 @@ const toAttempt = (doc: IPaymentAttemptDocument | Record<string, unknown>): Paym
   };
 };
 
+/** Counts over payment attempts started since a point in time. Holds no user ids or card fingerprints. */
+export type PaymentAttemptWindowSummary = {
+  attempts: number;
+  succeeded: number;
+  failed: number;
+  radarBlocked: number;
+  /** Radar risk level elevated or highest. */
+  elevatedRisk: number;
+  hostingNetwork: number;
+  distinctCards: number;
+};
+
 class PaymentAttemptRepository {
   /** Records where a payment started. Idempotent per payment intent; never overwrites a later outcome. */
   async recordStart(input: {
@@ -252,6 +264,51 @@ class PaymentAttemptRepository {
       input.ipHash ? count({ ipHash: input.ipHash }) : null,
     ]);
     return { account, network };
+  }
+
+  async summarizeWindow(since: Date): Promise<PaymentAttemptWindowSummary> {
+    const countIf = (condition: unknown) => ({ $sum: { $cond: [condition, 1, 0] } });
+    const [row] = await PaymentAttemptModel.aggregate<PaymentAttemptWindowSummary>([
+      // A recordCheckoutStart row is visit-only; its real attempt arrives later under the payment intent id.
+      { $match: { createdAt: { $gte: since }, paymentIntentId: { $not: /^cs_/ } } },
+      {
+        $group: {
+          _id: null,
+          attempts: { $sum: 1 },
+          succeeded: countIf({ $eq: ['$outcome', 'succeeded'] }),
+          failed: countIf({ $eq: ['$outcome', 'failed'] }),
+          radarBlocked: countIf({ $eq: ['$radarBlocked', true] }),
+          elevatedRisk: countIf({ $in: ['$riskLevel', ['elevated', 'highest']] }),
+          hostingNetwork: countIf({ $eq: ['$hostingNetwork', true] }),
+          cards: { $addToSet: { $ifNull: ['$cardFingerprints', []] } },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          attempts: 1,
+          succeeded: 1,
+          failed: 1,
+          radarBlocked: 1,
+          elevatedRisk: 1,
+          hostingNetwork: 1,
+          distinctCards: {
+            $size: { $reduce: { input: '$cards', initialValue: [], in: { $setUnion: ['$$value', '$$this'] } } },
+          },
+        },
+      },
+    ]).option({ maxTimeMS: 5000 });
+    return (
+      row ?? {
+        attempts: 0,
+        succeeded: 0,
+        failed: 0,
+        radarBlocked: 0,
+        elevatedRisk: 0,
+        hostingNetwork: 0,
+        distinctCards: 0,
+      }
+    );
   }
 
   /** The cards and payment networks this account has used, for linking it to other accounts. */

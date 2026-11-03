@@ -3,7 +3,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { securityScanScheduleRepository, SecurityScanType } from '@bike4mind/database';
+import { securityScanScheduleRepository, SECURITY_SCAN_TYPES, SecurityScanType } from '@bike4mind/database';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { calculateNextRunTime } from '@bike4mind/server-utils/utils/scheduleCalculator';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
@@ -14,7 +14,7 @@ const FIXED_DAY_OF_WEEK = 0; // Sunday
 const FIXED_TIME_OF_DAY = '02:00'; // 2:00 AM UTC
 
 /** Supported security scan types. */
-const ScanTypeSchema = z.enum(['web', 'code', 'packages', 'secrets', 'cloud', 'waf']);
+const ScanTypeSchema = z.enum(SECURITY_SCAN_TYPES);
 
 /** POST body: only the enabled flag is toggleable; the schedule is fixed. */
 const UpdateScheduleSchema = z.object({
@@ -35,7 +35,7 @@ function validateStageName(stage: string): void {
  * Retrieve the current schedule configuration for a specific scan type.
  * Returns the schedule if it exists, or default values if not configured.
  *
- * @param scanType - Type of security scan (web, code, packages, secrets, cloud)
+ * @param scanType - Type of security scan (web, cloud)
  * @returns Schedule configuration including enabled status and next run time
  */
 const handler = adminApi({
@@ -53,7 +53,7 @@ const handler = adminApi({
     try {
       scanType = ScanTypeSchema.parse(req.query.scanType);
     } catch (error) {
-      throw new BadRequestError('Invalid scan type. Must be one of: web, code, packages, secrets, cloud, waf');
+      throw new BadRequestError('Invalid scan type. Must be one of: web, cloud');
     }
 
     const stage = resolveStage();
@@ -90,7 +90,7 @@ const handler = adminApi({
     try {
       scanType = ScanTypeSchema.parse(req.query.scanType);
     } catch (error) {
-      throw new BadRequestError('Invalid scan type. Must be one of: web, code, packages, secrets, cloud, waf');
+      throw new BadRequestError('Invalid scan type. Must be one of: web, cloud');
     }
 
     let validatedData: z.infer<typeof UpdateScheduleSchema>;

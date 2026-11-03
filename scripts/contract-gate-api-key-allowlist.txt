@@ -155,24 +155,16 @@ apps/client/pages/api/admin/release-notes/index.ts
 apps/client/pages/api/admin/retrieval-rate.ts
 apps/client/pages/api/admin/scoped-settings/effective.ts
 apps/client/pages/api/admin/scoped-settings/index.ts
-apps/client/pages/api/admin/security-dashboard/ai-assessment.ts
 apps/client/pages/api/admin/security-dashboard/attack-simulation-ingest.ts
 apps/client/pages/api/admin/security-dashboard/attack-simulation.ts
 apps/client/pages/api/admin/security-dashboard/cloud-prowler-ingest.ts
 apps/client/pages/api/admin/security-dashboard/cloud-prowler.ts
 apps/client/pages/api/admin/security-dashboard/cloud.ts
-apps/client/pages/api/admin/security-dashboard/code-semgrep-ingest.ts
-apps/client/pages/api/admin/security-dashboard/code.ts
 apps/client/pages/api/admin/security-dashboard/overview.ts
-apps/client/pages/api/admin/security-dashboard/packages-ingest.ts
-apps/client/pages/api/admin/security-dashboard/packages.ts
 apps/client/pages/api/admin/security-dashboard/run-attack-simulation.ts
-apps/client/pages/api/admin/security-dashboard/secrets-ingest.ts
-apps/client/pages/api/admin/security-dashboard/secrets.ts
 apps/client/pages/api/admin/security-dashboard/waf-blocked-requests.ts
 apps/client/pages/api/admin/security-dashboard/waf-logs-insights.ts
 apps/client/pages/api/admin/security-dashboard/waf-traffic.ts
-apps/client/pages/api/admin/security-dashboard/waf.ts
 apps/client/pages/api/admin/security-dashboard/web-owasp-ingest.ts
 apps/client/pages/api/admin/security-dashboard/web.ts
 apps/client/pages/api/admin/security-scan-schedule/[scanType].ts
@@ -589,6 +581,7 @@ apps/client/pages/api/otc/form-token.ts  # deliberately unauthenticated (auth: f
 apps/client/pages/api/otc/send.ts
 apps/client/pages/api/otc/verify.ts
 apps/client/pages/api/overwatch/v1/events.ts
+apps/client/pages/api/partners/rewards/grant.ts  # confined, admin-provisioned partner scope (rewards:grant) kept out of the public OpenAPI; server-to-server only, session callers refused in the handler
 apps/client/pages/api/ping.ts
 apps/client/pages/api/projects/[id]/files.ts
 apps/client/pages/api/projects/[id]/index.ts

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, type networkInterfaces } from 'node:os';
 import { dirname, join } from 'node:path';
 import { scanLinuxGpus } from './gpus';
 import type { ExecLike } from './hardware';
@@ -148,6 +148,28 @@ describe('probeModelHost', () => {
     });
   });
 
+  it('reads the injected os interfaces and host name to decide the Ollama URL is this machine', async () => {
+    const os = (address: string) => ({
+      totalmem: () => 64 * GiB,
+      hostname: () => 'box',
+      networkInterfaces: () =>
+        ({ eth0: [{ address, family: 'IPv4' }] }) as unknown as ReturnType<typeof networkInterfaces>,
+    });
+    const ollamaUrl = 'http://192.168.1.20:11434';
+    const listening: ExecLike = async (command, args) => {
+      if (command === 'systemctl' && args[0] !== '--user') {
+        return { stdout: SHOW.replace('Environment=', 'Environment=OLLAMA_HOST=0.0.0.0 ') };
+      }
+      throw new Error(`${command} not found`);
+    };
+    const own = await probeModelHost(options(tree(FILES), { ollamaUrl, exec: listening, os: os('192.168.1.20') }));
+    expect(own.host.ollama.install.type).toBe('official');
+    expect(own.settings.readable).toBe(true);
+    const other = await probeModelHost(options(tree(FILES), { ollamaUrl, exec: listening, os: os('10.9.9.9') }));
+    expect(other.host.ollama.install.type).toBe('unknown');
+    expect(other.settings.readable).toBe(false);
+  });
+
   it('reports an unreachable Ollama with no loaded models and unreadable settings for an unknown install', async () => {
     const offline = runtime(false);
     const rootDir = tree({ ...FILES, 'proc/812/comm': 'bash\n' });
@@ -248,6 +270,7 @@ describe('probeModelHost', () => {
     };
     const result = await probeModelHost(options(tree(files), { exec: unitExec }));
     expect(result.host.ollama.store).toMatchObject({ path: '/srv/ollama-home/.ollama/models', source: 'service-home' });
+    expect(result.ollamaHome).toBe('/srv/ollama-home');
     const text = JSON.stringify(result);
     expect(text).not.toContain('sk-secret');
     expect(text).not.toContain('PATH=');

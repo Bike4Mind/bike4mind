@@ -64,6 +64,11 @@ describe('assertOutboundActionAllowed', () => {
     expect(error.message).not.toMatch(/\bAI\b/);
   });
 
+  it('lets an old free account through when account age no longer lifts API key limits', async () => {
+    settingsMap.mockResolvedValue({ apiKeyAccountAgeTrustsKeys: 'false' });
+    await expect(assertOutboundActionAllowed(old)).resolves.toBeUndefined();
+  });
+
   it('still blocks a moderated user when the trust gate is off', async () => {
     settingsMap.mockResolvedValue({ apiKeyTrustGateEnabled: 'false' });
     expect((await rejection(assertOutboundActionAllowed({ ...old, isModerated: true }))).statusCode).toBe(403);

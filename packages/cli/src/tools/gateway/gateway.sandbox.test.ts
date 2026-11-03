@@ -2,7 +2,7 @@
  * Wrapper-level tests for the gateway's sandbox pre-step, file-change notification and tool
  * routing, driven through wrapToolWithPermission with stub collaborators.
  */
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, afterAll } from 'vitest';
 import path from 'path';
 import { promises as fs, existsSync } from 'fs';
 import { tmpdir } from 'os';
@@ -32,6 +32,16 @@ function createMockTool(name: string, fn?: (args: unknown) => Promise<string>): 
     },
   };
 }
+
+const tempDirs: string[] = [];
+async function tempDir(prefix: string): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
+afterAll(async () => {
+  await Promise.all(tempDirs.map(dir => fs.rm(dir, { recursive: true, force: true })));
+});
 
 describe('wrapToolWithPermission sandbox cwd confinement', () => {
   const noopPrompt = vi.fn(async () => ({ action: 'allow-session' as const }));
@@ -115,8 +125,8 @@ describe('wrapToolWithPermission sandbox cwd confinement', () => {
     // bind a writable root outside the workspace: realpathSync(cwd) resolves the link
     // before the allow-list check, so confinement is on the real target, not the lexical path.
     const orchestrator = createOrchestrator();
-    const workspace = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), 'b4m-ws-')));
-    const outside = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), 'b4m-out-')));
+    const workspace = await fs.realpath(await tempDir('b4m-ws-'));
+    const outside = await fs.realpath(await tempDir('b4m-out-'));
     const link = path.join(workspace, 'escape');
     await fs.symlink(outside, link);
     const { wrapped, toolFn } = wrap(orchestrator, [workspace]);
@@ -132,7 +142,7 @@ describe('wrapToolWithPermission sandbox cwd confinement', () => {
   // profile, so cleanup is observable via the filesystem rather than a bare [].
   async function orchestratorWithProfile(): Promise<{ orchestrator: SandboxOrchestrator; profile: string }> {
     const orchestrator = createOrchestrator();
-    const profile = path.join(await fs.mkdtemp(path.join(tmpdir(), 'b4m-sb-')), 'sandbox.sb');
+    const profile = path.join(await tempDir('b4m-sb-'), 'sandbox.sb');
     await fs.writeFile(profile, '(version 1)');
     (orchestrator.shouldSandbox as ReturnType<typeof vi.fn>).mockReturnValue({
       type: 'sandbox',
@@ -234,7 +244,7 @@ describe('wrapToolWithPermission sandbox cwd confinement', () => {
     // Pins the writable-root threading: without `cwd,` in sandboxedArgs the tool would
     // run in the unresolved (symlinked) path, diverging from the profile's baked root.
     const orchestrator = createOrchestrator();
-    const workspace = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), 'b4m-ws-')));
+    const workspace = await fs.realpath(await tempDir('b4m-ws-'));
     const realTarget = path.join(workspace, 'real');
     await fs.mkdir(realTarget);
     const link = path.join(workspace, 'link');
@@ -287,7 +297,7 @@ describe('wrapToolWithPermission sandbox escalation', () => {
   });
 
   async function setup(options: { sandboxAutoAllow?: boolean; permissionManager?: PermissionManager } = {}) {
-    const profile = path.join(await fs.mkdtemp(path.join(tmpdir(), 'b4m-sb-')), 'sandbox.sb');
+    const profile = path.join(await tempDir('b4m-sb-'), 'sandbox.sb');
     await fs.writeFile(profile, '(version 1)');
     const orchestrator = {
       shouldSandbox: vi.fn(() => ({

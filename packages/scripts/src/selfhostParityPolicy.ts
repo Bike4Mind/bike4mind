@@ -693,6 +693,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     '7c55bfdeaea409d972ba757cc5e3c8d50a5a0d1e8fd8629afab3473284bbbd6e'
   ),
   broker(
+    'queue:infra/apiProbeDetectorDeadLetter.ts:apiProbeDetectorDlq',
+    'f353ac779308cb585b976a6bd5e80854661ced29c7569618b666faf1fb7e6d61'
+  ),
+  broker(
     'queue:infra/spendMonitorDeadLetter.ts:spendMonitorDlq',
     '1cf26770977879e377a4c62a5d06cc22ad09892a0a144d012deb4070368f2223'
   ),
@@ -970,6 +974,20 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
   hostedOnly(
+    'schedule:infra/apiProbeDetector.ts:apiProbeDetector',
+    '37284ab76c0c69632160d2a02c67b9547fc36ef1f806ccd69a5939bafc8e0cee',
+    'Queries the hosted server function CloudWatch log group; a portable deployment has none.',
+    [
+      'bedrock:*',
+      'cloudwatch:DescribeAlarms',
+      'cloudwatch:GetMetricData',
+      'cloudwatch:ListMetrics',
+      'cloudwatch:PutMetricData',
+      'events:PutEvents',
+      'lambda:InvokeFunction',
+    ]
+  ),
+  hostedOnly(
     'schedule:infra/cron.ts:youngAccountSpendAlert',
     '0f351e3081a732ae7ebcb35c048e4d5a5031666986942fbba872f472c6fa7ad2',
     'Hosted production abuse alert to Slack; not applicable to a portable deployment.'
@@ -1036,7 +1054,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    'f09d95b46de0dbba66bf529743630b750910f0291784ceec0af7f13445a409ad',
+    'a770f99a575fcdeb10ba6c48e81497217cc5646cef095e0dd257dc9a4ce4a4a5',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gap('service:infra/searxng.ts:Searxng', '16fc0b23bc4d075e5c4e98cbb502ff6dfc37aac7fbf9bd4f7429cd4202b2f370'),

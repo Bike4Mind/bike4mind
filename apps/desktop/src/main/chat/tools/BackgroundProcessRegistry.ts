@@ -2,9 +2,10 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import type { BackgroundProcessInfo, BackgroundProcessStatus } from '@shared/chat';
-import { PARENT_WATCH_FD, wrapWithParentWatchdog } from './backgroundScript';
+import { parentWatchStdioIndex, wrapWithParentWatchdog } from './backgroundScript';
 import { OutputBuffer, type OutputStream } from './outputBuffer';
 import { commandEnv, launchCommand } from './commandLaunch';
+import { commandExit, signalCommandTree, signalCommandTreesSync, type CommandTree } from './commandTree';
 import type { SandboxedCommand } from './sandbox';
 
 /** Retained per process. The tail is what matters for a watcher; see OutputBuffer. */
@@ -119,7 +120,8 @@ export class BackgroundProcessLimit extends Error {
  *
  * Three independent mechanisms enforce that guarantee, because each covers a hole in the others:
  *
- *  1. `shutdown()` on quit - SIGTERM the groups, wait, then SIGKILL. The polite path.
+ *  1. `shutdown()` on quit - SIGTERM the groups, wait, then SIGKILL. The polite path; on Windows
+ *     the first signal already force-ends each tagged tree.
  *  2. `shutdownSync()` on `will-quit` - a synchronous SIGKILL sweep, because that handler cannot
  *     await and a quit that races the grace period must not leave anything behind.
  *  3. The in-child watchdog (see backgroundScript.ts) - the only one that survives main being
@@ -131,7 +133,8 @@ export class BackgroundProcessLimit extends Error {
  * stale handle the model could call `bash_output` on is worse than no handle at all.
  *
  * Signals go to the process GROUP (`-pgid`), never the bare pid: signalling the shell alone
- * would leave whatever it spawned running.
+ * would leave whatever it spawned running. Windows has no groups to signal; there every signal
+ * force-ends the command's tagged process tree (see commandTree.ts).
  */
 export class BackgroundProcessRegistry {
   private readonly processes = new Map<string, Tracked>();
@@ -148,17 +151,19 @@ export class BackgroundProcessRegistry {
 
     const info = this.newInfo(request.sessionId, request.command, request.cwd, new Date().toISOString());
 
+    const watchIndex = parentWatchStdioIndex();
     let child: ChildProcess;
     try {
-      const env = await commandEnv({ B4M_DESKTOP_BACKGROUND: '1' });
+      const env = await commandEnv(launch, { B4M_DESKTOP_BACKGROUND: '1' });
       child = spawn(launch.executable, launch.args, {
         cwd: request.cwd,
         // Detached so the child leads its own process group: that is what makes one signal
         // reach the command's whole tree rather than just the shell.
         detached: true,
-        // fd 3 is the watch pipe the child blocks on. Its write end stays open in this process
-        // for exactly as long as this process lives, which is the entire mechanism.
-        stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
+        windowsHide: true,
+        // The watch pipe the child blocks on. Its write end stays open in this process for
+        // exactly as long as this process lives, which is the entire mechanism.
+        stdio: watchIndex === 0 ? ['pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe', 'pipe'],
         env,
       });
     } catch (err) {
@@ -170,8 +175,8 @@ export class BackgroundProcessRegistry {
 
     // Never written to, only held open. Unref'd so an idle pipe cannot be the thing keeping
     // the app alive at quit.
-    child.stdio[PARENT_WATCH_FD]?.on('error', () => undefined);
-    (child.stdio[PARENT_WATCH_FD] as { unref?(): void } | undefined)?.unref?.();
+    child.stdio[watchIndex]?.on('error', () => undefined);
+    (child.stdio[watchIndex] as { unref?(): void } | undefined)?.unref?.();
 
     this.processes.set(info.id, tracked);
     this.events.status(request.sessionId, { ...info });
@@ -255,7 +260,8 @@ export class BackgroundProcessRegistry {
         signal: NodeJS.Signals | null,
         error?: string
       ): void => {
-        this.finish(tracked, status, code, signal, error);
+        const exit = commandExit(code, signal, child);
+        this.finish(tracked, status, exit.code, exit.signal, error);
         resolve();
       };
       const ended = (): BackgroundProcessStatus => (tracked.info.status === 'killed' ? 'killed' : 'exited');
@@ -367,7 +373,10 @@ export class BackgroundProcessRegistry {
     return tracked.buffer.tail(maxChars);
   }
 
-  /** SIGTERM the group, SIGKILL after a grace period. Resolves once it is actually gone. */
+  /**
+   * SIGTERM the group, SIGKILL after a grace period; on Windows the tagged tree is force-ended at
+   * once. Resolves once it is actually gone.
+   */
   async kill(id: string, sessionId: string): Promise<BackgroundProcessInfo | null> {
     const tracked = this.processes.get(id);
     if (!tracked || tracked.info.sessionId !== sessionId) return null;
@@ -422,8 +431,11 @@ export class BackgroundProcessRegistry {
    */
   shutdownSync(): void {
     this.shuttingDown = true;
+    const trees = [...this.processes.values()]
+      .map(tracked => this.treeOf(tracked))
+      .filter((tree): tree is CommandTree => tree !== null);
+    signalCommandTreesSync(trees, 'SIGKILL');
     for (const tracked of this.processes.values()) {
-      this.signalGroup(tracked, 'SIGKILL');
       if (tracked.killTimer) clearTimeout(tracked.killTimer);
       if (tracked.emitTimer) clearTimeout(tracked.emitTimer);
     }
@@ -487,13 +499,13 @@ export class BackgroundProcessRegistry {
     tracked.killTimer.unref?.();
   }
 
+  private treeOf(tracked: Tracked): CommandTree | null {
+    return tracked.pgid === null ? null : { pid: tracked.pgid, child: tracked.child, launch: tracked.launch };
+  }
+
   private signalGroup(tracked: Tracked, signal: NodeJS.Signals): void {
-    if (tracked.pgid === null) return;
-    try {
-      process.kill(-tracked.pgid, signal);
-    } catch {
-      // ESRCH: already gone. Nothing to do, and nothing worth telling the user about.
-    }
+    const tree = this.treeOf(tracked);
+    if (tree) signalCommandTree(tree, signal);
   }
 
   private finish(

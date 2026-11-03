@@ -54,6 +54,23 @@ test.describe('Admin - Navigation', () => {
     }));
     expect(scrollWidth).toBe(clientWidth);
   });
+
+  test('invite center deep links land on their section', async ({ page, basePage, adminPage }) => {
+    // The legacy waitlist slug still works and keeps the section.
+    await page.goto('/admin?tab=subscribers&inviteSection=pending');
+    await page.waitForLoadState('domcontentloaded');
+    await basePage.dismissModals();
+
+    await expect(adminPage.page.getByTestId('invite-center-section-pending')).toBeVisible({
+      timeout: TIMEOUTS.NAVIGATION,
+    });
+    await expect(page).toHaveURL(/tab=waitlist/);
+    await expect(page).toHaveURL(/inviteSection=pending/);
+
+    await adminPage.page.getByTestId('invite-center-sections-waitlist-btn').click();
+    await expect(adminPage.page.getByTestId('invite-center-section-waitlist')).toBeVisible();
+    await expect(page).not.toHaveURL(/inviteSection=/);
+  });
 });
 
 // Independent tests - can run in parallel within workers
