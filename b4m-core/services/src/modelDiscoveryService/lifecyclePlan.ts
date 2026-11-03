@@ -642,13 +642,15 @@ function heldSuggestion(
   };
 }
 
+type SnapshotRowInput = Extract<IModelCatalogRowInput, { source: 'seed' | 'discovery' }>;
+
 /**
  * A held model's planned row with this run's lifecycle claim taken back out. The row supersedes
  * the discovery row in force, so where that row carried the lifecycle group the in-force lifecycle
  * is restated; otherwise the group stays with whichever row already backs it.
  */
-function heldRow(row: IModelCatalogRowInput, input: PlanContext): IModelCatalogRowInput {
-  const withoutClaim: IModelCatalogRowInput = {
+function heldRow(row: SnapshotRowInput, input: PlanContext): SnapshotRowInput {
+  const withoutClaim: SnapshotRowInput = {
     ...row,
     patch: omit(row.patch, 'lifecycle'),
     ownedGroups: row.ownedGroups.filter(group => group !== 'lifecycle'),
