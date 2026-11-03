@@ -22,6 +22,8 @@ const handler = nextRouteForContract(searchFilesContract, {
     ...(q !== undefined && { search: q }),
     ...(type !== undefined && { filters: { type } }),
     pagination: { page: 1, limit },
+    // toPublicFile never reads content, chunks or vector, and up to 100 rows of them is a large read.
+    options: { excludeContent: true },
   });
 
   res.setHeader('Cache-Control', 'private, no-store');

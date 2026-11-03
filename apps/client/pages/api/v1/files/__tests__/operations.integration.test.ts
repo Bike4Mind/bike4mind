@@ -211,13 +211,17 @@ describe('GET /api/v1/files/search', () => {
       search: 'ref',
       filters: { type: 'image' },
       pagination: { page: 1, limit: 5 },
+      options: { excludeContent: true },
     });
   });
 
   it('omits search and filters the caller did not send', async () => {
     withScopes([ApiKeyScope.READ_FILES]);
     await search();
-    expect(mockSearch).toHaveBeenCalledWith(expect.anything(), { pagination: { page: 1, limit: 25 } });
+    expect(mockSearch).toHaveBeenCalledWith(expect.anything(), {
+      pagination: { page: 1, limit: 25 },
+      options: { excludeContent: true },
+    });
   });
 
   it('is exempt from the daily quota', async () => {
