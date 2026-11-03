@@ -3,7 +3,7 @@ import { isLocalModel } from '@shared/chat';
 
 // Bedrock cross-region inference profiles prefix the foundation-model id with a geography. Must stay
 // in sync with BEDROCK_PROFILE_PREFIX in apps/client/app/utils/pickerModelDedupe.ts.
-const BEDROCK_PROFILE_PREFIX = /^(global|us-gov|us|eu|apac|jp|au|ca)\./;
+const BEDROCK_PROFILE_PREFIX = /^(global|us-gov|us|eu|apac|jp|au|ca)\./i;
 
 /**
  * Which rows are one model on one provider: a Bedrock foundation id and its `global.`/`us.`/... profiles
@@ -11,13 +11,14 @@ const BEDROCK_PROFILE_PREFIX = /^(global|us-gov|us|eu|apac|jp|au|ca)\./;
  */
 export function routeVariantKey(model: Pick<ChatModelOption, 'id' | 'backend'>): string {
   if (model.backend !== 'bedrock' || isLocalModel(model.id)) return model.id;
-  return `bedrock:${model.id.replace(BEDROCK_PROFILE_PREFIX, '')}`;
+  return `bedrock:${model.id.toLowerCase().replace(BEDROCK_PROFILE_PREFIX, '')}`;
 }
 
 /** Lower wins. Same order as the web picker's routePreference: global, then a geography, then the bare id. */
 function routeRank(model: ChatModelOption): number {
-  if (model.id.startsWith('global.')) return 0;
-  return BEDROCK_PROFILE_PREFIX.test(model.id) ? 1 : 2;
+  const id = model.id.toLowerCase();
+  if (id.startsWith('global.')) return 0;
+  return BEDROCK_PROFILE_PREFIX.test(id) ? 1 : 2;
 }
 
 function preference(model: ChatModelOption, activeModelId: string | null): number[] {

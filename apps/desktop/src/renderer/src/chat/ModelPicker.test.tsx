@@ -465,6 +465,29 @@ describe('ModelPicker Bedrock route variants', () => {
     typeInto(filterBox(), 'fable 5.1');
     expect(rows()).toEqual(['Claude Fable 5.1bedrock']);
   });
+
+  it('picks the shown variant when Enter takes a merged row as the top match', async () => {
+    const { onSelect } = mount([...fable, ...MODELS], 'claude-fable-5-1');
+
+    typeInto(filterBox(), 'fable bedrock');
+    expect(rows()[0]).toBe('Claude Fable 5.1bedrock');
+    await act(async () => key(filterBox(), 'Enter'));
+
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith('global.anthropic.claude-fable-5-1');
+  });
+
+  it('confirms the shown variant when a local conversation moves to a merged row', async () => {
+    const qwen: ChatModelOption = { id: 'local:ollama:qwen3:8b', name: 'qwen3:8b' };
+    const { onSelect } = mount([qwen, ...fable, ...MODELS], qwen.id, undefined, { hasHistory: true });
+
+    typeInto(filterBox(), 'fable bedrock');
+    await act(async () => key(filterBox(), 'Enter'));
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(el('model-picker-hosted-dialog').textContent).toContain('Claude Fable 5.1 (bedrock)');
+
+    act(() => el('model-picker-hosted-confirm-btn').click());
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith('global.anthropic.claude-fable-5-1');
+  });
 });
 
 describe('ModelPicker filters', () => {

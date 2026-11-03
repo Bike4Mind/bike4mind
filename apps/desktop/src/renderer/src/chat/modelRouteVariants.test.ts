@@ -27,6 +27,9 @@ describe('routeVariantKey', () => {
     expect(routeVariantKey({ id: 'anthropic.claude-fable-5', backend: 'bedrock' })).not.toBe(
       routeVariantKey({ id: 'anthropic.claude-fable-5-1', backend: 'bedrock' })
     );
+    expect(routeVariantKey({ id: 'Global.Anthropic.Claude-Fable-5', backend: 'bedrock' })).toBe(
+      routeVariantKey({ id: 'anthropic.claude-fable-5', backend: 'bedrock' })
+    );
     expect(routeVariantKey({ id: 'global.claude-x', backend: 'anthropic' })).not.toBe(
       routeVariantKey({ id: 'claude-x', backend: 'anthropic' })
     );
@@ -75,6 +78,9 @@ describe('mergeRouteVariants', () => {
       'global.anthropic.claude-opus-5',
     ]);
     expect(ids(mergeRouteVariants([variant('anthropic.claude-opus-5')], null))).toEqual(['anthropic.claude-opus-5']);
+    expect(
+      ids(mergeRouteVariants([variant('anthropic.claude-opus-5'), variant('GLOBAL.anthropic.claude-opus-5')], null))
+    ).toEqual(['GLOBAL.anthropic.claude-opus-5']);
   });
 
   it('leaves other providers, snapshots and local models as they are', () => {

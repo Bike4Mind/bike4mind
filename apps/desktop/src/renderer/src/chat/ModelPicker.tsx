@@ -83,10 +83,8 @@ export function groupByServer(models: readonly ChatModelOption[]): ModelGroup[] 
 }
 
 /**
- * Newest release first, undated after, each run in its incoming order - except that a model listed
- * under several providers (one name) keeps its rows together so they read as one choice, dated by
- * the newest of them, since one route's listing can lack the date another carries.
- * Only hosted models carry dates; local ones keep catalog order inside their own groups.
+ * Newest first, undated after, else incoming order. Hosted rows sharing a name sort together on the
+ * newest date among them, since one route can lack it; local rows keep catalog order.
  */
 export function sortByRecency(models: readonly ChatModelOption[]): ChatModelOption[] {
   const firstOfName = new Map<string, number>();
