@@ -77,6 +77,11 @@ const deferred = <T,>() => {
   return { promise, resolve, reject };
 };
 
+/** The first-run seed fails, which leaves the window with no conversation at all. */
+const seedFails = () => createSession.mockRejectedValueOnce(new Error('seed failed'));
+
+const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+
 /** Session reads for these ids wait on the promise, so a test can order the load against a share. */
 const heldLoads = new Map<string, Promise<void>>();
 
@@ -265,8 +270,7 @@ describe('Add folder in a Chat composer', () => {
 
   it('with no conversation yet, picks first and only then starts a chat that gets the folder', async () => {
     stubBridge([]);
-    // The first-run seed never lands, which leaves the window with no conversation at all.
-    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    seedFails();
     await renderShell();
     expect(byTestId<HTMLTextAreaElement>('chat-composer-input')?.disabled).toBe(true);
     expect(createSession).toHaveBeenCalledTimes(1);
@@ -449,7 +453,7 @@ describe('Add folder in a Chat composer', () => {
 
   it('words a picker failure and a chat-creation failure differently, without the IPC wrapper', async () => {
     stubBridge([]);
-    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    seedFails();
     await renderShell();
 
     pickProjectDirectory.mockRejectedValueOnce(
@@ -472,7 +476,7 @@ describe('Add folder in a Chat composer', () => {
 
   it('clears the alert when a retry starts, even if the picker is then cancelled', async () => {
     stubBridge([]);
-    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    seedFails();
     createSession.mockRejectedValueOnce(new Error('disk full'));
     await renderShell();
 
@@ -489,10 +493,9 @@ describe('Add folder in a Chat composer', () => {
     const stored = stubBridge([]);
     const seed = deferred<{ session: ChatSessionSummary }>();
     createSession.mockImplementationOnce(() => seed.promise);
-    createSession.mockRejectedValueOnce(new Error('disk full'));
     await renderShell();
 
-    pickProjectDirectory.mockResolvedValueOnce(NOTES);
+    pickProjectDirectory.mockRejectedValueOnce(new Error('dialog unavailable'));
     await addFolderFromMenu();
     expect(byTestId('chat-add-folder-error')).not.toBeNull();
 
@@ -505,7 +508,7 @@ describe('Add folder in a Chat composer', () => {
 
   it('does not leave the Chat alert up in a Code pane with no sessions', async () => {
     stubBridge([]);
-    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    seedFails();
     createSession.mockRejectedValueOnce(new Error('disk full'));
     await renderShell();
 
@@ -520,7 +523,7 @@ describe('Add folder in a Chat composer', () => {
 
   it('with no conversation yet, ignores a second Add folder while the first is still under way', async () => {
     stubBridge([]);
-    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    seedFails();
     await renderShell();
 
     const picked = deferred<string | null>();
@@ -538,7 +541,7 @@ describe('Add folder in a Chat composer', () => {
 
   it('with no conversation yet, says why no chat was started and lets the user try again', async () => {
     stubBridge([]);
-    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    seedFails();
     createSession.mockRejectedValueOnce(new Error('disk full'));
     await renderShell();
 
@@ -554,30 +557,31 @@ describe('Add folder in a Chat composer', () => {
     expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
   });
 
-  it('does not let a slow first-run seed replace the chat Add folder started', async () => {
+  it('does not let a slow first-run seed replace a chat the user started with New', async () => {
     const stored = stubBridge([]);
     const seed = deferred<{ session: ChatSessionSummary }>();
     createSession.mockImplementationOnce(() => seed.promise);
     await renderShell();
 
-    pickProjectDirectory.mockResolvedValue(NOTES);
-    addContextDirectory.mockResolvedValue({ status: 'added', path: NOTES, session: summary('fresh', 'chat', [NOTES]) });
-    await addFolderFromMenu();
-    expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
-
+    const other = summary('other', 'chat', undefined, 'Other');
+    stored.set('other', other);
+    createSession.mockResolvedValueOnce({ session: other });
+    await act(async () => byTestId('chat-new-session-btn')?.click());
+    await act(async () => undefined);
     const seeded = summary('seeded', 'chat', undefined, 'Seeded');
     stored.set('seeded', seeded);
     await act(async () => seed.resolve({ session: seeded }));
     await act(async () => undefined);
-    expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
+
+    addContextDirectory.mockResolvedValue({ status: 'added', path: NOTES, session: summary('other', 'chat', [NOTES]) });
+    await addFolderFromMenu();
+    expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('other', undefined);
   });
 
-  it('shares into the chat a slow seed opened while Add folder made its own, and deletes the empty one', async () => {
+  it('joins a first-run seed still in flight when the folder is picked, making no second chat', async () => {
     const stored = stubBridge([]);
     const seed = deferred<{ session: ChatSessionSummary }>();
     createSession.mockImplementationOnce(() => seed.promise);
-    const made = deferred<{ session: ChatSessionSummary }>();
-    createSession.mockImplementationOnce(() => made.promise);
     await renderShell();
 
     pickProjectDirectory.mockResolvedValue(NOTES);
@@ -587,27 +591,92 @@ describe('Add folder in a Chat composer', () => {
       session: summary('seeded', 'chat', [NOTES]),
     });
     await addFolderFromMenu();
-    expect(createSession).toHaveBeenCalledTimes(2);
+    expect(addContextDirectory).not.toHaveBeenCalled();
 
     const seeded = summary('seeded');
     stored.set('seeded', seeded);
     await act(async () => seed.resolve({ session: seeded }));
     await act(async () => undefined);
-    const fresh = summary('fresh');
-    stored.set('fresh', fresh);
-    await act(async () => made.resolve({ session: fresh }));
-    await act(async () => undefined);
 
+    expect(createSession).toHaveBeenCalledTimes(1);
     expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('seeded', NOTES);
-    expect(deleteSession).toHaveBeenCalledExactlyOnceWith('fresh', false);
     expect(document.querySelectorAll('[data-testid="chat-session-item"]')).toHaveLength(1);
     expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
   });
 
-  it('does not hand the folder to a Code session a seed made while Add folder made its chat', async () => {
+  it('joins a first-run seed that settled before the picked folder came back but has not opened yet', async () => {
+    const stored = stubBridge([]);
+    const seed = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => seed.promise);
+    await renderShell();
+
+    const picked = deferred<string | null>();
+    pickProjectDirectory.mockReturnValue(picked.promise);
+    addContextDirectory.mockResolvedValue({
+      status: 'added',
+      path: NOTES,
+      session: summary('seeded', 'chat', [NOTES]),
+    });
+    await addFolderFromMenu();
+
+    const seeded = summary('seeded');
+    stored.set('seeded', seeded);
+    // One act scope holds every render until it ends, so the seed's chat is not open yet when the pick returns.
+    await act(async () => {
+      seed.resolve({ session: seeded });
+      await tick();
+      picked.resolve(NOTES);
+      await tick();
+    });
+    await act(async () => undefined);
+
+    expect(createSession).toHaveBeenCalledTimes(1);
+    expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('seeded', NOTES);
+    expect(document.querySelectorAll('[data-testid="chat-session-item"]')).toHaveLength(1);
+    expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
+  });
+
+  it('makes its own chat when the first-run seed it was waiting on fails', async () => {
+    stubBridge([]);
+    const seed = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => seed.promise);
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValue(NOTES);
+    addContextDirectory.mockResolvedValue({ status: 'added', path: NOTES, session: summary('fresh', 'chat', [NOTES]) });
+    await addFolderFromMenu();
+    await act(async () => seed.reject(new Error('disk busy')));
+    await act(async () => undefined);
+
+    expect(createSession).toHaveBeenCalledTimes(2);
+    expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('fresh', NOTES);
+    expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
+    expect(byTestId('chat-add-folder-error')).toBeNull();
+  });
+
+  it('after the seed chat is deleted, Add folder with no chat open makes its own chat and shares into it', async () => {
+    const stored = stubBridge([]);
+    const seeded = summary('seeded');
+    stored.set('seeded', seeded);
+    createSession.mockResolvedValueOnce({ session: seeded });
+    await renderShell();
+    await deleteOpenChat();
+    expect(document.querySelectorAll('[data-testid="chat-session-item"]')).toHaveLength(0);
+
+    pickProjectDirectory.mockResolvedValue(NOTES);
+    addContextDirectory.mockResolvedValue({ status: 'added', path: NOTES, session: summary('fresh', 'chat', [NOTES]) });
+    await addFolderFromMenu();
+    await act(async () => undefined);
+
+    expect(createSession).toHaveBeenCalledTimes(2);
+    expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('fresh', NOTES);
+    expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
+  });
+
+  it('does not hand the folder to a Code session the seed is still making', async () => {
     const codeSeed = deferred<{ ok: true; session: ChatSessionSummary }>();
     const stored = stubBridge([], { createCodeSession: () => codeSeed.promise });
-    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    seedFails();
     const made = deferred<{ session: ChatSessionSummary }>();
     createSession.mockImplementationOnce(() => made.promise);
     await renderShell();
@@ -626,12 +695,28 @@ describe('Add folder in a Chat composer', () => {
     await act(async () => undefined);
 
     expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('fresh', NOTES);
-    expect(deleteSession).not.toHaveBeenCalled();
+  });
+
+  it('drops a folder picked after the window switched to Code mode', async () => {
+    stubBridge([summary('code-1', 'code', undefined, 'Code one')]);
+    seedFails();
+    await renderShell();
+
+    const picked = deferred<string | null>();
+    pickProjectDirectory.mockReturnValue(picked.promise);
+    await addFolderFromMenu();
+    await act(async () => byTestId('mode-switch-code-btn')?.click());
+    await act(async () => undefined);
+    await act(async () => picked.resolve(NOTES));
+    await act(async () => undefined);
+
+    expect(addContextDirectory).not.toHaveBeenCalled();
+    expect(createSession).toHaveBeenCalledTimes(1);
   });
 
   it('shares into the new chat by id without waiting for it to load', async () => {
     stubBridge([]);
-    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    seedFails();
     const loaded = deferred<void>();
     heldLoads.set('fresh', loaded.promise);
     await renderShell();
@@ -650,7 +735,7 @@ describe('Add folder in a Chat composer', () => {
 
   it('still shares into the new chat when the user leaves it before it loads, and never again on reopen', async () => {
     const stored = stubBridge([]);
-    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    seedFails();
     heldLoads.set('fresh', new Promise(() => undefined));
     await renderShell();
 
@@ -672,7 +757,7 @@ describe('Add folder in a Chat composer', () => {
 
   it("applies a share that landed during a chat's first read to that read only, then reads main on reopen", async () => {
     const stored = stubBridge([]);
-    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    seedFails();
     const firstRead = deferred<void>();
     heldLoads.set('fresh', firstRead.promise);
     await renderShell();
@@ -741,7 +826,7 @@ describe('Add folder in a Chat composer', () => {
 
   it('reads main on reopen after leaving a chat whose first read a share landed during', async () => {
     const stored = stubBridge([]);
-    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    seedFails();
     heldLoads.set('fresh', new Promise(() => undefined));
     await renderShell();
 
@@ -783,7 +868,7 @@ describe('Add folder in a Chat composer', () => {
 
   it('does not make the Add folder chat take over a chat the user started while it was being created', async () => {
     const stored = stubBridge([]);
-    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    seedFails();
     const made = deferred<{ session: ChatSessionSummary }>();
     createSession.mockImplementationOnce(() => made.promise);
     await renderShell();
@@ -809,7 +894,7 @@ describe('Add folder in a Chat composer', () => {
 
   it("leaves the open chat's error up when Add folder shares into the chat it made in the background", async () => {
     const stored = stubBridge([]);
-    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    seedFails();
     const made = deferred<{ session: ChatSessionSummary }>();
     createSession.mockImplementationOnce(() => made.promise);
     await renderShell();
@@ -838,7 +923,7 @@ describe('Add folder in a Chat composer', () => {
 
   it('shows no start-failure alert in a chat the user opened while the chat was being created', async () => {
     const stored = stubBridge([]);
-    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    seedFails();
     const made = deferred<{ session: ChatSessionSummary }>();
     createSession.mockImplementationOnce(() => made.promise);
     await renderShell();
@@ -859,7 +944,7 @@ describe('Add folder in a Chat composer', () => {
 
   it('shows no start-failure alert in the Code pane when the user switched modes while the chat was being created', async () => {
     stubBridge([]);
-    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    seedFails();
     const made = deferred<{ session: ChatSessionSummary }>();
     createSession.mockImplementationOnce(() => made.promise);
     await renderShell();
@@ -896,7 +981,7 @@ describe('Add folder in a Chat composer', () => {
 
   it('shows a throw from the share into a freshly made chat on that chat', async () => {
     stubBridge([]);
-    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    seedFails();
     await renderShell();
 
     pickProjectDirectory.mockResolvedValue(NOTES);
@@ -928,7 +1013,7 @@ describe('Add folder in a Chat composer', () => {
 
   it('keeps a reason that itself contains quotes and colons', async () => {
     stubBridge([]);
-    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    seedFails();
     await renderShell();
 
     pickProjectDirectory.mockResolvedValueOnce(NOTES);
@@ -945,7 +1030,7 @@ describe('Add folder in a Chat composer', () => {
 
   it('ends the alert without a dangling colon when main gave no reason', async () => {
     stubBridge([]);
-    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    seedFails();
     await renderShell();
 
     pickProjectDirectory.mockResolvedValueOnce(NOTES);
@@ -958,7 +1043,7 @@ describe('Add folder in a Chat composer', () => {
 
   it('does not share a folder the user removed again when the new chat is reopened', async () => {
     const stored = stubBridge([]);
-    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    seedFails();
     await renderShell();
 
     pickProjectDirectory.mockResolvedValue(NOTES);
@@ -1052,7 +1137,7 @@ describe('Add folder in a Chat composer', () => {
 
   it('keeps a refusal for a chat the user left and shows it when that chat is reopened', async () => {
     const stored = stubBridge([]);
-    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    seedFails();
     const made = deferred<{ session: ChatSessionSummary }>();
     createSession.mockImplementationOnce(() => made.promise);
     await renderShell();
@@ -1092,7 +1177,7 @@ describe('Add folder in a Chat composer', () => {
       ],
     ] as const) {
       stubBridge([]);
-      createSession.mockImplementationOnce(() => new Promise(() => undefined));
+      seedFails();
       await renderShell();
 
       const share = deferred<ShareDirectoryResult>();
@@ -1115,10 +1200,9 @@ describe('Add folder in a Chat composer', () => {
     const stored = stubBridge([]);
     const seed = deferred<{ session: ChatSessionSummary }>();
     createSession.mockImplementationOnce(() => seed.promise);
-    createSession.mockRejectedValueOnce(new Error('disk full'));
     await renderShell();
 
-    pickProjectDirectory.mockResolvedValueOnce(NOTES);
+    pickProjectDirectory.mockRejectedValueOnce(new Error('dialog unavailable'));
     await addFolderFromMenu();
     expect(byTestId('chat-add-folder-error')).not.toBeNull();
 
@@ -1134,7 +1218,7 @@ describe('Add folder in a Chat composer', () => {
 
   it('does not bring back a start failure after the chat the user opened meanwhile is deleted', async () => {
     const stored = stubBridge([]);
-    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    seedFails();
     const made = deferred<{ session: ChatSessionSummary }>();
     createSession.mockImplementationOnce(() => made.promise);
     await renderShell();

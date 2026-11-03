@@ -673,7 +673,7 @@ export function ChatShell({
 
   /**
    * The Chat composer's Add folder. With no conversation open it picks first, so a dismissed picker
-   * creates nothing, then shares into the chat it creates by id, open or not.
+   * creates nothing, then shares by id, open or not, into the first-run chat still being made or one it creates.
    */
   const shareFolderTo = conversation.addContextDirectoryTo;
   const addingFolder = useRef(false);
@@ -681,8 +681,8 @@ export function ChatShell({
   openChatId.current = activeId;
   const modeRef = useRef(mode);
   modeRef.current = mode;
-  // The last Chat session the first-run seed made, so Add folder can tell one landed while it made its own.
-  const seededChat = useRef<string | null>(null);
+  // The first-run Chat seed's create while it is in flight, so Add folder joins it instead of making a second chat.
+  const seedInFlight = useRef<Promise<string | null> | null>(null);
   const shareInto = useCallback(async (chatId: string, share: () => Promise<string | undefined>) => {
     try {
       const warning = await share();
@@ -702,28 +702,22 @@ export function ChatShell({
     }
     if (addingFolder.current) return;
     addingFolder.current = true;
-    const seededBefore = seededChat.current;
+    // Taken before the pick: the ref clears as the seed settles, which can be before the render that opens its chat.
+    const seed = seedInFlight.current;
     let picked = false;
     try {
       const path = await window.b4m.chat.pickProjectDirectory();
       picked = true;
-      if (!path) return;
+      if (!path || modeRef.current !== 'chat') return;
       // The first-run seed can land while the picker is open; share into that chat instead of making another.
       const open = openChatId.current;
       if (open) {
         await shareInto(open, () => shareFolderTo(open, path));
         return;
       }
-      markSessionStart('new');
-      const created = await create();
-      const seeded = seededChat.current;
-      if (seeded && seeded !== seededBefore) {
-        // The first-run seed made a chat meanwhile, opened unless the user opened another: the folder goes there,
-        // and the chat made here, never opened and still empty, is deleted.
-        void remove(created).catch(() => undefined);
-        await shareInto(seeded, () => shareFolderTo(seeded, path));
-        return;
-      }
+      const joined = seed && (await seed.catch(() => null));
+      if (!joined) markSessionStart('new');
+      const created = joined || (await create());
       void shareInto(created, () => shareFolderTo(created, path));
       setActiveId(current => current ?? created);
     } catch (error) {
@@ -740,7 +734,7 @@ export function ChatShell({
     } finally {
       addingFolder.current = false;
     }
-  }, [activeId, shareFolderTo, shareInto, clearAddFolderAlert, create, remove, markSessionStart]);
+  }, [activeId, shareFolderTo, shareInto, clearAddFolderAlert, create, markSessionStart]);
   // A failure from before any chat existed retires when a chat opens; any alert retires on a mode switch.
   useEffect(() => {
     setAddFolderAlerts({});
@@ -842,12 +836,20 @@ export function ChatShell({
   useEffect(() => {
     const empty = !sessions.some(session => session.mode === mode);
     if (!seedOnArrival(arrived.current, { loading: settling, mode, hasSessionInMode: !empty })) return;
-    void startSession().then(created => {
-      if (!created) return;
-      if (mode === 'chat') seededChat.current = created;
-      // A slow seed must not replace a chat the user opened or created while it was in flight.
-      setActiveId(current => current ?? created);
-    });
+    const seeding = startSession();
+    if (mode === 'chat') seedInFlight.current = seeding;
+    void seeding
+      .then(
+        created => {
+          // A slow seed must not replace a chat the user opened or created while it was in flight.
+          if (created) setActiveId(current => current ?? created);
+        },
+        // Failing leaves the empty pane, as firstRunSeed.ts describes; Add folder then makes its own chat.
+        () => undefined
+      )
+      .finally(() => {
+        if (seedInFlight.current === seeding) seedInFlight.current = null;
+      });
   }, [settling, sessions, mode, startSession]);
 
   /**
