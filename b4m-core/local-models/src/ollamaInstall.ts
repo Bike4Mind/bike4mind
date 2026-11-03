@@ -13,7 +13,7 @@ import {
   type OllamaSettings,
   type OllamaSettingSourceKind,
 } from '@bike4mind/common/modelHub';
-import { defaultExec, type ExecLike } from './hardware';
+import { defaultExec, withTimeout, type ExecLike } from './hardware';
 import { mapConcurrent } from './mapConcurrent';
 import {
   OLLAMA_SETTING_DEFAULTS,
@@ -467,10 +467,13 @@ export async function isLocalHostResolved(
   return anyLocalAddress(await resolveName(host, resolve), local);
 }
 
-/** What a host name resolves to; empty for an IP literal, `localhost` or an unresolvable name. */
+// getaddrinfo cannot be cancelled; stop waiting so a dead resolver does not stall every host probe (ms).
+const LOOKUP_TIMEOUT_MS = 1_500;
+
+/** What a host name resolves to; empty for an IP literal, `localhost`, or a name that does not resolve in time. */
 async function resolveName(host: string, resolve: HostLookup): Promise<string[]> {
   if (isIP(host) || host.toLowerCase() === 'localhost') return [];
-  return resolve(host).catch((): string[] => []);
+  return (await withTimeout(resolve(host), LOOKUP_TIMEOUT_MS).catch(() => null)) ?? [];
 }
 
 const anyLocalAddress = (addresses: readonly string[], local: readonly string[]) =>

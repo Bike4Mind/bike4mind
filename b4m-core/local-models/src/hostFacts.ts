@@ -108,9 +108,10 @@ export async function probeModelHost(options: ModelHostProbeOptions = {}): Promi
   const url = options.ollamaUrl ?? DEFAULT_OLLAMA_URL;
   const root = options.rootDir ?? '/';
   const os = options.os ?? nodeOs;
+  const { networkInterfaces, hostname } = os;
   const ownAddresses =
-    os.networkInterfaces && os.hostname
-      ? machineAddresses({ networkInterfaces: () => os.networkInterfaces!(), hostname: () => os.hostname!() })
+    networkInterfaces && hostname
+      ? machineAddresses({ networkInterfaces: () => networkInterfaces.call(os), hostname: () => hostname.call(os) })
       : undefined;
   const runtime = options.runtime ?? new OllamaRuntime({ baseUrl: url });
 

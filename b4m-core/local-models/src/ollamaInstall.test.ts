@@ -443,6 +443,17 @@ describe('isLocalHostResolved', () => {
     expect(await isLocalHostResolved('any.lan', local, async () => ['0.0.0.0'])).toBe(false);
   });
 
+  it('stops waiting on a lookup that never answers', async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = isLocalHostResolved('slow.lan', local, () => new Promise<string[]>(() => {}));
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(await pending).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does not look up an IP literal', async () => {
     const resolve = vi.fn(async () => ['127.0.0.1']);
     expect(await isLocalHostResolved('10.0.0.6', local, resolve)).toBe(false);
