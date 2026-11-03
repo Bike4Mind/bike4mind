@@ -136,6 +136,9 @@ describe('hostedControls', () => {
     expect(hostedControls({ ...budgetClaude, maxOutputTokens: 2000 }, undefined, false)).not.toHaveProperty(
       'thinkingBudgetTokens'
     );
+    const smallest = hostedControls({ ...budgetClaude, maxOutputTokens: 2024 }, undefined, false);
+    expect(smallest.thinkingBudgetTokens).toMatchObject({ min: 1024, max: 1024, default: 1024 });
+    expect(requestGeneration(undefined, smallest)).toEqual({ thinkingBudgetTokens: 1024 });
   });
 
   it("sends a budget that fits on a cap below the server's default budget plus its answer room", () => {
