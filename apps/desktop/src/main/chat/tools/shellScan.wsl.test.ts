@@ -100,3 +100,28 @@ describe('a path in a distro no root is in', () => {
     }
   );
 });
+
+describe('the folders a command in a WSL project may reach unasked', () => {
+  const root = '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo';
+
+  it("takes the distro's /tmp as the temp folder", async () => {
+    const scan = await scanShell('cat /tmp/out.txt', root, [root]);
+
+    expect(scan?.directories).toEqual([]);
+    expect(scan?.ungranted).toEqual([]);
+  });
+
+  it('still asks about another folder of the distro', async () => {
+    const scan = await scanShell('cat /var/log/out.txt', root, [root]);
+
+    expect(scan?.directories).toEqual(['\\\\wsl.localhost\\Ubuntu\\var\\log']);
+  });
+
+  it("lets a read-only probe look at the distro user's toolchain folder, and asks about a secret in it", async () => {
+    const toolchain = await scanShell('ls ~/.cargo/bin', root, [root]);
+    const secret = await scanShell('ls ~/.cargo/credentials.toml', root, [root]);
+
+    expect(toolchain?.directories).toEqual([]);
+    expect(secret?.directories).toEqual(['\\\\wsl.localhost\\Ubuntu\\home\\me\\.cargo']);
+  });
+});
