@@ -130,7 +130,8 @@ interface SummaryIndexFile {
  * profile screen re-reads only the transcripts that changed since it last asked.
  */
 const LOCAL_USAGE_INDEX = '.local-usage-index';
-const LOCAL_USAGE_INDEX_VERSION = 1;
+// Bump whenever sessionUsageBuckets output changes; cached buckets are reused while a file's size and mtime hold.
+const LOCAL_USAGE_INDEX_VERSION = 2;
 
 interface IndexedLocalUsage {
   size: number;
@@ -652,12 +653,8 @@ export class SessionStore implements SessionWritesStore {
   }
 
   /**
-   * Local-model usage buckets for every session in the current scope, and which kind of scope
-   * that is.
-   *
-   * A transcript is parsed only when its size or mtime moved since the index saw it, and at most
-   * LIST_READ_CONCURRENCY at a time; each is reduced to its buckets before the next is read, so a
-   * first build never holds the whole history in memory.
+   * Usage buckets for every session in the current scope, and its kind. Only transcripts whose size
+   * or mtime moved are parsed, each reduced to buckets at once so a first build stays small.
    */
   async localUsage(): Promise<LocalUsageScan> {
     const current = this.scope?.();
