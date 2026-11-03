@@ -22,6 +22,7 @@ import {
 } from './resolve';
 import {
   EXECUTE_BUDGET_MS,
+  SUBSCRIPTION_CANCEL_GRACE_MS,
   IDEMPOTENCY_TTL_MS,
   UNDO_RECORD_TTL_MS,
   USERS_BULK_CONCURRENCY,
@@ -61,7 +62,8 @@ export type ExecuteDeps = ResolveDeps & {
   cancelSubscriptions: (
     user: BulkUser,
     action: BanActionType,
-    batchId: string
+    batchId: string,
+    deadline: number
   ) => Promise<AccountSubscriptionCancellation>;
   logger?: UsersBulkLogger;
   now?: () => Date;
@@ -94,7 +96,14 @@ type UserOutcome =
   | { status: 'skipped'; canceledSubscriptions?: string[]; subscriptionCancelError?: string }
   | { status: 'failed'; userId: string; error: string };
 
-type ApplyContext = { action: AdminUsersBulkAction; actorId: string; reason: string; batchId: string };
+type ApplyContext = {
+  action: AdminUsersBulkAction;
+  actorId: string;
+  reason: string;
+  batchId: string;
+  /** Epoch ms past which a user's Stripe cancel makes no more requests. */
+  cancelDeadline: number;
+};
 
 const isDoneEntry = (data: unknown): data is { state: 'done'; result: AdminUsersBulkResult } =>
   typeof data === 'object' &&
@@ -193,7 +202,7 @@ async function applyToUser(user: BulkUser, context: ApplyContext, deps: ExecuteD
       // A ban action changes nothing only for a user already suspended; still cancel, so a ban from
       // before this step existed is caught up.
       const holder: Pick<UserUndoSnapshot, 'canceledSubscriptions'> = {};
-      const cancel = await cancelSubscriptionsOf(user, type, context.batchId, deps, holder);
+      const cancel = await cancelSubscriptionsOf(user, type, context, deps, holder);
       return { status: 'skipped', ...holder, ...cancel };
     }
     // After the commit, so a rollback never ends sockets for a ban that did not stick.
@@ -203,7 +212,7 @@ async function applyToUser(user: BulkUser, context: ApplyContext, deps: ExecuteD
     return {
       status: 'applied',
       snapshot,
-      ...(await cancelSubscriptionsOf(user, type, context.batchId, deps, snapshot)),
+      ...(await cancelSubscriptionsOf(user, type, context, deps, snapshot)),
     };
   } catch (error) {
     deps.logger?.error('Users bulk action failed for user', { userId: user.id, error });
@@ -218,12 +227,12 @@ async function applyToUser(user: BulkUser, context: ApplyContext, deps: ExecuteD
 async function cancelSubscriptionsOf(
   user: BulkUser,
   action: BanActionType,
-  batchId: string,
+  { batchId, cancelDeadline }: ApplyContext,
   deps: ExecuteDeps,
   snapshot: Pick<UserUndoSnapshot, 'canceledSubscriptions'>
 ): Promise<{ subscriptionCancelError?: string }> {
   try {
-    const { canceled, failed } = await deps.cancelSubscriptions(user, action, batchId);
+    const { canceled, failed } = await deps.cancelSubscriptions(user, action, batchId, cancelDeadline);
     if (canceled.length > 0) snapshot.canceledSubscriptions = canceled;
     return failed.length > 0 ? { subscriptionCancelError: failed.map(failure => failure.reason).join('; ') } : {};
   } catch (error) {
@@ -271,8 +280,14 @@ export async function executeAdminUsersBulk(
     throw error;
   }
 
-  const context: ApplyContext = { action: request.action, actorId: actor.id, reason: request.reason, batchId };
   const deadline = startedAt + (deps.budgetMs ?? EXECUTE_BUDGET_MS);
+  const context: ApplyContext = {
+    action: request.action,
+    actorId: actor.id,
+    reason: request.reason,
+    batchId,
+    cancelDeadline: deadline + SUBSCRIPTION_CANCEL_GRACE_MS,
+  };
   const snapshots: UserUndoSnapshot[] = [];
   const failed: AdminUsersBulkResult['failed'] = [];
   const subscriptionCancelFailures: AdminUsersBulkResult['subscriptionCancelFailures'] = [];

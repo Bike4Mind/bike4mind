@@ -124,6 +124,47 @@ describe('cancelAccountSubscriptions', () => {
     });
   });
 
+  it('makes no Stripe request past the deadline and reports every unit left', async () => {
+    mocks.findOrgs.mockResolvedValue([{ stripeCustomerId: 'cus_org' }]);
+
+    const result = await cancelAccountSubscriptions(
+      { userId: 'user-1', reason: 'suspended', deadline: Date.now() - 1 },
+      logger
+    );
+
+    expect(result).toEqual({
+      canceled: [],
+      failed: [
+        { customerId: 'cus_user', subscriptionId: null, reason: 'time budget exhausted' },
+        { customerId: 'cus_org', subscriptionId: null, reason: 'time budget exhausted' },
+      ],
+    });
+    expect(mocks.subscriptionsList).not.toHaveBeenCalled();
+    expect(mocks.subscriptionsCancel).not.toHaveBeenCalled();
+    expect(mocks.voidOpenSubscriptionInvoices).not.toHaveBeenCalled();
+  });
+
+  it('stops cancelling once the deadline passes mid-page, failing the rest without voiding', async () => {
+    mocks.subscriptionsList.mockResolvedValue(subs(['sub_a', 'active'], ['sub_b', 'active']));
+    const now = vi.spyOn(Date, 'now');
+    now.mockReturnValue(1_000);
+    mocks.subscriptionsCancel.mockImplementation(async () => {
+      now.mockReturnValue(5_000);
+      return {};
+    });
+
+    const result = await cancelAccountSubscriptions({ userId: 'user-1', reason: 'suspended', deadline: 3_000 }, logger);
+    now.mockRestore();
+
+    expect(result).toEqual({
+      canceled: ['sub_a'],
+      failed: [{ customerId: 'cus_user', subscriptionId: 'sub_b', reason: 'time budget exhausted' }],
+    });
+    expect(mocks.subscriptionsCancel).toHaveBeenCalledTimes(1);
+    expect(mocks.subscriptionsCancel).toHaveBeenCalledWith('sub_a', expect.anything(), { timeout: 2_000 });
+    expect(mocks.voidOpenSubscriptionInvoices).not.toHaveBeenCalled();
+  });
+
   it('does nothing without Stripe or without a customer', async () => {
     mocks.isStripeConfigured.mockReturnValue(false);
     expect(await cancelAccountSubscriptions({ userId: 'user-1', reason: 'suspended' }, logger)).toEqual({

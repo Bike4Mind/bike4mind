@@ -70,28 +70,43 @@ async function billedCustomerIds(user: { id: string; stripeCustomerId?: string |
 // so one hung call must not hold a chunk for Stripe's 80 s default.
 const STRIPE_REQUEST_TIMEOUT_MS = 10_000;
 
+const TIME_BUDGET_EXHAUSTED = 'time budget exhausted';
+
+// A request may not outlive the caller's deadline, but is always given at least 1 ms.
+const requestTimeout = (deadline: number | undefined): number =>
+  deadline === undefined
+    ? STRIPE_REQUEST_TIMEOUT_MS
+    : Math.max(1, Math.min(STRIPE_REQUEST_TIMEOUT_MS, deadline - Date.now()));
+
+const pastDeadline = (deadline: number | undefined): boolean => deadline !== undefined && Date.now() >= deadline;
+
 async function cancelCustomerSubscriptions(
   customerId: string,
   comment: string,
   result: AccountSubscriptionCancellation,
-  logger: Pick<Logger, 'info'>
+  logger: Pick<Logger, 'info'>,
+  deadline: number | undefined
 ): Promise<void> {
   // Stripe, not the local rows, is read: a row can lag a renewal, and a deleted account's rows are
   // the very ones that went unnoticed. Stripe's default listing already omits canceled history, and
   // one page of 100 mirrors voidOpenSubscriptionInvoices: over 100 live subscriptions is not a real case.
   const page = await stripe.subscriptions.list(
     { customer: customerId, limit: 100 },
-    { timeout: STRIPE_REQUEST_TIMEOUT_MS }
+    { timeout: requestTimeout(deadline) }
   );
   for (const subscription of page.data) {
     if (TERMINAL_SUBSCRIPTION_STATUSES.has(subscription.status)) continue;
+    if (pastDeadline(deadline)) {
+      result.failed.push({ customerId, subscriptionId: subscription.id, reason: TIME_BUDGET_EXHAUSTED });
+      continue;
+    }
     try {
       // prorate: false and no invoice_now, so the cancel mints no credit note or invoice; refunds
       // stay an admin decision. customer.subscription.deleted then closes the local row.
       await stripe.subscriptions.cancel(
         subscription.id,
         { prorate: false, cancellation_details: { comment } },
-        { timeout: STRIPE_REQUEST_TIMEOUT_MS }
+        { timeout: requestTimeout(deadline) }
       );
       result.canceled.push(subscription.id);
     } catch (error) {
@@ -100,9 +115,10 @@ async function cancelCustomerSubscriptions(
     }
     // An open invoice keeps Stripe's dunning retries running after the cancel. Best-effort: the
     // subscription is already canceled, which is what this call is for.
+    if (pastDeadline(deadline)) continue;
     try {
       const { voided, failed } = await voidOpenSubscriptionInvoices(subscription.id, {
-        timeoutMs: STRIPE_REQUEST_TIMEOUT_MS,
+        timeoutMs: requestTimeout(deadline),
       });
       if (voided.length > 0 || failed.length > 0) {
         logger.info('[Billing] voided open invoices after canceling a subscription', {
@@ -127,9 +143,12 @@ async function cancelCustomerSubscriptions(
  * returned for the caller's response and audit record. Refunds are deliberately not issued.
  *
  * Call it before a hard delete: the customer ids are read from the user and its owned orgs.
+ *
+ * `deadline` (epoch ms) bounds the whole call: past it no Stripe request is made, and every
+ * subscription or customer not yet handled is returned as failed.
  */
 export async function cancelAccountSubscriptions(
-  input: { userId: string; reason: AccountSubscriptionCancelReason },
+  input: { userId: string; reason: AccountSubscriptionCancelReason; deadline?: number },
   logger: Pick<Logger, 'info' | 'error'>
 ): Promise<AccountSubscriptionCancellation> {
   const result: AccountSubscriptionCancellation = { canceled: [], failed: [] };
@@ -152,8 +171,12 @@ export async function cancelAccountSubscriptions(
 
   const comment = CANCELLATION_COMMENT[input.reason];
   for (const customerId of customerIds) {
+    if (pastDeadline(input.deadline)) {
+      result.failed.push({ customerId, subscriptionId: null, reason: TIME_BUDGET_EXHAUSTED });
+      continue;
+    }
     try {
-      await cancelCustomerSubscriptions(customerId, comment, result, logger);
+      await cancelCustomerSubscriptions(customerId, comment, result, logger, input.deadline);
     } catch (error) {
       result.failed.push({ customerId, subscriptionId: null, reason: reasonOf(error) });
     }
