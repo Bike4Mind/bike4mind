@@ -14,12 +14,13 @@ import {
   toolsOffHint as sharedToolsOffHint,
   type HintApp,
 } from '@bike4mind/local-models/servers';
-import { localBackend, localModelId, parseLocalModelId, type ChatModelOption } from '@shared/chat';
+import { localBackend, localModelId, parseLocalModelId, type ChatModelOption, type ChatTokenRate } from '@shared/chat';
 import { isChatCapable } from '@shared/models';
 import type { CompletionMessage, CompletionRequest } from '../chat/completions';
 import type { LocalChat } from '../chat/localChat';
 import { LOCAL_CONTEXT_TARGET_TOKENS } from '../chat/localContext';
 import type { CompletionStreamEvent } from '../chat/streamEvents';
+import { estimatedRate, llamaServerRate, type StreamTiming } from '../chat/tokenRate';
 import { ServerCredentialsError, ServerForbiddenError } from './errors';
 
 export interface OpenAICompatibleServer {
@@ -143,6 +144,8 @@ interface StreamChunk {
     finish_reason?: unknown;
   }[];
   usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } | null;
+  /** llama-server only. */
+  timings?: unknown;
   error?: { message?: unknown } | unknown;
 }
 
@@ -321,6 +324,18 @@ export class OpenAICompatibleChat implements LocalChat {
     const calls = new Map<number, { id?: string; name: string; arguments: string }>();
     let stopReason: string | undefined;
     let usage: { inputTokens?: number; outputTokens?: number } | undefined;
+    let reported: ChatTokenRate | undefined;
+    // Stamped per network read, so deltas buffered into one read count as one arrival.
+    let readAt = 0;
+    const timing: StreamTiming = { reads: 0 };
+    const streamed = () => {
+      if (timing.lastAt !== readAt) timing.reads++;
+      if (timing.firstAt === undefined || timing.firstAt === readAt) {
+        timing.firstReadDeltas = (timing.firstReadDeltas ?? 0) + 1;
+      }
+      timing.lastAt = readAt;
+      timing.firstAt ??= readAt;
+    };
     let done = false;
     let failure: Error | undefined;
     const parser = createParser({
@@ -346,10 +361,16 @@ export class OpenAICompatibleChat implements LocalChat {
         const choice = chunk.choices?.[0];
         const delta = choice?.delta;
         const reasoning = delta?.reasoning_content ?? delta?.reasoning;
-        if (typeof reasoning === 'string' && reasoning)
+        if (typeof reasoning === 'string' && reasoning) {
+          streamed();
           onEvent({ type: 'content', text: `<think>${reasoning}</think>` });
-        if (typeof delta?.content === 'string' && delta.content) onEvent({ type: 'content', text: delta.content });
+        }
+        if (typeof delta?.content === 'string' && delta.content) {
+          streamed();
+          onEvent({ type: 'content', text: delta.content });
+        }
         for (const call of delta?.tool_calls ?? []) {
+          streamed();
           const index = typeof call.index === 'number' ? call.index : calls.size;
           const entry = calls.get(index) ?? { name: '', arguments: '' };
           if (typeof call.id === 'string') entry.id = call.id;
@@ -367,6 +388,7 @@ export class OpenAICompatibleChat implements LocalChat {
             ...(outputTokens !== undefined ? { outputTokens } : {}),
           };
         }
+        reported = llamaServerRate(chunk.timings) ?? reported;
       },
     });
     const reader = body.getReader();
@@ -375,6 +397,7 @@ export class OpenAICompatibleChat implements LocalChat {
       while (!failure) {
         const { done: ended, value } = await reader.read();
         if (ended) break;
+        readAt = performance.now();
         parser.feed(decoder.decode(value, { stream: true }));
       }
     } finally {
@@ -387,7 +410,13 @@ export class OpenAICompatibleChat implements LocalChat {
       .filter(call => call.name)
       .map(call => ({ name: call.name, arguments: call.arguments || '{}', ...(call.id ? { id: call.id } : {}) }));
     if (tools.length > 0) onEvent({ type: 'tool_use', tools });
-    onEvent({ type: 'content', stopReason: stopReason ?? 'stop', ...(usage ? { usage } : {}) });
+    const rate = reported ?? estimatedRate(usage?.outputTokens, timing);
+    onEvent({
+      type: 'content',
+      stopReason: stopReason ?? 'stop',
+      ...(usage ? { usage } : {}),
+      ...(rate ? { rate } : {}),
+    });
   }
 
   private learnContexts(models: readonly InstalledModel[]): void {

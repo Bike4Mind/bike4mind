@@ -1,4 +1,6 @@
 import { readdir, readFile, readlink } from 'node:fs/promises';
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
 import { hostname, networkInterfaces } from 'node:os';
 import { basename, join } from 'node:path';
 import {
@@ -11,7 +13,7 @@ import {
   type OllamaSettings,
   type OllamaSettingSourceKind,
 } from '@bike4mind/common/modelHub';
-import { defaultExec, type ExecLike } from './hardware';
+import { defaultExec, withTimeout, type ExecLike } from './hardware';
 import { mapConcurrent } from './mapConcurrent';
 import {
   OLLAMA_SETTING_DEFAULTS,
@@ -400,27 +402,82 @@ function urlTarget(url: string): OllamaHost | null {
 
 const isAnyHost = (host: string) => host === '' || host === '0.0.0.0' || host === '::';
 // Go's net.Listen binds "localhost" to 127.0.0.1.
-const canonicalHost = (host: string) => (host.toLowerCase() === 'localhost' ? '127.0.0.1' : host.toLowerCase());
+function canonicalHost(host: string): string {
+  const name = host.toLowerCase().replace(/%.*$/, '');
+  if (name === 'localhost') return '127.0.0.1';
+  return unmapIpv4(isIP(name) === 6 ? new URL(`http://[${name}]`).hostname.slice(1, -1) : name);
+}
 
-/** Whether an Ollama listening on `listen` answers at `url`. */
-export function servesUrl(listen: OllamaHost, url: string): boolean {
+/**
+ * Whether an Ollama listening on `listen` answers at `url`. `resolved` is what a name in `url` resolves to; a listener
+ * bound to one of those addresses serves the name.
+ */
+export function servesUrl(listen: OllamaHost, url: string, resolved: readonly string[] = []): boolean {
   const target = urlTarget(url);
   if (!target || listen.port !== target.port) return false;
-  return isAnyHost(listen.host) || canonicalHost(listen.host) === canonicalHost(target.host);
+  if (isAnyHost(listen.host)) return true;
+  const bound = canonicalHost(listen.host);
+  return bound === canonicalHost(target.host) || resolved.some(address => canonicalHost(address) === bound);
 }
 
 /** This machine's interface addresses and host name. */
-function localAddresses(): string[] {
-  const interfaces = Object.values(networkInterfaces()).flatMap(entries => entries ?? []);
-  return [...interfaces.map(entry => entry.address), hostname()];
+function localAddresses(
+  os: { networkInterfaces(): ReturnType<typeof networkInterfaces>; hostname(): string } = {
+    networkInterfaces,
+    hostname,
+  }
+): string[] {
+  const interfaces = Object.values(os.networkInterfaces()).flatMap(entries => entries ?? []);
+  return [...interfaces.map(entry => entry.address), os.hostname()];
+}
+
+export { localAddresses as machineAddresses };
+
+// URL parsing turns [::ffff:127.0.0.1] into ::ffff:7f00:1.
+function unmapIpv4(host: string): string {
+  const dotted = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(host);
+  if (dotted) return dotted[1];
+  const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(host);
+  if (!hex) return host;
+  const [high, low] = [parseInt(hex[1], 16), parseInt(hex[2], 16)];
+  return `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`;
 }
 
 /** Whether a URL's host is this machine: loopback, a wildcard, or one of `local` (its addresses and host name). */
 export function isLocalHost(host: string, local: readonly string[]): boolean {
-  const name = host.toLowerCase();
+  const name = unmapIpv4(host.toLowerCase());
   if (name === 'localhost' || name === '::1' || isAnyHost(name) || /^127\.\d+\.\d+\.\d+$/.test(name)) return true;
-  return local.some(address => address.toLowerCase() === name);
+  return local.some(address => unmapIpv4(address.toLowerCase()) === name);
 }
+
+export type HostLookup = (name: string) => Promise<string[]>;
+
+const resolveAll: HostLookup = async name => (await lookup(name, { all: true })).map(entry => entry.address);
+
+/**
+ * `isLocalHost`, plus a name (FQDN, mDNS) that resolves to loopback or one of `local`. An unresolvable name is not
+ * local.
+ */
+export async function isLocalHostResolved(
+  host: string,
+  local: readonly string[],
+  resolve: HostLookup = resolveAll
+): Promise<boolean> {
+  if (isLocalHost(host, local)) return true;
+  return anyLocalAddress(await resolveName(host, resolve), local);
+}
+
+// getaddrinfo cannot be cancelled; stop waiting so a dead resolver does not stall every host probe (ms).
+const LOOKUP_TIMEOUT_MS = 1_500;
+
+/** What a host name resolves to; empty for an IP literal, `localhost`, or a name that does not resolve in time. */
+async function resolveName(host: string, resolve: HostLookup): Promise<string[]> {
+  if (isIP(host) || host.toLowerCase() === 'localhost') return [];
+  return (await withTimeout(resolve(host), LOOKUP_TIMEOUT_MS).catch(() => null)) ?? [];
+}
+
+const anyLocalAddress = (addresses: readonly string[], local: readonly string[]) =>
+  addresses.some(address => isLocalHost(address.replace(/%.*$/, ''), local) && !isAnyHost(address));
 
 export interface OllamaProcess {
   pid: number;
@@ -506,6 +563,8 @@ export interface OllamaInstallOptions {
   unitName?: string;
   /** This machine's addresses and host name; default from os.networkInterfaces() and os.hostname(). */
   localAddresses?: readonly string[];
+  /** Every address a host name resolves to; default dns.lookup with all addresses. */
+  lookup?: HostLookup;
 }
 
 async function attempt<T>(task: () => Promise<T>): Promise<T | null> {
@@ -596,20 +655,25 @@ export async function detectOllamaInstall(options: OllamaInstallOptions = {}): P
   };
   // Nothing seen here serves another machine's address, a wildcard listener included.
   const target = urlTarget(url);
-  if (!target || !isLocalHost(target.host, options.localAddresses ?? localAddresses())) return unknown;
+  if (!target) return unknown;
+  const local = options.localAddresses ?? localAddresses();
+  const resolved = await resolveName(target.host, options.lookup ?? resolveAll);
+  if (!isLocalHost(target.host, local) && !anyLocalAddress(resolved, local)) return unknown;
 
   const [commands, units] = await Promise.all([
     scanProcCommands(root).catch((): ProcCommand[] => []),
     systemdUnits(options.exec ?? defaultExec, options.unitName ?? OLLAMA_UNIT),
   ]);
   const processes = await findOllamaProcesses(root, commands).catch((): OllamaProcess[] => []);
-  const listening = processes.filter(p => p.env !== null && servesUrl(parseOllamaHost(p.env.OLLAMA_HOST), url));
+  const listening = processes.filter(
+    p => p.env !== null && servesUrl(parseOllamaHost(p.env.OLLAMA_HOST), url, resolved)
+  );
 
   const unmatched: Array<{ unit: SystemdUnit; complete: boolean }> = [];
   for (const unit of units) {
     if (unit.mainPid !== null && listening.some(p => p.pid === unit.mainPid)) return unitProbe(unit, processes);
     const { listen, complete } = await unitHost(unit, root);
-    if (servesUrl(listen, url)) return unitProbe(unit, processes);
+    if (servesUrl(listen, url, resolved)) return unitProbe(unit, processes);
     unmatched.push({ unit, complete });
   }
   if (listening[0]) return processProbe(listening[0]);

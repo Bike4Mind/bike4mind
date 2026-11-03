@@ -259,3 +259,55 @@ describe('Organizations tab params', () => {
     }
   });
 });
+
+describe('invite center section param', () => {
+  it('is parsed by parseAdminSearch', () => {
+    expect(parseAdminSearch({ tab: 'waitlist', inviteSection: 'pending' }).inviteSection).toBe('pending');
+  });
+
+  it('drops an unknown section in validateSearch', () => {
+    expect(parseAdminSearch({ tab: 'waitlist', inviteSection: 'nope' }).inviteSection).toBeUndefined();
+  });
+
+  it('is kept on the waitlist tab and dropped on a switch away', () => {
+    const previous = { tab: 'waitlist', inviteSection: 'pending' };
+    expect(adminSearchForTab(previous, 'waitlist')).toMatchObject({ tab: 'waitlist', inviteSection: 'pending' });
+    expect(adminSearchForTab(previous, 'users').inviteSection).toBeUndefined();
+  });
+});
+
+describe('Security tab params', () => {
+  const securitySearch = {
+    tab: 'security-dashboard',
+    securityView: 'scans',
+    securityScan: 'prowler',
+    securityRange: '7d',
+  };
+
+  it('registers the view, scan and range params on the security tab only', () => {
+    expect(ADMIN_TAB_PARAMS['security-dashboard']).toEqual(['securityView', 'securityScan', 'securityRange']);
+    const owners = Object.entries(ADMIN_TAB_PARAMS).filter(([, params]) =>
+      (params as readonly string[]).some(
+        param => param === 'securityView' || param === 'securityScan' || param === 'securityRange'
+      )
+    );
+    expect(owners.map(([slug]) => slug)).toEqual(['security-dashboard']);
+  });
+
+  it('coerces each param in validateSearch and drops invalid ones', () => {
+    expect(parseAdminSearch(securitySearch)).toMatchObject(securitySearch);
+    expect(parseAdminSearch({ securityView: 'overview', securityScan: 'code', securityRange: '30d' })).toMatchObject({
+      securityView: undefined,
+      securityScan: undefined,
+      securityRange: undefined,
+    });
+  });
+
+  it('keeps them on the security tab and drops them on a switch away', () => {
+    expect(adminSearchForTab(securitySearch, 'security-dashboard')).toMatchObject(securitySearch);
+    const switched = adminSearchForTab(securitySearch, 'users');
+    expect(switched.securityView).toBeUndefined();
+    expect(switched.securityScan).toBeUndefined();
+    expect(switched.securityRange).toBeUndefined();
+  });
+});

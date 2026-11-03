@@ -99,6 +99,13 @@ export const signupGrantReleaseRepository = {
       createdAt: user.createdAt,
     }));
   },
+  /** Count of the held grants listHeld pages through, without payableOnly. */
+  async countHeld(reason: HeldSignupGrantReason = 'budget_exhausted') {
+    return User.countDocuments({
+      signupGrantHeldReason: { $eq: reason, $type: 'string' },
+      tags: PENDING_FREE_CREDITS_TAG,
+    });
+  },
   /** Payable accounts whose held payment unlock has settled, in ObjectId order; `afterId` pages. */
   async listDueHeldUnlocks(input: { now: Date; afterId?: string; limit: number }) {
     const users = await User.find({

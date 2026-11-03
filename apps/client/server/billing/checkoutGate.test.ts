@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   settings: {} as Record<string, string>,
   countRadarBlocked: vi.fn(),
   findLinkedAccounts: vi.fn(),
+  alertFraudBlock: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -21,6 +22,7 @@ vi.mock('@bike4mind/server-utils/auth/signupNetworkSignals', () => ({
 vi.mock('@server/billing/linkedAccounts', () => ({
   findLinkedAccounts: mocks.findLinkedAccounts,
 }));
+vi.mock('@server/billing/fraudBlockAlert', () => ({ alertFraudBlock: mocks.alertFraudBlock }));
 
 import { CHECKOUT_REFUSED_MESSAGE, assertCheckoutAllowed, checkoutRefusal } from './checkoutGate';
 
@@ -104,6 +106,27 @@ describe('assertCheckoutAllowed', () => {
     await expect(assertCheckoutAllowed(user, network, logger, 'credit_purchase')).rejects.toThrow(
       CHECKOUT_REFUSED_MESSAGE
     );
+  });
+
+  it('alerts LiveOps with the checkout and the reason it was refused', async () => {
+    mocks.countRadarBlocked.mockResolvedValue({ account: 0, network: 4 });
+    await expect(assertCheckoutAllowed(user, network, logger, 'credit_purchase')).rejects.toThrow(ForbiddenError);
+    expect(mocks.alertFraudBlock).toHaveBeenCalledExactlyOnceWith({
+      kind: 'checkoutRefused',
+      userId: 'u1',
+      details: ['*Checkout:* credit_purchase', '*Why:* 4 Radar-blocked payments from this network recently'],
+    });
+  });
+
+  it('names the blocked account a refused checkout is linked to', async () => {
+    mocks.findLinkedAccounts.mockResolvedValue([{ id: 'u9', blocked: true }]);
+    await expect(assertCheckoutAllowed(user, network, logger, 'subscription')).rejects.toThrow(ForbiddenError);
+    expect(mocks.alertFraudBlock.mock.calls[0][0].details[1]).toMatch(/^\*Why:\* linked by card or network to .*u9/);
+  });
+
+  it('does not alert on an allowed checkout', async () => {
+    await expect(assertCheckoutAllowed(user, network, logger, 'subscription')).resolves.toBeUndefined();
+    expect(mocks.alertFraudBlock).not.toHaveBeenCalled();
   });
 
   it('lets the checkout through, logged, when the gate itself fails', async () => {

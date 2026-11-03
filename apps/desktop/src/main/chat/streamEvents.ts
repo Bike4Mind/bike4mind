@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import type { ChatUsage } from '@shared/chat';
+import type { ChatTokenRate, ChatUsage } from '@shared/chat';
+import { addTokenRate } from './tokenRate';
 
 /**
  * The wire events `POST /api/ai/v1/completions` emits over SSE.
@@ -73,14 +74,21 @@ export const streamEventSchema = z.discriminatedUnion('type', [
   }),
 ]);
 
-export type CompletionStreamEvent = z.infer<typeof streamEventSchema>;
+type WireEvent = z.infer<typeof streamEventSchema>;
+
+/**
+ * A wire event, or a local transport's content frame carrying how fast the self-hosted server
+ * ran. `rate` is not in the wire schema, so parsing strips it from anything a hosted server sends.
+ */
+export type CompletionStreamEvent =
+  Exclude<WireEvent, { type: 'content' }> | (Extract<WireEvent, { type: 'content' }> & { rate?: ChatTokenRate });
 
 /**
  * Validate an already-JSON-decoded payload. `null` means "not a shape we know" and is
  * treated as skip-this-event rather than an error, so a new server event type reaches an
  * older build as silence instead of a failed turn.
  */
-export function parseStreamEvent(data: unknown): CompletionStreamEvent | null {
+export function parseStreamEvent(data: unknown): WireEvent | null {
   const result = streamEventSchema.safeParse(data);
   return result.success ? result.data : null;
 }
@@ -93,13 +101,15 @@ export function parseStreamEvent(data: unknown): CompletionStreamEvent | null {
 export function foldUsage(current: ChatUsage | undefined, event: CompletionStreamEvent): ChatUsage | undefined {
   if (event.type !== 'content' && event.type !== 'tool_use') return current;
   const { usage, credits } = event;
-  if (!usage && !credits) return current;
+  const rate = event.type === 'content' ? event.rate : undefined;
+  if (!usage && !credits && !rate) return current;
   const next: ChatUsage = { ...current };
   for (const [key, value] of Object.entries(usage ?? {})) {
-    if (value !== undefined) next[key as keyof ChatUsage] = value;
+    if (value !== undefined) next[key as (typeof USAGE_FIELDS)[number]] = value;
   }
   if (credits?.used !== undefined) next.creditsUsed = credits.used;
   if (credits?.usdCost !== undefined) next.usdCost = credits.usdCost;
+  if (rate) next.rate = rate;
   return next;
 }
 
@@ -116,6 +126,8 @@ export function addUsage(total: ChatUsage | undefined, next: ChatUsage | undefin
   for (const key of USAGE_FIELDS) {
     if (total[key] !== undefined || next[key] !== undefined) sum[key] = (total[key] ?? 0) + (next[key] ?? 0);
   }
+  const rate = addTokenRate(total.rate, next.rate);
+  if (rate) sum.rate = rate;
   return sum;
 }
 

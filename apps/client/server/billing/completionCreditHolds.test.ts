@@ -19,6 +19,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/services', () => ({ creditService: { assertNewAccountSpendWithinCap: assertSpendCap } }));
 import { createCompletionCreditHolds } from './completionCreditHolds';
+import { newAccountSpendCapAdaptersWithAlert } from './newAccountSpendCapWithAlert';
 
 const hold = {
   ownerId: 'user',
@@ -46,7 +47,7 @@ describe('new-account spend cap at reservation', () => {
     await createCompletionCreditHolds(logger).reserve(hold, debit);
     expect(assertSpendCap).toHaveBeenCalledWith(
       expect.objectContaining({ user: { id: 'user' }, requestedCredits: 30, billedToOrganization: false }),
-      { name: 'spend-cap-adapters' }
+      newAccountSpendCapAdaptersWithAlert
     );
     expect(assertSpendCap.mock.invocationCallOrder[0]).toBeLessThan(debit.mock.invocationCallOrder[0]);
   });

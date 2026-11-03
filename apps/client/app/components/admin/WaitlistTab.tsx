@@ -40,6 +40,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { toast } from 'sonner';
 import { ActionDialog } from './shared/ActionDialog';
 import { ADMIN_REASON_PRESETS } from './shared/adminReason';
+import { InviteCenterShell } from './InviteCenterShell';
 
 const SOURCE_LABELS: Record<SubscriberSource, string> = {
   subscribe_page: 'Waitlist page',
@@ -300,7 +301,7 @@ const PaginationControls = ({
   );
 };
 
-const WaitlistTab = () => {
+const WaitlistSection = () => {
   const { value: search, debouncedValue: debouncedSearch, setValue: setSearch } = useDebounceValue('');
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
@@ -534,5 +535,7 @@ const WaitlistTab = () => {
     </Sheet>
   );
 };
+
+const WaitlistTab = () => <InviteCenterShell waitlist={<WaitlistSection />} />;
 
 export default WaitlistTab;

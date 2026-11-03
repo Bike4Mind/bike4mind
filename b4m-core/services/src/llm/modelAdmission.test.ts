@@ -310,6 +310,49 @@ describe('free-tier model gate', () => {
     const admission = createModelAdmission({ user: { tags: [] }, configs: [], models: catalog });
     await expect(admission.admits('premium')).resolves.toBe(true);
   });
+
+  describe('with text models open', () => {
+    const textOpen = Object.assign(new Set(['priced']), { textModelsOpen: true as const });
+    const admission = () =>
+      createModelAdmission({
+        user: { tags: [] },
+        configs: [],
+        models: catalog,
+        freeTierAllowedModels: textOpen,
+        getEntitlements: async () => ['base'],
+      });
+
+    it('admits a free account an unlisted text model', async () => {
+      await expect(admission().assert('premium')).resolves.toBeUndefined();
+    });
+
+    it('still requires a paid plan for an unlisted media model', async () => {
+      await expect(admission().assert('img')).rejects.toMatchObject({
+        additionalInfo: { errorCode: MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE },
+      });
+    });
+
+    it('gates an id the catalog does not report as text', async () => {
+      await expect(admission().admits('not-in-catalog')).resolves.toBe(false);
+      await expect(
+        createModelAdmission({ user: { tags: [] }, configs: [], freeTierAllowedModels: textOpen }).admits('premium')
+      ).resolves.toBe(false);
+    });
+
+    it('still refuses an unpriced text model while credits are enforced', async () => {
+      const err = await createModelAdmission({
+        user: { tags: [] },
+        configs: [],
+        models: [unpriced],
+        enforceCredits: true,
+        freeTierAllowedModels: textOpen,
+      })
+        .assert('unpriced')
+        .catch(e => e);
+      expect(err).toBeInstanceOf(ForbiddenError);
+      expect(err.message).toContain('no price');
+    });
+  });
 });
 
 describe('free-tier media admission', () => {
@@ -367,6 +410,20 @@ describe('loadFreeTierAllowedModels', () => {
       DefaultAPIModel: ChatModels.CLAUDE_5_5_OPUS,
     });
     await expect(loadFreeTierAllowedModels(adminSettings)).resolves.toEqual(new Set(['cheap']));
+  });
+
+  it('marks text models open only when the gate scope is media', async () => {
+    getSettingsMap.mockResolvedValueOnce({
+      freeTierModelGateEnabled: 'true',
+      freeTierModelGateScope: 'media',
+      freeTierAllowedModels: JSON.stringify(['cheap']),
+    });
+    const media = await loadFreeTierAllowedModels(adminSettings);
+    expect(media).toEqual(new Set(['cheap']));
+    expect(media?.textModelsOpen).toBe(true);
+
+    getSettingsMap.mockResolvedValueOnce({ freeTierModelGateEnabled: 'true', freeTierModelGateScope: 'all' });
+    expect((await loadFreeTierAllowedModels(adminSettings))?.textModelsOpen).toBeUndefined();
   });
 
   it('propagates a settings read failure instead of opening the gate', async () => {

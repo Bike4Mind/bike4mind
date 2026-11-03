@@ -28,6 +28,7 @@ import { Composer } from './Composer';
 import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
 import type { ModelsInUse } from '../models/InstalledTab';
 import { ModelsScreen } from '../models/ModelsScreen';
+import { useModelServers } from '../models/useModelHub';
 import { GlobeIcon, PanelRightIcon, SearchIcon, TerminalIcon } from './icons';
 import { MessageThread } from './MessageThread';
 import { chatShellRootSx, columnStackSx, contentColumnSx } from './layout';
@@ -233,6 +234,8 @@ export function ChatShell({
   const localMode = isLocalMode(auth);
   const catalog = useModelCatalog(localMode);
   const noLocal = localMode ? noLocalModels(catalog) : null;
+  const modelServers = useModelServers();
+  const savedServers = useMemo(() => modelServers?.filter(server => !server.local), [modelServers]);
   const statuses = useSessionStatuses();
   const prSummaries = usePrSummaries();
   const [collapsed, setCollapsed] = useState(false);
@@ -615,6 +618,9 @@ export function ChatShell({
 
   /** "Use in chat" on the Models screen: a new Chat conversation already on that model. */
   const [chatOnError, setChatOnError] = useState<string | null>(null);
+  useEffect(() => {
+    if (screen !== 'models') setChatOnError(null);
+  }, [screen]);
   const startingChatOn = useRef(false);
   const startChatOn = useCallback(
     async (modelId: string) => {
@@ -1262,6 +1268,9 @@ export function ChatShell({
                   switchCredits={model =>
                     modelSwitchCredits(model, composerUsage.contextTokens ?? 0, cacheTtlFor(model))
                   }
+                  servers={savedServers}
+                  hasHistory={conversation.messages.length > 0}
+                  sessionId={activeId}
                 />
                 <ReasoningEffortPicker
                   models={catalog.models}

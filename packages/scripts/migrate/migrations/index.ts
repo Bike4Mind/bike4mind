@@ -261,6 +261,7 @@ import EnsurePaymentAttemptIndexes from './20260921236600_ensure-payment-attempt
 import EnsurePaymentRiskLinkIndexes from './20260921236700_ensure-payment-risk-link-indexes';
 import EnsureUserHeldUnlockIndex from './20260921236800_ensure-user-held-unlock-index';
 import EnsurePendingCreditHoldUserIndex from './20260921236900_ensure-pending-credit-hold-user-index';
+import EnsureFirstPartyNativeOAuthClient from './20260921236950_ensure-first-party-native-oauth-client';
 import EnsureReferralSubscriptionRewardIndexes from './20260921237000_ensure-referral-subscription-reward-indexes';
 import EnsureRevenueSnapshotIndex from './20260921237100_ensure-revenue-snapshot-index';
 import EnsureSpendRollupIndexes from './20260921237200_ensure-spend-rollup-indexes';
@@ -460,6 +461,7 @@ const coreMigrations: MigrationFile[] = [
   EnsurePaymentRiskLinkIndexes,
   EnsureUserHeldUnlockIndex,
   EnsurePendingCreditHoldUserIndex,
+  EnsureFirstPartyNativeOAuthClient,
   EnsureReferralSubscriptionRewardIndexes,
   EnsureRevenueSnapshotIndex,
   EnsureSpendRollupIndexes,

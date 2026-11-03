@@ -131,7 +131,7 @@ describe('createCliCuratedList', () => {
       publish(5, `${next} `, sigText(next, 5));
       const curated = list();
       await curated.refresh();
-      expect((await curated.manifest()).sequence).toBe(1);
+      expect((await curated.manifest()).sequence).toBe(2);
       expect(curated.origin()?.text).toBe('Bundled with this CLI (the last update check failed)');
     });
 
@@ -158,7 +158,7 @@ describe('createCliCuratedList', () => {
 
     it('uses the bundled list when offline with nothing cached', async () => {
       const curated = list({ offline: true });
-      expect((await curated.manifest()).sequence).toBe(1);
+      expect((await curated.manifest()).sequence).toBe(2);
       expect(curated.origin()?.text).toBe('Bundled with this CLI (updates are off)');
       expect(requests).toEqual([]);
     });
@@ -173,7 +173,7 @@ describe('createCliCuratedList', () => {
       fetchFake = stalled as unknown as typeof fetch;
       const started = Date.now();
       const curated = list();
-      expect((await curated.manifest()).sequence).toBe(1);
+      expect((await curated.manifest()).sequence).toBe(2);
       expect(Date.now() - started).toBeLessThan(5000);
       expect(curated.origin()?.check).not.toBe('failed');
       expect(logs.some(line => line.includes('check failed'))).toBe(false);
@@ -218,7 +218,7 @@ describe('createCliCuratedList', () => {
         fetch: fetchFake,
         log: () => {},
       });
-      expect((await production.manifest()).sequence).toBe(1);
+      expect((await production.manifest()).sequence).toBe(2);
       expect(production.origin()).toBeNull();
     });
   });
@@ -227,7 +227,7 @@ describe('createCliCuratedList', () => {
     vi.stubEnv('B4M_CURATED_MANIFEST_URL', LATEST);
     publish(5);
     const curated = list({ keys: [{ ...devSigner, role: 'signing' }] });
-    expect((await curated.manifest()).sequence).toBe(1);
+    expect((await curated.manifest()).sequence).toBe(2);
     expect(curated.origin()).toBeNull();
     expect(requests).toEqual([]);
   });

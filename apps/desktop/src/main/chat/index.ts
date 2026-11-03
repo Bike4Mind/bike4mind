@@ -371,6 +371,8 @@ export function registerChat(
     observeStream?(event: ChatStreamEvent): void;
     /** Revoking a model-pull grant in Settings stops that download; true once it no longer runs. */
     cancelModelPull?(key: string): Promise<boolean>;
+    /** The curated list's projector sizes, so chat sizes a vision model the way the Models screen does. */
+    pinnedProjectors?(): ReadonlyMap<string, number>;
   } = {}
 ): RegisteredChat {
   const logger = createMainLogger(VERBOSE);
@@ -471,7 +473,10 @@ export function registerChat(
   });
   const localContext = new LocalContextPreference(join(userData, 'local-context.json'));
   void localHardware.profile();
-  const localSizing = localContextSizing({ setting: () => localContext.read() });
+  const localSizing = localContextSizing({
+    setting: () => localContext.read(),
+    pinnedProjectors: () => hooks.pinnedProjectors?.() ?? new Map(),
+  });
   // safeStorage like the MCP secrets: a server's token or header value never goes to plain JSON.
   const modelServers = new ModelServerRegistry({
     store: new ModelServerStore(safeStorage, privateFile(join(userData, 'model-servers.json')), logger),

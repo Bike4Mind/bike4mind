@@ -1,5 +1,12 @@
+import { INVITE_CENTER_SEARCH_PARSERS, INVITE_CENTER_TAB_PARAMS, type InviteCenterSearch } from './inviteCenterSearch';
 import { INTEGRATION_DEMAND_TAB_PARAMS } from './integrationDemandSearch';
 import { SIGNUP_RISK_REVIEW_TAB_PARAMS } from './signupRiskReviewSearch';
+import { SHADOW_DETECTION_TAB_PARAMS } from './shadowDetectionSearch';
+import {
+  SECURITY_DASHBOARD_SEARCH_PARSERS,
+  SECURITY_DASHBOARD_TAB_PARAMS,
+  type SecurityDashboardSearch,
+} from './securityDashboardSearch';
 import {
   ADMIN_AUDIT_LOG_TAB_SLUG,
   ADMIN_FEEDBACK_TAB_SLUG,
@@ -45,6 +52,9 @@ export const ADMIN_WEBHOOK_AUDIT_LOGS_TAB_SLUG = 'webhook-audit-logs';
 export const ADMIN_MODEL_LOGS_TAB_SLUG = 'model-logs';
 export const ADMIN_INTEGRATION_DEMAND_TAB_SLUG = 'integration-demand';
 export const ADMIN_SIGNUP_RISK_REVIEW_TAB_SLUG = 'signup-risk-review';
+export const ADMIN_SECURITY_DASHBOARD_TAB_SLUG = 'security-dashboard';
+export const ADMIN_SHADOW_DETECTIONS_TAB_SLUG = 'shadow-detections';
+export const ADMIN_WAITLIST_TAB_SLUG = 'waitlist';
 export { ADMIN_ORGANIZATIONS_TAB_SLUG, ADMIN_SUBSCRIPTIONS_TAB_SLUG };
 
 const EMERGENCY_ACCESS_PARAM = 'emergency_access';
@@ -72,6 +82,9 @@ export const ADMIN_TAB_PARAMS = {
   [ADMIN_ORGANIZATIONS_TAB_SLUG]: ORGS_TAB_PARAMS,
   [ADMIN_SUBSCRIPTIONS_TAB_SLUG]: SUBSCRIPTIONS_TAB_PARAMS,
   [ADMIN_SIGNUP_RISK_REVIEW_TAB_SLUG]: SIGNUP_RISK_REVIEW_TAB_PARAMS,
+  [ADMIN_SECURITY_DASHBOARD_TAB_SLUG]: SECURITY_DASHBOARD_TAB_PARAMS,
+  [ADMIN_SHADOW_DETECTIONS_TAB_SLUG]: SHADOW_DETECTION_TAB_PARAMS,
+  [ADMIN_WAITLIST_TAB_SLUG]: INVITE_CENTER_TAB_PARAMS,
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
 type AdminTabParam = (typeof ADMIN_TAB_PARAMS)[keyof typeof ADMIN_TAB_PARAMS][number];
@@ -82,7 +95,9 @@ type TypedAdminSearch = UsersSearch &
   WebhookAuditLogsSearch &
   ModelLogsSearch &
   OrganizationsSearch &
-  SubscriptionsSearch;
+  SubscriptionsSearch &
+  SecurityDashboardSearch &
+  InviteCenterSearch;
 
 /** Params with a typed parser; every other registered param is an optional string. */
 export type AdminSearch = Partial<Record<Exclude<AdminSearchParam, keyof TypedAdminSearch>, string>> & TypedAdminSearch;
@@ -96,6 +111,8 @@ const TYPED_PARAM_PARSERS: ReadonlyMap<string, (value: unknown, search: Record<s
     ...MODEL_LOGS_SEARCH_PARSERS,
     ...ORGS_SEARCH_PARSERS,
     ...SUBSCRIPTIONS_SEARCH_PARSERS,
+    ...SECURITY_DASHBOARD_SEARCH_PARSERS,
+    ...INVITE_CENTER_SEARCH_PARSERS,
   })
 );
 

@@ -15,6 +15,7 @@ import type { ChatModelOption } from '@shared/chat';
 import { LOCAL_SERVER_ID, LOCAL_SERVER_NAME, serverManagement, type ModelServerView } from '@shared/modelServers';
 import { OLLAMA_DOWNLOAD_URL, type ModelPull, type ModelRuntimeStatus } from '@shared/models';
 import { CloseIcon, ReloadIcon } from '../chat/icons';
+import { isWindows } from '../chat/platform';
 import { FOCUS_RELOAD_MIN_MS } from '../chat/useChat';
 import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from '../chat/layout';
 import { missingFromCatalog } from './catalogSync';
@@ -65,6 +66,12 @@ function NoLocalRuntime({
         is, start it or give it a moment. This checks again every few seconds. To use models on another machine instead,
         point Desktop at its server.
       </Typography>
+      {isWindows && onOpenModelServers && (
+        <Typography level="body-sm" sx={{ mt: 0.5 }} data-testid="models-no-runtime-wsl-hint">
+          If Ollama runs in WSL, start it there. Desktop looks for it at {address} on Windows, which works only when WSL
+          shares that address with Windows. If it does not, add it with Point at a server.
+        </Typography>
+      )}
       {status.error && (
         <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5 }} data-testid="models-no-runtime-error">
           {status.error}
