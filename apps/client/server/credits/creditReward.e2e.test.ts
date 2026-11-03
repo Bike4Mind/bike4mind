@@ -147,6 +147,20 @@ describe('payCreditReward', () => {
     expect((await creditService.payCreditReward(reward(fresh.id, 'projects'), adapters)).outcome).toBe('paid');
   });
 
+  it('leaves an oversized reward out of the release scan so it cannot starve a payable one behind it', async () => {
+    config.signupGrantTricklePoolDaily = '0';
+    const huge = await makeUser();
+    const small = await makeUser();
+    await creditService.payCreditReward(reward(huge.id, 'projects', 500), adapters);
+    await creditService.payCreditReward(reward(small.id, 'projects', 50), adapters);
+    config.signupGrantTricklePoolDaily = '100';
+    const released = await creditService.releaseHeldCreditRewards(adapters, { limit: 1 });
+    expect(released).toMatchObject({ scanned: 1, paid: 1 });
+    expect(await balance(small.id)).toBe(50);
+    expect(await balance(huge.id)).toBe(0);
+    expect(await HeldCreditRewardModel.findOne({ userId: huge.id }).lean()).toMatchObject({ status: 'held' });
+  });
+
   it('queues a new reward behind a payable reward waiting behind an oversized head', async () => {
     config.signupGrantTricklePoolDaily = '0';
     const huge = await makeUser();
@@ -173,6 +187,29 @@ describe('payCreditReward', () => {
     expect(await CreditTransaction.countDocuments({ transactionId: reward(user.id, 'projects').transactionId })).toBe(
       1
     );
+    expect(await signupGrantBudgetRepository.getSpent(trickleKey())).toBe(100);
+  });
+
+  it('keeps the draw and still throws when the ledger cannot be read after the balance credit fails', async () => {
+    const user = await makeUser();
+    const paying = reward(user.id, 'projects');
+    const creditHolderMethods = {
+      ...userRepository,
+      incrementCredits: async () => {
+        throw new Error('balance write failed');
+      },
+    } as unknown as typeof userRepository;
+    let reads = 0;
+    const creditTransactions = Object.assign(Object.create(creditTransactionRepository), {
+      findOne: async (filter: { transactionId: string }) => {
+        if (++reads === 1) return creditTransactionRepository.findOne(filter);
+        throw new Error('ledger read failed');
+      },
+    }) as typeof creditTransactionRepository;
+    await expect(
+      creditService.payCreditReward(paying, { ...adapters, creditHolderMethods, db: { creditTransactions } })
+    ).rejects.toThrow('balance write failed');
+    expect(reads).toBeGreaterThan(1);
     expect(await signupGrantBudgetRepository.getSpent(trickleKey())).toBe(100);
   });
 

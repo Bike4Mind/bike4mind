@@ -313,6 +313,71 @@ describe('signup grant daily budget', () => {
     expect(await userService.grantFreeCredits(newcomer, adapters)).toMatchObject({ creditsGranted: 12 });
   });
 
+  it('drops the budget hold of a grant withheld for domain review, so it stops counting as backlog', async () => {
+    config.defaultFreeCredits = '12';
+    clock = new Date('2030-03-02T10:00:00Z');
+    const user = await createUser(false, 0);
+    await User.updateOne(
+      { _id: user.id },
+      {
+        $set: {
+          tags: [PENDING_FREE_CREDITS_TAG],
+          signupGrantHeldReason: 'budget_exhausted',
+          signupGrantHeldAt: new Date('2030-03-01T10:00:00Z'),
+        },
+      }
+    );
+    expect(await userService.hasSignupBacklog(userRepository, today())).toBe(true);
+
+    const reviewed = {
+      ...adapters,
+      db: {
+        ...adapters.db,
+        signupProtection: {
+          ...signupProtection,
+          repository: {
+            ...signupProtection.repository,
+            findReview: async () => ({ status: 'held_pending_review' }),
+          },
+        },
+      },
+    } as unknown as typeof adapters;
+    expect(await userService.grantFreeCredits(user, reviewed)).toMatchObject({ withheld: true, creditsGranted: 0 });
+
+    const after = await User.findById(user.id);
+    expect(after?.tags).toContain(PENDING_FREE_CREDITS_TAG);
+    expect(after?.signupGrantHeldReason).toBeNull();
+    expect(await userService.hasSignupBacklog(userRepository, today())).toBe(false);
+  });
+
+  it('holds a risk-review account behind an older budget backlog as a budget hold', async () => {
+    config.defaultFreeCredits = '12';
+    clock = new Date('2030-03-02T10:00:00Z');
+    const older = await createUser(false, 0);
+    await User.updateOne(
+      { _id: older.id },
+      {
+        $set: {
+          tags: [PENDING_FREE_CREDITS_TAG],
+          signupGrantHeldReason: 'budget_exhausted',
+          signupGrantHeldAt: new Date('2030-03-01T10:00:00Z'),
+        },
+      }
+    );
+    const flagged = await createUser(false, 1);
+    await User.updateOne({ _id: flagged.id }, { $set: { signupGrantHeldReason: 'risk_review' } });
+
+    expect(await userService.grantFreeCredits(flagged, adapters)).toMatchObject({
+      withheld: true,
+      budgetExhausted: true,
+    });
+
+    const after = await User.findById(flagged.id);
+    expect(after?.signupGrantHeldReason).toBe('budget_exhausted');
+    expect(after?.signupGrantHeldAt?.toISOString()).toBe(clock.toISOString());
+    expect(await creditsOf(flagged.id)).toBe(0);
+  });
+
   const createInbox = async (email: string, enrolled: boolean) =>
     User.create({
       username: email.replace(/\W/g, '-'),

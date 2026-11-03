@@ -1,13 +1,15 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockFindById, mockCountDocuments, mockAddCredits, mockGetSettingsMap, mockSlack } = vi.hoisted(() => ({
-  mockFindById: vi.fn(),
-  mockCountDocuments: vi.fn(),
-  mockAddCredits: vi.fn(),
-  mockGetSettingsMap: vi.fn(),
-  mockSlack: vi.fn(),
-}));
+const { mockFindById, mockCountDocuments, mockAddCredits, mockGetSettingsMap, mockSlack, mockBuildAdapters } =
+  vi.hoisted(() => ({
+    mockFindById: vi.fn(),
+    mockCountDocuments: vi.fn(),
+    mockAddCredits: vi.fn(),
+    mockGetSettingsMap: vi.fn(),
+    mockSlack: vi.fn(),
+    mockBuildAdapters: vi.fn(),
+  }));
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
@@ -16,7 +18,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/services', () => ({ creditService: { payCreditReward: mockAddCredits } }));
 vi.mock('@server/credits/creditRewardAdapters', () => ({
-  buildCreditRewardAdapters: () => ({ rewardAdapters: true }),
+  buildCreditRewardAdapters: (...a: unknown[]) => mockBuildAdapters(...a),
 }));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: mockGetSettingsMap,
@@ -46,6 +48,7 @@ beforeEach(() => {
   mockGetSettingsMap.mockResolvedValue({ ReferralFirstAnswerCredits: '1000', ReferralAlertRewardsPerDay: '50' });
   mockAddCredits.mockResolvedValue({ outcome: 'paid', creditTransactionId: 'tx1' });
   mockCountDocuments.mockResolvedValue(1);
+  mockBuildAdapters.mockReturnValue({ rewardAdapters: true });
   givenUsers(verifiedFriend);
 });
 
@@ -61,6 +64,8 @@ describe('rewardInviterForFirstAnswer', () => {
       reason: REFERRAL_REWARD_REASON,
       transactionId: 'referral-first-answer:inviter1:friend1',
     });
+    // No arguments: the default adapters open the payout's own transaction and answer a duplicate quietly.
+    expect(mockBuildAdapters).toHaveBeenCalledExactlyOnceWith();
     expect(mockAddCredits.mock.calls[0][1]).toEqual({ rewardAdapters: true });
   });
 

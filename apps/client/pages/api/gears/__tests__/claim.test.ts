@@ -26,6 +26,8 @@ const { mocks } = vi.hoisted(() => ({
     heldFind: vi.fn(),
     hold: vi.fn(),
     rewardOutcome: vi.fn(),
+    buildAdapters: vi.fn(),
+    refundBudgetOnFailure: vi.fn(),
   },
 }));
 
@@ -102,10 +104,15 @@ vi.mock('@bike4mind/services', () => ({
       });
       return { outcome: 'paid', creditTransactionId: 'tx1' };
     },
+    // Stand-in for the payout gate catalog.evaluateGears mirrors (the real one is covered in creditReward.e2e).
+    isRewardPartyBlocked: (party: { isBanned?: boolean; moderation?: { status?: string } }) =>
+      !!party.isBanned || party.moderation?.status === 'suspend_pending',
   },
-  userService: { refundBudgetOnFailure: (fn: () => Promise<unknown>) => fn() },
+  userService: { refundBudgetOnFailure: (fn: () => Promise<unknown>) => mocks.refundBudgetOnFailure(fn) },
 }));
-vi.mock('@server/credits/creditRewardAdapters', () => ({ buildCreditRewardAdapters: () => ({}) }));
+vi.mock('@server/credits/creditRewardAdapters', () => ({
+  buildCreditRewardAdapters: (...a: unknown[]) => mocks.buildAdapters(...a),
+}));
 
 import handler from '../claim';
 
@@ -154,6 +161,8 @@ beforeEach(() => {
   lockEverything();
   mocks.addCredits.mockResolvedValue({ currentCredits: 100 });
   mocks.withTransaction.mockImplementation((fn: () => Promise<unknown>) => fn());
+  mocks.buildAdapters.mockReturnValue({});
+  mocks.refundBudgetOnFailure.mockImplementation((fn: () => Promise<unknown>) => fn());
 });
 
 afterEach(() => {
@@ -194,7 +203,15 @@ describe('POST /api/gears/claim', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ key: 'projects', creditsAwarded: 1000 });
-    expect(mocks.userFindById).toHaveBeenCalledExactlyOnceWith('u1', { createdAt: 1, emailVerified: 1 });
+    expect(mocks.userFindById).toHaveBeenCalledExactlyOnceWith('u1', {
+      createdAt: 1,
+      emailVerified: 1,
+      isBanned: 1,
+      disputePending: 1,
+      moderation: 1,
+      deletedAt: 1,
+      isSynthetic: 1,
+    });
     expect(mocks.addCredits).toHaveBeenCalledTimes(1);
     expect(mocks.addCredits.mock.calls[0][0]).toMatchObject({
       ownerId: 'u1',
@@ -203,6 +220,18 @@ describe('POST /api/gears/claim', () => {
       transactionId: 'gear-unlock:u1:projects',
       reason: 'gear unlock: projects',
       description: 'Gear unlock reward: projects',
+    });
+  });
+
+  it('pays inside a refund scope with adapters that throw on a duplicate and run in the caller transaction', async () => {
+    unlockProjects();
+    const { promise } = claim({ key: 'projects' });
+    await promise;
+
+    expect(mocks.refundBudgetOnFailure).toHaveBeenCalledTimes(1);
+    expect(mocks.buildAdapters).toHaveBeenCalledExactlyOnceWith({
+      duplicateTransactionId: 'throw',
+      inTransaction: true,
     });
   });
 
@@ -424,13 +453,13 @@ describe('POST /api/gears/claim', () => {
     expect(res._getJSONData()).toEqual({ error: 'reward_pending', reason: 'unverified' });
   });
 
-  it('blocks payout as unverified when the user doc is missing', async () => {
+  it('blocks payout as unavailable when the user doc is missing', async () => {
     unlockProjects();
     mocks.userFindById.mockReturnValue({ lean: () => Promise.resolve(null) });
     const { res, promise } = claim({ key: 'projects' });
     await promise;
     expect(res._getStatusCode()).toBe(409);
-    expect(res._getJSONData()).toEqual({ error: 'reward_pending', reason: 'unverified' });
+    expect(res._getJSONData()).toEqual({ error: 'reward_pending', reason: 'unavailable' });
     expect(mocks.addCredits).not.toHaveBeenCalled();
   });
 

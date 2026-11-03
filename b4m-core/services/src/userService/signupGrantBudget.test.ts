@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SignupProtection } from '@bike4mind/common';
-import { refundBudgetOnFailure, reserveSignupGrantBudget, resolvePoolBudget } from './signupGrantBudget';
+import {
+  drawnInRefundScope,
+  refundBudgetOnFailure,
+  reserveSignupGrantBudget,
+  resolvePoolBudget,
+} from './signupGrantBudget';
 
 const SIGNUP = { pool: 'signup' } as const;
 
@@ -171,5 +176,34 @@ describe('per-pool reservations', () => {
     const result = await reserveSignupGrantBudget(adapters, 'tx-1', 5, { pool: 'trickle', day: DAY });
     await result.release();
     expect(repository.refund).toHaveBeenCalledExactlyOnceWith(`trickle:${DAY}`, 'tx-1', 5);
+  });
+
+  it('refunds a fresh reservation once however often it is released', async () => {
+    const { repository, adapters } = buildAdapters();
+    const result = await reserveSignupGrantBudget(adapters, 'tx-1', 5, { pool: 'trickle', day: DAY });
+    await result.release();
+    await result.release();
+    expect(repository.refund).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('drawnInRefundScope', () => {
+  it('sees a fresh draw of the same pool and transaction only while it stands inside the scope', async () => {
+    const { adapters } = buildAdapters();
+    expect(drawnInRefundScope(adapters, 'trickle', 'tx-1')).toBe(false);
+
+    await refundBudgetOnFailure(async () => {
+      expect(drawnInRefundScope(adapters, 'trickle', 'tx-1')).toBe(false);
+      const reservation = await reserveSignupGrantBudget(adapters, 'tx-1', 5, { pool: 'trickle' });
+
+      expect(drawnInRefundScope(adapters, 'trickle', 'tx-1')).toBe(true);
+      expect(drawnInRefundScope(adapters, 'signup', 'tx-1')).toBe(false);
+      expect(drawnInRefundScope(adapters, 'trickle', 'tx-2')).toBe(false);
+
+      await reservation.release();
+      expect(drawnInRefundScope(adapters, 'trickle', 'tx-1')).toBe(false);
+    });
+
+    expect(drawnInRefundScope(adapters, 'trickle', 'tx-1')).toBe(false);
   });
 });
