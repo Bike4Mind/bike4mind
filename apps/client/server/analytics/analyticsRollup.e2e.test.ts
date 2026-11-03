@@ -134,6 +134,49 @@ describe('rollupDay', () => {
     expect(rows.map(r => r.userId)).toContain('not-an-object-id');
     expect(rows.map(r => r.userId)).not.toContain(String(users.admin));
     expect(rows.find(r => r.userId === String(users.a))).toMatchObject({ requests: 2, features: ['chat', 'image'] });
+
+    const internalIds = ['admin', 'staff', 'system', 'synthetic'].map(k => String(users[k as keyof typeof users]));
+    const directInternal = (await UsageEvent.distinct('userId', {
+      status: 'ok',
+      createdAt: { $gte: new Date(`${DAY}T00:00:00Z`), $lt: new Date('2026-06-02T00:00:00Z') },
+      userId: { $in: internalIds },
+    })) as string[];
+    expect(daily?.internal).toEqual({
+      dau: directInternal.length,
+      wau: 4,
+      mau: 4,
+      userIds: [...internalIds].sort(),
+      requestsBySource: { web: 4 },
+    });
+  });
+
+  it('computes internal WAU and MAU over the window and refreshes later days when an earlier one lands', async () => {
+    await seedEvent(users.staff, `${DAY}T10:00:00Z`);
+    await seedEvent(users.admin, `${DAY}T11:00:00Z`);
+    await seedEvent(users.admin, '2026-05-30T10:00:00Z');
+    await seedEvent(users.system, '2026-05-10T10:00:00Z');
+    await rollupDay(DAY, { now: NOW });
+    expect((await AnalyticsDaily.findOne({ day: DAY }).lean())?.internal).toMatchObject({ dau: 2, wau: 2, mau: 2 });
+
+    await rollupDay('2026-05-10', { now: NOW });
+    await rollupDay('2026-05-30', { now: NOW });
+    expect((await AnalyticsDaily.findOne({ day: DAY }).lean())?.internal).toMatchObject({ dau: 2, wau: 2, mau: 3 });
+    expect((await AnalyticsDaily.findOne({ day: '2026-05-30' }).lean())?.internal).toMatchObject({
+      dau: 1,
+      wau: 1,
+      mau: 2,
+    });
+    // External counts are untouched by internal activity.
+    expect(await AnalyticsDaily.findOne({ day: DAY }).lean()).toMatchObject({ dau: 0, wau: 0, mau: 0 });
+  });
+
+  it('leaves a later row without internal counts alone when refreshing its windows', async () => {
+    await seedEvent(users.a, `${DAY}T10:00:00Z`);
+    await rollupDay(DAY, { now: NOW });
+    await AnalyticsDaily.updateOne({ day: DAY }, { $unset: { internal: 1 } });
+    await seedEvent(users.admin, '2026-05-30T10:00:00Z');
+    await rollupDay('2026-05-30', { now: NOW });
+    expect((await AnalyticsDaily.findOne({ day: DAY }).lean())?.internal).toBeUndefined();
   });
 
   it('writes a zero row for an empty day', async () => {

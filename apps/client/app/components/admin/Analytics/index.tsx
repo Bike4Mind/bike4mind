@@ -2,7 +2,12 @@ import { useState, type ReactNode } from 'react';
 import { Alert, Box, Button, Input, Skeleton, Stack, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
 import { ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
-import type { AnalyticsOverview, AnalyticsOverviewQuery, AnalyticsRange } from '@client/app/utils/analyticsOverview';
+import type {
+  AnalyticsAccounts,
+  AnalyticsOverview,
+  AnalyticsOverviewQuery,
+  AnalyticsRange,
+} from '@client/app/utils/analyticsOverview';
 import {
   AdminPageHeader,
   SegmentedControl,
@@ -35,6 +40,16 @@ const SIGNUPS_OPTIONS = [
   { value: 'legit', label: 'Legit only' },
   { value: 'all', label: 'All' },
 ] as const;
+const ACCOUNTS_OPTIONS = [
+  { value: 'external', label: 'External only' },
+  { value: 'internal', label: 'Internal only' },
+  { value: 'all', label: 'All' },
+] as const;
+const FOOTERS: Record<AnalyticsAccounts, string> = {
+  external: 'Counts exclude staff, system and test accounts. Days are UTC.',
+  internal: 'Active users count only staff, system and test accounts; signups always exclude them. Days are UTC.',
+  all: 'Active users include staff, system and test accounts; signups always exclude them. Days are UTC.',
+};
 
 const todayUtc = () => new Date().toISOString().slice(0, 10);
 const shiftUtc = (day: string, days: number) =>
@@ -225,6 +240,15 @@ const AnalyticsTab = () => {
             data-testid="analytics-signups-mode"
           />
         </ToolbarGroup>
+        <ToolbarGroup label="Accounts">
+          <SegmentedControl
+            options={ACCOUNTS_OPTIONS}
+            value={query.accounts}
+            onChange={accounts => setQuery({ accounts })}
+            aria-label="Accounts counted"
+            data-testid="analytics-accounts-mode"
+          />
+        </ToolbarGroup>
         {data && (
           <Stack direction="row" alignItems="center" gap={1} sx={{ ml: { md: 'auto' } }}>
             <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="analytics-last-updated">
@@ -262,7 +286,9 @@ const AnalyticsTab = () => {
         >
           <Box>
             <Typography level="body-sm">
-              {`Rollup is missing for ${missing.length} ${missing.length === 1 ? 'day' : 'days'}; those days show as gaps.`}
+              {`${data?.accounts === 'external' ? 'Rollup is' : 'Internal counts are'} missing for ${missing.length} ${
+                missing.length === 1 ? 'day' : 'days'
+              }; those days show as gaps.`}
             </Typography>
             {showMissing && (
               <Typography level="body-xs" sx={{ mt: 0.5 }} data-testid="analytics-missing-days">
@@ -292,7 +318,7 @@ const AnalyticsTab = () => {
       </Box>
 
       <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="analytics-footer">
-        Counts exclude staff, system and test accounts. Days are UTC.
+        {FOOTERS[data?.accounts ?? query.accounts]}
       </Typography>
     </Stack>
   );

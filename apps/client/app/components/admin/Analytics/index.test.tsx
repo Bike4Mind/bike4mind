@@ -28,6 +28,7 @@ vi.mock('recharts', async importOriginal => {
 });
 
 import AnalyticsTab from './index';
+import { ActiveUsersTooltip } from './ActiveUsersSection';
 import { readAnalyticsFilters, writeAnalyticsFilters } from './analyticsTabSearch';
 
 const theme = extendTheme({ ...getThemeConfig() });
@@ -44,6 +45,7 @@ const overview = (patch: Partial<AnalyticsOverview> = {}): AnalyticsOverview => 
     bucket: 'day',
   },
   signupsMode: 'legit',
+  accounts: 'external',
   lastUpdated: '2026-06-15T04:10:00.000Z',
   stale: false,
   missingDays: [],
@@ -55,8 +57,26 @@ const overview = (patch: Partial<AnalyticsOverview> = {}): AnalyticsOverview => 
   },
   activeUsers: {
     days: [
-      { day: '2026-06-14', dau: 20, wau: 60, mau: 112, partial: false, previousMau: 100 },
-      { day: '2026-06-15', dau: 4, wau: 61, mau: 113, partial: true, previousMau: 101 },
+      {
+        day: '2026-06-14',
+        dau: 20,
+        wau: 60,
+        mau: 112,
+        partial: false,
+        previousMau: 100,
+        external: { dau: 20, wau: 60, mau: 112 },
+        internal: { dau: 3, wau: 5, mau: 9 },
+      },
+      {
+        day: '2026-06-15',
+        dau: 4,
+        wau: 61,
+        mau: 113,
+        partial: true,
+        previousMau: 101,
+        external: { dau: 4, wau: 61, mau: 113 },
+        internal: { dau: 1, wau: 5, mau: 9 },
+      },
     ],
     bySource: [
       { day: '2026-06-14', partial: false, counts: { web: 30 } },
@@ -107,23 +127,39 @@ beforeEach(() => {
 
 describe('analytics URL state', () => {
   it('reads defaults and drops unknown values', () => {
-    expect(readAnalyticsFilters({})).toEqual({ range: '28d', compare: 'prev', signups: 'legit' });
-    expect(readAnalyticsFilters({ range: '1y', compare: 'x', signups: 'bots', from: '2026-01-01' })).toEqual({
+    expect(readAnalyticsFilters({})).toEqual({
       range: '28d',
       compare: 'prev',
       signups: 'legit',
+      accounts: 'external',
+    });
+    expect(
+      readAnalyticsFilters({ range: '1y', compare: 'x', signups: 'bots', accounts: 'staff', from: '2026-01-01' })
+    ).toEqual({
+      range: '28d',
+      compare: 'prev',
+      signups: 'legit',
+      accounts: 'external',
     });
   });
 
   it('round-trips a custom view and leaves defaults out of the URL', () => {
-    const query = { range: 'custom', from: '2026-01-01', to: '2026-01-31', compare: 'off', signups: 'all' } as const;
+    const query = {
+      range: 'custom',
+      from: '2026-01-01',
+      to: '2026-01-31',
+      compare: 'off',
+      signups: 'all',
+      accounts: 'internal',
+    } as const;
     expect(readAnalyticsFilters(writeAnalyticsFilters(query))).toEqual(query);
-    expect(writeAnalyticsFilters({ range: '28d', compare: 'prev', signups: 'legit' })).toEqual({
+    expect(writeAnalyticsFilters({ range: '28d', compare: 'prev', signups: 'legit', accounts: 'external' })).toEqual({
       range: '',
       from: '',
       to: '',
       compare: '',
       signups: '',
+      accounts: '',
     });
   });
 });
@@ -132,7 +168,7 @@ describe('AnalyticsTab', () => {
   it('requests the view a deep link describes', async () => {
     await renderPage('/admin?tab=analytics&range=90d&compare=off&signups=all');
     await screen.findByText('Active users (MAU)');
-    expect(lastParams()).toEqual({ range: '90d', compare: 'off', signups: 'all' });
+    expect(lastParams()).toEqual({ range: '90d', compare: 'off', signups: 'all', accounts: 'external' });
     expect(screen.getByTestId('analytics-range-90d')).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByTestId('analytics-compare-off')).toHaveAttribute('aria-pressed', 'true');
   });
@@ -140,7 +176,7 @@ describe('AnalyticsTab', () => {
   it('writes toolbar changes to the URL and refetches with them', async () => {
     const router = await renderPage('/admin?tab=analytics');
     await screen.findByText('Active users (MAU)');
-    expect(lastParams()).toEqual({ range: '28d', compare: 'prev', signups: 'legit' });
+    expect(lastParams()).toEqual({ range: '28d', compare: 'prev', signups: 'legit', accounts: 'external' });
 
     fireEvent.click(screen.getByTestId('analytics-range-7d'));
     await waitFor(() => expect(router.state.location.search.range).toBe('7d'));
@@ -148,10 +184,37 @@ describe('AnalyticsTab', () => {
     await waitFor(() =>
       expect(router.state.location.search).toMatchObject({ tab: 'analytics', range: '7d', signups: 'all' })
     );
-    await waitFor(() => expect(lastParams()).toEqual({ range: '7d', compare: 'prev', signups: 'all' }));
+    await waitFor(() =>
+      expect(lastParams()).toEqual({ range: '7d', compare: 'prev', signups: 'all', accounts: 'external' })
+    );
 
     fireEvent.click(screen.getByTestId('analytics-range-28d'));
     await waitFor(() => expect(router.state.location.search.range).toBeUndefined());
+  });
+
+  it('keeps the accounts toggle in the URL and requests that view', async () => {
+    const router = await renderPage('/admin?tab=analytics&accounts=internal');
+    await screen.findByText('Active users (MAU)');
+    expect(lastParams()).toMatchObject({ accounts: 'internal' });
+    expect(screen.getByTestId('analytics-accounts-mode-internal')).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(screen.getByTestId('analytics-accounts-mode-all'));
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ tab: 'analytics', accounts: 'all' }));
+    await waitFor(() => expect(lastParams()).toMatchObject({ accounts: 'all' }));
+
+    fireEvent.click(screen.getByTestId('analytics-accounts-mode-external'));
+    await waitFor(() => expect(router.state.location.search.accounts).toBeUndefined());
+  });
+
+  it('says in the footer and the missing banner which accounts are counted', async () => {
+    mocks.get.mockResolvedValue({ data: overview({ accounts: 'internal', missingDays: ['2026-06-01'] }) });
+    await renderPage('/admin?tab=analytics&accounts=internal');
+    expect(await screen.findByTestId('analytics-footer')).toHaveTextContent(
+      'Active users count only staff, system and test accounts; signups always exclude them.'
+    );
+    expect(await screen.findByTestId('analytics-missing-banner')).toHaveTextContent(
+      'Internal counts are missing for 1 day; those days show as gaps.'
+    );
   });
 
   it('seeds a custom range from the range on screen', async () => {
@@ -266,5 +329,39 @@ describe('AnalyticsTab', () => {
     const signals = await screen.findByTestId('analytics-signup-signals');
     expect(within(signals).getByText('Domain burst')).toBeInTheDocument();
     expect(within(signals).getByTestId('admin-inline-bar')).toBeInTheDocument();
+  });
+});
+
+describe('ActiveUsersTooltip', () => {
+  const daysById = new Map(overview().activeUsers.days.map(day => [day.day, day]));
+  const renderTooltip = (day: string) =>
+    render(
+      <CssVarsProvider theme={theme}>
+        <ActiveUsersTooltip
+          active
+          label="Jun 14"
+          payload={[
+            { name: 'DAU', value: 20, color: 'red', payload: { day } },
+            { name: 'DAU (today, partial)', value: null, payload: { day } },
+          ]}
+          daysById={daysById}
+        />
+      </CssVarsProvider>
+    );
+
+  it("shows the hovered series and the day's external and internal counts", () => {
+    renderTooltip('2026-06-14');
+    const tooltip = screen.getByTestId('analytics-active-users-tooltip');
+    expect(tooltip).toHaveTextContent('Jun 14 (UTC)');
+    expect(tooltip).toHaveTextContent('DAU: 20');
+    expect(tooltip).not.toHaveTextContent('partial');
+    expect(screen.getByTestId('analytics-tooltip-external')).toHaveTextContent('External: DAU 20, WAU 60, MAU 112');
+    expect(screen.getByTestId('analytics-tooltip-internal')).toHaveTextContent('Internal: DAU 3, WAU 5, MAU 9');
+  });
+
+  it('says when a day has no internal counts', () => {
+    daysById.set('2026-06-01', { ...overview().activeUsers.days[0], day: '2026-06-01', internal: null });
+    renderTooltip('2026-06-01');
+    expect(screen.getByTestId('analytics-tooltip-internal')).toHaveTextContent('Internal: not recorded');
   });
 });

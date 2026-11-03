@@ -14,6 +14,7 @@ const query = (patch: Partial<AnalyticsOverviewQuery> = {}): AnalyticsOverviewQu
   range: '7d',
   compare: 'prev',
   signups: 'legit',
+  accounts: 'external',
   ...patch,
 });
 
@@ -24,6 +25,7 @@ const row = (day: string, patch: Partial<OverviewDailyRow> = {}): OverviewDailyR
   mau: 40,
   signups: { legit: 2, suspected: 1, unclassified: 0, bySignal: { domainBurst: 1 } },
   requestsBySource: { web: 5, cli: 1, system: 9 },
+  internal: { dau: 2, wau: 3, mau: 4, requestsBySource: { web: 1, desktop: 2 } },
   computedAt: new Date('2026-06-15T04:00:00.000Z'),
   ...patch,
 });
@@ -34,6 +36,7 @@ const live: LiveDay = {
   mau: 45,
   signups: { legit: 0, suspected: 0, unclassified: 4, bySignal: {} },
   requestsBySource: { web: 2 },
+  internal: { dau: 1, wau: 3, mau: 5, requestsBySource: { cli: 1 } },
 };
 
 const rowsFor = (from: string, to: string, patch?: (day: string) => Partial<OverviewDailyRow>) =>
@@ -98,7 +101,14 @@ describe('resolveOverviewWindow', () => {
 
 describe('buildOverview', () => {
   const build = (q: AnalyticsOverviewQuery, rows: OverviewDailyRow[], liveDay: LiveDay | null = live) =>
-    buildOverview({ window: resolveOverviewWindow(q, NOW), signupsMode: q.signups, rows, live: liveDay, now: NOW });
+    buildOverview({
+      window: resolveOverviewWindow(q, NOW),
+      signupsMode: q.signups,
+      accounts: q.accounts,
+      rows,
+      live: liveDay,
+      now: NOW,
+    });
 
   it('reads tiles from complete days only and compares them with the previous period', () => {
     const rows = [
@@ -222,6 +232,60 @@ describe('buildOverview', () => {
       { signal: 'domainBurst', count: 6 },
       { signal: 'signupSpike', count: 4 },
     ]);
+  });
+
+  it('counts only internal accounts in internal mode, tiles and surfaces included', () => {
+    const overview = build(query({ accounts: 'internal' }), rowsFor('2026-06-03', '2026-06-14'));
+    expect(overview.accounts).toBe('internal');
+    expect(overview.activeUsers.days[0]).toMatchObject({ dau: 2, wau: 3, mau: 4, previousMau: 4 });
+    expect(overview.activeUsers.days.at(-1)).toMatchObject({ dau: 1, wau: 3, mau: 5, partial: true });
+    expect(overview.stats.mau).toEqual({ value: 4, previous: 4 });
+    expect(overview.stats.avgDau.value).toBe(2);
+    expect(overview.activeUsers.bySource[0].counts).toEqual({ web: 1, desktop: 2 });
+    // Signups never include internal accounts, so the toggle leaves them alone.
+    expect(overview.stats.newSignups.value).toBe(12);
+  });
+
+  it('sums both sides in all mode and merges their surfaces', () => {
+    const overview = build(query({ accounts: 'all', compare: 'off' }), rowsFor('2026-06-09', '2026-06-14'));
+    expect(overview.activeUsers.days[0]).toMatchObject({ dau: 12, wau: 23, mau: 44 });
+    expect(overview.activeUsers.days.at(-1)).toMatchObject({ dau: 4, wau: 28, mau: 50 });
+    expect(overview.activeUsers.bySource[0].counts).toEqual({ web: 6, cli: 1, desktop: 2 });
+    expect(overview.activeUsers.bySource.at(-1)?.counts).toEqual({ web: 2, cli: 1 });
+    expect(overview.stats.mau.value).toBe(44);
+  });
+
+  it('returns both sides of every day for the hover, whatever the selection', () => {
+    for (const accounts of ['external', 'internal', 'all'] as const) {
+      const days = build(query({ accounts, compare: 'off' }), rowsFor('2026-06-09', '2026-06-14')).activeUsers.days;
+      expect(days[0]).toMatchObject({
+        external: { dau: 10, wau: 20, mau: 40 },
+        internal: { dau: 2, wau: 3, mau: 4 },
+      });
+      expect(days.at(-1)).toMatchObject({
+        external: { dau: 3, wau: 25, mau: 45 },
+        internal: { dau: 1, wau: 3, mau: 5 },
+      });
+    }
+  });
+
+  it('treats a row without internal counts as a gap for internal and all, but not for external', () => {
+    const rows = rowsFor('2026-06-09', '2026-06-14', day => (day === '2026-06-11' ? { internal: undefined } : {}));
+    const external = build(query({ compare: 'off' }), rows);
+    expect(external.missingDays).toEqual([]);
+    expect(external.activeUsers.days.find(day => day.day === '2026-06-11')).toMatchObject({ dau: 10, internal: null });
+    for (const accounts of ['internal', 'all'] as const) {
+      const overview = build(query({ accounts, compare: 'off' }), rows);
+      expect(overview.missingDays).toEqual(['2026-06-11']);
+      expect(overview.activeUsers.days.find(day => day.day === '2026-06-11')).toMatchObject({
+        dau: null,
+        mau: null,
+        external: { dau: 10, wau: 20, mau: 40 },
+        internal: null,
+      });
+      expect(overview.activeUsers.bySource.find(day => day.day === '2026-06-11')?.counts).toBeNull();
+      expect(overview.signups.buckets.find(b => b.start === '2026-06-11')?.legit).toBe(2);
+    }
   });
 
   it('reports the newest computedAt and flags it stale after 30 hours', () => {
