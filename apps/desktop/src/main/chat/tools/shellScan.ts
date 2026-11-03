@@ -591,6 +591,23 @@ const WSL_REPORTS = new Set(['-l', '--list', '-v', '--version', '--status', '--h
 /** What `ungranted` holds for a wsl run in a distro the command does not name: the default one, or one by id. */
 export const UNNAMED_DISTRO = 'a WSL distro the command does not name';
 
+/** What `ungranted` holds for a wsl run with `--system`, which starts the WSL system distro. */
+export const SYSTEM_DISTRO = 'the WSL system distro';
+
+/** wsl's options that run a command in a distro; any other, such as `--shutdown`, manages WSL itself. */
+const WSL_RUNS = new Set([
+  'd',
+  'u',
+  'e',
+  'cd',
+  'distribution',
+  'distribution-id',
+  'user',
+  'exec',
+  'shell-type',
+  'system',
+]);
+
 interface WslRun {
   /** The index of the `wsl` word, and the index past its own options. */
   at: number;
@@ -599,6 +616,9 @@ interface WslRun {
   distro: string | undefined;
   /** Whether `-e` hands the words after its options to a program, not to the distro's shell as a command line. */
   exec: boolean;
+  /** Whether `--system` starts the system distro, and whether an option outside `WSL_RUNS` is given. */
+  system: boolean;
+  managing: boolean;
 }
 
 /** Each `wsl` in a run of leading wrappers that starts a distro. */
@@ -611,16 +631,20 @@ function wslRuns(tokens: readonly string[]): WslRun[] {
     if (WSL_REPORTS.has(unquote(tokens[options[0]] ?? ''))) break;
     let distro: string | undefined;
     let exec = false;
+    let system = false;
+    let managing = false;
     for (const index of options) {
       const word = unquote(tokens[index]);
       const name = word.startsWith('--') ? longOptionName(wsl, word.slice(2).split('=')[0]) : word.slice(1, 2);
+      if (name === undefined || !WSL_RUNS.has(name)) managing = true;
       if (name === 'e' || name === 'exec') exec = true;
+      if (name === 'system') system = true;
       if (name === 'distribution-id' || name === 'system') distro = undefined;
       if (name !== 'd' && name !== 'distribution') continue;
       const { value } = optionArgument(tokens, index, 'd');
       distro = value === undefined || isDynamic(value) ? undefined : unquote(value);
     }
-    runs.push({ at, end, distro, exec });
+    runs.push({ at, end, distro, exec, system, managing });
   }
   return runs;
 }
@@ -776,6 +800,12 @@ function powershellParameter(name: string, seven: boolean): PowershellParameter 
   return undefined;
 }
 
+/** Whether `arg` names a parameter PowerShell knows, so a value such as `/c/repo` is not read as one. */
+function isPowershellParameter(arg: string, seven: boolean): boolean {
+  const name = powershellSwitch(arg, seven);
+  return name !== undefined && powershellParameter(name, seven) !== undefined;
+}
+
 /** What PowerShell (`seven` for pwsh) runs given `args`; null when it runs a script file or only prints help. */
 function powershellRun(args: readonly string[], seven: boolean): WindowsRun | null {
   for (let at = 0; at < args.length; at++) {
@@ -785,9 +815,7 @@ function powershellRun(args: readonly string[], seven: boolean): WindowsRun | nu
     if (meaning === 'command') return { words: at + 1, shown: args[at], stdin: false };
     if (meaning === 'help') return null;
     if (meaning === 'file') return args[at + 1] === '-' ? READS_STDIN : null;
-    if (meaning === 'value' && args[at + 1] !== undefined && powershellSwitch(args[at + 1], seven) === undefined) {
-      at++;
-    }
+    if (meaning === 'value' && args[at + 1] !== undefined && !isPowershellParameter(args[at + 1], seven)) at++;
     if (meaning !== undefined) continue;
     // 5.1 runs the first word it does not know, and every word after it, as a command; 7 runs it as a script.
     return seven ? null : { words: at, shown: 'running its arguments as a command', stdin: false };
@@ -1755,7 +1783,12 @@ export async function scanShell(
         const computed = tokens.some(isDynamic);
         sends.push({ reason, target: assigns || computed ? null : repositoryWrite(tokens.map(unquote), state.cwd) });
       }
-      for (const { distro } of wslRuns(tokens)) {
+      for (const { distro, system, managing } of wslRuns(tokens)) {
+        if (managing) ungranted.add(UNNAMED_DISTRO);
+        if (system) {
+          ungranted.add(SYSTEM_DISTRO);
+          continue;
+        }
         const root = distro === undefined ? UNNAMED_DISTRO : wslUncPath({ host: 'wsl.localhost', distro }, '/');
         if (distro === undefined || inUngrantedDistro(root, allowed)) ungranted.add(root);
       }

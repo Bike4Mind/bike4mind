@@ -6,7 +6,7 @@ import type { BackgroundProcessInfo } from '@shared/chat';
 import type { OutputStream } from './outputBuffer';
 import { isWithin, realpathNearest, resolveWithinRoots } from './paths';
 import { writesOwnRepository } from './ownRepository';
-import { inUngrantedDistro, scanShell, UNNAMED_DISTRO } from './shellScan';
+import { inUngrantedDistro, scanShell, SYSTEM_DISTRO, UNNAMED_DISTRO } from './shellScan';
 import {
   expectShellRun,
   gitRunsConfiguredProgram,
@@ -438,7 +438,7 @@ export async function shellApproval(
   const script = await sessionScriptRun(command, startDirectory, context.sessionId).catch(() => null);
   const gitProgram = gitRunsConfiguredProgram(scan.commands);
   const unreachable = [...new Set([...ungranted, ...scan.ungranted])];
-  const named = unreachable.filter(place => place !== UNNAMED_DISTRO);
+  const named = unreachable.filter(place => place !== UNNAMED_DISTRO && place !== SYSTEM_DISTRO);
   const reasons = [
     ...(scan.envFiles.length > 0 ? [`Reads ${scan.envFiles.join(', ')}, which usually holds secrets.`] : []),
     ...(scan.outbound.length > 0 ? [`Can send data off this computer (${scan.outbound.join(', ')}).`] : []),
@@ -457,6 +457,7 @@ export async function shellApproval(
     ...(unreachable.includes(UNNAMED_DISTRO)
       ? ['Runs wsl in a distro it does not name, which may be one this project has no folder in.']
       : []),
+    ...(unreachable.includes(SYSTEM_DISTRO) ? ['Runs wsl in the WSL system distro.'] : []),
   ];
   // A push or gh write to the folder's own origin still says so on the card, but does not stop
   // auto mode; a reply that has read untrusted content asks anyway, as these are never contained.

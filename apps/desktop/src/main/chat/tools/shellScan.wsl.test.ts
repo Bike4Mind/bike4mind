@@ -60,7 +60,7 @@ vi.doMock('../../wsl/wslPath', async () => {
   };
 });
 
-const { scanShell, UNNAMED_DISTRO } = await import('./shellScan');
+const { scanShell, SYSTEM_DISTRO, UNNAMED_DISTRO } = await import('./shellScan');
 const { shareName } = await import('../../wsl/wslPath');
 
 const OTHER = '\\\\wsl.localhost\\Debian\\etc\\hosts';
@@ -163,12 +163,28 @@ describe('a command wsl runs in a distro', () => {
   it.each([
     'wsl.exe ls',
     'wsl.exe -e cat /etc/hosts',
-    'wsl.exe -d Ubuntu --system ls',
     'wsl.exe --distribution-id {0a1b} ls',
     'wsl.exe -d "$DISTRO" ls',
     'echo ls | wsl.exe',
   ])('takes %s as reaching a distro it does not name', async command => {
     expect((await scanShell(command, ubuntu, [ubuntu]))?.ungranted).toEqual([UNNAMED_DISTRO]);
+  });
+
+  it.each([
+    ['a WSL project', ubuntu],
+    ['a Windows project with an Ubuntu folder', 'C:\\repo'],
+  ])('asks about a wsl management option after -d in %s', async (_kind, root) => {
+    for (const option of ['--shutdown', '--terminate', '--update', '--install', '--unregister']) {
+      const scan = await scanShell(`wsl.exe -d Ubuntu ${option}`, root, [root, ubuntu]);
+
+      expect(scan?.ungranted, option).toContain(UNNAMED_DISTRO);
+    }
+  });
+
+  it('names the system distro for --system, not an unnamed one', async () => {
+    const scan = await scanShell('wsl.exe -d Ubuntu --system ls', ubuntu, [ubuntu]);
+
+    expect(scan?.ungranted).toEqual([SYSTEM_DISTRO]);
   });
 
   it('asks before running it, in auto mode too, and names the distro', async () => {
