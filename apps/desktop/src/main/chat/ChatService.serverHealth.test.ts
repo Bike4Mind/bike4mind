@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
@@ -26,10 +26,12 @@ const cipher: SecretCipher = {
   decryptString: encrypted => encrypted.toString('utf8'),
 };
 const services: ChatService[] = [];
+const directories: string[] = [];
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
   for (const service of services.splice(0)) service.dispose();
+  await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true })));
 });
 
 function memoryFile(): StoreFile {
@@ -114,8 +116,10 @@ async function fixture(options: { signedIn?: boolean; other?: boolean } = {}) {
     get: vi.fn(async () => ({})),
     getAxiosInstance: () => ({ post: vi.fn() }),
   } as unknown as AuthenticatedApiClient;
+  const directory = await mkdtemp(join(tmpdir(), 'b4m-server-health-'));
+  directories.push(directory);
   const service = new ChatService({
-    store: new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-server-health-')), 'claude-hosted-default'),
+    store: new SessionStore(directory, 'claude-hosted-default'),
     queue: new MessageQueue(() => undefined),
     models: catalog,
     modelMemory: { read: async () => null, record: vi.fn(async () => {}) },
