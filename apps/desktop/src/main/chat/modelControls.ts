@@ -210,11 +210,18 @@ export function hostedControls(
         : [];
   const temperature = hostedTemperature(model);
   const cap = model.maxOutputTokens;
-  // The server raises max_tokens to the budget plus its headroom and never back to the cap, so a larger budget fails the turn.
-  const budgetMax = Math.min(MAX_THINKING_BUDGET_TOKENS, (cap ?? Infinity) - THINKING_ANSWER_HEADROOM_TOKENS);
+  // The server raises max_tokens to the budget plus its headroom and never back to the cap, so a larger budget
+  // fails the turn. With no cap stated, only lowering the budget the server sends by default is known to fit.
+  const budgetMax = cap
+    ? Math.min(MAX_THINKING_BUDGET_TOKENS, cap - THINKING_ANSWER_HEADROOM_TOKENS)
+    : DEFAULT_THINKING_BUDGET_TOKENS;
+  const budgetDefault = Math.min(DEFAULT_THINKING_BUDGET_TOKENS, budgetMax);
   const thinkingBudgetTokens =
     budgeted && budgetMax > MIN_THINKING_BUDGET_TOKENS
-      ? control({ min: MIN_THINKING_BUDGET_TOKENS, max: budgetMax, step: 1024 }, DEFAULT_THINKING_BUDGET_TOKENS)
+      ? {
+          ...control({ min: MIN_THINKING_BUDGET_TOKENS, max: budgetMax, step: 1024 }, budgetDefault),
+          ...(budgetDefault < DEFAULT_THINKING_BUDGET_TOKENS ? { sendsDefault: true as const } : {}),
+        }
       : undefined;
   // The server raises an adaptive Claude's max_tokens to this floor while it thinks, and gives any model that
   // reasons inside max_tokens the same when none is sent, since less can be spent on reasoning alone.

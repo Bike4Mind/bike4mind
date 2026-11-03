@@ -138,6 +138,33 @@ describe('hostedControls', () => {
     );
   });
 
+  it("sends a budget that fits on a cap below the server's default budget plus its answer room", () => {
+    const controls = hostedControls({ ...budgetClaude, maxOutputTokens: 12_000 }, undefined, false);
+    expect(controls.thinkingBudgetTokens).toMatchObject({ max: 11_000, default: 11_000, sendsDefault: true });
+    expect(requestGeneration(undefined, controls)).toEqual({ thinkingBudgetTokens: 11_000 });
+    expect(requestGeneration({ thinkingBudgetTokens: 4096 }, controls)).toEqual({ thinkingBudgetTokens: 4096 });
+    expect(effectiveControls(controls, undefined)?.maxOutputTokens).toMatchObject({ min: 12_000, max: 12_000 });
+    expect(effectiveControls(controls, { thinkingBudgetTokens: 4096 })?.maxOutputTokens?.min).toBe(5096);
+    expect(hostedControls({ ...budgetClaude, maxOutputTokens: 17_000 }, undefined, false).thinkingBudgetTokens).toEqual(
+      { min: 1024, max: 16_000, step: 1024, default: 16_000, scope: 'request' }
+    );
+  });
+
+  it('only lowers the default budget on a Claude whose cap is not stated', () => {
+    const { maxOutputTokens: _cap, ...uncapped } = budgetClaude;
+    const controls = hostedControls(uncapped, undefined, false);
+    expect(controls.thinkingBudgetTokens).toEqual({
+      min: 1024,
+      max: 16_000,
+      step: 1024,
+      default: 16_000,
+      scope: 'request',
+    });
+    expect(controls).not.toHaveProperty('maxOutputTokens');
+    expect(requestGeneration(undefined, controls)).toEqual({});
+    expect(requestGeneration({ thinkingBudgetTokens: 30_000 }, controls)).toEqual({ thinkingBudgetTokens: 16_000 });
+  });
+
   it('raises the max output floor to the budget the turn sends plus the answer room', () => {
     const controls = hostedControls(budgetClaude, undefined, false);
     expect(controls.maxOutputTokens).toMatchObject({ min: 1024, budgetHeadroom: 1000 });
