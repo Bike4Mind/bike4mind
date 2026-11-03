@@ -192,13 +192,15 @@ export async function reserveVoiceHold(args: {
   startedAt: Date;
   realtime: boolean;
   unaffordable: () => Error;
+  /** The apps pass theirs, which alert LiveOps on a refusal; this package cannot import them. */
+  newAccountSpendCap?: creditService.NewAccountSpendCapAdapters;
 }): Promise<boolean> {
   if (args.reservedCredits) {
     const user = await userRepository.findById(args.userId);
     if (user) {
       await creditService.assertNewAccountSpendWithinCap(
         { user, requestedCredits: args.reservedCredits, billedToOrganization: false },
-        newAccountSpendCapAdapters
+        args.newAccountSpendCap ?? newAccountSpendCapAdapters
       );
     }
   }

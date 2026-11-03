@@ -100,6 +100,29 @@ describe('useAdminTabUrlSync', () => {
     expect(search({ tab: 'subscribers' }).tab).toBe('waitlist');
   });
 
+  it('keeps the invite section when rewriting a legacy subscribers link', () => {
+    routerMock.search = { tab: 'subscribers', inviteSection: 'pending' };
+
+    renderHook(() => useHarness(AdminTab.Users));
+
+    expect(lastNavigation().search({ tab: 'subscribers', inviteSection: 'pending' })).toMatchObject({
+      tab: 'waitlist',
+      inviteSection: 'pending',
+    });
+  });
+
+  it('drops the invite section when leaving the waitlist tab', () => {
+    routerMock.search = { tab: 'waitlist', inviteSection: 'pending' };
+    const { result } = renderHook(() => useHarness(AdminTab.Waitlist));
+    routerMock.navigate.mockClear();
+
+    act(() => result.current.setActiveTab(AdminTab.Users));
+
+    const search = lastNavigation().search({ tab: 'waitlist', inviteSection: 'pending' });
+    expect(search.tab).toBe('users');
+    expect(search.inviteSection).toBeUndefined();
+  });
+
   // Mount effects run twice in development; a first-run flag would let the store default
   // overwrite the deep link on the second pass.
   it('keeps a deep link on StrictMode double-run', () => {

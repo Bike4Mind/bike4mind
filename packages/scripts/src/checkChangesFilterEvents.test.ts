@@ -345,12 +345,16 @@ describe('readActionConsumers', () => {
   // consumer as absent - the "silently partial" shape this whole file argues against.
   it('finds consumers under either YAML extension and ignores unrelated workflows', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'changes-filter-consumers-'));
-    fs.writeFileSync(path.join(dir, 'ci.yml'), 'uses: ./.github/actions/changes-filter\n');
-    fs.writeFileSync(path.join(dir, 'release.yaml'), 'uses: ./.github/actions/changes-filter\n');
-    fs.writeFileSync(path.join(dir, 'unrelated.yml'), 'uses: actions/checkout@v4\n');
-    fs.writeFileSync(path.join(dir, 'README.md'), 'uses: ./.github/actions/changes-filter\n');
+    try {
+      fs.writeFileSync(path.join(dir, 'ci.yml'), 'uses: ./.github/actions/changes-filter\n');
+      fs.writeFileSync(path.join(dir, 'release.yaml'), 'uses: ./.github/actions/changes-filter\n');
+      fs.writeFileSync(path.join(dir, 'unrelated.yml'), 'uses: actions/checkout@v4\n');
+      fs.writeFileSync(path.join(dir, 'README.md'), 'uses: ./.github/actions/changes-filter\n');
 
-    expect(readActionConsumers(dir).sort()).toEqual(['ci.yml', 'release.yaml']);
+      expect(readActionConsumers(dir).sort()).toEqual(['ci.yml', 'release.yaml']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

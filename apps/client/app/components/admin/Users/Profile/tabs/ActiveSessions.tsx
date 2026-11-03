@@ -30,11 +30,13 @@ const CREATED_VIA_LABELS: Readonly<Record<AuthSessionCreatedVia, string>> = {
   identify: 'Identity link',
   'oauth-token': 'OAuth app',
   device: 'Device code',
+  ios: 'Native app',
   'legacy-migration': 'Carried over',
 };
 
 /** "Browser on OS" from the stored fields, else parsed from the user agent (most sessions store only that); '-' when unknown. */
 export const sessionDevice = ({ device }: Pick<AdminUserSession, 'device'>): string => {
+  if (device?.displayName) return device.displayName;
   const stored = [device?.browser, device?.os].filter(Boolean).join(' on ');
   if (stored) return stored;
   const { label } = describeUserAgent(device?.userAgent);

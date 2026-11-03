@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
+import { access, constants, stat } from 'node:fs/promises';
 import { homedir, userInfo } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, join, posix, win32 } from 'node:path';
 
 /** Generous on purpose: a login shell loading nix-darwin, direnv and plugins takes seconds, more on a cold launch. */
 const SHELL_PATH_TIMEOUT_MS = 20_000;
@@ -30,6 +31,8 @@ function commonBinDirs(): string[] {
  * for the app's lifetime, so main/index.ts starts it at launch.
  */
 export function resolveUserPath(): Promise<string> {
+  // A Windows app gets the user's PATH from the registry however it is launched.
+  if (process.platform === 'win32') return Promise.resolve(process.env.PATH ?? '');
   cachedPath ??= new Promise<string>(resolve => {
     const fallback = [...(process.env.PATH ?? '').split(delimiter), ...commonBinDirs()]
       .filter(Boolean)
@@ -49,3 +52,59 @@ export function resolveUserPath(): Promise<string> {
   return cachedPath;
 }
 let cachedPath: Promise<string> | undefined;
+
+async function isExecutableFile(file: string, platform: NodeJS.Platform): Promise<boolean> {
+  try {
+    if (!(await stat(file)).isFile()) return false;
+    if (platform !== 'win32') await access(file, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** A drive or UNC prefix; `\dir` alone follows the current drive, so it is not rooted. */
+export const WINDOWS_ROOTED = /^(?:[a-z]:[\\/]|[\\/]{2}[^\\/])/i;
+
+/**
+ * The absolute path of `name` in the first absolute PATH directory that has it, `<name>.exe` on
+ * Windows. Relative entries are skipped, so nothing resolves from the working directory.
+ */
+export async function findOnPath(
+  name: string,
+  path: string,
+  platform: NodeJS.Platform = process.platform,
+  isExecutable: (file: string) => Promise<boolean> = file => isExecutableFile(file, platform)
+): Promise<string | null> {
+  const windows = platform === 'win32';
+  const file = windows ? `${name}.exe` : name;
+  for (const entry of path.split(windows ? ';' : ':')) {
+    const directory = entry.trim().replace(/^"(.*)"$/, '$1');
+    if (windows ? !WINDOWS_ROOTED.test(directory) : !posix.isAbsolute(directory)) continue;
+    const candidate = (windows ? win32 : posix).join(directory, file);
+    if (await isExecutable(candidate)) return candidate;
+  }
+  return null;
+}
+
+const found = new Map<string, string>();
+
+/**
+ * The file to spawn for the program `name`: on Windows its absolute path from `path` (see
+ * `findOnPath`), kept while it still exists, or null when there is none; elsewhere `name` itself.
+ */
+export async function hostProgram(
+  name: string,
+  path: string = process.env.PATH ?? '',
+  platform: NodeJS.Platform = process.platform,
+  isExecutable: (file: string) => Promise<boolean> = file => isExecutableFile(file, platform)
+): Promise<string | null> {
+  if (platform !== 'win32') return name;
+  const key = `${name}\0${path}`;
+  const kept = found.get(key);
+  if (kept && (await isExecutable(kept))) return kept;
+  const program = await findOnPath(name, path, platform, isExecutable);
+  if (program) found.set(key, program);
+  else found.delete(key);
+  return program;
+}

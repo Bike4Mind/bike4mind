@@ -20,9 +20,9 @@ No Node.js, pnpm, or source checkout is required.
    and launch it. Some distributions require FUSE support to run AppImages.
 3. On Windows, download `setup.exe` and run it. The one installer covers x64 and ARM64
    Windows and installs the build native to the PC. It is not code signed yet,
-   so SmartScreen shows a warning on first run. In-app updates work on Windows. The local
-   tool layer (shell commands, file access, sandboxing) is built around a POSIX shell and
-   is not yet verified on Windows.
+   so SmartScreen shows a warning on first run. In-app updates work on Windows. Shell commands
+   run in Git Bash, so Code projects need [Git for Windows](https://git-scm.com/download/win).
+   The rest of the local tool layer (file access, sandboxing) is not yet verified on Windows.
 
 New distribution releases require Developer ID signing and notarization. Legacy unsigned
 builds in the source repository do not gain an updater retroactively: install the first signed

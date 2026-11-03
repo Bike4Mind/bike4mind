@@ -24,8 +24,8 @@ import {
   sessionRepository,
   usageEventRepository,
   userRepository,
-  newAccountSpendCapAdapters,
 } from '@bike4mind/database';
+import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
 import { Logger } from '@bike4mind/observability';
 import { modelDiscoveryService } from '@bike4mind/services';
 import { GenerationJobEngine } from '@bike4mind/services/generationJobs';
@@ -392,7 +392,7 @@ export const getVideoJobDeps = (): VideoJobDeps => {
       users: userRepository,
       organizations: organizationRepository,
       creditTransactions: creditTransactionRepository,
-      newAccountSpendCap: newAccountSpendCapAdapters,
+      newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
     },
     enqueue: enqueueGenerationJob,
     recordUsage,
@@ -421,7 +421,7 @@ export const getMusicJobDeps = (): MusicJobDeps => {
       users: userRepository,
       organizations: organizationRepository,
       creditTransactions: creditTransactionRepository,
-      newAccountSpendCap: newAccountSpendCapAdapters,
+      newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
     },
     enqueue: enqueueGenerationJob,
     recordUsage: recordMusicUsage,

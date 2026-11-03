@@ -110,7 +110,7 @@ describe('model host routes', () => {
   it('streams host events: the facts first, again when they change, and keepalives in between', async () => {
     let current: HostFacts = facts;
     const { manage } = await start({
-      probe: async () => ({ host: current, settings }),
+      probe: async () => ({ host: current, settings, ollamaHome: null }),
       factsMaxAgeMs: 0,
       eventsIntervalMs: 30,
     });

@@ -25,6 +25,7 @@ import { getFileExtension } from '@bike4mind/utils';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';
 import { respond } from '@server/utils/respond';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
@@ -161,6 +162,8 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
           db: { batches: dataLakeBatchRepository },
         });
       }
+
+      await consumeFileUploadBudget(req, 1);
 
       const result = await withTransaction(async () => {
         return fabFilesService.createFabFile(user.id, params, {

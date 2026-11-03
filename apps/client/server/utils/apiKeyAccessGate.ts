@@ -13,7 +13,13 @@ import {
   getActiveSubscriptionsForUser,
   type ActiveSubscriptionsRequest,
 } from '@server/entitlements/activeSubscriptions';
-import { hasPaidSubscription, type RateTierUser } from '@server/utils/userRateTier';
+import {
+  hasPaidSubscription,
+  hasPurchasedCredits,
+  holdsPaidStanding,
+  type PaidStandingUser,
+} from '@server/entitlements/paidStanding';
+import type { RateTierUser } from '@server/utils/userRateTier';
 
 export type ApiKeyAccessMode = 'all' | 'paid' | 'disabled';
 
@@ -71,15 +77,11 @@ async function orgHasPaidPlan(organizationId: string): Promise<boolean> {
 type ApiKeyAccessBasis = AdminApiKeyAccess['basis'];
 
 /** Pass the user document itself: a projection without `lastCreditsPurchasedAt` refuses a credit buyer. */
-export type ApiKeyAccessUser = RateTierUser & { lastCreditsPurchasedAt?: Date | null };
+export type ApiKeyAccessUser = RateTierUser & PaidStandingUser;
 
-// The same "ever bought" signal that grants plan:paid (server/entitlements/index.ts) and
-// hasPaidStanding (userApiKeyService/trust.ts).
-const hasBoughtCredits = (user: ApiKeyAccessUser): boolean => Boolean(user.lastCreditsPurchasedAt);
-
-/** The paid-mode subscription check shared by the gate and the admin description of it. */
+/** The paid-mode check shared by the gate and the admin description of it, after the purchase shortcut. */
 async function hasPaidApiKeyAccess(
-  user: RateTierUser,
+  user: ApiKeyAccessUser,
   billing?: ApiKeyBillingRef,
   req?: ActiveSubscriptionsRequest
 ): Promise<boolean> {
@@ -92,7 +94,7 @@ async function hasPaidApiKeyAccess(
     matchingRequest.activeSubscriptions = rows;
     matchingRequest.activeSubscriptionsStrict = true;
   }
-  if (hasPaidSubscription(rows)) return true;
+  if (holdsPaidStanding(user, rows)) return true;
 
   if (billing?.billingOwnerType === CreditHolderType.Organization && billing.organizationId) {
     return orgHasPaidPlan(billing.organizationId);
@@ -101,9 +103,9 @@ async function hasPaidApiKeyAccess(
 }
 
 /**
- * Admins, developers and trusted admin-provisioned keys bypass the switch. Paid access includes
- * standalone plans, org seats and a past credit purchase. Read failures propagate so clients get a
- * retryable 5xx.
+ * Admins, developers and trusted admin-provisioned keys bypass the switch. Paid mode admits paid
+ * standing (`@server/entitlements/paidStanding`) or a key billed to an org on a paid plan. Read
+ * failures propagate so clients get a retryable 5xx.
  */
 export async function isApiKeyAccessAllowed(
   user: ApiKeyAccessUser,
@@ -116,7 +118,7 @@ export async function isApiKeyAccessAllowed(
   if (mode === 'all') return true;
   if (mode === 'disabled') return false;
 
-  return hasBoughtCredits(user) || hasPaidApiKeyAccess(user, billing, req);
+  return hasPurchasedCredits(user) || hasPaidApiKeyAccess(user, billing, req);
 }
 
 /**
@@ -131,7 +133,7 @@ export async function describeApiKeyAccess(user: ApiKeyAccessUser): Promise<Admi
   if (hasDeveloperUserTag(user.tags)) return bypass('developer');
   if (mode === 'all') return bypass('open_to_all');
   if (mode === 'disabled') return { mode, allowed: false, basis: 'disabled' };
-  if (hasBoughtCredits(user)) return bypass('credit_purchase');
+  if (hasPurchasedCredits(user)) return bypass('credit_purchase');
 
   const paid = await hasPaidApiKeyAccess(user);
   return { mode, allowed: paid, basis: paid ? 'paid_subscription' : 'no_paid_subscription' };

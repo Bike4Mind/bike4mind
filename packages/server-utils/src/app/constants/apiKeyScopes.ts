@@ -508,6 +508,12 @@ const HAND_WRITTEN_ADMIN_ONLY_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     endpoints: [],
   },
   {
+    value: ApiKeyScope.REWARDS_GRANT,
+    label: 'Partners: Rewards',
+    description: 'Server-to-server credit grants for partner games (BedrockNews Headword)',
+    endpoints: [],
+  },
+  {
     value: ApiKeyScope.RELEASE_NOTES_WRITE,
     label: 'Release Notes: Write',
     description:
