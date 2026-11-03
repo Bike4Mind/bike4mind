@@ -41,7 +41,7 @@ import { computeBurnStats, MIN_DAYS_FOR_PROJECTION } from './creditBurnRate';
 import { getCreditSeriesLabel } from './creditChartLabels';
 import dynamic from 'next/dynamic';
 
-type SliceTooltipPoint = { id: string; serieId: string | number; data: { x: string | number | Date; y: number } };
+type SliceTooltipPoint = { id: string; seriesId: string | number; data: { x: string | number | Date; y: number } };
 
 const UsageDashboard = dynamic(
   () =>
@@ -971,8 +971,8 @@ const CreditAnalyticsTabContent: React.FC = () => {
                   </Typography>
                   {slice.points.map(point => (
                     <Typography key={point.id} level="body-xs">
-                      {getCreditSeriesLabel(String(point.serieId), t)}: <strong>{point.data.y.toLocaleString()}</strong>{' '}
-                      {t('credits.credits')}
+                      {getCreditSeriesLabel(String(point.seriesId), t)}:{' '}
+                      <strong>{point.data.y.toLocaleString()}</strong> {t('credits.credits')}
                     </Typography>
                   ))}
                 </Box>
