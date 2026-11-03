@@ -8,7 +8,7 @@ import {
 } from '@bike4mind/common';
 import { analyticsHopRepository, type IAnalyticsHopDoc } from '@bike4mind/database';
 import { emitProductEvent, HOST_PRODUCT_ID } from '@bike4mind/server-utils/analytics/emitActiveEvent';
-import { HOP_COOKIE, HOP_PARAM } from '@bike4mind/server-utils/lib/hopNames';
+import { HOP_COOKIE, HOP_EVENT, HOP_MINTED_EVENT, HOP_PARAM } from '@bike4mind/server-utils/lib/hopNames';
 import { parseCookies } from '@bike4mind/server-utils/analytics/cookies';
 import {
   HOP_TOKEN_TTL_SECONDS,
@@ -35,8 +35,7 @@ import { stableEventId } from './signupEvents';
  * self-reported stream in signupEvents.ts), nothing here takes a product from the browser.
  */
 
-export const HOP_MINTED_EVENT = 'hop_minted';
-export const HOP_EVENT = 'hop';
+export { HOP_EVENT, HOP_MINTED_EVENT };
 
 /**
  * Products a hop may be minted to: the ones that can redeem one. Only this app, for now. A hop to

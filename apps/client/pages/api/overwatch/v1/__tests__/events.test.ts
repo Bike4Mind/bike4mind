@@ -217,6 +217,76 @@ describe('POST /api/overwatch/v1/events', () => {
     });
   });
 
+  // The hop events are proof that a hop was minted or redeemed. Only this deployment's own paths
+  // record them: the mint route queues hop_minted directly, and the redeem posts hop under the host
+  // product's key. Any other key posting them would be forging a verified hop.
+  describe('reserved hop events', () => {
+    const hostKey = {
+      scopes: [ApiKeyScope.OVERWATCH_INGEST_WRITE],
+      productId: 'bike4mind',
+      keyId: 'host-key',
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    };
+    const hopMetadata = { hopId: 'a'.repeat(32), src: 'vibeswire', dest: 'bike4mind', verified: true };
+    const eventId = (n: number) => `550e8400-e29b-41d4-a716-${String(n).padStart(12, '0')}`;
+
+    it('refuses hop and hop_minted from a product key, one by one, and queues the rest of the batch', async () => {
+      mockSendBatch.mockResolvedValue([{ index: 0, success: true, messageId: 'm-0' }]);
+      const events = [
+        baseEvent({ eventId: eventId(1), event: 'hop', metadata: hopMetadata }),
+        baseEvent({ eventId: eventId(2), event: 'page_view' }),
+        baseEvent({ eventId: eventId(3), event: 'hop_minted', metadata: { hopId: 'a'.repeat(32), dest: 'bike4mind' } }),
+      ];
+      const { req, res } = createReq({ body: { events } });
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(200);
+      const data = res._getJSONData();
+      expect(data).toMatchObject({ accepted: 1, rejected: 2 });
+      expect(data.results[0]).toEqual({ index: 0, status: 'rejected', error: expect.stringMatching(/'hop'/) });
+      expect(data.results[1]).toMatchObject({ index: 1, status: 'accepted' });
+      expect(data.results[2]).toEqual({ index: 2, status: 'rejected', error: expect.stringMatching(/'hop_minted'/) });
+      const queued = mockSendBatch.mock.calls[0][1] as Array<{ event: string }>;
+      expect(queued.map(e => e.event)).toEqual(['page_view']);
+    });
+
+    it('answers 400 when every event in the request is a refused hop event', async () => {
+      const { req, res } = createReq({ body: { event: baseEvent({ event: 'hop', metadata: hopMetadata }) } });
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(400);
+      expect(res._getJSONData()).toMatchObject({ accepted: 0, rejected: 1 });
+      expect(mockSendBatch).not.toHaveBeenCalled();
+    });
+
+    it("accepts hop from the host app's own key: the redeem's path", async () => {
+      const { req, res } = createReq({
+        apiKeyInfo: hostKey,
+        body: { event: baseEvent({ productId: 'bike4mind', event: 'hop', metadata: hopMetadata }) },
+      });
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().results[0].status).toBe('accepted');
+    });
+
+    it("refuses hop_minted even from the host app's key: the mint route never posts it here", async () => {
+      const { req, res } = createReq({
+        apiKeyInfo: hostKey,
+        body: {
+          event: baseEvent({ productId: 'bike4mind', event: 'hop_minted', metadata: { hopId: 'a'.repeat(32) } }),
+        },
+      });
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(400);
+      expect(res._getJSONData().results[0]).toMatchObject({
+        status: 'rejected',
+        error: expect.stringMatching(/mint route/),
+      });
+    });
+  });
+
   describe('envelope validation', () => {
     it('returns 400 for invalid envelope (not an object)', async () => {
       const { req, res } = createReq({ body: 'garbage' });

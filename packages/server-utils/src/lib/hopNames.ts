@@ -15,3 +15,12 @@ export const HOP_PARAM = 'b4m_hop';
  * Set only with the visitor's consent. Server-only: no client code reads it.
  */
 export const HOP_COOKIE = 'b4m_hop';
+
+/**
+ * The Overwatch events a hop produces. Only this deployment's own paths may send them: the mint
+ * route queues `hop_minted` directly, and the redeem sends `hop` under the host product's key.
+ * The ingest route refuses both from anyone else (pages/api/overwatch/v1/events.ts), since a
+ * product that could post them itself could claim hops nobody minted or redeemed.
+ */
+export const HOP_MINTED_EVENT = 'hop_minted';
+export const HOP_EVENT = 'hop';
