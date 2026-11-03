@@ -6,7 +6,6 @@ const h = vi.hoisted(() => ({
   audit: vi.fn(),
   axiosPost: vi.fn(),
   runCloudScan: vi.fn(),
-  runWafScan: vi.fn(),
   findLatest: vi.fn(),
 }));
 
@@ -55,22 +54,15 @@ vi.mock('@aws-sdk/client-sqs', () => ({
 vi.mock('sst', () => ({
   Resource: {
     SECOPS_ZAP_DISPATCH_TOKEN: { value: 'test-token' },
-    SECOPS_PACKAGES_DISPATCH_TOKEN: { value: 'test-token' },
-    SECOPS_SECRETS_DISPATCH_TOKEN: { value: 'test-token' },
     SECOPS_PROWLER_WORKFLOW_TOKEN: { value: 'test-token' },
     GITHUB_ZAP_REF: { value: 'main' },
   },
 }));
 vi.mock('axios', () => ({ default: { post: h.axiosPost } }));
 vi.mock('@bike4mind/server-utils/security/cloudScan', () => ({ handler: h.runCloudScan }));
-vi.mock('@bike4mind/server-utils/security/wafScan', () => ({ handler: h.runWafScan }));
 
 import cloud from '../cloud';
 import cloudProwler from '../cloud-prowler';
-import code from '../code';
-import packages from '../packages';
-import secrets from '../secrets';
-import waf from '../waf';
 import web from '../web';
 
 type Route = (req: unknown, res: unknown) => Promise<void>;
@@ -87,7 +79,6 @@ beforeEach(() => {
   h.audit.mockResolvedValue(null);
   h.axiosPost.mockResolvedValue({ status: 204 });
   h.runCloudScan.mockResolvedValue(undefined);
-  h.runWafScan.mockResolvedValue(undefined);
   h.findLatest.mockResolvedValue(null);
 });
 
@@ -95,10 +86,6 @@ describe('admin security scan triggers audit', () => {
   it.each([
     ['cloud', cloud, 202, h.runCloudScan],
     ['cloud-prowler', cloudProwler, 202, h.axiosPost],
-    ['code', code, 202, h.axiosPost],
-    ['packages', packages, 202, h.axiosPost],
-    ['secrets', secrets, 202, h.axiosPost],
-    ['waf', waf, 200, h.runWafScan],
     ['web', web, 202, h.axiosPost],
   ])('records settings.security_scan.triggered for a %s scan', async (scanType, route, status, effect) => {
     const { req, res } = await post(route);
@@ -117,16 +104,16 @@ describe('admin security scan triggers audit', () => {
   it('does not record a trigger when the workflow dispatch fails', async () => {
     h.axiosPost.mockRejectedValue(new Error('dispatch failed'));
 
-    const { res } = await post(code);
+    const { res } = await post(web);
 
     expect(res._getStatusCode()).toBe(500);
     expect(h.audit).not.toHaveBeenCalled();
   });
 
   it('does not record a trigger when an inline scan fails', async () => {
-    h.runWafScan.mockRejectedValue(new Error('scan failed'));
+    h.runCloudScan.mockRejectedValue(new Error('scan failed'));
 
-    const { res } = await post(waf);
+    const { res } = await post(cloud);
 
     expect(res._getStatusCode()).toBe(500);
     expect(h.audit).not.toHaveBeenCalled();
