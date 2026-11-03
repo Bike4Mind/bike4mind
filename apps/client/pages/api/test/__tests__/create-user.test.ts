@@ -166,6 +166,15 @@ describe('POST /api/test/create-user', () => {
     });
   });
 
+  it('reports the email-pattern error, not the permissions error, when both are invalid', async () => {
+    const { res, status, json } = makeRes();
+    await handler(makeReq({ email: 'someone@example.com', adminPermissions: ['not-a-permission'] }) as never, res);
+
+    expect(status).toHaveBeenCalledWith(400);
+    expect(json).toHaveBeenCalledWith({ error: 'Test users must use the -e2e@test.com email pattern' });
+    expect(h.createUser).not.toHaveBeenCalled();
+  });
+
   describe('includePredefinedTags', () => {
     const tagsFor = async (over: Record<string, unknown>) => {
       const { res, status } = makeRes();
