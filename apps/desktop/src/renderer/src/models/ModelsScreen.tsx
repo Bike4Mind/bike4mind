@@ -315,6 +315,8 @@ export function ModelsScreen({
     setRefreshing(true);
     try {
       await Promise.all([hub.refresh(), catalog?.reload()]);
+    } catch {
+      // The next refresh retries; a rejected status read must not escape the click handler.
     } finally {
       setRefreshing(false);
     }
@@ -349,7 +351,7 @@ export function ModelsScreen({
     const onFocus = () => {
       if (document.hidden || Date.now() - lastFocusRefresh.current < FOCUS_RELOAD_MIN_MS) return;
       lastFocusRefresh.current = Date.now();
-      void refresh();
+      refresh().catch(() => undefined);
     };
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onFocus);

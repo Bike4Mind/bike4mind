@@ -308,27 +308,47 @@ export function useModelCatalog(local = false): ModelCatalogController {
   const [error, setError] = useState<string | null>(null);
   const [runtime, setRuntime] = useState<ModelRuntimeStatus | null>(null);
   const latestLoad = useRef(0);
+  const forcedLoad = useRef<Promise<void> | null>(null);
   const lastLoadAt = useRef(0);
   const seen = useRef({ empty: true, reachable: null as boolean | null });
   seen.current = { empty: models.length === 0, reachable: runtime?.reachable ?? null };
 
-  const load = useCallback(
-    async (force: boolean | 'local', quiet = false) => {
+  const run = useCallback(
+    async (force: boolean | 'local', quiet: boolean) => {
       const mine = ++latestLoad.current;
       lastLoadAt.current = Date.now();
       if (!quiet) setLoading(true);
-      const [catalog, status] = await Promise.all([
-        window.b4m.chat.listModels(force),
-        local ? window.b4m.models.getStatus().catch(() => null) : null,
-      ]);
-      // A slower, older response must not overwrite a newer one.
-      if (mine !== latestLoad.current) return;
-      setModels(catalog.models);
-      setError(catalog.error ?? null);
-      setRuntime(status);
-      setLoading(false);
+      try {
+        const [catalog, status] = await Promise.all([
+          window.b4m.chat.listModels(force),
+          local ? window.b4m.models.getStatus().catch(() => null) : null,
+        ]);
+        // A slower, older response must not overwrite a newer one.
+        if (mine !== latestLoad.current) return;
+        setModels(catalog.models);
+        setError(catalog.error ?? null);
+        setRuntime(status);
+        setLoading(false);
+      } catch (err) {
+        if (mine !== latestLoad.current) return;
+        setError(err instanceof Error ? err.message : 'Could not load the model list.');
+        setLoading(false);
+      }
     },
     [local]
+  );
+
+  const load = useCallback(
+    (force: boolean | 'local', quiet = false): Promise<void> => {
+      const promise = run(force, quiet);
+      if (!force) return promise;
+      forcedLoad.current = promise;
+      void promise.then(() => {
+        if (forcedLoad.current === promise) forcedLoad.current = null;
+      });
+      return promise;
+    },
+    [run]
   );
 
   // Models pulled outside Desktop (the CLI, Ollama itself) raise no event; coming back to the window is the cue.
@@ -372,7 +392,7 @@ export function useModelCatalog(local = false): ModelCatalogController {
   // A model pulled or removed on the Models screen changes the local half of the list.
   useEffect(() => window.b4m.models.onInstalledChanged(() => void load(true)), [load]);
 
-  const reload = useCallback(() => load(true), [load]);
+  const reload = useCallback(() => forcedLoad.current ?? load(true), [load]);
 
   return { models, loading, error, reload, runtime };
 }

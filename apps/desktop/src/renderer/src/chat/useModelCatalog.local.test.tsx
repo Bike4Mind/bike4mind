@@ -229,4 +229,40 @@ describe('useModelCatalog when a model finishes installing', () => {
     });
     expect(listModels).not.toHaveBeenCalled();
   });
+
+  it('joins a forced load already in flight when reload is called', async () => {
+    await mount(false);
+    await tick(FOCUS_RELOAD_MIN_MS);
+    listModels.mockClear();
+    const pending = deferred<ChatModelCatalog>();
+    listModels.mockReturnValueOnce(pending.promise);
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    let reloaded: Promise<void> = Promise.resolve();
+    await act(async () => {
+      reloaded = catalog.reload();
+    });
+    expect(listModels).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      pending.resolve({ models: [model] });
+      await reloaded;
+    });
+    expect(catalog.models).toEqual([model]);
+
+    await act(async () => {
+      await catalog.reload();
+    });
+    expect(listModels).toHaveBeenCalledTimes(2);
+  });
+
+  it('settles loading and reports the error when the list cannot be read', async () => {
+    await mount(false);
+    listModels.mockRejectedValueOnce(new Error('ipc down'));
+    await act(async () => {
+      await catalog.reload();
+    });
+    expect(catalog.loading).toBe(false);
+    expect(catalog.error).toBe('ipc down');
+  });
 });
