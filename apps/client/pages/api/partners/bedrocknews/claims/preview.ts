@@ -2,12 +2,12 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { rungCredits } from '@server/partners/bedrocknewsPuzzleReward';
+import { answerClaim, withOwnBalance } from '@server/partners/bedrocknewsClaimRoute';
 import {
-  answerClaim,
   failureState,
   isTicketPreview,
   malformedState,
-  withOwnBalance,
+  type PreviewState,
 } from '@server/partners/bedrocknewsClaimStates';
 import { previewTicket } from '@server/partners/bedrocknewsTickets';
 
@@ -15,7 +15,7 @@ export default baseApi({ auth: 'jwtOnly' })
   .use(csrfProtection())
   .use(rateLimit({ limit: 30, windowMs: 60000 }))
   .post((req, res) =>
-    answerClaim(req, res, async (ticket, user) => {
+    answerClaim(req, res, async (ticket, user): Promise<PreviewState> => {
       const preview = await previewTicket(ticket);
       if (!preview.ok) return failureState('preview', preview.code);
       if (!isTicketPreview(preview.preview)) return malformedState('preview');
