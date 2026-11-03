@@ -327,7 +327,11 @@ describe('createDataLake maps a unique-index rejection of the insert (#5701)', (
   ])('answers 409 rather than 500 when %s rejects the slug', async (_label, keyPattern) => {
     const logger = { warn: vi.fn() };
     const create = createDataLake('creator', params, { db: makeDb(duplicateKey(keyPattern)), logger } as never, 'org1');
-    await expect(create).rejects.toMatchObject({ name: 'ConflictError', statusCode: 409 });
+    await expect(create).rejects.toMatchObject({
+      name: 'ConflictError',
+      statusCode: 409,
+      additionalInfo: { code: 'DATA_LAKE_SLUG_UNAVAILABLE' },
+    });
     await expect(create).rejects.toThrow(/"test" is already taken/);
     expect(logger.warn).toHaveBeenCalledWith(expect.any(String), { slug: 'test', keyPattern });
   });

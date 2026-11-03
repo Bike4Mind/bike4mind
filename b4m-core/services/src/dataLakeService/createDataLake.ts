@@ -41,6 +41,13 @@ interface CreateDataLakeAdapters {
 const CREATE_ROW_OMITTED_FIELDS = new Set<LakeConfigChangeField>(['createdByUserId', 'organizationId', 'datalakeTag']);
 
 /**
+ * `additionalInfo.code` on the 409 a unique slug or `datalakeTag` index answers with. A caller that
+ * generated the slug itself (a connector placeholder) keys a retry on it, rather than re-reading the
+ * raw duplicate-key error this service already classified.
+ */
+export const DATA_LAKE_SLUG_UNAVAILABLE_CODE = 'DATA_LAKE_SLUG_UNAVAILABLE';
+
+/**
  * Builds the unique join meta-tag. Org-scoped lakes get `datalake:<org>:<slug>`;
  * org-less lakes get `datalake:<slug>`. Because the tag is the uniqueness key,
  * org-less lakes may not share a slug.
@@ -285,10 +292,11 @@ export const createDataLake = async (
  * - `fileTagPrefix` ({ createdByUserId, fileTagPrefix }): a concurrent create by the same user won
  *   the race against assertPrefixAvailable. Same friendly error the read-arm check produces.
  * - `slug` or `datalakeTag`: disambiguateSlug cleared this slug, yet an index rejected it. Either a
- *   concurrent create in the same scope took it first, or the collection still carries an index wider
- *   than the per-scope one the model declares (the legacy global `slug_1`, which the
- *   20260529000000 migration drops). A retry would compute the same slug, so answer 409 and ask for
- *   another name. The holder may sit in another org, so it is never named.
+ *   concurrent create in the same scope took it first (a resubmit then sees the winner and suffixes
+ *   past it), or the collection still carries an index wider than the per-scope one the model
+ *   declares (the legacy global `slug_1`, which the 20260529000000 migration drops; there a resubmit
+ *   computes the same slug and only another name gets through). Answer 409 rather than guess which.
+ *   The holder may sit in another org, so it is never named.
  *
  * The slug arm logs the index's key pattern: a recurring warning means an environment still has the
  * legacy index, and that is fixed by running the migration, not here.
@@ -311,7 +319,9 @@ function mapCreateDuplicateKeyError(
       slug: attempted.slug,
       keyPattern,
     });
-    return new ConflictError(`The data lake slug "${attempted.slug}" is already taken - choose a different name.`);
+    return new ConflictError(`The data lake slug "${attempted.slug}" is already taken - choose a different name.`, {
+      code: DATA_LAKE_SLUG_UNAVAILABLE_CODE,
+    });
   }
   return err;
 }
