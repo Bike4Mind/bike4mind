@@ -92,6 +92,22 @@ describe('cacheReadShare', () => {
     );
   });
 
+  it('reads the cached count a reply too short to rate carries on its usage', () => {
+    expect(cacheReadShare({ inputTokens: 4000, outputTokens: 1, cachedPromptTokens: 3000 })).toBe(0.75);
+    expect(
+      cacheReadShare({
+        inputTokens: 8000,
+        cachedPromptTokens: 3000,
+        rate: { evalTokens: 10, evalMs: 100, estimated: true, cachedPromptTokens: 1000 },
+      })
+    ).toBe(0.5);
+  });
+
+  it('never claims more than the whole prompt was cached', () => {
+    expect(cacheReadShare({ inputTokens: 4000, cachedPromptTokens: 5000 })).toBe(1);
+    expect(cacheReadShare({ inputTokens: 2000, rate: { evalTokens: 1, evalMs: 1, cachedPromptTokens: 3000 } })).toBe(1);
+  });
+
   it('is absent when nothing about the cache was reported', () => {
     expect(cacheReadShare({ inputTokens: 4000, outputTokens: 10 })).toBeNull();
     expect(cacheReadShare(undefined)).toBeNull();

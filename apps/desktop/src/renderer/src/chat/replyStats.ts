@@ -130,15 +130,18 @@ export function generationRate({
 
 /**
  * Prompt tokens served from cache, over the whole prompt. A self-hosted server reports cached
- * apart from evaluated tokens, or (vLLM) inside its prompt count; a hosted one reports cache
- * reads apart from new input and cache writes.
+ * apart from evaluated tokens in its timings, or (vLLM) inside its prompt count, on the rate or,
+ * for a reply too short to rate, on the usage; a hosted one reports cache reads apart from new
+ * input and cache writes.
  */
 export function cacheReadShare(usage: ChatUsage | null | undefined): number | null {
   if (!usage) return null;
-  const cached = usage.rate?.cachedPromptTokens;
-  if (cached !== undefined) {
+  const rated = usage.rate?.cachedPromptTokens;
+  const unrated = usage.cachedPromptTokens;
+  if (rated !== undefined || unrated !== undefined) {
+    const cached = (rated ?? 0) + (unrated ?? 0);
     const evaluated = usage.rate?.promptTokens;
-    const whole = evaluated !== undefined ? cached + evaluated : usage.inputTokens;
+    const whole = evaluated !== undefined && unrated === undefined ? cached + evaluated : usage.inputTokens;
     return whole !== undefined && whole > 0 ? Math.min(1, cached / whole) : null;
   }
   const read = usage.cacheReadInputTokens;
