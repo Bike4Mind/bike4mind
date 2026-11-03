@@ -24,7 +24,7 @@ export interface HardwareProfile {
   confidence: 'high' | 'low';
   /** Apple: `recommendedMaxWorkingSetSize` from a llama-server load log, or a non-zero `iogpu.wired_limit_mb`. */
   gpuWorkingSetBytes?: number | null;
-  /** Entered for the machine; without it the decode estimate takes CHIP_BANDWIDTH's figure (decode.ts). */
+  /** Entered spec-sheet figure; decode.ts scales it, or CHIP_BANDWIDTH's when absent, by bandwidthEfficiency. */
   memoryBandwidthBytesPerSec?: number | null;
 }
 

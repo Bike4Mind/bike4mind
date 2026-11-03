@@ -25,15 +25,44 @@ const N1X: HardwareProfile = {
 };
 const LS = { kind: 'llama-server' } as const;
 
+const mac = (chip: string): HardwareProfile => ({ ...machine('unified', 64), chip });
+const card = (gpuName: string): HardwareProfile => ({ ...machine('discrete', 64, 16), gpuName });
+const apu = (gpuName: string): HardwareProfile => ({ ...machine('unified', 128), platform: 'linux', gpuName });
+
 describe('memoryBandwidth', () => {
-  it('takes the chip table figure for a known chip', () => {
-    expect(memoryBandwidth(N1X)).toBe(200 * GIB);
-    expect(memoryBandwidth({ ...machine('unified', 128), chip: 'Spark N1X' })).toBe(200 * GIB);
+  it('gives back the measured N1X figure', () => {
+    expect(memoryBandwidth(N1X)).toBeCloseTo(200 * GIB, 0);
+    expect(memoryBandwidth({ ...machine('unified', 128), chip: 'Spark N1X' })).toBeCloseTo(200 * GIB, 0);
   });
 
-  it('prefers entered bandwidth over the chip table', () => {
-    expect(memoryBandwidth({ ...N1X, memoryBandwidthBytesPerSec: 256e9 })).toBe(256e9);
-    expect(memoryBandwidth({ ...machine('discrete', 64, 24), memoryBandwidthBytesPerSec: 1008e9 })).toBe(1008e9);
+  it('scales entered bandwidth by the efficiency factor, over the chip table', () => {
+    expect(memoryBandwidth({ ...N1X, memoryBandwidthBytesPerSec: 256e9 })).toBeCloseTo(204.8e9, 0);
+    expect(memoryBandwidth({ ...machine('discrete', 64, 24), memoryBandwidthBytesPerSec: 1008e9 })).toBeCloseTo(
+      806.4e9,
+      0
+    );
+  });
+
+  it('matches Apple chips by the exact brand string', () => {
+    expect(memoryBandwidth(mac('Apple M4'))).toBeCloseTo(120e9 * 0.8, 0);
+    expect(memoryBandwidth(mac('Apple M4 Pro'))).toBeCloseTo(273e9 * 0.8, 0);
+    expect(memoryBandwidth(mac('Apple M5 Max'))).toBeCloseTo(460e9 * 0.8, 0);
+    expect(memoryBandwidth(mac('Apple M1'))).toBeNull();
+  });
+
+  it('tells a GeForce card from its Ti and Laptop GPU siblings', () => {
+    expect(memoryBandwidth(card('NVIDIA GeForce RTX 5070'))).toBeCloseTo(672e9 * 0.8, 0);
+    expect(memoryBandwidth(card('NVIDIA GeForce RTX 5070 Ti'))).toBeCloseTo(896e9 * 0.8, 0);
+    expect(memoryBandwidth(card('NVIDIA GeForce RTX 5070 Laptop GPU'))).toBeNull();
+    expect(memoryBandwidth(card('NVIDIA GeForce RTX 5060'))).toBeNull();
+  });
+
+  it.each([
+    'AMD Radeon(TM) 8060S Graphics',
+    'AMD Strix Halo [Radeon Graphics / Radeon 8050S Graphics]',
+    'AMD GPU [1002:1586]',
+  ])('knows a Ryzen AI Max APU named %s', gpuName => {
+    expect(memoryBandwidth(apu(gpuName))).toBeCloseTo(256e9 * 0.8, 0);
   });
 
   it('knows nothing about an unlisted chip', () => {

@@ -691,8 +691,9 @@ describe('estimateFit decode estimate', () => {
   it('rates a resident plan, the requested one included, from the bandwidth', () => {
     const r = fit({ hardware: bandwidth(mac(16)), context: 8192 });
     expect(r.placement).toBe('gpu');
-    expect(r.decode?.tokensPerSec).toBeCloseTo(10);
-    expect(r.requested?.decode?.tokensPerSec).toBeCloseTo(10);
+    // 100 GiB/s at 0.8 efficiency over 10 GiB of weights.
+    expect(r.decode?.tokensPerSec).toBeCloseTo(8);
+    expect(r.requested?.decode?.tokensPerSec).toBeCloseTo(8);
     expect(fit().decode).toBeNull();
   });
 
@@ -708,7 +709,7 @@ describe('estimateFit decode estimate', () => {
   });
 
   it('rates a CPU placement only on a machine without a GPU', () => {
-    expect(fit({ hardware: bandwidth(machine('cpu', 64), 50) }).decode?.tokensPerSec).toBeCloseTo(5);
+    expect(fit({ hardware: bandwidth(machine('cpu', 64), 50) }).decode?.tokensPerSec).toBeCloseTo(4);
     const unknownVram = fit({ hardware: bandwidth(machine('discrete', 64, null)) });
     expect(unknownVram.placement).toBe('cpu');
     expect(unknownVram.decode).toBeNull();
