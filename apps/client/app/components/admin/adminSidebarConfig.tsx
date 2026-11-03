@@ -357,8 +357,9 @@ export const splitSectionItems = (
 };
 
 /**
- * The sections an admin can see: gated items and tabs `canOpenTab` refuses dropped, then (when `query` is non-blank) only the
- * items whose label or section label contains it. Sections left empty are omitted.
+ * The sections an admin can see: gated items and tabs `canOpenTab` refuses dropped, then (when
+ * `query` is non-blank) only the items whose label or section label contains it. Sections left
+ * empty are omitted.
  */
 export const filterSidebarSections = (
   sections: SidebarSection[],
