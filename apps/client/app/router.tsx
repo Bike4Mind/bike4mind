@@ -1412,7 +1412,8 @@ captureUtmParams();
 captureGitHubLakeCallbackSearch();
 
 // Then tell the server a visit is happening. Order matters: the beacon is the request the
-// server reads the campaign cookie from, so it has to follow the line above.
+// server reads the campaign cookie from, so it has to follow the line above. It also takes a
+// verified-hop token off the URL, which has to happen before the router below rewrites it.
 beaconVisit();
 // After the visit beacon, which carries this load's page when consent allows; the page beacon
 // reports the pages after it, and needs to start before the router's first resolve.

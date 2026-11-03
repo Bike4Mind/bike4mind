@@ -34,6 +34,12 @@ vi.mock('@bike4mind/server-utils/analytics/emitActiveEvent', async importOrigina
   };
 });
 
+const mockRedeemHop = vi.fn();
+vi.mock('@server/analytics/hops', async importOriginal => {
+  const original = await importOriginal<typeof import('@server/analytics/hops')>();
+  return { ...original, redeemHop: (...args: unknown[]) => mockRedeemHop(...args) };
+});
+
 import handler from '../visit';
 import { VISIT_COOKIE, VISIT_PENDING_COOKIE, readVisitId } from '@server/analytics/visitSession';
 
@@ -51,9 +57,12 @@ function call({
     ...(userAgent !== undefined && { 'user-agent': userAgent }),
     ...(referer !== undefined && { referer }),
   } as never;
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  (req as unknown as { logger: unknown }).logger = logger;
   return {
     req: req as never,
     res: res as never,
+    logger,
     run: () => (handler as (r: unknown, s: unknown) => unknown)(req, res),
   };
 }
@@ -77,6 +86,7 @@ describe('POST /api/analytics/visit', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockIsConfigured.mockReturnValue(true);
+    mockRedeemHop.mockResolvedValue({ redeemed: false, reason: 'refused' });
   });
 
   it('mints a visit, hands back the cookie, and emits exactly one event', async () => {
@@ -188,6 +198,82 @@ describe('POST /api/analytics/visit', () => {
     await run();
 
     expect(pendingCookieHeader(res as never)).toBeUndefined();
+  });
+
+  describe('a beacon that carries a verified-hop token', () => {
+    const TOKEN = `${'a'.repeat(32)}.1793707200.${'M'.repeat(43)}`;
+    const HOP_ID = 'c'.repeat(32);
+    const redeemed = { redeemed: true, hop: { hopId: HOP_ID, srcProductId: 'source-product', dest: 'bike4mind' } };
+    const hopCookie = (res: unknown) => setCookies(res as never).find(c => c.startsWith('b4m_hop='));
+
+    it('redeems it on the visit it starts, linked with consent, and hands back the hop cookie', async () => {
+      mockRedeemHop.mockResolvedValue(redeemed);
+      const { res, run } = call({ cookie: 'b4m_consent=granted', body: { landingPath: '/new', hop: TOKEN } });
+      await run();
+
+      const visitId = readVisitId(setCookieHeader(res as never)!.split(';')[0]);
+      expect(mockRedeemHop).toHaveBeenCalledWith({ token: TOKEN, visitId, linkVisit: true });
+      // The hop names the same visit as the visit event.
+      expect(mockEmitVisitEvent).toHaveBeenCalledWith(expect.objectContaining({ sessionId: visitId }));
+      expect(hopCookie(res)).toBe(`b4m_hop=${HOP_ID}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax; Secure`);
+    });
+
+    it('without consent, redeems it unlinked and sets no hop cookie', async () => {
+      mockRedeemHop.mockResolvedValue(redeemed);
+      for (const cookie of [undefined, 'b4m_consent=denied', 'b4m-consent-decision=denied']) {
+        mockRedeemHop.mockClear();
+        const { res, run } = call({ cookie, body: { hop: TOKEN } });
+        await run();
+        expect(mockRedeemHop.mock.calls[0][0], String(cookie)).toMatchObject({ token: TOKEN, linkVisit: false });
+        expect(hopCookie(res), String(cookie)).toBeUndefined();
+      }
+    });
+
+    it('sets no hop cookie when the redeem is refused', async () => {
+      const { res, run } = call({ cookie: 'b4m_consent=granted', body: { hop: TOKEN } });
+      await run();
+      expect(mockRedeemHop).toHaveBeenCalledOnce();
+      expect(hopCookie(res)).toBeUndefined();
+      // The visit itself is still recorded.
+      expect(mockEmitVisitEvent).toHaveBeenCalledTimes(1);
+    });
+
+    it('redeems it mid-visit, on the visit already running', async () => {
+      mockRedeemHop.mockResolvedValue(redeemed);
+      const visitId = 'b'.repeat(32);
+      const { res, run } = call({ cookie: `${VISIT_COOKIE}=${visitId}; b4m_consent=granted`, body: { hop: TOKEN } });
+      await run();
+
+      expect(mockRedeemHop).toHaveBeenCalledWith({ token: TOKEN, visitId, linkVisit: true });
+      expect(mockEmitVisitEvent).not.toHaveBeenCalled();
+      expect(hopCookie(res)).toContain(`b4m_hop=${HOP_ID}`);
+    });
+
+    it('never redeems on a beacon still awaiting consent', async () => {
+      const { run } = call({ cookie: 'b4m_consent=granted', body: { awaitingConsent: true, hop: TOKEN } });
+      await run();
+      expect(mockRedeemHop).not.toHaveBeenCalled();
+    });
+
+    it('never redeems for a non-human agent, or when analytics is off', async () => {
+      await call({ userAgent: 'Googlebot/2.1', body: { hop: TOKEN } }).run();
+      mockIsConfigured.mockReturnValue(false);
+      await call({ body: { hop: TOKEN } }).run();
+      expect(mockRedeemHop).not.toHaveBeenCalled();
+    });
+
+    it('never logs the token', async () => {
+      mockRedeemHop.mockResolvedValueOnce(redeemed);
+      const ok = call({ cookie: 'b4m_consent=granted', body: { hop: TOKEN } });
+      await ok.run();
+      const refused = call({ body: { hop: TOKEN } });
+      await refused.run();
+
+      expect(ok.logger.info).toHaveBeenCalledWith('analytics.hop.redeemed', { hopId: HOP_ID, linked: true });
+      expect(refused.logger.info).toHaveBeenCalledWith('analytics.hop.refused', { reason: 'refused' });
+      const logged = JSON.stringify([ok.logger, refused.logger].map(l => [l.info.mock.calls, l.warn.mock.calls]));
+      expect(logged).not.toContain(TOKEN);
+    });
   });
 
   // The first visit from search or a shared link usually lands on the consent banner, and its
