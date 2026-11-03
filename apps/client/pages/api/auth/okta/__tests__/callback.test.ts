@@ -147,12 +147,16 @@ const CODE = 'auth-code';
 // request carries req.logger. A shared stub keeps the pass-through assertions addressable.
 const reqLogger = { log: vi.fn(), warn: vi.fn() };
 
-function makeReqRes() {
+function makeReqRes(extraCookies?: string) {
   const { req, res } = createMocks({
     method: 'GET',
     query: { state: STATE, code: CODE },
     // PKCE verifier now rides a browser-bound cookie, not the state token.
-    headers: { host: 'localhost:3000', 'user-agent': 'vitest', cookie: 'b4m_okta_pkce=pkce-verifier' },
+    headers: {
+      host: 'localhost:3000',
+      'user-agent': 'vitest',
+      cookie: ['b4m_okta_pkce=pkce-verifier', extraCookies].filter(Boolean).join('; '),
+    },
     url: '/api/auth/okta/callback',
   });
   Object.assign(req, { logger: reqLogger });
@@ -160,10 +164,10 @@ function makeReqRes() {
 }
 
 /** Drive the handler with a given existing-user record and Okta userinfo. */
-async function runCallback(opts: { user: any; userInfo: Record<string, unknown> }) {
+async function runCallback(opts: { user: any; userInfo: Record<string, unknown>; cookies?: string }) {
   mockFindOne.mockResolvedValue(opts.user);
   mockFetchUserInfo.mockResolvedValue({ sub: 'okta-sub-default', ...opts.userInfo });
-  const { req, res } = makeReqRes();
+  const { req, res } = makeReqRes(opts.cookies);
   await handler(req, res);
   return res;
 }
@@ -451,6 +455,25 @@ describe('/api/auth/okta/callback - new-account email verification gate', () => 
     expect(mockEmitSignupFunnelEvents).toHaveBeenCalledTimes(1);
     expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith(
       expect.objectContaining({ method: 'okta', emailVerified: true, creditsGranted: 0 })
+    );
+  });
+
+  it("carries a new account's verified hop, read from its own cookies, to the signup funnel", async () => {
+    const hopId = 'c'.repeat(32);
+    const verifiedTouch = { srcProductId: 'source-product', hopId, redeemedAt: new Date() };
+    const acquisition = { verifiedTouch, signupMethod: 'okta', capturedAt: new Date() };
+    mockRecordSignupAcquisition.mockResolvedValueOnce({ acquisition, isSynthetic: false });
+
+    await runCallback({
+      user: null,
+      userInfo: { sub: 'okta-v', email: 'verified@example.com', email_verified: true, name: 'Ver Ified' },
+      cookies: `b4m_vid=${'d'.repeat(32)}; b4m_hop=${hopId}`,
+    });
+
+    // The provider returns the browser by a top-level GET, so the Lax hop cookie is on this request.
+    expect(mockRecordSignupAcquisition.mock.calls[0][0].req.headers.cookie).toContain(`b4m_hop=${hopId}`);
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'new-user', acquisition }) })
     );
   });
 

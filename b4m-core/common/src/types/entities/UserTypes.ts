@@ -787,9 +787,23 @@ export interface IUserAcquisitionTouch {
   content?: string;
 }
 
+/**
+ * The verified hop a signup followed (apps/client server/analytics/hops.ts): the product whose own
+ * server sent the visitor here, as that server proved with its ingest key, not as the browser
+ * claimed. Written only when the hop was redeemed in the same visit as the signup, with consent.
+ */
+export interface IUserVerifiedTouch {
+  /** The Overwatch product whose ingest key minted the hop. */
+  srcProductId: string;
+  hopId: string;
+  redeemedAt: Date;
+}
+
 export interface IUserAcquisition {
   firstTouch?: IUserAcquisitionTouch;
   lastTouch?: IUserAcquisitionTouch;
+  /** Absent for a signup that followed no verified hop. */
+  verifiedTouch?: IUserVerifiedTouch;
   /** How the account was created (`otc`, `google`, `github`, ...). */
   signupMethod: string;
   capturedAt: Date;

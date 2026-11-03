@@ -1136,10 +1136,21 @@ const AcquisitionTouchSchema = new Schema(
   { _id: false }
 );
 
+const VerifiedTouchSchema = new Schema(
+  {
+    srcProductId: { type: String, required: true },
+    hopId: { type: String, required: true },
+    redeemedAt: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
 const UserAcquisitionSchema = new Schema(
   {
     firstTouch: { type: AcquisitionTouchSchema, required: false },
     lastTouch: { type: AcquisitionTouchSchema, required: false },
+    // A verified hop the signup followed - see IUserAcquisition.verifiedTouch.
+    verifiedTouch: { type: VerifiedTouchSchema, required: false },
     signupMethod: { type: String, required: true },
     capturedAt: { type: Date, required: true },
   },

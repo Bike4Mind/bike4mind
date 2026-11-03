@@ -4,10 +4,12 @@ import {
   isSyntheticIdentity,
   parseSyntheticDomainList,
   type IUserAcquisition,
+  type IUserVerifiedTouch,
 } from '@bike4mind/common';
 import { adminSettingsRepository, User, userRepository } from '@bike4mind/database';
 import type { AcquisitionTouches } from '@bike4mind/server-utils/lib/subscriptions/acquisition';
 import { readConsentedAcquisitionTouches } from './acquisition';
+import { bindSignupHop } from './hops';
 import { emitProductEvent, HOST_PRODUCT_ID } from '@bike4mind/server-utils/analytics/emitActiveEvent';
 import { laneMetadata } from '@bike4mind/server-utils/analytics/lane';
 import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
@@ -49,12 +51,14 @@ export async function recordSyntheticIdentity(user: {
 export function toUserAcquisition(
   touches: AcquisitionTouches,
   signupMethod: string,
-  now: Date = new Date()
+  now: Date = new Date(),
+  verifiedTouch?: IUserVerifiedTouch
 ): IUserAcquisition | undefined {
-  if (!touches.firstTouch && !touches.lastTouch) return undefined;
+  if (!touches.firstTouch && !touches.lastTouch && !verifiedTouch) return undefined;
   return {
     ...(touches.firstTouch && { firstTouch: touches.firstTouch }),
     ...(touches.lastTouch && { lastTouch: touches.lastTouch }),
+    ...(verifiedTouch && { verifiedTouch }),
     signupMethod,
     capturedAt: now,
   };
@@ -64,6 +68,12 @@ export function toUserAcquisition(
  * Persist the signup's consented acquisition touches and the synthetic flag on the new user.
  * Consent is the same server-side gate signup pixels and Overwatch signup credit use
  * (readConsentedAcquisitionTouches), so a declined or unanswered consent stores no touch.
+ *
+ * A signup that follows a verified hop redeemed in this same visit also gets `verifiedTouch`: the
+ * source product as its own server proved it (bindSignupHop, which says what "same visit" means).
+ * Unlike the campaign touches it is never the browser's claim. The hop is claimed for this account
+ * before the write, so it can be claimed by no other.
+ *
  * Never throws: a signup must not fail on analytics. Resolves to what was decided.
  */
 export async function recordSignupAcquisition(opts: {
@@ -77,7 +87,13 @@ export async function recordSignupAcquisition(opts: {
   let isSynthetic = false;
   try {
     isSynthetic = isSyntheticIdentity(opts.user, await syntheticTestDomains());
-    const acquisition = toUserAcquisition(readConsentedAcquisitionTouches(opts.req), opts.method);
+    const verifiedTouch = await bindSignupHop(opts.req);
+    const acquisition = toUserAcquisition(
+      readConsentedAcquisitionTouches(opts.req),
+      opts.method,
+      new Date(),
+      verifiedTouch
+    );
     if (acquisition || isSynthetic) {
       await userRepository.update({
         id: opts.user.id,
@@ -95,7 +111,7 @@ export async function recordSignupAcquisition(opts: {
 export type FunnelUser = {
   id: string;
   isSynthetic?: boolean | null;
-  acquisition?: Pick<IUserAcquisition, 'firstTouch'> | null;
+  acquisition?: Pick<IUserAcquisition, 'firstTouch' | 'verifiedTouch'> | null;
 };
 
 // first_value counts only users who sign up after the funnel ships; no backfill. Without it every
@@ -122,6 +138,10 @@ export type FunnelEvent = 'credits_granted' | 'email_verified' | 'first_value' |
  * from real signups and a persona run can still be checked. The lane is spread last so caller
  * metadata cannot unmark a synthetic user.
  *
+ * `signup_completed` of an account with a verified touch also carries its `hopId` and
+ * `srcProductId`, so Overwatch can count verified hop -> signup. Spread after the caller's metadata,
+ * so the stored touch wins over anything a caller passes, and sent on no other stage.
+ *
  * `visitId` is the visit the stage happened in (readVisitId on the request), when the stage
  * is the user's own request: it ties the signup to the visit it came from, so the visit's
  * source and its conversion are one session downstream. A stage recorded by a worker names the
@@ -135,7 +155,12 @@ export async function emitFunnelEvent(opts: {
   visitId?: string;
 }): Promise<boolean> {
   const utm = opts.user.acquisition?.firstTouch;
-  const metadata = { ...opts.metadata, ...laneMetadata(opts.user) };
+  const verifiedTouch = opts.event === 'signup_completed' ? opts.user.acquisition?.verifiedTouch : undefined;
+  const metadata = {
+    ...opts.metadata,
+    ...(verifiedTouch && { hopId: verifiedTouch.hopId, srcProductId: verifiedTouch.srcProductId }),
+    ...laneMetadata(opts.user),
+  };
   await emitProductEvent({
     productId: HOST_PRODUCT_ID,
     event: opts.event,

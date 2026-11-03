@@ -1,15 +1,18 @@
+import type { Request } from 'express';
 import { z } from 'zod';
 import {
   OVERWATCH_ANALYTICS_SCHEMA_VERSION,
   OVERWATCH_ANONYMOUS_USER_ID,
   OVERWATCH_LANE_VALUES,
   OVERWATCH_UNKNOWN_SESSION_ID,
+  type IUserVerifiedTouch,
   type OverwatchAnalyticsEvent,
 } from '@bike4mind/common';
 import { analyticsHopRepository, type IAnalyticsHopDoc } from '@bike4mind/database';
 import { emitProductEvent, HOST_PRODUCT_ID } from '@bike4mind/server-utils/analytics/emitActiveEvent';
 import { HOP_COOKIE, HOP_PARAM } from '@bike4mind/server-utils/lib/hopNames';
 import { parseCookies } from '@bike4mind/server-utils/analytics/cookies';
+import { resolveServerConsent } from '@bike4mind/server-utils/analytics/serverConsent';
 import {
   HOP_TOKEN_TTL_SECONDS,
   hopKey,
@@ -20,6 +23,7 @@ import {
   verifyHopToken,
 } from './hopToken';
 import { stableEventId } from './signupEvents';
+import { readVisitId } from './visitSession';
 
 /**
  * Verified hops: a click that left a source product for this app, proven by the source rather than
@@ -243,4 +247,41 @@ export function hopCookieHeader(hopId: string, opts: { secure: boolean }): strin
 export function readHopCookie(cookieHeader: string | undefined): string | undefined {
   const value = parseCookies(cookieHeader)[HOP_COOKIE];
   return isHopId(value) ? value : undefined;
+}
+
+/**
+ * The verified touch for a new account: the hop this browser redeemed in this same visit, bound to
+ * this signup and to no other. Undefined for a signup that followed no hop, which is most of them.
+ *
+ * "Same session" is concrete. The signup request must carry:
+ *   - the `b4m_hop` cookie naming the hop (set when it was redeemed, with consent; 24 hours);
+ *   - the `b4m_vid` visit id the hop was redeemed in (visitSession.ts: one visit ends after 30
+ *     minutes without a page load), so a hop from yesterday's visit does not bind today's signup;
+ *   - a granted consent decision, the gate the campaign touches use (resolveServerConsent), so a
+ *     visitor who withdrew consent after landing is not linked;
+ * and the hop must have been redeemed no more than 24 hours ago and never bound before. The bind
+ * is one conditional update (analyticsHopRepository.bindToSignup), so one hop credits at most one
+ * account even when a browser signs up twice. Never throws.
+ */
+export async function bindSignupHop(
+  req: Pick<Request, 'headers'>,
+  now: Date = new Date()
+): Promise<IUserVerifiedTouch | undefined> {
+  const hopId = readHopCookie(req.headers.cookie);
+  const visitId = readVisitId(req.headers.cookie);
+  if (hopId === undefined || visitId === undefined || resolveServerConsent(req) !== 'granted') return undefined;
+  try {
+    const hop = await analyticsHopRepository.bindToSignup({
+      hopId,
+      dest: HOST_PRODUCT_ID,
+      sessionId: visitId,
+      now,
+      redeemedSince: new Date(now.getTime() - HOP_COOKIE_TTL_SECONDS * 1000),
+    });
+    if (!hop?.redeemedAt) return undefined;
+    return { srcProductId: hop.srcProductId, hopId: hop.hopId, redeemedAt: new Date(hop.redeemedAt) };
+  } catch (err) {
+    console.warn('[b4m-analytics] signup hop not bound', err instanceof Error ? err.message : err);
+    return undefined;
+  }
 }
