@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Box, Skeleton, Tooltip, Typography } from '@mui/joy';
+import { Box, Skeleton, Stack, Tooltip, Typography } from '@mui/joy';
 import {
   useAttackSimulationData,
   useSecurityDashboardOverview,
@@ -9,7 +9,7 @@ import {
   type SecurityCheckSummary,
 } from '@client/app/hooks/data/admin';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
-import { DataTable, formatUtc, RelativeTime, StatusChip } from '../shared';
+import { DataTable, formatUtc, RelativeTime, StatusChip, UpdatingBar } from '../shared';
 import type { SecurityScan } from '../securityDashboardSearch';
 
 const DASH = '\u2014';
@@ -196,77 +196,91 @@ export function ScanSummaryTable({
     },
   ];
 
+  const allLoaded = rows.every(row => !row.loading);
+  const refreshing = overview.isFetching || schedules.isFetching || prowler.isFetching || attack.isFetching;
+
   return (
-    <DataTable
-      label="Scans"
-      testId="security-scans-summary-table"
-      rows={rows}
-      getRowId={row => row.id}
-      rowTestId={row => `security-scans-summary-${row.id}-row`}
-      activeRowId={activeScan}
-      onRowActivate={row => onSelect(row.id)}
-      onRetry={() => {
-        void overview.refetch();
-        void schedules.refetch();
-        void prowler.refetch();
-        void attack.refetch();
-      }}
-      pagination={false}
-      minWidth="36rem"
-      maxHeight="none"
-      columns={[
-        { id: 'scan', label: 'Scan', render: row => row.label },
-        {
-          id: 'status',
-          label: 'Status',
-          render: row =>
-            row.loading ? (
-              <Skeleton variant="text" level="body-sm" width="8ch" />
-            ) : (
-              <StatusChip
-                tone={row.status.tone}
-                label={row.status.label}
-                data-testid={`security-scans-summary-${row.id}-status`}
-              />
-            ),
-        },
-        {
-          id: 'last-run',
-          label: 'Last run',
-          render: row =>
-            row.lastRunAt ? (
-              <RelativeTime at={row.lastRunAt} />
-            ) : (
-              <Box component="span" sx={{ color: 'admin.inkMuted' }}>
-                {DASH}
-              </Box>
-            ),
-        },
-        {
-          id: 'findings',
-          label: 'Findings',
-          render: row => (
-            <Box
-              component="span"
-              sx={{ color: row.findings ? 'admin.ink' : 'admin.inkMuted' }}
-              data-testid={`security-scans-summary-${row.id}-findings`}
-            >
-              {row.findings ?? DASH}
-            </Box>
-          ),
-        },
-        {
-          id: 'next-run',
-          label: 'Next run',
-          render: row => (
-            <NextRun
-              at={row.nextRunAt}
-              unavailable={row.nextRunUnavailable}
-              testId={`security-scans-summary-${row.id}-next`}
-            />
-          ),
-        },
-      ]}
-    />
+    <Stack gap={1}>
+      {allLoaded && refreshing && <UpdatingBar testId="security-scans-summary-updating" />}
+      <DataTable
+        label="Scans"
+        testId="security-scans-summary-table"
+        rows={rows}
+        getRowId={row => row.id}
+        rowTestId={row => `security-scans-summary-${row.id}-row`}
+        activeRowId={activeScan}
+        onRowActivate={row => onSelect(row.id)}
+        onRetry={() => {
+          void overview.refetch();
+          void schedules.refetch();
+          void prowler.refetch();
+          void attack.refetch();
+        }}
+        pagination={false}
+        minWidth="36rem"
+        maxHeight="none"
+        columns={[
+          { id: 'scan', label: 'Scan', render: row => row.label },
+          {
+            id: 'status',
+            label: 'Status',
+            render: row =>
+              row.loading ? (
+                <Skeleton variant="text" level="body-sm" width="8ch" />
+              ) : (
+                <StatusChip
+                  tone={row.status.tone}
+                  label={row.status.label}
+                  data-testid={`security-scans-summary-${row.id}-status`}
+                />
+              ),
+          },
+          {
+            id: 'last-run',
+            label: 'Last run',
+            render: row =>
+              row.loading ? (
+                <Skeleton variant="text" level="body-sm" width="10ch" />
+              ) : row.lastRunAt ? (
+                <RelativeTime at={row.lastRunAt} />
+              ) : (
+                <Box component="span" sx={{ color: 'admin.inkMuted' }}>
+                  {DASH}
+                </Box>
+              ),
+          },
+          {
+            id: 'findings',
+            label: 'Findings',
+            render: row =>
+              row.loading ? (
+                <Skeleton variant="text" level="body-sm" width="12ch" />
+              ) : (
+                <Box
+                  component="span"
+                  sx={{ color: row.findings ? 'admin.ink' : 'admin.inkMuted' }}
+                  data-testid={`security-scans-summary-${row.id}-findings`}
+                >
+                  {row.findings ?? DASH}
+                </Box>
+              ),
+          },
+          {
+            id: 'next-run',
+            label: 'Next run',
+            render: row =>
+              row.loading ? (
+                <Skeleton variant="text" level="body-sm" width="8ch" />
+              ) : (
+                <NextRun
+                  at={row.nextRunAt}
+                  unavailable={row.nextRunUnavailable}
+                  testId={`security-scans-summary-${row.id}-next`}
+                />
+              ),
+          },
+        ]}
+      />
+    </Stack>
   );
 }

@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 /**
- * GET /api/security/user-recent surfaces recent suspicious patterns; like
- * user-summary it must drop the IP-bucketed `emails` array so co-targeted users'
- * emails do not leak, exposing only the caller's own usernames.
+ * GET /api/security/user-recent surfaces recent suspicious patterns; it must drop the
+ * IP-bucketed `emails` array so co-targeted users' emails do not leak, exposing only the
+ * caller's own usernames.
  */
 
 // `any` below is deliberate test-mock plumbing: typing the full next-connect /
@@ -59,8 +59,8 @@ describe('GET /api/security/user-recent - email leak strip', () => {
     expect(item.data.usernames).toEqual(['me']);
     expect(JSON.stringify(body)).not.toContain('victim@example.com');
   });
-  // Same NaN-arithmetic shape as user-summary: `hours` reaches a Date-typed `createdAt`
-  // filter, and this route has no admin gate either.
+  // `hours` reaches a Date-typed `createdAt` filter, so NaN arithmetic must be rejected; this
+  // route has no admin gate either.
   it('rejects a non-numeric hours as a 400 before the repository is queried', async () => {
     const { req, res } = createMocks({ method: 'GET', query: { hours: 'abc' } });
     (req as any).user = { email: 'me@example.com', username: 'me' };

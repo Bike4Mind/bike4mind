@@ -11,6 +11,7 @@ import { isCustomRange } from '@bike4mind/server-utils/security/wafSharedHelpers
 import { WafTopRulesChart } from './WafTopRulesChart';
 import { WafTrafficGauge } from './WafTrafficGauge';
 import { WafLogsInsightsSection } from './WafLogsInsightsSection';
+import { LoadingState, UpdatingBar } from '../shared';
 
 /** Convert a Date to the value format expected by datetime-local inputs (YYYY-MM-DDTHH:mm). */
 function toDatetimeLocalValue(date: Date): string {
@@ -151,6 +152,16 @@ export const WafTrafficOverview = ({ isActive = true }: { isActive?: boolean }) 
           </Button>
         </Stack>
       </Stack>
+
+      {trafficQuery.data && trafficQuery.isFetching && (
+        <Box sx={{ mt: 1.5 }}>
+          <UpdatingBar testId="waf-traffic-updating" />
+        </Box>
+      )}
+
+      {trafficQuery.isLoading && !trafficQuery.data && (
+        <LoadingState label="Loading firewall traffic" testId="waf-traffic-loading" />
+      )}
 
       {showCustomPicker && (
         <Sheet

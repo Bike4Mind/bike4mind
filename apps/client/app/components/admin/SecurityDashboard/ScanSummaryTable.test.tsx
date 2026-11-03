@@ -147,4 +147,27 @@ describe('ScanSummaryTable', () => {
     );
     expect(compactSeverityCounts({}, ['critical'])).toBe('None');
   });
+
+  it('skeletons the last run, findings and next run cells of a row that is still loading', () => {
+    mocks.overview.mockReturnValue({ data: undefined, isError: false, isFetching: true, refetch: vi.fn() });
+    renderTable();
+    const row = screen.getByTestId('security-scans-summary-web-row');
+    expect(row).not.toHaveTextContent('\u2014');
+    expect(screen.queryByTestId('security-scans-summary-web-findings')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('security-scans-summary-web-next')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('security-scans-summary-updating')).not.toBeInTheDocument();
+  });
+
+  it('shows an updating bar above the table while loaded data refetches', () => {
+    mocks.attack.mockReturnValue({
+      data: attack,
+      isLoading: false,
+      isError: false,
+      isFetching: true,
+      refetch: vi.fn(),
+    });
+    renderTable();
+    expect(screen.getByTestId('security-scans-summary-updating')).toHaveTextContent('Updating');
+    expect(screen.getByTestId('security-scans-summary-web-findings')).toHaveTextContent('2 high, 5 medium');
+  });
 });

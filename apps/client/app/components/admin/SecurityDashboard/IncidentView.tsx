@@ -22,6 +22,7 @@ import {
   StatStrip,
   StatTile,
   StatusChip,
+  UpdatingBar,
   type SegmentedOption,
 } from '../shared';
 import {
@@ -779,6 +780,8 @@ export function IncidentView() {
   const retrySignals = () => void signalsQuery.refetch();
   const retryState = () => void stateQuery.refetch();
   const generatedAt = signals.data?.generatedAt ?? state.data?.generatedAt;
+  const refreshing =
+    (signalsQuery.isFetching && Boolean(signalsQuery.data)) || (stateQuery.isFetching && Boolean(stateQuery.data));
 
   return (
     <Stack gap={2.5} data-testid="security-incident-view">
@@ -797,6 +800,7 @@ export function IncidentView() {
         />
         {generatedAt && <RelativeTime prefix="As of" at={generatedAt} data-testid="security-incident-as-of" />}
       </Stack>
+      {refreshing && <UpdatingBar testId="security-incident-updating" />}
       <AnomalyBanner
         snapshot={anomaly.data}
         onReview={() =>

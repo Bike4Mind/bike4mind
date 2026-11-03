@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PERMANENT_IP_BLOCK_EXPIRES_AT } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { securityPaletteDark, securityPaletteLight } from '@client/app/theme/securityTheme';
-import BlockedIPsTab from './BlockedIPsTab';
+import BlockedIPsSection from './BlockedIPsSection';
 
 const h = vi.hoisted(() => ({ items: [] as Record<string, unknown>[] }));
 
@@ -29,9 +29,9 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={theme}>{children}</CssVarsProvider>
 );
 
-const renderTab = () => render(<BlockedIPsTab />, { wrapper: TestWrapper });
+const renderTab = () => render(<BlockedIPsSection />, { wrapper: TestWrapper });
 
-describe('BlockedIPsTab', () => {
+describe('BlockedIPsSection', () => {
   beforeEach(() => {
     h.items = [];
   });

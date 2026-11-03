@@ -1,28 +1,109 @@
 import React from 'react';
-import { Box, Typography } from '@mui/joy';
+import { Box, Button, Stack, Typography } from '@mui/joy';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import { useQueryClient } from '@tanstack/react-query';
 import { useUser } from '@client/app/contexts/UserContext';
-import SecurityTabLayout from './SecurityTabLayout';
+import SectionContainer from '@client/app/components/ProfileModal/SectionContainer';
+import MfaCard from '@client/app/components/ProfileModal/SettingsTabContent/MfaCard';
+import ActiveSessionsSection from '@client/app/components/ProfileModal/SettingsTabContent/ActiveSessionsSection';
+import ApprovedAppsSection from '@client/app/components/ProfileModal/SettingsTabContent/ApprovedAppsSection';
+import SignInActivitySection from './SignInActivitySection';
+import { SupportAccessActivity } from './SupportAccessActivity';
+import ApiKeyUsageSection from './ApiKeyUsageSection';
+import BlockedIPsSection from './BlockedIPsSection';
+
+// Must stay in sync with the query keys of the hooks the sections below use.
+export const SECURITY_TAB_QUERY_KEYS = [
+  ['mfa', 'status'],
+  ['passkeys'],
+  ['trusted-devices'],
+  ['users', 'me', 'sessions'],
+  ['security', 'user', 'recent', '7d'],
+  ['security', 'support-access'],
+  ['oauth-grants'],
+  ['admin', 'security', 'api-usage'],
+  ['security', 'blocked-ips'],
+] as const;
 
 const SecurityTab: React.FC = () => {
   const { currentUser } = useUser();
+  const queryClient = useQueryClient();
 
-  if (!currentUser?.isAdmin) {
-    return (
-      <Box sx={{ p: 3 }}>
-        <Typography level="h4" sx={{ mb: 1 }}>
-          Security dashboard unavailable
-        </Typography>
-        <Typography level="body-sm" color="neutral">
-          Security insights are limited to workspace administrators. Please contact your admin if you need access.
-        </Typography>
-      </Box>
-    );
-  }
+  const handleRefresh = async () => {
+    await Promise.all(SECURITY_TAB_QUERY_KEYS.map(queryKey => queryClient.invalidateQueries({ queryKey })));
+  };
 
   return (
-    <Box sx={{ p: 2 }} data-testid="security-tab-root">
-      <SecurityTabLayout />
-    </Box>
+    <Stack spacing={3} sx={{ p: 2 }} data-testid="security-tab-root">
+      <Stack
+        direction={{ xs: 'column', sm: 'row' }}
+        justifyContent="space-between"
+        alignItems={{ xs: 'stretch', sm: 'flex-start' }}
+        gap={1.5}
+      >
+        <Box sx={{ minWidth: 0 }}>
+          <Typography level="h3">Security</Typography>
+          <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
+            Two-factor sign-in, your signed-in devices, sign-in attempts against your account and your API keys.
+          </Typography>
+        </Box>
+        <Button
+          size="sm"
+          variant="outlined"
+          color="neutral"
+          startDecorator={<RefreshIcon fontSize="small" />}
+          onClick={handleRefresh}
+          data-testid="security-summary-refresh-btn"
+          sx={{ flexShrink: 0, alignSelf: { xs: 'flex-start', sm: 'auto' } }}
+        >
+          Refresh
+        </Button>
+      </Stack>
+
+      <Box data-testid="security-mfa-section">
+        <SectionContainer title="Two-factor authentication">
+          <MfaCard />
+        </SectionContainer>
+      </Box>
+
+      <Box data-testid="security-sessions-section">
+        <SectionContainer title="Signed-in devices">
+          <ActiveSessionsSection />
+        </SectionContainer>
+      </Box>
+
+      <Box data-testid="security-signin-activity-section">
+        <SignInActivitySection />
+      </Box>
+
+      <Box data-testid="security-support-access-section">
+        <SectionContainer
+          title="Support access"
+          subtitle="Times support signed in to your account, and how long each visit lasted."
+        >
+          <SupportAccessActivity />
+        </SectionContainer>
+      </Box>
+
+      <Box data-testid="security-approved-apps-section">
+        <SectionContainer
+          title="Approved apps"
+          subtitle="Third-party apps you have authorized to access your account. Revoking an app stops it from renewing access; a session it already holds may continue for up to 30 minutes."
+        >
+          <ApprovedAppsSection />
+        </SectionContainer>
+      </Box>
+
+      <Box data-testid="security-api-keys-section">
+        <ApiKeyUsageSection />
+      </Box>
+
+      {currentUser?.isAdmin && (
+        <Box data-testid="security-blocked-ips-section">
+          <BlockedIPsSection />
+        </Box>
+      )}
+    </Stack>
   );
 };
 

@@ -59,84 +59,13 @@ export type UserSecurityEvent =
       timestamp: string;
     };
 
-// Shared query keys - user-facing hooks use ['security', 'user', ...] prefix
-const USER_SUMMARY_KEY = ['security', 'user', 'summary'] as const;
-const USER_RECENT_24H_KEY = ['security', 'user', 'recent', '24h'] as const;
 const USER_RECENT_7D_KEY = ['security', 'user', 'recent', '7d'] as const;
 const BLOCKED_IPS_KEY = ['security', 'blocked-ips'] as const;
-
-type UserSecuritySummaryData = {
-  userFailures: { total: number; items: IAuthFailLogDocument[] };
-  suspiciousPatterns: { total: number; items: SuspiciousPatternSummary[] };
-  since: string;
-  user: { email: string | null; username: string };
-};
 
 type UserRecentEventsData = {
   items: UserSecurityEvent[];
   since: string;
   user: { email: string | null; username: string };
-};
-
-// Shared fetchers - a single queryFn per endpoint so React Query deduplicates the HTTP request
-const fetchUserSecuritySummary = async (): Promise<UserSecuritySummaryData> => {
-  const response = await api.get<UserSecuritySummaryData>('/api/security/user-summary?hours=24');
-  return response.data;
-};
-
-const fetchUserRecentEvents24h = async (): Promise<UserRecentEventsData> => {
-  const response = await api.get<UserRecentEventsData>('/api/security/user-recent?limit=5&hours=24');
-  return response.data;
-};
-
-export const useGetFailedLoginCount = () => {
-  return useQuery({
-    queryKey: USER_SUMMARY_KEY,
-    queryFn: fetchUserSecuritySummary,
-    select: data => ({ total: data.userFailures.total, since: data.since }),
-  });
-};
-
-export const useGetRecentFailedLogins = () => {
-  return useQuery({
-    queryKey: USER_RECENT_24H_KEY,
-    queryFn: fetchUserRecentEvents24h,
-    select: data => ({
-      items: data.items
-        .filter((e): e is Extract<UserSecurityEvent, { type: 'failed_login' }> => e.type === 'failed_login')
-        .map(e => e.data),
-      since: data.since,
-    }),
-  });
-};
-
-export const useGetSuspiciousSummary = () => {
-  return useQuery({
-    queryKey: USER_SUMMARY_KEY,
-    queryFn: fetchUserSecuritySummary,
-    select: data => ({ total: data.suspiciousPatterns.total, since: data.since }),
-  });
-};
-
-export const useGetRecentSuspiciousLogins = () => {
-  return useQuery({
-    queryKey: USER_RECENT_24H_KEY,
-    queryFn: fetchUserRecentEvents24h,
-    select: data => ({
-      items: data.items
-        .filter((e): e is Extract<UserSecurityEvent, { type: 'suspicious_pattern' }> => e.type === 'suspicious_pattern')
-        .map(e => e.data),
-      since: data.since,
-    }),
-  });
-};
-
-export const useGetRecentSecurityEvents = () => {
-  return useQuery({
-    queryKey: USER_RECENT_24H_KEY,
-    queryFn: fetchUserRecentEvents24h,
-    select: data => ({ items: data.items, since: data.since }),
-  });
 };
 
 export const useGetAllRecentSecurityEvents = () => {
@@ -250,33 +179,6 @@ export const useGetApiUsage = (options?: { refetchInterval?: number }) => {
       return res.data.items;
     },
     refetchInterval: options?.refetchInterval,
-  });
-};
-
-// AI Behavioral Summary (user-level)
-export interface SecurityBehavioralSummary {
-  /** Short natural-language overview of the user's security posture. */
-  summary: string;
-  /** 0-100 security posture score (0 = critical risk, 100 = excellent posture). */
-  securityScore: number;
-  /** Categorical risk level derived from the score. */
-  riskLevel: 'low' | 'medium' | 'high';
-  /** 2-5 short, actionable recommendations for the user. */
-  recommendations: string[];
-}
-
-export const useGetSecurityBehavioralSummary = () => {
-  return useQuery<SecurityBehavioralSummary>({
-    queryKey: ['admin', 'security', 'behavioral-summary'],
-    queryFn: async () => {
-      const res = await api.get<SecurityBehavioralSummary>('/api/security/behavioral-summary');
-      return res.data;
-    },
-    // Keep the AI summary reasonably fresh without hammering the model
-    staleTime: 5 * 60 * 1000, // 5 minutes
-    refetchOnWindowFocus: true,
-    refetchOnReconnect: true,
-    refetchOnMount: true,
   });
 };
 
