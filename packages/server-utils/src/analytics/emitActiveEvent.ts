@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import {
   OVERWATCH_ANALYTICS_SCHEMA_VERSION,
   OVERWATCH_ANONYMOUS_USER_ID,
+  OVERWATCH_PAGE_VIEW_EVENT,
   OVERWATCH_UNKNOWN_SESSION_ID,
   OVERWATCH_VISIT_EVENT,
 } from '@bike4mind/common';
@@ -103,6 +104,13 @@ export interface VisitEmitOptions {
   landingPath?: string;
 }
 
+export interface PageViewEmitOptions {
+  /** The visit the page belongs to (visitSession.ts); the page is never the start of one. */
+  sessionId: string;
+  /** The page's path, already cleaned (visitLanding.ts cleanLandingPath). */
+  path: string;
+}
+
 /**
  * One event per active user per day: the signal DAU is counted from. A synthetic user's is marked
  * with the synthetic lane rather than dropped, so persona activity can be told apart from real
@@ -138,6 +146,21 @@ export async function emitVisitEvent(opts: VisitEmitOptions): Promise<void> {
     ...(opts.referrer !== undefined && { referrer: opts.referrer }),
     ...(opts.utm !== undefined && { utm: opts.utm }),
     ...(opts.landingPath !== undefined && { metadata: { landingPath: opts.landingPath } }),
+  });
+}
+
+/**
+ * One event per page of a visit after its landing, so those pages, and the page the visit ended
+ * on, are known: a page the app moves to (pages/api/analytics/page.ts) or a later page load
+ * (pages/api/analytics/visit.ts). Anonymous for the same reason as the visit event above, and on
+ * the same visit id, so it joins that visit and never adds one.
+ */
+export async function emitPageViewEvent(opts: PageViewEmitOptions): Promise<void> {
+  return postEvent({
+    userId: OVERWATCH_ANONYMOUS_USER_ID,
+    sessionId: opts.sessionId,
+    event: OVERWATCH_PAGE_VIEW_EVENT,
+    metadata: { path: opts.path },
   });
 }
 

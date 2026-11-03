@@ -258,6 +258,7 @@ apps/client/pages/api/ai/v1/tools.ts
 apps/client/pages/api/ai/voice-sessions/index.ts
 apps/client/pages/api/analytics/aggregate.ts
 apps/client/pages/api/analytics/log-event.ts
+apps/client/pages/api/analytics/page.ts  # deliberately unauthenticated (auth: false): the app's page beacon, sent signed in or out like analytics/visit; rate limited, records only on a visit already recorded
 apps/client/pages/api/analytics/visit.ts
 apps/client/pages/api/api-keys/[id]/delete.ts
 apps/client/pages/api/api-keys/[id]/set-active.ts
