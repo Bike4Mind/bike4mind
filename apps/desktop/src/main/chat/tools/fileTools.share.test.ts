@@ -132,3 +132,48 @@ describe('names listed in a WSL folder, opened over the share', () => {
     expect(result).not.toContain('c:d.txt');
   });
 });
+
+describe('names a listing gives for a folder', () => {
+  const FOLDER = 'C:\\proj';
+  const local = () => ({ roots: [FOLDER], signal: new AbortController().signal });
+
+  beforeEach(() => {
+    files.clear();
+    folders.clear();
+    folders.add(FOLDER);
+    listed.tracked = '';
+    listed.ignored = '';
+    listDistroFiles.mockReset().mockResolvedValue(null);
+    ripgrepSearch.mockReset().mockResolvedValue('unavailable');
+    files.set('C:\\outside.txt', 'needle above the folder\n');
+    files.set(`${FOLDER}\\in.txt`, 'needle in the folder\n');
+  });
+
+  it('are searched only when joining them stays below the folder', async () => {
+    listed.tracked = '..\\outside.txt\0in.txt\0';
+
+    const result = await grepSearch.run({ pattern: 'needle', path: FOLDER }, local());
+
+    expect(result).toContain('needle in the folder');
+    expect(result).not.toContain('above the folder');
+  });
+
+  it('are searched only when joining them stays below the folder, for tracked and ignored ones too', async () => {
+    ripgrepSearch.mockResolvedValue('done');
+    listed.ignored = '..\\outside.txt\0in.txt\0';
+
+    const result = await grepSearch.run({ pattern: 'needle', path: FOLDER }, local());
+
+    expect(result).toContain('needle in the folder');
+    expect(result).not.toContain('above the folder');
+  });
+
+  it('are listed only when joining them stays below the folder', async () => {
+    listed.tracked = '..\\outside.txt\0in.txt\0';
+
+    const result = await globFiles.run({ pattern: '{../*.txt,*.txt}', path: FOLDER }, local());
+
+    expect(result).toContain('in.txt');
+    expect(result).not.toContain('outside.txt');
+  });
+});

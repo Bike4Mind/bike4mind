@@ -2,7 +2,7 @@ import { glob, lstat, readFile, stat } from 'node:fs/promises';
 import { basename, dirname, join, matchesGlob, relative } from 'node:path';
 import { git } from '../project/git';
 import { envReadPrompt, readsEnvFile } from './envFiles';
-import { resolveWithinRoots } from './paths';
+import { isWithin, resolveWithinRoots } from './paths';
 import { recordRecentFile } from './recentFiles';
 import { ripgrepSearch, type RipgrepFile } from './ripgrep';
 import { listDistroFiles } from './wslFiles';
@@ -164,6 +164,13 @@ async function trackedButIgnored(base: string): Promise<string[]> {
  */
 function hostSpelling(directory: string): (path: string) => string {
   return wslLocation(directory) ? shareRelativePath : path => path;
+}
+
+/** A listed `file` joined to `directory`, or null when the join lands anywhere but below it. */
+function listedPath(directory: string, file: string): string | null {
+  const root = join(directory);
+  const absolute = join(root, file);
+  return absolute !== root && isWithin(root, absolute) ? absolute : null;
 }
 
 interface FileListing {
@@ -332,7 +339,7 @@ export const globFiles: ToolDefinition = {
     const pattern = typeof input.pattern === 'string' && input.pattern ? input.pattern : '*';
 
     const listing = await listFiles(base, context);
-    const matched = listing.files.filter(file => matchesGlob(file, pattern));
+    const matched = listing.files.filter(file => matchesGlob(file, pattern) && listedPath(base, file));
 
     const found: { path: string; size: number; modified: number }[] = [];
     const known = listing.stats;
@@ -638,8 +645,9 @@ export const grepSearch: ToolDefinition = {
       // rg honours .gitignore even for a file git tracks; the JavaScript listing does not.
       for (const file of (await trackedButIgnored(directory)).map(spelled)) {
         if (tally.truncated || context.signal.aborted) break;
-        if (include && !matchesInclude(file, include)) continue;
-        const result = await scanFile(join(directory, file), expression);
+        const absolute = listedPath(directory, file);
+        if (!absolute || (include && !matchesInclude(file, include))) continue;
+        const result = await scanFile(absolute, expression);
         if (result) {
           tally.add(file, result.hits.length, shown =>
             formatHits(result.lines, result.hits.slice(0, shown), around, expression)
@@ -661,7 +669,12 @@ export const grepSearch: ToolDefinition = {
       for (let start = 0; start < candidates.length && !tally.truncated; start += SCAN_BATCH) {
         if (context.signal.aborted) break;
         const batch = candidates.slice(start, start + SCAN_BATCH);
-        const scanned = await Promise.all(batch.map(file => scanFile(join(directory, file), expression)));
+        const scanned = await Promise.all(
+          batch.map(file => {
+            const absolute = listedPath(directory, file);
+            return absolute ? scanFile(absolute, expression) : null;
+          })
+        );
 
         for (let index = 0; index < batch.length; index += 1) {
           const result = scanned[index];
