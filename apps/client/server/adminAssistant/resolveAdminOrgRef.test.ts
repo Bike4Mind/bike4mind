@@ -1,24 +1,28 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const findById = vi.fn();
-const search = vi.fn();
-const exactFind = vi.fn();
-const exactLimit = vi.fn();
+const orgFind = vi.fn();
+const orgSort = vi.fn();
+const orgLimit = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   organizationRepository: {
     findById: (...args: unknown[]) => findById(...args),
-    search: (...args: unknown[]) => search(...args),
   },
   Organization: {
     find: (...args: unknown[]) => {
-      exactFind(...args);
+      orgFind(...args);
+      const filter = args[0] as { name: { $regex: string } };
       const query = {
         select: () => query,
-        limit: (...limitArgs: unknown[]) => {
-          exactLimit(...limitArgs);
+        sort: (...sortArgs: unknown[]) => {
+          orgSort(...sortArgs);
           return query;
         },
-        lean: () => exactRows,
+        limit: (...limitArgs: unknown[]) => {
+          orgLimit(...limitArgs);
+          return query;
+        },
+        lean: () => (filter.name.$regex.startsWith('^') ? exactRows : partialRows),
       };
       return query;
     },
@@ -30,19 +34,22 @@ import { AdminOrgRefSchema } from './schemas';
 
 const ORG_ID = '65f1a2b3c4d5e6f708192a3b';
 
-let exactRows: { _id: string; name: string; personal: boolean }[] = [];
+type Row = { _id: string; name: string; personal: boolean };
+let exactRows: Row[] = [];
+let partialRows: Row[] = [];
 
 const org = (id: string, name: string) => ({ id, name, personal: false });
-const searchReturns = (data: unknown[], hasMore = false) =>
-  search.mockResolvedValue({ data, hasMore, total: data.length });
+const rows = (count: number, prefix: string): Row[] =>
+  Array.from({ length: count }, (_, index) => ({ _id: `o${index}`, name: `${prefix} ${index}`, personal: false }));
 
 describe('resolveAdminOrgRef', () => {
   beforeEach(() => {
     findById.mockReset();
-    search.mockReset();
-    exactFind.mockReset();
-    exactLimit.mockReset();
+    orgFind.mockReset();
+    orgSort.mockReset();
+    orgLimit.mockReset();
     exactRows = [];
+    partialRows = [];
   });
 
   it('finds an organization by id', async () => {
@@ -50,8 +57,7 @@ describe('resolveAdminOrgRef', () => {
 
     await expect(resolveAdminOrgRef({ orgId: ORG_ID })).resolves.toEqual({ ok: true, org: org(ORG_ID, 'Acme') });
     expect(findById).toHaveBeenCalledWith(ORG_ID);
-    expect(exactFind).not.toHaveBeenCalled();
-    expect(search).not.toHaveBeenCalled();
+    expect(orgFind).not.toHaveBeenCalled();
   });
 
   it('returns not_found for an unknown id', async () => {
@@ -65,18 +71,14 @@ describe('resolveAdminOrgRef', () => {
     findById.mockResolvedValue(org(ORG_ID, 'A.C (me)'));
 
     await expect(resolveAdminOrgRef({ name: 'a.c (ME)' })).resolves.toEqual({ ok: true, org: org(ORG_ID, 'A.C (me)') });
-    expect(exactFind).toHaveBeenCalledWith({ name: { $regex: '^a\\.c \\(ME\\)$', $options: 'i' } });
+    expect(orgFind).toHaveBeenCalledWith({ name: { $regex: '^a\\.c \\(ME\\)$', $options: 'i' } });
     expect(findById).toHaveBeenCalledWith(ORG_ID);
-    expect(search).not.toHaveBeenCalled();
   });
 
   it('resolves an exact match however many partial matches would sort ahead of it', async () => {
     exactRows = [{ _id: ORG_ID, name: 'demo', personal: false }];
     findById.mockResolvedValue(org(ORG_ID, 'demo'));
-    searchReturns(
-      Array.from({ length: 10 }, (_, index) => org(`o${index}`, `ABC Demo ${index}`)),
-      true
-    );
+    partialRows = rows(11, 'ABC Demo');
 
     await expect(resolveAdminOrgRef({ name: 'demo' })).resolves.toMatchObject({ ok: true, org: { id: ORG_ID } });
   });
@@ -96,29 +98,39 @@ describe('resolveAdminOrgRef', () => {
         { id: 'o4', name: 'acme', personal: true },
       ],
     });
-    expect(exactLimit).toHaveBeenCalledWith(11);
-    expect(search).not.toHaveBeenCalled();
+    expect(orgLimit).toHaveBeenCalledWith(11);
+  });
+
+  it('returns ambiguous with the first 10 exact matches and says when the list was cut', async () => {
+    exactRows = rows(11, 'Acme');
+
+    const result = await resolveAdminOrgRef({ name: 'Acme' });
+
+    expect(result).toMatchObject({ ok: false, error: 'ambiguous', message: expect.stringContaining('More than 10') });
+    expect((result as { candidates: unknown[] }).candidates).toHaveLength(10);
   });
 
   it('resolves a single partial match when nothing matches exactly', async () => {
-    searchReturns([org('o2', 'Acme Labs')]);
+    partialRows = [{ _id: 'o2', name: 'Acme Labs', personal: false }];
+    findById.mockResolvedValue(org('o2', 'Acme Labs'));
 
-    await expect(resolveAdminOrgRef({ name: 'acme' })).resolves.toMatchObject({ ok: true, org: { id: 'o2' } });
-    expect(search).toHaveBeenCalledWith(
-      '',
-      { name: 'acme' },
-      { page: 1, limit: 10 },
-      { field: 'name', direction: 'asc' }
-    );
+    await expect(resolveAdminOrgRef({ name: 'a.me' })).resolves.toMatchObject({ ok: true, org: { id: 'o2' } });
+    expect(findById).toHaveBeenCalledWith('o2');
+    expect(orgFind).toHaveBeenLastCalledWith({ name: { $regex: 'a\\.me', $options: 'i' } });
+    expect(orgSort).toHaveBeenLastCalledWith({ name: 1 });
+    expect(orgLimit).toHaveBeenLastCalledWith(11);
   });
 
-  it('returns ambiguous with every partial candidate and says when the list was cut', async () => {
-    searchReturns([org('o2', 'Acme Labs'), org('o3', 'Acme West')], true);
+  it('returns ambiguous with every partial candidate', async () => {
+    partialRows = [
+      { _id: 'o2', name: 'Acme Labs', personal: false },
+      { _id: 'o3', name: 'Acme West', personal: false },
+    ];
 
     await expect(resolveAdminOrgRef({ name: 'acme' })).resolves.toEqual({
       ok: false,
       error: 'ambiguous',
-      message: expect.stringContaining('More than 10'),
+      message: expect.stringContaining('Several'),
       candidates: [
         { id: 'o2', name: 'Acme Labs', personal: false },
         { id: 'o3', name: 'Acme West', personal: false },
@@ -126,9 +138,16 @@ describe('resolveAdminOrgRef', () => {
     });
   });
 
-  it('returns not_found when no name matches', async () => {
-    searchReturns([]);
+  it('says when the partial candidate list was cut', async () => {
+    partialRows = rows(11, 'Acme');
 
+    const result = await resolveAdminOrgRef({ name: 'acme' });
+
+    expect(result).toMatchObject({ ok: false, error: 'ambiguous', message: expect.stringContaining('More than 10') });
+    expect((result as { candidates: unknown[] }).candidates).toHaveLength(10);
+  });
+
+  it('returns not_found when no name matches', async () => {
     await expect(resolveAdminOrgRef({ name: 'nothing' })).resolves.toMatchObject({ ok: false, error: 'not_found' });
   });
 });

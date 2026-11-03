@@ -28,10 +28,10 @@ const resolveById = async (orgId: string): Promise<OrgRefResolution> => {
   return org ? { ok: true, org } : notFound;
 };
 
-// Anchored, so an exact name is found however many partial matches sort ahead of it.
-const findExactNameMatches = async (name: string): Promise<OrgCandidate[]> => {
-  const rows = await Organization.find({ name: { $regex: `^${escapeRegex(name)}$`, $options: 'i' } })
+const findNameMatches = async (pattern: string): Promise<OrgCandidate[]> => {
+  const rows = await Organization.find({ name: { $regex: pattern, $options: 'i' } })
     .select('_id name personal')
+    .sort({ name: 1 })
     .limit(MAX_NAME_MATCHES + 1)
     .lean<{ _id: unknown; name: string; personal: boolean }[]>();
   return rows.map(row => ({ id: String(row._id), name: row.name, personal: row.personal }));
@@ -45,21 +45,15 @@ export async function resolveAdminOrgRef(ref: AdminOrgRef): Promise<OrgRefResolu
   if (ref.orgId !== undefined) return resolveById(ref.orgId);
   if (ref.name === undefined) return notFound;
 
-  const exact = await findExactNameMatches(ref.name);
-  if (exact.length === 1) return resolveById(exact[0].id);
-  if (exact.length > 1) return ambiguous(exact.slice(0, MAX_NAME_MATCHES), exact.length > MAX_NAME_MATCHES);
+  const resolveMatches = async (matches: OrgCandidate[]): Promise<OrgRefResolution | null> => {
+    if (matches.length === 1) return resolveById(matches[0].id);
+    if (matches.length > 1) return ambiguous(matches.slice(0, MAX_NAME_MATCHES), matches.length > MAX_NAME_MATCHES);
+    return null;
+  };
 
-  // search() escapes the name and matches it as a case-insensitive substring.
-  const partial = await organizationRepository.search(
-    '',
-    { name: ref.name },
-    { page: 1, limit: MAX_NAME_MATCHES },
-    { field: 'name', direction: 'asc' }
-  );
-  if (partial.data.length === 0) return notFound;
-  if (partial.data.length === 1) return { ok: true, org: partial.data[0] };
-  return ambiguous(
-    partial.data.map(org => ({ id: org.id, name: org.name, personal: org.personal })),
-    partial.hasMore
-  );
+  // Anchored, so an exact name is found however many partial matches sort ahead of it.
+  const escaped = escapeRegex(ref.name);
+  const exact = await resolveMatches(await findNameMatches(`^${escaped}$`));
+  if (exact) return exact;
+  return (await resolveMatches(await findNameMatches(escaped))) ?? notFound;
 }
