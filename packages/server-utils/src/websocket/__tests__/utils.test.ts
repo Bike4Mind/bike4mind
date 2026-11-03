@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ACCOUNT_DELETION_PENDING_CODE, ForbiddenError, UnauthorizedError } from '@bike4mind/common';
 import { toApiKeyAuthError } from '../../auth/apiKeyAuthFailure';
+import { ACCOUNT_DELETION_PENDING_MESSAGE } from '../../auth/deletionPendingGate';
 import { InternalServerError } from '../../utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { JsonWebTokenError, NotBeforeError, TokenExpiredError } from 'jsonwebtoken';
@@ -127,7 +128,10 @@ describe('withWebSocketContext - auth-error detection', () => {
     const scheduledFor = '2026-12-01T00:00:00.000Z';
     const handler = withWebSocketContext(
       async () => {
-        throw new ForbiddenError('Scheduled for deletion.', { code: ACCOUNT_DELETION_PENDING_CODE, scheduledFor });
+        throw new ForbiddenError('An internal detail that must not reach the client.', {
+          code: ACCOUNT_DELETION_PENDING_CODE,
+          scheduledFor,
+        });
       },
       { skipDatabase: true }
     );
@@ -136,7 +140,7 @@ describe('withWebSocketContext - auth-error detection', () => {
 
     expect(result.statusCode).toBe(403);
     expect(JSON.parse(result.body ?? '{}')).toEqual({
-      error: 'Scheduled for deletion.',
+      error: ACCOUNT_DELETION_PENDING_MESSAGE,
       code: ACCOUNT_DELETION_PENDING_CODE,
       scheduledFor,
     });
