@@ -132,6 +132,17 @@ describe('UserRepository.findPendingRiskReviews', () => {
   });
 });
 
+describe('UserRepository.countPendingRiskReviews', () => {
+  it('counts unbanned pending accounts with no limit', async () => {
+    for (const state of ['pending', 'pending', 'pending', 'approved', 'none'] as const)
+      await createUser(undefined, state);
+    const banned = await createUser(undefined, 'pending');
+    await User.collection.updateOne({ _id: new mongoose.Types.ObjectId(banned) }, { $set: { isBanned: true } });
+
+    await expect(userRepository.countPendingRiskReviews()).resolves.toBe(3);
+  });
+});
+
 describe('UserRepository.setRiskReviewState', () => {
   it('moves a review only from the expected state', async () => {
     const id = await createUser(undefined, 'pending');
