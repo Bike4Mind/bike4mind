@@ -49,6 +49,7 @@ import {
   type BrowserGoAction,
   type BrowserGoRequest,
   type BrowserNavigateRequest,
+  type BrowserOpenArtifactRequest,
   type BrowserPaneBounds,
   type BrowserPaneRequest,
   type BrowserPaneState,
@@ -65,6 +66,7 @@ import { registerLocalContextIpc } from './localContextIpc';
 import { localContextSizing, localHardware } from './localContextSizing';
 import { SidebarSectionStore } from './SidebarSectionStore';
 import { registerImageMenuIpc } from './imageMenuIpc';
+import { registerSessionExportIpc } from './sessionExportIpc';
 import { registerSessionCreateIpc } from './sessionCreateIpc';
 import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
 import { AttachmentStore } from './AttachmentStore';
@@ -1103,6 +1105,17 @@ export function registerChat(
     downloadsDirectory: () => app.getPath('downloads'),
   });
 
+  registerSessionExportIpc(ipcMain, {
+    sessions: store,
+    pickSavePath: async (sender, options) => {
+      const window = BrowserWindow.fromWebContents(sender);
+      const picked = await (window ? dialog.showSaveDialog(window, options) : dialog.showSaveDialog(options));
+      return picked.canceled || !picked.filePath ? null : picked.filePath;
+    },
+    writeFile: (path, content) => writeFile(path, content, 'utf8'),
+    downloadsDirectory: () => app.getPath('downloads'),
+  });
+
   ipcMain.handle(IPC_CHANNELS.chatListArtifacts, () => artifactLibrary.list());
   ipcMain.handle(IPC_CHANNELS.chatReadArtifact, (_event, artifactId: string) => artifactLibrary.read(artifactId));
   ipcMain.handle(IPC_CHANNELS.chatPublishArtifact, (_event, request: ChatArtifactPublishRequest) =>
@@ -1170,6 +1183,16 @@ export function registerChat(
       throw new Error('A conversation and a url are required.');
     }
     return browser.navigate(request.sessionId, request.url);
+  });
+  ipcMain.handle(IPC_CHANNELS.browserOpenArtifact, (_event, request: BrowserOpenArtifactRequest) => {
+    if (
+      typeof request?.sessionId !== 'string' ||
+      typeof request?.title !== 'string' ||
+      typeof request?.content !== 'string'
+    ) {
+      throw new Error('A conversation, a title and the artifact content are required.');
+    }
+    return browser.openArtifact(request.sessionId, request.title, request.content);
   });
   ipcMain.handle(IPC_CHANNELS.browserGo, (_event, request: BrowserGoRequest): BrowserPaneState => {
     const actions: readonly BrowserGoAction[] = ['back', 'forward', 'reload'];

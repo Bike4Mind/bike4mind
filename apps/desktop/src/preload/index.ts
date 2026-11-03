@@ -35,6 +35,7 @@ import {
   type BrowserFreezeFrameRequest,
   type BrowserGoRequest,
   type BrowserNavigateRequest,
+  type BrowserOpenArtifactRequest,
   type BrowserPageStateEvent,
   type BrowserPaneRequest,
   type BrowserTabRequest,
@@ -173,6 +174,7 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatSetApprovalMode, sessionId, mode),
     setSessionArchived: (sessionId: string, archived: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionArchived, sessionId, archived),
+    exportSession: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatExportSession, sessionId),
     listSessions: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSessions),
     createSession: (request?: CreateSessionRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatCreateSession, request),
     createCodeSession: (request: CreateCodeSessionRequest) =>
@@ -303,6 +305,8 @@ const api: DesktopApi = {
     setPane: (request: BrowserPaneRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserSetPane, request),
     freezeFrame: (request: BrowserFreezeFrameRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserFreezeFrame, request),
     navigate: (request: BrowserNavigateRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserNavigate, request),
+    openArtifact: (request: BrowserOpenArtifactRequest) =>
+      ipcRenderer.invoke(IPC_CHANNELS.browserOpenArtifact, request),
     go: (request: BrowserGoRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserGo, request),
     tab: (request: BrowserTabRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserTab, request),
     onPageState: listener => {

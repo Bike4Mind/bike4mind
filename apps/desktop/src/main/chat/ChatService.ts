@@ -122,6 +122,7 @@ import {
   type WorkspaceOutcome,
 } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
+import type { PdfPromptText } from './pdfText';
 import type { AttachmentStore } from './AttachmentStore';
 import type { SidebarSectionStore } from './SidebarSectionStore';
 import { childOutcomeDisplay, classifyChildOutcome } from './childOutcome';
@@ -2803,8 +2804,7 @@ export class ChatService {
       const contextBlock = this.projectContext.get(session.id, project?.workingDirectory, project?.directory);
       const skillsBlock = this.skillsPrompt?.get(session.id, skillRoot) ?? Promise.resolve('');
       if (!resume) await this.reportSuggestionOutcomes(session);
-      const readAttachment = (attachment: ChatAttachment) =>
-        this.deps.attachments?.read(session.id, attachment.id) ?? Promise.resolve(null);
+      const readAttachment = this.attachmentReader(session.id);
       const projectContext = await contextBlock;
       const skillsSection = await skillsBlock;
       let toolsSupported = modelOption?.supportsTools !== false && (!localTurn || !!modelOption);
@@ -3728,6 +3728,13 @@ export class ChatService {
     for (const entry of [...entries].reverse()) this.deps.queue?.restore(sessionId, entry);
   }
 
+  private attachmentReader(sessionId: string): AttachmentReader {
+    return {
+      bytes: attachment => this.deps.attachments?.read(sessionId, attachment.id) ?? Promise.resolve(null),
+      pdfText: attachment => this.deps.attachments?.readPdfText(sessionId, attachment.id) ?? Promise.resolve(null),
+    };
+  }
+
   /**
    * One arrival as the next request carries it: built by the same code a replay uses, so this
    * turn's wire and the next turn's rebuild agree. Text goes as a one-block array rather than a
@@ -3735,10 +3742,7 @@ export class ChatService {
    * already holds text (this round's screenshot turn) and drops it there.
    */
   private async arrivalWire(session: ChatSession, message: ChatMessage): Promise<CompletionMessage | null> {
-    const [turn] = await toCompletionMessages(
-      { ...session, messages: [message] },
-      (attachment: ChatAttachment) => this.deps.attachments?.read(session.id, attachment.id) ?? Promise.resolve(null)
-    );
+    const [turn] = await toCompletionMessages({ ...session, messages: [message] }, this.attachmentReader(session.id));
     if (!turn) return null;
     return typeof turn.content === 'string' ? { ...turn, content: [{ type: 'text', text: turn.content }] } : turn;
   }
@@ -7057,7 +7061,7 @@ function parseArguments(raw: string | undefined): Record<string, unknown> {
  */
 async function toCompletionMessages(
   session: ChatSession,
-  readAttachment: ReadAttachment,
+  readAttachment: AttachmentReader,
   /** Deferred-tools turns only: tool-state reminders are rendered and each one's position is pushed here. */
   toolStateMarks?: ToolStateMark[],
   /** Deferred-tools turns only: the wire index of every assistant message a deferred turn sent. */
@@ -7310,8 +7314,11 @@ function automaticDisplay(automatic: ChatAutomaticOrigin): string {
     : `Auto-fix: ${automatic.summary}`;
 }
 
-/** Reads one attachment's stored bytes, or null when the file is gone. */
-type ReadAttachment = (attachment: ChatAttachment) => Promise<Buffer | null>;
+/** Reads one attachment's stored content; null when the file is gone or, for a PDF, unreadable. */
+interface AttachmentReader {
+  bytes(attachment: ChatAttachment): Promise<Buffer | null>;
+  pdfText(attachment: ChatAttachment): Promise<PdfPromptText | null>;
+}
 
 /**
  * A user turn that carried attachments, as provider-shaped content blocks.
@@ -7319,7 +7326,8 @@ type ReadAttachment = (attachment: ChatAttachment) => Promise<Buffer | null>;
  * Images go FIRST and as real image blocks: the point of this feature is that a screenshot
  * arrives as pixels rather than as a filename the model then invents contents for. Text files
  * are inlined into the single text block ahead of the user's own words, so the question they
- * are asking is the last thing the model reads.
+ * are asking is the last thing the model reads. A PDF goes the same way as its extracted text:
+ * not every model, and no local server, can read a document block.
  *
  * An attachment whose bytes have vanished is skipped rather than faked - a placeholder saying
  * "image.png" is exactly the filename-instead-of-image failure this exists to avoid.
@@ -7327,13 +7335,23 @@ type ReadAttachment = (attachment: ChatAttachment) => Promise<Buffer | null>;
 async function toAttachedContent(
   prompt: string,
   attachments: readonly ChatAttachment[],
-  readAttachment: ReadAttachment
+  readAttachment: AttachmentReader
 ): Promise<unknown[]> {
   const blocks: unknown[] = [];
   const sections: string[] = [];
 
   for (const attachment of attachments) {
-    const bytes = await readAttachment(attachment);
+    if (attachment.kind === 'pdf') {
+      const pdf = await readAttachment.pdfText(attachment);
+      if (pdf) {
+        sections.push(
+          textAttachmentBlock({ ...attachment, pages: pdf.pages, truncated: pdf.truncated || undefined }, pdf.text)
+        );
+      }
+      continue;
+    }
+
+    const bytes = await readAttachment.bytes(attachment);
     if (!bytes) continue;
 
     if (attachment.kind === 'image') {

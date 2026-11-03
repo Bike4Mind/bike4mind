@@ -921,6 +921,9 @@ importers:
       node-pty:
         specifier: 1.2.0-beta.15
         version: 1.2.0-beta.15
+      unpdf:
+        specifier: ^1.6.2
+        version: 1.6.2(@napi-rs/canvas@0.1.100)
       zod:
         specifier: ^4.6.6
         version: 4.6.6

@@ -41,6 +41,7 @@ import type {
   ChatQueuedMessage,
   ChatSession,
   ChatSessionStatusEvent,
+  ChatSessionExportResult,
   ChatSessionSummary,
   ChatStreamEvent,
   ChatVideoJob,
@@ -169,6 +170,7 @@ export const IPC_CHANNELS = {
    */
   chatSetApprovalMode: 'chat:set-approval-mode',
   chatSetSessionArchived: 'chat:set-session-archived',
+  chatExportSession: 'chat:export-session',
   chatListSessions: 'chat:list-sessions',
   chatCreateSession: 'chat:create-session',
   chatCreateCodeSession: 'chat:create-code-session',
@@ -368,6 +370,13 @@ export const IPC_CHANNELS = {
    * renderer's to enforce. See @shared/browserUrl.
    */
   browserNavigate: 'browser:navigate',
+  /**
+   * Show an HTML artifact full-size in a conversation's browser. Renderer -> main.
+   *
+   * Carries the content, never a url: main stores it and mints the `b4m-artifact:` address
+   * itself, so the url bar's refusal of the app's own schemes stays intact.
+   */
+  browserOpenArtifact: 'browser:open-artifact',
   /** Back, forward or reload from the pane's url bar. Renderer -> main. */
   browserGo: 'browser:go',
   /** Open, switch to or close a tab from the pane's tab strip. Renderer -> main. */
@@ -530,6 +539,13 @@ export interface BrowserFreezeFrameRequest {
 export interface BrowserNavigateRequest {
   sessionId: string;
   url: string;
+}
+
+/** An HTML artifact to show full-size in `sessionId`'s browser. */
+export interface BrowserOpenArtifactRequest {
+  sessionId: string;
+  title: string;
+  content: string;
 }
 
 /** The history controls, which take no url. */
@@ -713,6 +729,8 @@ export interface DesktopApi {
     setApprovalMode(sessionId: string, mode: ChatApprovalMode): Promise<ChatSessionSummary | null>;
     /** Move a conversation into or out of the sidebar's Archived section. Reversible. */
     setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null>;
+    /** Save a conversation as Markdown or JSON, by the extension picked in the save dialog. Rejects on a write failure. */
+    exportSession(sessionId: string): Promise<ChatSessionExportResult>;
     listSessions(): Promise<ChatSessionSummary[]>;
     /** Start a Chat session: no project, the mode everything before this was. */
     createSession(request?: CreateSessionRequest): Promise<CreatedSession>;
@@ -982,6 +1000,8 @@ export interface DesktopApi {
     freezeFrame(request: BrowserFreezeFrameRequest): Promise<string | null>;
     /** Open a url the user typed. Rejects with a reason for a scheme that is refused. */
     navigate(request: BrowserNavigateRequest): Promise<BrowserPaneState>;
+    /** Open an HTML artifact full-size; in a new tab when the active one is showing a page. */
+    openArtifact(request: BrowserOpenArtifactRequest): Promise<BrowserPaneState>;
     go(request: BrowserGoRequest): Promise<BrowserPaneState>;
     tab(request: BrowserTabRequest): Promise<BrowserPaneState>;
     /** Subscribe to page state; returns the unsubscribe. */
