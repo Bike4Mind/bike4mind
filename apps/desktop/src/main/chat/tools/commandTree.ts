@@ -15,9 +15,8 @@ export interface CommandTree {
 }
 
 /**
- * `<taskkill.exe|''> <signal> <tag>...`: finds the command's processes by the tag in their environment.
- * Given taskkill, each is force-ended with its native descendants as soon as it is found; an MSYS
- * signal would end an exec'd native program alone.
+ * `<taskkill.exe|''> <signal> <tag>...`: finds the command's processes by the tag in their environment,
+ * and given taskkill force-ends each with its native descendants (an MSYS signal ends an exec'd program alone).
  */
 export const WINDOWS_TREE_SCRIPT = `
 taskkill=$1 sig=$2
