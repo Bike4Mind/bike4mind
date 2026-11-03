@@ -17,7 +17,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   getSettingsMap: settingsMap,
 }));
 
-import { applyUntrustedRateLimit, resolveApiKeyTrust } from './apiKeyTrust';
+import { applyUntrustedRateLimit, resolveApiKeyTrust, resolveUntrustedKeyLimits } from './apiKeyTrust';
 import type { ActiveSubscriptionsRequest } from '@server/entitlements/activeSubscriptions';
 
 // Only handed through to the mocked reader, so an opaque stand-in is enough.
@@ -143,6 +143,12 @@ describe('applyUntrustedRateLimit', () => {
     settingsMap.mockResolvedValue({ apiKeyAccountAgeTrustsKeys: 'false', apiKeyUntrustedRequestsPerDay: '200' });
     const limit = await applyUntrustedRateLimit(oldVerified, { rateLimit: keyLimit });
     expect(limit).toEqual({ requestsPerMinute: 20, requestsPerDay: 200 });
+  });
+
+  it('flags an old free owner as untrusted for the completion quotas when account age does not lift key limits', async () => {
+    settingsMap.mockResolvedValue({ apiKeyAccountAgeTrustsKeys: 'false' });
+    const { ownerUntrusted } = await resolveUntrustedKeyLimits(oldVerified, { rateLimit: keyLimit });
+    expect(ownerUntrusted).toBe(true);
   });
 
   it('leaves org-billed keys untouched without assessing the owner', async () => {

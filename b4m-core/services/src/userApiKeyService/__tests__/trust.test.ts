@@ -133,6 +133,14 @@ describe('assessApiKeyTrust', () => {
       });
     });
 
+    it('gives a young free account the paid-standing reason, with no waiting date', async () => {
+      expect(await assess(youngVerifiedUser(), { honorAccountAge: false })).toEqual({
+        status: 'untrusted',
+        reason: 'paid_standing_required',
+        maxActiveKeys: 1,
+      });
+    });
+
     it.each([
       ['a past purchase', youngVerifiedUser({ lastCreditsPurchasedAt: new Date() }), false],
       ['an active plan', youngVerifiedUser(), true],
