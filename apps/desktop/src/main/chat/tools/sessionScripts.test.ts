@@ -32,6 +32,7 @@ const WRITTEN = [
   'cfg/custom.config.ts',
   'plugins/myplug.py',
   'a.R',
+  'b.ps1',
 ];
 
 describe('sessionScriptRun', () => {
@@ -85,6 +86,12 @@ describe('sessionScriptRun', () => {
     ['echo ok; (bash setup.sh)', 'setup.sh'],
     ['make build', 'Makefile'],
     ['npx tsx tools/x.ts', 'tools/x.ts'],
+    ['NPX tsx tools/x.ts', 'tools/x.ts'],
+    ['npx.exe tsx tools/x.ts', 'tools/x.ts'],
+    ['npx.cmd tsx tools/x.ts', 'tools/x.ts'],
+    ['/usr/bin/npx tsx tools/x.ts', 'tools/x.ts'],
+    ['PNPM exec tsx tools/x.ts', 'tools/x.ts'],
+    ['powershell.exe -File b.ps1', 'b.ps1'],
     ['bunx tsx tools/x.ts', 'tools/x.ts'],
     ['pnpm exec tsx tools/x.ts', 'tools/x.ts'],
     ['pnpm dlx tsx tools/x.ts', 'tools/x.ts'],
