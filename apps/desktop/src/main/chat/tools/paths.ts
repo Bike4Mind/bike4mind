@@ -1,5 +1,6 @@
 import { readlink, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, join, parse, resolve, sep } from 'node:path';
+import { parseWslPath, wslLocation, wslRealpath, wslUncPath, type WslLocation } from '../../wsl/wslPath';
 
 /** The kernel's own limit (MAXSYMLINKS); past it the open fails with ELOOP anyway. */
 const MAX_LINK_HOPS = 32;
@@ -54,10 +55,11 @@ export async function resolveWithinRoots(
   // which for a packaged Electron app is wherever the app happened to be launched from, and
   // is never somewhere the user granted.
   const lexical = isAbsolute(requested) || !baseDirectory ? resolve(requested) : resolve(baseDirectory, requested);
-  const realRoots = await Promise.all(roots.map(root => realpath(root).catch(() => resolve(root))));
+  const realRoots = await Promise.all(roots.map(realRoot));
 
-  const real = await physicalTarget(lexical);
-  if (!realRoots.some(root => isWithin(root, real))) throw new PathAccessDenied(requested);
+  const wsl = wslLocation(lexical);
+  const real = wsl ? await inDistro(wsl, wsl.linuxPath) : await physicalTarget(lexical);
+  if (real === null || !realRoots.some(root => isWithin(root, real))) throw new PathAccessDenied(requested);
 
   // The lexical path is what the caller gets back: `real` may point at the symlink TARGET,
   // and returning that would silently redirect a write the user believes is going elsewhere.
@@ -91,6 +93,14 @@ export async function resolveWithinRootsPhysically(
   if (!requested) throw new PathAccessDenied(requested);
   if (roots.length === 0) throw new PathAccessDenied(requested);
 
+  const realRoots = await Promise.all(roots.map(realRoot));
+  const wsl = wslLocation(baseDirectory);
+  const current = wsl ? await physicallyInDistro(wsl, requested) : await physicallyOnHost(requested, baseDirectory);
+  if (current === null || !realRoots.some(root => isWithin(root, current))) throw new PathAccessDenied(requested);
+  return current;
+}
+
+async function physicallyOnHost(requested: string, baseDirectory: string): Promise<string> {
   const prefix = parse(requested).root;
   // A Windows drive-relative path - `C:notes.txt` - has a root and is still not absolute, and
   // the directory it is relative to is per-drive state no part of this app can see. Only ever
@@ -103,10 +113,35 @@ export async function resolveWithinRootsPhysically(
     // `current` is already resolved, so its parent is the one the kernel would step back to.
     current = part === '..' ? dirname(current) : await realpathOrSelf(join(current, part));
   }
-
-  const realRoots = await Promise.all(roots.map(root => realpath(root).catch(() => resolve(root))));
-  if (!realRoots.some(root => isWithin(root, current))) throw new PathAccessDenied(requested);
   return current;
+}
+
+/**
+ * A command running in a WSL folder is a Linux process: its argument is resolved by Linux rules,
+ * against the folder's Linux path, by the distro itself. A share path to the same distro is read
+ * as the Linux path it names.
+ */
+async function physicallyInDistro(base: WslLocation, requested: string): Promise<string | null> {
+  const named = parseWslPath(requested);
+  if (named && named.distro.toLowerCase() !== base.distro.toLowerCase()) return null;
+  const linux = named
+    ? named.linuxPath
+    : requested.startsWith('/')
+      ? requested
+      : `${base.linuxPath.replace(/\/$/, '')}/${requested}`;
+  return inDistro(base, linux);
+}
+
+/** Linux symlinks under the share do not resolve from Windows, so the distro follows them; null when it cannot. */
+async function inDistro(location: WslLocation, linuxPath: string): Promise<string | null> {
+  const real = await wslRealpath(location.distro, linuxPath);
+  return real === null ? null : wslUncPath(location, real);
+}
+
+async function realRoot(root: string): Promise<string> {
+  const wsl = wslLocation(root);
+  const real = wsl ? await inDistro(wsl, wsl.linuxPath) : await realpath(root).catch(() => null);
+  return real ?? resolve(root);
 }
 
 async function realpathOrSelf(target: string): Promise<string> {

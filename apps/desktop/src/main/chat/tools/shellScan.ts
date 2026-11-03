@@ -14,6 +14,7 @@ import { isEnvFile } from './envFiles';
 import { ghReadFiles, repositoryWrite, type RepositoryWrite } from './ownRepository';
 import { realpathNearest, resolveWithinRootsPhysically } from './paths';
 import { inPlaceWrites } from './shellWrites';
+import { wslLocation, wslUncPath, wslUserEnvironment } from '../../wsl/wslPath';
 
 export interface ShellCommand {
   /** The command's tokens with options before the subcommand dropped: what a remembered pattern is matched against. */
@@ -85,8 +86,20 @@ const READ_PROBES = new Set(['ls', 'cat', 'head', 'tail', 'stat', 'file', 'wc', 
  * to find which node or pnpm a project runs on; they hold binaries and package code, not secrets.
  * Deliberately narrow: `~/.local/share` as a whole also holds keyrings and app data.
  */
-function toolchainLocations(): string[] {
-  const home = homedir();
+function toolchainLocations(home: string, absolute: (path: string) => string): string[] {
+  const system = [
+    '/etc/profiles',
+    '/nix/store',
+    '/nix/var/nix/profiles',
+    '/run/current-system/sw',
+    '/opt/homebrew/bin',
+    '/opt/homebrew/opt',
+    '/opt/homebrew/Cellar',
+    '/usr/local/bin',
+    '/usr/local/lib/node_modules',
+    '/usr/bin',
+    '/bin',
+  ];
   return [
     ...[
       '.nvm',
@@ -107,30 +120,24 @@ function toolchainLocations(): string[] {
       '.local/share/mise/installs',
       'Library/pnpm',
     ].map(path => join(home, path)),
-    '/etc/profiles',
-    '/nix/store',
-    '/nix/var/nix/profiles',
-    '/run/current-system/sw',
-    '/opt/homebrew/bin',
-    '/opt/homebrew/opt',
-    '/opt/homebrew/Cellar',
-    '/usr/local/bin',
-    '/usr/local/lib/node_modules',
-    '/usr/bin',
-    '/bin',
+    ...system.map(absolute),
   ];
 }
 
 // Credential files a package manager or a shell keeps beside its toolchain.
 const SECRET_NAME = /^\.?(npmrc|netrc|pypirc|git-credentials|yarnrc(\.yml)?)$|credential|secret|token/i;
 
-const namesSecret = (path: string): boolean => path.split('/').some(part => SECRET_NAME.test(part)) || isEnvFile(path);
+const namesSecret = (path: string): boolean =>
+  path.split(/[\\/]/).some(part => SECRET_NAME.test(part)) || isEnvFile(path);
 
 /**
  * Whether a path outside the project is a toolchain install that a read-only probe may look at
  * unasked, both as written and with every symlink followed, so `~/.nvm/link -> ~/.ssh` still asks.
+ * In a WSL folder the toolchains are the distro's, under `home` on the share.
  */
-export async function isToolchainPath(path: string, cwd: string): Promise<boolean> {
+export async function isToolchainPath(path: string, cwd: string, home: string = homedir()): Promise<boolean> {
+  const wsl = wslLocation(cwd);
+  const locations = toolchainLocations(home, wsl ? system => wslUncPath(wsl, system) : system => system);
   // Only the part below a toolchain root is checked: the root is trusted, and folders above it
   // (the home folder, a checkout path) may legitimately be named like a secret.
   const below = (candidate: string, roots: string[]): string => {
@@ -139,12 +146,12 @@ export async function isToolchainPath(path: string, cwd: string): Promise<boolea
       .map(root => candidate.slice(root.length));
     return rest.length ? rest.reduce((a, b) => (a.length >= b.length ? a : b)) : candidate;
   };
-  if (namesSecret(below(resolve(cwd, path), toolchainLocations()))) return false;
+  if (namesSecret(below(resolve(cwd, path), locations))) return false;
   try {
     // Each root is resolved the way the path is: a root that does not exist under a linked
     // parent (macOS `/etc` -> `/private/etc`) must still match the path's physical form.
     const roots = await Promise.all(
-      toolchainLocations().map(root => resolveWithinRootsPhysically(root, [parse(root).root], root))
+      locations.map(root => resolveWithinRootsPhysically(root, [parse(root).root], root))
     );
     return !namesSecret(below(await resolveWithinRootsPhysically(path, roots, cwd), roots));
   } catch {
@@ -244,8 +251,7 @@ export function unquote(text: string): string {
 }
 
 /** `~` and `$HOME` are the user's home, which the shell expands before the program sees it. */
-export function expandHome(text: string): string {
-  const home = homedir();
+export function expandHome(text: string, home: string = homedir()): string {
   if (text === '~') return home;
   if (text.startsWith('~/')) return join(home, text.slice(2));
   const named = /^~([^/]+)(\/.*)?$/.exec(text);
@@ -1100,6 +1106,18 @@ export function words(node: Node): string[] {
 /** Nodes whose assignments are already accounted for: a command's prefix, or a flagged declaration. */
 const ASSIGNMENT_OWNERS = new Set(['command', 'declaration_command', 'variable_assignments']);
 
+/**
+ * The home folder `~` and a bare `cd` reach, and the temp folders a command may use freely. A
+ * command in a WSL folder runs in Linux, so they are the distro user's, on the share. When the
+ * distro cannot say, `~` is taken as the distro's root, which no project contains.
+ */
+async function shellHome(startDirectory: string): Promise<{ home: string; temp: string[] }> {
+  const wsl = wslLocation(startDirectory);
+  if (!wsl) return { home: homedir(), temp: [tmpdir(), '/tmp', '/private/tmp'] };
+  const user = await wslUserEnvironment(wsl.distro);
+  return { home: wslUncPath(wsl, user?.home ?? '/'), temp: [wslUncPath(wsl, '/tmp')] };
+}
+
 export async function scanShell(
   command: string,
   startDirectory: string,
@@ -1109,7 +1127,7 @@ export async function scanShell(
   if (!tree) return null;
 
   try {
-    const temp = [tmpdir(), '/tmp', '/private/tmp'];
+    const { home, temp } = await shellHome(startDirectory);
     const allowed = [...roots, ...temp];
     const commands: ShellCommand[] = [];
     const paths = new Set<string>([await realpathNearest(startDirectory)]);
@@ -1125,14 +1143,14 @@ export async function scanShell(
     let readOnly = true;
 
     const noteEnvFile = (raw: string): void => {
-      const path = expandHome(unquote(raw));
+      const path = expandHome(unquote(raw), home);
       if (isDynamic(path)) return;
       if (globPrefix(path) === path ? isEnvFile(path) : globMayMatchEnvFile(path)) envFiles.add(path);
     };
 
     /** A `probe` only reads, so a toolchain folder it names is recorded as a path, not an outside folder to grant. */
     const check = async (raw: string, cwd: string, probe = false): Promise<string | null> => {
-      const text = expandHome(unquote(raw));
+      const text = expandHome(unquote(raw), home);
       const prefix = globPrefix(text);
       if (!prefix || isDynamic(prefix)) return null;
       // A glob can expand to `..` (`~/.nvm*/../.ssh`, `~/.nvm/.?/.ssh`), so a dot after the glob never stays inside.
@@ -1145,7 +1163,7 @@ export async function scanShell(
         const target = resolve(cwd, prefix);
         paths.add(target);
         paths.add(await realpathNearest(target));
-        if (probe && stays && (await isToolchainPath(prefix, cwd))) return target;
+        if (probe && stays && (await isToolchainPath(prefix, cwd, home))) return target;
         const isDirectory = (await stat(target).catch(() => null))?.isDirectory() === true;
         directories.add(isDirectory ? target : dirname(target));
         return target;
@@ -1233,10 +1251,11 @@ export async function scanShell(
         for (const arg of rest) {
           const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : arg;
           if (value.startsWith('-')) continue;
-          const prefix = globPrefix(expandHome(unquote(value)));
+          const prefix = globPrefix(expandHome(unquote(value), home));
           if (!prefix || isDynamic(prefix)) continue;
-          const filesystemRoot = parse(resolve(state.cwd, prefix)).root;
-          paths.add(await resolveWithinRootsPhysically(prefix, [filesystemRoot], state.cwd));
+          const target = resolve(state.cwd, prefix);
+          const filesystemRoot = parse(target).root;
+          paths.add(await resolveWithinRootsPhysically(prefix, [filesystemRoot], state.cwd).catch(() => target));
         }
         return;
       }
@@ -1257,7 +1276,7 @@ export async function scanShell(
         return;
       }
       const target = rest.find(arg => arg === '-' || !arg.startsWith('-'));
-      const next = target === '-' ? state.previous : await check(target ?? homedir(), state.cwd);
+      const next = target === '-' ? state.previous : await check(target ?? home, state.cwd);
       if (next === null) return;
       if (program === 'pushd') state.stack.push(state.cwd);
       state.previous = state.cwd;
@@ -1265,7 +1284,7 @@ export async function scanShell(
     };
 
     const noteWrite = (raw: string, into = writes): void => {
-      const text = expandHome(unquote(raw));
+      const text = expandHome(unquote(raw), home);
       if (text && !isDynamic(text) && !HARMLESS_REDIRECT_TARGETS.has(text)) into.add(resolve(state.cwd, text));
     };
 
