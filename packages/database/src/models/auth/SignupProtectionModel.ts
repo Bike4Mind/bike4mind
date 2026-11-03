@@ -40,6 +40,7 @@ const reviewSchema = new Schema<SignupDomainReview>({
   },
 });
 reviewSchema.index({ triggeredAt: -1 });
+reviewSchema.index({ status: 1, reason: 1, triggeredAt: 1 });
 
 export const SignupObservationModel: mongoose.Model<SignupObservation> =
   (mongoose.models.SignupObservation as mongoose.Model<SignupObservation>) ??
