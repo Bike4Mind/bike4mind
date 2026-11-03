@@ -353,9 +353,9 @@ services:
   # WebSocket. Two ports: a browser-facing socket server on 3001
   # (WEBSOCKET_URL=ws://localhost:3001) and an API Gateway Management API
   # emulator on 3002 (WEBSOCKET_MANAGEMENT_ENDPOINT=http://ws:3002) that the app
-  # and the subscriber-fanout push to. Only 3001 is published. It holds no auth/model logic; it delegates
-  # connect/subscribe/unsubscribe to the app over an internal shared-secret
-  # endpoint. Source: selfhost/ws-gateway/.
+  # and the subscriber-fanout push to. Only 3001 is published. It holds no
+  # auth/model logic; it delegates connect/subscribe/unsubscribe to the app over
+  # an internal shared-secret endpoint. Source: selfhost/ws-gateway/.
   ws:
     build:
       context: ./selfhost/ws-gateway
