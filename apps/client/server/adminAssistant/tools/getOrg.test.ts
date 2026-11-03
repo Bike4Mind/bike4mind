@@ -17,7 +17,9 @@ vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   },
 }));
 vi.mock('@client/lib/userSubscriptions/constants', () => ({
-  SUBSCRIPTION_PLANS: [{ priceId: 'price_team', name: 'Team' }],
+  // Mirrors the real module: the Team price lives only in TEAM_PLAN, never in SUBSCRIPTION_PLANS.
+  SUBSCRIPTION_PLANS: [{ priceId: 'price_pro', name: 'Professional' }],
+  TEAM_PLAN: { priceId: 'price_team', name: 'Team' },
 }));
 
 import { ADMIN_ASSISTANT_ORG_FIELDS, getOrgTool } from './getOrg';
