@@ -1,9 +1,9 @@
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
+import { NATIVE_OAUTH_CLIENT_ID } from '@bike4mind/common';
 import { OAuthClientModel } from '@bike4mind/database';
 import { type MigrationFile } from './index';
 
-export const NATIVE_OAUTH_CLIENT_ID = 'b4m-ios-app';
 const NATIVE_OAUTH_REDIRECT_PATH = '/ios/auth-callback';
 export const NATIVE_OAUTH_REDIRECT_URI = `https://app.bike4mind.com${NATIVE_OAUTH_REDIRECT_PATH}`;
 
