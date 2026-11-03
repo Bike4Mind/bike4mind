@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { SessionStore } from './SessionStore';
 
 const MODEL = 'test-model';
@@ -70,6 +70,15 @@ describe('SessionStore generation settings', () => {
 
     await writeFile(join(directory, `${ID}.json`), sessionFile({ generation: [0.5] }), 'utf8');
     expect(await new SessionStore(directory, MODEL).get(ID)).not.toHaveProperty('generation');
+  });
+
+  it('does not rewrite the file for the overrides it already holds', async () => {
+    const store = new SessionStore(await root(), MODEL);
+    const created = await store.create();
+    await store.setGeneration(created.id, { topP: 0.9, temperature: 0.4 });
+    const write = vi.spyOn(store as unknown as { write: () => Promise<void> }, 'write');
+    expect(await store.setGeneration(created.id, { topP: 0.9, temperature: 0.4 })).toMatchObject({ id: created.id });
+    expect(write).not.toHaveBeenCalled();
   });
 
   it('answers null for a session that is gone', async () => {
