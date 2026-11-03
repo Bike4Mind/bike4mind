@@ -73,4 +73,30 @@ describe('a path in a distro no root is in', () => {
     expect(scan?.ungranted).toHaveLength(1);
     expect(scan?.directories).toEqual([]);
   });
+
+  it.each([
+    ['a WSL project', '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo'],
+    ['a Windows project', 'C:\\repo'],
+  ])('is named, not read, as the operand of a program that does not open files, in %s', async (_kind, root) => {
+    touched.length = 0;
+    asked.length = 0;
+
+    const scan = await scanShell(`sed -n p '${OTHER}'`, root, [root]);
+
+    expect(scan?.ungranted).toEqual([OTHER]);
+    expect(inDebian(touched)).toEqual([]);
+    expect(inDebian(asked)).toEqual([]);
+  });
+
+  it.each(['node build.js C:/out', 'node build.js --base=//cdn.example.com/x', 'node build.js /usr/lib/x'])(
+    'scans %s from a WSL project as an ordinary command',
+    async command => {
+      const root = '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo';
+
+      const scan = await scanShell(command, root, [root]);
+
+      expect(scan?.commands.map(entry => entry.coverable)).toEqual([true]);
+      expect(scan?.ungranted).toEqual([]);
+    }
+  );
 });

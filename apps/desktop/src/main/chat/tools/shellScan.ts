@@ -1267,8 +1267,19 @@ export async function scanShell(
           if (value.startsWith('-')) continue;
           const prefix = globPrefix(expandHome(unquote(value), home));
           if (!prefix || isDynamic(prefix)) continue;
-          const filesystemRoot = parse(resolve(state.cwd, prefix)).root;
-          paths.add(await resolveWithinRootsPhysically(prefix, [filesystemRoot], state.cwd));
+          const target = resolve(state.cwd, prefix);
+          if (inUngrantedDistro(target, allowed)) {
+            ungranted.add(target);
+            continue;
+          }
+          // A WSL folder's command reads its operands by Linux rules, so the root to judge them against is its distro's.
+          const here = wslLocation(state.cwd);
+          const filesystemRoot = here ? wslUncPath(here, '/') : parse(target).root;
+          // An operand that filesystem cannot judge, such as a path in another distro, is left unread.
+          await resolveWithinRootsPhysically(prefix, [filesystemRoot], state.cwd).then(
+            physical => paths.add(physical),
+            () => undefined
+          );
         }
         return;
       }
