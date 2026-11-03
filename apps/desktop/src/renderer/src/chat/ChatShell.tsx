@@ -783,20 +783,23 @@ export function ChatShell({
         ((sessionsRef.current.find(session => session.id === lateOpen)?.messageCount ?? 0) > 0 ||
           openMessageCount.current > 0);
       if (lateOpen && lateHasMessages) {
+        const removed = remove(created).then(
+          () => true,
+          () => false
+        );
         await shareInto(lateOpen, () => shareFolderTo(lateOpen, path));
-        if (unmounted.current) return;
-        await remove(created).catch(() => {
-          const warning = 'Desktop could not remove the empty conversation it made. Delete it from the sidebar.';
-          setAddFolderAlerts(current => {
-            const existing = current[lateOpen];
-            return {
-              ...current,
-              [lateOpen]: {
-                text: existing ? `${existing.text} ${warning}` : warning,
-                color: existing?.color ?? 'warning',
-              },
-            };
-          });
+        if ((await removed) || unmounted.current) return;
+        const warning = 'Desktop could not remove the empty conversation it made. Delete it from the sidebar.';
+        setAddFolderAlerts(current => {
+          const existing = current[lateOpen];
+          const joiner = existing && /[.!?]$/.test(existing.text) ? ' ' : '. ';
+          return {
+            ...current,
+            [lateOpen]: {
+              text: existing ? `${existing.text}${joiner}${warning}` : warning,
+              color: existing?.color ?? 'warning',
+            },
+          };
         });
         return;
       }

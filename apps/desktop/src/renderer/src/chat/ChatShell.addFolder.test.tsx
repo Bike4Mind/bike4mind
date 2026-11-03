@@ -1003,7 +1003,7 @@ describe('Add folder in a Chat composer', () => {
         return { share };
       }
 
-      it('keeps the removal warning when the share succeeds after the delete failed', async () => {
+      it('keeps the removal warning when the share succeeds after the delete had already failed', async () => {
         const { share } = await landLateSeed();
         await act(async () =>
           share.resolve({ status: 'added', path: NOTES, session: summary('seeded', 'chat', [NOTES]) })
@@ -1013,14 +1013,29 @@ describe('Add folder in a Chat composer', () => {
         expect(byTestId('chat-add-folder-notice')?.textContent).toContain('could not remove the empty conversation');
       });
 
-      it('shows both the share failure and the removal warning', async () => {
+      it('shows both the share failure and the removal warning, joined into separate sentences', async () => {
         const { share } = await landLateSeed();
         await act(async () => share.reject(new Error('main refused')));
         await act(async () => undefined);
 
-        const text = (byTestId('chat-add-folder-error') ?? byTestId('chat-add-folder-notice'))?.textContent;
-        expect(text).toContain('could not share the folder');
-        expect(text).toContain('could not remove the empty conversation');
+        expect(byTestId('chat-add-folder-error')?.textContent).toMatch(
+          /could not share the folder.*main refused\. Desktop could not remove the empty conversation it made\. Delete it from the sidebar\.$/
+        );
+      });
+
+      it('starts removing the made chat before the share resolves', async () => {
+        await landLateSeed();
+
+        expect(deleteSession).toHaveBeenCalledExactlyOnceWith('made', false);
+      });
+
+      it('still removes the made chat when the shell unmounts during the share', async () => {
+        await landLateSeed();
+        act(() => root?.unmount());
+        root = null;
+        await tick();
+
+        expect(deleteSession).toHaveBeenCalledExactlyOnceWith('made', false);
       });
     });
   });
