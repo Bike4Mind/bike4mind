@@ -292,6 +292,52 @@ describe('ChatService reply stats', () => {
     expect(reply?.stats?.derived).toBeUndefined();
   });
 
+  it('times bare markers on a self-hosted model without counting them as thinking tokens', async () => {
+    localStream.mockImplementation(async (_request, emit) => {
+      emit({ type: 'content', text: '<think>' });
+      await pause(40);
+      emit({ type: 'content', text: '</think>' });
+      emit({ type: 'content', text: 'Done.' });
+      emit({ type: 'content', stopReason: 'end_turn', usage: { inputTokens: 40, outputTokens: 30 } });
+    });
+    const id = await session(LOCAL.id);
+    await services[0].send(id, 'think');
+    await settled();
+
+    const reply = (await store.get(id))?.messages.find(message => message.role === 'assistant');
+    expect(reply?.stats?.reasoningMs).toBeGreaterThanOrEqual(35);
+    expect(reply?.stats?.reasoningTokens).toBeUndefined();
+  });
+
+  it('stamps the first text even when the filter held all of it back until the stream ended', async () => {
+    localStream.mockImplementation(async (_request, emit) => {
+      emit({ type: 'content', text: '<think>which bracket opens a tag</think>' });
+      await pause(10);
+      emit({ type: 'content', text: '<' });
+      emit({ type: 'content', stopReason: 'end_turn', usage: { inputTokens: 40, outputTokens: 12 } });
+    });
+    const id = await session(LOCAL.id);
+    await services[0].send(id, 'which bracket?');
+    await settled();
+
+    const reply = (await store.get(id))?.messages.find(message => message.role === 'assistant');
+    expect(reply?.content).toBe('<');
+    expect(reply?.rounds?.[0].timing?.firstTextAt).toEqual(expect.any(Number));
+  });
+
+  it('never counts a hosted model thinking frames as tokens', async () => {
+    const { reply } = await hostedTurn(async stream => {
+      for (let i = 0; i < 3; i++) {
+        stream.write(frame({ type: 'content', text: `<think>step ${i} </think>` }));
+        await pause(10);
+      }
+      stream.write(frame({ type: 'content', text: 'Answer', usage: { outputTokens: 400 } }));
+    });
+
+    expect(reply?.stats?.reasoningMs).toBeGreaterThanOrEqual(15);
+    expect(reply?.stats?.reasoningTokens).toBeUndefined();
+  });
+
   it('keeps what was measured on a reply that failed', async () => {
     post.mockImplementationOnce(() => Promise.reject(new Error('upstream exploded')));
     const id = await session();
