@@ -1,4 +1,4 @@
-import { CreditHolderType, settingsMap } from '@bike4mind/common';
+import { CreditHolderType, REFERRAL_REWARD_REASON, settingsMap } from '@bike4mind/common';
 import {
   adminSettingsRepository,
   CreditTransaction,
@@ -13,7 +13,7 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { Logger } from '@bike4mind/observability';
 
-export const REFERRAL_REWARD_REASON = 'referral_reward';
+export { REFERRAL_REWARD_REASON };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
