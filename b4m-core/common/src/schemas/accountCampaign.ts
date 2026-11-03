@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ShadowDetectionSignal } from './shadowDetection';
 
 /**
  * Coordinated account campaigns: candidate groups of recent accounts linked by independent evidence
@@ -124,3 +125,106 @@ export const accountCampaignGroupSchema = z.object({
   totals: z.object({ direct: z.number().int(), transitive: z.number().int(), links: z.number().int() }),
 });
 export type AccountCampaignGroup = z.infer<typeof accountCampaignGroupSchema>;
+
+/** The smallest group the engine emits: one triangle of direct members. */
+export const ACCOUNT_CAMPAIGN_MIN_DIRECT_MEMBERS = 3;
+
+export const ACCOUNT_CAMPAIGN_RELATIONSHIP_LABELS: Record<AccountCampaignRelationship, string> = {
+  networkPrefix: 'network prefix',
+  hostingAsn: 'hosting network',
+  mailDomain: 'mail domain',
+  fingerprint: 'client fingerprint',
+  lifecycle: 'lifecycle timing',
+};
+
+/** The shadow detection summary line for a group, e.g. "5 accounts linked by client fingerprint (+1 transitive)". */
+export function accountCampaignSummary(group: AccountCampaignGroup): string {
+  const relationships = [...new Set(group.evidence.map(entry => entry.relationship))];
+  const transitive = group.totals.transitive > 0 ? ` (+${group.totals.transitive} transitive)` : '';
+  return `${group.totals.direct} accounts linked by ${relationships
+    .map(relationship => ACCOUNT_CAMPAIGN_RELATIONSHIP_LABELS[relationship])
+    .join(', ')}${transitive}`;
+}
+
+export function accountCampaignSignals(group: AccountCampaignGroup): ShadowDetectionSignal[] {
+  return [
+    {
+      key: 'directMembers',
+      label: 'Directly linked accounts',
+      observed: group.totals.direct,
+      threshold: ACCOUNT_CAMPAIGN_MIN_DIRECT_MEMBERS,
+    },
+    {
+      key: 'transitiveMembers',
+      label: 'Transitively linked accounts',
+      observed: group.totals.transitive,
+      threshold: null,
+    },
+    { key: 'links', label: 'Direct links', observed: group.totals.links, threshold: null },
+    {
+      key: 'axes',
+      label: 'Independent evidence axes',
+      observed: new Set(group.evidence.map(entry => entry.axis)).size,
+      threshold: ACCOUNT_CAMPAIGN_MIN_AXES,
+    },
+  ];
+}
+
+/**
+ * The group as it stands once an account is deleted, or null when no triangle of direct members is
+ * left. A transitive member whose every stored link ran through the deleted account goes with it, and a
+ * shared value held by fewer than two remaining members stops being evidence. Counts the stored lists
+ * cannot recompute (ignored memberCount, unknown) are capped at the remaining member count.
+ */
+export function withoutCampaignMember(group: AccountCampaignGroup, userId: string): AccountCampaignGroup | null {
+  const touchesRemoved = (link: AccountCampaignLink) => link.userIds.includes(userId);
+  const links = group.links.filter(link => !touchesRemoved(link));
+  const orphaned = new Set(
+    group.members
+      .filter(
+        member =>
+          member.membership === 'transitive' &&
+          group.links.some(link => link.userIds.includes(member.userId) && touchesRemoved(link)) &&
+          !links.some(link => link.userIds.includes(member.userId))
+      )
+      .map(member => member.userId)
+  );
+  const dropped = new Set([userId, ...orphaned]);
+  const removedLinks = group.links.filter(touchesRemoved);
+  const members = group.members
+    .filter(member => !dropped.has(member.userId))
+    .map(member => ({
+      ...member,
+      linkCount: member.linkCount - removedLinks.filter(link => link.userIds.includes(member.userId)).length,
+    }));
+  const direct = members.filter(member => member.membership === 'direct').length;
+  if (direct < ACCOUNT_CAMPAIGN_MIN_DIRECT_MEMBERS) return null;
+
+  const droppedDirect = group.members.filter(
+    member => dropped.has(member.userId) && member.membership === 'direct'
+  ).length;
+  const droppedTransitive = group.members.filter(
+    member => dropped.has(member.userId) && member.membership === 'transitive'
+  ).length;
+  const remaining = members.length;
+  return {
+    ...group,
+    members,
+    links,
+    evidence: group.evidence
+      .map(entry => ({ ...entry, userIds: entry.userIds.filter(id => !dropped.has(id)) }))
+      .filter(entry => entry.userIds.length >= 2),
+    ignored: group.ignored
+      .map(entry => ({ ...entry, memberCount: Math.min(entry.memberCount, remaining) }))
+      .filter(entry => entry.memberCount >= 2),
+    unknown: {
+      fingerprint: Math.min(group.unknown.fingerprint, remaining),
+      network: Math.min(group.unknown.network, remaining),
+    },
+    totals: {
+      direct: group.totals.direct - droppedDirect,
+      transitive: group.totals.transitive - droppedTransitive,
+      links: group.totals.links - removedLinks.length,
+    },
+  };
+}

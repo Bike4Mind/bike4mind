@@ -176,6 +176,50 @@ describe('findAccountCampaigns', () => {
       [userId(4), userId(5), userId(6)],
     ]);
     expect(groups.every(group => group.totals.transitive === 0)).toBe(true);
+    expect(groups.map(group => [group.totals.links, group.links.length, group.truncated])).toEqual([
+      [3, 3, false],
+      [3, 3, false],
+    ]);
+  });
+
+  it('keeps two clusters that share one account as two groups', () => {
+    const steps = [20_000, 3 * MINUTE, 4 * MINUTE];
+    // Accounts 1-3 share a client and a network; accounts 3-5 share a mail domain and a scripted
+    // lifecycle. Only account 3 is in both.
+    const accounts = [
+      account(1, { fingerprint: RARE_JA4, networkPrefix: '198.18.0.0' }),
+      account(2, { fingerprint: RARE_JA4, networkPrefix: '198.18.0.0' }),
+      account(3, {
+        fingerprint: RARE_JA4,
+        networkPrefix: '198.18.0.0',
+        mailDomain: 'right.example',
+        signedUpAt: burstAt(10),
+        steps,
+      }),
+      account(4, { mailDomain: 'right.example', signedUpAt: burstAt(11), steps }),
+      account(5, { mailDomain: 'right.example', signedUpAt: burstAt(12), steps }),
+    ];
+
+    const { groups } = scan(accounts);
+
+    const memberSets = groups.map(group => group.members.map(member => member.userId).sort()).sort();
+    expect(memberSets).toEqual([
+      [userId(1), userId(2), userId(3)],
+      [userId(3), userId(4), userId(5)],
+    ]);
+    expect(groups.flatMap(group => group.members).every(member => member.membership === 'direct')).toBe(true);
+  });
+
+  it('does not group a classroom that signs up on one network and onboards the usual way', () => {
+    const classroom = Array.from({ length: 12 }, (_, i) =>
+      account(i + 1, {
+        networkPrefix: '203.0.113.0',
+        signedUpAt: burstAt(i),
+        steps: [60_000 + i * 5000, -1, 3 * MINUTE + i * 5000],
+      })
+    );
+
+    expect(scan(classroom).groups).toEqual([]);
   });
 
   it('keeps missing fingerprints unknown rather than counting them as a match or a mismatch', () => {
@@ -204,6 +248,17 @@ describe('findAccountCampaigns', () => {
 
     const budgeted = scan(big, { policy: { ...DEFAULT_CAMPAIGN_POLICY, maxCandidatePairs: 3 } });
     expect(budgeted.stats).toMatchObject({ candidatePairs: 3, pairsTruncated: true });
+  });
+
+  it('keeps adding evidence to open pairs once the pair budget is spent', () => {
+    const neighbours = [100, 101].map(n => account(n, { networkPrefix: '192.0.2.0' }));
+
+    const { groups, stats } = scan([...neighbours, ...rotatingCampaign(1, 5)], {
+      policy: { ...DEFAULT_CAMPAIGN_POLICY, maxCandidatePairs: 10 },
+    });
+
+    expect(stats.pairsTruncated).toBe(true);
+    expect(groups.map(group => group.totals.direct)).toEqual([5]);
   });
 
   it('treats a value shared beyond the population cap as common', () => {

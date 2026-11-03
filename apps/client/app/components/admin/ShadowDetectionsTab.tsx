@@ -260,6 +260,8 @@ const SummaryStrip: React.FC<{ row: ShadowDetectionSummaryRow }> = ({ row }) => 
 
 const CONFLICT_FALLBACK_MESSAGE = 'Another admin graded this detection first. Review it again.';
 
+const countOf = (count: number, noun: string) => `${count.toLocaleString()} ${noun}${count === 1 ? '' : 's'}`;
+
 /**
  * A campaign group's accounts with how each is linked, then the shared values that linked them and the
  * ones discounted as common. Transitive members are context, linked to the group through one member.
@@ -269,17 +271,20 @@ const CampaignGroupEvidence: React.FC<{ group: CampaignGroupRow; now: number }> 
     <Typography level="body-xs" sx={muted}>
       Accounts ({group.totals.direct.toLocaleString()} direct, {group.totals.transitive.toLocaleString()} transitive,{' '}
       {group.totals.links.toLocaleString()} links). Last seen {relativeTime(new Date(group.lastObservedAt), now)}, first
-      seen {formatUtc(new Date(group.firstObservedAt))}.
+      seen {formatUtc(new Date(group.firstObservedAt))}. Populations count the accounts scanned from{' '}
+      {formatUtc(new Date(group.window.from))} to {formatUtc(new Date(group.window.to))}.
     </Typography>
     <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
       {group.members.map(member => (
         <Box component="li" key={member.userId} data-testid={`shadow-detection-campaign-member-${member.userId}`}>
           <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
             <UserLink userId={member.userId} testId={`shadow-detection-dialog-user-link-${member.userId}`} />
-            <StatusChip
-              tone={member.membership === 'direct' ? 'warn' : 'neutral'}
-              label={member.membership === 'direct' ? 'Direct' : 'Transitive'}
-            />
+            <Box component="span" data-testid={`shadow-detection-campaign-membership-${member.userId}`}>
+              <StatusChip
+                tone={member.membership === 'direct' ? 'warn' : 'neutral'}
+                label={member.membership === 'direct' ? 'Direct' : 'Transitive'}
+              />
+            </Box>
             <Typography level="body-xs" sx={muted}>
               {member.linkCount.toLocaleString()} {member.linkCount === 1 ? 'link' : 'links'}
             </Typography>
@@ -303,8 +308,8 @@ const CampaignGroupEvidence: React.FC<{ group: CampaignGroupRow; now: number }> 
           level="body-sm"
           sx={{ overflowWrap: 'anywhere' }}
         >
-          {RELATIONSHIP_LABELS[entry.relationship]}: {entry.label} ({entry.userIds.length.toLocaleString()} members,{' '}
-          {entry.population.toLocaleString()} scanned accounts)
+          {entry.label} ({countOf(entry.userIds.length, 'member')}; shared by{' '}
+          {countOf(entry.population, 'scanned account')})
         </Typography>
       ))}
     </Box>
@@ -322,7 +327,7 @@ const CampaignGroupEvidence: React.FC<{ group: CampaignGroupRow; now: number }> 
               sx={{ ...muted, overflowWrap: 'anywhere' }}
             >
               {RELATIONSHIP_LABELS[entry.relationship]} {entry.value}: {IGNORED_REASON_LABELS[entry.reason]} (
-              {entry.population.toLocaleString()} scanned accounts)
+              {countOf(entry.memberCount, 'member')}; shared by {countOf(entry.population, 'scanned account')})
             </Typography>
           ))}
         </Box>
@@ -330,8 +335,14 @@ const CampaignGroupEvidence: React.FC<{ group: CampaignGroupRow; now: number }> 
     )}
     {(group.unknown.fingerprint > 0 || group.unknown.network > 0) && (
       <Typography level="body-xs" sx={muted} data-testid="shadow-detection-campaign-unknown">
-        Not captured, so neither for nor against a link: client fingerprint for {group.unknown.fingerprint}, network for{' '}
-        {group.unknown.network}.
+        Not captured, so neither for nor against a link:{' '}
+        {[
+          group.unknown.fingerprint > 0 && `client fingerprint for ${countOf(group.unknown.fingerprint, 'member')}`,
+          group.unknown.network > 0 && `network for ${countOf(group.unknown.network, 'member')}`,
+        ]
+          .filter(Boolean)
+          .join(', ')}
+        .
       </Typography>
     )}
   </Stack>

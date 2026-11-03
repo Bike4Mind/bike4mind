@@ -1,6 +1,9 @@
 import mongoose, { Document, Model, model, Schema, Types } from 'mongoose';
 import {
   accountCampaignGroupSchema,
+  accountCampaignSignals,
+  accountCampaignSummary,
+  withoutCampaignMember,
   SHADOW_DETECTION_ACTIONS,
   type AccountCampaignGroup,
   SHADOW_DETECTION_VERDICTS,
@@ -112,6 +115,28 @@ const CAMPAIGN_REOPEN_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 const directUserIds = (group: AccountCampaignGroup) =>
   group.members.filter(member => member.membership === 'direct').map(member => member.userId);
 
+/** Recent records sharing a direct member that one sweep's group is matched against. */
+const CAMPAIGN_MATCH_CANDIDATES = 20;
+
+/**
+ * The record a re-observed group continues: the one sharing the most direct members, provided they are
+ * at least two and at least half of the smaller direct set. Two clusters that meet at one account, or a
+ * group that drifted to new accounts, get records of their own. Candidates come newest first, so a tie
+ * goes to the newest.
+ */
+function matchingCampaignRecord(candidates: LeanShadowDetection[], direct: string[]): LeanShadowDetection | null {
+  const directSet = new Set(direct);
+  let best: { record: LeanShadowDetection; overlap: number } | null = null;
+  for (const record of candidates) {
+    if (!record.group) continue;
+    const recordDirect = directUserIds(record.group);
+    const overlap = recordDirect.filter(userId => directSet.has(userId)).length;
+    const continues = overlap >= 2 && overlap * 2 >= Math.min(direct.length, recordDirect.length);
+    if (continues && overlap > (best?.overlap ?? 0)) best = { record, overlap };
+  }
+  return best?.record ?? null;
+}
+
 const sameMembers = (left: AccountCampaignGroup, right: AccountCampaignGroup) => {
   const key = (group: AccountCampaignGroup) =>
     group.members
@@ -181,7 +206,7 @@ class ShadowDetectionRepository {
    * still ungraded updates that record in place (keeping firstObservedAt and detectedAt); the revision
    * moves only when membership changed, so a reviewer grading the old membership gets a conflict. A
    * graded record is never rewritten: the same membership just marks it seen, and new direct members
-   * open a fresh record for a fresh review.
+   * (including a transitive member promoted into the core) open a fresh record for a fresh review.
    */
   async recordCampaignGroup(input: RecordShadowDetectionInput): Promise<RecordCampaignGroupResult> {
     if (input.detector !== 'accountCampaign' || !input.group) {
@@ -189,14 +214,16 @@ class ShadowDetectionRepository {
     }
     const group = accountCampaignGroupSchema.parse(input.group);
     const direct = directUserIds(group);
-    const existing = await ShadowDetectionModel.findOne({
+    const candidates = await ShadowDetectionModel.find({
       detector: 'accountCampaign',
       policyVersion: input.policyVersion,
       userIds: { $in: direct },
       'group.lastObservedAt': { $gte: new Date(group.lastObservedAt.getTime() - CAMPAIGN_REOPEN_AFTER_MS) },
     })
       .sort({ 'group.lastObservedAt': -1, _id: -1 })
-      .lean<LeanShadowDetection>();
+      .limit(CAMPAIGN_MATCH_CANDIDATES)
+      .lean<LeanShadowDetection[]>();
+    const existing = matchingCampaignRecord(candidates, direct);
 
     if (!existing?.group) {
       await ShadowDetectionModel.create({ ...input, group });
@@ -204,7 +231,7 @@ class ShadowDetectionRepository {
     }
 
     if (existing.verdict) {
-      const reviewed = new Set(existing.userIds);
+      const reviewed = new Set(directUserIds(existing.group));
       if (direct.some(userId => !reviewed.has(userId))) {
         await ShadowDetectionModel.create({ ...input, group });
         return 'created';
@@ -237,37 +264,41 @@ class ShadowDetectionRepository {
   }
 
   /**
-   * Account deletion: removes the user from every detection that names them, then deletes detections
-   * left with no accounts, or campaign groups left with fewer than two direct members. Group totals stay
-   * as computed; the member list is what remains. Returns how many records were deleted.
+   * Account deletion: removes the user from every detection that names them. A detection left with no
+   * accounts is deleted; a campaign group is pruned with withoutCampaignMember (summary and signals
+   * rebuilt, revision bumped so an open grading dialog conflicts) or deleted when no triangle of direct
+   * members remains, or when its stored group no longer parses. Returns how many records were deleted.
    */
   async removeUser(userId: string): Promise<number> {
-    const touched = await ShadowDetectionModel.find({ userIds: userId }, { _id: 1 }).lean<{ _id: Types.ObjectId }[]>();
-    if (touched.length === 0) return 0;
-    const ids = touched.map(doc => doc._id);
-    await ShadowDetectionModel.updateMany({ _id: { $in: ids } }, { $pull: { userIds: userId } });
-    await ShadowDetectionModel.updateMany(
-      { _id: { $in: ids }, group: { $type: 'object' } },
-      {
-        $pull: {
-          'group.members': { userId },
-          'group.links': { userIds: userId },
-          'group.evidence.$[].userIds': userId,
-        },
+    const touched = await ShadowDetectionModel.find({ userIds: userId }).lean<LeanShadowDetection[]>();
+    const deleteIds: Types.ObjectId[] = [];
+    for (const doc of touched) {
+      if (!doc.group) {
+        if ((doc.userIds ?? []).every(id => id === userId)) deleteIds.push(doc._id);
+        else await ShadowDetectionModel.updateOne({ _id: doc._id }, { $pull: { userIds: userId } });
+        continue;
       }
-    );
-    const directCount = {
-      $size: {
-        $filter: { input: { $ifNull: ['$group.members', []] }, cond: { $eq: ['$$this.membership', 'direct'] } },
-      },
-    };
-    const deleted = await ShadowDetectionModel.deleteMany({
-      _id: { $in: ids },
-      $or: [
-        { userIds: { $size: 0 } },
-        { $and: [{ group: { $type: 'object' } }, { $expr: { $lt: [directCount, 2] } }] },
-      ],
-    });
+      const parsed = accountCampaignGroupSchema.safeParse(doc.group);
+      const pruned = parsed.success ? withoutCampaignMember(parsed.data, userId) : null;
+      if (!pruned) {
+        deleteIds.push(doc._id);
+        continue;
+      }
+      await ShadowDetectionModel.updateOne(
+        { _id: doc._id },
+        {
+          $set: {
+            group: pruned,
+            userIds: pruned.members.map(member => member.userId),
+            summary: accountCampaignSummary(pruned),
+            signals: accountCampaignSignals(pruned),
+          },
+          $inc: { revision: 1 },
+        }
+      );
+    }
+    if (deleteIds.length === 0) return 0;
+    const deleted = await ShadowDetectionModel.deleteMany({ _id: { $in: deleteIds } });
     return deleted.deletedCount;
   }
 

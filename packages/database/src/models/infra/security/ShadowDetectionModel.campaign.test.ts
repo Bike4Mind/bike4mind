@@ -113,6 +113,38 @@ describe('shadowDetectionRepository campaign groups', () => {
     expect((await stored()).map(record => record.verdict)).toEqual([null, 'confirmed_abuse']);
   });
 
+  it('opens a new record when a graded group promotes a transitive member into its core', async () => {
+    await shadowDetectionRepository.recordCampaignGroup(campaign([...TRIO, [4, 'transitive']], at(0)));
+    const [graded] = await stored();
+    await shadowDetectionRepository.addVerdict({
+      id: graded.id,
+      expectedRevision: 0,
+      verdict: 'legitimate_human',
+      reason: 'Study group',
+      reviewerId: 'admin1',
+    });
+
+    expect(await shadowDetectionRepository.recordCampaignGroup(campaign([...TRIO, [4, 'direct']], at(1)))).toBe(
+      'created'
+    );
+  });
+
+  it('keeps clusters that share one account, or a group that drifted to new accounts, in records of their own', async () => {
+    await shadowDetectionRepository.recordCampaignGroup(campaign(TRIO, at(0)));
+
+    const sharingOne: [number, AccountCampaignMembership][] = [
+      [3, 'direct'],
+      [4, 'direct'],
+      [5, 'direct'],
+    ];
+    expect(await shadowDetectionRepository.recordCampaignGroup(campaign(sharingOne, at(1)))).toBe('created');
+    const records = await stored();
+    expect(records.map(record => record.userIds)).toEqual([
+      [id(3), id(4), id(5)],
+      [id(1), id(2), id(3)],
+    ]);
+  });
+
   it('opens a new record for a new policy version or a group not seen for a week', async () => {
     await shadowDetectionRepository.recordCampaignGroup(campaign(TRIO, at(0)));
 
@@ -136,7 +168,7 @@ describe('shadowDetectionRepository campaign groups', () => {
   });
 
   it('removes a deleted account from every detection and drops the records it leaves empty', async () => {
-    await shadowDetectionRepository.recordCampaignGroup(campaign(TRIO, at(0)));
+    await shadowDetectionRepository.recordCampaignGroup(campaign([...TRIO, [4, 'direct']], at(0)));
     await shadowDetectionRepository.record({
       detector: 'signupNetworkBurst',
       policyVersion: 1,
@@ -153,11 +185,16 @@ describe('shadowDetectionRepository campaign groups', () => {
     expect(await shadowDetectionRepository.removeUser(id(1))).toBe(1);
 
     const [remaining] = await stored();
-    expect(remaining.detector).toBe('accountCampaign');
-    expect(remaining.userIds).toEqual([id(2), id(3)]);
-    expect(remaining.group?.members.map(member => member.userId)).toEqual([id(2), id(3)]);
+    expect(remaining).toMatchObject({
+      detector: 'accountCampaign',
+      userIds: [id(2), id(3), id(4)],
+      summary: '3 accounts linked by client fingerprint',
+      revision: 1,
+    });
+    expect(remaining.group?.members.map(member => member.userId)).toEqual([id(2), id(3), id(4)]);
     expect(remaining.group?.links).toEqual([]);
-    expect(remaining.group?.evidence[0].userIds).toEqual([id(2), id(3)]);
+    expect(remaining.group?.evidence[0].userIds).toEqual([id(2), id(3), id(4)]);
+    expect(remaining.group?.totals).toMatchObject({ direct: 3, links: 0 });
 
     expect(await shadowDetectionRepository.removeUser(id(2))).toBe(1);
     expect(await stored()).toEqual([]);

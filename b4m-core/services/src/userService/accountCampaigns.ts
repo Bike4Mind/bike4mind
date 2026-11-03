@@ -1,4 +1,6 @@
 import {
+  accountCampaignSignals,
+  accountCampaignSummary,
   ACCOUNT_CAMPAIGN_AXIS_OF,
   ACCOUNT_CAMPAIGN_MIN_AXES,
   ACCOUNT_CAMPAIGN_POLICY_VERSION,
@@ -22,9 +24,10 @@ import {
  *    held by too many scanned accounts, a known-common JA4 or a personal mail provider is ignored.
  * 2. A pair is linked only when its relationships cover ACCOUNT_CAMPAIGN_MIN_AXES independent axes, so
  *    no single signal (a shared JA4, one office network) links anyone.
- * 3. Groups are the connected parts of the links that sit in a triangle (a 3-truss): a lone link
- *    bridging two clusters is dropped, so association does not chain across a component. Accounts
- *    linked into a group but outside it are listed as transitive, one hop only.
+ * 3. Groups are the links that sit in a triangle (a 3-truss), joined only through shared triangles: a
+ *    lone link bridging two clusters is dropped, and two clusters meeting at one account stay two
+ *    groups, so association does not chain. Accounts linked into a group but outside every group are
+ *    listed as transitive, one hop only.
  */
 
 /** The data one scanned account contributes. Null means not captured: unknown, never a mismatch. */
@@ -49,7 +52,7 @@ export type CampaignPolicy = {
   /** Two step offsets match when they differ by at most the larger of these. */
   lifecycleToleranceMs: number;
   lifecycleToleranceRatio: number;
-  /** Candidate pairs considered per run; past this the scan stops and reports truncation. */
+  /** Candidate pairs considered per run; past this no new pair is opened and truncation is reported. */
   maxCandidatePairs: number;
   /** Stored caps per group; totals keep the uncut counts. */
   maxDirectMembers: number;
@@ -86,7 +89,7 @@ export type CampaignScanStats = {
   candidatePairs: number;
   links: number;
   groups: number;
-  /** True when maxCandidatePairs stopped pair generation; the groups found so far are still valid. */
+  /** True when maxCandidatePairs refused new pairs; pairs already open still gathered every relationship. */
   pairsTruncated: boolean;
 };
 
@@ -172,9 +175,10 @@ function lifecycleOffsets(account: CampaignAccount): (number | null)[] | null {
     return at === null ? null : Math.max(0, at.getTime() - account.signedUpAt.getTime());
   });
   const present = offsets.filter(offset => offset !== null).length;
-  // Email verification alone happens to almost everyone; at least one later step is required.
-  const beyondVerification = offsets[1] !== null || offsets[2] !== null;
-  return present >= 2 && beyondVerification ? offsets : null;
+  // Verifying and then chatting is how most people onboard, so a classroom would match on it; only an
+  // API key step makes timing evidence of scripted use.
+  const ranApiKeyStep = offsets[1] !== null;
+  return present >= 2 && ranApiKeyStep ? offsets : null;
 }
 
 function lifecycleMatches(left: (number | null)[], right: (number | null)[], policy: CampaignPolicy): boolean {
@@ -195,27 +199,25 @@ function collectPairs(
 ): PairGraph {
   const relationships = new Map<string, Set<AccountCampaignRelationship>>();
   let truncated = false;
-  const add = (left: number, right: number, relationship: AccountCampaignRelationship): boolean => {
+  // Past the budget, pairs already open keep collecting relationships so they can still reach two axes.
+  // Work stays bounded: a bucket holds at most maxSharedPopulation accounts.
+  const add = (left: number, right: number, relationship: AccountCampaignRelationship) => {
     const key = pairKey(left, right);
     const existing = relationships.get(key);
     if (existing) {
       existing.add(relationship);
-      return true;
-    }
-    if (relationships.size >= policy.maxCandidatePairs) {
+    } else if (relationships.size >= policy.maxCandidatePairs) {
       truncated = true;
-      return false;
+    } else {
+      relationships.set(key, new Set([relationship]));
     }
-    relationships.set(key, new Set([relationship]));
-    return true;
   };
 
   for (const bucket of buckets) {
     if (bucket.ignored) continue;
     for (let i = 0; i < bucket.members.length; i++) {
-      for (let j = i + 1; j < bucket.members.length; j++) {
-        if (!add(bucket.members[i], bucket.members[j], bucket.relationship)) return { relationships, truncated };
-      }
+      for (let j = i + 1; j < bucket.members.length; j++)
+        add(bucket.members[i], bucket.members[j], bucket.relationship);
     }
   }
 
@@ -228,9 +230,7 @@ function collectPairs(
       const gap = accounts[j].signedUpAt.getTime() - accounts[i].signedUpAt.getTime();
       if (gap > policy.lifecycleSyncWindowMs) break;
       const right = offsets[j];
-      if (right && lifecycleMatches(left, right, policy) && !add(i, j, 'lifecycle')) {
-        return { relationships, truncated };
-      }
+      if (right && lifecycleMatches(left, right, policy)) add(i, j, 'lifecycle');
     }
   }
   return { relationships, truncated };
@@ -265,28 +265,42 @@ function trussLinks(links: [number, number][]): [number, number][] {
   }
 }
 
-function components(links: [number, number][]): number[][] {
+/**
+ * Account sets of the truss links joined through shared triangles (two links are joined when they are
+ * sides of one triangle). Clusters that only share an account stay apart, and that account is direct in
+ * both.
+ */
+function triangleComponents(links: [number, number][]): number[][] {
   const adjacency = adjacencyOf(links);
-  const seen = new Set<number>();
-  const result: number[][] = [];
-  for (const start of [...adjacency.keys()].sort((left, right) => left - right)) {
-    if (seen.has(start)) continue;
-    const component: number[] = [];
-    const stack = [start];
-    seen.add(start);
-    while (stack.length > 0) {
-      const node = stack.pop() as number;
-      component.push(node);
-      for (const next of adjacency.get(node) ?? []) {
-        if (!seen.has(next)) {
-          seen.add(next);
-          stack.push(next);
-        }
-      }
+  const parent = new Map(links.map(([left, right]) => [pairKey(left, right), pairKey(left, right)]));
+  const find = (key: string): string => {
+    const next = parent.get(key) as string;
+    if (next === key) return key;
+    const root = find(next);
+    parent.set(key, root);
+    return root;
+  };
+  const union = (left: string, right: string) => {
+    const [leftRoot, rightRoot] = [find(left), find(right)];
+    if (leftRoot !== rightRoot) parent.set(rightRoot, leftRoot);
+  };
+  for (const [left, right] of links) {
+    const leftNeighbours = adjacency.get(left) ?? new Set<number>();
+    for (const third of adjacency.get(right) ?? []) {
+      if (!leftNeighbours.has(third)) continue;
+      union(pairKey(left, right), pairKey(left, third));
+      union(pairKey(left, right), pairKey(right, third));
     }
-    result.push(component.sort((left, right) => left - right));
   }
-  return result;
+
+  const nodesByRoot = new Map<string, Set<number>>();
+  for (const [left, right] of links) {
+    const root = find(pairKey(left, right));
+    nodesByRoot.set(root, (nodesByRoot.get(root) ?? new Set<number>()).add(left).add(right));
+  }
+  return [...nodesByRoot.values()]
+    .map(nodes => [...nodes].sort((left, right) => left - right))
+    .sort((left, right) => left.join().localeCompare(right.join()));
 }
 
 export function findAccountCampaigns(input: CampaignScanInput): CampaignScanResult {
@@ -302,7 +316,7 @@ export function findAccountCampaigns(input: CampaignScanInput): CampaignScanResu
   const links = [...linkRelationships.keys()].map(key => key.split(':').map(Number) as [number, number]);
   const allAdjacency = adjacencyOf(links);
 
-  const cores = components(trussLinks(links));
+  const cores = triangleComponents(trussLinks(links));
   const directAnywhere = new Set(cores.flat());
   const lifecycleParticipants = new Set(
     [...pairs.relationships]
@@ -359,7 +373,17 @@ function buildGroup(context: {
   ];
 
   const groupSet = new Set([...core, ...transitive]);
-  const linkCount = (node: number) => [...(allAdjacency.get(node) ?? [])].filter(other => groupSet.has(other)).length;
+  // This group's links: both ends in the group, at least one in the core. Transitive-transitive links
+  // and links into another group's core are not this group's evidence.
+  const groupLinks = [...linkRelationships]
+    .map(([key, relationships]) => ({ nodes: key.split(':').map(Number) as [number, number], relationships }))
+    .filter(
+      ({ nodes }) =>
+        groupSet.has(nodes[0]) && groupSet.has(nodes[1]) && (coreSet.has(nodes[0]) || coreSet.has(nodes[1]))
+    );
+  const linkCounts = new Map<number, number>();
+  for (const { nodes } of groupLinks) for (const node of nodes) linkCounts.set(node, (linkCounts.get(node) ?? 0) + 1);
+  const linkCount = (node: number) => linkCounts.get(node) ?? 0;
   const byStrength = (left: number, right: number) =>
     linkCount(right) - linkCount(left) || compareAccounts(accounts[left], accounts[right]);
   const keptDirect = [...core].sort(byStrength).slice(0, policy.maxDirectMembers);
@@ -377,10 +401,6 @@ function buildGroup(context: {
     ...keptTransitive.map(node => toMember(node, 'transitive')),
   ];
 
-  // Links touching the core; transitive-transitive links are not this group's evidence.
-  const groupLinks = [...linkRelationships]
-    .map(([key, relationships]) => ({ nodes: key.split(':').map(Number) as [number, number], relationships }))
-    .filter(({ nodes }) => coreSet.has(nodes[0]) || coreSet.has(nodes[1]));
   const keptLinks = groupLinks.filter(({ nodes }) => kept.has(nodes[0]) && kept.has(nodes[1]));
   const storedLinks: AccountCampaignLink[] = keptLinks
     .map(({ nodes, relationships }) => {
@@ -454,7 +474,7 @@ function groupEvidence(
       relationship: 'lifecycle',
       axis: ACCOUNT_CAMPAIGN_AXIS_OF.lifecycle,
       value: null,
-      label: `Signed up within ${minutes} minutes of each other and ran the same steps at matching offsets (${steps.join(', ')})`,
+      label: `Signed up within ${minutes} minutes of each other and ran the same steps at matching offsets${steps.length > 0 ? ` (${steps.join(', ')})` : ''}`,
       population: lifecycleParticipants,
       userIds: userIdsOf(lifecycleNodes),
     },
@@ -481,14 +501,6 @@ function ignoredValues(
     .slice(0, policy.maxIgnoredValues);
 }
 
-export const ACCOUNT_CAMPAIGN_RELATIONSHIP_LABELS: Record<AccountCampaignRelationship, string> = {
-  networkPrefix: 'network prefix',
-  hostingAsn: 'hosting network',
-  mailDomain: 'mail domain',
-  fingerprint: 'client fingerprint',
-  lifecycle: 'lifecycle timing',
-};
-
 export type CampaignShadowDetection = Omit<ShadowDetectionItem, 'id' | 'verdict' | 'verdicts' | 'revision'>;
 
 /**
@@ -496,33 +508,14 @@ export type CampaignShadowDetection = Omit<ShadowDetectionItem, 'id' | 'verdict'
  * record itself acts on nobody.
  */
 export function toCampaignShadowDetection(group: AccountCampaignGroup, windowMinutes: number): CampaignShadowDetection {
-  const relationships = [...new Set(group.evidence.map(entry => entry.relationship))];
-  const transitive = group.totals.transitive > 0 ? ` (+${group.totals.transitive} transitive)` : '';
   return {
     detector: 'accountCampaign',
     policyVersion: group.policyVersion,
     wouldAction: 'contain',
-    summary: `${group.totals.direct} accounts linked by ${relationships
-      .map(relationship => ACCOUNT_CAMPAIGN_RELATIONSHIP_LABELS[relationship])
-      .join(', ')}${transitive}`,
+    summary: accountCampaignSummary(group),
     userIds: group.members.map(member => member.userId),
     network: null,
-    signals: [
-      { key: 'directMembers', label: 'Directly linked accounts', observed: group.totals.direct, threshold: 3 },
-      {
-        key: 'transitiveMembers',
-        label: 'Transitively linked accounts',
-        observed: group.totals.transitive,
-        threshold: null,
-      },
-      { key: 'links', label: 'Direct links', observed: group.totals.links, threshold: null },
-      {
-        key: 'axes',
-        label: 'Independent evidence axes',
-        observed: new Set(group.evidence.map(entry => entry.axis)).size,
-        threshold: ACCOUNT_CAMPAIGN_MIN_AXES,
-      },
-    ],
+    signals: accountCampaignSignals(group),
     windowMinutes,
     group,
     detectedAt: group.lastObservedAt,
