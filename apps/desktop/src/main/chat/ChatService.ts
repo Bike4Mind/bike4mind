@@ -3096,6 +3096,7 @@ export class ChatService {
             this.emit({ type: 'reasoning', sessionId, messageId: replyId, text: reasoning });
           }
           if (!visible) return;
+          if (visible.trim()) timer.text();
           // Every round streams into the SAME message, so without a break here the last
           // sentence of one round runs into the first word of the next. On the emitted text
           // only: the wire keeps its own round structure and needs no filler.
@@ -3141,7 +3142,6 @@ export class ChatService {
             // back as a possible partial marker; only the first is a thinking frame.
             const marker = !split.text && !split.reasoning && THINK_MARKER.test(event.text);
             if (split.reasoning || marker) timer.reasoning(split.reasoning);
-            if (split.text.trim()) timer.text();
             probe?.frame(split.text ? 'text' : split.reasoning ? 'reasoning' : marker ? 'marker' : 'text');
             if (split.text) setPhase(RESPONDING);
             // Whitespace is the empty block of a model with thinking off. A hosted provider's bare
@@ -3197,9 +3197,7 @@ export class ChatService {
               onCompletionEvent,
               controller.signal
             );
-        const held = splitThinking.flush();
-        if (held.text.trim()) timer.text();
-        append(held);
+        append(splitThinking.flush());
         const timing = timer.end();
         if (probe) this.logRoundPhases(sessionId, session.model, roundIndex, probe.end());
 
