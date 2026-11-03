@@ -50,12 +50,15 @@ export function turnGeneration(
  */
 export function auxiliaryGeneration(
   defaults: ModelSettings | undefined,
-  option: Pick<ChatModelOption, 'catalogSampling' | 'controls'> | undefined
+  option: Pick<ChatModelOption, 'catalogSampling' | 'controls' | 'thinkingAlwaysOn'> | undefined
 ): Omit<GenerationSettings, 'maxOutputTokens' | 'thinkingBudgetTokens'> {
+  // Effort levels without a `none` leave no way to switch thinking off, so those run on the thinking sampling.
+  const effortLevels = option?.controls?.effort?.levels;
+  const cannotStop = option?.thinkingAlwaysOn === true || (!!effortLevels && !effortLevels.includes('none'));
   const {
     maxOutputTokens: _output,
     thinkingBudgetTokens: _budget,
     ...sampling
-  } = requestGeneration(turnGeneration(undefined, defaults, option, false), option?.controls);
+  } = requestGeneration(turnGeneration(undefined, defaults, option, cannotStop), option?.controls);
   return sampling;
 }

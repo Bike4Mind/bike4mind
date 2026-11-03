@@ -113,10 +113,15 @@ function draftsOf(generation: GenerationSettings | undefined): Drafts {
 /**
  * One model's defaults: the per-request options its controls list. A blank field stores nothing,
  * so a turn sends the catalog's sampling for a reviewed build, else nothing and the model's own
- * default applies. A conversation's own Params override these.
+ * default applies. A conversation's own settings override these.
  */
 export function ModelDefaultsDialog({ option, onClose }: { option: ChatModelOption | null; onClose: () => void }) {
+  return <ModelDefaultsForm key={option?.id ?? ''} option={option} onClose={onClose} />;
+}
+
+function ModelDefaultsForm({ option, onClose }: { option: ChatModelOption | null; onClose: () => void }) {
   const [loaded, setLoaded] = useState<ModelSettings | null>(null);
+  const [readFailed, setReadFailed] = useState(false);
   const [drafts, setDrafts] = useState<Drafts>({});
   const [effort, setEffort] = useState<ModelEffort | null>(null);
   const [saving, setSaving] = useState(false);
@@ -125,6 +130,7 @@ export function ModelDefaultsDialog({ option, onClose }: { option: ChatModelOpti
 
   useEffect(() => {
     setLoaded(null);
+    setReadFailed(false);
     setError(null);
     if (!modelId) return;
     let live = true;
@@ -139,6 +145,7 @@ export function ModelDefaultsDialog({ option, onClose }: { option: ChatModelOpti
       (reason: unknown) => {
         if (!live) return;
         setLoaded({});
+        setReadFailed(true);
         setError(`Desktop could not read this model's settings: ${String(reason)}`);
       }
     );
@@ -183,7 +190,7 @@ export function ModelDefaultsDialog({ option, onClose }: { option: ChatModelOpti
         <DialogTitle>Settings for {option.name}</DialogTitle>
         <DialogContent>
           <Typography level="body-sm" textColor="text.tertiary">
-            Defaults for every chat on this model. A chat&apos;s own Params override them. A blank field uses the
+            Defaults for every chat on this model. A chat&apos;s own settings override them. A blank field uses the
             catalog value when there is one, else the model&apos;s own default.
           </Typography>
           {error && (
@@ -214,6 +221,7 @@ export function ModelDefaultsDialog({ option, onClose }: { option: ChatModelOpti
                       <Typography
                         level="body-xs"
                         textColor="text.tertiary"
+                        id={`model-defaults-${field}-note`}
                         data-testid={`model-defaults-${field}-source`}
                         data-source={seeds[0].seed.source}
                       >
@@ -240,6 +248,7 @@ export function ModelDefaultsDialog({ option, onClose }: { option: ChatModelOpti
                           max: control.max,
                           step: control.step,
                           'aria-label': GENERATION_LABELS[field],
+                          'aria-describedby': `model-defaults-${field}-note`,
                           'data-testid': `model-defaults-${field}-input`,
                         },
                       }}
@@ -281,7 +290,7 @@ export function ModelDefaultsDialog({ option, onClose }: { option: ChatModelOpti
         <DialogActions>
           <Button
             loading={saving}
-            disabled={loaded === null}
+            disabled={loaded === null || readFailed}
             onClick={() => void save()}
             data-testid="model-defaults-save-btn"
           >
@@ -305,7 +314,7 @@ export function ModelDefaultsDialog({ option, onClose }: { option: ChatModelOpti
               setEffort(null);
             }}
             sx={{ mr: 'auto' }}
-            data-testid="model-defaults-reset-btn"
+            data-testid="model-defaults-clear-btn"
           >
             Clear all
           </Button>

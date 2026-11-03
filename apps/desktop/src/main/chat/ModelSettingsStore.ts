@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { parseModelSettingsFile, type ModelSettings } from '@shared/modelSettings';
 
@@ -11,33 +11,42 @@ function isEmpty(settings: ModelSettings): boolean {
 export class ModelSettingsStore {
   private loaded: Promise<Map<string, ModelSettings>> | null = null;
   private writing: Promise<unknown> = Promise.resolve();
+  private corrupt = false;
 
   constructor(
     private readonly filePath: string,
     private readonly warn: (message: string) => void = () => {}
   ) {}
 
-  /** A missing or unreadable file holds no defaults, so chat goes on without them. */
+  /**
+   * A missing or unparseable file holds no defaults. Any other read failure rejects and is not
+   * cached, so a later read retries and set() never rewrites the file from a partial view.
+   */
   private read(): Promise<Map<string, ModelSettings>> {
-    this.loaded ??= readFile(this.filePath, 'utf8').then(
+    if (this.loaded) return this.loaded;
+    const loading: Promise<Map<string, ModelSettings>> = readFile(this.filePath, 'utf8').then(
       text => {
         try {
           return parseModelSettingsFile(JSON.parse(text));
         } catch (error) {
           this.warn(`MODEL SETTINGS: ignoring an unreadable ${this.filePath}: ${String(error)}`);
+          this.corrupt = true;
           return new Map<string, ModelSettings>();
         }
       },
       (error: NodeJS.ErrnoException) => {
-        if (error.code !== 'ENOENT') this.warn(`MODEL SETTINGS: could not read ${this.filePath}: ${String(error)}`);
-        return new Map<string, ModelSettings>();
+        if (error.code === 'ENOENT') return new Map<string, ModelSettings>();
+        this.warn(`MODEL SETTINGS: could not read ${this.filePath}: ${String(error)}`);
+        if (this.loaded === loading) this.loaded = null;
+        throw error;
       }
     );
-    return this.loaded;
+    this.loaded = loading;
+    return loading;
   }
 
   async get(modelId: string): Promise<ModelSettings> {
-    return (await this.read()).get(modelId) ?? {};
+    return (await this.read().catch(() => new Map<string, ModelSettings>())).get(modelId) ?? {};
   }
 
   /** Replaces one model's defaults; an empty set removes them. Writes run one at a time. */
@@ -47,10 +56,19 @@ export class ModelSettingsStore {
       if (isEmpty(settings)) updated.delete(modelId);
       else updated.set(modelId, settings);
       await mkdir(dirname(this.filePath), { recursive: true });
+      if (this.corrupt) {
+        await rename(this.filePath, `${this.filePath}.corrupt`).catch(() => undefined);
+        this.corrupt = false;
+      }
       const temporary = `${this.filePath}.${randomUUID()}.tmp`;
       const text = JSON.stringify({ models: Object.fromEntries(updated) }, null, 2);
-      await writeFile(temporary, text, { encoding: 'utf8', mode: 0o600 });
-      await rename(temporary, this.filePath);
+      try {
+        await writeFile(temporary, text, { encoding: 'utf8', mode: 0o600 });
+        await rename(temporary, this.filePath);
+      } catch (error) {
+        await rm(temporary, { force: true });
+        throw error;
+      }
       this.loaded = Promise.resolve(updated);
       return settings;
     });

@@ -16,6 +16,7 @@ import {
   type ReasoningEffortSetting,
 } from '@shared/chat';
 import { effortSent } from '@shared/generation';
+import type { ModelEffort } from '@shared/modelSettings';
 
 export const EFFORT_LABELS: Readonly<Record<ReasoningEffortSetting, string>> = {
   default: 'Default',
@@ -85,6 +86,7 @@ export function ReasoningEffortPicker({
   models,
   modelId,
   effort,
+  defaultEffort,
   disabled,
   onSelect,
 }: {
@@ -92,6 +94,8 @@ export function ReasoningEffortPicker({
   models: readonly ChatModelOption[];
   modelId: string | null;
   effort: ReasoningEffortSetting;
+  /** The model's default level from the Models screen, which a Default chat runs at. */
+  defaultEffort?: ModelEffort | null;
   disabled?: boolean;
   onSelect: (effort: ReasoningEffortSetting) => void;
 }) {
@@ -206,7 +210,9 @@ export function ReasoningEffortPicker({
             <Stack sx={{ minWidth: 0 }}>
               <Typography level="body-sm" noWrap>
                 {setting === shown ? '\u2022 ' : ''}
-                {EFFORT_LABELS[setting]}
+                {setting === 'default' && defaultEffort
+                  ? `Default (${EFFORT_LABELS[defaultEffort]})`
+                  : EFFORT_LABELS[setting]}
               </Typography>
               <Typography level="body-xs" textColor="text.tertiary" noWrap>
                 {DESCRIPTIONS[setting]}

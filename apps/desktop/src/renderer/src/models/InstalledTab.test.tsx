@@ -118,7 +118,9 @@ describe('InstalledTab model settings', () => {
     const models: LocalModelEntry[] = [
       { ...bare, name: 'llama3', capabilities: { ...bare.capabilities, completion: true } },
       { ...bare, name: 'nomic-embed', capabilities: { ...bare.capabilities, embeddings: true } },
+      { ...bare, name: 'bare-model', capabilities: { ...bare.capabilities, completion: true } },
     ];
+    const bareOption: ChatModelOption = { id: 'local:ollama:bare-model', name: 'bare-model', controls: {} };
     await act(async () =>
       root.render(
         <CssVarsProvider theme={desktopTheme}>
@@ -126,7 +128,7 @@ describe('InstalledTab model settings', () => {
             status={null}
             target={{ id: 'local', name: 'This computer', local: true, management: 'allowed' }}
             installed={{ ok: true, models }}
-            modelOn={name => (name === 'llama3' ? chatModel : null)}
+            modelOn={name => (name === 'llama3' ? chatModel : name === 'bare-model' ? bareOption : null)}
             onRetry={() => {}}
             onExplore={() => {}}
           />
@@ -134,6 +136,7 @@ describe('InstalledTab model settings', () => {
       )
     );
     expect(within(row('nomic-embed'), 'models-installed-settings-btn')).toBeNull();
+    expect(within(row('bare-model'), 'models-installed-settings-btn')).toBeNull();
     const button = row('llama3')?.querySelector<HTMLButtonElement>('[data-testid="models-installed-settings-btn"]');
     expect(button?.textContent).toBe('Settings');
     await act(async () => button?.click());

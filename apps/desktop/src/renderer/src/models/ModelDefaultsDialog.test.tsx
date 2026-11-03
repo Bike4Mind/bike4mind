@@ -165,11 +165,41 @@ describe('ModelDefaultsDialog', () => {
   it('clears every field, and saving that clears the stored defaults', async () => {
     stored = { generation: { temperature: 0.6, topK: 30 } };
     await render(QWEN);
-    await click('model-defaults-reset-btn');
+    await click('model-defaults-clear-btn');
     expect(input('temperature').value).toBe('');
     expect(input('topK').value).toBe('');
     await click('model-defaults-save-btn');
     expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, {});
+  });
+
+  it('disables Save after a failed read, so it cannot clear what is stored', async () => {
+    (window as unknown as { b4m: { chat: { getModelSettings: unknown } } }).b4m.chat.getModelSettings = vi.fn(
+      async () => {
+        throw new Error('EACCES');
+      }
+    );
+    await render(QWEN);
+    expect(byTestId('model-defaults-error')?.textContent).toMatch(/could not read/);
+    expect(byTestId<HTMLButtonElement>('model-defaults-save-btn')?.disabled).toBe(true);
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).not.toHaveBeenCalled();
+  });
+
+  it("never shows the previous model's drafts when reopened for another model", async () => {
+    stored = { generation: { temperature: 0.6 } };
+    await render(QWEN);
+    await fill('topK', '30');
+    stored = {};
+    await render(GEMMA);
+    expect(input('temperature').value).toBe('');
+    expect(input('topK').value).toBe('');
+  });
+
+  it('ties each field note to its input', async () => {
+    await render(QWEN);
+    const note = byTestId('model-defaults-temperature-source');
+    expect(note?.id).toBeTruthy();
+    expect(input('temperature').getAttribute('aria-describedby')).toBe(note?.id);
   });
 
   it('stays open and says so when main does not save', async () => {

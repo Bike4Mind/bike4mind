@@ -521,11 +521,8 @@ export function registerChat(
   const local = new LocalModels(
     new OllamaLocal((url, init) => net.fetch(url, init), localSizing),
     modelServers,
-    // Curated builds are Ollama pulls, so only an Ollama-served name can be one.
-    option =>
-      modelServers.kind(option.server?.id ?? LOCAL_SERVER_ID) === 'ollama'
-        ? hooks.catalogSampling?.(option.name)
-        : undefined
+    // Matched by name on every server; requestGeneration keeps each server to the fields it takes.
+    option => hooks.catalogSampling?.(option.name)
   );
   const models = new ModelCatalog(
     {
