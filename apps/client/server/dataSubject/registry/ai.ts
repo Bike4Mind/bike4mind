@@ -26,7 +26,15 @@ export const aiHolders = {
   },
   CuratedCatalogVersion: {
     kind: 'holder',
-    references: [{ path: 'publishedBy', matchBy: 'userId', action: 'anonymize' }],
+    // Published versions are append-only: the model rejects every update.
+    references: [
+      {
+        path: 'publishedBy',
+        matchBy: 'userId',
+        action: 'retain',
+        reason: 'Immutable record of which administrator published a catalog version, kept for accountability',
+      },
+    ],
   },
   DataLake: {
     kind: 'holder',

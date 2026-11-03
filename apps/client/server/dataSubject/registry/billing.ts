@@ -13,9 +13,17 @@ export const billingHolders = {
   },
   CreditGrantIdentityClaim: {
     kind: 'holder',
-    // The claim stays keyed by `identityDigest`, which is what blocks a repeat grant; the link back to
-    // the person is not needed for that.
-    references: [{ path: 'ownerId', matchBy: 'userId', action: 'anonymize' }],
+    // `ownerId` is immutable and uniquely indexed, so it cannot be cleared in place. The claim is what blocks a
+    // repeat signup grant.
+    references: [
+      {
+        path: 'ownerId',
+        matchBy: 'userId',
+        action: 'retain',
+        reason:
+          'Abuse-prevention record that stops a repeat signup credit grant (legitimate interest, GDPR Art. 6(1)(f))',
+      },
+    ],
   },
   CreditLot: {
     kind: 'holder',
