@@ -399,6 +399,8 @@ describe('signup activity drip', () => {
     const headroom = signupGrantDripRemaining((await User.findById(user.id))?.signupGrant ?? {}, 9000);
     expect(headroom).toBe(8000);
 
+    // The subscription unlock reads the real settings collection, not the in-memory config above.
+    await AdminSettings.create({ settingName: 'signupUnlockPaymentHoldHours', settingValue: '0' });
     expect((await unlockSignupGrantFromSubscription(user.id)).creditsGranted).toBe(8000);
     const grant = (await User.findById(user.id))?.signupGrant;
     expect(grant).toMatchObject({ stage: 'unlocked', unlockedBy: 'subscription', dripCredits: 1000 });
