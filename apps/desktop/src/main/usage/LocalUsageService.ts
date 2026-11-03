@@ -12,7 +12,7 @@ const CACHE_TTL_MS = 15_000;
 export interface LocalUsageServiceDeps {
   logger: { warn(message: string): void };
   /** Every session's buckets in the current scope, and its kind; see SessionStore.localUsage. */
-  scan(): Promise<{ scope: LocalUsageScope; buckets: LocalUsageBucket[] }>;
+  scan(): Promise<{ scope: LocalUsageScope; account?: string; buckets: LocalUsageBucket[] }>;
   /** The conversation scope reads come from, so a cached answer never crosses a sign-in or sign-out. */
   scopeKey(): string | null;
   /** Saved model servers' names by id, read from this device's own settings. */
@@ -58,9 +58,17 @@ export class LocalUsageService {
 
   private async read(window: UsageWindowId): Promise<LocalUsageResult> {
     try {
-      const [{ scope, buckets }, serverNames] = await Promise.all([this.deps.scan(), this.readServerNames()]);
+      const [{ scope, account, buckets }, serverNames] = await Promise.all([this.deps.scan(), this.readServerNames()]);
       const now = this.now();
-      return { ok: true, usage: { ...localUsageWindow(buckets, window, now, serverNames), scope, readAt: now } };
+      return {
+        ok: true,
+        usage: {
+          ...localUsageWindow(buckets, window, now, serverNames),
+          scope,
+          ...(account ? { account } : {}),
+          readAt: now,
+        },
+      };
     } catch (err) {
       this.deps.logger.warn(`USAGE: local usage read failed: ${err instanceof Error ? err.message : String(err)}`);
       return { ok: false, error: 'Could not read local model usage.' };

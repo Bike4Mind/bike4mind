@@ -139,6 +139,8 @@ interface IndexedLocalUsage {
 
 export interface LocalUsageScan {
   scope: LocalUsageScope;
+  /** `<environment url>\n<account id>` the folder belongs to, for an account scope. */
+  account?: string;
   buckets: LocalUsageBucket[];
 }
 
@@ -657,8 +659,14 @@ export class SessionStore implements SessionWritesStore {
    * first build never holds the whole history in memory.
    */
   async localUsage(): Promise<LocalUsageScan> {
+    const tag = (): string | undefined => {
+      const current = this.scope?.();
+      return current && !current.local ? `${current.environmentUrl}\n${current.accountId}` : undefined;
+    };
+    const account = tag();
     const directory = await this.directoryFor(true);
-    if (!directory) return { scope: 'none', buckets: [] };
+    // The account changed while the folder resolved, so the folder may be the other one's.
+    if (!directory || tag() !== account) return { scope: 'none', buckets: [] };
     const scope = this.scope && basename(directory) === DEVICE_LOCAL_SCOPE_KEY ? 'device' : 'account';
 
     // One scan per folder at a time: two overlapping ones would each prune what the other just indexed.
@@ -667,7 +675,7 @@ export class SessionStore implements SessionWritesStore {
       scanning = this.scanLocalUsage(directory).finally(() => this.localUsageScans.delete(directory));
       this.localUsageScans.set(directory, scanning);
     }
-    return { scope, buckets: await scanning };
+    return { scope, ...(scope === 'account' && account ? { account } : {}), buckets: await scanning };
   }
 
   private async scanLocalUsage(directory: string): Promise<LocalUsageBucket[]> {

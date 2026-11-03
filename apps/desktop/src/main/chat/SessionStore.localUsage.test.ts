@@ -166,6 +166,8 @@ describe('SessionStore.localUsage', () => {
     current = account;
     const signedIn = await store.localUsage();
     expect(signedIn.scope).toBe('account');
+    expect(signedIn.account).toBe('https://app.example.invalid\naccount-a');
+    expect(device.account).toBeUndefined();
     expect(outputOf(signedIn)).toBe(40);
     current = null;
     expect(await store.localUsage()).toEqual({ scope: 'none', buckets: [] });

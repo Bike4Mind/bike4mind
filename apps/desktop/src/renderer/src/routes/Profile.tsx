@@ -12,7 +12,7 @@ import type { UsageWindowId } from '@shared/usage';
 import { useAuthState } from '../auth/useAuthState';
 import { ArrowLeftIcon, ReloadIcon } from '../chat/icons';
 import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from '../chat/layout';
-import { LocalUsageSection } from '../profile/LocalUsageCard';
+import { hasLocalActivity, LocalUsageSection } from '../profile/LocalUsageCard';
 import { ProfileScreen } from '../profile/ProfileScreen';
 import { UsageWindowToggle } from '../profile/UsageWindowToggle';
 import { useLocalUsage } from '../profile/useLocalUsage';
@@ -115,7 +115,7 @@ export function SignedOutProfile({ scopeKey, onBack }: { scopeKey: string; onBac
             <SignInPrompt />
           </Sheet>
           <UsageWindowToggle value={windowId} onChange={setWindowId} />
-          {usage && usage.totals.replies === 0 && (
+          {usage && !hasLocalActivity(usage.totals) && (
             <Typography level="body-sm" textColor="text.tertiary" data-testid="profile-local-empty">
               No self-hosted model replies in the {WINDOW_LABELS[usage.window].toLowerCase()}.
             </Typography>
