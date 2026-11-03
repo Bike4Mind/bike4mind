@@ -148,6 +148,15 @@ describe('requestAccountDeletion', () => {
     expect(h.cancelSubscriptions).not.toHaveBeenCalled();
   });
 
+  it('does not let a personal workspace block the request', async () => {
+    const userId = await seedAccount();
+    await Organization.create({ name: 'Personal', userId });
+
+    await requestAccountDeletion(requestFor(userId));
+
+    expect((await User.findById(userId).lean<{ deletion?: unknown }>())!.deletion).toBeDefined();
+  });
+
   it('refuses a second request while one is pending', async () => {
     const userId = await seedAccount();
     await requestAccountDeletion(requestFor(userId));
