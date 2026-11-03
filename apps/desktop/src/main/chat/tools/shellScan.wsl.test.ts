@@ -165,6 +165,7 @@ describe('a command wsl runs in a distro', () => {
     'wsl.exe -e cat /etc/hosts',
     'wsl.exe --distribution-id {0a1b} ls',
     'wsl.exe -d "$DISTRO" ls',
+    'wsl.exe -d Ubuntu --distribution-id {x} ls',
     'echo ls | wsl.exe',
   ])('takes %s as reaching a distro it does not name', async command => {
     expect((await scanShell(command, ubuntu, [ubuntu]))?.ungranted).toEqual([UNNAMED_DISTRO]);
@@ -191,6 +192,12 @@ describe('a command wsl runs in a distro', () => {
     const scan = await scanShell('wsl.exe -e --system ls', ubuntu, [ubuntu]);
 
     expect(scan?.ungranted).toEqual([UNNAMED_DISTRO]);
+  });
+
+  it('checks every distro named, not only the first', async () => {
+    const scan = await scanShell('wsl.exe -d Ubuntu -d Debian ls', ubuntu, [ubuntu]);
+
+    expect(scan?.ungranted).toEqual(['\\\\wsl.localhost\\Debian\\']);
   });
 
   it('checks every distro named, not only the last', async () => {

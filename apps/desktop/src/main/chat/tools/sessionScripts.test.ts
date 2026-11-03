@@ -33,6 +33,11 @@ const WRITTEN = [
   'plugins/myplug.py',
   'a.R',
   'b.ps1',
+  'npx',
+  'npx.cmd',
+  'pnpm',
+  'sub/npx',
+  'uv.bat',
 ];
 
 describe('sessionScriptRun', () => {
@@ -90,6 +95,15 @@ describe('sessionScriptRun', () => {
     ['npx.exe tsx tools/x.ts', 'tools/x.ts'],
     ['npx.cmd tsx tools/x.ts', 'tools/x.ts'],
     ['/usr/bin/npx tsx tools/x.ts', 'tools/x.ts'],
+    ['./npx ls', './npx'],
+    ['./npx.cmd ls', './npx.cmd'],
+    ['./pnpm exec ls', './pnpm'],
+    ['sub/npx ls', 'sub/npx'],
+    ['ROOT/npx ls', 'ROOT/npx'],
+    ['./uv.bat run ls', './uv.bat'],
+    ['./npx tsx x.ts', './npx'],
+    ['uv.bat run python tools/go.py', 'tools/go.py'],
+    ['bash.bat setup.sh', 'setup.sh'],
     ['PNPM exec tsx tools/x.ts', 'tools/x.ts'],
     ['powershell.exe -File b.ps1', 'b.ps1'],
     ['bunx tsx tools/x.ts', 'tools/x.ts'],

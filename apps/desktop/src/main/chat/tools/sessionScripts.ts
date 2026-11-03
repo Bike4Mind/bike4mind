@@ -303,14 +303,21 @@ function launcherLength(tokens: readonly string[], start: number): number {
 }
 
 /** Where the program starts in `tokens` once leading wrappers and launchers (and their options) are skipped. */
-function skipWrappers(tokens: readonly string[]): { start: number; wrapped: boolean; launched: boolean } {
+function skipWrappers(tokens: readonly string[]): {
+  start: number;
+  wrapped: boolean;
+  launched: boolean;
+  launchers: number[];
+} {
   let start = 0;
   let wrapped = false;
   let launched = false;
+  const launchers: number[] = [];
   for (;;) {
     const launcher = launcherLength(tokens, start);
     if (launcher > 0) {
       launched = true;
+      launchers.push(start);
       start += launcher;
       while (start < tokens.length && /^(-|\d|[A-Za-z_][A-Za-z0-9_]*=)/.test(tokens[start])) start++;
     } else if (start < tokens.length && isWrapper(tokens[start])) {
@@ -320,7 +327,7 @@ function skipWrappers(tokens: readonly string[]): { start: number; wrapped: bool
       break;
     }
   }
-  return { start, wrapped, launched };
+  return { start, wrapped, launched, launchers };
 }
 
 /** A git config key that names a program git runs, set on the command line. */
@@ -457,7 +464,9 @@ async function scanScripts(
     const tokens = words(node).map(unquote);
     const split = splitString(words(node));
     if (split) await scanScripts(split.command, cwd, sessionId, found, hooks);
-    const { start, wrapped, launched } = skipWrappers(tokens);
+    const { start, wrapped, launched, launchers } = skipWrappers(tokens);
+    // A launcher spelled as a path (`./npx`) may be a file this session wrote.
+    for (const index of launchers) if (/[/\\]/.test(tokens[index])) await consider(tokens[index], cwd);
     const [executable, ...args] = tokens.slice(start);
     if (executable === undefined) return;
     const program = basename(executable);

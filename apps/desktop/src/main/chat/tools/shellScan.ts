@@ -792,7 +792,8 @@ const POWERSHELL_PARAMETERS: readonly (readonly [
 /** The name a PowerShell switch gives after its dash (two for PowerShell 7) or slash, lowercased; undefined for other words. */
 function powershellSwitch(arg: string, seven: boolean): string | undefined {
   const leader = seven ? /^(?:[-\u{2013}-\u{2015}]{1,2}|\/)/u : /^[-\u{2013}-\u{2015}/]/u;
-  const trimmed = arg.trim();
+  // .NET's String.Trim also removes U+0085, which JS trim() keeps.
+  const trimmed = arg.replace(/^[\s\u0085]+|[\s\u0085]+$/g, '');
   const match = leader.exec(trimmed);
   return match ? trimmed.slice(match[0].length).toLowerCase() : undefined;
 }
@@ -1062,7 +1063,10 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
   const wslShell = wslRuns(tokens).find(run => !run.exec);
   if (wslShell) {
     const wsl = basename(tokens[wslShell.at]);
-    if (wslShell.managing) return null;
+    if (wslShell.managing) {
+      // Only words after a `--` are a command; an option's own operand (`--unregister Ubuntu`) is not.
+      return unquote(tokens[wslShell.end - 1] ?? '') === '--' ? outboundReason(raw.slice(wslShell.end), stdin) : null;
+    }
     if (wslShell.end < tokens.length) return `${wsl} running its arguments as a command`;
     return stdin ? `${wsl} reading a script from stdin` : null;
   }
