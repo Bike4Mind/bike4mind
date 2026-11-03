@@ -115,6 +115,7 @@ export {
 export { PRODUCTION_CURATED_KEYS } from './curatedSource/keys';
 export {
   checkApproval,
+  checkInstalledBlob,
   checkInstalledDigest,
   checkReviewedLayers,
   checkRuntime,
