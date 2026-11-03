@@ -359,9 +359,36 @@ describe('ChatService tool loop', () => {
         toolCallIds: [expect.any(String)],
         timing: expect.any(Object),
         usage: { inputTokens: 1000, outputTokens: 200, cacheReadInputTokens: 50, creditsUsed: 20 },
+        model: 'test-model',
         sent: { text: 'Reading the config.' },
       },
-      { text: 'Done.', toolCallIds: [], timing: expect.any(Object), sent: { text: 'Done.' } },
+      { text: 'Done.', toolCallIds: [], timing: expect.any(Object), model: 'test-model', sent: { text: 'Done.' } },
+    ]);
+  });
+
+  it('stamps each round of a continued reply with the model its own request went to', async () => {
+    service = build({ rounds: 1 });
+    const { id } = await service.createSession();
+    await service.send(id, 'build it');
+    await firstRequest();
+
+    streams[0].write(frame({ type: 'content', text: 'Reading the config.' }));
+    await driveRounds(1, () => '{"pattern":"*"}');
+    expect(await waitFor(events, 'done')).toMatchObject({ stopReason: 'tool_turn_limit' });
+
+    await service.setSessionModel(id, ChatModels.CLAUDE_5_SONNET);
+    events.length = 0;
+    expect(await service.continueReply(id)).toMatchObject({ ok: true });
+    await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+    expect(post.mock.calls[1][1].model).toBe(ChatModels.CLAUDE_5_SONNET);
+    streams[1].write(frame({ type: 'content', text: 'Done.' }));
+    streams[1].write(frame('[DONE]'));
+    await waitFor(events, 'done');
+
+    const reply = (await service.getSession(id))?.messages.find(message => message.role === 'assistant');
+    expect(reply?.rounds?.map(round => [round.text, round.model])).toEqual([
+      ['Reading the config.', 'test-model'],
+      ['Done.', ChatModels.CLAUDE_5_SONNET],
     ]);
   });
 

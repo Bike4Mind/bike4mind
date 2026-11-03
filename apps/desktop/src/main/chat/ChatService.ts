@@ -2949,6 +2949,7 @@ export class ChatService {
               toolCallIds: entry.round.toolCallIds,
               timing: entry.round.timing,
               ...(entry.round.usage ? { usage: entry.round.usage } : {}),
+              model: session.model,
               ...(entry.round.reasoning.trim() ? { reasoning: entry.round.reasoning.trim() } : {}),
               sent: entry.round.sent,
             }))
@@ -2969,6 +2970,7 @@ export class ChatService {
           role: 'assistant',
           content: finalContent,
           createdAt: new Date().toISOString(),
+          model: session.model,
           stopReason,
           ...(toolCalls.length > 0 ? { toolCalls } : {}),
           ...(keepRounds ? { rounds } : {}),
@@ -3451,6 +3453,7 @@ export class ChatService {
         role: 'assistant',
         content,
         createdAt: new Date().toISOString(),
+        model: session.model,
         error: message,
         ...stop,
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
@@ -3536,6 +3539,7 @@ export class ChatService {
     // must clear the budget stop the previous one left behind, and `Partial` would keep it.
     const updated = await this.deps.store.updateMessage(sessionId, message.id, {
       content: message.content,
+      model: message.model,
       stopReason: message.stopReason,
       error: message.error,
       toolCalls: message.toolCalls,

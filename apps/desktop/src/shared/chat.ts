@@ -663,6 +663,12 @@ export interface ChatMessage {
    * ordering was never captured for those and cannot be recovered.
    */
   rounds?: ChatReplyRound[];
+  /**
+   * The model the reply's own turn requests went to, on assistant messages. An explore sub-loop's
+   * requests can go to another model while their usage is still summed into `usage`. Absent on
+   * replies stored before it was recorded; `ChatSession.model` can have changed since.
+   */
+  model?: string;
   /** What the whole reply cost, summed over its requests, on assistant messages. Never sent to the model. */
   usage?: ChatUsage;
   /** When the reply's last request refreshed the server's prompt cache, and for how long; see ChatPromptCacheStamp. */
@@ -1799,6 +1805,8 @@ export interface ChatReplyRound {
   timing?: ChatRoundTiming;
   /** What this round's request cost, as the server reported it. Never sent to the model. */
   usage?: ChatUsage;
+  /** The model this round's request went to; a continued reply's rounds can differ. Absent on older rounds. */
+  model?: string;
   /**
    * The model's readable reasoning before this round's prose, drawn in the transcript as a row
    * that is closed by default (ReasoningRow) and never drawn for the round still streaming -
