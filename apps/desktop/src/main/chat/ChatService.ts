@@ -233,6 +233,7 @@ import {
   type HostSessionView,
   type MediaContext,
   type RelayOutcome,
+  type QuestReadiness,
   type SpawnOutcome,
   type SpawnPlacement,
   type SpawnRejected,
@@ -4285,7 +4286,7 @@ export class ChatService {
       ...(orchestratesAgents(session)
         ? {
             delegates: { placement: (title, prompt) => this.delegatedPlacement(project, title, prompt) },
-            quest: { blockers: () => this.questBlockers(session.id) },
+            quest: { readiness: () => this.questReadiness(session.id) },
           }
         : session.origin
           ? {}
@@ -4723,8 +4724,8 @@ export class ChatService {
     }
   }
 
-  /** What still keeps an orchestrating parent's job from being complete; see quest_complete. */
-  private async questBlockers(parentId: string): Promise<string | null> {
+  /** Whether an orchestrating parent's job can be declared complete; see quest_complete. */
+  private async questReadiness(parentId: string): Promise<QuestReadiness> {
     const sessions = await this.deps.store.list();
     const agents: ChatSessionSummary[] = [];
     const parents = new Set([parentId]);
@@ -4739,7 +4740,9 @@ export class ChatService {
         grew = true;
       }
     }
-    if (agents.length === 0) return 'No agents were started from this conversation, so there is no job to complete.';
+    if (agents.length === 0) {
+      return { ready: false, reason: 'No agents were started from this conversation, so there is no job to complete.' };
+    }
 
     const reasons: string[] = [];
     const working = agents.filter(
@@ -4751,13 +4754,25 @@ export class ChatService {
     if (working.length > 0) {
       reasons.push(`Still working or waiting on approval: ${working.map(agent => `"${agent.title}"`).join(', ')}.`);
     }
-    const running = [parentId, ...agents.map(agent => agent.id)].flatMap(id =>
-      (this.deps.background?.list(id) ?? []).filter(process => process.status === 'running')
-    );
-    if (running.length > 0) {
-      reasons.push(`Background processes still running: ${running.map(process => process.command).join(', ')}.`);
+    const running = (sessionId: string) =>
+      (this.deps.background?.list(sessionId) ?? []).filter(process => process.status === 'running');
+    // Only the parent's own: bash_kill cannot reach an agent's processes, so they never block.
+    const own = running(parentId);
+    if (own.length > 0) {
+      reasons.push(`Background processes still running: ${own.map(process => process.command).join(', ')}.`);
     }
-    return reasons.length > 0 ? `${reasons.join(' ')} Call quest_complete again once they have finished.` : null;
+    if (reasons.length > 0) {
+      return { ready: false, reason: `${reasons.join(' ')} Call quest_complete again once they have finished.` };
+    }
+    const leftover = agents.flatMap(agent => running(agent.id));
+    if (leftover.length === 0) return { ready: true };
+    const count = leftover.length === 1 ? '1 background process is' : `${leftover.length} background processes are`;
+    return {
+      ready: true,
+      note:
+        `${count} still running in agent sessions (${leftover.map(process => process.command).join(', ')}); ` +
+        'mention it in the summary, since the user can stop them.',
+    };
   }
 
   private toHostView(entry: ChatSessionSummary): HostSessionView {

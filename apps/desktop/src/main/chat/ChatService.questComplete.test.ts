@@ -243,6 +243,64 @@ describe('ChatService quest_complete', () => {
     expect(interim.questComplete).toBeUndefined();
   });
 
+  it("names an agent's leftover background process in the result rather than refusing", async () => {
+    const parent = await parentWithAgent();
+    reply(await nthStreamOf('task a', 1), 'did a');
+    const agent = (await store.list()).find(entry => entry.origin?.parentSessionId === parent.id);
+    if (!agent) throw new Error('No agent');
+    await background.start({
+      sessionId: agent.id,
+      command: 'sleep 30',
+      cwd: project,
+      roots: [project],
+      protectedPaths: [],
+    });
+
+    callQuestComplete(await nthStreamOf('go', 3), 'quest-agent-bg', 'Here is the final summary.');
+    reply(await nthStreamOf('go', 4), 'Done.');
+    await idle(parent.id);
+
+    const final = await lastReply(parent.id);
+    expect(call(final, 'quest-agent-bg')).toMatchObject({ status: 'done' });
+    expect(call(final, 'quest-agent-bg')?.preview).toContain(
+      '1 background process is still running in agent sessions (sleep 30)'
+    );
+    expect(final.questComplete).toBe(true);
+  });
+
+  it("is refused while an agent's own agent is still working", async () => {
+    const parent = await parentWithAgent();
+    reply(await nthStreamOf('task a', 1), 'did a');
+    const agent = (await store.list()).find(entry => entry.origin?.parentSessionId === parent.id);
+    if (!agent) throw new Error('No agent');
+    const grandchild = await store.create('test-model', {
+      origin: { parentSessionId: agent.id, depth: 2, seedPrompt: 'task g' },
+    });
+    await store.rename(grandchild.id, 'g');
+    await service.send(grandchild.id, 'task g');
+    await nthStreamOf('task g', 1);
+
+    callQuestComplete(await nthStreamOf('go', 3), 'quest-grandchild');
+    reply(await nthStreamOf('go', 4), 'Not yet.');
+    await idle(parent.id);
+
+    const interim = await lastReply(parent.id);
+    expect(call(interim, 'quest-grandchild')?.error).toContain('Still working or waiting on approval: "g"');
+    expect(interim.questComplete).toBeUndefined();
+  });
+
+  it('is refused when no agent was ever started', async () => {
+    const parent = await orchestrator();
+    await service.send(parent.id, 'solo');
+    callQuestComplete(await nthStreamOf('solo', 1), 'quest-solo');
+    reply(await nthStreamOf('solo', 2), 'Nothing to wrap up.');
+    await idle(parent.id);
+
+    const interim = await lastReply(parent.id);
+    expect(call(interim, 'quest-solo')?.error).toContain('No agents were started from this conversation');
+    expect(interim.questComplete).toBeUndefined();
+  });
+
   it('is not offered to a session that does not orchestrate', async () => {
     const created = await service.createCodeSession({ directory: project, branch: '', workspace: false });
     if (!created.ok) throw new Error(created.error);

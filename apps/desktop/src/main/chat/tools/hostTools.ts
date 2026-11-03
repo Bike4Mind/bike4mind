@@ -305,7 +305,7 @@ export const questComplete: ToolDefinition = {
       'the user. Call it once, after every agent you started has finished and their work is ' +
       'combined, in the same reply as that summary. Never call it for an interim update. It is ' +
       'refused while an agent is still working or waiting on approval, or while a background ' +
-      'process you or your agents started is still running.',
+      'process you started is still running.',
     parameters: {
       type: 'object',
       properties: {
@@ -322,9 +322,11 @@ export const questComplete: ToolDefinition = {
     const quest = requireHost(context).quest;
     if (!quest) throw new Error('quest_complete is only available in a conversation with Orchestrate on.');
     requireString(input, 'summary');
-    const blocked = await quest.blockers();
-    if (blocked) throw new Error(blocked);
-    return 'Marked this reply as the final summary of the job. Do not call quest_complete again unless more work is done.';
+    const readiness = await quest.readiness();
+    if (!readiness.ready) throw new Error(readiness.reason);
+    const marked =
+      'Marked this reply as the final summary of the job. Do not call quest_complete again unless more work is done.';
+    return readiness.note ? `${marked} ${readiness.note}` : marked;
   },
 };
 

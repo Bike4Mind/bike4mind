@@ -516,9 +516,11 @@ export interface HostContext {
 }
 
 export interface QuestHost {
-  /** Why the job cannot be declared complete yet, readable by the model, or null when it can. */
-  blockers(): Promise<string | null>;
+  /** Whether the job can be declared complete now; both texts are for the model. */
+  readiness(): Promise<QuestReadiness>;
 }
+
+export type QuestReadiness = { ready: false; reason: string } | { ready: true; note?: string };
 
 export interface DelegationHost {
   /** Where a delegated child goes: the card's default choice, with the branch it would prefill. */
