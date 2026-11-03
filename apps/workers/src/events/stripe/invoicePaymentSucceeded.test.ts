@@ -244,6 +244,96 @@ describe('invoicePaymentSucceeded - purchase credited to the source product', ()
     });
   });
 
+  describe('the end of the period the payment bought', () => {
+    // Unix seconds, as Stripe sends a line's period.
+    const unix = (iso: string) => Date.parse(iso) / 1000;
+    const line = (end: string, type = 'subscription_item_details') => ({
+      parent: { type },
+      period: { start: unix(end) - 30 * 24 * 60 * 60, end: unix(end) },
+    });
+    const periodEnds = () => vi.mocked(emitProductEvent).mock.calls.map(([c]) => [c.productId, c.metadata?.periodEnd]);
+
+    it('sends the latest subscription line end, not the invoice period_end, on every copy', async () => {
+      // A move to a yearly plan that restarts the cycle: a line for the old monthly period and one
+      // for the new year. The one-off item's later end is not a subscription period and is skipped.
+      // Stripe sets invoice.period_end to the START of the billed period.
+      invoice({
+        billing_reason: 'subscription_update',
+        period_end: unix('2026-11-03T10:00:00Z'),
+        lines: {
+          has_more: false,
+          data: [
+            line('2026-12-03T10:00:00Z'),
+            line('2027-11-03T10:00:00Z'),
+            line('2028-01-01T00:00:00Z', 'invoice_item_details'),
+          ],
+        },
+      });
+
+      await run();
+
+      expect(periodEnds()).toEqual([
+        ['widgets', '2027-11-03T10:00:00.000Z'],
+        ['gadgets', '2027-11-03T10:00:00.000Z'],
+      ]);
+    });
+
+    it('reads past a subscription line that has no period', async () => {
+      invoice({
+        lines: {
+          has_more: false,
+          data: [{ parent: { type: 'subscription_item_details' }, period: null }, line('2026-12-03T10:00:00Z')],
+        },
+      });
+
+      await run();
+
+      expect(periodEnds()).toEqual([
+        ['widgets', '2026-12-03T10:00:00.000Z'],
+        ['gadgets', '2026-12-03T10:00:00.000Z'],
+      ]);
+    });
+
+    it('sends a monthly renewal its own period end', async () => {
+      invoice({
+        billing_reason: 'subscription_cycle',
+        lines: { has_more: false, data: [line('2026-12-03T10:00:00Z')] },
+      });
+
+      await run();
+
+      expect(periodEnds()).toEqual([
+        ['widgets', '2026-12-03T10:00:00.000Z'],
+        ['gadgets', '2026-12-03T10:00:00.000Z'],
+      ]);
+    });
+
+    it.each([
+      ['no lines', undefined],
+      ['an empty line list', { has_more: false, data: [] }],
+      ['only a one-off item', { has_more: false, data: [line('2026-12-03T10:00:00Z', 'invoice_item_details')] }],
+      [
+        'lines with no parent or no period',
+        {
+          has_more: true,
+          data: [
+            { parent: null, period: { start: 0, end: unix('2026-12-03T10:00:00Z') } },
+            { parent: { type: 'subscription_item_details' }, period: null },
+          ],
+        },
+      ],
+    ])('sends none, and still sends the purchase, for %s', async (_label, lines) => {
+      invoice({ period_end: unix('2026-11-03T10:00:00Z'), lines });
+
+      await run();
+
+      expect(periodEnds()).toEqual([
+        ['widgets', undefined],
+        ['gadgets', undefined],
+      ]);
+    });
+  });
+
   it('sends nothing for a zero-amount invoice (a trial)', async () => {
     invoice({ amount_paid: 0 });
     await run();

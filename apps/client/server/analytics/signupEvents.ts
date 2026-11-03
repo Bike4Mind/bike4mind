@@ -247,6 +247,11 @@ export async function emitBillingEvent(opts: {
  *
  * `visitId` (see billingEventDetails.ts) is sent only for a credit pack or the invoice that opened
  * a subscription; a renewal or seat change happened in no visit, so it names none.
+ *
+ * `periodEnd` is when the period a subscription payment bought ends, sent as `metadata.periodEnd`
+ * in ISO 8601 UTC. Plans are billed monthly or yearly, so the time since the last payment cannot
+ * say whether a subscriber is still covered; this can. Sent for a subscription only (a credit pack
+ * buys no period), and left out when the caller has none or passes an invalid date.
  */
 export async function emitPurchaseEvents(opts: {
   user: PurchaseCreditUser | null | undefined;
@@ -260,11 +265,18 @@ export async function emitPurchaseEvents(opts: {
   billingReason?: string | null;
   /** The visit the payment was started in, when one was recorded. */
   visitId?: string;
+  /** When the period this subscription payment bought ends. Ignored for a credit pack. */
+  periodEnd?: Date | null;
 }): Promise<string[]> {
-  const { user, paymentId, kind, amountMinor, currency, billingReason } = opts;
+  const { user, paymentId, kind, amountMinor, currency, billingReason, periodEnd } = opts;
   if (!paymentId || !currency) return [];
   if (typeof amountMinor !== 'number' || !Number.isFinite(amountMinor) || amountMinor <= 0) return [];
   const startedInVisit = kind === 'credits' || billingReason === 'subscription_create';
+  // An invalid Date would make toISOString throw, and this must never throw.
+  const coveredUntil =
+    kind === 'subscription' && periodEnd instanceof Date && Number.isFinite(periodEnd.getTime())
+      ? periodEnd.toISOString()
+      : undefined;
   return emitBillingEvent({
     user,
     event: PURCHASE_EVENT,
@@ -274,6 +286,7 @@ export async function emitPurchaseEvents(opts: {
       value: amountMinor / minorUnitsPerMajor(currency),
       currency: currency.toUpperCase(),
       ...(billingReason && { billingReason }),
+      ...(coveredUntil && { periodEnd: coveredUntil }),
     },
     ...(startedInVisit && opts.visitId && { visitId: opts.visitId }),
   });

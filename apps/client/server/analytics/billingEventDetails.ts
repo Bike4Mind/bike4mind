@@ -1,3 +1,4 @@
+import type Stripe from 'stripe';
 import { paymentAttemptRepository, userRepository } from '@bike4mind/database';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { SubscriptionOwnerType, type ISubscription } from '@bike4mind/server-utils/lib/subscriptions/types';
@@ -51,6 +52,33 @@ export function planChangeDirection(fromPriceId: string, toPriceId: string): Pla
   if (to > from) return 'upgrade';
   if (to < from) return 'downgrade';
   return 'same_tier';
+}
+
+/**
+ * When the period a paid subscription invoice bought ends: the latest `period.end` over its
+ * subscription lines, the ones a subscription item generated (`parent.type` is
+ * `subscription_item_details`). The latest, so an invoice with lines for more than one period (a
+ * plan change that restarts the billing cycle) reads as the newest one. Other lines are skipped: a
+ * one-off invoice item carries whatever period it was given, usually just the moment it was
+ * created.
+ *
+ * Not `invoice.period_end`, which for a subscription invoice is the START of the period it bills
+ * (the latest time an invoice item could still be added), so it would read a yearly payment as
+ * covering nothing.
+ *
+ * A retrieved invoice holds at most its first 10 lines (`lines.has_more` says there are more), and
+ * Stripe lists pending invoice items, prorations included, before the subscription lines. This
+ * reads only the lines included, without another Stripe call: a user subscription has one item, so
+ * its line is missed only behind nine or more pending items, and the period is then left out, not
+ * guessed. Undefined when no subscription line has a period.
+ */
+export function subscriptionPeriodEnd(invoice: Pick<Stripe.Invoice, 'lines'>): Date | undefined {
+  const ends = (invoice.lines?.data ?? [])
+    .filter(line => line.parent?.type === 'subscription_item_details')
+    .map(line => line.period?.end)
+    .filter((end): end is number => typeof end === 'number');
+  // A line's period is in unix seconds.
+  return ends.length ? new Date(Math.max(...ends) * 1000) : undefined;
 }
 
 /** Whole days from `from` to `to`, or undefined when either is missing or unparseable. */
