@@ -204,7 +204,7 @@ billing and account events above, the cross-product `signup`, and the client-sid
 and ad-pixel conversions still send nothing for a synthetic account.
 
 Internal accounts (the team's own) are marked the same way, with
-`metadata.internal: true`, on every event above that names a user: the
+`internal: true` in `metadata`, on every event above that names a user: the
 signup-funnel events, `first_value`, `active`, the billing and account events and
 the cross-product `signup`. An account is internal when `User.isInternal` is set or
 it is an admin. `isInternal` is set at signup for an email on a
