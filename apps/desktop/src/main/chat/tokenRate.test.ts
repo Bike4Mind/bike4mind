@@ -79,6 +79,18 @@ describe('estimatedRate', () => {
     });
   });
 
+  it('leaves out every delta of the first read, not just one', () => {
+    expect(estimatedRate(101, { firstAt: 1000, lastAt: 5000, reads: 3, firstReadDeltas: 21 })).toEqual({
+      evalTokens: 80,
+      evalMs: 4000,
+      estimated: true,
+    });
+  });
+
+  it('cannot estimate when the first read held every token', () => {
+    expect(estimatedRate(5, { firstAt: 0, lastAt: 1000, reads: 5, firstReadDeltas: 5 })).toBeUndefined();
+  });
+
   it.each([
     { tokens: undefined, timing: { firstAt: 0, lastAt: 1000, reads: 5 } },
     { tokens: 1, timing: { firstAt: 0, lastAt: 1000, reads: 5 } },

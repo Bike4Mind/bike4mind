@@ -329,6 +329,9 @@ export class OpenAICompatibleChat implements LocalChat {
     const timing: StreamTiming = { reads: 0 };
     const streamed = () => {
       if (timing.lastAt !== readAt) timing.reads++;
+      if (timing.firstAt === undefined || timing.firstAt === readAt) {
+        timing.firstReadDeltas = (timing.firstReadDeltas ?? 0) + 1;
+      }
       timing.lastAt = readAt;
       timing.firstAt ??= readAt;
     };

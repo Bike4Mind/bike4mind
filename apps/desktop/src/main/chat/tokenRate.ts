@@ -59,6 +59,8 @@ export interface StreamTiming {
   lastAt?: number;
   /** Distinct reads that carried a delta. */
   reads: number;
+  /** Deltas that arrived in the first read; each is about one token, and their time is the prompt's. */
+  firstReadDeltas?: number;
 }
 
 /** Below these, a buffered or bursty stream says more about the network than about generation. */
@@ -67,14 +69,17 @@ export const MIN_ESTIMATE_SPAN_MS = 250;
 
 /**
  * For a server that reports no timings: completion tokens over the wall time between the first
- * streamed token and the last. The first token's own time is the prompt's, so it is not counted.
+ * streamed token and the last. The first read's tokens arrived after the prompt, not during
+ * generation, so they are not counted.
  */
 export function estimatedRate(outputTokens: number | undefined, timing: StreamTiming): ChatTokenRate | undefined {
-  const { firstAt, lastAt, reads } = timing;
-  if (outputTokens === undefined || outputTokens < 2 || firstAt === undefined || lastAt === undefined) return undefined;
+  const { firstAt, lastAt, reads, firstReadDeltas } = timing;
+  if (outputTokens === undefined || firstAt === undefined || lastAt === undefined) return undefined;
   const evalMs = lastAt - firstAt;
   if (reads < MIN_ESTIMATE_READS || evalMs < MIN_ESTIMATE_SPAN_MS) return undefined;
-  return { evalTokens: outputTokens - 1, evalMs, estimated: true };
+  const evalTokens = outputTokens - Math.max(1, firstReadDeltas ?? 1);
+  if (evalTokens < 1) return undefined;
+  return { evalTokens, evalMs, estimated: true };
 }
 
 const RATE_FIELDS = [
@@ -87,7 +92,10 @@ const RATE_FIELDS = [
   'draftAccepted',
 ] as const satisfies readonly (keyof ChatTokenRate)[];
 
-/** Sum two requests' timings, so the turn's rate is its tokens over its time; absent stays absent. */
+/**
+ * Sum two requests' timings, so the turn's rate is its tokens over its time; absent stays absent.
+ * A round with no rate adds nothing, so the sum covers only the rounds that were timed.
+ */
 export function addTokenRate(
   total: ChatTokenRate | undefined,
   next: ChatTokenRate | undefined

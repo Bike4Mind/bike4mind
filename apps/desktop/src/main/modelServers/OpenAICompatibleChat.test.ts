@@ -147,6 +147,18 @@ describe('OpenAICompatibleChat', () => {
       });
     });
 
+    it('leaves the first read\'s tokens out of the estimate', async () => {
+      const burst = Array.from({ length: 40 }, () => delta({ content: 'a' }));
+      const fetch: FetchLike = async () =>
+        reads(
+          { at: 1000, chunks: burst },
+          { at: 1500, chunks: [delta({ content: 'b' })] },
+          { at: 3000, chunks: [delta({ content: 'c' }, 'stop'), ...ending(42)] }
+        );
+      const events = await collect(chat(fetch, null), { model: MODEL, messages: [{ role: 'user', content: 'hi' }] });
+      expect(events.at(-1)).toMatchObject({ rate: { evalTokens: 2, evalMs: 2000, estimated: true } });
+    });
+
     it('estimates nothing from a burst: a big first read and a few tiny ones right after', async () => {
       const fetch: FetchLike = async () =>
         reads(
