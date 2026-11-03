@@ -27,6 +27,7 @@ import {
 import { ServerCredentialsError, ServerForbiddenError } from '../modelServers/errors';
 import type { CompletionStreamEvent } from './streamEvents';
 import { createThinkFilter, type ThinkSplit } from './thinkFilter';
+import { ollamaRate } from './tokenRate';
 
 export const OLLAMA_RUNTIME_ID = 'ollama';
 const OLLAMA_URL = 'http://127.0.0.1:11434';
@@ -756,6 +757,9 @@ function emitFrame(
     error?: unknown;
     prompt_eval_count?: unknown;
     eval_count?: unknown;
+    prompt_eval_duration?: unknown;
+    eval_duration?: unknown;
+    load_duration?: unknown;
     message?: { content?: unknown; thinking?: unknown; tool_calls?: unknown[] };
   };
   if (typeof raw.error === 'string') throw new Error(redact(raw.error));
@@ -785,10 +789,12 @@ function emitFrame(
       ...(inputTokens !== undefined ? { inputTokens } : {}),
       ...(outputTokens !== undefined ? { outputTokens } : {}),
     };
+    const rate = ollamaRate(raw);
     onEvent({
       type: 'content',
       stopReason,
       ...(Object.keys(usage).length > 0 ? { usage } : {}),
+      ...(rate ? { rate } : {}),
     });
   }
 }

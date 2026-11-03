@@ -34,9 +34,10 @@ export const newPlaceholderSuffix = (): string => randomBytes(4).toString('hex')
 
 /** A slug, datalakeTag or tag-prefix clash on the random suffix - worth one retry with a fresh one. */
 function isSuffixCollision(error: unknown): boolean {
-  const e = error as { code?: unknown; keyPattern?: Record<string, unknown>; additionalInfo?: { code?: unknown } };
-  if (e?.additionalInfo?.code === dataLakeService.TAG_PREFIX_UNAVAILABLE_CODE) return true;
-  return e?.code === 11000 && !!e.keyPattern && ('slug' in e.keyPattern || 'datalakeTag' in e.keyPattern);
+  const code = (error as { additionalInfo?: { code?: unknown } })?.additionalInfo?.code;
+  return (
+    code === dataLakeService.TAG_PREFIX_UNAVAILABLE_CODE || code === dataLakeService.DATA_LAKE_SLUG_UNAVAILABLE_CODE
+  );
 }
 
 async function createPendingGitHubLake(req: Request, organizationId: string | undefined, suffix: () => string) {
