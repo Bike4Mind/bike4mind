@@ -5,7 +5,7 @@ import { getFallbackPriority, createTelemetryIssue } from './telemetryIssueCreat
 import { Logger } from '@bike4mind/observability';
 import { Quest } from '@bike4mind/database';
 
-vi.mock('@server/services/githubService', () => ({
+vi.mock('@bike4mind/server-utils/services/githubService', () => ({
   GitHubService: {
     forSystem: vi.fn(),
   },
@@ -37,7 +37,7 @@ vi.mock('@bike4mind/server-utils/services/issueDedup', () => ({
   }),
 }));
 
-vi.mock('@server/utils/telemetryAnalysis', () => ({
+vi.mock('@bike4mind/server-utils/utils/telemetryAnalysis', () => ({
   computeHistoricalBaselines: vi.fn().mockResolvedValue(null),
   generateRuleBasedAnalysis: vi.fn().mockReturnValue({
     summary: 'Test analysis',
@@ -199,7 +199,7 @@ describe('getFallbackPriority', () => {
 });
 
 // Import mocked modules for type-safe access in tests
-import { GitHubService } from '@server/services/githubService';
+import { GitHubService } from '@bike4mind/server-utils/services/githubService';
 import { checkFingerprintDedup } from '@bike4mind/server-utils/services/issueDedup';
 import { cacheRepository } from '@bike4mind/database';
 

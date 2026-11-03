@@ -116,6 +116,7 @@ export async function createMusicJob(
     {
       ...owner,
       requestedBy: input.user.id,
+      ...(input.apiKeyId && { apiKeyId: input.apiKeyId }),
       source: input.source,
       state: 'pending',
       payload: {

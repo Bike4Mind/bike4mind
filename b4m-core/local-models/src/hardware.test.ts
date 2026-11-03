@@ -2,7 +2,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseWindowsGpus, scanLinuxGpus, WINDOWS_GPU_SCRIPT, windowsGpuCommand } from './gpus';
-import { parseNvidiaSmi, probeHardware, type ExecLike } from './hardware';
+import {
+  parseMeminfo,
+  parseNvidiaSmi,
+  parseNvidiaSmiUsage,
+  parseRocmSmiVram,
+  probeHardware,
+  probeMemoryUsage,
+  type ExecLike,
+} from './hardware';
 import {
   amdRaphaelIgpu,
   amdRx7900xtx,
@@ -569,7 +577,7 @@ describe('probeHardware on Linux without nvidia-smi', () => {
   it('scans the same tree directly', async () => {
     const root = sysfs({ devices: [amdRx7900xtx, amdRaphaelIgpu], kfdNodes: amdKfd });
     expect(await scanLinuxGpus(root, {})).toEqual([
-      { vendor: 'amd', name: 'AMD GPU [1002:744c]', memoryBytes: 25753026560 },
+      { vendor: 'amd', name: 'AMD GPU [1002:744c]', memoryBytes: 25753026560, memoryUsedBytes: 1185984512 },
     ]);
   });
 });
@@ -841,5 +849,88 @@ describe('parseNvidiaSmi', () => {
       { name: 'NVIDIA GB10', memoryBytes: null },
       { name: 'Orin', memoryBytes: null },
     ]);
+  });
+});
+
+describe('memory in use', () => {
+  const MEMINFO = 'MemTotal:       65716204 kB\nMemFree:         1234567 kB\nMemAvailable:   53019716 kB\n';
+  const ROCM_SMI = JSON.stringify({
+    card1: { 'VRAM Total Memory (B)': '17163091968', 'VRAM Total Used Memory (B)': '2048' },
+    card0: { 'VRAM Total Memory (B)': '25753026560', 'VRAM Total Used Memory (B)': '1185984512' },
+    system: { 'Driver version': '6.8.5' },
+  });
+  const noUsedCounter = { ...amdRx7900xtx, files: { mem_info_vram_total: '25753026560' } };
+
+  it('parses meminfo, nvidia-smi usage and rocm-smi VRAM', () => {
+    expect(parseMeminfo(MEMINFO)).toEqual({ totalBytes: 65716204 * 1024, availableBytes: 53019716 * 1024 });
+    expect(parseMeminfo('garbage')).toEqual({ totalBytes: null, availableBytes: null });
+    expect(parseNvidiaSmiUsage('NVIDIA RTX A6000, Ada, 49140, 1024\nNVIDIA GB10, [N/A], 3000\nbad\n')).toEqual([
+      { vendor: 'nvidia', name: 'NVIDIA RTX A6000, Ada', memoryBytes: 49140 * MiB, memoryUsedBytes: 1024 * MiB },
+      { vendor: 'nvidia', name: 'NVIDIA GB10', memoryBytes: null, memoryUsedBytes: 3000 * MiB },
+    ]);
+    expect(parseRocmSmiVram(ROCM_SMI)).toEqual([
+      { totalBytes: 25753026560, usedBytes: 1185984512 },
+      { totalBytes: 17163091968, usedBytes: 2048 },
+    ]);
+    expect(parseRocmSmiVram('not json')).toEqual([]);
+  });
+
+  it('reads available RAM and NVIDIA usage on Linux', async () => {
+    const rootDir = sysfs({ devices: [nvidiaRtx4090], files: { 'proc/meminfo': MEMINFO } });
+    const exec = execFrom({ 'nvidia-smi': 'NVIDIA GeForce RTX 4090, 24564, 812\n' });
+    expect(await probeMemoryUsage({ exec, platform: 'linux', rootDir, env: {} })).toEqual({
+      availableMemoryBytes: 53019716 * 1024,
+      gpus: [
+        { vendor: 'nvidia', name: 'NVIDIA GeForce RTX 4090', memoryBytes: 24564 * MiB, memoryUsedBytes: 812 * MiB },
+      ],
+    });
+  });
+
+  it('reads AMD usage from sysfs without running rocm-smi', async () => {
+    const rootDir = sysfs({ devices: [amdRx7900xtx, amdRaphaelIgpu], kfdNodes: amdKfd });
+    const exec = execFrom({});
+    const usage = await probeMemoryUsage({ exec, platform: 'linux', rootDir, env: {} });
+    expect(usage).toEqual({
+      availableMemoryBytes: null,
+      gpus: [{ vendor: 'amd', name: 'AMD GPU [1002:744c]', memoryBytes: 25753026560, memoryUsedBytes: 1185984512 }],
+    });
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads Strix Halo usage from the GTT counter when ROCm allocates from GTT', async () => {
+    const apu = strixHalo(512 * MiB, 64 * GiB);
+    const device = { ...apu, files: { ...apu.files, mem_info_gtt_used: String(GiB), mem_info_vram_used: '4096' } };
+    const rootDir = sysfs({ devices: [device], kfdNodes: [KFD_STRIX_HALO_NODE], procVersion: kernel('6.12.0') });
+    const [gpu] = (await probeMemoryUsage({ exec: execFrom({}), platform: 'linux', rootDir, env: {} })).gpus;
+    expect(gpu).toMatchObject({ vendor: 'amd', memoryBytes: 64 * GiB, memoryUsedBytes: GiB });
+  });
+
+  it('fills AMD usage from rocm-smi when sysfs lacks the counter or cannot list the GPUs', async () => {
+    const rocm = execFrom({ 'rocm-smi': JSON.stringify({ card0: JSON.parse(ROCM_SMI).card0 }) });
+    const missing = sysfs({ devices: [noUsedCounter], kfdNodes: amdKfd });
+    expect((await probeMemoryUsage({ exec: rocm, platform: 'linux', rootDir: missing, env: {} })).gpus).toEqual([
+      { vendor: 'amd', name: 'AMD GPU [1002:744c]', memoryBytes: 25753026560, memoryUsedBytes: 1185984512 },
+    ]);
+    const hidden = sysfs({ pci: false });
+    expect((await probeMemoryUsage({ exec: rocm, platform: 'linux', rootDir: hidden, env: {} })).gpus).toEqual([
+      { vendor: 'amd', name: null, memoryBytes: 25753026560, memoryUsedBytes: 1185984512 },
+    ]);
+  });
+
+  it('leaves AMD usage null when rocm-smi is missing or lists a different number of cards', async () => {
+    const rootDir = sysfs({ devices: [noUsedCounter], kfdNodes: amdKfd });
+    for (const exec of [execFrom({}), execFrom({ 'rocm-smi': ROCM_SMI })]) {
+      const [gpu] = (await probeMemoryUsage({ exec, platform: 'linux', rootDir, env: {} })).gpus;
+      expect(gpu.memoryUsedBytes).toBeNull();
+    }
+  });
+
+  it('reports nothing on macOS and only nvidia-smi on Windows', async () => {
+    expect(await probeMemoryUsage({ exec: execFrom({}), platform: 'darwin' })).toEqual({
+      availableMemoryBytes: null,
+      gpus: [],
+    });
+    const exec = execFrom({ 'nvidia-smi': 'NVIDIA GeForce RTX 4090, 24564, 812\n' });
+    expect((await probeMemoryUsage({ exec, platform: 'win32' })).gpus).toHaveLength(1);
   });
 });

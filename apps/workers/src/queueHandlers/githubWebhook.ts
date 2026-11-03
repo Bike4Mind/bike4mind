@@ -10,7 +10,7 @@
  */
 
 import { z } from 'zod';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import {
   mcpServerRepository,
   cacheRepository,
@@ -27,7 +27,7 @@ import {
   GitHubWebhookPayload,
   GitHubHandlerContext,
 } from '@bike4mind/server-utils/integrations/github/types';
-import { dispatchReviewToSreRevision } from '@server/integrations/github/sreRevisionDispatch';
+import { dispatchReviewToSreRevision } from '@bike4mind/server-utils/integrations/github/sreRevisionDispatch';
 import { sanitizeDispatchError, sanitizeHandlerError, sanitizeNotificationError } from './sanitizeWebhookError';
 import { emitWebhookDeliveryMetric, WebhookMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';

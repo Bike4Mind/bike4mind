@@ -2,7 +2,7 @@
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { NotFoundError } from '@bike4mind/common';
-import { findListing } from '@server/skillMarket/market';
+import { findListing } from '@bike4mind/server-utils/skillMarket/market';
 import { withdrawOwnListing } from '@server/skillMarket/author';
 import { buildListingDetail } from '@server/skillMarket/detail';
 

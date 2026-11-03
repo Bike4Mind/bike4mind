@@ -101,6 +101,7 @@ apps/client/pages/api/admin/modal-tool.ts
 apps/client/pages/api/admin/modals/variants.ts
 apps/client/pages/api/admin/model-deprecation-status.ts
 apps/client/pages/api/admin/model-discovery.ts
+apps/client/pages/api/admin/model-hub/curated/versions.ts  # deliberately accepts ADMIN-scoped API keys: the curated publish script imports signed lists with one
 apps/client/pages/api/admin/model-logs.ts
 apps/client/pages/api/admin/model-metrics.ts
 apps/client/pages/api/admin/model-prices.ts
@@ -154,24 +155,16 @@ apps/client/pages/api/admin/release-notes/index.ts
 apps/client/pages/api/admin/retrieval-rate.ts
 apps/client/pages/api/admin/scoped-settings/effective.ts
 apps/client/pages/api/admin/scoped-settings/index.ts
-apps/client/pages/api/admin/security-dashboard/ai-assessment.ts
 apps/client/pages/api/admin/security-dashboard/attack-simulation-ingest.ts
 apps/client/pages/api/admin/security-dashboard/attack-simulation.ts
 apps/client/pages/api/admin/security-dashboard/cloud-prowler-ingest.ts
 apps/client/pages/api/admin/security-dashboard/cloud-prowler.ts
 apps/client/pages/api/admin/security-dashboard/cloud.ts
-apps/client/pages/api/admin/security-dashboard/code-semgrep-ingest.ts
-apps/client/pages/api/admin/security-dashboard/code.ts
 apps/client/pages/api/admin/security-dashboard/overview.ts
-apps/client/pages/api/admin/security-dashboard/packages-ingest.ts
-apps/client/pages/api/admin/security-dashboard/packages.ts
 apps/client/pages/api/admin/security-dashboard/run-attack-simulation.ts
-apps/client/pages/api/admin/security-dashboard/secrets-ingest.ts
-apps/client/pages/api/admin/security-dashboard/secrets.ts
 apps/client/pages/api/admin/security-dashboard/waf-blocked-requests.ts
 apps/client/pages/api/admin/security-dashboard/waf-logs-insights.ts
 apps/client/pages/api/admin/security-dashboard/waf-traffic.ts
-apps/client/pages/api/admin/security-dashboard/waf.ts
 apps/client/pages/api/admin/security-dashboard/web-owasp-ingest.ts
 apps/client/pages/api/admin/security-dashboard/web.ts
 apps/client/pages/api/admin/security-scan-schedule/[scanType].ts
@@ -529,6 +522,7 @@ apps/client/pages/api/modals/[id]/delete.ts
 apps/client/pages/api/modals/[id]/update.ts
 apps/client/pages/api/modals/create.ts
 apps/client/pages/api/modals/index.ts
+apps/client/pages/api/model-hub/curated/v2/[file].ts  # deliberately unauthenticated (auth: false): Desktop and the CLI fetch the signed curated list signed out; rate limited, read-only
 apps/client/pages/api/models.ts
 apps/client/pages/api/models/stats.ts
 apps/client/pages/api/notebooks/curate.ts
@@ -583,6 +577,7 @@ apps/client/pages/api/organizations/stats.ts
 apps/client/pages/api/organizations/subscriptions/subscribe.ts
 apps/client/pages/api/organizations/subscriptions/update-seats.ts
 apps/client/pages/api/organizations/users.ts
+apps/client/pages/api/otc/form-token.ts  # deliberately unauthenticated (auth: false): signed-out sign-in/register forms fetch it, like otc/send
 apps/client/pages/api/otc/send.ts
 apps/client/pages/api/otc/verify.ts
 apps/client/pages/api/overwatch/v1/events.ts

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ADMIN_SUBSCRIPTIONS_SORT_FIELDS } from '@client/app/utils/adminSubscriptionsFilter';
-import { Subscription } from '@server/models/Subscription';
+import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { adminSubscriptionsSort } from './adminSubscriptionsQuery';
 
 // A sort can only walk an index whose key it prefixes (in either direction), so the _id tiebreak in

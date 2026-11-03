@@ -2,7 +2,7 @@ import { randomBytes } from 'crypto';
 import type { ISkillSnapshot } from '@bike4mind/common';
 import { tryParseJsonObject } from '@server/utils/resolveImagePrompt';
 import type { ClassifierLlm } from './classifySkill';
-import { MAX_TAGS, TAG_PATTERN } from './market';
+import { MAX_TAGS, TAG_PATTERN } from '@bike4mind/server-utils/skillMarket/market';
 
 /**
  * Pre-publish tag suggestions for the Skill Market publish dialog. Best-effort: the author edits

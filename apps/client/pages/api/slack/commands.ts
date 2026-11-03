@@ -10,6 +10,7 @@ import { User, Session, connectDB } from '@bike4mind/database';
 import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
 import { createSession } from '@server/managers/sessionManager';
 import { Logger } from '@bike4mind/observability';
+import { withRequestLogger } from '@server/middlewares/requestLogger';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
@@ -901,4 +902,4 @@ export const config = {
   },
 };
 
-export default handler;
+export default withRequestLogger(handler);

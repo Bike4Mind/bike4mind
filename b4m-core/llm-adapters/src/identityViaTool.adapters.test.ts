@@ -143,6 +143,12 @@ describe.each(adapters)('$name identity via tool', ({ model, run, capsTools }) =
     expect(request.systemText).toBe(`You are terse.\n\n${buildIdentityReminder(model)}`);
   });
 
+  it('names modelIdentityId in place of the serving model', async () => {
+    const request = await run({ modelIdentityId: 'requested-model' });
+    expect(request.systemText).toContain(buildIdentityReminder('requested-model'));
+    expect(request.systemText).not.toContain(model);
+  });
+
   it('honors the explicit opt-out even when the identity tool is absent', async () => {
     const request = await run({ identityViaTool: true, omitIdentityReminder: true });
     expect(request.systemText).toBe('You are terse.');

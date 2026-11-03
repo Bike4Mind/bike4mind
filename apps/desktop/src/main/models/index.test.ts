@@ -1,6 +1,10 @@
+import { existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { AUTO_LOCAL_CONTEXT } from '@shared/localContextSetting';
-import type { CuratedSourceView, HfTokenResult } from '@shared/models';
+import type { CapabilityScope } from '@shared/capabilities';
+import type { CuratedSourceView, HfTokenResult, ModelPull } from '@shared/models';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelHubServiceDeps } from './ModelHubService';
 
@@ -23,11 +27,29 @@ const service = vi.hoisted(() => ({
   setToken: vi.fn(),
   clearToken: vi.fn(),
   curated: vi.fn(),
+  pulls: vi.fn(() => [] as ModelPull[]),
+  storeLocation: vi.fn(),
 }));
+const ledger = {
+  grant: vi.fn(async (input: { scope: CapabilityScope }) => ({ id: 'g1', scope: input.scope })),
+  use: vi.fn(async () => {}),
+  revokeMatching: vi.fn(async () => []),
+};
 
+const SERVICE_STORE = '/usr/share/ollama/.ollama/models';
+const fsState = vi.hoisted(() => ({ serviceStore: false }));
+vi.mock('node:fs', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    existsSync: (path: string) =>
+      path === '/usr/share/ollama/.ollama/models' ? fsState.serviceStore : actual.existsSync(path),
+  };
+});
 vi.mock('electron', () => electron);
-vi.mock('./curated/CuratedSource', () => ({
-  CuratedSource: class {
+vi.mock('@bike4mind/local-models', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/local-models')>()),
+  CuratedListSource: class {
     current = vi.fn();
     loaded = async () => {};
     checkIfDue = async () => {};
@@ -41,6 +63,8 @@ vi.mock('./ModelHubService', () => ({
     setToken = service.setToken;
     clearToken = service.clearToken;
     curated = service.curated;
+    pulls = service.pulls;
+    storeLocation = service.storeLocation;
     constructor(deps: ModelHubServiceDeps) {
       service.deps = deps;
     }
@@ -61,7 +85,11 @@ function setup() {
       return () => {};
     }),
   };
-  registerModels(servers, { localContext: async () => AUTO_LOCAL_CONTEXT });
+  registerModels(
+    servers,
+    { localContext: async () => AUTO_LOCAL_CONTEXT },
+    ledger as unknown as Parameters<typeof registerModels>[2]
+  );
   const deps = service.deps;
   if (!deps) throw new Error('ModelHubService was not built');
   return { deps, saved: (id: string) => saved?.(id) };
@@ -114,10 +142,58 @@ describe('registerModels', () => {
     expect(electron.powerSaveBlocker.stop).toHaveBeenCalledWith(7);
   });
 
+  it.runIf(process.platform === 'linux')(
+    "guesses the Linux service's model folder when it exists, before the home folder",
+    () => {
+      vi.stubEnv('OLLAMA_MODELS', '');
+      const { deps } = setup();
+      fsState.serviceStore = true;
+      expect(deps.defaultStoreDir?.()).toBe(SERVICE_STORE);
+      fsState.serviceStore = false;
+      expect(deps.defaultStoreDir?.()).toMatch(/\.ollama[\\/]models$/);
+      expect(deps.defaultStoreDir?.()).not.toBe(SERVICE_STORE);
+      vi.stubEnv('OLLAMA_MODELS', '/data/models');
+      expect(deps.defaultStoreDir?.()).toBe('/data/models');
+      vi.unstubAllEnvs();
+    }
+  );
+
+  it('measures free space for a model folder Ollama has not made yet on the disk that will hold it', async () => {
+    const { deps } = setup();
+    const missing = join(tmpdir(), `b4m-no-models-${process.pid}`, '.ollama', 'models');
+    expect(existsSync(missing)).toBe(false);
+    await expect(deps.freeSpace?.(missing)).resolves.toBeGreaterThan(0);
+  });
+
   it('tells the service when Settings saves or removes a server', () => {
     const { saved } = setup();
     saved('srv1');
     expect(service.serverChanged).toHaveBeenCalledWith('srv1');
+  });
+
+  it('closes leftover download grants at launch and records a started pull with where it lands', async () => {
+    const pull = {
+      key: 'qwen3:0.6b#q4_k_m',
+      serverId: 'local',
+      serverName: 'This computer',
+      ref: 'qwen3:0.6b',
+      label: 'Q4_K_M',
+      sizeBytes: 522_653_767,
+    };
+    service.pulls.mockReturnValue([{ key: pull.key, phase: 'downloading' } as ModelPull]);
+    service.storeLocation.mockResolvedValue({ path: '/models', source: 'runtime', freeBytes: 1 });
+    const { deps } = setup();
+    expect(ledger.revokeMatching).toHaveBeenCalledTimes(1);
+
+    deps.onPullStarted?.(pull);
+    await vi.waitFor(() => expect(ledger.use).toHaveBeenCalled());
+    expect(service.storeLocation).toHaveBeenCalledWith('local');
+    expect(ledger.grant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capability: 'model-download',
+        scope: expect.objectContaining({ kind: 'model-pull', value: pull.key, path: '/models', pathSource: 'runtime' }),
+      })
+    );
   });
 });
 
@@ -157,7 +233,13 @@ describe('Models credential IPC', () => {
 describe('Models curated IPC', () => {
   const list = {
     updatedAt: '2026-10-27T00:00:00Z',
-    machine: { memoryKind: 'cpu', totalMemoryBytes: 16 * 1024 ** 3, gpuMemoryBytes: null, gpuName: null },
+    machine: {
+      memoryKind: 'cpu',
+      totalMemoryBytes: 16 * 1024 ** 3,
+      gpuMemoryBytes: null,
+      gpuName: null,
+      confidence: 'high',
+    },
     entries: [],
     picks: [],
   };

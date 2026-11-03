@@ -11,6 +11,7 @@ import {
 } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
+import { AttachmentStore } from './AttachmentStore';
 import { MessageQueue } from './MessageQueue';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
@@ -39,6 +40,7 @@ describe('ChatService queued messages', () => {
   let streams: PassThrough[];
   let post: ReturnType<typeof vi.fn>;
   let apiClient: AuthenticatedApiClient | null;
+  let attachmentStore: AttachmentStore;
 
   /** The stream serving the Nth completion request, created on demand as the service asks. */
   const streamFor = (index: number) => {
@@ -80,8 +82,13 @@ describe('ChatService queued messages', () => {
     } as unknown as AuthenticatedApiClient;
 
     queue = new MessageQueue(event => queueEvents.push(event));
+    attachmentStore = new AttachmentStore(await mkdtemp(join(tmpdir(), 'b4m-queue-attachments-')), {
+      debug: vi.fn(),
+      warn: vi.fn(),
+    });
     service = new ChatService({
       store,
+      attachments: attachmentStore,
       access: { list: async () => [] } as unknown as AccessStore,
       logger: { debug: vi.fn(), warn: vi.fn() },
       queue,
@@ -713,21 +720,208 @@ describe('ChatService queued messages', () => {
       ]);
     });
 
-    it('leaves a relay for the end of the turn', async () => {
+    const relayFrom = { fromSessionId: 'sender', fromTitle: 'Sender', hops: 1 };
+
+    it('returns typed attachments and preserves every relay when attachment preparation fails', async () => {
       const { id } = await service.createSession();
       await service.send(id, 'build it');
       await waitForPost(1);
-      queue.enqueueRelay(id, 'from the other conversation', { fromSessionId: 'sender', fromTitle: 'Sender', hops: 1 });
+      const attachment = {
+        id: 'attachment',
+        kind: 'text' as const,
+        name: 'notes.txt',
+        mediaType: 'text/plain',
+        byteSize: 4,
+        sourceBytes: 4,
+      };
+      queue.enqueueRelay(id, 'first relay', relayFrom);
+      queue.enqueue(id, 'typed notes', [attachment]);
+      queue.enqueueRelay(id, 'second relay', relayFrom);
+      vi.spyOn(attachmentStore, 'read').mockRejectedValueOnce(new Error('EACCES: cannot read attachment'));
+
+      askForTool(0);
+      await waitForEvent('error');
+      await vi.waitUntil(async () => (await store.get(id))?.messages.filter(message => message.relay).length === 2);
+
+      expect(queueEvents.find(event => event.returned)?.returned).toMatchObject({
+        reason: 'failed',
+        messages: [{ text: 'typed notes', attachments: [attachment] }],
+      });
+      expect((await store.get(id))?.messages.filter(message => message.relay).map(message => message.content)).toEqual([
+        'first relay',
+        'second relay',
+      ]);
+      expect(queue.list(id)).toEqual([]);
+      expect(post).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(['segment settlement', 'second relay'])(
+      'preserves unaccepted relays after a failure during %s',
+      async failure => {
+        const { id } = await service.createSession();
+        await service.send(id, 'build it');
+        await waitForPost(1);
+        queue.enqueueRelay(id, 'first relay', relayFrom);
+        queue.enqueueRelay(id, 'second relay', relayFrom);
+        const appendMessage = store.appendMessage.bind(store);
+        let failed = false;
+        vi.spyOn(store, 'appendMessage').mockImplementation(async (sessionId, message) => {
+          if (
+            !failed &&
+            (failure === 'segment settlement' ? message.role === 'assistant' : message.content === failure)
+          ) {
+            failed = true;
+            throw new Error('transient write failure');
+          }
+          return appendMessage(sessionId, message);
+        });
+
+        askForTool(0);
+        await waitForEvent('error');
+        await vi.waitUntil(async () => (await store.get(id))?.messages.filter(message => message.relay).length === 2);
+
+        const messages = (await store.get(id))?.messages ?? [];
+        expect(messages.filter(message => message.relay).map(message => message.content)).toEqual([
+          'first relay',
+          'second relay',
+        ]);
+        expect(new Set(messages.map(message => message.id)).size).toBe(messages.length);
+        expect(queue.list(id)).toEqual([]);
+        expect(post).toHaveBeenCalledTimes(1);
+      }
+    );
+
+    it('keeps the settled reply whole when a relay after it fails to store', async () => {
+      const { id } = await service.createSession();
+      await service.send(id, 'build it');
+      await waitForPost(1);
+      queue.enqueueRelay(id, 'first relay', relayFrom);
+      queue.enqueueRelay(id, 'second relay', relayFrom);
+      const appendMessage = store.appendMessage.bind(store);
+      vi.spyOn(store, 'appendMessage').mockImplementation(async (sessionId, message) => {
+        if (message.content === 'second relay') throw new Error('transient write failure');
+        return appendMessage(sessionId, message);
+      });
+
+      streamFor(0).write(
+        frame({
+          type: 'content',
+          text: 'Here it is. <artifact identifier="plan" type="text/markdown" title="Plan">steps</artifact>',
+        })
+      );
+      askForTool(0);
+      await waitForEvent('error');
+
+      const reply = (await store.get(id))?.messages.find(message => message.role === 'assistant');
+      expect(reply).toMatchObject({
+        content: 'Here it is.',
+        error: 'transient write failure',
+        rounds: [{ text: 'Here it is.', toolCallIds: ['call_0'] }],
+        artifacts: [{ identifier: 'plan' }],
+      });
+    });
+
+    it('hands a relay to the next request with the framing its own turn would carry', async () => {
+      const { id } = await service.createSession();
+      await service.send(id, 'build it');
+      await waitForPost(1);
+      queue.enqueueRelay(id, 'from the other conversation', relayFrom);
 
       askForTool(0);
       await waitForPost(2);
 
-      expect(service.queuedMessages(id).map(message => message.text)).toEqual(['from the other conversation']);
-      expect(JSON.stringify(requestMessages(1))).not.toContain('from the other conversation');
+      expect(service.queuedMessages(id)).toEqual([]);
+      const last = requestMessages(1).at(-1) as { role: string; content: { type: string; text: string }[] };
+      expect(last.role).toBe('user');
+      expect(last.content[0].text).toMatch(
+        /^\[Message from another conversation in this project: "Sender" \(sender\)\.[\s\S]*\n\nfrom the other conversation\n\n<system-reminder>\nThis message from another conversation arrived while/
+      );
+      expect(queueEvents.at(-1)?.sent?.message).toMatchObject({
+        system: true,
+        content: 'from the other conversation',
+        relay: relayFrom,
+      });
 
       await finishReply(1);
+      await vi.waitUntil(() => events.filter(event => event.type === 'done').length === 2, { timeout: 2000 });
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(post).toHaveBeenCalledTimes(2);
+      const stored = (await service.getSession(id))?.messages[2];
+      expect(stored).toMatchObject({ role: 'user', system: true, relay: relayFrom });
+      await service.send(id, 'continue');
       await waitForPost(3);
-      expect(service.queuedMessages(id)).toEqual([]);
+      const replay = requestMessages(2).find(
+        message => typeof message.content === 'string' && message.content.includes('from the other conversation')
+      );
+      expect(replay?.content).toContain('[Message from another conversation in this project: "Sender" (sender).');
+      expect(replay?.content).toContain('This message from another conversation arrived while');
+    });
+
+    it('delivers typed and relayed messages taken together in queue order', async () => {
+      const { id } = await service.createSession();
+      await service.send(id, 'build it');
+      await waitForPost(1);
+      await service.send(id, 'first typed');
+      queue.enqueueRelay(id, 'relayed', relayFrom);
+      await service.send(id, 'second typed');
+
+      askForTool(0);
+      await waitForPost(2);
+
+      const texts = requestMessages(1)
+        .slice(-3)
+        .map(message => (message.content as { text: string }[])[0].text.split('\n')[0]);
+      expect(texts).toEqual([
+        'first typed',
+        expect.stringMatching(/^\[Message from another conversation/),
+        'second typed',
+      ]);
+      expect(queueEvents.filter(event => event.sent).map(event => event.sent?.message.content)).toEqual([
+        'first typed',
+        'relayed',
+        'second typed',
+      ]);
+    });
+
+    it('keeps an auto-fix entry for its own turn while a relay reaches the running turn', async () => {
+      const { id } = await service.createSession();
+      await service.send(id, 'build it');
+      await waitForPost(1);
+      queue.enqueueAutomatic(id, 'fix the checks', {
+        kind: 'auto-fix',
+        prUrl: 'https://github.com/example/project/pull/1',
+        prNumber: 1,
+        summary: 'Failing checks',
+      });
+      queue.enqueueRelay(id, 'relayed detail', relayFrom);
+
+      askForTool(0);
+      await waitForPost(2);
+
+      expect(queue.list(id).map(message => message.text)).toEqual(['fix the checks']);
+      expect(JSON.stringify(requestMessages(1))).toContain('relayed detail');
+      expect(JSON.stringify(requestMessages(1))).not.toContain('fix the checks');
+      service.stop(id);
+    });
+
+    it('sends a relay as a turn of its own when the round it waited for is the last', async () => {
+      const { id } = await service.createSession();
+      await service.send(id, 'build it');
+      await waitForPost(1);
+      queue.enqueueRelay(id, 'from the other conversation', relayFrom);
+
+      await finishReply(0);
+      await waitForPost(2);
+
+      expect(typeof requestMessages(1).at(-1)?.content).toBe('string');
+      expect(requestMessages(1).at(-1)?.content).not.toContain('<system-reminder>');
+      const session = await service.getSession(id);
+      expect(session?.messages.map(message => [message.role, message.content, message.relay?.hops])).toEqual([
+        ['user', 'build it', undefined],
+        ['assistant', 'reply', undefined],
+        ['user', 'from the other conversation', 1],
+        ['assistant', '', undefined],
+      ]);
     });
 
     it('sends the message as a turn of its own when the round it waited for is the last', async () => {

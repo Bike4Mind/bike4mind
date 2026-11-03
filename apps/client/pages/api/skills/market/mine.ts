@@ -1,6 +1,6 @@
 // apps/client/pages/api/skills/market/mine.ts
 import { baseApi } from '@client/server/middlewares/baseApi';
-import { serializeListing } from '@server/skillMarket/market';
+import { serializeListing } from '@bike4mind/server-utils/skillMarket/market';
 import { listMyListings } from '@server/skillMarket/author';
 
 /** GET /api/skills/market/mine - the caller's listings with their recent versions, findings and review notes. */

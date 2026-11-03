@@ -10,7 +10,7 @@ import {
   outputUrlExpiresAt,
   toIso,
   type JobMapperDeps,
-} from '@server/generations/signedOutput';
+} from '@bike4mind/server-utils/generations/signedOutput';
 
 // Fixed text per public code: a stored job.error.message can carry provider wording, which never leaves the server.
 const PUBLIC_ERROR_MESSAGES: Record<VideoJobPublicErrorCode, string> = {

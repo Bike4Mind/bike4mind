@@ -44,7 +44,9 @@ const handler = baseApi().get<Request<{}, unknown, unknown, { id: string }>>(asy
     // and ProfileDataForm.test.tsx), so a non-admin self view cannot blank them on save.
     const safeSelf = redactUserSecretsForSelf(user, {
       keep: ['securityQuestions'],
-      ...(isAdmin && { keepAdminOnly: ['userNotes', 'signupMeta', 'signupGrantAssessment'] as const }),
+      ...(isAdmin && {
+        keepAdminOnly: ['userNotes', 'signupMeta', 'signupGrantAssessment', 'throttle', 'riskSignals'] as const,
+      }),
     });
 
     // `.populate('organizationId')` above inlines the WHOLE Organization document, and

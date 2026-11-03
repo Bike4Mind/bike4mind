@@ -1,4 +1,7 @@
 import { createHash } from 'node:crypto';
+import { mkdir, mkdtemp, rm, truncate, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   HubAccessError,
   HubRateLimitError,
@@ -6,6 +9,7 @@ import {
   LocalRuntimeError,
   ModelNotFoundError,
   RuntimeConnectionError,
+  installedReviewed,
   loadCuratedManifest,
   type HardwareProfile,
   ollamaPullRef,
@@ -20,7 +24,7 @@ import {
   type OllamaRegistryLayers,
   type PullOptions,
 } from '@bike4mind/local-models';
-import type { HubBuild, HubManifest } from '@bike4mind/common';
+import { ollamaBuildBytes, type HubBuild, type HubManifest } from '@bike4mind/common';
 import { AUTO_LOCAL_CONTEXT, type LocalContextSetting } from '@shared/localContextSetting';
 import { pullKey, type ModelPull } from '@shared/models';
 import type { ModelServerSpecs } from '@shared/modelServers';
@@ -31,9 +35,9 @@ import { HuggingFaceTokenStore } from './HuggingFaceTokenStore';
 import {
   ModelHubService,
   toModelHubError,
-  installedReviewed,
   type HubTokenPort,
   type ModelHubPort,
+  type ModelHubServiceDeps,
   type ModelRuntimePort,
 } from './ModelHubService';
 
@@ -192,6 +196,7 @@ function harness(
     setting?: LocalContextSetting;
     checkBackoffMs?: number[];
     token?: string | null;
+    deps?: Pick<ModelHubServiceDeps, 'onPullStarted' | 'freeSpace' | 'defaultStoreDir' | 'pathExists'>;
   } = {}
 ) {
   const pulls: Deferred[] = [];
@@ -263,6 +268,7 @@ function harness(
     warn,
     progressIntervalMs: 0,
     checkBackoffMs: options.checkBackoffMs ?? [0, 0],
+    ...options.deps,
   });
   return { service, runtime, hub, libraryLayers, pulls, pushed, installedChanged, hardware, warn, tokens, createHub };
 }
@@ -314,7 +320,7 @@ describe('ModelHubService pulls', () => {
 
     expect(hub.verifyOllamaRef).toHaveBeenCalledTimes(1);
     expect(runtime.pull).toHaveBeenCalledWith(`hf.co/${REPO}:Q4_K_M`, expect.anything());
-    expect(pulls[0].options).not.toHaveProperty('runner');
+    expect(pulls[0].options?.runner).toBeUndefined();
     pulls[0].options?.onProgress?.({ status: 'pulling abc', completedBytes: 100, totalBytes: 491_400_032 });
     expect(service.pulls()[0]).toMatchObject({ phase: 'downloading', completedBytes: 100, label: 'Q4_K_M' });
 
@@ -655,6 +661,151 @@ describe('ModelHubService pulls', () => {
   });
 });
 
+describe('ModelHubService approval record and model folder', () => {
+  const installedModel = (name: string): InstalledModel => ({
+    name,
+    sizeBytes: 1,
+    quantization: null,
+    family: null,
+    parameterSize: null,
+    modifiedAt: null,
+    capabilities: { tools: true, vision: false, thinking: false, embeddings: false, completion: true },
+  });
+
+  it('reports a pull as started only once it passed every check, with what the dialog showed', async () => {
+    const onPullStarted = vi.fn();
+    const refused = harness({ verified: null, deps: { onPullStarted } });
+    await refused.service.pull(request);
+    expect(onPullStarted).not.toHaveBeenCalled();
+
+    const { service, pulls } = harness({ deps: { onPullStarted } });
+    const result = service.pull(request);
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    expect(onPullStarted).toHaveBeenCalledExactlyOnceWith({
+      key: pullKey(REPO, request.buildId),
+      serverId: 'local',
+      serverName: 'This computer',
+      ref: `hf.co/${REPO}:Q4_K_M`,
+      label: 'Q4_K_M',
+      sizeBytes: request.sizeBytes,
+    });
+    pulls[0].resolve();
+    await result;
+  });
+
+  it('reads the model folder from an installed model, with free space on this computer, and keeps it', async () => {
+    const freeSpace = vi.fn(async () => 500 * GIB);
+    const { service, runtime } = harness({ deps: { freeSpace, defaultStoreDir: () => '/default' } });
+    runtime.list.mockResolvedValue([installedModel('cloud-model:latest'), installedModel('qwen2.5:0.5b')]);
+    const inspect = runtime.inspect.getMockImplementation();
+    runtime.inspect.mockImplementation(async (name, options) => {
+      if (name === 'cloud-model:latest') throw new LocalRuntimeError('cloud-backed', 'ollama');
+      const shown = await inspect!(name, options);
+      return { ...shown, contents: { template: null, license: null, modelBlob: SHA, storeDir: '/srv/ollama' } };
+    });
+
+    expect(await service.storeLocation()).toEqual({ path: '/srv/ollama', source: 'runtime', freeBytes: 500 * GIB });
+    expect(freeSpace).toHaveBeenCalledWith('/srv/ollama');
+    const reads = runtime.inspect.mock.calls.length;
+    await service.storeLocation();
+    expect(runtime.inspect.mock.calls.length).toBe(reads);
+  });
+
+  it("falls back to Ollama's default folder, as a guess with its own free space, while nothing is installed", async () => {
+    const freeSpace = vi.fn(async () => 7);
+    const { service } = harness({ deps: { freeSpace, defaultStoreDir: () => '/usr/share/ollama/.ollama/models' } });
+    expect(await service.storeLocation()).toEqual({
+      path: '/usr/share/ollama/.ollama/models',
+      source: 'default',
+      freeBytes: 7,
+    });
+    expect(freeSpace).toHaveBeenCalledWith('/usr/share/ollama/.ollama/models');
+  });
+
+  const reportsFolder = (runtime: ReturnType<typeof harness>['runtime'], folder: () => string) => {
+    runtime.list.mockResolvedValue([installedModel('qwen2.5:0.5b')]);
+    const inspect = runtime.inspect.getMockImplementation();
+    runtime.inspect.mockImplementation(async (name, options) => ({
+      ...(await inspect!(name, options)),
+      contents: { template: null, license: null, modelBlob: SHA, storeDir: folder() },
+    }));
+  };
+
+  it("does not confirm, or measure, a folder this computer's disk does not have", async () => {
+    const freeSpace = vi.fn(async () => 1);
+    const { service, runtime } = harness({ deps: { freeSpace, pathExists: async () => false } });
+    reportsFolder(runtime, () => '/root/.ollama/models');
+    expect(await service.storeLocation()).toEqual({
+      path: '/root/.ollama/models',
+      source: 'elsewhere',
+      freeBytes: null,
+    });
+    expect(freeSpace).not.toHaveBeenCalled();
+  });
+
+  it('reads the folder again once Ollama went away, or once the remembered one is gone from disk', async () => {
+    let folder = '/srv/a';
+    const present = new Set(['/srv/a', '/srv/b', '/srv/c']);
+    const { service, runtime } = harness({ deps: { pathExists: async path => present.has(path) } });
+    reportsFolder(runtime, () => folder);
+    expect((await service.storeLocation()).path).toBe('/srv/a');
+
+    folder = '/srv/b';
+    expect((await service.storeLocation()).path).toBe('/srv/a');
+    runtime.health.mockResolvedValueOnce({ ok: false, version: null, error: 'connection refused' });
+    await service.status();
+    expect(await service.storeLocation()).toMatchObject({ path: '/srv/b', source: 'runtime' });
+
+    folder = '/srv/c';
+    present.delete('/srv/b');
+    expect(await service.storeLocation()).toMatchObject({ path: '/srv/c', source: 'runtime' });
+  });
+
+  it('stops a running pull and reports it stopped only once it no longer runs', async () => {
+    const { service, pulls } = harness();
+    const result = service.pull(request);
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    const key = pullKey(REPO, request.buildId);
+    await expect(service.stop(key)).resolves.toBe(true);
+    expect(service.pulls().find(pull => pull.key === key)).toBeUndefined();
+    await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'cancelled' } });
+    await expect(service.stop('nothing-running')).resolves.toBe(true);
+  });
+
+  it('reports a pull that does not stop in time as still running', async () => {
+    const { service, pulls, runtime } = harness();
+    runtime.pull.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          pulls.push({ resolve, reject, options: undefined });
+        })
+    );
+    void service.pull(request);
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await expect(service.stop(pullKey(REPO, request.buildId), 20)).resolves.toBe(false);
+    pulls[0].resolve();
+  });
+
+  it("reads a saved server's folder from its own runtime and never measures this computer's disk for it", async () => {
+    const freeSpace = vi.fn(async () => 1);
+    const { service, runtimes } = servers({ deps: { freeSpace } });
+    runtimes.a.list.mockResolvedValue([installedModel('qwen2.5:0.5b')]);
+    const inspect = runtimes.a.inspect.getMockImplementation();
+    runtimes.a.inspect.mockImplementation(async (name, options) => ({
+      ...(await inspect!(name, options)),
+      contents: { template: null, license: null, modelBlob: SHA, storeDir: '/var/lib/ollama/models' },
+    }));
+    expect(await service.storeLocation('a')).toEqual({
+      path: '/var/lib/ollama/models',
+      source: 'runtime',
+      freeBytes: null,
+    });
+    expect(await service.storeLocation('b')).toEqual({ path: null, source: null, freeBytes: null });
+    expect(await service.storeLocation('gone')).toEqual({ path: null, source: null, freeBytes: null });
+    expect(freeSpace).not.toHaveBeenCalled();
+  });
+});
+
 describe('ModelHubService reads', () => {
   it('marks loaded models', async () => {
     const { service, runtime } = harness();
@@ -806,6 +957,7 @@ function servers(options: Parameters<typeof harness>[0] = {}) {
     warn: local.warn,
     progressIntervalMs: 0,
     checkBackoffMs: [0, 0],
+    ...options.deps,
   });
   return { service, runtimes, remote, saved, chatOnly, keepAwake, installedChanged, local, hub: local.hub };
 }
@@ -937,7 +1089,35 @@ describe('ModelHubService entered hardware', () => {
     expect(remote.runtime.inspect).toHaveBeenCalledWith('small:latest', { tags: false });
     expect(local.runtime.inspect).not.toHaveBeenCalled();
     const detailed = await service.detail(REPO, 'a');
-    expect(detailed.ok && detailed.model.builds[0].fit?.detail).toContain('16 GiB');
+    // The 16 GiB GPU less its 2 GiB margin.
+    expect(detailed.ok && detailed.model.builds[0].fit?.detail).toContain('14 GiB');
+  });
+
+  it("words a saved server's verdicts for that server, and sizes its installed projector from the pins", async () => {
+    const { service, remote } = rated({ a: { ramGiB: 16, gpuMemoryGiB: null, bandwidthGBps: null, unified: true } });
+    const list = await service.curated('a');
+    const fits = list.entries.flatMap(entry => entry.builds.map(build => ({ entry: entry.id, ...build })));
+    const tight = fits.filter(build => build.fit.level === 'tight');
+    const tooLarge = fits.filter(build => build.fit.level === 'too-large');
+    expect(tight.length).toBeGreaterThan(0);
+    expect(tooLarge.length).toBeGreaterThan(0);
+    for (const build of tight)
+      expect(build.fit.detail).toMatch(/ Close other apps on that server first, or it may slow down\.$/);
+    for (const build of tooLarge) expect(build.fit.detail).toContain('that server can hold for a model');
+    for (const build of fits) expect(build.fit.detail).not.toContain('this computer');
+
+    const entry = CURATED.entries.find(candidate => candidate.id === 'qwen3-8-27b-gsq')!;
+    const reviewed = entry.builds.find(candidate => candidate.id === 'iq2-xs')!;
+    const { weightsBytes, mmprojBytes } = ollamaBuildBytes(reviewed);
+    remote.runtime.list.mockResolvedValue([
+      { ...installedModel, name: refOf(reviewed), sizeBytes: weightsBytes + mmprojBytes },
+    ]);
+    const shown = remote.runtime.inspect.getMockImplementation()!;
+    const arch = entry.arch as ModelArch;
+    remote.runtime.inspect.mockImplementation(async (name, options) => ({ ...(await shown(name, options)), arch }));
+    const installed = await service.installed('a');
+    const row = fits.find(build => build.entry === entry.id && build.id === reviewed.id);
+    expect(installed.ok && installed.models[0].fit).toEqual(row?.fit);
   });
 
   it("puts this computer's entered memory in place of its probe", async () => {
@@ -1122,6 +1302,39 @@ describe('ModelHubService fit', () => {
     expect(bare.ok && bare.model.builds[0].fit?.detail).toContain('(up to 16K)');
   });
 
+  it.each([
+    ['gemma-4-12b', 'qat-q4-0'],
+    ['qwen3-8-27b-gsq', 'iq2-xs'],
+  ])('rates an installed %s %s, a vision build, as its curated row does', async (entryId, buildId) => {
+    const entry = CURATED.entries.find(candidate => candidate.id === entryId)!;
+    const reviewed = entry.builds.find(candidate => candidate.id === buildId)!;
+    const { weightsBytes, mmprojBytes } = ollamaBuildBytes(reviewed);
+    expect(mmprojBytes).toBeGreaterThan(0);
+    // The projector blob as Ollama keeps it in its model folder on this computer.
+    const storeDir = await mkdtemp(join(tmpdir(), 'b4m-store-'));
+    await mkdir(join(storeDir, 'blobs'));
+    const blob = join(storeDir, 'blobs', `sha256-${pinsOf(reviewed)!.projector}`);
+    await writeFile(blob, '');
+    await truncate(blob, mmprojBytes);
+    try {
+      const { service, runtime } = harness({ hardware: machine('unified', 16) });
+      runtime.list.mockResolvedValue([installed({ name: refOf(reviewed), sizeBytes: weightsBytes + mmprojBytes })]);
+      const shown = runtime.inspect.getMockImplementation()!;
+      runtime.inspect.mockImplementation(async (name, options) => {
+        const inspection = await shown(name, options);
+        const arch = entry.arch as ModelArch;
+        return { ...inspection, arch, contents: inspection.contents && { ...inspection.contents, storeDir } };
+      });
+
+      const curated = await service.curated();
+      const row = curated.entries.find(candidate => candidate.id === entryId)?.builds.find(b => b.id === buildId);
+      const result = await service.installed();
+      expect(result.ok && result.models[0].fit).toEqual(row?.fit);
+    } finally {
+      await rm(storeDir, { recursive: true, force: true });
+    }
+  });
+
   it('uses a size estimate when a same-sized curated file has different weights', async () => {
     const { service } = harness({ detail: gsqDetail({ sha256: SHA }) });
     const view = await service.detail(GSQ_REPO);
@@ -1168,6 +1381,7 @@ describe('ModelHubService curated list', () => {
       totalMemoryBytes: 16 * GIB,
       gpuMemoryBytes: null,
       gpuName: null,
+      confidence: 'high',
     });
     expect(list.entries.every(entry => entry.vision && entry.thinking && entry.tools)).toBe(true);
     expect(list.entries.find(entry => entry.id === 'gemma-4-26b')).toMatchObject({

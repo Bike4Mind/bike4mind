@@ -2,10 +2,10 @@ import { connectDB, adminSettingsRepository } from '@bike4mind/database';
 import { secretRotationRepository } from '@bike4mind/database/infra';
 import { postMessageToSlack } from '@bike4mind/utils';
 import { getSettingsMap } from '@bike4mind/utils';
-import { resolveSlackWebhookUrl } from '@server/integrations/slack/slack';
+import { resolveSlackWebhookUrl } from '@bike4mind/server-utils/integrations/slack/slack';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { getSecretRotationConfig } from '@bike4mind/server-utils/lib/secretRotation/constants';
-import { SECRET_ROTATION_GRACE_MS } from '@server/auth/secretRotationGrace';
+import { SECRET_ROTATION_GRACE_MS } from '@bike4mind/server-utils/auth/secretRotationGrace';
 import { Resource } from 'sst';
 
 export async function handler() {

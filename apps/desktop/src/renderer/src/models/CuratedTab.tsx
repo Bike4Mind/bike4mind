@@ -27,7 +27,7 @@ import {
 } from '@shared/models';
 import { ExternalLink } from '../chat/ExternalLink';
 import { BuildRow, hubErrorText, startPull } from './ExploreTab';
-import type { ModelTarget } from './modelTarget';
+import type { ChatOn, ModelTarget } from './modelTarget';
 import { PullDialog, type PullConsent } from './PullDialog';
 
 const SLOT_LABELS: Record<CuratedSlot, string> = {
@@ -41,11 +41,22 @@ const CHECK_FAILED = 'Could not check this model with the Models service. Try ag
 
 function machineText(machine: MachineView): string {
   const memory = formatMemory(machine.totalMemoryBytes);
-  if (machine.memoryKind === 'unified') return `This computer has ${memory} of memory, shared with its GPU.`;
+  const gpuName = machine.gpuName ? ` (${machine.gpuName})` : '';
+  // Only AMD unified memory reports gpuMemoryBytes, sized from what ROCm can allocate rather than the RAM the OS sees.
+  // The probe does not say whether that is a firmware reserve (Windows, BIOS) or Linux GTT shared with the system, so
+  // the wording must hold for both.
+  if (machine.memoryKind === 'unified' && machine.gpuMemoryBytes) {
+    const usable = formatMemory(machine.gpuMemoryBytes);
+    return machine.confidence === 'low'
+      ? `This computer has ${memory} of RAM, and its GPU${gpuName} can use at least ${usable} of memory. The exact amount could not be confirmed.`
+      : `This computer has ${memory} of RAM, and its GPU${gpuName} can use ${usable} of memory.`;
+  }
+  if (machine.memoryKind === 'unified')
+    return machine.confidence === 'low'
+      ? `This computer has ${memory} of memory, shared with its GPU. How much of it the GPU can use could not be determined.`
+      : `This computer has ${memory} of memory, shared with its GPU.`;
   if (machine.memoryKind === 'discrete' && machine.gpuMemoryBytes)
-    return `This computer has ${memory} of RAM and ${formatMemory(machine.gpuMemoryBytes)} of GPU memory${
-      machine.gpuName ? ` (${machine.gpuName})` : ''
-    }.`;
+    return `This computer has ${memory} of RAM and ${formatMemory(machine.gpuMemoryBytes)} of GPU memory${gpuName}.`;
   return `This computer has ${memory} of RAM and no GPU memory was detected, so badges assume models run on the CPU.`;
 }
 
@@ -267,6 +278,7 @@ interface RowContext {
   installedNames: Set<string>;
   pulls: ModelPull[];
   runtimeReady: boolean;
+  chatOn?: ChatOn;
   onOpenInExplore: (repo: string) => void;
 }
 
@@ -281,8 +293,9 @@ function CuratedBuild({
   build: CuratedBuildView;
   context: RowContext;
 }) {
-  const { flow, target, rated, installedNames, pulls, runtimeReady, onOpenInExplore } = context;
+  const { flow, target, rated, installedNames, pulls, runtimeReady, chatOn, onOpenInExplore } = context;
   const canPull = target.management === 'allowed';
+  const installed = installedNames.has(build.ollamaRef.toLowerCase());
   const pull = pulls.find(candidate => candidate.key === pullKey(build.repo, build.pullBuildId, target.id));
   const failure = pull?.phase === 'failed' ? pull.error : null;
   // The row's own failed recheck outranks the pull's stored warning; a pullKey ties it to that pull.
@@ -309,11 +322,12 @@ function CuratedBuild({
         repo={build.repo}
         build={rowBuild(build, rated)}
         pull={pull}
-        installed={installedNames.has(build.ollamaRef.toLowerCase())}
+        installed={installed}
         runtimeReady={runtimeReady}
         canPull={canPull}
         preparing={flow.preparing === where}
         onPull={() => void flow.review(where, entry, build)}
+        onUse={installed ? (chatOn?.(build.ollamaRef) ?? null) : null}
       />
       {error && (
         <Alert
@@ -480,6 +494,7 @@ export function CuratedTab({
   target,
   installed,
   pulls,
+  chatOn,
   onRecheck,
   onOpenInExplore,
 }: {
@@ -487,6 +502,7 @@ export function CuratedTab({
   target: ModelTarget;
   installed: InstalledModelsResult | null;
   pulls: ModelPull[];
+  chatOn?: ChatOn;
   onRecheck: () => void;
   onOpenInExplore: (repo: string) => void;
 }) {
@@ -553,7 +569,7 @@ export function CuratedTab({
   const runtimeReady = status?.reachable === true;
   const rated = list.rating !== null;
   const subject = target.local ? 'this computer' : target.name;
-  const context: RowContext = { flow, target, rated, installedNames, pulls, runtimeReady, onOpenInExplore };
+  const context: RowContext = { flow, target, rated, installedNames, pulls, runtimeReady, chatOn, onOpenInExplore };
   const picks = list.picks.flatMap(pick => {
     const entry = list.entries.find(candidate => candidate.id === pick.entryId);
     const build = entry?.builds.find(candidate => candidate.id === pick.buildId);

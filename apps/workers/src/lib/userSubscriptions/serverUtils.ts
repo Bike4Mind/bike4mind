@@ -16,12 +16,12 @@ import { acquisitionFromStripeMetadata } from '@server/analytics/acquisition';
 
 import { Logger } from '@bike4mind/observability';
 import Stripe from 'stripe';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { resolveSubscriptionSource } from '@server/services/organizationService';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { findSubscriptionPlan } from '@client/lib/userSubscriptions/constants';
-import { resolveSubscriptionCycleCredits } from '@client/lib/userSubscriptions/cycleCredits';
+import { resolveSubscriptionCycleCredits } from '@bike4mind/server-utils/lib/userSubscriptions/cycleCredits';
 import { organizationService, creditService } from '@bike4mind/services';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { CreditHolderType, IOrganizationDocument, dayjs } from '@bike4mind/common';

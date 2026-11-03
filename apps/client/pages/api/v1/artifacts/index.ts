@@ -17,7 +17,7 @@ import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { ForbiddenError, NotFoundError, UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import { createArtifactSourceRefsGuard } from '@server/utils/artifactSourceRefsGuards';
 import { toPublicArtifact } from '@server/artifacts/toPublicArtifact';
-import { ARTIFACT_DB } from '@server/artifacts/artifactAccess';
+import { ARTIFACT_DB } from '@bike4mind/server-utils/artifacts/artifactAccess';
 
 const CURSOR_SCOPE = 'v1.artifacts';
 

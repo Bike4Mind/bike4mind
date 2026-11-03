@@ -38,7 +38,7 @@ import {
 import {
   AtlassianTokenManager,
   AtlassianReconnectRequiredError,
-} from '@server/integrations/jira/atlassianTokenManager';
+} from '@bike4mind/server-utils/integrations/jira/atlassianTokenManager';
 
 /**
  * Mask the secret for display (show only last 4 characters)

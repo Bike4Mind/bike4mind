@@ -17,6 +17,7 @@ import { SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
 import type { WorkspaceOwner } from '@shared/worktreeRemoval';
 import { isImportedMessageId, normalizeImportOrigin } from '@shared/claudeImport';
 import { storedReasoningEffortSetting } from './reasoningEffort';
+import { isPromptCacheTtl, type PromptCacheTtl } from '@bike4mind/common';
 import type { SessionWritesStore, StoredSessionWrites } from './tools/sessionScripts';
 import { assertScopeKey, migrateLegacySessions, sessionScopeKey, type SessionScope } from './sessionScope';
 
@@ -242,6 +243,12 @@ export interface ApprovalModeMemory {
   record(mode: ChatApprovalMode): Promise<void>;
 }
 
+/** The same for the prompt-cache lifetime; see PromptCacheTtlPreference. */
+export interface PromptCacheTtlMemory {
+  read(): Promise<PromptCacheTtl>;
+  record(ttl: PromptCacheTtl): Promise<void>;
+}
+
 /**
  * Conversations as one JSON file per session, mirroring the CLI's `~/.bike4mind/sessions`.
  *
@@ -303,7 +310,9 @@ export class SessionStore implements SessionWritesStore {
      * every conversation written before the setting existed. Read once per launch from the
      * environment, so a benchmark can move every untouched session without a rebuild.
      */
-    private readonly defaultReasoningEffort: ReasoningEffortSetting = 'default'
+    private readonly defaultReasoningEffort: ReasoningEffortSetting = 'default',
+    /** Absent means new conversations start at '5m' and a pick is not remembered. */
+    private readonly promptCacheTtls?: PromptCacheTtlMemory
   ) {}
 
   /**
@@ -385,6 +394,7 @@ export class SessionStore implements SessionWritesStore {
     // A mode the caller named is a spawn inheriting its parent's, already clamped there. Only
     // a conversation the user started themselves reads the preference.
     const approvalMode = options.approvalMode ?? (await this.approvalModes?.read()) ?? 'auto';
+    const promptCacheTtl = await this.promptCacheTtls?.read();
     const now = new Date().toISOString();
     const session: ChatSession = {
       id: randomUUID(),
@@ -398,6 +408,7 @@ export class SessionStore implements SessionWritesStore {
       mode,
       approvalMode,
       reasoningEffort: this.defaultReasoningEffort,
+      ...(promptCacheTtl ? { promptCacheTtl } : {}),
       ...(project && mode === 'code' ? { project } : {}),
       ...(options.grantedDirectories?.length ? { grantedDirectories: [...options.grantedDirectories] } : {}),
       ...(origin ? { origin } : {}),
@@ -685,6 +696,20 @@ export class SessionStore implements SessionWritesStore {
   }
 
   /**
+   * How long this conversation's prompt cache lives, remembered as the lifetime of the next new
+   * conversation. Leaves `updatedAt` alone, as setApprovalMode does.
+   */
+  async setPromptCacheTtl(id: string, ttl: PromptCacheTtl): Promise<ChatSessionSummary | null> {
+    const updated = await this.mutate(id, session => {
+      if (session.promptCacheTtl === ttl) return false;
+      session.promptCacheTtl = ttl;
+      return true;
+    });
+    if (updated) await this.promptCacheTtls?.record(ttl);
+    return updated;
+  }
+
+  /**
    * How much this conversation may do without asking.
    *
    * The ONLY writer of this field, and it is reached from exactly one place: the IPC channel
@@ -965,6 +990,7 @@ export class SessionStore implements SessionWritesStore {
               model: existing.model,
               approvalMode: existing.approvalMode,
               reasoningEffort: existing.reasoningEffort,
+              ...(existing.promptCacheTtl ? { promptCacheTtl: existing.promptCacheTtl } : {}),
             }
           : {};
         const imported = { ...existing, ...session, ...kept };
@@ -1180,6 +1206,7 @@ export class SessionStore implements SessionWritesStore {
       // A file with no stored effort keeps behaving the way it did before the picker existed:
       // it takes the launch default, which is the environment variable or nothing at all.
       reasoningEffort: storedReasoningEffortSetting(parsed.reasoningEffort) ?? this.defaultReasoningEffort,
+      ...(isPromptCacheTtl(parsed.promptCacheTtl) ? { promptCacheTtl: parsed.promptCacheTtl } : {}),
       ...(parsed.mode === 'code' && project ? { project } : {}),
       ...(grantedDirectories.length > 0 ? { grantedDirectories } : {}),
       ...(parsed.titleLocked ? { titleLocked: true } : {}),

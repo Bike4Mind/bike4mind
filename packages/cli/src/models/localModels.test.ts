@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { HubGgufBuild, HubModelDetail } from '@bike4mind/local-models';
-import { planPull, requireUnchangedLicenses, type HubClient, type ModelSourceDeps } from './localModels.js';
+import {
+  CancelledError,
+  planPull,
+  requireUnchangedLicenses,
+  type HubClient,
+  type ModelSourceDeps,
+} from './localModels.js';
 
 const build: HubGgufBuild = {
   id: 'model-Q4_K_M',
@@ -66,6 +72,21 @@ describe('planPull', () => {
 
     await expect(planPull('hf.co/org/repo:Q4_K_M', deps)).rejects.toThrow(/org\/repo/);
     expect(getModel).toHaveBeenCalledTimes(2);
+  });
+
+  it('is cancelled by Ctrl-C while the curated list is still being read', async () => {
+    for (const ref of ['qwen2.5:0.5b', 'hf.co/org/repo:Q4_K_M']) {
+      const controller = new AbortController();
+      const deps = {
+        curated: () => new Promise<never>(() => {}),
+        resolveRuntime: async () => ({ runtime: { capabilities: { canPull: true } }, source: 'ollama' }),
+        hub: () => hubWith(vi.fn(async () => detail())),
+        signal: controller.signal,
+      } as unknown as ModelSourceDeps;
+      const planned = planPull(ref, deps);
+      setTimeout(() => controller.abort(), 20);
+      await expect(planned).rejects.toBeInstanceOf(CancelledError);
+    }
   });
 });
 

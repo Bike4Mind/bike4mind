@@ -3,7 +3,10 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ApiKeyScope } from '@bike4mind/common';
-import { GENERIC_MODAL_API_KEY_SCOPES, genericApiKeyScopesFor } from '@client/app/constants/apiKeyScopes';
+import {
+  GENERIC_MODAL_API_KEY_SCOPES,
+  genericApiKeyScopesFor,
+} from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import AdminGenerateApiKeyModal from './AdminGenerateApiKeyModal';
 
 const h = vi.hoisted(() => ({

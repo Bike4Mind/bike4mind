@@ -23,6 +23,7 @@ import {
   deleteFileContract,
 } from './files.contract';
 import { createEmbeddingsContract } from './embeddings.contract';
+import { postSlackMessageContract } from './slackMessages.contract';
 import { createTextRefinementContract } from './textRefinement.contract';
 import { createDecisionContract, listDecisionModelsContract } from './decisions.contract';
 import { getQuestContract, listQuestFilesContract } from './quest.contract';
@@ -191,4 +192,5 @@ export const CONTRACTS: readonly EndpointContract[] = [
   rescanSkillMarketVersionContract,
   listSkillMarketReviewQueueContract,
   reviewSkillMarketVersionContract,
+  postSlackMessageContract,
 ];

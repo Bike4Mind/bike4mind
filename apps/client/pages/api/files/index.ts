@@ -11,7 +11,7 @@ import {
 } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
 import { accessibleBy } from '@casl/mongoose';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { unpublishUserArtifactsBySource } from '@server/services/publish/purgeUserPublishedArtifacts';
 import { baseApi } from '@server/middlewares/baseApi';
 import { adjustOwnerStorageInSession } from '@bike4mind/server-utils/s3/storageCharge';

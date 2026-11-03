@@ -6,7 +6,7 @@
  */
 
 import type { ILiveopsTriageConfigDocument } from '@bike4mind/database';
-import { resolveJiraConfig } from '../liveopsConnectionResolver';
+import { resolveJiraConfig } from '@bike4mind/server-utils/services/liveopsConnectionResolver';
 import { GitHubIssueTracker } from './githubIssueTracker';
 import { JiraIssueTracker } from './jiraIssueTracker';
 import type { IssueTrackerService, IssueTrackerLogger } from '@bike4mind/server-utils/services/issueTrackers/types';

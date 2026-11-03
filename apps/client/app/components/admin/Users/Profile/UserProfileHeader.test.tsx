@@ -112,17 +112,24 @@ describe('UserProfileHeader', () => {
     expect(screen.getByTestId('user-profile-adjust-credits-btn')).toBeInTheDocument();
   });
 
-  it.each(['editProfile', 'loginAs', 'message', 'subscription', 'role', 'productAccess', 'restrict', 'delete'])(
-    'the More menu reports %s',
-    async action => {
-      const { onAction } = renderHeader();
+  it.each([
+    'editProfile',
+    'loginAs',
+    'message',
+    'subscription',
+    'role',
+    'productAccess',
+    'restrict',
+    'shadowTier',
+    'delete',
+  ])('the More menu reports %s', async action => {
+    const { onAction } = renderHeader();
 
-      fireEvent.click(screen.getByTestId('user-profile-more-btn'));
-      fireEvent.click(await screen.findByTestId(`user-profile-menu-${action}-item`));
+    fireEvent.click(screen.getByTestId('user-profile-more-btn'));
+    fireEvent.click(await screen.findByTestId(`user-profile-menu-${action}-item`));
 
-      expect(onAction).toHaveBeenCalledWith(action);
-    }
-  );
+    expect(onAction).toHaveBeenCalledWith(action);
+  });
 
   it('the More menu opens the compliance record through onCompliance, not onAction', async () => {
     const { onAction, onCompliance } = renderHeader();
@@ -140,5 +147,46 @@ describe('UserProfileHeader', () => {
     fireEvent.click(screen.getByTestId('user-profile-more-btn'));
 
     expect(await screen.findByTestId('user-profile-menu-restrict-item')).toHaveTextContent('Lift restriction');
+  });
+
+  it('offers Move to limited tier to an unrestricted account', async () => {
+    renderHeader();
+    fireEvent.click(screen.getByTestId('user-profile-more-btn'));
+    expect(await screen.findByTestId('user-profile-menu-shadowTier-item')).toHaveTextContent('Move to limited tier');
+    expect(screen.queryByTestId('user-profile-shadow-tier-chip')).not.toBeInTheDocument();
+  });
+
+  it('offers Move to limited tier and no chip when the tier is none', async () => {
+    const throttle = { tier: 'none', source: 'admin', reason: 'ok', changedAt: new Date('2026-10-01') } as const;
+    renderHeader(buildProfile({ throttle }));
+    fireEvent.click(screen.getByTestId('user-profile-more-btn'));
+    expect(await screen.findByTestId('user-profile-menu-shadowTier-item')).toHaveTextContent('Move to limited tier');
+    expect(screen.queryByTestId('user-profile-shadow-tier-chip')).not.toBeInTheDocument();
+  });
+
+  it('offers Remove limited tier and shows a chip once shadowed', async () => {
+    const throttle = { tier: 'shadow', source: 'admin', reason: 'abuse', changedAt: new Date('2026-10-01') } as const;
+    renderHeader(buildProfile({ throttle }));
+    fireEvent.click(screen.getByTestId('user-profile-more-btn'));
+    expect(await screen.findByTestId('user-profile-menu-shadowTier-item')).toHaveTextContent('Remove limited tier');
+    expect(screen.getByTestId('user-profile-shadow-tier-chip')).toHaveTextContent('Limited tier');
+  });
+
+  it('marks the chip not in effect for an exempt shadowed user', () => {
+    const throttle = { tier: 'shadow', source: 'admin', reason: 'abuse', changedAt: new Date('2026-10-01') } as const;
+    renderHeader(buildProfile({ throttle, isAdmin: true }));
+    expect(screen.getByTestId('user-profile-shadow-tier-chip')).toHaveTextContent('Limited tier (not in effect)');
+  });
+
+  it('marks the chip not in effect for a Developer-tagged shadowed user', () => {
+    const throttle = { tier: 'shadow', source: 'admin', reason: 'abuse', changedAt: new Date('2026-10-01') } as const;
+    renderHeader(buildProfile({ throttle, tags: ['Developer'] }));
+    expect(screen.getByTestId('user-profile-shadow-tier-chip')).toHaveTextContent('Limited tier (not in effect)');
+  });
+
+  it('shows the plain chip for a normal shadowed user', () => {
+    const throttle = { tier: 'shadow', source: 'admin', reason: 'abuse', changedAt: new Date('2026-10-01') } as const;
+    renderHeader(buildProfile({ throttle }));
+    expect(screen.getByTestId('user-profile-shadow-tier-chip')).toHaveTextContent(/^Limited tier$/);
   });
 });

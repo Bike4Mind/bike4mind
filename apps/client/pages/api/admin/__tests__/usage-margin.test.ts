@@ -20,8 +20,12 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 const mockMarginByModelDay = vi.fn();
+const mockCostByFundingCohort = vi.fn();
 vi.mock('@bike4mind/database', () => ({
-  usageEventRepository: { marginByModelDay: (...a: unknown[]) => mockMarginByModelDay(...a) },
+  usageEventRepository: {
+    marginByModelDay: (...a: unknown[]) => mockMarginByModelDay(...a),
+    costByFundingCohort: (...a: unknown[]) => mockCostByFundingCohort(...a),
+  },
   userRepository: { findByIds: vi.fn().mockResolvedValue([]) },
 }));
 
@@ -63,5 +67,14 @@ describe('GET /api/admin/usage-margin', () => {
     const { res, run } = call({ query: { view: 'model-day', days: '14' } });
     await run();
     expect(res._getJSONData().rows).toHaveLength(1);
+  });
+
+  it('returns funding-cohort rows for the requested window', async () => {
+    const rows = [{ cohortWeek: null, accounts: 2, unattributedCostUsd: 0 }];
+    mockCostByFundingCohort.mockResolvedValue(rows);
+    const { res, run } = call({ query: { view: 'funding-cohort', days: '14' } });
+    await run();
+    expect(mockCostByFundingCohort).toHaveBeenCalledWith(14);
+    expect(res._getJSONData().rows).toEqual(rows);
   });
 });

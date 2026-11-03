@@ -1,5 +1,5 @@
 import { Agent, ApiKeyUsageLog, Organization, Quest, Session, UsageEvent, User, UserApiKey } from '@bike4mind/database';
-import { Subscription } from '@server/models/Subscription';
+import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import {
   buildExclusionRules,
   exclusionReason,

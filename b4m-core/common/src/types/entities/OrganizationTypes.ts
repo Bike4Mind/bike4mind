@@ -1,6 +1,6 @@
 import { IAppFileDocument, IShareableDocument, IShareableStaticMethods } from '.';
 import { IBaseRepository } from './BaseTypes';
-import { ICreditHolder, ICreditHolderMethods } from './CreditHolderTypes';
+import { ICreditHolder, ICreditHolderFlooredDebit, ICreditHolderMethods } from './CreditHolderTypes';
 import { IModelConfig } from './ModelConfigTypes';
 
 export interface IUserDetails {
@@ -94,7 +94,8 @@ export interface OrgMemberPopulation {
   stampOnly: string[];
 }
 
-export interface IOrganizationRepository extends IBaseRepository<IOrganizationDocument>, ICreditHolderMethods {
+export interface IOrganizationRepository
+  extends IBaseRepository<IOrganizationDocument>, ICreditHolderMethods, ICreditHolderFlooredDebit {
   shareable: IShareableStaticMethods<IOrganizationDocument>;
 
   /**

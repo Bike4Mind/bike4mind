@@ -24,6 +24,8 @@ export interface GearStatus {
   rewardPending?: boolean;
   /** Why rewardPending is true - drives UI copy. */
   pendingReason?: GearPendingReason;
+  /** Set with pendingReason 'too_new': the account age the payout waits for. */
+  minAccountAgeDays?: number;
   /** Presentation is server truth (code defaults + Manage Gears admin overrides). */
   title: string;
   tagline: string;

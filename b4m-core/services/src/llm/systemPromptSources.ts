@@ -218,6 +218,8 @@ export function relocatePerTurnContext(
  * final payload by reference. Returns the input array unchanged when history is empty, when that
  * message did not survive the build, or when it cannot carry the flag safely - it is a system
  * message, or its neighbour shares its role, which the stamp would stop the adapter merging with.
+ * A tool_result message is the exception: history after a tool-calling turn ends in one, the
+ * current prompt follows as another user turn, and the API joins the two either way.
  */
 export function markHistoryCacheAnchor(messages: IMessage[], lastHistoryMessage: IMessage | undefined): IMessage[] {
   if (!lastHistoryMessage) return messages;
@@ -226,8 +228,19 @@ export function markHistoryCacheAnchor(messages: IMessage[], lastHistoryMessage:
   const anchor = messages[index];
   const next = messages[index + 1];
   if (anchor.role === 'system') return messages;
-  if (next && next.role === anchor.role) return messages;
+  if (next && next.role === anchor.role && !isToolResultMessage(anchor)) return messages;
   return messages.map((message, i) => (i === index ? { ...message, cache: true } : message));
+}
+
+// The stamp leaves this content an array with no text block, so the Anthropic adapter still merges a
+// following string prompt into it and the breakpoint stays on the last tool_result.
+function isToolResultMessage(message: IMessage): boolean {
+  return (
+    message.role === 'user' &&
+    Array.isArray(message.content) &&
+    message.content.length > 0 &&
+    message.content.every(block => (block as { type?: unknown }).type === 'tool_result')
+  );
 }
 
 /**

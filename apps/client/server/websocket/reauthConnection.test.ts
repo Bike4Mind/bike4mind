@@ -30,7 +30,7 @@ vi.mock('@server/websocket/realtimeSession', () => ({
 vi.mock('@bike4mind/server-utils/websocket/closeConnection', () => ({
   closeConnection: (...args: unknown[]) => mocks.closeConnection(...args),
 }));
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   sendToConnection: (...args: unknown[]) => mocks.sendToConnection(...args),
   withWebSocketContext:
     (handler: (event: unknown, context: unknown, logger: unknown) => Promise<unknown>) =>

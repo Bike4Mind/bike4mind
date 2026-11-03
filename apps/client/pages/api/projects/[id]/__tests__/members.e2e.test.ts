@@ -10,7 +10,7 @@ import {
 import { Permission, KnowledgeType } from '@bike4mind/common';
 import { User, Project, FabFile, projectRepository, fabFileRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -38,8 +38,8 @@ vi.mock('@server/middlewares/baseApi', () => {
 
 // Wraps the real logEvent so case (c) below can force a rejection deep in the transaction without
 // touching the DB-facing behavior the other cases rely on.
-vi.mock('@server/utils/analyticsLog', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/utils/analyticsLog')>();
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/utils/analyticsLog')>();
   return { ...actual, logEvent: vi.fn(actual.logEvent) };
 });
 

@@ -24,7 +24,7 @@ import {
   type LocalModelFootprint,
   type OllamaMessage,
 } from './localContext';
-import { ServerCredentialsError } from '../modelServers/errors';
+import { ServerCredentialsError, ServerForbiddenError } from '../modelServers/errors';
 import type { CompletionStreamEvent } from './streamEvents';
 import { createThinkFilter, type ThinkSplit } from './thinkFilter';
 
@@ -51,6 +51,7 @@ const showSchema = z.object({
   model_info: z.record(z.string(), z.unknown()).nullable().optional(),
   parameters: z.string().optional(),
   template: z.string().optional().catch(undefined),
+  modelfile: z.string().optional().catch(undefined),
   /** The `think` values the model honors (booleans or effort names); absent when Ollama does not know. */
   thinking: z
     .object({ values: z.array(z.unknown()) })
@@ -68,8 +69,8 @@ export class LocalModelRemovedError extends Error {
 }
 
 async function ollamaError(response: Response, server?: RemoteOllama): Promise<Error> {
-  if (server && (response.status === 401 || response.status === 403))
-    return new ServerCredentialsError(server.label, server.hasCredentials());
+  if (server && response.status === 401) return new ServerCredentialsError(server.label, server.hasCredentials());
+  if (server && response.status === 403) return new ServerForbiddenError(server.label);
   const message = await httpError(response, server?.label ?? 'Ollama');
   // Ollama answers "model '...' not found" once the model is deleted, e.g. from the Models screen.
   if (response.status === 404 && /model .* not found/i.test(message)) return new LocalModelRemovedError();
@@ -170,6 +171,8 @@ export type ChatFetch = (url: typeof CHAT_URL, init: RequestInit) => Promise<Res
 export interface LocalModelFacts {
   name: string;
   modelInfo?: Record<string, unknown>;
+  /** `/api/show`'s Modelfile, whose FROM lines name the projector blobs. */
+  modelfile?: string;
   sizeBytes?: number;
   digest?: string;
 }
@@ -524,7 +527,12 @@ export class OllamaLocal {
 
   private async facts(name: string, inspection: Inspection): Promise<LocalModelFacts> {
     if (!tagFacts.has(this.key(name))) await this.tags().catch(() => null);
-    return { name, modelInfo: inspection.model_info ?? undefined, ...tagFacts.get(this.key(name)) };
+    return {
+      name,
+      modelInfo: inspection.model_info ?? undefined,
+      modelfile: inspection.modelfile,
+      ...tagFacts.get(this.key(name)),
+    };
   }
 
   /** One `/api/tags` per refresh; a changed digest is a different model under the same name. */
@@ -637,7 +645,7 @@ function blockText(content: unknown): string {
  * Maps the Anthropic-style blocks `ChatService` builds onto Ollama's chat format: tool calls on the
  * assistant message, one `role: 'tool'` message per result, screenshots in `images`.
  */
-function toMessages(messages: CompletionMessage[]): OllamaMessage[] {
+export function toMessages(messages: CompletionMessage[]): OllamaMessage[] {
   const toolNames = new Map<string, string>();
   return messages.flatMap(message => {
     const continues = message.continuesTurn ? { continuesTurn: true } : {};

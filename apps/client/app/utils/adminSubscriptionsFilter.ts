@@ -171,6 +171,8 @@ export type AdminSubscriptionRow = {
   periodStartsAt: string | null;
   periodEndsAt: string | null;
   canceledAt: string | null;
+  /** When a scheduled cancel takes effect: Stripe's cancelAt, or the period end under cancelAtPeriodEnd. */
+  cancelAt: string | null;
   createdAt: string | null;
 };
 

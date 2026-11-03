@@ -33,7 +33,7 @@ import {
   toSnapshot,
   type MarketActor,
   type MarketSettings,
-} from './market';
+} from '@bike4mind/server-utils/skillMarket/market';
 
 /**
  * Submit -> scan -> decide, for both a new listing's first version and every resubmit. The scan

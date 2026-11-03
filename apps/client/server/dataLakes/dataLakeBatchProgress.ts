@@ -10,7 +10,7 @@ import { dataLakeService } from '@bike4mind/services';
 import type { IDataLakeBatchDocument, IDataLakeBatchSummary } from '@bike4mind/common';
 import { recordBatchCompletion, recordTaxonomyDailyCapExceeded } from '@bike4mind/server-utils/utils/cloudwatch';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import {
   TAXONOMY_DAILY_CAP,
   TAXONOMY_RATE_LIMIT_WINDOW_MS,

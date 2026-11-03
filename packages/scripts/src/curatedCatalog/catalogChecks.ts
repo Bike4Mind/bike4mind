@@ -10,7 +10,7 @@ import {
 } from '@bike4mind/local-models';
 import { curatedDevKeys } from './devKey';
 
-export const KEYRING_PATH = 'apps/desktop/src/main/models/curated/keys.json';
+export const KEYRING_PATH = 'catalog/model-hub/keys.json';
 export const CANONICAL_KEYRING_URL = `https://raw.githubusercontent.com/Bike4Mind/bike4mind/main/${KEYRING_PATH}`;
 /** The largest step a publish may take over the live sequence; a first publish counts from 0. */
 export const MAX_SEQUENCE_STEP = 1000;
@@ -137,7 +137,7 @@ export function planPublish(candidate: CuratedCandidate, live: CuratedCandidate 
   const liveSequence = live?.catalog.sequence ?? 0;
   if (live && next.sequence === liveSequence && sameBytes(candidate.manifest, live.manifest))
     return { kind: 'already-live', liveSequence };
-  // Mirrors Desktop's CuratedSource: revocations apply before the sequence rule, so a live list signed only by keys
+  // Mirrors CuratedListSource in b4m-core/local-models: revocations apply before the sequence rule, so a live list signed only by keys
   // this list revokes is dropped, and a recovery signature is never revoked.
   const recover: PublishPlan | null =
     live &&

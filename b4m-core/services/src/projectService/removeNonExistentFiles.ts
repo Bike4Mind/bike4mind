@@ -65,8 +65,7 @@ export const removeNonExistentFiles = async (
     const hasProjectUsers = file.users && file.users.some(u => u.projectId === project.id);
 
     if (hasProjectUsers) {
-      file.users = file.users.filter(u => u.projectId !== project.id);
-      await db.fabFiles.update({ id: file.id, users: file.users });
+      await db.fabFiles.shareable.updateUserShares(file.id, { remove: { projectId: project.id } });
     }
   }
 

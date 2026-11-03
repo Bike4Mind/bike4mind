@@ -328,8 +328,8 @@ const noHeavyBarrelImportsInClient = [
 // apps/workers has no react/next/mui dependency (see apps/workers/package.json) and must stay that
 // way - it runs EventBridge Lambda handlers and a self-host job runner, neither of which renders
 // anything. Scoped to apps/client/app specifically (not @client/* broadly), since apps/workers
-// legitimately imports non-UI apps/client code (e.g. @client/lib/entitlements/registry) through the
-// same bridge described above.
+// legitimately imports non-UI apps/client code (e.g. @client/lib/userSubscriptions/constants) through
+// the same bridge described above.
 const WORKERS_NO_UI_MESSAGE =
   'apps/workers must never import UI code (React, Next.js, MUI). Workers are backend job/event ' +
   'runners; shared logic belongs in apps/client/server (imported via @server/*) or a shared package.';

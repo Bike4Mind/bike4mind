@@ -8,6 +8,7 @@ export const createSubscriber = async (data: {
   lastName: string;
   email: string;
   source?: SubscriberSource;
+  turnstileToken?: string;
 }) => {
   const response = await axios.post('/api/subscribers/create', data);
   return response.data;

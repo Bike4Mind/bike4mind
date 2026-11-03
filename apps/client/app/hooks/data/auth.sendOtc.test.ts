@@ -108,16 +108,32 @@ describe('useSendOTC challenge gate', () => {
 
   it('reports a failed challenge to the server with its reason and error code', async () => {
     getMock.mockResolvedValue({ data: { turnstileSiteKey: 'site' } });
-    solveMock.mockRejectedValue(new TurnstileError('error', 3, '300030'));
+    solveMock.mockRejectedValue(new TurnstileError('error', 3, '110600'));
     postMock.mockResolvedValue({ data: undefined });
     const { result } = renderHook(() => useSendOTC(), { wrapper });
     await expect(result.current.mutateAsync({ email: 'x@test.com' })).rejects.toMatchObject({
-      message: expect.stringContaining('verification check'),
+      message: expect.stringContaining('refresh and try again'),
     });
     expect(postMock).toHaveBeenCalledWith('/api/turnstile/client-failure', {
       action: 'otc-send',
       reason: 'error',
-      errorCode: '300030',
+      errorCode: '110600',
+      attempts: 3,
+    });
+  });
+
+  it('points a browser Cloudflare keeps rejecting at a regular browser instead of a refresh', async () => {
+    getMock.mockResolvedValue({ data: { turnstileSiteKey: 'site' } });
+    solveMock.mockRejectedValue(new TurnstileError('error', 3, '600010'));
+    postMock.mockResolvedValue({ data: undefined });
+    const { result } = renderHook(() => useSendOTC(), { wrapper });
+    const rejection = await result.current.mutateAsync({ email: 'x@test.com' }).catch(e => e);
+    expect(rejection.message).toContain('regular browser');
+    expect(rejection.message).not.toContain('refresh');
+    expect(postMock).toHaveBeenCalledWith('/api/turnstile/client-failure', {
+      action: 'otc-send',
+      reason: 'error',
+      errorCode: '600010',
       attempts: 3,
     });
   });

@@ -138,7 +138,7 @@ export enum ApiKeyScope {
    * which serves just what the key's owner can already see. Minted from the Skill Market's "Use in
    * Claude Code" dialog.
    * Not bound to an org: membership is re-checked on every request (`memberOrgIdsFor` in
-   * apps/client/server/skillMarket/market.ts), so a member who leaves or is removed loses that org's
+   * packages/server-utils/src/skillMarket/market.ts), so a member who leaves or is removed loses that org's
    * feed and zips while the key stays valid for their other orgs.
    */
   SKILLS_READ = 'skills:read',
@@ -187,6 +187,16 @@ export enum ApiKeyScope {
    * the Bob overlay package, with no implementation here.
    */
   BOB_RUN = 'bob:run',
+  /**
+   * Post a message, or a reply in a thread, to a Slack channel through the Bike4Mind bot
+   * (`POST /api/v1/slack/messages`). The caller never holds a Slack token. The scope alone opens
+   * nothing: the channel must sit in a Slack workspace connected to an organization the key's owner
+   * belongs to, and an org owner must have enabled that channel for API posting (`apiPostEnabled` on
+   * its SlackChannelConfig, optionally narrowed to listed key ids). Confined, so a posting key reaches
+   * nothing else; an org owner mints one from the organization's Slack integration settings. Public in
+   * the API reference, like {@link SKILLS_READ}, because customers mint it.
+   */
+  SLACK_POST = 'slack:post',
 }
 
 /**
@@ -216,7 +226,7 @@ export const isWellFormedApiKeyScope = (value: unknown): value is ApiKeyScopeVal
 
 /**
  * Scopes bound to a single dedicated flow: bridge pairing, the embed widget,
- * Overwatch ingest, QA run ingest, release-note automation. A key carrying ANY of these is *confined* and
+ * Overwatch ingest, QA run ingest, release-note automation, skill reads, Slack posting. A key carrying ANY of these is *confined* and
  * both ends of the system say the same thing about it in the same words:
  *  - at mint (createUserApiKey): a confined scope must be the key's only scope, so
  *    a confined key is never persisted alongside reach it would then lose;
@@ -232,16 +242,20 @@ export const CONFINED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
   ApiKeyScope.QA_INGEST,
   ApiKeyScope.SKILLS_READ,
   ApiKeyScope.RELEASE_NOTES_WRITE,
+  ApiKeyScope.SLACK_POST,
 ];
+
+/** Confined scopes customers mint themselves, so the public API reference documents them. */
+const CUSTOMER_MINTED_CONFINED_SCOPES: readonly ApiKeyScope[] = [ApiKeyScope.SKILLS_READ, ApiKeyScope.SLACK_POST];
 
 /**
  * Built-in scopes left out of the public API reference. An explicit list, not a rule: `admin:*`, the
- * confined integration scopes except `skills:read`, and the `optihashi:*` family. Documentation only -
+ * confined integration scopes except the customer-minted `skills:read` and `slack:post`, and the `optihashi:*` family. Documentation only -
  * it never affects which scopes a key may hold or what the runtime accepts.
  */
 export const UNDOCUMENTED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
   ApiKeyScope.ADMIN,
-  ...CONFINED_API_KEY_SCOPES.filter(scope => scope !== ApiKeyScope.SKILLS_READ),
+  ...CONFINED_API_KEY_SCOPES.filter(scope => !CUSTOMER_MINTED_CONFINED_SCOPES.includes(scope)),
   ApiKeyScope.OPTIHASHI_READ,
   ApiKeyScope.OPTIHASHI_COMPUTE,
 ];

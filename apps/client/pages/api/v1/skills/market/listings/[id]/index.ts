@@ -10,8 +10,8 @@ import {
 } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
-import { holdsApiKeyScope } from '@server/middlewares/apiKeyScopeGate';
-import { findListing } from '@server/skillMarket/market';
+import { holdsApiKeyScope } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
+import { findListing } from '@bike4mind/server-utils/skillMarket/market';
 import { buildListingDetail } from '@server/skillMarket/detail';
 import { withdrawOwnListing } from '@server/skillMarket/author';
 import { toPublicDetail } from '@server/skillMarket/publicView';

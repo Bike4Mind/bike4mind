@@ -15,7 +15,7 @@ import {
   assertProjectsWriteScope,
   PROJECTS_READ_OR_WRITE_SCOPES,
 } from '@server/projects/projectScopes';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { respond } from '@server/utils/respond';
 import { ProjectEvents, projectResponseSchema, redactSessionsForClient } from '@bike4mind/common';
 import { ActivityType } from '@bike4mind/server-utils/config/activityType';

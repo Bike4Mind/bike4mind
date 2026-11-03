@@ -5,7 +5,7 @@ import '@server/deepAgent/contributedToolbelts';
 import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 import { LlmWakeSteps } from '@bike4mind/server-utils/deepAgent/llmSteps';
 import { createDeepAgentToolMaterializer } from './toolMaterializer';
-import { loadLinkedAgentContext } from './missions';
+import { loadLinkedAgentContext } from '@bike4mind/server-utils/deepAgent/missions';
 import { bridgeWakeToSession } from '@bike4mind/server-utils/deepAgent/missionSessionBridge';
 import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@bike4mind/server-utils/deepAgent/resolveBackend';
 import { missionWakeMeter } from './wakeMetering';

@@ -2335,6 +2335,71 @@ describe('planCatalogWrites', () => {
       ]);
     });
 
+    it('refuses the alias of a dated snapshot a static adapter table ships', () => {
+      // The seed holds only the snapshot, so `base` does not; a named alias would
+      // otherwise list as a second "GPT-6 Astra" next to the static entry.
+      const result = introduce([astra()], { staticModelIds: new Set(['gpt-6-astra-2026-09-01']) });
+
+      expect(result.rows).toHaveLength(0);
+      expect(result.dropped).toContainEqual({
+        source: 'openai',
+        modelId: 'gpt-6-astra',
+        reason: 'id is the alias of a dated snapshot the catalog already holds',
+      });
+      expect(result.sightedModelIds.has('gpt-6-astra')).toBe(true);
+    });
+
+    it('refuses the alias of a dated snapshot the catalog holds', () => {
+      const base = asBase(
+        [],
+        [
+          seedRow(
+            {
+              id: 'gpt-6-astra-2026-09-01',
+              vendor: 'openai',
+              backend: 'openai',
+              type: 'text',
+              name: 'GPT-6 Astra',
+              contextWindow: 400_000,
+            },
+            ['identity', 'limits']
+          ),
+        ]
+      );
+
+      expect(introduce([astra()], { base }).rows).toHaveLength(0);
+    });
+
+    it('still introduces an alias the static adapter tables ship next to their snapshot', () => {
+      const result = introduce([astra()], { staticModelIds: new Set(['gpt-6-astra', 'gpt-6-astra-2026-09-01']) });
+
+      expect(result.dropped.map(drop => drop.reason)).not.toContain(
+        'id is the alias of a dated snapshot the catalog already holds'
+      );
+    });
+
+    it('still introduces an alias whose only dated sibling is unheld', () => {
+      const result = introduce([astra()], { staticModelIds: new Set(['gpt-6-nova-2026-09-01']) });
+
+      expect(result.diff.map(entry => entry.modelId)).toEqual(['gpt-6-astra']);
+    });
+
+    it('keeps updating an alias row the catalog already holds next to its snapshot', () => {
+      const introduced = introduce([astra()]);
+      const row = introduced.rows[0];
+      const result = introduce([astra({ contextWindow: 1_050_000 })], {
+        base: asBase([row]),
+        priorDiscoveryGroups: new Map([[row.modelId, row.ownedGroups]]),
+        staticModelIds: new Set(['gpt-6-astra-2026-09-01']),
+        runStartedAt: new Date(RUN_AT.getTime() + 60_000),
+      });
+
+      expect(result.dropped.map(drop => drop.reason)).not.toContain(
+        'id is the alias of a dated snapshot the catalog already holds'
+      );
+      expect(result.diff[0]).toMatchObject({ modelId: 'gpt-6-astra', kind: 'updated' });
+    });
+
     it('keeps updating a snapshot the catalog already holds', () => {
       const base = asBase(
         [],

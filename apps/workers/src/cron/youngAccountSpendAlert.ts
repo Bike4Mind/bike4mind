@@ -1,8 +1,10 @@
 import { Logger } from '@bike4mind/observability';
 import { getSettingsMap } from '@bike4mind/utils';
+import { classifyStage, escapeSlackText, toAbsoluteUrl } from '@bike4mind/common';
 import { connectDB, counterLogRepository, adminSettingsRepository } from '@bike4mind/database';
-import type { YoungAccountSpendSummary } from '@bike4mind/database';
-import { resolveSlackWebhookUrl } from '@server/integrations/slack/slack';
+import type { YoungAccountSpendSummary, YoungAccountSpender } from '@bike4mind/database';
+import { resolveSlackWebhookUrl } from '@bike4mind/server-utils/integrations/slack/slack';
+import { appUrlFromEnv } from '../events/alarmSlackMessage';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import axios from 'axios';
 import { Resource } from 'sst';
@@ -42,11 +44,46 @@ export function shouldAlertYoungAccountSpend(
   return summary.totalCredits > thresholds.credits || summary.accountCount > thresholds.accounts;
 }
 
+function slackLink(url: string, label: string): string {
+  return `<${escapeSlackText(url)}|${label}>`;
+}
+
+/** Same path as adminOwnerPath in apps/client/server/integrations/slack/subscriptionLifecycle.ts. */
+function adminUserLink(userId: string, appUrl: string | undefined): string | null {
+  if (!appUrl) return null;
+  return slackLink(toAbsoluteUrl(appUrl, `/admin/users/${encodeURIComponent(userId)}`), 'admin');
+}
+
+/** Non-production stages bill through Stripe test mode, whose dashboard lives under /test. */
+function stripeCustomerLink(stripeCustomerId: string | null, stage: string): string {
+  if (!stripeCustomerId) return 'no Stripe customer';
+  const modePrefix = classifyStage(stage) === 'production' ? '' : '/test';
+  return slackLink(
+    `https://dashboard.stripe.com${modePrefix}/customers/${encodeURIComponent(stripeCustomerId)}`,
+    'Stripe'
+  );
+}
+
+function formatSpenderLine(
+  spender: YoungAccountSpender,
+  rank: number,
+  stage: string,
+  appUrl: string | undefined
+): string {
+  const links = [adminUserLink(spender.userId, appUrl), stripeCustomerLink(spender.stripeCustomerId, stage)];
+  return (
+    `${rank}. \`${escapeSlackText(spender.userId)}\` ${spender.creditsSpent.toLocaleString('en-US')} credits ` +
+    `(created ${new Date(spender.accountCreatedAt).toISOString()}) - ` +
+    links.filter((link): link is string => link !== null).join(' | ')
+  );
+}
+
 export function formatYoungAccountSpendMessage(
   summary: YoungAccountSpendSummary,
   thresholds: YoungAccountSpendThresholds,
   window: { start: Date; end: Date },
-  stage: string
+  stage: string,
+  appUrl: string | undefined
 ): string {
   const lines = [
     `:rotating_light: *Young-account spend alert (${stage})*`,
@@ -55,11 +92,7 @@ export function formatYoungAccountSpendMessage(
       `across ${summary.accountCount} accounts ` +
       `(ceilings: ${thresholds.credits.toLocaleString('en-US')} credits, ${thresholds.accounts} accounts).`,
     `Top ${summary.topSpenders.length} by spend:`,
-    ...summary.topSpenders.map(
-      (spender, index) =>
-        `${index + 1}. \`${spender.userId}\` ${spender.creditsSpent.toLocaleString('en-US')} credits ` +
-        `(created ${new Date(spender.accountCreatedAt).toISOString()})`
-    ),
+    ...summary.topSpenders.map((spender, index) => formatSpenderLine(spender, index + 1, stage, appUrl)),
   ];
   return lines.join('\n');
 }
@@ -98,8 +131,13 @@ export async function handler(event: unknown) {
     throw new Error('young-account spend alert breached but no Slack webhook is configured');
   }
 
+  const appUrl = appUrlFromEnv();
+  if (!appUrl) {
+    // Still post: a spend alert without admin links beats no alert at all.
+    logger.error('young-account spend alert has no SERVER_DOMAIN; admin links omitted');
+  }
   await axios.post(webhookUrl, {
-    text: formatYoungAccountSpendMessage(summary, thresholds, { start, end }, Resource.App.stage),
+    text: formatYoungAccountSpendMessage(summary, thresholds, { start, end }, Resource.App.stage, appUrl),
   });
   return { status: 'alerted', totalCredits: summary.totalCredits, accountCount: summary.accountCount };
 }

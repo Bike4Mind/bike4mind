@@ -6,6 +6,7 @@ import { handler as sessionSummarizationHandler } from '@workers/events/sessionS
 import { handler as sessionContextSummarizationHandler } from '@workers/events/sessionContextSummarization';
 import { handler as sessionTaggingHandler } from '@workers/events/sessionTagging';
 import { handler as notebookCurationHandler } from '@workers/events/notebookCuration';
+import { requestRiskEvidenceRefresh } from '@server/auth/riskEvidence';
 
 /**
  * Self-host event routing.
@@ -21,8 +22,21 @@ import { handler as notebookCurationHandler } from '@workers/events/notebookCura
  */
 type EventHandler = (event: EventBridgeEvent<string, unknown>) => Promise<void>;
 
+const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;
+
+// Mirrors the hosted rule that also routes completion.completed to riskEvidenceQueue. The refresh never
+// throws, so it cannot block memento creation.
+const completionCompletedHandler: EventHandler = async event => {
+  const detail: unknown = event.detail;
+  const userId = typeof detail === 'object' && detail !== null && 'userId' in detail ? detail.userId : undefined;
+  if (typeof userId === 'string' && OBJECT_ID_PATTERN.test(userId)) {
+    await requestRiskEvidenceRefresh(userId, 'completion', console);
+  }
+  await createMementoHandler(event);
+};
+
 const HANDLERS: Record<string, EventHandler> = {
-  'completion.completed': createMementoHandler,
+  'completion.completed': completionCompletedHandler,
   'session.auto_name': sessionAutoNamingHandler,
   'session.summarize': sessionSummarizationHandler,
   'session.context_summarize': sessionContextSummarizationHandler,

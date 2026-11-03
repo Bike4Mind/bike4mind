@@ -1,6 +1,6 @@
 ---
 title: Local Model Commands
-description: Find, download, run and remove local models on Ollama with b4m models, including the fit check, --force, resuming a pull, and the MCP models_pull tool
+description: Find, download, run and remove local models on Ollama with b4m models, chat with models on Desktop's saved model servers, the fit check, --force, resuming a pull, and the MCP models_pull tool
 sidebar_position: 13
 ---
 
@@ -14,10 +14,13 @@ sidebar_position: 13
 | `b4m models search <terms>` | Search Hugging Face for GGUF repos |
 | `b4m models show <owner/repo>` | List a repo's builds with size, fit and the ref to pull |
 | `b4m models pull <ref>` | Download a model after showing its size, license and fit |
-| `b4m models use <name>` | Make an installed model the CLI's default |
+| `b4m models use <name>` | Make an installed model, or a model on a saved server, the CLI's default |
 | `b4m models rm <name>` | Remove an installed model |
+| `b4m models servers` | List the model servers saved in Desktop, with status |
+| `b4m models servers login <name>` | Give the CLI its own credential for a server |
+| `b4m models servers logout <name>` | Remove the CLI's credential for a server |
 
-`ls`, `search` and `show` print JSON with `--output-format json`.
+`ls`, `search`, `show` and `servers` print JSON with `--output-format json`. `ls`, `use`, `pull` and `rm` take `--server <name>` to act on a [Desktop model server](../features/desktop-model-servers.md) instead of the local Ollama.
 
 ## Pick and download a model
 
@@ -108,7 +111,7 @@ Default model: smollm2:135m on Ollama at http://127.0.0.1:11434
 Start chatting with: b4m
 ```
 
-`b4m`, `b4m -p` and the other CLI surfaces all use this one default model. `b4m models ls` marks it `default`.
+`b4m`, `b4m -p` and the other CLI surfaces all use this one default model. `b4m models ls` marks it `default`. To chat with a model on a server saved in Desktop, see [Chat with a model on a server](#chat-with-a-model-on-a-server).
 
 ## Remove a model
 
@@ -143,9 +146,75 @@ b4m models ls --ollama-host http://127.0.0.1:11500
 
 If the far machine has more memory than yours, add `--force` to pull a build rated too large.
 
+## Use the model servers saved in Desktop
+
+The CLI reads the server list you keep in Desktop (Settings > Model servers). It never changes that list. `b4m models servers` shows each server with its kind, address, access, whether the CLI has a credential for it, and whether it answers:
+
+```bash
+b4m models servers
+```
+
+```text
+NAME     KIND    ADDRESS                          ACCESS     CREDENTIALS                              STATUS
+shared   Ollama  http://127.0.0.1:11434           Manage     none                                     online (4 ms)
+vllm     vLLM    http://127.0.0.1:8001            Chat only  none                                     online (6 ms)
+gpu-box  Ollama  https://gpu-box.example.com      Manage     needed: b4m models servers login gpu-box  needs credentials
+```
+
+The NOTE column warns when a server uses plain http on a private network ("Unencrypted") and when a public server answers anyone without credentials ("Open to anyone"). Add `--check-tools` to send each OpenAI-compatible server a one-token request that declares a tool; a server that refuses tool calls gets a note saying what to change on it.
+
+Desktop keeps its credentials in your operating system's encrypted storage, which the CLI cannot read. For a server that needs one, type it once for the CLI. The input is hidden, and the CLI saves it only after the server accepts it:
+
+```bash
+b4m models servers login gpu-box
+```
+
+Pipe the credential instead with `--token-stdin`. The CLI keeps its copy in `~/.bike4mind/config.json`, which only you can read, next to its own sign-in tokens. It never prints a credential. `b4m models servers logout gpu-box` removes it, and also accepts the raw server id to clear a credential whose server was deleted in Desktop. The same address rules as in Desktop apply: credentials go over https, or over http only to this computer or a Tailscale address.
+
+Add `--server <name>` to act on one of these servers:
+
+```bash
+b4m models ls --server vllm
+```
+
+On an OpenAI-compatible server such as vLLM, `ls` shows each model once with its context length, the other names it answers to, and a LoRA adapter's base model. `pull` and `rm` work only on an Ollama server that Desktop lets you manage. A server set to Chat only in Desktop, and servers such as vLLM that serve a fixed set of models, refuse them. A pull still shows the size and license and asks first.
+
+### Chat with a model on a server
+
+`use --server` makes a model on one of these servers the CLI's default. A name the server also answers to is saved as the model's own name:
+
+```bash
+b4m models use qwen --server vllm
+```
+
+```text
+qwen is another name for qwen-small on vllm; saving qwen-small.
+Default model: qwen-small on vllm
+Start chatting with: b4m
+```
+
+The default remembers the server, so `b4m` and `b4m -p` send it there and never to a model with the same name somewhere else. In an interactive session, `/model` lists every server's models next to the hosted and Ollama models, named by server (`qwen-small on vllm`). The same model on two servers is two entries. Startup waits only for the default model's server; the other servers join `/model` as they answer. A server that is down, does not answer within 5 seconds, or was never logged into is left out without a startup line.
+
+Tools are on whenever the server supports them. When it does not, the turn still answers without tools and the CLI says once why and what to change:
+
+```text
+vllm was started without tool calling, so its chats run without tools. Restart vLLM with --enable-auto-tool-choice and a --tool-call-parser for the model, then start a new b4m session.
+```
+
+A server started with a small fixed context, such as vLLM's `--max-model-len 4096`, may not hold the CLI's instructions and tools. Then its chats run without tools and the notice names the context to restart with; if the instructions alone do not fit, the turn fails with the same hint. An Ollama model without tool support also chats without tools, with a notice, as does one whose tool support the CLI could not check.
+
+When the default model's server cannot be used, the CLI stops and says why instead of switching to another model:
+
+```text
+Error: Cannot chat with qwen-small on vllm: vllm needs credentials. Run: b4m models servers login vllm
+The CLI does not switch to another model on its own. To pick one, run: b4m models use <name>
+```
+
+The same happens when the server is down, does not answer within 60 seconds, or no longer serves the model. Start the server, log in, or pick another model with `b4m models use`. Fallback models set in the CLI's config never replace a model on a server, and a reply that stops arriving for 5 minutes ends with an error.
+
 ## Manage models from an MCP client
 
-When the CLI runs as an MCP server (`b4m mcp serve`), it offers `models_list`, `models_search`, `models_pull` and `models_remove` with the same checks. The host comes from `B4M_OLLAMA_HOST`, the saved host, or detection, as for `b4m models`.
+When the CLI runs as an MCP server (`b4m mcp serve`), it offers `models_list`, `models_search`, `models_pull` and `models_remove` with the same checks. The host comes from `B4M_OLLAMA_HOST`, the saved host, or detection, as for `b4m models`. `models_list`, `models_pull` and `models_remove` also take a `server` argument naming a Desktop model server, with the same credentials and the same pull and remove limits.
 
 `models_pull` never downloads on its own. A client that supports elicitation asks you directly, showing the size, every license and the fit. Any other client gets the preview and a command to run in your terminal, where the CLI asks you:
 

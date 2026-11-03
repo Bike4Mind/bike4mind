@@ -60,6 +60,15 @@ export function ChevronIcon({ open }: { open: boolean }) {
   );
 }
 
+/** Sessions branching off another one: a stem turning into an arrow. */
+export function SubSessionsIcon({ size }: { size?: number } = {}) {
+  return (
+    <Glyph size={size}>
+      <path d="M4.5 2.5v5.25A2.75 2.75 0 0 0 7.25 10.5h5.25M10 8l2.5 2.5L10 13" />
+    </Glyph>
+  );
+}
+
 /** Disclosure for a row that expands downward in place: points down closed, up open. */
 export function DisclosureIcon({ open }: { open: boolean }) {
   return (

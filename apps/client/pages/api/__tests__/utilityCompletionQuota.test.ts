@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 import type { Request, Response } from 'express';
 
 type Handler = (request: Request, response: Response) => Promise<unknown>;
@@ -35,7 +39,10 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', () => ({ apiKeyService: {}, fabFilesService: {}, recordOperationalUsage: vi.fn() }));
 vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({ OperationsModelService: {} }));
 vi.mock('@server/agents/assertAgentAccess', () => ({ assertAgentAccess: vi.fn() }));
-vi.mock('@client/server/agents/systemPromptRateLimit', () => ({ assertSystemPromptGenerationAllowed: vi.fn() }));
+vi.mock('@client/server/agents/systemPromptRateLimit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/server/agents/systemPromptRateLimit')>()),
+  assertSystemPromptGenerationAllowed: vi.fn(),
+}));
 vi.mock('@server/moderation/imageModerationIncidents', () => ({ imageModerationIncidents: {} }));
 vi.mock('@bike4mind/services/llm/imageModerationGate', () => ({ moderateImageOrThrow: vi.fn() }));
 vi.mock('@server/help/retrieval', () => ({ searchHelpContext: vi.fn() }));

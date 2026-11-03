@@ -8,6 +8,7 @@ import {
   dataLakeAccessGrantRepository,
   dataLakeProposalRepository,
 } from '@bike4mind/database';
+import { lakeProposalApproveResponseSchema, lakeProposalReviewResponseSchema } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { z } from 'zod';
@@ -16,6 +17,7 @@ import { admitProposedSource } from '@server/dataLakes/proposalAdmissionDeps';
 import { serializeLakeClaim } from '@server/dataLakes/serializeLakeClaim';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
+import { respond } from '@server/utils/respond';
 
 const ReviewInput = z.object({
   decision: z.enum(['approve', 'decline', 'restore']),
@@ -76,7 +78,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
         await dataLakeRepository.touchIfStable(lake.id);
         return result;
       });
-      return res.json({ data: restored });
+      return respond(res, lakeProposalReviewResponseSchema, { data: restored });
     }
 
     if (decision === 'decline') {
@@ -91,7 +93,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
         await dataLakeRepository.touchIfStable(lake.id);
         return result;
       });
-      return res.json({ data: declined });
+      return respond(res, lakeProposalReviewResponseSchema, { data: declined });
     }
 
     const { proposal: approved, fabFile } = await dataLakeService.approveDataLakeProposal(
@@ -109,7 +111,10 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       },
       { approverName: req.user?.name || req.user?.username || undefined }
     );
-    return res.json({ data: approved, fabFile: { id: fabFile.id, fileName: fabFile.fileName } });
+    return respond(res, lakeProposalApproveResponseSchema, {
+      data: approved,
+      fabFile: { id: fabFile.id, fileName: fabFile.fileName },
+    });
   });
 
 export const config = {

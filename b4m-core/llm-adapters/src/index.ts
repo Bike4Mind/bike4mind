@@ -606,6 +606,7 @@ export * from './dispatchModel';
 export * from './dispatchResolver';
 export * from './endUserId';
 export * from './mergeCatalog';
+export * from './openaiReasoning';
 export * from './providerAuth';
 export * from './routeTwinNames';
 export * from './wifTokenSource';
@@ -627,6 +628,7 @@ export * from './kimiBackend';
 export * from './kimiParams';
 export * from './localImageBackend';
 export * from './ollamaBackend';
+export * from './openaiCompatibleBackend';
 export * from './openaiBackend';
 export * from './xaiBackend';
 
@@ -645,7 +647,7 @@ export {
   MAX_QUEUED_PER_TENANT,
   DEFAULT_ACQUIRE_TIMEOUT_MS,
 } from './_anthropicSemaphore';
-export { isTerminalToolError, isTurnEndingTool } from './executeToolsBatch';
+export { isTerminalToolError, isTurnEndingTool, ToolBlockedError, toolFailureLogLevel } from './executeToolsBatch';
 export * from './PipelineTimer';
 export * from './realtimeVoicePricing';
 export {

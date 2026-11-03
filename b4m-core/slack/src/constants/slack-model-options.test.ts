@@ -65,6 +65,7 @@ describe('buildSlackModelOptionsFromDashboard', () => {
       'Moonshot (Kimi)',
       'DeepSeek',
       'Ollama',
+      'Local model server',
       'AWS',
       'Black Forest Labs',
       'Voyage AI',

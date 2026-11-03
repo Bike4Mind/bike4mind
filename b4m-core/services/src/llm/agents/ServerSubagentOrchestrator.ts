@@ -278,6 +278,7 @@ export interface ServerSubagentTracker {
  * Dependencies required by the server-side orchestrator
  */
 export interface ServerOrchestratorDeps {
+  substituteIdentity?: { substituteId: string; identityId: string; displayName?: string };
   userId: string;
   llm: ICompletionBackend;
   logger: Logger;
@@ -711,6 +712,12 @@ export class ServerSubagentOrchestrator {
       logger: this.deps.logger,
       llm: effectiveLlm,
       model: effectiveModel,
+      ...(this.deps.substituteIdentity && effectiveModel === this.deps.substituteIdentity.substituteId
+        ? {
+            modelIdentityId: this.deps.substituteIdentity.identityId,
+            modelDisplayName: this.deps.substituteIdentity.displayName,
+          }
+        : {}),
       tools: filteredTools,
       maxIterations,
       systemPrompt,

@@ -75,7 +75,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {},
 }));
 vi.mock('@bike4mind/services', () => ({ userService: userServiceMock }));
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   withWebSocketContext: (handler: unknown) => handler,
   sendToClient: sendToClientMock,
 }));

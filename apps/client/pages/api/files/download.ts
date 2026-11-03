@@ -6,9 +6,10 @@ import { accessibleBy } from '@casl/mongoose';
 import * as fs from 'fs';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { getContentFromFabfile, getMaxContentLength } from '@client/app/utils/fabFileUtils';
+import { getContentFromFabfile, MAX_CONTENT_LENGTH } from '@client/app/utils/fabFileUtils';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { FabFile } from '@bike4mind/database';
+import { adminSettingsRepository, FabFile } from '@bike4mind/database';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { isImageServeable, SupportedFabFileMimeTypes } from '@bike4mind/common';
 import { FILES_READ_SCOPES } from '@server/files/fileScopes';
 
@@ -54,7 +55,10 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
       // complete.
       const omitted: string[] = [];
       let exportedBytes = 0;
-      const maxContentLength = await getMaxContentLength();
+      // Read here, not via the client-side getMaxContentLength: that fetches through the browser API
+      // client, whose relative URL throws Invalid URL in Node and drops to the default.
+      const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+      const maxContentLength = getSettingsValue('MaxContentLength', settings, MAX_CONTENT_LENGTH);
 
       type ReadResult = { fileName: string; mimeType?: string; content?: string; note?: string };
 
@@ -80,7 +84,7 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
             : knowledge.fileUrl;
           // strict: a missing URL or a failed fetch must be distinguishable from empty text,
           // so the file can be skipped instead of archived as a 0-byte entry.
-          const content = await getContentFromFabfile({ fileUrl, mimeType, strict: true });
+          const content = await getContentFromFabfile({ fileUrl, mimeType, strict: true, maxContentLength });
           // Images and unsupported binaries extract to no text at all; an empty entry would
           // only look like a successful export of an empty document.
           return content

@@ -14,6 +14,7 @@ import { ServerSubagentOrchestrator, spentResultOf } from '../../agents/ServerSu
 import type { ModelAdmission } from '../../modelAdmission';
 import type {
   ServerAgentExecutionResult,
+  ServerOrchestratorDeps,
   ServerSubagentTracker,
   SubagentHandoffSignal,
   SubagentToolPermissions,
@@ -158,6 +159,8 @@ export interface DelegateToAgentToolDeps {
   checkMemberCreditCap?: () => boolean | Promise<boolean>;
   /** See `ServerOrchestratorDeps.checkInsufficientCredits`; spread into the grandchild tool like the cap check. */
   checkInsufficientCredits?: (model: string) => boolean | Promise<boolean>;
+  /** See `ServerOrchestratorDeps.substituteIdentity`. */
+  substituteIdentity?: ServerOrchestratorDeps['substituteIdentity'];
   /**
    * The parent run's tool-permission lists; forwarded to the orchestrator, see
    * `ServerOrchestratorDeps.toolPermissions`. Spread into the nested grandchild tool
@@ -373,6 +376,7 @@ export function createDelegateToAgentTool(deps: DelegateToAgentToolDeps): ICompl
         optInTools: deps.optInTools,
         checkMemberCreditCap: deps.checkMemberCreditCap,
         checkInsufficientCredits: deps.checkInsufficientCredits,
+        substituteIdentity: deps.substituteIdentity,
         toolPermissions: deps.toolPermissions,
         modelAdmission: deps.modelAdmission,
       });

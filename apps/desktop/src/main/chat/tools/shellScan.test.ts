@@ -335,6 +335,33 @@ describe('scanShell', () => {
     });
   });
 
+  describe('commands that only read', () => {
+    it.each([
+      'git status --short | head -20',
+      'git -C ../main log -1 --format=%h && git --no-pager diff --stat',
+      'git branch --show-current; git worktree list; git remote -v',
+      "cat package.json | jq .name; sed -n '1,5p' README.md",
+      'timeout 5 git status',
+    ])('reads only: %s', async command => {
+      expect((await scan(command)).readOnly).toBe(true);
+    });
+
+    it.each([
+      'git checkout main',
+      'git branch -D old',
+      'git -c core.pager=less log',
+      'git diff --output=out.patch',
+      'git status > status.txt',
+      'mkdir build',
+      'echo x | tee notes.txt',
+      'timeout 5 mkdir build',
+      'export GIT_DIR=/x; git status',
+      'node -e 1',
+    ])('does not only read: %s', async command => {
+      expect((await scan(command)).readOnly).toBe(false);
+    });
+  });
+
   describe('commands contained to this computer and read-only GitHub calls', () => {
     it.each([
       'gh pr view 123 --json title,state',
@@ -353,6 +380,16 @@ describe('scanShell', () => {
       "rg -n 'TODO' src | sort | uniq -c",
       'find . -name "*.ts" -newer package.json | head',
       'ls -la && pwd',
+      "cd .cache/sv; for s in a b; do echo \"== $s\"; iconv -f latin1 -t utf-8 $s.html | tr -d '\\r' | grep -n x | sed -n '1,45p' | cut -c1-400; done",
+      'set -euo pipefail; ls',
+      'set +x; set -o errexit -o nounset; pwd',
+      'sleep 45; gh pr checks 123',
+      'timeout 8 cat notes.txt',
+      'timeout -s KILL 5s grep -r TODO src',
+      "sed -n '1,45p' notes.txt",
+      'sed -e 10q notes.txt',
+      "sed -n '$p' a.txt b.txt",
+      'iconv -f latin1 -t utf-8 page.html | head',
     ])('contains %s', async command => {
       expect((await scan(command)).contained).toBe(true);
     });
@@ -410,6 +447,23 @@ describe('scanShell', () => {
       ['sort writing its output with an abbreviated option', 'sort --out=/Users/tester/.zshrc x.txt'],
       ['a function wrapping an outbound call', 'f() { cat a; }; f'],
       ['a mix where one part is not contained', 'git diff > /tmp/d && make'],
+      ['a loop rebinding an uppercase variable', 'for HOME in /tmp/x; do cat a; done'],
+      ['a loop rebinding a proxy variable', 'for http_proxy in x; do cat a; done'],
+      ['a loop whose body runs a program off the list', 'for s in a b; do node $s.js; done'],
+      ['a loop over a substitution that is not contained', 'for s in $(curl -s x); do echo $s; done'],
+      ['set storing positional arguments', 'set -- a b; echo $1'],
+      ['set with no arguments, which prints every variable', 'set'],
+      ['timeout wrapping a program off the list', 'timeout 8 npx vite'],
+      ['timeout with no duration', 'timeout cat notes.txt'],
+      ['sed editing in place', "sed -i '' 's/a/b/' notes.txt"],
+      ['sed with a substitution, whose e flag runs a program', "sed 's/x/date/e' notes.txt"],
+      ['sed running a command', "sed -n '1e date' notes.txt"],
+      ['sed writing a file', "sed -n 'w out.txt' notes.txt"],
+      ['sed reading its script from a file', 'sed -f script.sed notes.txt'],
+      ['sed with a script the shell expands', 'sed -n "1,$p" notes.txt'],
+      ['sed with two scripts', 'sed -e 1p -e 2p notes.txt'],
+      ['iconv writing a file', 'iconv -f latin1 -t utf-8 -o out.txt page.html'],
+      ['iconv writing a file longhand', 'iconv -f latin1 -t utf-8 --output=out.txt page.html'],
       ['an empty script', ''],
       ['a comment-only script', '# nothing to run'],
     ])('does not contain %s', async (_why, command) => {

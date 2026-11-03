@@ -12,7 +12,7 @@ import { NotFoundError, BadRequestError } from '@bike4mind/server-utils/utils/er
 import { sreErrorTrackingRepository } from '@bike4mind/database';
 import { parseIssueNumberFromUrl } from '@bike4mind/server-utils/integrations/github/sreWebhookDispatch';
 import { SRE_DEFAULT_REPO_SLUG } from '@bike4mind/common';
-import { GitHubService } from '@server/services/githubService';
+import { GitHubService } from '@bike4mind/server-utils/services/githubService';
 import { Logger } from '@bike4mind/observability';
 
 const handler = adminApi({ adminPermissions: { GET: 'support:read' } }).get(

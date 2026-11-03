@@ -6,18 +6,20 @@ import {
   usageEventRepository,
   userRepository,
   withTransaction,
+  newAccountSpendCapAdapters,
 } from '@bike4mind/database';
 import { creditService } from '@bike4mind/services';
 import type { CreditLedgerEntry } from '@bike4mind/services/creditService';
 import type { ILogger } from '@bike4mind/observability';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMembership';
+import { assertApiKeyOrgMembership } from '@bike4mind/server-utils/billing/assertApiKeyOrgMembership';
+import { attributeToRequestApiKey } from '@server/billing/attributeToRequestApiKey';
 
-import { resolveRequestBillingOrgId } from './resolveRequestBillingOrgId';
+import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 import { checkFreeTierDailySpendCap } from './freeTierDailyCapGate';
 
-export { resolveRequestBillingOrgId } from './resolveRequestBillingOrgId';
+export { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
 export type { CreditLedgerEntry };
 
 /**
@@ -52,7 +54,8 @@ export type CreditReservation = {
 /** The slice of an authenticated request billing reads. */
 type BillingRequest = {
   user?: IUserDocument;
-  apiKeyInfo?: Pick<Express.ApiKeyInfo, 'billingOwnerType' | 'organizationId'>;
+  apiKeyInfo?: Pick<Express.ApiKeyInfo, 'billingOwnerType' | 'organizationId'> &
+    Partial<Pick<Express.ApiKeyInfo, 'keyId'>>;
   logger: ILogger;
 };
 
@@ -61,6 +64,7 @@ export const holdAdapters = {
   organizations: organizationRepository,
   creditTransactions: creditTransactionRepository,
   deductCredits: creditService.deductCreditsWithOrgSupport,
+  newAccountSpendCap: newAccountSpendCapAdapters,
 };
 
 type ReserveRequestCreditsParams = {
@@ -153,7 +157,10 @@ export async function reserveRequestCredits({
     hold: { ...hold, pendingHoldId: pending.id },
     refund: () => releaseHeldCredits({ ...hold, pendingHoldId: pending.id }, { featureLabel, logger: req.logger }),
     settle: (chargedCredits, entry) =>
-      settlePendingHold(hold, pending.id, chargedCredits, entry, { featureLabel, logger: req.logger }),
+      settlePendingHold(hold, pending.id, chargedCredits, attributeToRequestApiKey(entry, req), {
+        featureLabel,
+        logger: req.logger,
+      }),
   };
 }
 

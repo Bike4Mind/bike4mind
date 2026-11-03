@@ -1,4 +1,4 @@
-import { postMessageToSlack } from '@server/integrations/slack/slack';
+import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { adminAuditLogRepository } from '@bike4mind/database';
 import { adminAuditService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database/auth';

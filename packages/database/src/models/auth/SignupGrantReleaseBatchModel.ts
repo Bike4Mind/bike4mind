@@ -99,4 +99,29 @@ export const signupGrantReleaseRepository = {
       createdAt: user.createdAt,
     }));
   },
+  /** Count of the held grants listHeld pages through, without payableOnly. */
+  async countHeld(reason: HeldSignupGrantReason = 'budget_exhausted') {
+    return User.countDocuments({
+      signupGrantHeldReason: { $eq: reason, $type: 'string' },
+      tags: PENDING_FREE_CREDITS_TAG,
+    });
+  },
+  /** Payable accounts whose held payment unlock has settled, in ObjectId order; `afterId` pages. */
+  async listDueHeldUnlocks(input: { now: Date; afterId?: string; limit: number }) {
+    const users = await User.find({
+      // $type repeats the user_signupGrant_heldUnlock_releaseAt partial filter so the planner can pick that index.
+      'signupGrant.heldUnlock.releaseAt': { $lte: input.now, $type: 'date' },
+      emailVerified: true,
+      isBanned: { $ne: true },
+      disputePending: { $ne: true },
+      isModerated: { $ne: true },
+      'moderation.status': { $ne: 'suspended' },
+      ...(input.afterId ? { _id: { $gt: input.afterId } } : {}),
+    })
+      .sort({ _id: 1 })
+      .limit(input.limit)
+      .select('_id')
+      .lean();
+    return users.map(user => String(user._id));
+  },
 };

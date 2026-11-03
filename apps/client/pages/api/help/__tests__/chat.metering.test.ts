@@ -309,6 +309,14 @@ describe('POST /api/help/chat metering', () => {
       expect(m.findOrg).not.toHaveBeenCalled();
       expect(m.recordOperationalUsage.mock.calls[0][0].organization).toBeNull();
     });
+
+    it('records the authenticating API key on the embedding charge', async () => {
+      m.enforce = false;
+
+      await call({ apiKeyInfo: { keyId: 'key-1', billingOwnerType: 'User' } });
+
+      expect(m.recordOperationalUsage.mock.calls[0][0]).toMatchObject({ apiKeyId: 'key-1' });
+    });
   });
 
   it('records no embedding when retrieval did not embed', async () => {

@@ -32,7 +32,7 @@ vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test
 
 vi.mock('@server/managers/fabFileManager', () => ({ getFabFileById: h.getFabFileById }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: h.sendToClient }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: h.sendToClient }));
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@server/dataLakes/dataLakeScopes', () => ({ assertDataLakeWriteScope: h.assertDataLakeWriteScope }));

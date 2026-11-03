@@ -9,7 +9,7 @@ import {
   withTransaction,
   importHistoryJobRepository,
 } from '@bike4mind/database';
-import { withContext } from '@server/s3/utils';
+import { withContext } from '@bike4mind/server-utils/s3/utils';
 import { Resource } from 'sst';
 import { updateImportProgress, markImportComplete, markImportFailed } from '@server/utils/importHistoryProgress';
 

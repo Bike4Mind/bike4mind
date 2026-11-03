@@ -1,5 +1,5 @@
 import type { PremiumNavDescriptor } from '@client/app/premiumContract';
-import { normalizeTag } from '@client/lib/entitlements/registry';
+import { normalizeTag } from '@bike4mind/server-utils/lib/entitlements/registry';
 
 /**
  * Visibility filter for premium-overlay nav launch points (empty array in the

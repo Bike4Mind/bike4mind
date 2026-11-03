@@ -67,6 +67,7 @@ const makeRow = (index: number, overrides: Partial<AdminSubscriptionRow> = {}): 
   periodStartsAt: '2026-06-01T00:00:00.000Z',
   periodEndsAt: '2026-07-01T00:00:00.000Z',
   canceledAt: null,
+  cancelAt: null,
   createdAt: new Date(Date.UTC(2026, 0, 1) - index * 1000).toISOString(),
   ...overrides,
 });

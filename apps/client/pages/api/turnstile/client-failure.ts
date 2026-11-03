@@ -1,4 +1,4 @@
-import { TURNSTILE_ACTION_OAUTH_START, TURNSTILE_ACTION_OTC_SEND } from '@bike4mind/common';
+import { TURNSTILE_ACTION_OAUTH_START, TURNSTILE_ACTION_OTC_SEND, TURNSTILE_ACTION_SUBSCRIBE } from '@bike4mind/common';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
@@ -7,7 +7,7 @@ import { z } from 'zod';
 
 // Must stay in sync with TurnstileFailureReason in apps/client/app/utils/turnstile.ts.
 const turnstileClientFailureSchema = z.object({
-  action: z.enum([TURNSTILE_ACTION_OTC_SEND, TURNSTILE_ACTION_OAUTH_START]),
+  action: z.enum([TURNSTILE_ACTION_OTC_SEND, TURNSTILE_ACTION_OAUTH_START, TURNSTILE_ACTION_SUBSCRIBE]),
   reason: z.enum(['script-error', 'script-timeout', 'unavailable', 'error', 'expired', 'timeout', 'render-failed']),
   // Cloudflare's client-side error codes are short numerics (e.g. 110200, 300030).
   errorCode: z

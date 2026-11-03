@@ -1,5 +1,6 @@
 export const API_KEY_USER_CAP_ERROR_CODE = 'api_key_user_cap';
 export const API_KEY_TRUST_REQUIRED_ERROR_CODE = 'api_key_trust_required';
+export const ACCOUNT_TRUST_REQUIRED_ERROR_CODE = 'account_trust_required';
 export const AGENT_LIMIT_REACHED_ERROR_CODE = 'agent_limit_reached';
 export const UNKNOWN_MODEL_ERROR_CODE = 'unknown_model';
 export const MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE = 'model_requires_subscription';
@@ -31,6 +32,8 @@ export const API_ERROR_CODES = [
   API_KEY_USER_CAP_ERROR_CODE,
   /** The account is not yet trusted to mint (more) API keys; remediation is verifying email, waiting, purchasing or admin approval. */
   API_KEY_TRUST_REQUIRED_ERROR_CODE,
+  /** The account is not yet trusted for outbound actions (email, invites, tools, publishing); remediation is verifying email, waiting, purchasing or admin approval. */
+  ACCOUNT_TRUST_REQUIRED_ERROR_CODE,
   /** The user owns as many agents as their tier allows; remediation is deleting one or upgrading. */
   AGENT_LIMIT_REACHED_ERROR_CODE,
   /** The caller cannot afford the request; remediation is buying credits. */
@@ -126,6 +129,13 @@ export const API_ERROR_CODES = [
   'local_changes',
   /** The caller already has a skill with that name; retry with another `name`. */
   'name_taken',
+  // Slack posting (POST /api/v1/slack/messages); see SLACK_MESSAGE_ERROR_CODES in schemas/slackMessagesApi.ts.
+  /** The Bike4Mind bot is not a member of the channel; remediation is inviting it (`/invite @<bot name>`). */
+  'slack_bot_not_in_channel',
+  /** The channel is archived, so nothing can be posted to it. */
+  'slack_channel_archived',
+  /** The channel restricts who may post or where (announcement-only or thread-only), and refused the bot. */
+  'slack_channel_restricted',
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];

@@ -8,7 +8,7 @@ import { organizationRepository } from '@bike4mind/database/infra';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { ForbiddenError } from '@server/utils/errors';
 import { publicAppUrl } from '@server/utils/validators';
-import { memberOrgIdsFor } from '@server/skillMarket/market';
+import { memberOrgIdsFor } from '@bike4mind/server-utils/skillMarket/market';
 import { buildClaudeMarketplace } from '@server/skillMarket/claudeMarketplace';
 
 const handler = nextRouteForContract(getClaudeMarketplaceContract).get(async (req, res) => {

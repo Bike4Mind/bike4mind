@@ -11,6 +11,8 @@ import {
 } from '@tanstack/react-router';
 import {
   adminRoute,
+  adminSubscriptionByStripeIdRoute,
+  adminSubscriptionDetailRoute,
   adminUserProfileRoute,
   billingRoute,
   feedbackRollupRoute,
@@ -284,5 +286,28 @@ describe('admin user profile route', () => {
     const validate = (search: Record<string, unknown>) => adminUserProfileRoute.options.validateSearch(search);
     expect(validate({ tab: 'admin' })).toEqual({ tab: 'admin' });
     expect({ tab: 'nope', ...validate({ tab: 'nope' }) }.tab).toBeUndefined();
+  });
+});
+
+describe('admin subscription detail routes', () => {
+  it('mounts both under the admin layout', () => {
+    const layout = adminRoute.options.getParentRoute();
+    expect(adminSubscriptionDetailRoute.options.getParentRoute()).toBe(layout);
+    expect(adminSubscriptionByStripeIdRoute.options.getParentRoute()).toBe(layout);
+    expect(adminSubscriptionDetailRoute.fullPath).toBe('/admin/subscriptions/$subscriptionId');
+    expect(adminSubscriptionByStripeIdRoute.fullPath).toBe('/admin/subscriptions/by-stripe/$stripeSubscriptionId');
+  });
+
+  it('deep-links a tab through ?tab=', () => {
+    const validate = (search: Record<string, unknown>) => adminSubscriptionDetailRoute.options.validateSearch(search);
+    expect(validate({ tab: 'admin' })).toEqual({ tab: 'admin' });
+    expect(validate({ tab: 'overview' })).toEqual({ tab: undefined });
+    expect(validate({ tab: 'nope' })).toEqual({ tab: undefined });
+  });
+
+  it('matches the static by-stripe path before the $subscriptionId param', () => {
+    const match = (pathname: string) => router.getMatchedRoutes(pathname)[2]?.id;
+    expect(match('/admin/subscriptions/by-stripe/sub_123')).toBe(adminSubscriptionByStripeIdRoute.id);
+    expect(match('/admin/subscriptions/0123456789abcdef01234567')).toBe(adminSubscriptionDetailRoute.id);
   });
 });

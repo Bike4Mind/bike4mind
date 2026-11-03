@@ -61,12 +61,12 @@ vi.mock('@server/s3/moderationScan', () => ({
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ getMetadata: getMetadataMock }),
 }));
-vi.mock('@server/s3/utils', () => ({
+vi.mock('@bike4mind/server-utils/s3/utils', () => ({
   decodeS3Key: (k: string) => decodeURIComponent(k.replace(/\+/g, ' ')),
   findWithRetry: <T>(fn: () => Promise<T>) => fn(),
 }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: sendToQueueMock }));
-vi.mock('@server/dataLakes/recomputeStatsForUploadedFile', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/recomputeStatsForUploadedFile', () => ({
   recomputeStatsForUploadedFile: recomputeUploadedMock,
 }));
 vi.mock('sst', () => ({
@@ -354,7 +354,7 @@ describe('POST /api/internal/s3/object-created', () => {
     await handler(makeReq('secret-token', 'uploads/a.pdf', { size: 5, eTag: 'etag-b' }), makeRes());
     await vi.waitFor(() => expect(moderateFilesMock).toHaveBeenCalled());
 
-    expect(recordLandedMock).toHaveBeenCalledWith('ff1', 'uploads/a.pdf');
+    expect(recordLandedMock).toHaveBeenCalledWith('ff1', 'uploads/a.pdf', expect.anything());
     expect(recordLandedMock.mock.invocationCallOrder[0]).toBeLessThan(moderateFilesMock.mock.invocationCallOrder[0]);
   });
 
@@ -362,7 +362,7 @@ describe('POST /api/internal/s3/object-created', () => {
     getMetadataMock.mockResolvedValue({ size: 5, etag: '"etag-c"' });
     await handler(makeReq('secret-token', 'uploads/a.pdf', { size: 5 }), makeRes());
 
-    expect(recordLandedMock).toHaveBeenCalledWith('ff1', 'uploads/a.pdf');
+    expect(recordLandedMock).toHaveBeenCalledWith('ff1', 'uploads/a.pdf', expect.anything());
   });
 
   it('retries before scanning or charging when current-version reconciliation fails', async () => {

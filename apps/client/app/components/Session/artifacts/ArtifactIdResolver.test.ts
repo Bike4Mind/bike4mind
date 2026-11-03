@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import { getCachedArtifactId, getProvisionalArtifactId, useArtifactIdResolver } from './ArtifactIdResolver';
-import { getArtifactTimestamp } from '@client/app/utils/artifactParser';
+import { getArtifactTimestamp } from '@bike4mind/server-utils/app/utils/artifactParser';
 import { findExistingArtifactId } from '@client/app/utils/artifactPersistence';
 
 vi.mock('@client/app/utils/artifactPersistence', () => ({

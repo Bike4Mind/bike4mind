@@ -11,7 +11,7 @@
  * different retry policy, timeout, and permission set.
  */
 
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { SreJobMessageSchema } from '@bike4mind/common';
 import { runSreAnalysis } from './sreAnalysis';
 import { runSreRevision } from './sreRevision';

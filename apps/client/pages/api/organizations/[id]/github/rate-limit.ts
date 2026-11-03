@@ -13,7 +13,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
-import { GitHubService } from '@server/services/githubService';
+import { GitHubService } from '@bike4mind/server-utils/services/githubService';
 import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { isNearLimit } from '@bike4mind/common';
