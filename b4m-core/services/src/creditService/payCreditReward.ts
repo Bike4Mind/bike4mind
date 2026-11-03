@@ -22,8 +22,8 @@ export type HeldCreditRewardRow = HeldCreditRewardInput & { status: 'held' | 'pa
 export interface HeldCreditRewardRepository {
   hold(reward: HeldCreditRewardInput): Promise<void>;
   findByTransactionIds(transactionIds: string[]): Promise<HeldCreditRewardRow[]>;
-  /** Credits of the oldest held reward, or null when none is queued. */
-  oldestHeldCredits(): Promise<number | null>;
+  /** Credits of the oldest held reward of at most `maxCredits`, or null when none is queued. */
+  oldestHeldCredits(maxCredits?: number): Promise<number | null>;
   listHeld(limit: number): Promise<HeldCreditRewardRow[]>;
   settle(transactionId: string, status: 'paid' | 'void'): Promise<void>;
 }
@@ -117,8 +117,7 @@ export async function payCreditReward(
   // A voided row was refused at release; answering 'duplicate' would read as claimed and loop the user.
   if (own) return { outcome: own.status === 'held' ? 'queued' : own.status === 'void' ? 'blocked' : 'duplicate' };
 
-  const oldest = await adapters.heldRewards.oldestHeldCredits();
-  if (!(await queueHeadBlocks(adapters, 'trickle', oldest, reward.credits))) {
+  if (!(await queueHeadBlocks(adapters, 'trickle', adapters.heldRewards, reward.credits))) {
     const paid = await payNow(reward, adapters);
     if (paid.status === 'paid') return { outcome: 'paid', creditTransactionId: paid.creditTransactionId };
     if (paid.status === 'duplicate') return { outcome: 'duplicate' };

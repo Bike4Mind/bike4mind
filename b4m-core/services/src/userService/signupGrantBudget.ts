@@ -64,6 +64,8 @@ export async function resolvePoolBudget(
 
 export const signupGrantBudgetDay = (now: Date = new Date()) => now.toISOString().slice(0, 10);
 
+type HeldRewardQueue = NonNullable<NonNullable<SignupProtection['grantBudget']>['heldRewards']>;
+
 const counterKey = (pool: SignupGrantPool, day: string) => `${pool}:${day}`;
 
 async function alertCrossing(
@@ -89,22 +91,23 @@ async function alertCrossing(
 
 /**
  * True when a newer grant must wait behind the queue: the pool's day could no longer cover the oldest
- * held reward (`oldestHeld` credits) once `amount` is drawn. No queue, or no wired budget, never blocks.
- * A head larger than the whole daily budget can never be paid that day, so it does not block either
- * (releaseHeldCreditRewards skips it the same way).
+ * held reward that fits the daily budget once `amount` is drawn. No queue, or no wired budget, never
+ * blocks. Rewards larger than the whole budget are passed over (releaseHeldCreditRewards skips them the
+ * same way), so the head is the oldest reward the release can actually pay.
  */
 export async function queueHeadBlocks(
   adapters: BudgetAdapters,
   pool: SignupGrantPool,
-  oldestHeld: number | null | undefined,
+  heldRewards: HeldRewardQueue | undefined,
   amount: number,
   dayOverride?: string
 ): Promise<boolean> {
   const budgetConfig = adapters.signupProtection?.grantBudget;
-  if (!budgetConfig || !oldestHeld) return false;
+  if (!budgetConfig || !heldRewards) return false;
   const day = dayOverride ?? signupGrantBudgetDay(budgetConfig.now?.());
   const { budget } = await resolvePoolBudget(adapters.adminSettings, pool);
-  if (budget > 0 && oldestHeld > budget) return false;
+  const oldestHeld = await heldRewards.oldestHeldCredits(budget > 0 ? budget : undefined);
+  if (!oldestHeld) return false;
   const spent = await budgetConfig.repository.getSpent(counterKey(pool, day));
   return budget - spent < oldestHeld + amount;
 }

@@ -92,7 +92,7 @@ export type SignupGrantBudget = {
    * Queued gear/referral rewards (creditService.payCreditReward). A daily drip waits only when the trickle
    * pool could no longer cover the oldest of them after the drip (queueHeadBlocks).
    */
-  heldRewards?: { oldestHeldCredits(): Promise<number | null> };
+  heldRewards?: { oldestHeldCredits(maxCredits?: number): Promise<number | null> };
   /** Clock override for the budget's UTC day; tests only. */
   now?: () => Date;
 };

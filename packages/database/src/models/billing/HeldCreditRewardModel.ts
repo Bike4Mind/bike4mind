@@ -62,8 +62,11 @@ export const heldCreditRewardRepository = {
     const rows = await HeldCreditRewardModel.find({ transactionId: { $in: transactionIds } }).lean();
     return rows.map(toReward);
   },
-  async oldestHeldCredits(): Promise<number | null> {
-    const row = await HeldCreditRewardModel.findOne({ status: 'held' })
+  async oldestHeldCredits(maxCredits?: number): Promise<number | null> {
+    const row = await HeldCreditRewardModel.findOne({
+      status: 'held',
+      ...(maxCredits !== undefined ? { credits: { $lte: maxCredits } } : {}),
+    })
       .sort({ heldAt: 1, _id: 1 })
       .select('credits')
       .lean();

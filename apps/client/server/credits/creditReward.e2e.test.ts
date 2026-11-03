@@ -146,6 +146,18 @@ describe('payCreditReward', () => {
     expect((await creditService.payCreditReward(reward(fresh.id, 'projects'), adapters)).outcome).toBe('paid');
   });
 
+  it('queues a new reward behind a payable reward waiting behind an oversized head', async () => {
+    config.signupGrantTricklePoolDaily = '0';
+    const huge = await makeUser();
+    const small = await makeUser();
+    await creditService.payCreditReward(reward(huge.id, 'projects', 5000), adapters);
+    await creditService.payCreditReward(reward(small.id, 'projects'), adapters);
+    config.signupGrantTricklePoolDaily = '150';
+    const newer = await makeUser();
+    expect((await creditService.payCreditReward(reward(newer.id, 'projects'), adapters)).outcome).toBe('queued');
+    expect(await signupGrantBudgetRepository.getSpent(trickleKey())).toBe(0);
+  });
+
   it('treats its own earlier draw as fresh when a transaction retries inside one refund scope', async () => {
     await userService.refundBudgetOnFailure(async () => {
       const first = await userService.reserveSignupGrantBudget(adapters, 'retry-tx', 100, { pool: 'trickle' });

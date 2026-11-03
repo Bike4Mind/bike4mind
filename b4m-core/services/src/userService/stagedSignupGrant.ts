@@ -217,13 +217,7 @@ async function releaseStage(
           // An account already in the queue is drained by the held-release cron in order; a new one waits behind it.
           // A drip likewise waits while it would leave the trickle pool unable to pay the oldest queued reward.
           const queued = dripDay
-            ? await queueHeadBlocks(
-                db,
-                'trickle',
-                await db.signupProtection?.grantBudget?.heldRewards?.oldestHeldCredits(),
-                amount,
-                dripDay
-              )
+            ? await queueHeadBlocks(db, 'trickle', db.signupProtection?.grantBudget?.heldRewards, amount, dripDay)
             : expected === 'pending_email' &&
               !user.signupGrantHeldReason &&
               (await hasSignupBacklog(db.users, signupGrantBudgetDay(grantClock(db))));
