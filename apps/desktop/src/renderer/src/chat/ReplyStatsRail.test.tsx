@@ -10,6 +10,18 @@ import type { TurnProgress } from './statusLine';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+// A reply with this id has stats that cannot be read, for the rail's error boundary.
+vi.mock('./replyStats', async importOriginal => {
+  const actual = await importOriginal<typeof import('./replyStats')>();
+  return {
+    ...actual,
+    messageStats: (message: ChatMessage) => {
+      if (message.id === 'unreadable') throw new Error('unreadable stats');
+      return actual.messageStats(message);
+    },
+  };
+});
+
 const stats: ChatReplyStats = {
   totalMs: 12_000,
   modelMs: 12_000,
@@ -246,6 +258,17 @@ describe('the reply stats rail and its footer fallback', () => {
       expect(replies()[1]).toBe(reply);
       expect({ className: reply.className, style: reply.getAttribute('style') }).toEqual(drawn);
       expect(cellOf('a1')?.style.gridRow).toBe('span 2');
+    });
+
+    it('drops a rail that throws and keeps the thread', () => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      render([...thread.slice(0, 3), { ...settled[1]!, id: 'unreadable', content: 'Still here.' }], {
+        statsRail: true,
+      });
+
+      expect(replies()[1]?.textContent).toContain('Still here.');
+      expect(cellOf('a1')).not.toBeNull();
+      expect(cellOf('unreadable')).toBeNull();
     });
   });
 
