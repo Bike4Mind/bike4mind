@@ -1,3 +1,4 @@
+import { INVITE_CENTER_TAB_PARAMS } from './inviteCenterSearch';
 import { INTEGRATION_DEMAND_TAB_PARAMS } from './integrationDemandSearch';
 import { SIGNUP_RISK_REVIEW_TAB_PARAMS } from './signupRiskReviewSearch';
 import { SHADOW_DETECTION_TAB_PARAMS } from './shadowDetectionSearch';
@@ -47,6 +48,7 @@ export const ADMIN_MODEL_LOGS_TAB_SLUG = 'model-logs';
 export const ADMIN_INTEGRATION_DEMAND_TAB_SLUG = 'integration-demand';
 export const ADMIN_SIGNUP_RISK_REVIEW_TAB_SLUG = 'signup-risk-review';
 export const ADMIN_SHADOW_DETECTIONS_TAB_SLUG = 'shadow-detections';
+export const ADMIN_WAITLIST_TAB_SLUG = 'waitlist';
 export { ADMIN_ORGANIZATIONS_TAB_SLUG, ADMIN_SUBSCRIPTIONS_TAB_SLUG };
 
 const EMERGENCY_ACCESS_PARAM = 'emergency_access';
@@ -75,6 +77,7 @@ export const ADMIN_TAB_PARAMS = {
   [ADMIN_SUBSCRIPTIONS_TAB_SLUG]: SUBSCRIPTIONS_TAB_PARAMS,
   [ADMIN_SIGNUP_RISK_REVIEW_TAB_SLUG]: SIGNUP_RISK_REVIEW_TAB_PARAMS,
   [ADMIN_SHADOW_DETECTIONS_TAB_SLUG]: SHADOW_DETECTION_TAB_PARAMS,
+  [ADMIN_WAITLIST_TAB_SLUG]: INVITE_CENTER_TAB_PARAMS,
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
 type AdminTabParam = (typeof ADMIN_TAB_PARAMS)[keyof typeof ADMIN_TAB_PARAMS][number];
