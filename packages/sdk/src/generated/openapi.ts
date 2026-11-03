@@ -10684,7 +10684,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description Per-user rate limit exceeded. */
+      /** @description Per-user rate limit exceeded, or the hourly file allowance shared with uploads is spent: a re-chunk costs one file. */
       429: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
