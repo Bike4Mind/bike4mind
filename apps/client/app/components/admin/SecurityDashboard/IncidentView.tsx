@@ -1,5 +1,5 @@
-import { useState, type ReactNode } from 'react';
-import { Box, Button, Skeleton, Stack, Typography } from '@mui/joy';
+import type { ReactNode } from 'react';
+import { Alert, Box, Button, Skeleton, Stack, Typography } from '@mui/joy';
 import type { UseQueryResult } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useSecurityIncidentSignals, useSecurityIncidentState, useSignupAnomaly } from '@client/app/hooks/data/admin';
@@ -10,6 +10,7 @@ import { useSignupTimeseries } from '../Signups/useSignupTimeseries';
 import { AnomalyBanner } from '../Users/AnomalyBanner';
 import { AdminTab } from '../adminSidebarConfig';
 import { adminTabToSlug } from '../adminTabSlugs';
+import { useSecurityDashboardSearch } from './useSecurityDashboardSearch';
 import {
   ErrorState,
   Fact,
@@ -64,7 +65,7 @@ const QUEUES: ReadonlyArray<{
   tab: AdminTab;
 }> = [
   { key: 'riskReviewsPending', id: 'risk-review', label: 'Risk review', tab: AdminTab.SignupRiskReview },
-  { key: 'heldGrants', id: 'held-grants', label: 'Held signup grants', tab: AdminTab.HeldSignupGrants },
+  { key: 'heldGrants', id: 'held-grants', label: 'Held grants (budget)', tab: AdminTab.HeldSignupGrants },
   { key: 'domainHoldsPending', id: 'domain-holds', label: 'Signup domain holds', tab: AdminTab.SignupDomainHolds },
 ];
 
@@ -143,6 +144,20 @@ function Unavailable({ error, testId }: { error?: string; testId?: string }) {
       <MutedDash />
       {error && <HelpText>{error}</HelpText>}
     </Stack>
+  );
+}
+
+/** A firewall section on a stage with no firewall: nothing to read, which is not a failure. */
+const isNotConfigured = (section: object | undefined): boolean =>
+  section !== undefined && 'notConfigured' in section && section.notConfigured === true;
+
+const NO_FIREWALL = 'No firewall on this stage';
+
+function NoFirewall({ testId }: { testId?: string }) {
+  return (
+    <Box component="span" sx={{ color: 'admin.inkMuted' }} data-testid={testId}>
+      {NO_FIREWALL}
+    </Box>
   );
 }
 
@@ -229,6 +244,7 @@ function IncidentTiles({ signals, state }: { signals: Source<IncidentSignals>; s
       ? waf.allowed + waf.blocked + waf.counted
       : null;
   const alarmTotal = alarms?.total ?? null;
+  const wafNotConfigured = isNotConfigured(waf);
 
   return (
     <StatStrip aria-label="Incident signals">
@@ -282,7 +298,7 @@ function IncidentTiles({ signals, state }: { signals: Source<IncidentSignals>; s
           signals.loading,
           blocked !== null,
           wafTotal === null ? (waf?.error ?? `of ${DASH} requests`) : `of ${wafTotal.toLocaleString()} requests`,
-          signalsError(waf?.error)
+          wafNotConfigured ? NO_FIREWALL : signalsError(waf?.error)
         )}
       />
       <StatTile
@@ -343,6 +359,7 @@ function DefensesCard({ signals, state }: { signals: Source<IncidentSignals>; st
   const defensesError = state.down ? STATE_DOWN : defenses?.error;
   const blockLists = signals.data?.blockLists;
   const blockListsError = signals.down ? SIGNALS_DOWN : blockLists?.error;
+  const noFirewall = isNotConfigured(blockLists);
   const turnstile = defenses?.turnstile;
   const grantBudget = defenses?.grantBudget;
   const spendCapDays = defenses?.newAccountSpendCapDays ?? null;
@@ -363,8 +380,15 @@ function DefensesCard({ signals, state }: { signals: Source<IncidentSignals>; st
                 label={turnstile.enabled ? (turnstile.failClosed ? 'On, fail closed' : 'On') : 'Off'}
                 data-testid="security-incident-turnstile-chip"
               />
-              {turnstile.enabled && !turnstile.secretConfigured && (
+              {turnstile.enabled && turnstile.secretConfigured === false && (
                 <StatusChip tone="warn" label="Secret missing" data-testid="security-incident-turnstile-secret-chip" />
+              )}
+              {turnstile.enabled && turnstile.secretConfigured === null && (
+                <StatusChip
+                  tone="neutral"
+                  label="Secret: Unknown"
+                  data-testid="security-incident-turnstile-secret-chip"
+                />
               )}
             </Chips>
           ) : (
@@ -390,7 +414,9 @@ function DefensesCard({ signals, state }: { signals: Source<IncidentSignals>; st
       ) : (
         <Fact label="Block lists" data-testid="security-incident-block-lists">
           {signalsFact(() =>
-            blockLists && !blockListsError ? (
+            noFirewall ? (
+              <NoFirewall testId="security-incident-block-lists-none" />
+            ) : blockLists && !blockListsError ? (
               <StatusChip tone="neutral" label="None" />
             ) : (
               <Unavailable error={blockListsError} />
@@ -407,6 +433,8 @@ function DefensesCard({ signals, state }: { signals: Source<IncidentSignals>; st
               </Box>
               <RelativeTime at={blocker.at} />
             </Stack>
+          ) : noFirewall ? (
+            <NoFirewall testId="security-incident-blocker-none" />
           ) : (
             <Unavailable error={blockListsError} />
           )
@@ -741,10 +769,10 @@ function SignupsSection({ range }: { range: IncidentRange }) {
  * payments look normal right now, with the defenses and queues an admin acts on next.
  */
 export function IncidentView() {
-  const [range, setRange] = useState<IncidentRange>('24h');
+  const { range, setRange } = useSecurityDashboardSearch();
   const navigate = useNavigate();
-  const signalsQuery = useSecurityIncidentSignals(range, true);
-  const stateQuery = useSecurityIncidentState(true);
+  const signalsQuery = useSecurityIncidentSignals(range);
+  const stateQuery = useSecurityIncidentState();
   const anomaly = useSignupAnomaly();
   const signals = sourceOf(signalsQuery);
   const state = sourceOf(stateQuery);
@@ -778,6 +806,7 @@ export function IncidentView() {
           })
         }
       />
+      {anomaly.isError && <Alert color="warning">Could not check signup anomalies. Refresh to retry.</Alert>}
       <IncidentTiles signals={signals} state={state} />
       <Box
         sx={{

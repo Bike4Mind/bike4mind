@@ -27,6 +27,19 @@ import { WAF_CACHE_TTL, wafQueryCache } from './wafQueryCache';
 
 const HOUR_MS = 60 * 60 * 1000;
 
+// Bounds every NextToken loop so a misbehaving API cannot spin a request forever.
+const MAX_PAGES = 20;
+
+class PageLimitError extends Error {
+  constructor(what: string) {
+    super(`${what} exceeded ${MAX_PAGES} pages`);
+    this.name = 'PageLimitError';
+  }
+}
+
+// WAF alarms are created next to the CLOUDFRONT-scope WAF, in us-east-1.
+const WAF_ALARM_REGION = 'us-east-1';
+
 type MetricKey = Exclude<keyof IncidentMetricTotals, 'error'>;
 
 interface MetricSpec {
@@ -58,6 +71,7 @@ export function incidentMetricSpecs(app: string, stage: string): MetricSpec[] {
     {
       key: 'oauthSignupsRefused',
       namespace: 'Lumina5/AuthSecurity',
+      // Mirrors oauthSignupsRefusedMetricName in infra/authAbuseMetric.ts (pinned by a test).
       metricName: stage === 'production' ? 'OAuthSignupsRefused' : `OAuthSignupsRefused-${stage}`,
       stat: 'Sum',
     },
@@ -74,7 +88,9 @@ async function getMetricDataPages(
 ): Promise<Map<string, MetricDataResult>> {
   const byId = new Map<string, MetricDataResult>();
   let NextToken: string | undefined;
+  let pages = 0;
   do {
+    if (++pages > MAX_PAGES) throw new PageLimitError('GetMetricData');
     const page = await client.send(new GetMetricDataCommand({ ...input, NextToken }));
     for (const result of page.MetricDataResults ?? []) {
       if (!result.Id) continue;
@@ -134,15 +150,23 @@ async function getMetricTotals(app: string, stage: string, range: IncidentRange)
     return failed.length > 0 ? { ...totals, error: `Some metrics could not be read: ${failed.join(', ')}` } : totals;
   } catch (error) {
     Logger.globalInstance.warn('Incident signals: metric query failed', { error });
-    return { ...nulls, error: 'CloudWatch metrics could not be read' };
+    return {
+      ...nulls,
+      error:
+        error instanceof PageLimitError
+          ? 'CloudWatch metrics returned too many pages'
+          : 'CloudWatch metrics could not be read',
+    };
   }
 }
 
 async function getWafTotals(stage: string, range: IncidentRange): Promise<IncidentWafTotals> {
   const nulls = { allowed: null, blocked: null, counted: null };
   try {
+    // The totals come from the shared traffic overview, so they can lag by WAF_CACHE_TTL.traffic.
     const overview = await getWafTrafficOverview({ stage, range, period: resolveDefaultPeriod(range) });
-    if (!overview.enabled || !overview.totals) return { ...nulls, error: 'No WAF is attached to the router' };
+    if (!overview.enabled) return { ...nulls, notConfigured: true };
+    if (!overview.totals) return { ...nulls, error: 'WAF traffic could not be read' };
     const { allowed, blocked, counted } = overview.totals;
     return { allowed, blocked, counted };
   } catch (error) {
@@ -151,40 +175,66 @@ async function getWafTotals(stage: string, range: IncidentRange): Promise<Incide
   }
 }
 
+async function listAlarms(
+  client: CloudWatchClient,
+  prefix: string
+): Promise<{ total: number; inAlarm: IncidentAlarm[] }> {
+  let total = 0;
+  const inAlarm: IncidentAlarm[] = [];
+  let NextToken: string | undefined;
+  let pages = 0;
+  do {
+    if (++pages > MAX_PAGES) throw new PageLimitError('DescribeAlarms');
+    const page = await client.send(
+      new DescribeAlarmsCommand({
+        AlarmNamePrefix: prefix,
+        AlarmTypes: ['MetricAlarm', 'CompositeAlarm'],
+        MaxRecords: 100,
+        NextToken,
+      })
+    );
+    const alarms = [...(page.MetricAlarms ?? []), ...(page.CompositeAlarms ?? [])];
+    total += alarms.length;
+    for (const alarm of alarms) {
+      if (alarm.StateValue !== 'ALARM' || !alarm.AlarmName) continue;
+      const since = alarm.StateTransitionedTimestamp ?? alarm.StateUpdatedTimestamp;
+      inAlarm.push({
+        name: alarm.AlarmName.startsWith(prefix) ? alarm.AlarmName.slice(prefix.length) : alarm.AlarmName,
+        since: since ? since.toISOString() : new Date(0).toISOString(),
+      });
+    }
+    NextToken = page.NextToken;
+  } while (NextToken);
+  return { total, inAlarm };
+}
+
 async function getAlarms(app: string, stage: string): Promise<IncidentAlarms> {
-  try {
-    const prefix = `${app}-${stage}-`;
-    const client = new CloudWatchClient({});
-    let total = 0;
-    const inAlarm: IncidentAlarm[] = [];
-    let NextToken: string | undefined;
-    do {
-      const page = await client.send(
-        new DescribeAlarmsCommand({
-          AlarmNamePrefix: prefix,
-          AlarmTypes: ['MetricAlarm', 'CompositeAlarm'],
-          MaxRecords: 100,
-          NextToken,
-        })
-      );
-      const alarms = [...(page.MetricAlarms ?? []), ...(page.CompositeAlarms ?? [])];
-      total += alarms.length;
-      for (const alarm of alarms) {
-        if (alarm.StateValue !== 'ALARM' || !alarm.AlarmName) continue;
-        const since = alarm.StateTransitionedTimestamp ?? alarm.StateUpdatedTimestamp;
-        inAlarm.push({
-          name: alarm.AlarmName.startsWith(prefix) ? alarm.AlarmName.slice(prefix.length) : alarm.AlarmName,
-          since: since ? since.toISOString() : new Date(0).toISOString(),
-        });
-      }
-      NextToken = page.NextToken;
-    } while (NextToken);
-    inAlarm.sort((a, b) => b.since.localeCompare(a.since));
-    return { total, inAlarm };
-  } catch (error) {
-    Logger.globalInstance.warn('Incident signals: alarm listing failed', { error });
-    return { total: null, inAlarm: [], error: 'Alarms could not be read' };
+  // The prefix also matches a stage whose name starts with `${stage}-`; stage names are expected not to nest.
+  const prefix = `${app}-${stage}-`;
+  const defaultClient = new CloudWatchClient({});
+  const defaultRegion = await defaultClient.config.region().catch(() => undefined);
+  const clients =
+    defaultRegion === WAF_ALARM_REGION
+      ? [defaultClient]
+      : [defaultClient, new CloudWatchClient({ region: WAF_ALARM_REGION })];
+
+  const settled = await Promise.allSettled(clients.map(client => listAlarms(client, prefix)));
+  const fulfilled = settled.flatMap(result => (result.status === 'fulfilled' ? [result.value] : []));
+  const failures = settled.flatMap(result => (result.status === 'rejected' ? [result.reason as unknown] : []));
+
+  if (failures.length > 0) {
+    Logger.globalInstance.warn('Incident signals: alarm listing failed', { errors: failures.map(String) });
   }
+  const inAlarm = fulfilled.flatMap(result => result.inAlarm).sort((a, b) => b.since.localeCompare(a.since));
+  const total = fulfilled.length > 0 ? fulfilled.reduce((acc, result) => acc + result.total, 0) : null;
+  if (failures.length === 0) return { total, inAlarm };
+
+  const error = failures.some(failure => failure instanceof PageLimitError)
+    ? 'Alarm listing returned too many pages'
+    : fulfilled.length > 0
+      ? 'Alarms could not be read in every region'
+      : 'Alarms could not be read';
+  return { total, inAlarm, error };
 }
 
 const ACTION_RANK: Record<IncidentBlockListAction, number> = { block: 0, count: 1, other: 2 };
@@ -238,9 +288,9 @@ function parseWafArn(arn: string, kind: 'webacl' | 'ipset'): { name: string; id:
   return name && id ? { name, id } : null;
 }
 
-async function getIpSetLists(): Promise<{ lists: IncidentBlockList[]; error?: string }> {
+async function getIpSetLists(): Promise<{ lists: IncidentBlockList[]; error?: string; notConfigured?: true }> {
   const { webAclArn } = await resolveRouterWebAcl();
-  if (!webAclArn) return { lists: [], error: 'No WAF is attached to the router' };
+  if (!webAclArn) return { lists: [], notConfigured: true };
   const acl = parseWafArn(webAclArn, 'webacl');
   if (!acl) return { lists: [], error: 'The router WebACL could not be identified' };
 
@@ -294,7 +344,9 @@ async function getBlockerActiveEntries(stage: string): Promise<{
   const client = new CloudWatchClient({ region: 'us-east-1' });
   const functionNames: string[] = [];
   let NextToken: string | undefined;
+  let pages = 0;
   do {
+    if (++pages > MAX_PAGES) throw new PageLimitError('ListMetrics');
     const page = await client.send(
       new ListMetricsCommand({
         Namespace: 'WafRuntimeBlocker',
@@ -348,8 +400,10 @@ async function getBlockLists(stage: string): Promise<IncidentBlockLists> {
   const [lists, blocker] = await Promise.allSettled([getIpSetLists(), getBlockerActiveEntries(stage)]);
   const errors: string[] = [];
   let resolvedLists: IncidentBlockList[] = [];
+  let notConfigured = false;
   if (lists.status === 'fulfilled') {
     resolvedLists = lists.value.lists;
+    notConfigured = lists.value.notConfigured === true;
     if (lists.value.error) errors.push(lists.value.error);
   } else {
     Logger.globalInstance.warn('Incident signals: WebACL read failed', { error: lists.reason });
@@ -361,11 +415,16 @@ async function getBlockLists(stage: string): Promise<IncidentBlockLists> {
     if (blocker.value.error) errors.push(blocker.value.error);
   } else {
     Logger.globalInstance.warn('Incident signals: runtime blocker metric failed', { error: blocker.reason });
-    errors.push('Runtime blocker metric could not be read');
+    errors.push(
+      blocker.reason instanceof PageLimitError
+        ? 'Runtime blocker metric returned too many pages'
+        : 'Runtime blocker metric could not be read'
+    );
   }
   return {
     lists: resolvedLists,
     blockerActiveEntries,
+    ...(notConfigured ? { notConfigured: true as const } : {}),
     ...(errors.length > 0 ? { error: errors.join('; ') } : {}),
   };
 }

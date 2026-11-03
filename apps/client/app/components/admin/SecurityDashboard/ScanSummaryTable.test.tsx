@@ -132,6 +132,15 @@ describe('ScanSummaryTable', () => {
     expect(screen.getByTestId('security-scans-summary-web-status')).toHaveAttribute('data-tone', 'neutral');
   });
 
+  it('shows the next run as unavailable, not manual, when the schedules failed to load', () => {
+    mocks.schedules.mockReturnValue({ data: undefined, isError: true, refetch: vi.fn() });
+    renderTable();
+    for (const id of ['web', 'cloud']) {
+      expect(screen.getByTestId(`security-scans-summary-${id}-next`)).toHaveTextContent('Unavailable');
+    }
+    expect(screen.getByTestId('security-scans-summary-prowler-next')).toHaveTextContent('Manual');
+  });
+
   it('summarizes severity counts compactly', () => {
     expect(compactSeverityCounts({ critical: 1, low: 3 }, ['critical', 'high', 'medium', 'low'])).toBe(
       '1 critical, 3 low'

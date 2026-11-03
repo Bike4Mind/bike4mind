@@ -103,7 +103,7 @@ function settingsUpdateExemption(stage: string): UriPathMatch | undefined {
 }
 
 /**
- * The six machine-posted scanner-ingest endpoints, each a static route file under
+ * The three machine-posted scanner-ingest endpoints, each a static route file under
  * apps/client/pages/api/admin/security-dashboard/ with nothing routed below it.
  *
  * They post raw scanner output, which the signature groups read as an attack payload. Probed
@@ -117,9 +117,6 @@ function settingsUpdateExemption(stage: string): UriPathMatch | undefined {
 const INGEST_PATHS = [
   '/api/admin/security-dashboard/attack-simulation-ingest',
   '/api/admin/security-dashboard/cloud-prowler-ingest',
-  '/api/admin/security-dashboard/code-semgrep-ingest',
-  '/api/admin/security-dashboard/packages-ingest',
-  '/api/admin/security-dashboard/secrets-ingest',
   '/api/admin/security-dashboard/web-owasp-ingest',
 ];
 
@@ -419,7 +416,7 @@ describe('wafPolicy', () => {
   });
 
   // Replaces the CommonRuleSet-only ingest check that used to live under `terminating Allow
-  // rules`. That one asserted the six paths were present on one of the five groups, with
+  // rules`. That one asserted the ingest paths were present on one of the five groups, with
   // toContain on the search string, which is how the SQLi and KnownBadInputs gaps survived
   // review: CommonRuleSet is the group whose exemption was written, and the other two signature
   // groups were never asked about.
@@ -455,7 +452,7 @@ describe('wafPolicy', () => {
       // Stated separately from the table above so the failure names the actual defect. The three
       // signature groups inspect the same request body for different families, so an ingest path
       // exempted from one and not the others is still blocked; the exemption is only meaningful
-      // if every group that has one carries the identical six.
+      // if every group that has one carries the identical three.
       it(`exempts the scanner ingest paths identically in every scoped ${stage} group`, () => {
         const managed = managedRules(stage);
 
@@ -469,7 +466,7 @@ describe('wafPolicy', () => {
 
           expect(
             sortMatches(ingest),
-            `${stage}: ${ruleName} must exempt all six scanner-ingest paths, spelled identically`
+            `${stage}: ${ruleName} must exempt all three scanner-ingest paths, spelled identically`
           ).toEqual(sortMatches(ingestExemptions()));
         }
       });

@@ -23,6 +23,8 @@ export interface IncidentWafTotals {
   allowed: number | null;
   blocked: number | null;
   counted: number | null;
+  /** The stage has no WAF on its router; not a failure. */
+  notConfigured?: true;
   error?: string;
 }
 
@@ -52,6 +54,8 @@ export interface IncidentBlockList {
 export interface IncidentBlockLists {
   lists: IncidentBlockList[];
   blockerActiveEntries: { value: number; at: string } | null;
+  /** The stage has no WAF on its router, so there are no IP sets; not a failure. */
+  notConfigured?: true;
   error?: string;
 }
 
@@ -65,8 +69,8 @@ export interface IncidentSignals {
 }
 
 export interface IncidentDefenses {
-  /** null when settings could not be read. */
-  turnstile: { enabled: boolean; failClosed: boolean; secretConfigured: boolean } | null;
+  /** null when settings could not be read. `secretConfigured` is null when the secret could not be read (unknown). */
+  turnstile: { enabled: boolean; failClosed: boolean; secretConfigured: boolean | null } | null;
   /** null when the budget is unmetered (setting 0 or unset), or on error. */
   grantBudget: { limit: number; spentToday: number; day: string } | null;
   /** null when the new-account spend caps are off (0), or on error. */

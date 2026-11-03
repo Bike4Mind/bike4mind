@@ -709,6 +709,9 @@ export const useUpdateSecurityScanSchedule = (scanType: string) => {
         queryKey: ['admin', 'security-scan-schedule', scanType],
       });
       queryClient.invalidateQueries({
+        queryKey: ['admin', 'security-scan-schedules'],
+      });
+      queryClient.invalidateQueries({
         queryKey: ['admin', 'security-dashboard', 'overview'],
       });
     },
@@ -815,10 +818,9 @@ export const useRunAttackSimulation = () => {
   });
 };
 
-export const useSecurityIncidentSignals = (range: IncidentRange, enabled = true) => {
+export const useSecurityIncidentSignals = (range: IncidentRange) => {
   return useQuery<IncidentSignals>({
     queryKey: ['admin', 'security-dashboard', 'incident-signals', range],
-    enabled,
     queryFn: async () => {
       const res = await api.get<IncidentSignals>('/api/admin/security-dashboard/incident-signals', {
         params: { range },
@@ -826,26 +828,24 @@ export const useSecurityIncidentSignals = (range: IncidentRange, enabled = true)
       return res.data;
     },
     staleTime: 60 * 1000, // matches the server-side cache TTL
-    refetchInterval: enabled ? 60 * 1000 : false,
+    refetchInterval: 60 * 1000,
     refetchOnWindowFocus: true,
   });
 };
 
-export const useSecurityIncidentState = (enabled = true) => {
+export const useSecurityIncidentState = () => {
   return useQuery<IncidentState>({
     queryKey: ['admin', 'security-dashboard', 'incident-state'],
-    enabled,
     queryFn: async () => {
       const res = await api.get<IncidentState>('/api/admin/security-dashboard/incident-state');
       return res.data;
     },
     staleTime: 60 * 1000,
-    refetchInterval: enabled ? 60 * 1000 : false,
+    refetchInterval: 60 * 1000,
     refetchOnWindowFocus: true,
   });
 };
 
-// Same key as the Users tab's banner query (components/admin/Users/index.tsx), so both share one cache entry.
 export const useSignupAnomaly = () => {
   return useQuery({
     queryKey: ['admin-signup-anomaly'],

@@ -6,8 +6,11 @@ import type { SecurityScan } from './securityDashboardSearch';
 
 vi.mock('@tanstack/react-router', async () => (await import('./__tests__/fakeAdminRouter')).fakeRouterModule);
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
+const mocks = vi.hoisted(() => ({
+  query: { data: undefined as unknown, isLoading: false, isError: false, refetch: vi.fn() },
+}));
 vi.mock('@client/app/hooks/data/admin', () => {
-  const query = { data: undefined, isLoading: false, refetch: vi.fn() };
+  const query = mocks.query;
   const mutation = { mutate: vi.fn(), isPending: false };
   return {
     useSecurityDashboardWeb: () => query,
@@ -55,7 +58,11 @@ const renderPage = () =>
   );
 
 describe('SecurityDashboard views', () => {
-  beforeEach(() => fakeAdminRouter.reset({ tab: 'security-dashboard' }));
+  beforeEach(() => {
+    Object.assign(mocks.query, { data: undefined, isLoading: false, isError: false });
+    mocks.query.refetch.mockClear();
+    fakeAdminRouter.reset({ tab: 'security-dashboard' });
+  });
 
   it('opens the incident view on a bare tab link', () => {
     renderPage();
@@ -112,5 +119,30 @@ describe('SecurityDashboard views', () => {
     act(() => fakeAdminRouter.reset({ tab: 'security-dashboard', securityView: 'overview' }));
     renderPage();
     expect(screen.getByTestId('incident-view-stub')).toBeInTheDocument();
+  });
+
+  it('shows an error with retry, not the empty message, when the website scan fails to load', () => {
+    fakeAdminRouter.reset({ tab: 'security-dashboard', securityView: 'scans' });
+    mocks.query.isError = true;
+    renderPage();
+    expect(screen.getByTestId('admin-error-state')).toHaveTextContent('Could not load the website security scan.');
+    expect(screen.queryByText(/No website security scan has been recorded/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(mocks.query.refetch).toHaveBeenCalled();
+  });
+
+  it('shows the empty message when the website scan loaded with no data', () => {
+    fakeAdminRouter.reset({ tab: 'security-dashboard', securityView: 'scans' });
+    renderPage();
+    expect(screen.getByText(/No website security scan has been recorded/)).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-error-state')).not.toBeInTheDocument();
+  });
+
+  it('shows an error, not the empty message, when the Prowler audit fails to load', () => {
+    fakeAdminRouter.reset({ tab: 'security-dashboard', securityView: 'scans', securityScan: 'prowler' });
+    mocks.query.isError = true;
+    renderPage();
+    expect(screen.getByTestId('admin-error-state')).toHaveTextContent('Could not load the Prowler audit.');
+    expect(screen.queryByText(/No Prowler audit data found/)).not.toBeInTheDocument();
   });
 });

@@ -1,11 +1,14 @@
 import { useCallback } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import {
+  DEFAULT_SECURITY_RANGE,
   DEFAULT_SECURITY_SCAN,
   DEFAULT_SECURITY_VIEW,
   SECURITY_DASHBOARD_SEARCH_PARSERS as parsers,
+  SECURITY_RANGE_PARAM,
   SECURITY_SCAN_PARAM,
   SECURITY_VIEW_PARAM,
+  type SecurityRange,
   type SecurityScan,
   type SecurityView,
 } from '../securityDashboardSearch';
@@ -13,7 +16,7 @@ import {
 type SearchRecord = Record<string, unknown>;
 
 /**
- * The Security tab's view and scan panel, owned by the URL. A default is written as undefined so a
+ * The Security tab's view, scan panel and incident range, owned by the URL. A default is written as undefined so a
  * bare `?tab=security-dashboard` opens the incident view. Leaving the tab needs no cleanup: the
  * tab-sync rebuild in useAdminTabUrlSync drops these keys through the param registry.
  */
@@ -22,6 +25,7 @@ export function useSecurityDashboardSearch() {
   const navigate = useNavigate();
   const view = parsers[SECURITY_VIEW_PARAM](search[SECURITY_VIEW_PARAM]) ?? DEFAULT_SECURITY_VIEW;
   const scan = parsers[SECURITY_SCAN_PARAM](search[SECURITY_SCAN_PARAM]) ?? DEFAULT_SECURITY_SCAN;
+  const range = parsers[SECURITY_RANGE_PARAM](search[SECURITY_RANGE_PARAM]) ?? DEFAULT_SECURITY_RANGE;
 
   const write = useCallback(
     (nextView: SecurityView, nextScan: SecurityScan | undefined) => {
@@ -47,5 +51,19 @@ export function useSecurityDashboardSearch() {
 
   const setScan = useCallback((next: SecurityScan) => write('scans', next), [write]);
 
-  return { view, scan, setView, setScan };
+  const setRange = useCallback(
+    (next: SecurityRange) => {
+      navigate({
+        to: '/admin',
+        search: (previous: SearchRecord) => ({
+          ...previous,
+          [SECURITY_RANGE_PARAM]: next === DEFAULT_SECURITY_RANGE ? undefined : next,
+        }),
+        replace: true,
+      });
+    },
+    [navigate]
+  );
+
+  return { view, scan, range, setView, setScan, setRange };
 }

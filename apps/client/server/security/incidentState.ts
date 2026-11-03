@@ -31,11 +31,12 @@ const SETTING_NAMES = [
   'paymentRiskCheckoutMaxBlockedAttempts',
 ] as const;
 
-function secretConfigured(): boolean {
+function secretConfigured(): boolean | null {
   try {
     return isTurnstileSecretConfigured(Config.TURNSTILE_SECRET_KEY);
-  } catch {
-    return false;
+  } catch (error) {
+    Logger.globalInstance.warn('Incident state: Turnstile secret could not be read', { error });
+    return null;
   }
 }
 

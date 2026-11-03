@@ -20,7 +20,7 @@ import { IncidentView } from './SecurityDashboard/IncidentView';
 import { ScanSummaryTable } from './SecurityDashboard/ScanSummaryTable';
 import { useSecurityDashboardSearch } from './SecurityDashboard/useSecurityDashboardSearch';
 import { SECURITY_VIEWS, type SecurityScan, type SecurityView } from './securityDashboardSearch';
-import { AdminPageHeader, SegmentedControl, ViewTabs, type SegmentedOption, type ViewTab } from './shared';
+import { AdminPageHeader, ErrorState, SegmentedControl, ViewTabs, type SegmentedOption, type ViewTab } from './shared';
 import { SecurityFindingsTable } from './SecurityDashboard/SecurityFindingsTable';
 
 const statusColorMap: Record<SecurityCheckStatus, 'success' | 'warning' | 'danger' | 'neutral'> = {
@@ -66,7 +66,7 @@ const countBySeverity = (findings: Array<{ severity: SeverityLevel }>) => {
 };
 
 const SecurityWebTab = () => {
-  const { data: snapshot, isLoading, refetch } = useSecurityDashboardWeb();
+  const { data: snapshot, isLoading, isError, refetch } = useSecurityDashboardWeb();
   const runWebScan = useRunWebSecurityScan();
   const { cooldownActive, hoursRemaining } = useSecurityScanCooldown(snapshot?.checkedAt);
   const { data: schedule } = useSecurityScanSchedule('web');
@@ -78,6 +78,10 @@ const SecurityWebTab = () => {
         <CircularProgress size="sm" />
       </Box>
     );
+  }
+
+  if (!snapshot && isError) {
+    return <ErrorState message="Could not load the website security scan." onRetry={() => void refetch()} />;
   }
 
   if (!snapshot) {
@@ -751,7 +755,7 @@ const InfrastructureBaselineSubTab = ({ initialSnapshot }: { initialSnapshot?: S
 };
 
 const ProwlerAuditSubTab = () => {
-  const { data: snapshot, isLoading, refetch } = useSecurityDashboardProwler();
+  const { data: snapshot, isLoading, isError, refetch } = useSecurityDashboardProwler();
   const runProwler = useRunProwlerScan();
   const { cooldownActive, hoursRemaining } = useSecurityScanCooldown(snapshot?.checkedAt);
   const [showAll, setShowAll] = useState(false);
@@ -774,6 +778,10 @@ const ProwlerAuditSubTab = () => {
         <CircularProgress size="sm" />
       </Box>
     );
+  }
+
+  if (!snapshot && isError) {
+    return <ErrorState message="Could not load the Prowler audit." onRetry={() => void refetch()} />;
   }
 
   if (!snapshot) {

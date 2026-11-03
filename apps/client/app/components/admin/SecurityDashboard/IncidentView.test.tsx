@@ -11,13 +11,14 @@ const mocks = vi.hoisted(() => ({
   timeseries: vi.fn(),
   refetchSignals: vi.fn(),
   refetchState: vi.fn(),
+  anomaly: vi.fn(),
 }));
 
 vi.mock('@tanstack/react-router', async () => (await import('../__tests__/fakeAdminRouter')).fakeRouterModule);
 vi.mock('@client/app/hooks/data/admin', () => ({
   useSecurityIncidentSignals: mocks.signals,
   useSecurityIncidentState: mocks.state,
-  useSignupAnomaly: () => ({ data: undefined }),
+  useSignupAnomaly: mocks.anomaly,
 }));
 vi.mock('../Signups/useSignupTimeseries', () => ({ useSignupTimeseries: mocks.timeseries }));
 vi.mock('../Signups/SignupChart', () => ({ SignupChart: () => <div data-testid="signup-chart-stub" /> }));
@@ -104,6 +105,7 @@ describe('IncidentView', () => {
     mocks.signals.mockReturnValue(query(signalsData(), { refetch: mocks.refetchSignals }));
     mocks.state.mockReturnValue(query(stateData(), { refetch: mocks.refetchState }));
     mocks.timeseries.mockReturnValue(query(timeseries));
+    mocks.anomaly.mockReturnValue({ data: undefined, isError: false });
   });
 
   it('renders the five tile values and the defense chips', () => {
@@ -228,7 +230,77 @@ describe('IncidentView', () => {
     fireEvent.click(screen.getByTestId('security-incident-range-7d'));
     expect(lastRange()).toBe('7d');
     expect(mocks.timeseries).toHaveBeenLastCalledWith('7d');
-    expect(mocks.state.mock.calls.every(call => call[0] === true)).toBe(true);
+    expect(fakeAdminRouter.search).toMatchObject({ securityRange: '7d' });
+  });
+
+  it('reads the range from the URL and drops the param for the default', () => {
+    fakeAdminRouter.reset({ tab: 'security-dashboard', securityRange: '7d' });
+    renderView();
+    expect(mocks.signals).toHaveBeenLastCalledWith('7d');
+    expect(mocks.timeseries).toHaveBeenLastCalledWith('7d');
+
+    fireEvent.click(screen.getByTestId('security-incident-range-24h'));
+    expect(fakeAdminRouter.search).not.toHaveProperty('securityRange');
+    expect(fakeAdminRouter.navigate).toHaveBeenLastCalledWith(expect.objectContaining({ replace: true }));
+  });
+
+  it('falls back to 24 hours for an invalid range in the URL', () => {
+    fakeAdminRouter.reset({ tab: 'security-dashboard', securityRange: '30d' });
+    renderView();
+    expect(mocks.signals).toHaveBeenLastCalledWith('24h');
+  });
+
+  it('warns when the signup anomaly check fails, rather than showing nothing', () => {
+    mocks.anomaly.mockReturnValue({ data: undefined, isError: true });
+    renderView();
+    expect(screen.getByText('Could not check signup anomalies. Refresh to retry.')).toBeInTheDocument();
+  });
+
+  it('shows no warning when the signup anomaly check succeeds', () => {
+    renderView();
+    expect(screen.queryByText(/Could not check signup anomalies/)).not.toBeInTheDocument();
+  });
+
+  it('labels the held-grants queue as budget holds only', () => {
+    renderView();
+    expect(screen.getByRole('button', { name: 'Open Held grants (budget)' })).toBeInTheDocument();
+  });
+
+  it('shows "No firewall on this stage", not an error, when the stage has no firewall', () => {
+    mocks.signals.mockReturnValue(
+      query(
+        signalsData({
+          waf: { allowed: null, blocked: null, counted: null, notConfigured: true } as IncidentSignals['waf'],
+          blockLists: {
+            lists: [],
+            blockerActiveEntries: null,
+            notConfigured: true,
+          } as IncidentSignals['blockLists'],
+        })
+      )
+    );
+    renderView();
+    expect(screen.getByTestId('security-incident-waf-value')).toHaveTextContent(DASH);
+    expect(screen.getAllByText('No firewall on this stage').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByTestId('security-incident-block-lists-none')).toHaveTextContent('No firewall on this stage');
+    expect(screen.getByTestId('security-incident-blocker-none')).toHaveTextContent('No firewall on this stage');
+    expect(screen.queryByText('Not available')).not.toBeInTheDocument();
+  });
+
+  it('shows an unknown Turnstile secret as a neutral chip', () => {
+    mocks.state.mockReturnValue(
+      query(
+        stateData({
+          defenses: {
+            ...stateData().defenses,
+            turnstile: { enabled: true, failClosed: true, secretConfigured: null },
+          },
+        })
+      )
+    );
+    renderView();
+    expect(screen.getByTestId('security-incident-turnstile-secret-chip')).toHaveTextContent('Unknown');
+    expect(screen.getByTestId('security-incident-turnstile-secret-chip')).toHaveAttribute('data-tone', 'neutral');
   });
 
   it('flags an enabled Turnstile without its secret', () => {

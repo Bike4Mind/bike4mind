@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   countDomainHolds: vi.fn(),
   summarizeWindow: vi.fn(),
   secret: 'configured-secret' as string | undefined,
+  secretThrows: false,
 }));
 
 vi.mock('sst', () => ({ Resource: {} }));
@@ -26,6 +27,7 @@ vi.mock('@bike4mind/services', () => ({
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {
     get TURNSTILE_SECRET_KEY() {
+      if (h.secretThrows) throw new Error('secret unavailable');
       return h.secret;
     },
   },
@@ -52,6 +54,7 @@ const storedSettings = (values: Record<string, unknown>) =>
 beforeEach(() => {
   vi.clearAllMocks();
   h.secret = 'configured-secret';
+  h.secretThrows = false;
   h.settings.mockResolvedValue(
     storedSettings({
       turnstileEnabled: true,
@@ -120,6 +123,14 @@ describe('getIncidentState', () => {
     });
     expect(defenses.error).toBeUndefined();
     expect(h.getSpent).not.toHaveBeenCalled();
+  });
+
+  it('reports the Turnstile secret as unknown (null) when reading it throws', async () => {
+    h.secretThrows = true;
+
+    const { defenses } = await getIncidentState(NOW);
+
+    expect(defenses.turnstile).toEqual({ enabled: true, failClosed: false, secretConfigured: null });
   });
 
   it('keeps every other section when one read fails', async () => {

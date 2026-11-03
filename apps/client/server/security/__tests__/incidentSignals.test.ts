@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
 import { CloudFrontClient, GetDistributionCommand } from '@aws-sdk/client-cloudfront';
 import {
@@ -10,8 +10,15 @@ import {
   type GetMetricDataCommandInput,
 } from '@aws-sdk/client-cloudwatch';
 import { GetIPSetCommand, GetWebACLCommand, WAFV2Client, type Rule } from '@aws-sdk/client-wafv2';
-import { collectIpSetRefs, getIncidentSignals, ipSetActions, pickBlockerFunction } from '../incidentSignals';
-import { wafQueryCache } from '../wafQueryCache';
+import { oauthSignupsRefusedMetricName } from '../../../../../infra/authAbuseMetric';
+import {
+  collectIpSetRefs,
+  incidentMetricSpecs,
+  getIncidentSignals,
+  ipSetActions,
+  pickBlockerFunction,
+} from '../incidentSignals';
+import { WAF_CACHE_TTL, wafQueryCache } from '../wafQueryCache';
 
 vi.mock('sst', () => ({
   Resource: {
@@ -127,7 +134,17 @@ const metricQueryInput = () =>
     .map(call => call.args[0].input)
     .find(input => input.MetricDataQueries?.[0]?.Id === 'm0');
 
+const originalRegion = process.env.AWS_REGION;
+
+afterEach(() => {
+  vi.useRealTimers();
+  if (originalRegion === undefined) delete process.env.AWS_REGION;
+  else process.env.AWS_REGION = originalRegion;
+});
+
 beforeEach(() => {
+  // The default region is us-east-1 here, so the alarm listing runs in a single region.
+  process.env.AWS_REGION = 'us-east-1';
   cloudFrontMock.reset();
   cloudWatchMock.reset();
   wafMock.reset();
@@ -362,6 +379,121 @@ describe('getIncidentSignals', () => {
     expect(result.alarms.total).toBe(4);
   });
 
+  it('also lists alarms in us-east-1 when the default region differs, and merges them', async () => {
+    process.env.AWS_REGION = 'us-east-2';
+    cloudWatchMock
+      .on(DescribeAlarmsCommand)
+      .resolvesOnce({
+        MetricAlarms: [{ AlarmName: 'bike4mind-production-api-burst', StateValue: 'OK' }],
+      })
+      .resolvesOnce({
+        MetricAlarms: [
+          {
+            AlarmName: 'bike4mind-production-waf-otc-edge-signal-rate',
+            StateValue: 'ALARM',
+            StateTransitionedTimestamp: new Date('2026-11-02T12:00:00Z'),
+          },
+        ],
+      });
+
+    const { alarms } = await getIncidentSignals('24h');
+
+    expect(alarms).toEqual({
+      total: 2,
+      inAlarm: [{ name: 'waf-otc-edge-signal-rate', since: '2026-11-02T12:00:00.000Z' }],
+    });
+    const regions = await Promise.all(
+      cloudWatchMock.commandCalls(DescribeAlarmsCommand).map(call => call.thisValue.config.region())
+    );
+    expect(regions.sort()).toEqual(['us-east-1', 'us-east-2']);
+  });
+
+  it('keeps the data from one region and flags the section when the other fails', async () => {
+    process.env.AWS_REGION = 'us-east-2';
+    cloudWatchMock
+      .on(DescribeAlarmsCommand)
+      .resolvesOnce({ MetricAlarms: [{ AlarmName: 'bike4mind-production-api-burst', StateValue: 'OK' }] })
+      .rejectsOnce(new Error('Throttling'));
+
+    const { alarms } = await getIncidentSignals('24h');
+
+    expect(alarms).toEqual({ total: 1, inAlarm: [], error: 'Alarms could not be read in every region' });
+  });
+
+  it('stops paging alarms at the page limit and reports it', async () => {
+    cloudWatchMock.on(DescribeAlarmsCommand).resolves({ MetricAlarms: [], NextToken: 'again' });
+
+    const { alarms } = await getIncidentSignals('24h');
+
+    expect(cloudWatchMock.commandCalls(DescribeAlarmsCommand)).toHaveLength(20);
+    expect(alarms.error).toBe('Alarm listing returned too many pages');
+  });
+
+  it('stops paging metric data at the page limit and reports it', async () => {
+    cloudWatchMock.on(GetMetricDataCommand).resolves({ MetricDataResults: [], NextToken: 'again' });
+
+    const { metrics } = await getIncidentSignals('24h');
+
+    expect(metrics.error).toBe('CloudWatch metrics returned too many pages');
+    expect(metrics.successfulSignups).toBeNull();
+  });
+
+  it('stops paging the blocker series list at the page limit and reports it', async () => {
+    cloudWatchMock.on(ListMetricsCommand).resolves({ Metrics: [], NextToken: 'again' });
+
+    const { blockLists } = await getIncidentSignals('24h');
+
+    expect(cloudWatchMock.commandCalls(ListMetricsCommand)).toHaveLength(20);
+    expect(blockLists.error).toContain('Runtime blocker metric returned too many pages');
+  });
+
+  it('reports a stage without a router WAF as not configured rather than failed', async () => {
+    cloudFrontMock
+      .on(GetDistributionCommand)
+      .resolves({ Distribution: { DistributionConfig: { WebACLId: '' } } } as never);
+
+    const { waf, blockLists } = await getIncidentSignals('24h');
+
+    expect(waf).toEqual({ allowed: null, blocked: null, counted: null, notConfigured: true });
+    expect(blockLists.notConfigured).toBe(true);
+    expect(blockLists.lists).toEqual([]);
+    expect(blockLists.error).toBeUndefined();
+  });
+
+  describe('cache lifetime', () => {
+    const healthyFetches = () => cloudWatchMock.commandCalls(DescribeAlarmsCommand).length;
+
+    it('refetches a degraded response after the short TTL', async () => {
+      vi.useFakeTimers();
+      cloudWatchMock.on(DescribeAlarmsCommand).rejects(new Error('Throttling'));
+
+      await getIncidentSignals('24h');
+      const initial = healthyFetches();
+      await vi.advanceTimersByTimeAsync(WAF_CACHE_TTL.incidentDegraded - 1);
+      await getIncidentSignals('24h');
+      expect(healthyFetches()).toBe(initial);
+
+      await vi.advanceTimersByTimeAsync(2);
+      await getIncidentSignals('24h');
+      expect(healthyFetches()).toBeGreaterThan(initial);
+    });
+
+    it('keeps a healthy response past the short TTL but refetches after the long one', async () => {
+      vi.useFakeTimers();
+      cloudWatchMock.on(DescribeAlarmsCommand).resolves({ MetricAlarms: [] });
+
+      await getIncidentSignals('24h');
+      const initial = healthyFetches();
+      await vi.advanceTimersByTimeAsync(WAF_CACHE_TTL.incidentDegraded + 1);
+      await getIncidentSignals('24h');
+      expect(healthyFetches()).toBe(initial);
+
+      await vi.advanceTimersByTimeAsync(WAF_CACHE_TTL.incident);
+      await getIncidentSignals('24h');
+      expect(healthyFetches()).toBeGreaterThan(initial);
+    });
+  });
+
   it('caches per range and shares one in-flight fetch', async () => {
     const [first, second] = await Promise.all([getIncidentSignals('24h'), getIncidentSignals('24h')]);
     await getIncidentSignals('24h');
@@ -426,5 +558,14 @@ describe('pickBlockerFunction', () => {
 
   it('declines to guess between several unmatched functions', () => {
     expect(pickBlockerFunction(['blocker-a', 'blocker-b'], 'pr123')).toBeNull();
+  });
+});
+
+describe('incidentMetricSpecs', () => {
+  it('names the OAuth refusal metric exactly as the infra emitter does', () => {
+    for (const stage of ['production', 'dev', 'pr-123']) {
+      const spec = incidentMetricSpecs('bike4mind', stage).find(item => item.key === 'oauthSignupsRefused');
+      expect(spec?.metricName).toBe(oauthSignupsRefusedMetricName(stage));
+    }
   });
 });

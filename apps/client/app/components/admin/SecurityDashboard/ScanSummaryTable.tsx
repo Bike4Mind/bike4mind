@@ -28,6 +28,8 @@ type ScanSummaryRow = {
   findings: string | null;
   /** null: no schedule, so the scan only runs when started by hand. */
   nextRunAt: string | null;
+  /** The schedules failed to load, so a missing next run does not mean manual. */
+  nextRunUnavailable?: boolean;
 };
 
 const CHECK_STATUS: Record<SecurityCheckStatus, ScanStatus> = {
@@ -61,13 +63,20 @@ function untilLabel(date: Date, now: number): string {
   return formatter.format(Math.round(seconds / 86400), 'day');
 }
 
-function NextRun({ at, testId }: { at: string | null; testId: string }) {
+function NextRun({ at, unavailable, testId }: { at: string | null; unavailable?: boolean; testId: string }) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 60_000);
     return () => clearInterval(timer);
   }, []);
   const date = at ? new Date(at) : undefined;
+  if (unavailable) {
+    return (
+      <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }} data-testid={testId}>
+        Unavailable
+      </Typography>
+    );
+  }
   if (!date || Number.isNaN(date.getTime())) {
     return (
       <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }} data-testid={testId}>
@@ -96,7 +105,8 @@ function checkRow(
   label: string,
   check: SecurityCheckSummary | undefined,
   overview: { loading: boolean; failed: boolean },
-  nextRunAt: string | null
+  nextRunAt: string | null,
+  nextRunUnavailable: boolean
 ): ScanSummaryRow {
   return {
     id,
@@ -106,6 +116,7 @@ function checkRow(
     lastRunAt: check?.lastCheckedAt ?? null,
     findings: check?.lastCheckedAt ? compactSeverityCounts(check.severityCounts, SEVERITIES) : null,
     nextRunAt,
+    nextRunUnavailable,
   };
 }
 
@@ -127,6 +138,7 @@ export function ScanSummaryTable({
 
   const overviewState = { loading: !overview.data && !overview.isError, failed: !overview.data && overview.isError };
   const checks = overview.data?.checks ?? [];
+  const schedulesFailed = !schedules.data && schedules.isError;
   const scheduled = (key: 'web' | 'cloud') => {
     const schedule = schedules.data?.[key];
     return schedule?.enabled && schedule.nextRunAt ? schedule.nextRunAt : null;
@@ -151,14 +163,16 @@ export function ScanSummaryTable({
       'Website',
       checks.find(check => check.id === 'web'),
       overviewState,
-      scheduled('web')
+      scheduled('web'),
+      schedulesFailed
     ),
     checkRow(
       'cloud',
       'Cloud baseline',
       checks.find(check => check.id === 'cloud'),
       overviewState,
-      scheduled('cloud')
+      scheduled('cloud'),
+      schedulesFailed
     ),
     {
       id: 'prowler',
@@ -244,7 +258,13 @@ export function ScanSummaryTable({
         {
           id: 'next-run',
           label: 'Next run',
-          render: row => <NextRun at={row.nextRunAt} testId={`security-scans-summary-${row.id}-next`} />,
+          render: row => (
+            <NextRun
+              at={row.nextRunAt}
+              unavailable={row.nextRunUnavailable}
+              testId={`security-scans-summary-${row.id}-next`}
+            />
+          ),
         },
       ]}
     />
