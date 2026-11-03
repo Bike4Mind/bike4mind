@@ -69,23 +69,42 @@ function FieldRow({
   sent: number | undefined;
   autoFocus: boolean;
   disabled?: boolean;
-  onCommit: (value: number | undefined) => void;
+  onCommit: (value: number | undefined) => Promise<boolean | void>;
 }) {
   const noteId = useId();
   const [draft, setDraft] = useState(shown(sent));
-  useEffect(() => setDraft(shown(sent)), [sent]);
+  // The value last asked for, so Enter and the blur after it save once.
+  const committed = useRef<string | null>(null);
+  const attempt = useRef(0);
+  const discarded = useRef(false);
+  useEffect(() => {
+    committed.current = null;
+    setDraft(shown(sent));
+  }, [sent]);
   const locked = control.locked;
 
+  const save = (value: number | undefined) => {
+    if (shown(value) === committed.current) return;
+    committed.current = shown(value);
+    const mine = ++attempt.current;
+    void onCommit(value).then(saved => {
+      if (saved !== false || mine !== attempt.current) return;
+      committed.current = null;
+      setDraft(shown(sent));
+    });
+  };
+
   const commit = () => {
+    if (discarded.current) return;
     const text = draft.trim();
     if (text === shown(sent)) return;
     if (!text) {
-      onCommit(undefined);
+      save(undefined);
       return;
     }
     const next = requestGeneration({ [field]: Number(text) }, { [field]: control })[field];
     setDraft(shown(next ?? sent));
-    if (next !== undefined && next !== sent) onCommit(next);
+    if (next !== undefined && next !== sent) save(next);
   };
 
   return (
@@ -124,11 +143,7 @@ function FieldRow({
         variant={locked ? 'soft' : 'outlined'}
         value={locked ? String(locked.value) : draft}
         placeholder={
-          control.default !== undefined
-            ? numberFormat.format(control.default)
-            : control.unlimitedDefault
-              ? 'No limit'
-              : 'Default'
+          control.default !== undefined ? String(control.default) : control.unlimitedDefault ? 'No limit' : 'Default'
         }
         disabled={disabled}
         readOnly={locked !== undefined}
@@ -137,8 +152,16 @@ function FieldRow({
         onBlur={locked ? undefined : commit}
         onKeyDown={event => {
           if (event.key === 'Enter' && !locked) commit();
+          // Escape closes the dialog, and the typed value goes with it even if a blur fires first.
+          if (event.key === 'Escape' && !event.nativeEvent.isComposing) discarded.current = true;
         }}
-        sx={{ width: 112, flexShrink: 0, ...(locked ? { color: 'text.tertiary' } : {}) }}
+        sx={{
+          width: 112,
+          flexShrink: 0,
+          '--Input-placeholderColor': 'var(--joy-palette-text-tertiary)',
+          '& input::placeholder': { fontStyle: 'italic' },
+          ...(locked ? { color: 'text.tertiary' } : {}),
+        }}
         slotProps={{
           input: {
             min: control.min,
@@ -189,21 +212,28 @@ export function GenerationSettingsPicker({
   if (fields.length === 0) return null;
 
   const sent = requestGeneration(generation, controls);
-  const applied = Object.keys(sent).length;
+  const applied = fields.filter(({ field }) => generation?.[field] !== undefined && sent[field] !== undefined).length;
   const resettable = fields.some(({ field, control }) => !control.locked && generation?.[field] !== undefined);
   const firstEditable = fields.find(({ control }) => !control.locked)?.field;
 
   const save = (next: GenerationSettings) => {
     pending.current = next;
-    void Promise.resolve(onChange(next)).then(saved => {
+    return Promise.resolve(onChange(next)).then(saved => {
       if (saved === false && pending.current === next) pending.current = undefined;
+      return saved;
     });
   };
   const set = (field: GenerationField, value: number | undefined) => {
     const next: GenerationSettings = { ...(pending.current ?? generation) };
     if (value === undefined) delete next[field];
     else next[field] = value;
-    save(next);
+    return save(next);
+  };
+  // Overrides for fields this model does not show stay for the model that does.
+  const resetShown = () => {
+    const next: GenerationSettings = { ...(pending.current ?? generation) };
+    for (const { field, control } of fields) if (!control.locked) delete next[field];
+    void save(next);
   };
   const open = () => {
     const rect = anchor.current?.getBoundingClientRect();
@@ -240,6 +270,7 @@ export function GenerationSettingsPicker({
       >
         <Sheet
           role="dialog"
+          aria-modal="true"
           aria-labelledby={titleId}
           aria-describedby={introId}
           tabIndex={-1}
@@ -284,7 +315,7 @@ export function GenerationSettingsPicker({
                 variant="plain"
                 color="neutral"
                 disabled={disabled}
-                onClick={() => save({})}
+                onClick={resetShown}
                 data-testid="generation-settings-reset-all-btn"
               >
                 <Typography level="body-xs" textColor="inherit">
