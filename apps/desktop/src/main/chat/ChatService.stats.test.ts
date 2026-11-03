@@ -163,6 +163,18 @@ describe('ChatService reply stats', () => {
     expect(thinkingPhases()).toBe(1);
   });
 
+  it('stamps no first text on whitespace, so hidden thinking is timed to the answer', async () => {
+    const { reply } = await hostedTurn(async stream => {
+      stream.write(frame({ type: 'content', text: '\n\n' }));
+      await pause(40);
+      stream.write(frame({ type: 'content', text: 'Answer', usage: { outputTokens: 50, reasoningTokens: 30 } }));
+    });
+
+    expect(reply?.content).toBe('Answer');
+    expect(reply?.stats?.derived).toEqual(['reasoningMs']);
+    expect(reply?.stats?.reasoningMs).toBeGreaterThanOrEqual(35);
+  });
+
   it('estimates hosted thinking it never saw from the wait before the text, and says so', async () => {
     const { reply } = await hostedTurn(async stream => {
       await pause(30);
@@ -408,6 +420,29 @@ describe('ChatService reply stats', () => {
     expect(reply).not.toHaveProperty('stats');
     expect(end).toMatchObject({ type: 'done' });
     expect(end).not.toHaveProperty('stats');
+  });
+
+  it('keeps the earlier stats on a Continue refused before it reached the model', async () => {
+    const id = await session();
+    await store.appendMessage(id, { id: 'u1', role: 'user', content: 'go', createdAt: new Date().toISOString() });
+    const earlier = { totalMs: 8_000, modelMs: 3_000, toolMs: 5_000, firstTokenMs: 200 };
+    await store.appendMessage(id, {
+      id: 'a1',
+      role: 'assistant',
+      content: 'partway',
+      createdAt: new Date().toISOString(),
+      stopReason: 'tool_turn_limit',
+      stats: earlier,
+    });
+    accessList.mockRejectedValueOnce(new Error('the folder list could not be read'));
+
+    await services[0].continueReply(id);
+    const end = await settled();
+
+    const reply = (await store.get(id))?.messages.find(message => message.id === 'a1');
+    expect(post).not.toHaveBeenCalled();
+    expect(end).toMatchObject({ type: 'error', stats: earlier });
+    expect(reply?.stats).toEqual(earlier);
   });
 
   it('stores no stats on a turn refused before it reached the model', async () => {
