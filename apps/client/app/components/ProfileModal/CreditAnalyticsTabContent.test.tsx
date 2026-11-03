@@ -242,3 +242,40 @@ describe('CreditAnalyticsTabContent spend breakdown', () => {
     expect(screen.queryByTestId('usage-spend-breakdown')).toBeNull();
   });
 });
+
+describe('CreditAnalyticsTabContent referral rewards', () => {
+  afterEach(() => {
+    hoisted.transactions = [];
+    line.series = [];
+  });
+
+  const showCreditsAdded = () => {
+    const [, viewModeSelect] = screen.getAllByRole('combobox');
+    fireEvent.mouseDown(viewModeSelect);
+    fireEvent.click(screen.getByText('Credits Added'));
+  };
+  const total = (id: string) => line.series.find(s => s.id === id)?.data.reduce((sum, point) => sum + point.y, 0);
+
+  it('charts referral rewards as their own series, apart from the other credits added', () => {
+    const at = new Date(Date.now() - 3_600_000);
+    hoisted.transactions = [
+      { type: 'purchase', credits: 5000, createdAt: at },
+      { type: 'generic_add', credits: 200, createdAt: at, reason: 'admin_grant' },
+      { type: 'generic_add', credits: 6000, createdAt: at, reason: 'referral_reward' },
+    ];
+    render(<CreditAnalyticsTabContent />, { wrapper: TestWrapper });
+    showCreditsAdded();
+
+    expect(line.series.map(series => series.id)).toEqual(['credits_added', 'referral_rewards']);
+    expect(total('credits_added')).toBe(5200);
+    expect(total('referral_rewards')).toBe(6000);
+  });
+
+  it('adds no referral series when there are no referral rewards', () => {
+    hoisted.transactions = [{ type: 'purchase', credits: 5000, createdAt: new Date(Date.now() - 3_600_000) }];
+    render(<CreditAnalyticsTabContent />, { wrapper: TestWrapper });
+    showCreditsAdded();
+
+    expect(line.series.map(series => series.id)).toEqual(['credits_added']);
+  });
+});
