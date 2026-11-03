@@ -72,6 +72,15 @@ describe('HeldRelayCard', () => {
     expect(byId('held-relay-card')?.textContent).toContain('do more without asking than the sender');
   });
 
+  it('discloses that delivering a notify message lets the sender read the conversation', () => {
+    mount();
+    expect(byId('held-relay-notify-note')).toBeNull();
+    act(() => root?.unmount());
+    host?.remove();
+    mount({ held: [{ ...held, relay: { ...held.relay, notify: true } }] });
+    expect(byId('held-relay-notify-note')?.textContent).toContain('Docs pass read this conversation');
+  });
+
   it('delivers or declines through the resolver', async () => {
     const onResolve = vi.fn(async () => {});
     mount({ onResolve });

@@ -65,6 +65,11 @@ function HeldRelayRow({
         <Typography level="body-xs" textColor="text.tertiary">
           {REASONS[held.reason]}
         </Typography>
+        {relay.notify && (
+          <Typography level="body-xs" textColor="text.tertiary" data-testid="held-relay-notify-note">
+            Delivering also lets {relay.fromTitle || 'the sender'} read this conversation when the turn ends.
+          </Typography>
+        )}
         <Typography
           level="body-sm"
           data-testid="held-relay-text"
