@@ -20,6 +20,7 @@ import { storedReasoningEffortSetting } from './reasoningEffort';
 import { isPromptCacheTtl, type PromptCacheTtl } from '@bike4mind/common';
 import type { SessionWritesStore, StoredSessionWrites } from './tools/sessionScripts';
 import { assertScopeKey, migrateLegacySessions, sessionScopeKey, type SessionScope } from './sessionScope';
+import { isLocalUsageBucket, sessionUsageBuckets, type LocalUsageBucket } from '../usage/localUsage';
 
 /** Session ids are generated here, but arrive back from the renderer over IPC - see `filePath`. */
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -114,6 +115,26 @@ interface SummaryIndexFile {
   /** The launch defaults baked into every summary; a change invalidates them all. */
   defaults: string;
   entries: Record<string, IndexedSummary>;
+}
+
+/**
+ * Each session's local-model usage buckets, keyed and invalidated like SUMMARY_INDEX, so the
+ * profile screen re-reads only the transcripts that changed since it last asked.
+ */
+const LOCAL_USAGE_INDEX = '.local-usage-index';
+const LOCAL_USAGE_INDEX_VERSION = 1;
+
+interface IndexedLocalUsage {
+  size: number;
+  mtimeMs: number;
+  buckets: LocalUsageBucket[];
+}
+
+interface LocalUsageIndexFile {
+  version: number;
+  /** The session model a file without one falls back to; see SummaryIndexFile.defaults. */
+  defaults: string;
+  entries: Record<string, IndexedLocalUsage>;
 }
 
 /** Whether an import wrote its copy, preserved a continuation, or respected conversation/workspace deletion. */
@@ -288,6 +309,8 @@ export class SessionStore implements SessionWritesStore {
 
   /** Per scope directory; see SUMMARY_INDEX. */
   private readonly summaryIndexes = new Map<string, Promise<Map<string, IndexedSummary>>>();
+  /** Per scope directory; see LOCAL_USAGE_INDEX. */
+  private readonly localUsageIndexes = new Map<string, Promise<Map<string, IndexedLocalUsage>>>();
 
   constructor(
     private readonly baseDirectory: string,
@@ -607,6 +630,103 @@ export class SessionStore implements SessionWritesStore {
       await rename(temporary, path);
     } catch {
       // A cache: failing to save it costs the next listing a re-read, nothing more.
+      await rm(temporary, { force: true }).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Local-model usage buckets for every session in the current scope.
+   *
+   * A transcript is parsed only when its size or mtime moved since the index saw it, and at most
+   * LIST_READ_CONCURRENCY at a time; each is reduced to its buckets before the next is read, so a
+   * first build never holds the whole history in memory.
+   */
+  async localUsageBuckets(): Promise<LocalUsageBucket[]> {
+    const directory = await this.directoryFor(true);
+    if (!directory) return [];
+
+    let entries: string[];
+    try {
+      entries = await readdir(directory);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw err;
+    }
+
+    const index = await this.localUsageIndex(directory);
+    const ids = entries.filter(name => name.endsWith('.json')).map(name => name.slice(0, -'.json'.length));
+    let changed = false;
+    let next = 0;
+    const worker = async () => {
+      while (next < ids.length) {
+        const id = ids[next++];
+        try {
+          const info = await stat(this.filePath(directory, id));
+          const cached = index.get(id);
+          if (cached && cached.size === info.size && cached.mtimeMs === info.mtimeMs) continue;
+          const session = await this.read(directory, id);
+          if (session) index.set(id, { size: info.size, mtimeMs: info.mtimeMs, buckets: sessionUsageBuckets(session) });
+          else index.delete(id);
+          changed = true;
+        } catch {
+          // Unreadable now: dropped, so a file that recovers is read again rather than trusted.
+          if (index.delete(id)) changed = true;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(LIST_READ_CONCURRENCY, ids.length) }, worker));
+
+    const present = new Set(ids);
+    for (const id of index.keys()) {
+      if (!present.has(id)) {
+        index.delete(id);
+        changed = true;
+      }
+    }
+    if (changed) await this.saveLocalUsageIndex(directory, index);
+
+    return [...index.values()].flatMap(entry => entry.buckets);
+  }
+
+  private localUsageIndex(directory: string): Promise<Map<string, IndexedLocalUsage>> {
+    let loading = this.localUsageIndexes.get(directory);
+    if (!loading) {
+      loading = this.loadLocalUsageIndex(directory);
+      this.localUsageIndexes.set(directory, loading);
+    }
+    return loading;
+  }
+
+  private async loadLocalUsageIndex(directory: string): Promise<Map<string, IndexedLocalUsage>> {
+    const index = new Map<string, IndexedLocalUsage>();
+    try {
+      const parsed = JSON.parse(
+        await readFile(join(directory, LOCAL_USAGE_INDEX), 'utf8')
+      ) as Partial<LocalUsageIndexFile>;
+      if (parsed.version !== LOCAL_USAGE_INDEX_VERSION || parsed.defaults !== this.defaultModel) return index;
+      for (const [id, entry] of Object.entries(parsed.entries ?? {})) {
+        if (!isValidSessionId(id) || typeof entry?.size !== 'number' || typeof entry.mtimeMs !== 'number') continue;
+        if (!Array.isArray(entry.buckets) || !entry.buckets.every(isLocalUsageBucket)) continue;
+        index.set(id, entry);
+      }
+    } catch {
+      // Missing or unreadable: every file is read once and the index is rebuilt.
+    }
+    return index;
+  }
+
+  private async saveLocalUsageIndex(directory: string, index: Map<string, IndexedLocalUsage>): Promise<void> {
+    const file: LocalUsageIndexFile = {
+      version: LOCAL_USAGE_INDEX_VERSION,
+      defaults: this.defaultModel,
+      entries: Object.fromEntries(index),
+    };
+    const path = join(directory, LOCAL_USAGE_INDEX);
+    const temporary = `${path}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, JSON.stringify(file), 'utf8');
+      await rename(temporary, path);
+    } catch {
       await rm(temporary, { force: true }).catch(() => undefined);
     }
   }

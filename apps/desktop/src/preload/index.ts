@@ -134,6 +134,8 @@ const api: DesktopApi = {
   usage: {
     getHistory: (window: UsageWindowId, force?: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.usageGetHistory, window, force ?? false),
+    getLocal: (window: UsageWindowId, force?: boolean) =>
+      ipcRenderer.invoke(IPC_CHANNELS.usageGetLocal, window, force ?? false),
   },
   fleet: {
     getState: () => ipcRenderer.invoke(IPC_CHANNELS.fleetGetState),

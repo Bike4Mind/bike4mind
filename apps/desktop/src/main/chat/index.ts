@@ -303,6 +303,8 @@ export interface RegisteredChat {
   localContext: LocalContextPreference;
   /** The capability ledger, which the Models screen records approved downloads in. */
   capabilityLedger: CapabilityLedger;
+  /** The session store, which the profile screen's local usage is counted from. */
+  store: SessionStore;
 }
 
 /**
@@ -1407,6 +1409,7 @@ export function registerChat(
     },
     localContext,
     capabilityLedger,
+    store,
   };
 }
 
