@@ -166,7 +166,7 @@ export class ModelServerRegistry {
   private timer: ReturnType<typeof setInterval> | undefined;
   private loaded: Promise<void> | null = null;
   private readonly savedListeners = new Set<(id: string) => void>();
-  private readonly checking = new WeakMap<Entry, Promise<void>>();
+  private readonly checking = new WeakMap<Entry, Promise<Listing | undefined>>();
   private lateNoticeAt = 0;
 
   constructor(private readonly deps: ModelServerRegistryDeps) {}
@@ -431,27 +431,40 @@ export class ModelServerRegistry {
     // picker refresh starts one when the last is stale. A server not checked yet is listed directly.
     const down = entry.health.state !== 'online' && entry.health.state !== 'unknown';
     const running = this.checking.get(entry);
+    let checked: Listing | undefined;
     if (down && (running || this.stale(entry))) {
-      const check = (running ?? this.checkEntry(entry).then(() => this.emit())).catch(() => undefined);
-      await within(check, PICKER_CHECK_WAIT_MS, undefined);
+      const check = (
+        running ??
+        this.checkEntry(entry).then(listing => {
+          this.emit();
+          return listing;
+        })
+      ).catch(() => undefined);
+      checked = await within(check, PICKER_CHECK_WAIT_MS, undefined);
     }
     if (!this.current(entry)) return this.savedModels(entry, options);
     let reason: string | null = null;
     if (listable(entry)) {
       const fresh = this.freshKept(entry);
-      let slot = fresh ? null : this.listEntry(entry);
+      const known: Listing | undefined = fresh ? { ok: true, models: fresh } : checked?.ok ? checked : undefined;
+      let slot = known ? null : this.listEntry(entry);
       // undefined: still listing when the wait ran out, or already reported as still listing.
-      let result: Listing | undefined = fresh ? { ok: true, models: fresh } : undefined;
+      let result: Listing | undefined = known;
       if (slot) slot.picker = true;
-      if (slot && options.untilListed === entry.record.id) {
-        result = await slot.promise;
-        // A pull or removal during the wait dropped that listing, so the one started after it decides.
-        while (slot.seq < entry.floor && this.current(entry)) {
+      const turn = options.untilListed === entry.record.id;
+      const deadline = Date.now() + PICKER_LIST_WAIT_MS;
+      const wait = (listing: Slot) =>
+        turn ? listing.promise : within(listing.promise, Math.max(deadline - Date.now(), 0), undefined);
+      if (slot && (turn || !slot.reported)) {
+        result = await wait(slot);
+        // A pull or removal during the wait dropped that listing, so the one started after it decides. The
+        // picker keeps a dropped listing that succeeded, but a failed one says nothing about the server.
+        while (result && slot.seq < entry.floor && (turn || !result.ok) && this.current(entry)) {
           slot = this.listEntry(entry);
           slot.picker = true;
-          result = await slot.promise;
+          result = await wait(slot);
         }
-      } else if (slot && !slot.reported) result = await within(slot.promise, PICKER_LIST_WAIT_MS, undefined);
+      }
       if (!this.current(entry)) return this.savedModels(entry, options);
       if (result?.ok) {
         if (entry.health.state === 'unknown') void this.check(entry.record.id);
@@ -698,8 +711,8 @@ export class ModelServerRegistry {
     }
   }
 
-  /** One check per server at a time; callers during a check share its result. */
-  private checkEntry(entry: Entry): Promise<void> {
+  /** One check per server at a time; callers during a check share its result: the listing it made, if it made one. */
+  private checkEntry(entry: Entry): Promise<Listing | undefined> {
     const running = this.checking.get(entry);
     if (running) return running;
     const done = this.probeEntry(entry).finally(() => this.checking.delete(entry));
@@ -707,11 +720,11 @@ export class ModelServerRegistry {
     return done;
   }
 
-  private async probeEntry(entry: Entry): Promise<void> {
+  private async probeEntry(entry: Entry): Promise<Listing | undefined> {
     entry.scope = (await this.scopeOf(entry.parsed.host)) ?? entry.scope;
     if (this.deps.store.credentialMissing(entry.record)) {
       this.setHealth(entry, this.missingCredentialHealth());
-      return;
+      return undefined;
     }
     const outcome = await probeServer(
       entry.fetch,
@@ -730,7 +743,7 @@ export class ModelServerRegistry {
         checkedAt,
         error: new ServerCredentialsError(entry.record.name, !!this.deps.store.headers(entry.record)).message,
       });
-      return;
+      return undefined;
     }
     if (!outcome.kind) {
       if (outcome.code) {
@@ -745,7 +758,7 @@ export class ModelServerRegistry {
         checkedAt,
         error: outcome.error && withLocalNetworkHint(outcome.error, outcome.code, entry.scope, this.platform),
       });
-      return;
+      return undefined;
     }
     if (outcome.product && outcome.product !== entry.product) {
       entry.product = outcome.product;
@@ -762,7 +775,8 @@ export class ModelServerRegistry {
       error: null,
     });
     // A fresh kept listing is what the picker serves; listing again would take its rows back to pending.
-    const listing = this.freshKept(entry) ? null : await this.listEntry(entry).promise;
+    const slot = this.freshKept(entry) ? null : this.listEntry(entry);
+    const listing = slot ? await slot.promise : null;
     if (listing && !listing.ok) {
       const err = listing.error;
       this.deps.logger.debug(
@@ -772,6 +786,8 @@ export class ModelServerRegistry {
     // Each check is how tools come back after the server restarts with tool calling on. Not awaited: the probe
     // generates a token, and a change reaches Settings and the picker through toolsChanged.
     void entry.client.recheckTools?.(entry.record.models[0]);
+    // A picker read that waited on this check serves its listing; one a pull or removal dropped is not served.
+    return slot && listing?.ok && slot.seq >= entry.floor ? listing : undefined;
   }
 
   private missingCredentialHealth(): ModelServerHealth {

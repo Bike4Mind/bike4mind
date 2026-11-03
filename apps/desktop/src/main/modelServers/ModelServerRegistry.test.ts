@@ -720,6 +720,22 @@ describe('ModelServerRegistry', () => {
       expect((await servers.views())[1].health.state).toBe('online');
     });
 
+    it('has the picker list again when a pull or removal dropped the listing it waited on, and that one failed', async () => {
+      const { fake, servers, slowId, listedBefore, fail } = await slowAndFast();
+      const read = servers.models();
+      await vi.waitFor(() => expect(tagCalls(fake, SLOW)).toBe(listedBefore + 1));
+      await servers
+        .hubServer(slowId)
+        ?.runtime.remove('qwen2.5:0.5b')
+        .catch(() => undefined);
+      fake.state.tagsGates.delete(SLOW);
+      fail();
+      const slow = (await read).filter(model => model.server?.id === slowId);
+      expect(slow.map(model => model.name).sort()).toEqual(['llama3.2:3b', 'qwen2.5:0.5b']);
+      expect(slow.every(model => model.unavailable === undefined)).toBe(true);
+      expect((await servers.views())[1].health.state).toBe('online');
+    });
+
     it('has the picker list a server renamed while its listing was pending, once that listing lands', async () => {
       const { servers, listedLate, slowId, release } = await slowAndFast();
       await listPastTheWait(servers);
@@ -1262,6 +1278,23 @@ describe('ModelServerRegistry', () => {
       expect(model.unavailable).toBeUndefined();
     });
 
+    it.each([
+      ['a picker read', false],
+      ['a turn on that server', true],
+    ])('lists once for %s, using the listing that check made', async (_label, turn) => {
+      const { fake, servers, release, checking } = await downServer();
+      const id = (await servers.views())[1].id;
+      const tags = () => fake.calls.filter(call => call.path === '/api/tags').length;
+      const before = tags();
+      const listing = servers.models(turn ? { untilListed: id } : {});
+      setTimeout(release, 20);
+      const [model] = await listing;
+      await checking;
+      expect(model.unavailable).toBeUndefined();
+      // The check's probe and its listing; the read starts none of its own.
+      expect(tags()).toBe(before + 2);
+    });
+
     it('lists its last models, disabled, when that check is slow', async () => {
       const { servers, release, checking } = await downServer();
       vi.useFakeTimers();
@@ -1423,6 +1456,35 @@ describe('ModelServerRegistry', () => {
     expect(view.health.state).toBe('credentials');
     expect(view.health.error).toMatch(/rejected the credentials/);
     expect(model.unavailable).toMatch(/needs new credentials/);
+  });
+
+  it('tells a saved credential the server rejects from one that was never saved, on the picker rows', async () => {
+    const fake = fakeOllama();
+    const { registry: servers } = registry(fake);
+    await servers.add({
+      address: 'http://127.0.0.2:11434',
+      credential: { type: 'bearer', token: TOKEN },
+      name: 'keyed',
+      kind: 'ollama',
+      access: 'chat',
+    });
+    await servers.add({
+      address: 'http://127.0.0.3:11434',
+      credential: none,
+      name: 'bare',
+      kind: 'ollama',
+      access: 'chat',
+    });
+    fake.state.wantToken = 'a-token-the-saved-one-is-not';
+    const rows = await servers.models();
+    expect(rows.find(row => row.server?.name === 'keyed')).toMatchObject({
+      unavailable: expect.stringMatching(/keyed needs new credentials/),
+      wantsCredentials: 'rejected',
+    });
+    expect(rows.find(row => row.server?.name === 'bare')).toMatchObject({
+      unavailable: expect.stringMatching(/bare needs new credentials/),
+      wantsCredentials: 'missing',
+    });
   });
 
   describe('credentials on a saved http host name that has not been checked yet', () => {
