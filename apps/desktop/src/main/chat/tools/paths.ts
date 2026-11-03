@@ -149,10 +149,13 @@ async function physicallyInDistro(base: WslLocation, requested: string): Promise
   return inDistro(base, linux);
 }
 
-/** Linux symlinks under the share do not resolve from Windows, so the distro follows them; null when it cannot. */
+/**
+ * Linux symlinks under the share do not resolve from Windows, so the distro follows them; null when it cannot.
+ * A Linux name holding a backslash has no share spelling that keeps it one name, so it is null too.
+ */
 async function inDistro(location: WslLocation, linuxPath: string): Promise<string | null> {
   const real = await wslRealpath(location.distro, linuxPath);
-  return real === null ? null : wslUncPath(location, real);
+  return real === null || real.includes('\\') ? null : wslUncPath(location, real);
 }
 
 /** A WSL root is resolved in its distro only when the path checked against it is in that distro too. */

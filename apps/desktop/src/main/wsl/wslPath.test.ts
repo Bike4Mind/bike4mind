@@ -119,6 +119,10 @@ describe('the user environment probe', () => {
     expect(parseUserEnvironment('__B4M_ENV__/usr/bin__B4M_ENV____B4M_ENV__')).toBeNull();
   });
 
+  it('does not report a home whose name holds a backslash', () => {
+    expect(parseUserEnvironment('__B4M_ENV__/usr/bin__B4M_ENV__/home/a\\b__B4M_ENV__')).toBeNull();
+  });
+
   // What wsl.exe hands to Linux, run here directly.
   it.runIf(process.platform === 'linux')('asks the login shell from the passwd entry', () => {
     const run = spawnSync('/bin/sh', ['-c', USER_ENV_SCRIPT, 'b4m-env', USER_ENV_PRINT], {

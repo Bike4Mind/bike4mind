@@ -86,6 +86,15 @@ describe('paths in a WSL folder', () => {
     await denied(resolveWithinRootsPhysically('broken/x', ['\\\\wsl.localhost\\Ubuntu\\'], REPO));
   });
 
+  it('treats a Linux name with a backslash as outside, not as a path below the share folder it spells', async () => {
+    await denied(resolveWithinRootsPhysically('../repo\\x/secret', [REPO], REPO));
+    expect(asked).toContain('Ubuntu:/home/me/repo/../repo\\x/secret');
+    realpaths.set('/home/me/repo/link', '/home/me/repo/a\\b');
+    await denied(resolveWithinRootsPhysically('link', [REPO], REPO));
+    await expect(hostRealpath(`${REPO}\\link`)).rejects.toThrow('Cannot resolve');
+    expect(await resolveWithinRootsPhysically('src/x', [REPO], REPO)).toBe(`${REPO}\\src\\x`);
+  });
+
   it('refuses a path in a distro no root is in without asking that distro', async () => {
     await denied(resolveWithinRootsPhysically('\\\\wsl.localhost\\Debian\\home\\me\\repo', [REPO], REPO));
     expect(asked).toEqual(['Ubuntu:/home/me/repo']);
