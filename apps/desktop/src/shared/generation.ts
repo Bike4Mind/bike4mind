@@ -141,8 +141,8 @@ export function normalizeGeneration(raw: unknown): GenerationSettings | undefine
 
 /**
  * A replacement set from the renderer, or null when it is not one: any known field out of bounds
- * or not a number rejects the whole set, so a malformed call never clears what is stored. `{}`
- * is a valid set that clears every override.
+ * or not a number rejects the whole set, and so does a set with keys but no known field holding a
+ * value, so a malformed call never clears what is stored. Only `{}` clears every override.
  */
 export function parseGenerationInput(raw: unknown): GenerationSettings | null {
   if (!isRecord(raw)) return null;
@@ -153,7 +153,7 @@ export function parseGenerationInput(raw: unknown): GenerationSettings | null {
     if (!withinBounds(field, value)) return null;
     settings[field] = value;
   }
-  return settings;
+  return Object.keys(settings).length === 0 && Object.keys(raw).length > 0 ? null : settings;
 }
 
 function sentValue(field: GenerationField, value: unknown, control: NumericControl | undefined): number | undefined {
