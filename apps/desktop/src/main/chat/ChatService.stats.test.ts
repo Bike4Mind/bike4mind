@@ -31,6 +31,7 @@ describe('ChatService reply stats', () => {
   let store: SessionStore;
   let post: ReturnType<typeof vi.fn>;
   let localStream: ReturnType<typeof vi.fn<OllamaLocal['stream']>>;
+  let accessList: ReturnType<typeof vi.fn<AccessStore['list']>>;
   const services: ChatService[] = [];
 
   beforeEach(async () => {
@@ -46,6 +47,7 @@ describe('ChatService reply stats', () => {
       return Promise.resolve({ data: stream, status: 200 });
     });
     localStream = vi.fn<OllamaLocal['stream']>();
+    accessList = vi.fn<AccessStore['list']>(async () => [root]);
     const service = new ChatService({
       store,
       models: {
@@ -55,7 +57,7 @@ describe('ChatService reply stats', () => {
         cached: () => [],
       } as unknown as ModelCatalog,
       local: { stream: localStream } as unknown as OllamaLocal,
-      access: { list: async () => [root] } as unknown as AccessStore,
+      access: { list: accessList } as unknown as AccessStore,
       logger: { debug: vi.fn(), warn: vi.fn() },
       getApiClient: () =>
         ({
@@ -274,14 +276,55 @@ describe('ChatService reply stats', () => {
 
     await services[0].continueReply(id);
     await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+    await pause(30);
     streams[0].write(frame({ type: 'content', text: ' and done' }));
     streams[0].write(frame('[DONE]'));
-    await settled();
+    const end = await settled();
 
     const reply = (await store.get(id))?.messages.find(message => message.id === 'a1');
     expect(reply?.stats).toMatchObject({ startedAt: 1_000, firstTokenAt: 1_200, toolMs: 5_000 });
-    expect(reply!.stats!.totalMs).toBeGreaterThanOrEqual(8_000);
+    // Past what was stored: the update has to write the new run's stats, not keep the old ones.
+    expect(reply!.stats!.totalMs).toBeGreaterThanOrEqual(8_025);
     expect(reply!.stats!.totalMs).toBeLessThan(8_000 + 3_000);
-    expect(reply!.stats!.modelMs).toBeGreaterThanOrEqual(3_000);
+    expect(reply!.stats!.modelMs).toBeGreaterThanOrEqual(3_025);
+    expect(end).toMatchObject({ type: 'done', stats: reply?.stats });
+  });
+
+  it('stores no stats on a continued reply stored before they were kept, whose earlier time is unknown', async () => {
+    const id = await session();
+    await store.appendMessage(id, { id: 'u1', role: 'user', content: 'go', createdAt: new Date().toISOString() });
+    await store.appendMessage(id, {
+      id: 'a1',
+      role: 'assistant',
+      content: 'partway',
+      createdAt: new Date().toISOString(),
+      stopReason: 'tool_turn_limit',
+      usage: { outputTokens: 8_000 },
+    });
+
+    await services[0].continueReply(id);
+    await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+    streams[0].write(frame({ type: 'content', text: ' and done', usage: { outputTokens: 4 } }));
+    streams[0].write(frame('[DONE]'));
+    const end = await settled();
+
+    const reply = (await store.get(id))?.messages.find(message => message.id === 'a1');
+    expect(reply?.usage?.outputTokens).toBe(8_004);
+    expect(reply).not.toHaveProperty('stats');
+    expect(end).toMatchObject({ type: 'done' });
+    expect(end).not.toHaveProperty('stats');
+  });
+
+  it('stores no stats on a turn refused before it reached the model', async () => {
+    accessList.mockRejectedValueOnce(new Error('the folder list could not be read'));
+    const id = await session();
+    await services[0].send(id, 'go');
+    const end = await settled();
+
+    const reply = (await store.get(id))?.messages.find(message => message.role === 'assistant');
+    expect(reply?.error).toMatch(/folder list/);
+    expect(post).not.toHaveBeenCalled();
+    expect(reply).not.toHaveProperty('stats');
+    expect(end).not.toHaveProperty('stats');
   });
 });
