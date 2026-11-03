@@ -446,7 +446,9 @@ export async function shellApproval(
     place => place !== UNNAMED_DISTRO && place !== SYSTEM_DISTRO && place !== WSL_MANAGEMENT
   );
   const reasons = [
-    ...(scriptCheckFailed ? ['Could not check whether it runs code written in this session.'] : []),
+    ...(scriptCheckFailed
+      ? ['Could not check whether it runs code written in this session, so it is asked each time.']
+      : []),
     ...(scan.envFiles.length > 0 ? [`Reads ${scan.envFiles.join(', ')}, which usually holds secrets.`] : []),
     ...(scan.outbound.length > 0 ? [`Can send data off this computer (${scan.outbound.join(', ')}).`] : []),
     ...(script && script.names.length > 0

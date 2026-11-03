@@ -487,7 +487,9 @@ describe('shellApproval when the session-script check cannot finish', () => {
       const context: ToolContext = { roots: [root], signal: new AbortController().signal, protectedPaths: [] };
       const result = await shellApproval('bash_execute', { command: 'ls', cwd: root }, context);
       expect(result.askInAuto).toBe(true);
-      expect(result.detail).toContain('Could not check whether it runs code written in this session.');
+      expect(result.detail).toContain(
+        'Could not check whether it runs code written in this session, so it is asked each time.'
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
     }
