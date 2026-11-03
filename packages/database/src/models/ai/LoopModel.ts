@@ -4,6 +4,7 @@ import {
   ILoop,
   ILoopRepository,
   LOOP_AUTO_RESUME_KINDS,
+  LOOP_STAGE_RUNNERS,
   LOOP_STATUSES,
   LoopAutoResume,
   LoopStatus,
@@ -156,6 +157,22 @@ export const LoopSchema = new Schema<ILoop, ILoopModel>(
     },
     tools: { type: [String], default: [] },
     stages: { type: [String], default: () => [...DEFAULT_LOOP_STAGES] },
+    // Kept in sync with validateLoopStageConfig (apps/client/server/utils/loopValidation.ts).
+    stageConfig: {
+      type: [
+        new Schema(
+          {
+            stage: { type: String, required: true },
+            instructions: { type: String },
+            model: { type: String },
+            tools: { type: [String], default: undefined },
+            runner: { type: String, enum: LOOP_STAGE_RUNNERS },
+          },
+          { _id: false }
+        ),
+      ],
+      default: undefined,
+    },
     // Kept in sync with validateLoopBudget (apps/client/server/utils/loopValidation.ts).
     budgetCreditsPerDay: {
       type: Number,

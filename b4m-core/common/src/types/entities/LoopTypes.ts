@@ -43,6 +43,35 @@ export const startOfUtcDay = (now: Date): Date =>
 
 export const DEFAULT_LOOP_STAGES: readonly string[] = ['todo', 'doing', 'done'];
 
+export const LOOP_STAGE_RUNNERS = ['cloud', 'desktop'] as const;
+
+export type LoopStageRunner = (typeof LOOP_STAGE_RUNNERS)[number];
+
+/** Per-stage overrides for runs that work a ticket in `stage`. Unset fields fall back to the loop's own. */
+export interface ILoopStageConfig {
+  /** One of the loop's `stages`, never the last. */
+  stage: string;
+  /** Owner-written; added to the prompt of runs working a ticket in this stage. */
+  instructions?: string;
+  /** Replaces the loop's `model`. */
+  model?: string;
+  /** Replaces the loop's `tools`; empty or absent inherits them. */
+  tools?: string[];
+  /**
+   * Absent means `cloud`. The cloud scheduler never claims a ticket in a `desktop` stage: those are claimed
+   * through the desktop runner contract (`/api/loops/runner/*`).
+   */
+  runner?: LoopStageRunner;
+}
+
+/** The config for a stage; {} when it has none. */
+export const stageConfigOf = (loop: Pick<ILoop, 'stageConfig'>, stage?: string): Omit<ILoopStageConfig, 'stage'> =>
+  (loop.stageConfig ?? []).find(entry => entry.stage === stage) ?? {};
+
+/** Stages whose tickets wait for a desktop runner. */
+export const desktopStagesOf = (loop: Pick<ILoop, 'stageConfig'>): string[] =>
+  (loop.stageConfig ?? []).filter(entry => entry.runner === 'desktop').map(entry => entry.stage);
+
 /** State carried from one run to the next. */
 export interface ILoopMemory {
   notes: string;
@@ -70,6 +99,8 @@ export interface ILoop {
   /** Tool allowlist, passed as the run's `enabledTools`. Built-in names or `<lowercased server>__<tool>` for MCP tools. */
   tools: string[];
   stages: string[];
+  /** Keyed by stage name, parallel to `stages`; see `stageConfigOf`. */
+  stageConfig?: ILoopStageConfig[] | null;
   /** Enforced at dispatch per UTC day (`startOfUtcDay`); one run can overshoot it. */
   budgetCreditsPerDay?: number;
   status: LoopStatus;

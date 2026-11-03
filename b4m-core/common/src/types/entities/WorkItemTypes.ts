@@ -150,9 +150,14 @@ export interface IWorkItemRepository extends IBaseRepository<IWorkItem> {
 
   /**
    * The oldest `open` ticket of the loop, outside `lastStage`, whose dependencies are all closed or
-   * gone. This is what the loop scheduler works next.
+   * gone, skipping `skipStages` (desktop stages). This is what the loop scheduler works next.
    */
-  findNextReadyForLoop(userId: string, loopId: string, lastStage: string): Promise<IWorkItem | null>;
+  findNextReadyForLoop(
+    userId: string,
+    loopId: string,
+    lastStage: string,
+    skipStages?: string[]
+  ): Promise<IWorkItem | null>;
 
   /** `open -> in_progress`, conditional on still being `open`; null when another tick won the claim. */
   claimForRun(id: string, loopId: string): Promise<IWorkItem | null>;

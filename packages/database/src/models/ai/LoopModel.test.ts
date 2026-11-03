@@ -50,6 +50,13 @@ describe('LoopRepository', () => {
     });
   });
 
+  it('loads a loop with no stageConfig and rejects an unknown runner', async () => {
+    expect((await create()).stageConfig).toBeUndefined();
+    const withConfig = await create({ stageConfig: [{ stage: 'doing', runner: 'desktop', tools: ['web_search'] }] });
+    expect(withConfig.stageConfig).toEqual([{ stage: 'doing', runner: 'desktop', tools: ['web_search'] }]);
+    await expect(create({ stageConfig: [{ stage: 'doing', runner: 'laptop' }] })).rejects.toThrow(/runner/);
+  });
+
   it('rejects an interval under 5 minutes or a fractional one', async () => {
     await expect(create({ intervalMinutes: 4 })).rejects.toThrow(/intervalMinutes/);
     await expect(create({ intervalMinutes: 5.5 })).rejects.toThrow(/intervalMinutes/);

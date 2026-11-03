@@ -408,6 +408,15 @@ describe('WorkItemRepository', () => {
       expect((await workItemRepository.findNextReadyForLoop(USER, LOOP, 'done'))?.title).toBe('Waits');
     });
 
+    it('findNextReadyForLoop skips tickets in skipStages', async () => {
+      await ticket('Desktop', { stage: 'review' });
+      const cloud = await ticket('Cloud', { stage: 'todo' });
+      expect((await workItemRepository.findNextReadyForLoop(USER, LOOP, 'done'))?.title).toBe('Desktop');
+      expect((await workItemRepository.findNextReadyForLoop(USER, LOOP, 'done', ['review']))?.id).toBe(cloud.id);
+      await workItemRepository.updateForUser(cloud.id, USER, { status: 'closed' });
+      expect(await workItemRepository.findNextReadyForLoop(USER, LOOP, 'done', ['review'])).toBeNull();
+    });
+
     it('claimForRun wins once; releaseClaim reopens and unlinks', async () => {
       const t = await ticket('T');
       expect(await workItemRepository.claimForRun(t.id, 'other-loop')).toBeNull();

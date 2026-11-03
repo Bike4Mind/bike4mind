@@ -117,10 +117,16 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     };
   }
 
-  async findNextReadyForLoop(userId: string, loopId: string, lastStage: string): Promise<IWorkItem | null> {
+  async findNextReadyForLoop(
+    userId: string,
+    loopId: string,
+    lastStage: string,
+    skipStages: string[] = []
+  ): Promise<IWorkItem | null> {
+    // Skipped stages are filtered in the query so they never eat the candidate window.
     const candidates = (
       await this.workItemModel
-        .find({ userId, loopId, deletedAt: null, status: 'open', stage: { $ne: lastStage } })
+        .find({ userId, loopId, deletedAt: null, status: 'open', stage: { $nin: [lastStage, ...skipStages] } })
         .sort({ createdAt: 1 })
         .limit(LOOP_READY_CANDIDATES)
     ).map(doc => doc.toJSON());
