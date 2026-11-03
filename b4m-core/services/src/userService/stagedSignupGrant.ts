@@ -24,7 +24,7 @@ import {
 } from './signupRisk';
 import { accountBlockReasons, isAiAccessRevoked } from './accountState';
 import { protectSignupCredits } from './signupProtection';
-import { reserveSignupGrantBudget, type SignupGrantBudgetReservation } from './signupGrantBudget';
+import { reserveSignupGrantBudget, signupGrantBudgetDay, type SignupGrantBudgetReservation } from './signupGrantBudget';
 
 type GrantAdapters = FreeCreditAdapters & {
   audit?: (input: { userId: string; credits: number; creditTransactionId?: string }) => Promise<void>;
@@ -209,10 +209,18 @@ async function releaseStage(
       let creditTransactionId: string | undefined;
       if (amount > 0) {
         if (!BUDGET_EXEMPT_REASONS.has(reason) && !adapters.bypassBudget) {
-          const reservation = await reserveSignupGrantBudget(db, transactionId, amount, {
-            pool: dripDay ? 'trickle' : 'signup',
-            day: dripDay,
-          });
+          // An account already in the queue is drained by the held-release cron in order; a new one waits behind it.
+          const queued =
+            !dripDay &&
+            expected === 'pending_email' &&
+            !user.signupGrantHeldReason &&
+            (await hasSignupBacklog(db.users, signupGrantBudgetDay(grantClock(db))));
+          const reservation = queued
+            ? { outcome: 'exhausted' as const, release: async () => {} }
+            : await reserveSignupGrantBudget(db, transactionId, amount, {
+                pool: dripDay ? 'trickle' : 'signup',
+                day: dripDay,
+              });
           reservations.push(reservation);
           // A same-day drip that did not make the draw fresh belongs to a concurrent attempt that may
           // still refund it; paying on that reservation could pay unmetered.
@@ -225,7 +233,8 @@ async function releaseStage(
               await db.users.update({
                 id: userId,
                 signupGrantHeldReason: 'budget_exhausted',
-                signupGrantHeldAt: db.signupProtection?.grantBudget?.now?.() ?? new Date(),
+                // Kept from the first hold so a retried account keeps its place in the queue.
+                ...(user.signupGrantHeldReason ? {} : { signupGrantHeldAt: grantClock(db) }),
               });
             }
             return { ...noGrant(), withheld: true, budgetExhausted: true };
@@ -332,6 +341,24 @@ async function releaseStage(
 async function clearHeldReason(users: FreeCreditAdapters['db']['users'], userId: string) {
   if ((await users.findById(userId))?.signupGrantHeldReason)
     await users.update({ id: userId, signupGrantHeldReason: null });
+}
+
+/**
+ * True when a payable signup tranche held for the signup pool before `day` is still waiting. New grants
+ * then hold behind it so the held-release cron pays the queue oldest first. Blocked holders never count.
+ */
+export async function hasSignupBacklog(users: FreeCreditAdapters['db']['users'], day: string): Promise<boolean> {
+  const held = await users.findOne({
+    signupGrantHeldReason: 'budget_exhausted',
+    'signupGrant.stage': 'pending_email',
+    isBanned: { $ne: true },
+    isModerated: { $ne: true },
+    disputePending: { $ne: true },
+    'moderation.status': { $ne: 'suspended' },
+    deletedAt: { $exists: false },
+    signupGrantHeldAt: { $lt: new Date(`${day}T00:00:00.000Z`) },
+  });
+  return !!held;
 }
 
 export const releaseSignupTranche = (userId: string, adapters: GrantAdapters) =>

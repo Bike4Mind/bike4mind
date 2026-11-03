@@ -150,6 +150,57 @@ describe('held signup grant release', () => {
     expect((await User.findById(users[3].id))?.signupGrantHeldReason).toBe('budget_exhausted');
   });
 
+  it('holds new signups behind an older backlog until the cron pays the queue oldest first', async () => {
+    config.signupGrantSignupPoolDaily = '0';
+    clock = new Date('2030-01-01T10:00:00Z');
+    const users = [];
+    for (let n = 0; n < 3; n++) {
+      const user = await createUser(true, n);
+      expect(await userService.releaseSignupTranche(user.id, adapters)).toMatchObject({ budgetExhausted: true });
+      users.push(user);
+    }
+
+    clock = new Date('2030-01-02T00:00:01Z');
+    config.signupGrantSignupPoolDaily = '24';
+    expect(await cron()).toMatchObject({ released: 2, stoppedOnBudget: true });
+    expect([await creditsOf(users[0].id), await creditsOf(users[1].id), await creditsOf(users[2].id)]).toEqual([
+      12, 12, 0,
+    ]);
+    // Room in the pool is not enough: the day-one hold is still waiting, so the newcomer queues behind it.
+    config.signupGrantSignupPoolDaily = '1000';
+    const late = await createUser(true, 3);
+    expect(await userService.releaseSignupTranche(late.id, adapters)).toMatchObject({ withheld: true });
+    const queued = await User.findById(late.id);
+    expect(queued?.signupGrantHeldReason).toBe('budget_exhausted');
+    expect(queued?.tags).toContain(PENDING_FREE_CREDITS_TAG);
+    expect(await spentToday()).toBe(24);
+
+    clock = new Date('2030-01-03T00:00:01Z');
+    config.signupGrantSignupPoolDaily = '24';
+    expect(await cron()).toMatchObject({ released: 2, creditsPaid: 24 });
+    expect(await creditsOf(users[2].id)).toBe(12);
+    expect(await creditsOf(late.id)).toBe(12);
+
+    config.signupGrantSignupPoolDaily = '1000';
+    const fresh = await createUser(true, 4);
+    expect(await userService.releaseSignupTranche(fresh.id, adapters)).toMatchObject({ creditsGranted: 12 });
+  });
+
+  it('does not queue new signups behind a blocked or same-day hold', async () => {
+    config.signupGrantSignupPoolDaily = '0';
+    clock = new Date('2030-01-01T10:00:00Z');
+    const stale = await createUser(true, 0);
+    await userService.releaseSignupTranche(stale.id, adapters);
+    await User.updateOne({ _id: stale.id }, { isBanned: true });
+
+    clock = new Date('2030-01-02T10:00:00Z');
+    const sameDay = await createUser(true, 1);
+    expect(await userService.releaseSignupTranche(sameDay.id, adapters)).toMatchObject({ budgetExhausted: true });
+    config.signupGrantSignupPoolDaily = '1000';
+    const next = await createUser(true, 2);
+    expect(await userService.releaseSignupTranche(next.id, adapters)).toMatchObject({ creditsGranted: 12 });
+  });
+
   it('skips banned accounts without stalling the accounts behind them', async () => {
     const users = await holdUsers(3);
     await User.updateOne({ _id: users[1].id }, { isBanned: true });
