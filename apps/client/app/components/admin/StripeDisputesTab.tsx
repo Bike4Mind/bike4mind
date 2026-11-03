@@ -240,8 +240,7 @@ const UndoContainDialog: React.FC<DialogProps> = ({ row, onClose, onRowChange })
           {credits > 0 && <li>{credits.toLocaleString('en-US')} credits are returned to the balance.</li>}
           {contain && contain.apiKeysRevoked > 0 && (
             <li>
-              {contain.apiKeysRevoked.toLocaleString('en-US')} API keys are re-enabled, only once the account is no
-              longer blocked.
+              {contain.apiKeysRevoked.toLocaleString('en-US')} revoked API keys stay revoked; the user creates new ones.
             </li>
           )}
           {contain && !contain.suspended && credits === 0 && contain.apiKeysRevoked === 0 && (

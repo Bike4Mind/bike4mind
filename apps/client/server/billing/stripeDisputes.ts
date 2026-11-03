@@ -2,6 +2,7 @@ import {
   adminAuditLogRepository,
   stripeDisputeRepository,
   userRepository,
+  withTransaction,
   type StripeDisputeFacts,
 } from '@bike4mind/database';
 import type { AuditActor, StripeDisputeItem, StripeDisputeSubject } from '@bike4mind/common';
@@ -178,9 +179,16 @@ export async function resolveLostUserDispute(
     return { status: 'contained', item: contained.item };
   }
 
-  const resolved = await stripeDisputeRepository.resolveBySystem(stripeDisputeId, 'lost');
+  // One transaction, so a failed flag write rolls the resolution back and the retried close sets it.
+  const resolved = await withTransaction(
+    async () => {
+      const item = await stripeDisputeRepository.resolveBySystem(stripeDisputeId, 'lost');
+      if (item) await keepBlocked(user.id);
+      return item;
+    },
+    { logger }
+  );
   if (!resolved) return { status: 'already_resolved' };
-  await keepBlocked(user.id);
   await auditSystemResolution(resolved, 'resolved a lost Stripe dispute; the account needed no Contain', logger);
   return { status: 'resolved_without_contain', item: resolved };
 }
@@ -193,8 +201,8 @@ export class DisputeContainUndoRefused extends Error {
 
 /**
  * An admin undoes the automatic Contain of a lost dispute: unsuspends, restores the credits it removed
- * and re-enables the keys it revoked unless the account is still blocked (it is, while the dispute
- * flag stays set). The revert and the record's `undoneAt` commit together, so it runs once. Throws
+ * and leaves the keys it revoked off (the account stays blocked while the dispute flag is set, and
+ * the user creates new keys). The revert and the record's `undoneAt` commit together, so it runs once. Throws
  * DisputeContainUndoRefused when there is nothing to undo, or when it was already undone.
  */
 export async function undoDisputeContain(
