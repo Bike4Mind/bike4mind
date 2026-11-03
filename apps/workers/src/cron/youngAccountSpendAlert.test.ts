@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   getSettingsMap: vi.fn(),
   resolveSlackWebhookUrl: vi.fn(),
   post: vi.fn(),
+  recordShadowDetections: vi.fn(),
   log: vi.fn(),
   error: vi.fn(),
 }));
@@ -18,7 +19,13 @@ vi.mock('@bike4mind/database', () => ({
   counterLogRepository: { findYoungAccountSpend: mocks.findYoungAccountSpend },
   adminSettingsRepository: {},
 }));
-vi.mock('@bike4mind/utils', () => ({ getSettingsMap: mocks.getSettingsMap }));
+vi.mock('@bike4mind/utils', () => ({
+  getSettingsMap: mocks.getSettingsMap,
+  getSettingsValue: (key: string, settings: Record<string, unknown>, fallback: unknown) => settings[key] ?? fallback,
+}));
+vi.mock('./youngAccountSpendShadowDetections', () => ({
+  recordYoungAccountSpendShadowDetections: mocks.recordShadowDetections,
+}));
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   resolveSlackWebhookUrl: mocks.resolveSlackWebhookUrl,
 }));
@@ -54,6 +61,7 @@ beforeEach(() => {
   mocks.resource.App.stage = 'production';
   mocks.getSettingsMap.mockResolvedValue({});
   mocks.resolveSlackWebhookUrl.mockReturnValue('https://hooks.example.com/x');
+  mocks.recordShadowDetections.mockResolvedValue(1);
 });
 
 describe('young-account spend thresholds', () => {
@@ -243,5 +251,39 @@ describe('young-account spend handler', () => {
     mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));
     mocks.resolveSlackWebhookUrl.mockReturnValue('');
     await expect(handler(event)).rejects.toThrow(/no Slack webhook/);
+  });
+
+  it('records shadow detections for the alerted window alongside the Slack alert', async () => {
+    const breached = summary(9000, 4);
+    mocks.findYoungAccountSpend.mockResolvedValue(breached);
+    expect(await handler(event)).toMatchObject({ status: 'alerted' });
+    expect(mocks.recordShadowDetections).toHaveBeenCalledExactlyOnceWith({
+      summary: breached,
+      thresholds: { credits: 5000, accounts: 25 },
+      window: { start: new Date('2026-10-26T10:00:00Z'), end: new Date(event.time) },
+      logger: expect.anything(),
+    });
+    expect(mocks.post).toHaveBeenCalledOnce();
+  });
+
+  it('records nothing for a quiet hour', async () => {
+    mocks.findYoungAccountSpend.mockResolvedValue(summary(100, 2));
+    await handler(event);
+    expect(mocks.recordShadowDetections).not.toHaveBeenCalled();
+  });
+
+  it('records before the Slack step, so a missing webhook still leaves the detection', async () => {
+    mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));
+    mocks.resolveSlackWebhookUrl.mockReturnValue('');
+    await expect(handler(event)).rejects.toThrow(/no Slack webhook/);
+    expect(mocks.recordShadowDetections).toHaveBeenCalledOnce();
+  });
+
+  it('skips recording, and still alerts, when shadow detection recording is switched off', async () => {
+    mocks.getSettingsMap.mockResolvedValue({ shadowDetectionRecordingEnabled: false });
+    mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));
+    expect(await handler(event)).toMatchObject({ status: 'alerted' });
+    expect(mocks.recordShadowDetections).not.toHaveBeenCalled();
+    expect(mocks.post).toHaveBeenCalledOnce();
   });
 });
