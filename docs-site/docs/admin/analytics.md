@@ -48,7 +48,7 @@ A line chart of daily, weekly and monthly active users per day. With **Compare**
 
 Hover over any day to see its external and internal daily, weekly and monthly active users, whichever **Accounts** option is selected.
 
-Switch to **By surface** to see AI requests per day stacked by surface. Internal system traffic is not shown.
+Switch to **By surface** to see AI requests per day stacked by surface as bars. Internal system traffic is not shown.
 
 ## Signups: real vs suspected
 

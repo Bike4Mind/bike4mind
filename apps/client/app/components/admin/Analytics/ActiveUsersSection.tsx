@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
 import { Box, Divider, Typography, useTheme } from '@mui/joy';
 import {
-  Area,
-  AreaChart,
+  Bar,
+  BarChart,
   CartesianGrid,
+  Cell,
   Legend,
   Line,
   LineChart,
@@ -18,6 +19,7 @@ import { DataTable, SegmentedControl, type DataColumn } from '../shared';
 import { SIGNAL_COLORS } from '../Signups/SignupChart';
 import { AnalyticsSection } from './AnalyticsSection';
 import { comparisonLine, formatCount, formatDayLabel } from './analyticsFormat';
+import { isIsolatedPoint } from './isolatedPoint';
 
 type ActiveUsersMode = 'users' | 'surface';
 const MODE_OPTIONS = [
@@ -162,12 +164,31 @@ export function ActiveUsersSection({ data, loading, error, onRetry, onShowDefaul
   const ariaLabel =
     mode === 'users'
       ? `Line chart of daily, weekly and monthly active users per UTC day. ${caption}`
-      : 'Stacked area chart of AI requests per UTC day by surface.';
+      : 'Stacked bar chart of AI requests per UTC day by surface.';
   const axisTick = { fontSize: 12, fill: admin.inkMuted };
   const sourceColor = (source: string) => {
     const slot = SOURCE_ORDER.indexOf(source);
     const palette = SIGNAL_COLORS[scheme];
     return palette[(slot === -1 ? SOURCE_ORDER.length + sources.indexOf(source) : slot) % palette.length];
+  };
+
+  const partialColor = (key: 'dau' | 'wau' | 'mau') =>
+    key === 'mau' ? admin.accent : key === 'wau' ? admin.inkSecondary : admin.inkMuted;
+  const isolatedDot = (key: string, color: string) => {
+    const renderDot = ({ index, cx, cy }: { index: number; cx?: number; cy?: number }) =>
+      isIsolatedPoint(lineRows, index, key) && cx != null && cy != null ? (
+        <circle
+          key={`${key}-${index}`}
+          cx={cx}
+          cy={cy}
+          r={3}
+          fill={color}
+          data-testid="analytics-active-users-isolated-dot"
+        />
+      ) : (
+        <g key={`${key}-${index}`} />
+      );
+    return renderDot;
   };
 
   const empty = !days.some(day => (day.dau ?? 0) > 0);
@@ -190,7 +211,7 @@ export function ActiveUsersSection({ data, loading, error, onRetry, onShowDefaul
                 strokeOpacity={0.4}
                 strokeDasharray={PARTIAL_DASH}
                 strokeWidth={2}
-                dot={false}
+                dot={isolatedDot('previousMau', admin.inkMuted)}
                 isAnimationActive={false}
               />
             )}
@@ -199,7 +220,7 @@ export function ActiveUsersSection({ data, loading, error, onRetry, onShowDefaul
               name="DAU"
               stroke={admin.inkMuted}
               strokeWidth={1.5}
-              dot={false}
+              dot={isolatedDot('dau', admin.inkMuted)}
               isAnimationActive={false}
             />
             <Line
@@ -207,7 +228,7 @@ export function ActiveUsersSection({ data, loading, error, onRetry, onShowDefaul
               name="WAU"
               stroke={admin.inkSecondary}
               strokeWidth={1.5}
-              dot={false}
+              dot={isolatedDot('wau', admin.inkSecondary)}
               isAnimationActive={false}
             />
             <Line
@@ -215,7 +236,7 @@ export function ActiveUsersSection({ data, loading, error, onRetry, onShowDefaul
               name="MAU"
               stroke={admin.accent}
               strokeWidth={2}
-              dot={false}
+              dot={isolatedDot('mau', admin.accent)}
               isAnimationActive={false}
             />
             {(['dau', 'wau', 'mau'] as const).map(key => (
@@ -224,10 +245,10 @@ export function ActiveUsersSection({ data, loading, error, onRetry, onShowDefaul
                 dataKey={`${key}Partial`}
                 name={`${key.toUpperCase()} (today, partial)`}
                 legendType="none"
-                stroke={key === 'mau' ? admin.accent : key === 'wau' ? admin.inkSecondary : admin.inkMuted}
+                stroke={partialColor(key)}
                 strokeDasharray={PARTIAL_DASH}
                 strokeWidth={key === 'mau' ? 2 : 1.5}
-                dot={false}
+                dot={isolatedDot(`${key}Partial`, partialColor(key))}
                 isAnimationActive={false}
               />
             ))}
@@ -237,26 +258,33 @@ export function ActiveUsersSection({ data, loading, error, onRetry, onShowDefaul
     ) : (
       <Box role="img" aria-label={ariaLabel} data-testid="analytics-surface-chart">
         <ResponsiveContainer width="100%" height={260}>
-          <AreaChart data={surfaceRows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+          <BarChart data={surfaceRows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }} barCategoryGap={1}>
             <CartesianGrid vertical={false} stroke={admin.border} />
             <XAxis dataKey="label" tick={axisTick} minTickGap={24} tickLine={false} />
             <YAxis tick={axisTick} width={44} allowDecimals={false} axisLine={false} tickLine={false} />
-            <Tooltip content={<ActiveUsersTooltip daysById={daysById} />} />
+            <Tooltip cursor={{ fill: admin.hover }} content={<ActiveUsersTooltip daysById={daysById} />} />
             <Legend wrapperStyle={{ fontSize: 12, color: admin.inkSecondary }} />
             {sources.map(source => (
-              <Area
+              <Bar
                 key={source}
                 dataKey={source}
                 name={SOURCE_LABELS[source] ?? source}
                 stackId="sources"
-                type="linear"
-                stroke={sourceColor(source)}
                 fill={sourceColor(source)}
-                fillOpacity={0.5}
                 isAnimationActive={false}
-              />
+              >
+                {surfaceRows.map(row => (
+                  <Cell
+                    key={row.day}
+                    fill={sourceColor(source)}
+                    fillOpacity={row.partial ? 0.45 : 1}
+                    stroke={row.partial ? sourceColor(source) : admin.surface}
+                    strokeDasharray={row.partial ? '3 2' : undefined}
+                  />
+                ))}
+              </Bar>
             ))}
-          </AreaChart>
+          </BarChart>
         </ResponsiveContainer>
       </Box>
     );
