@@ -243,7 +243,6 @@ export const KNOWN_UNPOSTURED = new Set<string>([
   'quest-plans/index.ts',
   'quests/[id]/check-timeout.ts',
   'quests/[id]/client-timing.ts',
-  'reg-invites/create.ts',
   'reg-invites/delete.ts',
   'reg-invites/index.ts',
   'reg-invites/migrate.ts',
