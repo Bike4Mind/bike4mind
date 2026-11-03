@@ -1,13 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const mocks = vi.hoisted(() => ({ overview: vi.fn(), adminOptions: vi.fn() }));
+const mocks = vi.hoisted(() => ({ overview: vi.fn(), adminOptions: vi.fn(), used: vi.fn() }));
 vi.mock('@server/middlewares/adminApi', () => ({
   adminApi: (options: unknown) => {
     mocks.adminOptions(options);
-    const chain = { use: () => chain, get: (handler: unknown) => handler };
+    const chain = {
+      use: (middleware: unknown) => {
+        mocks.used(middleware);
+        return chain;
+      },
+      get: (handler: unknown) => handler,
+    };
     return chain;
   },
+}));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: (options: unknown) => ({ rateLimit: options }),
 }));
 vi.mock('@server/analytics/analyticsOverview', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/analytics/analyticsOverview')>()),
@@ -29,8 +38,14 @@ describe('analytics overview route', () => {
     mocks.overview.mockResolvedValue({ window: { range: '28d' } });
   });
 
-  it('gates GET on the support:read admin permission', () => {
-    expect(declaredOptions).toMatchObject({ adminPermissions: { GET: 'support:read' } });
+  it('gates GET on a JWT session with the support:read admin permission', () => {
+    expect(declaredOptions).toMatchObject({ auth: 'jwtOnly', adminPermissions: { GET: 'support:read' } });
+  });
+
+  it('rate limits the route in its own bucket', () => {
+    expect(mocks.used).toHaveBeenCalledWith({
+      rateLimit: { limit: 30, windowMs: 60_000, bucket: 'admin-analytics-overview' },
+    });
   });
 
   it('rejects values outside the supported sets', async () => {

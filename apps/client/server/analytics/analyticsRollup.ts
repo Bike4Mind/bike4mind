@@ -246,7 +246,7 @@ export async function collectDayUsage(day: string, { maxTimeMS = QUERY_DEADLINE_
  */
 export async function rollupDay(day: string, options: RollupOptions = {}) {
   const computedAt = options.now ?? new Date();
-  const { users, perUser, byFeature, bySource, byModel, creditsConsumed } = await collectDayUsage(day);
+  const { users, perUser, byFeature, bySource, byModel, creditsConsumed } = await collectDayUsage(day, options);
 
   const suspectedUsers = await resolveSuspected(
     [...perUser.keys()].map(userId => {

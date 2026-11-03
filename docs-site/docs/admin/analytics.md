@@ -9,7 +9,7 @@ tags: [admin, analytics]
 
 The Analytics page (**Overview > Analytics**) shows who uses Bike4Mind, how often, and whether they come back. It is a trend page: the Dashboard answers "is anything wrong right now?", Analytics answers "are we growing?".
 
-All days are UTC days, and every chart says so. Counts exclude staff, system and test accounts.
+All days are UTC days, and every chart says so. Counts exclude admin accounts, system accounts, accounts flagged as automated test accounts, and accounts on your internal staff email domains. Every other account is counted, including a test account that carries none of those flags.
 
 ## Toolbar
 
@@ -35,7 +35,7 @@ The toolbar is kept in the page URL (`range`, `start`, `end`, `compare`, `signup
 | **New signups** | Signups in the range (legit only, or all, per the Signups toggle), with the number of suspected signups underneath |
 | **Activation rate** | Not available yet |
 
-A user is active on a day when they make at least one successful AI request that UTC day, from any surface (web, CLI, desktop, API or agent).
+A user is active on a day when they make at least one successful AI request that UTC day, from any source. That includes requests made through the public API and internal system traffic, so a user active only through the API still counts toward daily, weekly and monthly active users.
 
 The tiles cover complete days only. When the range ends today, today is still counting, so it is left out of the tiles and comparisons. With **Compare** on, each tile compares against the same number of days right before the range.
 

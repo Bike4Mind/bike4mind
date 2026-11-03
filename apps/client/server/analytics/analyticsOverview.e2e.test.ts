@@ -122,6 +122,20 @@ describe('getAnalyticsOverview', () => {
     expect((liveSignups?.legit ?? 0) + (liveSignups?.suspected ?? 0) + (liveSignups?.unclassified ?? 0)).toBe(1);
   });
 
+  it("counts yesterday's users in today's WAU/MAU before the nightly rollup has written yesterday", async () => {
+    await seedEvent(users.a, '2026-06-10T10:00:00Z');
+    await rollupDay('2026-06-10', { now: NOW });
+    await seedEvent(users.b, '2026-06-14T22:00:00Z');
+    await seedEvent(users.c, `${TODAY}T08:00:00Z`);
+
+    const overview = await getAnalyticsOverview({ range: '7d', compare: 'off', signups: 'legit' }, NOW);
+    expect(overview.activeUsers.days.at(-1)).toMatchObject({ day: TODAY, partial: true, dau: 1, wau: 3, mau: 3 });
+
+    await rollupDay('2026-06-14', { now: NOW });
+    const afterRollup = await getAnalyticsOverview({ range: '7d', compare: 'off', signups: 'legit' }, NOW);
+    expect(afterRollup.activeUsers.days.at(-1)).toMatchObject({ dau: 1, wau: 3, mau: 3 });
+  });
+
   it('leaves today as a gap when the live slice fails, keeping the rolled-up days', async () => {
     await seedEvent(users.a, '2026-06-10T10:00:00Z');
     await rollupDay('2026-06-10', { now: NOW });

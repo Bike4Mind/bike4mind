@@ -234,7 +234,10 @@ export function buildOverview({
     window,
     signupsMode,
     lastUpdated: lastUpdated?.toISOString() ?? null,
-    stale: !lastUpdated || now.getTime() - lastUpdated.getTime() > ANALYTICS_STALE_AFTER_MS,
+    // A fully past range is complete history; only a window reaching the latest rollup can be stale.
+    stale:
+      window.to >= shiftDay(window.today, -1) &&
+      (!lastUpdated || now.getTime() - lastUpdated.getTime() > ANALYTICS_STALE_AFTER_MS),
     missingDays: completeDays.filter(day => !byDay.has(day)),
     stats: {
       mau,
@@ -268,19 +271,31 @@ async function distinctUsersBefore(today: string, windowDays: number): Promise<s
   }).maxTimeMS(LIVE_QUERY_DEADLINE_MS);
 }
 
+/**
+ * Yesterday's active users when its rollup has not run yet (the nightly rollup lands at 04:00 UTC),
+ * so today's windows do not drop users seen only yesterday. Empty once the daily row exists.
+ */
+async function unrolledYesterdayUsers(today: string): Promise<string[]> {
+  const yesterday = shiftDay(today, -1);
+  if (await AnalyticsDaily.exists({ day: yesterday }).maxTimeMS(LIVE_QUERY_DEADLINE_MS)) return [];
+  const usage = await collectDayUsage(yesterday, { maxTimeMS: LIVE_QUERY_DEADLINE_MS });
+  return [...usage.perUser.keys()];
+}
+
 /** Today so far, with collectDayUsage and classifyCohort so it counts exactly what the nightly rollup will. */
 export async function loadLiveDay(today: string, now: Date): Promise<LiveDay> {
-  const [usage, cohort, weekIds, monthIds] = await Promise.all([
+  const [usage, cohort, weekIds, monthIds, yesterdayIds] = await Promise.all([
     collectDayUsage(today, { maxTimeMS: LIVE_QUERY_DEADLINE_MS }),
     classifyCohort(today, { now, maxTimeMS: LIVE_QUERY_DEADLINE_MS }),
     distinctUsersBefore(today, WAU_WINDOW_DAYS),
     distinctUsersBefore(today, MAU_WINDOW_DAYS),
+    unrolledYesterdayUsers(today),
   ]);
   const todayIds = [...usage.perUser.keys()];
   return {
     dau: todayIds.length,
-    wau: new Set([...weekIds, ...todayIds]).size,
-    mau: new Set([...monthIds, ...todayIds]).size,
+    wau: new Set([...weekIds, ...yesterdayIds, ...todayIds]).size,
+    mau: new Set([...monthIds, ...yesterdayIds, ...todayIds]).size,
     signups: cohort.signups,
     requestsBySource: Object.fromEntries(usage.bySource),
   };
