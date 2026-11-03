@@ -26,7 +26,9 @@ async function unlockFromOrgInvite(userId: string, inviteId?: string) {
       org_invite: async user => {
         // Validation runs before the engine's zero-delta return. A replay must not
         // reserve another organization slot when no payout remains.
-        if (!user.signupGrant || signupGrantRemaining(user.signupGrant) <= 0) return false;
+        if (!user.signupGrant) return false;
+        const { dripCap } = await userService.resolveDripLimits(adminSettingsRepository);
+        if (signupGrantRemaining(user.signupGrant, dripCap) <= 0) return false;
         const enabled = await adminSettingsRepository.findBySettingName('signupGrantOrgInviteEnabled');
         if (enabled?.settingValue !== 'true' && (enabled?.settingValue as unknown) !== true) return false;
         const email = user.email;

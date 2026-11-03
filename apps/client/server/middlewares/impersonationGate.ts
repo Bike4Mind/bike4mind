@@ -11,7 +11,7 @@ const READS = [
   /^\/api\/users\/[^/]+\/(userInvites|friend-requests|activities)$/,
   /^\/api\/(gears\/status|models\/stats|help\/recently-viewed)$/,
   /^\/api\/v1\/(video-models|music-models)$/,
-  /^\/api\/security\/(user-summary|user-recent|support-access)$/,
+  /^\/api\/security\/(user-recent|support-access)$/,
   /^\/api\/auth\/impersonation$/,
   /^\/api\/users\/me\/(sessions|storage-breakdown)$/,
   /^\/api\/users\/[^/]+$/,

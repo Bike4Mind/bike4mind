@@ -666,6 +666,8 @@ export const CliToolResponseAction = z.object({
   success: z.boolean(),
   content: z.unknown().optional(),
   error: z.string().optional(),
+  /** Billing classifier on a failure, e.g. `insufficient_credits`. */
+  errorCode: z.string().optional(),
 });
 export type ICliToolResponseAction = z.infer<typeof CliToolResponseAction>;
 

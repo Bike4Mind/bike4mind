@@ -74,10 +74,12 @@ describe('S3Storage browser-facing signing endpoint', () => {
         audience: 'browser',
         ResponseContentType: 'application/pdf',
         ResponseContentDisposition: 'inline',
+        ResponseCacheControl: 'no-store',
       })
     );
     expect(url.searchParams.get('response-content-type')).toBe('application/pdf');
     expect(url.searchParams.get('response-content-disposition')).toBe('inline');
+    expect(url.searchParams.get('response-cache-control')).toBe('no-store');
     expect(url.searchParams.get('X-Amz-Signature')).toBe(expectedGetSignature(url));
   });
 

@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
- * The SPA-only AI helpers call an LLM without credit metering, so they must stay off the API-key
- * surface. Drives each route's real baseApi chain (as audio-providers.test.ts does) to prove
+ * The SPA-only AI helpers have no public contract (and most are not credit-metered), so they must stay
+ * off the API-key surface. Drives each route's real baseApi chain (as audio-providers.test.ts does) to prove
  * `auth: 'jwtOnly'` is wired: a key-bearing request is rejected without the key ever being validated
  * and without reaching the model, while a JWT caller still gets past auth.
  */

@@ -213,6 +213,14 @@ describe('proxy CSP header', () => {
     expect(embed.headers.get('Referrer-Policy')).toBeNull();
   });
 
+  it('serves a verified-hop landing with strict-origin, so the token never rides a Referer', () => {
+    const landing = proxy(makeRequest('https://app.bike4mind.com/new?utm_source=x&b4m_hop=abc.123.def'));
+    expect(landing.headers.get('Referrer-Policy')).toBe('strict-origin');
+    // Only the landing that carries one: the same page without it keeps the app default.
+    const plain = proxy(makeRequest('https://app.bike4mind.com/new?utm_source=x'));
+    expect(plain.headers.get('Referrer-Policy')).toBe('strict-origin-when-cross-origin');
+  });
+
   it('sets X-Frame-Options on HTML routes', () => {
     const response = proxy(makeRequest('https://app.bike4mind.com/'));
     expect(response.headers.get('X-Frame-Options')).toBe('SAMEORIGIN');

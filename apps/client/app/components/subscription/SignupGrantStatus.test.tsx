@@ -15,12 +15,14 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: { signupGrant: h.grant, signupGrantHeldReason: h.held } }),
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useGetSettingsValue: (key: string) =>
-    key === 'signupGrantActivityDailyCredits'
-      ? h.daily
-      : key === 'signupGrantActivityMinActiveSeconds'
-        ? h.minSeconds
-        : h.activity,
+  useGetSettingsValue: (key: string) => (key === 'signupGrantActivityMinActiveSeconds' ? h.minSeconds : undefined),
+  useSettingsFromServer: () => ({
+    data: [
+      { settingName: 'signupGrantActivityEnabled', settingValue: h.activity },
+      { settingName: 'signupGrantDailyCredits', settingValue: h.daily },
+      { settingName: 'signupGrantDripCap', settingValue: '9000' },
+    ],
+  }),
 }));
 import SignupGrantStatus from './SignupGrantStatus';
 const theme = extendTheme({ ...getThemeConfig() });
@@ -66,10 +68,20 @@ describe('signup grant status', () => {
     show();
     expect(screen.getByTestId('signup-grant-unlock-paths')).toHaveTextContent('for about 30 minutes');
   });
-  it('omits the daily drip when the unlock pool is 0', () => {
-    h.grant = { ...h.grant!, unlockCredits: 0 };
+  it('omits the daily drip when a closed grant has an unlock pool of 0', () => {
+    h.grant = { ...h.grant!, unlockCredits: 0, stage: 'unlocked', unlockedBy: 'card_verified', creditsReleased: 1000 };
     show();
     expect(screen.queryByTestId('signup-grant-unlock-paths')).toBeNull();
+  });
+  it('counts the live cap as still locked while the grant is open, as an unlock pays it', () => {
+    h.grant = { ...h.grant!, unlockCredits: 0, creditsReleased: 1000 };
+    show();
+    expect(screen.getByTestId('signup-grant-released')).toHaveTextContent('9,000 more credits are still locked');
+  });
+  it('omits the daily drip once the account has dripped up to the cap', () => {
+    h.grant = { ...h.grant!, dripCredits: 9000 };
+    show();
+    expect(screen.getByTestId('signup-grant-unlock-paths')).not.toHaveTextContent('each day');
   });
   it('shows the unlock date of a bonus held for a settling payment instead of the unlock paths', () => {
     const releaseAt = new Date('2026-11-02T08:45:00.000Z');
@@ -86,9 +98,8 @@ describe('signup grant status', () => {
     expect(screen.queryByRole('button')).toBeNull();
   });
   it.each([
-    [false, 1000],
-    ['false', 1000],
     [true, 0],
+    [true, '0'],
     [true, undefined],
   ])('omits the daily drip when activity=%j and daily=%j', (activity, daily) => {
     h.activity = activity;
@@ -97,6 +108,11 @@ describe('signup grant status', () => {
     const paths = screen.getByTestId('signup-grant-unlock-paths');
     expect(paths).not.toHaveTextContent('each day');
     expect(paths).toHaveTextContent('when you subscribe');
+  });
+  it('advertises the daily drip with the retired activity flag off while the daily amount is positive', () => {
+    h.activity = false;
+    show();
+    expect(screen.getByTestId('signup-grant-unlock-paths')).toHaveTextContent('each day');
   });
   it('drops the unlock paths once the grant is fully released', () => {
     h.grant = { ...h.grant!, creditsReleased: 10000, stage: 'unlocked', nextCondition: null };

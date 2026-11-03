@@ -56,9 +56,10 @@ export function readVisitId(cookieHeader: string | undefined): string | undefine
 }
 
 /**
- * Set-Cookie value for a visit id. Sent on every beacon request, not only when minting:
+ * Set-Cookie value for a visit id. Sent on every visit beacon request, not only when minting:
  * re-sending it is what slides the inactivity window forward, so an active browser keeps
- * one visit instead of accumulating one per 30 minutes.
+ * one visit instead of accumulating one per 30 minutes. Only a page load slides it; the page
+ * beacon (pages/api/analytics/page.ts) never sends it.
  *
  * HttpOnly because no client code reads it. SameSite=Lax rather than Strict so a visitor
  * arriving by a top-level link from a campaign, an email or a search result still presents

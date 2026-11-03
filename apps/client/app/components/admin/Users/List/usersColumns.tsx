@@ -33,6 +33,7 @@ export const SIGNUP_METHOD_LABELS: Record<string, string> = {
   google: 'Google',
   github: 'GitHub',
   facebook: 'Facebook',
+  apple: 'Apple',
   okta: 'Okta',
   saml: 'SAML',
 };

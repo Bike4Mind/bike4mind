@@ -42,6 +42,9 @@ export function spendsCredits(toolName: string): boolean {
  * and text in an image steers a model as well as text does. A `file_read` of an image is not:
  * it is a file in a folder the user shared, judged like the text files beside it.
  *
+ * `simulator_screenshot` for the same reason: the app on the device can show a web page or any
+ * text its server sends.
+ *
  * `browser_*` and every server tool are matched by prefix, so a new one is covered as it ships.
  */
 const READS_UNTRUSTED: ReadonlySet<string> = new Set([
@@ -50,6 +53,7 @@ const READS_UNTRUSTED: ReadonlySet<string> = new Set([
   'skill',
   'session_read',
   'screen_capture',
+  'simulator_screenshot',
 ]);
 
 export function readsUntrusted(toolName: string): boolean {
@@ -68,6 +72,8 @@ const SENDS_OUT: ReadonlySet<string> = new Set([
   'browser_navigate',
   'browser_tabs',
   'session_send',
+  // A deep link or web page opened on the device can carry what the reply read in its URL.
+  'simulator_open_url',
 ]);
 
 export function sendsOut(toolName: string): boolean {

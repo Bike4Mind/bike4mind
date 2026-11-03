@@ -16,6 +16,7 @@ import {
   modelDiscoveryCronEnabled,
   modelDiscoveryFunction,
   modelDiscoveryStalenessFunction,
+  signupDomainHoldTriageCron,
   voiceHoldSweepCron,
 } from './cron';
 import { whatsNewGenerationQueueSubscription, webhookDeliveryQueueSubscription } from './queues';
@@ -948,6 +949,29 @@ if (isMonitoredStage) {
       threshold: 0,
       treatMissingData: 'notBreaching',
       dimensions: { FunctionName: disposableDomainRefreshCron.nodes.function.name },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'SignupProtection',
+        Severity: 'Medium',
+      },
+    });
+  }
+
+  // Metric source: apps/workers/src/cron/signupDomainHoldTriage.ts throws when any hold fails to
+  // confirm. Three failing runs in a row (30 minutes) means the rule has stopped working the queue.
+  if (signupDomainHoldTriageCron) {
+    new aws.cloudwatch.MetricAlarm('signupDomainHoldTriageLambdaErrors', {
+      name: `${$app.name}-${$app.stage}-signup-domain-hold-triage-lambda-errors`,
+      alarmDescription: 'Signup domain hold triage Lambda errored on three consecutive runs',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 3,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 600, // 10 minutes, the run cadence
+      statistic: 'Sum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: { FunctionName: signupDomainHoldTriageCron.nodes.function.name },
       alarmActions: [dlqAlarmTopic.arn],
       tags: {
         Application: 'SignupProtection',

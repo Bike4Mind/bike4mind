@@ -120,7 +120,7 @@ export interface paths {
     put?: never;
     /**
      * Execute a server-side tool
-     * @description Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`, `decide`) and returns its result as JSON. Authenticate with a JWT access token only - API keys are NOT accepted on this endpoint. Rate-limited to 100 requests/hour per user, counted separately from other endpoints. `request_id` echoes the X-Request-ID response header.
+     * @description Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`, `decide`) and returns its result as JSON. Authenticate with a JWT access token only - API keys are NOT accepted on this endpoint. Rate-limited to 100 requests/hour per user, counted separately from other endpoints. `web_search` and `web_fetch` are billed per call from the caller's credits (or their organization's), and refused with a 422 `insufficient_credits` before the provider is called. `request_id` echoes the X-Request-ID response header.
      */
     post: operations['executeTool'];
     delete?: never;
@@ -229,6 +229,30 @@ export interface paths {
     put?: never;
     post?: never;
     delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/push-tokens': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Register a device push token
+     * @description Registers a push token for the signed-in device so the server can notify it. Idempotent: re-registering the same token refreshes it and rebinds it to the calling user and session, which is how a token moves when a different account signs in on the same device. The token is removed automatically when the registering session ends. Authenticate with a JWT access token only: the token is bound to the signed-in session that registers it, and API keys have no session. A token with no session claim (legacy access token) is refused with `401`; sign in again.
+     */
+    post: operations['registerPushToken'];
+    /**
+     * Unregister a device push token
+     * @description Removes a push token so the server stops notifying it. Succeeds whether or not the token was registered, so a client can call it unconditionally on sign-out. Only the token owner can remove it: a token registered by another user is left in place and the call still succeeds. Authenticate with a JWT access token only: the token is bound to the signed-in session that registers it, and API keys have no session.
+     */
+    delete: operations['unregisterPushToken'];
     options?: never;
     head?: never;
     patch?: never;
@@ -2075,15 +2099,32 @@ export interface components {
       result?: unknown;
       error?: string;
       errorType?: string;
+      errorCode?: string;
       executionTimeMs?: number;
       request_id: string;
     };
+    executeToolResponse422:
+      | {
+          success: boolean;
+          result?: unknown;
+          error?: string;
+          errorType?: string;
+          errorCode?: string;
+          executionTimeMs?: number;
+          request_id: string;
+        }
+      | {
+          error: string;
+          request_id?: string;
+          name?: string;
+        };
     executeToolResponse500:
       | {
           success: boolean;
           result?: unknown;
           error?: string;
           errorType?: string;
+          errorCode?: string;
           executionTimeMs?: number;
           request_id: string;
         }
@@ -2766,6 +2807,35 @@ export interface components {
         monthly_allowance?: number | null;
       };
       entitlements: string[];
+    };
+    /**
+     * @example {
+     *       "token": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+     *       "kind": "device",
+     *       "platform": "ios",
+     *       "environment": "production",
+     *       "appVersion": "1.0.0"
+     *     }
+     */
+    registerPushTokenRequest: {
+      token: string;
+      /** @enum {string} */
+      kind: 'device' | 'liveActivity';
+      /** @enum {string} */
+      platform: 'ios';
+      /** @enum {string} */
+      environment: 'sandbox' | 'production';
+      activityId?: string;
+      questId?: string;
+      appVersion?: string;
+    };
+    /**
+     * @example {
+     *       "token": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+     *     }
+     */
+    unregisterPushTokenRequest: {
+      token: string;
     };
     /**
      * @example {
@@ -8262,7 +8332,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description Request failed validation. */
+      /** @description Request body failed validation, or the caller cannot afford a billed tool call (`success: false`, `errorCode: "insufficient_credits"`). */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -8270,7 +8340,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ErrorResponse'];
+          'application/json': components['schemas']['executeToolResponse422'];
         };
       };
       /** @description Rate limit exceeded (100 requests/hour per user for this endpoint). */
@@ -9393,6 +9463,146 @@ export interface operations {
           'X-RateLimit-Remaining-Day'?: number;
           /** @description Unix epoch (seconds) when the day window resets. */
           'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  registerPushToken: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['registerPushTokenRequest'];
+      };
+    };
+    responses: {
+      /** @description The token is registered. */
+      204: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Missing or invalid JWT, or the token carries no session. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  unregisterPushToken: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['unregisterPushTokenRequest'];
+      };
+    };
+    responses: {
+      /** @description The token is not registered (it was removed, or never was). */
+      204: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Missing or invalid JWT. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
           [name: string]: unknown;
         };
         content: {

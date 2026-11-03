@@ -1,6 +1,6 @@
 import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { userService } from '@bike4mind/services';
-import { newSignupGrant, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
+import { newSignupGrant, PENDING_FREE_CREDITS_TAG, signupGrantDripRemaining } from '@bike4mind/common';
 import type { SignupGrantBudgetAlert, SignupProtection } from '@bike4mind/common';
 import {
   mongoose,
@@ -18,6 +18,9 @@ import {
   settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
+import { unlockSignupGrantFromSubscription } from './subscriptionUnlock';
+
+vi.mock('@server/integrations/slack/slack', () => ({ postMessageToSlackWithOutcome: vi.fn() }));
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -25,6 +28,7 @@ let server: Awaited<ReturnType<typeof createMongoReplSet>>;
 const UNCAPPED = '1000000000';
 const config: Record<string, string> = {
   stagedSignupGrantEnabled: 'true',
+  signupGrantActivityEnabled: 'true',
   signupGrantCredits: '1000',
   verifiedUnlockCredits: '9000',
   signupGrantSignupPoolDaily: UNCAPPED,
@@ -36,10 +40,12 @@ const config: Record<string, string> = {
 };
 const adminSettings = {
   findBySettingName: async (key: string) => (key in config ? { settingValue: config[key] } : null),
-  findBySettingNames: async () => [],
-} as unknown as Parameters<typeof newSignupGrant>[0] & { findBySettingNames: () => Promise<[]> };
+  findBySettingNames: async (keys: string[]) =>
+    keys.filter(key => key in config).map(key => ({ settingName: key, settingValue: config[key] })),
+} as unknown as Parameters<typeof newSignupGrant>[0] & { findBySettingNames: (keys: string[]) => Promise<unknown[]> };
 let clock = new Date();
 const notify = vi.fn<(alert: SignupGrantBudgetAlert) => Promise<void>>().mockResolvedValue();
+const notifyConfig = vi.fn<NonNullable<SignupProtection['notifyConfig']>>().mockResolvedValue();
 const signupProtection: SignupProtection = {
   repository: {
     findReview: async () => null,
@@ -49,6 +55,7 @@ const signupProtection: SignupProtection = {
     isOrganizationDomain: async () => false,
   },
   grantBudget: { repository: signupGrantBudgetRepository, notify, now: () => clock },
+  notifyConfig,
 };
 const adapters = {
   db: { users: userRepository, creditTransactions: creditTransactionRepository, adminSettings, signupProtection },
@@ -86,7 +93,11 @@ beforeEach(async () => {
   config.signupGrantActivityMaxCredits = '9000';
   config.verifiedUnlockCredits = '9000';
   delete config.signupGrantRiskPolicy;
+  delete config.signupGrantDailyCredits;
+  delete config.signupGrantDripCap;
   notify.mockClear();
+  notifyConfig.mockClear();
+  userService.resetUnsetDripCapAlert();
   clock = new Date();
 });
 
@@ -184,13 +195,125 @@ describe('signup activity drip', () => {
   it.each([
     ['daily rate', 'signupGrantActivityDailyCredits'],
     ['cap', 'signupGrantActivityMaxCredits'],
-  ])('is off when the %s is 0 or invalid', async (_label, key) => {
+    ['schedule daily rate', 'signupGrantDailyCredits'],
+    ['schedule cap', 'signupGrantDripCap'],
+  ])('is off when the %s is 0', async (_label, key) => {
     const user = await createSignupStageUser();
-    for (const value of ['0', '-5', 'abc']) {
-      config[key] = value;
-      expect(await drip(user.id, 0)).toMatchObject({ creditsGranted: 0 });
-    }
+    config[key] = '0';
+    expect(await drip(user.id, 0)).toMatchObject({ creditsGranted: 0 });
     expect(await dripRows(user.id)).toHaveLength(0);
+  });
+
+  it('applies a lowered then raised live cap on the next drip, never paying past it', async () => {
+    const user = await createSignupStageUser();
+    expect((await drip(user.id, 0)).creditsGranted).toBe(1000);
+    expect((await drip(user.id, 1)).creditsGranted).toBe(1000);
+    config.signupGrantDripCap = '2000';
+    expect((await drip(user.id, 2)).creditsGranted).toBe(0);
+    config.signupGrantDripCap = '1500';
+    expect((await drip(user.id, 3)).creditsGranted).toBe(0);
+    config.signupGrantDripCap = '3500';
+    const granted: number[] = [];
+    for (let n = 4; n < 7; n++) granted.push((await drip(user.id, n)).creditsGranted);
+    expect(granted).toEqual([1000, 500, 0]);
+    expect((await User.findById(user.id))?.signupGrant).toMatchObject({ dripCredits: 3500, stage: 'signup' });
+  });
+
+  it('grows the enrolled unlock pool when the cap is raised above its snapshot', async () => {
+    config.verifiedUnlockCredits = '2000';
+    const user = await createSignupStageUser();
+    expect((await User.findById(user.id))?.signupGrant?.unlockCredits).toBe(2000);
+    config.signupGrantDripCap = '3500';
+    const granted: number[] = [];
+    for (let n = 0; n < 5; n++) granted.push((await drip(user.id, n)).creditsGranted);
+    expect(granted).toEqual([1000, 1000, 1000, 500, 0]);
+    expect((await User.findById(user.id))?.signupGrant).toMatchObject({
+      unlockCredits: 3500,
+      creditsReleased: 4500,
+      dripCredits: 3500,
+      stage: 'unlocked',
+    });
+  });
+
+  it('pays a card unlock on a reopened grant the headroom to the raised cap', async () => {
+    const user = await createSignupStageUser();
+    for (let n = 0; n < 10; n++) await drip(user.id, n);
+    expect((await User.findById(user.id))?.signupGrant).toMatchObject({ stage: 'unlocked', dripCredits: 9000 });
+    config.signupGrantDripCap = '15000';
+    expect((await drip(user.id, 10)).creditsGranted).toBe(1000);
+    expect((await User.findById(user.id))?.signupGrant).toMatchObject({ stage: 'signup', creditsReleased: 11000 });
+
+    const card = { ...adapters, validators: { card_verified: async () => true } };
+    expect((await userService.unlockSignupGrant(user.id, 'card_verified', card)).creditsGranted).toBe(5000);
+    expect(await creditsOf(user.id)).toBe(16000);
+    expect((await User.findById(user.id))?.signupGrant).toMatchObject({
+      stage: 'unlocked',
+      unlockedBy: 'card_verified',
+      unlockCredits: 15000,
+      creditsReleased: 16000,
+      dripCredits: 10000,
+      nextCondition: null,
+    });
+    expect((await drip(user.id, 11)).creditsGranted).toBe(0);
+  });
+
+  it('pays a subscription unlock after a cap raise the full grant under the live cap', async () => {
+    const user = await createSignupStageUser();
+    expect((await drip(user.id, 0)).creditsGranted).toBe(1000);
+    expect((await drip(user.id, 1)).creditsGranted).toBe(1000);
+    // The subscription unlock reads the real settings collection, not the in-memory config above.
+    await AdminSettings.create([
+      { settingName: 'signupUnlockPaymentHoldHours', settingValue: '0' },
+      { settingName: 'signupGrantDripCap', settingValue: '15000' },
+    ]);
+
+    expect((await unlockSignupGrantFromSubscription(user.id)).creditsGranted).toBe(13000);
+    expect(await creditsOf(user.id)).toBe(16000);
+    expect((await User.findById(user.id))?.signupGrant).toMatchObject({
+      stage: 'unlocked',
+      unlockedBy: 'subscription',
+      unlockCredits: 15000,
+      creditsReleased: 16000,
+      dripCredits: 2000,
+      nextCondition: null,
+    });
+    config.signupGrantDripCap = '15000';
+    expect((await drip(user.id, 2)).creditsGranted).toBe(0);
+  });
+
+  it('alerts once a day when the cap falls back to the activity max registry default', async () => {
+    delete config.signupGrantActivityMaxCredits;
+    const user = await createSignupStageUser();
+    await drip(user.id, 0);
+    await drip(user.id, 1);
+    expect(notifyConfig).toHaveBeenCalledTimes(1);
+    expect(notifyConfig).toHaveBeenCalledWith({ setting: 'signupGrantDripCap', fallback: 9000 });
+  });
+
+  it('does not alert on the default cap while the daily amount is 0', async () => {
+    delete config.signupGrantActivityMaxCredits;
+    config.signupGrantDailyCredits = '0';
+    const user = await createSignupStageUser();
+    await drip(user.id, 0);
+    expect(notifyConfig).not.toHaveBeenCalled();
+  });
+
+  it('retries the unset-cap alert on the next drip after an undelivered post', async () => {
+    delete config.signupGrantActivityMaxCredits;
+    notifyConfig.mockRejectedValueOnce(new Error('not delivered'));
+    const user = await createSignupStageUser();
+    await drip(user.id, 0);
+    await new Promise(resolve => setImmediate(resolve));
+    await drip(user.id, 1);
+    await new Promise(resolve => setImmediate(resolve));
+    await drip(user.id, 2);
+    expect(notifyConfig).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not alert when a cap is configured', async () => {
+    const user = await createSignupStageUser();
+    await drip(user.id, 0);
+    expect(notifyConfig).not.toHaveBeenCalled();
   });
 
   it('draws the daily budget, and an exhausted budget pays nothing and retries on a later day', async () => {
@@ -332,6 +455,71 @@ describe('signup activity drip', () => {
     });
     expect(await drip(legacy.id, 0)).toMatchObject({ creditsGranted: 0 });
     expect(await CreditTransaction.countDocuments({})).toBe(0);
+  });
+
+  it('gives a staged-off environment seeded with drip cap 0 the flat grant, no drip and no unset-cap alert', async () => {
+    const seeded = {
+      stagedSignupGrantEnabled: 'false',
+      signupGrantActivityEnabled: 'false',
+      signupGrantInitialCredits: '1000',
+      signupGrantDailyCredits: '0',
+      signupGrantDripCap: '0',
+    };
+    const prior = { ...config };
+    Object.assign(config, seeded);
+    try {
+      const user = await createSignupStageUser();
+      expect(await creditsOf(user.id)).toBe(1000);
+      expect((await User.findById(user.id))?.signupGrant).toMatchObject({ unlockCredits: 0, creditsReleased: 1000 });
+      expect((await drip(user.id, 0)).creditsGranted).toBe(0);
+      expect(await creditsOf(user.id)).toBe(1000);
+      expect(notifyConfig).not.toHaveBeenCalled();
+    } finally {
+      for (const key of Object.keys(seeded)) delete config[key];
+      Object.assign(config, prior);
+    }
+  });
+
+  it('leaves the drip headroom of a subscribed account unchanged after a paid lot and the subscription unlock', async () => {
+    const user = await createSignupStageUser();
+    expect((await drip(user.id, 0)).creditsGranted).toBe(1000);
+    await User.updateOne({ _id: user.id }, { $inc: { currentCredits: 5000 } });
+    const headroom = signupGrantDripRemaining((await User.findById(user.id))?.signupGrant ?? {}, 9000);
+    expect(headroom).toBe(8000);
+
+    // The subscription unlock reads the real settings collection, not the in-memory config above.
+    await AdminSettings.create({ settingName: 'signupUnlockPaymentHoldHours', settingValue: '0' });
+    expect((await unlockSignupGrantFromSubscription(user.id)).creditsGranted).toBe(8000);
+    const grant = (await User.findById(user.id))?.signupGrant;
+    expect(grant).toMatchObject({ stage: 'unlocked', unlockedBy: 'subscription', dripCredits: 1000 });
+    expect(signupGrantDripRemaining(grant ?? {}, 9000)).toBe(headroom);
+    expect(await creditsOf(user.id)).toBe(15000);
+    expect((await drip(user.id, 1)).creditsGranted).toBe(0);
+  });
+
+  it('keeps paying a purchase-only account min(daily, cap - dripped)', async () => {
+    const user = await createSignupStageUser();
+    expect((await drip(user.id, 0)).creditsGranted).toBe(1000);
+    await User.updateOne({ _id: user.id }, { $inc: { currentCredits: 5000 } });
+    expect((await drip(user.id, 1)).creditsGranted).toBe(1000);
+    config.signupGrantDripCap = '2500';
+    expect((await drip(user.id, 2)).creditsGranted).toBe(500);
+    expect((await User.findById(user.id))?.signupGrant?.dripCredits).toBe(2500);
+  });
+
+  it.each([
+    ['org_invite', async () => ({ unlockedOrgId: 'org-1' })],
+    ['phone_verified', async () => true],
+  ] as const)('leaves dripCredits unchanged on a non-drip %s unlock', async (reason, validator) => {
+    const user = await createSignupStageUser();
+    expect((await drip(user.id, 0)).creditsGranted).toBe(1000);
+    const result = await userService.unlockSignupGrant(user.id, reason, {
+      ...adapters,
+      validators: { [reason]: validator },
+    });
+    expect(result.creditsGranted).toBe(8000);
+    expect((await User.findById(user.id))?.signupGrant).toMatchObject({ stage: 'unlocked', dripCredits: 1000 });
+    expect((await drip(user.id, 1)).creditsGranted).toBe(0);
   });
 
   it('hands a failed payout back to the budget', async () => {

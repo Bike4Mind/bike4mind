@@ -3,8 +3,12 @@ import {
   hasPaidSignupDrip,
   isPaymentUnlockReason,
   PENDING_FREE_CREDITS_TAG,
+  resolveSignupGrantSchedule,
+  signupGrantDripOpen,
+  signupGrantDripRemaining,
   settingsMap,
   signupGrantRemaining,
+  signupGrantUnlockCredits,
   SignupRiskScoringSchema,
   type IUserDocument,
   type PaymentUnlockReason,
@@ -43,7 +47,7 @@ export type SignupGrantValidator = (
 ) => Promise<boolean | { cumulativeCredits: number } | { unlockedOrgId: string }>;
 
 /** One UTC day's activity drip: a fixed daily amount, bounded by the account-wide drip cap. */
-type DripEvidence = { drip: { day: string; dailyCredits: number; maxCredits: number; period?: string } };
+type DripEvidence = { drip: { day: string; dailyCredits: number; dripCap: number; period?: string } };
 
 const noGrant = (): GrantFreeCreditsResult => ({ creditsGranted: 0, currentCredits: null });
 
@@ -145,6 +149,8 @@ async function releaseStage(
       let assessedBand: SignupRiskBand | undefined;
       let target: number;
       let dripAmount = 0;
+      let unlockCredits = grant.unlockCredits;
+      let dripRemainingAfter = 0;
       if (expected === 'pending_email') {
         if (!assessment) {
           const setting = await db.adminSettings.findBySettingName('signupGrantRiskPolicy');
@@ -179,18 +185,24 @@ async function releaseStage(
           throw new Error('Invalid signup assessment entitlement');
       } else {
         if (typeof evidence === 'object' && 'drip' in evidence) {
-          const { day, dailyCredits, maxCredits, period } = evidence.drip;
+          const { day, dailyCredits, dripCap, period } = evidence.drip;
           const dripped = grant.dripCredits ?? 0;
           if (hasPaidSignupDrip(grant, day, period) || !Number.isSafeInteger(dripped) || dripped < 0) return noGrant();
-          dripAmount = Math.max(
-            0,
-            Math.min(dailyCredits, maxCredits - dripped, grant.unlockCredits - dripped, maximum - grant.creditsReleased)
-          );
+          // A verification unlock already paid the whole entitlement; only a drip-completed grant reopens on a raised cap.
+          if (!signupGrantDripOpen(grant)) return noGrant();
+          dripAmount = Math.max(0, Math.min(dailyCredits, signupGrantDripRemaining(grant, dripCap)));
           target = grant.creditsReleased + dripAmount;
+          // The live cap governs the drip, so a cap raised after enrollment grows the snapshot pool to fit,
+          // and the grant stays open while the cap still has room.
+          unlockCredits = Math.max(grant.unlockCredits, target - grant.signupCredits);
+          dripRemainingAfter = signupGrantDripRemaining({ dripCredits: dripped + dripAmount }, dripCap);
+        } else if (evidence === true || 'unlockedOrgId' in evidence) {
+          unlockCredits = signupGrantUnlockCredits(grant, (await resolveDripLimits(db.adminSettings)).dripCap);
+          target = grant.signupCredits + unlockCredits;
         } else {
-          target = evidence === true || 'unlockedOrgId' in evidence ? maximum : evidence.cumulativeCredits;
+          target = evidence.cumulativeCredits;
         }
-        if (!Number.isSafeInteger(target) || target < 0 || target > maximum)
+        if (!Number.isSafeInteger(target) || target < 0 || target > grant.signupCredits + unlockCredits)
           throw new Error('Invalid unlock entitlement');
       }
       const amount = Math.max(0, target - grant.creditsReleased);
@@ -272,13 +284,14 @@ async function releaseStage(
         creditTransactionId = result.creditTransactionId;
       }
       const released = grant.creditsReleased + amount;
-      const unlocked = released >= maximum;
+      const unlocked = released >= grant.signupCredits + unlockCredits && dripRemainingAfter <= 0;
       const nextGrant: SignupGrant = {
         ...(unlocked ? withoutHeldUnlock(grant) : grant),
         stage: unlocked ? 'unlocked' : 'signup',
         creditsReleased: released,
         nextCondition: unlocked ? null : 'verification',
         ...(reason ? { unlockedBy: reason } : {}),
+        unlockCredits,
         ...(dripDay ? { dripCredits: (grant.dripCredits ?? 0) + dripAmount, lastDripDay: dripDay } : {}),
         ...(dripPeriod ? { lastDripPeriod: dripPeriod } : {}),
         ...(typeof evidence === 'object' && 'unlockedOrgId' in evidence
@@ -459,9 +472,10 @@ async function holdPaymentUnlock(
   // Same domain protection as a payout, so a protected account records no hold either.
   if (db.signupProtection && (await protectSignupCredits(userId, db))) return { ...noGrant(), withheld: true };
   const hours = await resolvePaymentUnlockHoldHours(db.adminSettings);
+  const { dripCap } = await resolveDripLimits(db.adminSettings);
   const releaseAt = await withTransaction<Date | null>(async () => {
     const user = await db.users.findById(userId);
-    if (!isReleaseEligible(user, 'signup') || signupGrantRemaining(user.signupGrant) === 0) return null;
+    if (!isReleaseEligible(user, 'signup') || signupGrantRemaining(user.signupGrant, dripCap) === 0) return null;
     if (user.signupGrant.heldUnlock) return user.signupGrant.heldUnlock.releaseAt;
     if (!(await validate(user))) return null;
     const heldAt = grantClock(db);
@@ -500,6 +514,39 @@ async function unlockWithHeldTranche(
   const remainder = await unlock();
   const creditsGranted = tranche.creditsGranted + remainder.creditsGranted;
   return { ...remainder, creditsGranted, currentCredits: remainder.currentCredits ?? tranche.currentCredits };
+}
+
+let unsetDripCapAlertDay: string | undefined;
+let unsetDripCapAlertInFlight = false;
+
+/**
+ * Fire-and-forget, at most once per UTC day per process (so once per warm Lambda container, not once globally):
+ * the drip is paying from the registry default cap.
+ * The day is marked only after a delivered alert, so a failed post retries on the next drip.
+ */
+function notifyUnsetDripCap(protection: GrantAdapters['db']['signupProtection'], fallback: number) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (!protection?.notifyConfig || unsetDripCapAlertDay === today || unsetDripCapAlertInFlight) return;
+  unsetDripCapAlertInFlight = true;
+  protection
+    .notifyConfig({ setting: 'signupGrantDripCap', fallback })
+    .then(
+      () => {
+        unsetDripCapAlertDay = today;
+      },
+      error => {
+        console.warn('[signup-grant] Unset drip cap alert failed', error);
+      }
+    )
+    .finally(() => {
+      unsetDripCapAlertInFlight = false;
+    });
+}
+
+/** Test seam: clears the once-per-day alert dedupe. */
+export function resetUnsetDripCapAlert() {
+  unsetDripCapAlertDay = undefined;
+  unsetDripCapAlertInFlight = false;
 }
 
 export type HeldUnlockReleaseResult = { scanned: number; released: number; creditsPaid: number; failed: number };
@@ -579,14 +626,8 @@ export async function forfeitPaymentUnlock(
 }
 
 export async function resolveDripLimits(adminSettings: GrantAdapters['db']['adminSettings']) {
-  const read = async (key: 'signupGrantActivityDailyCredits' | 'signupGrantActivityMaxCredits') => {
-    const parsed = settingsMap[key].schema.safeParse((await adminSettings.findBySettingName(key))?.settingValue);
-    return parsed.success ? parsed.data : 0;
-  };
-  return {
-    dailyCredits: await read('signupGrantActivityDailyCredits'),
-    maxCredits: await read('signupGrantActivityMaxCredits'),
-  };
+  const { dailyCredits, dripCap, dripCapSource } = await resolveSignupGrantSchedule(adminSettings);
+  return { dailyCredits, dripCap, dripCapSource };
 }
 
 /**
@@ -604,15 +645,16 @@ export async function dripSignupGrant(
 ): Promise<GrantFreeCreditsResult> {
   if (period !== undefined && !/^preview:\d{1,4}:\d+$/.test(period)) return noGrant();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return noGrant();
-  const { dailyCredits, maxCredits } = await resolveDripLimits(adapters.db.adminSettings);
-  if (!(dailyCredits > 0) || !(maxCredits > 0)) return noGrant();
+  const { dailyCredits, dripCap, dripCapSource } = await resolveDripLimits(adapters.db.adminSettings);
+  if (!(dailyCredits > 0) || !(dripCap > 0)) return noGrant();
+  if (dripCapSource === 'default') notifyUnsetDripCap(adapters.db.signupProtection, dripCap);
   const user = await adapters.db.users.findById(userId);
   if (!user?.signupGrant || hasPaidSignupDrip(user.signupGrant, day, period)) return noGrant();
   return releaseStage(
     userId,
     'signup',
     'activity_drip',
-    async current => (current.emailVerified ? { drip: { day, dailyCredits, maxCredits, period } } : false),
+    async current => (current.emailVerified ? { drip: { day, dailyCredits, dripCap, period } } : false),
     adapters
   );
 }

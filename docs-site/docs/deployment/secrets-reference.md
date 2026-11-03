@@ -203,6 +203,23 @@ Callback URLs:
 
 Callback URL: `https://app.yourdomain.com/api/auth/github/callback`
 
+### Sign in with Apple
+
+| Secret | Description |
+|--------|-------------|
+| `APPLE_CLIENT_ID` | Sign in with Apple Services ID (leave unset to disable Sign in with Apple) |
+| `APPLE_TEAM_ID` | Apple Developer team ID |
+| `APPLE_KEY_ID` | Key ID of the Sign in with Apple private key |
+| `APPLE_PRIVATE_KEY` | Contents of the `.p8` private key (PEM) |
+
+Callback URL: `https://app.yourdomain.com/api/auth/apple/callback`
+
+Sign in with Apple stays off unless all four secrets are set and the private key is a valid EC key. In the Apple Developer account, register a Services ID, add the callback URL above as its return URL, and create a Sign in with Apple key. Set the key with its contents, not its file path: `pnpm sst secret set APPLE_PRIVATE_KEY "$(cat AuthKey_XXXX.p8)" --stage <stage>`.
+
+:::note Private email relay
+People who choose Hide My Email get an address at `privaterelay.appleid.com`. Apple only forwards mail to these addresses from sender domains or addresses registered under your Apple Developer account's email source configuration. Register the domain your stage sends mail from, or these users will not receive one-time codes, billing or notification emails.
+:::
+
 ### Okta (Enterprise SSO)
 
 | Secret | Description | Example |
