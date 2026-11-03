@@ -463,7 +463,7 @@ describe('the shell layout', () => {
 
 describe('the reply stats rail in the shell', () => {
   const at = '2026-10-01T00:00:00.000Z';
-  const stats = { startedAt: 0, endedAt: 4000, totalMs: 4000, modelMs: 4000, streamMs: 3000, toolMs: 0 };
+  const stats = { totalMs: 4000, modelMs: 4000, toolMs: 0, generation: { tokens: 119, ms: 3000 } };
 
   beforeEach(() => {
     reloadReplyStatsPrefs();

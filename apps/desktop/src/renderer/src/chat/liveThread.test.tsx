@@ -51,10 +51,12 @@ function PhaseProbe() {
 
 function TurnProbe() {
   const { turn, messages } = useConversation(SESSION, () => undefined);
-  const { firstTokenAt, thinkingMs, thinkingSince } = turn ?? {};
+  const { requestAt, firstTokenAt, thinkingMs, thinkingSince } = turn ?? {};
   const stats = messages.at(-1)?.stats ?? null;
   return (
-    <output data-testid="chat-turn-probe">{JSON.stringify({ firstTokenAt, thinkingMs, thinkingSince, stats })}</output>
+    <output data-testid="chat-turn-probe">
+      {JSON.stringify({ requestAt, firstTokenAt, thinkingMs, thinkingSince, stats })}
+    </output>
   );
 }
 
@@ -145,9 +147,9 @@ describe('the live thread, driven by stream events', () => {
       emit({ type: 'start', sessionId: SESSION, messageId: MESSAGE });
       phaseAt(1500, 'waiting');
       phaseAt(2000, 'thinking');
-      expect(probe()).toMatchObject({ firstTokenAt: 2000, thinkingSince: 2000 });
+      expect(probe()).toMatchObject({ requestAt: 1500, firstTokenAt: 2000, thinkingSince: 2000 });
       phaseAt(5000, 'responding');
-      expect(probe()).toEqual({ firstTokenAt: 2000, thinkingMs: 3000, stats: null });
+      expect(probe()).toEqual({ requestAt: 1500, firstTokenAt: 2000, thinkingMs: 3000, stats: null });
 
       // A call that arrives mid-think ends the think: the tool's time is not the model's.
       phaseAt(6000, 'thinking');
@@ -155,11 +157,11 @@ describe('the live thread, driven by stream events', () => {
       emit({ type: 'tool-start', sessionId: SESSION, messageId: MESSAGE, call: call('a') });
       expect(probe().thinkingMs).toBe(3500);
 
-      const stats = { startedAt: 1000, endedAt: 9000, totalMs: 8000, modelMs: 7000, streamMs: 6000, toolMs: 1000 };
+      const stats = { totalMs: 8000, modelMs: 7000, toolMs: 1000, firstTokenMs: 500 };
       emit({ type: 'done', sessionId: SESSION, messageId: MESSAGE, content: 'Done.', stats });
       expect(probe().stats).toEqual(stats);
 
-      const failed = { ...stats, endedAt: 4000, totalMs: 3000 };
+      const failed = { ...stats, totalMs: 3000 };
       emit({ type: 'start', sessionId: SESSION, messageId: 'm2' });
       emit({ type: 'error', sessionId: SESSION, messageId: 'm2', message: 'The server went away', stats: failed });
       expect(probe().stats).toEqual(failed);

@@ -77,9 +77,6 @@ const ESTIMATES = {
   speed: 'timed by this app from the stream',
 } as const;
 
-/** Below this the stream's span is the network's, not generation's; as MIN_ESTIMATE_SPAN_MS in main. */
-const MIN_STREAM_MS = 250;
-
 /** "820ms", "12.3s", "3m 7s". */
 export function formatDuration(ms: number): string {
   if (ms < 1000) return `${Math.round(Math.max(0, ms))}ms`;
@@ -100,8 +97,8 @@ export function thinkingShare(stats: ChatReplyStats | undefined): number | null 
 }
 
 /**
- * Tokens over generation time. A server's own timings where it sent them; otherwise output
- * tokens over the time the stream ran, which counts the network too and so is an estimate.
+ * Tokens over generation time. A server's own timings where it sent them; otherwise what main
+ * timed per request from the stream, which counts the network too and so is an estimate.
  */
 export function generationRate({
   stats,
@@ -111,9 +108,9 @@ export function generationRate({
   if (rate && rate.evalTokens > 0 && rate.evalMs > 0) {
     return { tokens: rate.evalTokens, ms: rate.evalMs, estimated: rate.estimated === true };
   }
-  const output = usage?.outputTokens;
-  if (!stats || output === undefined || output < 2 || stats.streamMs < MIN_STREAM_MS) return null;
-  return { tokens: output, ms: stats.streamMs, estimated: true };
+  const timed = stats?.generation;
+  if (!timed || timed.tokens <= 0 || timed.ms <= 0) return null;
+  return { tokens: timed.tokens, ms: timed.ms, estimated: true };
 }
 
 /**
@@ -142,23 +139,23 @@ function stat(id: ReplyStatId, value: string | null, estimate?: string | false):
 
 /**
  * Every stat the source has a value for, in REPLY_STATS order. `live` formats durations in whole
- * seconds, to tick with the status line's clock.
+ * seconds, to tick with the status line's clock, and leaves out the total and the speed, which
+ * that line shows while the turn runs, and the share, whose model time is not known until the end.
  */
 export function replyStats(source: ReplyStatsSource, { live = false }: { live?: boolean } = {}): ReplyStat[] {
   const { stats, usage } = source;
   const derived = new Set<string>(stats?.derived ?? []);
   const duration = live ? formatElapsed : formatDuration;
   const thinkingEstimate = derived.has('reasoningMs') && ESTIMATES.thinking;
-  const share = thinkingShare(stats);
-  const generation = generationRate(source);
+  const share = live ? null : thinkingShare(stats);
+  const generation = live ? null : generationRate(source);
   const cached = cacheReadShare(usage);
   const rate = usage?.rate;
   const reasoningTokens = stats?.reasoningTokens ?? usage?.reasoningTokens;
-  const firstTokenMs = stats?.firstTokenAt !== undefined ? stats.firstTokenAt - stats.startedAt : undefined;
 
   const all: Record<ReplyStatId, ReplyStat | null> = {
     thinking: stat('thinking', stats?.reasoningMs !== undefined ? duration(stats.reasoningMs) : null, thinkingEstimate),
-    total: stat('total', stats ? duration(stats.totalMs) : null),
+    total: stat('total', stats && !live ? duration(stats.totalMs) : null),
     thinkingShare: stat('thinkingShare', share !== null ? formatShare(share) : null, thinkingEstimate),
     thinkingTokens: stat(
       'thinkingTokens',
@@ -178,7 +175,7 @@ export function replyStats(source: ReplyStatsSource, { live = false }: { live?: 
         ? formatTokenRate({ evalTokens: rate.promptTokens, evalMs: rate.promptMs })
         : null
     ),
-    firstToken: stat('firstToken', firstTokenMs !== undefined ? formatDuration(Math.max(0, firstTokenMs)) : null),
+    firstToken: stat('firstToken', stats?.firstTokenMs !== undefined ? formatDuration(stats.firstTokenMs) : null),
     load: stat('load', rate?.loadMs !== undefined ? formatDuration(rate.loadMs) : null),
   };
   return REPLY_STATS.map(id => all[id]).filter((row): row is ReplyStat => row !== null);
@@ -197,29 +194,39 @@ export function describeReplyStats(rows: readonly ReplyStat[]): string | null {
     .join('\n');
 }
 
-/** What a reply in flight has measured so far, in the shape a settled one stores. */
-export function liveReplyStats(turn: TurnProgress, now: number): ChatReplyStats {
+/**
+ * What a reply in flight has measured so far, in the shape a settled one stores, on top of
+ * `earlier`: a continued reply's stats from the runs before this one. Only the thinking time and
+ * the first token are live; the rest is zero and left out of the live rail.
+ */
+export function liveReplyStats(turn: TurnProgress, now: number, earlier?: ChatReplyStats): ChatReplyStats {
   const open = turn.thinkingSince !== undefined ? Math.max(0, now - turn.thinkingSince) : 0;
   const thought = turn.thinkingMs !== undefined || turn.thinkingSince !== undefined;
+  const reasoningMs = thought ? (earlier?.reasoningMs ?? 0) + (turn.thinkingMs ?? 0) + open : earlier?.reasoningMs;
+  const firstTokenMs =
+    earlier?.firstTokenMs ??
+    (turn.firstTokenAt !== undefined ? Math.max(0, turn.firstTokenAt - (turn.requestAt ?? turn.startedAt)) : undefined);
   return {
-    startedAt: turn.startedAt,
-    ...(turn.firstTokenAt !== undefined ? { firstTokenAt: turn.firstTokenAt } : {}),
-    endedAt: now,
-    totalMs: Math.max(0, now - turn.startedAt),
+    totalMs: 0,
     modelMs: 0,
-    // Zero, so no stream estimate is drawn from a stream that is still running.
-    streamMs: 0,
     toolMs: 0,
-    ...(thought ? { reasoningMs: (turn.thinkingMs ?? 0) + open } : {}),
+    ...(firstTokenMs !== undefined ? { firstTokenMs } : {}),
+    ...(reasoningMs !== undefined ? { reasoningMs } : {}),
+    ...(earlier?.reasoningTokens !== undefined ? { reasoningTokens: earlier.reasoningTokens } : {}),
+    ...(earlier?.derived ? { derived: earlier.derived } : {}),
   };
 }
 
 /**
- * The turn with a phase change folded into its thinking clock and first-token stamp. Returns the
- * same object when nothing changed, so a repeated phase re-renders nothing.
+ * The turn with a phase change folded into its thinking clock and its request and first-token
+ * stamps. Returns the same object when nothing changed, so a repeated phase re-renders nothing.
  */
 export function withPhase(turn: TurnProgress, phase: ModelPhase, now: number): TurnProgress {
   let next = turn;
+  // Main sends a wait as each request goes out, so the first one is when the model was asked.
+  if (phase.kind === 'waiting' && next.requestAt === undefined && next.firstTokenAt === undefined) {
+    next = { ...next, requestAt: now };
+  }
   if (phase.kind !== 'waiting' && next.firstTokenAt === undefined) next = { ...next, firstTokenAt: now };
   const thinking = phase.kind === 'thinking';
   if (thinking && next.thinkingSince === undefined) return { ...next, thinkingSince: now };
