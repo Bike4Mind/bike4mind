@@ -233,8 +233,9 @@ export function planLifecycleSignals({
             ? 'provider-date'
             : undefined;
       const corroborated = corroboration !== undefined;
-      // First writer wins, same precedence the field overlay uses.
-      if (!docs.has(record.modelId)) {
+      // First writer wins, same precedence the field overlay uses - except over an uncorroborated
+      // entry: this record's lifecycle reaches the catalog, so the hold in planLifecycle must see why.
+      if (!docs.has(record.modelId) || (corroborated && !docs.get(record.modelId)?.corroborated)) {
         docs.set(record.modelId, {
           modelId: record.modelId,
           source: contribution.name,
@@ -436,27 +437,16 @@ export function planLifecycle(plannerInput: LifecyclePlanInput): LifecyclePlan {
     const remap = TERMINAL_STATUSES.has(entry.to) ? planRemap(entry, input, sunsetting) : undefined;
     const autoApplied = remap !== undefined && remap.blockers.length === 0 && input.autoRemap === 'apply';
     const docsSignal = input.docs.get(entry.modelId);
-    if (docsSignal?.corroboration === 'provider-date' && TERMINAL_STATUSES.has(entry.to)) {
-      const successorKnown =
-        autoApplied ||
-        input.knownSuccessor?.(entry.modelId) !== undefined ||
-        lifecycleOf(input.resolvedInForce.get(entry.modelId))?.replacedBy !== undefined;
-      if (!successorKnown) {
+    if (docsSignal?.corroboration === 'provider-date' && TERMINAL_STATUSES.has(entry.to) && !autoApplied) {
+      const successor = providerDateSuccessor(entry.modelId, input, sunsetting);
+      if (!successor) {
         held.add(entry.modelId);
-        suggestions.push({
-          modelId: entry.modelId,
-          status: entry.to,
-          deprecationDate: entry.lifecycle.deprecationDate,
-          retirementDate: entry.lifecycle.retirementDate,
-          replacedBy: remap?.candidate,
-          source: docsSignal.source,
-          detail:
-            `${docsSignal.source} documents this model as ${entry.to}` +
-            `${entry.lifecycle.retirementDate ? ` (retirement ${entry.lifecycle.retirementDate})` : ''}; ` +
-            'held, no successor resolves: set modelDiscoveryAutoRemap to apply or map it',
-        });
+        suggestions.push(heldSuggestion(entry.modelId, entry.to, entry.lifecycle, remap?.candidate, docsSignal.source));
         continue;
       }
+      // The written row wins the lifecycle group and foldLifecycle keeps only the winner's
+      // replacedBy, so an in-force successor this decision leaned on has to be restated.
+      if (successor.carry) applied.set(entry.modelId, successor.carry);
     }
     if (remap && autoApplied) applied.set(entry.modelId, remap.candidate);
     else if (remap) {
@@ -475,9 +465,24 @@ export function planLifecycle(plannerInput: LifecyclePlanInput): LifecyclePlan {
       signal: entry.signal,
       deprecationDate: entry.lifecycle.deprecationDate,
       retirementDate: entry.lifecycle.retirementDate,
-      replacedBy: autoApplied ? remap?.candidate : undefined,
+      replacedBy: applied.get(entry.modelId),
       autoApplied,
     });
+  }
+
+  // A date move on a model already in a sunset status hides it just the same.
+  const dateChanges: LifecycleDateChange[] = [];
+  for (const change of typed.dateChanges) {
+    const docsSignal = input.docs.get(change.modelId);
+    const hides = TERMINAL_STATUSES.has(change.status) && docsSignal?.corroboration === 'provider-date';
+    const successor = hides ? providerDateSuccessor(change.modelId, input, sunsetting) : undefined;
+    if (hides && !successor) {
+      held.add(change.modelId);
+      suggestions.push(heldSuggestion(change.modelId, change.status, change, undefined, docsSignal.source));
+      continue;
+    }
+    if (successor?.carry) applied.set(change.modelId, successor.carry);
+    dateChanges.push(change);
   }
 
   for (const signal of docsSuggestions(input, sunsetting)) suggestions.push(signal);
@@ -493,19 +498,14 @@ export function planLifecycle(plannerInput: LifecyclePlanInput): LifecyclePlan {
   input.catalogPlan.rows.forEach((row, index) => {
     const entry = input.catalogPlan.diff[index];
     if (row.source === 'discovery' && held.has(row.modelId)) {
-      const ownedGroups = row.ownedGroups.filter(group => group !== 'lifecycle');
-      if (ownedGroups.length === 0) return;
-      rows.push({
-        ...row,
-        patch: omit(row.patch, 'lifecycle'),
-        ownedGroups,
-        contributors: row.contributors?.filter(credit => credit.group !== 'lifecycle'),
-      });
-      diff.push({
-        ...entry,
-        ownedGroups: entry.ownedGroups.filter(group => group !== 'lifecycle'),
-        changedKeys: entry.changedKeys.filter(key => key !== 'lifecycle'),
-      });
+      const changedKeys = entry.changedKeys.filter(key => key !== 'lifecycle');
+      // rowsInForce keeps one discovery row per model, so an append here supersedes the one in
+      // force: with nothing else to move, appending would only drop the lifecycle it carries.
+      if (changedKeys.length === 0) return;
+      const kept = heldRow(row, input);
+      if (kept.ownedGroups.length === 0) return;
+      rows.push(kept);
+      diff.push({ ...entry, ownedGroups: kept.ownedGroups, changedKeys });
       return;
     }
     const replacedBy = applied.get(row.modelId);
@@ -590,9 +590,85 @@ export function planLifecycle(plannerInput: LifecyclePlanInput): LifecyclePlan {
     diff,
     dropped,
     transitions,
-    dateChanges: typed.dateChanges,
+    dateChanges,
     suggestions,
     wouldDeprecate: graduated.map(entry => entry.modelId),
+  };
+}
+
+/** A successor-chain resolver as LifecyclePlanInput.knownSuccessor reads it: resolving to itself is no successor. */
+export const knownSuccessorFrom =
+  (resolve: (modelId: string) => string) =>
+  (modelId: string): string | undefined => {
+    const next = resolve(modelId);
+    return next === modelId ? undefined : next;
+  };
+
+/**
+ * Whether a pinned session would have somewhere to go if a provider-page sunset hid this model:
+ * the static resolver maps it, or the in-force lifecycle names a live successor. `carry` is set
+ * for the second case only, the replacedBy the written row must restate.
+ */
+function providerDateSuccessor(
+  modelId: string,
+  input: PlanContext,
+  sunsetting: ReadonlySet<string>
+): { carry?: string } | undefined {
+  if (input.knownSuccessor?.(modelId) !== undefined) return {};
+  const replacedBy = lifecycleOf(input.resolvedInForce.get(modelId))?.replacedBy;
+  if (replacedBy === undefined || replacedBy === modelId || sunsetting.has(replacedBy)) return undefined;
+  const target = input.resolvedInForce.get(replacedBy);
+  return target && !isTerminal(target) ? { carry: replacedBy } : undefined;
+}
+
+function heldSuggestion(
+  modelId: string,
+  status: string,
+  dates: { deprecationDate?: string; retirementDate?: string },
+  replacedBy: string | undefined,
+  source: string
+): LifecycleSuggestion {
+  return {
+    modelId,
+    status,
+    deprecationDate: dates.deprecationDate,
+    retirementDate: dates.retirementDate,
+    replacedBy,
+    source,
+    detail:
+      `${source} documents this model as ${status}` +
+      `${dates.retirementDate ? ` (retirement ${dates.retirementDate})` : ''}; ` +
+      'held, no successor resolves: set modelDiscoveryAutoRemap to apply or map it',
+  };
+}
+
+/**
+ * A held model's planned row with this run's lifecycle claim taken back out. The row supersedes
+ * the discovery row in force, so where that row carried the lifecycle group the in-force lifecycle
+ * is restated; otherwise the group stays with whichever row already backs it.
+ */
+function heldRow(row: IModelCatalogRowInput, input: PlanContext): IModelCatalogRowInput {
+  const withoutClaim: IModelCatalogRowInput = {
+    ...row,
+    patch: omit(row.patch, 'lifecycle'),
+    ownedGroups: row.ownedGroups.filter(group => group !== 'lifecycle'),
+    contributors: row.contributors?.filter(credit => credit.group !== 'lifecycle'),
+  };
+  if (input.priorDiscoveryGroups?.get(row.modelId)?.includes('lifecycle') !== true) return withoutClaim;
+  const restated = ModelRecordWrite.safeParse({
+    ...withoutClaim.patch,
+    lifecycle: input.base.get(row.modelId)?.record.lifecycle,
+  });
+  if (!restated.success || !restated.data.lifecycle) return withoutClaim;
+  const priorCredit = input.priorContributors?.get(row.modelId)?.find(credit => credit.group === 'lifecycle');
+  return {
+    ...withoutClaim,
+    patch: { ...withoutClaim.patch, lifecycle: restated.data.lifecycle },
+    ownedGroups: [...withoutClaim.ownedGroups, 'lifecycle'],
+    contributors: [
+      ...(withoutClaim.contributors ?? []),
+      priorCredit ?? { group: 'lifecycle', source: DISCOVERY_CONTRIBUTOR },
+    ],
   };
 }
 

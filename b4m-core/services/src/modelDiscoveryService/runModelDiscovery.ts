@@ -30,6 +30,7 @@ import { planCatalogWrites, summarizeDiff, type CatalogWritePlan } from './catal
 import {
   detectListingShrink,
   detectParserRowShifts,
+  knownSuccessorFrom,
   planLifecycle,
   planLifecycleSignals,
   type LifecyclePlan,
@@ -896,10 +897,7 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     ratesInForce: perTokenRatesInForce(priceRowsInForce),
     priorDiscoveryGroups,
     priorContributors,
-    knownSuccessor: id => {
-      const next = resolveSuccessorChain(id);
-      return next === id ? undefined : next;
-    },
+    knownSuccessor: knownSuccessorFrom(resolveSuccessorChain),
     autoRemap: ctx.autoRemap,
     operatorOwnedModelIds,
     staticModelIds,
