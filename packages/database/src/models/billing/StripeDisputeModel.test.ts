@@ -107,6 +107,18 @@ describe('StripeDisputeModel', () => {
     expect(resolved).toMatchObject({ status: 'updated', item: { state: 'resolved', stripeStatus: 'warning_closed' } });
   });
 
+  it('refuses an admin resolve of a user dispute Stripe closed as won or lost until the system resolves it', async () => {
+    const user = await stripeDisputeRepository.recordOpened(facts({ subject: 'user', subjectId: 'u1' }));
+    await stripeDisputeRepository.recordClosed(
+      facts({ subject: 'user', subjectId: 'u1', stripeStatus: 'lost' }),
+      new Date()
+    );
+
+    const refused = await stripeDisputeRepository.resolveByAdmin({ id: user.id, adminId: 'admin1', note: 'x' });
+
+    expect(refused).toMatchObject({ status: 'conflict', item: { state: 'open', stripeStatus: 'lost' } });
+  });
+
   it('marks a Contain undone once', async () => {
     const opened = await stripeDisputeRepository.recordOpened(facts({ subject: 'user', subjectId: 'u1' }));
     expect((await stripeDisputeRepository.markContainUndone({ id: opened.id, adminId: 'admin1' })).status).toBe(
