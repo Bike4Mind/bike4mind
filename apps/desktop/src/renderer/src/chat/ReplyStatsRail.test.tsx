@@ -117,6 +117,9 @@ describe('the reply stats rail and its footer fallback', () => {
 
     expect(statValue('thinkingShare')).toBeUndefined();
     expect(statValue('thinking')).toBe('3.0s');
+    const spoken = container.querySelector('[data-testid="chat-reply-stats-spoken"]')?.textContent ?? '';
+    expect(spoken).toContain('Thinking time 3.0s');
+    expect(spoken).not.toContain('Thinking share');
   });
 
   it('still draws the cost with every stat unticked', () => {
