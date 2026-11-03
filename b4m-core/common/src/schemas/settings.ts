@@ -562,6 +562,7 @@ export const SettingKeySchema = z.enum([
   'turnstileFailClosed',
   'turnstileSiteKey',
   'signupRiskScoring',
+  'signupRiskAutoApproval',
   'preferenceArenaEnabled',
   'preferenceArenaCreditsPerVote',
   'preferenceArenaDailyVoteCap',
@@ -1539,6 +1540,37 @@ export const SignupRiskScoringSchema = z
 
 export type SignupRiskScoring = z.infer<typeof SignupRiskScoringSchema>;
 
+/**
+ * Rules that approve a pending signup risk review without an admin
+ * (apps/client/server/security/riskReviewAutoApproval.ts). Both only move pending to approved, which
+ * an admin can reopen; a model verdict never approves.
+ */
+export const SignupRiskAutoApprovalSchema = z
+  .object({
+    settledPayment: z
+      .object({
+        enabled: z.boolean().prefault(true),
+        /** Hours a successful payment must have stood; 0 approves as the payment succeeds. */
+        minPaymentAgeHours: z.number().int().min(0).max(720).prefault(0),
+      })
+      .strict()
+      .prefault({}),
+    quietAccount: z
+      .object({
+        enabled: z.boolean().prefault(false),
+        minAccountAgeDays: z.number().int().min(1).max(365).prefault(14),
+        /** Only accounts scoring at most this; set it near the review threshold to cover borderline rows only. */
+        maxScore: z.number().min(1).max(100).prefault(60),
+        /** Days since the score was last recomputed (by email verification or a new API key). */
+        minQuietDays: z.number().int().min(1).max(365).prefault(7),
+      })
+      .strict()
+      .prefault({}),
+  })
+  .strict();
+
+export type SignupRiskAutoApproval = z.infer<typeof SignupRiskAutoApprovalSchema>;
+
 export const CUSTOM_MCP_POLICY_MODES = ['off', 'presets_only', 'allowlist', 'any'] as const;
 export type CustomMcpPolicyMode = (typeof CUSTOM_MCP_POLICY_MODES)[number];
 
@@ -2410,6 +2442,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'signupBurstWindowHours', order: 25 },
       { key: 'signupBurstAutoHold', order: 26 },
       { key: 'signupRiskScoring', order: 27 },
+      { key: 'signupRiskAutoApproval', order: 27.5 },
       { key: 'signupAnomaly', order: 28 },
       { key: 'enableDomainIntelligence', order: 29 },
       { key: 'holdSignupsFromDomainsYoungerThanDays', order: 30 },
@@ -5545,6 +5578,21 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
     schema: SignupRiskScoringSchema,
+  }),
+  signupRiskAutoApproval: makeObjectSetting({
+    key: 'signupRiskAutoApproval',
+    name: 'Signup Risk Auto-Approval',
+    defaultValue: SignupRiskAutoApprovalSchema.parse({}),
+    description:
+      'Approves a pending signup risk review without an admin. settledPayment: a successful card payment ' +
+      '(credit pack or subscription) that Stripe Radar rated normal, on a card no other account has used, ' +
+      'at least minPaymentAgeHours old. quietAccount (off by default): an account at least minAccountAgeDays ' +
+      'old, scoring at most maxScore, not rescored for minQuietDays and named in no open shadow detection. ' +
+      'Neither applies to a banned, suspended or disputed account, or one whose payment unlock was forfeited. ' +
+      'Each approval is audited and listed in Risk review, where it can be reopened.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+    schema: SignupRiskAutoApprovalSchema,
   }),
   signupAnomaly: makeObjectSetting({
     key: 'signupAnomaly',

@@ -17,12 +17,14 @@ import {
   IUserRepository,
   IUserNote,
   IModerationHit,
+  ISignupRiskAutoApproval,
   ISignupRiskScore,
   RISK_EVIDENCE_TRIGGERS,
   type RiskEvidenceCoverage,
   type RiskEvidenceSummary,
   riskEvidenceSummarySchema,
   type RiskEvidenceTrigger,
+  SIGNUP_RISK_AUTO_APPROVAL_POLICIES,
   SIGNUP_RISK_REVIEW_STATES,
   SIGNUP_RISK_SIGNALS,
   type SignupRiskReviewState,
@@ -1111,9 +1113,51 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
 
   async setRiskReviewState(userId: string, from: SignupRiskReviewState, to: SignupRiskReviewState): Promise<boolean> {
     const result = await this.model
-      .updateOne({ _id: userId, 'riskScore.reviewState': from }, { $set: { 'riskScore.reviewState': to } })
+      .updateOne(
+        { _id: userId, 'riskScore.reviewState': from },
+        { $set: { 'riskScore.reviewState': to }, $unset: { riskReviewAutoApproval: 1 } }
+      )
       .exec();
     return result.modifiedCount === 1;
+  }
+
+  async autoApproveRiskReview(userId: string, approval: ISignupRiskAutoApproval): Promise<boolean> {
+    const result = await this.model
+      .updateOne(
+        { _id: userId, 'riskScore.reviewState': 'pending', isBanned: { $ne: true } },
+        { $set: { 'riskScore.reviewState': 'approved', riskReviewAutoApproval: approval } }
+      )
+      .exec();
+    return result.modifiedCount === 1;
+  }
+
+  async findPendingRiskReviewIds(options: { afterId?: string; limit: number }): Promise<string[]> {
+    const rows = await this.model
+      .find(
+        {
+          'riskScore.reviewState': 'pending',
+          isBanned: { $ne: true },
+          ...(options.afterId ? { _id: { $gt: new mongoose.Types.ObjectId(options.afterId) } } : {}),
+        },
+        { _id: 1 }
+      )
+      .sort({ _id: 1 })
+      .limit(options.limit)
+      .lean<{ _id: mongoose.Types.ObjectId }[]>()
+      .exec();
+    return rows.map(row => row._id.toString());
+  }
+
+  // Rides the user_riskScore_review index on reviewState; approved accounts are few enough to filter.
+  async findRiskAutoApprovals(options: { since: Date; limit: number }): Promise<IUserDocument[]> {
+    return this.model
+      .find(
+        { 'riskScore.reviewState': 'approved', 'riskReviewAutoApproval.decidedAt': { $gte: options.since } },
+        { email: 1, username: 1, riskScore: 1, riskReviewAutoApproval: 1 }
+      )
+      .sort({ 'riskReviewAutoApproval.decidedAt': -1 })
+      .limit(options.limit)
+      .exec();
   }
 
   async claimRiskEvidenceRefresh(
@@ -1689,6 +1733,18 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     },
     // Recomputed by userService.refreshSignupRiskScore - see IUser.riskScore.
     riskScore: { type: RiskScoreSchema, required: false, default: undefined },
+    // Written by riskReviewAutoApproval (apps/client) - see IUser.riskReviewAutoApproval.
+    riskReviewAutoApproval: {
+      type: new Schema(
+        {
+          policy: { type: String, required: true, enum: [...SIGNUP_RISK_AUTO_APPROVAL_POLICIES] },
+          decidedAt: { type: Date, required: true },
+        },
+        { _id: false }
+      ),
+      required: false,
+      default: undefined,
+    },
     // Written by userService.refreshRiskEvidence - see IUser.riskEvidence.
     riskEvidence: { type: RiskEvidenceSchema, required: false, default: undefined },
     isSynthetic: { type: Boolean, required: false },

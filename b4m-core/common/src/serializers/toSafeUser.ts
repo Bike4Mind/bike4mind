@@ -50,6 +50,7 @@ export const USER_SECRET_FIELDS = [
   'loginRecords',
   'signupMeta',
   'riskScore',
+  'riskReviewAutoApproval',
   'riskEvidence',
   'freeCreditClaimEmail',
   'grantPackageId',

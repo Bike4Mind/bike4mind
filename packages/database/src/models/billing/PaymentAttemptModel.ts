@@ -221,6 +221,12 @@ class PaymentAttemptRepository {
     return { attempt: toAttempt(after), changed };
   }
 
+  /** This account's attempts within the retention window, newest first, at most `limit`. */
+  async findByUser(userId: string, limit: number): Promise<PaymentAttempt[]> {
+    const rows = await PaymentAttemptModel.find({ userId }).sort({ createdAt: -1 }).limit(limit).lean().exec();
+    return rows.map(toAttempt);
+  }
+
   /** Distinct accounts that have used this card, successfully or not. Null when the scan is truncated. */
   async countAccountsForCard(cardFingerprint: string): Promise<number | null> {
     const userIds = await PaymentAttemptModel.distinct('userId', { cardFingerprints: cardFingerprint }).maxTimeMS(2000);

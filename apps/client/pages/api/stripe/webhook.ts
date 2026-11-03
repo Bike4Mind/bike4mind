@@ -37,6 +37,7 @@ import { creditService, userService } from '@bike4mind/services';
 import { grantCreditPurchase } from '@server/billing/grantCreditPurchase';
 import { unlockSignupGrantFromCreditPurchase } from '@server/credits/creditPurchaseUnlock';
 import { alertStripeRiskEvent, radarRiskLine, screenPaymentOutcome } from '@server/billing/paymentRisk';
+import { autoApproveRiskReviewAfterPayment } from '@server/security/riskReviewAutoApproval';
 import {
   forfeitHeldUnlockForFraudWarning,
   forfeitHeldUnlockForRefund,
@@ -146,6 +147,8 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
             },
             req.logger
           );
+          // After screening, which records the Radar outcome and card this reads.
+          await autoApproveRiskReviewAfterPayment(subscriber.id, req.logger);
         }
         break;
       }
@@ -262,6 +265,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         },
         req.logger
       );
+      await autoApproveRiskReviewAfterPayment(user.id, req.logger);
 
       req.logger.info('[CreditPurchase] Credits granted', {
         step: 'credits_granted',

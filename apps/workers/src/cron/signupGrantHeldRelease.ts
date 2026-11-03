@@ -1,6 +1,7 @@
 /**
  * Pays queued gear and referral rewards from the trickle pool (creditService.releaseHeldCreditRewards), then
- * held signup grants from the signup pool, oldest first, then due payment unlocks (userService.releaseDueHeldUnlocks).
+ * held signup grants from the signup pool, oldest first, then due payment unlocks (userService.releaseDueHeldUnlocks),
+ * then approves pending risk reviews whose auto-approval evidence now holds (riskReviewAutoApproval.ts).
  * Schedule: hourly (infra/cron.ts signupGrantHeldRelease), so the day's first run drains the backlog.
  * Self-host equivalent: apps/workers/src/selfhost/signupGrantHeldRelease.ts.
  */
@@ -12,13 +13,20 @@ import { Resource } from 'sst';
 import { buildHeldGrantAdapters } from '@server/credits/heldSignupGrantAdapters';
 import { buildCreditRewardAdapters } from '@server/credits/creditRewardAdapters';
 import { alertForReleasedReferralRewards } from '@server/referrals/firstAnswerReward';
+import {
+  sweepRiskReviewAutoApprovals,
+  type RiskReviewAutoApprovalSweepResult,
+} from '@server/security/riskReviewAutoApproval';
 
 const logger = new Logger({ metadata: { service: 'signupGrantHeldRelease' } });
 const MAX_USERS_PER_RUN = 500;
 
-export async function runSignupGrantHeldRelease(
-  now: Date = new Date()
-): Promise<userService.HeldReleaseCronResult & { heldUnlocks: userService.HeldUnlockReleaseResult }> {
+export async function runSignupGrantHeldRelease(now: Date = new Date()): Promise<
+  userService.HeldReleaseCronResult & {
+    heldUnlocks: userService.HeldUnlockReleaseResult;
+    riskReviewAutoApprovals: RiskReviewAutoApprovalSweepResult;
+  }
+> {
   // Queued gear/referral rewards go first: they are owed from the trickle pool before new drips.
   // A failure here must not stall the held signup grants and unlocks below.
   try {
@@ -59,7 +67,10 @@ export async function runSignupGrantHeldRelease(
     { now, maxUsers: MAX_USERS_PER_RUN }
   );
   if (heldUnlocks.scanned > 0) logger.info('[signupGrantHeldRelease] held unlocks done', heldUnlocks);
-  return { ...result, heldUnlocks };
+  const riskReviewAutoApprovals = await sweepRiskReviewAutoApprovals(logger, { maxUsers: MAX_USERS_PER_RUN, now });
+  if (riskReviewAutoApprovals.scanned > 0)
+    logger.info('[signupGrantHeldRelease] risk review auto-approvals done', riskReviewAutoApprovals);
+  return { ...result, heldUnlocks, riskReviewAutoApprovals };
 }
 
 export const handler = async () => {

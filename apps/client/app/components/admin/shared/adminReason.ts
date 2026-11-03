@@ -68,6 +68,7 @@ export const ADMIN_REASON_PRESETS = {
     'Duplicate of another dispute',
   ],
   stripeDisputeUndoContain: ['Customer verified as legitimate', 'Contained in error'],
+  signupRiskReopen: ['Evidence needs a manual look', 'Linked to known abuse', 'Payment disputed or refunded'],
   shadowDetectionVerdict: [
     'Reviewed account activity',
     'Matches a known abuse pattern',

@@ -8,6 +8,7 @@ import { ICreditHolder, ICreditHolderFlooredDebit, ICreditHolderMethods } from '
 import { PaginatedResponse, UserReasoningEffort } from '../common';
 import type { AuthStrategy } from '../../schemas/user';
 import type { SignupRiskSignal } from '../../schemas/settings';
+import type { SignupRiskAutoApprovalPolicy } from '../../schemas/signupRiskReview';
 import type { RiskEvidenceRecord, RiskEvidenceSummary, RiskEvidenceTrigger } from '../../schemas/riskEvidence';
 import type { SignupGrant, SignupGrantAssessment } from '../../signupGrant';
 import type { AdminPermissionId } from '../../adminPermissions';
@@ -71,6 +72,11 @@ export interface ISignupMeta extends INetworkMeta {
  */
 export const SIGNUP_RISK_REVIEW_STATES = ['none', 'pending', 'approved', 'banned'] as const;
 export type SignupRiskReviewState = (typeof SIGNUP_RISK_REVIEW_STATES)[number];
+
+export interface ISignupRiskAutoApproval {
+  policy: SignupRiskAutoApprovalPolicy;
+  decidedAt: Date;
+}
 
 export interface RiskEvidenceCoverage {
   accounts: number;
@@ -839,6 +845,9 @@ export interface IUser extends ICreditHolder {
   /** Abuse risk of a new account. Never shown to the user: the signals would say how to avoid them. */
   riskScore?: ISignupRiskScore | null;
 
+  /** Set when the pending review was approved automatically; any admin review decision clears it. */
+  riskReviewAutoApproval?: ISignupRiskAutoApproval | null;
+
   /**
    * Behavioral evidence and its refresh state (b4m-core/common/src/schemas/riskEvidence.ts).
    * Shadow-only: never feeds riskScore.reviewState. Admin-only, like riskScore.
@@ -1094,9 +1103,15 @@ export interface IUserRepository
   countPendingRiskReviews: () => Promise<number>;
   /**
    * Move a user's review from `from` to `to`, only if it is still `from`; false when it was not
-   * (already decided or no score). Used for admin approve and its undo.
+   * (already decided or no score). Used for admin approve and its undo; clears riskReviewAutoApproval.
    */
   setRiskReviewState: (userId: string, from: SignupRiskReviewState, to: SignupRiskReviewState) => Promise<boolean>;
+  /** Approve a pending, unbanned user's review and record why; false when it was no longer pending. */
+  autoApproveRiskReview: (userId: string, approval: ISignupRiskAutoApproval) => Promise<boolean>;
+  /** Ids of unbanned users whose review is pending, in id order; pass the last id back as `afterId`. */
+  findPendingRiskReviewIds: (options: { afterId?: string; limit: number }) => Promise<string[]>;
+  /** Users still approved by an automatic approval decided at or after `since`, newest first. */
+  findRiskAutoApprovals: (options: { since: Date; limit: number }) => Promise<IUserDocument[]>;
   /**
    * Mark an evidence refresh queued, only if none is pending or the pending one is older than
    * `staleBefore` (its message was lost). True when this call claimed it and should enqueue.
