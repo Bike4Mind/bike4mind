@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { COMMAND_TAG_ENV } from './commandTree';
+import { resolveGitBash } from './gitBash';
 import { resolveUserPath } from './userPath';
 import { sandboxAvailable, sandboxCommand, type SandboxedCommand } from './sandbox';
 
@@ -13,6 +16,14 @@ export async function launchCommand(
   roots: readonly string[],
   protectedPaths: readonly string[]
 ): Promise<SandboxedCommand> {
+  if (process.platform === 'win32') {
+    return {
+      executable: await resolveGitBash(),
+      args: ['-c', command],
+      processTag: randomUUID(),
+      cleanup: async () => undefined,
+    };
+  }
   if (!SANDBOX_SHELL_COMMANDS) {
     return { executable: '/bin/bash', args: ['-c', command], cleanup: async () => undefined };
   }
@@ -23,8 +34,9 @@ export async function launchCommand(
 }
 
 /** The user's own environment, with the PATH a terminal would have rather than Finder's. */
-export async function commandEnv(extra: NodeJS.ProcessEnv = {}): Promise<NodeJS.ProcessEnv> {
+export async function commandEnv(launch: SandboxedCommand, extra: NodeJS.ProcessEnv = {}): Promise<NodeJS.ProcessEnv> {
   const env: NodeJS.ProcessEnv = { ...process.env, PATH: await resolveUserPath(), ...extra };
   if (SANDBOX_SHELL_COMMANDS) env.B4M_DESKTOP_SANDBOX = '1';
+  if (launch.processTag) env[COMMAND_TAG_ENV] = launch.processTag;
   return env;
 }
