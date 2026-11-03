@@ -21,10 +21,8 @@ export interface LocalUsageServiceDeps {
 }
 
 /**
- * Usage of self-hosted models, computed from the conversations stored on this device.
- *
- * Makes no request of any kind: there is no API client here, and nothing it computes leaves main
- * except the aggregates handed to the renderer.
+ * Usage of self-hosted models, computed from the conversations stored on this device. Makes no
+ * request: there is no API client here, and only aggregates leave main.
  */
 export class LocalUsageService {
   private readonly cache = new Map<string, { at: number; result: LocalUsageResult }>();
