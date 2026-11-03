@@ -3,15 +3,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const h = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
   getSummary: vi.fn(),
+  baseApiOptions: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
-    get: (fn: (req: unknown, res: unknown) => Promise<unknown>) => {
-      h.handler = fn;
-      return {};
-    },
-  }),
+  baseApi: (options?: unknown) => {
+    h.baseApiOptions(options);
+    return {
+      get: (fn: (req: unknown, res: unknown) => Promise<unknown>) => {
+        h.handler = fn;
+        return {};
+      },
+    };
+  },
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: <T>(fn: T) => fn }));
 vi.mock('@server/referrals/inviterSummary', () => ({ getInviterSummary: h.getSummary }));
@@ -20,7 +24,11 @@ await import('../summary');
 
 describe('GET /api/referrals/summary', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    h.getSummary.mockReset();
+  });
+
+  it('refuses API keys by requiring a session token', () => {
+    expect(h.baseApiOptions).toHaveBeenCalledWith({ auth: 'jwtOnly' });
   });
 
   it("returns the signed-in user's own summary and nobody else's", async () => {
