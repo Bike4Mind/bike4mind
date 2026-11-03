@@ -159,19 +159,25 @@ describe('startRootHeartbeat', () => {
     const dir = await mkdtemp(join(tmpdir(), 'heartbeat-'));
     const old = new Date(Date.now() - STALE_ROOT_AGE_MS - 60_000);
     await utimes(dir, old, old);
+    const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
     const stop = startRootHeartbeat(dir, 20);
     try {
-      await vi.waitUntil(async () => (await stat(dir)).mtimeMs > old.getTime() + 60_000, {
-        timeout: 2000,
-        interval: 10,
-      });
-    } finally {
-      stop();
-    }
+      try {
+        await vi.waitUntil(async () => (await stat(dir)).mtimeMs > old.getTime() + 60_000, {
+          timeout: 2000,
+          interval: 10,
+        });
+      } finally {
+        stop();
+      }
 
-    await utimes(dir, old, old);
-    await new Promise(resolve => setTimeout(resolve, 100));
-    expect((await stat(dir)).mtimeMs).toBeLessThan(old.getTime() + 1000);
-    await rm(dir, { recursive: true, force: true });
+      // A utimes issued by the last tick can land after stop(); let it settle before resetting.
+      await sleep(50);
+      await utimes(dir, old, old);
+      await sleep(100);
+      expect((await stat(dir)).mtimeMs).toBeLessThan(old.getTime() + 1000);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
