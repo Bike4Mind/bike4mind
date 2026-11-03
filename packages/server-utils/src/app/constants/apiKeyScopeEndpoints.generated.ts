@@ -42,6 +42,8 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'GET /api/files/tags/counts',
     'GET /api/v1/files',
     'GET /api/v1/files/:id',
+    'GET /api/v1/files/by-ids',
+    'GET /api/v1/files/search',
   ],
   [ApiKeyScope.WRITE_FILES]: [
     'DELETE /api/files',
@@ -62,6 +64,8 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'POST /api/files/tags/toggle',
     'POST /api/v1/files',
     'PATCH|DELETE /api/v1/files/:id',
+    'POST /api/v1/files/:id/chunk',
+    'POST /api/v1/files/bulk-delete',
   ],
   [ApiKeyScope.AI_GENERATE]: [
     'POST /api/ai/music',
