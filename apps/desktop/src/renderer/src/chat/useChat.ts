@@ -1224,7 +1224,13 @@ export function useConversation(
         onSummaryChanged(updated);
         return true;
       } catch (error) {
+        if (version !== generationVersion.current) return false;
         setNotice(`Could not save this chat's params. ${error instanceof Error ? error.message : String(error)}`);
+        // An older save skipped as stale may still have landed, so show what main holds now.
+        const stored = await window.b4m.chat.getSession(sessionId).catch(() => null);
+        if (stored && version === generationVersion.current) {
+          setSession(current => (current?.id === sessionId ? { ...current, generation: stored.generation } : current));
+        }
         return false;
       }
     },

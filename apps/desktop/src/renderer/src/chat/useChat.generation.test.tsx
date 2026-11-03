@@ -110,6 +110,56 @@ describe('a conversation generation settings', () => {
     expect(conversation.session?.generation).toEqual({ topK: 30 });
   });
 
+  it('says nothing when an older save fails after a newer one landed', async () => {
+    await act(async () => root.render(<Harness />));
+    let failFirst: (error: Error) => void = () => {};
+    setSessionGeneration.mockImplementationOnce(
+      () => new Promise<ChatSessionSummary>((_resolve, reject) => (failFirst = reject))
+    );
+    let first: Promise<boolean> | undefined;
+    await act(async () => {
+      first = conversation.setGeneration({ topK: 20 });
+    });
+    await act(async () => conversation.setGeneration({ topK: 30 }));
+    await act(async () => {
+      failFirst(new Error('disk full'));
+      await first;
+    });
+    expect(conversation.notice).toBeNull();
+    expect(conversation.session?.generation).toEqual({ topK: 30 });
+  });
+
+  it('shows what main holds when the newest save fails after an older one landed unseen', async () => {
+    await act(async () => root.render(<Harness />));
+    let answerFirst: (summary: ChatSessionSummary) => void = () => {};
+    let failSecond: (error: Error) => void = () => {};
+    setSessionGeneration
+      .mockImplementationOnce(() => new Promise<ChatSessionSummary>(resolve => (answerFirst = resolve)))
+      .mockImplementationOnce(() => new Promise<ChatSessionSummary>((_resolve, reject) => (failSecond = reject)));
+    let first: Promise<boolean> | undefined;
+    let second: Promise<boolean> | undefined;
+    await act(async () => {
+      first = conversation.setGeneration({ topK: 20 });
+      second = conversation.setGeneration({ topK: 30 });
+    });
+    const { messages: _messages, generation: _generation, ...meta } = session;
+    await act(async () => {
+      answerFirst({ ...meta, generation: { topK: 20 }, messageCount: 0 });
+      await first;
+    });
+    expect(conversation.session?.generation).toEqual({ temperature: 0.4 });
+
+    window.b4m.chat.getSession = async () => ({ ...session, generation: { topK: 20 } });
+    let saved: boolean | undefined;
+    await act(async () => {
+      failSecond(new Error('disk full'));
+      saved = await second;
+    });
+    expect(saved).toBe(false);
+    expect(conversation.notice).toBe("Could not save this chat's params. disk full");
+    expect(conversation.session?.generation).toEqual({ topK: 20 });
+  });
+
   it('does not put a save that lands after a switch on the conversation now open', async () => {
     const other: ChatSession = { ...session, id: 's2', generation: { topP: 0.5 } };
     window.b4m.chat.getSession = async (id: string) => (id === 's2' ? other : session);
