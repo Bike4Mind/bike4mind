@@ -1,8 +1,10 @@
 /**
  * GET /api/ai/elevenlabs-voices - the ElevenLabs voices this caller can synthesize with, for Studio's
  * voice picker. Read with the same key /api/ai/tts would use (the caller's own, else the admin one),
- * so the list matches the account doing the synthesis. Unlike /api/v1/voice/voices (the admin voice
- * agent catalog) it does not depend on the voiceV2Enabled setting.
+ * so the list matches the account doing the synthesis. A caller without a key of their own therefore
+ * sees the admin workspace's catalog; only id, name, labels and preview URL leave the server.
+ * Unlike /api/v1/voice/voices (the admin voice agent catalog) it does not depend on the
+ * voiceV2Enabled setting.
  *
  * Unversioned and unpublished: only Studio's picker reads it, so API keys never need it (jwtOnly).
  * No key is not an error here: an empty list sends the picker to its account-voice fallback.

@@ -11,6 +11,8 @@ import { VoiceGenerationVendor } from './voiceGeneration';
  *   priced per minute of audio (~$0.015/min), so its per-char cost depends on the
  *   voice's speaking rate. The slowest bundled sample (marin, ~760 chars/min) costs
  *   ~$0.0197 per 1K chars; the rate is set from that voice, not the ~900 average.
+ *   That clip is short, so this is an estimate: slower long-form speech can cost the
+ *   platform slightly more per character than it bills.
  * - ElevenLabs ElevenAPI: Flash/Turbo $0.05, Multilingual v2/v3 $0.10 per 1K chars.
  *   ElevenLabs' effective rate is plan-dependent; these are the pay-as-you-go
  *   rates and are treated as an approximation of the admin key's real cost.
