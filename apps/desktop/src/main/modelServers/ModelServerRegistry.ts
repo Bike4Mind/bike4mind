@@ -110,8 +110,8 @@ interface Entry {
 type Listing = { ok: true; models: ChatModelOption[] } | { ok: false; error: unknown };
 
 export interface ModelListOptions {
-  /** Waits for each server's listing to finish, as a turn does; the picker's read lists a slow server as pending. */
-  untilListed?: boolean;
+  /** The server a turn runs on: the read waits out its listing, and every other server keeps the picker's wait. */
+  untilListed?: string;
 }
 
 interface Slot {
@@ -130,7 +130,7 @@ export interface ModelServerRegistryDeps {
   changed?(servers: ModelServerView[]): void;
   /** A server was added, saved or removed, or its tools changed, so a model list read before now is out of date. */
   edited?(): void;
-  /** A server's model listing outlasted the picker's wait and has now finished, so the picker should list again. */
+  /** The picker should list again: a server was removed, or its listing outlasted the picker's wait and finished. */
   listedLate?(serverId: string): void;
   /** Resolves a host name to its addresses; defaults to `dns.lookup` with `all: true`. */
   resolve?(host: string): Promise<string[]>;
@@ -389,10 +389,12 @@ export class ModelServerRegistry {
   async remove(id: string): Promise<ModelServerView[]> {
     await this.load();
     await this.deps.store.remove(id);
+    const entry = this.entries.get(id);
     this.entries.delete(id);
     this.deps.edited?.();
     this.saved(id);
     this.emit();
+    if (entry) this.announce(entry, true);
     return this.views();
   }
 
@@ -412,62 +414,78 @@ export class ModelServerRegistry {
   /** Every saved server's chat models. A server that does not answer, or not in time, lists its last models, disabled. */
   async models(options: ModelListOptions = {}): Promise<ChatModelOption[]> {
     await this.load();
-    const lists = await Promise.all(
-      [...this.entries.values()].map(async entry => {
-        const server = { id: entry.record.id, name: entry.record.name };
-        // Asking without the credential would get a 401 that replaces this message with a vaguer one.
-        const missing = this.deps.store.credentialMissing(entry.record) ? this.missingCredentialHealth() : null;
-        if (missing && (entry.health.state !== missing.state || entry.health.error !== missing.error)) {
-          this.setHealth(entry, missing);
-          this.emit();
-        }
-        // A server shown as down may be back: a check already running (say, after a pull) decides, or a
-        // picker refresh starts one when the last is stale. A server not checked yet is listed directly.
-        const down = entry.health.state !== 'online' && entry.health.state !== 'unknown';
-        const running = this.checking.get(entry);
-        if (down && (running || this.stale(entry))) {
-          const check = (running ?? this.checkEntry(entry).then(() => this.emit())).catch(() => undefined);
-          await within(check, PICKER_CHECK_WAIT_MS, undefined);
-        }
-        if (!this.current(entry)) return [];
-        let reason: string | null = null;
-        if (listable(entry)) {
-          const fresh = this.freshKept(entry);
-          const slot = fresh ? null : this.listEntry(entry);
-          // undefined: still listing when the wait ran out, or already reported as still listing.
-          let result: Listing | undefined = fresh ? { ok: true, models: fresh } : undefined;
-          if (slot) slot.picker = true;
-          if (slot && options.untilListed) result = await slot.promise;
-          else if (slot && !slot.reported) result = await within(slot.promise, PICKER_LIST_WAIT_MS, undefined);
-          if (!this.current(entry)) return [];
-          if (result?.ok) {
-            if (entry.health.state === 'unknown') void this.check(entry.record.id);
-            return result.models.map(model => ({ ...model, server }));
-          }
-          // A check that found the server down during the wait decides the label.
-          if (result === undefined && listable(entry)) {
-            if (slot) slot.reported = true;
-            reason = `${entry.record.name} is still listing its models`;
-          }
-        }
-        const pending = reason !== null;
-        reason ??= unavailableReason(entry);
-        const runtimeId = serverRuntimeId(entry.record.id);
-        return entry.record.models.map(name => {
-          const aliasIds = entry.aliasIds?.get(name);
-          return {
-            id: localModelId(runtimeId, name),
-            name,
-            backend: localBackend(runtimeId),
-            server,
-            ...(aliasIds ? { aliasIds } : {}),
-            unavailable: reason,
-            ...(pending ? { pending: true } : {}),
-          };
-        });
-      })
-    );
+    const lists = await Promise.all([...this.entries.values()].map(entry => this.entryModels(entry, options)));
     return lists.flat();
+  }
+
+  /** One server's chat models. A server saved again during the waits lists as saved; a removed one lists nothing. */
+  private async entryModels(entry: Entry, options: ModelListOptions): Promise<ChatModelOption[]> {
+    const server = { id: entry.record.id, name: entry.record.name };
+    // Asking without the credential would get a 401 that replaces this message with a vaguer one.
+    const missing = this.deps.store.credentialMissing(entry.record) ? this.missingCredentialHealth() : null;
+    if (missing && (entry.health.state !== missing.state || entry.health.error !== missing.error)) {
+      this.setHealth(entry, missing);
+      this.emit();
+    }
+    // A server shown as down may be back: a check already running (say, after a pull) decides, or a
+    // picker refresh starts one when the last is stale. A server not checked yet is listed directly.
+    const down = entry.health.state !== 'online' && entry.health.state !== 'unknown';
+    const running = this.checking.get(entry);
+    if (down && (running || this.stale(entry))) {
+      const check = (running ?? this.checkEntry(entry).then(() => this.emit())).catch(() => undefined);
+      await within(check, PICKER_CHECK_WAIT_MS, undefined);
+    }
+    if (!this.current(entry)) return this.savedModels(entry, options);
+    let reason: string | null = null;
+    if (listable(entry)) {
+      const fresh = this.freshKept(entry);
+      let slot = fresh ? null : this.listEntry(entry);
+      // undefined: still listing when the wait ran out, or already reported as still listing.
+      let result: Listing | undefined = fresh ? { ok: true, models: fresh } : undefined;
+      if (slot) slot.picker = true;
+      if (slot && options.untilListed === entry.record.id) {
+        result = await slot.promise;
+        // A pull or removal during the wait dropped that listing, so the one started after it decides.
+        while (slot.seq < entry.floor && this.current(entry)) {
+          slot = this.listEntry(entry);
+          slot.picker = true;
+          result = await slot.promise;
+        }
+      } else if (slot && !slot.reported) result = await within(slot.promise, PICKER_LIST_WAIT_MS, undefined);
+      if (!this.current(entry)) return this.savedModels(entry, options);
+      if (result?.ok) {
+        if (entry.health.state === 'unknown') void this.check(entry.record.id);
+        return result.models.map(model => ({ ...model, server }));
+      }
+      // A check that found the server down during the wait decides the label.
+      if (result === undefined && listable(entry)) {
+        if (slot) slot.reported = true;
+        reason = `${entry.record.name} is still listing its models`;
+      }
+    }
+    const pending = reason !== null;
+    reason ??= unavailableReason(entry);
+    const wantsCredentials = entry.health.state === 'credentials' && !pending;
+    const rejected = wantsCredentials && !!this.deps.store.headers(entry.record);
+    const runtimeId = serverRuntimeId(entry.record.id);
+    return entry.record.models.map(name => {
+      const aliasIds = entry.aliasIds?.get(name);
+      return {
+        id: localModelId(runtimeId, name),
+        name,
+        backend: localBackend(runtimeId),
+        server,
+        ...(aliasIds ? { aliasIds } : {}),
+        unavailable: reason,
+        ...(pending ? { pending: true } : {}),
+        ...(wantsCredentials ? { wantsCredentials: rejected ? ('rejected' as const) : ('missing' as const) } : {}),
+      };
+    });
+  }
+
+  private savedModels(replaced: Entry, options: ModelListOptions): Promise<ChatModelOption[]> {
+    const saved = this.entries.get(replaced.record.id);
+    return saved ? this.entryModels(saved, options) : Promise.resolve([]);
   }
 
   /** A pull or removal changed what the server holds, so its last listing is no longer served. */
@@ -517,9 +535,9 @@ export class ModelServerRegistry {
   private async settle(entry: Entry, slot: Slot, result: Listing): Promise<Listing> {
     try {
       if (!this.current(entry)) {
-        // Saved again while a picker read waited on or showed this listing: the picker lists the saved server again.
+        // Saved again after a caller was shown this listing as pending: the picker lists the saved server again.
         const saved = this.entries.get(entry.record.id);
-        if (saved && slot.picker) this.announce(saved, true);
+        if (saved && slot.reported) this.announce(saved, true);
         return { ok: false, error: new Error(`${entry.record.name} was changed.`) };
       }
       if (slot.seq < entry.floor) return result;
@@ -954,7 +972,9 @@ function listable(entry: Entry): boolean {
 function unavailableReason(entry: Entry): string {
   if (entry.health.state === 'credentials') return `${entry.record.name} needs new credentials`;
   if (entry.health.state === 'refused')
-    return `${entry.record.name} was refused: ${entry.health.error ?? 'check Settings'}`;
+    return entry.health.error
+      ? `${entry.record.name} was refused: ${entry.health.error}`
+      : `${entry.record.name} was refused`;
   return `${entry.record.name} is unreachable`;
 }
 

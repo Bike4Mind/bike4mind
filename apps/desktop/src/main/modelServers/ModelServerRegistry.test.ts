@@ -669,14 +669,55 @@ describe('ModelServerRegistry', () => {
       expect(tagCalls(fake, SLOW)).toBe(listedBefore + 2);
     });
 
-    it('changes nothing when the server is removed before its abandoned listing lands', async () => {
+    it('has the picker list again on removing a server, and not when its abandoned listing lands', async () => {
       const { servers, listedLate, slowId, release } = await slowAndFast();
       await listPastTheWait(servers);
       await servers.remove(slowId);
+      expect(listedLate).toHaveBeenCalledExactlyOnceWith(slowId);
       release();
       await settle();
       await settle();
-      expect(listedLate).not.toHaveBeenCalled();
+      expect(listedLate).toHaveBeenCalledTimes(1);
+    });
+
+    it('waits out only the listing of the server a turn runs on', async () => {
+      const { fake, servers, slowId, release } = await slowAndFast();
+      let releaseFast = () => {};
+      fake.state.tagsGates.set(FAST, new Promise<void>(resolve => (releaseFast = resolve)));
+      const read: { rows?: ChatModelOption[] } = {};
+      vi.useFakeTimers();
+      try {
+        void servers.models({ untilListed: slowId }).then(rows => (read.rows = rows));
+        await vi.advanceTimersByTimeAsync(PICKER_LIST_WAIT_MS);
+        expect(read.rows).toBeUndefined();
+        release();
+        await vi.waitFor(() => expect(read.rows).toBeDefined());
+      } finally {
+        vi.useRealTimers();
+        releaseFast();
+      }
+      const slow = read.rows?.filter(model => model.server?.id === slowId) ?? [];
+      expect(slow.map(model => model.name).sort()).toEqual(['llama3.2:3b', 'qwen2.5:0.5b']);
+      expect(slow.every(model => model.unavailable === undefined)).toBe(true);
+      const fast = read.rows?.filter(model => model.server?.name === 'fast') ?? [];
+      expect(fast.length).toBeGreaterThan(0);
+      expect(fast.every(model => model.pending)).toBe(true);
+    });
+
+    it('has a turn follow the listing started after a pull or removal dropped the one it waited on', async () => {
+      const { fake, servers, slowId, listedBefore, fail } = await slowAndFast();
+      const read = servers.models({ untilListed: slowId });
+      await vi.waitFor(() => expect(tagCalls(fake, SLOW)).toBe(listedBefore + 1));
+      await servers
+        .hubServer(slowId)
+        ?.runtime.remove('qwen2.5:0.5b')
+        .catch(() => undefined);
+      fake.state.tagsGates.delete(SLOW);
+      fail();
+      const slow = (await read).filter(model => model.server?.id === slowId);
+      expect(slow.map(model => model.name).sort()).toEqual(['llama3.2:3b', 'qwen2.5:0.5b']);
+      expect(slow.every(model => model.unavailable === undefined)).toBe(true);
+      expect((await servers.views())[1].health.state).toBe('online');
     });
 
     it('has the picker list a server renamed while its listing was pending, once that listing lands', async () => {
@@ -1011,17 +1052,25 @@ describe('ModelServerRegistry', () => {
       expect(tagCalls(fake, SLOW)).toBe(listedBefore + 2);
     });
 
-    it.each([
-      ['removed', (servers: ModelServerRegistry, id: string) => servers.remove(id)],
-      ['renamed', (servers: ModelServerRegistry, id: string) => servers.update(id, { name: 'renamed' })],
-    ])('lists nothing for a server %s while a picker waits on its listing', async (_label, change) => {
+    it('lists nothing for a server removed while a picker waits on its listing', async () => {
       const { fake, servers, slowId, listedBefore, release } = await slowAndFast();
       const listing = servers.models();
       await vi.waitFor(() => expect(tagCalls(fake, SLOW)).toBe(listedBefore + 1));
-      await change(servers, slowId);
+      await servers.remove(slowId);
       release();
       const listed = await listing;
       expect(listed.filter(model => model.server?.id === slowId)).toEqual([]);
+    });
+
+    it('lists a server renamed while a picker waits on its listing as saved', async () => {
+      const { fake, servers, slowId, listedBefore, release } = await slowAndFast();
+      const listing = servers.models();
+      await vi.waitFor(() => expect(tagCalls(fake, SLOW)).toBe(listedBefore + 1));
+      await servers.update(slowId, { name: 'renamed' });
+      release();
+      const renamed = (await listing).filter(model => model.server?.id === slowId);
+      expect(renamed.map(model => model.name).sort()).toEqual(['llama3.2:3b', 'qwen2.5:0.5b']);
+      expect(renamed.every(model => model.unavailable === undefined && model.server?.name === 'renamed')).toBe(true);
     });
 
     it('does not keep a listing that started before a removal on the Models screen', async () => {

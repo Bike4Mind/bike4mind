@@ -964,6 +964,8 @@ export interface ChatModelOption {
   unavailable?: string;
   /** Set with `unavailable` while its server is still listing models: not picked yet, but not down either. */
   pending?: boolean;
+  /** Set with `unavailable` when its server wants credentials: `rejected` when it turned down the ones Desktop sent. */
+  wantsCredentials?: 'missing' | 'rejected';
   /** USD per token by context tier, as the server's catalog publishes it. Absent when unpriced. */
   pricing?: Record<number, { input: number; output: number; cache_read?: number; cache_write?: number }>;
 }

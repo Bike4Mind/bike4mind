@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { FetchLike } from '@bike4mind/local-models';
-import { THINKING_OFF_SETTING, type ChatStreamEvent } from '@shared/chat';
+import { ServerTransportError } from '@bike4mind/local-models/servers';
+import { SERVER_CREDENTIALS_STOP, THINKING_OFF_SETTING, type ChatStreamEvent } from '@shared/chat';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LocalModels } from '../modelServers/LocalModels';
 import { ModelServerRegistry, PICKER_LIST_WAIT_MS } from '../modelServers/ModelServerRegistry';
@@ -17,6 +18,7 @@ import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 
 const ADDRESS = 'http://192.168.1.20:11434';
+const OTHER_ADDRESS = 'http://192.168.1.21:11434';
 const logger = { debug: () => undefined, warn: () => undefined };
 const cipher: SecretCipher = {
   isEncryptionAvailable: () => true,
@@ -26,6 +28,7 @@ const cipher: SecretCipher = {
 const services: ChatService[] = [];
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const service of services.splice(0)) service.dispose();
 });
 
@@ -40,17 +43,25 @@ function memoryFile(): StoreFile {
   };
 }
 
-/** One saved Ollama server behind the registry and catalog, wired as registerChat wires them, and a conversation on it. */
-async function fixture(options: { signedIn?: boolean } = {}) {
-  const down = new Set<string>();
+/**
+ * One saved Ollama server ("gpu"), or two with `other`, behind the registry and catalog, wired as registerChat
+ * wires them, and a conversation on gpu's model.
+ */
+async function fixture(options: { signedIn?: boolean; other?: boolean } = {}) {
+  const failures = new Map<string, Error>();
+  const unauthorized = new Set<string>();
+  const listingGates = new Map<string, Promise<void>>();
+  const tagCalls: string[] = [];
   let computerGate: Promise<void> = Promise.resolve();
-  let listingGate: Promise<void> = Promise.resolve();
   const fetchFor = (): FetchLike => async input => {
     const url = new URL(String(input));
-    if (down.has(url.origin)) throw new TypeError('fetch failed', { cause: { code: 'ECONNREFUSED' } });
+    const failure = failures.get(url.origin);
+    if (failure) throw failure;
+    if (unauthorized.has(url.origin)) return new Response('', { status: 401 });
     if (url.pathname === '/api/version') return Response.json({ version: '0.12.0' });
     if (url.pathname === '/api/tags') {
-      await listingGate;
+      tagCalls.push(url.origin);
+      await listingGates.get(url.origin);
       return Response.json({ models: [{ name: 'qwen3:8b' }] });
     }
     if (url.pathname === '/api/show')
@@ -84,6 +95,15 @@ async function fixture(options: { signedIn?: boolean } = {}) {
   holder.catalog = catalog;
   await servers.add({ address: ADDRESS, credential: { type: 'none' }, name: 'gpu', kind: 'ollama', access: 'chat' });
   const id = (await servers.views())[1].id;
+  if (options.other) {
+    await servers.add({
+      address: OTHER_ADDRESS,
+      credential: { type: 'none' },
+      name: 'other',
+      kind: 'ollama',
+      access: 'chat',
+    });
+  }
   const model = `local:srv-${id}:qwen3:8b`;
 
   const events: ChatStreamEvent[] = [];
@@ -121,20 +141,30 @@ async function fixture(options: { signedIn?: boolean } = {}) {
     await vi.waitUntil(() => !service.isSessionBusy(session.id), { timeout: 5_000 });
     return turnRequest();
   };
+  const sessionEvent = <T extends ChatStreamEvent['type']>(type: T) =>
+    events.find((event): event is Extract<ChatStreamEvent, { type: T }> => {
+      return event.type === type && event.sessionId === session.id;
+    });
   return {
     catalog,
     model,
     setDown: (isDown: boolean) => {
-      if (isDown) down.add(ADDRESS);
-      else down.delete(ADDRESS);
+      if (isDown) failures.set(ADDRESS, new TypeError('fetch failed', { cause: { code: 'ECONNREFUSED' } }));
+      else failures.delete(ADDRESS);
     },
+    /** Every request to gpu fails as refused, with no detail to show. */
+    refuse: () => failures.set(ADDRESS, new ServerTransportError('')),
+    /** gpu answers 401 to everything. */
+    wantCredentials: () => unauthorized.add(ADDRESS),
     holdComputer: (gate: Promise<void>) => (computerGate = gate),
-    /** Holds the server's model listings until `gate` settles; a rejection fails them. */
-    holdListing: (gate: Promise<void>) => {
+    /** Holds a server's model listings until `gate` settles; a rejection fails them. */
+    holdListing: (gate: Promise<void>, address = ADDRESS) => {
       gate.catch(() => undefined);
-      listingGate = gate;
+      listingGates.set(address, gate);
     },
-    /** A health check of the server, through to its `changed` emit. */
+    listings: (address = ADDRESS) => tagCalls.filter(origin => origin === address).length,
+    rename: (name: string) => servers.update(id, { name }),
+    /** A health check of gpu, through to its `changed` emit. */
     check: async () => {
       changed.mockClear();
       await servers.check(id);
@@ -147,11 +177,12 @@ async function fixture(options: { signedIn?: boolean } = {}) {
       await start();
       return finish();
     },
+    stop: () => service.stop(session.id),
+    busy: () => service.isSessionBusy(session.id),
+    sessionModel: async () => (await service.getSession(session.id))?.model,
     turnRequest,
-    turnError: () =>
-      events.find((event): event is Extract<ChatStreamEvent, { type: 'error' }> => {
-        return event.type === 'error' && event.sessionId === session.id;
-      })?.message,
+    turnError: () => sessionEvent('error'),
+    turnDone: () => sessionEvent('done'),
     lastRow: () => catalog.lastLocal()?.find(option => option.id === model),
   };
 }
@@ -162,6 +193,18 @@ const FULL_ROW = {
   thinkingToggle: true,
   contextWindow: expect.any(Number),
 };
+
+const NEXT_STEP = 'Pick another model, or check the server under Settings, Model servers.';
+
+function held() {
+  let release = () => {};
+  let fail = (_err: Error) => {};
+  const gate = new Promise<void>((resolve, reject) => {
+    release = resolve;
+    fail = reject;
+  });
+  return { gate, release: () => release(), fail: (err: Error) => fail(err) };
+}
 
 describe('a turn on a saved server whose health changed', () => {
   it('lists again when the last list was read while the server was down, then runs on its full row', async () => {
@@ -204,13 +247,38 @@ describe('a turn on a saved server whose health changed', () => {
     expect((await harness.send())?.thinking).toBe(false);
     expect(listLocal).not.toHaveBeenCalled();
   });
+
+  it('ends with the credentials stop, without streaming, when the server wants credentials', async () => {
+    const harness = await fixture({ signedIn: true });
+    harness.wantCredentials();
+    await harness.check();
+    harness.catalog.forgetLocal();
+
+    await harness.start();
+    expect(await harness.finish()).toBeUndefined();
+    expect(harness.turnError()).toMatchObject({
+      stopReason: SERVER_CREDENTIALS_STOP,
+      message: expect.stringMatching(/^gpu asks for credentials\./),
+    });
+  });
+
+  it('names the refusal once when the server refused without saying why', async () => {
+    const harness = await fixture({ signedIn: true });
+    harness.refuse();
+    await harness.check();
+    harness.catalog.forgetLocal();
+
+    await harness.start();
+    expect(await harness.finish()).toBeUndefined();
+    expect(harness.turnError()?.message).toBe(`gpu was refused. ${NEXT_STEP}`);
+  });
 });
 
 describe('a turn on a saved server that is still listing', () => {
   it('waits for the listing the picker showed as pending, then runs on its full row', async () => {
     const harness = await fixture({ signedIn: true });
-    let release = () => {};
-    harness.holdListing(new Promise<void>(resolve => (release = resolve)));
+    const listing = held();
+    harness.holdListing(listing.gate);
     vi.useFakeTimers();
     try {
       const read = harness.catalog.listLocal(true);
@@ -224,7 +292,7 @@ describe('a turn on a saved server that is still listing', () => {
     await harness.start();
     await new Promise(resolve => setTimeout(resolve, 100));
     expect(harness.turnRequest()).toBeUndefined();
-    release();
+    listing.release();
     expect((await harness.finish())?.thinking).toBe(false);
     expect(harness.lastRow()).toMatchObject(FULL_ROW);
   });
@@ -232,16 +300,47 @@ describe('a turn on a saved server that is still listing', () => {
   it('waits past the picker wait for a listing a cold cache has to read', async () => {
     const harness = await fixture({ signedIn: true });
     harness.catalog.forgetLocal();
-    let release = () => {};
-    harness.holdListing(new Promise<void>(resolve => (release = resolve)));
+    const listing = held();
+    harness.holdListing(listing.gate);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
 
     await harness.start();
-    await new Promise(resolve => setTimeout(resolve, PICKER_LIST_WAIT_MS + 300));
+    await vi.advanceTimersByTimeAsync(PICKER_LIST_WAIT_MS * 2);
     expect(harness.turnRequest()).toBeUndefined();
-    release();
+    listing.release();
     expect((await harness.finish())?.thinking).toBe(false);
     expect(harness.lastRow()).toMatchObject(FULL_ROW);
-  }, 15_000);
+  });
+
+  it('in device-local mode, sends once the picker wait runs out and runs the turn once the listing lands', async () => {
+    const harness = await fixture();
+    harness.catalog.forgetLocal();
+    const listing = held();
+    harness.holdListing(listing.gate);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    const sent = harness.start();
+    await vi.advanceTimersByTimeAsync(PICKER_LIST_WAIT_MS);
+    await sent;
+    await vi.advanceTimersByTimeAsync(PICKER_LIST_WAIT_MS);
+    expect(harness.turnRequest()).toBeUndefined();
+    listing.release();
+    expect((await harness.finish())?.thinking).toBe(false);
+    expect(await harness.sessionModel()).toBe(harness.model);
+  });
+
+  it('runs without waiting out a slow listing on another server', async () => {
+    const harness = await fixture({ signedIn: true, other: true });
+    harness.catalog.forgetLocal();
+    const other = held();
+    harness.holdListing(other.gate, OTHER_ADDRESS);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    await harness.start();
+    await vi.advanceTimersByTimeAsync(PICKER_LIST_WAIT_MS);
+    expect((await harness.finish())?.thinking).toBe(false);
+    other.release();
+  });
 
   it('fails with the server named when its listing fails, without streaming', async () => {
     const harness = await fixture({ signedIn: true });
@@ -250,6 +349,43 @@ describe('a turn on a saved server that is still listing', () => {
 
     await harness.start();
     expect(await harness.finish()).toBeUndefined();
-    expect(harness.turnError()).toMatch(/^gpu is unreachable\. Pick another model, or check the server under Settings/);
+    expect(harness.turnError()?.message).toBe(`gpu is unreachable. ${NEXT_STEP}`);
+  });
+
+  it('ends as stopped at once on Stop, and a listing that fails after it changes nothing', async () => {
+    const harness = await fixture({ signedIn: true });
+    harness.catalog.forgetLocal();
+    const listing = held();
+    harness.holdListing(listing.gate);
+
+    const before = harness.listings();
+    await harness.start();
+    await vi.waitFor(() => expect(harness.listings()).toBeGreaterThan(before));
+    harness.stop();
+    await vi.waitUntil(() => !harness.busy(), { timeout: 1_000 });
+    listing.fail(new TypeError('fetch failed', { cause: { code: 'ECONNREFUSED' } }));
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    expect(harness.turnDone()?.stopReason).toBe('aborted');
+    expect(harness.turnError()).toBeUndefined();
+    expect(harness.turnRequest()).toBeUndefined();
+  });
+
+  it('in device-local mode, keeps the conversation on a server saved during the send', async () => {
+    const harness = await fixture({ other: true });
+    harness.catalog.forgetLocal();
+    const listing = held();
+    harness.holdListing(listing.gate);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    const before = harness.listings();
+    const sent = harness.start();
+    await vi.waitFor(() => expect(harness.listings()).toBeGreaterThan(before));
+    await harness.rename('gpu renamed');
+    await vi.advanceTimersByTimeAsync(PICKER_LIST_WAIT_MS * 2);
+    await sent;
+    expect(await harness.sessionModel()).toBe(harness.model);
+    listing.release();
+    expect((await harness.finish())?.thinking).toBe(false);
   });
 });

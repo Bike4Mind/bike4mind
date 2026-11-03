@@ -67,6 +67,7 @@ import {
 import { AUTO_COMPACT_PERCENT, inputSide, occupiedTokens, shouldAutoCompact } from '@shared/contextLimit';
 import { estimateContextOverhead, type ContextSnapshot } from '@shared/contextBreakdown';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
+import { serverIdOfRuntime } from '@shared/modelServers';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
 import type { AppWorktree } from '@shared/worktreeRemoval';
 import { ASK_USER_TOOL_NAME, parseQuestions, sanitizeAnswers, type ChatQuestionOutcome } from '@shared/questions';
@@ -2516,15 +2517,17 @@ export class ChatService {
   }
 
   /**
-   * The last local list while its row for `model` is ready; otherwise one forced read, which for a turn waits out a
-   * slow server's listing. A row listed while its server was down or still listing has none of the model's settings.
+   * The last local list while its row for `model` is ready; otherwise one forced read, which for a turn waits out
+   * its own server's listing. A row listed while its server was down or still listing lacks the model's settings.
    */
   private async localModelsFor(model: string, turn = false): Promise<ChatModelOption[]> {
     const last = this.deps.models?.lastLocal?.();
     const cached = findModelOption(last ?? undefined, model);
     if (last && cached && cached.unavailable === undefined) return last;
+    const runtimeId = parseLocalModelId(model)?.runtimeId;
+    const serverId = turn && runtimeId ? serverIdOfRuntime(runtimeId) : null;
     const models = this.deps.models;
-    const listed = turn ? models?.listLocal?.(true, { untilListed: true }) : models?.listLocal?.(true);
+    const listed = serverId ? models?.listLocal?.(true, { untilListed: serverId }) : models?.listLocal?.(true);
     return (await listed) ?? [];
   }
 
@@ -2688,11 +2691,14 @@ export class ChatService {
       let mcpServers = (await this.deps.mcp?.state())?.servers ?? [];
       const catalog =
         localTurn && this.deps.models?.listLocal
-          ? { models: await this.localModelsFor(session.model, true) }
+          ? { models: await unlessStopped(this.localModelsFor(session.model, true), controller.signal, []) }
           : await this.deps.models?.list();
       const cacheable = supportsPromptCache(catalog?.models ?? [], session.model);
       const modelOption = findModelOption(catalog?.models, session.model);
       if (localTurn && modelOption?.unavailable !== undefined) {
+        if (modelOption.wantsCredentials && modelOption.server) {
+          throw new ServerCredentialsError(modelOption.server.name, modelOption.wantsCredentials === 'rejected');
+        }
         const reason = modelOption.unavailable.replace(/\.$/, '');
         throw new Error(`${reason}. Pick another model, or check the server under Settings, Model servers.`);
       }
@@ -3006,6 +3012,7 @@ export class ChatService {
       const screenshotTurns: number[] = [];
 
       for (let roundIndex = 0; roundIndex < limits.rounds; roundIndex++) {
+        if (controller.signal.aborted) break;
         if (liveState && roundIndex > 0) {
           const next = toolState();
           if (!sameToolState(liveState, next)) {
@@ -6965,6 +6972,13 @@ interface DirectoryTurn {
 function resumedUntrusted(calls: readonly ChatToolCall[]): { untrusted?: string } {
   const source = calls.find(call => call.status !== 'denied' && !call.ownContent && readsUntrusted(call.name));
   return source ? { untrusted: source.name } : {};
+}
+
+/** `work`'s result, or `stopped` once `signal` aborts; a later result or rejection then goes nowhere. */
+async function unlessStopped<T>(work: Promise<T>, signal: AbortSignal, stopped: T): Promise<T> {
+  const outcome = await untilStopped(work, signal, () => false, 0);
+  if (outcome.kind === 'threw') throw outcome.error;
+  return outcome.kind === 'returned' ? outcome.value : stopped;
 }
 
 function untrustedReason(tool: string): string {
