@@ -1266,6 +1266,7 @@ export function ChatShell({
                   }
                   servers={savedServers}
                   hasHistory={conversation.messages.length > 0}
+                  sessionId={activeId}
                 />
                 <ReasoningEffortPicker
                   models={catalog.models}

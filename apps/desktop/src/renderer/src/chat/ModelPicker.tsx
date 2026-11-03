@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Chip from '@mui/joy/Chip';
@@ -16,9 +16,10 @@ import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { ChatModelOption } from '@shared/chat';
 import { findModelOption, parseLocalModelId } from '@shared/chat';
-import { LOCAL_SERVER_ID } from '@shared/modelServers';
+import { LOCAL_SERVER_ID, serverIdOfRuntime } from '@shared/modelServers';
 import { CloudIcon, ServerIcon } from './icons';
 import {
+  changeFilters as nextFilters,
   effectiveFilters,
   filterOptions,
   type FilterOptions,
@@ -29,9 +30,11 @@ import {
   modelProvider,
   modelServer,
   needsHostedSwitchConfirm,
+  NO_FILTERS,
   type ModelPickerFilters,
   type ServerRef,
   useModelPickerFilters,
+  visibleControls,
 } from './modelPickerFilters';
 import type { NoLocalModels } from './noLocalModels';
 import { formatCredits } from './statusLine';
@@ -55,11 +58,11 @@ interface ModelGroup {
 }
 
 /**
- * Hosted, this computer, then each saved server in list order, from whatever the filters left.
- * Headed whenever more than one remains. `localFirst` (a conversation on a local model) puts the
- * local groups above hosted, so the side the conversation is on is the one in view.
+ * This computer, each saved server in list order, then hosted, from whatever the filters left;
+ * headed whenever more than one remains. Local first because those lists are short and chosen by
+ * the user, and hosted models carry the release dates that order the long tail.
  */
-export function groupByServer(models: readonly ChatModelOption[], { localFirst = false } = {}): ModelGroup[] {
+export function groupByServer(models: readonly ChatModelOption[]): ModelGroup[] {
   const hosted: ModelGroup = { key: 'hosted', label: 'Hosted', models: [] };
   const local = new Map<string, ModelGroup>();
   for (const model of models) {
@@ -74,7 +77,7 @@ export function groupByServer(models: readonly ChatModelOption[], { localFirst =
   }
   const thisComputer = local.get(LOCAL_SERVER_ID);
   const servers = [...(thisComputer ? [thisComputer] : []), ...[...local.values()].filter(g => g !== thisComputer)];
-  const groups = (localFirst ? [...servers, hosted] : [hosted, ...servers]).filter(group => group.models.length);
+  const groups = [...servers, hosted].filter(group => group.models.length);
   return groups.length === 1 ? [{ ...groups[0]!, label: null }] : groups;
 }
 
@@ -99,9 +102,9 @@ export function sortByRecency(models: readonly ChatModelOption[]): ChatModelOpti
     .map(entry => entry.model);
 }
 
-/** A hosted row names its provider; a saved server's row names the server, even when filtered to it. */
+/** A hosted row names its provider and a local row its server, even when filtered to it. */
 function providerLabel(model: ChatModelOption): string | undefined {
-  return model.server ? model.server.name : model.backend;
+  return modelServer(model)?.name ?? model.backend;
 }
 
 /**
@@ -139,6 +142,7 @@ function SwitchCost({ credits }: { credits: number | null }) {
       textColor="warning.plainColor"
       noWrap
       title={`About ${formatCredits(credits)} credits to re-read this chat`}
+      aria-label={`About ${formatCredits(credits)} credits to re-read this chat`}
       sx={{ flexShrink: 0 }}
       data-testid="model-picker-switch-cost"
     >
@@ -151,13 +155,26 @@ function serverPhrase(server: ServerRef): string {
   return server.id === LOCAL_SERVER_ID ? 'this computer' : server.name;
 }
 
+/** Where a local model id runs, from the catalog entry or, when that is missing, from the id itself. */
+function whereModelRuns(modelId: string, current: ChatModelOption | undefined, servers: readonly ServerRef[]): string {
+  const listed = current && modelServer(current);
+  if (listed) return serverPhrase(listed);
+  const runtimeId = parseLocalModelId(modelId)?.runtimeId;
+  const serverId = runtimeId ? serverIdOfRuntime(runtimeId) : null;
+  if (!serverId) return 'this computer';
+  return servers.find(server => server.id === serverId)?.name ?? 'a saved model server';
+}
+
 /** Where a row's model runs, so a hosted pick never looks like a local one. */
 function LocationMark({ model, warn }: { model: ChatModelOption; warn: boolean }) {
   const server = modelServer(model);
+  const label = server ? `Runs on ${serverPhrase(server)}` : 'Hosted: messages go to Bike4Mind';
   return (
     <Box
       component="span"
-      title={server ? `Runs on ${serverPhrase(server)}` : 'Hosted: messages go to Bike4Mind'}
+      role="img"
+      aria-label={label}
+      title={label}
       data-testid="model-picker-option-location"
       data-location={modelLocation(model)}
       sx={{ display: 'flex', flexShrink: 0, color: warn ? 'warning.plainColor' : 'text.tertiary' }}
@@ -201,15 +218,13 @@ function FilterControls({
   options: FilterOptions;
   onChange: (change: Partial<ModelPickerFilters>) => void;
 }) {
-  const showLocation = options.hasHosted && (options.hasLocal || options.servers.length > 1);
-  const showProviders = filters.location !== 'local' && options.providers.length > 1;
-  const showServers = filters.location !== 'hosted' && options.servers.length > 1;
-  if (!showLocation && !showProviders && !showServers) return null;
+  const shown = visibleControls(filters, options);
+  if (!shown.location && !shown.providers && !shown.servers) return null;
   const row = { px: 1, pb: 0.5, gap: 0.25, flexWrap: 'wrap' } as const;
   return (
     <Box data-testid="model-picker-filters">
-      {showLocation && (
-        <Stack direction="row" sx={row}>
+      {shown.location && (
+        <Stack direction="row" role="group" aria-label="Location" sx={row}>
           {(['all', 'hosted', 'local'] as const).map(location => (
             <FilterChip
               key={location}
@@ -221,8 +236,8 @@ function FilterControls({
           ))}
         </Stack>
       )}
-      {showProviders && (
-        <Stack direction="row" sx={row}>
+      {shown.providers && (
+        <Stack direction="row" role="group" aria-label="Provider" sx={row}>
           <FilterChip
             selected={!filters.provider}
             label="Any provider"
@@ -240,8 +255,8 @@ function FilterControls({
           ))}
         </Stack>
       )}
-      {showServers && (
-        <Stack direction="row" sx={row}>
+      {shown.servers && (
+        <Stack direction="row" role="group" aria-label="Server" sx={row}>
           <FilterChip
             selected={!filters.server}
             label="Any server"
@@ -265,27 +280,26 @@ function FilterControls({
 
 /** Asked before a conversation that has stayed local moves to a hosted model. */
 function HostedSwitchDialog({
-  from,
+  where,
   to,
   onConfirm,
   onCancel,
 }: {
-  from: ChatModelOption | undefined;
+  /** Where the conversation runs now, as a phrase ("this computer", a server's name). */
+  where: string;
   to: ChatModelOption;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
-  const server = from && modelServer(from);
-  const where = server ? serverPhrase(server) : 'this computer';
   const provider = modelProvider(to);
   return (
     <Modal open onClose={onCancel}>
       <ModalDialog size="sm" data-testid="model-picker-hosted-dialog">
         <DialogTitle>Send this conversation to Bike4Mind?</DialogTitle>
         <DialogContent>
-          So far this conversation has run on {where}. With {to.name}
-          {provider ? ` (${provider})` : ''}, your next message sends the whole conversation, earlier messages and tool
-          results included, to Bike4Mind to be answered by a hosted model.
+          This conversation is on {where}. With {to.name}
+          {provider ? ` (${provider})` : ''}, your next message sends the whole conversation to Bike4Mind for a hosted
+          model to answer, including any messages and tool results that have only been on {where} so far.
         </DialogContent>
         <DialogActions>
           <Button color="warning" onClick={onConfirm} data-testid="model-picker-hosted-confirm-btn">
@@ -318,6 +332,7 @@ export function ModelPicker({
   switchCredits,
   servers,
   hasHistory = false,
+  sessionId,
 }: {
   catalog: ModelCatalogController;
   /** The conversation's saved model. May not be in `catalog.models` - see `unavailable`. */
@@ -335,10 +350,12 @@ export function ModelPicker({
   servers?: readonly ServerRef[];
   /** The conversation has messages, so moving it from a local model to a hosted one sends them. */
   hasHistory?: boolean;
+  /** The conversation the picker is acting for; a pending hosted-switch question is dropped when it changes. */
+  sessionId?: string | null;
 }) {
   const [filter, setFilter] = useState('');
-  const [savedFilters, changeFilters] = useModelPickerFilters();
-  const [pendingHosted, setPendingHosted] = useState<ChatModelOption | null>(null);
+  const [savedFilters, setFilters] = useModelPickerFilters();
+  const [pendingHosted, setPendingHosted] = useState<{ model: ChatModelOption; key: string } | null>(null);
   const { models, loading, error } = catalog;
 
   /** False once the user has asked to leave the filter box - see `bindFilter`. */
@@ -395,16 +412,21 @@ export function ModelPicker({
       ),
     [models, details, filter, filters]
   );
-  const localChat = !!modelId && !!parseLocalModelId(modelId);
-  const groups = useMemo(() => groupByServer(matches, { localFirst: localChat }), [matches, localChat]);
-  const warnHosted = localChat && hasHistory;
+  const groups = useMemo(() => groupByServer(matches), [matches]);
+  const warnHosted = hasHistory && !!modelId && !!parseLocalModelId(modelId);
   const emptyServer =
     filters.server && !models.some(model => modelServer(model)?.id === filters.server)
       ? options.servers.find(server => server.id === filters.server)?.name
       : undefined;
+  const changeFilters = (change: Partial<ModelPickerFilters>) => setFilters(nextFilters(filters, change));
+
+  // A question asked about one conversation's model must not be answered for another's.
+  const pendingKey = `${sessionId ?? ''}\n${modelId ?? ''}`;
+  const pending = pendingHosted?.key === pendingKey ? pendingHosted.model : null;
+  useEffect(() => setPendingHosted(null), [pendingKey]);
 
   const choose = (model: ChatModelOption) => {
-    if (needsHostedSwitchConfirm(modelId, model, hasHistory)) setPendingHosted(model);
+    if (needsHostedSwitchConfirm(modelId, model, hasHistory)) setPendingHosted({ model, key: pendingKey });
     else onSelect(model.id);
   };
 
@@ -594,18 +616,32 @@ export function ModelPicker({
         ))}
 
         {models.length > 0 && matches.length === 0 && (
-          <Typography
-            level="body-xs"
-            textColor="text.tertiary"
-            sx={{ px: 1.5, py: 0.5, whiteSpace: 'normal' }}
-            data-testid="model-picker-no-match"
-          >
-            {emptyServer && !filter.trim()
-              ? `${emptyServer} lists no chat models.`
-              : filter.trim()
-                ? `Nothing matches "${filter}"${filtersActive(filters) ? ' with these filters' : ''}.`
-                : 'No models match these filters.'}
-          </Typography>
+          <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 1.5, py: 0.5 }}>
+            <Typography
+              level="body-xs"
+              textColor="text.tertiary"
+              sx={{ whiteSpace: 'normal' }}
+              data-testid="model-picker-no-match"
+            >
+              {emptyServer && !filter.trim()
+                ? `${emptyServer} lists no chat models.`
+                : filter.trim()
+                  ? `Nothing matches "${filter}"${filtersActive(filters) ? ' with these filters' : ''}.`
+                  : 'No models match these filters.'}
+            </Typography>
+            {filtersActive(filters) && (
+              // A button, not a MenuItem: activating a MenuItem closes the menu.
+              <Button
+                size="sm"
+                variant="plain"
+                onClick={() => setFilters(NO_FILTERS)}
+                sx={{ flexShrink: 0 }}
+                data-testid="model-picker-clear-filters-btn"
+              >
+                Clear filters
+              </Button>
+            )}
+          </Stack>
         )}
 
         <MenuItem onClick={() => void catalog.reload()} data-testid="model-picker-reload">
@@ -615,13 +651,13 @@ export function ModelPicker({
         </MenuItem>
       </Menu>
       {/* Portals out of the Dropdown; it opens once the row's click has closed the menu. */}
-      {pendingHosted && (
+      {pending && modelId && (
         <HostedSwitchDialog
-          from={current}
-          to={pendingHosted}
+          where={whereModelRuns(modelId, current, options.servers)}
+          to={pending}
           onConfirm={() => {
             setPendingHosted(null);
-            onSelect(pendingHosted.id);
+            onSelect(pending.id);
           }}
           onCancel={() => setPendingHosted(null)}
         />

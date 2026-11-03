@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ChatModelOption } from '@shared/chat';
 import { isLocalModel, parseLocalModelId } from '@shared/chat';
 import { LOCAL_SERVER_ID, LOCAL_SERVER_NAME } from '@shared/modelServers';
@@ -65,22 +65,43 @@ export function filterOptions(
   };
 }
 
+/** Which filter rows the picker draws; each row is left out when it has nothing to choose between. */
+export function visibleControls(
+  filters: ModelPickerFilters,
+  options: FilterOptions
+): { location: boolean; providers: boolean; servers: boolean } {
+  return {
+    location: options.hasHosted && (options.hasLocal || options.servers.length > 1),
+    providers: filters.location !== 'local' && options.providers.length > 1,
+    servers: filters.location !== 'hosted' && options.servers.length > 1,
+  };
+}
+
 /**
- * The filters as they apply to this list. A remembered provider or server that is no longer
- * offered is ignored rather than hiding everything; an empty list (still loading) changes nothing.
+ * The filters as they apply to this list. A filter whose control is not drawn never applies, so a
+ * remembered choice the list no longer offers (signed out, a server removed, Ollama stopped) cannot
+ * hide models with no visible way to undo it. Storage keeps the remembered choice.
  */
 export function effectiveFilters(filters: ModelPickerFilters, options: FilterOptions): ModelPickerFilters {
-  if (!options.hasHosted && !options.hasLocal) return filters;
+  const sideHasModels =
+    filters.location === 'all' || (filters.location === 'hosted' ? options.hasHosted : options.hasLocal);
+  const location = visibleControls(filters, options).location && sideHasModels ? filters.location : ('all' as const);
+  const shown = visibleControls({ ...filters, location }, options);
   return {
-    location: filters.location,
-    provider: filters.provider && options.providers.includes(filters.provider) ? filters.provider : null,
-    server: filters.server && options.servers.some(server => server.id === filters.server) ? filters.server : null,
+    location,
+    provider:
+      shown.providers && filters.provider && options.providers.includes(filters.provider) ? filters.provider : null,
+    server:
+      shown.servers && filters.server && options.servers.some(server => server.id === filters.server)
+        ? filters.server
+        : null,
   };
 }
 
 /** A provider only exists among hosted models and a server only among local ones, so each choice clears the other. */
 export function changeFilters(filters: ModelPickerFilters, change: Partial<ModelPickerFilters>): ModelPickerFilters {
   const next = { ...filters, ...change };
+  if (change.location === 'all') next.provider = next.server = null;
   if (change.provider) next.server = null;
   if (change.server) next.provider = null;
   if (next.location === 'local') next.provider = null;
@@ -140,11 +161,15 @@ export function readModelPickerFilters(): ModelPickerFilters {
     const parsed: unknown = JSON.parse(window.localStorage.getItem(FILTERS_KEY) ?? 'null');
     if (!parsed || typeof parsed !== 'object') return NO_FILTERS;
     const { location, provider, server } = parsed as Record<string, unknown>;
-    return changeFilters(NO_FILTERS, {
-      location: isLocationFilter(location) ? location : 'all',
-      provider: typeof provider === 'string' && provider ? provider : null,
-      server: typeof server === 'string' && server ? server : null,
-    });
+    const storedProvider = typeof provider === 'string' && provider ? provider : null;
+    return changeFilters(
+      {
+        location: isLocationFilter(location) ? location : 'all',
+        provider: storedProvider,
+        server: !storedProvider && typeof server === 'string' && server ? server : null,
+      },
+      {}
+    );
   } catch {
     return NO_FILTERS;
   }
@@ -158,15 +183,16 @@ export function writeModelPickerFilters(filters: ModelPickerFilters): void {
   }
 }
 
-/** The remembered filters, seeded from storage and written back on change. */
-export function useModelPickerFilters(): [ModelPickerFilters, (change: Partial<ModelPickerFilters>) => void] {
+/** The remembered filters, seeded from storage and written back once a change lands. */
+export function useModelPickerFilters(): [ModelPickerFilters, (next: ModelPickerFilters) => void] {
   const [filters, setFilters] = useState(readModelPickerFilters);
-  const update = useCallback((change: Partial<ModelPickerFilters>) => {
-    setFilters(current => {
-      const next = changeFilters(current, change);
-      writeModelPickerFilters(next);
-      return next;
-    });
+  const changed = useRef(false);
+  useEffect(() => {
+    if (changed.current) writeModelPickerFilters(filters);
+  }, [filters]);
+  const update = useCallback((next: ModelPickerFilters) => {
+    changed.current = true;
+    setFilters(next);
   }, []);
   return [filters, update];
 }

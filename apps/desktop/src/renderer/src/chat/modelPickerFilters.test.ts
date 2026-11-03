@@ -71,6 +71,15 @@ describe('changeFilters', () => {
     });
     expect(changeFilters({ ...NO_FILTERS, server: 'abc123' }, { location: 'hosted' }).server).toBeNull();
   });
+
+  it('clears the provider and server when All is picked', () => {
+    expect(changeFilters({ location: 'all', provider: 'anthropic', server: null }, { location: 'all' })).toEqual(
+      NO_FILTERS
+    );
+    expect(changeFilters({ location: 'local', provider: null, server: 'abc123' }, { location: 'all' })).toEqual(
+      NO_FILTERS
+    );
+  });
 });
 
 describe('effectiveFilters', () => {
@@ -85,9 +94,35 @@ describe('effectiveFilters', () => {
     expect(effectiveFilters({ location: 'all', provider: 'bedrock', server: null }, options).provider).toBe('bedrock');
   });
 
-  it('leaves the filters alone while the list is empty', () => {
-    const filters = { location: 'local' as const, provider: null, server: 'abc123' };
-    expect(effectiveFilters(filters, filterOptions([]))).toBe(filters);
+  it('never applies a filter whose control is not drawn', () => {
+    // Signed out: no hosted models, so no location row.
+    expect(
+      effectiveFilters({ location: 'hosted', provider: 'anthropic', server: null }, filterOptions([qwen, llama]))
+    ).toEqual(NO_FILTERS);
+    // Ollama stopped and no saved server: no local side, no location row.
+    expect(
+      effectiveFilters({ location: 'local', provider: null, server: null }, filterOptions([haiku, bedrockHaiku]))
+    ).toEqual(NO_FILTERS);
+    // Only one server left.
+    expect(
+      effectiveFilters({ location: 'all', provider: null, server: LOCAL_SERVER_ID }, filterOptions([haiku, qwen]))
+    ).toEqual(NO_FILTERS);
+    // Only one provider left.
+    expect(
+      effectiveFilters({ location: 'all', provider: 'anthropic', server: null }, filterOptions([haiku, qwen]))
+    ).toEqual(NO_FILTERS);
+  });
+
+  it('drops Local when the location row is drawn only for a saved server with no chat models', () => {
+    const options = filterOptions([haiku, bedrockHaiku], [{ id: 'mcsv', name: 'mcsv' }]);
+    expect(effectiveFilters({ location: 'local', provider: null, server: null }, options)).toEqual(NO_FILTERS);
+    expect(effectiveFilters({ location: 'all', provider: null, server: 'mcsv' }, options).server).toBe('mcsv');
+  });
+
+  it('applies nothing to an empty list', () => {
+    expect(effectiveFilters({ location: 'local', provider: null, server: 'abc123' }, filterOptions([]))).toEqual(
+      NO_FILTERS
+    );
   });
 });
 
