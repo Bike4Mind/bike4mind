@@ -31,11 +31,10 @@ jobs:
   cla:
     runs-on: ubuntu-latest
     # Only run in the canonical public repo; never in the private monorepo or forks.
-    # The comment-body check is a cheap prefilter only: the action trims the body and
-    # does the exact match itself, so it must not be stricter (a pasted sign phrase
-    # often carries a trailing newline). Comments must stay OUTSIDE the folded scalar:
-    # inside it they become literal text of the expression, which GitHub cannot
-    # compile, so the workflow never triggers and every push spawns a failed run.
+    # The comment-body check is a cheap prefilter: the action trims and exact-matches
+    # itself, so this must not be stricter (a pasted phrase may end in a newline).
+    # Keep comments OUTSIDE the folded scalar below: inside it they become literal
+    # expression text, which GitHub cannot compile.
     if: >
       github.repository == (vars.OPEN_CORE_REPO || 'Bike4Mind/bike4mind') &&
       (
