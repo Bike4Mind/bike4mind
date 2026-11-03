@@ -11,7 +11,16 @@ import { ProfileScreen } from '../profile/ProfileScreen';
 
 function Centered({ children }: { children: ReactNode }) {
   return (
-    <Box sx={{ minHeight: '100vh', display: 'grid', placeItems: 'center', bgcolor: 'background.body', p: 3 }}>
+    <Box
+      sx={{
+        height: '100vh',
+        overflowY: 'auto',
+        display: 'grid',
+        placeItems: 'safe center',
+        bgcolor: 'background.body',
+        p: 3,
+      }}
+    >
       <Card variant="outlined" sx={{ width: 'min(520px, 100%)', gap: 2 }}>
         {children}
       </Card>

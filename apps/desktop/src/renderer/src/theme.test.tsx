@@ -122,6 +122,22 @@ describe('the desktop theme', () => {
     expect(style.overflowWrap).toBe('anywhere');
   });
 
+  // An interactive tooltip held open by the pointer crossing it covered the control beneath.
+  it('lets the pointer through every tooltip to whatever it is drawn over', async () => {
+    await act(async () =>
+      root.render(
+        <CssVarsProvider theme={desktopTheme}>
+          <Tooltip title="/Users/someone/projects/a-long-folder" open>
+            <span>folder</span>
+          </Tooltip>
+        </CssVarsProvider>
+      )
+    );
+
+    const tooltip = document.body.querySelector('[role="tooltip"]') as HTMLElement;
+    expect(getComputedStyle(tooltip).pointerEvents).toBe('none');
+  });
+
   it('runs every tooltip and menu through the modifier that keeps them off the browser page', async () => {
     const avoid = vi.spyOn(avoidPageModifier, 'fn');
     await act(async () =>

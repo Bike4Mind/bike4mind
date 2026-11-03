@@ -580,6 +580,14 @@ function EarlierMessages({ count, children }: { count: number; children: ReactNo
 
 const PIN_THRESHOLD_PX = 48;
 
+/** The prompts the last message is waiting on, as one comparable value; empty when there are none. */
+export function awaitingApprovalKey(message: ChatMessage | undefined): string {
+  return (message?.toolCalls ?? [])
+    .filter(call => call.status === 'awaiting-approval' && call.approvalId)
+    .map(call => call.approvalId)
+    .join(',');
+}
+
 /**
  * How far above the viewport the next window starts mounting, so older turns are in place before
  * a reader scrolling up reaches them rather than as they arrive.
@@ -717,6 +725,7 @@ export function MessageThread({
   const pinned = useRef(true);
   const last = messages[messages.length - 1];
   const lastContent = (last?.content.length ?? 0) + (last?.toolCalls?.length ?? 0);
+  const awaiting = awaitingApprovalKey(last);
   const empty = messages.length === 0;
   // Only the LAST boundary divides the thread. Earlier ones fall inside the folded section and
   // draw their own divider there, which is what a conversation compacted twice should look like.
@@ -758,6 +767,15 @@ export function MessageThread({
     if (last?.role === 'user') pinned.current = true;
     if (pinned.current) bottom.current?.scrollIntoView({ block: 'end' });
   }, [messages.length, lastContent]);
+
+  // A turn parked on a prompt shows nothing else until it is answered, so the prompt is brought
+  // into view however far up the reader was. Its own key because a call turning into a prompt
+  // changes neither the message count nor its length, which is all the effect above watches.
+  useLayoutEffect(() => {
+    if (!awaiting) return;
+    pinned.current = true;
+    bottom.current?.scrollIntoView({ block: 'end' });
+  }, [awaiting]);
 
   // Content that grows or a viewport that shrinks with no new text (a plan panel, a queued
   // banner, a taller composer) would otherwise leave the foot of the reply behind the composer.

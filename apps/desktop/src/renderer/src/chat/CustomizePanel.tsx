@@ -13,6 +13,7 @@ import Tab from '@mui/joy/Tab';
 import TabList from '@mui/joy/TabList';
 import TabPanel from '@mui/joy/TabPanel';
 import Tabs from '@mui/joy/Tabs';
+import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { SkillMarketImport, SkillMarketListingRef } from '@shared/skillMarket';
 import type { SkillSummary } from '@shared/skills';
@@ -85,9 +86,12 @@ const SkillRow = memo(function SkillRow({
               </Typography>
             )}
           </Stack>
-          <Typography level="body-sm" textColor="text.secondary" noWrap title={skill.description}>
-            {skill.description}
-          </Typography>
+          {/* Not a native `title`: the OS draws that at the pointer, over the very line it explains. */}
+          <Tooltip title={skill.description} size="sm" variant="soft" placement="bottom-start">
+            <Typography level="body-sm" textColor="text.secondary" noWrap>
+              {skill.description}
+            </Typography>
+          </Tooltip>
         </Box>
         {imported?.updateAvailable && onOpenListing && (
           <Button

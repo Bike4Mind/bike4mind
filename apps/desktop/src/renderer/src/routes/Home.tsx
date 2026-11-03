@@ -72,7 +72,16 @@ export function Home() {
   }
 
   return (
-    <Box sx={{ minHeight: '100vh', display: 'grid', placeItems: 'center', bgcolor: 'background.body', p: 3 }}>
+    <Box
+      sx={{
+        height: '100vh',
+        overflowY: 'auto',
+        display: 'grid',
+        placeItems: 'safe center',
+        bgcolor: 'background.body',
+        p: 3,
+      }}
+    >
       <Card variant="outlined" sx={{ width: 'min(520px, 100%)', gap: 2 }}>
         {!state || state.status === 'initializing' ? (
           <Stack direction="row" spacing={1.5} alignItems="center" data-testid="auth-loading-stack">

@@ -38,13 +38,15 @@ export function writeBrowserPaneOpen(open: boolean): void {
 export const BROWSER_PANE_WIDTH = 560;
 
 /**
- * The most of the window the pane may ever take.
+ * The most of the window the pane may take when the window is too small for it and the
+ * conversation both, and before the layout has been measured; see browserPaneMaxWidth.
  *
  * Without it the conversation, which is `flex: 1` over `minWidth: 0`, gives up every pixel the
  * pane asks for: on a 900px window beside an open sidebar that left the transcript sixty pixels
  * wide. The pane yields first instead, and the page goes to its phone layout, which is the
  * honest outcome - at that size the two cannot both be read, and the window is the thing to
- * widen.
+ * widen. It is not a cap on a window with room for both: there the conversation's own minimum
+ * is, and holding the pane under half of a wide window kept pages in their narrow layout.
  */
 export const BROWSER_PANE_MAX_FRACTION = 0.42;
 
