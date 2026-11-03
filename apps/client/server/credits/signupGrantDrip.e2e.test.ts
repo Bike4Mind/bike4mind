@@ -1,6 +1,6 @@
 import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { userService } from '@bike4mind/services';
-import { newSignupGrant } from '@bike4mind/common';
+import { newSignupGrant, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import type { SignupGrantBudgetAlert, SignupProtection } from '@bike4mind/common';
 import {
   mongoose,
@@ -210,51 +210,51 @@ describe('signup activity drip', () => {
   });
 
   // A held tranche is paid by a card or subscription unlock; the test calls the release directly to stand in for it.
-  it('pays held signup tranches before any drip', async () => {
+  it('keeps dripping from the trickle pool while signup tranches are held', async () => {
     const dripper = await createSignupStageUser(0);
-    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '1000';
+    config.signupGrantSignupPoolDaily = '0';
+    config.signupGrantTricklePoolDaily = '1000';
     clock = new Date(`${day(0)}T09:00:00Z`);
-    await userService.releaseSignupTranche((await createUser(2)).id, adapters);
     const held = await createUser(1);
     expect(await userService.releaseSignupTranche(held.id, adapters)).toMatchObject({ withheld: true });
-    expect(await drip(dripper.id, 0)).toMatchObject({ creditsGranted: 0, withheld: true });
-    expect(await dripRows(dripper.id)).toHaveLength(0);
+    expect((await User.findById(held.id))?.signupGrantHeldReason).toBe('budget_exhausted');
 
-    clock = new Date(`${day(1)}T09:00:00Z`);
-    expect(await userService.releaseSignupTranche(held.id, adapters)).toMatchObject({ creditsGranted: 1000 });
-    clock = new Date(`${day(2)}T09:00:00Z`);
-    expect(await drip(dripper.id, 2)).toMatchObject({ creditsGranted: 1000 });
+    expect(await drip(dripper.id, 0)).toMatchObject({ creditsGranted: 1000 });
+    expect(await spentToday('trickle')).toBe(1000);
+    expect(await spentToday('signup')).toBe(0);
   });
 
-  it('is not stalled by a stale, banned or AI-revoked held tranche', async () => {
+  it('skips the drip on a dry trickle pool without queueing it, and leaves signups paying', async () => {
     const dripper = await createSignupStageUser(0);
-    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '5000';
+    config.signupGrantTricklePoolDaily = '0';
     clock = new Date(`${day(0)}T09:00:00Z`);
-    const held = await createUser(1);
-    await User.collection.updateOne(
-      { _id: held._id },
-      { $set: { signupGrantHeldReason: 'budget_exhausted', 'signupGrant.stage': 'pending_email' } }
-    );
-    const setHeldAt = (d: string) =>
-      User.collection.updateOne({ _id: held._id }, { $set: { signupGrantHeldAt: new Date(`${d}T09:00:00Z`) } });
-    await setHeldAt(day(0));
     expect(await drip(dripper.id, 0)).toMatchObject({ creditsGranted: 0, withheld: true });
-    // Any later write to the held account (a login, a settings save) must not make an old hold current again.
-    await User.collection.updateOne({ _id: held._id }, { $set: { updatedAt: new Date(`${day(1)}T10:00:00Z`) } });
+    const skipped = await User.findById(dripper.id);
+    expect(skipped?.signupGrant?.dripCredits).toBeUndefined();
+    expect(skipped?.signupGrantHeldReason ?? null).toBeNull();
+    expect(skipped?.tags ?? []).not.toContain(PENDING_FREE_CREDITS_TAG);
+    expect(await dripRows(dripper.id)).toHaveLength(0);
+    expect(await userService.releaseSignupTranche((await createUser(1)).id, adapters)).toMatchObject({
+      creditsGranted: 1000,
+    });
+
+    config.signupGrantTricklePoolDaily = '1000';
+    clock = new Date(`${day(1)}T09:00:00Z`);
     expect(await drip(dripper.id, 1)).toMatchObject({ creditsGranted: 1000 });
-    await setHeldAt(day(2));
-    expect(await drip(dripper.id, 2)).toMatchObject({ creditsGranted: 0, withheld: true });
-    for (const [n, flag] of [
-      [2, { isBanned: true }],
-      [3, { isModerated: true }],
-    ] as const) {
-      await User.collection.updateOne(
-        { _id: held._id },
-        { $set: { ...flag, signupGrantHeldAt: new Date(`${day(n)}T09:00:00Z`) } }
-      );
-      expect(await drip(dripper.id, n)).toMatchObject({ creditsGranted: 1000 });
-      await User.collection.updateOne({ _id: held._id }, { $unset: { isBanned: '', isModerated: '' } });
-    }
+  });
+
+  it('pays no free grant with both pools at 0', async () => {
+    const dripper = await createSignupStageUser(0);
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '0';
+    clock = new Date(`${day(0)}T09:00:00Z`);
+    expect(await drip(dripper.id, 0)).toMatchObject({ creditsGranted: 0, withheld: true });
+    const signup = await createUser(1);
+    expect(await userService.releaseSignupTranche(signup.id, adapters)).toMatchObject({ withheld: true });
+    const held = await User.findById(signup.id);
+    expect(held?.signupGrantHeldReason).toBe('budget_exhausted');
+    expect(held?.tags).toContain(PENDING_FREE_CREDITS_TAG);
+    expect(await creditsOf(dripper.id)).toBe(1000);
+    expect(await creditsOf(signup.id)).toBe(0);
   });
 
   it('does not pay a drip on a reservation another attempt still owns', async () => {

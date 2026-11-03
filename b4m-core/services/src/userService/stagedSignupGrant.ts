@@ -538,8 +538,8 @@ export async function resolveDripLimits(adminSettings: GrantAdapters['db']['admi
 
 /**
  * Pays a UTC day's activity drip, or a trusted preview period within it. The caller establishes eligibility; this owns
- * the rate, the cap, the once-per-day ledger id and the daily budget draw. Signup tranches still held
- * for the budget are paid first, so a drip is skipped (withheld) while a live one from `day` exists.
+ * the rate, the cap, the once-per-day ledger id and the draw from the trickle pool. A dry trickle pool
+ * skips the day (withheld, not queued); signup tranches held on the signup pool do not stop it.
  */
 export async function dripSignupGrant(
   userId: string,
@@ -553,19 +553,6 @@ export async function dripSignupGrant(
   if (!(dailyCredits > 0) || !(maxCredits > 0)) return noGrant();
   const user = await adapters.db.users.findById(userId);
   if (!user?.signupGrant || hasPaidSignupDrip(user.signupGrant, day, period)) return noGrant();
-  // Existence only, and bounded: holders that are blocked, AI-revoked or held before `day` are ignored
-  // so one abandoned hold cannot stall every drip. Older holds are retried by the held-release job.
-  const heldTranche = await adapters.db.users.findOne({
-    signupGrantHeldReason: 'budget_exhausted',
-    'signupGrant.stage': 'pending_email',
-    isBanned: { $ne: true },
-    isModerated: { $ne: true },
-    disputePending: { $ne: true },
-    'moderation.status': { $ne: 'suspended' },
-    deletedAt: { $exists: false },
-    signupGrantHeldAt: { $gte: new Date(`${day}T00:00:00.000Z`) },
-  });
-  if (heldTranche) return { ...noGrant(), withheld: true };
   return releaseStage(
     userId,
     'signup',

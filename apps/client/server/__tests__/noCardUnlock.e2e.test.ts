@@ -149,23 +149,24 @@ describe('grantNoCardUnlock on a real replica set', () => {
     });
   });
 
+  const buildBudgeted = async () => ({
+    ...(await build()),
+    signupProtection: {
+      repository: {
+        findReview: async () => null,
+        observe: async () => {},
+        recent: async () => [],
+        createHold: async () => false,
+        isOrganizationDomain: async () => false,
+      },
+      grantBudget: { repository: signupGrantBudgetRepository },
+    },
+  });
+
   it('refuses while the signup tranche is held, and draws the daily signup budget otherwise', async () => {
     await seedSettings({ signupGrantSignupPoolDaily: GITHUB });
     const held = await seedUser({ signupGrantHeldReason: 'budget_exhausted' });
-    const base = await build();
-    const budgeted = {
-      ...base,
-      signupProtection: {
-        repository: {
-          findReview: async () => null,
-          observe: async () => {},
-          recent: async () => [],
-          createHold: async () => false,
-          isOrganizationDomain: async () => false,
-        },
-        grantBudget: { repository: signupGrantBudgetRepository },
-      },
-    };
+    const budgeted = await buildBudgeted();
     expect(await grantNoCardUnlock(held, 'github_verified', budgeted)).toEqual({
       granted: false,
       refusal: 'signup_grant_pending',
@@ -180,6 +181,16 @@ describe('grantNoCardUnlock on a real replica set', () => {
       refusal: 'daily_budget_reached',
     });
     expect(await balance(fourth)).toBe(0);
+  });
+
+  it('refuses with the signup pool at 0 even while the trickle pool has room', async () => {
+    await seedSettings({ signupGrantSignupPoolDaily: 0, signupGrantTricklePoolDaily: 1_000_000 });
+    const id = await seedUser();
+    expect(await grantNoCardUnlock(id, 'github_verified', await buildBudgeted())).toEqual({
+      granted: false,
+      refusal: 'daily_budget_reached',
+    });
+    expect(await balance(id)).toBe(0);
   });
 
   it('does not refuse a staged account that has no budget-held reason', async () => {
