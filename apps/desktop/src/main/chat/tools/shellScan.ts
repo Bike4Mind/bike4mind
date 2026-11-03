@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { basename, dirname, isAbsolute, join, parse, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, parse, posix, resolve, sep } from 'node:path';
 import type { Node } from 'web-tree-sitter';
 import {
   PACKAGE_VALUE_OPTIONS,
@@ -14,7 +14,7 @@ import { isEnvFile } from './envFiles';
 import { ghReadFiles, repositoryWrite, type RepositoryWrite } from './ownRepository';
 import { realpathNearest, resolveWithinRootsPhysically } from './paths';
 import { inPlaceWrites } from './shellWrites';
-import { wslLocation, wslUncPath, wslUserEnvironment } from '../../wsl/wslPath';
+import { parseWslPath, wslLocation, wslUncPath, wslUserEnvironment } from '../../wsl/wslPath';
 
 export interface ShellCommand {
   /** The command's tokens with options before the subcommand dropped: what a remembered pattern is matched against. */
@@ -1112,6 +1112,16 @@ async function shellHome(startDirectory: string): Promise<{ home: string; known:
   return { home: wslUncPath(wsl, user?.home ?? '/'), known: !!user, temp: [wslUncPath(wsl, '/tmp')] };
 }
 
+/**
+ * Where `operand` lands from `cwd`. A command in a WSL folder reads it by Linux rules, where a
+ * backslash is part of a name; a share path is taken as the place it names.
+ */
+function operandTarget(cwd: string, operand: string): string {
+  const wsl = wslLocation(cwd);
+  if (!wsl || parseWslPath(operand)) return resolve(cwd, operand);
+  return wslUncPath(wsl, posix.resolve(wsl.linuxPath, operand));
+}
+
 /** A path in a WSL distro that none of `roots` is in. */
 export function inUngrantedDistro(path: string, roots: readonly string[]): boolean {
   const distro = wslLocation(path)?.distro.toLowerCase();
@@ -1171,7 +1181,7 @@ export async function scanShell(
       if (!prefix || isDynamic(prefix)) return null;
       // A glob can expand to `..` (`~/.nvm*/../.ssh`, `~/.nvm/.?/.ssh`), so a dot after the glob never stays inside.
       const stays = text === prefix || (!text.slice(prefix.length).includes('.') && !prefix.endsWith('.'));
-      const target = resolve(cwd, prefix);
+      const target = operandTarget(cwd, prefix);
       if (inUngrantedDistro(target, allowed)) {
         // Outside without a look: reading it over the share would start that distro.
         ungranted.add(target);

@@ -133,6 +133,31 @@ describe('the folders a command in a WSL project may reach unasked', () => {
     expect(scan?.directories).toEqual(['\\\\wsl.localhost\\Ubuntu\\var\\log']);
   });
 
+  it.each([
+    "grep -rn 'foo\\|bar' src",
+    "git log --grep='fix\\b'",
+    "grep -n 'foo\\.bar' notes.txt",
+    "sed -n 's/\\t/ /p' notes.txt",
+    "printf 'a\\n'",
+    "echo -e 'x\\ty'",
+    "node -e 'console.log(1)\\n'",
+    "cat 'a\\nb.txt'",
+    "ls 'dir\\sub'",
+  ])('scans %s, reading a backslash in an operand as part of a Linux name', async command => {
+    const scan = await scanShell(command, root, [root]);
+
+    expect(scan).not.toBeNull();
+    expect(scan?.directories).toEqual([]);
+    expect(scan?.ungranted).toEqual([]);
+  });
+
+  it('names the Linux folder an operand with a backslash lands in, outside the project', async () => {
+    const scan = await scanShell("cat '/var/x\\..\\..\\home\\me\\repo\\f'", root, [root]);
+
+    expect(scan?.directories).toEqual(['\\\\wsl.localhost\\Ubuntu\\var']);
+    expect(scan?.paths).not.toContain(`${root}\\f`);
+  });
+
   it("lets a read-only probe look at the distro user's toolchain folder, and asks about a secret in it", async () => {
     const toolchain = await scanShell('ls ~/.cargo/bin', root, [root]);
     const secret = await scanShell('ls ~/.cargo/credentials.toml', root, [root]);
