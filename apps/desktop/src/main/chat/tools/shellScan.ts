@@ -1094,15 +1094,6 @@ export function words(node: Node): string[] {
   return out;
 }
 
-/**
- * Every simple command a shell script would run, and every directory outside the project it
- * names. Null when the script does not parse, which the caller treats as a reason to ask.
- *
- * `cd`, `pushd` and `popd` move the directory later commands resolve against, except inside a
- * subshell, a `$( )` or a pipeline, where the shell discards the move. An argument built from a
- * variable or a command substitution is skipped, as opencode does: it cannot be read off the
- * text, and a `cd` to one leaves the tracked directory where it was.
- */
 /** Nodes whose assignments are already accounted for: a command's prefix, or a flagged declaration. */
 const ASSIGNMENT_OWNERS = new Set(['command', 'declaration_command', 'variable_assignments']);
 
@@ -1118,6 +1109,15 @@ async function shellHome(startDirectory: string): Promise<{ home: string; temp: 
   return { home: wslUncPath(wsl, user?.home ?? '/'), temp: [wslUncPath(wsl, '/tmp')] };
 }
 
+/**
+ * Every simple command a shell script would run, and every directory outside the project it
+ * names. Null when the script does not parse, which the caller treats as a reason to ask.
+ *
+ * `cd`, `pushd` and `popd` move the directory later commands resolve against, except inside a
+ * subshell, a `$( )` or a pipeline, where the shell discards the move. An argument built from a
+ * variable or a command substitution is skipped, as opencode does: it cannot be read off the
+ * text, and a `cd` to one leaves the tracked directory where it was.
+ */
 export async function scanShell(
   command: string,
   startDirectory: string,

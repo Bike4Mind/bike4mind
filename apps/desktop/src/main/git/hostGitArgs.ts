@@ -54,6 +54,14 @@ export async function gitCommandEnv(
   return location ? wslCommandEnv(process.env, location.distro) : undefined;
 }
 
+/**
+ * The timeout for a quick git read, given its `gitCommandEnv`: through wsl.exe (an env is set) it
+ * can spend seconds starting a distro that is not running yet.
+ */
+export function quickGitTimeout(env: NodeJS.ProcessEnv | undefined): number {
+  return env ? 10_000 : 2000;
+}
+
 /** Of `env`, only what wsl.exe passes into Linux: the variables WSLENV names for that direction. */
 export function crossingEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(
@@ -71,11 +79,10 @@ const NETWORK_KEYS = '^(credential\\.(.*\\.)?helper|core\\.sshcommand|core\\.ask
 const readScopedConfig: ScopedConfigReader = async directory => {
   const env = await gitCommandEnv(directory);
   const command = await gitCommand(directory, ['config', '--show-scope', '-z', '--get-regexp', NETWORK_KEYS]);
-  // wsl.exe can spend seconds starting a distro that is not running yet.
-  const timeout = env ? 10_000 : 2000;
   return new Promise(resolve => {
     if (!command) return resolve([]);
-    execFile(command.file, command.args, { cwd: command.cwd, env, timeout, windowsHide: true }, (error, stdout) => {
+    const { file, args, cwd } = command;
+    execFile(file, args, { cwd, env, timeout: quickGitTimeout(env), windowsHide: true }, (error, stdout) => {
       if (error) return resolve([]);
       // `-z` output is `scope\0key\nvalue\0` per entry; a key written without `=` has no value line.
       const fields = stdout.split('\0');

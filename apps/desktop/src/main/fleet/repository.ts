@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { gitArgumentPath, gitCommand, gitCommandEnv, hostGitArgs } from '../git/hostGitArgs';
+import { gitArgumentPath, gitCommand, gitCommandEnv, hostGitArgs, quickGitTimeout } from '../git/hostGitArgs';
 import { isRepositoryPart } from './activityContract';
 
 export interface RepositoryName {
@@ -84,8 +84,7 @@ export async function gitOriginUrl(directory: string): Promise<string | null> {
   const command = await gitCommand(directory, args);
   if (!command) return null;
   return new Promise(resolve => {
-    // wsl.exe can spend seconds starting a distro that is not running yet.
-    execFile(command.file, command.args, { env, timeout: env ? 10_000 : 2000, windowsHide: true }, (err, stdout) => {
+    execFile(command.file, command.args, { env, timeout: quickGitTimeout(env), windowsHide: true }, (err, stdout) => {
       resolve(err ? null : stdout.trim() || null);
     });
   });
