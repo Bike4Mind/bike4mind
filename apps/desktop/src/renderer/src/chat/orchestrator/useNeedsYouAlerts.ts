@@ -36,7 +36,7 @@ export function useNeedsYouAlerts(
     }
   }, [statuses]);
 
-  const count = needsYouCount(statuses);
+  const count = needsYouCount(statuses, sessions);
   useEffect(() => {
     void window.b4m.attention.setBadgeCount(count);
   }, [count]);

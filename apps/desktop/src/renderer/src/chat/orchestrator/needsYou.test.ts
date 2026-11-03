@@ -33,9 +33,16 @@ describe('enteredNeedsYou', () => {
 });
 
 describe('needsYouCount', () => {
-  it('counts every session waiting on the user', () => {
-    expect(needsYouCount(statuses({ a: 'needs-action', b: 'processing', c: 'needs-action' }))).toBe(2);
-    expect(needsYouCount(new Map())).toBe(0);
+  const listed = [session('a'), session('b'), session('c')];
+
+  it('counts every listed session waiting on the user', () => {
+    expect(needsYouCount(statuses({ a: 'needs-action', b: 'processing', c: 'needs-action' }), listed)).toBe(2);
+    expect(needsYouCount(new Map(), listed)).toBe(0);
+  });
+
+  it('skips archived sessions and sessions that are no longer listed', () => {
+    const sessions = [session('a'), { ...session('b'), archived: true }];
+    expect(needsYouCount(statuses({ a: 'needs-action', b: 'needs-action', gone: 'needs-action' }), sessions)).toBe(1);
   });
 });
 

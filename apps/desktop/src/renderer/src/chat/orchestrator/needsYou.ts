@@ -24,9 +24,14 @@ export function enteredNeedsYou(
     .map(([id]) => id);
 }
 
-export function needsYouCount(statuses: ReadonlyMap<string, ChatSessionStatus>): number {
+/** Sessions waiting on the user that the user can see: archived and deleted ones do not count. */
+export function needsYouCount(
+  statuses: ReadonlyMap<string, ChatSessionStatus>,
+  sessions: readonly ChatSessionSummary[]
+): number {
+  const visible = new Set(sessions.filter(session => !session.archived).map(session => session.id));
   let count = 0;
-  for (const status of statuses.values()) if (status === 'needs-action') count += 1;
+  for (const [sessionId, status] of statuses) if (status === 'needs-action' && visible.has(sessionId)) count += 1;
   return count;
 }
 

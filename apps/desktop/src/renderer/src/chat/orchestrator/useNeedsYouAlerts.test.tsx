@@ -22,8 +22,9 @@ const session = (id: string, parentId?: string, title = `Session ${id}`): ChatSe
     ...(parentId && { origin: { parentSessionId: parentId, seedPrompt: `seed ${id}` } }),
   }) as ChatSessionSummary;
 
-const SESSIONS = [session('root', undefined, 'Audit'), session('child', 'root', 'Review the auth middleware')];
+const DEFAULT_SESSIONS = [session('root', undefined, 'Audit'), session('child', 'root', 'Review the auth middleware')];
 
+let sessions = DEFAULT_SESSIONS;
 let container: HTMLDivElement;
 let root: Root;
 let openListener: ((event: AttentionOpenEvent) => void) | null;
@@ -33,7 +34,7 @@ const onOpen = vi.fn();
 let focused = false;
 
 const Probe = ({ statuses }: { statuses: ReadonlyMap<string, ChatSessionStatus> }) => {
-  useNeedsYouAlerts(SESSIONS, statuses, onOpen);
+  useNeedsYouAlerts(sessions, statuses, onOpen);
   return null;
 };
 const render = (entries: Record<string, ChatSessionStatus>) =>
@@ -41,6 +42,7 @@ const render = (entries: Record<string, ChatSessionStatus>) =>
 
 beforeEach(() => {
   focused = false;
+  sessions = DEFAULT_SESSIONS;
   openListener = null;
   vi.spyOn(document, 'hasFocus').mockImplementation(() => focused);
   (window as unknown as { b4m: unknown }).b4m = {
@@ -118,6 +120,12 @@ describe('useNeedsYouAlerts', () => {
     expect(setBadgeCount).toHaveBeenLastCalledWith(2);
     await render({ child: 'processing', root: 'done' });
     expect(setBadgeCount).toHaveBeenLastCalledWith(0);
+  });
+
+  it('leaves archived and deleted sessions out of the dock badge', async () => {
+    sessions = [session('root', undefined, 'Audit'), { ...session('child', 'root'), archived: true }];
+    await render({ child: 'needs-action', root: 'needs-action', gone: 'needs-action' });
+    expect(setBadgeCount).toHaveBeenLastCalledWith(1);
   });
 
   it('hands a clicked notice to onOpen', async () => {
