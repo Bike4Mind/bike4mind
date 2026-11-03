@@ -5,6 +5,7 @@ import {
   isClaudeModelId,
   MAX_THINKING_BUDGET_TOKENS,
   NO_TEMPERATURE_MODELS,
+  REASONING_SUPPORTED_MODELS,
   type ReasoningEffort,
 } from '@bike4mind/common';
 import type { OpenAICompatibleProduct } from '@bike4mind/local-models';
@@ -32,9 +33,9 @@ function control(range: Range, value?: number): NumericControl {
   return { ...range, ...(value !== undefined ? { default: value } : {}), scope: 'request' };
 }
 
-function outputControl(min: number, max: number, value?: number): NumericControl | undefined {
+function outputControl(min: number, max: number, value?: number, thinks = false): NumericControl | undefined {
   if (!Number.isFinite(max) || max <= min) return undefined;
-  return control({ min, max, step: OUTPUT_STEP }, value);
+  return { ...control({ min, max, step: OUTPUT_STEP }, value), ...(thinks ? { includesThinking: true } : {}) };
 }
 
 /** The levels in `values` that name a setting, lowest first. */
@@ -60,6 +61,8 @@ export interface OllamaModelFacts {
   thinkingValues?: readonly unknown[];
   /** The num_ctx Desktop runs the model with, which bounds a reply. */
   contextWindow: number;
+  /** num_predict counts thinking as well as the answer. */
+  thinks?: boolean;
 }
 
 /** Ollama takes every sampling option and num_predict per request, and `think` levels where the template has them. */
@@ -71,7 +74,8 @@ export function ollamaControls(facts: OllamaModelFacts): ModelControls {
   const maxOutputTokens = outputControl(
     MIN_OUTPUT_TOKENS,
     facts.contextWindow,
-    numPredict !== undefined && numPredict > 0 ? numPredict : undefined
+    numPredict !== undefined && numPredict > 0 ? numPredict : undefined,
+    facts.thinks
   );
   return {
     temperature: control(TEMPERATURE, known('temperature')),
@@ -93,11 +97,16 @@ export const OPENAI_COMPATIBLE_EFFORT_LEVELS: readonly ReasoningEffortSetting[] 
  */
 export function openAICompatibleControls(
   product: OpenAICompatibleProduct | null,
-  facts: { contextWindow?: number; effortLevels: boolean }
+  facts: { contextWindow?: number; effortLevels: boolean; thinks?: boolean }
 ): ModelControls {
   // vLLM refuses a request whose prompt plus max_tokens passes the context, so a reply may take half.
   const outputCeiling = facts.contextWindow !== undefined ? Math.floor(facts.contextWindow / 2) : 32_768;
-  const maxOutputTokens = outputControl(MIN_OUTPUT_TOKENS, outputCeiling);
+  const maxOutputTokens = outputControl(
+    MIN_OUTPUT_TOKENS,
+    outputCeiling,
+    undefined,
+    facts.effortLevels || facts.thinks === true
+  );
   return {
     temperature: control(TEMPERATURE),
     topP: control(TOP_P),
@@ -117,6 +126,8 @@ export interface HostedModelFacts {
   maxOutputTokens?: number;
   /** The catalog sends OpenAI's `max_completion_tokens`, which the server pairs with a fixed temperature. */
   maxCompletionTokens?: boolean;
+  /** `reasons_within_output_budget` on GET /api/v1/models; absent when the server did not say. */
+  reasonsWithinOutputBudget?: boolean;
 }
 
 /** The levels Desktop offered before the server published its own, for a server that does not. */
@@ -128,6 +139,16 @@ function servedAsClaude(model: HostedModelFacts): boolean {
 
 function thinksAdaptively(model: HostedModelFacts): boolean {
   return ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS.has(model.id) || model.thinkingStyle === 'adaptive';
+}
+
+/** The server's answer, else the part of reasonsWithinOutputBudget (llm-adapters thinkingParams.ts) a client can decide. */
+function reasonsWithinOutputBudget(model: HostedModelFacts): boolean {
+  if (model.reasonsWithinOutputBudget !== undefined) return model.reasonsWithinOutputBudget;
+  return (
+    model.thinkingStyle === 'adaptive' ||
+    REASONING_SUPPORTED_MODELS.has(model.id) ||
+    (model.maxCompletionTokens === true && model.canThink)
+  );
 }
 
 /**
@@ -178,10 +199,13 @@ export function hostedControls(
     budgeted && budgetMax > MIN_THINKING_BUDGET_TOKENS
       ? control({ min: MIN_THINKING_BUDGET_TOKENS, max: budgetMax, step: 1024 }, DEFAULT_THINKING_BUDGET_TOKENS)
       : undefined;
-  // The server raises an adaptive Claude's max_tokens to this floor while it thinks, so less is never sent.
-  const outputFloor =
-    claude && model.canThink && thinksAdaptively(model) ? ADAPTIVE_THINKING_MAX_TOKENS_FLOOR : MIN_HOSTED_OUTPUT_TOKENS;
-  const output = cap ? outputControl(Math.min(outputFloor, cap), cap, cap) : undefined;
+  // The server raises an adaptive Claude's max_tokens to this floor while it thinks, and gives any model that
+  // reasons inside max_tokens the same when none is sent, since less can be spent on reasoning alone.
+  const reasons = reasonsWithinOutputBudget(model) || (claude && model.canThink && thinksAdaptively(model));
+  const outputFloor = reasons ? ADAPTIVE_THINKING_MAX_TOKENS_FLOOR : MIN_HOSTED_OUTPUT_TOKENS;
+  const output = cap
+    ? outputControl(Math.min(outputFloor, cap), cap, cap, reasons || thinkingBudgetTokens !== undefined)
+    : undefined;
   const maxOutputTokens =
     output && thinkingBudgetTokens ? { ...output, budgetHeadroom: THINKING_ANSWER_HEADROOM_TOKENS } : output;
   return {

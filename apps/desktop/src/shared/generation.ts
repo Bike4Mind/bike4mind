@@ -59,6 +59,8 @@ export interface NumericControl {
    * this many tokens, so the floor follows the budget the turn sends; see effectiveControls.
    */
   budgetHeadroom?: number;
+  /** Max output that the model's thinking is spent from, so a low limit can leave no room for the answer. */
+  includesThinking?: true;
   scope: ControlScope;
 }
 
