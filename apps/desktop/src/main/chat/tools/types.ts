@@ -2,6 +2,7 @@ import type { CustomCommand } from '@bike4mind/cli/skills';
 import type { VideoModel } from '@bike4mind/common';
 import type { BrowserSnapshot } from '@shared/browserPage';
 import type { McpServerState, McpServersState } from '@shared/mcp';
+import type { PrActionResult, PrBindOutcome } from '@shared/pullRequest';
 import type {
   ChatApprovalOption,
   ChatDiff,
@@ -334,6 +335,8 @@ export interface ToolContext {
   skills?: SkillContext;
   /** The user's MCP servers. Absent in a build or test without them; the mcp_* tools then refuse. */
   mcp?: McpToolContext;
+  /** The calling session's PR binding. Absent in tests; set_session_pull_request then refuses. */
+  pullRequests?: PullRequestContext;
   /** Absent outside the chat loop; every tool treats it as optional. */
   report?: ToolReporter;
   /**
@@ -358,6 +361,12 @@ export interface McpToolContext {
   reconnect(id: string): Promise<McpServerState | null>;
   setEnabled(id: string, enabled: boolean): Promise<McpServersState>;
   removeServer(id: string): Promise<McpServersState>;
+}
+
+/** One session's PR binding, as set_session_pull_request may change it. See PrMonitor. */
+export interface PullRequestContext {
+  bind(target: string): Promise<PrBindOutcome>;
+  clear(): Promise<PrActionResult>;
 }
 
 /**

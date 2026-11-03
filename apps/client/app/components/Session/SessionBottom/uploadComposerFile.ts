@@ -47,7 +47,7 @@ interface UploadComposerFileOptions {
 
 // A first upload unlocks the 'files' gear server-side, but the Gears status
 // query has a 5-minute staleTime - without an explicit invalidation the Gears
-// page keeps showing the unearned "Upload your first file" CTA until a reload.
+// page keeps showing the unearned "Upload a file" CTA until a reload.
 // Only invalidate while the gear is still locked so routine uploads don't
 // refetch the status on every attachment.
 function invalidateGearsStatusOnFirstFile(queryClient: QueryClient) {

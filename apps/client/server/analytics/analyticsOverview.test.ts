@@ -176,6 +176,7 @@ describe('buildOverview', () => {
     ];
     const overview = build(query(), rows);
     expect(overview.activeUsers.days[0]).toMatchObject({ day: '2026-06-09', previousMau: 3 });
+    expect(overview.activeUsers.days.at(-1)).toMatchObject({ day: '2026-06-15', partial: true, previousMau: null });
     expect(build(query({ compare: 'off' }), rows).activeUsers.days[0]).not.toHaveProperty('previousMau');
   });
 

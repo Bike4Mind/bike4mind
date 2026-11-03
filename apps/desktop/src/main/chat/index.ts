@@ -624,6 +624,7 @@ export function registerChat(
     sidebarSections,
     mcp,
     browser,
+    pullRequests,
     screen: desktopScreenCapturer(app.getName()),
     prepareImage: prepareToolImage,
     history,

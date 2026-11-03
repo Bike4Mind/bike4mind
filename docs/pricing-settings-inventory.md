@@ -11,6 +11,8 @@ The source of truth stays in code:
   `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`.
 - Keys hidden from Admin Settings because Growth and Pricing owns them: `GROWTH_PRICING_ONLY_KEYS` in
   `apps/client/app/components/admin/AdminSettingsTab.tsx`.
+- Keys hidden from Admin Settings on `PRODUCTION_STAGES` (`production`, `dev`): definitions with
+  `hideOnProductionStages`, collected by `stageHiddenSettingKeys` in `b4m-core/common/src/schemas/settings.ts`.
 
 ## Scope
 
@@ -48,8 +50,8 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 | `signupGrantActivityMinActiveSeconds` | Admin Settings > User Management > Credits System > Signup Activity Minimum Active Seconds | The server-accrued active time a UTC day needs before the drip pays (`resolveRequiredActiveSeconds` in `activityUnlock.ts`, `recordActiveSession.ts`) and the "about N minutes" unlock copy (`newUserWelcomeModel.ts`). Clamped to 60-7200, default 60. | no. Sets how long a free drip takes to earn. | Signup and starter credits |
 | `signupGrantActivityDailyCredits` | Admin Settings > User Management > Credits System > Signup Activity Daily Credits | The per-day drip amount (`resolveDripLimits` in `stagedSignupGrant.ts`), the heartbeat gate and the unlock copy. Pays only from the unlock pool (`verifiedUnlockCredits`) and nothing while that is 0. | no. A free grant. | Signup and starter credits |
 | `signupGrantActivityMaxCredits` | Admin Settings > User Management > Credits System > Signup Activity Maximum Credits | The lifetime per-account cap on the activity drip (`resolveDripLimits` in `stagedSignupGrant.ts`, `activityUnlock.ts`, `recordActiveSession.ts`). | no. Caps free credits. | Signup and starter credits |
-| `signupGrantActivityPreviewTestMode` | Admin Settings > User Management > Credits System > Signup Drip Preview Test Mode | Preview-only five-minute earning windows in `signupDripPeriod.ts`; default off. Only `pr<number>` stages honor the switch. Production/staging keep UTC days, and the platform budget still uses real UTC days. | no. Accelerates free-grant testing only. | Signup and starter credits |
-| `ReferralCreditsAmount` | **Two editors**: Growth and Pricing > Signup and starter credits, and Admin Settings > User Management > Referrals | The referred-user grant at registration (`register.ts`), the referral send route (`apps/client/pages/api/reg-invites/refer.ts`) and the "invited person gets N credits" line (`ReferralModal.tsx`). | no. A free grant. | Signup and starter credits |
+| `signupGrantActivityPreviewTestMode` | Admin Settings > User Management > Credits System > Signup Drip Preview Test Mode (not shown on `production` or `dev`) | Preview-only five-minute earning windows in `signupDripPeriod.ts`; default off. Only `pr<number>` stages honor the switch. Production/staging keep UTC days, and the platform budget still uses real UTC days. | no. Accelerates free-grant testing only. | Signup and starter credits |
+| `ReferralCreditsAmount` | Growth and Pricing > Signup and starter credits | The referred-user grant at registration (`register.ts`), the referral send route (`apps/client/pages/api/reg-invites/refer.ts`) and the "invited person gets N credits" line (`ReferralModal.tsx`). | no. A free grant. | Signup and starter credits |
 | `ReferralFirstAnswerCredits` | Growth and Pricing > Referral rewards for inviters | The inviter payout when the invited friend has a first answer and a verified email (`apps/client/server/referrals/firstAnswerReward.ts`). Only friends who signed up on or after the first-value launch date (`FIRST_VALUE_LAUNCH_AT` in `apps/client/server/analytics/funnel.ts`) qualify. Default 0 (off). | no. A free grant. | Signup and starter credits |
 | `ReferralFirstPaymentCredits` | Growth and Pricing > Referral rewards for inviters | Defined only; the payout reads it in a later change. Default 0 (off). | no. A free grant. | Signup and starter credits |
 | `ReferralSecondPaymentCredits` | Growth and Pricing > Referral rewards for inviters | Defined only; the payout reads it in a later change. Default 0 (off). | no. A free grant. | Signup and starter credits |
@@ -85,8 +87,7 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 
 ## Findings
 
-- **One key still has two editors.** `ReferralCreditsAmount` is edited on Growth and Pricing and under Admin
-  Settings > User Management > Referrals. Every other key in scope has exactly one editor.
+- **Every key in scope has exactly one editor.**
 - **`pricePerCredit` prices a path no UI offers.** Only the per-credit branch of `/api/stripe/start-payment`
   reads it, and every purchase button in the app sells a credit pack. It is a candidate for the legacy-path
   cleanup in the admin settings epic.

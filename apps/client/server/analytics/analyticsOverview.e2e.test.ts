@@ -6,6 +6,16 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/d
 import { rollupDay } from './analyticsRollup';
 import { getAnalyticsOverview } from './analyticsOverview';
 
+const liveFailure = vi.hoisted(() => ({ error: null as Error | null }));
+vi.mock('./analyticsRollup', async importOriginal => {
+  const actual = await importOriginal<typeof import('./analyticsRollup')>();
+  return {
+    ...actual,
+    collectDayUsage: (...args: Parameters<typeof actual.collectDayUsage>) =>
+      liveFailure.error ? Promise.reject(liveFailure.error) : actual.collectDayUsage(...args),
+  };
+});
+
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 let mongod: MongoMemoryServer;
@@ -60,6 +70,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  liveFailure.error = null;
   await Promise.all([
     UsageEvent.deleteMany({}),
     AnalyticsUserDay.deleteMany({}),
@@ -109,6 +120,19 @@ describe('getAnalyticsOverview', () => {
       unclassified: nightly?.signups.unclassified,
     });
     expect((liveSignups?.legit ?? 0) + (liveSignups?.suspected ?? 0) + (liveSignups?.unclassified ?? 0)).toBe(1);
+  });
+
+  it('leaves today as a gap when the live slice fails, keeping the rolled-up days', async () => {
+    await seedEvent(users.a, '2026-06-10T10:00:00Z');
+    await rollupDay('2026-06-10', { now: NOW });
+    liveFailure.error = new Error('operation exceeded time limit');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const overview = await getAnalyticsOverview({ range: '7d', compare: 'off', signups: 'legit' }, NOW);
+    expect(overview.activeUsers.days.at(-1)).toEqual({ day: TODAY, dau: null, wau: null, mau: null, partial: true });
+    expect(overview.activeUsers.days.find(day => day.day === '2026-06-10')).toMatchObject({ dau: 1 });
+    expect(warn).toHaveBeenCalledWith('analytics overview: live slice for today failed', liveFailure.error);
+    warn.mockRestore();
   });
 
   it('reads a past custom range from the rollup alone, without a live slice', async () => {

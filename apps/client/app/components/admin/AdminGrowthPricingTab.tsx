@@ -33,7 +33,7 @@ import { useCreditAnalysisStore } from './CreditAnalysis/store';
  * The growth and monetization knobs, grouped on one page so they can be tuned without hunting
  * through Admin Settings. Storage is the ordinary admin-settings collection. This tab is the only
  * editor for these keys (GROWTH_PRICING_ONLY_KEYS in AdminSettingsTab, whose Credits System group
- * links here), except ReferralCreditsAmount, which keeps a second editor under Referrals.
+ * links here).
  * docs/pricing-settings-inventory.md lists every key in this area; update it when a key moves.
  */
 export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
