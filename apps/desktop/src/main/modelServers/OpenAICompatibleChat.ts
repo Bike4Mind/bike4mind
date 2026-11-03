@@ -19,7 +19,7 @@ import type { CompletionMessage, CompletionRequest } from '../chat/completions';
 import type { LocalChat } from '../chat/localChat';
 import { LOCAL_CONTEXT_TARGET_TOKENS } from '../chat/localContext';
 import type { CompletionStreamEvent } from '../chat/streamEvents';
-import { estimatedRate, llamaServerRate } from '../chat/tokenRate';
+import { estimatedRate, llamaServerRate, type StreamTiming } from '../chat/tokenRate';
 import { ServerCredentialsError, ServerForbiddenError } from './errors';
 
 export interface OpenAICompatibleServer {
@@ -324,13 +324,13 @@ export class OpenAICompatibleChat implements LocalChat {
     let stopReason: string | undefined;
     let usage: { inputTokens?: number; outputTokens?: number } | undefined;
     let reported: ChatTokenRate | undefined;
-    // Stamped per network read, so a reply that arrives in one buffered read yields no estimate.
+    // Stamped per network read, so deltas buffered into one read count as one arrival.
     let readAt = 0;
-    let firstAt: number | undefined;
-    let lastAt: number | undefined;
+    const timing: StreamTiming = { reads: 0 };
     const streamed = () => {
-      lastAt = readAt;
-      firstAt ??= readAt;
+      if (timing.lastAt !== readAt) timing.reads++;
+      timing.lastAt = readAt;
+      timing.firstAt ??= readAt;
     };
     let done = false;
     let failure: Error | undefined;
@@ -406,7 +406,7 @@ export class OpenAICompatibleChat implements LocalChat {
       .filter(call => call.name)
       .map(call => ({ name: call.name, arguments: call.arguments || '{}', ...(call.id ? { id: call.id } : {}) }));
     if (tools.length > 0) onEvent({ type: 'tool_use', tools });
-    const rate = reported ?? estimatedRate(usage?.outputTokens, firstAt, lastAt);
+    const rate = reported ?? estimatedRate(usage?.outputTokens, timing);
     onEvent({
       type: 'content',
       stopReason: stopReason ?? 'stop',

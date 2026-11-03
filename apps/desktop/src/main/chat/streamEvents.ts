@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ChatUsage } from '@shared/chat';
+import type { ChatTokenRate, ChatUsage } from '@shared/chat';
 import { addTokenRate } from './tokenRate';
 
 /**
@@ -30,18 +30,6 @@ const creditsSchema = z.object({
   usdCost: z.number().optional(),
 });
 
-// Self-hosted model servers only: Desktop's local transports set it, the completions endpoint never sends it.
-const rateSchema = z.object({
-  evalTokens: z.number(),
-  evalMs: z.number(),
-  promptTokens: z.number().optional(),
-  promptMs: z.number().optional(),
-  loadMs: z.number().optional(),
-  draftTokens: z.number().optional(),
-  draftAccepted: z.number().optional(),
-  estimated: z.boolean().optional(),
-});
-
 const toolUseSchema = z.object({
   name: z.string(),
   arguments: z.string().optional(),
@@ -58,7 +46,6 @@ export const streamEventSchema = z.discriminatedUnion('type', [
     text: z.string().optional(),
     usage: usageSchema.optional(),
     credits: creditsSchema.optional(),
-    rate: rateSchema.optional(),
     stopReason: z.string().optional(),
     toolStarted: toolStartedSchema.optional(),
   }),
@@ -87,14 +74,21 @@ export const streamEventSchema = z.discriminatedUnion('type', [
   }),
 ]);
 
-export type CompletionStreamEvent = z.infer<typeof streamEventSchema>;
+type WireEvent = z.infer<typeof streamEventSchema>;
+
+/**
+ * A wire event, or a local transport's content frame carrying how fast the self-hosted server
+ * ran. `rate` is not in the wire schema, so parsing strips it from anything a hosted server sends.
+ */
+export type CompletionStreamEvent =
+  Exclude<WireEvent, { type: 'content' }> | (Extract<WireEvent, { type: 'content' }> & { rate?: ChatTokenRate });
 
 /**
  * Validate an already-JSON-decoded payload. `null` means "not a shape we know" and is
  * treated as skip-this-event rather than an error, so a new server event type reaches an
  * older build as silence instead of a failed turn.
  */
-export function parseStreamEvent(data: unknown): CompletionStreamEvent | null {
+export function parseStreamEvent(data: unknown): WireEvent | null {
   const result = streamEventSchema.safeParse(data);
   return result.success ? result.data : null;
 }

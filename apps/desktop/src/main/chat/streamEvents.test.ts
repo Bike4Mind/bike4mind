@@ -76,16 +76,21 @@ describe('addUsage', () => {
 });
 
 describe('the local rate on a frame', () => {
-  it('survives parsing and folds into the usage', () => {
-    const event = parseStreamEvent({
-      type: 'content',
-      stopReason: 'stop',
-      usage: { outputTokens: 12 },
-      rate: { evalTokens: 12, evalMs: 600, estimated: true },
-    })!;
-    expect(foldUsage(undefined, event)).toEqual({
+  const frame = {
+    type: 'content' as const,
+    stopReason: 'stop',
+    usage: { outputTokens: 12 },
+    rate: { evalTokens: 12, evalMs: 600, estimated: true },
+  };
+
+  it('folds into the usage from a local transport', () => {
+    expect(foldUsage(undefined, frame)).toEqual({
       outputTokens: 12,
       rate: { evalTokens: 12, evalMs: 600, estimated: true },
     });
+  });
+
+  it('is stripped from a hosted server frame by parsing', () => {
+    expect(foldUsage(undefined, parseStreamEvent(frame)!)).toEqual({ outputTokens: 12 });
   });
 });

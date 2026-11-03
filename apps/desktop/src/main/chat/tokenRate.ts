@@ -53,18 +53,28 @@ export function llamaServerRate(timings: unknown): ChatTokenRate | undefined {
   };
 }
 
+/** When the reply's deltas arrived, stamped once per network read. */
+export interface StreamTiming {
+  firstAt?: number;
+  lastAt?: number;
+  /** Distinct reads that carried a delta. */
+  reads: number;
+}
+
+/** Below these, a buffered or bursty stream says more about the network than about generation. */
+export const MIN_ESTIMATE_READS = 3;
+export const MIN_ESTIMATE_SPAN_MS = 250;
+
 /**
  * For a server that reports no timings: completion tokens over the wall time between the first
  * streamed token and the last. The first token's own time is the prompt's, so it is not counted.
  */
-export function estimatedRate(
-  outputTokens: number | undefined,
-  firstAt: number | undefined,
-  lastAt: number | undefined
-): ChatTokenRate | undefined {
+export function estimatedRate(outputTokens: number | undefined, timing: StreamTiming): ChatTokenRate | undefined {
+  const { firstAt, lastAt, reads } = timing;
   if (outputTokens === undefined || outputTokens < 2 || firstAt === undefined || lastAt === undefined) return undefined;
   const evalMs = lastAt - firstAt;
-  return evalMs > 0 ? { evalTokens: outputTokens - 1, evalMs, estimated: true } : undefined;
+  if (reads < MIN_ESTIMATE_READS || evalMs < MIN_ESTIMATE_SPAN_MS) return undefined;
+  return { evalTokens: outputTokens - 1, evalMs, estimated: true };
 }
 
 const RATE_FIELDS = [

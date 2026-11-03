@@ -217,6 +217,19 @@ describe('the live thread, driven by stream events', () => {
     expect(container.querySelector('[data-testid="chat-turn-status-detail"]')).toBeNull();
   });
 
+  it("shows a self-hosted turn's rate on the line, with its detail in the title", async () => {
+    const usage = { inputTokens: 100, outputTokens: 48, rate: { evalTokens: 48, evalMs: 2000 } };
+    await act(async () =>
+      root.render(
+        <TurnStatus turn={{ startedAt: Date.now(), tokens: 148, usage }} activity={describeActivity([], true)} />
+      )
+    );
+
+    const line = container.querySelector('[data-testid="chat-turn-status-text"]');
+    expect(statusText()).toContain('24.0 tok/s');
+    expect(line?.getAttribute('title')).toBe('100 new input, 48 output\nGeneration: 24.0 tok/s (48 tokens in 2.0s)');
+  });
+
   it('moves the reasoning from the line into the transcript when the turn ends', async () => {
     await mount();
     emit({ type: 'start', sessionId: SESSION, messageId: MESSAGE });

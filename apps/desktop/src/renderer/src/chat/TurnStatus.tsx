@@ -17,7 +17,7 @@ import {
   type TurnActivity,
   type TurnProgress,
 } from './statusLine';
-import { formatTokenRate, useShowTokenRate } from './tokenRate';
+import { describeTokenRate, formatTokenRate, useShowTokenRate } from './tokenRate';
 
 const pulse = keyframes({
   '0%, 100%': { opacity: 0.3 },
@@ -118,6 +118,9 @@ export function TurnStatus({ turn, activity }: { turn: TurnProgress | null; acti
   // The one place a detail is ever built, and only while it is on screen.
   const detail = open && expandable ? activityDetail(live) : null;
   const rate = showRate ? formatTokenRate(turn.usage?.rate) : null;
+  const title = [describeSplit(turn.usage), rate ? describeTokenRate(turn.usage?.rate) : null].filter(
+    (part): part is string => part !== null
+  );
 
   // One line at any width. It truncates rather than wrapping now that the whole of it is one
   // click away: a second line here pushes the composer down every time a tool reports progress.
@@ -126,7 +129,7 @@ export function TurnStatus({ turn, activity }: { turn: TurnProgress | null; acti
       component="span"
       level="body-xs"
       textColor="text.tertiary"
-      title={describeSplit(turn.usage) ?? undefined}
+      title={title.length > 0 ? title.join('\n') : undefined}
       noWrap
       sx={{ minWidth: 0, display: 'block' }}
       data-testid="chat-turn-status-text"

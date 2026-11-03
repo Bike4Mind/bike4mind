@@ -102,35 +102,77 @@ describe('OpenAICompatibleChat', () => {
   });
 
   describe('without server timings', () => {
-    const frames = (...chunks: object[]) => {
+    /** One network read per group, each delivered with the clock at its `at`. */
+    const reads = (...groups: { at: number; chunks: (object | string)[] }[]) => {
       const encoder = new TextEncoder();
-      const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-          for (const chunk of [...chunks, '[DONE]'])
-            controller.enqueue(
-              encoder.encode(`data: ${typeof chunk === 'string' ? chunk : JSON.stringify(chunk)}\n\n`)
-            );
-          controller.close();
+      let clock = 0;
+      vi.spyOn(performance, 'now').mockImplementation(() => clock);
+      let next = 0;
+      const body = new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            const group = groups[next++];
+            if (!group) return controller.close();
+            clock = group.at;
+            const text = group.chunks
+              .map(chunk => `data: ${typeof chunk === 'string' ? chunk : JSON.stringify(chunk)}\n\n`)
+              .join('');
+            controller.enqueue(encoder.encode(text));
+          },
         },
-      });
+        { highWaterMark: 0 }
+      );
       return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
     };
+    const ending = (completionTokens: number) => [
+      { choices: [], usage: { prompt_tokens: 5, completion_tokens: completionTokens } },
+      '[DONE]',
+    ];
 
     afterEach(() => vi.restoreAllMocks());
 
     it('estimates from the first streamed token to the last, and says so', async () => {
-      vi.spyOn(performance, 'now').mockReturnValueOnce(1000).mockReturnValueOnce(1500).mockReturnValue(3000);
       const fetch: FetchLike = async () =>
-        frames(delta({ content: 'a' }), delta({ content: 'b' }), delta({ content: 'c' }, 'stop'), {
-          choices: [],
-          usage: { prompt_tokens: 5, completion_tokens: 41 },
-        });
+        reads(
+          { at: 1000, chunks: [delta({ content: 'a' })] },
+          { at: 1500, chunks: [delta({ content: 'b' })] },
+          { at: 3000, chunks: [delta({ content: 'c' }, 'stop'), ...ending(41)] }
+        );
       const events = await collect(chat(fetch, null), { model: MODEL, messages: [{ role: 'user', content: 'hi' }] });
       expect(events.at(-1)).toEqual({
         type: 'content',
         stopReason: 'stop',
         usage: { inputTokens: 5, outputTokens: 41 },
         rate: { evalTokens: 40, evalMs: 2000, estimated: true },
+      });
+    });
+
+    it('estimates nothing from a burst: a big first read and a few tiny ones right after', async () => {
+      const fetch: FetchLike = async () =>
+        reads(
+          { at: 1000, chunks: Array.from({ length: 40 }, () => delta({ content: 'x' })) },
+          { at: 1010, chunks: [delta({ content: 'y' })] },
+          { at: 1020, chunks: [delta({ content: 'z' }, 'stop'), ...ending(42)] }
+        );
+      const events = await collect(chat(fetch, null), { model: MODEL, messages: [{ role: 'user', content: 'hi' }] });
+      expect(events.at(-1)).toEqual({
+        type: 'content',
+        stopReason: 'stop',
+        usage: { inputTokens: 5, outputTokens: 42 },
+      });
+    });
+
+    it('estimates nothing from two reads, however far apart', async () => {
+      const fetch: FetchLike = async () =>
+        reads(
+          { at: 1000, chunks: [delta({ content: 'a' })] },
+          { at: 9000, chunks: [delta({ content: 'b' }, 'stop'), ...ending(30)] }
+        );
+      const events = await collect(chat(fetch, null), { model: MODEL, messages: [{ role: 'user', content: 'hi' }] });
+      expect(events.at(-1)).toEqual({
+        type: 'content',
+        stopReason: 'stop',
+        usage: { inputTokens: 5, outputTokens: 30 },
       });
     });
 

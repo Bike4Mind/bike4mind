@@ -249,7 +249,7 @@ function ReplyCost({ usage }: { usage?: ChatUsage }) {
       data-testid="chat-message-cost"
     >
       {credits}
-      {credits && rate && ' · '}
+      {credits && rate && ' \xb7 '}
       {rate && <span data-testid="chat-message-rate">{rate}</span>}
     </Typography>
   );

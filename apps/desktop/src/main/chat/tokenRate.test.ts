@@ -72,17 +72,23 @@ describe('llamaServerRate', () => {
 
 describe('estimatedRate', () => {
   it('times the tokens after the first over the span from first to last', () => {
-    expect(estimatedRate(101, 1000, 5000)).toEqual({ evalTokens: 100, evalMs: 4000, estimated: true });
+    expect(estimatedRate(101, { firstAt: 1000, lastAt: 5000, reads: 3 })).toEqual({
+      evalTokens: 100,
+      evalMs: 4000,
+      estimated: true,
+    });
   });
 
   it.each([
-    [undefined, 0, 1000],
-    [1, 0, 1000],
-    [10, undefined, 1000],
-    [10, 1000, undefined],
-    [10, 1000, 1000],
-  ])('cannot estimate from tokens %s between %s and %s', (tokens, first, last) => {
-    expect(estimatedRate(tokens, first, last)).toBeUndefined();
+    { tokens: undefined, timing: { firstAt: 0, lastAt: 1000, reads: 5 } },
+    { tokens: 1, timing: { firstAt: 0, lastAt: 1000, reads: 5 } },
+    { tokens: 10, timing: { lastAt: 1000, reads: 5 } },
+    { tokens: 10, timing: { firstAt: 1000, reads: 5 } },
+    { tokens: 10, timing: { firstAt: 1000, lastAt: 1000, reads: 5 } },
+    { tokens: 10, timing: { firstAt: 0, lastAt: 1000, reads: 2 } },
+    { tokens: 10, timing: { firstAt: 0, lastAt: 249, reads: 5 } },
+  ])('cannot estimate from $tokens tokens over $timing', ({ tokens, timing }) => {
+    expect(estimatedRate(tokens, timing)).toBeUndefined();
   });
 });
 
