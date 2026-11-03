@@ -155,6 +155,8 @@ export const authHolders = {
       { path: 'usageHistory.userId', matchBy: 'userId', action: 'pullFromArray' },
       { path: 'email', matchBy: 'email', action: 'anonymize' },
     ],
+    // A usable invite code admits whoever holds it.
+    secretPaths: ['code'],
   },
   SamlRequestId: { kind: 'noUserData', note: 'Short-lived SAML request-id replay cache; no person is recorded.' },
   // Chat notebooks are the person's own content. A notebook shared with others goes with its owner.

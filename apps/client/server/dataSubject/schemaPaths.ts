@@ -7,13 +7,15 @@ type SchemaTypeWithSubschema = SchemaType & {
   caster?: { options?: { ref?: unknown } };
 };
 
-export type SchemaLeaf = { path: string; refsUser: boolean };
+/** `instance` is the Mongoose type name (`String`, `Boolean`, `Array`, `Mixed`, ...). */
+export type SchemaLeaf = { path: string; refsUser: boolean; instance: string };
 
 /**
  * Every leaf path of a schema, descending into subdocuments and arrays of subdocuments, and whether
  * it is declared as a reference to the `User` model. `Schema.eachPath` stops at a subdocument
  * array, which is where shared-document access lists (`users.userId`) live, so it is not enough on
- * its own.
+ * its own. A `Mixed` field is a single leaf: nothing below it is declared, so nothing below it is
+ * listed.
  */
 export function listSchemaLeaves(schema: Schema, prefix = ''): SchemaLeaf[] {
   const leaves: SchemaLeaf[] = [];
@@ -24,7 +26,7 @@ export function listSchemaLeaves(schema: Schema, prefix = ''): SchemaLeaf[] {
       return;
     }
     const ref = schemaType.options.ref ?? schemaType.caster?.options?.ref;
-    leaves.push({ path: fullPath, refsUser: ref === 'User' });
+    leaves.push({ path: fullPath, refsUser: ref === 'User', instance: schemaType.instance });
   });
   return leaves;
 }
@@ -80,4 +82,23 @@ export function looksLikeUserReference(path: string): boolean {
   // `_id` is not this case.
   const parent = segments[segments.length - 2];
   return leaf === 'id' && parent !== undefined && ROLE_PARENT.test(parent);
+}
+
+// A credential, token, one-time code or its hash, matched against the leaf with underscores removed.
+// Content and file hashes (`contentHash`) and token counters (`maxTokens`) are deliberately not matched.
+const SECRET_PATTERNS = [
+  /(token|secret|password|passphrase|privatekey|pvk|nonce|otc)$/i,
+  /(token|secret|code|key|password|passphrase|otc|nonce)hash(es)?$/i,
+  /^(sid|code|ticket|challenge|apikey|presignedurl|signedurl|downloadurl|backupcodes)$/i,
+];
+// A flag (`hasAccessToken`), counter or timestamp names a secret without holding one.
+const NON_SECRET_INSTANCES = new Set(['Boolean', 'Number', 'Date']);
+
+export function looksLikeSecret(leaf: SchemaLeaf): boolean {
+  if (NON_SECRET_INSTANCES.has(leaf.instance)) return false;
+  const segments = leaf.path.split('.');
+  // `error.code`, `lastError.code`: a provider's error code, not a one-time code.
+  if (segments.length > 1 && /error$/i.test(segments[segments.length - 2])) return false;
+  const name = segments[segments.length - 1].replace(/_/g, '');
+  return SECRET_PATTERNS.some(pattern => pattern.test(name));
 }

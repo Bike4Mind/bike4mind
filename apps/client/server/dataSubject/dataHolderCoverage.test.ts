@@ -4,7 +4,13 @@ import { mongoose } from '@bike4mind/database';
 import '@bike4mind/server-utils/models/Subscription';
 import '@server/models/UserSubscription';
 import { DATA_HOLDER_REGISTRY, findUnclassifiedModels } from './registry';
-import { listSchemaLeaves, listSchemaPaths, looksLikeUserReference, schemaDeclaresPath } from './schemaPaths';
+import {
+  listSchemaLeaves,
+  listSchemaPaths,
+  looksLikeSecret,
+  looksLikeUserReference,
+  schemaDeclaresPath,
+} from './schemaPaths';
 import type { DataHolder, UserReference } from './types';
 
 const registeredModels = mongoose.modelNames().sort();
@@ -81,6 +87,11 @@ function userReferenceLikePaths(schema: mongoose.Schema): string[] {
     .map(leaf => leaf.path);
 }
 
+/** The kinds whose documents an export can include; see the export rules in types.ts. */
+function isExported(holder: DataHolder): boolean {
+  return holder.kind === 'subject' || holder.kind === 'holder' || holder.kind === 'viaParent';
+}
+
 function baseModelNameOf(modelName: string): string | undefined {
   return (mongoose.model(modelName) as { baseModelName?: string }).baseModelName;
 }
@@ -144,6 +155,18 @@ describe('data holder registry', () => {
       'Add each path to the entry as a reference, or to unrelatedPaths if it does not identify a person'
     ).toEqual([]);
   });
+
+  it.each(classifiedModels.filter(name => registeredModels.includes(name) && isExported(DATA_HOLDER_REGISTRY[name])))(
+    '%s: every path that looks like a secret is in secretPaths',
+    modelName => {
+      const holder = DATA_HOLDER_REGISTRY[modelName];
+      const secrets = new Set('secretPaths' in holder ? (holder.secretPaths ?? []) : []);
+      const unlisted = listSchemaLeaves(mongoose.model(modelName).schema)
+        .filter(leaf => looksLikeSecret(leaf) && !secrets.has(leaf.path))
+        .map(leaf => leaf.path);
+      expect(unlisted, 'Add each path to secretPaths so a data subject export never includes it').toEqual([]);
+    }
+  );
 
   it('User: every field that references another user is a subject reference', () => {
     // The person's own fields are covered by deleting the User document; a field naming another
