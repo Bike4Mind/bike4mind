@@ -48,8 +48,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  errorSpy.mockRestore();
-  warnSpy.mockRestore();
+  vi.restoreAllMocks();
 });
 
 describe('GET /api/mcp-servers/notion/pages - connection states', () => {
@@ -88,13 +87,12 @@ describe('GET /api/mcp-servers/notion/pages - connection states', () => {
 
   it('keeps a Notion API failure at error with a 502', async () => {
     mockEnsureValidToken.mockResolvedValue('token');
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 503 }));
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 503 }));
 
     const res = await call();
 
     expect(res._getStatusCode()).toBe(502);
     expect(res._getJSONData()).toMatchObject({ code: 'NOTION_API_ERROR' });
     expect(errorSpy).toHaveBeenCalledTimes(1);
-    fetchSpy.mockRestore();
   });
 });

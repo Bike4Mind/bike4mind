@@ -63,7 +63,8 @@ export class NotionTokenManager {
   }
 
   /**
-   * Returns the access token string, or throws if invalid/revoked.
+   * Returns the access token string. Throws NotionNotConnectedError / NotionReconnectRequiredError for the
+   * expected states, and a generic Error when the token cannot be read.
    */
   static async ensureValidToken(userId: string): Promise<string> {
     const result = await this.getValidTokens(userId);
