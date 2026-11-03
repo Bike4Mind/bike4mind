@@ -14,7 +14,14 @@ import {
   toolsOffHint as sharedToolsOffHint,
   type HintApp,
 } from '@bike4mind/local-models/servers';
-import { localBackend, localModelId, parseLocalModelId, type ChatModelOption, type ChatTokenRate } from '@shared/chat';
+import {
+  localBackend,
+  localModelId,
+  parseLocalModelId,
+  type ChatModelOption,
+  type ChatTokenRate,
+  type ChatUsage,
+} from '@shared/chat';
 import { isChatCapable } from '@shared/models';
 import type { CompletionMessage, CompletionRequest } from '../chat/completions';
 import type { LocalChat } from '../chat/localChat';
@@ -329,7 +336,7 @@ export class OpenAICompatibleChat implements LocalChat {
   ) {
     const calls = new Map<number, { id?: string; name: string; arguments: string }>();
     let stopReason: string | undefined;
-    let usage: { inputTokens?: number; outputTokens?: number; reasoningTokens?: number } | undefined;
+    let usage: Pick<ChatUsage, 'inputTokens' | 'outputTokens' | 'reasoningTokens' | 'cachedPromptTokens'> | undefined;
     let cachedTokens: number | undefined;
     let reported: ChatTokenRate | undefined;
     // Stamped per network read, so deltas buffered into one read count as one arrival.
@@ -420,10 +427,10 @@ export class OpenAICompatibleChat implements LocalChat {
       .filter(call => call.name)
       .map(call => ({ name: call.name, arguments: call.arguments || '{}', ...(call.id ? { id: call.id } : {}) }));
     if (tools.length > 0) onEvent({ type: 'tool_use', tools });
-    let rate = reported ?? estimatedRate(usage?.outputTokens, timing);
-    // llama-server reports the cache in its timings too; a server with only the usage details is read here.
-    if (rate && rate.cachedPromptTokens === undefined && cachedTokens !== undefined)
-      rate = { ...rate, cachedPromptTokens: cachedTokens };
+    const rate = reported ?? estimatedRate(usage?.outputTokens, timing);
+    // Kept apart from the rate, which a short reply has none of; llama-server's timings count it first.
+    if (cachedTokens !== undefined && rate?.cachedPromptTokens === undefined)
+      usage = { ...usage, cachedPromptTokens: cachedTokens };
     onEvent({
       type: 'content',
       stopReason: stopReason ?? 'stop',

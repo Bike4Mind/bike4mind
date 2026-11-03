@@ -1041,6 +1041,11 @@ export interface ChatUsage {
   cacheWrite1hInputTokens?: number;
   /** Thinking tokens the server reported; part of outputTokens, not on top of it. */
   reasoningTokens?: number;
+  /**
+   * Of inputTokens, what a self-hosted server served from its prompt cache, from the usage details.
+   * Unset where llama-server's timings already put it in `rate.cachedPromptTokens`.
+   */
+  cachedPromptTokens?: number;
   /** Credits the server charged for these requests. */
   creditsUsed?: number;
   usdCost?: number;

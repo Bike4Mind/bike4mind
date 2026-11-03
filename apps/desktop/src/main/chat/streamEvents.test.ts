@@ -89,6 +89,13 @@ describe('addUsage', () => {
     expect(addUsage({ outputTokens: 1 }, { outputTokens: 2 })).toEqual({ outputTokens: 3 });
   });
 
+  it("sums a self-hosted server's cached prompt count across requests", () => {
+    expect(addUsage({ inputTokens: 900, cachedPromptTokens: 850 }, { inputTokens: 950 })).toEqual({
+      inputTokens: 1850,
+      cachedPromptTokens: 850,
+    });
+  });
+
   it('sums a local server rate beside the token counts', () => {
     expect(
       addUsage(
