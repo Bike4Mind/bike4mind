@@ -2,7 +2,7 @@ import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
-import { finaleStats, formatWallTime } from './finale';
+import { finaleStats, formatWallTime, questSucceeded } from './finale';
 import type { AgentView } from './roster';
 import { INNKEEPER_ART } from './tavern/tavernArt';
 
@@ -15,6 +15,8 @@ const unfurl = keyframes`
 const INK = '#3b2412';
 const INK_SOFT = '#6b4a2b';
 const GOLD = '#b8862f';
+/** The rule colour of a quest that ended with failed or unfinished agents. */
+const DUSK = '#8a7a66';
 const PARCHMENT = 'linear-gradient(180deg, #fbf0d4 0%, #f3dfb0 55%, #e8cc92 100%)';
 const SERIF = 'Georgia, "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif';
 
@@ -44,7 +46,7 @@ function StatChip({ label, alert = false, testId }: { label: string; alert?: boo
   );
 }
 
-/** The "Quest complete" card: a parchment notice pinned over the top of the scene. */
+/** The finale card: a parchment notice pinned over the top of the scene, muted when not every agent finished done. */
 export function FinaleBanner({
   agents,
   onRead,
@@ -55,6 +57,9 @@ export function FinaleBanner({
   onDismiss(): void;
 }) {
   const stats = finaleStats(agents);
+  const succeeded = questSucceeded(stats);
+  const title = succeeded ? 'Quest complete' : 'Quest ended';
+  const rule = succeeded ? GOLD : DUSK;
   const chips = [
     { key: 'agents', label: plural(stats.agents, 'agent', 'agents') },
     { key: 'time', label: formatWallTime(stats.wallMs) },
@@ -65,8 +70,9 @@ export function FinaleBanner({
   return (
     <Box
       role="status"
-      aria-label="Quest complete"
+      aria-label={title}
       data-testid="orchestrator-finale"
+      data-outcome={succeeded ? 'complete' : 'ended'}
       sx={{
         position: 'absolute',
         top: 'clamp(8px, 2.5%, 24px)',
@@ -86,7 +92,7 @@ export function FinaleBanner({
         background: PARCHMENT,
         color: INK,
         // A double rule: the gold border plus an inset brown line just inside it.
-        border: `4px double ${GOLD}`,
+        border: `4px double ${rule}`,
         boxShadow: `inset 0 0 0 1px rgba(107, 74, 43, 0.35), inset 0 0 24px rgba(160, 110, 40, 0.25), 0 10px 28px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.4)`,
         animation: `${unfurl} 0.45s cubic-bezier(0.2, 0.8, 0.3, 1.2)`,
         '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
@@ -94,7 +100,7 @@ export function FinaleBanner({
     >
       <Box
         component="img"
-        src={INNKEEPER_ART.cheering}
+        src={succeeded ? INNKEEPER_ART.cheering : INNKEEPER_ART.idle}
         alt=""
         draggable={false}
         sx={{
@@ -104,7 +110,7 @@ export function FinaleBanner({
           objectFit: 'contain',
           imageRendering: 'pixelated',
           borderRadius: '50%',
-          border: `2px solid ${GOLD}`,
+          border: `2px solid ${rule}`,
           bgcolor: '#2a1a0c',
           boxShadow: 'inset 0 0 8px rgba(0, 0, 0, 0.6)',
         }}
@@ -122,7 +128,7 @@ export function FinaleBanner({
             m: 0,
           }}
         >
-          Quest complete
+          {title}
         </Typography>
         <Box
           component="ul"

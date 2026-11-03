@@ -268,10 +268,29 @@ describe('OrchestratorStage', () => {
       expect(query('orchestrator-finale')).toBeNull();
       await settle();
       const banner = el('orchestrator-finale');
-      expect(banner.textContent).toContain('Quest complete');
+      // One of the two failed, so the run ended rather than completed.
+      expect(banner.textContent).toContain('Quest ended');
+      expect(banner.getAttribute('data-outcome')).toBe('ended');
       const chips = [...el('orchestrator-finale-stats').querySelectorAll('li')].map(chip => chip.textContent);
       expect(chips).toEqual(['2 agents', '3m 12s', '$1.75', '1 done', '1 failed']);
       expect(query('orchestrator-table')).not.toBeNull();
+    });
+
+    it('says "Quest complete" only when every agent finished done', async () => {
+      const allDone = [agentFixture('a', 'done'), agentFixture('b', 'done')];
+      await renderRun([agentFixture('a', 'working'), agentFixture('b', 'working')], { status: 'processing' });
+      await renderRun(allDone, { status: 'done' });
+      await settle();
+      const banner = el('orchestrator-finale');
+      expect(banner.textContent).toContain('Quest complete');
+      expect(banner.getAttribute('aria-label')).toBe('Quest complete');
+      expect(banner.getAttribute('data-outcome')).toBe('complete');
+    });
+
+    it('says "Quest ended" when an agent never finished', async () => {
+      await renderRun([agentFixture('a', 'done'), agentFixture('b', 'idle')], { status: 'done' });
+      await settle();
+      expect(el('orchestrator-finale').getAttribute('aria-label')).toBe('Quest ended');
     });
 
     it('chimes once as the banner comes up', async () => {

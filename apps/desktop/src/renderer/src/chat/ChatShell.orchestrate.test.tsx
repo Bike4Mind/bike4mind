@@ -499,7 +499,8 @@ describe('orchestrate mode in the chat shell', () => {
     await act(async () => {
       vi.advanceTimersByTime(5000);
     });
-    expect(el('orchestrator-finale').textContent).toContain('Quest complete');
+    // The fixture agent records no outcome, so it reads as unfinished and the quest as ended.
+    expect(el('orchestrator-finale').textContent).toContain('Quest ended');
 
     scrolled.length = 0;
     await act(async () => el('orchestrator-finale-read-btn').click());
