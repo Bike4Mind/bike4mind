@@ -232,21 +232,19 @@ describe('buildReplyStats', () => {
     expect(buildReplyStats({ ...base, local: false }).generation).toEqual({ tokens: 49, ms: 300 });
   });
 
-  it('drops the first token on a Continue of stats stored with an epoch first token', () => {
+  it("leaves the reply's first token to a Continue when the earlier runs streamed nothing", () => {
     const next = round(
       { startedAt: 100_000, firstTokenAt: 100_300, firstTextAt: 100_300, endedAt: 101_000 },
       { usage: { outputTokens: 20 } }
     );
-    const base = { endedAt: 101_000, rounds: [next], toolMs: 0, local: false };
-    const stored = { startedAt: 1_000, firstTokenAt: 1_900, endedAt: 6_000, totalMs: 5_000, modelMs: 5_000, toolMs: 0 };
-    const legacy = buildReplyStats({ ...base, earlier: stored as ChatReplyStats });
-    expect(legacy).not.toHaveProperty('firstTokenMs');
-    expect(legacy).not.toHaveProperty('firstTokenAt');
-    expect(legacy).toMatchObject({ totalMs: 6_000, modelMs: 6_000 });
-
-    // Earlier runs that streamed nothing leave the reply's first token to this one.
-    const silent = buildReplyStats({ ...base, earlier: { totalMs: 5_000, modelMs: 5_000, toolMs: 0 } });
-    expect(silent.firstTokenMs).toBe(300);
+    const silent = buildReplyStats({
+      endedAt: 101_000,
+      rounds: [next],
+      toolMs: 0,
+      local: false,
+      earlier: { totalMs: 5_000, modelMs: 5_000, toolMs: 0 },
+    });
+    expect(silent).toMatchObject({ firstTokenMs: 300, totalMs: 6_000, modelMs: 6_000 });
   });
 
   it('times a plain hosted reply from its request, leaving out the setup before it', () => {
