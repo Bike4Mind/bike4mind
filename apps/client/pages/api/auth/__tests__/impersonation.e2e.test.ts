@@ -6,7 +6,7 @@ import {
   createMongoReplSet,
   settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
-} from '../../../../packages/database/src/__test__/createMongoServer';
+} from '../../../../../../packages/database/src/__test__/createMongoServer';
 import { SupportAccess, AuthSessionModel, withTransaction } from '@bike4mind/database';
 const h = vi.hoisted(() => ({
   audit: vi.fn(),
@@ -27,8 +27,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
     }),
   }),
 }));
-import { endImpersonation } from './impersonation';
-import '../../pages/api/auth/impersonation';
+import { endImpersonation } from '@server/auth/impersonation';
+import '../impersonation';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 let db: MongoMemoryReplSet;
