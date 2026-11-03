@@ -66,7 +66,8 @@ export const signupGrantBudgetDay = (now: Date = new Date()) => now.toISOString(
 
 type HeldRewardQueue = NonNullable<NonNullable<SignupProtection['grantBudget']>['heldRewards']>;
 
-const counterKey = (pool: SignupGrantPool, day: string) => `${pool}:${day}`;
+/** The budget counter's storage key for one pool-day; read spend with this, never a bare day. */
+export const signupGrantBudgetKey = (pool: SignupGrantPool, day: string) => `${pool}:${day}`;
 
 async function alertCrossing(
   budgetConfig: NonNullable<SignupProtection['grantBudget']>,
@@ -77,7 +78,7 @@ async function alertCrossing(
   budget: number
 ) {
   try {
-    if (await budgetConfig.repository.markAlerted(counterKey(pool, day), threshold)) {
+    if (await budgetConfig.repository.markAlerted(signupGrantBudgetKey(pool, day), threshold)) {
       const spent = await readSpent();
       // Reservations run inside callers' payout transactions and Slack can take seconds.
       budgetConfig.notify?.({ pool, day, threshold, spent, budget })?.catch(error => {
@@ -108,7 +109,7 @@ export async function queueHeadBlocks(
   const { budget } = await resolvePoolBudget(adapters.adminSettings, pool);
   const oldestHeld = await heldRewards.oldestHeldCredits(budget > 0 ? budget : undefined);
   if (!oldestHeld) return false;
-  const spent = await budgetConfig.repository.getSpent(counterKey(pool, day));
+  const spent = await budgetConfig.repository.getSpent(signupGrantBudgetKey(pool, day));
   return budget - spent < oldestHeld + amount;
 }
 
@@ -127,7 +128,7 @@ export async function reserveSignupGrantBudget(
   const budgetConfig = adapters.signupProtection?.grantBudget;
   if (!budgetConfig || amount <= 0) return { outcome: 'unmetered', release: noop };
   const day = dayOverride ?? signupGrantBudgetDay(budgetConfig.now?.());
-  const key = counterKey(pool, day);
+  const key = signupGrantBudgetKey(pool, day);
   const readSpent = () => budgetConfig.repository.getSpent(key);
   const { budget, missing } = await resolvePoolBudget(adapters.adminSettings, pool);
   if (missing) await alertCrossing(budgetConfig, pool, day, 'missing', readSpent, 0);

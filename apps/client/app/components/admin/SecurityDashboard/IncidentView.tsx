@@ -443,16 +443,32 @@ function DefensesCard({ signals, state }: { signals: Source<IncidentSignals>; st
       <Fact label="Grant budget" data-testid="security-incident-grant-budget">
         {stateFact(() =>
           grantBudget ? (
-            <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
-              <Box component="span" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                {grantBudget.spentToday.toLocaleString()} of {grantBudget.limit.toLocaleString()} credits
-              </Box>
-              <InlineBar value={grantBudget.spentToday} max={grantBudget.limit} />
+            <Stack gap={0.5}>
+              {grantBudget.pools.map(({ pool, limit, spentToday, missing }) => (
+                <Stack
+                  key={pool}
+                  direction="row"
+                  gap={1}
+                  alignItems="center"
+                  flexWrap="wrap"
+                  data-testid={`security-incident-grant-budget-${pool}`}
+                >
+                  <Box component="span">{pool === 'signup' ? 'Signup' : 'Trickle'}:</Box>
+                  {limit > 0 ? (
+                    <>
+                      <Box component="span" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                        {spentToday.toLocaleString()} of {limit.toLocaleString()} credits
+                      </Box>
+                      <InlineBar value={spentToday} max={limit} />
+                    </>
+                  ) : (
+                    <StatusChip tone="warn" label={missing ? 'Paused (not set)' : 'Paused'} />
+                  )}
+                </Stack>
+              ))}
             </Stack>
-          ) : defensesError ? (
-            <Unavailable error={defensesError} />
           ) : (
-            <StatusChip tone="neutral" label="Unmetered" />
+            <Unavailable error={defensesError} />
           )
         )}
       </Fact>

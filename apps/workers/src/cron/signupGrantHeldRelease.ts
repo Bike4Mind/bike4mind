@@ -1,6 +1,6 @@
 /**
- * Pays free signup grants held by the daily budget, oldest first, against the new day's budget, then
- * the payment unlocks whose settling window has passed (userService.releaseDueHeldUnlocks).
+ * Pays queued gear and referral rewards from the trickle pool (creditService.releaseHeldCreditRewards), then
+ * held signup grants from the signup pool, oldest first, then due payment unlocks (userService.releaseDueHeldUnlocks).
  * Schedule: hourly (infra/cron.ts signupGrantHeldRelease), so the day's first run drains the backlog.
  * Self-host equivalent: apps/workers/src/selfhost/signupGrantHeldRelease.ts.
  */
