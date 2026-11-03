@@ -140,6 +140,7 @@ const USAGE_FIELDS = [
   'cacheCreationInputTokens',
   'cacheWrite1hInputTokens',
   'reasoningTokens',
+  'cachedPromptTokens',
   'creditsUsed',
   'usdCost',
 ] as const satisfies readonly (keyof ChatUsage)[];
