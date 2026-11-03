@@ -14,6 +14,14 @@ describe('ollamaRate', () => {
     ).toEqual({ evalTokens: 240, evalMs: 10_000, promptTokens: 1200, promptMs: 1500, loadMs: 2250 });
   });
 
+  it("keeps the server's whole-request time", () => {
+    expect(ollamaRate({ eval_count: 10, eval_duration: 500_000_000, total_duration: 3_200_000_000 })).toEqual({
+      evalTokens: 10,
+      evalMs: 500,
+      totalMs: 3200,
+    });
+  });
+
   it('leaves out a prompt with no duration, as a fully cached prompt reports', () => {
     expect(ollamaRate({ eval_count: 10, eval_duration: 500_000_000, prompt_eval_count: 5 })).toEqual({
       evalTokens: 10,
@@ -44,6 +52,17 @@ describe('llamaServerRate', () => {
         predicted_per_second: 24,
       })
     ).toEqual({ evalTokens: 120, evalMs: 5000, promptTokens: 300, promptMs: 400 });
+  });
+
+  it('reads the prompt tokens served from the cache, a full miss included', () => {
+    expect(
+      llamaServerRate({ cache_n: 2400, prompt_n: 100, prompt_ms: 200, predicted_n: 50, predicted_ms: 1000 })
+    ).toEqual({ evalTokens: 50, evalMs: 1000, promptTokens: 100, promptMs: 200, cachedPromptTokens: 2400 });
+    expect(llamaServerRate({ cache_n: 0, predicted_n: 50, predicted_ms: 1000 })).toEqual({
+      evalTokens: 50,
+      evalMs: 1000,
+      cachedPromptTokens: 0,
+    });
   });
 
   it('reads draft acceptance when speculative decoding ran', () => {
@@ -120,6 +139,15 @@ describe('addTokenRate', () => {
       draftTokens: 40,
       draftAccepted: 20,
     });
+  });
+
+  it('sums the server total time and the cached prompt across requests', () => {
+    expect(
+      addTokenRate(
+        { evalTokens: 10, evalMs: 100, totalMs: 900, cachedPromptTokens: 400 },
+        { evalTokens: 10, evalMs: 100, totalMs: 600, cachedPromptTokens: 0 }
+      )
+    ).toEqual({ evalTokens: 20, evalMs: 200, totalMs: 1500, cachedPromptTokens: 400 });
   });
 
   it('marks the sum estimated when any part was', () => {

@@ -1,0 +1,94 @@
+import type { ChatReplyStats, ChatReplyStatsEstimate, ChatRoundTiming, ChatUsage } from '@shared/chat';
+
+/** What one request adds to its reply's stats; ChatService's raw rounds fit this shape. */
+export interface StatsRound {
+  timing: ChatRoundTiming;
+  reasoningFrames: number;
+  /** Readable thinking, including blocks that only became readable once the round stopped. */
+  reasoning?: string;
+  usage?: ChatUsage;
+}
+
+export interface ReplyStatsInput {
+  /** When this run of the reply started; see ChatReplyStats.startedAt. */
+  startedAt: number;
+  endedAt: number;
+  /** This run's requests, in order. */
+  rounds: readonly StatsRound[];
+  toolMs: number;
+  /** The whole reply's usage, a continued reply's earlier runs included. */
+  usage?: ChatUsage;
+  /** A self-hosted model streams about one token per frame, so its frames can stand in for a count. */
+  local: boolean;
+  /** A continued reply's stats from the runs before this one. */
+  earlier?: ChatReplyStats;
+}
+
+const nonNegative = (ms: number) => Math.max(0, ms);
+
+/**
+ * One round's thinking: the span its thinking frames cover. With no span to measure (thinking the
+ * provider sent nothing for, or one frame), the wait before its first output, as an estimate.
+ */
+export function roundThinking(round: StatsRound): { ms: number; derived: boolean } | null {
+  const { startedAt, firstTokenAt, firstReasoningAt, lastReasoningAt, firstTextAt } = round.timing;
+  if (firstReasoningAt !== undefined && lastReasoningAt !== undefined && lastReasoningAt > firstReasoningAt) {
+    return { ms: lastReasoningAt - firstReasoningAt, derived: false };
+  }
+  const thought =
+    firstReasoningAt !== undefined || !!round.reasoning?.trim() || (round.usage?.reasoningTokens ?? 0) > 0;
+  const shown = firstTextAt ?? lastReasoningAt ?? firstTokenAt;
+  if (!thought || shown === undefined) return null;
+  return { ms: nonNegative(shown - startedAt), derived: true };
+}
+
+/** The reply's stats from its rounds, folded onto a continued reply's earlier runs. */
+export function buildReplyStats(input: ReplyStatsInput): ChatReplyStats {
+  const { earlier } = input;
+  const derived = new Set<ChatReplyStatsEstimate>(earlier?.derived ?? []);
+  let modelMs = earlier?.modelMs ?? 0;
+  let streamMs = earlier?.streamMs ?? 0;
+  let reasoningMs = earlier?.reasoningMs;
+  let reasoningFrames = earlier?.reasoningFrames ?? 0;
+  let firstTokenAt = earlier?.firstTokenAt;
+  let firstTextAt = earlier?.firstTextAt;
+
+  for (const round of input.rounds) {
+    const { timing } = round;
+    modelMs += nonNegative(timing.endedAt - timing.startedAt);
+    if (timing.firstTokenAt !== undefined) {
+      streamMs += nonNegative(timing.endedAt - timing.firstTokenAt);
+      firstTokenAt ??= timing.firstTokenAt;
+    }
+    firstTextAt ??= timing.firstTextAt;
+    reasoningFrames += round.reasoningFrames;
+    const thinking = roundThinking(round);
+    if (thinking) {
+      reasoningMs = (reasoningMs ?? 0) + thinking.ms;
+      if (thinking.derived) derived.add('reasoningMs');
+    }
+  }
+
+  derived.delete('reasoningTokens');
+  let reasoningTokens = input.usage?.reasoningTokens;
+  if (reasoningTokens === undefined && input.local && reasoningFrames > 0) {
+    const output = input.usage?.outputTokens;
+    reasoningTokens = output === undefined ? reasoningFrames : Math.min(reasoningFrames, output);
+    derived.add('reasoningTokens');
+  }
+
+  return {
+    startedAt: earlier?.startedAt ?? input.startedAt,
+    ...(firstTokenAt !== undefined ? { firstTokenAt } : {}),
+    ...(firstTextAt !== undefined ? { firstTextAt } : {}),
+    endedAt: input.endedAt,
+    totalMs: (earlier?.totalMs ?? 0) + nonNegative(input.endedAt - input.startedAt),
+    modelMs,
+    streamMs,
+    toolMs: (earlier?.toolMs ?? 0) + input.toolMs,
+    ...(reasoningMs !== undefined ? { reasoningMs } : {}),
+    ...(reasoningFrames > 0 ? { reasoningFrames } : {}),
+    ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
+    ...(derived.size > 0 ? { derived: [...derived].sort() } : {}),
+  };
+}
