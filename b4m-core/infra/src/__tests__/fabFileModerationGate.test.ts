@@ -157,9 +157,9 @@ const ALLOWLIST: Record<string, string> = {
   'apps/client/pages/api/sessions/[id]/files.ts':
     'DI passthrough — generateSignedUrl closure consumed by fabFileService.listFabFilesBySession -> getFabFile, gated via the generateSignedUrl choke in fabFileService/get.ts',
   'apps/client/server/files/searchFilesForRequest.ts':
-    'DI passthrough — generateSignedUrl closure consumed by fabFileService.search, gated via the generateSignedUrl choke in fabFileService/get.ts; shared by GET /api/files/search and GET /api/v1/files/search',
+    'DI passthrough - generateSignedUrl closure consumed by fabFileService.search, gated via the generateSignedUrl choke in fabFileService/get.ts; shared by GET /api/files/search and GET /api/v1/files/search',
   'apps/client/server/files/listFilesByIds.ts':
-    'DI passthrough — generateSignedUrl closure consumed by fabFileService.listFabFiles, gated via the generateSignedUrl choke in fabFileService/get.ts; shared by GET /api/files/byIds and GET /api/v1/files/by-ids',
+    'DI passthrough - generateSignedUrl closure consumed by fabFileService.listFabFiles, gated via the generateSignedUrl choke in fabFileService/get.ts; shared by GET /api/files/byIds and GET /api/v1/files/by-ids',
   'apps/client/pages/api/files/index.ts':
     'gated via generateSignedUrl choke (search -> get.ts) for reads; the other match is a delete-only storage.delete call',
   'apps/client/server/files/updateFileForUser.ts':
