@@ -504,6 +504,10 @@ export function registerChat(
       models.forgetLocal();
     },
   });
+  app.once('will-quit', () => {
+    clearTimeout(lateReload);
+    modelServers.stop();
+  });
   localHardware.setOverride(probed => withEnteredSpecs(probed, modelServers.specs(LOCAL_SERVER_ID)));
   void modelServers.start().catch(error => logger.warn(`MODEL SERVERS: could not load: ${String(error)}`));
   const local = new LocalModels(new OllamaLocal((url, init) => net.fetch(url, init), localSizing), modelServers);

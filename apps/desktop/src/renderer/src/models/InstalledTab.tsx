@@ -14,9 +14,10 @@ import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import { formatBytes, type InstalledModelsResult, type LocalModelEntry, type ModelRuntimeStatus } from '@shared/models';
+import { LOCAL_SERVER_ID } from '@shared/modelServers';
 import { TrashIcon } from '../chat/icons';
 import { FitBadge } from './FitBadge';
-import { listedAtLabel, type LastInstalled } from './installedCache';
+import { installedCache, listedAtLabel, type LastInstalled } from './installedCache';
 import type { ChatOn, ModelTarget } from './modelTarget';
 
 /** A device-side model a chat points at: its Ollama name and the server it runs on. */
@@ -59,8 +60,8 @@ const CAPABILITY_LABELS: [keyof LocalModelEntry['capabilities'], string][] = [
 
 const visuallyHidden = {
   position: 'absolute',
-  width: 1,
-  height: 1,
+  width: '1px',
+  height: '1px',
   overflow: 'hidden',
   clip: 'rect(0 0 0 0)',
   whiteSpace: 'nowrap',
@@ -216,6 +217,7 @@ export function InstalledTab({
   const remove = async (model: LocalModelEntry, serverId: string | undefined) => {
     setRemoving(true);
     const result = await window.b4m.models.remove(model.name, serverId);
+    if (result.ok) installedCache.dropModel(serverId ?? LOCAL_SERVER_ID, model.name);
     setRemoving(false);
     setConfirming(null);
     setRemoveError(result.ok ? null : result.error.message);

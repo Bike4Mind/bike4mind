@@ -72,7 +72,10 @@ export class ModelCatalog {
   private cache: { environmentUrl: string; models: ChatModelOption[]; expiresAt: number } | null = null;
 
   private localCache: { models: ChatModelOption[]; expiresAt: number } | null = null;
-  /** Reads started, and the start number of the read last cached: a read never replaces one that started later. */
+  /**
+   * Reads started, and the newest start number whose read may no longer be cached: a read never replaces one that
+   * started later, and one in flight at forgetLocal() is not cached.
+   */
   private localReads = 0;
   private localWritten = 0;
 
@@ -173,6 +176,7 @@ export class ModelCatalog {
   /** After the local context setting changes or a model turns out removed, so the next list reads Ollama again. */
   forgetLocal(): void {
     this.localCache = null;
+    this.localWritten = this.localReads;
   }
 
   private mergeLocal(hosted: ChatModelOption[], local = this.freshLocal()): ChatModelOption[] {

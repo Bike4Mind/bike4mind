@@ -1980,6 +1980,8 @@ describe('ModelsScreen servers', () => {
       expect(q('models-remove-dialog')).toBeNull();
       const described = blocked?.getAttribute('aria-describedby');
       expect(described && document.getElementById(described)?.textContent).toBe('Available once the list refreshes');
+      const reason = described ? document.getElementById(described) : null;
+      expect(reason && getComputedStyle(reason).width).toBe('1px');
 
       await act(async () => release());
       await flush();
@@ -1987,6 +1989,26 @@ describe('ModelsScreen servers', () => {
       expect(q('models-installed-tab')?.textContent).toBe('Installed (2)');
       expect(q('models-installed-refreshing')).toBeNull();
       expect(q('models-installed-remove-btn')?.hasAttribute('aria-disabled')).toBe(false);
+    });
+
+    it('drops a model removed through the app from the last list', async () => {
+      bridge.remote.gpu.installed = { ok: true, models: [llama, qwen] };
+      await mount();
+      await pickServer('gpu');
+      expect(rowNames()).toHaveLength(2);
+      const row = all('models-installed-row').find(candidate => candidate.dataset.name === 'qwen2.5:0.5b');
+      await click(row?.querySelector<HTMLElement>('[data-testid="models-installed-remove-btn"]') ?? null);
+      await click(q('models-remove-dialog-confirm-btn'));
+      expect(calls.remove).toHaveBeenCalledWith('qwen2.5:0.5b', 'gpu');
+      await pickServer('local');
+
+      let release = () => {};
+      bridge.installedGate = new Promise(resolve => (release = resolve));
+      await click(q('models-server-select'));
+      act(() => q('models-server-option-gpu')?.click());
+      expect(rowNames()).toHaveLength(1);
+      expect(rowNames()[0]).toContain('llama3.2:3b');
+      await act(async () => release());
     });
 
     it('keeps the last list with the reason when the server is down, and checks again on request', async () => {

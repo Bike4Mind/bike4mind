@@ -440,13 +440,14 @@ describe('ModelServerRegistry', () => {
       const listedBefore = tagCalls(fake, SLOW);
       return {
         fake,
+        names,
         servers,
         listedLate,
         changed,
         slowId,
         listedBefore,
         release: () => release(),
-        fail: () => fail(new TypeError('fetch failed', { cause: { code: 'ECONNREFUSED' } })),
+        fail: (err: Error = new TypeError('fetch failed', { cause: { code: 'ECONNREFUSED' } })) => fail(err),
       };
     }
 
@@ -711,6 +712,99 @@ describe('ModelServerRegistry', () => {
       expect((await servers.models()).filter(model => model.server?.name === 'slow')).toEqual([
         expect.objectContaining({ unavailable: expect.stringMatching(/slow is unreachable/) }),
       ]);
+    });
+
+    /** Under fake timers: lists past the wait, so slow is reported, then lets its held listing land. */
+    async function keepLateListing(servers: ModelServerRegistry, release: () => void): Promise<void> {
+      const listing = servers.models();
+      await vi.advanceTimersByTimeAsync(PICKER_LIST_WAIT_MS);
+      await listing;
+      release();
+      await vi.advanceTimersByTimeAsync(0);
+    }
+
+    function slowRows(listed: ChatModelOption[]): ChatModelOption[] {
+      return listed.filter(model => model.server?.name === 'slow');
+    }
+
+    it("does not revive an older kept list when another server's late listing lands", async () => {
+      const { fake, names, servers, slowId, release } = await slowAndFast();
+      vi.useFakeTimers();
+      try {
+        await keepLateListing(servers, release);
+        // Once that is stale, a model pulled outside the app reaches slow through a health check.
+        await vi.advanceTimersByTimeAsync(LISTED_FRESH_MS);
+        names.push('phi3:mini');
+        await servers.check(slowId);
+        expect((await servers.views())[1].models).toContain('phi3:mini');
+
+        let releaseFast = () => {};
+        fake.state.tagsGates.set(FAST, new Promise<void>(resolve => (releaseFast = resolve)));
+        const reporting = servers.models();
+        await vi.advanceTimersByTimeAsync(PICKER_LIST_WAIT_MS);
+        await reporting;
+        releaseFast();
+        await vi.advanceTimersByTimeAsync(0);
+
+        const slow = slowRows(await servers.models());
+        expect(slow.map(model => model.name)).toContain('phi3:mini');
+        expect(slow.every(model => model.unavailable === undefined)).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not revive a kept list after a later reported listing of the same server failed', async () => {
+      const { fake, names, servers, slowId, release } = await slowAndFast();
+      vi.useFakeTimers();
+      try {
+        await keepLateListing(servers, release);
+        await vi.advanceTimersByTimeAsync(LISTED_FRESH_MS);
+        let failSlow: (err: Error) => void = () => {};
+        fake.state.tagsGates.set(SLOW, new Promise<void>((_resolve, reject) => (failSlow = reject)));
+        const reporting = servers.models();
+        await vi.advanceTimersByTimeAsync(PICKER_LIST_WAIT_MS);
+        await reporting;
+        failSlow(new TypeError('fetch failed', { cause: { code: 'ECONNREFUSED' } }));
+        await vi.advanceTimersByTimeAsync(0);
+        expect((await servers.views())[1].health.state).toBe('unreachable');
+
+        fake.state.tagsGates.delete(SLOW);
+        names.push('phi3:mini');
+        await servers.check(slowId);
+        const slow = slowRows(await servers.models());
+        expect(slow.map(model => model.name)).toContain('phi3:mini');
+        expect(slow.every(model => model.unavailable === undefined)).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('dates a late listing failure it cannot classify, so the next load does not check again at once', async () => {
+      const { servers, fail } = await slowAndFast();
+      vi.useFakeTimers();
+      try {
+        const listing = servers.models();
+        await vi.advanceTimersByTimeAsync(PICKER_LIST_WAIT_MS);
+        await listing;
+        await vi.advanceTimersByTimeAsync(20_000);
+        fail(new Error('boom'));
+        await vi.advanceTimersByTimeAsync(0);
+        const health = (await servers.views())[1].health;
+        expect(health.state).toBe('unreachable');
+        expect(Date.now() - Date.parse(health.checkedAt ?? '')).toBeLessThan(1_000);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("leaves a server online when only a health check's model listing fails", async () => {
+      const { fake, servers, slowId } = await slowAndFast();
+      const refused = Promise.reject(new Error('boom'));
+      refused.catch(() => undefined);
+      fake.state.tagsGates.set(SLOW, refused);
+      await servers.check(slowId);
+      expect((await servers.views())[1].health.state).toBe('online');
     });
 
     it('labels the server down, not pending, when a check finds it down during the wait', async () => {

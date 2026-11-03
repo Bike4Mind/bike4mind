@@ -114,6 +114,8 @@ interface Slot {
   promise: Promise<Listing>;
   /** A caller was given pending rows for this listing, so its result is kept and announced when it lands. */
   reported: boolean;
+  /** A models() call waits on this listing, so its failure marks the server down; a health check's alone does not. */
+  picker: boolean;
 }
 
 export interface ModelServerRegistryDeps {
@@ -424,6 +426,7 @@ export class ModelServerRegistry {
           const slot = fresh ? null : this.listEntry(entry);
           // undefined: still listing when the wait ran out, or already reported as still listing.
           let result: Listing | undefined = fresh ? { ok: true, models: fresh } : undefined;
+          if (slot) slot.picker = true;
           if (slot && !slot.reported) result = await within(slot.promise, PICKER_LIST_WAIT_MS, undefined);
           if (!this.current(entry)) return [];
           if (result?.ok) {
@@ -479,7 +482,7 @@ export class ModelServerRegistry {
   /** One listing per server at a time, shared by the picker and health checks; its promise never rejects. */
   private listEntry(entry: Entry): Slot {
     if (entry.slot) return entry.slot;
-    const slot = { seq: ++entry.listSeq, reported: false } as Slot;
+    const slot = { seq: ++entry.listSeq, reported: false, picker: false } as Slot;
     slot.promise = entry.client
       .listModels()
       .then(
@@ -500,8 +503,12 @@ export class ModelServerRegistry {
         const names = result.models.map(model => model.name);
         entry.record = { ...entry.record, models: names };
         entry.aliasIds = aliasIdsOf(result.models);
-        if (slot.reported) entry.kept = { models: result.models, at: Date.now() };
-      } else this.listingFailed(entry, result.error);
+        // Only a listing a caller was told is pending is kept; any other result makes an older kept list stale.
+        entry.kept = slot.reported ? { models: result.models, at: Date.now() } : undefined;
+      } else {
+        entry.kept = undefined;
+        if (slot.picker) this.listingFailed(entry, result.error);
+      }
       if (slot.reported) this.announce(entry, result.ok);
       if (result.ok) await this.deps.store.setModels(entry.record.id, entry.record.models).catch(() => undefined);
       return result;
@@ -526,6 +533,7 @@ export class ModelServerRegistry {
     entry.health = failureHealth(err, entry.record.name, entry.scope, this.platform) ?? {
       ...entry.health,
       state: 'unreachable',
+      checkedAt: new Date().toISOString(),
       error: withLocalNetworkHint(
         `${entry.record.name}: ${describeFailure(err)}`,
         errorCode(err),

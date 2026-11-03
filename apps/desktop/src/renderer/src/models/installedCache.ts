@@ -37,6 +37,12 @@ export class InstalledCache {
     this.#entries.set(serverId, { identity, models, listedAt });
   }
 
+  /** A model removed through the app leaves that server's cached list too. */
+  dropModel(serverId: string, name: string): void {
+    const entry = this.#entries.get(serverId);
+    if (entry) this.#entries.set(serverId, { ...entry, models: entry.models.filter(model => model.name !== name) });
+  }
+
   /** Drops entries for servers no longer saved, or saved under the same id with another address or kind. */
   retain(servers: readonly ModelServerView[]): void {
     const current = new Map(servers.map(server => [server.id, serverIdentity(server)]));
