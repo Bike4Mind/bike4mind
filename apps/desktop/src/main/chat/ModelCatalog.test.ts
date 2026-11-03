@@ -336,6 +336,28 @@ describe('ModelCatalog', () => {
     expect(get).toHaveBeenCalledTimes(2);
   });
 
+  it("re-reads device models on 'local' but serves the hosted list from cache", async () => {
+    const local = { models: vi.fn().mockResolvedValue([]) };
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => ({ get }) as unknown as AuthenticatedApiClient,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      local as never
+    );
+    await catalog.list();
+    local.models.mockResolvedValue([{ id: 'local:ollama:qwen', name: 'qwen' }]);
+
+    const refreshed = await catalog.list('local');
+    expect(refreshed.models.map(model => model.id)).toEqual(['claude-sonnet-4-5-20250929', 'local:ollama:qwen']);
+    expect(local.models).toHaveBeenCalledTimes(2);
+    expect(get).toHaveBeenCalledTimes(1);
+
+    await catalog.list(true);
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
   // A network blip must not be cached as "this server has no models" for the rest of the TTL.
   it('reports a failed lookup as an error and retries on the next read', async () => {
     get.mockRejectedValueOnce(new Error('ECONNREFUSED'));

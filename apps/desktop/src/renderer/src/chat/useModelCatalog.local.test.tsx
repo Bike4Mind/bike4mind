@@ -19,7 +19,7 @@ const status = (reachable: boolean): ModelRuntimeStatus => ({
   management: 'allowed',
 });
 
-const listModels = vi.fn<(force?: boolean) => Promise<ChatModelCatalog>>();
+const listModels = vi.fn<(force?: boolean | 'local') => Promise<ChatModelCatalog>>();
 const getStatus = vi.fn<() => Promise<ModelRuntimeStatus>>();
 let authListeners: Array<(state: unknown) => void> = [];
 let installedListeners: Array<() => void> = [];
@@ -208,7 +208,7 @@ describe('useModelCatalog when a model finishes installing', () => {
       window.dispatchEvent(new Event('focus'));
     });
     expect(listModels).toHaveBeenCalledTimes(1);
-    expect(listModels).toHaveBeenCalledWith(true);
+    expect(listModels).toHaveBeenCalledWith('local');
     expect(catalog.models).toEqual([model]);
   });
 

@@ -678,7 +678,9 @@ export function registerChat(
     releaseSessionTerminals: hooks.releaseSessionTerminals,
   });
 
-  ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: boolean) => service.listModels(force));
+  ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: unknown) =>
+    service.listModels(force === 'local' ? 'local' : force === true)
+  );
   registerModelServersIpc(ipcMain, modelServers, async () => {
     const probed = await localHardware.probed();
     return probed && machineView(probed);

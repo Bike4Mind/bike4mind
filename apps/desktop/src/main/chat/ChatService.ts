@@ -913,7 +913,7 @@ export class ChatService {
     this.deps.sessionClosed?.(sessionId);
   }
 
-  listModels(force = false): Promise<ChatModelCatalog> {
+  listModels(force: boolean | 'local' = false): Promise<ChatModelCatalog> {
     return this.deps.models?.list(force) ?? Promise.resolve({ models: [] });
   }
 

@@ -678,9 +678,10 @@ export interface DesktopApi {
   chat: {
     /**
      * Models this deployment offers the agent, from the server's own catalog. `force` skips
-     * the main-process cache, which is what a "try again" affordance needs.
+     * the main-process cache, which is what a "try again" affordance needs; `'local'` re-reads
+     * device and server models but keeps the cached hosted list.
      */
-    listModels(force?: boolean): Promise<ChatModelCatalog>;
+    listModels(force?: boolean | 'local'): Promise<ChatModelCatalog>;
     /** The models Settings may pin the next-prompt hint to: small hosted ones, then local ones. */
     listSuggestionModels(): Promise<ChatModelCatalog>;
     /** How local models size their context window; see @shared/localContextSetting. */

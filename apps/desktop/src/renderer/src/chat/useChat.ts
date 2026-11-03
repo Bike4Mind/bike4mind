@@ -313,7 +313,7 @@ export function useModelCatalog(local = false): ModelCatalogController {
   seen.current = { empty: models.length === 0, reachable: runtime?.reachable ?? null };
 
   const load = useCallback(
-    async (force: boolean, quiet = false) => {
+    async (force: boolean | 'local', quiet = false) => {
       const mine = ++latestLoad.current;
       lastLoadAt.current = Date.now();
       if (!quiet) setLoading(true);
@@ -338,7 +338,7 @@ export function useModelCatalog(local = false): ModelCatalogController {
       const status = await window.b4m.models.getStatus().catch(() => null);
       if (!status) return;
       const { empty, reachable } = seen.current;
-      if (status.reachable !== reachable || (status.reachable && empty)) await load(true, true);
+      if (status.reachable !== reachable || (status.reachable && empty)) await load('local', true);
     };
     const tick = () => void check();
     const timer = setInterval(tick, LOCAL_STATUS_POLL_MS);
@@ -355,7 +355,7 @@ export function useModelCatalog(local = false): ModelCatalogController {
   useEffect(() => {
     const onFocus = () => {
       if (document.hidden || Date.now() - lastLoadAt.current < FOCUS_RELOAD_MIN_MS) return;
-      void load(true, true);
+      void load('local', true);
     };
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onFocus);
