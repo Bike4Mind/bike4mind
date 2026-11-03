@@ -60,7 +60,11 @@ async function call<T>(
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     const body = await response.json().catch(() => null);
-    if (response.ok) return { ok: true, body: body as T };
+    if (response.ok) {
+      return body === null
+        ? { ok: false, code: 'BEDROCKNEWS_UNAVAILABLE', status: 502 }
+        : { ok: true, body: body as T };
+    }
     const code = typeof body?.code === 'string' ? body.code : 'BEDROCKNEWS_UNAVAILABLE';
     return { ok: false, code, status: response.status };
   } catch {

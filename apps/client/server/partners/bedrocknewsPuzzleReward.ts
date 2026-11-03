@@ -60,6 +60,13 @@ const isPayable = (user: RewardUser) =>
   accountBlockReasons(user).length === 0 &&
   user.moderation?.status !== 'suspend_pending';
 
+export async function findPayableUser(userId: string): Promise<{ email: string } | null> {
+  const user = await User.findById(userId)
+    .select('email emailVerified isSynthetic deletedAt isBanned disputePending moderation.status')
+    .lean<RewardUser & { email?: string | null }>();
+  return user?.email && isPayable(user) ? { email: user.email } : null;
+}
+
 const rungAmount = (tierCredits: number, multiplier: number, hard: boolean) =>
   Math.round(tierCredits * (hard ? multiplier : 1));
 

@@ -77,6 +77,18 @@ describe('previewTicket', () => {
   });
 });
 
+describe('a success with no JSON body', () => {
+  it.each([
+    ['empty', ''],
+    ['non-JSON', '<html>ok</html>'],
+  ])('is BEDROCKNEWS_UNAVAILABLE for an %s 200', async (_label, text) => {
+    const unavailable = { ok: false, code: 'BEDROCKNEWS_UNAVAILABLE', status: 502 };
+    mockFetch.mockImplementation(async () => new Response(text, { status: 200 }));
+    expect(await previewTicket(TICKET)).toEqual(unavailable);
+    expect(await redeemTicket(TICKET, { id: 'a1b2c3d4e5f6a1b2c3d4e5f6', email: 'v@x.io' })).toEqual(unavailable);
+  });
+});
+
 describe('redeemTicket', () => {
   const user = { id: 'a1b2c3d4e5f6a1b2c3d4e5f6', email: 'victor@bike4mind.com' };
 
