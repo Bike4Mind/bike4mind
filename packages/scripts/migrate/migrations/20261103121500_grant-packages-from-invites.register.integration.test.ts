@@ -125,7 +125,7 @@ describe('invites migrated to grant packages', () => {
 
     expect((await User.findById(first.id).lean())?.currentCredits).toBe(250);
     expect((await User.findById(alias.id).lean())?.currentCredits).toBe(250);
-    expect((await User.findById(alias.id).lean())?.grantPackageId).toBeUndefined();
+    expect((await User.findById(alias.id).lean())?.grantPackageId ?? null).toBeNull();
   });
 
   it('keeps a storage-only invite on the ReferralCreditsAmount fallback', async () => {
