@@ -148,6 +148,7 @@ void app.whenReady().then(async () => {
     observeStream: event => fleet.observe(event),
     cancelModelPull: key => models.stop(key),
     pinnedProjectors: () => models.pinnedProjectors(),
+    catalogSampling: name => models.catalogSampling(name),
   });
   const models = registerModels(modelServers, { localContext: () => localContext.read() }, capabilityLedger);
   fleet.setDirectoryResolver(async sessionId => {

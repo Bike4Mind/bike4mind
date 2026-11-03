@@ -18,6 +18,7 @@ export interface GenerationSettings {
   topK?: number;
   minP?: number;
   repeatPenalty?: number;
+  presencePenalty?: number;
   /** Replaces the model's own output ceiling for this conversation's turns. */
   maxOutputTokens?: number;
   /** Thinking budget for a Claude model that thinks with a fixed budget rather than an effort. */
@@ -33,9 +34,21 @@ export const GENERATION_FIELDS: readonly GenerationField[] = [
   'topK',
   'minP',
   'repeatPenalty',
+  'presencePenalty',
   'maxOutputTokens',
   'thinkingBudgetTokens',
 ];
+
+export const GENERATION_LABELS: Readonly<Record<GenerationField, string>> = {
+  temperature: 'Temperature',
+  topP: 'Top P',
+  topK: 'Top K',
+  minP: 'Min P',
+  repeatPenalty: 'Repeat penalty',
+  presencePenalty: 'Presence penalty',
+  maxOutputTokens: 'Max output tokens',
+  thinkingBudgetTokens: 'Thinking budget',
+};
 
 const INTEGER_FIELDS: ReadonlySet<GenerationField> = new Set(['topK', 'maxOutputTokens', 'thinkingBudgetTokens']);
 
@@ -112,6 +125,7 @@ export const GENERATION_BOUNDS: Readonly<Record<GenerationField, { min: number; 
   topK: { min: 0, max: 200 },
   minP: { min: 0, max: 1 },
   repeatPenalty: { min: 0.5, max: 2 },
+  presencePenalty: { min: 0, max: 2 },
   maxOutputTokens: { min: 1, max: 2_000_000 },
   thinkingBudgetTokens: { min: 1024, max: 32_000 },
 };
@@ -196,4 +210,38 @@ export function requestGeneration(
     if (value !== undefined) sent[field] = value;
   }
   return sent;
+}
+
+/**
+ * The curated catalog's family sampling for a reviewed build (`families.*.sampling` in
+ * b4m-core/common modelHub.ts), by whether the turn thinks. Main reads it; see LocalModels.
+ */
+export interface CatalogSampling {
+  thinking?: GenerationSettings;
+  nonThinking?: GenerationSettings;
+}
+
+/** The catalog's sampling for a turn that thinks or does not; never the other state's, which is tuned for it. */
+export function catalogSeed(sampling: CatalogSampling | undefined, thinking: boolean): GenerationSettings | undefined {
+  return thinking ? sampling?.thinking : sampling?.nonThinking;
+}
+
+/** Where a value a turn sends comes from, highest first. */
+export type GenerationSource = 'chat' | 'model' | 'catalog';
+
+export type GenerationLayers = Partial<Record<GenerationSource, GenerationSettings>>;
+
+const LAYER_ORDER: readonly GenerationSource[] = ['chat', 'model', 'catalog'];
+
+/**
+ * Each field from the highest layer that sets it: the conversation's override, the model's default
+ * from the Models screen, then the catalog. A field none sets is left to the model's own default.
+ */
+export function layeredGeneration(layers: GenerationLayers): GenerationSettings {
+  const settings: GenerationSettings = {};
+  for (const field of GENERATION_FIELDS) {
+    const value = LAYER_ORDER.map(source => layers[source]?.[field]).find(isFiniteNumber);
+    if (value !== undefined) settings[field] = value;
+  }
+  return settings;
 }

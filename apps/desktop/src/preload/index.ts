@@ -23,6 +23,7 @@ import type { CookieImportRequest, CookieImportState } from '@shared/browserCook
 import type { ClaudeImportState } from '@shared/claudeImport';
 import type { DevLogRecord } from '@shared/devLog';
 import type { GenerationSettings } from '@shared/generation';
+import type { ModelSettings } from '@shared/modelSettings';
 import type { McpServerInput, McpServersState } from '@shared/mcp';
 import type {
   ModelServerAddInput,
@@ -178,6 +179,9 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionPromptCacheTtl, sessionId, ttl),
     setSessionGeneration: (sessionId: string, generation: GenerationSettings) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionGeneration, sessionId, generation),
+    getModelSettings: (modelId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetModelSettings, modelId),
+    setModelSettings: (modelId: string, settings: ModelSettings) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSetModelSettings, modelId, settings),
     setSessionPinned: (sessionId: string, pinned: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionPinned, sessionId, pinned),
     setApprovalMode: (sessionId: string, mode: ChatApprovalMode) =>

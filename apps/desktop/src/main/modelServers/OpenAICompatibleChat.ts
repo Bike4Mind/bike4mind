@@ -196,6 +196,7 @@ function samplingFields(
   const fields: Record<string, number> = {};
   if (generation.temperature !== undefined) fields.temperature = generation.temperature;
   if (generation.topP !== undefined) fields.top_p = generation.topP;
+  if (generation.presencePenalty !== undefined) fields.presence_penalty = generation.presencePenalty;
   if (product === null) return fields;
   if (generation.topK !== undefined) fields.top_k = generation.topK;
   if (generation.repeatPenalty !== undefined)

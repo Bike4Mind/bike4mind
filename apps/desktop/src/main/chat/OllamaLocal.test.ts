@@ -331,7 +331,7 @@ describe('OllamaLocal', () => {
     const done = `${JSON.stringify({ done: true })}\n`;
     const { sent } = await streamWith(done, {
       maxTokens: 512,
-      generation: { temperature: 0.2, topP: 0.8, topK: 30, minP: 0.05, repeatPenalty: 1.05 },
+      generation: { temperature: 0.2, topP: 0.8, topK: 30, minP: 0.05, repeatPenalty: 1.05, presencePenalty: 1.5 },
     });
     expect(sent.options).toEqual({
       num_ctx: 16384,
@@ -341,6 +341,7 @@ describe('OllamaLocal', () => {
       top_k: 30,
       min_p: 0.05,
       repeat_penalty: 1.05,
+      presence_penalty: 1.5,
     });
     expect((await streamWith(done)).sent.options).toEqual({ num_ctx: 16384 });
   });

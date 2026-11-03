@@ -11,7 +11,7 @@
 
 import type { GenerationJobState, PromptCacheTtl, ValidationViolation } from '@bike4mind/common';
 import type { ChatImportOrigin } from './claudeImport';
-import type { GenerationSettings, ModelControls } from './generation';
+import type { CatalogSampling, GenerationSettings, ModelControls } from './generation';
 import type { ChatQuestionAnswer } from './questions';
 import type { SkillSource } from './skills';
 
@@ -982,6 +982,8 @@ export interface ChatModelOption {
   pricing?: Record<number, { input: number; output: number; cache_read?: number; cache_write?: number }>;
   /** The generation settings this model takes, built in main; see shared/generation.ts. */
   controls?: ModelControls;
+  /** An Ollama model installed from a reviewed curated build: its family's recommended sampling. */
+  catalogSampling?: CatalogSampling;
 }
 
 /** The setting a `thinkingToggle` model's "Off" is stored as. */
