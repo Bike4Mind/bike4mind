@@ -3667,6 +3667,7 @@ export class ChatService {
       usage: message.usage,
       promptCache: message.promptCache,
       contextSnapshot: message.contextSnapshot,
+      questComplete: message.questComplete,
       // Never cleared: rounds a deferred run already sent keep replaying as they were sent.
       ...(message.deferred ? { deferred: true } : {}),
     });

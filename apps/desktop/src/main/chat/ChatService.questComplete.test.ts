@@ -34,10 +34,12 @@ describe('ChatService quest_complete', () => {
   let post: ReturnType<typeof vi.fn>;
   let streams: PassThrough[];
   let project: string;
+  let storeDirectory: string;
 
   beforeEach(async () => {
     project = await realpath(await mkdtemp(join(tmpdir(), 'b4m-quest-')));
-    store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-quest-sessions-')), 'test-model');
+    storeDirectory = await mkdtemp(join(tmpdir(), 'b4m-quest-sessions-'));
+    store = new SessionStore(storeDirectory, 'test-model');
     background = new BackgroundProcessRegistry({ output: () => {}, status: () => {} });
     const opened: PassThrough[] = [];
     streams = opened;
@@ -150,6 +152,25 @@ describe('ChatService quest_complete', () => {
     expect(call(final, 'quest-1')).toMatchObject({ status: 'done' });
     expect(final.questComplete).toBe(true);
     expect(final.content).toContain('Here is the final summary.');
+  });
+
+  it('keeps the mark on disk when a budget-stopped reply is continued into quest_complete', async () => {
+    const parent = await parentWithAgent();
+    reply(await nthStreamOf('task a', 1), 'did a');
+    reply(await nthStreamOf('go', 3), 'Combining the work.');
+    await idle(parent.id);
+    const interrupted = await lastReply(parent.id);
+    await store.updateMessage(parent.id, interrupted.id, { stopReason: 'tool_turn_limit' });
+
+    expect(await service.continueReply(parent.id)).toMatchObject({ ok: true });
+    callQuestComplete(await nthStreamOf('go', 4), 'quest-resumed', 'Here is the final summary.');
+    reply(await nthStreamOf('go', 5), 'Done.');
+    await idle(parent.id);
+
+    const reread = await new SessionStore(storeDirectory, 'test-model').get(parent.id);
+    const final = reread?.messages.find(message => message.id === interrupted.id);
+    expect(final && call(final, 'quest-resumed')).toMatchObject({ status: 'done' });
+    expect(final?.questComplete).toBe(true);
   });
 
   it('is refused while an agent is still working, and leaves the reply unmarked', async () => {
