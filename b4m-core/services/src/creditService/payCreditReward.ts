@@ -1,7 +1,7 @@
 import { CreditHolderType, type IAdminSettingsRepository, type SignupProtection } from '@bike4mind/common';
 import { accountBlockReasons, type AccountStateFields } from '../userService/accountState';
 import { queueHeadBlocks, reserveSignupGrantBudget, resolvePoolBudget } from '../userService/signupGrantBudget';
-import { addCreditsWithLedgerRow, type AddCreditsAdapters } from './addCredits';
+import { addCreditsWithLedgerRow, DuplicateCreditTransactionError, type AddCreditsAdapters } from './addCredits';
 
 export type CreditRewardSource = 'gear' | 'referral_first_answer';
 
@@ -50,6 +50,11 @@ export type PayCreditRewardAdapters = AddCreditsAdapters & {
   adminSettings: Pick<IAdminSettingsRepository, 'findBySettingName'>;
   signupProtection?: SignupProtection;
   logger?: { error(message: string, ...context: unknown[]): void };
+  /**
+   * Commits each payout's ledger row and balance credit together. Omit only when the caller already
+   * runs payCreditReward inside a transaction (the gear claim route).
+   */
+  withTransaction?: <T>(fn: () => Promise<T>) => Promise<T>;
 };
 
 export type PayCreditRewardOutcome =
@@ -75,8 +80,13 @@ async function payNow(reward: HeldCreditRewardInput, adapters: PayCreditRewardAd
   // A non-fresh draw belongs to a concurrent attempt (double claim, overlapping cron) that may still pay
   // or refund it; paying here could pay unmetered, and losing its ledger insert would refund its draw.
   if (reservation.outcome === 'reserved' && !reservation.fresh) return { status: 'contended' };
-  try {
-    const { creditTransactionId } = await addCreditsWithLedgerRow(
+  const { withTransaction } = adapters;
+  // A duplicate insert aborts an owned transaction, so it must throw out of it rather than read on.
+  const creditAdapters: AddCreditsAdapters = withTransaction
+    ? { ...adapters, duplicateTransactionId: 'throw' }
+    : adapters;
+  const credit = () =>
+    addCreditsWithLedgerRow(
       {
         ownerId: reward.userId,
         ownerType: CreditHolderType.User,
@@ -87,16 +97,22 @@ async function payNow(reward: HeldCreditRewardInput, adapters: PayCreditRewardAd
         description: reward.description,
         metadata: { ...reward.metadata, rewardSource: reward.source },
       },
-      adapters
+      creditAdapters
     );
+  try {
+    const { creditTransactionId } = withTransaction ? await withTransaction(credit) : await credit();
     if (!creditTransactionId) {
       await reservation.release();
       return { status: 'duplicate' };
     }
     return { status: 'paid', creditTransactionId };
   } catch (error) {
-    // Outside a transaction a throw after the ledger insert leaves a committed row the draw must stay
-    // spent for; inside one the row rolls back and refundBudgetOnFailure hands the draw back.
+    if (withTransaction && error instanceof DuplicateCreditTransactionError) {
+      await reservation.release();
+      return { status: 'duplicate' };
+    }
+    // The draw stays spent only for a ledger row that committed; a rolled-back one hands it back here,
+    // or via refundBudgetOnFailure when the caller's own transaction rolls back after this returns.
     const committed = await adapters.db.creditTransactions
       .findOne({ transactionId: reward.transactionId })
       .catch(() => null);

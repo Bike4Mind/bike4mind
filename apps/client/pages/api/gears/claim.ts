@@ -62,7 +62,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
               description: `Gear unlock reward: ${key}`,
             },
             // A duplicate insert has already aborted the transaction; throw out of it rather than retry.
-            buildCreditRewardAdapters({ duplicateTransactionId: 'throw' })
+            buildCreditRewardAdapters({ duplicateTransactionId: 'throw', inTransaction: true })
           )
         )
       );

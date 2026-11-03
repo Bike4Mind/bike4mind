@@ -11,6 +11,7 @@ import {
   heldCreditRewardRepository,
   signupGrantBudgetRepository,
   SignupGrantBudgetDayModel,
+  withTransaction,
 } from '@bike4mind/database';
 import {
   createMongoReplSet,
@@ -258,5 +259,96 @@ describe('payCreditReward', () => {
     await creditService.payCreditReward(reward(user.id, 'projects'), adapters);
     expect((await creditService.payCreditReward(reward(user.id, 'projects'), adapters)).outcome).toBe('duplicate');
     expect(await balance(user.id)).toBe(100);
+  });
+});
+
+describe('payCreditReward in its own transaction', () => {
+  const txAdapters: creditService.PayCreditRewardAdapters = {
+    ...adapters,
+    withTransaction: fn => withTransaction(() => fn()),
+  };
+  const failingBalance = {
+    ...userRepository,
+    incrementCredits: async () => {
+      throw new Error('balance write failed');
+    },
+  } as unknown as typeof userRepository;
+  const referral = (inviterId: string, friendId: string) => ({
+    transactionId: `referral-first-answer:${inviterId}:${friendId}`,
+    userId: inviterId,
+    credits: 100,
+    source: 'referral_first_answer' as const,
+    reason: 'referral_reward',
+    description: 'Referral reward: first answer from an invited friend',
+    metadata: { [creditService.REFERRED_USER_ID_METADATA_KEY]: friendId },
+  });
+
+  it('rolls back the ledger row and refunds the draw when the referral balance credit throws, then pays once on retry', async () => {
+    const inviter = await makeUser();
+    const friend = await makeUser();
+    const paying = referral(inviter.id, friend.id);
+    await expect(
+      creditService.payCreditReward(paying, { ...txAdapters, creditHolderMethods: failingBalance })
+    ).rejects.toThrow('balance write failed');
+    expect(await CreditTransaction.countDocuments({ transactionId: paying.transactionId })).toBe(0);
+    expect(await balance(inviter.id)).toBe(0);
+    expect(await signupGrantBudgetRepository.getSpent(trickleKey())).toBe(0);
+
+    expect((await creditService.payCreditReward(paying, txAdapters)).outcome).toBe('paid');
+    expect((await creditService.payCreditReward(paying, txAdapters)).outcome).toBe('duplicate');
+    expect(await CreditTransaction.countDocuments({ transactionId: paying.transactionId })).toBe(1);
+    expect(await balance(inviter.id)).toBe(100);
+    expect(await signupGrantBudgetRepository.getSpent(trickleKey())).toBe(100);
+  });
+
+  it('rolls back the ledger row and refunds the draw when a released reward balance credit throws, then pays once on the next run', async () => {
+    config.signupGrantTricklePoolDaily = '0';
+    const inviter = await makeUser();
+    const friend = await makeUser();
+    const queued = referral(inviter.id, friend.id);
+    expect((await creditService.payCreditReward(queued, txAdapters)).outcome).toBe('queued');
+    config.signupGrantTricklePoolDaily = '1000';
+
+    const failed = await creditService.releaseHeldCreditRewards(
+      { ...txAdapters, creditHolderMethods: failingBalance },
+      { limit: 10 }
+    );
+    expect(failed).toMatchObject({ paid: 0, failed: 1 });
+    expect(await CreditTransaction.countDocuments({ transactionId: queued.transactionId })).toBe(0);
+    expect(await balance(inviter.id)).toBe(0);
+    expect(await signupGrantBudgetRepository.getSpent(trickleKey())).toBe(0);
+    expect(await HeldCreditRewardModel.findOne({ transactionId: queued.transactionId }).lean()).toMatchObject({
+      status: 'held',
+    });
+
+    expect(await creditService.releaseHeldCreditRewards(txAdapters, { limit: 10 })).toMatchObject({ paid: 1 });
+    expect(await creditService.releaseHeldCreditRewards(txAdapters, { limit: 10 })).toMatchObject({ scanned: 0 });
+    expect(await CreditTransaction.countDocuments({ transactionId: queued.transactionId })).toBe(1);
+    expect(await balance(inviter.id)).toBe(100);
+    expect(await signupGrantBudgetRepository.getSpent(trickleKey())).toBe(100);
+  });
+
+  it('answers duplicate and refunds the draw when the ledger row lands between the check and the insert', async () => {
+    const user = await makeUser();
+    const paying = reward(user.id, 'projects');
+    await CreditTransaction.create({
+      type: 'generic_add',
+      ownerId: user.id,
+      ownerType: 'User',
+      credits: 100,
+      transactionId: paying.transactionId,
+      reason: paying.reason,
+      description: paying.description,
+    });
+    const creditTransactions = Object.assign(Object.create(creditTransactionRepository), {
+      findOne: async () => null,
+    }) as typeof creditTransactionRepository;
+    const result = await creditService.payCreditReward(paying, {
+      ...txAdapters,
+      db: { creditTransactions },
+    });
+    expect(result.outcome).toBe('duplicate');
+    expect(await balance(user.id)).toBe(0);
+    expect(await signupGrantBudgetRepository.getSpent(trickleKey())).toBe(0);
   });
 });
