@@ -220,6 +220,13 @@ describe('useAdminTabUrlSync', () => {
     expect(lastNavigation().search({ tab: 'live-ops-triage' }).tab).toBe('users');
   });
 
+  it("falls back to the first sidebar tab it can render when Users is not one (a delegated admin's console)", () => {
+    const { result } = renderHook(() => useHarness(AdminTab.Dashboard, tab => tab === AdminTab.Modals));
+
+    expect(result.current.activeTab).toBe(AdminTab.Modals);
+    expect(lastNavigation().search({}).tab).toBe('modals');
+  });
+
   // The gate can resolve after a deep link has already selected the tab.
   it('falls back to Users when the selected tab stops being renderable', () => {
     routerMock.search = { tab: 'live-ops-triage' };

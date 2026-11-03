@@ -46,6 +46,7 @@ import ApiReferenceTab from './ApiReferenceTab';
 import ApiCookbookTab from './ApiCookbookTab';
 import { AdminTab } from './adminSidebarConfig';
 import { canRenderAdminTab } from './adminTabRenderability';
+import { canOpenAdminTab } from './adminTabPermissions';
 import { useAdminTabUrlSync } from './useAdminTabUrlSync';
 import { useAdminModal } from './useAdminModal';
 import { UndoToastProvider } from './shared/UndoToast';
@@ -117,11 +118,12 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   // treats it as unknown and corrects the store instead.
   const isAdminTabRenderable = useCallback(
     (tab: AdminTab) =>
+      canOpenAdminTab(currentUser, tab) &&
       canRenderAdminTab(tab, {
         enableUserMigration,
         liveOpsTriage: isLiveOpsEnvError ? false : liveopsEnvData?.showTab,
       }),
-    [enableUserMigration, liveopsEnvData, isLiveOpsEnvError]
+    [currentUser, enableUserMigration, liveopsEnvData, isLiveOpsEnvError]
   );
 
   useAdminTabUrlSync(activeTab, setActiveTab, isAdminTabRenderable);
@@ -137,7 +139,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   return (
     <UndoToastProvider>
       <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-        <AdminCommandPalette onNavigate={setActiveTab} onOpenHelp={openHelpPanel} />
+        <AdminCommandPalette onNavigate={setActiveTab} canOpenTab={isAdminTabRenderable} onOpenHelp={openHelpPanel} />
         <Tabs
           aria-label="Admin tabs"
           value={activeTab}

@@ -1,4 +1,4 @@
-import { Suspense, useState, type ReactNode } from 'react';
+import { Suspense, useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Outlet, useLocation, useNavigate } from '@tanstack/react-router';
 import { useShallow } from 'zustand/react/shallow';
 import MenuIcon from '@mui/icons-material/Menu';
@@ -12,6 +12,7 @@ import { HelpPanel } from '../help';
 import EnvironmentBanner from './AdminEnvironmentBanner';
 import { SidebarNav } from './AdminSidebarNav';
 import { AdminTab } from './adminSidebarConfig';
+import { canEnterAdminConsole, canOpenAdminTab } from './adminTabPermissions';
 import { environmentChipLabel, resolveCurrentEnvironment } from './environmentBanner';
 import { adminTabToSlug } from './adminTabSlugs';
 import { adminFocus, adminScrollGutter } from './shared/adminStyles';
@@ -57,11 +58,19 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
   const { collapsed, toggleCollapsed } = useAdminSidebarCollapsed();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  const activeTab = isAdminUserProfilePath(pathname)
+  const detailPageTab = isAdminUserProfilePath(pathname)
     ? AdminTab.Users
     : isAdminSubscriptionDetailPath(pathname)
       ? AdminTab.Subscriptions
-      : storedActiveTab;
+      : undefined;
+  const activeTab = detailPageTab ?? storedActiveTab;
+
+  const canOpenTab = useCallback((tab: AdminTab) => canOpenAdminTab(currentUser, tab), [currentUser]);
+  // A detail page belongs to its tab, so a delegate who cannot open that tab cannot open the page.
+  const detailPageDenied = detailPageTab !== undefined && !canOpenTab(detailPageTab);
+  useEffect(() => {
+    if (detailPageDenied) navigate({ to: ADMIN_CONSOLE_PATH, replace: true });
+  }, [detailPageDenied, navigate]);
 
   const selectTab = (tab: AdminTab) => {
     setDrawerOpen(false);
@@ -74,7 +83,7 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
   const account = currentUser
     ? {
         name: currentUser.name || currentUser.username || currentUser.email || 'Admin',
-        role: 'Admin',
+        role: isAdmin ? 'Admin' : 'Delegated admin',
         photoUrl: currentUser.photoUrl ?? undefined,
       }
     : undefined;
@@ -88,6 +97,7 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
     // No dot on the tab the admin is looking at; a row started meanwhile lights it once they leave.
     newSubscriptions: newSubscriptions && activeTab !== AdminTab.Subscriptions,
     hiddenNotifications,
+    canOpenTab,
     onTabSelect: selectTab,
     environmentLabel: environmentChipLabel[resolveCurrentEnvironment().environment],
   };
@@ -138,7 +148,9 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
                 Admin
               </Typography>
             </Box>
-            <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', ...adminScrollGutter }}>{children}</Box>
+            <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', ...adminScrollGutter }}>
+              {detailPageDenied ? null : children}
+            </Box>
           </Box>
         </Box>
         <Drawer
@@ -163,7 +175,7 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
  * here once, so no admin child route can render outside them or without the sidebar.
  */
 export const AdminLayoutRoute = ({ fallback }: { fallback: ReactNode }) => (
-  <RestrictedPage requireAdmin>
+  <RestrictedPage requireAccess={canEnterAdminConsole}>
     {/* Mounted only behind the guard, so an unauthorised visit does not trigger their fetches. */}
     <ProviderBundle>
       <AdminLayout>

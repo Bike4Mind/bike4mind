@@ -4,6 +4,7 @@ import { useColorScheme, useTheme } from '@mui/joy/styles';
 import { useLocation, useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { UiNavigationEvents } from '@bike4mind/common';
+import { canEnterAdminConsole } from '@client/app/components/admin/adminTabPermissions';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useReferralModal } from '@client/app/components/referrals/ReferralModal';
 import { useBillingView } from '@client/app/components/subscription/BillingDeepLinkModals';
@@ -259,7 +260,8 @@ const ProfileMenu = () => {
   const modeToggleEnabled = theme.branding.modeToggleEnabled;
 
   const currentUser = useUser(s => s.currentUser);
-  const isAdmin = useUser(s => s.isAdmin);
+  // Delegated admins too: the console admits anyone it has a tab to show.
+  const canOpenAdmin = canEnterAdminConsole(currentUser);
   const { accounts, selectedAccount, setSelectedAccount, showAccountType } = useAccounts();
 
   const { isFeatureEnabled } = useFeatureEnabled();
@@ -439,7 +441,7 @@ const ProfileMenu = () => {
 
           <Divider sx={{ my: 1 }} />
 
-          {isAdmin && (
+          {canOpenAdmin && (
             <MenuRow
               testId="profile-menu-admin"
               icon={<AdminPanelSettingsIcon sx={{ fontSize: '18px' }} />}
