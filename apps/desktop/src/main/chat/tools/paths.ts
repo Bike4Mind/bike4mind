@@ -23,8 +23,19 @@ export class PathAccessDenied extends Error {
   }
 }
 
+/** A WSL path with the share name and distro case that do not change where it lands made uniform. */
+function comparable(path: string): string {
+  const wsl = wslLocation(path);
+  return wsl ? wslUncPath({ host: 'wsl.localhost', distro: wsl.distro.toLowerCase() }, wsl.linuxPath) : path;
+}
+
+const sameDistro = (a: WslLocation | null, b: WslLocation): boolean =>
+  a !== null && a.distro.toLowerCase() === b.distro.toLowerCase();
+
 /** True when `candidate` is `root` itself or lies beneath it. */
-export function isWithin(root: string, candidate: string): boolean {
+export function isWithin(rootPath: string, candidatePath: string): boolean {
+  const root = comparable(rootPath);
+  const candidate = comparable(candidatePath);
   if (candidate === root) return true;
   // The separator matters: without it "/Users/jude/Downloads-secret" passes a plain
   // startsWith test against "/Users/jude/Downloads".
@@ -54,10 +65,15 @@ export async function resolveWithinRoots(
   // A relative path resolves against the SESSION's working directory, not process.cwd() -
   // which for a packaged Electron app is wherever the app happened to be launched from, and
   // is never somewhere the user granted.
-  const lexical = isAbsolute(requested) || !baseDirectory ? resolve(requested) : resolve(baseDirectory, requested);
-  const realRoots = await Promise.all(roots.map(realRoot));
+  // In a WSL folder a Linux program writes `/home/...` for a path in its own distro.
+  const base = baseDirectory ? wslLocation(baseDirectory) : null;
+  const spelled = base && /^\/(?!\/)/.test(requested) ? wslUncPath(base, requested) : requested;
+  const lexical = isAbsolute(spelled) || !baseDirectory ? resolve(spelled) : resolve(baseDirectory, spelled);
 
   const wsl = wslLocation(lexical);
+  // Asking a distro no root lives in would start it only to refuse.
+  if (wsl && !roots.some(root => sameDistro(wslLocation(root), wsl))) throw new PathAccessDenied(requested);
+  const realRoots = await Promise.all(roots.map(root => realRoot(root, wsl)));
   const real = wsl ? await inDistro(wsl, wsl.linuxPath) : await physicalTarget(lexical);
   if (real === null || !realRoots.some(root => isWithin(root, real))) throw new PathAccessDenied(requested);
 
@@ -93,8 +109,9 @@ export async function resolveWithinRootsPhysically(
   if (!requested) throw new PathAccessDenied(requested);
   if (roots.length === 0) throw new PathAccessDenied(requested);
 
-  const realRoots = await Promise.all(roots.map(realRoot));
   const wsl = wslLocation(baseDirectory);
+  if (wsl && !roots.some(root => sameDistro(wslLocation(root), wsl))) throw new PathAccessDenied(requested);
+  const realRoots = await Promise.all(roots.map(root => realRoot(root, wsl)));
   const current = wsl ? await physicallyInDistro(wsl, requested) : await physicallyOnHost(requested, baseDirectory);
   if (current === null || !realRoots.some(root => isWithin(root, current))) throw new PathAccessDenied(requested);
   return current;
@@ -138,8 +155,10 @@ async function inDistro(location: WslLocation, linuxPath: string): Promise<strin
   return real === null ? null : wslUncPath(location, real);
 }
 
-async function realRoot(root: string): Promise<string> {
+/** A WSL root is resolved in its distro only when the path checked against it is in that distro too. */
+async function realRoot(root: string, checked: WslLocation | null): Promise<string> {
   const wsl = wslLocation(root);
+  if (wsl && !(checked && sameDistro(wsl, checked))) return resolve(root);
   const real = wsl ? await inDistro(wsl, wsl.linuxPath) : await realpath(root).catch(() => null);
   return real ?? resolve(root);
 }

@@ -1253,9 +1253,8 @@ export async function scanShell(
           if (value.startsWith('-')) continue;
           const prefix = globPrefix(expandHome(unquote(value), home));
           if (!prefix || isDynamic(prefix)) continue;
-          const target = resolve(state.cwd, prefix);
-          const filesystemRoot = parse(target).root;
-          paths.add(await resolveWithinRootsPhysically(prefix, [filesystemRoot], state.cwd).catch(() => target));
+          const filesystemRoot = parse(resolve(state.cwd, prefix)).root;
+          paths.add(await resolveWithinRootsPhysically(prefix, [filesystemRoot], state.cwd));
         }
         return;
       }
