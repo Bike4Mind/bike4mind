@@ -123,6 +123,8 @@ import {
   prefetchBase,
   resolveWorkspace,
   releaseBranchName,
+  reserveBranchName,
+  type BranchReservation,
   type SpareWorktrees,
   unusedBranchName,
   type WorkspaceOutcome,
@@ -315,6 +317,9 @@ const TURN_LIMITS: TurnLimits = {
   stalledRounds: 5,
   wallClockMs: 30 * 60 * 1000,
 };
+
+/** A spawn's hold on its worktree branch name; see spawnSession. */
+type BranchLease = { reservation: BranchReservation | null; launched: boolean };
 
 type SettledModel = { session: ChatSession; summary?: ChatSessionSummary; notice?: string } | { error: string };
 
@@ -4667,15 +4672,19 @@ export class ChatService {
     placement: SpawnPlacement,
     onFailed?: (message: string) => Promise<void>
   ): Promise<SpawnOutcome> {
-    const outcome = await this.withWorkspaceBindings(() =>
-      this.spawnSessionWithWorkspaceLease(parent, prompt, title, placement, onFailed)
-    );
-    // A delegated name is reserved when picked (unusedBranchName); one that never reaches a cut
-    // gives it back here, and one that does is released by resolveWorkspace or launchSpawned.
-    if (!outcome.ok && placement.kind === 'worktree' && parent.project) {
-      releaseBranchName(parent.project.directory, placement.branch);
+    // The worktree branch name this spawn holds (see reserveBranchName). It passes to
+    // launchSpawned with the session; until then, any way out of here gives it back.
+    const lease: BranchLease = {
+      reservation: placement.kind === 'worktree' ? (placement.reservation ?? null) : null,
+      launched: false,
+    };
+    try {
+      return await this.withWorkspaceBindings(() =>
+        this.spawnSessionWithWorkspaceLease(parent, prompt, title, placement, lease, onFailed)
+      );
+    } finally {
+      if (!lease.launched && lease.reservation) releaseBranchName(lease.reservation);
     }
-    return outcome;
   }
 
   private async spawnSessionWithWorkspaceLease(
@@ -4683,6 +4692,7 @@ export class ChatService {
     prompt: string,
     title: string | undefined,
     placement: SpawnPlacement,
+    lease: BranchLease,
     onFailed?: (message: string) => Promise<void>
   ): Promise<SpawnOutcome> {
     const project = parent.project;
@@ -4728,7 +4738,7 @@ export class ChatService {
       // refused while they can still answer with another, rather than after a row appeared.
       let worktree: { branch: string; base: string } | null = null;
       if (placement.kind === 'worktree') {
-        const checked = await this.checkSpawnBranch(project, placement.branch);
+        const checked = await this.checkSpawnBranch(project, placement.branch, lease);
         if (!checked.ok) return checked;
         worktree = { branch: checked.branch, base: placement.base };
       }
@@ -4775,7 +4785,13 @@ export class ChatService {
       // reply can finish - and look for its watch entry - before launchSpawned sees it return.
       this.spawnWatch.set(child.id, { parentSessionId: parent.id });
       const seedHops = this.turnRelay.get(parent.id)?.hops ?? 0;
-      void this.launchSpawned(parent.id, project.directory, child, seed, worktree, { seedHops, timer, onFailed });
+      lease.launched = true;
+      void this.launchSpawned(parent.id, project.directory, child, seed, worktree, {
+        seedHops,
+        timer,
+        onFailed,
+        reservation: lease.reservation,
+      });
       return { ok: true, session: child };
     } finally {
       this.spawnReservations--;
@@ -4800,7 +4816,14 @@ export class ChatService {
       seedHops,
       timer,
       onFailed,
-    }: { seedHops: number; timer: PhaseTimer; onFailed?: (message: string) => Promise<void> }
+      reservation,
+    }: {
+      seedHops: number;
+      timer: PhaseTimer;
+      onFailed?: (message: string) => Promise<void>;
+      /** Released once the worktree is cut or abandoned: from then on git itself holds the name. */
+      reservation: BranchReservation | null;
+    }
   ): Promise<void> {
     this.launching.add(child.id);
     this.deps.activity?.preparingStarted(child.id);
@@ -4834,7 +4857,7 @@ export class ChatService {
         this.deps.logger.warn(`CHAT: could not clean up ${child.id}: ${err instanceof Error ? err.message : err}`);
       });
     } finally {
-      if (worktree) releaseBranchName(projectDirectory, worktree.branch);
+      if (reservation) releaseBranchName(reservation);
       this.launching.delete(child.id);
       this.deps.activity?.preparingEnded(child.id);
       if (!failure) this.flushQueue(child.id);
@@ -4950,13 +4973,14 @@ export class ChatService {
     if (defaultSpawnPlacement(repository) === 'local') return { kind: 'local' };
     const base = await spawnBaseFor(project);
     prefetchBase(project.directory, base);
-    const branch = await unusedBranchName(project.directory, suggestBranchName(title, prompt));
-    return { kind: 'worktree', branch, base };
+    const { branch, reservation } = await unusedBranchName(project.directory, suggestBranchName(title, prompt));
+    return { kind: 'worktree', branch, base, reservation };
   }
 
   private async checkSpawnBranch(
     project: ChatProject,
-    branch: string
+    branch: string,
+    lease: BranchLease
   ): Promise<{ ok: true; branch: string } | SpawnRejected> {
     const wanted = branch.trim();
     if (!isValidBranchName(wanted)) {
@@ -4980,6 +5004,22 @@ export class ChatService {
       };
     }
 
+    if (lease.reservation && lease.reservation.branch !== wanted) {
+      releaseBranchName(lease.reservation);
+      lease.reservation = null;
+    }
+    // A name the user typed on a card is held here; one the app picked arrives already held.
+    // Either way it is held before the existence check, so no other spawn can take it meanwhile.
+    lease.reservation ??= reserveBranchName(project.directory, wanted);
+    if (!lease.reservation) {
+      return {
+        ok: false,
+        reason: 'branch',
+        message:
+          `Another session being started is already setting up the branch ${wanted}, so no worktree ` +
+          'was made and no session started. Pick a different branch name.',
+      };
+    }
     try {
       const [exists, worktrees] = await Promise.all([
         branchExists(project.directory, wanted),

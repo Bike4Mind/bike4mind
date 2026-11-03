@@ -21,6 +21,7 @@ import type { CompletionRequest } from '../completions';
 import type { CompletionStreamEvent } from '../streamEvents';
 
 import type { MemoryStore } from '../project/memory';
+import type { BranchReservation } from '../project/workspace';
 import type { MediaApiClient } from '../media/MediaApiClient';
 import type { MediaStore } from '../media/MediaStore';
 import type { VideoJobScheduler } from '../media/VideoJobScheduler';
@@ -414,7 +415,15 @@ export type SpawnOutcome = { ok: true; session: ChatSessionSummary } | SpawnReje
  * checkout back and be isolated in name only. `base` is what that branch is cut from - the
  * parent's own branch, never the parent's checkout - see HostContext.spawnBase.
  */
-export type SpawnPlacement = { kind: 'local' } | { kind: 'worktree'; branch: string; base: string };
+export type SpawnPlacement =
+  | { kind: 'local' }
+  | {
+      kind: 'worktree';
+      branch: string;
+      base: string;
+      /** Set when the app picked `branch` and already holds it; the spawn then owns releasing it. */
+      reservation?: BranchReservation | null;
+    };
 
 /**
  * A delivered message, and whether the target took it up straight away.

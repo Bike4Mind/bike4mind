@@ -16,7 +16,7 @@ import { SessionStore } from './SessionStore';
 import { AttachmentStore } from './AttachmentStore';
 import { MessageQueue } from './MessageQueue';
 import { git, listWorktrees } from './project/git';
-import { appWorktreeRoot, prefetchBase } from './project/workspace';
+import { appWorktreeRoot, prefetchBase, releaseBranchName, reserveBranchName } from './project/workspace';
 import { DependencyInstaller } from './project/dependencyInstall';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import type { AccessStore } from './tools/AccessStore';
@@ -350,6 +350,32 @@ describe('ChatService spawn placement', () => {
     );
     await vi.waitUntil(async () => (await child()) === undefined, { timeout: 5000, interval: 10 });
     expect(seedPosted('do the thing')).toBe(false);
+  });
+
+  it('gives back the branch name a delegated spawn reserved when creating its session throws', async () => {
+    const create = store.create.bind(store);
+    vi.spyOn(store, 'create').mockImplementation((...args: Parameters<SessionStore['create']>) =>
+      args[1]?.origin ? Promise.reject(new Error('disk full')) : create(...args)
+    );
+
+    const { call } = await delegate();
+
+    expect(call?.status).toBe('error');
+    expect(await child()).toBeUndefined();
+    const again = reserveBranchName(main, 'agent/the-thing');
+    expect(again).not.toBeNull();
+    releaseBranchName(again!);
+  });
+
+  it('refuses a card branch another spawn is setting up, and its refusal frees nothing', async () => {
+    const delegated = reserveBranchName(main, 'agent/in-flight');
+
+    const { result } = await spawnWith({ placement: 'worktree', branch: 'agent/in-flight' });
+
+    expect(await child()).toBeUndefined();
+    expect(!result.ok && result.error).toMatch(/already setting up the branch agent\/in-flight/);
+    expect(reserveBranchName(main, 'agent/in-flight')).toBeNull();
+    releaseBranchName(delegated!);
   });
 
   it('starts nothing when the model only suggests, and leaves the tool call done', async () => {

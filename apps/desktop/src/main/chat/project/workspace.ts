@@ -801,19 +801,6 @@ export async function resolveWorkspace(
   projectDirectory: string,
   request: WorkspaceRequest
 ): Promise<WorkspaceResolution> {
-  try {
-    return await resolveWorkspaceUnreserved(projectDirectory, request);
-  } finally {
-    // From here the branch exists (or this attempt removed it), so git itself is the guard.
-    const named = (request.branch ?? '').trim();
-    if (named) releaseBranchName(projectDirectory, named);
-  }
-}
-
-async function resolveWorkspaceUnreserved(
-  projectDirectory: string,
-  request: WorkspaceRequest
-): Promise<WorkspaceResolution> {
   const { timer } = request;
   const registered = await listWorktrees(projectDirectory);
   timer?.lap('worktreeList');
@@ -931,49 +918,67 @@ async function discardFailedWorktree(
 }
 
 /**
- * Branch names unusedBranchName has handed out whose worktree is not cut yet, per project
- * directory. Without it two spawns asked for together, with the same title, both find the same
- * name free, and the second would share the first one's tree through resolveWorkspace's
- * existing-worktree return. Released by resolveWorkspace, or by the caller if it never gets there.
+ * A branch name a spawn holds while its worktree is not cut yet. Only the holder of the token can
+ * give it back, so one spawn failing never frees a name another spawn is still cutting.
  */
-const reservedBranches = new Map<string, Set<string>>();
+export type BranchReservation = { readonly projectDirectory: string; readonly branch: string; readonly token: symbol };
 
-export function releaseBranchName(projectDirectory: string, branch: string): void {
-  const reserved = reservedBranches.get(projectDirectory);
-  if (!reserved) return;
-  reserved.delete(branch);
-  if (reserved.size === 0) reservedBranches.delete(projectDirectory);
+/**
+ * Reserved branch names per project directory, each with its holder's token. Without it two
+ * spawns started together with the same title both find the same name free, and the second would
+ * share the first one's tree through resolveWorkspace's existing-worktree return.
+ */
+const reservedBranches = new Map<string, Map<string, symbol>>();
+
+/** Hold `branch` for the caller, or null when another spawn holds it. */
+export function reserveBranchName(projectDirectory: string, branch: string): BranchReservation | null {
+  const reserved = reservedBranches.get(projectDirectory) ?? new Map<string, symbol>();
+  if (reserved.has(branch)) return null;
+  const token = Symbol(branch);
+  reserved.set(branch, token);
+  reservedBranches.set(projectDirectory, reserved);
+  return { projectDirectory, branch, token };
+}
+
+/** Give a name back. A no-op unless `reservation` is the one holding it. */
+export function releaseBranchName(reservation: BranchReservation): void {
+  const reserved = reservedBranches.get(reservation.projectDirectory);
+  if (!reserved || reserved.get(reservation.branch) !== reservation.token) return;
+  reserved.delete(reservation.branch);
+  if (reserved.size === 0) reservedBranches.delete(reservation.projectDirectory);
 }
 
 /**
- * `wanted`, or the first of `wanted-2`, `wanted-3`... that no branch and no worktree holds.
+ * `wanted`, or the first of `wanted-2`, `wanted-3`... that no branch, no worktree and no other
+ * spawn holds, reserved for the caller, who releases it once the worktree is cut or abandoned.
  *
  * For a branch name the app picked itself (an Orchestrate spawn), where a leftover branch from an
  * earlier attempt must not block the next one. Never for a name the user typed: that collision is
- * theirs to see. Falls back to `wanted` when nothing free is found or git cannot be read, and the
- * caller's own existence check then refuses it with a reason.
+ * theirs to see. Answers `wanted` unreserved when nothing free is found or git cannot be read,
+ * and the caller's own checks then refuse it with a reason.
  */
-export async function unusedBranchName(projectDirectory: string, wanted: string): Promise<string> {
-  const reserved = reservedBranches.get(projectDirectory) ?? new Set<string>();
-  reservedBranches.set(projectDirectory, reserved);
+export async function unusedBranchName(
+  projectDirectory: string,
+  wanted: string
+): Promise<{ branch: string; reservation: BranchReservation | null }> {
   try {
     const worktrees = await listWorktrees(projectDirectory);
     for (let attempt = 1; attempt <= MAX_BRANCH_NAME_ATTEMPTS; attempt++) {
       const candidate = attempt === 1 ? wanted : `${wanted}-${attempt}`;
-      if (reserved.has(candidate) || worktrees.some(entry => entry.branch === candidate)) continue;
+      if (worktrees.some(entry => entry.branch === candidate)) continue;
       // Taken before the await, so a parallel call cannot pick it in the gap.
-      reserved.add(candidate);
+      const reservation = reserveBranchName(projectDirectory, candidate);
+      if (!reservation) continue;
       if (await branchExists(projectDirectory, candidate)) {
-        reserved.delete(candidate);
+        releaseBranchName(reservation);
         continue;
       }
-      return candidate;
+      return { branch: candidate, reservation };
     }
   } catch {
     // Unreadable: the caller's check reports it.
   }
-  if (reserved.size === 0) reservedBranches.delete(projectDirectory);
-  return wanted;
+  return { branch: wanted, reservation: null };
 }
 
 const MAX_BRANCH_NAME_ATTEMPTS = 20;
