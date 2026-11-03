@@ -1109,6 +1109,12 @@ async function shellHome(startDirectory: string): Promise<{ home: string; temp: 
   return { home: wslUncPath(wsl, user?.home ?? '/'), temp: [wslUncPath(wsl, '/tmp')] };
 }
 
+/** A path in a WSL distro that none of `roots` is in. */
+function inUngrantedDistro(path: string, roots: readonly string[]): boolean {
+  const distro = wslLocation(path)?.distro.toLowerCase();
+  return distro !== undefined && !roots.some(root => wslLocation(root)?.distro.toLowerCase() === distro);
+}
+
 /**
  * Every simple command a shell script would run, and every directory outside the project it
  * names. Null when the script does not parse, which the caller treats as a reason to ask.
@@ -1155,12 +1161,18 @@ export async function scanShell(
       if (!prefix || isDynamic(prefix)) return null;
       // A glob can expand to `..` (`~/.nvm*/../.ssh`, `~/.nvm/.?/.ssh`), so a dot after the glob never stays inside.
       const stays = text === prefix || (!text.slice(prefix.length).includes('.') && !prefix.endsWith('.'));
+      const target = resolve(cwd, prefix);
+      if (inUngrantedDistro(target, allowed)) {
+        // Outside without a look: reading it over the share would start that distro.
+        paths.add(target);
+        directories.add(dirname(target));
+        return target;
+      }
       try {
         const physical = await resolveWithinRootsPhysically(prefix, allowed, cwd);
         paths.add(physical);
         return physical;
       } catch {
-        const target = resolve(cwd, prefix);
         paths.add(target);
         paths.add(await realpathNearest(target));
         if (probe && stays && (await isToolchainPath(prefix, cwd, home))) return target;
