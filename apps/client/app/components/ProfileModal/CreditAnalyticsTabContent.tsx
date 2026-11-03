@@ -30,7 +30,7 @@ import dayjs from 'dayjs';
 import { useTheme } from '@mui/joy/styles';
 import { useTranslation } from 'react-i18next';
 import { useAccessibleModels } from '@client/app/hooks/useAccessibleModels';
-import { CreditHolderType, ModelBackend, ModelInfo, usdToCredits } from '@bike4mind/common';
+import { CreditHolderType, ModelBackend, ModelInfo, REFERRAL_REWARD_REASON, usdToCredits } from '@bike4mind/common';
 import { bedrockChipLabels, dedupePricingRows, textModelPriceCells } from './modelPricingRows';
 import { aggregateUsageByModel } from './usageByModel';
 import SectionContainer from './SectionContainer';
@@ -50,9 +50,6 @@ const UsageDashboard = dynamic(
     })),
   { ssr: false }
 );
-
-// Must match REFERRAL_REWARD_REASON in server/referrals/firstAnswerReward.ts, which this client cannot import.
-const REFERRAL_REWARD_REASON = 'referral_reward';
 
 const TIME_PERIODS = {
   WEEK: '7d',
