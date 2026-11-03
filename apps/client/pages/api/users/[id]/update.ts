@@ -42,6 +42,7 @@ import {
   isSameUserId,
   isSelfOrImpersonator,
   parseAdminActionReason,
+  readAdminActionReason,
   recordAdminActionFromRequest,
 } from '@server/utils/adminAudit';
 
@@ -415,7 +416,9 @@ const handler = baseApi().put(
           await recordAdminActionFromRequest(req, {
             ...cancellationEntry,
             target: auditTarget,
-            reason: statusChangeReason ?? parseAdminActionReason(body.statusChangeReason),
+            // A moderation-only suspension carries no status reason; this runs after the commit and
+            // the Stripe cancel, so it must not throw.
+            reason: statusChangeReason ?? readAdminActionReason(body.statusChangeReason),
           });
         }
       }

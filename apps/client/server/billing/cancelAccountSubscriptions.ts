@@ -85,6 +85,13 @@ const requestTimeout = (deadline: number | undefined): number =>
     ? STRIPE_REQUEST_TIMEOUT_MS
     : Math.max(1, Math.min(STRIPE_REQUEST_TIMEOUT_MS, deadline - Date.now()));
 
+// Under a deadline a timed-out request is not retried: each retry would get a fresh timeout and
+// could carry the call past the caller's budget.
+const requestOptions = (deadline: number | undefined) =>
+  deadline === undefined
+    ? { timeout: requestTimeout(deadline) }
+    : { timeout: requestTimeout(deadline), maxNetworkRetries: 0 };
+
 const pastDeadline = (deadline: number | undefined): boolean => deadline !== undefined && Date.now() >= deadline;
 
 async function cancelCustomerSubscriptions(
@@ -97,10 +104,7 @@ async function cancelCustomerSubscriptions(
   // Stripe, not the local rows, is read: a row can lag a renewal, and a deleted account's rows are
   // the very ones that went unnoticed. Stripe's default listing already omits canceled history, and
   // one page of 100 mirrors voidOpenSubscriptionInvoices: over 100 live subscriptions is not a real case.
-  const page = await stripe.subscriptions.list(
-    { customer: customerId, limit: 100 },
-    { timeout: requestTimeout(deadline) }
-  );
+  const page = await stripe.subscriptions.list({ customer: customerId, limit: 100 }, requestOptions(deadline));
   for (const subscription of page.data) {
     if (TERMINAL_SUBSCRIPTION_STATUSES.has(subscription.status)) continue;
     if (pastDeadline(deadline)) {
@@ -113,7 +117,7 @@ async function cancelCustomerSubscriptions(
       await stripe.subscriptions.cancel(
         subscription.id,
         { prorate: false, cancellation_details: { comment } },
-        { timeout: requestTimeout(deadline) }
+        requestOptions(deadline)
       );
       result.canceled.push(subscription.id);
     } catch (error) {
@@ -126,6 +130,7 @@ async function cancelCustomerSubscriptions(
     try {
       const { voided, failed } = await voidOpenSubscriptionInvoices(subscription.id, {
         timeoutMs: requestTimeout(deadline),
+        ...(deadline === undefined ? {} : { maxNetworkRetries: 0 }),
       });
       if (voided.length > 0 || failed.length > 0) {
         logger.info('[Billing] voided open invoices after canceling a subscription', {

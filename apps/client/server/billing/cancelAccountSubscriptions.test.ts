@@ -161,7 +161,10 @@ describe('cancelAccountSubscriptions', () => {
       failed: [{ customerId: 'cus_user', subscriptionId: 'sub_b', reason: 'time budget exhausted' }],
     });
     expect(mocks.subscriptionsCancel).toHaveBeenCalledTimes(1);
-    expect(mocks.subscriptionsCancel).toHaveBeenCalledWith('sub_a', expect.anything(), { timeout: 2_000 });
+    expect(mocks.subscriptionsCancel).toHaveBeenCalledWith('sub_a', expect.anything(), {
+      timeout: 2_000,
+      maxNetworkRetries: 0,
+    });
     expect(mocks.voidOpenSubscriptionInvoices).not.toHaveBeenCalled();
   });
 
