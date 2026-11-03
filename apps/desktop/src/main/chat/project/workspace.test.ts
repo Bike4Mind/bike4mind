@@ -16,7 +16,14 @@ import {
   projectDisplayName,
   unusableProjectReason,
 } from './git';
-import { appWorktreeRoot, resolveWorkspace, SpareWorktrees, unusedBranchName, worktreeFolderName } from './workspace';
+import {
+  appWorktreeRoot,
+  releaseBranchName,
+  resolveWorkspace,
+  SpareWorktrees,
+  unusedBranchName,
+  worktreeFolderName,
+} from './workspace';
 
 /**
  * Real git repositories in a temp directory rather than a mocked child_process: the whole
@@ -368,6 +375,48 @@ describe('resolveWorkspace', () => {
 
     expect(await branchExists(main, 'feat/kept')).toBe(true);
     await expect(stat(join(root, worktreeFolderName('feat/kept')))).rejects.toThrow();
+  });
+
+  it('cleans up nothing when git refuses because another writer made the path first', async () => {
+    const path = join(root, worktreeFolderName('agent/race'));
+    const originalGit = projectGit.git;
+    const spy = vi.spyOn(projectGit, 'git').mockImplementation(async (directory, args, options) => {
+      if (args[0] !== 'worktree' || args[1] !== 'add') return originalGit(directory, args, options);
+      // The other writer lands between our checks and this add.
+      await originalGit(directory, ['worktree', 'add', '--quiet', '-b', 'agent/race', path, 'main']);
+      await writeFile(join(path, 'theirs.txt'), 'theirs');
+      throw new projectGit.GitError(args, `fatal: a branch named 'agent/race' already exists`);
+    });
+    try {
+      await expect(resolveWorkspace(main, { base: 'main', branch: 'agent/race' })).rejects.toThrow(/already exists/);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(await readFile(join(path, 'theirs.txt'), 'utf8')).toBe('theirs');
+    expect(await branchExists(main, 'agent/race')).toBe(true);
+    expect((await listWorktrees(main)).some(entry => entry.branch === 'agent/race')).toBe(true);
+  });
+
+  it('removes a registration the killed add left locked, so its branch really goes', async () => {
+    const path = join(root, worktreeFolderName('agent/locked'));
+    const originalGit = projectGit.git;
+    const spy = vi.spyOn(projectGit, 'git').mockImplementation(async (directory, args, options) => {
+      if (args[0] !== 'worktree' || args[1] !== 'add') return originalGit(directory, args, options);
+      await originalGit(directory, args, options);
+      // What git leaves while it is still initializing: a lock a plain --force does not get past.
+      await originalGit(directory, ['worktree', 'lock', '--reason', 'initializing', path]);
+      throw new projectGit.GitError(args, '', options?.timeoutMs);
+    });
+    try {
+      await resolveWorkspace(main, { base: 'main', branch: 'agent/locked' }).catch(() => undefined);
+    } finally {
+      spy.mockRestore();
+    }
+
+    await expect(stat(path)).rejects.toThrow();
+    expect((await listWorktrees(main)).some(entry => entry.branch === 'agent/locked')).toBe(false);
+    expect(await branchExists(main, 'agent/locked')).toBe(false);
   });
 
   it('reuses a worktree registered for the branch even at an unexpected path', async () => {
@@ -826,5 +875,29 @@ describe('unusedBranchName', () => {
     await git(main, ['worktree', 'add', '--quiet', '-b', 'agent/review-2', join(container, 'review-2')]);
 
     expect(await unusedBranchName(main, 'agent/review')).toBe('agent/review-3');
+  });
+
+  it('gives two calls made together two names, and frees a name once it is released', async () => {
+    const { main } = await bareLayoutRepository();
+
+    const [first, second] = await Promise.all([
+      unusedBranchName(main, 'agent/twin'),
+      unusedBranchName(main, 'agent/twin'),
+    ]);
+    expect(new Set([first, second])).toEqual(new Set(['agent/twin', 'agent/twin-2']));
+
+    releaseBranchName(main, 'agent/twin');
+    expect(await unusedBranchName(main, 'agent/twin')).toBe('agent/twin');
+    releaseBranchName(main, 'agent/twin');
+    releaseBranchName(main, 'agent/twin-2');
+  });
+
+  it('holds a name until resolveWorkspace has cut it, then the branch itself holds it', async () => {
+    const { main } = await bareLayoutRepository();
+    const name = await unusedBranchName(main, 'agent/held');
+    await resolveWorkspace(main, { base: 'main', branch: name });
+
+    expect(await unusedBranchName(main, 'agent/held')).toBe('agent/held-2');
+    releaseBranchName(main, 'agent/held-2');
   });
 });

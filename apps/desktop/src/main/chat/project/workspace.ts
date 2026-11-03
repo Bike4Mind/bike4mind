@@ -801,6 +801,19 @@ export async function resolveWorkspace(
   projectDirectory: string,
   request: WorkspaceRequest
 ): Promise<WorkspaceResolution> {
+  try {
+    return await resolveWorkspaceUnreserved(projectDirectory, request);
+  } finally {
+    // From here the branch exists (or this attempt removed it), so git itself is the guard.
+    const named = (request.branch ?? '').trim();
+    if (named) releaseBranchName(projectDirectory, named);
+  }
+}
+
+async function resolveWorkspaceUnreserved(
+  projectDirectory: string,
+  request: WorkspaceRequest
+): Promise<WorkspaceResolution> {
   const { timer } = request;
   const registered = await listWorktrees(projectDirectory);
   timer?.lap('worktreeList');
@@ -873,9 +886,13 @@ export async function resolveWorkspace(
 /**
  * Check out a new worktree at `path`, which did not exist before, or leave nothing behind.
  *
- * A failed or timed-out add leaves a half-populated folder, often a registration, and with `-b`
- * the branch, and each of those makes the next attempt at the same branch fail. `createdBranch`
- * is the branch this call creates, and only that one is deleted: never a branch that was there.
+ * A failed or timed-out add leaves a half-populated folder, a registration git has locked while
+ * it was initializing, and with `-b` the branch, and each of those makes the next attempt at the
+ * same branch fail. `createdBranch` is the branch this call creates.
+ *
+ * Nothing is cleaned when git refused because the path or branch already existed: then another
+ * writer made it between our checks and this add, and it is theirs. The caller has checked that
+ * `path` did not exist, so any other failure left only what this call made.
  */
 async function addWorktree(
   projectDirectory: string,
@@ -886,25 +903,46 @@ async function addWorktree(
   try {
     await git(projectDirectory, args, { timeoutMs: WORKTREE_ADD_TIMEOUT_MS });
   } catch (err) {
-    // "already exists" means another writer made the branch first; it is theirs, not ours.
-    const raced = err instanceof Error && /already exists/i.test(err.message);
-    await discardFailedWorktree(projectDirectory, path, raced ? null : createdBranch);
+    if (!(err instanceof Error && ALREADY_THERE.test(err.message))) {
+      await discardFailedWorktree(projectDirectory, path, createdBranch);
+    }
     throw err;
   }
 }
+
+/** git's refusals for a path or branch that something else holds. */
+const ALREADY_THERE = /already exists|already checked out|already used by worktree|is a missing but/i;
 
 async function discardFailedWorktree(
   projectDirectory: string,
   path: string,
   createdBranch: string | null
 ): Promise<void> {
-  await git(projectDirectory, ['worktree', 'remove', '--force', path]).catch(() => undefined);
+  // A killed add leaves its registration locked ("initializing"): one --force does not remove a
+  // locked worktree and prune skips it, which would leave the branch held.
+  await git(projectDirectory, ['worktree', 'unlock', path]).catch(() => undefined);
+  await git(projectDirectory, ['worktree', 'remove', '--force', '--force', path]).catch(() => undefined);
   await rm(path, { recursive: true, force: true }).catch(() => undefined);
   // Drops a registration whose folder is now gone, which would otherwise hold the branch.
   await git(projectDirectory, ['worktree', 'prune']).catch(() => undefined);
   if (createdBranch && (await branchExists(projectDirectory, createdBranch))) {
     await git(projectDirectory, ['branch', '-D', createdBranch]).catch(() => undefined);
   }
+}
+
+/**
+ * Branch names unusedBranchName has handed out whose worktree is not cut yet, per project
+ * directory. Without it two spawns asked for together, with the same title, both find the same
+ * name free, and the second would share the first one's tree through resolveWorkspace's
+ * existing-worktree return. Released by resolveWorkspace, or by the caller if it never gets there.
+ */
+const reservedBranches = new Map<string, Set<string>>();
+
+export function releaseBranchName(projectDirectory: string, branch: string): void {
+  const reserved = reservedBranches.get(projectDirectory);
+  if (!reserved) return;
+  reserved.delete(branch);
+  if (reserved.size === 0) reservedBranches.delete(projectDirectory);
 }
 
 /**
@@ -916,17 +954,25 @@ async function discardFailedWorktree(
  * caller's own existence check then refuses it with a reason.
  */
 export async function unusedBranchName(projectDirectory: string, wanted: string): Promise<string> {
+  const reserved = reservedBranches.get(projectDirectory) ?? new Set<string>();
+  reservedBranches.set(projectDirectory, reserved);
   try {
     const worktrees = await listWorktrees(projectDirectory);
     for (let attempt = 1; attempt <= MAX_BRANCH_NAME_ATTEMPTS; attempt++) {
       const candidate = attempt === 1 ? wanted : `${wanted}-${attempt}`;
-      if (worktrees.some(entry => entry.branch === candidate)) continue;
-      if (await branchExists(projectDirectory, candidate)) continue;
+      if (reserved.has(candidate) || worktrees.some(entry => entry.branch === candidate)) continue;
+      // Taken before the await, so a parallel call cannot pick it in the gap.
+      reserved.add(candidate);
+      if (await branchExists(projectDirectory, candidate)) {
+        reserved.delete(candidate);
+        continue;
+      }
       return candidate;
     }
   } catch {
     // Unreadable: the caller's check reports it.
   }
+  if (reserved.size === 0) reservedBranches.delete(projectDirectory);
   return wanted;
 }
 
