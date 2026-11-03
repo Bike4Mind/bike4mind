@@ -82,6 +82,10 @@ describe('the Settings screen', () => {
     expect(html).toContain('data-testid="settings-worktree-default-switch"');
   });
 
+  it('offers the orchestrator sound preference', () => {
+    expect(html).toContain('data-testid="settings-orchestrator-sound-switch"');
+  });
+
   it('mounts the same server picker and updater, not copies of them', () => {
     expect(html).toContain('data-testid="environment-select-btn"');
     expect(html).toContain('data-testid="update-settings"');

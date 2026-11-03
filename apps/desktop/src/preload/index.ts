@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import type { AttentionNotice, AttentionOpenEvent } from '@shared/attention';
 import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth';
 import type { PromptCacheTtl } from '@bike4mind/common';
 import type {
@@ -453,6 +454,15 @@ const api: DesktopApi = {
   },
   shell: {
     openExternal: (url: string) => ipcRenderer.invoke(IPC_CHANNELS.shellOpenExternal, url),
+  },
+  attention: {
+    notify: (notice: AttentionNotice) => ipcRenderer.invoke(IPC_CHANNELS.attentionNotify, notice),
+    setBadgeCount: (count: number) => ipcRenderer.invoke(IPC_CHANNELS.attentionSetBadge, count),
+    onOpen: listener => {
+      const handler = (_event: unknown, event: AttentionOpenEvent) => listener(event);
+      ipcRenderer.on(IPC_CHANNELS.attentionOpen, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.attentionOpen, handler);
+    },
   },
   devLog: {
     getSnapshot: () => ipcRenderer.invoke(IPC_CHANNELS.devLogGetSnapshot),

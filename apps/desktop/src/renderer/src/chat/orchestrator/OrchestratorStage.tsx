@@ -6,6 +6,7 @@ import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
 import { useEffect, useMemo, type ReactNode, useState } from 'react';
 import { AgentPeekDrawer } from './AgentPeekDrawer';
+import { playChime } from './chime';
 import { useFinale } from './finale';
 import { FinaleBanner } from './FinaleBanner';
 import { ORCHESTRATOR_VIEWS, type OrchestratorViewId } from './orchestratorPrefs';
@@ -41,6 +42,9 @@ export interface OrchestratorStageProps {
   rootId?: string;
   /** The finale's "Read the report": show the parent's final answer. */
   onReadReport?(): void;
+  /** An agent to open in the peek drawer (a clicked needs-you notice); reported back once opened. */
+  focusAgent?: string | null;
+  onFocusAgentConsumed?(): void;
   view: OrchestratorViewId;
   onViewChange(view: OrchestratorViewId): void;
   actions: AgentActions;
@@ -68,6 +72,8 @@ export function OrchestratorStage({
   onParentFocus,
   rootId,
   onReadReport,
+  focusAgent = null,
+  onFocusAgentConsumed,
   view,
   onViewChange,
   actions,
@@ -85,6 +91,12 @@ export function OrchestratorStage({
   const hasSelection = selected !== null;
 
   useEffect(() => {
+    if (!focusAgent) return;
+    setSelectedId(focusAgent);
+    onFocusAgentConsumed?.();
+  }, [focusAgent]);
+
+  useEffect(() => {
     if (!hasSelection) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !event.isComposing && !event.defaultPrevented) setSelectedId(null);
@@ -99,6 +111,9 @@ export function OrchestratorStage({
   const firstNeedsYou = agents.find(agent => agent.state === 'needs-you');
 
   const finale = useFinale(rootId, agents, parent);
+  useEffect(() => {
+    if (finale.shown) playChime();
+  }, [finale.shown]);
 
   const viewProps: OrchestratorViewProps = {
     agents,

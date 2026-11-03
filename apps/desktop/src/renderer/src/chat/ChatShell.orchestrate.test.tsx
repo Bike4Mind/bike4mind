@@ -9,6 +9,7 @@ import type {
   ChatSessionStatusEvent,
   ChatSessionSummary,
 } from '@shared/chat';
+import type { AttentionOpenEvent } from '@shared/attention';
 import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
@@ -121,6 +122,7 @@ let listed: ChatSessionSummary[] = SESSIONS;
 let statusSnapshot: ChatSessionStatusEvent[] = [];
 let statusListener: ((event: ChatSessionStatusEvent) => void) | null = null;
 let parentMessages: ChatMessage[] = [];
+let attentionOpen: ((event: AttentionOpenEvent) => void) | null = null;
 let catalogModels: ChatModelOption[] = [];
 const setSessionOrchestrate = vi.fn(async (id: string, orchestrate: boolean) => {
   const found = listed.find(session => session.id === id);
@@ -138,6 +140,7 @@ beforeEach(() => {
   statusSnapshot = [];
   statusListener = null;
   parentMessages = [];
+  attentionOpen = null;
   Element.prototype.scrollIntoView = () => undefined;
   vi.stubGlobal(
     'IntersectionObserver',
@@ -173,6 +176,12 @@ beforeEach(() => {
       }),
       sidebar: quietBridge({ getSections: async () => EMPTY_SIDEBAR_SECTIONS }),
       pullRequests: quietBridge({ watch: async () => null }),
+      attention: quietBridge({
+        onOpen: (listener: (event: AttentionOpenEvent) => void) => {
+          attentionOpen = listener;
+          return () => undefined;
+        },
+      }),
       // A Code session's chips shorten paths against the home directory.
       getAppInfo: async () => ({ homeDirectory: '/home/user' }),
     },
@@ -490,6 +499,19 @@ describe('orchestrate mode in the chat shell', () => {
     expect(query('orchestrator-finale')).toBeNull();
     expect(query('orchestrator-dock')).not.toBeNull();
     expect(scrolled.at(-1)?.textContent).toContain('The combined report');
+  });
+
+  it("opens a clicked notice's agent: selects its parent, orchestrates, and peeks the agent", async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, 'table');
+    await openParent(PARENT_B.title);
+    expect(query('orchestrator-stage')).toBeNull();
+
+    await act(async () => attentionOpen?.({ sessionId: CHILD.id, rootId: PARENT.id }));
+    await act(async () => undefined);
+    expect(el('chat-session-title').textContent).toBe(PARENT.title);
+    expect(query('orchestrator-stage')).not.toBeNull();
+    expect(query('orchestrator-peek-drawer')).not.toBeNull();
   });
 
   it('opens an agent session from the stage', async () => {

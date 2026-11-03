@@ -8,6 +8,7 @@ import Input from '@mui/joy/Input';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
+import type { AttentionOpenEvent } from '@shared/attention';
 import type { AuthState } from '@shared/auth';
 import { DEFAULT_PROMPT_CACHE_TTL, type PromptCacheTtl } from '@bike4mind/common';
 import type { ChatModelOption, ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
@@ -93,12 +94,13 @@ import { BoardView } from './orchestrator/BoardView';
 import { OrchestrateToggle } from './orchestrator/OrchestrateToggle';
 import type { AgentActions, OrchestratorViewProps } from './orchestrator/OrchestratorStage';
 import { OrchestratorSurface } from './orchestrator/OrchestratorSurface';
-import { readIntroSeen, writeIntroSeen, type OrchestratorViewId } from './orchestrator/orchestratorPrefs';
+import { readIntroSeen, writeIntroSeen, writeSurface, type OrchestratorViewId } from './orchestrator/orchestratorPrefs';
 import { TableView } from './orchestrator/TableView';
 import { TavernView } from './orchestrator/tavern/TavernView';
 import { agentStates } from './orchestrator/roster';
 import { prefersReducedMotion } from './orchestrator/motion';
 import { useOrchestratorPrefs } from './orchestrator/useOrchestrator';
+import { useNeedsYouAlerts } from './orchestrator/useNeedsYouAlerts';
 
 function SessionHeader({ title, onRename }: { title: string; onRename: (title: string) => void }) {
   const [editing, setEditing] = useState(false);
@@ -555,6 +557,17 @@ export function ChatShell({
     setDockOpen(true);
     setComposerFocus(request => request + 1);
   }, [setDockOpen]);
+  // The agent a clicked needs-you notice asked for; handed to its parent's stage once that is open.
+  const [noticeFocus, setNoticeFocus] = useState<{ rootId: string; agentId: string } | null>(null);
+  const openNotice = ({ sessionId, rootId }: AttentionOpenEvent) => {
+    if (rootId === activeId) setOrchestratorSurface('orchestrate');
+    else writeSurface(rootId, 'orchestrate');
+    selectSession(rootId);
+    if (sessionId === rootId) setDockOpen(true);
+    else setNoticeFocus({ rootId, agentId: sessionId });
+  };
+  useNeedsYouAlerts(sessions, statuses, openNotice);
+  const clearNoticeFocus = useCallback(() => setNoticeFocus(null), []);
   const changeOrchestratorView = useCallback(
     (view: OrchestratorViewId) => {
       setIntroPhase('off');
@@ -1231,6 +1244,8 @@ export function ChatShell({
                   renderView={renderOrchestratorView}
                   onParentFocus={focusParentChat}
                   onReadReport={readParentReport}
+                  focusAgent={noticeFocus?.rootId === activeId ? noticeFocus.agentId : null}
+                  onFocusAgentConsumed={clearNoticeFocus}
                   delegate={
                     orchestrateCapable ? { on: delegating, onChange: on => void setOrchestrate(on) } : undefined
                   }

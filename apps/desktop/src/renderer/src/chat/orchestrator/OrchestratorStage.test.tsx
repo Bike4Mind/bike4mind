@@ -12,6 +12,9 @@ const FIXTURE = [
   agentFixture('d', 'done'),
 ];
 
+const chime = vi.hoisted(() => ({ playChime: vi.fn() }));
+vi.mock('./chime', () => chime);
+
 const onViewChange = vi.fn();
 const actions = { open: vi.fn(), stop: vi.fn(), archive: vi.fn() };
 const themed = createThemedMount();
@@ -201,6 +204,15 @@ describe('OrchestratorStage', () => {
       expect(query('orchestrator-table')).not.toBeNull();
     });
 
+    it('chimes once as the banner comes up', async () => {
+      await renderRun([agentFixture('a', 'working')]);
+      await renderRun(finished);
+      expect(chime.playChime).not.toHaveBeenCalled();
+      await settle();
+      await renderRun(finished);
+      expect(chime.playChime).toHaveBeenCalledTimes(1);
+    });
+
     it('reads the report and dismisses the banner', async () => {
       await renderRun([agentFixture('a', 'working')]);
       await renderRun(finished);
@@ -243,5 +255,24 @@ describe('OrchestratorStage', () => {
       await settle();
       expect(seen.at(-1)).toBe(true);
     });
+  });
+
+  it('opens the agent a notice asked for, once, and says it was taken', async () => {
+    const onFocusAgentConsumed = vi.fn();
+    const renderFocus = (focusAgent: string | null) =>
+      themed.render(
+        <OrchestratorStage
+          agents={FIXTURE}
+          view="table"
+          onViewChange={onViewChange}
+          actions={actions}
+          introPlaying={false}
+          focusAgent={focusAgent}
+          onFocusAgentConsumed={onFocusAgentConsumed}
+        />
+      );
+    await renderFocus('n');
+    expect(query('orchestrator-peek-drawer')).not.toBeNull();
+    expect(onFocusAgentConsumed).toHaveBeenCalledTimes(1);
   });
 });

@@ -8,6 +8,7 @@ import type { ChatApprovalAnswer, ChatMessage, ChatQueuedMessage, ChatToolCall }
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { ToolCallList } from '../ToolCallList';
 import { groupToolCalls } from '../toolRows';
+import { pendingCallsIn } from './needsYou';
 import { activityLabel } from './activity';
 import { AgentStateChip } from './AgentStateChip';
 import type { AgentActions } from './OrchestratorStage';
@@ -66,12 +67,6 @@ function useSessionMessages(
 function refreshKeyOf(agent: AgentView): string {
   const waitingOn = agent.state === 'needs-you' && agent.activity ? activityLabel(agent.activity) : '';
   return [agent.updatedAt, agent.state, waitingOn].join('\n');
-}
-
-function pendingCallsIn(messages: readonly ChatMessage[]): ChatToolCall[] {
-  return messages.flatMap(message =>
-    (message.toolCalls ?? []).filter(call => call.status === 'awaiting-approval' && call.approvalId)
-  );
 }
 
 /** One line for the message, or null when it has nothing to show. */
