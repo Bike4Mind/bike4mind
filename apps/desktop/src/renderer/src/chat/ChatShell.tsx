@@ -565,7 +565,7 @@ export function ChatShell({
   const panelShown = !!panelProject && (panelDocked ? panelPrefs.open : panelPopoverOpen);
   // Unmeasured reads as too narrow, the reverse of the panel: a rail drawn before the width is
   // known could overhang the sidebar for a frame, where the footer it falls back to cannot.
-  const statsRailFits = threadRegionWidth !== null && railFitsBesideThread(threadRegionWidth);
+  const statsRailFits = railFitsBesideThread(threadRegionWidth);
   const statsRailOn = useReplyStatsPrefs().rail;
   const bindingErrorHidden =
     !!panelProject && !!conversation.project.error && (!panelShown || panelPrefs.collapsed.has('environment'));
@@ -1243,19 +1243,31 @@ export function ChatShell({
                   </IconButton>
                 </Tooltip>
               )}
-              {/* Only while the rail fits: narrower, the stats are in each reply's hover footer
-                  whichever way this is set, so a button here would do nothing visible. */}
-              {statsRailFits && (
-                <Tooltip
-                  size="sm"
-                  variant="soft"
-                  placement="bottom-end"
-                  title={statsRailOn ? 'Hide reply stats' : 'Show reply stats'}
-                >
+              {/* Drawn at every width, so the buttons beside it never shift and focus is never
+                  dropped as the window crosses the breakpoint; narrower, the tooltip says why
+                  nothing shows beside the conversation. */}
+              <Tooltip
+                size="sm"
+                variant="soft"
+                placement="bottom-end"
+                title={
+                  !activeId
+                    ? 'Open a conversation to see reply stats.'
+                    : statsRailFits
+                      ? statsRailOn
+                        ? 'Hide reply stats'
+                        : 'Show reply stats'
+                      : statsRailOn
+                        ? 'Hide reply stats beside the conversation; the window is too narrow for them now'
+                        : 'Show reply stats beside the conversation once the window is wide enough'
+                }
+              >
+                <Box component="span" sx={{ display: 'inline-flex' }}>
                   <IconButton
                     size="sm"
-                    variant={statsRailOn ? 'soft' : 'plain'}
+                    variant={statsRailOn && activeId ? 'soft' : 'plain'}
                     color="neutral"
+                    disabled={!activeId}
                     aria-pressed={statsRailOn}
                     aria-label={statsRailOn ? 'Hide reply stats' : 'Show reply stats'}
                     onClick={() => setReplyStatsRail(!statsRailOn)}
@@ -1263,8 +1275,8 @@ export function ChatShell({
                   >
                     <StatsIcon />
                   </IconButton>
-                </Tooltip>
-              )}
+                </Box>
+              </Tooltip>
             </Box>
           </Box>
 

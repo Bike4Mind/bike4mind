@@ -33,6 +33,10 @@ describe('railFitsBesideThread', () => {
     expect(railFitsBesideThread(1280 - sidebar.collapsed)).toBe(true);
   });
 
+  it('does not fit a thread region that has not been measured yet', () => {
+    expect(railFitsBesideThread(null)).toBe(false);
+  });
+
   it('needs a wider window for a wider sidebar', () => {
     expect(railFitsBesideThread(1657 - sidebar.widest)).toBe(true);
     expect(railFitsBesideThread(1656 - sidebar.widest)).toBe(false);
