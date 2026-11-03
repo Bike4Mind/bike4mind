@@ -11,9 +11,9 @@ import {
 } from '@bike4mind/common';
 import { addCredits, DuplicateCreditTransactionError } from '../creditService';
 import type { SignupRiskBand, SignupRiskSignals } from './signupRisk';
-import { releaseSignupTranche } from './stagedSignupGrant';
+import { dropBudgetHold, hasSignupBacklog, releaseSignupTranche } from './stagedSignupGrant';
 import { protectSignupCredits } from './signupProtection';
-import { reserveSignupGrantBudget } from './signupGrantBudget';
+import { reserveSignupGrantBudget, signupGrantBudgetDay } from './signupGrantBudget';
 
 type FreeCreditUser = {
   id: string;
@@ -98,9 +98,15 @@ export const grantFreeCredits = async (
       transactionId: { $in: [`verify-grant:${user.id}`, legacyOtcRegisterTransactionId(user.id)] },
     });
     if (!alreadyGranted) await db.users.addTagsToUser(user.id, [PENDING_FREE_CREDITS_TAG]);
+    await dropBudgetHold(db.users, user.id, persisted?.signupGrantHeldReason);
     return { creditsGranted: 0, currentCredits: null, withheld: true };
   }
-  const result = await grantFlatFreeCredits(user, { db, reason, bypassBudget }, !!persisted?.referredByUserId);
+  const result = await grantFlatFreeCredits(
+    user,
+    { db, reason, bypassBudget },
+    !!persisted?.referredByUserId,
+    persisted?.signupGrantHeldReason === 'budget_exhausted'
+  );
   // Every outcome but a hold is final, so a held reason left from an earlier attempt must not outlive it.
   if (!result.withheld && persisted?.signupGrantHeldReason)
     await db.users.update({ id: user.id, signupGrantHeldReason: null });
@@ -110,7 +116,8 @@ export const grantFreeCredits = async (
 async function grantFlatFreeCredits(
   user: Pick<FreeCreditUser, 'id' | 'pendingCreditGrant'>,
   { db, reason, bypassBudget }: Pick<FreeCreditAdapters, 'db' | 'reason' | 'bypassBudget'>,
-  referred: boolean
+  referred: boolean,
+  alreadyHeld: boolean
 ): Promise<GrantFreeCreditsResult> {
   const amount = await resolveFreeCreditAmount(user.pendingCreditGrant, db.adminSettings);
   if (amount <= 0) return { creditsGranted: 0, currentCredits: null };
@@ -153,10 +160,18 @@ async function grantFlatFreeCredits(
   const budget =
     bypassBudget || isExplicitGrant
       ? { outcome: 'unmetered' as const, release: async () => {} }
-      : await reserveSignupGrantBudget(db, transactionId, amount);
+      : !alreadyHeld &&
+          db.signupProtection?.grantBudget &&
+          (await hasSignupBacklog(db.users, signupGrantBudgetDay(db.signupProtection?.grantBudget?.now?.())))
+        ? { outcome: 'exhausted' as const, release: async () => {} }
+        : await reserveSignupGrantBudget(db, transactionId, amount, { pool: 'signup' });
   if (budget.outcome === 'exhausted') {
     await db.users.addTagsToUser(user.id, [PENDING_FREE_CREDITS_TAG]);
-    await db.users.update({ id: user.id, signupGrantHeldReason: 'budget_exhausted' });
+    await db.users.update({
+      id: user.id,
+      signupGrantHeldReason: 'budget_exhausted',
+      ...(alreadyHeld ? {} : { signupGrantHeldAt: db.signupProtection?.grantBudget?.now?.() ?? new Date() }),
+    });
     return { creditsGranted: 0, currentCredits: null, withheld: true, budgetExhausted: true };
   }
 

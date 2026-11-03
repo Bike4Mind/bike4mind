@@ -5,6 +5,8 @@ import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { GearStatus } from '@client/app/hooks/useGearsStatus';
+import { toast } from 'sonner';
+import { AxiosError, type AxiosResponse } from 'axios';
 
 const { state, logEvent } = vi.hoisted(() => ({
   state: {
@@ -123,6 +125,41 @@ describe('GearsPage reward markers', () => {
     expect(state.mutate).toHaveBeenCalledTimes(1);
     expect(state.mutate.mock.calls[0][0]).toBe('projects');
     expect(state.navigate).not.toHaveBeenCalled();
+  });
+
+  it('tells the user a queued claim will pay later', async () => {
+    renderPage();
+    await userEvent.click(screen.getByTestId('gear-claim-projects'));
+    vi.mocked(toast.success).mockClear();
+    state.mutate.mock.calls[0][1].onSuccess({ key: 'projects', queued: true });
+    expect(toast.success).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(toast.success).mock.calls[0][0]).toMatch(/pays out as soon as the daily reward budget allows/);
+  });
+
+  it('does not invite a retry when the reward is refused for the account', async () => {
+    renderPage();
+    await userEvent.click(screen.getByTestId('gear-claim-projects'));
+    vi.mocked(toast.error).mockClear();
+    state.mutate.mock.calls[0][1].onError(
+      new AxiosError('Forbidden', '403', undefined, undefined, {
+        status: 403,
+        data: { error: 'account_blocked' },
+      } as AxiosResponse)
+    );
+    expect(vi.mocked(toast.error).mock.calls[0][0]).toBe("This reward isn't available for your account.");
+  });
+
+  it('does not read a 403 from another gate as a refused account', async () => {
+    renderPage();
+    await userEvent.click(screen.getByTestId('gear-claim-projects'));
+    vi.mocked(toast.error).mockClear();
+    state.mutate.mock.calls[0][1].onError(
+      new AxiosError('Forbidden', '403', undefined, undefined, {
+        status: 403,
+        data: { error: 'Forbidden' },
+      } as AxiosResponse)
+    );
+    expect(vi.mocked(toast.error).mock.calls[0][0]).toBe("Couldn't claim the reward. Try again.");
   });
 
   it('a click on the card itself acts on its CTA and claims nothing', async () => {

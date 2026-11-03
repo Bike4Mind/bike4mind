@@ -63,7 +63,13 @@ const stateData = (overrides: Partial<IncidentState> = {}): IncidentState => ({
   generatedAt: '2026-11-02T12:00:00.000Z',
   defenses: {
     turnstile: { enabled: true, failClosed: true, secretConfigured: true },
-    grantBudget: { limit: 50000, spentToday: 12500, day: '2026-11-02' },
+    grantBudget: {
+      day: '2026-11-02',
+      pools: [
+        { pool: 'signup', limit: 50000, spentToday: 12500, missing: false },
+        { pool: 'trickle', limit: 0, spentToday: 0, missing: true },
+      ],
+    },
     newAccountSpendCapDays: 7,
     paymentRisk: {
       alertsEnabled: true,
@@ -125,7 +131,8 @@ describe('IncidentView', () => {
     expect(screen.queryByTestId('security-incident-turnstile-secret-chip')).not.toBeInTheDocument();
     expect(screen.getByTestId('security-incident-block-list-0-chip')).toHaveAttribute('data-tone', 'bad');
     expect(screen.getByTestId('security-incident-block-list-1-chip')).toHaveAttribute('data-tone', 'warn');
-    expect(screen.getByTestId('security-incident-grant-budget')).toHaveTextContent('12,500 of 50,000 credits');
+    expect(screen.getByTestId('security-incident-grant-budget-signup')).toHaveTextContent('12,500 of 50,000 credits');
+    expect(screen.getByTestId('security-incident-grant-budget-trickle')).toHaveTextContent('Paused (not set)');
     expect(screen.getByTestId('security-incident-spend-cap')).toHaveTextContent('7 days');
     expect(screen.getByTestId('security-incident-payment-auto-refund-chip')).toHaveTextContent('Auto-refund off');
     expect(screen.getByTestId('security-incident-payment-auto-refund-chip')).toHaveAttribute('data-tone', 'neutral');
