@@ -1,8 +1,7 @@
 import { GetEffectiveApiKeyAdapters } from '../apiKeyService';
 import { ToolExecutionRequest, ToolExecutionResult, ToolErrorType, type ServerToolExecutors } from './types';
-import { firecrawlFetch, webFetchBody } from '../llm/tools/implementation/webfetch';
-import { performWebSearch, WebSearchParams } from '../llm/tools/implementation/websearch';
 import { fetchWeatherData, WeatherParams } from '../llm/tools/implementation/weather';
+import { getQuestErrorCode } from '@bike4mind/common';
 
 /**
  * Categorize errors for analytics without changing user-facing behavior
@@ -56,10 +55,6 @@ function categorizeError(error: any): ToolErrorType {
 export async function executeServerTool(
   request: ToolExecutionRequest,
   adapters: GetEffectiveApiKeyAdapters,
-  // Signs web_search image URLs - see WebSearchToolConfig.imageUrlSigningSecret. Omit only when
-  // the caller genuinely has no secret; performWebSearch degrades to no images rather than
-  // emitting an unverifiable URL.
-  imageUrlSigningSecret = '',
   // Host-supplied implementations for tools this package cannot reach (see ServerToolExecutors).
   executors: ServerToolExecutors = {}
 ): Promise<ToolExecutionResult> {
@@ -75,18 +70,19 @@ export async function executeServerTool(
         break;
       }
 
+      // Paid provider calls: the host's executor holds credits around them, so a missing one fails
+      // the tool rather than running it un-billed (same rule as decide).
       case 'web_search': {
-        const result = await performWebSearch({ db: adapters.db }, input as WebSearchParams, imageUrlSigningSecret);
-        content = result.formattedResults;
+        const webSearch = executors.web_search;
+        if (!webSearch) throw new Error('web_search is not configured on this deployment');
+        content = await webSearch(request);
         break;
       }
 
       case 'web_fetch': {
-        const { url, offset } = input as { url: string; offset?: number };
-        const result = await firecrawlFetch({ db: adapters.db }, url, { offset });
-        // Shared formatter keeps truncation/continuation in-band and consistent with the
-        // web_fetch tool and HTTP endpoint.
-        content = webFetchBody(result);
+        const webFetch = executors.web_fetch;
+        if (!webFetch) throw new Error('web_fetch is not configured on this deployment');
+        content = await webFetch(request);
         break;
       }
 
@@ -117,6 +113,7 @@ export async function executeServerTool(
       success: false,
       error: errorMessage,
       errorType,
+      errorCode: getQuestErrorCode(error),
       executionTimeMs,
     };
   }

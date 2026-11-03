@@ -67,6 +67,15 @@ export interface DeductVideoGenerationCreditsParams extends DeductCreditsWithOrg
 }
 
 /**
+ * Parameters for a tool's provider cost billed outside a chat turn (web_search, web_fetch on the
+ * stateless tool routes). `model` names the provider-and-tool that incurred it, e.g.
+ * `serpapi-web_search`, never a chat model. The quest id is a synthetic per-call id.
+ */
+export interface DeductToolUsageCreditsParams extends DeductCreditsWithOrgSupportParams {
+  type: 'tool_usage';
+}
+
+/**
  * Parameters for text generation credit deduction
  */
 export interface DeductTextGenerationCreditsParams extends DeductCreditsWithOrgSupportParams {
@@ -141,6 +150,7 @@ export type DeductCreditsParams =
   | DeductImageGenerationCreditsParams
   | DeductImageEditCreditsParams
   | DeductVideoGenerationCreditsParams
+  | DeductToolUsageCreditsParams
   | DeductTextGenerationCreditsParams
   | DeductSoundEffectsCreditsParams
   | DeductTtsCreditsParams
@@ -281,7 +291,7 @@ export async function deductCreditsWithOrgSupport(
       cacheWriteTokens: params.cacheWriteTokens,
     };
   } else {
-    // Quest-scoped image/edit/video types; questId is guaranteed by their param shape.
+    // Quest-scoped image/edit/video/tool types; questId is guaranteed by their param shape.
     transactionParams = {
       ...baseParams,
       type,
