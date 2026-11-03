@@ -107,6 +107,8 @@ describe('sessionScriptRun', () => {
     ['bash -c "cd sub && ./y.sh"', './y.sh'],
     ['bash -c "cd sub; bash y.sh"', 'y.sh'],
     ['bash +ec "cd sub; bash y.sh"', 'y.sh'],
+    ['sudo -u bob bash -c "cd sub && ./y.sh"', './y.sh'],
+    ['timeout -s KILL 5 bash -c "cd sub && ./y.sh"', './y.sh'],
     ['echo "$(./run.sh)"', './run.sh'],
     ['echo "$(bash run.sh)"', 'run.sh'],
     ['bash <(cat run.sh)', 'run.sh'],
@@ -178,6 +180,7 @@ describe('sessionScriptRun', () => {
     expect(run?.hooks.map(([repository]) => repository)).toEqual([repo]);
     expect(await sessionScriptRun('git status', root, id)).toBeNull();
     expect(await sessionScriptRun(`git -C ${repo} status`, root, id)).not.toBeNull();
+    expect(await sessionScriptRun('timeout -s KILL 5 git status', repo, id)).not.toBeNull();
 
     expectShellRun('key', id, run!.hooks);
     shellCommandRan({ sessionId: id, approvedKey: 'key' } as ToolContext);

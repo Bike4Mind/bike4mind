@@ -408,11 +408,16 @@ export function pastWrapper(tokens: readonly string[], at: number): number {
   return Math.min(wrapperOptionsEnd(name, tokens, at + 1) + (WRAPPERS[name]?.operands ?? 0), tokens.length);
 }
 
-/** The command a wrapper (`sudo`, `env X=1`, `timeout 5`) runs, with the wrapper's own words dropped. */
-function withoutWrappers(tokens: readonly string[]): string[] {
+/** Where the command a run of leading wrappers (`sudo`, `env X=1`, `timeout 5`) runs starts in `tokens`. */
+function wrappedStart(tokens: readonly string[]): number {
   let start = 0;
   while (start < tokens.length && isWrapper(tokens[start])) start = pastWrapper(tokens, start);
-  return tokens.slice(start);
+  return start;
+}
+
+/** The command a wrapper runs, with the wrapper's own words dropped. */
+function withoutWrappers(tokens: readonly string[]): string[] {
+  return tokens.slice(wrappedStart(tokens));
 }
 
 /** A wrapper can change the executable, and these clients can start sending data just by changing flags. */
@@ -583,11 +588,7 @@ const STDIN_SCRIPT = /^(python[\d.]*|node|ruby|perl|php|bun|osascript|sh|bash|zs
  */
 export function opaqueForm(tokens: readonly string[]): string | null {
   const normalised = tokens.map(unquote);
-  let start = 0;
-  while (start < normalised.length && isWrapperName(basename(normalised[start]))) {
-    start++;
-    while (start < normalised.length && /^(-|\d|[A-Za-z_][A-Za-z0-9_]*=)/.test(normalised[start])) start++;
-  }
+  const start = wrappedStart(normalised);
   const executable = normalised[start];
   if (executable === undefined) return null;
   const program = basename(executable);
@@ -668,11 +669,7 @@ function sendsBody(method: string | undefined): boolean {
  */
 export function outboundReason(raw: readonly string[], stdin = false): string | null {
   const tokens = raw.map(unquote);
-  let start = 0;
-  while (start < tokens.length && isWrapperName(basename(tokens[start]))) {
-    start++;
-    while (start < tokens.length && /^(-|\d)|=/.test(tokens[start])) start++;
-  }
+  const start = wrappedStart(tokens);
   if (start >= tokens.length) return null;
   const program = basename(tokens[start]);
   const args = tokens.slice(start + 1);
@@ -887,19 +884,12 @@ function sortRunsOrWrites(args: readonly string[]): boolean {
   return false;
 }
 
-/** Option arguments of `timeout` that take a value of their own. */
-const TIMEOUT_VALUE_OPTIONS = /^(-s|-k|--signal|--kill-after)$/;
-
 /**
  * The command `timeout [options] DURATION command...` runs, or null when it cannot be read off
  * the text. The duration and option values are inert; only the wrapped command matters.
  */
 function timeoutCommand(raw: readonly string[]): string[] | null {
-  let at = 0;
-  while (at < raw.length && unquote(raw[at]).startsWith('-')) {
-    if (TIMEOUT_VALUE_OPTIONS.test(unquote(raw[at]))) at++;
-    at++;
-  }
+  const at = wrapperOptionsEnd('timeout', raw, 0);
   const duration = raw[at];
   if (duration === undefined || !/^\d+(\.\d+)?[smhd]?$/.test(unquote(duration))) return null;
   const command = raw.slice(at + 1);

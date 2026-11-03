@@ -5,7 +5,7 @@ import { parseWslPath, wslLocation } from '../../wsl/wslPath';
 import { directoryOptionValues } from './bashArity';
 import { parseBash } from './bashParser';
 import { hostPhysicalTarget, isWithin, operandTargets, resolveOperand } from './paths';
-import { expandHome, shellHome, unquote, words } from './shellScan';
+import { expandHome, isWrapper, pastWrapper, shellHome, unquote, words } from './shellScan';
 import { repositoryRoot } from './shellWrites';
 import type { ToolContext } from './types';
 
@@ -208,7 +208,6 @@ export function expectShellRun(key: string, sessionId: string, hooks: [string, n
   if (pendingHooks.size > MAX_PENDING) pendingHooks.delete(pendingHooks.keys().next().value as string);
 }
 
-const WRAPPERS = new Set(['sudo', 'env', 'command', 'exec', 'nohup', 'time', 'nice', 'timeout', 'xargs']);
 /** Leading words that start another program: `npx tsx x.ts` runs `tsx x.ts`. */
 const LAUNCHERS: readonly (readonly string[])[] = [
   ['npx'],
@@ -306,11 +305,16 @@ function skipWrappers(tokens: readonly string[]): { start: number; wrapped: bool
   let launched = false;
   for (;;) {
     const launcher = launcherLength(tokens, start);
-    if (launcher === 0 && !WRAPPERS.has(basename(tokens[start] ?? ''))) break;
-    if (launcher === 0) wrapped = true;
-    else launched = true;
-    start += Math.max(launcher, 1);
-    while (start < tokens.length && /^(-|\d|[A-Za-z_][A-Za-z0-9_]*=)/.test(tokens[start])) start++;
+    if (launcher > 0) {
+      launched = true;
+      start += launcher;
+      while (start < tokens.length && /^(-|\d|[A-Za-z_][A-Za-z0-9_]*=)/.test(tokens[start])) start++;
+    } else if (start < tokens.length && isWrapper(tokens[start])) {
+      wrapped = true;
+      start = pastWrapper(tokens, start);
+    } else {
+      break;
+    }
   }
   return { start, wrapped, launched };
 }

