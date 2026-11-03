@@ -47,7 +47,12 @@ describe('GET /api/v1/credits dedicated rate limit', () => {
 
   it('is off by default, so nothing changes until an admin sets it', async () => {
     mockGetSettingsMap.mockResolvedValue({});
-    expect(await captured.limiter!.limit({ apiKeyInfo: { keyId: 'k1' } })).toBe(0);
+    expect(await captured.limiter!.limit({ apiKeyInfo: { keyId: 'k1' } })).toBe(Infinity);
+  });
+
+  it('treats an explicit 0 setting as off', async () => {
+    mockGetSettingsMap.mockResolvedValue({ apiRateLimitCreditsPerMin: '0' });
+    expect(await captured.limiter!.limit({ apiKeyInfo: { keyId: 'k1' } })).toBe(Infinity);
   });
 
   it('takes its per-minute ceiling from the admin setting', async () => {
@@ -57,7 +62,7 @@ describe('GET /api/v1/credits dedicated rate limit', () => {
 
   it('leaves JWT sessions exempt without reading the setting', async () => {
     mockGetSettingsMap.mockResolvedValue({ apiRateLimitCreditsPerMin: '1' });
-    expect(await captured.limiter!.limit({})).toBe(0);
+    expect(await captured.limiter!.limit({})).toBe(Infinity);
     expect(mockGetSettingsMap).not.toHaveBeenCalled();
   });
 
