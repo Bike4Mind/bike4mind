@@ -23,6 +23,12 @@ describe('describeAlways', () => {
     expect(describeAlways(unreachable, CWD, HOME)).toBeUndefined();
   });
 
+  it('shows a character a WSL path keeps behind a NUL as its code point', () => {
+    const scope = describeAlways(always([], ['/Users/jude/x\0\u{f05c}']), CWD, HOME);
+    expect(scope?.shown).toBe('~/x<U+F05C>/*');
+    expect(scope?.full).toBe('/Users/jude/x<U+F05C>/*');
+  });
+
   it('names the patterns a command would allow', () => {
     expect(describeAlways(always(['git status *']), CWD, HOME)?.shown).toBe('`git status *`');
   });

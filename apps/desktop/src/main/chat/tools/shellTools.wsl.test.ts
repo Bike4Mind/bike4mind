@@ -52,6 +52,16 @@ describe('a shell command that reaches a WSL distro no root is in', () => {
     expect(prompt.always?.ungranted).toEqual([DEBIAN]);
   });
 
+  it('names a Linux name kept behind a NUL with that character shown, and keeps the path as scanned', async () => {
+    const kept = '\\\\wsl.localhost\\Debian\\home\\x\0\u{f05c}';
+    scanned.ungranted = [kept];
+
+    const prompt = await shellApproval('bash_execute', { command: 'ls' }, context);
+
+    expect(prompt.detail).toContain('Reaches \\\\wsl.localhost\\Debian\\home\\x<U+F05C>, in a WSL distro');
+    expect(prompt.always?.ungranted).toEqual([kept]);
+  });
+
   it('treats a working directory in such a distro as unreachable, not as a folder to remember', async () => {
     scanned.ungranted = [];
 

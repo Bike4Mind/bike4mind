@@ -18,6 +18,7 @@ import {
 import { commandEnv, launchCommand, spawnsDetached } from './commandLaunch';
 import { commandExit, signalCommandTree } from './commandTree';
 import type { SandboxedCommand } from './sandbox';
+import { shownPath } from '../../wsl/wslPath';
 import {
   capOutputMiddle,
   optionalNumber,
@@ -450,7 +451,7 @@ export async function shellApproval(
       : []),
     ...(gitProgram ? [`Sets ${gitProgram}, which makes git run a program.`] : []),
     ...(unreachable.length > 0
-      ? [`Reaches ${unreachable.join(', ')}, in a WSL distro this project has no folder in.`]
+      ? [`Reaches ${unreachable.map(shownPath).join(', ')}, in a WSL distro this project has no folder in.`]
       : []),
   ];
   // A push or gh write to the folder's own origin still says so on the card, but does not stop

@@ -73,6 +73,14 @@ export function wslUncPath(location: Pick<WslLocation, 'host' | 'distro'>, linux
   );
 }
 
+/**
+ * `path` for UI text, where the NUL `wslUncPath` keeps a character behind draws nothing: that
+ * character is shown as `<U+F05C>`, which no Windows name can hold.
+ */
+export function shownPath(path: string): string {
+  return path.replace(/\0(.)/gu, (_, char: string) => `<U+${(char.codePointAt(0) ?? 0).toString(16).toUpperCase()}>`);
+}
+
 /** How an operand is read: by bash itself (`cd`, a redirect), by a program, or by a Windows program run through interop. */
 export type OperandReader = 'shell' | 'program' | 'windows';
 
