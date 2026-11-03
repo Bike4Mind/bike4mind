@@ -21,6 +21,15 @@ describe('accountDeletionPendingFrom', () => {
     ).toBeNull();
   });
 
+  it('returns null when the date is not a string', () => {
+    expect(
+      accountDeletionPendingFrom(errorWith(403, { code: ACCOUNT_DELETION_PENDING_CODE, scheduledFor: 1790000000000 }))
+    ).toBeNull();
+    expect(
+      accountDeletionPendingFrom(errorWith(403, { code: ACCOUNT_DELETION_PENDING_CODE, scheduledFor: { at: 'x' } }))
+    ).toBeNull();
+  });
+
   it('returns null for a 403 with another code and for a non-403', () => {
     expect(accountDeletionPendingFrom(errorWith(403, { code: 'OTHER', scheduledFor: 'x' }))).toBeNull();
     expect(
