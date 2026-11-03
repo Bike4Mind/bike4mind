@@ -24,6 +24,7 @@ import { sessionWillInjectAuthoredPrompt } from '@bike4mind/server-utils/utils/s
 import { dispatchQuest } from '@server/utils/dispatchQuest';
 import { loadBaseIdentitySystemPromptMessages } from '@bike4mind/server-utils/utils/systemPrompts/loader';
 import { requestTurnAuth } from '@server/auth/turnAuth';
+import { readVisitId } from '@server/analytics/visitSession';
 import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
 import { Request } from 'express';
 
@@ -150,6 +151,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     // scope gaps always win.
     const deniedTools = [...(isStringArray(requestedDenials) ? requestedDenials : []), ...dataLakeToolsDeniedFor(req)];
 
+    const turnAuth = requestTurnAuth(req);
     const quest = await chatCompletion.invoke({
       body: {
         ...invokeParams,
@@ -159,8 +161,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
       },
       userId: req.user.id,
       // The key (when one authenticated the turn) also attributes a lake write a tool drives.
-      ...requestTurnAuth(req),
+      ...turnAuth,
       adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
+      // The visit the question was asked in, so the turn's first_value names it. A key turn names none.
+      visitId: turnAuth.authOrigin === 'session' ? readVisitId(req.headers.cookie) : undefined,
     });
 
     // Handle case where quest creation failed (session or quest not found during invoke)
