@@ -12,7 +12,7 @@ import { type MigrationFile } from './index';
  * Idempotent: createIndexes is a no-op for indexes that already exist.
  */
 const migration: MigrationFile = {
-  id: 20260921237400,
+  id: 20260921238200,
   name: 'ensure analytics hop indexes',
 
   up: async () => {
