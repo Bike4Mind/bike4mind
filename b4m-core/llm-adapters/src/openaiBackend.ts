@@ -171,6 +171,16 @@ export class ResponsesStreamTruncatedError extends Error {
   }
 }
 
+// Tools return once after a first failed round so the model can retry or route around it; a second
+// failure drops them so a broken tool cannot loop to the cap. Capture `priorToolFailure` before the round runs.
+function keepToolsForNextRound(
+  anyMcpTool: boolean,
+  priorToolFailure: boolean,
+  toolsUsed: RecordableToolUse[]
+): boolean {
+  return anyMcpTool || (!priorToolFailure && toolsUsed.some(t => t.success === false));
+}
+
 export class OpenAIBackend implements ICompletionBackend {
   private _api: OpenAI;
   private logger: Logger;
@@ -1053,6 +1063,7 @@ export class OpenAIBackend implements ICompletionBackend {
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
+    const priorToolFailure = toolsUsed.some(t => t.success === false);
     this.currentModel = model;
     options = {
       temperature: 0.9,
@@ -1523,19 +1534,17 @@ export class OpenAIBackend implements ICompletionBackend {
               return;
             }
 
-            // Keep tools available for MCP tools (enables chaining); remove for built-in tools
+            const keepTools = keepToolsForNextRound(anyMcpTool, priorToolFailure, toolsUsed);
             // Carry this turn's tokens forward so the terminal recursive call's
             // emits carry the full multi-turn billable total (each OpenAI API
             // call is billed independently - accumulating is required for
             // correct credit attribution).
             await this.complete(
               model,
-              // Tracks the tools decision on the next line: this branch keeps tools only for MCP
-              // chaining, so on the built-in-tool path the tool-dependent prompts have to go too.
-              anyMcpTool ? messages : stripToolDependentMessages(messages),
+              keepTools ? messages : stripToolDependentMessages(messages),
               {
                 ...options,
-                tools: anyMcpTool ? options.tools : undefined,
+                tools: keepTools ? options.tools : undefined,
                 // First-turn-only tool_choice: after tools run, let the model synthesize.
                 tool_choice: 'auto',
                 _internal: {
@@ -1994,16 +2003,16 @@ export class OpenAIBackend implements ICompletionBackend {
           return;
         }
 
-        // Keep tools available for MCP tools (enables chaining); remove for built-in tools.
+        const keepTools = keepToolsForNextRound(anyMcpTool, priorToolFailure, toolsUsed);
         // Carry this turn's tokens forward so the recursive call's emits carry the full
         // multi-turn billable total (each OpenAI API call is billed independently -
         // accumulating is required for correct credit attribution).
         await this.complete(
           model,
-          messages,
+          keepTools ? messages : stripToolDependentMessages(messages),
           {
             ...options,
-            tools: anyMcpTool ? options.tools : undefined,
+            tools: keepTools ? options.tools : undefined,
             // First-turn-only tool_choice: after tools run, let the model synthesize.
             tool_choice: 'auto',
             _internal: {
@@ -2234,6 +2243,7 @@ export class OpenAIBackend implements ICompletionBackend {
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
+    const priorToolFailure = toolsUsed.some(t => t.success === false);
     const toolCallCount = options._internal?.toolCallCount ?? 0;
     // Always set by complete() before it routes here.
     const requestStartedAt = options._internal?.requestStartedAt ?? Date.now();
@@ -2530,13 +2540,14 @@ export class OpenAIBackend implements ICompletionBackend {
 
     // Recurse. Tool results are now in `messages`; carry this turn's tokens forward so
     // the terminal emit reports the full multi-turn billable total. Drop tools for the
-    // synthesis turn (unless MCP, which chains) - mirrors the chat path.
+    // synthesis turn (unless MCP, which chains, or a first failure) - mirrors the chat path.
+    const keepTools = keepToolsForNextRound(anyMcpTool, priorToolFailure, toolsUsed);
     await this.complete(
       model,
-      messages,
+      keepTools ? messages : stripToolDependentMessages(messages),
       {
         ...options,
-        tools: anyMcpTool ? options.tools : undefined,
+        tools: keepTools ? options.tools : undefined,
         tool_choice: 'auto',
         _internal: {
           ...options._internal,
