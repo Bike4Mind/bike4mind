@@ -64,17 +64,46 @@ export type IncidentReviewDelivery = Omit<IncidentReviewAlertDeps, 'incidents'>;
 
 export type IncidentAlertOutcome = 'delivered' | 'no_recipients' | 'failed';
 
+// Digest links land on the admin console base path.
+// TODO: link the moderation review tab directly once it is merged (see adminModerationIncidentPath).
+const ADMIN_CONSOLE_PATH = '/admin';
+
+export interface IncidentReminderDigest {
+  /** Incidents still awaiting a verdict. */
+  pendingCount: number;
+  /** Age of the oldest of them, in minutes. */
+  oldestAgeMinutes: number;
+}
+
 /**
- * Sends the metadata-only alert for one incident to every configured reviewer, without stamping
- * anything: the caller decides which timestamp a delivery records. Shared by the request path
- * (withReviewerAlerts) and the scheduled sweep so both render and log identically.
+ * Renders the daily reminder: one message per reviewer for everything still waiting. Counts and an
+ * age only; like the per-incident alert it carries no incident id, image, category or user data.
  */
-export async function deliverIncidentAlert(
-  incident: RecordedIncident,
+export function renderIncidentReminderDigest(
+  digest: IncidentReminderDigest,
+  reviewUrl: string
+): { subject: string; html: string } {
+  const hours = Math.floor(digest.oldestAgeMinutes / 60);
+  const rows: [string, string][] = [
+    ['Incidents waiting', String(digest.pendingCount)],
+    ['Oldest waiting', `${hours} ${hours === 1 ? 'hour' : 'hours'}`],
+  ];
+  const table = rows.map(([k, v]) => `<tr><td><strong>${k}</strong></td><td>${escapeHtml(v)}</td></tr>`).join('');
+  return {
+    subject: 'Moderation reviews still pending',
+    html:
+      `<p>Moderation incidents are still waiting for a review verdict in the admin console.</p><table>${table}</table>` +
+      `<p><a href="${escapeHtml(reviewUrl)}">${escapeHtml(reviewUrl)}</a></p>`,
+  };
+}
+
+async function deliverToReviewers(
+  buildEmail: (adminUrl: (path: string) => string) => { subject: string; html: string },
+  meta: Record<string, string>,
+  what: string,
   deps: IncidentReviewDelivery,
-  options: { timeoutMs?: number } = {}
+  options: { timeoutMs?: number }
 ): Promise<IncidentAlertOutcome> {
-  const meta = { incidentId: incident.id };
   const { valid: recipients, invalid } = partitionEmailList(await deps.getRecipients());
   if (invalid.length > 0) {
     deps.logger.warn(
@@ -90,9 +119,8 @@ export async function deliverIncidentAlert(
     return 'no_recipients';
   }
 
-  const path = adminModerationIncidentPath(incident.id);
   const baseUrl = deps.appUrl()?.trim();
-  const email = renderIncidentReviewAlert(incident, baseUrl ? toAbsoluteUrl(baseUrl, path) : path);
+  const email = buildEmail(path => (baseUrl ? toAbsoluteUrl(baseUrl, path) : path));
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timedOut = new Promise<'timeout'>(resolve => {
@@ -106,17 +134,52 @@ export async function deliverIncidentAlert(
   try {
     const outcome = await Promise.race([deliver(), timedOut]);
     if (outcome === 'timeout') {
-      deps.logger.error('[ImageModeration] reviewer alert did not complete in time', meta);
+      deps.logger.error(`[ImageModeration] reviewer ${what} did not complete in time`, meta);
       return 'failed';
     }
     if (outcome === false) {
-      deps.logger.error('[ImageModeration] reviewer alert failed to send', meta);
+      deps.logger.error(`[ImageModeration] reviewer ${what} failed to send`, meta);
       return 'failed';
     }
     return 'delivered';
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Sends the metadata-only alert for one incident to every configured reviewer, without stamping
+ * anything: the caller decides which timestamp a delivery records. Shared by the request path
+ * (withReviewerAlerts) and the scheduled sweep so both render and log identically. The send budget
+ * defaults to the request path's; the sweep has no request to protect and passes a longer one.
+ */
+export function deliverIncidentAlert(
+  incident: RecordedIncident,
+  deps: IncidentReviewDelivery,
+  options: { timeoutMs?: number } = {}
+): Promise<IncidentAlertOutcome> {
+  return deliverToReviewers(
+    adminUrl => renderIncidentReviewAlert(incident, adminUrl(adminModerationIncidentPath(incident.id))),
+    { incidentId: incident.id },
+    'alert',
+    deps,
+    options
+  );
+}
+
+/** Sends the daily reminder digest to every configured reviewer; the caller stamps what it covered. */
+export function deliverReminderDigest(
+  digest: IncidentReminderDigest,
+  deps: IncidentReviewDelivery,
+  options: { timeoutMs?: number } = {}
+): Promise<IncidentAlertOutcome> {
+  return deliverToReviewers(
+    adminUrl => renderIncidentReminderDigest(digest, adminUrl(ADMIN_CONSOLE_PATH)),
+    { pendingCount: String(digest.pendingCount) },
+    'reminder',
+    deps,
+    options
+  );
 }
 
 async function alertReviewers(incident: RecordedIncident, deps: IncidentReviewAlertDeps): Promise<void> {

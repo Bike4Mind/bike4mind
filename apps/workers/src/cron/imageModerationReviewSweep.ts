@@ -1,8 +1,8 @@
 /**
  * Re-sends the reviewer alert for image moderation incidents nobody was told about (none configured
- * when it was recorded, or the send failed) and sends one reminder per day for incidents still
- * awaiting a verdict. The alert is metadata only and goes through the same delivery as the request
- * path (packages/server-utils/src/moderation/incidentReviewSweep.ts).
+ * when it was recorded, or the send failed) and sends a daily reminder digest (counts only, one
+ * email per reviewer) for incidents still awaiting a verdict. Both are metadata only and go through
+ * the same delivery as the request path (packages/server-utils/src/moderation/incidentReviewSweep.ts).
  *
  * Publishes the oldest unalerted and oldest pending incident ages and a reviewer-list-empty flag
  * on every run; the alarms in infra/imageModerationReviewAlarms.ts watch them.
@@ -44,7 +44,8 @@ const incidents: IncidentReviewSweepDeps['incidents'] = {
     return oldest && toRecorded(oldest);
   },
   markAlerted: (id, at) => imageModerationIncidentRepository.markAlerted(id, at),
-  markReminded: (id, at) => imageModerationIncidentRepository.markReminded(id, at),
+  countPending: () => imageModerationIncidentRepository.countPendingReview(),
+  markReminded: (ids, at) => imageModerationIncidentRepository.markReminded(ids, at),
 };
 
 export async function handler() {

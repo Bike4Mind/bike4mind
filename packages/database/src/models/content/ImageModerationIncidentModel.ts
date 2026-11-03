@@ -109,9 +109,15 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
     await this.model.updateOne({ _id: id }, { $set: { alertedAt } });
   }
 
-  /** Stamps the time the scheduled sweep last re-sent the alert for a still-unreviewed incident. */
-  async markReminded(id: string, lastReminderAt = new Date()): Promise<void> {
-    await this.model.updateOne({ _id: id }, { $set: { lastReminderAt } });
+  /** Stamps the time a reminder digest covered these still-unreviewed incidents. */
+  async markReminded(ids: string[], lastReminderAt = new Date()): Promise<void> {
+    if (ids.length === 0) return;
+    await this.model.updateMany({ _id: { $in: ids } }, { $set: { lastReminderAt } });
+  }
+
+  /** Number of unreviewed incidents (reviewStatus absent or 'pending_review'). */
+  async countPendingReview(): Promise<number> {
+    return this.model.countDocuments({ reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES } });
   }
 
   /**

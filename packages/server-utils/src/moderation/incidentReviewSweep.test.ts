@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   REVIEW_SWEEP_BATCH_LIMIT,
+  REVIEW_SWEEP_REMINDER_LIMIT,
   REVIEW_SWEEP_SEND_BUDGET_MS,
   runIncidentReviewSweep,
   type IncidentReviewSweepDeps,
@@ -16,7 +17,12 @@ const incident = (id: string, ageMinutes: number): RecordedIncident => ({
 });
 
 function setup(
-  data: { unalerted?: RecordedIncident[]; due?: RecordedIncident[]; oldestPending?: RecordedIncident } = {},
+  data: {
+    unalerted?: RecordedIncident[];
+    due?: RecordedIncident[];
+    oldestPending?: RecordedIncident;
+    pendingCount?: number;
+  } = {},
   overrides: Partial<IncidentReviewSweepDeps> = {}
 ) {
   const unalerted = data.unalerted ?? [];
@@ -25,6 +31,7 @@ function setup(
       findUnalerted: vi.fn().mockImplementation(async (_cutoff: Date, limit: number) => unalerted.slice(0, limit)),
       findDueForReminder: vi.fn().mockResolvedValue(data.due ?? []),
       findOldestPending: vi.fn().mockResolvedValue(data.oldestPending),
+      countPending: vi.fn().mockResolvedValue(data.pendingCount ?? (data.due ?? []).length),
       markAlerted: vi.fn().mockResolvedValue(undefined),
       markReminded: vi.fn().mockResolvedValue(undefined),
     },
@@ -59,16 +66,60 @@ describe('runIncidentReviewSweep', () => {
     expect(deps.incidents.findUnalerted).toHaveBeenNthCalledWith(1, minutesAgo(15), REVIEW_SWEEP_BATCH_LIMIT);
   });
 
-  it('sends one reminder per 24 hours for an alerted incident still awaiting a verdict', async () => {
-    const deps = setup({ due: [incident('inc-2', 3000)] });
+  it('sends one digest per reviewer for everything due, and stamps every incident it covered', async () => {
+    const deps = setup(
+      {
+        due: [incident('inc-2', 3000), incident('inc-2b', 2000)],
+        oldestPending: incident('inc-2', 3000),
+        pendingCount: 5,
+      },
+      { getRecipients: vi.fn().mockResolvedValue(['reviewer-one@example.com', 'reviewer-two@example.com']) }
+    );
 
     const result = await runIncidentReviewSweep(deps, NOW);
 
-    expect(deps.incidents.findDueForReminder).toHaveBeenCalledWith(minutesAgo(24 * 60), REVIEW_SWEEP_BATCH_LIMIT);
-    expect(deps.sendEmail).toHaveBeenCalledTimes(1);
-    expect(deps.incidents.markReminded).toHaveBeenCalledWith('inc-2', NOW);
+    expect(deps.incidents.findDueForReminder).toHaveBeenCalledWith(minutesAgo(24 * 60), REVIEW_SWEEP_REMINDER_LIMIT);
+    expect(vi.mocked(deps.sendEmail).mock.calls.map(call => call[0])).toEqual([
+      'reviewer-one@example.com',
+      'reviewer-two@example.com',
+    ]);
+    const email = vi.mocked(deps.sendEmail).mock.calls[0][1];
+    expect(email.subject).toBe('Moderation reviews still pending');
+    expect(email.html).toContain('>5<');
+    expect(email.html).toContain('50 hours');
+    expect(email.html).toContain('https://app.example/admin');
+    expect(email.html).not.toContain('inc-2');
+    expect(deps.incidents.markReminded).toHaveBeenCalledExactlyOnceWith(['inc-2', 'inc-2b'], NOW);
     expect(deps.incidents.markAlerted).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ alerted: 0, reminded: 1, failed: 0 });
+    expect(result).toMatchObject({ alerted: 0, reminded: 2, failed: 0 });
+  });
+
+  it('sends no digest when nothing is due', async () => {
+    const deps = setup({ oldestPending: incident('inc-2c', 600) });
+
+    const result = await runIncidentReviewSweep(deps, NOW);
+
+    expect(deps.sendEmail).not.toHaveBeenCalled();
+    expect(deps.incidents.markReminded).not.toHaveBeenCalled();
+    expect(result.reminded).toBe(0);
+  });
+
+  it('leaves a failed digest unstamped so the next run retries it', async () => {
+    const deps = setup({ due: [incident('inc-2d', 3000)] }, { sendEmail: vi.fn().mockResolvedValue(false) });
+
+    const result = await runIncidentReviewSweep(deps, NOW);
+
+    expect(deps.incidents.markReminded).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ reminded: 0, failed: 1 });
+  });
+
+  it('sends a digest only to reviewers, never while none is configured', async () => {
+    const deps = setup({ due: [incident('inc-2e', 3000)] }, { getRecipients: vi.fn().mockResolvedValue([]) });
+
+    await runIncidentReviewSweep(deps, NOW);
+
+    expect(deps.sendEmail).not.toHaveBeenCalled();
+    expect(deps.incidents.markReminded).not.toHaveBeenCalled();
   });
 
   it('sends nothing and flags the gap when no reviewer is configured but an incident is pending', async () => {

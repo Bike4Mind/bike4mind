@@ -62,13 +62,26 @@ describe('ImageModerationIncidentRepository', () => {
       return String(inc._id);
     };
 
-    it('markReminded stamps lastReminderAt and leaves it absent until then', async () => {
-      const inc = await imageModerationIncidentRepository.record(baseIncident());
-      expect((await ImageModerationIncident.findById(inc._id).lean())?.lastReminderAt).toBeUndefined();
+    it('markReminded stamps lastReminderAt on every given incident and leaves the others absent', async () => {
+      const first = await imageModerationIncidentRepository.record(baseIncident());
+      const second = await imageModerationIncidentRepository.record(baseIncident());
+      const untouched = await imageModerationIncidentRepository.record(baseIncident());
 
-      await imageModerationIncidentRepository.markReminded(inc.id, NOW);
+      await imageModerationIncidentRepository.markReminded([first.id, second.id], NOW);
+      await imageModerationIncidentRepository.markReminded([], NOW);
 
-      expect((await ImageModerationIncident.findById(inc._id).lean())?.lastReminderAt).toEqual(NOW);
+      expect((await ImageModerationIncident.findById(first._id).lean())?.lastReminderAt).toEqual(NOW);
+      expect((await ImageModerationIncident.findById(second._id).lean())?.lastReminderAt).toEqual(NOW);
+      expect((await ImageModerationIncident.findById(untouched._id).lean())?.lastReminderAt).toBeUndefined();
+    });
+
+    it('countPendingReview counts absent and pending_review incidents only', async () => {
+      await seed({});
+      await seed({ reviewStatus: 'pending_review' });
+      await seed({ reviewStatus: 'reported' });
+      await seed({ reviewStatus: 'false_positive' });
+
+      expect(await imageModerationIncidentRepository.countPendingReview()).toBe(2);
     });
 
     it('findUnalerted returns old-enough unreviewed incidents with no alert, oldest first', async () => {
