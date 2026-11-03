@@ -9,6 +9,7 @@ import {
   aggregationGraceReasonOf,
   refusesUnrunnableModel,
   shouldGateIteration,
+  stopCappedIteration,
   stopUnfundedIteration,
 } from './agentExecutor.iterationCreditGate';
 
@@ -58,6 +59,7 @@ describe('stopUnfundedIteration', () => {
 
     expect(deps.markFailed).toHaveBeenCalledWith('exec-1', {
       message: 'Insufficient credits to continue agent execution',
+      failureReason: 'insufficient_credits',
     });
     expect(deps.sendWs).toHaveBeenCalledWith('failed', {
       executionId: 'exec-1',
@@ -106,6 +108,38 @@ describe('stopUnfundedIteration', () => {
     await expect(stopUnfundedIteration(gateArgs, deps)).resolves.toBe(true);
 
     expect(deps.persistRunAsQuest).toHaveBeenCalledWith('exec-1', 'Stopped: out of credits.');
+  });
+});
+
+describe('stopCappedIteration', () => {
+  const capArgs = (spent: number, creditCap: number) => {
+    const { readBalance: _unused, ...rest } = args();
+    return { ...rest, creditCap, readSpent: vi.fn().mockResolvedValue(spent) };
+  };
+
+  it('lets an iteration run when it fits under the cap exactly', async () => {
+    const deps = makeDeps();
+    await expect(stopCappedIteration(capArgs(10, 10 + required()), deps)).resolves.toBe(false);
+    expect(deps.markFailed).not.toHaveBeenCalled();
+  });
+
+  it('stops before an iteration that would cross the cap, as credit_cap', async () => {
+    const deps = makeDeps();
+    await expect(stopCappedIteration(capArgs(10, 10 + required() - 0.01), deps)).resolves.toBe(true);
+
+    expect(deps.markFailed).toHaveBeenCalledWith('exec-1', {
+      message: "Stopped at this run's credit cap",
+      failureReason: 'credit_cap',
+    });
+    expect(deps.sendWs).toHaveBeenCalledWith('failed', {
+      executionId: 'exec-1',
+      reason: 'credit_cap',
+      partialResult: steps,
+    });
+    expect(deps.persistRunAsQuest).toHaveBeenCalledWith(
+      'exec-1',
+      "Stopped: reached this run's credit cap. Partial response:\n\npartial answer"
+    );
   });
 });
 
@@ -175,6 +209,14 @@ describe('processExecution iteration-gate wiring', () => {
     expect(loopSource).toMatch(/if \(gateThisIteration && modelInfo\) \{/);
     expect(loopSource).toMatch(/const stopped = await stopUnfundedIteration\(/);
     expect(loopSource).toMatch(/if \(stopped\) return;/);
+  });
+
+  it('checks the run credit cap before every iteration but the wake start, regardless of enforceCredits', () => {
+    expect(loopSource).toContain(
+      'if (execution.creditCap != null && modelInfo && iterationIndex !== aggregationWakeStartIteration) {'
+    );
+    expect(loopSource).toMatch(/const stopped = await stopCappedIteration\(/);
+    expect(loopSource).toContain('creditCap: execution.creditCap,');
   });
 
   it('grows the next estimate from the iteration that just ran', () => {

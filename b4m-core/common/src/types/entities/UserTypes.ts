@@ -306,6 +306,8 @@ export interface IUser extends ICreditHolder {
   storageLimit: number /** Effective storage limit in decimal MB */;
   /** Manual or custom signup allocation; null means use plan/default. */
   storageLimitOverride?: number | null;
+  /** The user's own cap on what all their loops spend per UTC day; the admin LoopsDailyCreditsPerUser still applies. */
+  loopsDailyCredits?: number;
   /** Plan allocation in decimal MB, separate from the manual override. */
   planStorageLimit?: number | null;
   currentStorageSize: number /** Current storage size in Bytes */;

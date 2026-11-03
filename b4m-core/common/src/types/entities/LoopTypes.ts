@@ -87,6 +87,8 @@ export interface ILoop {
   runCount: number;
   /** Non-credit failures in a row; the loop moves to `error` at the scheduler's limit. */
   consecutiveFailures: number;
+  /** Idle runs in a row (no ticket, memory unchanged, no ticket touched); each doubles the wait before the next. */
+  idleStreak?: number;
   /** Ids of the same owner's loops this loop oversees: its runs may read their state and send them directives. */
   oversees?: string[];
 

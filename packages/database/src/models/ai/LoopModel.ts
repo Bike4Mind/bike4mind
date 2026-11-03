@@ -61,10 +61,16 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     return result.deletedCount > 0;
   }
 
-  async claimDue(now: Date, leaseMs: number, skipIds: string[] = []): Promise<ILoop | null> {
+  async claimDue(
+    now: Date,
+    leaseMs: number,
+    skipIds: string[] = [],
+    skipUserIds: string[] = []
+  ): Promise<ILoop | null> {
     const result = await this.loopModel.findOneAndUpdate(
       {
         ...(skipIds.length > 0 && { _id: { $nin: skipIds } }),
+        ...(skipUserIds.length > 0 && { userId: { $nin: skipUserIds } }),
         status: 'live',
         nextRunAt: { $lte: now },
         activeExecutionId: { $exists: false },
@@ -90,6 +96,31 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     );
   }
 
+  /** Pushes a claimed live loop's next run out without pausing it, and releases the claim. */
+  async deferUntil(id: string, nextRunAt: Date): Promise<void> {
+    const result = await this.loopModel.updateOne(
+      { _id: id, status: 'live' },
+      { $set: { nextRunAt }, $unset: { leaseUntil: '' } }
+    );
+    if (result.matchedCount === 0) await this.releaseLease(id);
+  }
+
+  /** Pauses every live loop of a user; conditional on `live`, so an owner pause is never overwritten. */
+  async pauseAllLiveForUser(
+    userId: string,
+    patch: { statusReason: string; autoResume: LoopAutoResume; nextRunAt: Date }
+  ): Promise<number> {
+    const result = await this.loopModel.updateMany(
+      { userId, status: 'live' },
+      { $set: { status: 'paused', ...patch }, $unset: { leaseUntil: '' } }
+    );
+    return result.modifiedCount;
+  }
+
+  async countInFlight(): Promise<number> {
+    return this.loopModel.countDocuments({ activeExecutionId: { $exists: true } });
+  }
+
   async listInFlight(): Promise<ILoop[]> {
     const results = await this.loopModel.find({ activeExecutionId: { $exists: true } });
     return results.map(doc => doc.toJSON());
@@ -107,11 +138,12 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     return result.modifiedCount > 0;
   }
 
+  /** Also ends an idle back-off: something changed, so the loop has work worth a run again. */
   async makeDueNow(id: string, now: Date): Promise<void> {
-    await this.loopModel.updateOne(
-      { _id: id, status: 'live', $or: [{ nextRunAt: { $exists: false } }, { nextRunAt: { $gt: now } }] },
-      { $set: { nextRunAt: now } }
-    );
+    // $min over a missing nextRunAt yields `now` (aggregation $min ignores missing values).
+    await this.loopModel.updateOne({ _id: id, status: 'live' }, [
+      { $set: { nextRunAt: { $min: ['$nextRunAt', now] }, idleStreak: 0 } },
+    ]);
   }
 
   async markErroredIfFailing(id: string, maxFailures: number): Promise<void> {
@@ -178,6 +210,7 @@ export const LoopSchema = new Schema<ILoop, ILoopModel>(
     leaseUntil: { type: Date },
     runCount: { type: Number, default: 0 },
     consecutiveFailures: { type: Number, default: 0 },
+    idleStreak: { type: Number, default: 0 },
     oversees: { type: [String], default: undefined },
   },
   {

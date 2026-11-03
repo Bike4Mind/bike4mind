@@ -103,7 +103,7 @@ export async function assertLoopTicketAccess(
 /** Makes a live loop due now when it has a ticket ready to work, so a new ticket does not wait out the interval. */
 export async function makeDueIfReady(loop: ILoop, now = new Date()): Promise<void> {
   if (loop.status !== 'live') return;
-  const ready = await workItemRepository.findNextReadyForLoop(loop.userId, loop.id, lastStageOf(loop));
+  const ready = await workItemRepository.findNextReadyForLoop(loop.userId, loop.id, loop.stages);
   if (ready) await loopRepository.makeDueNow(loop.id, now);
 }
 

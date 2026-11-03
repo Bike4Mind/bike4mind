@@ -183,6 +183,62 @@ describe('LoopRepository', () => {
     expect((await loopRepository.findByIdAndUserId(alreadyDue.id, USER))?.nextRunAt).toEqual(earlier);
   });
 
+  it('makeDueNow ends an idle back-off even when the loop is already due', async () => {
+    const now = new Date();
+    const earlier = new Date(now.getTime() - 60_000);
+    const loop = await create({ status: 'live', nextRunAt: earlier, idleStreak: 3 });
+    const unscheduled = await create({ status: 'live', idleStreak: 1 });
+
+    await loopRepository.makeDueNow(loop.id, now);
+    await loopRepository.makeDueNow(unscheduled.id, now);
+
+    expect(await loopRepository.findById(loop.id)).toMatchObject({ nextRunAt: earlier, idleStreak: 0 });
+    expect(await loopRepository.findById(unscheduled.id)).toMatchObject({ nextRunAt: now, idleStreak: 0 });
+  });
+
+  it('claimDue skips the users it is told to', async () => {
+    const now = new Date();
+    const past = new Date(now.getTime() - 60_000);
+    await create({ status: 'live', nextRunAt: past });
+    const theirs = await create({ status: 'live', nextRunAt: new Date(now.getTime() - 1000), userId: 'user-2' });
+    expect((await loopRepository.claimDue(now, 60_000, [], [USER]))?.id).toBe(theirs.id);
+    expect(await loopRepository.claimDue(now, 60_000, [], [USER, 'user-2'])).toBeNull();
+  });
+
+  it('countInFlight counts loops with a run in flight', async () => {
+    await create({ activeExecutionId: 'e1' });
+    await create({ activeExecutionId: 'e2' });
+    await create();
+    expect(await loopRepository.countInFlight()).toBe(2);
+  });
+
+  it('deferUntil moves a live loop on and releases the lease; a non-live loop keeps its time', async () => {
+    const now = new Date();
+    const later = new Date(now.getTime() + 3_600_000);
+    const lease = new Date(now.getTime() + 60_000);
+    const live = await create({ status: 'live', nextRunAt: now, leaseUntil: lease });
+    const paused = await create({ status: 'paused', nextRunAt: now, leaseUntil: lease });
+    await loopRepository.deferUntil(live.id, later);
+    await loopRepository.deferUntil(paused.id, later);
+    const [l, p] = [await loopRepository.findById(live.id), await loopRepository.findById(paused.id)];
+    expect(l).toMatchObject({ status: 'live', nextRunAt: later });
+    expect(l?.leaseUntil).toBeUndefined();
+    expect(p?.nextRunAt).toEqual(now);
+    expect(p?.leaseUntil).toBeUndefined();
+  });
+
+  it("pauseAllLiveForUser pauses only that user's live loops", async () => {
+    const at = new Date();
+    const live = await create({ status: 'live' });
+    const owned = await create({ status: 'paused' });
+    const theirs = await create({ status: 'live', userId: 'user-2' });
+    const patch = { statusReason: 'r', autoResume: 'budget' as const, nextRunAt: at };
+    expect(await loopRepository.pauseAllLiveForUser(USER, patch)).toBe(1);
+    expect(await loopRepository.findById(live.id)).toMatchObject({ status: 'paused', ...patch });
+    expect((await loopRepository.findById(owned.id))?.autoResume).toBeUndefined();
+    expect((await loopRepository.findById(theirs.id))?.status).toBe('live');
+  });
+
   it("removeFromOversees pulls a deleted loop from the owner's other loops only", async () => {
     const a = await create({ oversees: ['gone', 'kept'] });
     const b = await create({ oversees: ['gone'] });

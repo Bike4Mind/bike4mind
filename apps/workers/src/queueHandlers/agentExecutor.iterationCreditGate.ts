@@ -1,7 +1,7 @@
 import type { AgentStep } from '@bike4mind/agents';
 import type { ModelInfo } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { uncoveredIterationCredits } from './agentExecutor.billing';
+import { nextIterationCredits, uncoveredIterationCredits } from './agentExecutor.billing';
 import type { AggregationGraceReason } from './agentExecutorUtils/truncatedReply';
 
 export function aggregationGraceReasonOf(
@@ -66,7 +66,10 @@ export interface IterationCreditGateArgs {
 }
 
 export interface IterationCreditGateDeps {
-  markFailed(executionId: string, error: { message: string }): Promise<void>;
+  markFailed(
+    executionId: string,
+    error: { message: string; failureReason: 'insufficient_credits' | 'credit_cap' }
+  ): Promise<void>;
   sendWs(action: string, payload: Record<string, unknown>): Promise<void>;
   persistRunAsQuest(executionId: string, message: string): Promise<void>;
   logger: Pick<Logger, 'warn'>;
@@ -89,14 +92,55 @@ export async function stopUnfundedIteration(
     requiredCredits: uncoveredCredits,
     iterationIndex: args.iterationIndex,
   });
-  const { steps, partialAnswer } = args.snapshot();
-  await deps.markFailed(args.executionId, {
+  await stopRun(args, deps, {
     message: 'Insufficient credits to continue agent execution',
+    failureReason: 'insufficient_credits',
+    stopped: 'Stopped: out of credits',
   });
-  await deps.sendWs('failed', { executionId: args.executionId, reason: 'insufficient_credits', partialResult: steps });
+  return true;
+}
+
+export interface IterationCapGateArgs extends Omit<IterationCreditGateArgs, 'readBalance'> {
+  /** The run's `creditCap`, set by the loop scheduler at dispatch. */
+  creditCap: number;
+  /** The run's live `totalCreditsUsed`, re-read so it includes the iteration that just settled. */
+  readSpent: () => Promise<number>;
+}
+
+/**
+ * Stops the run before an iteration that could take its spend past its `creditCap`, whether or not
+ * credits are enforced. An iteration already started settles in full, and in-process subagent spend is
+ * only seen at the next check, so a run can end above its cap by that much.
+ */
+export async function stopCappedIteration(args: IterationCapGateArgs, deps: IterationCreditGateDeps): Promise<boolean> {
+  const spent = await args.readSpent();
+  const next = nextIterationCredits(args.modelInfo, args.lastInputTokens);
+  if (spent + next <= args.creditCap) return false;
+
+  deps.logger.warn('[Credits] Next iteration could cross the run credit cap; stopping execution', {
+    spent,
+    nextIterationCredits: next,
+    creditCap: args.creditCap,
+    iterationIndex: args.iterationIndex,
+  });
+  await stopRun(args, deps, {
+    message: "Stopped at this run's credit cap",
+    failureReason: 'credit_cap',
+    stopped: "Stopped: reached this run's credit cap",
+  });
+  return true;
+}
+
+async function stopRun(
+  args: Pick<IterationCreditGateArgs, 'executionId' | 'snapshot'>,
+  deps: IterationCreditGateDeps,
+  stop: { message: string; failureReason: 'insufficient_credits' | 'credit_cap'; stopped: string }
+): Promise<void> {
+  const { steps, partialAnswer } = args.snapshot();
+  await deps.markFailed(args.executionId, { message: stop.message, failureReason: stop.failureReason });
+  await deps.sendWs('failed', { executionId: args.executionId, reason: stop.failureReason, partialResult: steps });
   await deps.persistRunAsQuest(
     args.executionId,
-    partialAnswer ? `Stopped: out of credits. Partial response:\n\n${partialAnswer}` : 'Stopped: out of credits.'
+    partialAnswer ? `${stop.stopped}. Partial response:\n\n${partialAnswer}` : `${stop.stopped}.`
   );
-  return true;
 }

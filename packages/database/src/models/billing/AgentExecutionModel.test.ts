@@ -112,6 +112,24 @@ describe('AgentExecutionRepository', () => {
     });
   });
 
+  describe('sumLoopCreditsForUser', () => {
+    it("sums the user's top-level loop runs since the given time, across loops", async () => {
+      const since = new Date(Date.now() - 60_000);
+      const parent = await agentExecutionRepository.create(
+        makeBaseExecution({ userId: 'u1', loopId: 'loopA', totalCreditsUsed: 4 })
+      );
+      await agentExecutionRepository.create(makeBaseExecution({ userId: 'u1', loopId: 'loopB', totalCreditsUsed: 6 }));
+      await agentExecutionRepository.create(
+        makeBaseExecution({ userId: 'u1', loopId: 'loopA', parentExecutionId: parent.id, totalCreditsUsed: 99 })
+      );
+      await agentExecutionRepository.create(makeBaseExecution({ userId: 'u1', totalCreditsUsed: 50 }));
+      await agentExecutionRepository.create(makeBaseExecution({ userId: 'u2', loopId: 'loopC', totalCreditsUsed: 70 }));
+
+      expect(await agentExecutionRepository.sumLoopCreditsForUser('u1', since)).toBe(10);
+      expect(await agentExecutionRepository.sumLoopCreditsForUser('u1', new Date(Date.now() + 60_000))).toBe(0);
+    });
+  });
+
   describe('listRecentForLoop', () => {
     it("returns a loop's newest top-level runs", async () => {
       const older = await agentExecutionRepository.create(

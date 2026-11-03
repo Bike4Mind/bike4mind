@@ -203,6 +203,7 @@ import {
   aggregationGraceReasonOf,
   refusesUnrunnableModel,
   shouldGateIteration,
+  stopCappedIteration,
   stopUnfundedIteration,
 } from './agentExecutor.iterationCreditGate';
 import { buildAgentVideoToolConfig, getAgentVideoToolConfigDeps } from './agentExecutor.videoToolConfig';
@@ -2928,6 +2929,32 @@ async function processExecution(
             lastInputTokens,
             readBalance: () =>
               readPayerBalance({ organizationId: organization?.id, userId: (user as IUserDocument).id }),
+            snapshot: () => {
+              const checkpoint = agent.toCheckpoint();
+              return { steps: checkpoint.steps, partialAnswer: extractFinalAnswer(checkpoint.steps) };
+            },
+          },
+          {
+            markFailed: (id, error) => agentExecutionRepository.markFailed(id, error),
+            sendWs,
+            persistRunAsQuest: (id, message) =>
+              persistRunAsQuest(id, message, logger, generatedImages, undefined, allSideEffects, retrievalSummary),
+            logger,
+          }
+        );
+        if (stopped) return;
+      }
+
+      // A loop run's own spend ceiling (set by the loop scheduler), checked whether or not credits are enforced.
+      if (execution.creditCap != null && modelInfo && iterationIndex !== aggregationWakeStartIteration) {
+        const stopped = await stopCappedIteration(
+          {
+            executionId,
+            iterationIndex,
+            modelInfo,
+            lastInputTokens,
+            creditCap: execution.creditCap,
+            readSpent: async () => (await agentExecutionRepository.findById(executionId))?.totalCreditsUsed ?? 0,
             snapshot: () => {
               const checkpoint = agent.toCheckpoint();
               return { steps: checkpoint.steps, partialAnswer: extractFinalAnswer(checkpoint.steps) };

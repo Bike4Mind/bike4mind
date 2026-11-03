@@ -117,26 +117,43 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     };
   }
 
-  async findNextReadyForLoop(userId: string, loopId: string, lastStage: string): Promise<IWorkItem | null> {
+  async findNextReadyForLoop(userId: string, loopId: string, stages: string[]): Promise<IWorkItem | null> {
+    return (await this.listReadyForLoop(userId, loopId, stages))[0] ?? null;
+  }
+
+  /**
+   * A loop's open tickets whose dependencies are closed, in the order its runs take them: finish first
+   * (a later stage before an earlier one), then oldest first.
+   */
+  async listReadyForLoop(userId: string, loopId: string, stages: string[]): Promise<IWorkItem[]> {
     const candidates = (
       await this.workItemModel
-        .find({ userId, loopId, deletedAt: null, status: 'open', stage: { $ne: lastStage } })
+        .find({ userId, loopId, deletedAt: null, status: 'open', stage: { $ne: stages.at(-1) ?? '' } })
         .sort({ createdAt: 1 })
         .limit(LOOP_READY_CANDIDATES)
     ).map(doc => doc.toJSON());
     const depIds = [...new Set(candidates.flatMap(item => item.dependencies))];
     const deps = await this.findManyByIdsForUser(depIds, userId);
     const open = new Set(deps.filter(dep => dep.status !== 'closed').map(dep => dep.id));
-    return candidates.find(item => item.dependencies.every(depId => !open.has(depId))) ?? null;
+    const stageIndex = (item: IWorkItem) => stages.indexOf(item.stage ?? '');
+    // Array.prototype.sort is stable, so equal stages keep the createdAt order.
+    return candidates
+      .filter(item => item.dependencies.every(depId => !open.has(depId)))
+      .sort((a, b) => stageIndex(b) - stageIndex(a));
   }
 
   async claimForRun(id: string, loopId: string): Promise<IWorkItem | null> {
     const result = await this.workItemModel.findOneAndUpdate(
       { _id: id, loopId, deletedAt: null, status: 'open' },
-      { $set: { status: 'in_progress' } },
+      { $set: { status: 'in_progress' }, $inc: { runCount: 1 } },
       { new: true }
     );
     return result?.toJSON() ?? null;
+  }
+
+  /** Tickets of a loop created or changed in [from, to]; a run that touched none changed nothing on the board. */
+  async countTouchedForLoop(userId: string, loopId: string, from: Date, to: Date): Promise<number> {
+    return this.workItemModel.countDocuments({ userId, loopId, updatedAt: { $gte: from, $lte: to } });
   }
 
   async setExecution(id: string, executionId: string): Promise<void> {
@@ -365,6 +382,7 @@ export const WorkItemSchema = new Schema<IWorkItem, IWorkItemModel>(
     stage: { type: String },
     executionId: { type: String },
     statusReason: { type: String },
+    runCount: { type: Number, default: 0 },
   },
   {
     timestamps: { createdAt: true, updatedAt: true },

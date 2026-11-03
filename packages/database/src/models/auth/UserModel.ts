@@ -1025,6 +1025,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     adminPermissions: { type: [String], enum: ADMIN_PERMISSIONS, default: [] },
     storageLimit: { type: Number, default: 1000 }, // Decimal MB
     storageLimitOverride: { type: Number },
+    loopsDailyCredits: { type: Number },
     planStorageLimit: { type: Number },
     currentStorageSize: { type: Number, default: 0 }, // Bytes
     currentCredits: { type: Number, default: 0 },

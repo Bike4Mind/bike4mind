@@ -355,6 +355,7 @@ describe('WorkItemRepository', () => {
 
   describe('loop tickets', () => {
     const LOOP = 'loop-1';
+    const STAGES = ['todo', 'doing', 'done'];
     const ticket = (title: string, overrides: Record<string, unknown> = {}) =>
       create(title, { loopId: LOOP, stage: 'todo', ...overrides });
 
@@ -402,10 +403,10 @@ describe('WorkItemRepository', () => {
       await ticket('Theirs', { userId: OTHER_USER });
       const next = await ticket('Next');
 
-      expect((await workItemRepository.findNextReadyForLoop(USER, LOOP, 'done'))?.id).toBe(next.id);
+      expect((await workItemRepository.findNextReadyForLoop(USER, LOOP, STAGES))?.id).toBe(next.id);
 
       await workItemRepository.updateForUser(otherLoopBlocker.id, USER, { status: 'closed' });
-      expect((await workItemRepository.findNextReadyForLoop(USER, LOOP, 'done'))?.title).toBe('Waits');
+      expect((await workItemRepository.findNextReadyForLoop(USER, LOOP, STAGES))?.title).toBe('Waits');
     });
 
     it('claimForRun wins once; releaseClaim reopens and unlinks', async () => {
@@ -456,13 +457,40 @@ describe('WorkItemRepository', () => {
       expect(listed.map(item => item.title)).toEqual(['Open', 'New']);
     });
 
+    it('listReadyForLoop puts a ticket further along before an older one in an earlier stage', async () => {
+      const oldest = await ticket('Oldest');
+      const along = await ticket('Along', { stage: 'doing' });
+      const newer = await ticket('Newer');
+      expect((await workItemRepository.listReadyForLoop(USER, LOOP, STAGES)).map(t => t.id)).toEqual([
+        along.id,
+        oldest.id,
+        newer.id,
+      ]);
+    });
+
+    it('claimForRun counts the runs that claimed a ticket', async () => {
+      const t = await ticket('Counted');
+      expect((await workItemRepository.claimForRun(t.id, LOOP))?.runCount).toBe(1);
+      await workItemRepository.releaseClaim(t.id);
+      expect((await workItemRepository.claimForRun(t.id, LOOP))?.runCount).toBe(2);
+    });
+
+    it('countTouchedForLoop counts tickets updated in the window', async () => {
+      const before = new Date();
+      await ticket('Touched', { loopId: 'loop-touched' });
+      await create('Other loop', { loopId: 'loop-2', stage: 'todo' });
+      const later = new Date(Date.now() + 1000);
+      expect(await workItemRepository.countTouchedForLoop(USER, 'loop-touched', before, later)).toBe(1);
+      expect(await workItemRepository.countTouchedForLoop(USER, 'loop-touched', later, later)).toBe(0);
+    });
+
     it("softDeleteByLoop removes only that loop's tickets", async () => {
       await ticket('A');
       await create('Other loop', { loopId: 'loop-2' });
       await create('Plain');
 
       expect(await workItemRepository.softDeleteByLoop(USER, LOOP)).toBe(1);
-      expect(await workItemRepository.findNextReadyForLoop(USER, LOOP, 'done')).toBeNull();
+      expect(await workItemRepository.findNextReadyForLoop(USER, LOOP, STAGES)).toBeNull();
     });
 
     it('countBlockedByLoop counts live blocked tickets per loop for the user only', async () => {

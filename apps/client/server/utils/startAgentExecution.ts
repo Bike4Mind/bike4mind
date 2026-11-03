@@ -142,6 +142,8 @@ export type StartAgentExecutionInput = {
   enableLattice?: boolean;
   /** Set by the loop scheduler; the executor then offers the run the loop ticket tools. */
   loopId?: string;
+  /** Loop scheduler only: the most credits the run may spend. Never taken from a client request. */
+  creditCap?: number;
   /** Caller's per-request artifact intent. Absent means "no preference" (the admin
    * `EnableArtifacts` setting decides); only an explicit `false` opts out. */
   enableArtifacts?: boolean;
@@ -364,6 +366,7 @@ export async function startAgentExecution(
     enableMementos: input.enableMementos,
     enableLattice: input.enableLattice,
     loopId: input.loopId,
+    creditCap: input.creditCap,
     enableArtifacts: input.enableArtifacts,
     imageConfig: input.imageConfig,
     audioConfig: input.audioConfig,

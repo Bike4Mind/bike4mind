@@ -172,7 +172,8 @@ class InboxRepository extends BaseRepository<IInboxDocument> implements IInboxRe
   async listKeyed(prefix: string): Promise<{ id: string; sourceKey: string }[]> {
     // includeDeleted: a notice the receiver deleted still holds its key until resolveKeyed frees it.
     const docs = await this.model
-      .find({ sourceKey: { $regex: `^${escapeRegex(prefix)}` } }, { sourceKey: 1 })
+      // $exists lets the planner use the partial unique sourceKey index; it cannot infer that from $regex.
+      .find({ sourceKey: { $exists: true, $regex: `^${escapeRegex(prefix)}` } }, { sourceKey: 1 })
       .setOptions({ includeDeleted: true });
     return docs.map(doc => ({ id: doc.id, sourceKey: doc.sourceKey! }));
   }

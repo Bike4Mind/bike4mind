@@ -38,6 +38,8 @@ export interface IWorkItem {
   executionId?: string;
   /** Why the ticket is `blocked`; cleared when it leaves `blocked`. */
   statusReason?: string;
+  /** Loop runs that claimed this ticket since its owner last moved it; the scheduler blocks it at its limit. */
+  runCount?: number;
 
   createdAt: Date;
   updatedAt: Date;
@@ -149,13 +151,21 @@ export interface IWorkItemRepository extends IBaseRepository<IWorkItem> {
   softDeleteForUser(id: string, userId: string): Promise<boolean>;
 
   /**
-   * The oldest `open` ticket of the loop, outside `lastStage`, whose dependencies are all closed or
-   * gone. This is what the loop scheduler works next.
+   * The first of `listReadyForLoop`: the ticket the loop scheduler works next.
    */
-  findNextReadyForLoop(userId: string, loopId: string, lastStage: string): Promise<IWorkItem | null>;
+  findNextReadyForLoop(userId: string, loopId: string, stages: string[]): Promise<IWorkItem | null>;
+
+  /**
+   * The loop's `open` tickets outside its last stage whose dependencies are all closed or gone, furthest
+   * stage first, then oldest first.
+   */
+  listReadyForLoop(userId: string, loopId: string, stages: string[]): Promise<IWorkItem[]>;
 
   /** `open -> in_progress`, conditional on still being `open`; null when another tick won the claim. */
   claimForRun(id: string, loopId: string): Promise<IWorkItem | null>;
+
+  /** Count of the loop's tickets created or updated in [from, to]. */
+  countTouchedForLoop(userId: string, loopId: string, from: Date, to: Date): Promise<number>;
 
   setExecution(id: string, executionId: string): Promise<void>;
 

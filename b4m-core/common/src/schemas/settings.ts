@@ -604,6 +604,7 @@ export const SettingKeySchema = z.enum([
 
   // LOOPS SETTINGS
   'EnableLoops',
+  'LoopsDailyCreditsPerUser',
 
   // TIME MACHINE & NIGHT SKY SETTINGS
   'EnableEnhancedDateTime',
@@ -2060,6 +2061,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableAgentsDefault', order: 11 },
       { key: 'enableAgentProactiveMessages', order: 12 },
       { key: 'EnableLoops', order: 13 },
+      { key: 'LoopsDailyCreditsPerUser', order: 14 },
       { key: 'EnableAgentMode', order: 15 },
       { key: 'EnableAgentModeDefault', order: 16 },
       { key: 'EnableArtifacts', order: 20 },
@@ -5899,6 +5901,18 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 13,
     dependsOn: 'EnableAgents',
+  }),
+  LoopsDailyCreditsPerUser: makeNumberSetting({
+    key: 'LoopsDailyCreditsPerUser',
+    name: 'Loops: Daily Credits per User',
+    defaultValue: 0,
+    min: 0,
+    description:
+      "Most credits all of one user's loops may spend per UTC day, paced across the day. 0 means no cap; a user may set a lower limit of their own.",
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 14,
+    dependsOn: 'EnableLoops',
   }),
   // Time Machine & Night Sky Settings
   EnableEnhancedDateTime: makeBooleanSetting({
