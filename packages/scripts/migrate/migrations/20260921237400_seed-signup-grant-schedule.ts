@@ -22,7 +22,7 @@ const LEGACY_KEYS: SignupGrantCreditKey[] = [
  * while the keys are unset (signupGrantScheduleFromValues in b4m-core/common/src/signupGrant.ts).
  */
 const migration: MigrationFile = {
-  id: 20260921236500,
+  id: 20260921237400,
   name: 'seed-signup-grant-schedule',
   up: async () => {
     const raw = async (settingName: string) => (await AdminSettings.findOne({ settingName }))?.settingValue as unknown;
