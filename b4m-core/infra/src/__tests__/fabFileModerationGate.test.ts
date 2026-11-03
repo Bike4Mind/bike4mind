@@ -149,6 +149,8 @@ const ALLOWLIST: Record<string, string> = {
   // --- Not FabFile content: the bucket is shared, but the key is a server-rendered CSV. ---
   'apps/client/server/utils/adminAuditExportStorage.ts':
     'signs a server-rendered admin audit-log CSV it just staged under exports/ for a platform admin - not user-uploaded FabFile bytes, so there is no moderationStatus to gate on',
+  'apps/client/pages/api/users/me/data-export/[jobId].ts':
+    "signs the caller's own account data export zip under exports/ - not a FabFile row; the worker that built it already left out files that are not isImageServeable",
 
   // --- DI passthroughs: the file only wires a storage closure; the actual gate lives
   // in the shared service function the closure is handed to. ---
