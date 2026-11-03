@@ -355,7 +355,8 @@ const WRAPPERS: Readonly<Record<string, Wrapper>> = {
   command: { values: '' },
   exec: { values: 'a' },
   nohup: { values: '' },
-  time: { values: 'fo', long: ['format', 'output'] },
+  // bash's `time` keyword times a whole simple command, assignments included.
+  time: { values: 'fo', long: ['format', 'output'], assignments: true },
   nice: { values: 'n', long: ['adjustment'] },
   timeout: { values: 'ks', long: ['kill-after', 'signal'], operands: 1 },
   xargs: {

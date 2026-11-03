@@ -335,6 +335,7 @@ describe('a Windows program run from a WSL project', () => {
     "time -pf '%e'",
     'time -ofoo',
     'time --output foo',
+    'time A=1',
     'timeout 5',
     'timeout -s KILL 5',
     'timeout -sKILL 5',

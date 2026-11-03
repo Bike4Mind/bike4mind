@@ -114,6 +114,8 @@ describe('sessionScriptRun', () => {
     ['bash <(cat run.sh)', 'run.sh'],
     ['cat run.sh | sudo bash', 'run.sh'],
     ['cat run.sh | env bash', 'run.sh'],
+    ['time FOO=1 make', 'Makefile'],
+    ['cat run.sh | time FOO=1 bash', 'run.sh'],
     ["git -c alias.z='!sh run.sh' z", 'run.sh'],
     ['/usr/bin/git -c core.hooksPath=./run.sh commit', './run.sh'],
   ])('finds %s', async (command, name) => {
