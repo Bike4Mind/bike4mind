@@ -17,15 +17,25 @@ describe('wrapWithParentWatchdog', () => {
         detached: true,
         stdio: ['pipe', 'pipe', 'ignore'],
       });
-      let output = '';
-      child.stdout.on('data', (chunk: Buffer) => (output += chunk.toString()));
-      const ended = new Promise<NodeJS.Signals | null>(resolve => child.on('exit', (_code, signal) => resolve(signal)));
+      try {
+        let output = '';
+        child.stdout.on('data', (chunk: Buffer) => (output += chunk.toString()));
+        const ended = new Promise<NodeJS.Signals | null>(resolve =>
+          child.on('exit', (_code, signal) => resolve(signal))
+        );
 
-      await new Promise(resolve => setTimeout(resolve, 300));
-      expect(output).toBe('no-stdin\n');
+        await new Promise(resolve => setTimeout(resolve, 300));
+        expect(output).toBe('no-stdin\n');
 
-      child.stdin.end();
-      expect(await ended).toBe('SIGTERM');
+        child.stdin.end();
+        expect(await ended).toBe('SIGTERM');
+      } finally {
+        try {
+          process.kill(-(child.pid as number), 'SIGKILL');
+        } catch {
+          // The group already ended.
+        }
+      }
     }
   );
 });

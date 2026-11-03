@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
-import { COMMAND_TAG_ENV, WINDOWS_TREE_SCRIPT, commandExit, signalCommandTree } from './commandTree';
+import { COMMAND_TAG_ENV, WINDOWS_TREE_SCRIPT, commandExit, signalCommandTree, windowsArgs } from './commandTree';
 
 describe('commandExit', () => {
   it('reads a Git Bash signal exit back as the signal on Windows, by MSYS signal number', () => {
@@ -12,6 +12,13 @@ describe('commandExit', () => {
     expect(commandExit(21 * 256, null, undefined, 'win32')).toEqual({ code: null, signal: 'SIGTTIN' });
     expect(commandExit(22 * 256, null, undefined, 'win32')).toEqual({ code: null, signal: 'SIGTTOU' });
     expect(commandExit(30 * 256, null, undefined, 'win32')).toEqual({ code: null, signal: 'SIGUSR1' });
+  });
+
+  it('reads a signal death that dumped core, with 0x80 set beside the signal number', () => {
+    expect(commandExit(0x8b00, null, undefined, 'win32')).toEqual({ code: null, signal: 'SIGSEGV' });
+    expect(commandExit(0x8600, null, undefined, 'win32')).toEqual({ code: null, signal: 'SIGABRT' });
+    expect(commandExit(0x10b00, null, undefined, 'win32')).toEqual({ code: 0x10b00, signal: null });
+    expect(commandExit(0x8b01, null, undefined, 'win32')).toEqual({ code: 0x8b01, signal: null });
   });
 
   it('leaves ordinary exits, unknown numbers and other platforms alone', () => {
@@ -35,7 +42,24 @@ describe('commandExit', () => {
     }
     await exited;
     expect(commandExit(1, null, child, 'win32')).toEqual({ code: null, signal: 'SIGKILL' });
-    expect(commandExit(1, null, spawn('true'), 'win32')).toEqual({ code: 1, signal: null });
+    const other = spawn('true');
+    await new Promise(resolve => other.on('exit', resolve));
+    expect(commandExit(1, null, other, 'win32')).toEqual({ code: 1, signal: null });
+  });
+});
+
+describe('windowsArgs', () => {
+  it('names taskkill by its absolute System32 path and lists every tag', () => {
+    const child = {} as ChildProcess;
+    const tree = (tag: string) => ({
+      pid: 1,
+      child,
+      launch: { executable: 'C:\\Git\\bin\\bash.exe', args: [], processTag: tag, cleanup: async () => undefined },
+    });
+    const args = windowsArgs([tree('one'), tree('two')]);
+    expect(args.slice(0, 3)).toEqual(['-c', WINDOWS_TREE_SCRIPT, 'b4m-signal']);
+    expect(args[3]).toMatch(/^[A-Z]:\\.*\\System32\\taskkill\.exe$/i);
+    expect(args.slice(4)).toEqual(['KILL', 'one', 'two']);
   });
 });
 
@@ -61,7 +85,9 @@ describe.runIf(process.platform === 'linux')('WINDOWS_TREE_SCRIPT', () => {
     const elsewhere = sleeper(other);
     await new Promise(resolve => setTimeout(resolve, 200));
 
-    const run = spawnSync('bash', ['-c', WINDOWS_TREE_SCRIPT, 'b4m-signal', 'TERM', one, two], { encoding: 'utf8' });
+    const run = spawnSync('bash', ['-c', WINDOWS_TREE_SCRIPT, 'b4m-signal', '', 'TERM', one, two], {
+      encoding: 'utf8',
+    });
     expect(run.status).toBe(0);
 
     expect(await first.ended).toBe('SIGTERM');

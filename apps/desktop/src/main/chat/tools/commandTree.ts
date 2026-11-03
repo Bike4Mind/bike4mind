@@ -1,4 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { system32 } from './gitBash';
 import type { SandboxedCommand } from './sandbox';
 
 /** Set on every Windows command; each process it starts inherits it, which is how a stop finds them. */
@@ -14,15 +15,12 @@ export interface CommandTree {
 }
 
 /**
- * Run under Git Bash with `<signal> <tag>...`. A Windows process has no group to signal, and its
- * Windows parent links break across MSYS fork and exec, so the tree is found by the tag in each
- * MSYS process's environment instead. KILL goes through taskkill /T, so native programs the
- * command started go down with their MSYS parents.
+ * `<taskkill.exe|''> <signal> <tag>...`: finds the command's processes by the tag in their environment. Given taskkill, each is
+ * force-ended with its native descendants as soon as it is found; an MSYS signal would end an exec'd native program alone.
  */
 export const WINDOWS_TREE_SCRIPT = `
-sig=$1
-shift
-pids= winpids=
+taskkill=$1 sig=$2
+shift 2
 for p in /proc/[0-9]*; do
   hit=
   while IFS= read -r -d '' entry; do
@@ -30,23 +28,21 @@ for p in /proc/[0-9]*; do
     [ -n "$hit" ] && break
   done 2>/dev/null < "$p/environ"
   [ -n "$hit" ] || continue
-  pids="$pids \${p#/proc/}"
-  IFS= read -r winpid < "$p/winpid" && winpids="$winpids //PID $winpid"
+  if [ -n "$taskkill" ]; then
+    IFS= read -r winpid 2>/dev/null < "$p/winpid" && "$taskkill" //F //T //PID "$winpid" >/dev/null 2>&1
+  else
+    kill -s "$sig" "\${p#/proc/}" 2>/dev/null
+  fi
 done
-if [ "$sig" = KILL ]; then
-  [ -z "$winpids" ] || taskkill //F //T $winpids >/dev/null 2>&1
-elif [ -n "$pids" ]; then
-  kill -s "$sig" $pids 2>/dev/null
-fi
 exit 0
 `;
 
-/** Children this side sent KILL; taskkill ends them with exit code 1, which says nothing of the kill. */
+/** Children this side stopped; taskkill ends them with exit code 1, which says nothing of the kill. */
 const killed = new WeakSet<ChildProcess>();
 
-function windowsArgs(trees: readonly CommandTree[], signal: NodeJS.Signals): string[] {
+export function windowsArgs(trees: readonly CommandTree[]): string[] {
   const tags = trees.map(tree => tree.launch.processTag).filter((tag): tag is string => Boolean(tag));
-  return ['-c', WINDOWS_TREE_SCRIPT, 'b4m-signal', signal === 'SIGKILL' ? 'KILL' : 'TERM', ...tags];
+  return ['-c', WINDOWS_TREE_SCRIPT, 'b4m-signal', system32('taskkill.exe'), 'KILL', ...tags];
 }
 
 /**
@@ -102,8 +98,8 @@ const MSYS_SIGNALS: Readonly<Record<number, NodeJS.Signals>> = {
 };
 
 /**
- * On Windows, reads Git Bash's `signal << 8` exit code back as the signal, and reports SIGKILL for
- * a child this side killed.
+ * On Windows, reads Git Bash's `signal << 8` exit code (0x80 set for a core dump) back as the
+ * signal, and reports SIGKILL for a child this side stopped.
  */
 export function commandExit(
   code: number | null,
@@ -113,24 +109,28 @@ export function commandExit(
 ): { code: number | null; signal: NodeJS.Signals | null } {
   if (platform !== 'win32') return { code, signal };
   if (child && killed.has(child)) return { code: null, signal: 'SIGKILL' };
-  if (code === null || code < 256 || code % 256 !== 0) return { code, signal };
-  const name = MSYS_SIGNALS[code / 256];
+  if (code === null || code < 0x100 || code >= 0x10000 || (code & 0xff) !== 0) return { code, signal };
+  const name = MSYS_SIGNALS[(code >> 8) & 0x7f];
   return name ? { code: null, signal: name } : { code, signal };
 }
 
-/** Signal a command and everything it started. Returns at once; on Windows the work finishes in the background. */
+/**
+ * Signal a command and everything it started. Returns at once; on Windows the work finishes in the
+ * background, and every stop is forced. The launcher goes once the sweep is done, so the tree is intact for it.
+ */
 export function signalCommandTree(tree: CommandTree, signal: NodeJS.Signals): void {
   if (process.platform !== 'win32') {
     posixSignal(tree.pid, signal);
     return;
   }
-  const sweep = spawn(tree.launch.executable, windowsArgs([tree], signal), {
+  killed.add(tree.child);
+  const sweep = spawn(tree.launch.executable, windowsArgs([tree]), {
     stdio: 'ignore',
     windowsHide: true,
     timeout: WINDOWS_SIGNAL_TIMEOUT_MS,
   });
-  sweep.on('error', () => undefined);
-  if (signal === 'SIGKILL') killLaunchers([tree]);
+  sweep.on('error', () => killLaunchers([tree]));
+  sweep.on('exit', () => killLaunchers([tree]));
 }
 
 /** For handlers that cannot await. On Windows this blocks for one Git Bash run, however many trees. */
@@ -141,10 +141,10 @@ export function signalCommandTreesSync(trees: readonly CommandTree[], signal: No
   }
   const first = trees[0];
   if (!first) return;
-  spawnSync(first.launch.executable, windowsArgs(trees, signal), {
+  spawnSync(first.launch.executable, windowsArgs(trees), {
     stdio: 'ignore',
     windowsHide: true,
     timeout: WINDOWS_SIGNAL_TIMEOUT_MS,
   });
-  if (signal === 'SIGKILL') killLaunchers(trees);
+  killLaunchers(trees);
 }

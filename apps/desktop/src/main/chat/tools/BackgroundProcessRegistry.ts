@@ -520,8 +520,9 @@ export class BackgroundProcessRegistry {
     this.flushEmit(tracked);
 
     // The leader exiting does not empty its group: `npm run dev &` inside the command leaves
-    // the server behind with the watchdog already dismissed. Sweep the group either way.
-    this.signalGroup(tracked, 'SIGTERM');
+    // the server behind with the watchdog already dismissed. Sweep the group either way. No
+    // KILL follows this one, so on Windows, where a stop is always forced, it is sent as KILL.
+    this.signalGroup(tracked, process.platform === 'win32' ? 'SIGKILL' : 'SIGTERM');
     if (tracked.killTimer) clearTimeout(tracked.killTimer);
     tracked.pgid = null;
 
