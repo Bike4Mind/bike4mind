@@ -1345,6 +1345,29 @@ describe('ModelServerRegistry', () => {
       }
     });
 
+    it('waits out that check for a turn on that server, however slow', async () => {
+      const { servers, release, checking } = await downServer();
+      const id = (await servers.views())[1].id;
+      vi.useFakeTimers();
+      try {
+        let listed = null as ChatModelOption[] | null;
+        void servers.models({ untilListed: id }).then(result => {
+          listed = result;
+        });
+        await vi.advanceTimersByTimeAsync(PICKER_LIST_WAIT_MS * 2);
+        expect(listed).toBeNull();
+        release();
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.waitFor(() => expect(listed).not.toBeNull());
+        expect(listed).toEqual([expect.objectContaining({ name: 'qwen2.5:0.5b' })]);
+        expect(listed?.[0]?.unavailable).toBeUndefined();
+      } finally {
+        vi.useRealTimers();
+        release();
+        await checking;
+      }
+    });
+
     it('counts the wait on that check against the wait on the listing it started', async () => {
       const { fake, servers, release, checking } = await downServer();
       let finishListing: () => void = () => {};

@@ -419,9 +419,12 @@ export class ModelServerRegistry {
   }
 
   /** One server's chat models. A server saved again during the waits lists as saved; a removed one lists nothing. */
-  private async entryModels(entry: Entry, options: ModelListOptions): Promise<ChatModelOption[]> {
-    // One budget for the check wait and the listing wait together.
-    const deadline = Date.now() + PICKER_LIST_WAIT_MS;
+  private async entryModels(
+    entry: Entry,
+    options: ModelListOptions,
+    // One budget for the check wait and the listing wait together, kept across a re-save during the wait.
+    deadline = Date.now() + PICKER_LIST_WAIT_MS
+  ): Promise<ChatModelOption[]> {
     const server = { id: entry.record.id, name: entry.record.name };
     // Asking without the credential would get a 401 that replaces this message with a vaguer one.
     const missing = this.deps.store.credentialMissing(entry.record) ? this.missingCredentialHealth() : null;
@@ -431,6 +434,7 @@ export class ModelServerRegistry {
     }
     // A server shown as down may be back: a check already running (say, after a pull) decides, or a
     // picker refresh starts one when the last is stale. A server not checked yet is listed directly.
+    const turn = options.untilListed === entry.record.id;
     const down = entry.health.state !== 'online' && entry.health.state !== 'unknown';
     const running = this.checking.get(entry);
     let checked: Listing | undefined;
@@ -442,9 +446,10 @@ export class ModelServerRegistry {
           return listing;
         })
       ).catch(() => undefined);
-      checked = await within(check, PICKER_CHECK_WAIT_MS, undefined);
+      // A turn waits for the check like it waits for the listing; Stop still ends it.
+      checked = turn ? await check : await within(check, PICKER_CHECK_WAIT_MS, undefined);
     }
-    if (!this.current(entry)) return this.savedModels(entry, options);
+    if (!this.current(entry)) return this.savedModels(entry, options, deadline);
     let reason: string | null = null;
     if (listable(entry)) {
       const fresh = this.freshKept(entry);
@@ -453,7 +458,6 @@ export class ModelServerRegistry {
       // undefined: still listing when the wait ran out, or already reported as still listing.
       let result: Listing | undefined = known;
       if (slot) slot.picker = true;
-      const turn = options.untilListed === entry.record.id;
       const wait = (listing: Slot) =>
         turn ? listing.promise : within(listing.promise, Math.max(deadline - Date.now(), 0), undefined);
       if (slot && (turn || !slot.reported)) {
@@ -466,7 +470,7 @@ export class ModelServerRegistry {
           result = await wait(slot);
         }
       }
-      if (!this.current(entry)) return this.savedModels(entry, options);
+      if (!this.current(entry)) return this.savedModels(entry, options, deadline);
       if (result?.ok) {
         if (entry.health.state === 'unknown') void this.check(entry.record.id);
         return result.models.map(model => ({ ...model, server }));
@@ -497,9 +501,9 @@ export class ModelServerRegistry {
     });
   }
 
-  private savedModels(replaced: Entry, options: ModelListOptions): Promise<ChatModelOption[]> {
+  private savedModels(replaced: Entry, options: ModelListOptions, deadline: number): Promise<ChatModelOption[]> {
     const saved = this.entries.get(replaced.record.id);
-    return saved ? this.entryModels(saved, options) : Promise.resolve([]);
+    return saved ? this.entryModels(saved, options, deadline) : Promise.resolve([]);
   }
 
   /** A pull or removal changed what the server holds, so its last listing is no longer served. */

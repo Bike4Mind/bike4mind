@@ -61,6 +61,7 @@ import { createMainLogger } from '../logger';
 import { ApprovalModePreference } from './ApprovalModePreference';
 import { PromptCacheTtlPreference } from './PromptCacheTtlPreference';
 import { LocalContextPreference } from './LocalContextPreference';
+import { createLateReload } from './lateReload';
 import { registerLocalContextIpc } from './localContextIpc';
 import { localContextSizing, localHardware } from './localContextSizing';
 import { SidebarSectionStore } from './SidebarSectionStore';
@@ -184,7 +185,7 @@ const DEFERRED_TOOLS_OVERRIDE = parseDeferredToolsOverride(
 /** How much of a background process's output the panel asks for when it rejoins after a reload. */
 const PANEL_TAIL_CHARS = 20_000;
 
-/** Gathers model servers whose slow listings finish close together into one chat model list reload. */
+/** Window (ms) that gathers late server listings into one chat model list reload; see lateReload.ts. */
 const LATE_RELOAD_DEBOUNCE_MS = 250;
 
 /** Re-encode quality for a downscaled screenshot. Text in a UI stays legible well below this. */
@@ -482,8 +483,10 @@ export function registerChat(
     setting: () => localContext.read(),
     pinnedProjectors: () => hooks.pinnedProjectors?.() ?? new Map(),
   });
-  let lateReload: ReturnType<typeof setTimeout> | undefined;
-  let modelServersStopped = false;
+  const lateReload = createLateReload(() => {
+    models.forgetLocal();
+    send(IPC_CHANNELS.chatModelsChanged, undefined);
+  }, LATE_RELOAD_DEBOUNCE_MS);
   // safeStorage like the MCP secrets: a server's token or header value never goes to plain JSON.
   const modelServers = new ModelServerRegistry({
     store: new ModelServerStore(safeStorage, privateFile(join(userData, 'model-servers.json')), logger),
@@ -493,15 +496,7 @@ export function registerChat(
       send(IPC_CHANNELS.modelServersChanged, servers);
     },
     edited: () => models.forgetLocal(),
-    // Several servers finishing together cause one reload.
-    listedLate: () => {
-      if (lateReload || modelServersStopped) return;
-      lateReload = setTimeout(() => {
-        lateReload = undefined;
-        models.forgetLocal();
-        send(IPC_CHANNELS.chatModelsChanged, undefined);
-      }, LATE_RELOAD_DEBOUNCE_MS);
-    },
+    listedLate: lateReload.notify,
     localSpecsChanged: () => {
       forgetLocalContexts();
       localSizing.forget?.();
@@ -1348,8 +1343,7 @@ export function registerChat(
     spareWorktrees,
     modelServers,
     stopModelServers: () => {
-      modelServersStopped = true;
-      clearTimeout(lateReload);
+      lateReload.stop();
       modelServers.stop();
     },
     localContext,
