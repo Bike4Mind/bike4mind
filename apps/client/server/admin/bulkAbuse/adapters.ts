@@ -51,8 +51,11 @@ export function bulkAbuseExecuteAdapters(
         details,
         related,
       }),
-    cancelSubscriptions: async user => {
-      const result = await cancelAccountSubscriptions({ userId: user.id, reason: 'suspended' }, logger ?? console);
+    cancelSubscriptions: async (user, deadline) => {
+      const result = await cancelAccountSubscriptions(
+        { userId: user.id, reason: 'suspended', deadline },
+        logger ?? console
+      );
       const entry = subscriptionCancellationAudit(result, 'suspended');
       // Best-effort per the catalogue: the ban is committed, so a lost entry must not fail the user.
       if (entry) {
