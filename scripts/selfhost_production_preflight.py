@@ -31,7 +31,6 @@ MESSAGES = {
 }
 
 
-# Mirrors the canonical PLACEHOLDER_VALUE_PATTERNS in scripts/secrets-scan-summarize-and-ingest.mjs.
 PLACEHOLDER_VALUES = {
     'selfhost', 'minioadmin', 'not-configured', 'not_configured', 'changeme',
     'your-secret-here', 'your_secret_here', 'your-api-key', 'your_api_key',
