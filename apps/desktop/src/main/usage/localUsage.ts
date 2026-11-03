@@ -46,10 +46,11 @@ function amount(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-/** One reply's contribution on one model. Session files are this app's own but older ones predate every field. */
-function replyFigures(usage: ChatUsage): LocalUsageFigures {
+/** One reply's share on one model; only `counted` shares add a reply. Older session files predate every field. */
+function replyFigures(usage: ChatUsage, counted: boolean): LocalUsageFigures {
   const figures = emptyFigures();
-  figures.replies = 1;
+  const reply = counted ? 1 : 0;
+  figures.replies = reply;
   figures.outputTokens = amount(usage?.outputTokens);
   figures.contextTokens = amount(usage?.inputTokens);
   const rate = usage?.rate;
@@ -57,12 +58,12 @@ function replyFigures(usage: ChatUsage): LocalUsageFigures {
   const evalMs = amount(rate?.evalMs);
   if (!rate || evalTokens === 0 || evalMs === 0) return figures;
   if (rate.estimated) {
-    figures.estimatedReplies = 1;
+    figures.estimatedReplies = reply;
     figures.estimatedEvalTokens = evalTokens;
     figures.estimatedEvalMs = evalMs;
     return figures;
   }
-  figures.timedReplies = 1;
+  figures.timedReplies = reply;
   figures.evalTokens = evalTokens;
   figures.evalMs = evalMs;
   const promptTokens = amount(rate.promptTokens);
@@ -85,11 +86,8 @@ function replyFigures(usage: ChatUsage): LocalUsageFigures {
 }
 
 /**
- * The model a reply ran on, or null when that cannot be told.
- *
- * Replies stored before the per-reply stamp fall back to their context snapshot's model, and to
- * the session's only when they carry a rate, which hosted replies never do. A prompt-cache stamp
- * is hosted-only, so it settles an unstamped reply as hosted.
+ * The model a reply started on, or null when that cannot be told. An unstamped reply falls back
+ * to its snapshot's model, then the session's if it has a rate; a prompt-cache stamp means hosted.
  */
 function replyModel(message: ChatMessage, sessionModel: string): string | null {
   if (typeof message.model === 'string') return message.model;
@@ -109,12 +107,13 @@ function addShare(total: ChatUsage | undefined, next: ChatUsage): ChatUsage {
 }
 
 /**
- * A reply's usage per model its requests went to. `message.usage` is the sum of `rounds[].usage`,
- * so it is the whole answer unless a continued reply's rounds name different models; then the
- * rounds are summed per model instead, and never both.
+ * A reply's usage per model its requests went to: `message.usage` whole, unless the rounds name
+ * different models, then the rounds summed per model. `replyLevel` always has a share.
  */
-function replyShares(message: ChatMessage & { usage: ChatUsage }, sessionModel: string): Map<string | null, ChatUsage> {
-  const replyLevel = replyModel(message, sessionModel);
+function replyShares(
+  message: ChatMessage & { usage: ChatUsage },
+  replyLevel: string | null
+): Map<string | null, ChatUsage> {
   const rounds = Array.isArray(message.rounds)
     ? message.rounds.filter(round => round && typeof round === 'object')
     : [];
@@ -131,8 +130,8 @@ function replyShares(message: ChatMessage & { usage: ChatUsage }, sessionModel: 
     counted.outputTokens += amount(round.usage.outputTokens);
     counted.inputTokens += amount(round.usage.inputTokens);
   }
-  // What no round carries: an explore sub-loop's spend, which only hosted turns run, or a round
-  // stored before rounds kept usage, which ran on the reply's own model.
+  // What no round carries: an explore sub-loop's spend (hosted only) or a fallback round for a
+  // reply stored without rounds, which ran on the model the reply started on.
   const rest = {
     outputTokens: Math.max(0, amount(message.usage.outputTokens) - counted.outputTokens),
     inputTokens: Math.max(0, amount(message.usage.inputTokens) - counted.inputTokens),
@@ -140,6 +139,7 @@ function replyShares(message: ChatMessage & { usage: ChatUsage }, sessionModel: 
   const allLocal = [...shares.keys()].every(model => model !== null && isLocalModel(model));
   if (allLocal && (rest.outputTokens > 0 || rest.inputTokens > 0))
     shares.set(replyLevel, addShare(shares.get(replyLevel), rest));
+  if (!shares.has(replyLevel)) shares.set(replyLevel, {});
   return shares;
 }
 
@@ -151,7 +151,8 @@ export function sessionUsageBuckets(session: Pick<ChatSession, 'model' | 'messag
     const at = Date.parse(message.createdAt);
     if (!Number.isFinite(at)) continue;
     const hour = Math.floor(at / HOUR_MS) * HOUR_MS;
-    for (const [model, usage] of replyShares(message as ChatMessage & { usage: ChatUsage }, session.model)) {
+    const started = replyModel(message, session.model);
+    for (const [model, usage] of replyShares(message as ChatMessage & { usage: ChatUsage }, started)) {
       if (!model || !isLocalModel(model) || !parseLocalModelId(model)) continue;
       const key = `${hour}\n${model}`;
       let bucket = buckets.get(key);
@@ -159,7 +160,7 @@ export function sessionUsageBuckets(session: Pick<ChatSession, 'model' | 'messag
         bucket = { model, hour, ...emptyFigures() };
         buckets.set(key, bucket);
       }
-      addFigures(bucket, replyFigures(usage));
+      addFigures(bucket, replyFigures(usage, model === started));
     }
   }
   return [...buckets.values()];
