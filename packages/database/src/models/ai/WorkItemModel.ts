@@ -401,6 +401,8 @@ WorkItemSchema.index(
   { loopId: 1, deletedAt: 1, status: 1, stage: 1 },
   { partialFilterExpression: { loopId: { $exists: true } } }
 );
+// The loop notice sweep's global read of blocked loop tickets (apps/workers/src/cron/loopNotices.ts).
+WorkItemSchema.index({ status: 1, loopId: 1 }, { partialFilterExpression: { loopId: { $exists: true } } });
 WorkItemSchema.index({ executionId: 1 }, { partialFilterExpression: { executionId: { $exists: true } } });
 
 export const WorkItem: IWorkItemModel =

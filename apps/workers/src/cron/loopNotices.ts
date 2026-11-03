@@ -3,6 +3,8 @@ import { inboxRepository, loopRepository, usableObjectIds, workItemRepository } 
 import { Logger } from '@bike4mind/observability';
 
 const KEY_PREFIX = 'loop:';
+/** Set on every live loop of a user when their all-loops daily budget runs out; one notice covers them all. */
+export const USER_BUDGET_PAUSE_REASON = 'All-loops daily budget reached; resumes 00:00 UTC';
 const TITLE_CHARS = 120;
 const MESSAGE_CHARS = 1000;
 
@@ -34,22 +36,35 @@ const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0
  * The notices that should be open right now: one per loop whose status needs its owner
  * (`loopStatusNeedsOwner`, shared with the loop list marker) and one per blocked ticket of a loop
  * that still exists. The status is part of the key, so `paused` -> `error` replaces the notice.
+ * Loops paused by their owner's all-loops budget share one notice per user instead.
  */
 export function desiredLoopNotices(
   loops: ILoop[],
   tickets: BlockedTicket[],
   loopsById: Map<string, ILoop>
 ): LoopNotice[] {
-  const notices: LoopNotice[] = loops.filter(loopStatusNeedsOwner).map(loop => ({
-    sourceKey: `${KEY_PREFIX}${loop.id}:status:${loop.status}`,
-    receiverId: loop.userId,
-    title: clip(`Loop "${loop.name}" ${STATUS_TITLES[loop.status]}`, TITLE_CHARS),
-    message: clip(
-      `${loop.statusReason ?? 'The loop stopped.'}\n${NEXT_STEP[loop.autoResume ?? 'owner']}`,
-      MESSAGE_CHARS
-    ),
-    link: `/loops/${loop.id}`,
+  const userBudget = (loop: ILoop) => loop.status === 'paused' && loop.statusReason === USER_BUDGET_PAUSE_REASON;
+  const budgetUsers = new Set(loops.filter(userBudget).map(loop => loop.userId));
+  const notices: LoopNotice[] = [...budgetUsers].map(userId => ({
+    sourceKey: `${KEY_PREFIX}user:${userId}:budget`,
+    receiverId: userId,
+    title: 'Your loops paused: all-loops daily budget reached',
+    message: `${USER_BUDGET_PAUSE_REASON}.\nRaise "All loops: max credits per day" on the loops page to run sooner.`,
+    link: '/loops',
   }));
+  const perLoop = loops
+    .filter(loop => loopStatusNeedsOwner(loop) && !userBudget(loop))
+    .map(loop => ({
+      sourceKey: `${KEY_PREFIX}${loop.id}:status:${loop.status}`,
+      receiverId: loop.userId,
+      title: clip(`Loop "${loop.name}" ${STATUS_TITLES[loop.status]}`, TITLE_CHARS),
+      message: clip(
+        `${loop.statusReason ?? 'The loop stopped.'}\n${NEXT_STEP[loop.autoResume ?? 'owner']}`,
+        MESSAGE_CHARS
+      ),
+      link: `/loops/${loop.id}`,
+    }));
+  notices.push(...perLoop);
 
   for (const ticket of tickets) {
     const loop = loopsById.get(ticket.loopId!);
@@ -75,8 +90,11 @@ export function desiredLoopNotices(
  * ticks. A changed reason on an unchanged key does not re-notify, and a notice the owner deleted keeps its
  * key (so is not re-sent) until its cause clears.
  *
- * ponytail: global scan of candidate loops and blocked loop tickets every tick; go per-user or
- * event-driven if loop counts grow.
+ * Global, but bounded by what currently needs an owner rather than by all loops: each query reads
+ * through an index and returns only loops in needs_you/error/paused ({status, nextRunAt}), blocked loop
+ * tickets (the partial {status, loopId} index, entered at status 'blocked') and held `loop:` notices (the partial
+ * unique sourceKey index, which `listKeyed` states `$exists` for). Live loops and open or closed tickets
+ * are never read.
  */
 export async function syncLoopNotices(logger: Logger): Promise<void> {
   const [candidates, tickets, held] = await Promise.all([

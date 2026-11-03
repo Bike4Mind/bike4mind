@@ -363,7 +363,11 @@ describe('WorkItemRepository', () => {
       await WorkItem.syncIndexes();
       const keys = (await WorkItem.collection.indexes()).map(index => index.key);
       expect(keys).toEqual(
-        expect.arrayContaining([{ loopId: 1, deletedAt: 1, status: 1, stage: 1 }, { executionId: 1 }])
+        expect.arrayContaining([
+          { loopId: 1, deletedAt: 1, status: 1, stage: 1 },
+          { status: 1, loopId: 1 },
+          { executionId: 1 },
+        ])
       );
     });
 

@@ -39,7 +39,13 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
 }));
 vi.mock('../queueHandlers/agentExecutor.billing', () => ({ nextIterationCredits: h.nextIterationCredits }));
 
-import { BUDGET_PAUSE_REASON, LOOP_LEASE_MS, MAX_CONSECUTIVE_FAILURES, runLoopSchedulerTick } from './loopScheduler';
+import {
+  BUDGET_PAUSE_REASON,
+  LOOP_LEASE_MS,
+  MAX_CONSECUTIVE_FAILURES,
+  runLoopSchedulerTick,
+  USER_BUDGET_PAUSE_REASON,
+} from './loopScheduler';
 import { STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -67,6 +73,9 @@ beforeEach(() => {
   vi.spyOn(agentExecutionRepository, 'findById').mockImplementation(
     (async (id: string) => executions[id] ?? null) as never
   );
+  // A funded owner and an unpriceable model by default, so admission passes unless a test says otherwise.
+  vi.spyOn(userRepository, 'findById').mockResolvedValue({ currentCredits: 1000 } as never);
+  h.getAvailableModels.mockResolvedValue([]);
   let n = 0;
   h.startAgentExecution.mockImplementation(async () => ({ ok: true, executionId: `exec-${++n}` }));
 });
@@ -276,7 +285,7 @@ describe('runLoopSchedulerTick', () => {
 
   it('releases the lease when claiming a ticket throws', async () => {
     const loop = await createLoop();
-    vi.spyOn(workItemRepository, 'findNextReadyForLoop').mockRejectedValue(new Error('db down'));
+    vi.spyOn(workItemRepository, 'listReadyForLoop').mockRejectedValue(new Error('db down'));
 
     await runLoopSchedulerTick(NOW, logger);
 
@@ -725,7 +734,7 @@ describe('runLoopSchedulerTick - budget and auto-resume', () => {
 
   beforeEach(() => {
     spentToday = 0;
-    balance = { currentCredits: 0 };
+    balance = { currentCredits: 100 };
     vi.spyOn(agentExecutionRepository, 'sumCreditsByLoop').mockImplementation((async (ids: string[]) =>
       Object.fromEntries(ids.map(id => [id, spentToday]))) as never);
     vi.spyOn(userRepository, 'findById').mockImplementation((async () => balance) as never);
@@ -765,10 +774,11 @@ describe('runLoopSchedulerTick - budget and auto-resume', () => {
     expect((await WorkItem.findById(ticket.id))!.toJSON()).toMatchObject({ status: 'open' });
   });
 
-  it('dispatches while under budget, and skips the spend check without one', async () => {
+  it('dispatches while under its paced budget, and skips the spend check without one', async () => {
     const budgeted = await createLoop({ budgetCreditsPerDay: 10 });
     await createLoop({ sessionId: 'session-2' });
-    spentToday = 9.5;
+    // At 12:00 UTC the paced allowance is 10 * 13/24 = 5.42.
+    spentToday = 5;
 
     await runLoopSchedulerTick(NOW, logger);
 
@@ -806,6 +816,7 @@ describe('runLoopSchedulerTick - budget and auto-resume', () => {
   });
 
   it('keeps a credit pause while the balance is empty and resumes once it is positive', async () => {
+    balance = { currentCredits: 0 };
     const loop = await createLoop({ activeExecutionId: 'exec-0', lastExecutionId: 'exec-0' });
     executions['exec-0'] = { status: 'failed', failureReason: 'insufficient_credits', error: { message: 'x' } };
     await runLoopSchedulerTick(NOW, logger);
@@ -927,5 +938,241 @@ describe('runLoopSchedulerTick - budget and auto-resume', () => {
 
     expect((await reload(loop.id)).status).toBe('paused');
     expect(h.startAgentExecution).not.toHaveBeenCalled();
+  });
+});
+
+describe('runLoopSchedulerTick - safety and pacing', () => {
+  const settings = (values: Record<string, unknown>) =>
+    vi
+      .mocked(adminSettingsRepository.getSettingsValue)
+      .mockImplementation((async (key: string) => (key === 'EnableLoops' ? true : values[key])) as never);
+  const createTicket = async (loopId: string, overrides: Record<string, unknown> = {}) =>
+    (
+      await WorkItem.create({
+        userId: 'user-1',
+        loopId,
+        title: 'Write the summary',
+        stage: 'todo',
+        status: 'open',
+        dependencies: [],
+        ...overrides,
+      })
+    ).toJSON();
+  const ticketOf = async (id: string) => (await WorkItem.findById(id))!.toJSON();
+  const running = () => ({ status: 'running', updatedAt: NOW });
+  const LATER = new Date(NOW.getTime() + 60 * 60_000);
+
+  it('dispatches no loop with 4 loop runs in flight, and at most 2 with 2 in flight', async () => {
+    for (let i = 0; i < 4; i++) {
+      await createLoop({ activeExecutionId: `busy-${i}`, nextRunAt: LATER });
+      executions[`busy-${i}`] = running();
+    }
+    for (let i = 0; i < 5; i++) await createLoop({ userId: `due-${i}` });
+
+    await runLoopSchedulerTick(NOW, logger);
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
+
+    await Loop.updateMany({ activeExecutionId: { $in: ['busy-0', 'busy-1'] } }, { $unset: { activeExecutionId: '' } });
+    await runLoopSchedulerTick(NOW, logger);
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not let one user's many due loops keep another user's loop out of the tick", async () => {
+    await Loop.insertMany(
+      Array.from({ length: 30 }, (_, i) => ({
+        userId: 'user-a',
+        name: `A${i}`,
+        goal: 'g',
+        model: 'claude-sonnet-5',
+        sessionId: `sa-${i}`,
+        intervalMinutes: 15,
+        status: 'live',
+        nextRunAt: new Date(PAST.getTime() - (i + 1) * 60_000),
+      }))
+    );
+    await createLoop({ userId: 'user-b' });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(4);
+    expect(h.startAgentExecution.mock.calls.map(call => call[0].userId)).toContain('user-b');
+  });
+
+  it('pauses a loop whose payer cannot cover one iteration, without creating an execution', async () => {
+    vi.mocked(userRepository.findById).mockResolvedValue({ currentCredits: 0 } as never);
+    const loop = await createLoop();
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
+    expect(await reload(loop.id)).toMatchObject({
+      status: 'paused',
+      autoResume: 'credits',
+      statusReason: 'Out of credits',
+    });
+  });
+
+  it('passes the run the lowest of the remaining loop, paced and all-loops budgets as its credit cap', async () => {
+    settings({ LoopsDailyCreditsPerUser: 100 });
+    vi.spyOn(agentExecutionRepository, 'sumCreditsByLoop').mockImplementation((async (ids: string[]) =>
+      Object.fromEntries(ids.map(id => [id, 5]))) as never);
+    vi.spyOn(agentExecutionRepository, 'sumLoopCreditsForUser').mockResolvedValue(50);
+    await createLoop({ budgetCreditsPerDay: 24 });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    // At 12:00 the all-loops allowance is 100 * 13/24 = 54.17, of which 50 is spent.
+    expect(h.startAgentExecution.mock.calls[0][0].creditCap).toBeCloseTo(100 * (13 / 24) - 50);
+  });
+
+  it('starts an uncapped run when no budget is set', async () => {
+    await createLoop();
+    await runLoopSchedulerTick(NOW, logger);
+    expect(h.startAgentExecution.mock.calls[0][0]).not.toHaveProperty('creditCap');
+  });
+
+  it('defers a loop that is ahead of its paced budget, and runs it once the allowance covers an iteration', async () => {
+    vi.spyOn(agentExecutionRepository, 'sumCreditsByLoop').mockImplementation((async (ids: string[]) =>
+      Object.fromEntries(ids.map(id => [id, 5]))) as never);
+    const early = new Date('2026-10-29T02:30:00Z');
+    const loop = await createLoop({ budgetCreditsPerDay: 24, nextRunAt: early });
+
+    // Allowance at 02:30 is 24 * 3.5/24 = 3.5, under the 5 already spent.
+    await runLoopSchedulerTick(early, logger);
+
+    const deferred = await reload(loop.id);
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
+    expect(deferred.status).toBe('live');
+    expect(deferred.leaseUntil).toBeUndefined();
+    expect(deferred.nextRunAt!.getTime()).toBeGreaterThan(new Date('2026-10-29T04:00:00Z').getTime());
+    expect(await Inbox.countDocuments({})).toBe(0);
+
+    await runLoopSchedulerTick(deferred.nextRunAt!, logger);
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+  });
+
+  it('pauses rather than defers when the budget left cannot cover one iteration', async () => {
+    h.getAvailableModels.mockResolvedValue([{ id: 'claude-sonnet-5' }]);
+    h.nextIterationCredits.mockReturnValue(20);
+    const loop = await createLoop({ budgetCreditsPerDay: 10 });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
+    expect(await reload(loop.id)).toMatchObject({ status: 'paused', statusReason: BUDGET_PAUSE_REASON });
+  });
+
+  it("pauses all of a user's live loops at the lower of the admin and user caps, with one notice, until midnight", async () => {
+    settings({ LoopsDailyCreditsPerUser: 50 });
+    vi.mocked(userRepository.findById).mockResolvedValue({ currentCredits: 1000, loopsDailyCredits: 30 } as never);
+    const spent = vi.spyOn(agentExecutionRepository, 'sumLoopCreditsForUser').mockResolvedValue(30);
+    const due = await createLoop();
+    const waiting = await createLoop({ nextRunAt: LATER, sessionId: 'session-2' });
+    const owned = await createLoop({ status: 'paused', sessionId: 'session-3' });
+    const theirs = await createLoop({ userId: 'user-2', nextRunAt: LATER, sessionId: 'session-4' });
+
+    await runLoopSchedulerTick(NOW, logger);
+    await runLoopSchedulerTick(NOW, logger);
+
+    const midnight = new Date('2026-10-30T00:00:00Z');
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
+    for (const id of [due.id, waiting.id]) {
+      expect(await reload(id)).toMatchObject({
+        status: 'paused',
+        autoResume: 'budget',
+        statusReason: USER_BUDGET_PAUSE_REASON,
+        nextRunAt: midnight,
+      });
+    }
+    expect((await reload(owned.id)).autoResume).toBeUndefined();
+    expect((await reload(theirs.id)).status).toBe('live');
+    const notices = await Inbox.find({ deletedAt: null }).lean();
+    expect(notices.map(notice => notice.sourceKey)).toEqual(['loop:user:user-1:budget']);
+
+    spent.mockResolvedValue(0);
+    await runLoopSchedulerTick(midnight, logger);
+    expect((await reload(waiting.id)).status).toBe('live');
+    expect(await Inbox.countDocuments({ deletedAt: null })).toBe(0);
+  });
+
+  it("returns a capped run's ticket to open without counting a failure, and says why on the loop", async () => {
+    h.startAgentExecution.mockResolvedValue({ ok: false, reason: 'concurrent_limit' });
+    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
+    const ticket = await createTicket(loop.id, { status: 'in_progress', executionId: 'exec-0' });
+    executions['exec-0'] = { status: 'failed', failureReason: 'credit_cap', creditCap: 12.5, error: { message: 'x' } };
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(await ticketOf(ticket.id)).toMatchObject({ status: 'open' });
+    const after = await reload(loop.id);
+    expect(after).toMatchObject({
+      status: 'live',
+      consecutiveFailures: 0,
+      statusReason: 'Last run stopped at its credit cap (12.5 credits)',
+    });
+    expect(after.activeExecutionId).toBeUndefined();
+  });
+
+  it('blocks a ticket that used up its runs and works the next one', async () => {
+    const loop = await createLoop();
+    const spent = await createTicket(loop.id, { title: 'Spent', runCount: 6 });
+    const next = await createTicket(loop.id, { title: 'Next' });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(await ticketOf(spent.id)).toMatchObject({
+      status: 'blocked',
+      statusReason: 'Ran 6 times without finishing',
+    });
+    expect(await ticketOf(next.id)).toMatchObject({ status: 'in_progress', runCount: 1, executionId: 'exec-1' });
+  });
+
+  it('works a ticket further along before an older one in an earlier stage', async () => {
+    const loop = await createLoop();
+    await createTicket(loop.id, { title: 'Older' });
+    const along = await createTicket(loop.id, { title: 'Along', stage: 'doing' });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(await ticketOf(along.id)).toMatchObject({ status: 'in_progress' });
+  });
+
+  it('backs an idle loop off 2x per idle run up to 8x its interval, and a ticket change ends it', async () => {
+    // An answer without a memory block becomes the notes, so the same answer again leaves memory unchanged.
+    const loop = await createLoop({ nextRunAt: LATER, memory: { notes: 'nothing new', nextAction: '' } });
+    const idleRun = async (n: number) => {
+      await Loop.updateOne({ _id: loop.id }, { $set: { activeExecutionId: `idle-${n}` } });
+      executions[`idle-${n}`] = {
+        status: 'completed',
+        result: { answer: 'nothing new' },
+        createdAt: PAST,
+        completedAt: NOW,
+      };
+      await runLoopSchedulerTick(NOW, logger);
+      return reload(loop.id);
+    };
+
+    expect(await idleRun(1)).toMatchObject({ idleStreak: 1, nextRunAt: new Date(NOW.getTime() + 30 * 60_000) });
+    expect(await idleRun(2)).toMatchObject({ idleStreak: 2, nextRunAt: new Date(NOW.getTime() + 60 * 60_000) });
+    await idleRun(3);
+    expect(await idleRun(4)).toMatchObject({ idleStreak: 4, nextRunAt: new Date(NOW.getTime() + 120 * 60_000) });
+
+    await loopRepository.makeDueNow(loop.id, NOW);
+    expect(await reload(loop.id)).toMatchObject({ idleStreak: 0, nextRunAt: NOW });
+  });
+
+  it('does not back off a run that changed memory or touched a ticket', async () => {
+    const memory = { notes: 'same', nextAction: '' };
+    const loop = await createLoop({ nextRunAt: LATER, idleStreak: 2, memory, activeExecutionId: 'touched' });
+    const ticket = await createTicket(loop.id, { status: 'blocked', statusReason: 'x' });
+    await WorkItem.collection.updateOne({ _id: new mongoose.Types.ObjectId(ticket.id) }, { $set: { updatedAt: PAST } });
+    executions.touched = { status: 'completed', result: { answer: 'same' }, createdAt: PAST, completedAt: NOW };
+    await runLoopSchedulerTick(NOW, logger);
+    expect((await reload(loop.id)).idleStreak).toBe(0);
+
+    await Loop.updateOne({ _id: loop.id }, { $set: { activeExecutionId: 'changed', idleStreak: 2 } });
+    executions.changed = { status: 'completed', result: { answer: 'news' }, createdAt: NOW, completedAt: NOW };
+    await runLoopSchedulerTick(NOW, logger);
+    expect((await reload(loop.id)).idleStreak).toBe(0);
   });
 });

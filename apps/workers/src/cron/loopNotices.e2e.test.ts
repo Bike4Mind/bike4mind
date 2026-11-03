@@ -22,7 +22,7 @@ vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: {} }));
 vi.mock('@server/utils/startAgentExecution', () => ({ startAgentExecution: vi.fn() }));
 
-import { runLoopSchedulerTick } from './loopScheduler';
+import { runLoopSchedulerTick, USER_BUDGET_PAUSE_REASON } from './loopScheduler';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -108,6 +108,27 @@ describe('loop notices', () => {
       title: `Loop "Digest" ${phrase}`,
     });
     expect(notices[0].message).toContain(statusReason);
+  });
+
+  it('opens one notice per user for loops paused by the all-loops budget, and resolves it on resume', async () => {
+    const paused = { status: 'paused', statusReason: USER_BUDGET_PAUSE_REASON, autoResume: 'budget' };
+    await createLoop({ ...paused, nextRunAt: new Date(NOW.getTime() + 3_600_000) });
+    await createLoop({ ...paused, nextRunAt: new Date(NOW.getTime() + 3_600_000) });
+    await tick();
+
+    const notices = await openNotices();
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({ sourceKey: 'loop:user:owner-1:budget', receiverId: 'owner-1', link: '/loops' });
+
+    await Loop.updateMany(
+      {},
+      {
+        $set: { status: 'live', nextRunAt: new Date(NOW.getTime() + 60_000) },
+        $unset: { statusReason: '', autoResume: '' },
+      }
+    );
+    await tick();
+    expect(await openNotices()).toHaveLength(0);
   });
 
   it('stays silent for an owner pause, a live loop and a draft', async () => {
