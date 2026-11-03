@@ -43,7 +43,7 @@ The tiles cover complete days only. When the range ends today, today is still co
 
 A line chart of daily, weekly and monthly active users per day. With **Compare** on, a faint dashed line shows MAU for the previous period. Today is drawn dashed because it is not finished.
 
-Switch to **By surface** to see AI requests per day stacked by surface. Internal system traffic is not shown.
+Switch to **By surface** to see AI requests per day stacked by surface as bars. Internal system traffic is not shown.
 
 ## Signups: real vs suspected
 

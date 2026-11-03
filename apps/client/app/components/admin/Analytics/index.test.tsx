@@ -267,4 +267,46 @@ describe('AnalyticsTab', () => {
     expect(within(signals).getByText('Domain burst')).toBeInTheDocument();
     expect(within(signals).getByTestId('admin-inline-bar')).toBeInTheDocument();
   });
+
+  describe('a lone day with no neighbouring rollups', () => {
+    const loneDay = () =>
+      overview({
+        activeUsers: {
+          days: [
+            { day: '2026-06-14', dau: null, wau: null, mau: null, partial: false, previousMau: null },
+            { day: '2026-06-15', dau: 1, wau: 1, mau: 1, partial: true, previousMau: null },
+          ],
+          bySource: [
+            { day: '2026-06-14', partial: false, counts: null },
+            { day: '2026-06-15', partial: true, counts: { web: 1, api: 1 } },
+          ],
+          sources: ['web', 'api'],
+        },
+      });
+
+    it('draws a dot for it in the Active users view', async () => {
+      mocks.get.mockResolvedValue({ data: loneDay() });
+      await renderPage('/admin?tab=analytics&range=7d');
+      const chart = await screen.findByTestId('analytics-active-users-chart');
+      await waitFor(() =>
+        expect(chart.querySelectorAll('[data-testid="analytics-active-users-isolated-dot"]').length).toBeGreaterThan(0)
+      );
+    });
+
+    it('draws sized bars for it in the By surface view', async () => {
+      mocks.get.mockResolvedValue({ data: loneDay() });
+      await renderPage('/admin?tab=analytics&range=7d');
+      fireEvent.click(await screen.findByTestId('analytics-active-users-mode-surface'));
+      const chart = await screen.findByTestId('analytics-surface-chart');
+      await waitFor(() => {
+        const bars = chart.querySelectorAll('.recharts-bar-rectangle path');
+        expect(bars.length).toBeGreaterThan(0);
+        bars.forEach(bar => {
+          const [, width, height] = /h\s*(-?[\d.]+)\s*v\s*(-?[\d.]+)/.exec(bar.getAttribute('d') ?? '') ?? [];
+          expect(Math.abs(Number(width))).toBeGreaterThan(0);
+          expect(Math.abs(Number(height))).toBeGreaterThan(0);
+        });
+      });
+    });
+  });
 });
