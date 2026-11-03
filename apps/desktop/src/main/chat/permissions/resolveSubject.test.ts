@@ -27,6 +27,16 @@ describe('resolveSubject', () => {
     expect((await resolveSubject({ tool: 'bash_execute', paths: [message] })).paths).toEqual([message]);
   });
 
+  it('resolves a name holding a NUL as a missing file below its existing folder', async () => {
+    const kept = join(root, 'x\0\u{f05c}', 'notes.txt');
+    const command = 'cat notes.txt';
+    const subject = await resolveSubject({
+      tool: 'bash_execute',
+      shell: { script: command, commands: [{ text: command, coverable: true }], directories: [], paths: [kept] },
+    });
+    expect(subject.shell?.paths).toEqual([kept]);
+  });
+
   it('resolves symlinked parents for a file that will be created', async () => {
     await mkdir(join(root, 'protected'));
     await symlink(join(root, 'protected'), join(root, 'alias'));
