@@ -32,6 +32,7 @@ const menuEntries = (user: AdminUserProfile): MenuEntry[] => [
 const SIGNUP_METHOD_LABELS: Readonly<Record<string, string>> = {
   google: 'Google',
   github: 'GitHub',
+  apple: 'Apple',
   okta: 'Okta',
   email: 'email',
   password: 'email',
