@@ -381,6 +381,8 @@ const SystemTurn = memo(function SystemTurn({ message }: { message: ChatMessage 
       color="neutral"
       sx={{ px: 2, py: 1.25, borderRadius: 'md' }}
       data-testid="chat-message-system"
+      // The orchestrator's "Read the report" lands on the first of a trailing run of these.
+      data-child-report
     >
       <Typography level="body-xs" textColor="text.tertiary" sx={{ fontWeight: 'lg', mb: 0.5 }}>
         From a session you started

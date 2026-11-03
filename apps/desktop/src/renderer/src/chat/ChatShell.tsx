@@ -102,6 +102,19 @@ import { prefersReducedMotion } from './orchestrator/motion';
 import { useOrchestratorPrefs } from './orchestrator/useOrchestrator';
 import { useNeedsYouAlerts } from './orchestrator/useNeedsYouAlerts';
 
+/**
+ * Where "Read the report" lands: the parent's last reply when it answered after its agents reported,
+ * else the first of the agent reports that came in since (spawned agents never resume their parent,
+ * so a finished run usually ends on those). Must stay in sync with the data attributes MessageThread sets.
+ */
+function reportAnchor(thread: HTMLElement | null): Element | undefined {
+  const turns = [...(thread?.querySelectorAll('[data-assistant-reply], [data-child-report]') ?? [])];
+  const isReport = (index: number) => turns[index]?.hasAttribute('data-child-report') ?? false;
+  let anchor = turns.length - 1;
+  while (isReport(anchor) && isReport(anchor - 1)) anchor -= 1;
+  return turns[anchor];
+}
+
 function SessionHeader({ title, onRename }: { title: string; onRename: (title: string) => void }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(title);
@@ -546,8 +559,7 @@ export function ChatShell({
     setDockOpen(true);
     // After the dock is shown again, or a hidden dock would scroll nothing into view.
     window.requestAnimationFrame(() => {
-      const replies = threadHost.current?.querySelectorAll('[data-assistant-reply]');
-      replies?.[replies.length - 1]?.scrollIntoView({
+      reportAnchor(threadHost.current)?.scrollIntoView({
         block: 'start',
         behavior: prefersReducedMotion() ? 'auto' : 'smooth',
       });
