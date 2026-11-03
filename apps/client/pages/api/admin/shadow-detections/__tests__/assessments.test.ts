@@ -159,6 +159,24 @@ describe('GET /api/admin/shadow-detections/assessments', () => {
     expect(res._getHeaders()['cache-control']).toBe('private, no-store');
     expect(res._getJSONData()).toMatchObject({ data: [{ id: ASSESSMENT_ID, detectionId: DETECTION_ID }] });
   });
+
+  it('still lists rows made under an older evidence version or a model since dropped from the catalog', async () => {
+    const legacy = {
+      ...assessment(),
+      model: 'retired-model',
+      evidenceVersion: 0,
+      featureSummary: { evidenceVersion: 0, detection: { detector: 'retiredDetector' }, accounts: [] },
+    } as unknown as AbuseAssessmentItem;
+    h.listForDetection.mockResolvedValue([legacy]);
+    const { req, res } = request('GET', { query: { detectionId: DETECTION_ID } });
+
+    await h.handlers.assessments.get(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({
+      data: [{ model: 'retired-model', featureSummary: { evidenceVersion: 0 } }],
+    });
+  });
 });
 
 describe('POST /api/admin/shadow-detections/assessments', () => {

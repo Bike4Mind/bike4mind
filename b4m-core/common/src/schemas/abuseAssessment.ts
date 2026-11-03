@@ -157,7 +157,18 @@ export const abuseAssessmentListQuerySchema = z.object({
   detectionId: z.string().regex(/^[a-f0-9]{24}$/i, 'Not a valid id'),
 });
 
-export const abuseAssessmentListSchema = z.object({ data: z.array(abuseAssessmentItemSchema) });
+/**
+ * An assessment as listed back. Rows are kept 365 days and outlive the evidence version and model
+ * catalog they were made under, so the summary and model are returned as recorded rather than
+ * re-validated against today's schema.
+ */
+export const abuseAssessmentStoredItemSchema = abuseAssessmentItemSchema.extend({
+  model: z.string(),
+  featureSummary: z.record(z.string(), z.unknown()),
+});
+export type AbuseAssessmentStoredItem = z.infer<typeof abuseAssessmentStoredItemSchema>;
+
+export const abuseAssessmentListSchema = z.object({ data: z.array(abuseAssessmentStoredItemSchema) });
 export type AbuseAssessmentList = z.infer<typeof abuseAssessmentListSchema>;
 
 export const abuseAssessmentRunRequestSchema = z.object({

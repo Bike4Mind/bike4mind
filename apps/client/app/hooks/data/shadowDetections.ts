@@ -1,5 +1,5 @@
 import {
-  abuseAssessmentItemSchema,
+  abuseAssessmentStoredItemSchema,
   accountCampaignGroupSchema,
   accountCampaignMemberSchema,
   shadowDetectionItemSchema,
@@ -78,7 +78,7 @@ const ASSESSMENTS_ENDPOINT = `${ENDPOINT}/assessments`;
 const ASSESSMENTS_QUERY_KEY = ['admin-shadow-detection-assessments'];
 
 /** An assessment as it arrives over JSON: the date is an ISO string. */
-export const abuseAssessmentRowSchema = abuseAssessmentItemSchema.extend({ assessedAt: z.string() });
+export const abuseAssessmentRowSchema = abuseAssessmentStoredItemSchema.extend({ assessedAt: z.string() });
 export type AbuseAssessmentRow = z.infer<typeof abuseAssessmentRowSchema>;
 
 export type AbuseAssessmentRunResult =
