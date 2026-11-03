@@ -104,16 +104,16 @@ export class ModelCatalog {
     return entry.models.find(model => model.id === modelId)?.thinkingToggle;
   }
 
-  async list(force = false): Promise<ChatModelCatalog> {
+  async list(force: boolean | 'local' = false): Promise<ChatModelCatalog> {
     const api = this.deps.getApiClient();
     const entry = this.cache;
     const hostedHit =
-      !force && api && entry?.environmentUrl === this.deps.getEnvironmentUrl() && Date.now() < entry.expiresAt
+      force !== true && api && entry?.environmentUrl === this.deps.getEnvironmentUrl() && Date.now() < entry.expiresAt
         ? entry.models
         : null;
     // The device and the server are asked at the same time; neither waits on the other.
     const [local, hosted] = await Promise.all([
-      this.listLocal(force),
+      this.listLocal(force !== false),
       api && !hostedHit
         ? api.get<{ models?: WireModel[] }>(MODELS_PATH).then(
             response => ({ ok: true as const, models: selectUsableModels(response?.models) }),

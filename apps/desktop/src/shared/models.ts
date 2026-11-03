@@ -1,7 +1,7 @@
 /** The Models screen's IPC types and the pure rules main and the renderer share. */
 
 import type { LicenseKind } from '@bike4mind/local-models/licenses';
-import { LOCAL_SERVER_ID, type ModelServerManagement } from './modelServers';
+import { LOCAL_SERVER_ID, type ModelServerKind, type ModelServerManagement } from './modelServers';
 
 export type { ModelServerManagement };
 
@@ -56,6 +56,14 @@ export interface LocalModelCapabilities {
   thinking: boolean;
   embeddings: boolean;
   completion: boolean;
+}
+
+/**
+ * Whether the chat catalog offers a model of this server kind. Ollama reports `completion` itself
+ * (OllamaLocal.ts checks the same flag from /api/show); OpenAI-compatible servers only mark embedders.
+ */
+export function isChatCapable(capabilities: LocalModelCapabilities, kind: ModelServerKind): boolean {
+  return kind === 'ollama' ? capabilities.completion : !capabilities.embeddings || capabilities.completion;
 }
 
 export type FitLevel = 'fits' | 'tight' | 'too-large';
