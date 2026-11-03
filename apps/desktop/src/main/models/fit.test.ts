@@ -155,6 +155,13 @@ describe('fitFromArch', () => {
     expect(fit.detail).toContain('more than the 11 GiB this computer can hold');
   });
 
+  it('rounds the need and the limit apart in MiB when three decimals still read the same', () => {
+    stub(11.0001, { fits: false });
+    const fit = fitFromArch(DENSE, 4 * GIB, cpu(16), 16384);
+    expect(fit.detail).toContain('Needs about 11265 MiB');
+    expect(fit.detail).toContain('more than the 11264 MiB this computer can hold');
+  });
+
   it("names a saved server's memory, not this computer's, when rating its entered specs", () => {
     stub(10.5);
     expect(fitFromArch(DENSE, 4 * GIB, cpu(16), 16384, { where: 'server' }).detail).toMatch(

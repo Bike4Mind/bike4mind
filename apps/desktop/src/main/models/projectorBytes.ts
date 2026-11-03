@@ -23,17 +23,19 @@ async function blobBytes(storeDir: string | null | undefined, digest: string): P
 }
 
 /**
- * The projector part of an installed Ollama model's listed size, so the fit estimate can count its compute buffer:
- * looked up in `pinned` for a saved server, else read from the model folder on this computer. 0 when it has no
+ * The projector part of an installed Ollama model's listed size, so the fit estimate can count its compute buffer.
+ * On this computer it is read from the model folder, then looked up in `pinned` when that read misses (a daemon in a
+ * container lists paths that only exist inside it); a saved server's is only looked up in `pinned`. 0 when it has no
  * projector or any projector's size is unknown, which leaves it counted as weights.
  */
 export async function installedProjectorBytes(
   contents: Pick<ModelContents, 'projectorBlobs' | 'storeDir'> | undefined,
-  pinned?: ReadonlyMap<string, number>
+  { pinned, onThisComputer }: { pinned?: ReadonlyMap<string, number>; onThisComputer: boolean }
 ): Promise<number> {
   let total = 0;
   for (const digest of contents?.projectorBlobs ?? []) {
-    const size = digest ? (pinned ? pinned.get(digest) : await blobBytes(contents?.storeDir, digest)) : undefined;
+    const read = digest && onThisComputer ? await blobBytes(contents?.storeDir, digest) : undefined;
+    const size = digest ? (read ?? pinned?.get(digest)) : undefined;
     if (!size) return 0;
     total += size;
   }

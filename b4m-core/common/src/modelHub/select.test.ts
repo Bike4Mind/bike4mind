@@ -506,6 +506,14 @@ describe('ollamaBuildBytes', () => {
     expect(ollamaBuildBytes(library())).toEqual({ weightsBytes: 7e9, mmprojBytes: 0 });
   });
 
+  it("takes Ollama's pinned projector out of a library layer over a Hugging Face mmproj file", () => {
+    const both = {
+      ...library(0.175e9),
+      mmproj: { path: 'mmproj.gguf', sizeBytes: 0.85e9, sha256: sha(4) },
+    } as HubBuild;
+    expect(ollamaBuildBytes(both)).toEqual({ weightsBytes: 7e9 - 0.175e9, mmprojBytes: 0.175e9 });
+  });
+
   it('adds a pinned projector beside Hugging Face weights, which leave it out', () => {
     const pinned = build({
       weights: [{ path: 'model.gguf', sizeBytes: 8.4e9, sha256: sha(3) }],

@@ -61,10 +61,10 @@ export interface LocalContextSizingDeps {
   showVerbose?(model: string): Promise<{ model_info?: Record<string, unknown> | null; tensors?: unknown }>;
   /** The projector part of a model's size from its `/api/show` Modelfile; 0 when none or unknown. */
   projectorBytes?(modelfile: string): Promise<number>;
+  /** The curated list's projector sizes by digest, for a projector blob this computer cannot read. */
+  pinnedProjectors?(): ReadonlyMap<string, number>;
   now?(): number;
 }
-
-const localProjectorBytes = (modelfile: string) => installedProjectorBytes(modelBlobsOf(modelfile));
 
 const OLLAMA_URL = 'http://127.0.0.1:11434';
 // A verbose show carries the whole tokenizer, about 9 MB for gpt-oss-20b; the plain show's 1 s is too tight.
@@ -122,7 +122,9 @@ export function localContextSizing({
   setting,
   hardware = localHardware,
   showVerbose = verboseShow,
-  projectorBytes = localProjectorBytes,
+  pinnedProjectors,
+  projectorBytes = modelfile =>
+    installedProjectorBytes(modelBlobsOf(modelfile), { pinned: pinnedProjectors?.(), onThisComputer: true }),
   now = Date.now,
 }: LocalContextSizingDeps): LocalContextSizing {
   const arches = new Map<string, ArchEntry>();

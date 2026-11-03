@@ -8,8 +8,8 @@
       "date": "2026-11-02",
       "added": [],
       "removed": [],
-      "changed": [],
-      "notes": "Added projector sizes to library builds so fit checks count image input weights."
+      "changed": ["qwen3-5-0-8b", "qwen3-5-4b", "gemma-4-e4b", "gemma-4-12b", "gemma-4-26b", "qwen3-8-27b"],
+      "notes": "Added projector sizes to library builds so fit checks count the image encoder's working memory."
     },
     {
       "sequence": 1,

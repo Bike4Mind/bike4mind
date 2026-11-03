@@ -375,8 +375,10 @@ export function memoryBudgets(hw: HardwareProfile): MemoryBudgets {
         ? FIT_CONSTANTS.unifiedLargeFraction
         : FIT_CONSTANTS.unifiedSmallFraction;
     const gpu = hw.gpuMemoryBytes || hw.gpuWorkingSetBytes || hw.totalMemoryBytes * fraction;
-    // Layers past the GPU part load on the CPU from the same RAM, which keeps a CPU-only machine's OS reserve.
-    const ramPool = Math.max(0, hw.totalMemoryBytes * FIT_CONSTANTS.cpuFraction - gpu);
+    // Layers past the GPU part load on the CPU from the same RAM, which keeps a CPU-only machine's OS reserve. A GPU
+    // pool larger than that RAM can only be a carve-out outside it, so none of the RAM is the GPU's.
+    const cpuRam = hw.totalMemoryBytes * FIT_CONSTANTS.cpuFraction;
+    const ramPool = gpu > hw.totalMemoryBytes ? cpuRam : Math.max(0, cpuRam - gpu);
     return { gpu, ramPool, cpuOnly: false };
   }
   if (hw.memoryKind === 'discrete' && hw.gpuMemoryBytes) {
