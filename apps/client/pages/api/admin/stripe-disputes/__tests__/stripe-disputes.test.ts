@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   handlers: {} as Record<string, Record<string, (req: unknown, res: unknown) => Promise<void>>>,
   current: '',
   routeOptions: vi.fn(),
+  optionsByRoute: {} as Record<string, unknown>,
   list: vi.fn(),
   resolveByAdmin: vi.fn(),
   findById: vi.fn(),
@@ -23,6 +24,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown)
 vi.mock('@server/middlewares/adminApi', () => ({
   adminApi: (options: unknown) => {
     h.routeOptions(options);
+    h.optionsByRoute[h.current] = options;
     const route = (h.handlers[h.current] = {} as Record<string, (req: unknown, res: unknown) => Promise<void>>);
     const chain = {
       use: () => chain,
@@ -139,7 +141,7 @@ describe('GET /api/admin/stripe-disputes', () => {
 
 describe('POST /api/admin/stripe-disputes/resolve', () => {
   it('is gated on the moderation permission', () => {
-    expect(h.routeOptions).toHaveBeenCalledWith({
+    expect(h.optionsByRoute.resolve).toEqual({
       auth: 'jwtOnly',
       requiredScopes: [ApiKeyScope.ADMIN],
       adminPermissions: { POST: 'users:moderate' },
@@ -218,6 +220,36 @@ describe('POST /api/admin/stripe-disputes/undo-contain', () => {
         undoneBy: null,
       },
     });
+
+  it('is session-only and gated on the moderation permission', () => {
+    expect(h.optionsByRoute.undo).toEqual({
+      auth: 'jwtOnly',
+      requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { POST: 'users:moderate' },
+    });
+  });
+
+  it('answers 409 when a later bulk action changed the user', async () => {
+    h.findById.mockResolvedValue({ ...contained(), containSnapshot: { userId: 'u1', banned: true } });
+    h.undoDisputeContain.mockRejectedValue(new Error('Changed by a later bulk action'));
+    const { req, res } = request('POST', { body: { id: DISPUTE_ID, reason: REASON } });
+    await expect(h.handlers.undo.post(req, res)).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it('answers 404 when the undo finds no dispute', async () => {
+    h.findById.mockResolvedValue({ ...contained(), containSnapshot: null });
+    h.undoDisputeContain.mockRejectedValue(new h.DisputeContainUndoRefused({ status: 'not_found' }));
+    const { req, res } = request('POST', { body: { id: DISPUTE_ID, reason: REASON } });
+    await expect(h.handlers.undo.post(req, res)).rejects.toThrow('Dispute not found');
+  });
+
+  it('rejects a bad body or a short reason before looking the dispute up', async () => {
+    const bad = request('POST', { body: { id: 'nope', reason: REASON } });
+    await expect(h.handlers.undo.post(bad.req, bad.res)).rejects.toThrow('Expected a dispute id and a reason');
+    const short = request('POST', { body: { id: DISPUTE_ID, reason: 'no' } });
+    await expect(h.handlers.undo.post(short.req, short.res)).rejects.toThrow();
+    expect(h.findById).not.toHaveBeenCalled();
+  });
 
   it('undoes the Contain as the requesting admin', async () => {
     const dispute = { ...contained(), containSnapshot: { userId: 'u1', banned: true } };

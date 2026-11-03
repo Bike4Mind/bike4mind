@@ -829,6 +829,13 @@ describe('charge.dispute.closed', () => {
     expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
   });
 
+  it('fails the delivery when the Contain throws, so Stripe retries it', async () => {
+    mocks.findByPaymentIntentId.mockResolvedValue({ id: 'tx_1', ownerId: 'user_1', credits: 50000 });
+    mocks.resolveLostUserDispute.mockRejectedValue(new Error('contain failed'));
+
+    await expect(deliver(closed('lost'))).rejects.toThrow('contain failed');
+  });
+
   it('queues a lost organization dispute for an admin without containing anyone', async () => {
     mocks.findOrgByStripeCustomerId.mockResolvedValue({ id: 'org_1' });
 
@@ -879,6 +886,22 @@ describe('charge.dispute.closed', () => {
 });
 
 describe('charge.dispute.created - dispute record', () => {
+  it('records a user dispute against the matched account', async () => {
+    mocks.retrieveCharge.mockResolvedValue({ id: 'ch_1', customer: 'cus_1' });
+    mocks.findUserByStripeCustomerId.mockResolvedValue(owner);
+
+    await deliver({
+      type: 'charge.dispute.created',
+      data: { object: { id: 'dp_1', charge: 'ch_1', amount: 3000, currency: 'usd', reason: 'fraudulent' } },
+    });
+
+    expect(mocks.recordDisputeOpened).toHaveBeenCalledExactlyOnceWith({
+      stripeDisputeId: 'dp_1',
+      subject: 'user',
+      subjectId: 'user_1',
+    });
+  });
+
   it('records a dispute with no matching account as unmatched', async () => {
     mocks.retrieveCharge.mockResolvedValue({ id: 'ch_1', customer: 'cus_1' });
 

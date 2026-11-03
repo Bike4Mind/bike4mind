@@ -1,14 +1,20 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { createElement, type ReactNode } from 'react';
-import { act, renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AxiosError, AxiosHeaders, type AxiosResponse } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
-import { useResolveStripeDispute, useUndoContainStripeDispute, type StripeDisputeRow } from './stripeDisputes';
+import {
+  useResolveStripeDispute,
+  useStripeDisputes,
+  useUndoContainStripeDispute,
+  type StripeDisputeRow,
+} from './stripeDisputes';
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: vi.fn(), get: vi.fn() } }));
 
 const post = api.post as unknown as Mock;
+const get = api.get as unknown as Mock;
 
 const createWrapper = () => {
   const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
@@ -36,6 +42,28 @@ const row = (over: Partial<StripeDisputeRow> = {}): StripeDisputeRow => ({
   resolution: null,
   contain: null,
   ...over,
+});
+
+describe('useStripeDisputes', () => {
+  beforeEach(() => {
+    get.mockReset();
+    get.mockResolvedValue({ data: { data: [], truncated: false } });
+  });
+
+  it('sends the filters as params and refetches when they change', async () => {
+    const { result, rerender } = renderHook(({ query }) => useStripeDisputes(query), {
+      wrapper: createWrapper(),
+      initialProps: { query: { state: 'open', subject: 'unmatched' } as const } as {
+        query: Parameters<typeof useStripeDisputes>[0];
+      },
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(get).toHaveBeenCalledWith('/api/admin/stripe-disputes', { params: { state: 'open', subject: 'unmatched' } });
+
+    rerender({ query: { state: 'resolved' } });
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    expect(get).toHaveBeenLastCalledWith('/api/admin/stripe-disputes', { params: { state: 'resolved' } });
+  });
 });
 
 const REQUEST = { id: DISPUTE_ID, reason: 'Handled in Stripe' };
