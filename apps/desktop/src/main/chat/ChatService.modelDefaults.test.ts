@@ -191,7 +191,7 @@ describe('per-model defaults and catalog sampling on a local turn', () => {
   });
 
   it('looks defaults up by the listed id when the chat is saved on an alias of it', async () => {
-    const alias = 'local:openai-compatible:qwen3.8-27b';
+    const alias = 'local:ollama:qwen3.8:27b-alias';
     const lookups: string[] = [];
     const defaults = async (modelId: string) => {
       lookups.push(modelId);
