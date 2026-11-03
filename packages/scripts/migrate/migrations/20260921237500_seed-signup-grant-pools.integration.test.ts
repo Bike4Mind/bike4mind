@@ -46,18 +46,36 @@ describe('seed-signup-grant-pools migration', () => {
   });
 
   it.each([
-    ['0', String(POOL_SEED_UNMETERED)],
-    ['', String(POOL_SEED_UNMETERED)],
-    ['-5', String(POOL_SEED_UNMETERED)],
-    ['1.5', String(POOL_SEED_UNMETERED)],
-    ['abc', String(POOL_SEED_UNMETERED)],
-    ['500', '500'],
-    [' 500 ', '500'],
-    [750, '750'],
-  ])('legacy budget %j seeds both pools with %s', async (legacy, expected) => {
+    ['0', String(POOL_SEED_UNMETERED), String(POOL_SEED_UNMETERED)],
+    ['', String(POOL_SEED_UNMETERED), String(POOL_SEED_UNMETERED)],
+    ['-5', String(POOL_SEED_UNMETERED), String(POOL_SEED_UNMETERED)],
+    ['1.5', String(POOL_SEED_UNMETERED), String(POOL_SEED_UNMETERED)],
+    ['abc', String(POOL_SEED_UNMETERED), String(POOL_SEED_UNMETERED)],
+    ['500', '250', '250'],
+    [' 501 ', '251', '250'],
+    [750, '375', '375'],
+    ['2', '1', '1'],
+  ])('legacy budget %j seeds signup %s and trickle %s', async (legacy, signup, trickle) => {
     await setRaw('signupGrantDailyBudget', legacy);
     await migration.up();
-    expect(await pools()).toEqual({ signupGrantSignupPoolDaily: expected, signupGrantTricklePoolDaily: expected });
+    expect(await pools()).toEqual({ signupGrantSignupPoolDaily: signup, signupGrantTricklePoolDaily: trickle });
+  });
+
+  it('never seeds more than the legacy cap in total, and never a 0 row', async () => {
+    for (const legacy of [1, 2, 3, 7, 1000, 1001]) {
+      await AdminSettings.collection.deleteMany({});
+      await setRaw('signupGrantDailyBudget', String(legacy));
+      await migration.up();
+      const seeded = Object.values(await pools()).map(Number);
+      expect(seeded.reduce((sum, value) => sum + value, 0)).toBeLessThanOrEqual(legacy);
+      expect(seeded.every(value => value > 0)).toBe(true);
+    }
+  });
+
+  it('seeds only the signup pool from a legacy cap of 1, leaving the trickle pool paused', async () => {
+    await setRaw('signupGrantDailyBudget', '1');
+    await migration.up();
+    expect(await pools()).toEqual({ signupGrantSignupPoolDaily: '1' });
   });
 
   it('seeds the unmetered constant when the legacy row is missing, and never writes 0', async () => {

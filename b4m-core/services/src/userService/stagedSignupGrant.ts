@@ -344,13 +344,14 @@ async function clearHeldReason(users: FreeCreditAdapters['db']['users'], userId:
 }
 
 /**
- * True when a payable signup tranche held for the signup pool before `day` is still waiting. New grants
- * then hold behind it so the held-release cron pays the queue oldest first. Blocked holders never count.
+ * True when a payable grant (staged tranche or flat-path grant) held for the signup pool before `day` is
+ * still waiting. New grants then hold behind it so the held-release cron pays the queue oldest first.
+ * Blocked holders never count.
  */
 export async function hasSignupBacklog(users: FreeCreditAdapters['db']['users'], day: string): Promise<boolean> {
   const held = await users.findOne({
-    signupGrantHeldReason: 'budget_exhausted',
-    'signupGrant.stage': 'pending_email',
+    // $type repeats the user_signupGrantHeldReason partial filter so the planner can use that index.
+    signupGrantHeldReason: { $eq: 'budget_exhausted', $type: 'string' },
     isBanned: { $ne: true },
     isModerated: { $ne: true },
     disputePending: { $ne: true },

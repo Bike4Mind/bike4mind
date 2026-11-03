@@ -285,6 +285,21 @@ describe('signup grant daily budget', () => {
     expect((await User.findById(second.id))?.signupGrantHeldReason).toBeNull();
   });
 
+  it('queues a new signup behind an unstaged grant held on an earlier day', async () => {
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '12';
+    config.defaultFreeCredits = '12';
+    clock = new Date('2030-03-01T10:00:00Z');
+    const [first, held] = await Promise.all([createUser(false, 0), createUser(false, 1)]);
+    await userService.grantFreeCredits(first, adapters);
+    expect(await userService.grantFreeCredits(held, adapters)).toMatchObject({ withheld: true });
+
+    clock = new Date('2030-03-02T10:00:00Z');
+    const newcomer = await createUser(false, 2);
+    expect(await userService.grantFreeCredits(newcomer, adapters)).toMatchObject({ withheld: true, creditsGranted: 0 });
+    expect(await creditsOf(newcomer.id)).toBe(0);
+    expect(await spentToday()).toBe(0);
+  });
+
   const createInbox = async (email: string, enrolled: boolean) =>
     User.create({
       username: email.replace(/\W/g, '-'),
