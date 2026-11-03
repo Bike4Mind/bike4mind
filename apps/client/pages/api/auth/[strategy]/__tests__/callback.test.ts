@@ -9,6 +9,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   const chain: Chain = {
     use: () => chain,
     post: fn => {
+      mockChain.order.push('post');
       mockChain.post = fn;
       return chain;
     },
@@ -35,6 +36,7 @@ const { rateLimitOptions } = vi.hoisted(() => ({ rateLimitOptions: [] as unknown
 vi.mock('@server/middlewares/rateLimit', () => ({
   rateLimit: (opts: unknown) => {
     rateLimitOptions.push(opts);
+    mockChain.order.push('rateLimit');
     return (_req: any, _res: any, next: any) => next?.();
   },
 }));
@@ -329,8 +331,8 @@ describe('[strategy]/callback - banned user gate', () => {
 });
 
 describe('[strategy]/callback - guards and refusal metric line', () => {
-  it('registers the block check and the per-IP limit ahead of the get handler', () => {
-    expect(mockChain.order).toEqual(['checkBlockedIP', 'oauthIpRateLimit:oauth-callback', 'get']);
+  it('registers the Apple POST hop ahead of the rate limiters so only the GET is limited', () => {
+    expect(mockChain.order).toEqual(['checkBlockedIP', 'post', 'rateLimit', 'oauthIpRateLimit:oauth-callback', 'get']);
   });
 
   it.each([

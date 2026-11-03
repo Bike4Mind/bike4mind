@@ -79,11 +79,10 @@ const handler = baseApi({ auth: false })
     next();
   })
   .use(checkBlockedIP())
-  .use(rateLimit({ limit: 10, windowMs: 60 * 1000, bucket: 'oauth-callback' }))
-  .use(oauthIpRateLimit('oauth-callback'))
   // Apple answers with a cross-site form POST (response_mode=form_post), which withholds the Lax nonce
   // cookie the state store binds the login to and which passport-oauth2 cannot read from a body. Hand
   // the fields to the same-site GET form with a 303, so everything downstream is the Google/GitHub path.
+  // It sits ahead of the rate limits so only the GET hop counts against them.
   .post((req, res) => {
     if (req.query.strategy !== AuthStrategy.Apple) {
       throw new BadRequestError('Invalid auth strategy');
@@ -100,6 +99,8 @@ const handler = baseApi({ auth: false })
     if (params.get('error') === 'user_cancelled_authorize') params.set('error', 'access_denied');
     res.redirect(303, `/api/auth/${AuthStrategy.Apple}/callback?${params.toString()}`);
   })
+  .use(rateLimit({ limit: 10, windowMs: 60 * 1000, bucket: 'oauth-callback' }))
+  .use(oauthIpRateLimit('oauth-callback'))
   .get(async (req: Request<{}, unknown, unknown, { strategy: AuthStrategy; state: string }>, res, next) => {
     const { strategy } = req.query;
 
