@@ -7,7 +7,6 @@ const STARTER_CREDIT_SETTINGS: IAdminSettings['settingName'][] = [
   'stagedSignupGrantEnabled',
   'signupGrantCredits',
   'signupGrantInitialCredits',
-  'signupGrantActivityEnabled',
 ];
 
 /**

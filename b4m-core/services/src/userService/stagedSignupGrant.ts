@@ -459,7 +459,8 @@ let unsetDripCapAlertDay: string | undefined;
 let unsetDripCapAlertInFlight = false;
 
 /**
- * Fire-and-forget, at most once per UTC day per process: the drip is paying from the registry default cap.
+ * Fire-and-forget, at most once per UTC day per process (so once per warm Lambda container, not once globally):
+ * the drip is paying from the registry default cap.
  * The day is marked only after a delivered alert, so a failed post retries on the next drip.
  */
 function notifyUnsetDripCap(protection: GrantAdapters['db']['signupProtection'], fallback: number) {
