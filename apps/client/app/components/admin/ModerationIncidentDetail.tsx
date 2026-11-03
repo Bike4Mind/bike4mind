@@ -50,7 +50,8 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
   const verdict = useModerationIncidentVerdict();
   const [dialog, setDialog] = useState<'false_positive' | 'confirmed' | null>(null);
   const [reportId, setReportId] = useState('');
-  const [imageFailed, setImageFailed] = useState(false);
+  // Keyed to the link that failed, so the fresh link a reload brings back clears it by itself.
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const [now] = useState(() => Date.now());
 
   const data = view.data;
@@ -58,7 +59,11 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
   const reportIdInvalid = reportIdValue.length > 0 && !REPORT_ID_PATTERN.test(reportIdValue);
   const canSubmitConfirmed =
     reportIdValue.length > 0 && reportIdValue.length <= REPORT_ID_MAX_LENGTH && !reportIdInvalid;
-  const actionable = data?.reviewStatus === 'pending_review';
+  const imageUrl = data?.image.availability === 'ready' ? data.image.url : null;
+  const imageFailed = imageUrl !== null && failedUrl === imageUrl;
+  const canMarkFalsePositive = data?.reviewStatus === 'pending_review';
+  // Mirrors the verdict route: a report can also be recorded over an earlier false positive.
+  const canConfirm = canMarkFalsePositive || data?.reviewStatus === 'false_positive';
 
   const closeDialog = () => {
     if (verdict.isPending) return;
@@ -83,11 +88,6 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
         },
       }
     );
-
-  const reloadImage = () => {
-    setImageFailed(false);
-    void view.refetch();
-  };
 
   return (
     <Stack
@@ -165,7 +165,7 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
                   alt="Image under review"
                   referrerPolicy="no-referrer"
                   draggable={false}
-                  onError={() => setImageFailed(true)}
+                  onError={() => setFailedUrl(imageUrl)}
                   data-testid="moderation-incident-image"
                   sx={{
                     maxWidth: '100%',
@@ -184,7 +184,7 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
                   size="sm"
                   variant="plain"
                   loading={view.isFetching}
-                  onClick={reloadImage}
+                  onClick={() => void view.refetch()}
                   data-testid="moderation-incident-reload-btn"
                 >
                   Reload image
@@ -197,17 +197,19 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
             </Alert>
           )}
 
-          {!actionable && (
+          {!canMarkFalsePositive && (
             <Alert color="neutral" data-testid="moderation-incident-not-actionable">
               {data.reviewStatus === 'confirmed_csam'
                 ? 'A report submission for this incident was left in an unknown state. It needs recovery before a verdict can be recorded here.'
-                : 'A verdict has already been recorded for this incident.'}
+                : data.reviewStatus === 'false_positive'
+                  ? 'This incident was marked as a false positive. If a report was filed after all, you can still record its id with Confirmed.'
+                  : 'A verdict has already been recorded for this incident.'}
             </Alert>
           )}
           <Stack direction="row" gap={1} flexWrap="wrap">
             <Button
               variant="outlined"
-              disabled={!actionable}
+              disabled={!canMarkFalsePositive}
               onClick={() => setDialog('false_positive')}
               data-testid="moderation-incident-false-positive-btn"
             >
@@ -216,7 +218,7 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
             <Button
               color="danger"
               variant="outlined"
-              disabled={!actionable}
+              disabled={!canConfirm}
               onClick={() => setDialog('confirmed')}
               data-testid="moderation-incident-confirmed-btn"
             >
@@ -234,7 +236,8 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
       >
         <DialogContent>
           <Typography level="body-sm">
-            This closes the incident without a report. It stays on file and can still be recorded as reported later.
+            This closes the incident without a report. It stays on file, and a report id can still be recorded on it
+            with Confirmed.
           </Typography>
           {verdict.error && dialog === 'false_positive' && (
             <Alert color="danger" data-testid="moderation-incident-verdict-error">

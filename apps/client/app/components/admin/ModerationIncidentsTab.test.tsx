@@ -34,8 +34,8 @@ const rows: ModerationIncidentRow[] = [
   { id: 'inc-old', createdAt: '2026-10-01T10:00:00.000Z', surface: 'upload', stuck: false },
   { id: 'inc-stuck', createdAt: '2026-10-02T10:00:00.000Z', surface: 'generation', stuck: true },
 ];
-const ready = (data: ModerationIncidentRow[]) => ({
-  data,
+const ready = (data: ModerationIncidentRow[], truncated = false) => ({
+  data: { rows: data, truncated },
   isPending: false,
   error: null,
   refetch: vi.fn(),
@@ -76,6 +76,12 @@ describe('ModerationIncidentsTab', () => {
     fireEvent.click(screen.getByTestId('detail-stub'));
     const { search } = m.navigate.mock.calls[0][0] as { search: (prev: object) => object };
     expect(search({ incidentId: 'inc-linked' })).toEqual({ incidentId: undefined });
+  });
+
+  it('warns when the queue came back at its cap', () => {
+    m.queue.mockReturnValue(ready(rows, true));
+    renderTab();
+    expect(screen.getByTestId('moderation-incidents-truncated').textContent).toContain('Showing the oldest 2');
   });
 
   it('shows an empty state when nothing waits', () => {

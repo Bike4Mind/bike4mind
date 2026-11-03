@@ -69,12 +69,35 @@ describe('ModerationIncidentDetail', () => {
     expect(screen.getByTestId('moderation-incident-image-unavailable').textContent).toContain('No stored image');
   });
 
-  it('offers a reload when the link has expired', () => {
-    renderDetail();
+  it('offers a reload when the link has expired, and a fresh link clears the failure', () => {
+    const { rerender } = renderDetail();
     fireEvent.error(screen.getByTestId('moderation-incident-image'));
     expect(screen.getByTestId('moderation-incident-image-failed')).toBeTruthy();
     fireEvent.click(screen.getByTestId('moderation-incident-reload-btn'));
     expect(m.refetch).toHaveBeenCalledTimes(1);
+
+    // The refetch resolves with a new link; nothing else has to reset.
+    m.view.mockReturnValue(
+      loaded(
+        view({
+          image: { availability: 'ready', url: 'https://signed.example/img2', expiresAt: '2026-10-30T10:10:00.000Z' },
+        })
+      )
+    );
+    rerender(
+      <CssVarsProvider theme={appTheme}>
+        <ModerationIncidentDetail incidentId="inc-1" onBack={onBack} />
+      </CssVarsProvider>
+    );
+    expect(screen.queryByTestId('moderation-incident-image-failed')).toBeNull();
+    expect(screen.getByTestId('moderation-incident-image').getAttribute('src')).toBe('https://signed.example/img2');
+  });
+
+  it('still lets a recorded false positive be confirmed, matching the verdict route', () => {
+    m.view.mockReturnValue(loaded(view({ reviewStatus: 'false_positive' })));
+    renderDetail();
+    expect((screen.getByTestId('moderation-incident-false-positive-btn') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByTestId('moderation-incident-confirmed-btn') as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('marks a false positive', () => {

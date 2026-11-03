@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Button, Typography, Stack } from '@mui/joy';
+import { Alert, Button, Typography, Stack } from '@mui/joy';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { MODERATION_INCIDENT_ID_PARAM } from '@bike4mind/common';
 import { AdminPageHeader, DataTable, EmptyState, StatusChip, formatUtc, relativeTime, type DataColumn } from './shared';
@@ -67,7 +67,7 @@ export const ModerationIncidentsTab: React.FC = () => {
     },
   ];
 
-  const rows = queue.data ?? [];
+  const rows = queue.data?.rows ?? [];
 
   return (
     <Stack
@@ -80,6 +80,11 @@ export const ModerationIncidentsTab: React.FC = () => {
         count={queue.data ? rows.length : undefined}
         description="Image moderation incidents waiting for a verdict, oldest first. Opening one records a view in the audit log."
       />
+      {queue.data?.truncated && (
+        <Alert color="warning" data-testid="moderation-incidents-truncated">
+          Showing the oldest {rows.length.toLocaleString()}. Decide these to see the rest.
+        </Alert>
+      )}
       <DataTable
         rows={rows}
         columns={columns}

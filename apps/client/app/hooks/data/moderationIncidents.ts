@@ -5,6 +5,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 const ENDPOINT = '/api/admin/moderation-incidents';
 export const MODERATION_INCIDENT_QUEUE_QUERY_KEY = ['admin-moderation-incident-queue'];
 
+const QUEUE_LIST_LIMIT = 100;
+
 // Rows come from lean reads, so the id is `_id`; everything else the page needs is below.
 type QueueIncidentJson = {
   _id: string;
@@ -35,11 +37,14 @@ export function useModerationIncidentQueue() {
     queryFn: async () => {
       const { incidents, staleConfirmedCsam } = (
         await api.get<{ incidents: QueueIncidentJson[]; staleConfirmedCsam: QueueIncidentJson[] }>(ENDPOINT, {
-          params: { limit: 100 },
+          params: { limit: QUEUE_LIST_LIMIT },
         })
       ).data;
       const rows = [...incidents.map(i => toRow(i, false)), ...staleConfirmedCsam.map(i => toRow(i, true))];
-      return rows.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+      rows.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+      // The route caps each list, so a full one means more are waiting behind it.
+      const truncated = incidents.length >= QUEUE_LIST_LIMIT || staleConfirmedCsam.length >= QUEUE_LIST_LIMIT;
+      return { rows, truncated };
     },
   });
 }
