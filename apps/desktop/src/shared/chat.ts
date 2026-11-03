@@ -1163,8 +1163,9 @@ export interface ChatReplyStats {
   /** Thinking tokens: the server's count, else on a self-hosted model the readable thinking frames. */
   reasoningTokens?: number;
   /**
-   * Output tokens over the time spent generating them, summed over the requests where that time can
-   * be told apart from latency and the server timed nothing itself; see roundGeneration.
+   * A hosted reply's output tokens over the time spent generating them, summed over the requests
+   * where that time can be told apart from latency; see roundGeneration. A self-hosted reply's speed
+   * is its usage's rate.
    */
   generation?: { tokens: number; ms: number };
   /** The figures above that are estimates; the thread marks them approximate. */
