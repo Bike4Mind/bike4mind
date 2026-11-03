@@ -87,6 +87,8 @@ export interface ModelCatalogDeps {
   getApiClient(): AuthenticatedApiClient | null;
   /** Cache identity: switching environments must not show the previous server's models. */
   getEnvironmentUrl(): string;
+  /** The cached hosted list changed without a list() call, after the reasoning read landed late. */
+  changed?(): void;
 }
 
 /**
@@ -97,7 +99,12 @@ export interface ModelCatalogDeps {
  * the same reasoning `/api/models` applies to its own server-side cache.
  */
 export class ModelCatalog {
-  private cache: { environmentUrl: string; models: ChatModelOption[]; expiresAt: number } | null = null;
+  private cache: { environmentUrl: string; wire: unknown; models: ChatModelOption[]; expiresAt: number } | null = null;
+
+  /** The last `/api/v1/models` read, kept past the list's TTL so a slow read never costs what is already known. */
+  private reasoning: { environmentUrl: string; byId: HostedReasoningById } | null = null;
+
+  private reasoningRead: string | null = null;
 
   private localCache: { models: ChatModelOption[]; expiresAt: number } | null = null;
   /**
@@ -145,8 +152,10 @@ export class ModelCatalog {
       force !== true && api && entry?.environmentUrl === this.deps.getEnvironmentUrl() && Date.now() < entry.expiresAt
         ? entry.models
         : null;
-    // The device and the server are asked at the same time; neither waits on the other.
-    const [local, hosted, reasoning] = await Promise.all([
+    // The device and the server are asked at the same time; neither waits on the other, and the list
+    // waits on neither the effort levels nor the reasoning floor, which update it when they land.
+    if (api && !hostedHit) this.refreshReasoning(api);
+    const [local, hosted] = await Promise.all([
       this.listLocal(force !== false),
       api && !hostedHit
         ? api.get<{ models?: WireModel[] }>(MODELS_PATH).then(
@@ -154,7 +163,6 @@ export class ModelCatalog {
             (err: unknown) => ({ ok: false as const, err })
           )
         : null,
-      api && !hostedHit ? this.readReasoning(api) : null,
     ]);
     if (hostedHit) return { models: this.mergeLocal(hostedHit, local) };
     if (!api || !hosted) return local.length ? { models: local } : { models: [], error: 'Sign in to see models.' };
@@ -166,7 +174,9 @@ export class ModelCatalog {
         ? { models: local }
         : { models: [], error: 'Could not load the model list from this server.' };
     }
-    const models = selectUsableModels(hosted.wire, reasoning ?? undefined);
+    const environmentUrl = this.deps.getEnvironmentUrl();
+    const known = this.reasoning?.environmentUrl === environmentUrl ? this.reasoning.byId : undefined;
+    const models = selectUsableModels(hosted.wire, known);
 
     if (models.length === 0) {
       this.cache = null;
@@ -174,13 +184,27 @@ export class ModelCatalog {
       return { models: local };
     }
 
-    this.cache = {
-      environmentUrl: this.deps.getEnvironmentUrl(),
-      models,
-      expiresAt: Date.now() + CACHE_TTL_MS,
-    };
+    this.cache = { environmentUrl, wire: hosted.wire, models, expiresAt: Date.now() + CACHE_TTL_MS };
     this.deps.logger.debug(`CHAT: ${models.length} model(s) available`);
     return { models: this.mergeLocal(models, local) };
+  }
+
+  /** Starts one reasoning read per environment; a read that lands after the list rebuilds the cached one. */
+  private refreshReasoning(api: AuthenticatedApiClient): void {
+    const environmentUrl = this.deps.getEnvironmentUrl();
+    if (this.reasoningRead === environmentUrl) return;
+    this.reasoningRead = environmentUrl;
+    void this.readReasoning(api).then(byId => {
+      if (this.reasoningRead === environmentUrl) this.reasoningRead = null;
+      if (!byId || environmentUrl !== this.deps.getEnvironmentUrl()) return;
+      const previous = this.reasoning?.environmentUrl === environmentUrl ? this.reasoning.byId : undefined;
+      this.reasoning = { environmentUrl, byId };
+      if (previous && JSON.stringify([...previous]) === JSON.stringify([...byId])) return;
+      const entry = this.cache;
+      if (entry?.environmentUrl !== environmentUrl) return;
+      this.cache = { ...entry, models: selectUsableModels(entry.wire, byId) };
+      this.deps.changed?.();
+    });
   }
 
   /**

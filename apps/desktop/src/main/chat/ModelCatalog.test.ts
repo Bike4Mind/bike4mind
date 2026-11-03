@@ -572,10 +572,48 @@ describe('ModelCatalog', () => {
       .mockResolvedValueOnce({ data: [{ id: 'first', reasoning_efforts: ['none', 'high'] }], next_cursor: 'page-2' })
       .mockResolvedValueOnce({ data: [{ id: 'second', reasoning_efforts: ['xhigh'] }], next_cursor: null });
 
+    await catalog.list();
+    await vi.waitFor(() => expect(effortsPage).toHaveBeenCalledTimes(2));
     const levels = (await catalog.list()).models.map(model => model.controls?.effort?.levels);
     expect(levels).toEqual([['none', 'high'], ['xhigh']]);
-    expect(effortsPage).toHaveBeenCalledTimes(2);
-    expect(effortsPage.mock.calls[1]?.[0]).toMatchObject({ params: { limit: 100, cursor: 'page-2' } });
+    expect(effortsPage.mock.calls[1]?.[0]).toMatchObject({
+      params: { limit: 100, cursor: 'page-2' },
+      timeout: 5_000,
+    });
+  });
+
+  it('lists without waiting for the effort levels, and updates the cached list when they land', async () => {
+    const changed = vi.fn();
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: client,
+        getEnvironmentUrl: () => environmentUrl,
+        changed,
+      },
+      { models: async () => [] } as never
+    );
+    get.mockResolvedValue({ models: [wireModel({ id: ChatModels.GPT5, backend: 'openai' })] });
+    let land: (page: unknown) => void = () => {};
+    effortsPage.mockReturnValueOnce(new Promise(resolve => (land = resolve)));
+
+    const { models } = await catalog.list();
+    expect(models[0]?.controls?.effort?.levels).toEqual(['minimal', 'low', 'medium', 'high']);
+    expect(changed).not.toHaveBeenCalled();
+
+    land({ data: [{ id: ChatModels.GPT5, reasoning_efforts: ['low', 'medium', 'high'] }], next_cursor: null });
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+    expect(catalog.cached()?.[0]?.controls?.effort?.levels).toEqual(['low', 'medium', 'high']);
+
+    // A later refresh lists with what is known at once, and says nothing when the read brings no change.
+    effortsPage.mockResolvedValue({
+      data: [{ id: ChatModels.GPT5, reasoning_efforts: ['low', 'medium', 'high'] }],
+      next_cursor: null,
+    });
+    expect((await catalog.list(true)).models[0]?.controls?.effort?.levels).toEqual(['low', 'medium', 'high']);
+    await vi.waitFor(() => expect(effortsPage).toHaveBeenCalledTimes(2));
+    await Promise.resolve();
+    expect(changed).toHaveBeenCalledTimes(1);
   });
 
   it.each([
