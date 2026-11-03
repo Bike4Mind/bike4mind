@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ModelArchSchema } from '../schemas/modelHub';
 import { machine } from './__fixtures__/hubManifest';
 import { DECODE_CONSTANTS, activeParamsFraction, decodeBytesPerToken, estimateDecode, memoryBandwidth } from './decode';
-import type { FitModel, HardwareProfile } from './fit';
+import { estimateFit, type FitModel, type HardwareProfile } from './fit';
 
 const GIB = 1024 ** 3;
 
@@ -18,9 +18,12 @@ const MOE = ModelArchSchema.parse({
   moe: { experts: 128, used: 8, moeLayers: 30 },
 });
 
-// The probe's GPU name on the machine the measurements came from.
+// The probe's report of the machine the measurements came from: nvidia-smi lists 80 GiB of GPU memory, so it is
+// discrete, with the GPU's name and no chip.
 const N1X: HardwareProfile = {
-  ...machine('unified', 128),
+  ...machine('discrete', 128, 80),
+  platform: 'linux',
+  gpuVendor: 'nvidia',
   gpuName: 'NVIDIA RTX Spark N1X (6144-core Blackwell RTX GPU)',
 };
 const LS = { kind: 'llama-server' } as const;
@@ -63,6 +66,25 @@ describe('memoryBandwidth', () => {
     'AMD GPU [1002:1586]',
   ])('knows a Ryzen AI Max APU named %s', gpuName => {
     expect(memoryBandwidth(apu(gpuName))).toBeCloseTo(256e9 * 0.8, 0);
+  });
+
+  it('knows a DGX Spark by the GB10 name nvidia-smi reports for its unified memory', () => {
+    const spark: HardwareProfile = {
+      ...machine('unified', 128),
+      platform: 'linux',
+      gpuVendor: 'nvidia',
+      gpuName: 'NVIDIA GB10',
+    };
+    expect(memoryBandwidth(spark)).toBeCloseTo(273e9 * 0.8, 0);
+  });
+
+  it.each(['linux', 'win32'])('applies the N1X figure to the discrete 80 GiB box the probe reports on %s', platform => {
+    const hardware = { ...N1X, platform };
+    expect(memoryBandwidth(hardware)).toBeCloseTo(200 * GIB, 0);
+    const model = { arch: DENSE, weightsBytes: 15.33 * GIB };
+    const fit = estimateFit({ model, hardware, mode: 'chat', runtime: LS });
+    expect(fit.placement).toBe('gpu');
+    expect(fit.decode?.tokensPerSec).toBeCloseTo(200 / 15.33, 6);
   });
 
   it('knows nothing about an unlisted chip', () => {

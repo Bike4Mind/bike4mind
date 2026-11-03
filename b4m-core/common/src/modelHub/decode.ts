@@ -6,7 +6,7 @@ const GB = 1e9;
 export const DECODE_CONSTANTS = {
   // Share of a spec-sheet bandwidth a decode step sees. Assumed: the measured N1X has no published spec.
   bandwidthEfficiency: 0.8,
-  // A 25B MoE with 3.8B active decoded at about half the rate its active weights predict.
+  // A 25B MoE with 3.8B active decoded at about half the rate its active weights predict; fitted to that one model.
   moeOverhead: 2,
   // Under the 1.8x to 2.2x measured with MTP on prose; code and long chats are unmeasured.
   speculativeGain: 1.5,
@@ -21,6 +21,8 @@ const geforce = (card: string, gbps: number) => ({ match: new RegExp(`\\bRTX ${c
 export const CHIP_BANDWIDTH: ReadonlyArray<{ match: RegExp; gbps: number }> = [
   // Measured at 196 to 216 GiB/s of dense decode; listed so the efficiency factor gives 200 GiB/s back.
   { match: /\bN1X\b/i, gbps: (200 * GIB) / GB / DECODE_CONSTANTS.bandwidthEfficiency },
+  // DGX Spark: nvidia-smi names the GB10 chip.
+  { match: /\bGB10\b/i, gbps: 273 },
   apple('M1 Pro', 200),
   apple('M1 Max', 400),
   apple('M1 Ultra', 800),
