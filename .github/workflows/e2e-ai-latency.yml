@@ -70,7 +70,7 @@ jobs:
   # single-cell and all-specs dispatch modes — those use the dispatch-selected model.
   discover-models:
     if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_full_matrix)
-    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_STATIC || vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -290,7 +290,7 @@ jobs:
     # There is no run shape in which some cells skip and others do not.
     outputs:
       preview_skipped: ${{ steps.e2e.outputs.preview_skipped }}
-    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_STATIC || vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     name: '${{ matrix.spec_file }} — ${{ matrix.ai_model }}'
     timeout-minutes: 90
     permissions:
