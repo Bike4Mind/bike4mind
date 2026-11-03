@@ -107,7 +107,7 @@ export const sessionRead: ToolDefinition = {
       properties: {
         session_id: {
           type: 'string',
-          description: 'The conversation: its id, a unique id prefix of 8 characters, or its exact title.',
+          description: 'The conversation: its id, a unique id prefix of at least 6 characters, or its exact title.',
         },
       },
       required: ['session_id'],
@@ -363,7 +363,7 @@ export const sessionSend: ToolDefinition = {
       properties: {
         session_id: {
           type: 'string',
-          description: 'The existing conversation: its id, a unique id prefix of 8 characters, or its exact title.',
+          description: 'The existing conversation: its id, a unique id prefix of at least 6 characters, or its exact title.',
         },
         notify_when_done: {
           type: 'boolean',
