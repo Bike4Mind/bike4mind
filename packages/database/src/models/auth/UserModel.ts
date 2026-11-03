@@ -1002,6 +1002,10 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       .exec();
   }
 
+  async countPendingRiskReviews(): Promise<number> {
+    return this.model.countDocuments({ 'riskScore.reviewState': 'pending', isBanned: { $ne: true } }).exec();
+  }
+
   async setRiskReviewState(userId: string, from: SignupRiskReviewState, to: SignupRiskReviewState): Promise<boolean> {
     const result = await this.model
       .updateOne({ _id: userId, 'riskScore.reviewState': from }, { $set: { 'riskScore.reviewState': to } })

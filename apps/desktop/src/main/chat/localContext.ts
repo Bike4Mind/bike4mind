@@ -52,6 +52,8 @@ export interface LocalModelFootprint {
   arch: ModelArch | null;
   /** The model's files as Ollama lists them, projector included. */
   weightsBytes: number | null;
+  /** The projector's part of weightsBytes, when known. */
+  projectorBytes?: number;
   hardware: HardwareProfile | null;
 }
 
@@ -66,11 +68,17 @@ export interface ChatContextInput {
 
 type SizedInput = Omit<FitInput, 'context'>;
 
-function fitInput({ arch, weightsBytes, hardware }: LocalModelFootprint): SizedInput | null {
+function fitInput({ arch, weightsBytes, projectorBytes = 0, hardware }: LocalModelFootprint): SizedInput | null {
   if (!arch || !weightsBytes || !hardware?.totalMemoryBytes) return null;
+  const mmprojBytes = projectorBytes < weightsBytes ? projectorBytes : 0;
   // Ollama's cache type, flash attention and num_parallel are daemon settings its API does not report, so
   // this assumes the defaults; flash attention off or num_parallel above 1 makes the real footprint larger.
-  return { model: { arch, weightsBytes }, hardware, mode: 'chat', runtime: { kind: 'ollama' } };
+  return {
+    model: { arch, weightsBytes: weightsBytes - mmprojBytes, mmprojBytes },
+    hardware,
+    mode: 'chat',
+    runtime: { kind: 'ollama' },
+  };
 }
 
 function trainedLimit(footprint: LocalModelFootprint, modelLimit: number | undefined): number | undefined {
