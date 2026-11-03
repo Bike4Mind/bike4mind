@@ -8,7 +8,7 @@ const PROBE_TIMEOUT_MS = 5_000;
 export interface GitBashProbe {
   env: NodeJS.ProcessEnv;
   exists(path: string): Promise<boolean>;
-  /** Stdout of a command, or '' when it fails. */
+  /** Stdout of an executable named by absolute path, run in the Windows folder; '' when it fails. */
   run(file: string, args: readonly string[]): Promise<string>;
 }
 
@@ -22,23 +22,43 @@ export class GitBashMissing extends Error {
   }
 }
 
+function systemRoot(env: NodeJS.ProcessEnv): string {
+  return win32.resolve(env.SystemRoot || env.windir || 'C:\\Windows');
+}
+
+function system32(env: NodeJS.ProcessEnv, file: string): string {
+  return win32.join(systemRoot(env), 'System32', file);
+}
+
 function registryInstallPaths(output: string): string[] {
   return [...output.matchAll(/^\s*InstallPath\s+REG_(?:EXPAND_)?SZ\s+(.+?)\s*$/gm)].map(match => match[1] as string);
 }
 
-/** `<root>\cmd\git.exe`, `<root>\bin\git.exe` and `<root>\mingw64\bin\git.exe` all name the same install. */
-function rootsOfGitExe(gitExe: string): string[] {
-  const directory = win32.dirname(gitExe);
-  return [win32.dirname(directory), win32.dirname(win32.dirname(directory))];
+/**
+ * The install a `git.exe` belongs to, from its exec path (`<root>/<mingw64|clangarm64|...>/libexec/git-core`).
+ * Asked of git itself, so a shim such as scoop's leads to the real install.
+ */
+async function rootOfGitExe(probe: GitBashProbe, gitExe: string): Promise<string | null> {
+  const execPath = (await probe.run(gitExe, ['--exec-path'])).trim();
+  if (!/[\\/]libexec[\\/]git-core$/i.test(execPath)) return null;
+  return win32.dirname(win32.dirname(win32.dirname(win32.normalize(execPath))));
 }
 
 async function candidateRoots(probe: GitBashProbe): Promise<string[]> {
   const { env } = probe;
+  const reg = system32(env, 'reg.exe');
   const [machine, user, where] = await Promise.all([
-    probe.run('reg.exe', ['query', 'HKLM\\SOFTWARE\\GitForWindows', '/v', 'InstallPath']),
-    probe.run('reg.exe', ['query', 'HKCU\\SOFTWARE\\GitForWindows', '/v', 'InstallPath']),
-    probe.run('where.exe', ['git']),
+    probe.run(reg, ['query', 'HKLM\\SOFTWARE\\GitForWindows', '/v', 'InstallPath']),
+    probe.run(reg, ['query', 'HKCU\\SOFTWARE\\GitForWindows', '/v', 'InstallPath']),
+    probe.run(system32(env, 'where.exe'), ['git']),
   ]);
+  const onPath = await Promise.all(
+    where
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(line => win32.isAbsolute(line) && line.toLowerCase().endsWith('git.exe'))
+      .map(gitExe => rootOfGitExe(probe, gitExe))
+  );
   const standard = [env.ProgramW6432, env.ProgramFiles, env['ProgramFiles(x86)']]
     .filter((directory): directory is string => Boolean(directory))
     .map(directory => win32.join(directory, 'Git'));
@@ -46,22 +66,23 @@ async function candidateRoots(probe: GitBashProbe): Promise<string[]> {
   return [
     ...registryInstallPaths(machine),
     ...registryInstallPaths(user),
-    ...where
-      .split(/\r?\n/)
-      .map(line => line.trim())
-      .filter(line => line.toLowerCase().endsWith('git.exe'))
-      .flatMap(rootsOfGitExe),
+    ...onPath.filter((root): root is string => root !== null),
     ...standard,
   ];
 }
 
 /** System32\bash.exe is the WSL launcher, which would run the command in Linux instead. */
 function inSystemDirectory(path: string, env: NodeJS.ProcessEnv): boolean {
-  const systemRoot = win32.resolve(env.SystemRoot || env.windir || 'C:\\Windows').toLowerCase();
-  return win32.resolve(path).toLowerCase().startsWith(`${systemRoot}\\`);
+  return win32
+    .resolve(path)
+    .toLowerCase()
+    .startsWith(`${systemRoot(env).toLowerCase()}\\`);
 }
 
-/** The Git for Windows `bin\bash.exe`, which sets up the MSYS environment its own `usr\bin\bash.exe` lacks. */
+/**
+ * The Git for Windows `bin\bash.exe`, which sets up the MSYS environment its own `usr\bin\bash.exe`
+ * lacks. A root counts only with the MSYS runtime in it, so another program's `bin\bash.exe` does not.
+ */
 export async function findGitBash(probe: GitBashProbe): Promise<string | null> {
   const seen = new Set<string>();
   for (const root of await candidateRoots(probe)) {
@@ -70,7 +91,11 @@ export async function findGitBash(probe: GitBashProbe): Promise<string | null> {
     if (seen.has(key)) continue;
     seen.add(key);
     if (inSystemDirectory(bash, probe.env)) continue;
-    if (await probe.exists(bash)) return bash;
+    const [shell, runtime] = await Promise.all([
+      probe.exists(bash),
+      probe.exists(win32.join(root, 'usr', 'bin', 'msys-2.0.dll')),
+    ]);
+    if (shell && runtime) return bash;
   }
   return null;
 }
@@ -84,8 +109,12 @@ const machineProbe: GitBashProbe = {
     ),
   run: (file, args) =>
     new Promise(resolve => {
-      execFile(file, [...args], { timeout: PROBE_TIMEOUT_MS, windowsHide: true }, (error, stdout) =>
-        resolve(error ? '' : stdout)
+      // A fixed cwd: Windows looks beside the working directory before PATH for DLLs and helpers.
+      execFile(
+        file,
+        [...args],
+        { cwd: systemRoot(process.env), timeout: PROBE_TIMEOUT_MS, windowsHide: true },
+        (error, stdout) => resolve(error ? '' : stdout)
       );
     }),
 };
