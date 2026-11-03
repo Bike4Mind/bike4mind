@@ -8,10 +8,9 @@ import {
   type SimulatorViewDevice,
   type SimulatorViewState,
 } from '@shared/simulator';
-import { commandEnv } from '../tools/commandLaunch';
 import type { SimulatorDriver } from '../tools/types';
 import { MjpegParser } from './mjpeg';
-import { AXE_INSTALL_COMMAND, runToolchain, SimulatorSetupError, type Runner } from './toolchain';
+import { AXE_INSTALL_COMMAND, runToolchain, SimulatorSetupError, toolchainEnv, type Runner } from './toolchain';
 
 const STREAM_FPS = 10;
 /** Half the device's pixels is still sharper than the pane draws it. */
@@ -37,7 +36,7 @@ const spawnAxeStream: StreamSpawner = async udid =>
       '--scale',
       String(STREAM_SCALE),
     ],
-    { env: await commandEnv(), stdio: ['ignore', 'pipe', 'pipe'] }
+    { env: await toolchainEnv(), stdio: ['ignore', 'pipe', 'pipe'] }
   );
 
 export interface SimulatorLiveViewEvents {

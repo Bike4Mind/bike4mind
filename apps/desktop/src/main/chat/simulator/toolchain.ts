@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { commandEnv } from '../tools/commandLaunch';
+import { resolveUserPath } from '../tools/userPath';
 
 export const AXE_INSTALL_COMMAND = 'brew install cameroncooke/axe/axe';
 
@@ -49,8 +49,13 @@ export class ToolchainCommandError extends Error {
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 
+/** The user's environment with the PATH a terminal would have, so Homebrew's axe is found. */
+export async function toolchainEnv(): Promise<NodeJS.ProcessEnv> {
+  return { ...process.env, PATH: await resolveUserPath() };
+}
+
 export const runToolchain: Runner = async (file, args, options = {}) => {
-  const env = { ...(await commandEnv()), ...options.env };
+  const env = { ...(await toolchainEnv()), ...options.env };
   return new Promise((resolve, reject) => {
     execFile(
       file,
