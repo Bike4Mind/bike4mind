@@ -459,6 +459,95 @@ describe('ChatService tool loop', () => {
       expect((await reply(id))?.rounds?.map(round => round.model)).toEqual(['test-model', ChatModels.CLAUDE_5_SONNET]);
     });
 
+    it('when the continued run fails after finishing a round of its own, keeping that round too', async () => {
+      service = build({ rounds: 2 });
+      const { id } = await service.createSession();
+      await service.send(id, 'build it');
+      await firstRequest();
+      streams[0].write(frame({ type: 'content', text: 'Reading the config.' }));
+      await driveRounds(2, () => '{"pattern":"*"}');
+      expect(await waitFor(events, 'done')).toMatchObject({ stopReason: 'tool_turn_limit' });
+
+      events.length = 0;
+      expect(await service.continueReply(id)).toMatchObject({ ok: true });
+      await vi.waitUntil(() => streams.length === 3, { timeout: 3000, interval: 5 });
+      streams[2].write(frame({ type: 'content', text: 'Found it.' }));
+      streams[2].write(
+        frame({ type: 'tool_use', tools: [{ id: 'c2', name: 'glob_files', arguments: '{"pattern":"*"}' }] })
+      );
+      streams[2].write(frame('[DONE]'));
+      await vi.waitUntil(() => streams.length === 4, { timeout: 3000, interval: 5 });
+      streams[3].destroy(new Error('the server fell over'));
+      await waitFor(events, 'error');
+
+      const failed = await reply(id);
+      expect(failed?.rounds?.map(round => [round.toolCallIds, round.text])).toEqual([
+        [['c0'], 'Reading the config.'],
+        [['c1'], ''],
+        [['c2'], 'Found it.'],
+      ]);
+
+      await service.send(id, 'try again');
+      await vi.waitUntil(() => streams.length === 5, { timeout: 3000, interval: 5 });
+      const wire = JSON.stringify(post.mock.calls[4][1].messages);
+      expect(wire).toContain('"id":"c2"');
+      expect(wire).toContain('Found it.');
+    });
+
+    it('keeps a round for a continued run that called no tools, so its model can be told', async () => {
+      service = build({ wallClockMs: 0 });
+      const { id } = await service.createSession();
+      await service.send(id, 'build it');
+      await firstRequest();
+      streams[0].write(frame({ type: 'content', text: 'Thinking.' }));
+      streams[0].write(frame('[DONE]'));
+      await waitFor(events, 'done');
+      const stopped = await reply(id);
+      expect(stopped?.rounds).toBeUndefined();
+      await store.updateMessage(id, stopped?.id ?? '', { stopReason: 'turn_time_limit' });
+
+      service = build();
+      await service.setSessionModel(id, ChatModels.CLAUDE_5_SONNET);
+      events.length = 0;
+      expect(await service.continueReply(id)).toMatchObject({ ok: true });
+      await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+      streams[1].write(frame({ type: 'content', text: 'Done.', usage: { inputTokens: 5, outputTokens: 2 } }));
+      streams[1].write(frame('[DONE]'));
+      await waitFor(events, 'done');
+
+      const finished = await reply(id);
+      expect(finished?.model).toBe('test-model');
+      expect(finished?.rounds?.map(round => round.model)).toEqual(['test-model', ChatModels.CLAUDE_5_SONNET]);
+    });
+
+    it('carries the context snapshot model for a reply stored before it was stamped', async () => {
+      service = build({ rounds: 1 });
+      const { id } = await service.createSession();
+      await service.send(id, 'build it');
+      await firstRequest();
+      streams[0].write(frame({ type: 'content', text: 'Reading the config.' }));
+      await driveRounds(1, () => '{"pattern":"*"}');
+      await waitFor(events, 'done');
+      const stopped = await reply(id);
+      await store.updateMessage(id, stopped?.id ?? '', {
+        model: undefined,
+        rounds: undefined,
+        contextSnapshot: { model: 'test-model', inputTokens: 10, overhead: [] },
+      });
+
+      await service.setSessionModel(id, ChatModels.CLAUDE_5_SONNET);
+      events.length = 0;
+      expect(await service.continueReply(id)).toMatchObject({ ok: true });
+      await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+      streams[1].write(frame({ type: 'content', text: 'Done.' }));
+      streams[1].write(frame('[DONE]'));
+      await waitFor(events, 'done');
+
+      const finished = await reply(id);
+      expect(finished?.model).toBe('test-model');
+      expect(finished?.rounds?.[0].model).toBe('test-model');
+    });
+
     it('when the continued run fails', async () => {
       const id = await stopThenSwitch(() => streams[0].write(frame({ type: 'content', text: 'Reading the config.' })));
       streams[1].destroy(new Error('the server fell over'));

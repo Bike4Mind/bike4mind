@@ -663,11 +663,7 @@ export interface ChatMessage {
    * ordering was never captured for those and cannot be recovered.
    */
   rounds?: ChatReplyRound[];
-  /**
-   * The model the reply's own turn requests went to, on assistant messages. An explore sub-loop's
-   * requests can go to another model while their usage is still summed into `usage`. Absent on
-   * replies stored before it was recorded; `ChatSession.model` can have changed since.
-   */
+  /** The model an assistant reply started on; a continuation on another model does not change it. Absent on older replies. */
   model?: string;
   /** What the whole reply cost, summed over its requests, on assistant messages. Never sent to the model. */
   usage?: ChatUsage;
