@@ -180,6 +180,99 @@ describe('a conversation generation settings', () => {
     expect(conversation.session?.generation).toEqual({ topP: 0.5 });
   });
 
+  it('keeps an older set main sends back from replacing a newer save that landed while it was read', async () => {
+    await act(async () => root.render(<Harness />));
+    let failFirst: (error: Error) => void = () => {};
+    let read: (value: ChatSession) => void = () => {};
+    setSessionGeneration.mockImplementationOnce(
+      () => new Promise<ChatSessionSummary>((_resolve, reject) => (failFirst = reject))
+    );
+    window.b4m.chat.getSession = () => new Promise<ChatSession>(resolve => (read = resolve));
+    let first: Promise<boolean> | undefined;
+    await act(async () => {
+      first = conversation.setGeneration({ topK: 20 });
+    });
+    await act(async () => failFirst(new Error('disk full')));
+    await act(async () => conversation.setGeneration({ topK: 30 }));
+    expect(conversation.session?.generation).toEqual({ topK: 30 });
+    await act(async () => {
+      read(session);
+      await first;
+    });
+    expect(conversation.session?.generation).toEqual({ topK: 30 });
+  });
+
+  describe('across chats', () => {
+    const { messages: _messages, generation: _generation, ...meta } = session;
+
+    it('tells only the chat it failed in, and leaves the open one as it was', async () => {
+      const other: ChatSession = { ...session, id: 's2', generation: { topP: 0.5 } };
+      window.b4m.chat.getSession = async (id: string) => (id === 's2' ? other : session);
+      await act(async () => root.render(<Harness />));
+      let fail: (error: Error) => void = () => {};
+      setSessionGeneration.mockImplementationOnce(
+        () => new Promise<ChatSessionSummary>((_resolve, reject) => (fail = reject))
+      );
+      let save: Promise<boolean> | undefined;
+      await act(async () => {
+        save = conversation.setGeneration({ topK: 20 });
+      });
+      await act(async () => root.render(<Harness id="s2" />));
+      await act(async () => {
+        fail(new Error('disk full'));
+        await save;
+      });
+      expect(conversation.session?.id).toBe('s2');
+      expect(conversation.notice).toBeNull();
+      expect(conversation.session?.generation).toEqual({ topP: 0.5 });
+    });
+
+    it("applies a chat's save that lands after a save in another chat", async () => {
+      const other: ChatSession = { ...session, id: 's2', generation: undefined };
+      window.b4m.chat.getSession = async (id: string) => (id === 's2' ? other : session);
+      await act(async () => root.render(<Harness />));
+      let answer: (summary: ChatSessionSummary) => void = () => {};
+      setSessionGeneration.mockImplementationOnce(() => new Promise<ChatSessionSummary>(resolve => (answer = resolve)));
+      let save: Promise<boolean> | undefined;
+      await act(async () => {
+        save = conversation.setGeneration({ topK: 20 });
+      });
+      await act(async () => root.render(<Harness id="s2" />));
+      await act(async () => conversation.setGeneration({ topP: 0.7 }));
+      await act(async () => root.render(<Harness id="s1" />));
+      await act(async () => {
+        answer({ ...meta, generation: { topK: 20 }, messageCount: 0 });
+        await save;
+      });
+      expect(conversation.session?.id).toBe('s1');
+      expect(conversation.session?.generation).toEqual({ topK: 20 });
+    });
+
+    it("reports a chat's failed save once it is open again, after a save in another chat", async () => {
+      const other: ChatSession = { ...session, id: 's2', generation: undefined };
+      window.b4m.chat.getSession = async (id: string) => (id === 's2' ? other : session);
+      await act(async () => root.render(<Harness />));
+      let fail: (error: Error) => void = () => {};
+      setSessionGeneration.mockImplementationOnce(
+        () => new Promise<ChatSessionSummary>((_resolve, reject) => (fail = reject))
+      );
+      let save: Promise<boolean> | undefined;
+      await act(async () => {
+        save = conversation.setGeneration({ topK: 20 });
+      });
+      await act(async () => root.render(<Harness id="s2" />));
+      await act(async () => conversation.setGeneration({ topP: 0.7 }));
+      await act(async () => root.render(<Harness id="s1" />));
+      await act(async () => {
+        fail(new Error('disk full'));
+        await save;
+      });
+      expect(conversation.session?.id).toBe('s1');
+      expect(conversation.notice).toBe("Could not save this chat's params. disk full");
+      expect(conversation.session?.generation).toEqual({ temperature: 0.4 });
+    });
+  });
+
   it('saves nothing before the conversation has loaded', async () => {
     let finish: (value: ChatSession) => void = () => {};
     window.b4m.chat.getSession = () => new Promise<ChatSession>(resolve => (finish = resolve));
