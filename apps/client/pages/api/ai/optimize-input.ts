@@ -16,7 +16,7 @@ const OPTIMIZE_INPUT_MAX_CHARS = 16_000;
 const optimizeInputSchema = z.object({
   text: z.string().max(OPTIMIZE_INPUT_MAX_CHARS).optional(),
   style: z.enum(['optimized', 'concise', 'professional', 'casual']).optional(),
-  maxLength: z.number().optional(),
+  maxLength: z.number().int().positive().optional(),
 });
 
 export interface RephraseRequest {

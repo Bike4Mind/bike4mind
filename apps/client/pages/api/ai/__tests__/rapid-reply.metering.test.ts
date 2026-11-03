@@ -2,7 +2,7 @@
 /**
  * POST /api/ai/rapid-reply runs an admin-mapped fast model on the platform key. It is best-effort
  * (every refusal is a 200 {success:false}), but it must hold credits before the call, settle after,
- * refund on a provider throw, truncate its input, and meter OptiHashi sessions like any other.
+ * refund on a provider throw, truncate its input, and meter toggle-bypass sessions like any other.
  * The real meterPlatformCompletion + reserveRequestCredits run; only the credit store is faked.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -205,7 +205,7 @@ describe('POST /api/ai/rapid-reply metering', () => {
     expect(m.complete).not.toHaveBeenCalled();
   });
 
-  it('meters an OptiHashi session that bypasses the feature toggle', async () => {
+  it('meters a session that bypasses the feature toggle', async () => {
     m.rapidReplyEnabled = false;
     m.hasMapping = false;
 
@@ -216,7 +216,7 @@ describe('POST /api/ai/rapid-reply metering', () => {
     expect(m.settleHold).toHaveBeenCalledOnce();
   });
 
-  it('soft-fails a zero-credit OptiHashi session without calling the provider', async () => {
+  it('soft-fails a zero-credit toggle-bypass session without calling the provider', async () => {
     m.rapidReplyEnabled = false;
     m.hasMapping = false;
     m.hold.mockRejectedValue(insufficientCreditsError('You do not have enough credits.'));

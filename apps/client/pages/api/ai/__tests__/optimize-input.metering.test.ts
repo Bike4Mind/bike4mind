@@ -162,6 +162,17 @@ describe('POST /api/ai/optimize-input metering', () => {
     expect(m.complete).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ['an unknown style', { text: 'hello', style: 'shouty' }],
+    ['a non-positive maxLength', { text: 'hello', maxLength: -5 }],
+  ])('rejects %s with 400 before any hold or provider call', async (_label, body) => {
+    const res = await call(body);
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(m.hold).not.toHaveBeenCalled();
+    expect(m.complete).not.toHaveBeenCalled();
+  });
+
   it('still answers 400 for missing text without touching credits', async () => {
     const res = await call({});
 
