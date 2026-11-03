@@ -18,8 +18,8 @@ No Node.js, pnpm, or source checkout is required.
    and drag Bike4Mind into Applications.
 2. On Linux x64, download the `.AppImage`, mark it executable (`chmod +x <file>.AppImage`),
    and launch it. Some distributions require FUSE support to run AppImages.
-3. On Windows (x64 or ARM64), download `setup.exe` and run it. The one installer holds both
-   builds and installs the one native to the PC. It is not code signed yet,
+3. On Windows, download `setup.exe` and run it. The one installer covers x64 and ARM64
+   Windows and installs the build native to the PC. It is not code signed yet,
    so SmartScreen shows a warning on first run. In-app updates work on Windows. The local
    tool layer (shell commands, file access, sandboxing) is built around a POSIX shell and
    is not yet verified on Windows.

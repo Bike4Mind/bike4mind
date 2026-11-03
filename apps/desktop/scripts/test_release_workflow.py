@@ -1,7 +1,10 @@
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
+import tempfile
+import textwrap
 import unittest
 
 import yaml
@@ -82,8 +85,36 @@ class ReleaseWorkflowTest(unittest.TestCase):
         packaging = build.split(command, 1)[1].split('\n          else\n', 1)[0]
         self.assertIn('7z l "release/Bike4Mind-$DESKTOP_VERSION-setup.exe"', packaging)
         self.assertIn('for archive in app-64.7z app-arm64.7z; do', packaging)
-        self.assertIn('win-arm64-unpacked/resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-arm64/conpty.node',
-                      packaging)
+
+    def test_windows_installer_check_requires_both_archives(self):
+        build = job('build')
+        start = build.index('contents=$(7z l')
+        check = textwrap.dedent(build[build.rindex('\n', 0, start) + 1:build.index('done\n', start) + 4])
+        both = '$PLUGINSDIR\\app-arm64.7z\n$PLUGINSDIR\\app-64.7z\n'
+        cases = [(both, 0, True), (both, 2, True), ('$PLUGINSDIR\\app-64.7z\n', 0, False), ('', 2, False)]
+        for listing, status, passes in cases:
+            with self.subTest(listing=listing, status=status), tempfile.TemporaryDirectory() as directory:
+                fake = Path(directory) / '7z'
+                fake.write_text(f'#!/bin/sh\nprintf %s {shlex.quote(listing)}\nexit {status}\n')
+                fake.chmod(0o755)
+                env = {**os.environ, 'PATH': f'{directory}{os.pathsep}{os.environ["PATH"]}', 'DESKTOP_VERSION': '0.1.1'}
+                result = subprocess.run(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', check],
+                                        env=env, capture_output=True)
+                self.assertEqual(result.returncode == 0, passes)
+
+    def test_installer_refuses_32_bit_windows(self):
+        config = yaml.safe_load((ROOT / 'apps/desktop/electron-builder.yml').read_text())
+        # electron-builder includes build/installer.nsh only when neither of these overrides it.
+        self.assertNotIn('include', config['nsis'])
+        self.assertNotIn('script', config['nsis'])
+        self.assertEqual(config['directories']['buildResources'], 'build')
+        script = (ROOT / 'apps/desktop/build/installer.nsh').read_text()
+        macro = script.split('!macro customInit\n', 1)[1].split('!macroend', 1)[0]
+        self.assertIn('${IfNot} ${RunningX64}', macro)
+        self.assertIn('${AndIfNot} ${IsNativeARM64}', macro)
+        self.assertIn('$(x64WinRequired)', macro)
+        self.assertIn('/SD IDOK', macro)
+        self.assertIn('Quit', macro)
 
     def test_curated_build_check_runs_between_each_build_and_packaging(self):
         build = job('build')
