@@ -109,8 +109,8 @@ export default defineConfig({
   // Brand defaults baked into the published binary at build time - NO brand
   // fallback in source (open-core invariant): a fresh clone
   // ships empty, so the upstream literal never enters a fork's bundle. The hosted
-  // publish injects these from repo variables in the build step (release.yaml /
-  // snapshot-publish.yaml); a fork sets B4M_DEFAULT_API_URL / B4M_CREDITS_URL when
+  // publish injects these from repo variables in the build step (release.yaml);
+  // a fork sets B4M_DEFAULT_API_URL / B4M_CREDITS_URL when
   // building to publish under its own brand.
   env: {
     B4M_DEFAULT_API_URL: process.env.B4M_DEFAULT_API_URL ?? '',
