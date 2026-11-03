@@ -22,9 +22,20 @@ vi.mock('@bike4mind/database', () => {
 });
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://%STAGE%' } }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics }));
-vi.mock('@bike4mind/services', () => ({ userService: { PUBLIC_MAILBOX_DOMAINS: new Set(['gmail.com']) } }));
+vi.mock('@bike4mind/services', () => ({
+  userService: {
+    PUBLIC_MAILBOX_DOMAINS: new Set(['gmail.com']),
+    isPrivacyRelayDomain: (domain: string) => domain === '33mail.com' || domain.endsWith('.33mail.com'),
+  },
+}));
 
-import { DISPOSABLE_LIST_SOURCES, handler, parseDisposableList, rejectSnapshot } from './disposableDomainRefresh';
+import {
+  DISPOSABLE_LIST_SOURCES,
+  handler,
+  parseDisposableJsonList,
+  parseDisposableList,
+  rejectSnapshot,
+} from './disposableDomainRefresh';
 
 describe('parseDisposableList', () => {
   it('keeps listed domains as published and drops comments, suffixes and mailbox providers', () => {
@@ -47,6 +58,27 @@ describe('parseDisposableList', () => {
   });
 });
 
+describe('parseDisposableJsonList', () => {
+  it('applies the text-list filtering to a JSON array and drops privacy relays', () => {
+    const json = JSON.stringify([
+      'Example-Burner.TEST',
+      'x.github.io',
+      'co.uk',
+      'gmail.com',
+      '33mail.com',
+      'a.33mail.com',
+      '',
+    ]);
+    expect([...parseDisposableJsonList(json)].sort()).toEqual(['example-burner.test', 'x.github.io']);
+  });
+
+  it('throws on a payload that is not an array of strings', () => {
+    expect(() => parseDisposableJsonList('{"domains":[]}')).toThrow(/JSON array/);
+    expect(() => parseDisposableJsonList('[1]')).toThrow(/JSON array/);
+    expect(() => parseDisposableJsonList('<html>')).toThrow();
+  });
+});
+
 describe('rejectSnapshot', () => {
   it('refuses empty or truncated snapshots and accepts normal drift', () => {
     expect(rejectSnapshot(0, undefined)).toMatch(/empty/i);
@@ -66,14 +98,21 @@ describe('handler', () => {
       vi.fn(async (url: string) =>
         url === DISPOSABLE_LIST_SOURCES.aggregate
           ? new Response('down', { status: 503 })
-          : new Response('one-burner.test\ntwo-burner.test\n')
+          : url === DISPOSABLE_LIST_SOURCES.tompec
+            ? new Response(JSON.stringify(['one-burner.test', 'two-burner.test']))
+            : new Response('one-burner.test\ntwo-burner.test\n')
       )
     );
     const result = await handler();
 
     expect(result.status).toBe('partial');
-    expect(repo.replaceDisposableSource).toHaveBeenCalledTimes(1);
+    expect(repo.replaceDisposableSource).toHaveBeenCalledTimes(2);
     expect(repo.replaceDisposableSource).toHaveBeenCalledWith('fakefilter', expect.any(Set), expect.any(Date));
+    expect(repo.replaceDisposableSource).toHaveBeenCalledWith(
+      'tompec',
+      new Set(['one-burner.test', 'two-burner.test']),
+      expect.any(Date)
+    );
     expect(repo.recordDisposableSource).toHaveBeenCalledWith(
       'aggregate',
       expect.objectContaining({ error: 'HTTP 503' })
@@ -84,6 +123,7 @@ describe('handler', () => {
       expect.objectContaining({ error: expect.stringMatching(/under half/) })
     );
     expect(repo.recordDisposableSource).toHaveBeenCalledWith('fakefilter', expect.objectContaining({ count: 2 }));
+    expect(repo.recordDisposableSource).toHaveBeenCalledWith('tompec', expect.objectContaining({ count: 2 }));
     expect(emitMetrics).toHaveBeenCalledWith('Lumina5/DisposableDomains', [
       { name: 'SourceFailures', value: 2, dimensions: { Stage: 'test' } },
     ]);
@@ -99,12 +139,14 @@ describe('handler', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) =>
-        url === DISPOSABLE_LIST_SOURCES.aggregate ? new Response('down', { status: 503 }) : new Response('a.test')
+        url === DISPOSABLE_LIST_SOURCES.aggregate
+          ? new Response('down', { status: 503 })
+          : new Response(url === DISPOSABLE_LIST_SOURCES.tompec ? '["a.test"]' : 'a.test')
       )
     );
     const result = await handler();
 
     expect(result.status).toBe('partial');
-    expect(repo.replaceDisposableSource).toHaveBeenCalledTimes(2);
+    expect(repo.replaceDisposableSource).toHaveBeenCalledTimes(3);
   });
 });

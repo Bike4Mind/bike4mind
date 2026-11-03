@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { accountCampaignGroupSchema } from './accountCampaign';
 
 /**
  * Shadow detections: what an abuse detector WOULD have done to an actor, recorded next to its alert
@@ -8,7 +9,7 @@ import { z } from 'zod';
  * detectors write it, the admin Detections page reads and grades it.
  */
 
-export const SHADOW_DETECTORS = ['signupNetworkBurst'] as const;
+export const SHADOW_DETECTORS = ['signupNetworkBurst', 'accountCampaign'] as const;
 export type ShadowDetector = (typeof SHADOW_DETECTORS)[number];
 
 /**
@@ -70,6 +71,8 @@ export const shadowDetectionItemSchema = z.object({
   network: shadowDetectionNetworkSchema.nullable(),
   signals: z.array(shadowDetectionSignalSchema),
   windowMinutes: z.number().nullable(),
+  /** The linked-account evidence of an accountCampaign detection; null for single-actor detectors. */
+  group: accountCampaignGroupSchema.nullable(),
   detectedAt: z.date(),
   /** The latest verdict; null until reviewed. Earlier verdicts stay in `verdicts`. */
   verdict: z.enum(SHADOW_DETECTION_VERDICTS).nullable(),

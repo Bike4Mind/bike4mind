@@ -6243,6 +6243,8 @@ export class ChatCompletionProcess {
         // Widen explicitly: the terminal flip happens inside setTerminalQuestStatus, so control
         // flow analysis still believes status is 'running' at this point.
         const statusAtEnd = quest.status as IChatHistoryItemDocument['status'];
+        const lastToolUse = echoToolsUsed.at(-1);
+        const lastToolFailed = lastToolUse?.success === false;
         const incompleteAnswerNotice = buildIncompleteAnswerNotice({
           stopped: statusAtEnd === 'stopped',
           toolCallCount: toolCallsSeen,
@@ -6255,8 +6257,11 @@ export class ChatCompletionProcess {
           // reason after a mixed round ending in a flagged tool also skips the notice.
           endedOnAnswerTool:
             actualTokenUsage.stopReason === 'tool_use' &&
-            echoToolsUsed.length > 0 &&
-            isTurnEndingTool(echoToolsUsed[echoToolsUsed.length - 1].name, allTools),
+            lastToolUse !== undefined &&
+            isTurnEndingTool(lastToolUse.name, allTools),
+          lastToolError: lastToolFailed
+            ? { name: lastToolUse.name, message: lastToolUse.returnValue ?? '' }
+            : undefined,
         });
         // When the reply ended on a stripped call, say why in place of the generic notice. An answer
         // written after the call gets no notice: "try again" next to it would read as "you got nothing".
@@ -6268,6 +6273,8 @@ export class ChatCompletionProcess {
             model: currentModel.id,
             stopReason: actualTokenUsage.stopReason,
             toolCallCount: toolCallsSeen,
+            lastToolName: lastToolUse?.name,
+            lastToolFailed,
           });
         }
         // Same shape as setErrorReply in the catch below: the notice is its own slot and

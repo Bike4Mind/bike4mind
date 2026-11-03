@@ -166,6 +166,57 @@ describe('PaymentAttemptModel', () => {
     ).toEqual({ byCard: [], byNetwork: [] });
   });
 
+  const visitA = 'a'.repeat(32);
+  const visitB = 'b'.repeat(32);
+
+  it('keeps the visit a payment started in through its outcome, and reads it back by payment intent', async () => {
+    await paymentAttemptRepository.recordStart({ paymentIntentId: 'pi_1', ...start, visitId: visitA });
+    // A repeated start does not replace it, and neither does the webhook's outcome.
+    await paymentAttemptRepository.recordStart({ paymentIntentId: 'pi_1', ...start, visitId: visitB });
+    await paymentAttemptRepository.recordOutcome(outcome('pi_1', 'u1', 'fp_1'));
+    await paymentAttemptRepository.recordStart({ paymentIntentId: 'pi_2', ...start });
+
+    expect(await paymentAttemptRepository.findVisitId('pi_1')).toBe(visitA);
+    expect(await paymentAttemptRepository.findVisitId('pi_2')).toBeNull();
+    expect(await paymentAttemptRepository.findVisitId('pi_unseen')).toBeNull();
+  });
+
+  it('names no visit on an attempt the webhook created', async () => {
+    await paymentAttemptRepository.recordOutcome({ ...outcome('pi_sub', 'u1', 'fp_1'), kind: 'subscription' });
+    expect(await paymentAttemptRepository.findVisitId('pi_sub')).toBeNull();
+  });
+
+  it("keeps a Checkout's visit under its session id, with nothing the risk checks count", async () => {
+    await PaymentAttemptModel.createIndexes();
+    await paymentAttemptRepository.recordCheckoutStart({ checkoutSessionId: 'cs_1', userId: 'u1', visitId: visitA });
+    await paymentAttemptRepository.recordCheckoutStart({ checkoutSessionId: 'cs_1', userId: 'u1', visitId: visitB });
+
+    expect(await paymentAttemptRepository.findVisitId('cs_1')).toBe(visitA);
+    expect(await PaymentAttemptModel.countDocuments()).toBe(1);
+    expect(await PaymentAttemptModel.findOne({ paymentIntentId: 'cs_1' }).lean()).toMatchObject({
+      userId: 'u1',
+      kind: 'subscription',
+      outcome: 'started',
+      amount: null,
+      ipHash: null,
+      hostingNetwork: null,
+      cardFingerprints: [],
+      radarBlocked: false,
+    });
+
+    const since = new Date(Date.now() - 60_000);
+    expect(await paymentAttemptRepository.linkKeysForUser('u1')).toEqual({ cardFingerprints: [], ipHashes: [] });
+    expect(await paymentAttemptRepository.countRecentCards({ userId: 'u1', ipHash: null, since })).toEqual({
+      userCards: 0,
+      networkCards: null,
+    });
+    expect(await paymentAttemptRepository.countRadarBlocked({ userId: 'u1', ipHash: null, since })).toEqual({
+      account: 0,
+      network: null,
+    });
+    expect((await paymentAttemptRepository.summarizeWindow(since)).attempts).toBe(0);
+  });
+
   it('summarizes a window of attempts without exposing users or cards', async () => {
     await paymentAttemptRepository.recordStart({ paymentIntentId: 'pi_1', ...start });
     await paymentAttemptRepository.recordOutcome({ ...outcome('pi_1', 'u1', 'fp_1'), outcome: 'failed' });

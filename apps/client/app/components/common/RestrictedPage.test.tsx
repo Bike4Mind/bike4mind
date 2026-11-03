@@ -397,6 +397,40 @@ describe('RestrictedPage — requireEntitlement gate', () => {
   });
 });
 
+describe('RestrictedPage - requireAccess', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseEntitlements.mockReturnValue(entitlementsQuery.pending());
+    mockRouterState.location = { pathname: '/admin', searchStr: '', hash: '', search: {} };
+  });
+
+  it('admits a user the predicate accepts, even without isAdmin', () => {
+    mockUseUser.mockReturnValue({ currentUser: { id: 'u1', isAdmin: false, tags: [] } });
+
+    const { getByText } = render(
+      <RestrictedPage requireAccess={() => true}>
+        <div>admin content</div>
+      </RestrictedPage>
+    );
+
+    expect(getByText('admin content')).toBeInTheDocument();
+    expect(mockHistoryPush).not.toHaveBeenCalled();
+  });
+
+  it('redirects a user the predicate refuses, even an admin, and renders nothing', () => {
+    mockUseUser.mockReturnValue({ currentUser: { id: 'u1', isAdmin: true, tags: [] } });
+
+    const { queryByText } = render(
+      <RestrictedPage requireAccess={() => false}>
+        <div>admin content</div>
+      </RestrictedPage>
+    );
+
+    expect(queryByText('admin content')).toBeNull();
+    expect(mockHistoryPush).toHaveBeenCalledWith('/new');
+  });
+});
+
 describe('RestrictedPage — requireAdmin denial honors fallbackPath', () => {
   beforeEach(() => {
     vi.clearAllMocks();

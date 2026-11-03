@@ -13,7 +13,10 @@ export const signupDomainReviewSchema = z.object({
 export type SignupDomainReview = z.infer<typeof signupDomainReviewSchema>;
 
 /** Refreshed disposable-domain lists; see apps/workers/src/cron/disposableDomainRefresh.ts for the URLs. */
-export type DisposableListSource = 'aggregate' | 'curated' | 'fakefilter';
+export type DisposableListSource = 'aggregate' | 'curated' | 'fakefilter' | 'tompec';
+/** What refused a signup email: a refreshed list, the admin blockedEmailDomains setting, or the bundled static list. */
+export type DisposableRefusalSource = DisposableListSource | 'admin' | 'static';
+export type DisposableRefusal = { domain: string; sources: DisposableRefusalSource[] };
 export type DisposableSourceStatus = {
   source: DisposableListSource;
   count: number;
@@ -103,4 +106,6 @@ export type SignupProtection = {
   notifyHold?: (review: SignupDomainReview) => Promise<void>;
   /** Daily per-pool payout budgets for free signup grants; absent means no budget is enforced. */
   grantBudget?: SignupGrantBudget;
+  /** Called on every disposable-email refusal so false positives surface per source. Must not throw. */
+  recordDisposableRefusal?: (refusal: DisposableRefusal) => Promise<void>;
 };

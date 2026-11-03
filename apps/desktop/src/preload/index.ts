@@ -35,6 +35,7 @@ import {
   type BrowserFreezeFrameRequest,
   type BrowserGoRequest,
   type BrowserNavigateRequest,
+  type BrowserOpenArtifactRequest,
   type BrowserPageStateEvent,
   type BrowserPaneRequest,
   type BrowserTabRequest,
@@ -89,6 +90,7 @@ const api: DesktopApi = {
     dismissPull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsDismissPull, key),
     remove: (name: string, serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsRemove, name, serverId),
     getStoreLocation: (serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsGetStoreLocation, serverId),
+    getLoadedState: (modelId: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsGetLoadedState, modelId),
     getHfToken: () => ipcRenderer.invoke(IPC_CHANNELS.modelsGetHfAccess),
     setHfToken: (token: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsSaveHfAccess, token),
     clearHfToken: () => ipcRenderer.invoke(IPC_CHANNELS.modelsClearHfAccess),
@@ -144,7 +146,7 @@ const api: DesktopApi = {
     },
   },
   chat: {
-    listModels: (force?: boolean) => ipcRenderer.invoke(IPC_CHANNELS.chatListModels, force ?? false),
+    listModels: (force?: boolean | 'local') => ipcRenderer.invoke(IPC_CHANNELS.chatListModels, force ?? false),
     listSuggestionModels: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSuggestionModels),
     getLocalContext: () => ipcRenderer.invoke(IPC_CHANNELS.chatGetLocalContext),
     setLocalContext: setting => ipcRenderer.invoke(IPC_CHANNELS.chatSetLocalContext, setting),
@@ -173,6 +175,7 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatSetApprovalMode, sessionId, mode),
     setSessionArchived: (sessionId: string, archived: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionArchived, sessionId, archived),
+    exportSession: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatExportSession, sessionId),
     listSessions: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSessions),
     createSession: (request?: CreateSessionRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatCreateSession, request),
     createCodeSession: (request: CreateCodeSessionRequest) =>
@@ -303,6 +306,8 @@ const api: DesktopApi = {
     setPane: (request: BrowserPaneRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserSetPane, request),
     freezeFrame: (request: BrowserFreezeFrameRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserFreezeFrame, request),
     navigate: (request: BrowserNavigateRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserNavigate, request),
+    openArtifact: (request: BrowserOpenArtifactRequest) =>
+      ipcRenderer.invoke(IPC_CHANNELS.browserOpenArtifact, request),
     go: (request: BrowserGoRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserGo, request),
     tab: (request: BrowserTabRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserTab, request),
     onPageState: listener => {
