@@ -216,6 +216,53 @@ describe('ChatService session_send', () => {
     await expect(awaitStream(settled, 1000)).rejects.toThrow();
   });
 
+  it('ends a chain of notify_when_done messages at the hop bound, landing the last notice without a turn', async () => {
+    const alpha = await codeSession('Alpha');
+    const beta = await codeSession('Beta');
+    await service.send(alpha.id, 'kick off');
+
+    let opened = 0;
+    for (; opened < 60; opened++) {
+      try {
+        await awaitStream(opened, 1500);
+      } catch {
+        break;
+      }
+      const last = JSON.stringify(messagesOf(opened).at(-1)?.content ?? '');
+      if (!isFreshTurn(opened) || last.includes('finished the turn your message started')) {
+        endTurn(streams[opened]);
+        continue;
+      }
+      const isAlpha = String(messagesOf(opened)[1]?.content).includes('kick off');
+      streams[opened].write(
+        frame({
+          type: 'tool_use',
+          tools: [
+            {
+              id: `send-${opened}`,
+              name: 'session_send',
+              arguments: JSON.stringify({
+                session_id: isAlpha ? beta.id : alpha.id,
+                message: `ping ${opened}`,
+                notify_when_done: true,
+              }),
+            },
+          ],
+        })
+      );
+      streams[opened].write(frame('[DONE]'));
+    }
+    expect(opened).toBeLessThan(60);
+
+    const settledStreams = streams.length;
+    await expect(awaitStream(settledStreams, 1000)).rejects.toThrow();
+
+    const stored = [...((await store.get(alpha.id))?.messages ?? []), ...((await store.get(beta.id))?.messages ?? [])];
+    const notices = stored.filter(message => /finished the turn your message started/.test(message.content));
+    expect(notices.some(message => message.relay?.kind === 'done')).toBe(true);
+    expect(notices.some(message => !message.relay)).toBe(true);
+  });
+
   it('caps how many messages one turn may send, so a single turn cannot fan out across the project', async () => {
     const sender = await codeSession('Sender');
     const one = await codeSession('One');

@@ -2490,7 +2490,9 @@ export class ChatService {
         // that was mid-turn takes delivery of anything that finished while it was busy.
         // Reporting to the PARENT writes a different session's file, so it needs no ordering here.
         void this.settleSpawnedTurn(sessionId, isLocalModel(session.model));
-        void this.notifySenders(sessionId, outcome).catch(error =>
+        // Read now: the queue flush below can start the next turn and reset turnRelay.
+        const endedHops = this.turnRelay.get(sessionId)?.hops ?? 0;
+        void this.notifySenders(sessionId, outcome, endedHops).catch(error =>
           this.deps.logger.warn(`CHAT: could not notify the senders waiting on ${sessionId}: ${String(error)}`)
         );
 
@@ -4767,13 +4769,13 @@ export class ChatService {
    * stands in for and the hop bound still ends any chain; at the bound, or when the sender is
    * busy being removed, it lands as a notice for the next turn instead of starting one.
    */
-  private async notifySenders(sessionId: string, outcome: TurnOutcome): Promise<void> {
+  private async notifySenders(sessionId: string, outcome: TurnOutcome, endedHops: number): Promise<void> {
     const pending = this.turnNotify.get(sessionId);
     if (!pending || pending.length === 0) return;
     this.turnNotify.delete(sessionId);
     const target = await this.deps.store.get(sessionId);
     if (!target) return;
-    const hops = (this.turnRelay.get(sessionId)?.hops ?? 0) + 1;
+    const hops = endedHops + 1;
     const ended = outcome === 'completed' ? 'finished' : outcome === 'aborted' ? 'was stopped' : 'failed';
 
     for (const relay of pending) {
