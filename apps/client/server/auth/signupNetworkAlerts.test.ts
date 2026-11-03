@@ -378,6 +378,7 @@ describe('buildSignupNetworkShadowDetection', () => {
       network: { ip: '203.0.113.7', asn: 64500, asnOrg: 'Example Cloud', country: 'US', hosting: true },
       signals: [{ key: 'asnSignups', label: 'Self-serve signups from this network', observed: 3, threshold: 2 }],
       windowMinutes: 60,
+      group: null,
       detectedAt,
     });
   });

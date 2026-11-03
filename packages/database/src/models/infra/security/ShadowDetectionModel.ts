@@ -1,6 +1,8 @@
 import mongoose, { Document, Model, model, Schema, Types } from 'mongoose';
 import {
+  accountCampaignGroupSchema,
   SHADOW_DETECTION_ACTIONS,
+  type AccountCampaignGroup,
   SHADOW_DETECTION_VERDICTS,
   SHADOW_DETECTORS,
   type ShadowDetectionAction,
@@ -27,6 +29,7 @@ export interface IShadowDetectionDocument extends Document {
   network: ShadowDetectionNetwork | null;
   signals: ShadowDetectionSignal[];
   windowMinutes: number | null;
+  group: AccountCampaignGroup | null;
   detectedAt: Date;
   verdict: ShadowDetectionVerdict | null;
   verdicts: ShadowDetectionVerdictEntry[];
@@ -78,6 +81,9 @@ export const ShadowDetectionSchema = new Schema<IShadowDetectionDocument>(
     network: { type: NetworkSchema, default: null },
     signals: { type: [SignalSchema], default: [] },
     windowMinutes: { type: Number, default: null },
+    // Validated against accountCampaignGroupSchema on write (recordCampaignGroup); Mixed because the
+    // nested evidence lists are read whole and never queried field by field.
+    group: { type: Schema.Types.Mixed, default: null },
     detectedAt: { type: Date, required: true },
     verdict: { type: String, enum: [...SHADOW_DETECTION_VERDICTS, null], default: null },
     verdicts: { type: [VerdictEntrySchema], default: [] },
@@ -97,6 +103,23 @@ export const ShadowDetectionModel: Model<IShadowDetectionDocument> =
   model<IShadowDetectionDocument>('ShadowDetection', ShadowDetectionSchema);
 
 export type RecordShadowDetectionInput = Omit<ShadowDetectionItem, 'id' | 'verdict' | 'verdicts' | 'revision'>;
+
+export type RecordCampaignGroupResult = 'created' | 'updated' | 'unchanged' | 'skipped';
+
+/** An open campaign record stops absorbing re-observations once it has not been seen for this long. */
+const CAMPAIGN_REOPEN_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+
+const directUserIds = (group: AccountCampaignGroup) =>
+  group.members.filter(member => member.membership === 'direct').map(member => member.userId);
+
+const sameMembers = (left: AccountCampaignGroup, right: AccountCampaignGroup) => {
+  const key = (group: AccountCampaignGroup) =>
+    group.members
+      .map(member => `${member.userId}:${member.membership}`)
+      .sort()
+      .join();
+  return key(left) === key(right);
+};
 
 export type AddShadowDetectionVerdictResult =
   | { status: 'updated'; item: ShadowDetectionItem }
@@ -135,6 +158,7 @@ const toItem = (doc: LeanShadowDetection): ShadowDetectionItem => ({
     threshold: signal.threshold ?? null,
   })),
   windowMinutes: doc.windowMinutes ?? null,
+  group: doc.group ?? null,
   detectedAt: doc.detectedAt,
   verdict: doc.verdict ?? null,
   verdicts: (doc.verdicts ?? []).map(entry => ({
@@ -150,6 +174,101 @@ class ShadowDetectionRepository {
   async record(input: RecordShadowDetectionInput): Promise<string> {
     const doc = await ShadowDetectionModel.create(input);
     return doc._id.toString();
+  }
+
+  /**
+   * Records one sweep's view of an account campaign group. A group re-observed while its record is
+   * still ungraded updates that record in place (keeping firstObservedAt and detectedAt); the revision
+   * moves only when membership changed, so a reviewer grading the old membership gets a conflict. A
+   * graded record is never rewritten: the same membership just marks it seen, and new direct members
+   * open a fresh record for a fresh review.
+   */
+  async recordCampaignGroup(input: RecordShadowDetectionInput): Promise<RecordCampaignGroupResult> {
+    if (input.detector !== 'accountCampaign' || !input.group) {
+      throw new Error('recordCampaignGroup records accountCampaign detections with group evidence only');
+    }
+    const group = accountCampaignGroupSchema.parse(input.group);
+    const direct = directUserIds(group);
+    const existing = await ShadowDetectionModel.findOne({
+      detector: 'accountCampaign',
+      policyVersion: input.policyVersion,
+      userIds: { $in: direct },
+      'group.lastObservedAt': { $gte: new Date(group.lastObservedAt.getTime() - CAMPAIGN_REOPEN_AFTER_MS) },
+    })
+      .sort({ 'group.lastObservedAt': -1, _id: -1 })
+      .lean<LeanShadowDetection>();
+
+    if (!existing?.group) {
+      await ShadowDetectionModel.create({ ...input, group });
+      return 'created';
+    }
+
+    if (existing.verdict) {
+      const reviewed = new Set(existing.userIds);
+      if (direct.some(userId => !reviewed.has(userId))) {
+        await ShadowDetectionModel.create({ ...input, group });
+        return 'created';
+      }
+      await ShadowDetectionModel.updateOne(
+        { _id: existing._id },
+        { $max: { 'group.lastObservedAt': group.lastObservedAt } }
+      );
+      return 'unchanged';
+    }
+
+    const membershipChanged = !sameMembers(existing.group, group);
+    const updated = await ShadowDetectionModel.updateOne(
+      { _id: existing._id, revision: existing.revision, verdict: null },
+      {
+        $set: {
+          summary: input.summary,
+          userIds: input.userIds,
+          signals: input.signals,
+          windowMinutes: input.windowMinutes,
+          wouldAction: input.wouldAction,
+          group: { ...group, firstObservedAt: existing.group.firstObservedAt },
+        },
+        ...(membershipChanged ? { $inc: { revision: 1 } } : {}),
+      }
+    );
+    // A verdict landed between the read and the write: leave it; the next sweep sees a graded record.
+    if (updated.matchedCount === 0) return 'skipped';
+    return membershipChanged ? 'updated' : 'unchanged';
+  }
+
+  /**
+   * Account deletion: removes the user from every detection that names them, then deletes detections
+   * left with no accounts, or campaign groups left with fewer than two direct members. Group totals stay
+   * as computed; the member list is what remains. Returns how many records were deleted.
+   */
+  async removeUser(userId: string): Promise<number> {
+    const touched = await ShadowDetectionModel.find({ userIds: userId }, { _id: 1 }).lean<{ _id: Types.ObjectId }[]>();
+    if (touched.length === 0) return 0;
+    const ids = touched.map(doc => doc._id);
+    await ShadowDetectionModel.updateMany({ _id: { $in: ids } }, { $pull: { userIds: userId } });
+    await ShadowDetectionModel.updateMany(
+      { _id: { $in: ids }, group: { $type: 'object' } },
+      {
+        $pull: {
+          'group.members': { userId },
+          'group.links': { userIds: userId },
+          'group.evidence.$[].userIds': userId,
+        },
+      }
+    );
+    const directCount = {
+      $size: {
+        $filter: { input: { $ifNull: ['$group.members', []] }, cond: { $eq: ['$$this.membership', 'direct'] } },
+      },
+    };
+    const deleted = await ShadowDetectionModel.deleteMany({
+      _id: { $in: ids },
+      $or: [
+        { userIds: { $size: 0 } },
+        { $and: [{ group: { $type: 'object' } }, { $expr: { $lt: [directCount, 2] } }] },
+      ],
+    });
+    return deleted.deletedCount;
   }
 
   /** Newest first; `truncated` is true when more than `limit` records match. */
