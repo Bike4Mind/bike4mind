@@ -8,6 +8,7 @@ import {
   type TerminalCreateResult,
   type TerminalInfo,
 } from '@shared/terminal';
+import { system32 } from '../chat/tools/gitBash';
 import { wslLocation } from '../wsl/wslPath';
 
 /** Output is coalesced for this long before it crosses to a window (ms): one frame. */
@@ -389,7 +390,9 @@ export class TerminalManager {
     if (live.epoch !== epoch) throw new Error('superseded');
     // cmd refuses a UNC working directory, and a WSL folder wants the distro's own shell anyway.
     const wsl = wslLocation(cwd, this.deps.platform);
-    const shell = wsl ? { file: 'wsl.exe', args: ['-d', wsl.distro, '--cd', wsl.linuxPath] } : this.deps.shell;
+    const shell = wsl
+      ? { file: system32('wsl.exe'), args: ['-d', wsl.distro, '--cd', wsl.linuxPath] }
+      : this.deps.shell;
     const pty = this.spawnFn(shell.file, shell.args, {
       name: 'xterm-256color',
       cols: live.size.cols,

@@ -5,7 +5,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { COMMAND_ENV, WINDOWS_COMMAND_ARGS, commandEnv, launchCommand } from './commandLaunch';
 import { COMMAND_TAG_ENV } from './commandTree';
 
-vi.mock('./gitBash', () => ({ resolveGitBash: async () => 'C:\\Program Files\\Git\\bin\\bash.exe' }));
+vi.mock('./gitBash', async importOriginal => ({
+  ...(await importOriginal<typeof import('./gitBash')>()),
+  resolveGitBash: async () => 'C:\\Program Files\\Git\\bin\\bash.exe',
+}));
 vi.mock('./userPath', () => ({ resolveUserPath: async () => 'C:\\Tools' }));
 vi.mock('node:child_process', async importOriginal => {
   const actual = await importOriginal<typeof import('node:child_process')>();
@@ -87,7 +90,7 @@ describe('launchCommand in a WSL folder', () => {
   it("runs the distro's bash in the folder and passes only the named variables into Linux", async () => {
     onWindows();
     const launch = await launchCommand('pnpm test', [], [], '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo');
-    expect(launch.executable).toBe('wsl.exe');
+    expect(launch.executable).toMatch(/^[A-Z]:\\.*\\System32\\wsl\.exe$/i);
     expect(launch.wslDistro).toBe('Ubuntu');
     expect(launch.args.slice(0, 2)).toEqual(['-d', 'Ubuntu']);
     expect(launch.args.slice(-4)).toEqual(['/home/me/repo', 'bash', '-c', 'pnpm test']);

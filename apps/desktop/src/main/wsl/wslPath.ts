@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { system32 } from '../chat/tools/gitBash';
 
 /** A folder inside a WSL distro, reached from Windows over `\\wsl.localhost\<distro>\...` or `\\wsl$\<distro>\...`. */
 export interface WslLocation {
@@ -65,7 +66,7 @@ export function wslCommand(
   args: readonly string[]
 ): { file: string; args: string[] } {
   return {
-    file: 'wsl.exe',
+    file: system32('wsl.exe'),
     args: [
       '-d',
       location.distro,
@@ -118,7 +119,7 @@ function probeUserEnvironment(distro: string): Promise<UserEnvironmentProbe> {
   return new Promise(resolve => {
     // stdin is closed so a startup file that reads it gets end of input instead of waiting.
     const child = spawn(
-      'wsl.exe',
+      system32('wsl.exe'),
       ['-d', distro, '--exec', '/bin/sh', '-c', USER_ENV_SCRIPT, 'b4m-env', USER_ENV_PRINT],
       {
         stdio: ['ignore', 'pipe', 'ignore'],
@@ -256,7 +257,7 @@ function endSession(distro: string, session: RealpathSession): void {
 function realpathSession(distro: string): RealpathSession {
   const open = realpathSessions.get(distro);
   if (open) return open;
-  const child = spawn('wsl.exe', ['-d', distro, '--exec', 'bash', '-c', REALPATH_SCRIPT], {
+  const child = spawn(system32('wsl.exe'), ['-d', distro, '--exec', 'bash', '-c', REALPATH_SCRIPT], {
     stdio: ['pipe', 'pipe', 'ignore'],
     windowsHide: true,
     env: wslSpawnEnv(),

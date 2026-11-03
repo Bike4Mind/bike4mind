@@ -53,7 +53,7 @@ describe('ripgrep in a WSL folder', () => {
 
     expect(spawned).toHaveLength(1);
     const [run] = spawned;
-    expect(run?.file).toBe('wsl.exe');
+    expect(run?.file).toMatch(/^[A-Z]:\\.*\\System32\\wsl\.exe$/i);
     expect(run?.args.slice(0, 2)).toEqual(['-d', 'Ubuntu']);
     expect(run?.args[(run?.args.indexOf('--regexp') ?? 0) + 1]).toBe(pattern);
     expect(run?.args.slice(-2)).toEqual(['--', '.']);
@@ -69,6 +69,6 @@ describe('ripgrep in a WSL folder', () => {
     expect(await search('\\\\wsl.localhost\\Debian\\srv', 'x')).toBe('unavailable');
     exitCode = 1;
     expect(await search('C:\\repo', 'x')).toBe('done');
-    expect(spawned.map(run => run.file)).toEqual(['wsl.exe', 'rg']);
+    expect(spawned.map(run => run.file)).toEqual([expect.stringMatching(/^[A-Z]:\\.*\\System32\\wsl\.exe$/i), 'rg']);
   });
 });

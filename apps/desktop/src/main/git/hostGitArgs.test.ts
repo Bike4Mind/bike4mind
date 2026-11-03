@@ -139,7 +139,7 @@ describe('hostGitArgs', () => {
         const worktree = gitArgumentPath(wsl, '\\\\wsl.localhost\\Ubuntu\\home\\me\\wt', 'win32');
         expect(worktree).toBe('/home/me/wt');
         const command = await gitCommand(wsl, hostGitArgs(['worktree', 'add', worktree], wsl, 'win32'), 'win32');
-        expect(command?.file).toBe('wsl.exe');
+        expect(command?.file).toMatch(/^[A-Z]:\\.*\\System32\\wsl\.exe$/i);
         expect(command?.cwd).toBeUndefined();
         expect(command?.args.slice(0, 2)).toEqual(['-d', 'Ubuntu']);
         expect(command?.args.slice(-9)).toEqual([

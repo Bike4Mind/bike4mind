@@ -110,7 +110,11 @@ describe('windowsSignalCommands', () => {
       [wsl(20, 'a', 'Ubuntu'), wsl(21, 'b', 'Ubuntu'), wsl(22, 'c', 'Debian'), native(23, 'd')],
       'SIGTERM'
     );
-    expect(commands.map(command => command.file)).toEqual(['C:\\Git\\bin\\bash.exe', 'wsl.exe', 'wsl.exe']);
+    expect(commands[0]?.file).toBe('C:\\Git\\bin\\bash.exe');
+    expect(commands.slice(1).map(command => command.file)).toEqual([
+      expect.stringMatching(/^[A-Z]:\\.*\\System32\\wsl\.exe$/i),
+      expect.stringMatching(/^[A-Z]:\\.*\\System32\\wsl\.exe$/i),
+    ]);
     expect(commands[1]?.args.slice(0, 5)).toEqual(['-d', 'Ubuntu', '--exec', 'bash', '-c']);
     expect(commands[1]?.args.slice(6)).toEqual(['b4m-signal', '', 'TERM', 'a', 'b']);
     expect(commands[2]?.args.slice(6)).toEqual(['b4m-signal', '', 'TERM', 'c']);

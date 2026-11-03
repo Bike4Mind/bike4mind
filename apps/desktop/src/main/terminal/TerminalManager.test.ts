@@ -467,7 +467,7 @@ describe('lifecycle', () => {
     });
     cwdFor.s1 = '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo';
     const { info, pty } = await open(terminals);
-    expect(pty.file).toBe('wsl.exe');
+    expect(pty.file).toMatch(/^[A-Z]:\\.*\\System32\\wsl\.exe$/i);
     expect(pty.args).toEqual(['-d', 'Ubuntu', '--cd', '/home/me/repo']);
     expect(pty.options.cwd).toBe('C:\\Users\\someone');
     expect(pty.options.env?.WSL_UTF8).toBe('1');

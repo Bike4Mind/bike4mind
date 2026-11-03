@@ -104,7 +104,7 @@ describe('wslCommand', () => {
     if (!location) throw new Error('unparsed');
     const pattern = '\\\\wsl.localhost\\Ubuntu\\home\\me\\wt';
     const command = wslCommand(location, 'rg', ['--regexp', pattern, '--', '.']);
-    expect(command.file).toBe('wsl.exe');
+    expect(command.file).toMatch(/^[A-Z]:\\.*\\System32\\wsl\.exe$/i);
     expect(command.args.slice(0, 4)).toEqual(['-d', 'Ubuntu', '--exec', '/bin/sh']);
     expect(command.args.slice(-7)).toEqual(['b4m-wsl', '/home/me/repo', 'rg', '--regexp', pattern, '--', '.']);
   });

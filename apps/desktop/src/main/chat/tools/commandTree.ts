@@ -67,7 +67,7 @@ export function windowsSignalCommands(trees: readonly CommandTree[], signal: Nod
   for (const distro of distros) {
     const inDistro = trees.filter(tree => tree.launch.wslDistro === distro);
     commands.push({
-      file: 'wsl.exe',
+      file: system32('wsl.exe'),
       args: ['-d', distro, '--exec', 'bash', '-c', WINDOWS_TREE_SCRIPT, 'b4m-signal', '', name, ...tagsOf(inDistro)],
       env: wslSpawnEnv(),
     });
