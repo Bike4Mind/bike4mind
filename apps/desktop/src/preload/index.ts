@@ -145,6 +145,11 @@ const api: DesktopApi = {
   },
   chat: {
     listModels: (force?: boolean) => ipcRenderer.invoke(IPC_CHANNELS.chatListModels, force ?? false),
+    onModelsChanged: listener => {
+      const handler = () => listener();
+      ipcRenderer.on(IPC_CHANNELS.chatModelsChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.chatModelsChanged, handler);
+    },
     listSuggestionModels: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSuggestionModels),
     getLocalContext: () => ipcRenderer.invoke(IPC_CHANNELS.chatGetLocalContext),
     setLocalContext: setting => ipcRenderer.invoke(IPC_CHANNELS.chatSetLocalContext, setting),

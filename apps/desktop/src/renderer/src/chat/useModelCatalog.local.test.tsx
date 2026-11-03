@@ -23,6 +23,7 @@ const listModels = vi.fn<(force?: boolean) => Promise<ChatModelCatalog>>();
 const getStatus = vi.fn<() => Promise<ModelRuntimeStatus>>();
 let authListeners: Array<(state: unknown) => void> = [];
 let installedListeners: Array<() => void> = [];
+let changedListeners: Array<() => void> = [];
 let root: Root;
 let host: HTMLElement;
 let catalog: ModelCatalogController;
@@ -54,11 +55,18 @@ beforeEach(() => {
   getStatus.mockReset();
   authListeners = [];
   installedListeners = [];
+  changedListeners = [];
   listModels.mockResolvedValue({ models: [] });
   getStatus.mockResolvedValue(status(false));
   Object.assign(window, {
     b4m: {
-      chat: { listModels },
+      chat: {
+        listModels,
+        onModelsChanged: (listener: () => void) => {
+          changedListeners.push(listener);
+          return () => (changedListeners = changedListeners.filter(item => item !== listener));
+        },
+      },
       models: {
         getStatus,
         onInstalledChanged: (listener: () => void) => {
@@ -191,5 +199,20 @@ describe('useModelCatalog when a model finishes installing', () => {
     expect(installedListeners).toHaveLength(1);
     await act(async () => root.render(null));
     expect(installedListeners).toHaveLength(0);
+  });
+});
+
+describe('useModelCatalog when a model server finishes a slow listing', () => {
+  it('rereads the list without forcing the hosted half, and stops listening on unmount', async () => {
+    await mount(false);
+    expect(changedListeners).toHaveLength(1);
+    listModels.mockClear();
+    listModels.mockResolvedValue({ models: [model] });
+    await act(async () => changedListeners.forEach(listener => listener()));
+    expect(listModels).toHaveBeenCalledTimes(1);
+    expect(listModels).toHaveBeenCalledWith(false);
+    expect(catalog.models).toEqual([model]);
+    await act(async () => root.render(null));
+    expect(changedListeners).toHaveLength(0);
   });
 });

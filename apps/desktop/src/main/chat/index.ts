@@ -184,6 +184,9 @@ const DEFERRED_TOOLS_OVERRIDE = parseDeferredToolsOverride(
 /** How much of a background process's output the panel asks for when it rejoins after a reload. */
 const PANEL_TAIL_CHARS = 20_000;
 
+/** Gathers model servers whose slow listings finish close together into one chat model list reload. */
+const LATE_RELOAD_DEBOUNCE_MS = 250;
+
 /** Re-encode quality for a downscaled screenshot. Text in a UI stays legible well below this. */
 const SHRUNK_JPEG_QUALITY = 82;
 
@@ -477,6 +480,7 @@ export function registerChat(
     setting: () => localContext.read(),
     pinnedProjectors: () => hooks.pinnedProjectors?.() ?? new Map(),
   });
+  let lateReload: ReturnType<typeof setTimeout> | undefined;
   // safeStorage like the MCP secrets: a server's token or header value never goes to plain JSON.
   const modelServers = new ModelServerRegistry({
     store: new ModelServerStore(safeStorage, privateFile(join(userData, 'model-servers.json')), logger),
@@ -485,10 +489,14 @@ export function registerChat(
       models.forgetLocal();
       send(IPC_CHANNELS.modelServersChanged, servers);
     },
-    // The chat model list reloads on this channel, and its next local read gets the finished listing.
-    listedLate: serverId => {
-      models.forgetLocal();
-      send(IPC_CHANNELS.modelsInstalledChanged, serverId);
+    // Several servers finishing together cause one reload.
+    listedLate: () => {
+      if (lateReload) return;
+      lateReload = setTimeout(() => {
+        lateReload = undefined;
+        models.forgetLocal();
+        send(IPC_CHANNELS.chatModelsChanged, undefined);
+      }, LATE_RELOAD_DEBOUNCE_MS);
     },
     localSpecsChanged: () => {
       forgetLocalContexts();

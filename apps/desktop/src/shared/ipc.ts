@@ -148,6 +148,8 @@ export const IPC_CHANNELS = {
   /** main -> renderer push of the integration's state; never carries the key. */
   fleetStateChanged: 'fleet:state-changed',
   chatListModels: 'chat:list-models',
+  /** main -> renderer: a model server's slow listing finished, so the device-side half of the list changed. */
+  chatModelsChanged: 'chat:models-changed',
   chatListSuggestionModels: 'chat:list-suggestion-models',
   chatGetLocalContext: 'chat:get-local-context',
   chatSetLocalContext: 'chat:set-local-context',
@@ -681,6 +683,8 @@ export interface DesktopApi {
      * the main-process cache, which is what a "try again" affordance needs.
      */
     listModels(force?: boolean): Promise<ChatModelCatalog>;
+    /** A model server's listing finished after the list was read; read it again without forcing. */
+    onModelsChanged(listener: () => void): () => void;
     /** The models Settings may pin the next-prompt hint to: small hosted ones, then local ones. */
     listSuggestionModels(): Promise<ChatModelCatalog>;
     /** How local models size their context window; see @shared/localContextSetting. */

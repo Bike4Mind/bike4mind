@@ -1973,14 +1973,20 @@ describe('ModelsScreen servers', () => {
       expect(rowNames()[0]).toContain('qwen2.5:0.5b');
       expect(q('models-installed-tab')?.textContent).toBe('Installed (1)');
       expect(q('models-installed-refreshing')).not.toBeNull();
-      expect(q('models-installed-remove-btn')?.hasAttribute('disabled')).toBe(true);
+      const blocked = q('models-installed-remove-btn');
+      expect(blocked?.getAttribute('aria-disabled')).toBe('true');
+      expect(blocked?.hasAttribute('disabled')).toBe(false);
+      act(() => blocked?.click());
+      expect(q('models-remove-dialog')).toBeNull();
+      const described = blocked?.getAttribute('aria-describedby');
+      expect(described && document.getElementById(described)?.textContent).toBe('Available once the list refreshes');
 
       await act(async () => release());
       await flush();
       expect(rowNames()).toHaveLength(2);
       expect(q('models-installed-tab')?.textContent).toBe('Installed (2)');
       expect(q('models-installed-refreshing')).toBeNull();
-      expect(q('models-installed-remove-btn')?.hasAttribute('disabled')).toBe(false);
+      expect(q('models-installed-remove-btn')?.hasAttribute('aria-disabled')).toBe(false);
     });
 
     it('keeps the last list with the reason when the server is down, and checks again on request', async () => {

@@ -54,6 +54,7 @@ window.ResizeObserver ??= class {
 const HOSTED = 'claude-opus-4-5-20251101';
 const LOCAL_ID = 'local:ollama:qwen3.5:0.8b';
 const LAB_ID = 'local:srv-lab:qwen3.5:0.8b';
+const SLOW_ID = 'local:srv-slow:qwen3.5:0.8b';
 
 // The hosted model of the same name sits ahead of the local one, so a match that ignored the backend would pick it.
 const MODELS: ChatModelOption[] = [
@@ -68,6 +69,14 @@ const MODELS: ChatModelOption[] = [
     unavailable: 'GPU box is not answering.',
   },
   { id: LAB_ID, name: 'qwen3.5:0.8b', backend: 'local-srv-lab', server: { id: 'lab', name: 'Lab box' } },
+  {
+    id: SLOW_ID,
+    name: 'qwen3.5:0.8b',
+    backend: 'local-srv-slow',
+    server: { id: 'slow', name: 'Slow box' },
+    unavailable: 'Slow box is still listing its models',
+    pending: true,
+  },
 ];
 
 const summary = (id: string, model: string): ChatSessionSummary =>
@@ -191,6 +200,12 @@ describe('Use in chat', () => {
     expect(offered?.('gpu', 'qwen3.5:0.8b')).toBeNull();
     await act(async () => offered?.('lab', 'qwen3.5:0.8b')?.());
     expect(setSessionModel).toHaveBeenCalledWith('fresh-1', LAB_ID);
+  });
+
+  it('offers a model on a server that is still listing its models', async () => {
+    await openModels();
+    await act(async () => offered?.('slow', 'qwen3.5:0.8b')?.());
+    expect(setSessionModel).toHaveBeenCalledWith('fresh-1', SLOW_ID);
   });
 
   it('starts one conversation for a double click', async () => {

@@ -73,6 +73,12 @@ export const PICKER_CHECK_WAIT_MS = 2_000;
  * Ollama lists in well under a second; this leaves room for an SSH server's connection setup.
  */
 export const PICKER_LIST_WAIT_MS = 3_000;
+/**
+ * How long a listing that finished after the picker stopped waiting is served instead of asking the server again,
+ * counted from that listing or from the last late-listing notice, whichever is newer. The reload a notice causes
+ * then starts no new slow listing on any server; 5s matches the chat model catalog's device-side cache.
+ */
+export const LISTED_FRESH_MS = 5_000;
 
 interface ServerClient extends LocalChat {
   listModels(): Promise<ChatModelOption[]>;
@@ -95,11 +101,16 @@ interface Entry {
   product: OpenAICompatibleProduct | null;
   /** From the last listing, so a conversation saved on an alias still finds its model while the server is down. */
   aliasIds?: ReadonlyMap<string, string[]>;
-  listing?: Promise<ChatModelOption[] | null>;
-  /** A listing that landed after the picker stopped waiting, kept for the next models() call. */
-  late?: ChatModelOption[];
-  reporting?: Promise<ChatModelOption[] | null>;
+  /** The listing in flight, shared by the picker and health checks. */
+  listing?: Promise<Listing>;
+  /** A listing that finished after the picker stopped waiting, served instead of a new listing while fresh. */
+  listed?: { models: ChatModelOption[]; at: number };
+  reporting?: Promise<Listing>;
+  /** The last listing a models() call handed out. */
+  returned?: Listing;
 }
+
+type Listing = { ok: true; models: ChatModelOption[] } | { ok: false; error: unknown };
 
 export interface ModelServerRegistryDeps {
   store: ModelServerStore;
@@ -143,6 +154,7 @@ export class ModelServerRegistry {
   private loaded: Promise<void> | null = null;
   private readonly savedListeners = new Set<(id: string) => void>();
   private readonly checking = new WeakMap<Entry, Promise<void>>();
+  private lateNoticeAt = 0;
 
   constructor(private readonly deps: ModelServerRegistryDeps) {}
 
@@ -403,20 +415,23 @@ export class ModelServerRegistry {
         }
         let reason: string | null = null;
         if (entry.health.state === 'online' || entry.health.state === 'unknown') {
-          const late = entry.late;
-          entry.late = undefined;
-          const listing = late ? null : this.listEntry(entry);
+          const fresh = this.freshListing(entry);
+          const listing = fresh ? null : this.listEntry(entry);
           // undefined: still listing when the wait ran out.
-          const listed = listing ? await within(listing, PICKER_LIST_WAIT_MS, undefined) : late;
-          if (listed) {
+          const result: Listing | undefined = listing
+            ? await within(listing, PICKER_LIST_WAIT_MS, undefined)
+            : { ok: true, models: fresh ?? [] };
+          if (result?.ok) {
+            entry.returned = result;
             if (entry.health.state === 'unknown') void this.check(entry.record.id);
-            return listed.map(model => ({ ...model, server }));
+            return result.models.map(model => ({ ...model, server }));
           }
-          if (listed === undefined && listing) {
+          if (result === undefined && listing) {
             this.reportLate(entry, listing);
             reason = `${entry.record.name} is still listing its models`;
-          }
+          } else if (result && this.current(entry)) this.listingFailed(entry, result.error);
         }
+        const pending = reason !== null;
         reason ??= unavailableReason(entry);
         const runtimeId = serverRuntimeId(entry.record.id);
         return entry.record.models.map(name => {
@@ -428,6 +443,7 @@ export class ModelServerRegistry {
             server,
             ...(aliasIds ? { aliasIds } : {}),
             unavailable: reason,
+            ...(pending ? { pending: true } : {}),
           };
         });
       })
@@ -435,32 +451,39 @@ export class ModelServerRegistry {
     return lists.flat();
   }
 
-  /** One listing per server at a time; null when it failed, with the server's health updated to say why. */
-  private listEntry(entry: Entry): Promise<ChatModelOption[] | null> {
-    entry.listing ??= entry.client
+  /** A pull or removal changed what the server holds, so its last listing is no longer served. */
+  private forget(id: string): void {
+    const entry = this.entries.get(id);
+    if (entry) entry.listed = undefined;
+  }
+
+  /** False once update() or remove() replaced this entry; its late results then change nothing. */
+  private current(entry: Entry): boolean {
+    return this.entries.get(entry.record.id) === entry;
+  }
+
+  private freshListing(entry: Entry): ChatModelOption[] | null {
+    const listed = entry.listed;
+    if (!listed) return null;
+    return Date.now() - Math.max(listed.at, this.lateNoticeAt) < LISTED_FRESH_MS ? listed.models : null;
+  }
+
+  /** One listing per server at a time, shared by the picker and health checks; it never rejects. */
+  private listEntry(entry: Entry): Promise<Listing> {
+    if (entry.listing) return entry.listing;
+    entry.listed = undefined;
+    entry.listing = entry.client
       .listModels()
       .then(
-        listed => {
-          const names = listed.map(model => model.name);
-          void this.deps.store.setModels(entry.record.id, names).catch(() => undefined);
+        async (models): Promise<Listing> => {
+          if (!this.current(entry)) return { ok: false, error: new Error(`${entry.record.name} was changed.`) };
+          const names = models.map(model => model.name);
           entry.record = { ...entry.record, models: names };
-          entry.aliasIds = aliasIdsOf(listed);
-          return listed;
+          entry.aliasIds = aliasIdsOf(models);
+          await this.deps.store.setModels(entry.record.id, names).catch(() => undefined);
+          return { ok: true, models };
         },
-        (raw: unknown) => {
-          const err = this.unwrapFailure(raw, entry);
-          entry.health = failureHealth(err, entry.record.name, entry.scope, this.platform) ?? {
-            ...entry.health,
-            state: 'unreachable',
-            error: withLocalNetworkHint(
-              `${entry.record.name}: ${describeFailure(err)}`,
-              errorCode(err),
-              entry.scope,
-              this.platform
-            ),
-          };
-          return null;
-        }
+        (error: unknown): Listing => ({ ok: false, error })
       )
       .finally(() => {
         entry.listing = undefined;
@@ -468,15 +491,46 @@ export class ModelServerRegistry {
     return entry.listing;
   }
 
-  /** Once a listing the picker stopped waiting for lands, says so once, and the next models() returns it. */
-  private reportLate(entry: Entry, listing: Promise<ChatModelOption[] | null>): void {
+  private listingFailed(entry: Entry, raw: unknown): void {
+    const err = this.unwrapFailure(raw, entry);
+    entry.listed = undefined;
+    entry.health = failureHealth(err, entry.record.name, entry.scope, this.platform) ?? {
+      ...entry.health,
+      state: 'unreachable',
+      error: withLocalNetworkHint(
+        `${entry.record.name}: ${describeFailure(err)}`,
+        errorCode(err),
+        entry.scope,
+        this.platform
+      ),
+    };
+  }
+
+  /**
+   * After a listing the picker stopped waiting for finishes, says so once, unless a models() call already handed it
+   * out. Deferred a turn so a models() call that was waiting on the same listing gets there first.
+   */
+  private reportLate(entry: Entry, listing: Promise<Listing>): void {
     if (entry.reporting === listing) return;
     entry.reporting = listing;
-    void listing.then(listed => {
-      if (listed) entry.late = listed;
-      else this.emit();
-      this.deps.listedLate?.(entry.record.id);
-    });
+    void listing.then(result =>
+      setTimeout(() => {
+        try {
+          if (!this.current(entry)) return;
+          if (result.ok) {
+            if (entry.returned === result) return;
+            entry.listed = { models: result.models, at: Date.now() };
+          } else {
+            this.listingFailed(entry, result.error);
+            this.emit();
+          }
+          this.lateNoticeAt = Date.now();
+          this.deps.listedLate?.(entry.record.id);
+        } catch (err) {
+          this.deps.logger.warn(`MODEL SERVERS: reporting a late listing failed: ${String(err)}`);
+        }
+      }, 0)
+    );
   }
 
   /** The chat client for a `srv-<id>` runtime id; null for any other id. */
@@ -513,8 +567,10 @@ export class ModelServerRegistry {
         list: () => this.run(id, undefined, current => current.runtime.list()),
         loaded: () => this.run(id, undefined, current => current.runtime.loaded()),
         inspect: (model, options) => this.run(id, options?.signal, current => current.runtime.inspect(model, options)),
-        pull: (ref, options) => this.run(id, options?.signal, current => current.runtime.pull(ref, options)),
-        remove: model => this.run(id, undefined, current => current.runtime.remove(model)),
+        pull: (ref, options) =>
+          this.run(id, options?.signal, current => current.runtime.pull(ref, options)).finally(() => this.forget(id)),
+        remove: model =>
+          this.run(id, undefined, current => current.runtime.remove(model)).finally(() => this.forget(id)),
       },
     };
   }
@@ -653,13 +709,10 @@ export class ModelServerRegistry {
       checkedAt,
       error: null,
     });
-    try {
-      const listed = await entry.client.listModels();
-      const names = listed.map(model => model.name);
-      entry.record = { ...entry.record, models: names };
-      entry.aliasIds = aliasIdsOf(listed);
-      await this.deps.store.setModels(entry.record.id, names);
-    } catch (err) {
+    entry.listed = undefined;
+    const listing = await this.listEntry(entry);
+    if (!listing.ok) {
+      const err = listing.error;
       this.deps.logger.debug(
         `MODEL SERVERS: listing ${entry.record.id} failed: ${err instanceof Error ? err.name : 'unknown'}`
       );
@@ -688,6 +741,7 @@ export class ModelServerRegistry {
 
   private setHealth(entry: Entry, health: ModelServerHealth): void {
     entry.health = health;
+    if (health.state !== 'online') entry.listed = undefined;
   }
 
   private build(record: ModelServerRecord, previous?: Entry): Entry {

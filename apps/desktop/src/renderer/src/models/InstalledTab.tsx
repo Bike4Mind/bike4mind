@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -57,6 +57,15 @@ const CAPABILITY_LABELS: [keyof LocalModelEntry['capabilities'], string][] = [
   ['embeddings', 'Embeddings'],
 ];
 
+const visuallyHidden = {
+  position: 'absolute',
+  width: 1,
+  height: 1,
+  overflow: 'hidden',
+  clip: 'rect(0 0 0 0)',
+  whiteSpace: 'nowrap',
+} as const;
+
 /** Contexts are set in powers of two, so 4096 reads as 4K and 131072 as 128K. */
 function contextLabel(tokens: number): string {
   return tokens >= 1024 ? `${Math.round(tokens / 1024)}K` : String(tokens);
@@ -74,6 +83,7 @@ function InstalledRow({
   /** Why Remove is shown disabled; null when it is usable. */
   removeBlocked: string | null;
 }) {
+  const blockedId = useId();
   return (
     <Sheet
       variant="outlined"
@@ -147,21 +157,26 @@ function InstalledRow({
         </Button>
       )}
       {onRemove && removeBlocked && (
-        <Tooltip title={removeBlocked} size="sm" variant="soft">
-          {/* A disabled button fires no pointer events, so the tooltip hangs off this wrapper. */}
-          <Box component="span" sx={{ display: 'inline-flex' }}>
+        <>
+          <Tooltip title={removeBlocked} size="sm" variant="soft" describeChild>
+            {/* aria-disabled rather than disabled keeps it focusable, so keyboard and screen reader users get the reason. */}
             <Button
               size="sm"
               variant="plain"
               color="danger"
               startDecorator={<TrashIcon />}
-              disabled
+              aria-disabled="true"
+              aria-describedby={blockedId}
+              sx={{ opacity: 0.5, cursor: 'default' }}
               data-testid="models-installed-remove-btn"
             >
               Remove
             </Button>
+          </Tooltip>
+          <Box component="span" id={blockedId} sx={visuallyHidden}>
+            {removeBlocked}
           </Box>
-        </Tooltip>
+        </>
       )}
     </Sheet>
   );

@@ -176,7 +176,7 @@ export function ModelPicker({
   // Local mode: a hosted id or the placeholder is replaced by main as soon as it sees a list.
   const selecting = missing && local && !parseLocalModelId(modelId);
   const unavailable = missing && !selecting;
-  const serverDown = current?.unavailable;
+  const serverDown = current?.pending ? undefined : current?.unavailable;
 
   const details = useMemo(() => rowDetails(models), [models]);
   const matches = useMemo(() => {
