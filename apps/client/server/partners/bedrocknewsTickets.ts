@@ -42,18 +42,17 @@ async function partnerConfig(): Promise<{ baseUrl: string; partnerKey: string } 
   );
   const setting = (key: (typeof SETTING_NAMES)[number]) =>
     getSettingsValue(key, settings, settingsMap[key].defaultValue ?? '');
-  const baseUrl = setting('BedrockNewsApiUrl').replace(/\/+$/, '');
-  const partnerKey = setting('BedrockNewsPartnerKey');
+  const baseUrl = setting('BedrockNewsApiUrl').trim().replace(/\/+$/, '');
+  const partnerKey = setting('BedrockNewsPartnerKey').trim();
   return baseUrl && partnerKey ? { baseUrl, partnerKey } : null;
 }
 
-// A fetch error message can carry the request URL, which holds the ticket.
-function warnRequestFailed(error: unknown, ticket: string) {
-  const { name, message } = error instanceof Error ? error : { name: typeof error, message: '' };
-  Logger.warn('[partners] bedrocknews ticket request failed', {
-    name,
-    message: message.replaceAll(ticket, `${ticket.slice(0, 8)}…`),
-  });
+const FAILURE_REASONS: Record<string, string> = { TimeoutError: 'timeout', AbortError: 'aborted' };
+
+// Never log the message: fetch errors quote the URL (ticket) or a rejected header value (partner key).
+function warnRequestFailed(error: unknown) {
+  const name = typeof (error as { name?: unknown })?.name === 'string' ? (error as { name: string }).name : 'unknown';
+  Logger.warn('[partners] bedrocknews ticket request failed', { name, reason: FAILURE_REASONS[name] });
 }
 
 async function call<T>(
@@ -85,7 +84,7 @@ async function call<T>(
     const code = typeof body?.code === 'string' ? body.code : 'BEDROCKNEWS_UNAVAILABLE';
     return { ok: false, code, status: response.status };
   } catch (error) {
-    warnRequestFailed(error, ticket);
+    warnRequestFailed(error);
     return { ok: false, code: 'BEDROCKNEWS_UNAVAILABLE', status: 502 };
   }
 }

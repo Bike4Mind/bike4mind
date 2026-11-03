@@ -84,15 +84,35 @@ describe('previewTicket', () => {
     expect(mockFetch.mock.calls[0][0]).toBe(`${BASE}/api/headword/partner/tickets/${TICKET}`);
   });
 
-  it('warns with the error name but never the full ticket or the partner key', async () => {
+  it('warns with the error name and never the ticket or a partner key the request rejected', async () => {
+    const key = 'secret\nkey';
+    mockGetSettingsMap.mockResolvedValue({ BedrockNewsApiUrl: BASE, BedrockNewsPartnerKey: key });
     const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
-    mockFetch.mockRejectedValue(new TypeError(`Failed to parse URL from ${BASE}/tickets/${TICKET}`));
+    mockFetch.mockRejectedValue(new TypeError(`Invalid header value: "${key}" for ${BASE}/tickets/${TICKET}`));
     await previewTicket(TICKET);
     const logged = JSON.stringify(warn.mock.calls);
     expect(logged).toContain('TypeError');
     expect(logged).not.toContain(TICKET);
-    expect(logged).not.toContain('secret-key');
+    expect(logged).not.toContain(JSON.stringify(key).slice(1, -1));
+    expect(logged).not.toContain('secret');
     warn.mockRestore();
+  });
+
+  it('names a timeout as the warning reason', async () => {
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
+    mockFetch.mockRejectedValue(new DOMException('timed out', 'TimeoutError'));
+    await previewTicket(TICKET);
+    expect(warn.mock.calls[0][1]).toEqual({ name: 'TimeoutError', reason: 'timeout' });
+    warn.mockRestore();
+  });
+
+  it('trims whitespace pasted around the API URL and partner key', async () => {
+    mockGetSettingsMap.mockResolvedValue({ BedrockNewsApiUrl: ` ${BASE}/ \n`, BedrockNewsPartnerKey: ' secret-key\n' });
+    mockFetch.mockResolvedValue(json(200, { status: 'open', expiresAt: 'x', rungs: [] }));
+    await previewTicket(TICKET);
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toBe(`${BASE}/api/headword/partner/tickets/${TICKET}`);
+    expect(init.headers['X-Partner-Key']).toBe('secret-key');
   });
 });
 
