@@ -31,7 +31,7 @@ import { useShowDollarCosts } from './costDisplay';
 import { describeReplyCost, formatCreditsSpent, type TurnProgress } from './statusLine';
 import { describeReplyStats, FOOTER_STATS, messageStats } from './replyStats';
 import { useReplyStatsPrefs } from './replyStatsPrefs';
-import { railGroupId, ReplyStatsRail, turnGridSx } from './ReplyStatsRail';
+import { railGroupId, ReplyStatsRail, turnGridSx, useRailDrawn } from './ReplyStatsRail';
 import { clampWindow, extendWindow, initialWindow, WINDOW_STEP, type ThreadWindow } from './threadWindow';
 import { ToolCallList, type MoveCallToBackground, type RespondToApproval } from './ToolCallList';
 import { OrphanVideoJobs } from './VideoJobCard';
@@ -325,6 +325,7 @@ const AssistantTurn = memo(function AssistantTurn({
   /** MessageThread draws the stats rail beside the reply, so there is no hover footer. */
   rail?: boolean;
 }) {
+  const railDrawn = useRailDrawn(message.id) && rail;
   const toolCalls = message.toolCalls ?? [];
   const rounds = roundsOf(message);
   // Hidden from the front of the WHOLE list rather than drawn from a slice of it, so a round
@@ -344,7 +345,7 @@ const AssistantTurn = memo(function AssistantTurn({
       data-testid="chat-message-assistant"
       data-reply
       // The rail comes before the reply for the grid's placement; this reads it after the reply.
-      {...(rail ? { 'aria-owns': railGroupId(message.id) } : {})}
+      {...(railDrawn ? { 'aria-owns': railGroupId(message.id) } : {})}
     >
       {/* The turn in the order it happened: each round's prose, then the tools that round went
           on to run, then the next round's prose. A reply that touched six files across ten
@@ -638,17 +639,28 @@ function isReplyTurn(message: ChatMessage): boolean {
 }
 
 /**
- * How many grid rows the rail of the reply at `index` runs down: its own and those of the turns
- * after it in the same list, up to the next reply, whose own rail starts there. See turnGridSx.
+ * How many grid rows the rail of the reply at `index` runs down: its own, and the one group of
+ * turns after it in the same list, if any come before the next reply. See turnGridSx.
  */
 export function railRows(messages: readonly ChatMessage[], index: number, end: number): number {
-  let next = index + 1;
-  while (next < end) {
-    const message = messages[next];
-    if (!message || isReplyTurn(message)) break;
-    next++;
-  }
-  return next - index;
+  const after = messages[index + 1];
+  return index + 1 < end && after && !isReplyTurn(after) ? 2 : 1;
+}
+
+/** The turns between two replies, one grid item so that their gap is theirs and not the rows'. */
+function TurnGroup({ children }: { children: ReactNode }) {
+  return (
+    <Stack spacing={3} sx={{ minWidth: 0 }} data-testid="chat-turn-group">
+      {children}
+    </Stack>
+  );
+}
+
+/** Keyed by the reply the run follows, so a group keeps its turns' state as the window grows over it or a turn joins it. */
+function groupKey(messages: readonly ChatMessage[], index: number): string {
+  let at = index - 1;
+  while (at >= 0 && !isReplyTurn(messages[at]!)) at--;
+  return `group-${at >= 0 ? messages[at]!.id : 'start'}`;
 }
 
 /**
@@ -722,10 +734,30 @@ function WindowedTurns({
     root.scrollTop = root.scrollHeight - kept;
   });
 
+  const items: ReactNode[] = [];
+  let run: ReactNode[] = [];
+  let runKey = '';
+  const closeRun = () => {
+    if (run.length > 0) items.push(<TurnGroup key={runKey}>{run}</TurnGroup>);
+    run = [];
+  };
+  for (let index = start; index < to; index++) {
+    const message = messages[index]!;
+    const node = turn(message, index, index === start ? skip : 0, to);
+    if (isReplyTurn(message)) {
+      closeRun();
+      items.push(node);
+    } else {
+      if (run.length === 0) runKey = groupKey(messages, index);
+      run.push(node);
+    }
+  }
+  closeRun();
+
   return (
     <>
       {complete ? above : <div ref={sentinel} data-testid="chat-thread-older-sentinel" />}
-      {messages.slice(start, to).map((message, offset) => turn(message, start + offset, offset === 0 ? skip : 0, to))}
+      {items}
     </>
   );
 }

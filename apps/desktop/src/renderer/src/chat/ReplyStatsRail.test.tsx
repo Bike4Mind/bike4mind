@@ -10,14 +10,22 @@ import type { TurnProgress } from './statusLine';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-// A reply with this id has stats that cannot be read, for the rail's error boundary.
+const statsReads = vi.hoisted(() => ({ byId: {} as Record<string, number> }));
+
+// A reply with the id 'unreadable' has stats that cannot be read, and 'flaky' has live figures that
+// cannot, for the rail's error boundary. Reads are counted per reply, for the memo.
 vi.mock('./replyStats', async importOriginal => {
   const actual = await importOriginal<typeof import('./replyStats')>();
   return {
     ...actual,
     messageStats: (message: ChatMessage) => {
+      statsReads.byId[message.id] = (statsReads.byId[message.id] ?? 0) + 1;
       if (message.id === 'unreadable') throw new Error('unreadable stats');
       return actual.messageStats(message);
+    },
+    liveReplyStats: (turn: TurnProgress, now: number, earlier?: ChatReplyStats) => {
+      if (turn.messageId === 'flaky') throw new Error('unreadable live figures');
+      return actual.liveReplyStats(turn, now, earlier);
     },
   };
 });
@@ -44,23 +52,23 @@ describe('railRows', () => {
   });
   const system = message('s1', { role: 'user', content: 'Note', system: true });
 
-  it("runs a rail down its reply and the turns after it, up to the next reply's own", () => {
+  it("runs a rail down its reply's row and the one group of turns after it, up to the next reply", () => {
     const thread = [user('u1'), message('a1'), user('u2'), message('a2'), relay, system, user('u3'), message('a3')];
     expect(railRows(thread, 1, thread.length)).toBe(2);
-    expect(railRows(thread, 3, thread.length)).toBe(4);
+    expect(railRows(thread, 3, thread.length)).toBe(2);
     expect(railRows(thread, 7, thread.length)).toBe(1);
   });
 
   it('stops at the end of the list it is drawn in, and at a reply straight after', () => {
     const thread = [message('a1'), message('a2'), user('u1'), user('u2')];
     expect(railRows(thread, 0, thread.length)).toBe(1);
-    expect(railRows(thread, 1, thread.length)).toBe(3);
-    expect(railRows(thread, 1, 3)).toBe(2);
+    expect(railRows(thread, 1, thread.length)).toBe(2);
+    expect(railRows(thread, 1, 2)).toBe(1);
   });
 
-  it('runs on past a compaction divider, which is not a reply', () => {
+  it('counts a compaction divider, which is not a reply, in the group', () => {
     const thread = [message('a1'), message('b1', { boundary: { kind: 'compact' } }), user('u1'), message('a2')];
-    expect(railRows(thread, 0, thread.length)).toBe(3);
+    expect(railRows(thread, 0, thread.length)).toBe(2);
   });
 });
 
@@ -231,13 +239,83 @@ describe('the reply stats rail and its footer fallback', () => {
       expect(cellOf('a1')?.style.gridRow).toBe('span 2');
       expect(cellOf('a2')?.style.gridRow).toBe('span 1');
       expect(a2?.getAttribute('aria-owns')).toBe(cellOf('a2')?.querySelector('[role="group"]')?.id);
-      // A rail taller than its rows grows them: the reply keeps the top of its row and the prompt
-      // the bottom of its own, so the room opens between a reply and the next prompt.
-      expect(getComputedStyle(a1!.parentElement!).display).toBe('grid');
+      // A rail taller than its rows grows them: the reply keeps the top of its row and the group
+      // of turns after it the bottom of its own, so the room opens between a reply and them.
+      const column = a1!.parentElement!;
+      expect(getComputedStyle(column).display).toBe('grid');
+      expect(getComputedStyle(column).rowGap).toBe('24px');
       expect(getComputedStyle(a1!).alignSelf).toBe('start');
-      const prompt = container.querySelectorAll('[data-testid="chat-message-user"]')[1]!.parentElement!;
+      const prompt = container
+        .querySelectorAll('[data-testid="chat-message-user"]')[1]!
+        .closest<HTMLElement>('[data-testid="chat-turn-group"]')!;
+      expect(prompt.parentElement).toBe(column);
       expect(getComputedStyle(prompt).alignSelf).toBe('end');
       expect(getComputedStyle(cellOf('a1')!).gridColumn).toBe('1');
+      expect(getComputedStyle(cellOf('a1')!.querySelector('[role="group"]')!).position).toBe('sticky');
+    });
+
+    it('keeps three prompts after a short reply in one group, a rail of two rows beside it', () => {
+      const prompts = ['u2', 'u3', 'u4'].map(id => message(id, { role: 'user', content: id }));
+      render([settled[0]!, settled[1]!, ...prompts, message('a2', { content: 'Next', stats })], { statsRail: true });
+
+      const groups = Array.from(container.querySelectorAll('[data-testid="chat-turn-group"]'));
+      expect(groups.map(group => group.querySelectorAll('[data-testid="chat-message-user"]').length)).toEqual([1, 3]);
+      expect(cellOf('a1')?.style.gridRow).toBe('span 2');
+      expect(cellOf('a2')?.style.gridRow).toBe('span 1');
+      expect(groups[1]?.previousElementSibling).toBe(replies()[0]);
+      expect(getComputedStyle(groups[1]!.children[1]!).marginTop).toBe('24px');
+    });
+
+    it('lays out the folded earlier messages as the same grid', () => {
+      render([...thread.slice(0, 2), message('b1', { boundary: { kind: 'compact' } }), ...thread.slice(2)], {
+        statsRail: true,
+      });
+      const details = container.querySelector<HTMLDetailsElement>('[data-testid="chat-earlier-messages"]')!;
+      details.open = true;
+      act(() => {
+        details.dispatchEvent(new Event('toggle'));
+      });
+
+      const folded = cellOf('a1')!.parentElement!;
+      expect(folded.parentElement).toBe(details);
+      expect(getComputedStyle(folded).display).toBe('grid');
+      expect(getComputedStyle(folded).rowGap).toBe('24px');
+    });
+
+    it('reads a reply to its rail only while the rail is drawn', () => {
+      render(
+        [
+          message('a1', { content: 'No.', stats }),
+          message('a2', { content: 'Sure.' }),
+          message('a3', { content: 'Done.', stats }),
+        ],
+        { statsRail: true }
+      );
+      const [a1, a2, a3] = replies();
+      expect(a1?.getAttribute('aria-owns')).toBe(cellOf('a1')?.querySelector('[role="group"]')?.id);
+      expect(a2?.hasAttribute('aria-owns')).toBe(false);
+      expect(a3?.hasAttribute('aria-owns')).toBe(true);
+
+      act(() => REPLY_STATS.forEach(id => setReplyStatShown(id, false)));
+      expect(replies().some(reply => reply.hasAttribute('aria-owns'))).toBe(false);
+    });
+
+    it('does not read a reply to a rail that threw', () => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      render([{ ...settled[1]!, id: 'unreadable' }], { statsRail: true });
+
+      expect(replies()[0]?.hasAttribute('aria-owns')).toBe(false);
+    });
+
+    it('does not draw a rail again for a reply that did not change', () => {
+      const first = message('a1', { content: 'One.', stats });
+      const second = message('a2', { content: 'Two.', stats });
+      render([first, second], { statsRail: true });
+      const reads = { ...statsReads.byId };
+
+      render([first, { ...second, content: 'Two, longer.' }], { statsRail: true });
+      expect(statsReads.byId['a1']).toBe(reads['a1']);
+      expect(statsReads.byId['a2']).toBeGreaterThan(reads['a2']!);
     });
 
     it('leaves the live reply where it is when its rail gets its first row', () => {
@@ -269,6 +347,17 @@ describe('the reply stats rail and its footer fallback', () => {
       expect(replies()[1]?.textContent).toContain('Still here.');
       expect(cellOf('a1')).not.toBeNull();
       expect(cellOf('unreadable')).toBeNull();
+    });
+
+    it('draws the rail again from the stored stats after it threw on a live frame', () => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const live: TurnProgress = { startedAt: Date.now() - 4000, tokens: null, messageId: 'flaky' };
+      render([message('flaky', { content: 'Working' })], { statsRail: true, streaming: true, liveTurn: live });
+      expect(cellOf('flaky')).toBeNull();
+
+      render([message('flaky', { content: 'Done.', stats })], { statsRail: true, streaming: false, liveTurn: null });
+      expect(cellOf('flaky')).not.toBeNull();
+      expect(statValue('total')).toBe('12.0s');
     });
   });
 
