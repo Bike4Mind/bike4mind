@@ -84,6 +84,8 @@ export interface SandboxedCommand {
   args: string[];
   /** Windows only: the `COMMAND_TAG_ENV` value that marks this command's processes (see commandTree.ts). */
   processTag?: string;
+  /** Variables the launch needs in the child's environment, merged in by `commandEnv`. */
+  env?: Readonly<Record<string, string>>;
   /** Removes the generated profile. Always call it, including on failure. */
   cleanup(): Promise<void>;
 }

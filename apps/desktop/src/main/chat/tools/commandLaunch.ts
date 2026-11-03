@@ -11,31 +11,41 @@ import { sandboxAvailable, sandboxCommand, type SandboxedCommand } from './sandb
  */
 export const SANDBOX_SHELL_COMMANDS = false;
 
+export const COMMAND_ENV = 'B4M_DESKTOP_COMMAND';
+
+/**
+ * Git Bash's MSYS runtime re-parses the Windows command line, unescaping backslashes and globbing
+ * unquoted words, so the command travels in the environment and the argv stays fixed. The
+ * expansion happens before `eval` runs, so the variable is gone before the command starts.
+ */
+export const WINDOWS_COMMAND_ARGS: readonly string[] = ['-c', `eval "unset ${COMMAND_ENV}; $${COMMAND_ENV}"`];
+
 export async function launchCommand(
   command: string,
   roots: readonly string[],
   protectedPaths: readonly string[]
 ): Promise<SandboxedCommand> {
+  if (SANDBOX_SHELL_COMMANDS) {
+    if (!sandboxAvailable()) {
+      throw new Error('Commands cannot be run on this machine: the macOS sandbox is unavailable.');
+    }
+    return sandboxCommand(command, roots, protectedPaths);
+  }
   if (process.platform === 'win32') {
     return {
       executable: await resolveGitBash(),
-      args: ['-c', command],
+      args: [...WINDOWS_COMMAND_ARGS],
+      env: { [COMMAND_ENV]: command },
       processTag: randomUUID(),
       cleanup: async () => undefined,
     };
   }
-  if (!SANDBOX_SHELL_COMMANDS) {
-    return { executable: '/bin/bash', args: ['-c', command], cleanup: async () => undefined };
-  }
-  if (!sandboxAvailable()) {
-    throw new Error('Commands cannot be run on this machine: the macOS sandbox is unavailable.');
-  }
-  return sandboxCommand(command, roots, protectedPaths);
+  return { executable: '/bin/bash', args: ['-c', command], cleanup: async () => undefined };
 }
 
 /** The user's own environment, with the PATH a terminal would have rather than Finder's. */
 export async function commandEnv(launch: SandboxedCommand, extra: NodeJS.ProcessEnv = {}): Promise<NodeJS.ProcessEnv> {
-  const env: NodeJS.ProcessEnv = { ...process.env, PATH: await resolveUserPath(), ...extra };
+  const env: NodeJS.ProcessEnv = { ...process.env, PATH: await resolveUserPath(), ...extra, ...launch.env };
   if (SANDBOX_SHELL_COMMANDS) env.B4M_DESKTOP_SANDBOX = '1';
   if (launch.processTag) env[COMMAND_TAG_ENV] = launch.processTag;
   return env;
