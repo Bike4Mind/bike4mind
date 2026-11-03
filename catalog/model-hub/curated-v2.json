@@ -1,8 +1,16 @@
 {
   "schemaVersion": 2,
-  "sequence": 1,
-  "updatedAt": "2026-10-27T00:00:00Z",
+  "sequence": 2,
+  "updatedAt": "2026-11-02T00:00:00Z",
   "changelog": [
+    {
+      "sequence": 2,
+      "date": "2026-11-02",
+      "added": [],
+      "removed": [],
+      "changed": ["qwen3-5-0-8b", "qwen3-5-4b", "gemma-4-e4b", "gemma-4-12b", "gemma-4-26b", "qwen3-8-27b"],
+      "notes": "Added projector sizes to library builds so fit checks count the image encoder's working memory."
+    },
     {
       "sequence": 1,
       "date": "2026-10-27",
@@ -192,6 +200,7 @@
               "license": "50cbab8a892c5f2993b8c7351a99182507472def3b1374558308605d99b86b32",
               "numCtx": null,
               "projector": "5ba2eb9bf28c5b5ff7a705f07bd9269f0f2dbd6cb2b4c46d5f98ed8d15d18883",
+              "projectorBytes": 207346304,
               "draft": "b0108ebdcf5adea94899909c0cd6c12565f079f819991e68e464cb2e69a5d93d"
             }
           },
@@ -265,7 +274,8 @@
               "params": "9371364b27a52acac9d87f88bd93c9db1174d8d6ec57f6888925cdc1788871ff",
               "license": "50cbab8a892c5f2993b8c7351a99182507472def3b1374558308605d99b86b32",
               "numCtx": null,
-              "projector": "e56a899b1540860385465756dd308c84417410b94dbc1c380adffd20a921ca60"
+              "projector": "e56a899b1540860385465756dd308c84417410b94dbc1c380adffd20a921ca60",
+              "projectorBytes": 675569120
             }
           },
           "runtimeMin": { "ollama": "0.19.0" },
@@ -338,7 +348,8 @@
               "params": "56380ca2ab89f1f68c283f4d50863c0bcab52ae3f1b9a88e4ab5617b176f71a3",
               "license": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
               "numCtx": null,
-              "projector": "c6398448d84a4836fdedf58f9775979e69ae0cc4dfdf4d697b5597693a555b12"
+              "projector": "c6398448d84a4836fdedf58f9775979e69ae0cc4dfdf4d697b5597693a555b12",
+              "projectorBytes": 991551904
             }
           },
           "runtimeMin": { "ollama": "0.30.6" },
@@ -411,7 +422,8 @@
               "params": "56380ca2ab89f1f68c283f4d50863c0bcab52ae3f1b9a88e4ab5617b176f71a3",
               "license": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
               "numCtx": null,
-              "projector": "e70b0e5cd80323d5d588b4ed06780356b7b1ba03995a4b8164c6ae9db0ff5989"
+              "projector": "e70b0e5cd80323d5d588b4ed06780356b7b1ba03995a4b8164c6ae9db0ff5989",
+              "projectorBytes": 175115264
             }
           },
           "runtimeMin": { "ollama": "0.30.6" },
@@ -485,7 +497,8 @@
               "params": "56380ca2ab89f1f68c283f4d50863c0bcab52ae3f1b9a88e4ab5617b176f71a3",
               "license": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
               "numCtx": null,
-              "projector": "d8e2de16e17515d9061b23c9a002715f996f9e0c87b93a9354264611bfab9239"
+              "projector": "d8e2de16e17515d9061b23c9a002715f996f9e0c87b93a9354264611bfab9239",
+              "projectorBytes": 1194827744
             }
           },
           "runtimeMin": { "ollama": "0.30.6" },
@@ -558,7 +571,8 @@
               "params": "906ee87bde6cff7bf3c3b1550f55cbbec261e027187fbb9f511f908ffc418334",
               "license": "4c6a8e842ef0d8504549facfb03f1273a8d0022991519bc1888522cc1a5517d1",
               "numCtx": null,
-              "projector": "ac3714bfdddeca31351f2752bf1a63f266f4df87c0b68c895e44945ca704448e"
+              "projector": "ac3714bfdddeca31351f2752bf1a63f266f4df87c0b68c895e44945ca704448e",
+              "projectorBytes": 931146016
             }
           },
           "runtimeMin": { "ollama": "0.32.12" },
@@ -587,7 +601,8 @@
               "params": "448d29437397713495b408d51b4ccbc5ba95240a7583643efb2304921950b111",
               "license": "4c6a8e842ef0d8504549facfb03f1273a8d0022991519bc1888522cc1a5517d1",
               "numCtx": null,
-              "projector": "ac3714bfdddeca31351f2752bf1a63f266f4df87c0b68c895e44945ca704448e"
+              "projector": "ac3714bfdddeca31351f2752bf1a63f266f4df87c0b68c895e44945ca704448e",
+              "projectorBytes": 931146016
             }
           },
           "runtimeMin": { "ollama": "0.32.12" },

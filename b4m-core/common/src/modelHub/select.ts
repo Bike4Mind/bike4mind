@@ -107,6 +107,22 @@ function runtimeOrder(build: HubBuild): HubRuntime[] {
   return build.routing.ollamaFallback ? ['llama-server', 'ollama'] : ['llama-server'];
 }
 
+/**
+ * Weights and projector as Ollama loads a build. A library layer's size includes its projector (and any draft), so
+ * the pinned projector size is taken out of it; Hugging Face weight sizes leave the projector out.
+ */
+export function ollamaBuildBytes(build: HubBuild): { weightsBytes: number; mmprojBytes: number } {
+  const source = build.ollama;
+  const pinned = source && source.kind !== 'create' ? source.layers?.projectorBytes : undefined;
+  // A library layer carries Ollama's own projector blob, which can differ from a Hugging Face mmproj file.
+  if (source?.kind === 'library') {
+    const mmprojBytes = pinned ?? build.mmproj?.sizeBytes ?? 0;
+    return { weightsBytes: source.sizeBytes - mmprojBytes, mmprojBytes };
+  }
+  const mmprojBytes = build.mmproj?.sizeBytes ?? pinned ?? 0;
+  return { weightsBytes: build.weights.reduce((sum, w) => sum + w.sizeBytes, 0), mmprojBytes };
+}
+
 function fitInputs(entry: HubEntry, build: HubBuild, runtime: HubRuntime, options: PickOptions) {
   const weights = build.weights.reduce((sum, w) => sum + w.sizeBytes, 0);
   const expertBytesPerLayer = build.tensorStats?.expertBytesPerLayer;
@@ -118,11 +134,10 @@ function fitInputs(entry: HubEntry, build: HubBuild, runtime: HubRuntime, option
     const library = source?.kind === 'library';
     const hasDraft = build.draft !== undefined || entry.arch.mtpLayers > 0;
     const draftNumPredict = source && source.kind !== 'library' ? source.modelfile.draftNumPredict : undefined;
-    // Ollama loads a model's projector whenever it has one; a library layer size already includes it.
+    // Ollama loads a model's projector whenever it has one.
     const model: FitModel = {
       arch: entry.arch,
-      weightsBytes: library ? source.sizeBytes : weights,
-      mmprojBytes: library ? 0 : (build.mmproj?.sizeBytes ?? 0),
+      ...ollamaBuildBytes(build),
       draftBytes: library ? 0 : (draftFile?.sizeBytes ?? 0),
       expertBytesPerLayer,
     };
