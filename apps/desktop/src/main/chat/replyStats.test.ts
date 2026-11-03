@@ -406,6 +406,26 @@ describe('buildReplyStats', () => {
     });
   });
 
+  it('does not count a self-hosted cold start as thinking when one readable frame is all it sent', () => {
+    const rounds = [
+      round(
+        {
+          startedAt: 0,
+          firstTokenAt: 6_000,
+          firstReasoningAt: 6_000,
+          lastReasoningAt: 6_000,
+          firstTextAt: 6_100,
+          endedAt: 7_000,
+        },
+        { reasoningFrames: 1 }
+      ),
+    ];
+    const local = buildReplyStats({ endedAt: 7_000, rounds, toolMs: 0, usage: { outputTokens: 40 }, local: true });
+    expect(local.reasoningMs).toBe(0);
+    expect(local.derived).toEqual(['reasoningTokens']);
+    expect(buildReplyStats({ endedAt: 7_000, rounds, toolMs: 0, local: false }).reasoningMs).toBe(6_100);
+  });
+
   it('drops an earlier thinking-token estimate once the server reports a count', () => {
     const stats = buildReplyStats({
       endedAt: 2_000,

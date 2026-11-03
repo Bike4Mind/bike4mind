@@ -27,11 +27,16 @@ const nonNegative = (ms: number) => Math.max(0, ms);
 
 /**
  * One round's thinking: the span its thinking frames cover. With no span to measure (thinking the
- * provider sent nothing for, or one frame), the wait before its first output, as an estimate.
+ * provider sent nothing for, or one frame), the wait before its first output, as an estimate. A
+ * self-hosted round with a readable frame keeps its frame span, however short: the wait is model load.
  */
-export function roundThinking(round: StatsRound): { ms: number; derived: boolean } | null {
+export function roundThinking(round: StatsRound, local = false): { ms: number; derived: boolean } | null {
   const { startedAt, firstTokenAt, firstReasoningAt, lastReasoningAt, firstTextAt } = round.timing;
-  if (firstReasoningAt !== undefined && lastReasoningAt !== undefined && lastReasoningAt > firstReasoningAt) {
+  if (
+    firstReasoningAt !== undefined &&
+    lastReasoningAt !== undefined &&
+    (local || lastReasoningAt > firstReasoningAt)
+  ) {
     return { ms: lastReasoningAt - firstReasoningAt, derived: false };
   }
   const thought =
@@ -75,7 +80,7 @@ export function buildReplyStats(input: ReplyStatsInput): ChatReplyStats {
     modelMs += nonNegative(timing.endedAt - timing.startedAt);
     if (timing.firstTokenAt !== undefined) firstTokenMs ??= nonNegative(timing.firstTokenAt - timing.startedAt);
     reasoningFrames += round.reasoningFrames;
-    const thinking = roundThinking(round);
+    const thinking = roundThinking(round, input.local);
     if (thinking) {
       reasoningMs = (reasoningMs ?? 0) + thinking.ms;
       if (thinking.derived) derived.add('reasoningMs');
