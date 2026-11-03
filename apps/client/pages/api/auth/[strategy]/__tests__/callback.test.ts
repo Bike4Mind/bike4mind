@@ -3,9 +3,9 @@ import { createMocks } from 'node-mocks-http';
 
 // Middleware: collapse the baseApi chain so `.get(fn)` yields the raw handler,
 // mirroring apps/client/pages/api/auth/okta/__tests__/callback.test.ts.
-const mockChain = vi.hoisted(() => ({ order: [] as string[], post: undefined as undefined | ((...a: any[]) => void) }));
+const mockChain = vi.hoisted(() => ({ order: [] as string[], post: undefined as undefined | ((...a: unknown[]) => void) }));
 vi.mock('@server/middlewares/baseApi', () => {
-  type Chain = { use: () => Chain; post: (fn: (...a: any[]) => void) => Chain; get: (fn: unknown) => unknown };
+  type Chain = { use: () => Chain; post: (fn: (...a: unknown[]) => void) => Chain; get: (fn: unknown) => unknown };
   const chain: Chain = {
     use: () => chain,
     post: fn => {
@@ -45,12 +45,12 @@ vi.mock('@server/middlewares/rateLimit', () => ({
 // the mock lets each test drive the (err, user, info) triple passport would normally supply.
 const mockAuthenticate = vi.fn();
 vi.mock('passport', () => ({
-  default: { authenticate: (...args: any[]) => mockAuthenticate(...args) },
+  default: { authenticate: (...args: unknown[]) => mockAuthenticate(...args) },
 }));
 
 const mockAuthFailCreate = vi.fn();
 vi.mock('@bike4mind/database', () => ({
-  authFailLogRepository: { create: (...a: any[]) => mockAuthFailCreate(...a) },
+  authFailLogRepository: { create: (...a: unknown[]) => mockAuthFailCreate(...a) },
 }));
 
 vi.mock('@server/auth/tokenGenerator', () => ({
@@ -63,26 +63,26 @@ vi.mock('@bike4mind/server-utils/auth/jwtStateStore', () => ({ verifyStateToken:
 const mockResolveSecondFactor = vi.fn();
 const mockLogSignInSuccess = vi.fn().mockResolvedValue(undefined);
 vi.mock('@server/auth/signInSecondFactor', () => ({
-  resolveSecondFactor: (...a: any[]) => mockResolveSecondFactor(...a),
-  logSignInSuccess: (...a: any[]) => mockLogSignInSuccess(...a),
+  resolveSecondFactor: (...a: unknown[]) => mockResolveSecondFactor(...a),
+  logSignInSuccess: (...a: unknown[]) => mockLogSignInSuccess(...a),
 }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));
 
 const mockEmitSignup = vi.fn().mockResolvedValue([]);
 vi.mock('@server/analytics/signupEvents', () => ({
-  emitSignupForSourceProducts: (...a: any[]) => mockEmitSignup(...a),
+  emitSignupForSourceProducts: (...a: unknown[]) => mockEmitSignup(...a),
 }));
 const mockRecordSignupAcquisition = vi.fn().mockResolvedValue({ isSynthetic: false });
 const mockEmitSignupFunnelEvents = vi.fn().mockResolvedValue(undefined);
 vi.mock('@server/analytics/funnel', () => ({
-  recordSignupAcquisition: (...a: any[]) => mockRecordSignupAcquisition(...a),
-  emitSignupFunnelEvents: (...a: any[]) => mockEmitSignupFunnelEvents(...a),
+  recordSignupAcquisition: (...a: unknown[]) => mockRecordSignupAcquisition(...a),
+  emitSignupFunnelEvents: (...a: unknown[]) => mockEmitSignupFunnelEvents(...a),
 }));
 
 const mockRecordSignupNetwork = vi.fn().mockResolvedValue(undefined);
 vi.mock('@server/auth/networkMeta', () => ({
-  recordSignupNetwork: (...a: any[]) => mockRecordSignupNetwork(...a),
+  recordSignupNetwork: (...a: unknown[]) => mockRecordSignupNetwork(...a),
 }));
 
 const mockRefreshSignupRiskScore = vi.fn().mockResolvedValue(undefined);
@@ -93,7 +93,7 @@ vi.mock('@server/auth/signupRiskScore', () => ({
 
 const mockIssueBrowserSession = vi.fn().mockResolvedValue({ accessToken: 'jwt-access', sid: 'sid' });
 vi.mock('@server/auth/issueSession', () => ({
-  issueBrowserSession: (...a: any[]) => mockIssueBrowserSession(...a),
+  issueBrowserSession: (...a: unknown[]) => mockIssueBrowserSession(...a),
 }));
 
 const mockStampSourceTag = vi.fn().mockResolvedValue(undefined);
