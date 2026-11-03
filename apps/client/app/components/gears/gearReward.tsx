@@ -136,7 +136,13 @@ export const RewardChip = ({
         </Tooltip>
       )}
       {reward === 'claimed' && (
-        <Tooltip title={`Reward claimed - ${creditText(gear)}`}>
+        <Tooltip
+          title={
+            gear.rewardQueued
+              ? `Reward queued - ${creditText(gear)} pays out once today's reward budget allows`
+              : `Reward claimed - ${creditText(gear)}`
+          }
+        >
           <Chip
             size="sm"
             variant="soft"

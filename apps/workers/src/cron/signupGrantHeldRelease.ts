@@ -6,10 +6,11 @@
  */
 import { connectDB, signupGrantReleaseRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { userService } from '@bike4mind/services';
+import { creditService, userService } from '@bike4mind/services';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
 import { buildHeldGrantAdapters } from '@server/credits/heldSignupGrantAdapters';
+import { buildCreditRewardAdapters } from '@server/credits/creditRewardAdapters';
 
 const logger = new Logger({ metadata: { service: 'signupGrantHeldRelease' } });
 const MAX_USERS_PER_RUN = 500;
@@ -17,6 +18,11 @@ const MAX_USERS_PER_RUN = 500;
 export async function runSignupGrantHeldRelease(
   now: Date = new Date()
 ): Promise<userService.HeldReleaseCronResult & { heldUnlocks: userService.HeldUnlockReleaseResult }> {
+  // Queued gear/referral rewards go first: they are owed from the trickle pool before new drips.
+  const rewards = await creditService.releaseHeldCreditRewards(buildCreditRewardAdapters(), {
+    limit: MAX_USERS_PER_RUN,
+  });
+  if (rewards.scanned > 0) logger.info('[signupGrantHeldRelease] held rewards done', rewards);
   const adapters = buildHeldGrantAdapters(logger);
   const result = await userService.releaseHeldGrantsAgainstBudget(
     {

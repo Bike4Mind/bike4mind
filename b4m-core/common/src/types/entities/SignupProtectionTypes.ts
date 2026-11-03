@@ -88,6 +88,8 @@ export type SignupGrantBudgetAlert = {
 export type SignupGrantBudget = {
   repository: SignupGrantBudgetRepository;
   notify?: (alert: SignupGrantBudgetAlert) => Promise<void>;
+  /** Queued gear/referral rewards (creditService.payCreditReward); daily drips wait behind them on the trickle pool. */
+  heldRewards?: { hasHeld(): Promise<boolean> };
   /** Clock override for the budget's UTC day; tests only. */
   now?: () => Date;
 };

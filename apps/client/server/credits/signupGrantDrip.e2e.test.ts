@@ -225,6 +225,22 @@ describe('signup activity drip', () => {
     expect(await spentToday('signup')).toBe(0);
   });
 
+  it('skips the drip while queued gear/referral rewards are owed from the trickle pool', async () => {
+    const dripper = await createSignupStageUser(0);
+    clock = new Date(`${day(0)}T09:00:00Z`);
+    let owed = true;
+    signupProtection.grantBudget!.heldRewards = { hasHeld: async () => owed };
+    try {
+      expect(await drip(dripper.id, 0)).toMatchObject({ creditsGranted: 0, withheld: true });
+      expect(await spentToday('trickle')).toBe(0);
+      owed = false;
+      clock = new Date(`${day(1)}T09:00:00Z`);
+      expect(await drip(dripper.id, 1)).toMatchObject({ creditsGranted: 1000 });
+    } finally {
+      delete signupProtection.grantBudget!.heldRewards;
+    }
+  });
+
   it('skips the drip on a dry trickle pool without queueing it, and leaves signups paying', async () => {
     const dripper = await createSignupStageUser(0);
     config.signupGrantTricklePoolDaily = '0';

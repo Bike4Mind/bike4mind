@@ -23,6 +23,9 @@ const { mocks } = vi.hoisted(() => ({
     withTransaction: vi.fn(),
     userFindById: vi.fn(),
     gearMinAgeSetting: vi.fn(),
+    heldFind: vi.fn(),
+    hold: vi.fn(),
+    rewardOutcome: vi.fn(),
   },
 }));
 
@@ -76,15 +79,33 @@ vi.mock('@bike4mind/database', () => ({
   importHistoryJobRepository: { findOne: (...a: unknown[]) => mocks.importFindOne(...a) },
   rapidReplyAuditLogRepository: { findOne: (...a: unknown[]) => mocks.miscFindOne(...a) },
   researchDataRepository: { findOne: (...a: unknown[]) => mocks.miscFindOne(...a) },
-  userRepository: {},
+  heldCreditRewardRepository: { findByTransactionIds: (...a: unknown[]) => mocks.heldFind(...a) },
   withTransaction: (fn: () => Promise<unknown>) => mocks.withTransaction(fn),
 }));
+// Stand-in for creditService.payCreditReward: the ledger check, then the outcome the test picks
+// (default paid). Its real behavior is covered on a real DB in server/credits/creditReward.e2e.test.ts.
 vi.mock('@bike4mind/services', () => ({
-  creditService: { addCredits: (...a: unknown[]) => mocks.addCredits(...a) },
+  creditService: {
+    payCreditReward: async (reward: Record<string, unknown>) => {
+      if (await mocks.txFindOne({ transactionId: reward.transactionId })) return { outcome: 'duplicate' };
+      const outcome = (mocks.rewardOutcome() as string | undefined) ?? 'paid';
+      if (outcome === 'queued') mocks.hold(reward);
+      if (outcome !== 'paid') return { outcome };
+      await mocks.addCredits({
+        ownerId: reward.userId,
+        credits: reward.credits,
+        type: 'generic_add',
+        transactionId: reward.transactionId,
+        reason: reward.reason,
+        description: reward.description,
+        source: reward.source,
+      });
+      return { outcome: 'paid', creditTransactionId: 'tx1' };
+    },
+  },
+  userService: { refundBudgetOnFailure: (fn: () => Promise<unknown>) => fn() },
 }));
-vi.mock('@bike4mind/common', () => ({
-  CreditHolderType: { User: 'User' },
-}));
+vi.mock('@server/credits/creditRewardAdapters', () => ({ buildCreditRewardAdapters: () => ({}) }));
 
 import handler from '../claim';
 
@@ -123,6 +144,7 @@ const lockEverything = () => {
   mocks.hearthHasAnyChannel.mockResolvedValue(false);
   mocks.txFind.mockResolvedValue([]);
   mocks.txFindOne.mockResolvedValue(null);
+  mocks.heldFind.mockResolvedValue([]);
   // Default: trusted account so existing tests that expect payouts continue to pass.
   makeTrustedUser();
 };
@@ -182,6 +204,44 @@ describe('POST /api/gears/claim', () => {
       reason: 'gear unlock: projects',
       description: 'Gear unlock reward: projects',
     });
+  });
+
+  it('tags the payout with its reward source', async () => {
+    unlockProjects();
+    const { promise } = claim({ key: 'projects' });
+    await promise;
+    expect(mocks.addCredits.mock.calls[0][0]).toMatchObject({ source: 'gear' });
+  });
+
+  it('answers 202 queued without paying while the trickle pool is dry', async () => {
+    unlockProjects();
+    mocks.rewardOutcome.mockReturnValue('queued');
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getStatusCode()).toBe(202);
+    expect(res._getJSONData()).toEqual({ key: 'projects', queued: true });
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+    expect(mocks.hold).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats a queued reward as claimed, so a second claim neither pays nor queues again', async () => {
+    unlockProjects();
+    mocks.heldFind.mockResolvedValue([{ transactionId: 'gear-unlock:u1:projects', status: 'held' }]);
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getJSONData()).toEqual({ key: 'projects', alreadyClaimed: true });
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+    expect(mocks.hold).not.toHaveBeenCalled();
+  });
+
+  it('pays nothing and queues nothing for a blocked account', async () => {
+    unlockProjects();
+    mocks.rewardOutcome.mockReturnValue('blocked');
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+    expect(mocks.hold).not.toHaveBeenCalled();
   });
 
   it('writes the ledger row and the balance inside one transaction', async () => {

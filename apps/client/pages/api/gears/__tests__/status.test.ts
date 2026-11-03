@@ -9,6 +9,7 @@ const { mocks } = vi.hoisted(() => ({
     fabFileExists: vi.fn(),
     publishedExists: vi.fn(),
     txFind: vi.fn(),
+    heldFind: vi.fn(),
     addCredits: vi.fn(),
     artifactExists: vi.fn(),
     apiKeyExists: vi.fn(),
@@ -61,6 +62,7 @@ vi.mock('@bike4mind/database', () => ({
   agentRepository: { countByUserId: (...a: unknown[]) => mocks.agentCount(...a) },
   dataLakeRepository: { findOne: (...a: unknown[]) => mocks.dataLakeFindOne(...a) },
   creditTransactionRepository: { find: (...a: unknown[]) => mocks.txFind(...a) },
+  heldCreditRewardRepository: { findByTransactionIds: (...a: unknown[]) => mocks.heldFind(...a) },
   gearStampRepository: {
     stampedKeys: (...a: unknown[]) => mocks.stampedKeys(...a),
   },
@@ -109,6 +111,7 @@ const lockEverything = () => {
   mocks.overridesByKey.mockResolvedValue(new Map());
   mocks.hearthHasAnyChannel.mockResolvedValue(false);
   mocks.txFind.mockResolvedValue([]);
+  mocks.heldFind.mockResolvedValue([]);
   // Default: trusted account so existing status tests continue to pass.
   mocks.userFindById.mockReturnValue({
     lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000), emailVerified: true }),
@@ -165,6 +168,21 @@ describe('GET /api/gears/status', () => {
     expect(projects.claimable).toBe(true);
     // Read-only: the payout is POST /api/gears/claim's job.
     expect(mocks.addCredits).not.toHaveBeenCalled();
+  });
+
+  it('a reward queued for the trickle pool reads as claimed and queued, not claimable', async () => {
+    mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
+    mocks.heldFind.mockResolvedValue([{ transactionId: 'gear-unlock:u1:projects', status: 'held' }]);
+
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+
+    const body = res._getJSONData() as {
+      gears: Array<{ key: string; claimable?: boolean; claimed?: boolean; rewardQueued?: boolean }>;
+    };
+    const projects = body.gears.find(g => g.key === 'projects')!;
+    expect(projects).toMatchObject({ claimed: true, rewardQueued: true });
+    expect(projects.claimable).toBeUndefined();
   });
 
   it('a gear already in the ledger is not claimable', async () => {

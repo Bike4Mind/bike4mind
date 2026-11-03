@@ -210,11 +210,12 @@ async function releaseStage(
       if (amount > 0) {
         if (!BUDGET_EXEMPT_REASONS.has(reason) && !adapters.bypassBudget) {
           // An account already in the queue is drained by the held-release cron in order; a new one waits behind it.
-          const queued =
-            !dripDay &&
-            expected === 'pending_email' &&
-            !user.signupGrantHeldReason &&
-            (await hasSignupBacklog(db.users, signupGrantBudgetDay(grantClock(db))));
+          // A drip likewise waits while queued rewards are owed from the trickle pool.
+          const queued = dripDay
+            ? !!(await db.signupProtection?.grantBudget?.heldRewards?.hasHeld())
+            : expected === 'pending_email' &&
+              !user.signupGrantHeldReason &&
+              (await hasSignupBacklog(db.users, signupGrantBudgetDay(grantClock(db))));
           const reservation = queued
             ? { outcome: 'exhausted' as const, release: async () => {} }
             : await reserveSignupGrantBudget(db, transactionId, amount, {

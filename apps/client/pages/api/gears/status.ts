@@ -32,6 +32,8 @@ export interface GearStatus {
   /** The ledger has paid this gear. Independent of `unlocked`, which follows live
    *  data: deleting your only agent re-locks the gear, but the reward stays spent. */
   claimed?: boolean;
+  /** Claimed while the trickle pool was dry: held, and paid by the hourly release. */
+  rewardQueued?: boolean;
   /** Unlocked, but the payout's stricter condition isn't met yet (e.g.
    *  Published: waiting for a non-owner view). */
   rewardPending?: boolean;
@@ -48,7 +50,7 @@ const handler = baseApi().get(
 
     const { evaluations, overrides, minAccountAgeDays } = await evaluateGears(String(userId));
     const gears: GearStatus[] = evaluations.map(evaluation => {
-      const { def, unlocked, credits, rewardEligible, alreadyRewarded, pendingReason } = evaluation;
+      const { def, unlocked, credits, rewardEligible, alreadyRewarded, rewardQueued, pendingReason } = evaluation;
       const o = overrides.get(def.key);
       const base = GEAR_PRESENTATION[def.key];
       const gear: GearStatus = {
@@ -69,6 +71,7 @@ const handler = baseApi().get(
       }
       if (rewardEligible && credits > 0 && !alreadyRewarded) gear.claimable = true;
       if (alreadyRewarded) gear.claimed = true;
+      if (rewardQueued) gear.rewardQueued = true;
       return gear;
     });
 

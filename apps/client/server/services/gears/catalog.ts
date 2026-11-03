@@ -22,6 +22,7 @@ import {
   dataLakeRepository,
   adminSettingsRepository,
   creditTransactionRepository,
+  heldCreditRewardRepository,
   gearStampRepository,
   gearOverrideRepository,
   hearthRepository,
@@ -369,6 +370,8 @@ export interface GearEvaluation {
   /** The payout's own condition - `rewardCheck` where the gear has one. */
   rewardEligible: boolean;
   alreadyRewarded: boolean;
+  /** Claimed, but held for the trickle pool; alreadyRewarded is also true. */
+  rewardQueued: boolean;
   /** Why rewardEligible is false for an unlocked, unpaid gear. */
   pendingReason?: GearPendingReason;
 }
@@ -411,11 +414,19 @@ export async function evaluateGears(
   const txIds = activeGears.map(g => gearTxId(userId, g.key));
   const existing = await creditTransactionRepository.find({ transactionId: { $in: txIds } });
   const rewarded = new Set((existing as Array<{ transactionId?: string }>).map(t => t.transactionId).filter(Boolean));
+  // A reward queued for the trickle pool is already claimed: it pays on release, not on a second claim.
+  const queued = new Set(
+    (await heldCreditRewardRepository.findByTransactionIds(txIds))
+      .filter(row => row.status === 'held')
+      .map(row => row.transactionId)
+  );
+  for (const txId of queued) rewarded.add(txId);
 
   const evaluations = await Promise.all(
     activeGears.map(async (def, i) => {
       const unlocked = unlockedFlags[i];
       const alreadyRewarded = rewarded.has(gearTxId(userId, def.key));
+      const rewardQueued = queued.has(gearTxId(userId, def.key));
       const credits = overrides.get(def.key)?.credits ?? creditsFor(def);
 
       let rewardEligible: boolean;
@@ -442,6 +453,7 @@ export async function evaluateGears(
         credits,
         rewardEligible,
         alreadyRewarded,
+        rewardQueued,
         pendingReason,
       };
     })

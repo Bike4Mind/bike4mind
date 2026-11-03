@@ -1,4 +1,8 @@
-import { signupGrantBudgetRepository, signupProtectionRepository } from '@bike4mind/database';
+import {
+  heldCreditRewardRepository,
+  signupGrantBudgetRepository,
+  signupProtectionRepository,
+} from '@bike4mind/database';
 import type { SignupProtection } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { escapeSlackText } from '@bike4mind/services';
@@ -11,6 +15,9 @@ export const signupProtection: SignupProtection = {
   grantBudget: {
     get repository() {
       return signupGrantBudgetRepository;
+    },
+    get heldRewards() {
+      return heldCreditRewardRepository;
     },
     async notify(alert) {
       try {

@@ -11,13 +11,13 @@ const { mockFindById, mockCountDocuments, mockAddCredits, mockGetSettingsMap, mo
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
-  creditLotRepository: {},
-  creditTransactionRepository: {},
-  userRepository: {},
   CreditTransaction: { countDocuments: mockCountDocuments },
   User: { findById: mockFindById },
 }));
-vi.mock('@bike4mind/services', () => ({ creditService: { addCreditsWithLedgerRow: mockAddCredits } }));
+vi.mock('@bike4mind/services', () => ({ creditService: { payCreditReward: mockAddCredits } }));
+vi.mock('@server/credits/creditRewardAdapters', () => ({
+  buildCreditRewardAdapters: () => ({ rewardAdapters: true }),
+}));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: mockGetSettingsMap,
   getSettingsValue: (key: string, settings: Record<string, string>, fallback = 0) => Number(settings[key] ?? fallback),
@@ -40,7 +40,7 @@ const givenUsers = (friend: unknown, inviter: unknown = {}) =>
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetSettingsMap.mockResolvedValue({ ReferralFirstAnswerCredits: '1000', ReferralAlertRewardsPerDay: '50' });
-  mockAddCredits.mockResolvedValue({ creditTransactionId: 'tx1' });
+  mockAddCredits.mockResolvedValue({ outcome: 'paid', creditTransactionId: 'tx1' });
   mockCountDocuments.mockResolvedValue(1);
   givenUsers(verifiedFriend);
 });
@@ -51,14 +51,21 @@ describe('rewardInviterForFirstAnswer', () => {
 
     expect(mockAddCredits).toHaveBeenCalledTimes(1);
     expect(mockAddCredits.mock.calls[0][0]).toMatchObject({
-      ownerId: 'inviter1',
-      ownerType: 'User',
+      userId: 'inviter1',
       credits: 1000,
-      type: 'generic_add',
+      source: 'referral_first_answer',
       reason: REFERRAL_REWARD_REASON,
       transactionId: 'referral-first-answer:inviter1:friend1',
     });
-    expect(mockAddCredits.mock.calls[0][1].db.creditLots).toBeDefined();
+    expect(mockAddCredits.mock.calls[0][1]).toEqual({ rewardAdapters: true });
+  });
+
+  it('neither counts nor alerts on a reward queued for the trickle pool', async () => {
+    mockAddCredits.mockResolvedValue({ outcome: 'queued' });
+    await rewardInviterForFirstAnswer('friend1');
+    expect(mockAddCredits).toHaveBeenCalledTimes(1);
+    expect(mockCountDocuments).not.toHaveBeenCalled();
+    expect(mockSlack).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -101,7 +108,7 @@ describe('rewardInviterForFirstAnswer', () => {
   });
 
   it('does not count or alert on a replay that wrote no transaction', async () => {
-    mockAddCredits.mockResolvedValue({ creditTransactionId: undefined });
+    mockAddCredits.mockResolvedValue({ outcome: 'duplicate' });
     await rewardInviterForFirstAnswer('friend1');
     expect(mockCountDocuments).not.toHaveBeenCalled();
     expect(mockSlack).not.toHaveBeenCalled();

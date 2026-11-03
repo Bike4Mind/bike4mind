@@ -1,12 +1,6 @@
 import { CreditHolderType, settingsMap } from '@bike4mind/common';
-import {
-  adminSettingsRepository,
-  CreditTransaction,
-  creditLotRepository,
-  creditTransactionRepository,
-  User,
-  userRepository,
-} from '@bike4mind/database';
+import { buildCreditRewardAdapters } from '@server/credits/creditRewardAdapters';
+import { adminSettingsRepository, CreditTransaction, User } from '@bike4mind/database';
 import { creditService } from '@bike4mind/services';
 import { accountBlockReasons, type AccountStateFields } from '@bike4mind/services/userService/accountState';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
@@ -62,23 +56,21 @@ export async function rewardInviterForFirstAnswer(friendId: string): Promise<voi
       .lean<RewardParty>();
     if (!inviter || isBlockedInviter(inviter)) return;
 
-    const { creditTransactionId } = await creditService.addCreditsWithLedgerRow(
+    // Paid from the trickle pool; a dry pool queues it for the hourly release.
+    const result = await creditService.payCreditReward(
       {
-        ownerId: inviterId,
-        ownerType: CreditHolderType.User,
-        credits: amount,
-        type: 'generic_add',
         transactionId: `referral-first-answer:${inviterId}:${friendId}`,
+        userId: inviterId,
+        credits: amount,
+        source: 'referral_first_answer',
         reason: REFERRAL_REWARD_REASON,
         description: 'Referral reward: first answer from an invited friend',
         metadata: { step: 'first_answer', referredUserId: friendId },
       },
-      {
-        db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
-        creditHolderMethods: userRepository,
-      }
+      buildCreditRewardAdapters()
     );
-    if (!creditTransactionId) return;
+    if (result.outcome !== 'paid') return;
+    const { creditTransactionId } = result;
 
     await alertIfRewardsSpike(
       creditTransactionId,
