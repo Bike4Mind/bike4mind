@@ -57,7 +57,10 @@ describe('cancelAccountSubscriptions', () => {
       { prorate: false, cancellation_details: { comment: expect.stringContaining('suspended') } },
       { timeout: expect.any(Number) }
     );
-    expect(mocks.subscriptionsList).toHaveBeenCalledWith(expect.anything(), { timeout: expect.any(Number) });
+    expect(mocks.subscriptionsList).toHaveBeenCalledWith(
+      { customer: 'cus_user', limit: 100 },
+      { timeout: expect.any(Number) }
+    );
     expect(mocks.voidOpenSubscriptionInvoices).toHaveBeenCalledWith('sub_org', { timeoutMs: expect.any(Number) });
     expect(logger.error).not.toHaveBeenCalled();
   });

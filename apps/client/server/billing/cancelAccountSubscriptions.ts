@@ -76,10 +76,10 @@ async function cancelCustomerSubscriptions(
   result: AccountSubscriptionCancellation
 ): Promise<void> {
   // Stripe, not the local rows, is read: a row can lag a renewal, and a deleted account's rows are
-  // the very ones that went unnoticed. One page, like voidOpenSubscriptionInvoices: a customer with
-  // over 100 live subscriptions is not a real case.
+  // the very ones that went unnoticed. Stripe's default listing already omits canceled history, and
+  // one page of 100 mirrors voidOpenSubscriptionInvoices: over 100 live subscriptions is not a real case.
   const page = await stripe.subscriptions.list(
-    { customer: customerId, status: 'all', limit: 100 },
+    { customer: customerId, limit: 100 },
     { timeout: STRIPE_REQUEST_TIMEOUT_MS }
   );
   for (const subscription of page.data) {
