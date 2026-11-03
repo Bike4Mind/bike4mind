@@ -6,6 +6,7 @@ import type { AdminSearch } from './adminTabParams';
 import {
   DEFAULT_INVITE_CENTER_SECTION,
   INVITE_CENTER_SECTION_IDS,
+  INVITE_CENTER_SEARCH_PARSERS,
   INVITE_CENTER_SECTION_PARAM,
   type InviteCenterSectionId,
 } from './inviteCenterSearch';
@@ -27,6 +28,8 @@ const SECTION_LABELS: Record<InviteCenterSectionId, string> = {
   pending: 'Pending',
   rewards: 'Rewards',
 };
+
+const parseSection = INVITE_CENTER_SEARCH_PARSERS[INVITE_CENTER_SECTION_PARAM];
 
 const VIEWS = INVITE_CENTER_SECTION_IDS.map(id => ({ id, label: SECTION_LABELS[id] }));
 
@@ -101,18 +104,20 @@ const StubSectionBody = ({ section }: { section: StubSection }) => {
 export function InviteCenterShell({ waitlist }: { waitlist: ReactNode }) {
   const search = useSearch({ strict: false }) as AdminSearch;
   const navigate = useNavigate();
-  const section = search[INVITE_CENTER_SECTION_PARAM] ?? DEFAULT_INVITE_CENTER_SECTION;
+  const section = parseSection(search[INVITE_CENTER_SECTION_PARAM]) ?? DEFAULT_INVITE_CENTER_SECTION;
 
   // Not the admin tab store: the URL sync would treat it as a tab switch and drop this param.
-  const selectSection = (id: string) =>
-    navigate({
+  const selectSection = (id: string) => {
+    const next = parseSection(id);
+    return navigate({
       to: '/admin',
       search: (previous: AdminSearch) => ({
         ...previous,
-        [INVITE_CENTER_SECTION_PARAM]: id === DEFAULT_INVITE_CENTER_SECTION ? undefined : id,
+        [INVITE_CENTER_SECTION_PARAM]: next === DEFAULT_INVITE_CENTER_SECTION ? undefined : next,
       }),
       replace: true,
     });
+  };
 
   return (
     <Stack gap={2}>
