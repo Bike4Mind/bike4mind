@@ -2,6 +2,8 @@ import { lstat, open } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ChatProject } from '@shared/chat';
 import type { ChangedFile, WorkspaceChanges } from '@shared/workspaceChanges';
+import { shareRelativePath, wslLocation } from '../../wsl/wslPath';
+import { isWithin } from '../tools/paths';
 import { git, isGitRepository, resolveBaseRef } from './git';
 
 /** Files sent to the renderer. The totals still cover every file; only the list is cut. */
@@ -63,8 +65,11 @@ export async function countUntrackedFile(
   path: string,
   maxBytes = MAX_UNTRACKED_BYTES
 ): Promise<{ file: ChangedFile; bytesRead: number }> {
-  const absolute = join(directory, path);
-  if (!(await lstat(absolute)).isFile()) return { file: uncounted(path), bytesRead: 0 };
+  // git in a WSL folder runs in the distro and prints Linux names; the share spells them its own way.
+  const root = join(directory);
+  const absolute = join(root, wslLocation(directory) ? shareRelativePath(path) : path);
+  const inside = absolute !== root && isWithin(root, absolute);
+  if (!inside || !(await lstat(absolute)).isFile()) return { file: uncounted(path), bytesRead: 0 };
 
   const handle = await open(absolute, 'r');
   try {
