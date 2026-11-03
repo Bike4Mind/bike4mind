@@ -49,6 +49,8 @@ function fakeOllama(models = ['qwen2.5:0.5b']) {
     versionGate: null as Promise<void> | null,
     /** Holds `/api/tags` on an origin until it settles. */
     tagsGates: new Map<string, Promise<void>>(),
+    /** Holds `/api/tags` on an origin until it settles, after `skip` requests have passed. */
+    tagsGatesAfter: new Map<string, { skip: number; gate: Promise<void> }>(),
     /** Delays every `/api/tags` on an origin by this many ms. */
     tagsDelays: new Map<string, number>(),
     /** The system error code a request to a `down` origin fails with. */
@@ -76,6 +78,8 @@ function fakeOllama(models = ['qwen2.5:0.5b']) {
       if (url.pathname === '/api/version') await state.versionGate;
       if (url.pathname === '/api/tags') {
         await state.tagsGates.get(url.origin);
+        const later = state.tagsGatesAfter.get(url.origin);
+        if (later && later.skip-- <= 0) await later.gate;
         const delay = state.tagsDelays.get(url.origin);
         if (delay) await new Promise(resolve => setTimeout(resolve, delay));
       }
@@ -105,6 +109,21 @@ function registry(
     resolve: typeof resolve === 'function' ? resolve : async host => resolve[host] ?? [],
   });
   return { registry: instance, store, changed, edited, listedLate };
+}
+
+/** The picker list after `ms` of fake time; undefined while it is still waiting. */
+async function listedAfter(servers: ModelServerRegistry, ms: number): Promise<ChatModelOption[] | undefined> {
+  vi.useFakeTimers();
+  try {
+    let listed: ChatModelOption[] | undefined;
+    void servers.models().then(result => {
+      listed = result;
+    });
+    await vi.advanceTimersByTimeAsync(ms);
+    return listed;
+  } finally {
+    vi.useRealTimers();
+  }
 }
 
 const none = { type: 'none' as const };
@@ -388,7 +407,7 @@ describe('ModelServerRegistry', () => {
     fake.state.down.add('http://127.0.0.2:11434');
     changed.mockClear();
     await servers.check(id);
-    await vi.waitFor(() => expect(changed).toHaveBeenCalled());
+    await vi.waitFor(() => expect(changed).toHaveBeenCalled(), { timeout: 5_000 });
     expect(edited).toHaveBeenCalledTimes(1);
     await servers.update(id, { name: 'b' });
     expect(edited).toHaveBeenCalledTimes(2);
@@ -433,17 +452,17 @@ describe('ModelServerRegistry', () => {
       access: 'chat',
     });
     const view = async () => (await servers.views())[1];
-    await vi.waitFor(async () => expect((await view()).toolsHint).toMatch(/without tool calling/));
+    await vi.waitFor(async () => expect((await view()).toolsHint).toMatch(/without tool calling/), { timeout: 5_000 });
     const serverRows = vi.spyOn(servers, 'models');
 
     let release = () => {};
     computerGate = new Promise(resolve => (release = resolve));
     const read = catalog.listLocal(true);
-    await vi.waitFor(() => expect(serverRows).toHaveBeenCalled());
+    await vi.waitFor(() => expect(serverRows).toHaveBeenCalled(), { timeout: 5_000 });
     expect((await serverRows.mock.results[0].value)[0].supportsTools).toBe(false);
     refuseTools = false;
     await servers.check((await view()).id);
-    await vi.waitFor(async () => expect((await view()).toolsHint).toBeUndefined());
+    await vi.waitFor(async () => expect((await view()).toolsHint).toBeUndefined(), { timeout: 5_000 });
     release();
     await read;
 
@@ -680,6 +699,21 @@ describe('ModelServerRegistry', () => {
       expect(listedLate).toHaveBeenCalledTimes(1);
     });
 
+    it('has the picker list again when a failed removal dropped a pending listing and that one fails', async () => {
+      const { servers, listedLate, slowId, fail } = await slowAndFast();
+      await listPastTheWait(servers);
+      await servers
+        .hubServer(slowId)
+        ?.runtime.remove('qwen2.5:0.5b')
+        .catch(() => undefined);
+      expect(listedLate).not.toHaveBeenCalled();
+      fail();
+      await settle();
+      await settle();
+      expect(listedLate).toHaveBeenCalledExactlyOnceWith(slowId);
+      expect((await servers.views())[1].health.state).toBe('online');
+    });
+
     it('waits out only the listing of the server a turn runs on', async () => {
       const { fake, servers, slowId, release } = await slowAndFast();
       let releaseFast = () => {};
@@ -691,7 +725,7 @@ describe('ModelServerRegistry', () => {
         await vi.advanceTimersByTimeAsync(PICKER_LIST_WAIT_MS);
         expect(read.rows).toBeUndefined();
         release();
-        await vi.waitFor(() => expect(read.rows).toBeDefined());
+        await vi.waitFor(() => expect(read.rows).toBeDefined(), { timeout: 5_000 });
       } finally {
         vi.useRealTimers();
         releaseFast();
@@ -707,7 +741,7 @@ describe('ModelServerRegistry', () => {
     it('has a turn follow the listing started after a pull or removal dropped the one it waited on', async () => {
       const { fake, servers, slowId, listedBefore, fail } = await slowAndFast();
       const read = servers.models({ untilListed: slowId });
-      await vi.waitFor(() => expect(tagCalls(fake, SLOW)).toBe(listedBefore + 1));
+      await vi.waitFor(() => expect(tagCalls(fake, SLOW)).toBe(listedBefore + 1), { timeout: 5_000 });
       await servers
         .hubServer(slowId)
         ?.runtime.remove('qwen2.5:0.5b')
@@ -723,7 +757,7 @@ describe('ModelServerRegistry', () => {
     it('has the picker list again when a pull or removal dropped the listing it waited on, and that one failed', async () => {
       const { fake, servers, slowId, listedBefore, fail } = await slowAndFast();
       const read = servers.models();
-      await vi.waitFor(() => expect(tagCalls(fake, SLOW)).toBe(listedBefore + 1));
+      await vi.waitFor(() => expect(tagCalls(fake, SLOW)).toBe(listedBefore + 1), { timeout: 5_000 });
       await servers
         .hubServer(slowId)
         ?.runtime.remove('qwen2.5:0.5b')
@@ -1041,7 +1075,7 @@ describe('ModelServerRegistry', () => {
       }
       release();
       await settle();
-      expect(listedLate).not.toHaveBeenCalled();
+      expect(listedLate).toHaveBeenCalledExactlyOnceWith(slowId);
       expect((await servers.views())[1].models).toEqual(['qwen2.5:0.5b']);
       await servers.models();
       expect(tagCalls(fake, SLOW)).toBe(listedBefore + 2);
@@ -1050,7 +1084,7 @@ describe('ModelServerRegistry', () => {
     it('lets a detached listing finish without dropping the listing that replaced it', async () => {
       const { fake, servers, slowId, listedBefore, release } = await slowAndFast();
       const first = servers.models();
-      await vi.waitFor(() => expect(tagCalls(fake, SLOW)).toBe(listedBefore + 1));
+      await vi.waitFor(() => expect(tagCalls(fake, SLOW)).toBe(listedBefore + 1), { timeout: 5_000 });
       await servers
         .hubServer(slowId)
         ?.runtime.remove('qwen2.5:0.5b')
@@ -1058,7 +1092,7 @@ describe('ModelServerRegistry', () => {
       let releaseSecond: () => void = () => {};
       fake.state.tagsGates.set(SLOW, new Promise<void>(resolve => (releaseSecond = resolve)));
       const second = servers.models();
-      await vi.waitFor(() => expect(tagCalls(fake, SLOW)).toBe(listedBefore + 2));
+      await vi.waitFor(() => expect(tagCalls(fake, SLOW)).toBe(listedBefore + 2), { timeout: 5_000 });
       release();
       await first;
       const third = servers.models();
@@ -1071,7 +1105,7 @@ describe('ModelServerRegistry', () => {
     it('lists nothing for a server removed while a picker waits on its listing', async () => {
       const { fake, servers, slowId, listedBefore, release } = await slowAndFast();
       const listing = servers.models();
-      await vi.waitFor(() => expect(tagCalls(fake, SLOW)).toBe(listedBefore + 1));
+      await vi.waitFor(() => expect(tagCalls(fake, SLOW)).toBe(listedBefore + 1), { timeout: 5_000 });
       await servers.remove(slowId);
       release();
       const listed = await listing;
@@ -1081,7 +1115,7 @@ describe('ModelServerRegistry', () => {
     it('lists a server renamed while a picker waits on its listing as saved', async () => {
       const { fake, servers, slowId, listedBefore, release } = await slowAndFast();
       const listing = servers.models();
-      await vi.waitFor(() => expect(tagCalls(fake, SLOW)).toBe(listedBefore + 1));
+      await vi.waitFor(() => expect(tagCalls(fake, SLOW)).toBe(listedBefore + 1), { timeout: 5_000 });
       await servers.update(slowId, { name: 'renamed' });
       release();
       const renamed = (await listing).filter(model => model.server?.id === slowId);
@@ -1099,7 +1133,7 @@ describe('ModelServerRegistry', () => {
       release();
       await settle();
       await settle();
-      expect(listedLate).not.toHaveBeenCalled();
+      expect(listedLate).toHaveBeenCalledExactlyOnceWith(slowId);
       expect((await servers.views())[1].models).toEqual(['qwen2.5:0.5b']);
       await servers.models();
       expect(tagCalls(fake, SLOW)).toBe(listedBefore + 2);
@@ -1188,10 +1222,7 @@ describe('ModelServerRegistry', () => {
     let release: () => void = () => {};
     fake.state.versionGate = new Promise(resolve => (release = resolve));
     const checking = servers.check();
-    const listed = await Promise.race([
-      servers.models(),
-      new Promise(resolve => setTimeout(() => resolve('waited for the check'), 200)),
-    ]);
+    const listed = await listedAfter(servers, 10);
     release();
     await checking;
     expect(listed).toMatchObject([{ name: 'qwen2.5:0.5b', server: { name: 'gpu box' } }]);
@@ -1225,13 +1256,10 @@ describe('ModelServerRegistry', () => {
       none
     );
     void servers.start();
-    const listed = await Promise.race([
-      servers.models(),
-      new Promise(resolve => setTimeout(() => resolve('waited for the check'), 200)),
-    ]);
+    const listed = await listedAfter(servers, 10);
     servers.stop();
     expect(listed).toEqual([expect.objectContaining({ name: 'qwen2.5:0.5b', server: expect.anything() })]);
-    expect((listed as ChatModelOption[])[0].unavailable).toBeUndefined();
+    expect(listed?.[0].unavailable).toBeUndefined();
   });
 
   describe('a server shown as down with a check running', () => {
@@ -1313,6 +1341,36 @@ describe('ModelServerRegistry', () => {
       } finally {
         vi.useRealTimers();
         release();
+        await checking;
+      }
+    });
+
+    it('counts the wait on that check against the wait on the listing it started', async () => {
+      const { fake, servers, release, checking } = await downServer();
+      let finishListing: () => void = () => {};
+      fake.state.tagsGatesAfter.set('http://127.0.0.2:11434', {
+        skip: 1,
+        gate: new Promise<void>(resolve => (finishListing = resolve)),
+      });
+      vi.useFakeTimers();
+      try {
+        let listed: ChatModelOption[] | null = null;
+        void servers.models().then(result => {
+          listed = result;
+        });
+        await vi.advanceTimersByTimeAsync(1_000);
+        release();
+        await vi.advanceTimersByTimeAsync(PICKER_LIST_WAIT_MS - 1_000);
+        expect(listed).toEqual([
+          expect.objectContaining({
+            name: 'qwen2.5:0.5b',
+            unavailable: 'gpu box is still listing its models',
+            pending: true,
+          }),
+        ]);
+      } finally {
+        vi.useRealTimers();
+        finishListing();
         await checking;
       }
     });

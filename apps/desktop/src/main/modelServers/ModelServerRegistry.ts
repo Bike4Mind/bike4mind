@@ -420,6 +420,8 @@ export class ModelServerRegistry {
 
   /** One server's chat models. A server saved again during the waits lists as saved; a removed one lists nothing. */
   private async entryModels(entry: Entry, options: ModelListOptions): Promise<ChatModelOption[]> {
+    // One budget for the check wait and the listing wait together.
+    const deadline = Date.now() + PICKER_LIST_WAIT_MS;
     const server = { id: entry.record.id, name: entry.record.name };
     // Asking without the credential would get a 401 that replaces this message with a vaguer one.
     const missing = this.deps.store.credentialMissing(entry.record) ? this.missingCredentialHealth() : null;
@@ -452,7 +454,6 @@ export class ModelServerRegistry {
       let result: Listing | undefined = known;
       if (slot) slot.picker = true;
       const turn = options.untilListed === entry.record.id;
-      const deadline = Date.now() + PICKER_LIST_WAIT_MS;
       const wait = (listing: Slot) =>
         turn ? listing.promise : within(listing.promise, Math.max(deadline - Date.now(), 0), undefined);
       if (slot && (turn || !slot.reported)) {
@@ -553,7 +554,11 @@ export class ModelServerRegistry {
         if (saved && slot.reported) this.announce(saved, true);
         return { ok: false, error: new Error(`${entry.record.name} was changed.`) };
       }
-      if (slot.seq < entry.floor) return result;
+      if (slot.seq < entry.floor) {
+        // A pull or removal that failed reloads nothing, so a picker shown this listing as pending must be told.
+        if (slot.reported) this.announce(entry, true);
+        return result;
+      }
       if (result.ok) {
         const names = result.models.map(model => model.name);
         entry.record = { ...entry.record, models: names };
