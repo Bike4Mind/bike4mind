@@ -125,6 +125,24 @@ describe('sessionUsageBuckets', () => {
       ]);
     });
 
+    it('adds a load time only on the model the reply started on, so the average is per reply', () => {
+      const result = buckets([
+        {
+          ...reply(at, { outputTokens: 30, rate: { evalTokens: 30, evalMs: 600, loadMs: 800 } }),
+          rounds: [
+            round(OLLAMA, { outputTokens: 10, rate: { evalTokens: 10, evalMs: 200, loadMs: 300 } }),
+            round(SERVER, { outputTokens: 20, rate: { evalTokens: 20, evalMs: 400, loadMs: 500 } }),
+          ],
+        },
+      ]);
+      expect(result.map(bucket => [bucket.model, bucket.loads, bucket.loadMs])).toEqual([
+        [OLLAMA, 1, 300],
+        [SERVER, 0, 0],
+      ]);
+      const { totals } = localUsageWindow(result, 'last-24-hours', NOW, NAMES);
+      expect(totals.loadMs / totals.loads).toBe(300);
+    });
+
     it('counts a reply that started hosted on no local model, and a reply that started local once', () => {
       const result = buckets([
         {
@@ -258,6 +276,120 @@ describe('sessionUsageBuckets', () => {
         [OLLAMA, 50, 500],
       ]);
       expect(totals(result)).toEqual({ outputTokens: 90, contextTokens: 900 });
+    });
+  });
+
+  describe('a reply continued in a later hour', () => {
+    const began = '2026-10-30T09:05:00.000Z';
+    const round = (model: string, endedAt: string | null, usage: ChatUsage) => ({
+      text: 'x',
+      toolCallIds: [],
+      model,
+      usage,
+      ...(endedAt ? { timing: { startedAt: Date.parse(endedAt) - 1000, endedAt: Date.parse(endedAt) } } : {}),
+    });
+    const hourly = (result: LocalUsageBucket[], iso: string) => result.find(bucket => bucket.hour === Date.parse(iso));
+
+    it('puts each round in the hour it ended and the reply in the hour it began', () => {
+      const result = buckets([
+        {
+          ...reply(began, {
+            inputTokens: 300,
+            outputTokens: 30,
+            rate: { evalTokens: 30, evalMs: 600, loadMs: 300 },
+          }),
+          rounds: [
+            round(OLLAMA, '2026-10-30T09:06:00.000Z', {
+              inputTokens: 100,
+              outputTokens: 10,
+              rate: { evalTokens: 10, evalMs: 200, loadMs: 200 },
+            }),
+            round(OLLAMA, '2026-11-02T14:10:00.000Z', {
+              inputTokens: 200,
+              outputTokens: 20,
+              rate: { evalTokens: 20, evalMs: 400, loadMs: 100 },
+            }),
+          ],
+        },
+      ]);
+      expect(result).toHaveLength(2);
+      expect(hourly(result, '2026-10-30T09:00:00.000Z')).toMatchObject({
+        replies: 1,
+        outputTokens: 10,
+        contextTokens: 100,
+        timedReplies: 1,
+        evalTokens: 10,
+        evalMs: 200,
+        loads: 1,
+        loadMs: 300,
+      });
+      expect(hourly(result, '2026-11-02T14:00:00.000Z')).toMatchObject({
+        replies: 0,
+        outputTokens: 20,
+        contextTokens: 200,
+        timedReplies: 0,
+        evalTokens: 20,
+        evalMs: 400,
+        loads: 0,
+        loadMs: 0,
+      });
+
+      const lastDay = localUsageWindow(result, 'last-24-hours', NOW, NAMES);
+      expect(lastDay.totals).toMatchObject({ outputTokens: 20, replies: 0 });
+      expect(lastDay.bars[22]).toMatchObject({ startsAt: '2026-11-02T14:00:00.000Z', outputTokens: 20 });
+      expect(lastDay.allTimeReplies).toBe(1);
+    });
+
+    it('follows a round on another model to the hour it ended', () => {
+      const result = buckets([
+        {
+          ...reply(began, { outputTokens: 30 }),
+          rounds: [
+            round(OLLAMA, '2026-10-30T09:06:00.000Z', { outputTokens: 10 }),
+            round(SERVER, '2026-11-02T14:10:00.000Z', { outputTokens: 20 }),
+          ],
+        },
+      ]);
+      expect(result.map(bucket => [bucket.model, bucket.hour, bucket.replies, bucket.outputTokens])).toEqual([
+        [OLLAMA, Date.parse('2026-10-30T09:00:00.000Z'), 1, 10],
+        [SERVER, Date.parse('2026-11-02T14:00:00.000Z'), 0, 20],
+      ]);
+    });
+
+    it('keeps a round with no timing, and what no round carries, in the hour the reply began', () => {
+      const result = buckets([
+        {
+          ...reply(began, {
+            inputTokens: 900,
+            outputTokens: 90,
+            rate: { evalTokens: 80, evalMs: 1600 },
+          }),
+          rounds: [
+            round(OLLAMA, null, { inputTokens: 200, outputTokens: 20, rate: { evalTokens: 20, evalMs: 400 } }),
+            round(OLLAMA, '2026-11-02T14:10:00.000Z', {
+              inputTokens: 400,
+              outputTokens: 40,
+              rate: { evalTokens: 40, evalMs: 800 },
+            }),
+          ],
+        },
+      ]);
+      expect(result).toHaveLength(2);
+      expect(hourly(result, '2026-10-30T09:00:00.000Z')).toMatchObject({
+        replies: 1,
+        outputTokens: 50,
+        contextTokens: 500,
+        timedReplies: 1,
+        evalTokens: 40,
+        evalMs: 800,
+      });
+      expect(hourly(result, '2026-11-02T14:00:00.000Z')).toMatchObject({
+        replies: 0,
+        outputTokens: 40,
+        contextTokens: 400,
+        evalTokens: 40,
+        evalMs: 800,
+      });
     });
   });
 

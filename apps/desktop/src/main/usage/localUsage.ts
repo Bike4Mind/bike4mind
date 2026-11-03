@@ -1,4 +1,11 @@
-import { isLocalModel, parseLocalModelId, type ChatMessage, type ChatSession, type ChatUsage } from '@shared/chat';
+import {
+  isLocalModel,
+  parseLocalModelId,
+  type ChatMessage,
+  type ChatSession,
+  type ChatTokenRate,
+  type ChatUsage,
+} from '@shared/chat';
 import { LOCAL_SERVER_NAME, serverIdOfRuntime } from '@shared/modelServers';
 import type { LocalUsage, LocalUsageBar, LocalUsageFigures, LocalUsageRow, UsageWindowId } from '@shared/usage';
 import { addTokenRate } from '../chat/tokenRate';
@@ -46,11 +53,9 @@ function amount(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-/** One reply's share on one model; only `counted` shares add a reply. Older session files predate every field. */
-function replyFigures(usage: ChatUsage, counted: boolean): LocalUsageFigures {
+/** The tokens and speed sums of one slice of a reply's usage. Older session files predate every field. */
+function usageFigures(usage: ChatUsage): LocalUsageFigures {
   const figures = emptyFigures();
-  const reply = counted ? 1 : 0;
-  figures.replies = reply;
   figures.outputTokens = amount(usage?.outputTokens);
   figures.contextTokens = amount(usage?.inputTokens);
   const rate = usage?.rate;
@@ -58,12 +63,10 @@ function replyFigures(usage: ChatUsage, counted: boolean): LocalUsageFigures {
   const evalMs = amount(rate?.evalMs);
   if (!rate || evalTokens === 0 || evalMs === 0) return figures;
   if (rate.estimated) {
-    figures.estimatedReplies = reply;
     figures.estimatedEvalTokens = evalTokens;
     figures.estimatedEvalMs = evalMs;
     return figures;
   }
-  figures.timedReplies = reply;
   figures.evalTokens = evalTokens;
   figures.evalMs = evalMs;
   const promptTokens = amount(rate.promptTokens);
@@ -71,11 +74,6 @@ function replyFigures(usage: ChatUsage, counted: boolean): LocalUsageFigures {
   if (promptTokens > 0 && promptMs > 0) {
     figures.promptTokens = promptTokens;
     figures.promptMs = promptMs;
-  }
-  const loadMs = amount(rate.loadMs);
-  if (loadMs > 0) {
-    figures.loads = 1;
-    figures.loadMs = loadMs;
   }
   const draftTokens = amount(rate.draftTokens);
   if (draftTokens > 0) {
@@ -85,10 +83,28 @@ function replyFigures(usage: ChatUsage, counted: boolean): LocalUsageFigures {
   return figures;
 }
 
+/** The counts one reply adds, from its whole usage on the model it started on. */
+function replyFigures(usage: ChatUsage): LocalUsageFigures {
+  const figures = emptyFigures();
+  figures.replies = 1;
+  const rate = usage?.rate;
+  if (!rate || amount(rate.evalTokens) === 0 || amount(rate.evalMs) === 0) return figures;
+  if (rate.estimated) {
+    figures.estimatedReplies = 1;
+    return figures;
+  }
+  figures.timedReplies = 1;
+  const loadMs = amount(rate.loadMs);
+  if (loadMs > 0) {
+    figures.loads = 1;
+    figures.loadMs = loadMs;
+  }
+  return figures;
+}
+
 /**
- * The model a reply started on, or null when that cannot be told. An unstamped reply falls back
- * to its snapshot's model, then the session's if it has a rate; a prompt-cache stamp means hosted.
- * Null too when only its rounds are stamped: a continuation's snapshot says nothing of its start.
+ * The model a reply started on, or null. Unstamped: its snapshot's model, else the session's if it has a rate.
+ * Null when hosted (prompt-cache stamp) or when only rounds are stamped: a continuation's snapshot is not its start.
  */
 function replyModel(message: ChatMessage, sessionModel: string): string | null {
   if (typeof message.model === 'string') return message.model;
@@ -108,61 +124,105 @@ function addShare(total: ChatUsage | undefined, next: ChatUsage): ChatUsage {
   };
 }
 
+const RATE_KEYS = [
+  'evalTokens',
+  'evalMs',
+  'promptTokens',
+  'promptMs',
+  'loadMs',
+  'draftTokens',
+  'draftAccepted',
+] as const satisfies readonly (keyof ChatTokenRate)[];
+
+/** What `whole` holds beyond `parts`. A reply split across models gets no rate: it belongs to none of them. */
+function usageBeyond(whole: ChatUsage, parts: ChatUsage[], withRate: boolean): ChatUsage {
+  const carried = (read: (usage: ChatUsage) => unknown) => parts.reduce((sum, part) => sum + amount(read(part)), 0);
+  const rest: ChatUsage = {
+    outputTokens: Math.max(0, amount(whole.outputTokens) - carried(part => part.outputTokens)),
+    inputTokens: Math.max(0, amount(whole.inputTokens) - carried(part => part.inputTokens)),
+  };
+  if (!withRate || !whole.rate) return rest;
+  const rate: ChatTokenRate = { evalTokens: 0, evalMs: 0, ...(whole.rate.estimated ? { estimated: true } : {}) };
+  for (const key of RATE_KEYS) {
+    rate[key] = Math.max(0, amount(whole.rate[key]) - carried(part => part.rate?.[key]));
+  }
+  return { ...rest, rate };
+}
+
+type HourlyUsage = Map<number, ChatUsage>;
+
+function addAt(shares: Map<string | null, HourlyUsage>, model: string | null, hour: number, usage: ChatUsage): void {
+  let hours = shares.get(model);
+  if (!hours) {
+    hours = new Map();
+    shares.set(model, hours);
+  }
+  hours.set(hour, addShare(hours.get(hour), usage));
+}
+
+function hourOf(at: number): number {
+  return Math.floor(at / HOUR_MS) * HOUR_MS;
+}
+
 /**
- * A reply's usage per model its requests went to: `message.usage` whole, unless the rounds name
- * different models, then the rounds summed per model. `replyLevel` always has a share.
+ * A reply's usage per model and UTC hour: each round's where it ended, the rest where the reply began.
+ * `message.usage` stays whole unless the rounds name different models. `replyLevel` always has a share.
  */
 function replyShares(
   message: ChatMessage & { usage: ChatUsage },
-  replyLevel: string | null
-): Map<string | null, ChatUsage> {
+  replyLevel: string | null,
+  startHour: number
+): Map<string | null, HourlyUsage> {
   const rounds = Array.isArray(message.rounds)
     ? message.rounds.filter(round => round && typeof round === 'object')
     : [];
   const modelOf = (round: (typeof rounds)[number]): string | null =>
     typeof round.model === 'string' ? round.model : replyLevel;
-  if (new Set(rounds.map(modelOf)).size < 2) return new Map([[replyLevel, message.usage]]);
+  const spread = new Set(rounds.map(modelOf)).size >= 2;
 
-  const shares = new Map<string | null, ChatUsage>();
-  const counted = { outputTokens: 0, inputTokens: 0 };
+  const shares = new Map<string | null, HourlyUsage>();
+  const carried: ChatUsage[] = [];
   for (const round of rounds) {
     if (!round.usage || typeof round.usage !== 'object') continue;
-    const model = modelOf(round);
-    shares.set(model, addShare(shares.get(model), round.usage));
-    counted.outputTokens += amount(round.usage.outputTokens);
-    counted.inputTokens += amount(round.usage.inputTokens);
+    const endedAt = round.timing?.endedAt;
+    const hour = typeof endedAt === 'number' && Number.isFinite(endedAt) ? hourOf(endedAt) : startHour;
+    addAt(shares, spread ? modelOf(round) : replyLevel, hour, round.usage);
+    carried.push(round.usage);
   }
   // What no round carries: an explore sub-loop's spend (hosted only) or a fallback round for a
   // reply stored without rounds, which ran on the model the reply started on.
-  const rest = {
-    outputTokens: Math.max(0, amount(message.usage.outputTokens) - counted.outputTokens),
-    inputTokens: Math.max(0, amount(message.usage.inputTokens) - counted.inputTokens),
-  };
   const allLocal = [...shares.keys()].every(model => model !== null && isLocalModel(model));
-  if (allLocal && (rest.outputTokens > 0 || rest.inputTokens > 0))
-    shares.set(replyLevel, addShare(shares.get(replyLevel), rest));
-  if (!shares.has(replyLevel)) shares.set(replyLevel, {});
+  if (!spread || allLocal) addAt(shares, replyLevel, startHour, usageBeyond(message.usage, carried, !spread));
+  if (!shares.has(replyLevel)) addAt(shares, replyLevel, startHour, {});
   return shares;
 }
 
 /** A session's local replies, bucketed by model and UTC hour. */
 export function sessionUsageBuckets(session: Pick<ChatSession, 'model' | 'messages'>): LocalUsageBucket[] {
   const buckets = new Map<string, LocalUsageBucket>();
+  const bucketAt = (model: string, hour: number): LocalUsageBucket => {
+    const key = `${hour}\n${model}`;
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = { model, hour, ...emptyFigures() };
+      buckets.set(key, bucket);
+    }
+    return bucket;
+  };
   for (const message of session.messages) {
     if (message?.role !== 'assistant' || !message.usage || typeof message.usage !== 'object') continue;
     const at = Date.parse(message.createdAt);
     if (!Number.isFinite(at)) continue;
-    const hour = Math.floor(at / HOUR_MS) * HOUR_MS;
+    const startHour = hourOf(at);
     const started = replyModel(message, session.model);
-    for (const [model, usage] of replyShares(message as ChatMessage & { usage: ChatUsage }, started)) {
+    for (const [model, hours] of replyShares(message as ChatMessage & { usage: ChatUsage }, started, startHour)) {
       if (!model || !isLocalModel(model) || !parseLocalModelId(model)) continue;
-      const key = `${hour}\n${model}`;
-      let bucket = buckets.get(key);
-      if (!bucket) {
-        bucket = { model, hour, ...emptyFigures() };
-        buckets.set(key, bucket);
+      let whole: ChatUsage = {};
+      for (const [hour, usage] of hours) {
+        addFigures(bucketAt(model, hour), usageFigures(usage));
+        whole = addShare(whole, usage);
       }
-      addFigures(bucket, replyFigures(usage, model === started));
+      if (model === started) addFigures(bucketAt(model, startHour), replyFigures(whole));
     }
   }
   return [...buckets.values()];
@@ -224,9 +284,7 @@ function addToRow(rows: Map<string, RowTotals>, key: string, label: string, figu
 }
 
 /**
- * One window of local usage out of the hour buckets.
- *
- * Bars are UTC hours and UTC days, the day bars spanning the same days + 1 as the credit chart's.
+ * One window of local usage out of the hour buckets: UTC hour or day bars (days + 1, as the credit chart's).
  * Every total is summed from exactly the buckets the bars draw, so the headline matches the chart.
  */
 export function localUsageWindow(
