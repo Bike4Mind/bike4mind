@@ -16,7 +16,7 @@ import { type MigrationFile } from './index';
  * highest on disk - its own test asserts that invariant.
  */
 const migration: MigrationFile = {
-  id: 20260921237400,
+  id: 20260921237700,
   name: 'ensure quest session keyset index',
 
   up: async () => {

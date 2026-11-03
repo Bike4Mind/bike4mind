@@ -1712,7 +1712,7 @@ function initializeQuestModel() {
     // Index for findBySessionIdAndId operations
     ChatHistoryItemSchema.index({ sessionId: 1, _id: 1 }, { name: 'sessionId_id' });
     // Keyset order of findPageAfterBySessionId (GET /api/v1/sessions/{id}/quests). Built in
-    // production by migration 20260921237400_ensure-quest-session-keyset-index; keep in sync.
+    // production by migration 20260921237700_ensure-quest-session-keyset-index; keep in sync.
     ChatHistoryItemSchema.index({ sessionId: 1, timestamp: 1, _id: 1 }, { name: 'sessionId_timestamp_id' });
     // Built in production by migration 20260921235966_ensure-quest-signup-activity-index; keep the
     // name and key in sync with it. Partial so the build and its entries cover only turns carrying

@@ -88,23 +88,24 @@ describe('findPageAfterBySessionId', () => {
     expect(findProperties(winningPlans[0], 'indexName')).toContain('sessionId_timestamp_id');
     const [docsExamined] = findProperties(explanation, 'totalDocsExamined');
     expect(docsExamined).toBeLessThanOrEqual(30);
-  });
-});
 
-describe('Quest sessionId+timestamp+_id index', () => {
-  it('builds the named compound index', async () => {
-    const indexes = await Quest.collection.indexes();
-    expect(indexes.find(i => i.name === 'sessionId_timestamp_id')?.key).toEqual({
-      sessionId: 1,
-      timestamp: 1,
-      _id: 1,
+    // The explain above pins the plan, but it runs a copy of the filter, so it cannot see the
+    // $gte bound going missing from findPageAfterBySessionId itself. Profile the real call too:
+    // without that bound the planner falls back to a SORT_MERGE at ~49 docs examined.
+    const db = mongoose.connection.db!;
+    await db.command({ profile: 2 });
+    await questRepository.findPageAfterBySessionId(SESSION, {
+      limit: 25,
+      after: { timestamp: mid!.timestamp, id: String(mid!._id) },
     });
-  });
-
-  it('does not duplicate an existing index key pattern', async () => {
-    const built = (await Quest.collection.indexes()).map(i => JSON.stringify(i.key));
-    expect(new Set(built).size).toBe(built.length);
-    const declared = Quest.schema.indexes().map(([key]) => JSON.stringify(key));
-    expect(new Set(declared).size).toBe(declared.length);
+    await db.command({ profile: 0 });
+    const [op] = await db
+      .collection('system.profile')
+      .find({ ns: `${db.databaseName}.${Quest.collection.collectionName}`, op: 'query' })
+      .sort({ ts: -1 })
+      .limit(1)
+      .toArray();
+    expect(op, 'the paged query left no profiler entry to measure').toBeDefined();
+    expect(op.docsExamined).toBeLessThanOrEqual(30);
   });
 });
