@@ -518,10 +518,10 @@ export interface ConversationController {
   respondToApproval: (approvalId: string, answer: ChatApprovalAnswer) => void;
 }
 
-/** A session read in flight, and the last summary main wrote for that session while it was. */
+/** A session read in flight, and whether main wrote a summary for that session while it was. */
 interface SessionRead {
   sessionId: string;
-  summary?: ChatSessionSummary;
+  stale: boolean;
 }
 
 /**
@@ -567,8 +567,10 @@ export function useConversation(
   const onSharedRef = useRef(onShared);
   onSharedRef.current = onShared;
 
-  // The open chat's read in flight. A summary written meanwhile is laid over that read alone, as it may predate it.
+  // The open chat's read in flight, done again if main writes that chat a summary meanwhile, as it may predate it.
   const openRead = useRef<SessionRead | null>(null);
+  // The chat the reset below last ran for. A share result that lands before then would be wiped by it.
+  const resetFor = useRef<string | null>(null);
 
   /** Replies this window has seen end; see the session load, which must not reopen one. */
   const settledReplies = useRef(new Set<string>());
@@ -589,6 +591,7 @@ export function useConversation(
     setCommandProgress(null);
     setPreparing(null);
     setPhase(null);
+    resetFor.current = sessionId;
     if (!sessionId) {
       setSession(null);
       setMessages([]);
@@ -599,7 +602,7 @@ export function useConversation(
 
     let current = true;
     const load = (): void => {
-      const read: SessionRead = { sessionId };
+      const read: SessionRead = { sessionId, stale: false };
       openRead.current = read;
       const preparationBeforeRead = workspaceVersion.current;
       const historyBeforeRead = historyVersion.current;
@@ -607,16 +610,14 @@ export function useConversation(
         if (!current) return;
         if (preparationBeforeRead !== workspaceVersion.current) return load();
         if (historyBeforeRead !== historyVersion.current) return load();
+        if (read.stale) return load();
         // A reply already running arrives as main's live copy, and the events from now on
         // extend it. One that settled while this read was in flight is stale: read again
         // rather than put back a turn the 'done' already closed.
         const live = loaded?.replyInFlight;
         if (live && settledReplies.current.has(live.messageId)) return load();
         openRead.current = null;
-        const early = read.summary;
-        setSession(
-          loaded && early ? { ...loaded, project: early.project, grantedDirectories: early.grantedDirectories } : loaded
-        );
+        setSession(loaded);
         setMessages(loaded?.messages ?? []);
         // A started session opened while its worktree is still being cut: no event is coming
         // to say so, the 'workspace' one went out before this window was looking.
@@ -1024,7 +1025,7 @@ export function useConversation(
   const applySummary = useCallback(
     (updated: ChatSessionSummary) => {
       const read = openRead.current;
-      if (read && read.sessionId === updated.id) read.summary = updated;
+      if (read && read.sessionId === updated.id) read.stale = true;
       setSession(current =>
         current?.id === updated.id
           ? { ...current, project: updated.project, grantedDirectories: updated.grantedDirectories }
@@ -1042,7 +1043,7 @@ export function useConversation(
       if (!target) return;
       const result = await window.b4m.chat.addContextDirectory(target, path);
       if (result.status === 'cancelled') return;
-      const stillOpen = activeSessionId.current === target;
+      const stillOpen = activeSessionId.current === target && resetFor.current === target;
       if (result.status === 'refused') {
         if (stillOpen) setSendError(result.error);
         else if (keep) throw new Error(result.error);
