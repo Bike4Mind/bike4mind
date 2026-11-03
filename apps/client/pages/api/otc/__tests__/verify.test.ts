@@ -160,6 +160,7 @@ vi.mock('@bike4mind/database', () => ({
   subscriberRepository: {},
   creditTransactionRepository: {},
   creditLotRepository: {},
+  grantPackageRepository: {},
   userRepository: {
     findByEmail: (...a: unknown[]) => mockFindByEmail(...a),
     count: vi.fn(),

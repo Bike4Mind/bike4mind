@@ -1221,6 +1221,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // Invite-resolved credits awaiting proof of email ownership; paired with
     // the pending-free-credits tag and nulled once granted.
     pendingCreditGrant: { type: Number, default: null },
+    grantPackageId: { type: String, default: null },
     // Canonical inbox (canonicalizeEmail) this account claimed its free-credit grant under; unset
     // until a grant is claimed. Unique, so one inbox earns one grant however many aliases sign up.
     freeCreditClaimEmail: { type: String },

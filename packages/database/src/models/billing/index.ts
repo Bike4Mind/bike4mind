@@ -3,6 +3,7 @@ export * from './CreditGrantIdentityClaimModel';
 export * from './creditHolderFundingSnapshot';
 export * from './CreditLotModel';
 export * from './CreditTransactionModel';
+export * from './GrantPackageModel';
 export * from './FailedRefundModel';
 export * from './PaymentAttemptModel';
 export * from './PaymentRiskActionModel';
