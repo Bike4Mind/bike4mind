@@ -122,9 +122,8 @@ export interface CompletionRequest {
  * an abort is a normal outcome here, since stopping a reply is a user action, not a failure.
  * Rejects on a pre-stream HTTP failure or a mid-stream socket error.
  *
- * A connection that drops before the reply has produced anything is asked once more: nothing
- * has reached the caller, so a second request cannot duplicate text. Never after an abort, and
- * never once a content, tool or usage event has been delivered.
+ * A dropped connection is never retried: the server keeps generating after the client goes
+ * away, so a second request could bill a second completion or replay a server-side tool.
  *
  * Callback-based rather than an async iterable because every consumer forwards straight to an
  * IPC push, which cannot exert backpressure anyway.
@@ -137,21 +136,12 @@ export async function streamCompletion(
   signal?: AbortSignal,
   options: StreamOptions = {}
 ): Promise<void> {
-  let delivered = false;
-  const forward = (event: CompletionStreamEvent) => {
-    if (event.type !== 'meta') delivered = true;
-    onEvent(event);
-  };
-  for (let attempt = 0; ; attempt++) {
-    try {
-      await streamOnce(axiosInstance, endpoint, request, forward, signal, options);
-      return;
-    } catch (err) {
-      if (!isConnectionDrop(err)) throw err;
-      if (signal?.aborted) return;
-      if (attempt === 0 && !delivered) continue;
-      throw new Error(`The connection to the server dropped before the reply finished (${err.message}).`);
-    }
+  try {
+    await streamOnce(axiosInstance, endpoint, request, onEvent, signal, options);
+  } catch (err) {
+    if (!isConnectionDrop(err)) throw err;
+    if (signal?.aborted) return;
+    throw new Error(`The connection to the server dropped before the reply finished (${err.message}).`);
   }
 }
 

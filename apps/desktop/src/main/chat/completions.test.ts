@@ -242,22 +242,18 @@ describe('streamCompletion', () => {
       return { instance: { post } as unknown as AxiosInstance, post };
     }
 
-    it('is asked once more when it drops before the reply produced anything', async () => {
+    it('is not retried when it drops before the reply produced anything', async () => {
       const first = new PassThrough();
-      const second = new PassThrough();
-      const { instance, post } = sequentialAxios([first, second]);
+      const { instance, post } = sequentialAxios([first, new PassThrough()]);
       const events: CompletionStreamEvent[] = [];
 
       const done = streamCompletion(instance, '/c', REQUEST, event => events.push(event));
       first.write(frame({ type: 'meta', requestId: 'r1' }));
       await vi.waitUntil(() => events.length === 1, { timeout: 2000, interval: 5 });
       first.destroy(dropped());
-      await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 2000, interval: 5 });
-      second.write(frame({ type: 'content', text: 'retried' }));
-      second.write(frame('[DONE]'));
 
-      await expect(done).resolves.toBeUndefined();
-      expect(events.filter(event => event.type === 'content')).toEqual([{ type: 'content', text: 'retried' }]);
+      await expect(done).rejects.toThrow('The connection to the server dropped before the reply finished (aborted).');
+      expect(post).toHaveBeenCalledTimes(1);
     });
 
     it('is not retried once content arrived, and says what happened instead of a bare "aborted"', async () => {
@@ -294,7 +290,7 @@ describe('streamCompletion', () => {
       const done = streamCompletion(instance, '/c', REQUEST, () => {}, undefined, { idleTimeoutMs: 30 });
 
       await expect(done).rejects.toThrow(/dropped before the reply finished \(no data for \d+s\)/);
-      expect(post).toHaveBeenCalledTimes(2);
+      expect(post).toHaveBeenCalledTimes(1);
     });
 
     it('leaves a server-reported error alone: it is not a drop', async () => {
