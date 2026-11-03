@@ -996,11 +996,14 @@ export function useConversation(
     if (!result.ok) setSendError(result.error);
   }, [sessionId]);
 
-  // A summary main just wrote, folded into both the open conversation and the sidebar row.
+  // A summary main just wrote, folded into both the open conversation and the sidebar row. The
+  // open conversation only when it is that session: a share can return after the user moved on.
   const applySummary = useCallback(
     (updated: ChatSessionSummary) => {
       setSession(current =>
-        current ? { ...current, project: updated.project, grantedDirectories: updated.grantedDirectories } : current
+        current?.id === updated.id
+          ? { ...current, project: updated.project, grantedDirectories: updated.grantedDirectories }
+          : current
       );
       onSummaryChanged(updated);
     },

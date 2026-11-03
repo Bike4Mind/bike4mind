@@ -590,4 +590,25 @@ describe('the "+" menu', () => {
     mount({ disabled: true, addFolder: { onClick: () => {}, disabled: true } });
     expect(plus()?.disabled).toBe(true);
   });
+
+  it('keeps "+" and Attach a file available while Add folder is disabled', () => {
+    const pick = vi.fn(async () => {});
+    mount({ attachments: { ...draft, pick }, addFolder: { onClick: () => {}, disabled: true } });
+    expect(plus()?.disabled).toBe(false);
+
+    open();
+    expect(isDisabled(item('composer-attach-item'))).toBe(false);
+    act(() => item('composer-attach-item')?.click());
+    expect(pick).toHaveBeenCalledOnce();
+  });
+
+  it('does not run Add folder while it is disabled', () => {
+    const onClick = vi.fn();
+    mount({ addFolder: { onClick, disabled: true } });
+
+    open();
+    expect(isDisabled(item('composer-add-folder-item'))).toBe(true);
+    act(() => item('composer-add-folder-item')?.click());
+    expect(onClick).not.toHaveBeenCalled();
+  });
 });

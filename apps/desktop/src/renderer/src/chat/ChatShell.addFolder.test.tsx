@@ -32,10 +32,15 @@ window.ResizeObserver ??= class {
 
 const NOTES = '/work/notes';
 
-const summary = (id: string, mode: 'chat' | 'code' = 'chat', grantedDirectories?: string[]): ChatSessionSummary =>
+const summary = (
+  id: string,
+  mode: 'chat' | 'code' = 'chat',
+  grantedDirectories?: string[],
+  title = 'New conversation'
+): ChatSessionSummary =>
   ({
     id,
-    title: 'New conversation',
+    title,
     mode,
     model: 'claude-opus-4-5-20251101',
     messageCount: 0,
@@ -60,6 +65,19 @@ const pickProjectDirectory = vi.fn<() => Promise<string | null>>();
 const addContextDirectory = vi.fn<(sessionId: string, path?: string) => Promise<ShareDirectoryResult>>();
 const removeContextDirectory = vi.fn<(sessionId: string, directory: string) => Promise<ChatSessionSummary | null>>();
 
+const deferred = <T,>() => {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+};
+
+/** Session reads for these ids wait on the promise, so a test can order the load against a share. */
+const heldLoads = new Map<string, Promise<void>>();
+
 function stubBridge(sessions: ChatSessionSummary[]) {
   const stored = new Map(sessions.map(session => [session.id, session]));
   createSession.mockImplementation(async () => {
@@ -72,6 +90,7 @@ function stubBridge(sessions: ChatSessionSummary[]) {
       chat: quietBridge({
         listSessions: async () => sessions,
         getSession: async (id: string) => {
+          await heldLoads.get(id);
           const session = stored.get(id);
           return session ? ({ ...session, messages: [] } as unknown as ChatSession) : null;
         },
@@ -94,6 +113,7 @@ function stubBridge(sessions: ChatSessionSummary[]) {
       },
     }
   );
+  return stored;
 }
 
 let root: Root | null = null;
@@ -114,6 +134,7 @@ beforeEach(() => {
   );
   for (const mock of [createSession, pickProjectDirectory, addContextDirectory, removeContextDirectory])
     mock.mockReset();
+  heldLoads.clear();
 });
 
 afterEach(() => {
@@ -142,6 +163,16 @@ async function renderShell(): Promise<void> {
 const byTestId = <T extends HTMLElement = HTMLElement>(testid: string) =>
   document.querySelector<T>(`[data-testid="${testid}"]`);
 const chips = () => [...document.querySelectorAll<HTMLElement>('[data-testid="session-chip-context"]')];
+
+const sidebarRow = (title: string) =>
+  [...document.querySelectorAll<HTMLElement>('[data-testid="chat-session-item"]')].find(row =>
+    row.textContent?.includes(title)
+  );
+
+async function openSessionRow(title: string): Promise<void> {
+  await act(async () => sidebarRow(title)?.click());
+  await act(async () => undefined);
+}
 
 async function addFolderFromMenu(): Promise<void> {
   await act(async () => byTestId('composer-plus-btn')?.click());
@@ -211,6 +242,163 @@ describe('Add folder in a Chat composer', () => {
     expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('fresh', NOTES);
     expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
     expect(byTestId<HTMLTextAreaElement>('chat-composer-input')?.disabled).toBe(false);
+  });
+
+  it('does not paint a share that returns after the user moved to another chat', async () => {
+    stubBridge([summary('alpha', 'chat', undefined, 'Alpha'), summary('beta', 'chat', undefined, 'Beta')]);
+    await renderShell();
+    await openSessionRow('Alpha');
+
+    const share = deferred<ShareDirectoryResult>();
+    addContextDirectory.mockReturnValue(share.promise);
+    await addFolderFromMenu();
+    expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('alpha', undefined);
+
+    await openSessionRow('Beta');
+    await act(async () =>
+      share.resolve({ status: 'added', path: NOTES, session: summary('alpha', 'chat', [NOTES], 'Alpha') })
+    );
+    expect(chips()).toHaveLength(0);
+  });
+
+  it('with no conversation yet, ignores a second Add folder while the first is still under way', async () => {
+    stubBridge([]);
+    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    await renderShell();
+
+    const picked = deferred<string | null>();
+    pickProjectDirectory.mockReturnValue(picked.promise);
+    addContextDirectory.mockResolvedValue({ status: 'added', path: NOTES, session: summary('fresh', 'chat', [NOTES]) });
+    await addFolderFromMenu();
+    await addFolderFromMenu();
+    expect(pickProjectDirectory).toHaveBeenCalledTimes(1);
+
+    await act(async () => picked.resolve(NOTES));
+    await act(async () => undefined);
+    expect(createSession).toHaveBeenCalledTimes(2);
+    expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('fresh', NOTES);
+  });
+
+  it('with no conversation yet, says why no chat was started and lets the user try again', async () => {
+    stubBridge([]);
+    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    createSession.mockRejectedValueOnce(new Error('disk full'));
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValue(NOTES);
+    await addFolderFromMenu();
+    expect(byTestId('chat-add-folder-error')?.textContent).toContain('disk full');
+    expect(addContextDirectory).not.toHaveBeenCalled();
+
+    addContextDirectory.mockResolvedValue({ status: 'added', path: NOTES, session: summary('fresh', 'chat', [NOTES]) });
+    await addFolderFromMenu();
+    expect(byTestId('chat-add-folder-error')).toBeNull();
+    expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('fresh', NOTES);
+    expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
+  });
+
+  it('does not let a slow first-run seed replace the chat Add folder started', async () => {
+    const stored = stubBridge([]);
+    const seed = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => seed.promise);
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValue(NOTES);
+    addContextDirectory.mockResolvedValue({ status: 'added', path: NOTES, session: summary('fresh', 'chat', [NOTES]) });
+    await addFolderFromMenu();
+    expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
+
+    const seeded = summary('seeded', 'chat', undefined, 'Seeded');
+    stored.set('seeded', seeded);
+    await act(async () => seed.resolve({ session: seeded }));
+    await act(async () => undefined);
+    expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
+  });
+
+  it('shares into the new chat only once it has loaded', async () => {
+    stubBridge([]);
+    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    const loaded = deferred<void>();
+    heldLoads.set('fresh', loaded.promise);
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValue(NOTES);
+    addContextDirectory.mockResolvedValue({ status: 'added', path: NOTES, session: summary('fresh', 'chat', [NOTES]) });
+    await addFolderFromMenu();
+    expect(createSession).toHaveBeenCalledTimes(2);
+    expect(addContextDirectory).not.toHaveBeenCalled();
+
+    await act(async () => loaded.resolve());
+    await act(async () => undefined);
+    expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('fresh', NOTES);
+    expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
+  });
+
+  it('does not share a folder the user removed again when the new chat is reopened', async () => {
+    const stored = stubBridge([]);
+    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValue(NOTES);
+    addContextDirectory.mockResolvedValue({ status: 'added', path: NOTES, session: summary('fresh', 'chat', [NOTES]) });
+    await addFolderFromMenu();
+    expect(chips()).toHaveLength(1);
+    removeContextDirectory.mockResolvedValue(summary('fresh'));
+    await act(async () => chips()[0].querySelector('button')?.click());
+    expect(chips()).toHaveLength(0);
+
+    const other = summary('other', 'chat', undefined, 'Other');
+    stored.set('other', other);
+    createSession.mockResolvedValueOnce({ session: other });
+    await act(async () => byTestId('chat-new-session-btn')?.click());
+    await act(async () => undefined);
+    await openSessionRow('New conversation');
+
+    expect(addContextDirectory).toHaveBeenCalledTimes(1);
+    expect(chips()).toHaveLength(0);
+  });
+
+  it('keeps Add folder off while the open chat is still loading', async () => {
+    const loaded = deferred<void>();
+    heldLoads.set('alpha', loaded.promise);
+    stubBridge([summary('alpha')]);
+    await renderShell();
+
+    const addFolderItem = async () => {
+      if (!byTestId('composer-add-folder-item')) await act(async () => byTestId('composer-plus-btn')?.click());
+      return byTestId('composer-add-folder-item');
+    };
+    expect((await addFolderItem())?.getAttribute('aria-disabled')).toBe('true');
+    await act(async () => (await addFolderItem())?.click());
+    expect(addContextDirectory).not.toHaveBeenCalled();
+
+    await act(async () => loaded.resolve());
+    await act(async () => undefined);
+    expect((await addFolderItem())?.getAttribute('aria-disabled')).not.toBe('true');
+  });
+
+  it('follows the window mode, not the previous mode, when the mode is switched', async () => {
+    stubBridge([summary('chat-1', 'chat', undefined, 'Chat one'), summary('code-1', 'code', undefined, 'Code one')]);
+    await renderShell();
+    expect(byTestId('composer-plus-btn')).not.toBeNull();
+
+    const codeLoad = deferred<void>();
+    heldLoads.set('code-1', codeLoad.promise);
+    await act(async () => byTestId('mode-switch-code-btn')?.click());
+    await act(async () => undefined);
+    expect(byTestId('composer-plus-btn')).toBeNull();
+    expect(byTestId('composer-attach-btn')).not.toBeNull();
+    await act(async () => codeLoad.resolve());
+    await act(async () => undefined);
+
+    const chatLoad = deferred<void>();
+    heldLoads.set('chat-1', chatLoad.promise);
+    await act(async () => byTestId('mode-switch-chat-btn')?.click());
+    await act(async () => undefined);
+    expect(byTestId('composer-plus-btn')).toBeNull();
+    await act(async () => chatLoad.resolve());
+    await act(async () => undefined);
+    expect(byTestId('composer-plus-btn')).not.toBeNull();
   });
 
   it('leaves "+" the attach button in a Code session', async () => {

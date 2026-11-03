@@ -682,20 +682,16 @@ export function Composer({
             sat on the line is what used to send its hover surface outside the column. */}
         {addFolder ? (
           <Dropdown>
-            <Tooltip title="Attach a file or add a folder" size="sm" variant="soft" placement="top">
-              <Box component="span" sx={{ display: 'inline-flex' }}>
-                <MenuButton
-                  slots={{ root: IconButton }}
-                  slotProps={{
-                    root: { size: 'sm', variant: 'plain', color: 'neutral', 'data-testid': 'composer-plus-btn' },
-                  }}
-                  disabled={attachBlocked && !!addFolder.disabled}
-                  aria-label="Attach a file or add a folder"
-                >
-                  <Typography level="body-lg">+</Typography>
-                </MenuButton>
-              </Box>
-            </Tooltip>
+            <MenuButton
+              slots={{ root: IconButton }}
+              slotProps={{
+                root: { size: 'sm', variant: 'plain', color: 'neutral', 'data-testid': 'composer-plus-btn' },
+              }}
+              disabled={attachBlocked && !!addFolder.disabled}
+              aria-label="Attach a file or add a folder"
+            >
+              <Typography level="body-lg">+</Typography>
+            </MenuButton>
             <Menu size="sm" placement="top-start" data-testid="composer-plus-menu">
               <MenuItem
                 disabled={attachBlocked}

@@ -651,18 +651,34 @@ export function ChatShell({
    */
   const [folderForNewChat, setFolderForNewChat] = useState<{ sessionId: string; path: string } | null>(null);
   const shareFolder = conversation.project.addContextDirectory;
+  const [addFolderError, setAddFolderError] = useState<string | null>(null);
+  const addingFolder = useRef(false);
   const addFolder = useCallback(async () => {
     if (activeId) {
       await shareFolder();
       return;
     }
-    const path = await window.b4m.chat.pickProjectDirectory();
-    if (!path) return;
-    markSessionStart('new');
-    const created = await create();
-    setFolderForNewChat({ sessionId: created, path });
-    setActiveId(created);
+    if (addingFolder.current) return;
+    addingFolder.current = true;
+    setAddFolderError(null);
+    try {
+      const path = await window.b4m.chat.pickProjectDirectory();
+      if (!path) return;
+      markSessionStart('new');
+      const created = await create();
+      setFolderForNewChat({ sessionId: created, path });
+      setActiveId(created);
+    } catch (error) {
+      setAddFolderError(
+        `Desktop could not start a conversation: ${error instanceof Error ? error.message : String(error)}`
+      );
+    } finally {
+      addingFolder.current = false;
+    }
   }, [activeId, shareFolder, create, markSessionStart]);
+  useEffect(() => {
+    if (activeId) setAddFolderError(null);
+  }, [activeId]);
   useEffect(() => {
     if (!folderForNewChat || conversation.session?.id !== folderForNewChat.sessionId) return;
     setFolderForNewChat(null);
@@ -762,7 +778,8 @@ export function ChatShell({
     const empty = !sessions.some(session => session.mode === mode);
     if (!seedOnArrival(arrived.current, { loading: settling, mode, hasSessionInMode: !empty })) return;
     void startSession().then(created => {
-      if (created) setActiveId(created);
+      // A slow seed must not replace a chat the user opened or created while it was in flight.
+      if (created) setActiveId(current => current ?? created);
     });
   }, [settling, sessions, mode, startSession]);
 
@@ -1245,6 +1262,21 @@ export function ChatShell({
             </Box>
           )}
 
+          {addFolderError && (
+            <Box sx={contentColumnSx}>
+              <Alert
+                size="sm"
+                color="danger"
+                variant="soft"
+                sx={{ cursor: 'pointer' }}
+                onClick={() => setAddFolderError(null)}
+                data-testid="chat-add-folder-error"
+              >
+                {addFolderError}
+              </Alert>
+            </Box>
+          )}
+
           {codeError && (
             <Box sx={contentColumnSx}>
               <Alert
@@ -1332,9 +1364,10 @@ export function ChatShell({
             onStop={conversation.stop}
             onRunCommand={(name, args) => void conversation.runCommand(name, args)}
             onBrowseSkillMarket={() => openSkillMarket()}
-            // A Code session shares folders from its workspace controls instead.
+            // A Code session shares folders from its workspace controls instead. Both must say
+            // Chat: for a frame after a mode switch, the open session is still the old mode's.
             addFolder={
-              (conversation.session?.mode ?? mode) === 'chat'
+              mode === 'chat' && (conversation.session?.mode ?? 'chat') === 'chat'
                 ? { onClick: () => void addFolder(), disabled: opening }
                 : null
             }
