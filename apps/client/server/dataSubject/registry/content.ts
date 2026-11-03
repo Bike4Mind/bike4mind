@@ -113,7 +113,10 @@ export const contentHolders = {
   PublishedArtifact: {
     kind: 'holder',
     references: [
-      { path: 'ownerId', matchBy: 'userId', action: 'deleteDocument' },
+      // Only personal pages go. Account deletion hands an organization page a colleague published to that
+      // colleague (`purgeOwnerPublishedArtifacts`), and removes thumbnails and CDN copies
+      // (`purgeUserPublishedArtifacts`), so erasure must call those rather than delete the rows.
+      { path: 'ownerId', matchBy: 'userId', action: 'deleteDocument', where: { tier: 'user' } },
       { path: 'deletedBy', matchBy: 'userId', action: 'anonymize' },
       { path: 'lastPublishedBy', matchBy: 'userId', action: 'anonymize' },
       { path: 'previousVersionMeta.publishedBy', matchBy: 'userId', action: 'anonymize' },
