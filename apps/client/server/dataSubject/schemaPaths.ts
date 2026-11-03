@@ -1,23 +1,36 @@
 import type { Schema, SchemaType } from 'mongoose';
 
-type SchemaTypeWithSubschema = SchemaType & { schema?: Schema };
+type SchemaTypeWithSubschema = SchemaType & {
+  schema?: Schema;
+  options: { ref?: unknown };
+  /** The element type of a primitive array (`[{ type: String, ref: 'User' }]`). */
+  caster?: { options?: { ref?: unknown } };
+};
+
+export type SchemaLeaf = { path: string; refsUser: boolean };
 
 /**
- * Every leaf path of a schema, descending into subdocuments and arrays of subdocuments.
- * `Schema.eachPath` stops at a subdocument array, which is where shared-document access lists
- * (`users.userId`) live, so it is not enough on its own.
+ * Every leaf path of a schema, descending into subdocuments and arrays of subdocuments, and whether
+ * it is declared as a reference to the `User` model. `Schema.eachPath` stops at a subdocument
+ * array, which is where shared-document access lists (`users.userId`) live, so it is not enough on
+ * its own.
  */
-export function listSchemaPaths(schema: Schema, prefix = ''): string[] {
-  const paths: string[] = [];
+export function listSchemaLeaves(schema: Schema, prefix = ''): SchemaLeaf[] {
+  const leaves: SchemaLeaf[] = [];
   schema.eachPath((path, schemaType: SchemaTypeWithSubschema) => {
     const fullPath = `${prefix}${path}`;
     if (schemaType.schema) {
-      paths.push(...listSchemaPaths(schemaType.schema, `${fullPath}.`));
+      leaves.push(...listSchemaLeaves(schemaType.schema, `${fullPath}.`));
       return;
     }
-    paths.push(fullPath);
+    const ref = schemaType.options.ref ?? schemaType.caster?.options?.ref;
+    leaves.push({ path: fullPath, refsUser: ref === 'User' });
   });
-  return paths;
+  return leaves;
+}
+
+export function listSchemaPaths(schema: Schema): string[] {
+  return listSchemaLeaves(schema).map(leaf => leaf.path);
 }
 
 /**
@@ -38,16 +51,33 @@ export function schemaDeclaresPath(schema: Schema, dottedPath: string): boolean 
   return false;
 }
 
-// The last segment of a path that holds a person: a role noun with an optional id suffix
-// (`ownerId`, `actorUserId`, `reviewerId`), a `...By` attribution (`createdBy`, `revokedBy`), or an
-// email address. Deliberately broad: a false positive costs one `unrelatedPaths` entry, while a miss
-// is an erasure that leaves personal data behind.
-const ROLE_REFERENCE =
-  /(user|owner|actor|principal|author|creator|reporter|reviewer|requester|recipient|sender|inviter|viewer|assignee|payer)(ids?)?$/i;
-const ATTRIBUTION = /By(Id|UserId)?$/;
-const EMAIL = /email/i;
+// Matched against a path segment with underscores removed, so `created_by` reads as `createdby`.
+// A role noun, optionally plural, with an optional id suffix (`ownerId`, `actorUserId`, `memberIds`,
+// `sharedWithUsers`); a `...by` attribution (`createdBy`, `usedby`); a permission list (`canWrite`);
+// a share list (`sharedWith`); an email or contact address. Deliberately broad: a false positive
+// costs one `unrelatedPaths` entry, while a miss is an erasure that leaves personal data behind.
+const ROLE_NOUN =
+  '(user|owner|actor|principal|author|creator|reporter|reviewer|requester|recipient|receiver|sender|inviter|invitee|grantee|viewer|assignee|payer|member|participant|editor|subscriber)';
+const ROLE_REFERENCE = new RegExp(`${ROLE_NOUN}s?(user)?(ids?|names?)?$`, 'i');
+const ROLE_PARENT = new RegExp(`${ROLE_NOUN}s?$`, 'i');
+const SEGMENT_PATTERNS = [
+  ROLE_REFERENCE,
+  // `admin` alone is usually a flag (`isAdmin`); only its id form names a person.
+  /admin(user)?ids?$/i,
+  /by(id|userid)?$/i,
+  /^can(read|write|delete|edit|view|access|manage)/i,
+  /^shared/i,
+  /email/i,
+  /contact$/i,
+  /^uid$/i,
+];
 
 export function looksLikeUserReference(path: string): boolean {
-  const leaf = path.split('.').pop() ?? path;
-  return ROLE_REFERENCE.test(leaf) || ATTRIBUTION.test(leaf) || EMAIL.test(leaf);
+  const segments = path.split('.');
+  const leaf = segments[segments.length - 1];
+  if (SEGMENT_PATTERNS.some(pattern => pattern.test(leaf.replace(/_/g, '')))) return true;
+  // `author.id`, `editor.id`: the role is named by the parent, not the leaf. A subdocument's own
+  // `_id` is not this case.
+  const parent = segments[segments.length - 2];
+  return leaf === 'id' && parent !== undefined && ROLE_PARENT.test(parent);
 }

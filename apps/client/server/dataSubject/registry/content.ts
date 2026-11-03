@@ -5,6 +5,9 @@ export const contentHolders = {
     kind: 'holder',
     // `ownerType` is the Mongoose model name the feed entry was created for (see ActivityRepository).
     references: [{ path: 'ownerId', matchBy: 'userId', action: 'deleteDocument', where: { ownerType: 'User' } }],
+    // `ownerName` goes with the document when the person owns it, and names the owning entity otherwise.
+    unrelatedPaths: ['ownerName'],
+    unmatchedPaths: { receiverName: 'Cached display name of the receiver; the receiver id is not stored.' },
   },
   // Authored annotation threads go with their author; resolving or deleting someone else's is attribution only.
   Annotation: {
@@ -21,7 +24,12 @@ export const contentHolders = {
   },
   Artifact: {
     kind: 'holder',
-    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
+      { path: 'permissions.canRead', matchBy: 'userId', action: 'pullFromArray' },
+      { path: 'permissions.canWrite', matchBy: 'userId', action: 'pullFromArray' },
+      { path: 'permissions.canDelete', matchBy: 'userId', action: 'pullFromArray' },
+    ],
   },
   ArtifactContent: { kind: 'viaParent', parent: 'Artifact', foreignKey: 'artifactId' },
   // Versions follow the artifact so no content outlives it; a collaborator's version of someone
@@ -44,7 +52,10 @@ export const contentHolders = {
   FabFile: {
     kind: 'holder',
     references: [
-      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
+      // A personal upload goes; a file uploaded into an organization's lake is the org's and stays,
+      // with the uploader cleared (the anonymize below; precedence is in types.ts).
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', where: { organizationId: null } },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
       { path: 'users.userId', matchBy: 'userId', action: 'pullFromArray' },
       { path: 'supersededInLakes.decidedByUserId', matchBy: 'userId', action: 'anonymize' },
     ],

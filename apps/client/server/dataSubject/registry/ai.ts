@@ -31,6 +31,8 @@ export const aiHolders = {
   DataLake: {
     kind: 'holder',
     references: [
+      // A personal lake goes; an organization's lake stays with its creator cleared.
+      { path: 'createdByUserId', matchBy: 'userId', action: 'deleteDocument', where: { organizationId: null } },
       { path: 'createdByUserId', matchBy: 'userId', action: 'anonymize' },
       { path: 'lastUpdatedByUserId', matchBy: 'userId', action: 'anonymize' },
     ],
@@ -70,6 +72,7 @@ export const aiHolders = {
   DataLakeHealthSnapshot: {
     kind: 'noUserData',
     note: 'Aggregate health counters per lake and day; names no person.',
+    unrelatedPaths: ['measuredMembers'],
   },
   DataLakeOwnershipOffer: {
     kind: 'holder',
@@ -146,7 +149,13 @@ export const aiHolders = {
     ],
   },
   // Shares its `_id` with the owning LakeAccessEvent.
-  LakeAccessQueryText: { kind: 'viaParent', parent: 'LakeAccessEvent', foreignKey: '_id' },
+  LakeAccessQueryText: {
+    kind: 'viaParent',
+    parent: 'LakeAccessEvent',
+    foreignKey: '_id',
+    // The person's own search text, kept apart from the access event that only records them.
+    deleteWhenParentAnonymized: true,
+  },
   LakeConfigChangeEvent: {
     kind: 'holder',
     references: [
@@ -298,12 +307,14 @@ export const aiHolders = {
     kind: 'holder',
     references: [{ path: 'createdByUserId', matchBy: 'userId', action: 'anonymize' }],
   },
-  // The author's own publication, so it goes with them (rule for authored items), even though others
+  // The author's own publication, so it goes with them like the rest of their content, even though others
   // may have imported it: their copies are independent Skill documents.
   SkillListing: {
     kind: 'holder',
     references: [{ path: 'authorUserId', matchBy: 'userId', action: 'deleteDocument' }],
     secretPaths: ['shareToken'],
+    // The author's own display name, deleted with the listing.
+    unrelatedPaths: ['authorName'],
   },
   SkillListingImport: {
     kind: 'holder',
