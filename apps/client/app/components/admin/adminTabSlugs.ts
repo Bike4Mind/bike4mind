@@ -9,6 +9,7 @@ import {
   ADMIN_SHADOW_DETECTIONS_TAB_SLUG,
   ADMIN_SIGNUP_RISK_REVIEW_TAB_SLUG,
   ADMIN_SUBSCRIPTIONS_TAB_SLUG,
+  ADMIN_WAITLIST_TAB_SLUG,
   ADMIN_WEBHOOK_AUDIT_LOGS_TAB_SLUG,
 } from './adminTabParams';
 
@@ -34,7 +35,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.Documentation]: 'documentation',
   [AdminTab.WorldTime]: 'world-time',
   [AdminTab.Analysts]: 'analysts',
-  [AdminTab.Waitlist]: 'waitlist',
+  [AdminTab.Waitlist]: ADMIN_WAITLIST_TAB_SLUG,
   [AdminTab.Subscriptions]: ADMIN_SUBSCRIPTIONS_TAB_SLUG,
   [AdminTab.Revenue]: 'revenue',
   [AdminTab.Organizations]: ADMIN_ORGANIZATIONS_TAB_SLUG,
