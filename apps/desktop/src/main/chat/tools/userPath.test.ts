@@ -61,6 +61,38 @@ describe('findOnPath', () => {
   });
 });
 
+describe('hostProgram', () => {
+  it('gives the bare name off Windows', async () => {
+    const { hostProgram } = await import('./userPath');
+    const isExecutable = vi.fn(async () => true);
+
+    expect(await hostProgram('git', '/usr/bin', 'linux', isExecutable)).toBe('git');
+    expect(await hostProgram('rg', '/opt/homebrew/bin', 'darwin', isExecutable)).toBe('rg');
+    expect(isExecutable).not.toHaveBeenCalled();
+  });
+
+  it('gives the absolute Windows path, keeps it while it exists and finds none when it is gone', async () => {
+    const { hostProgram } = await import('./userPath');
+    const present = new Set(['C:\\Git\\cmd\\git.exe']);
+    const checked: string[] = [];
+    const isExecutable = async (file: string) => {
+      checked.push(file);
+      return present.has(file);
+    };
+    const path = '.;D:\\bin;C:\\Git\\cmd';
+
+    expect(await hostProgram('git', path, 'win32', isExecutable)).toBe('C:\\Git\\cmd\\git.exe');
+    checked.length = 0;
+    expect(await hostProgram('git', path, 'win32', isExecutable)).toBe('C:\\Git\\cmd\\git.exe');
+    expect(checked).toEqual(['C:\\Git\\cmd\\git.exe']);
+
+    present.clear();
+    expect(await hostProgram('git', path, 'win32', isExecutable)).toBeNull();
+    present.add('D:\\bin\\git.exe');
+    expect(await hostProgram('git', path, 'win32', isExecutable)).toBe('D:\\bin\\git.exe');
+  });
+});
+
 describe.skipIf(process.platform === 'win32')('resolveUserPath', () => {
   let directory: string;
 

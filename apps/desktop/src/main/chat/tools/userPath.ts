@@ -83,3 +83,25 @@ export async function findOnPath(
   }
   return null;
 }
+
+const found = new Map<string, string>();
+
+/**
+ * The file to spawn for the program `name`: on Windows its absolute path from `path` (see
+ * `findOnPath`), kept while it still exists, or null when there is none; elsewhere `name` itself.
+ */
+export async function hostProgram(
+  name: string,
+  path: string = process.env.PATH ?? '',
+  platform: NodeJS.Platform = process.platform,
+  isExecutable: (file: string) => Promise<boolean> = file => isExecutableFile(file, platform)
+): Promise<string | null> {
+  if (platform !== 'win32') return name;
+  const key = `${name}\0${path}`;
+  const kept = found.get(key);
+  if (kept && (await isExecutable(kept))) return kept;
+  const program = await findOnPath(name, path, platform, isExecutable);
+  if (program) found.set(key, program);
+  else found.delete(key);
+  return program;
+}
