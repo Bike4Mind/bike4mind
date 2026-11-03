@@ -734,6 +734,12 @@ export interface ChatMessage {
   /** Set with `system` when the app started this turn on its own; see ChatAutomaticOrigin. */
   automatic?: ChatAutomaticOrigin;
   /**
+   * Set on a spawned session's first prompt, which the parent conversation's model wrote. The
+   * thread still draws it as the prompt, but nothing that trusts what the user typed counts it:
+   * a session mention in it must not open another project to session_read (ChatService.knownTo).
+   */
+  seed?: true;
+  /**
    * What the THREAD shows in place of `content`, on messages the app wrote rather than either
    * speaker.
    *

@@ -2132,6 +2132,7 @@ export class ChatService {
       ...(released?.automatic
         ? { system: true, automatic: released.automatic, display: automaticDisplay(released.automatic) }
         : {}),
+      ...(options.spawnSeed ? { seed: true } : {}),
       ...(attached.length > 0 ? { attachments: attached } : {}),
       ...(skill ? { skill } : {}),
       ...(notes?.length ? { notes: [...notes] } : {}),
@@ -4849,7 +4850,7 @@ export class ChatService {
 
   /**
    * Whether `callerId`'s transcript traces `targetId` back to something its user did: a mention
-   * they wrote, or a message that conversation sent here (which they could read in the thread).
+   * they typed (not a spawn's model-written seed), or a message that conversation sent here (which they could read in the thread).
    * Read fresh, because the mention is usually in the very turn asking about it.
    */
   private async knownTo(callerId: string, targetId: string): Promise<boolean> {
@@ -4859,6 +4860,7 @@ export class ChatService {
         message.relay?.fromSessionId === targetId ||
         (message.role === 'user' &&
           !message.system &&
+          !message.seed &&
           findSessionMentions(message.content).some(mention => mention.sessionId === targetId))
     );
   }

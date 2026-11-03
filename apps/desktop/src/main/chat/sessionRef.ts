@@ -77,7 +77,8 @@ export function relayHoldReason(
   to: Pick<ChatSession, 'id' | 'project' | 'approvalMode'>
 ): ChatRelayHoldReason | null {
   if (from.project?.directory !== to.project?.directory) return 'other-project';
-  // The parent chose the child's mode, so the child reporting back widens nothing.
+  // Reporting to the session that spawned it widens nothing: parent reports were never held,
+  // and a child is capped at its parent's mode when spawned (its user may loosen it later).
   if (from.origin?.parentSessionId === to.id) return null;
   // `?? 'ask'` for a session stored before the mode existed, which is what it is relaunched at.
   if (MODE_RANK[to.approvalMode ?? 'ask'] > MODE_RANK[from.approvalMode ?? 'ask']) return 'looser-mode';

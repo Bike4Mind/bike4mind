@@ -795,7 +795,10 @@ describe('ChatService session_send', () => {
     });
 
     describe('what lets a session read another project', () => {
-      type Seed = (targetId: string, thirdId: string) => { content: string; system?: boolean; relay?: ChatRelayOrigin };
+      type Seed = (
+        targetId: string,
+        thirdId: string
+      ) => { content: string; system?: boolean; seed?: true; relay?: ChatRelayOrigin };
       const mention = (targetId: string) => formatSessionMention(targetId, 'Elsewhere');
 
       async function readAfterSeeding(seed: Seed) {
@@ -826,6 +829,7 @@ describe('ChatService session_send', () => {
           }),
         ],
         ['a mention inside an automatic notice', target => ({ content: `see ${mention(target)}`, system: true })],
+        ['a mention inside a spawn seed prompt', target => ({ content: `read ${mention(target)}`, seed: true })],
       ])('does not grant read for %s', async (_name, seed) => {
         expect((await readAfterSeeding(seed))?.error).toMatch(/another project/);
       });
