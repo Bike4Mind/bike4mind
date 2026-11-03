@@ -205,7 +205,7 @@ import {
 } from './tools/ApprovalGate';
 import { inspectDirectory, inspectDirectoryRequest } from './tools/requestDirectoryTool';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
-import { QUEST_COMPLETE_TOOL_NAME } from './tools/hostTools';
+import { QUEST_COMPLETE_TOOL_NAME, SESSION_SPAWN_TOOL_NAME } from './tools/hostTools';
 import { isWithin } from './tools/paths';
 import { BackgroundWake } from './backgroundWake';
 import type { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
@@ -3080,9 +3080,7 @@ export class ChatService {
           ...(promptCache ? { promptCache } : {}),
           ...(contextSnapshot ? { contextSnapshot } : {}),
           ...(deferred ? { deferred } : {}),
-          ...(toolCalls.some(call => call.name === QUEST_COMPLETE_TOOL_NAME && call.status === 'done')
-            ? { questComplete: true as const }
-            : {}),
+          ...(marksQuestComplete(toolCalls) ? { questComplete: true as const } : {}),
         };
         await this.settleReply(sessionId, !!resume, historyScope, message);
         this.emit({
@@ -7607,6 +7605,17 @@ export function sessionForRenderer(session: ChatSession | null): ChatSession | n
 }
 
 /** App-written notes ride after the turn's own words, so what the user said stays first. */
+/** An agent started after quest_complete in the same reply means the job was not finished after all. */
+function marksQuestComplete(toolCalls: readonly ChatToolCall[]): boolean {
+  let marked = false;
+  for (const call of toolCalls) {
+    if (call.status !== 'done') continue;
+    if (call.name === QUEST_COMPLETE_TOOL_NAME) marked = true;
+    else if (call.name === SESSION_SPAWN_TOOL_NAME) marked = false;
+  }
+  return marked;
+}
+
 function withNotes(message: ChatMessage, text: string): string {
   if (!message.notes?.length) return text;
   const block = ['<system-reminder>', ...message.notes, '</system-reminder>'].join('\n');

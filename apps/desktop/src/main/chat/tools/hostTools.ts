@@ -140,9 +140,11 @@ async function cardPlacement(input: Record<string, unknown>, host: HostContext):
   return { kind: 'worktree', branch, base: carried || (await host.spawnBase()) };
 }
 
+export const SESSION_SPAWN_TOOL_NAME = 'session_spawn';
+
 export const sessionSpawn: ToolDefinition = {
   schema: {
-    name: 'session_spawn',
+    name: SESSION_SPAWN_TOOL_NAME,
     description:
       'Hand a self-contained piece of work to a NEW conversation in this project. With the user ' +
       'present this only SUGGESTS it: a card appears beside their composer where they can edit ' +

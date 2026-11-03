@@ -173,6 +173,27 @@ describe('ChatService quest_complete', () => {
     expect(final?.questComplete).toBe(true);
   });
 
+  it('leaves the reply unmarked when it starts another agent after quest_complete', async () => {
+    const parent = await parentWithAgent();
+    reply(await nthStreamOf('task a', 1), 'did a');
+    callQuestComplete(await nthStreamOf('go', 3), 'quest-1');
+    const spawning = await nthStreamOf('go', 4);
+    spawning.write(
+      frame({
+        type: 'tool_use',
+        tools: [{ id: 'spawn-b', name: 'session_spawn', arguments: JSON.stringify({ prompt: 'task b', title: 'b' }) }],
+      })
+    );
+    spawning.write(frame('[DONE]'));
+    reply(await nthStreamOf('go', 5), 'One more piece first.');
+    await idle(parent.id);
+
+    const interim = await lastReply(parent.id);
+    expect(call(interim, 'quest-1')).toMatchObject({ status: 'done' });
+    expect(call(interim, 'spawn-b')).toMatchObject({ status: 'done' });
+    expect(interim.questComplete).toBeUndefined();
+  });
+
   it('is refused while an agent is still working, and leaves the reply unmarked', async () => {
     const parent = await parentWithAgent();
     await nthStreamOf('task a', 1);
