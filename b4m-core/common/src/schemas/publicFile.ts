@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { PaginationQuerySchema, paginatedResponseSchema } from './pagination';
+import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '../constants/chunking';
+import { FAB_FILE_TYPE_FILTERS } from '../types/entities/FabFileTypes';
 
 /**
  * Public wire schemas for the `/api/v1/files` endpoints: start an upload, list, read one file back
@@ -102,3 +104,73 @@ export const ListQuestFilesResponseSchema = z.object({
 });
 
 export type ListQuestFilesResponse = z.infer<typeof ListQuestFilesResponseSchema>;
+
+/** POST /api/v1/files/{id}/chunk. */
+export const ChunkFileRequestSchema = z.object({
+  /** Passage target in tokens, inclusive bounds. Out-of-range values are rejected, never clamped. */
+  chunk_size: z.number().int().min(MIN_PASSAGE_TOKEN_TARGET).max(OVERSIZED_PASSAGE_TOKEN_THRESHOLD),
+});
+
+export type ChunkFileRequest = z.infer<typeof ChunkFileRequestSchema>;
+
+export const ChunkFileResponseSchema = z.object({
+  /** Id of the queued chunking job. Chunking runs in the background and there is no endpoint to poll it. */
+  message_id: z.string(),
+});
+
+export type ChunkFileResponse = z.infer<typeof ChunkFileResponseSchema>;
+
+/** Upper bound on one `by-ids` lookup and one bulk delete, so a request cannot fan out unboundedly. */
+export const MAX_FILE_IDS_PER_REQUEST = 100;
+
+/** GET /api/v1/files/search. Not paginated: it returns the best `limit` matches, so narrow with `q` and `type`. */
+export const SearchFilesQuerySchema = z.object({
+  /** Case-insensitive substring match on the file name. Omit to list by name. */
+  q: z.string().min(1).max(200).optional(),
+  type: z.enum(FAB_FILE_TYPE_FILTERS).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+});
+
+export type SearchFilesQuery = z.infer<typeof SearchFilesQuerySchema>;
+
+/** Named `files`, not `data`: bounded by `limit`, so it is not a paginated list. */
+export const SearchFilesResponseSchema = z.object({
+  files: z.array(FileResponseSchema),
+});
+
+export type SearchFilesResponse = z.infer<typeof SearchFilesResponseSchema>;
+
+/** GET /api/v1/files/by-ids. */
+export const FilesByIdsQuerySchema = z.object({
+  /** Comma-separated file ids, at most 100. */
+  ids: z.string().min(1),
+});
+
+export type FilesByIdsQuery = z.infer<typeof FilesByIdsQuerySchema>;
+
+/** Ids the caller cannot see, or that do not exist, are simply absent. Bounded by the id cap, so not paginated. */
+export const FilesByIdsResponseSchema = z.object({
+  files: z.array(FileResponseSchema),
+});
+
+export type FilesByIdsResponse = z.infer<typeof FilesByIdsResponseSchema>;
+
+/** POST /api/v1/files/bulk-delete. */
+export const BulkDeleteFilesRequestSchema = z.object({
+  file_ids: z.array(z.string().min(1)).min(1).max(MAX_FILE_IDS_PER_REQUEST),
+});
+
+export type BulkDeleteFilesRequest = z.infer<typeof BulkDeleteFilesRequestSchema>;
+
+/** Every requested id lands in exactly one bucket. */
+export const BulkDeleteFilesResponseSchema = z.object({
+  /** Files you owned, now deleted. */
+  deleted: z.array(z.string()),
+  /** Files shared with you: only your access was removed. */
+  unshared: z.array(z.string()),
+  not_found: z.array(z.string()),
+  /** Ids that could not be processed; retry them. */
+  failed: z.array(z.object({ id: z.string(), error: z.string() })),
+});
+
+export type BulkDeleteFilesResponse = z.infer<typeof BulkDeleteFilesResponseSchema>;
