@@ -377,6 +377,9 @@ describe('OllamaLocal', () => {
       controls: { temperature: { default: 0.7 }, topK: { default: 20 }, topP: { default: 0.9 } },
     });
     expect(llama?.controls).not.toHaveProperty('effort');
+    expect(gptOss?.controls?.maxOutputTokens?.includesThinking).toBe(true);
+    expect(llama?.controls?.maxOutputTokens).toBeDefined();
+    expect(llama?.controls?.maxOutputTokens).not.toHaveProperty('includesThinking');
   });
 
   describe('thinking off for a template that always thinks', () => {

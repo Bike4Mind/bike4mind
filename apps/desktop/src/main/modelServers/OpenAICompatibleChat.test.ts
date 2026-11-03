@@ -373,6 +373,28 @@ describe('OpenAICompatibleChat generation settings', () => {
     expect(bodies[0]).toMatchObject({ reasoning_effort: 'high' });
   });
 
+  it('sends the gpt-oss level to a turn on a served name listed as its alias', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetch: FetchLike = async (url, init) => {
+      if (String(url).endsWith('/v1/models'))
+        return Response.json({
+          object: 'list',
+          data: [
+            { id: 'openai/gpt-oss-20b', object: 'model', root: '/weights/oss' },
+            { id: 'house-model', object: 'model', root: '/weights/oss' },
+          ],
+        });
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return sse([delta({ content: 'ok' }, 'stop'), '[DONE]']);
+    };
+    const client = chat(fetch, 'vllm');
+    expect((await client.listModels()).map(model => [model.name, model.aliasIds])).toEqual([
+      ['openai/gpt-oss-20b', ['local:srv-abc123:house-model']],
+    ]);
+    await collect(client, ask('house-model', { reasoningEffort: 'medium' }));
+    expect(bodies[0]).toMatchObject({ model: 'house-model', reasoning_effort: 'medium' });
+  });
+
   it('lists a thinking switch learned on an earlier run, and saves one learned now', async () => {
     const { fetch } = server(['qwen3-8b', 'phi-4'], true);
     const add = vi.fn(async () => undefined);
@@ -575,6 +597,76 @@ describe('OpenAICompatibleChat max output on a context the server fixes', () => 
     const events = await collect(client, ask(14_000, 2048));
     expect(server.bodies.map(body => body.max_tokens)).toEqual([2048, undefined]);
     expect(events.at(-1)).toMatchObject({ stopReason: 'stop' });
+  });
+
+  it('does not ask again for a refusal that is not about the context, or when it sent no max_tokens', async () => {
+    const refusing = (status: number, message: string) => {
+      const bodies: Record<string, unknown>[] = [];
+      const fetch: FetchLike = async (url, init) => {
+        if (String(url).endsWith('/v1/models'))
+          return Response.json({ object: 'list', data: [{ id: 'qwen3-8b', object: 'model', max_model_len: CONTEXT }] });
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return Response.json({ error: { message } }, { status });
+      };
+      return { client: chat(fetch, 'vllm'), bodies };
+    };
+    for (const [status, message, maxTokens] of [
+      [400, 'temperature must be at most 2', 2048],
+      [500, 'max_tokens scheduler crashed', 2048],
+      [400, "This model's maximum context length is 8192 tokens.", undefined],
+    ] as const) {
+      const { client, bodies } = refusing(status, message);
+      await client.listModels();
+      await expect(collect(client, ask(400, maxTokens))).rejects.toThrow();
+      expect(bodies).toHaveLength(1);
+    }
+  });
+
+  it('asks again without max_tokens and without the tools the server refused', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetch: FetchLike = async (url, init) => {
+      if (String(url).endsWith('/v1/models'))
+        return Response.json({ object: 'list', data: [{ id: 'qwen3-8b', object: 'model', max_model_len: CONTEXT }] });
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      bodies.push(body);
+      if (body.tools) return new Response('{"error":{"message":"tools param requires --jinja flag"}}', { status: 500 });
+      if (body.max_tokens)
+        return Response.json(
+          { error: { message: "This model's maximum context length is 8192 tokens." } },
+          { status: 400 }
+        );
+      return sse([delta({ content: 'ok' }, 'stop'), '[DONE]']);
+    };
+    const client = chat(fetch, 'llama-server');
+    await client.listModels();
+    const tools = [{ toolSchema: { name: 'read_file', parameters: { type: 'object' } } }];
+    await collect(client, { ...ask(400, 2048), tools });
+    expect(bodies.map(body => ['tools' in body, body.max_tokens])).toEqual([
+      [true, 2048],
+      [false, 2048],
+      [false, undefined],
+    ]);
+  });
+
+  it('tells a turn its message is too long for the tools when only the reply room of a large override is missing', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetch: FetchLike = async (url, init) => {
+      if (String(url).endsWith('/v1/models'))
+        return Response.json({ object: 'list', data: [{ id: 'qwen3-8b', object: 'model', max_model_len: 32_768 }] });
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return sse([delta({ content: 'ok' }, 'stop'), '[DONE]']);
+    };
+    const client = chat(fetch, 'vllm');
+    await client.listModels();
+    const notices: string[] = [];
+    await client.stream(
+      { ...ask(400, 6000), sessionId: 's1', toolPromptTokens: 28_000 },
+      () => undefined,
+      undefined,
+      undefined,
+      notice => notices.push(notice)
+    );
+    expect(notices).toEqual([expect.stringMatching(/too long for qwen3-8b's 32768-token context/)]);
   });
 
   it('sends the limit as given when the server states no context', async () => {
