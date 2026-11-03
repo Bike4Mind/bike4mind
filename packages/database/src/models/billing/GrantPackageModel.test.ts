@@ -157,3 +157,32 @@ describe('GrantPackageRepository.isInboxClaimed', () => {
     expect(await grantPackageRepository.isInboxClaimed('other@gmail.com')).toBe(false);
   });
 });
+
+describe('GrantPackageRepository admin reads and writes', () => {
+  it("lists packages with today's daily-cap count and leaves other days out", async () => {
+    const now = new Date('2026-03-01T12:00:00Z');
+    const capped = await createPackage({ dailyCap: 5 });
+    const open = await createPackage({});
+    await grantPackageRepository.reserveRedemption(capped, 'user-1', now);
+    await grantPackageRepository.reserveRedemption(capped, 'user-2', new Date('2026-02-28T12:00:00Z'));
+
+    const page = await grantPackageRepository.listPackages({ page: 1, limit: 25, now });
+    const byId = new Map(page.data.map(pkg => [pkg.id, pkg]));
+    expect(page.meta.total).toBe(2);
+    expect(byId.get(capped)).toMatchObject({ redeemedToday: 1, redeemedTotal: 2 });
+    expect(byId.get(open)).toMatchObject({ redeemedToday: 0 });
+  });
+
+  it('creates and patches a package, and returns null for an unknown id', async () => {
+    const created = await grantPackageRepository.create({
+      name: 'Launch',
+      credits: 100,
+      totalCap: 1,
+      dailyCap: null,
+      createdBy: 'synthetic-admin',
+    });
+    const updated = await grantPackageRepository.update(created.id, { totalCap: null, reason: 'Internal testing' });
+    expect(updated).toMatchObject({ totalCap: null, reason: 'Internal testing', redeemedTotal: 0, active: true });
+    expect(await grantPackageRepository.update(new mongoose.Types.ObjectId().toString(), { active: false })).toBeNull();
+  });
+});

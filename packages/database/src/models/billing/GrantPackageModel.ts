@@ -1,7 +1,10 @@
 import mongoose, { Schema, model, Types } from 'mongoose';
 import {
   grantPackageDay,
+  type CreateGrantPackageInput,
   type GrantPackageReservation,
+  type PaginatedResponse,
+  type UpdateGrantPackageInput,
   type IGrantPackage,
   type IGrantPackageDocument,
   type IGrantPackageRepository,
@@ -87,6 +90,44 @@ export class GrantPackageRepository implements IGrantPackageRepository {
   async findById(id: string): Promise<IGrantPackageDocument | null> {
     if (!Types.ObjectId.isValid(id)) return null;
     const doc = await GrantPackage.findById(id).lean();
+    return doc ? toDocument(doc) : null;
+  }
+
+  /** Newest first, each with how many redemptions today's daily cap has counted. */
+  async listPackages({
+    page,
+    limit,
+    now = new Date(),
+  }: {
+    page: number;
+    limit: number;
+    now?: Date;
+  }): Promise<PaginatedResponse<IGrantPackageDocument & { redeemedToday: number }>> {
+    const [docs, total] = await Promise.all([
+      GrantPackage.find()
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      GrantPackage.countDocuments(),
+    ]);
+    const ids = docs.map(doc => String(doc._id));
+    const dayCounts = await GrantPackageDayCount.find({ packageId: { $in: ids }, day: grantPackageDay(now) }).lean();
+    const today = new Map(dayCounts.map(row => [row.packageId, row.count]));
+    return {
+      data: docs.map(doc => ({ ...toDocument(doc), redeemedToday: today.get(String(doc._id)) ?? 0 })),
+      meta: { currentPage: page, totalPages: Math.ceil(total / limit), total },
+    };
+  }
+
+  async create(input: CreateGrantPackageInput & { createdBy: string; reason?: string | null }) {
+    const [doc] = await GrantPackage.create([input]);
+    return toDocument(doc.toObject());
+  }
+
+  async update(id: string, patch: UpdateGrantPackageInput & { reason?: string | null }) {
+    if (!Types.ObjectId.isValid(id)) return null;
+    const doc = await GrantPackage.findByIdAndUpdate(id, { $set: patch }, { new: true, runValidators: true }).lean();
     return doc ? toDocument(doc) : null;
   }
 

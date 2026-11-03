@@ -16,6 +16,43 @@ export const grantPackageInputSchema = z.object({
 
 export type GrantPackageInput = z.infer<typeof grantPackageInputSchema>;
 
+/** Admin create body; `reason` is validated separately, since only a large grant requires one. */
+export const createGrantPackageSchema = grantPackageInputSchema.omit({ reason: true }).strict();
+export type CreateGrantPackageInput = z.infer<typeof createGrantPackageSchema>;
+
+/** Admin edit body. Packages are deactivated, never deleted, so redemption history keeps its target. */
+export const updateGrantPackageSchema = createGrantPackageSchema.partial().strict();
+export type UpdateGrantPackageInput = z.infer<typeof updateGrantPackageSchema>;
+
+/** Same thresholds as the admin audit's large-grant escalation (AdminAuditCriticalGrantCredits / DailyGrantCredits). */
+export type GrantPackageReasonPolicy = { singleGrantCredits: number; dailyTotalCredits: number };
+
+type GrantPackageExposureShape = { credits: number; totalCap: number | null };
+
+/** Most credits the package can ever hand out; an uncapped package with credits is unbounded. */
+export const grantPackageExposure = ({ credits, totalCap }: GrantPackageExposureShape): number =>
+  credits === 0 ? 0 : credits * (totalCap ?? Infinity);
+
+/**
+ * A package needs an admin reason when one redemption exceeds the single-grant threshold or its
+ * whole run can exceed the daily threshold. The server enforces this; the admin form mirrors it.
+ */
+export const requiresGrantReason = (pkg: GrantPackageExposureShape, policy: GrantPackageReasonPolicy): boolean =>
+  pkg.credits > policy.singleGrantCredits || grantPackageExposure(pkg) > policy.dailyTotalCredits;
+
+/**
+ * An edit needs a reason when it leaves a large package live and widens what it can hand out
+ * (more credits per signup, a raised or removed cap, or reactivation). Shrinking one does not.
+ */
+export const updateRequiresGrantReason = (
+  before: GrantPackageExposureShape & { active: boolean },
+  after: GrantPackageExposureShape & { active: boolean },
+  policy: GrantPackageReasonPolicy
+): boolean =>
+  after.active &&
+  requiresGrantReason(after, policy) &&
+  (!before.active || after.credits > before.credits || grantPackageExposure(after) > grantPackageExposure(before));
+
 /** UTC calendar day a daily cap counts against. */
 export const grantPackageDay = (now: Date = new Date()): string => now.toISOString().slice(0, 10);
 
