@@ -101,10 +101,10 @@ describe('getOrgTool', () => {
       currentCredits: 5000,
       lastCreditsPurchasedAt: '2026-09-01T00:00:00.000Z',
       maxCreditsPerMember: null,
-      storageLimit: 1000,
       currentStorageSize: 2048,
       allowedGroupTypes: [],
       createdAt: '2026-01-01T00:00:00.000Z',
+      storageLimitBytes: 1_000_000_000,
       hasSystemPrompt: true,
     });
     expect(result.data.owner).toEqual({ userId: 'owner-1', name: 'Olive' });
@@ -149,6 +149,15 @@ describe('getOrgTool', () => {
     const result = await runTool({ orgId: ORG_ID });
 
     expect(result.data.organization.description).toHaveLength(500);
+  });
+
+  it('reports the default storage limit in bytes when the org has none set', async () => {
+    resolveAdminOrgRef.mockResolvedValue({ ok: true, org: orgDoc({ storageLimit: null }) });
+
+    const result = await runTool({ orgId: ORG_ID });
+
+    expect(result.data.organization.storageLimitBytes).toBe(10_000_000_000);
+    expect(result.data.organization).not.toHaveProperty('storageLimit');
   });
 
   it('never emits secrets or the system prompt text', async () => {

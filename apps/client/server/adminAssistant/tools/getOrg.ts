@@ -1,4 +1,4 @@
-import type { IOrganizationDocument } from '@bike4mind/common';
+import { organizationStorageLimitBytes, type IOrganizationDocument } from '@bike4mind/common';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { resolveUserNames } from '../../utils/resolveUserNames';
@@ -26,7 +26,6 @@ export const ADMIN_ASSISTANT_ORG_FIELDS = [
   'currentCredits',
   'lastCreditsPurchasedAt',
   'maxCreditsPerMember',
-  'storageLimit',
   'currentStorageSize',
   'allowedGroupTypes',
   'createdAt',
@@ -41,7 +40,7 @@ const toOrgFieldValue = (org: IOrganizationDocument, field: (typeof ADMIN_ASSIST
 export const getOrgTool = defineAdminTool({
   name: 'admin_get_org',
   description:
-    'Look up one organization by id or name: profile basics (description truncated to 500 characters, seats, credit balance, storage in bytes against its limit in MB), owner, members with role, and active subscriptions. The owner is reported separately and is usually not in the members list; memberCount includes the owner, matching how seats are counted.',
+    'Look up one organization by id or name: profile basics (description truncated to 500 characters, seats, credit balance, storage used against its effective limit, both in bytes), owner, members with role, and active subscriptions. The owner is reported separately and is usually not in the members list; memberCount includes the owner, matching how seats are counted.',
   input: AdminOrgRefSchema,
   run: async ref => {
     const resolved = await resolveAdminOrgRef(ref);
@@ -60,6 +59,7 @@ export const getOrgTool = defineAdminTool({
       data: {
         organization: {
           ...Object.fromEntries(ADMIN_ASSISTANT_ORG_FIELDS.map(field => [field, toOrgFieldValue(org, field)])),
+          storageLimitBytes: organizationStorageLimitBytes(org),
           hasSystemPrompt: Boolean(org.systemPrompt?.trim()),
         },
         owner: { userId: org.userId, name: names.get(org.userId) ?? null },
