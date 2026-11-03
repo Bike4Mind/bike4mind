@@ -174,8 +174,9 @@ async function ownersOf(docs: SubscriptionDoc[]): Promise<OwnerLookup> {
   ]);
 
   const accountBlocked = new Map<string, boolean>();
+  const userOwnerIds = new Set(userIds);
   const billingOwnerIds = organizations.flatMap(organization =>
-    organization.userId && !userIds.includes(String(organization.userId)) ? [String(organization.userId)] : []
+    organization.userId && !userOwnerIds.has(String(organization.userId)) ? [String(organization.userId)] : []
   );
   const billingOwners =
     billingOwnerIds.length > 0
