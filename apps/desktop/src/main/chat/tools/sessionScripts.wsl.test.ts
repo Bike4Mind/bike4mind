@@ -30,6 +30,7 @@ vi.doMock('node:fs/promises', async () => {
 });
 /** Symlinks in the distro, Linux path to Linux target. */
 const links = new Map<string, string>();
+const askedDistros: string[] = [];
 
 vi.doMock('../../wsl/wslPath', async () => {
   const actual = await vi.importActual<typeof import('../../wsl/wslPath')>('../../wsl/wslPath');
@@ -37,7 +38,8 @@ vi.doMock('../../wsl/wslPath', async () => {
     ...actual,
     wslLocation: (directory: string) => actual.parseWslPath(directory),
     wslUserEnvironment: async () => ({ path: '/usr/bin', home: '/home/me' }),
-    wslRealpath: async (_distro: string, linuxPath: string) => {
+    wslRealpath: async (distro: string, linuxPath: string) => {
+      askedDistros.push(distro);
       const path = posix.normalize(linuxPath);
       for (const [link, target] of links) {
         if (path === link || path.startsWith(`${link}/`)) return target + path.slice(link.length);
@@ -101,6 +103,15 @@ describe('the scripts a command in a WSL project runs, followed through the dist
     await forgetSessionWrites(session);
   });
 
+  it('records a write through a distro symlink where it lands, and finds it run by either name', async () => {
+    links.set('/home/me/repo/link', '/home/me/repo/real');
+    await recordSessionWrite(context, `${ROOT}\\link\\s.sh`);
+    await recordSessionWrite(context, `${ROOT}\\real\\t.sh`);
+
+    expect((await sessionScriptRun('sh real/s.sh', ROOT, session))?.names).toEqual(['real/s.sh']);
+    expect((await sessionScriptRun('sh link/t.sh', ROOT, session))?.names).toEqual(['link/t.sh']);
+  });
+
   it('records a write to a Linux name holding a share spelling character under that name', async () => {
     const odd = 'x\u{f05c}';
     links.set(`/home/me/repo/${odd}`, '/home/me/repo/real');
@@ -109,5 +120,27 @@ describe('the scripts a command in a WSL project runs, followed through the dist
 
     expect((await sessionScriptRun('sh real/s.sh', ROOT, session))?.names).toEqual(['real/s.sh']);
     expect((await sessionScriptRun(`cd '${odd}' && sh s.sh`, ROOT, session))?.names).toEqual(['s.sh']);
+  });
+
+  it("finds a script written in the distro user's home and run from ~", async () => {
+    await recordSessionWrite(context, '\\\\wsl.localhost\\Ubuntu\\home\\me\\s.sh');
+
+    expect((await sessionScriptRun('bash ~/s.sh', ROOT, session))?.names).toEqual(['/home/me/s.sh']);
+  });
+
+  it('finds a written script at every place its operand can name', async () => {
+    await recordSessionWrite(context, `${ROOT}\\s.sh`);
+    const named = `${ROOT}\\s.sh`;
+
+    expect((await sessionScriptRun(`bash '${named}'`, ROOT, session))?.names).toEqual([named]);
+  });
+
+  it('asks no other distro where a script named in it lands', async () => {
+    const debian = '\\\\wsl.localhost\\Debian\\home\\me\\s.sh';
+    await recordSessionWrite(context, debian);
+    askedDistros.length = 0;
+
+    expect((await sessionScriptRun(`bash '${debian}'`, ROOT, session))?.names).toEqual([debian]);
+    expect(askedDistros.filter(distro => distro !== 'Ubuntu')).toEqual([]);
   });
 });

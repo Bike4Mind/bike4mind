@@ -36,6 +36,7 @@ const {
   hostPhysicalTarget,
   hostRealpath,
   isWithin,
+  onAnotherComputer,
   resolveOperand,
   resolveWithinRoots,
   resolveWithinRootsPhysically,
@@ -169,5 +170,19 @@ describe('paths in a WSL folder', () => {
     await denied(resolveWithinRootsPhysically('notes.txt', [REPO], entered));
     expect(await hostPhysicalTarget(`${entered}\\notes.txt`)).toBe('\\\\wsl.localhost\\Ubuntu\\home\\me\\notes.txt');
     expect(await resolveWithinRootsPhysically('x\\/notes.txt', [REPO], REPO)).toBe(`${REPO}\\x\u{f05c}\\notes.txt`);
+  });
+
+  it('asks no other distro about a share place in it, even one with a granted folder', async () => {
+    const debian = '\\\\wsl.localhost\\Debian\\home\\me';
+
+    await denied(resolveWithinRootsPhysically(`${debian}\\notes.txt`, [REPO, debian], REPO));
+    expect(asked.filter(question => question.startsWith('Debian:'))).toEqual([]);
+  });
+
+  it('counts a share path as a WSL place, not a path to another computer', () => {
+    expect(onAnotherComputer('\\\\wsl.localhost\\Ubuntu\\home\\me')).toBe(false);
+    expect(onAnotherComputer('//wsl$/Ubuntu/home/me')).toBe(false);
+    expect(onAnotherComputer('\\\\fileserver\\share\\notes.txt')).toBe(true);
+    expect(onAnotherComputer('C:\\Users\\me')).toBe(false);
   });
 });

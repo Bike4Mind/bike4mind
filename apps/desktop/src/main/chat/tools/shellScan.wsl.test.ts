@@ -14,6 +14,8 @@ const distroUser: { current: { path: string; home: string } | null } = {
 const unresolvable = { current: false };
 /** Symlinks in the distro, Linux path to Linux target. */
 const links = new Map<string, string>();
+/** Files Windows can read over the share, by share path. */
+const shareFiles = new Map<string, string>();
 
 const followLinks = (linuxPath: string): string => {
   const path = posix.normalize(linuxPath);
@@ -35,6 +37,9 @@ vi.doMock('node:fs/promises', async () => {
       typeof value === 'function'
         ? async (...args: unknown[]) => {
             touched.push(...args.filter((arg): arg is string => typeof arg === 'string'));
+            const file = typeof args[0] === 'string' ? shareFiles.get(args[0]) : undefined;
+            if (file !== undefined && name === 'readFile') return file;
+            if (file !== undefined && name === 'stat') return { isFile: () => true, isDirectory: () => false, size: 1 };
             throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
           }
         : value,
@@ -347,11 +352,13 @@ describe('a script that names the home folder before the distro has said where i
 
 describe('symlinks and odd names in a WSL project, followed by the distro', () => {
   const root = '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo';
+  const HOME = '\\\\wsl.localhost\\Ubuntu\\home\\me';
   /** A Linux name holding U+F05C itself, which the share also uses to spell `\`. */
   const odd = 'x\u{f05c}';
 
   afterEach(() => {
     links.clear();
+    shareFiles.clear();
   });
 
   it('asks the distro about a name holding a share spelling character under its own Linux name', async () => {
@@ -369,5 +376,54 @@ describe('symlinks and odd names in a WSL project, followed by the distro', () =
 
     expect((await scanShell(`cd '${odd}' && cat up/notes.txt`, root, [root]))?.directories).toHaveLength(1);
     expect((await scanShell(`cd '${odd}' && cat notes.txt`, root, [root]))?.directories).toEqual([]);
+  });
+
+  it('records a write after a cd through a symlink in the folder the link leads to', async () => {
+    links.set('/home/me/repo/link', '/home/me/repo/a/b');
+
+    const scan = await scanShell('cd link && echo x > out.txt', root, [root]);
+
+    expect(scan?.writes).toEqual([`${root}\\a\\b\\out.txt`]);
+  });
+
+  it('tracks a cd to a share-spelled name as the Linux name bash enters, asking about nothing', async () => {
+    const scan = await scanShell(`cd '\\\\wsl.localhost\\Ubuntu\\etc' && cat ../notes.txt`, root, [root]);
+
+    expect(scan?.directories).toEqual([]);
+    expect(scan?.paths).toContain(`${root}\\notes.txt`);
+  });
+
+  it('judges a name in a toolchain folder by how it is written as well as where it links', async () => {
+    links.set('/home/me/.cargo/credentials.toml', '/home/me/.cargo/bin');
+
+    const scan = await scanShell('ls ~/.cargo/credentials.toml', root, [root]);
+
+    expect(scan?.directories).toEqual([`${HOME}\\.cargo`]);
+  });
+
+  it.each([
+    ['tar -xf a.tar -C out a/c.txt', [`${root}\\out\\a\\c.txt`]],
+    ['unzip a.zip a/c.txt -d out', [`${root}\\out\\a\\c.txt`]],
+  ])('records the folder an archive member lands in by Linux rules: %s', async (command, expected) => {
+    expect((await scanShell(command, root, [root]))?.writtenTrees).toEqual(expected);
+  });
+
+  it('records what git -C rewrites in the folder named by Linux rules', async () => {
+    const scan = await scanShell("git -C 'a\\b' checkout -- x.txt", root, [root]);
+
+    expect(scan?.writtenTrees).toContain(`${root}\\a\u{f05c}b\\x.txt`);
+    expect(scan?.writtenTrees).not.toContain(`${root}\\a\\b\\x.txt`);
+  });
+
+  it('reads the patch fed to patch on standard input from the Linux name', async () => {
+    shareFiles.set(
+      `${root}\\d\u{f05c}fix.diff`,
+      'diff --git a/x.sh b/x.sh\n--- a/x.sh\n+++ b/x.sh\n@@ -1 +1 @@\n-a\n+b\n'
+    );
+
+    const scan = await scanShell("patch -p1 < 'd\\fix.diff'", root, [root]);
+
+    expect(scan?.writes).toContain(`${root}\\x.sh`);
+    expect(scan?.writtenTrees).toEqual([]);
   });
 });
