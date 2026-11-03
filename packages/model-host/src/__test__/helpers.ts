@@ -48,7 +48,7 @@ export const settings: OllamaSettings = {
   unreadablePaths: [],
 };
 
-export const probe = (): Promise<ModelHostProbe> => Promise.resolve({ host: facts, settings });
+export const probe = (): Promise<ModelHostProbe> => Promise.resolve({ host: facts, settings, ollamaHome: null });
 
 /** Unix sockets need a short path, so these live under the system temp dir rather than a long scratch path. */
 export async function tempDir(): Promise<{ dir: string; cleanup: () => Promise<void> }> {
@@ -72,6 +72,21 @@ export function get(socketPath: string, path: string, headers: Record<string, st
     });
     req.on('error', reject);
     req.end();
+  });
+}
+
+export function send(socketPath: string, method: string, path: string, body?: unknown): Promise<Reply> {
+  return new Promise((resolve, reject) => {
+    const text = body === undefined ? '' : typeof body === 'string' ? body : JSON.stringify(body);
+    const headers = text ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(text) } : {};
+    const req = request({ socketPath, path, method, headers, agent: false }, res => {
+      let reply = '';
+      res.setEncoding('utf8');
+      res.on('data', chunk => (reply += chunk));
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: reply }));
+    });
+    req.on('error', reject);
+    req.end(text);
   });
 }
 

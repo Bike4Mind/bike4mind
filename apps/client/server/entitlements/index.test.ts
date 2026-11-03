@@ -63,12 +63,8 @@ vi.mock('@bike4mind/server-utils/lib/entitlements/registry', async () => {
 // Plan price ids are env-dependent, so the ladder read is a fixture; the real mapping is covered by
 // lib/userSubscriptions/utils.test.ts.
 vi.mock('@client/lib/userSubscriptions/utils', () => ({
-  getHighestLadderTier: (subscriptions: readonly { priceId: string }[]) =>
-    subscriptions.some(subscription => subscription.priceId === 'price_ladder_pro')
-      ? 2
-      : subscriptions.some(subscription => subscription.priceId === 'price_ladder_basic')
-        ? 1
-        : undefined,
+  getEntitlingPlanByPriceId: (priceId: string) =>
+    ({ price_ladder_pro: { tier: 2 }, price_ladder_basic: { tier: 1 }, price_standalone: {} })[priceId],
 }));
 
 // DB-backed partner rules (issue #293) are resolved through this server module. Mock it so
@@ -173,10 +169,10 @@ describe('getUserEntitlements', () => {
       await expect(getUserEntitlements(user)).resolves.not.toContain('plan:paid');
     });
 
-    it('is not granted for a plan off the ladder', async () => {
+    it('is granted for a paid plan off the ladder', async () => {
       findActive.mockResolvedValue([{ priceId: 'price_standalone' }]);
 
-      await expect(getUserEntitlements(user)).resolves.not.toContain('plan:paid');
+      await expect(getUserEntitlements(user)).resolves.toContain('plan:paid');
     });
 
     it('is not granted by a passthrough tag', async () => {

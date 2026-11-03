@@ -86,6 +86,10 @@ describe('the Settings screen', () => {
     expect(html).toContain('data-testid="settings-orchestrator-sound-switch"');
   });
 
+  it('offers the self-hosted model speed preference', () => {
+    expect(html).toContain('data-testid="settings-token-rate-switch"');
+  });
+
   it('mounts the same server picker and updater, not copies of them', () => {
     expect(html).toContain('data-testid="environment-select-btn"');
     expect(html).toContain('data-testid="update-settings"');

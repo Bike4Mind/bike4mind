@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { APIConnectionError, APIError } from '@anthropic-ai/sdk';
 import { ChatModels, supportsForcedToolChoice, type ModelInfo, type ResponseFormat } from '@bike4mind/common';
 import { AnthropicBackend } from './anthropicBackend';
 import type { CompletionInfo, ICompletionOptions, ICompletionOptionTools } from './backend';
@@ -14,7 +15,15 @@ import {
   buildToolUseInstruction,
   declaresOpenObject,
   isStrictCompatibleSchema,
+  isStrictSchemaRejection,
+  withStrictOff,
 } from './forcedToolChoice';
+
+// The real withStrictOff, wrapped so one test can make the retry keep its strict schema.
+vi.mock('./forcedToolChoice', async importOriginal => {
+  const actual = await importOriginal<typeof import('./forcedToolChoice')>();
+  return { ...actual, withStrictOff: vi.fn(actual.withStrictOff) };
+});
 
 type Params = Record<string, unknown> & {
   tools?: Array<Record<string, unknown>>;
@@ -55,6 +64,9 @@ const RESPONSE_FORMAT: ResponseFormat = {
 };
 
 const RESULT = { name: 'Erik', age: 42 };
+
+const formatWithStrict = (strict: boolean | undefined) =>
+  ({ type: 'json_schema', json_schema: { ...RESPONSE_FORMAT.json_schema, strict } }) as ResponseFormat;
 
 function asyncIterable(events: unknown[]) {
   return {
@@ -266,6 +278,28 @@ describe('AnthropicBackend json_schema on models without forced tool use', () =>
     expect(JSON.stringify(format.schema)).not.toContain('"minLength"');
   });
 
+  it('sends a nullable enum through output_config.format in anyOf form', async () => {
+    const { backend, captured } = buildBackend(() => textResponse('{"tier":null}'));
+    const schema = {
+      type: 'object',
+      properties: { tier: { type: ['string', 'null'], enum: ['free', 'pro', null] } },
+      required: ['tier'],
+      additionalProperties: false,
+    };
+    await run(backend, 'claude-sonnet-5-5', {
+      stream: false,
+      responseFormat: { type: 'json_schema', json_schema: { name: 'n', schema } },
+    });
+
+    expect(captured[0].output_config?.format).toEqual({
+      type: 'json_schema',
+      schema: {
+        ...schema,
+        properties: { tier: { anyOf: [{ type: 'string', enum: ['free', 'pro'] }, { type: 'null' }] } },
+      },
+    });
+  });
+
   it('merges effort into output_config instead of overwriting the format', async () => {
     const { backend, captured } = buildBackend(() => textResponse(JSON.stringify(RESULT)));
     const record: ModelInfo = {
@@ -293,6 +327,68 @@ describe('AnthropicBackend json_schema on models without forced tool use', () =>
       format: { type: 'json_schema', schema: SCHEMA },
       effort: 'high',
     });
+  });
+
+  it("puts a caller's strict: false schema in the prompt instead of output_config.format", async () => {
+    const { backend, captured } = buildBackend(() => textResponse(JSON.stringify(RESULT)));
+    const warn = vi.spyOn((backend as unknown as { logger: { warn: (...a: unknown[]) => void } }).logger, 'warn');
+    const out = capture();
+    await run(backend, ChatModels.CLAUDE_5_5_OPUS, { stream: false, responseFormat: formatWithStrict(false) }, out.cb);
+
+    expectNoForcedChoice(captured[0]);
+    expect(captured[0]).not.toHaveProperty('output_config');
+    expect(captured[0]).not.toHaveProperty('tools');
+    expect(systemText(captured[0].system)).toContain('Schema name: extract_user');
+    expect(JSON.parse(out.text())).toEqual(RESULT);
+    expect(out.mode()).toBe('best-effort');
+    expect(warn.mock.calls.filter(([msg]) => String(msg).includes('not expressible'))).toHaveLength(0);
+  });
+
+  it.each([true, undefined])('still sends output_config.format when strict is %s', async strict => {
+    const { backend, captured } = buildBackend(() => textResponse(JSON.stringify(RESULT)));
+    const out = capture();
+    await run(backend, ChatModels.CLAUDE_5_5_OPUS, { stream: false, responseFormat: formatWithStrict(strict) }, out.cb);
+
+    expect(captured[0].output_config).toEqual({ format: { type: 'json_schema', schema: SCHEMA } });
+    expect(out.mode()).toBe('native');
+  });
+
+  it.each([
+    [
+      'declares an open object',
+      false,
+      { type: 'object', properties: { name: { type: 'string' } }, additionalProperties: { type: 'number' } },
+    ],
+    [
+      'declares a nested open object',
+      false,
+      {
+        type: 'object',
+        properties: { meta: { type: 'object', properties: {}, additionalProperties: true } },
+        required: ['meta'],
+        additionalProperties: false,
+      },
+    ],
+    ['leaves additionalProperties out', true, { type: 'object', properties: { name: { type: 'string' } } }],
+  ])('when the schema %s, sends output_config.format: %s', async (_label, native, schema) => {
+    const { backend, captured } = buildBackend(() => textResponse(JSON.stringify(RESULT)));
+    const out = capture();
+    await run(
+      backend,
+      ChatModels.CLAUDE_5_5_OPUS,
+      { stream: false, responseFormat: { type: 'json_schema', json_schema: { name: 'n', schema } } },
+      out.cb
+    );
+
+    expectNoForcedChoice(captured[0]);
+    if (native) {
+      expect(captured[0].output_config).toEqual({ format: buildStructuredOutputFormat(schema) });
+      expect(out.mode()).toBe('native');
+    } else {
+      expect(captured[0]).not.toHaveProperty('output_config');
+      expect(systemText(captured[0].system)).toContain('Schema name: n');
+      expect(out.mode()).toBe('best-effort');
+    }
   });
 
   it('tags every streamed JSON chunk with the native mode', async () => {
@@ -399,13 +495,85 @@ describe('buildStructuredOutputFormat', () => {
     });
   });
 
-  it('closes a nullable object type', () => {
-    const format = buildStructuredOutputFormat({ type: ['object', 'null'], properties: { a: { type: 'string' } } });
-    expect(format?.schema).toEqual({
+  it('closes a nullable object type and writes it as anyOf', () => {
+    const format = buildStructuredOutputFormat({
       type: ['object', 'null'],
       properties: { a: { type: 'string' } },
+      description: 'maybe',
+    });
+    expect(format?.schema).toEqual({
+      anyOf: [{ type: 'object', properties: { a: { type: 'string' } }, additionalProperties: false }, { type: 'null' }],
+      description: 'maybe',
+    });
+  });
+
+  it('rewrites a nullable enum type array as anyOf', () => {
+    const schema = {
+      type: 'object',
+      properties: { status: { type: ['string', 'null'], enum: ['a', 'b', null], description: 'state' } },
+      required: ['status'],
+      additionalProperties: false,
+    };
+    const before = structuredClone(schema);
+
+    const format = buildStructuredOutputFormat(schema);
+
+    expect(schema).toEqual(before);
+    expect(format?.schema).toEqual({
+      type: 'object',
+      properties: {
+        status: { anyOf: [{ type: 'string', enum: ['a', 'b'] }, { type: 'null' }], description: 'state' },
+      },
+      required: ['status'],
       additionalProperties: false,
     });
+  });
+
+  it.each([
+    ['a nullable string', { type: ['string', 'null'] }, { anyOf: [{ type: 'string' }, { type: 'null' }] }],
+    [
+      'an enum that leaves out null',
+      { type: ['string', 'null'], enum: ['a', 'b'] },
+      { type: 'string', enum: ['a', 'b'] },
+    ],
+    ['a one-type array', { type: ['string'] }, { type: 'string' }],
+    [
+      'a nullable string with a format and a moved constraint',
+      { type: ['string', 'null'], format: 'date', minLength: 1 },
+      { anyOf: [{ type: 'string', format: 'date' }, { type: 'null' }], description: '{minLength: 1}' },
+    ],
+    [
+      'a nullable array',
+      { type: ['array', 'null'], items: { type: ['integer', 'null'] }, minItems: 1 },
+      {
+        anyOf: [
+          { type: 'array', items: { anyOf: [{ type: 'integer' }, { type: 'null' }] }, minItems: 1 },
+          { type: 'null' },
+        ],
+      },
+    ],
+    [
+      'a mixed-type enum',
+      { type: ['integer', 'string'], enum: [1, 'one'] },
+      {
+        anyOf: [
+          { type: 'integer', enum: [1] },
+          { type: 'string', enum: ['one'] },
+        ],
+      },
+    ],
+    ['a nullable const', { type: ['boolean', 'null'], const: true }, { type: 'boolean', const: true }],
+  ])('rewrites %s', (_label, schema, expected) => {
+    expect(buildStructuredOutputFormat(schema)?.schema).toEqual(expected);
+  });
+
+  it.each([
+    ['an enum with an object value', { type: 'object', properties: { p: { enum: [{ a: 1 }, 'x'] } } }],
+    ['an allOf member that is a $ref', { allOf: [{ $ref: '#/$defs/a' }], $defs: { a: { type: 'string' } } }],
+    ['a type array no enum value fits', { type: ['string', 'null'], enum: [1] }],
+    ['a type array beside anyOf', { type: ['string', 'null'], anyOf: [{ type: 'string' }, { type: 'null' }] }],
+  ])('returns null for %s', (_label, schema) => {
+    expect(buildStructuredOutputFormat(schema)).toBeNull();
   });
 
   it('moves an object repeated inline to one $defs entry', () => {
@@ -578,6 +746,23 @@ describe('AnthropicBackend caller tool_choice on models without forced tool use'
     expect(captured[0].tools?.[0]).not.toHaveProperty('strict');
   });
 
+  it.each([
+    [false, false],
+    [true, true],
+  ])('with the caller tool strict: %s, sends the named tool strict: %s', async (callerStrict, sentStrict) => {
+    const { backend, captured } = buildBackend(() => textResponse('ok'));
+    const tool = weatherTool(STRICT_PARAMS);
+    await run(backend, ChatModels.CLAUDE_5_5_OPUS, {
+      stream: false,
+      tools: [{ ...tool, toolSchema: { ...tool.toolSchema, strict: callerStrict } }],
+      tool_choice: { type: 'function', function: { name: 'get_weather' } },
+    });
+
+    expect(captured[0].tool_choice).toEqual({ type: 'auto' });
+    expect(captured[0].tools?.[0].strict === true).toBe(sentStrict);
+    expect(systemText(captured[0].system)).toContain(buildToolUseInstruction({ toolName: 'get_weather' }));
+  });
+
   it('keeps tools and system identical on the post-tool turn and warns once', async () => {
     const { backend, captured } = buildBackend((_params, turn) =>
       turn === 1 ? toolUseResponse('get_weather', { city: 'NYC' }) : textResponse('done')
@@ -652,6 +837,111 @@ describe('AnthropicBackend on models with forced tool use', () => {
       additionalProperties: false,
       properties: { address: { additionalProperties: false } },
     });
+  });
+
+  it('sends a nullable enum to the strict tool in anyOf form, never as a type array', async () => {
+    const schema = {
+      type: 'object',
+      properties: { name: { type: 'string' }, tier: { type: ['string', 'null'], enum: ['free', 'pro', null] } },
+      required: ['name', 'tier'],
+      additionalProperties: false,
+    };
+    const { backend, captured } = buildBackend(() => toolUseResponse('extract_user', RESULT));
+    await run(backend, ChatModels.CLAUDE_5_5_HAIKU, {
+      stream: false,
+      responseFormat: { type: 'json_schema', json_schema: { name: 'extract_user', schema } },
+    });
+
+    const tool = captured[0].tools?.[0];
+    expect(tool?.strict).toBe(true);
+    expect(tool?.input_schema).toEqual({
+      ...schema,
+      properties: {
+        name: { type: 'string' },
+        tier: { anyOf: [{ type: 'string', enum: ['free', 'pro'] }, { type: 'null' }] },
+      },
+    });
+  });
+
+  it('sends a schema already in strict form unchanged', async () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        tier: { anyOf: [{ type: 'string', enum: ['free', 'pro'] }, { type: 'null' }] },
+        tags: { type: 'array', items: { type: 'string', enum: ['a', 'b'] } },
+      },
+      required: ['name', 'tier', 'tags'],
+      additionalProperties: false,
+    };
+    const { backend, captured } = buildBackend(() => toolUseResponse('extract_user', RESULT));
+    await run(backend, ChatModels.CLAUDE_5_5_HAIKU, {
+      stream: false,
+      responseFormat: { type: 'json_schema', json_schema: { name: 'extract_user', schema } },
+    });
+
+    expect(captured[0].tools).toEqual([{ name: 'extract_user', input_schema: schema, strict: true }]);
+    expect(captured[0].tool_choice).toEqual({ type: 'tool', name: 'extract_user', disable_parallel_tool_use: true });
+  });
+
+  it.each([
+    [false, false],
+    [true, true],
+  ])('with json_schema strict: %s, sends the forced tool strict: %s', async (callerStrict, sentStrict) => {
+    const openSchema = {
+      type: 'object',
+      properties: { name: { type: 'string' }, age: { type: 'integer', minimum: 0 } },
+      required: ['name'],
+    };
+    const { backend, captured } = buildBackend(() => toolUseResponse('extract_user', RESULT));
+    const out = capture();
+    await run(
+      backend,
+      ChatModels.CLAUDE_5_5_HAIKU,
+      {
+        stream: false,
+        responseFormat: {
+          type: 'json_schema',
+          json_schema: { name: 'extract_user', schema: openSchema, strict: callerStrict },
+        },
+      },
+      out.cb
+    );
+
+    expect(captured[0].tools).toEqual([
+      sentStrict
+        ? { name: 'extract_user', input_schema: buildStructuredOutputFormat(openSchema)?.schema, strict: true }
+        : { name: 'extract_user', input_schema: openSchema },
+    ]);
+    expect(captured[0].tool_choice).toEqual({ type: 'tool', name: 'extract_user', disable_parallel_tool_use: true });
+    expect(JSON.parse(out.text())).toEqual(RESULT);
+    expect(out.mode()).toBe('tool_use');
+  });
+
+  it.each([
+    [false, 'keeps the unconstrained forced tool'],
+    [true, 'moves to output_config.format'],
+  ])('with caller thinking and json_schema strict: %s, %s', async (callerStrict, _outcome) => {
+    const { backend, captured } = buildBackend(params =>
+      params.output_config ? textResponse(JSON.stringify(RESULT)) : toolUseResponse('extract_user', RESULT)
+    );
+    await run(backend, ChatModels.CLAUDE_5_5_HAIKU, {
+      stream: false,
+      responseFormat: formatWithStrict(callerStrict),
+      reasoningEffort: 'high',
+      explicitReasoning: true,
+    });
+
+    if (callerStrict) {
+      expect(captured[0].output_config).toMatchObject({ format: { type: 'json_schema', schema: SCHEMA } });
+      expectNoForcedChoice(captured[0]);
+    } else {
+      expect(captured[0]).not.toHaveProperty('output_config');
+      expect(captured[0].tools).toEqual([
+        { name: 'extract_user', description: 'Extract user info', input_schema: SCHEMA },
+      ]);
+      expect(captured[0].tool_choice).toEqual({ type: 'tool', name: 'extract_user', disable_parallel_tool_use: true });
+    }
   });
 
   it.each([
@@ -812,6 +1102,161 @@ describe('AnthropicBackend json_schema with document citations', () => {
   });
 });
 
+// Built the way the SDK builds it from an HTTP error response.
+const anthropicError = (status: number, type: string, message: string) =>
+  APIError.generate(status, { type: 'error', error: { type, message } }, undefined, new Headers());
+
+const schemaRejection = () =>
+  anthropicError(400, 'invalid_request_error', 'tools.0.custom.input_schema: schema is not supported in strict mode');
+
+describe('AnthropicBackend retry after a strict schema rejection', () => {
+  it('resends the forced json_schema tool once, without strict and with the schema as sent by the caller', async () => {
+    const { backend, captured } = buildBackend((_params, turn) => {
+      if (turn === 1) throw schemaRejection();
+      return toolUseResponse('extract_user', RESULT);
+    });
+    const out = capture();
+    await run(backend, ChatModels.CLAUDE_5_5_HAIKU, { stream: false, responseFormat: RESPONSE_FORMAT }, out.cb);
+
+    expect(captured).toHaveLength(2);
+    expect(captured[0].tools?.[0].strict).toBe(true);
+    expect(captured[1].tools).toEqual([
+      { name: 'extract_user', description: 'Extract user info', input_schema: SCHEMA },
+    ]);
+    expect(captured[1].tool_choice).toEqual({ type: 'tool', name: 'extract_user', disable_parallel_tool_use: true });
+    expect(JSON.parse(out.text())).toEqual(RESULT);
+    expect(out.mode()).toBe('tool_use');
+  });
+
+  it('moves a rejected output_config.format to the prompt instruction on the streaming path', async () => {
+    const { backend, captured } = buildBackend((_params, turn) => {
+      if (turn === 1) throw schemaRejection();
+      return textStream(JSON.stringify(RESULT));
+    });
+    const out = capture();
+    await run(backend, ChatModels.CLAUDE_5_5_OPUS, { stream: true, responseFormat: RESPONSE_FORMAT }, out.cb);
+
+    expect(captured).toHaveLength(2);
+    expect(captured[0].output_config).toEqual({ format: { type: 'json_schema', schema: SCHEMA } });
+    expect(captured[1]).not.toHaveProperty('output_config');
+    expect(systemText(captured[1].system)).toContain('Schema name: extract_user');
+    expect(JSON.parse(out.text())).toEqual(RESULT);
+    expect(out.mode()).toBe('best-effort');
+  });
+
+  it('drops strict from the downgraded named tool and keeps it off on later tool rounds', async () => {
+    const { backend, captured } = buildBackend((_params, turn) => {
+      if (turn === 1) throw schemaRejection();
+      return turn === 2 ? toolUseResponse('get_weather', { city: 'NYC' }) : textResponse('done');
+    });
+    await run(backend, ChatModels.CLAUDE_5_5_OPUS, {
+      stream: false,
+      tools: [weatherTool(STRICT_PARAMS)],
+      tool_choice: { type: 'function', function: { name: 'get_weather' } },
+    });
+
+    expect(captured).toHaveLength(3);
+    expect(captured[0].tools?.[0].strict).toBe(true);
+    expect(captured[1].tools?.[0]).not.toHaveProperty('strict');
+    expect(captured[2].tools).toEqual(captured[1].tools);
+    for (const params of captured) {
+      expect(params.tool_choice).toEqual({ type: 'auto' });
+      expect(systemText(params.system)).toContain(buildToolUseInstruction({ toolName: 'get_weather' }));
+    }
+  });
+
+  it('retries only once and surfaces the second error unchanged', async () => {
+    const second = schemaRejection();
+    const { backend, captured } = buildBackend((_params, turn) => {
+      throw turn === 1 ? schemaRejection() : second;
+    });
+
+    await expect(
+      run(backend, ChatModels.CLAUDE_5_5_HAIKU, { stream: false, responseFormat: RESPONSE_FORMAT })
+    ).rejects.toBe(second);
+    expect(captured).toHaveLength(2);
+  });
+
+  it('does not retry the retry, even when it still carries a strict schema', async () => {
+    vi.mocked(withStrictOff).mockImplementationOnce(options => options);
+    const second = schemaRejection();
+    const { backend, captured } = buildBackend((_params, turn) => {
+      if (turn === 1) throw schemaRejection();
+      if (turn === 2) throw second;
+      return toolUseResponse('extract_user', RESULT);
+    });
+
+    await expect(
+      run(backend, ChatModels.CLAUDE_5_5_HAIKU, { stream: false, responseFormat: RESPONSE_FORMAT })
+    ).rejects.toBe(second);
+    expect(captured).toHaveLength(2);
+    expect(captured[1].tools?.[0].strict).toBe(true);
+  });
+
+  it.each([
+    ['a 400 that is not about the schema', () => anthropicError(400, 'invalid_request_error', 'prompt is too long')],
+    ['an auth error', () => anthropicError(401, 'authentication_error', 'invalid x-api-key')],
+    ['a permission error', () => anthropicError(403, 'permission_error', 'not allowed to use this schema')],
+  ])('does not retry %s', async (_label, makeError) => {
+    const error = makeError();
+    const { backend, captured } = buildBackend(() => {
+      throw error;
+    });
+
+    await expect(
+      run(backend, ChatModels.CLAUDE_5_5_HAIKU, { stream: false, responseFormat: RESPONSE_FORMAT })
+    ).rejects.toBe(error);
+    expect(captured).toHaveLength(1);
+  });
+
+  it('does not retry a request that carried no strict schema', async () => {
+    const error = schemaRejection();
+    const { backend, captured } = buildBackend(() => {
+      throw error;
+    });
+
+    await expect(
+      run(backend, ChatModels.CLAUDE_5_5_HAIKU, { stream: false, responseFormat: formatWithStrict(false) })
+    ).rejects.toBe(error);
+    expect(captured).toHaveLength(1);
+  });
+
+  it('does not retry a rejection on a later tool round, after the first request was accepted', async () => {
+    const error = schemaRejection();
+    const { backend, captured } = buildBackend((_params, turn) => {
+      if (turn === 2) throw error;
+      return turn === 1 ? toolUseResponse('get_weather', { city: 'NYC' }) : textResponse('done');
+    });
+
+    await expect(
+      run(backend, ChatModels.CLAUDE_5_5_OPUS, {
+        stream: false,
+        tools: [weatherTool(STRICT_PARAMS)],
+        tool_choice: { type: 'function', function: { name: 'get_weather' } },
+      })
+    ).rejects.toBe(error);
+    expect(captured).toHaveLength(2);
+  });
+});
+
+describe('isStrictSchemaRejection', () => {
+  it.each([
+    ['a 400 invalid_request_error naming the schema', schemaRejection(), true],
+    [
+      'a 400 invalid_request_error naming the compiled grammar',
+      anthropicError(400, 'invalid_request_error', 'compiled grammar is too large'),
+      true,
+    ],
+    ['a 400 that is not about the schema', anthropicError(400, 'invalid_request_error', 'prompt is too long'), false],
+    ['a 401', anthropicError(401, 'authentication_error', 'invalid x-api-key'), false],
+    ['a 429', anthropicError(429, 'rate_limit_error', 'schema requests are rate limited'), false],
+    ['a connection error', new APIConnectionError({ message: 'Connection error.' }), false],
+    ['a plain Error', new Error('400 schema'), false],
+  ])('%s -> %s', (_label, error, expected) => {
+    expect(isStrictSchemaRejection(error)).toBe(expected);
+  });
+});
+
 describe('declaresOpenObject', () => {
   it.each([
     ['a closed schema', SCHEMA, false],
@@ -861,7 +1306,33 @@ describe('isStrictCompatibleSchema', () => {
     ).toBe(true);
   });
 
+  it('accepts a nullable enum written as anyOf', () => {
+    expect(
+      isStrictCompatibleSchema({
+        type: 'object',
+        properties: { tier: { anyOf: [{ type: 'string', enum: ['free', 'pro'] }, { type: 'null' }] } },
+        required: ['tier'],
+        additionalProperties: false,
+      })
+    ).toBe(true);
+  });
+
   it.each([
+    [
+      'a nullable enum type array',
+      {
+        type: 'object',
+        properties: { tier: { type: ['string', 'null'], enum: ['free', 'pro', null] } },
+        required: ['tier'],
+        additionalProperties: false,
+      },
+    ],
+    ['a nullable type array', { type: ['string', 'null'] }],
+    ['an enum with an object value', { enum: [{ a: 1 }] }],
+    [
+      'a typeless property',
+      { type: 'object', properties: { anything: {} }, required: ['anything'], additionalProperties: false },
+    ],
     ['an open object', { type: 'object', properties: {}, required: [] }],
     ['an object with no required list', { type: 'object', properties: {}, additionalProperties: false }],
     [

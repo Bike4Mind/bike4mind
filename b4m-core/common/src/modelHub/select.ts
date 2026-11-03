@@ -8,6 +8,7 @@ import type {
   KvCacheType,
   ProducerTier,
 } from '../schemas/modelHub';
+import { activeParamsFraction, memoryBandwidth } from './decode';
 import { estimateFit, type FitMode, type FitModel, type FitResult, type FitRuntime, type HardwareProfile } from './fit';
 import { entryTier, gradeBuild, isCurrentOwnEval, meetsGrade, type BuildGrade, type RuntimePins } from './grade';
 
@@ -74,6 +75,8 @@ const OLLAMA_DEFAULT_DRAFT_MAX = 2;
 
 const ROLE_MODE: Record<HubRole, FitMode> = { chat: 'chat', code: 'code', vision: 'chat', embeddings: 'embeddings' };
 const VERDICT_RANK: Record<FitResult['verdict'], number> = { fast: 0, tight: 1, slow: 2, 'too-large': 3 };
+/** A candidate estimated to decode slower than this sorts after the others in its fit class. */
+export const SLOW_DECODE_TOKENS_PER_SEC = 10;
 
 function semverAtLeast(version: string, minimum: string): boolean {
   const a = version.split('.').map(Number);
@@ -126,6 +129,7 @@ export function ollamaBuildBytes(build: HubBuild): { weightsBytes: number; mmpro
 function fitInputs(entry: HubEntry, build: HubBuild, runtime: HubRuntime, options: PickOptions) {
   const weights = build.weights.reduce((sum, w) => sum + w.sizeBytes, 0);
   const expertBytesPerLayer = build.tensorStats?.expertBytesPerLayer;
+  const activeShare = activeParamsFraction(entry.params);
   const draftFile = build.draft && 'file' in build.draft ? build.draft.file : undefined;
   if (runtime === 'ollama') {
     const ollama = options.runtimes.ollama;
@@ -134,19 +138,22 @@ function fitInputs(entry: HubEntry, build: HubBuild, runtime: HubRuntime, option
     const library = source?.kind === 'library';
     const hasDraft = build.draft !== undefined || entry.arch.mtpLayers > 0;
     const draftNumPredict = source && source.kind !== 'library' ? source.modelfile.draftNumPredict : undefined;
+    const draftMax = hasDraft ? (draftNumPredict ?? OLLAMA_DEFAULT_DRAFT_MAX) : 0;
     // Ollama loads a model's projector whenever it has one.
     const model: FitModel = {
       arch: entry.arch,
       ...ollamaBuildBytes(build),
       draftBytes: library ? 0 : (draftFile?.sizeBytes ?? 0),
       expertBytesPerLayer,
+      activeParamsFraction: activeShare,
     };
     const fitRuntime: FitRuntime = {
       kind: 'ollama',
       kv: ollama?.kvType ? { k: ollama.kvType, v: ollama.kvType } : undefined,
       flashAttn: ollama?.flashAttention === false ? 'off' : 'auto',
       slots: family && OLLAMA_SINGLE_SLOT_ARCHS.has(family.ggufArch) ? 1 : (ollama?.numParallel ?? 1),
-      draftMax: hasDraft ? (draftNumPredict ?? OLLAMA_DEFAULT_DRAFT_MAX) : 0,
+      draftMax,
+      speculative: draftMax > 0,
     };
     return { model, runtime: fitRuntime, contextCap: undefined };
   }
@@ -161,6 +168,7 @@ function fitInputs(entry: HubEntry, build: HubBuild, runtime: HubRuntime, option
     mmprojBytes: loadMmproj ? (build.mmproj?.sizeBytes ?? 0) : 0,
     draftBytes: speculating && draftFile ? draftFile.sizeBytes : 0,
     expertBytesPerLayer,
+    activeParamsFraction: activeShare,
   };
   const fitRuntime: FitRuntime = {
     kind: 'llama-server',
@@ -173,6 +181,7 @@ function fitInputs(entry: HubEntry, build: HubBuild, runtime: HubRuntime, option
     slots: preset.slots,
     nCpuMoe: preset.nCpuMoe,
     draftMax: speculating ? preset.speculative.draftMax : 0,
+    speculative: speculating,
   };
   return { model, runtime: fitRuntime, contextCap: preset.ctxCap };
 }
@@ -263,8 +272,10 @@ function beatsTierA(c: HubCandidate, tierA: HubCandidate | undefined): boolean {
 
 /**
  * The best curated build for a role on this machine, plus one alternate per other listed entry. Candidates are
- * ordered by verdict (fast, tight, slow; a slow one below the mode floor last), then by the manifest ranking for
- * the role (unranked entries follow in manifest order), then by build preference.
+ * ordered by verdict (fast, tight, slow; a slow one below the mode floor last), then by decode speed (an offloaded
+ * load, no estimate or one under SLOW_DECODE_TOKENS_PER_SEC last; skipped for embeddings and where the machine's
+ * bandwidth is unknown), then by the manifest ranking for the role (unranked entries follow in manifest order), then
+ * by build preference.
  */
 export function pickForMachine(options: PickOptions): HubPick {
   const { manifest, role } = options;
@@ -273,7 +284,22 @@ export function pickForMachine(options: PickOptions): HubPick {
     const i = ranking.indexOf(entry.id);
     return i >= 0 ? i : ranking.length + manifest.entries.indexOf(entry);
   };
-  const fitClass = (c: HubCandidate) => [VERDICT_RANK[c.fit.verdict], c.fit.context < c.fit.floor ? 1 : 0];
+  // Embeddings do not decode; without a known bandwidth no candidate has an estimate, so none is ranked on it.
+  const decodeKnown = ROLE_MODE[role] !== 'embeddings' && memoryBandwidth(options.hardware) !== null;
+  // With the bandwidth known, a load split across GPU and RAM or one without an estimate counts as slow.
+  const slowDecode = (c: HubCandidate) =>
+    !decodeKnown
+      ? 0
+      : c.fit.placement === 'expert-offload' || c.fit.placement === 'layer-offload'
+        ? 1
+        : (c.fit.decode?.tokensPerSec ?? 0) < SLOW_DECODE_TOKENS_PER_SEC
+          ? 1
+          : 0;
+  const fitClass = (c: HubCandidate) => [
+    VERDICT_RANK[c.fit.verdict],
+    c.fit.context < c.fit.floor ? 1 : 0,
+    slowDecode(c),
+  ];
   const key = (c: HubCandidate) => [...fitClass(c), rankOf(c.entry), c.entry.builds.indexOf(c.build)];
   const byKey = (a: HubCandidate, b: HubCandidate) => {
     const ka = key(a);

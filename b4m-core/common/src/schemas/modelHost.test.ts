@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { HostFactsSchema, MODEL_HOST_LIMITS, ModelHostHelloSchema, OllamaSettingsSchema } from './modelHost';
+import {
+  HostFactsSchema,
+  MODEL_HOST_LIMITS,
+  ModelHostHelloSchema,
+  OllamaSettingsSchema,
+  PullJobRequestSchema,
+} from './modelHost';
 
 const facts = {
   os: { name: 'Ubuntu 24.04.3 LTS', kernel: '6.8.0-90-generic' },
@@ -123,5 +129,77 @@ describe('ModelHostHelloSchema', () => {
   it('refuses unknown roles and modes', () => {
     expect(ModelHostHelloSchema.safeParse({ ...hello, role: 'root' }).success).toBe(false);
     expect(ModelHostHelloSchema.safeParse({ ...hello, mode: 'cluster' }).success).toBe(false);
+  });
+});
+
+describe('PullJobRequestSchema', () => {
+  const hf = {
+    source: 'hf',
+    repo: 'bartowski/SmolLM2-135M-Instruct-GGUF',
+    buildId: 'SmolLM2-135M-Instruct-Q4_K_M',
+    revision: '0'.repeat(40),
+    ref: 'hf.co/bartowski/SmolLM2-135M-Instruct-GGUF:Q4_K_M',
+    sha256: 'a'.repeat(64),
+    sizeBytes: 105454432,
+    licenses: ['apache-2.0'],
+    licenseAccepted: false,
+    accessConfirmed: false,
+    device: { id: 'laptop', name: 'Laptop' },
+  };
+  const library = {
+    source: 'library',
+    ref: 'qwen3.5:0.8b',
+    manifestDigest: 'b'.repeat(64),
+    sizeBytes: 1000,
+    licenses: ['apache-2.0'],
+    licenseAccepted: false,
+    curated: { entryId: 'qwen3.5-0.8b', buildId: 'q8-0', layers: { model: 'c'.repeat(64), template: null } },
+    device: { id: 'laptop', name: 'Laptop' },
+  };
+
+  it('accepts a Hugging Face and a curated library approval', () => {
+    expect(PullJobRequestSchema.parse(hf)).toEqual(hf);
+    expect(PullJobRequestSchema.parse(library)).toEqual(library);
+  });
+
+  it('refuses refs that leave the Hub, library pulls without curated pins, and control characters in names', () => {
+    expect(PullJobRequestSchema.safeParse({ ...hf, ref: 'evil.example/org/repo:Q4' }).success).toBe(false);
+    expect(PullJobRequestSchema.safeParse({ ...library, curated: undefined }).success).toBe(false);
+    expect(PullJobRequestSchema.safeParse({ ...hf, device: { id: 'x', name: 'a\nb' } }).success).toBe(false);
+    expect(PullJobRequestSchema.safeParse({ ...hf, revision: 'main' }).success).toBe(false);
+  });
+
+  it.each([
+    ['a line separator', 'a\u2028b'],
+    ['a paragraph separator', 'a\u2029b'],
+    ['a bidi override', 'a\u202Eb'],
+    ['only a zero-width space', '\u200B'],
+    ['only whitespace', '   '],
+    ['an empty string', ''],
+    ['a newline', 'a\nb'],
+  ])('refuses a device label with %s', (_label, name) => {
+    expect(PullJobRequestSchema.safeParse({ ...hf, device: { id: 'x', name } }).success).toBe(false);
+  });
+
+  it('accepts a device label with spaces and non-ASCII letters', () => {
+    const device = { id: 'laptop-1', name: "Nao's MacBook Pro \u00E9" };
+    expect(PullJobRequestSchema.parse({ ...hf, device }).device).toEqual(device);
+  });
+
+  it('refuses a curated build id or a license id with whitespace, newlines or empty text', () => {
+    const curated = (buildId: string) => ({ ...library, curated: { ...library.curated, buildId } });
+    for (const buildId of ['q8\n0', 'q8 0', '', '../q8', 'a/b/c']) {
+      expect(PullJobRequestSchema.safeParse(curated(buildId)).success).toBe(false);
+    }
+    for (const license of ['apache\n2.0', 'apache 2.0', '', '-mit']) {
+      expect(PullJobRequestSchema.safeParse({ ...hf, licenses: [license] }).success).toBe(false);
+      expect(PullJobRequestSchema.safeParse({ ...library, licenses: [license] }).success).toBe(false);
+    }
+  });
+
+  it('accepts the build and license ids the curated catalog and the Hub use', () => {
+    const curated = { ...library.curated, buildId: 'UD-Q4_K_XL/model-Q4.K' };
+    const licenses = ['apache-2.0', 'llama3.2', 'cc-by-nc-4.0', 'gemma'];
+    expect(PullJobRequestSchema.safeParse({ ...library, curated, licenses }).success).toBe(true);
   });
 });

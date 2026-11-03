@@ -29,10 +29,12 @@ export interface FirecrawlAppConfig {
 }
 
 export interface FirecrawlScrapeParams {
-  formats?: ('markdown' | 'html')[];
+  formats?: ('markdown' | 'html' | 'screenshot')[];
   timeout?: number;
   onlyMainContent?: boolean;
   maxAge?: number;
+  /** Render as a phone (affects the screenshot's viewport). */
+  mobile?: boolean;
   storeInCache?: boolean;
   actions?: ({ type: 'wait'; milliseconds: number } | { type: 'scroll'; direction: 'up' | 'down'; pixels: number })[];
 }
@@ -41,6 +43,8 @@ export interface FirecrawlScrapeResult {
   error?: string;
   markdown?: string;
   html?: string;
+  /** Hosted URL of the first-screen (viewport) screenshot; present only when 'screenshot' was requested. */
+  screenshot?: string;
   metadata?: { title?: string; [key: string]: unknown };
 }
 

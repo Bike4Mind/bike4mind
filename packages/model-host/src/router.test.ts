@@ -35,6 +35,22 @@ describe('createRouter', () => {
     await expect(wrongMethod).rejects.toMatchObject({ status: 405, headers: { allow: 'GET, POST' } });
   });
 
+  it('matches a parameter segment, decoding it, but never an empty or extra segment', async () => {
+    const byId = vi.fn();
+    const withParams: Route[] = [
+      { method: 'DELETE', path: '/v1/models/:name', role: 'manage', handle: byId },
+      { method: 'POST', path: '/v1/jobs/:id/cancel', role: 'manage', handle: byId },
+    ];
+    await call(withParams, 'DELETE', '/v1/models/hf.co%2Forg%2Frepo%3AQ4_K_M', 'manage');
+    expect(byId.mock.calls[0][0].params).toEqual({ name: 'hf.co/org/repo:Q4_K_M' });
+    await call(withParams, 'POST', '/v1/jobs/abc/cancel', 'admin');
+    expect(byId.mock.calls[1][0].params).toEqual({ id: 'abc' });
+    await expect(call(withParams, 'DELETE', '/v1/models/', 'manage')).rejects.toMatchObject({ status: 404 });
+    await expect(call(withParams, 'DELETE', '/v1/models/a/b', 'manage')).rejects.toMatchObject({ status: 404 });
+    await expect(call(withParams, 'DELETE', '/v1/models/%E0%A4%A', 'manage')).rejects.toMatchObject({ status: 404 });
+    await expect(call(withParams, 'POST', '/v1/jobs/abc/cancel', 'chat')).rejects.toMatchObject({ status: 403 });
+  });
+
   it('echoes at most 200 characters of an unknown path', async () => {
     const long = `/${'a'.repeat(5_000)}`;
     await expect(call(routes, 'GET', long, 'admin')).rejects.toMatchObject({

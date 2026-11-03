@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   isBlocked: vi.fn(),
   listActiveAllScope: vi.fn(),
   emitMetric: vi.fn(),
+  alertFraudBlock: vi.fn(),
   clientIp: '203.0.113.9',
 }));
 
@@ -16,6 +17,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/ip', () => ({ getClientIp: () => h.clientIp }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: h.emitMetric }));
+vi.mock('@server/billing/fraudBlockAlert', () => ({ alertFraudBlock: h.alertFraudBlock }));
 
 import {
   checkBlockedIP,
@@ -55,6 +57,7 @@ describe('checkBlockedIP', () => {
     h.isBlocked.mockReset().mockResolvedValue(null);
     h.listActiveAllScope.mockReset().mockResolvedValue([]);
     h.emitMetric.mockReset().mockResolvedValue(undefined);
+    h.alertFraudBlock.mockReset().mockResolvedValue(undefined);
   });
 
   describe('login surface', () => {
@@ -74,6 +77,21 @@ describe('checkBlockedIP', () => {
       h.isBlocked.mockResolvedValue({ ip: '203.0.113.0/24', scope: 'all', expiresAt: inAnHour() });
       const { res } = await run(checkBlockedIP());
       expect(res._getJSONData()).toEqual({ error: NETWORK_BLOCKED_MESSAGE, blocked: true, request_id: 'req-1' });
+    });
+
+    it('alerts LiveOps on an all block, keyed by IP when signed out, but not on a login lockout', async () => {
+      h.isBlocked.mockResolvedValueOnce({ ip: '203.0.113.9', scope: 'login', expiresAt: inAnHour() });
+      await run(checkBlockedIP());
+      expect(h.alertFraudBlock).not.toHaveBeenCalled();
+
+      h.isBlocked.mockResolvedValueOnce({ ip: '203.0.113.0/24', scope: 'all', expiresAt: inAnHour() });
+      await run(checkBlockedIP());
+      expect(h.alertFraudBlock).toHaveBeenCalledExactlyOnceWith({
+        kind: 'ipBlocked',
+        userId: null,
+        ip: '203.0.113.9',
+        details: ['*IP:* `203.0.113.9` (login surface)'],
+      });
     });
 
     it('treats a legacy row without a scope as a login lockout', async () => {
@@ -112,6 +130,12 @@ describe('checkBlockedIP', () => {
       expect(res._getStatusCode()).toBe(403);
       expect(res._getJSONData().error).toBe(NETWORK_BLOCKED_MESSAGE);
       expect(h.isBlocked).not.toHaveBeenCalled();
+    });
+
+    it('alerts LiveOps with the signed-in user it refused', async () => {
+      h.listActiveAllScope.mockResolvedValue([rangeRow('203.0.113.0/24')]);
+      await run(gate(), { user: { id: 'u1', isAdmin: false } });
+      expect(h.alertFraudBlock).toHaveBeenCalledWith(expect.objectContaining({ kind: 'ipBlocked', userId: 'u1' }));
     });
 
     it('ignores login lockouts, which the cached list never contains', async () => {

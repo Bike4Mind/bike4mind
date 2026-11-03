@@ -51,7 +51,13 @@ import {
   type RuntimeCheck,
   type RuntimeHealth,
 } from '@bike4mind/local-models';
-import { ollamaBuildBytes, type HubBuild, type HubEntry, type HubManifest } from '@bike4mind/common';
+import {
+  activeParamsFraction,
+  ollamaBuildBytes,
+  type HubBuild,
+  type HubEntry,
+  type HubManifest,
+} from '@bike4mind/common';
 import {
   licenseKind,
   pullKey,
@@ -645,7 +651,12 @@ function reviewedFit(entry: HubEntry, build: HubBuild, sizing: Sizing): ModelFit
     configured: pinsOf(build)?.numCtx ?? undefined,
     projectorBytes: mmprojBytes,
   });
-  return fitFromArch(entry.arch, weightsBytes, sizing.hardware, context, { mmprojBytes, where: sizing.where });
+  return fitFromArch(entry.arch, weightsBytes, sizing.hardware, context, {
+    mmprojBytes,
+    where: sizing.where,
+    expertBytesPerLayer: build.tensorStats?.expertBytesPerLayer,
+    activeParamsFraction: activeParamsFraction(entry.params),
+  });
 }
 
 /**
@@ -671,6 +682,7 @@ export class ModelHubService {
       parameters: string | null;
       contextLength: number | null;
       projectorBytes: number;
+      expertBytesPerLayer: number | undefined;
     } | null>
   >();
   /** Model folders read from a runtime, by server id; a guessed default is never kept. */
@@ -743,6 +755,7 @@ export class ModelHubService {
             pinned: this.pinnedProjectors(),
             onThisComputer: target.local,
           }),
+          expertBytesPerLayer: inspection.tensorStats?.expertBytesPerLayer,
         }))
         .catch(() => {
           // A busy daemon can time out once; read it again next time instead of rating by size for the session.
@@ -763,7 +776,11 @@ export class ModelHubService {
     });
     const { where } = sizing;
     return arch
-      ? fitFromArch(arch, model.sizeBytes - projector, hardware, context, { mmprojBytes: projector, where })
+      ? fitFromArch(arch, model.sizeBytes - projector, hardware, context, {
+          mmprojBytes: projector,
+          expertBytesPerLayer: inspection?.expertBytesPerLayer,
+          where,
+        })
       : fitFromSize(model.sizeBytes, hardware, context, { limitKnown: limit !== undefined, where });
   }
 

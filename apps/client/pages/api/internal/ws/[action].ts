@@ -75,7 +75,7 @@ const handler = baseApi({ auth: false }).post(
       // domainName/stage only feed disconnect's best-effort cc_agent despawn
       // broadcast; the core cleanup (Connection + QuerySubscription pull) ignores
       // them. Note: disconnect builds https://<host>/<stage>, but the self-host
-      // management endpoint is plain HTTP (http://ws:3001), so that broadcast is
+      // management endpoint is plain HTTP (http://ws:3002), so that broadcast is
       // effectively a no-op here (it is wrapped in try/catch upstream and the
       // core cleanup still runs). Derive host/stage from the endpoint anyway.
       const mgmt = new URL(Resource.websocket.managementEndpoint);
