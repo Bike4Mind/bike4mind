@@ -88,10 +88,12 @@ function replyFigures(usage: ChatUsage, counted: boolean): LocalUsageFigures {
 /**
  * The model a reply started on, or null when that cannot be told. An unstamped reply falls back
  * to its snapshot's model, then the session's if it has a rate; a prompt-cache stamp means hosted.
+ * Null too when only its rounds are stamped: a continuation's snapshot says nothing of its start.
  */
 function replyModel(message: ChatMessage, sessionModel: string): string | null {
   if (typeof message.model === 'string') return message.model;
   if (message.promptCache) return null;
+  if (Array.isArray(message.rounds) && message.rounds.some(round => typeof round?.model === 'string')) return null;
   const snapshot = message.contextSnapshot?.model;
   if (typeof snapshot === 'string' && snapshot) return snapshot;
   return message.usage?.rate ? sessionModel : null;
