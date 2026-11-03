@@ -7,7 +7,6 @@ import {
   DEFAULT_INVITE_CENTER_SECTION,
   INVITE_CENTER_SECTION_IDS,
   INVITE_CENTER_SECTION_PARAM,
-  inviteCenterSectionFromParam,
   type InviteCenterSectionId,
 } from './inviteCenterSearch';
 import { useAdminModal } from './useAdminModal';
@@ -102,7 +101,7 @@ const StubSectionBody = ({ section }: { section: StubSection }) => {
 export function InviteCenterShell({ waitlist }: { waitlist: ReactNode }) {
   const search = useSearch({ strict: false }) as AdminSearch;
   const navigate = useNavigate();
-  const section = inviteCenterSectionFromParam(search[INVITE_CENTER_SECTION_PARAM]);
+  const section = search[INVITE_CENTER_SECTION_PARAM] ?? DEFAULT_INVITE_CENTER_SECTION;
 
   // Not the admin tab store: the URL sync would treat it as a tab switch and drop this param.
   const selectSection = (id: string) =>

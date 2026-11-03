@@ -1,4 +1,4 @@
-import { INVITE_CENTER_TAB_PARAMS } from './inviteCenterSearch';
+import { INVITE_CENTER_SEARCH_PARSERS, INVITE_CENTER_TAB_PARAMS, type InviteCenterSearch } from './inviteCenterSearch';
 import { INTEGRATION_DEMAND_TAB_PARAMS } from './integrationDemandSearch';
 import { SIGNUP_RISK_REVIEW_TAB_PARAMS } from './signupRiskReviewSearch';
 import { SHADOW_DETECTION_TAB_PARAMS } from './shadowDetectionSearch';
@@ -96,7 +96,8 @@ type TypedAdminSearch = UsersSearch &
   ModelLogsSearch &
   OrganizationsSearch &
   SubscriptionsSearch &
-  SecurityDashboardSearch;
+  SecurityDashboardSearch &
+  InviteCenterSearch;
 
 /** Params with a typed parser; every other registered param is an optional string. */
 export type AdminSearch = Partial<Record<Exclude<AdminSearchParam, keyof TypedAdminSearch>, string>> & TypedAdminSearch;
@@ -111,6 +112,7 @@ const TYPED_PARAM_PARSERS: ReadonlyMap<string, (value: unknown, search: Record<s
     ...ORGS_SEARCH_PARSERS,
     ...SUBSCRIPTIONS_SEARCH_PARSERS,
     ...SECURITY_DASHBOARD_SEARCH_PARSERS,
+    ...INVITE_CENTER_SEARCH_PARSERS,
   })
 );
 
