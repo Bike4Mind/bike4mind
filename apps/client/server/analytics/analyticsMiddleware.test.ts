@@ -207,6 +207,29 @@ describe('analyticsMiddleware - a marked user is reported once per visit', () =>
     expect(next).toHaveBeenCalledTimes(4);
   });
 
+  it('does not send a visit again when the user goes back to it the same day, but does the next day', () => {
+    const [web, other] = [mintVisitId(), mintVisitId()];
+    const mw = analyticsMiddleware();
+    const staff = () => marked({ isInternal: true });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-11-03T12:00:00Z'));
+      for (const visit of [web, other, web, other]) mw(inVisit(staff(), visit), res, next);
+      mw(staff(), res, next);
+      mw(inVisit(staff(), web), res, next);
+      mw(staff(), res, next);
+      vi.setSystemTime(new Date('2026-11-04T00:00:01Z'));
+      mw(inVisit(staff(), web), res, next);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const sessions = (emitActiveEvent as unknown as { mock: { calls: Array<[{ sessionId: string }]> } }).mock.calls.map(
+      ([event]) => event.sessionId
+    );
+    expect(sessions).toEqual([web, other, OVERWATCH_UNKNOWN_SESSION_ID, web]);
+  });
+
   it("keeps a customer's emit to once a day, whatever the visit", () => {
     const mw = analyticsMiddleware();
     mw(inVisit(makeReq(), mintVisitId()), res, next);

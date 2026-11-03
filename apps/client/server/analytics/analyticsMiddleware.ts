@@ -28,13 +28,14 @@ function utcDate(): string {
 // purge of stale-day entries only if a single warm instance is ever shown to accumulate a
 // pathologically wide user tail.
 //
-// The value is the UTC day for a customer. For a marked user (synthetic or internal, lane.ts) it
-// is the day and the visit, so their `active` goes out once per visit rather than once per day.
-// The visit beacon is anonymous and carries no lane, so a visit is set aside downstream only when
-// a marked event of its user arrives under the same visit id; once a day, only the day's first
-// visit would get one, and the rest would count as customers' visits. A customer's emits are
-// unchanged, and the extra ones land on the same user-day, which the upsert keeps as one.
-const emitted = new Map<string, string>();
+// A customer is sent once a day. A marked user (synthetic or internal, lane.ts) is sent once per
+// visit that day, so `sent` holds their visit ids, reset with the day. The visit beacon is
+// anonymous and carries no lane, so a visit is set aside downstream only when a marked event of
+// its user arrives under the same visit id; once a day, only the day's first visit would get one,
+// and the rest would count as customers' visits. A customer's emits are unchanged, and the extra
+// ones land on the same user-day, which the upsert keeps as one.
+const emitted = new Map<string, { day: string; sent: Set<string> }>();
+const CUSTOMER_SLOT = '';
 
 // Test-only: clear the shared throttle between cases. Not referenced in production code.
 export function __resetAnalyticsThrottle(): void {
@@ -73,13 +74,15 @@ export function analyticsMiddleware() {
     // sentinel adds one bucket a consumer can exclude outright. The user is still counted
     // in DAU either way, which is what this emit is for.
     const sessionId = readVisitId(req.headers.cookie) ?? OVERWATCH_UNKNOWN_SESSION_ID;
-    const sent = isLaneMarked(req.user) ? `${today}|${sessionId}` : today;
+    const slot = isLaneMarked(req.user) ? sessionId : CUSTOMER_SLOT;
 
-    if (emitted.get(pseudoUserId) === sent) {
+    const seen = emitted.get(pseudoUserId);
+    if (seen?.day === today && seen.sent.has(slot)) {
       next();
       return;
     }
-    emitted.set(pseudoUserId, sent);
+    if (seen?.day === today) seen.sent.add(slot);
+    else emitted.set(pseudoUserId, { day: today, sent: new Set([slot]) });
 
     const userType = resolveUserType({ level: req.user.level, subscribedUntil: req.user.subscribedUntil });
     const utm = readUtmCookie(req);
