@@ -295,6 +295,22 @@ export const RESOLVABLE_SECRETS = {
     category: 'oauth' as SystemSecretCategory,
     description: 'GitHub OAuth client secret',
   },
+  APPLE_CLIENT_ID: {
+    category: 'oauth' as SystemSecretCategory,
+    description: 'Sign in with Apple Services ID',
+  },
+  APPLE_TEAM_ID: {
+    category: 'oauth' as SystemSecretCategory,
+    description: 'Sign in with Apple team ID',
+  },
+  APPLE_KEY_ID: {
+    category: 'oauth' as SystemSecretCategory,
+    description: 'Sign in with Apple private key ID',
+  },
+  APPLE_PRIVATE_KEY: {
+    category: 'oauth' as SystemSecretCategory,
+    description: 'Sign in with Apple private key (.p8 PEM)',
+  },
 
   // API Keys
   ANTHROPIC_API_KEY: {

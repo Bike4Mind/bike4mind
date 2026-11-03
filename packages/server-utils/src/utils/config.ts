@@ -43,6 +43,11 @@ const Config = {
   GOOGLE_CLIENT_SECRET: Resource.GOOGLE_CLIENT_SECRET.value,
   GITHUB_CLIENT_ID: Resource.GITHUB_CLIENT_ID.value,
   GITHUB_CLIENT_SECRET: Resource.GITHUB_CLIENT_SECRET.value,
+  // Sign in with Apple; optional so a stage without it simply does not register the strategy.
+  APPLE_CLIENT_ID: readOptionalSecret('APPLE_CLIENT_ID', () => Resource.APPLE_CLIENT_ID.value),
+  APPLE_TEAM_ID: readOptionalSecret('APPLE_TEAM_ID', () => Resource.APPLE_TEAM_ID.value),
+  APPLE_KEY_ID: readOptionalSecret('APPLE_KEY_ID', () => Resource.APPLE_KEY_ID.value),
+  APPLE_PRIVATE_KEY: readOptionalSecret('APPLE_PRIVATE_KEY', () => Resource.APPLE_PRIVATE_KEY.value),
   // Read-only data-lake GitHub App; resolved (and 'not-configured' rejected) by getGitHubLakeAppConfig.
   GITHUB_LAKE_APP_CLIENT_ID: readOptionalSecret(
     'GITHUB_LAKE_APP_CLIENT_ID',

@@ -4,6 +4,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { isOpenRegistrationAllowed } from '@server/utils/auth/openRegistration';
 import { getTurnstilePolicy } from '@server/utils/auth/turnstile';
+import { getAppleConfig } from '@bike4mind/server-utils/auth/appleConfig';
 import { publicAppUrl } from '@server/utils/validators';
 
 export type ServerConfigPublic = {
@@ -17,6 +18,8 @@ export type ServerConfigPublic = {
   allowTrustedDevices: boolean;
   /** Turnstile site key; empty when the challenge is not enforced on this stage. */
   turnstileSiteKey: string;
+  /** True when Apple credentials are configured, so the login page offers Sign in with Apple. */
+  appleSignInEnabled: boolean;
 };
 
 // Public pre-login config - minimal fields only.
@@ -47,6 +50,7 @@ const handler = baseApi({ auth: false }).get(
       pyodideBaseUrl: process.env.PYODIDE_BASE_URL || '',
       allowTrustedDevices,
       turnstileSiteKey: turnstile.active ? turnstile.siteKey : '',
+      appleSignInEnabled: getAppleConfig() !== null,
     };
 
     return res.json(config);

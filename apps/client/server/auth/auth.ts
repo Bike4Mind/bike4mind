@@ -23,6 +23,8 @@ import { verifyJwtPayload } from './verifyJwtPayload';
 import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { githubOAuthStateStore, googleOAuthStateStore } from './passportOAuthStateStore';
 import { createGitHubStrategy } from './githubStrategy';
+import { registerAppleStrategy } from './appleStrategy';
+import { getAppleConfig } from '@bike4mind/server-utils/auth/appleConfig';
 import { isPolicyConsentRequired, type ConsentGateUser } from '@bike4mind/server-utils/auth/consentGate';
 import { samlRequestCache } from './samlRequestCache';
 import { emailMatchesIdpDomain, IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/auth/idpEmailDomain';
@@ -237,6 +239,11 @@ if (Config.GITHUB_CLIENT_ID && Config.GITHUB_CLIENT_ID !== 'not-configured') {
   );
 } else {
   console.warn('[AUTH] GitHub OAuth disabled: GITHUB_CLIENT_ID not configured');
+}
+
+// Only register Sign in with Apple if all four credentials are configured
+if (!registerAppleStrategy(passport, getAppleConfig())) {
+  console.warn('[AUTH] Sign in with Apple disabled: APPLE_* credentials not configured');
 }
 
 // Note: Okta authentication is now handled by openid-client in oktaOidcClient.ts
