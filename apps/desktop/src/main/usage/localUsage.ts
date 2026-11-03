@@ -165,7 +165,7 @@ function hourOf(at: number): number {
 }
 
 /**
- * A reply's usage per model and UTC hour: each round's where it ended, the rest where the reply began.
+ * A reply's usage per model and UTC hour: each round where it ended, the rest in the hour it was first stored.
  * `message.usage` stays whole unless the rounds name different models. `replyLevel` always has a share.
  */
 function replyShares(
