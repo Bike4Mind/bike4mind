@@ -32,17 +32,29 @@ describe('parseGenerationInput', () => {
     expect(parseGenerationInput({})).toEqual({});
   });
 
+  it('takes each bound itself', () => {
+    expect(parseGenerationInput({ temperature: 2, thinkingBudgetTokens: 32_000, topK: 0 })).toEqual({
+      temperature: 2,
+      thinkingBudgetTokens: 32_000,
+      topK: 0,
+    });
+  });
+
   it.each([
     null,
     'hot',
     [0.4],
     { temperature: '0.4' },
     { temperature: 2.5 },
+    { temperature: -0.1 },
     { topP: -0.1 },
     { topK: 20.5 },
     { maxOutputTokens: 1e12 },
     { thinkingBudgetTokens: 512 },
+    { thinkingBudgetTokens: 32_001 },
     { temperature: 0.4, repeatPenalty: Number.NaN },
+    { temperatur: 0.5 },
+    { temperature: undefined },
   ])('rejects the whole set for %j', raw => {
     expect(parseGenerationInput(raw)).toBeNull();
   });
