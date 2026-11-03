@@ -4190,8 +4190,9 @@ export class ChatService {
   /**
    * The app-control surface for one Code session, or undefined when there is nothing to scope to.
    *
-   * Everything it offers is bounded by the caller's own project: it can see and change the
-   * conversations in that project and no others. The one capability that creates something -
+   * Changing a conversation (archive, delete) is bounded by the caller's own project. Messaging
+   * reaches any conversation of the account, in any project, and reading one in another project
+   * is allowed once it is known to the caller (see knownTo). The one capability that creates something -
    * `spawn` - puts the child either in the caller's own working directory or in a fresh worktree
    * of the caller's own repository, and WHICH of those comes from the user's answer on the
    * approval card. There is still deliberately no argument through which a directory, a branch or
@@ -4590,12 +4591,11 @@ export class ChatService {
   /**
    * Deliver a message from one session to another and let the target run it.
    *
-   * Which sessions may be targeted: any live conversation in the CALLER'S OWN PROJECT, itself
-   * excluded. That is the same boundary the rest of the family already draws - `session_read`
-   * reads any of them and `session_delete` removes any of them - so narrowing messaging alone
-   * to, say, the caller's own children would leave the agent able to delete a sibling but not
-   * to speak to it. Archived is refused rather than silently unarchived: the user put it away,
-   * and a conversation that starts replying from the Archived section is the app undoing that.
+   * Which sessions may be targeted: any live conversation of the account, in any project, itself
+   * excluded. A message to another project, or to a conversation in a looser approval mode, is
+   * held for the receiving conversation's user rather than delivered (see relayHoldReason).
+   * Archived is refused rather than silently unarchived: the user put it away, and a conversation
+   * that starts replying from the Archived section is the app undoing that.
    *
    * Both halves of the cycle bound are checked HERE rather than in the tool, so no path into
    * this capability can skip them.
