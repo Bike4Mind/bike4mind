@@ -151,6 +151,20 @@ describe('DesktopDownloadPage', () => {
     await waitFor(() => expect(within(row).getByRole('link')).toHaveAttribute('href', EXE_URL));
   });
 
+  it('links Windows to the release page when the release has no exe asset', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ ...RELEASE, assets: RELEASE.assets.filter(asset => !asset.name.endsWith('.exe')) }),
+    });
+    setUserAgent(UA.windows);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByTestId('desktop-download-version')).toHaveTextContent('Version 0.42.0'));
+    const exe = screen.getByTestId('desktop-download-exe-link');
+    expect(exe).toHaveAttribute('href', RELEASE.html_url);
+    expect(exe).toHaveTextContent('Get the .exe on GitHub');
+  });
+
   it('falls back to the releases page for Windows when the API is unreachable', async () => {
     fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
     setUserAgent(UA.windows);

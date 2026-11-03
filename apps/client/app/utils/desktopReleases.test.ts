@@ -16,6 +16,10 @@ const githubRelease = (overrides: Record<string, unknown> = {}) => ({
       browser_download_url: `${BASE}/releases/download/desktop-v0.42.0/Bike4Mind-0.42.0-x64.AppImage`,
     },
     {
+      name: 'Bike4Mind-0.42.0-setup.exe.blockmap',
+      browser_download_url: `${BASE}/releases/download/desktop-v0.42.0/Bike4Mind-0.42.0-setup.exe.blockmap`,
+    },
+    {
       name: 'Bike4Mind-0.42.0-setup.exe',
       browser_download_url: `${BASE}/releases/download/desktop-v0.42.0/Bike4Mind-0.42.0-setup.exe`,
     },
