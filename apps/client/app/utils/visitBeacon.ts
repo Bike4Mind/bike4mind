@@ -47,9 +47,9 @@ export function visitBeaconSettled(): Promise<unknown> {
 }
 
 /**
- * The page this load's latest visit beacon request carried, which the server records (as the
- * visit's landing, or as a page_view on a later load); undefined while held or when sent without
- * consent. The page beacon (pageBeacon.ts) sends the landing itself only when this is not it.
+ * The page this load's latest visit beacon request carried, for the server to record (as the
+ * visit's landing, or as a page_view on a later load) if the request reaches it; undefined while
+ * held or when sent without consent. The page beacon (pageBeacon.ts) sends the landing itself only when this is not it.
  */
 export function visitBeaconLanding(): string | undefined {
   return sentLanding;
