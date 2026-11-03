@@ -426,7 +426,7 @@ export const LoginAsDialog: React.FC<ProfileDialogProps> = ({ user, onClose }) =
             type="button"
             onClick={() => {
               onClose();
-              void navigate({ to: '/profile', search: { tab: 'settings', section: 'security' } });
+              void navigate({ to: '/profile', search: { tab: 'security' } });
             }}
             sx={{ color: 'admin.link', bgcolor: 'transparent', border: 0, p: 0, cursor: 'pointer', font: 'inherit' }}
             data-testid="login-as-dialog-setup-mfa-btn"

@@ -463,21 +463,23 @@ describe('staged signup ledger', () => {
     expect(await CreditTransaction.countDocuments({ transactionId: `verify-grant:${user.id}` })).toBe(1);
   });
 
-  const activitySettings = (overrides: Record<string, string | undefined> = {}) =>
-    vi.spyOn(adminSettingsRepository, 'findBySettingName').mockImplementation(
-      async name =>
-        ({
-          settingValue: (
-            {
-              signupGrantActivityEnabled: 'true',
-              signupGrantActivityMinActiveSeconds: '600',
-              signupGrantActivityDailyCredits: '10',
-              signupGrantActivityMaxCredits: '28',
-              ...overrides,
-            } as Record<string, string | undefined>
-          )[name],
-        }) as never
+  const activitySettings = (overrides: Record<string, string | undefined> = {}) => {
+    const values: Record<string, string | undefined> = {
+      stagedSignupGrantEnabled: 'true',
+      signupGrantActivityEnabled: 'true',
+      signupGrantActivityMinActiveSeconds: '600',
+      signupGrantActivityDailyCredits: '10',
+      signupGrantActivityMaxCredits: '28',
+      verifiedUnlockCredits: config.verifiedUnlockCredits,
+      ...overrides,
+    };
+    vi.spyOn(adminSettingsRepository, 'findBySettingNames').mockImplementation(
+      async names => names.map(name => ({ settingName: name, settingValue: values[name] })) as never
     );
+    return vi
+      .spyOn(adminSettingsRepository, 'findBySettingName')
+      .mockImplementation(async name => ({ settingValue: values[name] }) as never);
+  };
   const accrue = (userId: string, day: string, ms: number) =>
     User.collection.updateOne(
       { _id: new mongoose.Types.ObjectId(userId) },
@@ -799,12 +801,12 @@ describe('staged signup ledger', () => {
     expect((await User.findById(user.id))?.currentCredits).toBe(12);
   });
 
-  it.each([['false'], [undefined]])('does not unlock from activity when the flag is %s', async flag => {
+  it.each([['0'], [undefined]])('does not unlock from activity when the daily amount is %s', async daily => {
     const user = await createUser();
     const at = new Date('2030-03-01T10:00:00Z');
     await User.collection.updateOne({ _id: user._id }, { $set: { createdAt: new Date('2030-02-01T00:00:00Z') } });
     await userService.releaseSignupTranche(user.id, adapters);
-    activitySettings({ signupGrantActivityEnabled: flag });
+    activitySettings({ signupGrantActivityDailyCredits: daily });
     await accrue(user.id, '2030-03-01', 600_000);
     expect((await unlockSignupGrantFromActivity(user.id, at)).creditsGranted).toBe(0);
     expect((await User.findById(user.id))?.currentCredits).toBe(12);

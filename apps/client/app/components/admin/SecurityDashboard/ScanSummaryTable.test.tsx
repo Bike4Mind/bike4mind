@@ -141,10 +141,43 @@ describe('ScanSummaryTable', () => {
     expect(screen.getByTestId('security-scans-summary-prowler-next')).toHaveTextContent('Manual');
   });
 
+  it('skeletons the web and cloud next run, and hides the updating bar, until the schedules arrive', () => {
+    mocks.schedules.mockReturnValue({ data: undefined, isError: false, isFetching: true, refetch: vi.fn() });
+    renderTable();
+    for (const id of ['web', 'cloud']) {
+      expect(screen.queryByTestId(`security-scans-summary-${id}-next`)).not.toBeInTheDocument();
+    }
+    expect(screen.getByTestId('security-scans-summary-prowler-next')).toHaveTextContent('Manual');
+    expect(screen.queryByTestId('security-scans-summary-updating')).not.toBeInTheDocument();
+  });
+
   it('summarizes severity counts compactly', () => {
     expect(compactSeverityCounts({ critical: 1, low: 3 }, ['critical', 'high', 'medium', 'low'])).toBe(
       '1 critical, 3 low'
     );
     expect(compactSeverityCounts({}, ['critical'])).toBe('None');
+  });
+
+  it('skeletons the last run, findings and next run cells of a row that is still loading', () => {
+    mocks.overview.mockReturnValue({ data: undefined, isError: false, isFetching: true, refetch: vi.fn() });
+    renderTable();
+    const row = screen.getByTestId('security-scans-summary-web-row');
+    expect(row).not.toHaveTextContent('\u2014');
+    expect(screen.queryByTestId('security-scans-summary-web-findings')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('security-scans-summary-web-next')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('security-scans-summary-updating')).not.toBeInTheDocument();
+  });
+
+  it('shows an updating bar above the table while loaded data refetches', () => {
+    mocks.attack.mockReturnValue({
+      data: attack,
+      isLoading: false,
+      isError: false,
+      isFetching: true,
+      refetch: vi.fn(),
+    });
+    renderTable();
+    expect(screen.getByTestId('security-scans-summary-updating')).toHaveTextContent('Updating');
+    expect(screen.getByTestId('security-scans-summary-web-findings')).toHaveTextContent('2 high, 5 medium');
   });
 });

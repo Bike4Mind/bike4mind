@@ -24,8 +24,9 @@ export const executeToolContract = defineEndpoint({
     'Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`, `decide`) and ' +
     'returns its result as JSON. Authenticate with a JWT access token only - API keys are NOT ' +
     'accepted on this endpoint. Rate-limited to 100 requests/hour per user, counted separately from ' +
-    'other endpoints. `request_id` echoes the ' +
-    'X-Request-ID response header.',
+    "other endpoints. `web_search` and `web_fetch` are billed per call from the caller's credits (or " +
+    "their organization's), and refused with a 422 `insufficient_credits` before the provider is called. " +
+    '`request_id` echoes the X-Request-ID response header.',
   tags: ['AI'],
   auth: 'jwtOnly',
   request: ToolExecutionRequestSchema,
@@ -44,6 +45,14 @@ export const executeToolContract = defineEndpoint({
     400: { description: 'Malformed JSON body.', schema: ApiErrorSchema },
     401: { description: 'Missing or invalid JWT (an API key is rejected here).', schema: ApiErrorSchema },
     403: { description: 'Valid JWT, but the account is suspended or has a dispute pending.', schema: ApiErrorSchema },
+    422: {
+      description:
+        'Request body failed validation, or the caller cannot afford a billed tool call (`success: false`, ' +
+        '`errorCode: "insufficient_credits"`).',
+      schema: z.union([ToolExecutionResponseSchema, ApiErrorSchema]),
+      bespokeErrorShape:
+        'A refused billed tool call returns the full ToolExecutionResponse (success: false), not an error envelope.',
+    },
     429: { description: 'Rate limit exceeded (100 requests/hour per user for this endpoint).', schema: ApiErrorSchema },
     // Two 500 shapes: a failed-but-executed tool returns the full ToolExecutionResponse
     // (`success: false` with `error`); an unexpected throw is shaped by defineLambdaRoute

@@ -682,6 +682,16 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
+    id: 'admin.moderation_incidents',
+    section: 'admin',
+    label: 'Moderation review',
+    description: 'Review image moderation incidents that are waiting for a verdict',
+    navigationType: 'tab',
+    target: '74', // AdminTab.ModerationIncidents
+    keywords: ['moderation', 'image moderation', 'incident review', 'flagged images', 'false positive'],
+    requiresAdmin: true,
+  },
+  {
     id: 'admin.signup_risk_review',
     section: 'admin',
     label: 'Risk review',

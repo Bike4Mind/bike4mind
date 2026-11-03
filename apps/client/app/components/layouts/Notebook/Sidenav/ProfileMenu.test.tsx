@@ -31,6 +31,7 @@ const user = vi.hoisted(() => ({
     isAdmin?: boolean;
     adminPermissions?: string[];
   },
+  avatarVersion: 0,
 }));
 const config = vi.hoisted(() => ({ cdnUrl: 'https://cdn.example.test' as string | undefined }));
 vi.mock('@client/app/components/subscription/BillingDeepLinkModals', () => ({
@@ -40,7 +41,8 @@ vi.mock('@client/app/contexts/InboxContext', () => ({
   useInbox: { getState: () => ({ setOpen: vi.fn() }) },
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: (select: (s: unknown) => unknown) => select({ currentUser: user.current, isAdmin: false }),
+  useUser: (select: (s: unknown) => unknown) =>
+    select({ currentUser: user.current, isAdmin: false, avatarVersion: user.avatarVersion }),
 }));
 vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: analytics.mutate }) }));
 vi.mock('@client/app/hooks/data/settings', () => ({
@@ -135,6 +137,7 @@ describe('ProfileMenu AccountCard - semantics', () => {
 describe('ProfileMenu - avatar', () => {
   afterEach(() => {
     user.current = { id: 'u1', name: 'Jane' };
+    user.avatarVersion = 0;
     config.cdnUrl = 'https://cdn.example.test';
     delete process.env.NEXT_PUBLIC_CDN_URL;
   });
@@ -190,6 +193,28 @@ describe('ProfileMenu - avatar', () => {
 
     const img = screen.getByTestId('profile-menu-avatar').querySelector('img');
     expect(img?.getAttribute('src')).toBe('https://build-cdn.example.test/profile-photos/u1/abc.png');
+  });
+
+  // Joy's Avatar latches on a failed load of an unchanged src; only a remount re-requests it.
+  it('remounts the avatar when avatarVersion bumps, even with the same photo', () => {
+    user.current = { id: 'u1', name: 'Jane', photoUrl: 'profile-photos/u1/abc.png' };
+    const view = render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+    const before = screen.getByTestId('profile-menu-avatar');
+
+    user.avatarVersion = 1;
+    view.rerender(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+
+    const after = screen.getByTestId('profile-menu-avatar');
+    expect(after).not.toBe(before);
+    expect(after.querySelector('img')?.getAttribute('src')).toBe('https://cdn.example.test/profile-photos/u1/abc.png');
   });
 });
 

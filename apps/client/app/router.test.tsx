@@ -31,6 +31,27 @@ import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
 // adminRoute does after it, so it passes here.
 vi.mock('./utils/consentGuard', () => ({ enforceConsentRedirect: async () => undefined }));
 
+// Hoisted: router.tsx calls startPageBeacon() while it is being imported.
+const pageBeacon = vi.hoisted(() => ({ startPageBeacon: vi.fn(), beaconPage: vi.fn() }));
+vi.mock('./utils/pageBeacon', () => pageBeacon);
+
+describe('page beacon wiring', () => {
+  it('notes the landing at bootstrap, then reports each page the router settles on', () => {
+    expect(pageBeacon.startPageBeacon).toHaveBeenCalledOnce();
+    expect(pageBeacon.beaconPage).not.toHaveBeenCalled();
+
+    router.emit({
+      type: 'onResolved',
+      toLocation: router.latestLocation,
+      pathChanged: true,
+      hrefChanged: true,
+      hashChanged: false,
+    });
+
+    expect(pageBeacon.beaconPage).toHaveBeenCalledOnce();
+  });
+});
+
 describe('adminRoute validateSearch', () => {
   const validate = (search: Record<string, unknown>) => adminRoute.options.validateSearch(search);
 

@@ -10,11 +10,13 @@ import { readJobCondition, readJobs, readNeeds, readSteps } from './ciWorkflowTe
  * It must run on every change, docs-only ones included: `docs/**` and `docs-site/**` are
  * non-deployable, and they are exactly where planning artifacts and pasted identifiers land. Gating
  * it on `deployable` (as `repo-guards` is) would skip it there, and a skipped job counts as passing
- * in `ci-complete`, so the regression would be silent. Text-matched like the sibling
+ * in `ci-complete`, so the regression would be silent. The one allowed condition skips merge_group,
+ * whose diff the PR run already checked. Text-matched like the sibling
  * check*JobWired tests; the last describe proves the helpers see a broken copy.
  */
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const ci = fs.readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
+const PR_ONLY = "github.event_name != 'merge_group'";
 
 function jobBody(source: string, name: string): string {
   return readJobs(source).find(job => job.name === name)?.body ?? '';
@@ -41,8 +43,8 @@ describe('leak-shapes job in ci.yml', () => {
     expect(readSteps(body).some(runsCheck)).toBe(true);
   });
 
-  it('runs unconditionally, with no deployable gate', () => {
-    expect(readJobCondition(body)).toBe('');
+  it('runs on every change except merge_group, with no deployable gate', () => {
+    expect(readJobCondition(body)).toBe(PR_ONLY);
     expect(readNeeds(body)).not.toContain('changes');
   });
 

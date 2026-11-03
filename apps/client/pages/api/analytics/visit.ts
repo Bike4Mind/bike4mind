@@ -1,7 +1,11 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { isDevelopment } from '@bike4mind/server-utils/utils/config';
-import { isAnalyticsConfigured, emitVisitEvent } from '@bike4mind/server-utils/analytics/emitActiveEvent';
+import {
+  isAnalyticsConfigured,
+  emitPageViewEvent,
+  emitVisitEvent,
+} from '@bike4mind/server-utils/analytics/emitActiveEvent';
 import { readUtmCookie } from '@bike4mind/server-utils/analytics/cookies';
 import {
   isProbableBot,
@@ -24,8 +28,11 @@ import { readVisitLanding } from '@server/analytics/visitLanding';
  *
  * So the app's bootstrap calls this on every page load, signed in or not. The cookie does
  * the counting: a request with no visit cookie is the start of a visit and emits exactly
- * one event; a request that already carries one emits nothing and only slides the
- * inactivity window forward. One event per visit, by construction rather than by throttle.
+ * one visit event; a request that already carries one emits no visit and slides the
+ * inactivity window forward. One visit event per visit, by construction rather than by
+ * throttle. With consent, such a later load also records the page it loaded as a page_view
+ * (a new tab, a typed URL, a link, a reload); the pages the app moves to without a load are
+ * reported by the page beacon (page.ts).
  *
  * One exception to "emits at the start": a visitor still being asked for consent can't send a
  * source yet, and a visit's source is read from its one event alone. So a beacon awaiting
@@ -94,9 +101,20 @@ const handler = baseApi({ auth: false, maxBodySize: 1024 })
     if (hold || markedPending) cookies.push(visitPendingCookieHeader(hold, { secure }));
     res.setHeader('Set-Cookie', cookies);
 
-    if (!unrecorded || hold) return res.status(204).end();
+    if (hold) return res.status(204).end();
 
     const landing = readVisitLanding(req.body);
+
+    if (!unrecorded) {
+      // A later page load of a recorded visit: its page is one of the visit's pages, and the page
+      // beacon counts it as sent (pageBeacon.ts), so it must be recorded here. Only a consented
+      // body carries a path; the awaiting-consent check only guards against hand-made bodies that
+      // send both.
+      if (landing.landingPath !== undefined && !isAwaitingConsent(req.body)) {
+        void emitPageViewEvent({ sessionId: visitId, path: landing.landingPath }).catch(() => {});
+      }
+      return res.status(204).end();
+    }
 
     // Fire-and-forget, like the middleware's emit: a page load must not wait on the ingest
     // hop, and a dropped visit event costs one session in a count that is already

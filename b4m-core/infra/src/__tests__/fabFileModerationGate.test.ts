@@ -146,6 +146,12 @@ const ALLOWLIST: Record<string, string> = {
   'apps/client/server/s3/knowledgeModerationDeps.ts':
     'the moderation scanner wiring - downloads bytes to RUN the scan and PRODUCE moderationStatus (its closures are handed to moderateImportedKnowledgeFiles / the rescue sweep), never returns them to a client; cannot gate on isImageServeable (circular - it is what sets that field)',
 
+  // --- The reviewer's own view of a blocked upload: the point is to see the image the scanner
+  // refused, so it cannot gate on isImageServeable. Reachable only through a full admin on a
+  // freshly verified session, audited before the link is signed, 5 minute inline-only link. ---
+  'apps/client/server/moderation/incidentImageLink.ts':
+    'admin moderation review of a blocked upload - must read the image isImageServeable refuses; full admin + step-up only, audited per view, 5 minute inline-only raster link',
+
   // --- Not FabFile content: the bucket is shared, but the key is a server-rendered CSV. ---
   'apps/client/server/utils/adminAuditExportStorage.ts':
     'signs a server-rendered admin audit-log CSV it just staged under exports/ for a platform admin - not user-uploaded FabFile bytes, so there is no moderationStatus to gate on',

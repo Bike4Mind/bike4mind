@@ -120,7 +120,7 @@ export interface paths {
     put?: never;
     /**
      * Execute a server-side tool
-     * @description Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`, `decide`) and returns its result as JSON. Authenticate with a JWT access token only - API keys are NOT accepted on this endpoint. Rate-limited to 100 requests/hour per user, counted separately from other endpoints. `request_id` echoes the X-Request-ID response header.
+     * @description Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`, `decide`) and returns its result as JSON. Authenticate with a JWT access token only - API keys are NOT accepted on this endpoint. Rate-limited to 100 requests/hour per user, counted separately from other endpoints. `web_search` and `web_fetch` are billed per call from the caller's credits (or their organization's), and refused with a 422 `insufficient_credits` before the provider is called. `request_id` echoes the X-Request-ID response header.
      */
     post: operations['executeTool'];
     delete?: never;
@@ -2099,15 +2099,32 @@ export interface components {
       result?: unknown;
       error?: string;
       errorType?: string;
+      errorCode?: string;
       executionTimeMs?: number;
       request_id: string;
     };
+    executeToolResponse422:
+      | {
+          success: boolean;
+          result?: unknown;
+          error?: string;
+          errorType?: string;
+          errorCode?: string;
+          executionTimeMs?: number;
+          request_id: string;
+        }
+      | {
+          error: string;
+          request_id?: string;
+          name?: string;
+        };
     executeToolResponse500:
       | {
           success: boolean;
           result?: unknown;
           error?: string;
           errorType?: string;
+          errorCode?: string;
           executionTimeMs?: number;
           request_id: string;
         }
@@ -8315,7 +8332,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description Request failed validation. */
+      /** @description Request body failed validation, or the caller cannot afford a billed tool call (`success: false`, `errorCode: "insufficient_credits"`). */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -8323,7 +8340,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ErrorResponse'];
+          'application/json': components['schemas']['executeToolResponse422'];
         };
       };
       /** @description Rate limit exceeded (100 requests/hour per user for this endpoint). */

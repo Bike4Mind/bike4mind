@@ -23,40 +23,19 @@ import { cardSurfaceSx } from '@client/app/components/ProfileModal/settingsStyle
 import LanguageSelector from '@client/app/components/LanguageSelector';
 import { useTranslation } from 'react-i18next';
 import VoicePreferenceSection from './VoicePreferenceSection';
-import ActiveSessionsSection from './ActiveSessionsSection';
-import { SupportAccessActivity } from '../SecurityTab/tabs/SupportAccessActivity';
-import ApprovedAppsSection from './ApprovedAppsSection';
 import DocxTemplateSection from './DocxTemplateSection';
 import PromptCacheDefaultCard from './PromptCacheDefaultCard';
 import { DeleteAllKnowledgeFilesConfirm, DeleteAllNotebooksConfirm } from './DeleteAllConfirmModals';
 import WorkspaceVisibilitySection from './WorkspaceVisibilitySection';
 import ExperimentalFeatureToggle from '../ExperimentalFeatureToggle';
-import MfaCard from './MfaCard';
 import SettingsActionButton from './SettingsActionButton';
 import { useExperimentalFeatureSettings, useSettingsFromServer } from '@client/app/hooks/data/settings';
-import { useEffect, useRef, useState } from 'react';
-import { useSearch } from '@tanstack/react-router';
+import { useState } from 'react';
 
 const GeneralSettingsTab = () => {
   const { settings, updatePreferences } = useUserSettings();
   const { isLoading: serverSettingsLoading } = useSettingsFromServer();
   const { data: experimentalSettingsWithDefaults } = useExperimentalFeatureSettings();
-
-  // Scroll the Security/MFA section into view when navigated here with
-  // ?section=security (e.g. the admin "Login as User -> Set Up MFA" flow).
-  const search = useSearch({ strict: false }) as { section?: string };
-  const securitySectionRef = useRef<HTMLDivElement>(null);
-
-  // Wait for server settings to resolve so the optional Beta Features section
-  // above doesn't shift the target after we scroll, and defer a frame so the
-  // lazy-loaded panel has committed its layout before we measure.
-  useEffect(() => {
-    if (search?.section !== 'security' || serverSettingsLoading) return;
-    const frame = requestAnimationFrame(() => {
-      securitySectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [search?.section, serverSettingsLoading]);
 
   const { t } = useTranslation();
 
@@ -323,16 +302,6 @@ const GeneralSettingsTab = () => {
           <ExperimentalFeatureToggle />
         </SectionContainer>
       )}
-
-      {/* Security Section */}
-      <Box ref={securitySectionRef} data-testid="settings-security-section">
-        <SectionContainer title="Security">
-          <MfaCard />
-          <ActiveSessionsSection />
-          <SupportAccessActivity />
-          <ApprovedAppsSection />
-        </SectionContainer>
-      </Box>
 
       <VoicePreferenceSection />
 

@@ -53,6 +53,20 @@ describe('signup protection alerts', () => {
       domain: '<example.net>',
     });
   });
+
+  it('posts the unset drip cap alert to the liveops channel and rejects when undelivered', async () => {
+    await signupProtection.notifyConfig!({ setting: 'signupGrantDripCap', fallback: 9000 });
+    expect(postMessageToSlackWithOutcome).toHaveBeenCalledWith(
+      expect.stringContaining('9,000 credits'),
+      'SlackLiveopsWebhookUrl',
+      { timeoutMs: 3000 }
+    );
+
+    vi.mocked(postMessageToSlackWithOutcome).mockResolvedValue('failed');
+    await expect(signupProtection.notifyConfig!({ setting: 'signupGrantDripCap', fallback: 9000 })).rejects.toThrow(
+      'Signup grant config alert was not delivered'
+    );
+  });
 });
 
 describe('disposable refusal metric', () => {

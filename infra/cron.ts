@@ -115,6 +115,26 @@ const signupBaselineReport = runsScheduledJobs
     })
   : undefined;
 
+// Auto-confirms Signup Domain Holds that need no judgment (it never releases one). A failed hold
+// throws so signupDomainHoldTriageLambdaErrors in alarms.ts sees it; the next run retries.
+const signupDomainHoldTriageCron = runsScheduledJobs
+  ? new sst.aws.Cron('signupDomainHoldTriage', {
+      schedule: 'rate(10 minutes)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/signupDomainHoldTriage.handler',
+        runtime: 'nodejs24.x',
+        timeout: '2 minutes',
+        memory: '512 MB',
+        retries: 0,
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+      },
+    })
+  : undefined;
+
 // Refreshes the disposable email domain lists the signup gate reads. Its SourceFailures metric feeds
 // disposableDomainRefreshFailures in alarms.ts.
 const disposableDomainRefreshCron = runsScheduledJobs
@@ -1463,6 +1483,7 @@ export {
   oauthAbuseAutoBlockCron,
   signupGrantHeldRelease,
   disposableDomainRefreshCron,
+  signupDomainHoldTriageCron,
   dataLakeVectorIndexKeepWarmCron,
   modelDiscoveryCronEnabled,
   dailyUserActivityReport,

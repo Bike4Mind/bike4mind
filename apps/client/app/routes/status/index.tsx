@@ -26,7 +26,7 @@ const QaStatusPage: FC = () => {
   const runs = useQaRuns(effective);
 
   const onChange = (patch: Partial<QaStatusSearch>) =>
-    navigate({ to: '/status', search: prev => ({ ...prev, ...patch }) });
+    navigate({ from: '/status', to: '/status', search: prev => ({ ...prev, ...patch }) });
   const openRun = (id: string) => navigate({ to: '/status/runs/$id', params: { id } });
   const openTest = (testKey: string) => navigate({ to: '/status/tests/$testKey', params: { testKey } });
 

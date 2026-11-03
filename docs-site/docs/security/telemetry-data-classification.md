@@ -59,6 +59,73 @@ prevents future collection; it does not delete existing Stripe or MongoDB record
 Configured GA conversion events can receive source, medium, and campaign fields
 through the shared consent-gated attribution reader.
 
+## Visits and pages
+
+The app counts visits, and the pages within them, with two first-party events sent
+as the host product's Overwatch events. Both are anonymous: their user is a fixed
+anonymous id, never an account or its pseudonym, even for a signed-in visitor.
+
+A visit is a browser holding the `b4m_vid` cookie. The server mints it on a page
+load that carries none, and sends it again on every page load, which restarts its
+30-minute inactivity window. Nothing else refreshes it, so a visit ends 30 minutes
+after its last page load however long the tab stays in use. A value the server did
+not mint is ignored and replaced. A browser that identifies itself as a bot, or
+sends no user agent, gets no cookie and records nothing.
+
+Each visit sends one `visit` event, with the visit id as its `sessionId`. With
+consent it also carries the referring site's origin (never its path or query), the
+landing path, and the session campaign from `b4m_utm`; without consent it carries
+none of them. While a visitor in the opt-in region has not answered the banner, the
+event is held, marked by the `b4m_vid_pending` cookie, and sent once they answer, or
+without a source if the page is hidden or closed first.
+
+Every page of a visit after its landing sends a `page_view` event with the same
+visit id and the page's path, and nothing else. That covers a page the app moves to
+without a page load, and a later page load in the same visit: a new tab, a typed
+URL, a bookmark, a link or a reload. A reload sends its page again, so a visit's
+`page_view` events can repeat a path. A `page_view` is sent only while consent is
+granted, never while it is declined or not yet given, and pages passed without
+consent are not sent later. A grant sends the page the visitor is on unless this
+page load has already sent it. So a visitor who declines at first, or leaves the
+banner unanswered until the page is hidden, and then grants on the page they landed
+on, records that page as a `page_view`. Within one page load, a change of query
+string or fragment alone, or the page just sent again, sends nothing, and the app
+sends at most 100.
+
+The server records a `page_view` only on a visit whose `visit` event was already
+sent. A page the app moves to is dropped when there is no visit cookie, while the
+visit is held for consent, or after the visit has lapsed, and recording one never
+sets or refreshes a cookie. A page load with no live visit starts a new visit
+instead, and its page is that visit's landing.
+
+The browser sends only the path, cut to 200 characters at a `/`. The server checks
+it again, because anyone can post to these routes: it keeps the path alone, cut at
+any `?` or `#`, replaces each segment shaped like a secret (a UUID, a long hex id,
+or a long letter-and-digit token such as a share or invite link carries) with
+`:token`, and drops a path that holds an address (`@`, or `%40` encoded) entirely.
+
+When a signed-in event is sent during a visit (the daily `active` event, or the
+funnel events of a signup), it carries that visit's id as its `sessionId` beside the
+user's pseudonym. So a visit's landing and pages can be joined to the pseudonymous
+user who was signed in, or signed up, during that visit.
+
+Query strings, fragments, IP addresses and user agents are never sent on these
+events. The server reads the user agent to filter bots, and the client IP for a
+per-IP rate limit whose counter expires with its one-minute window.
+
+| Data       | Storage                                                                  | Lifetime                                            | Purpose                                     |
+| ---------- | ------------------------------------------------------------------------ | --------------------------------------------------- | ------------------------------------------- |
+| Visit id   | App cookie `b4m_vid`: 16 random bytes in hex, `HttpOnly`, `SameSite=Lax` | 30 minutes, refreshed only by a page load           | Tell one visit from the next                |
+| Visit hold | App cookie `b4m_vid_pending`: `1`, no id, `HttpOnly`, `SameSite=Lax`     | Until the `visit` event is sent or the visit lapses | Hold the `visit` event for a consent answer |
+
+| Data  | Sent as                                                                                                                          | Purpose                                             |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| Visit | `visit`: anonymous user, visit id as `sessionId`; with consent, referrer origin, `metadata.landingPath` and the campaign (`utm`) | Count visits and where they came from               |
+| Page  | `page_view`: anonymous user, visit id as `sessionId`, `metadata.path`; only with consent, and only on a recorded visit           | Know a visit's later pages and the page it ended on |
+
+Both cookies use `path=/`, and `Secure` outside local development. Unlike the
+campaign cookies, they are not readable by JavaScript.
+
 ## Cross-product signup reporting (self-reported)
 
 Account creation emits a `signup` event to each Overwatch product named by the
