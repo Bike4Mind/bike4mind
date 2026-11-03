@@ -198,6 +198,23 @@ describe('sessionUsageBuckets', () => {
         );
       });
 
+      it('a legacy hosted reply continued locally, with only the later rounds stamped: the earlier tokens are not local', () => {
+        const snapshot = { model: OLLAMA, inputTokens: 10, overhead: [] };
+        const result = buckets([
+          {
+            ...reply(at, { inputTokens: 3060, outputTokens: 207 }, null),
+            contextSnapshot: snapshot,
+            rounds: [
+              round(undefined, { inputTokens: 3000, outputTokens: 200 }),
+              round(OLLAMA, { inputTokens: 60, outputTokens: 7 }),
+            ],
+          },
+        ]);
+        expect(result.map(bucket => [bucket.model, bucket.outputTokens, bucket.contextTokens])).toEqual([
+          [OLLAMA, 7, 60],
+        ]);
+      });
+
       it('a hosted reply with no stored rounds, continued locally: its earlier tokens stay hosted', () => {
         const result = buckets([
           {
