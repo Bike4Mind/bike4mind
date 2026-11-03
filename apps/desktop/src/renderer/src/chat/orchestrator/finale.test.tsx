@@ -7,9 +7,8 @@ import {
   FINALE_SETTLE_MS,
   finaleStats,
   formatWallTime,
-  latestParentReport,
-  reportFollowsAgents,
-  runKey,
+  latestQuestReport,
+  questSucceeded,
   useFinale,
   type ParentReport,
 } from './finale';
@@ -59,16 +58,7 @@ describe('formatWallTime', () => {
   });
 });
 
-describe('runKey', () => {
-  it('names a run by its agents, whatever their order or state', () => {
-    expect(runKey([agent('a', 'done'), agent('b', 'failed')])).toBe(
-      runKey([agent('b', 'working'), agent('a', 'idle')])
-    );
-    expect(runKey([agent('a', 'done')])).not.toBe(runKey([agent('a', 'done'), agent('c', 'done')]));
-  });
-});
-
-describe('latestParentReport', () => {
+describe('latestQuestReport', () => {
   const at = '2026-10-01T00:05:00.000Z';
   const message = (extra: Partial<ChatMessage>): ChatMessage => ({
     id: 'm',
@@ -78,32 +68,28 @@ describe('latestParentReport', () => {
     ...extra,
   });
 
-  it("is the parent's last reply when it has text", () => {
-    expect(latestParentReport([message({ id: 'p', role: 'user' }), message({ id: 's' })])).toEqual({
-      id: 's',
-      createdAt: at,
-    });
+  it('is the newest reply marked by quest_complete, wherever it sits', () => {
+    expect(
+      latestQuestReport([
+        message({ id: 'q1', questComplete: true }),
+        message({ id: 'q2', questComplete: true }),
+        message({ id: 'n', role: 'user', system: true }),
+        message({ id: 'later' }),
+      ])
+    ).toEqual({ id: 'q2', createdAt: at });
   });
 
-  it('is absent while an agent notice or a prompt follows the last reply', () => {
-    expect(latestParentReport([message({}), message({ id: 'n', role: 'user', system: true })])).toBeUndefined();
-    expect(latestParentReport([message({}), message({ id: 'u', role: 'user' })])).toBeUndefined();
-    expect(latestParentReport([])).toBeUndefined();
-  });
-
-  it('is absent for a reply that is empty, failed or stopped', () => {
-    expect(latestParentReport([message({ content: '  ' })])).toBeUndefined();
-    expect(latestParentReport([message({ error: 'boom' })])).toBeUndefined();
-    expect(latestParentReport([message({ stopReason: 'aborted' })])).toBeUndefined();
+  it('ignores an unmarked reply however final it looks', () => {
+    expect(latestQuestReport([message({ id: 'p', role: 'user' }), message({ id: 'waiting' })])).toBeUndefined();
+    expect(latestQuestReport([])).toBeUndefined();
   });
 });
 
-describe('reportFollowsAgents', () => {
-  it('holds only when the report was written at or after every agent last changed', () => {
-    const report = { id: 's', createdAt: '2026-10-01T00:05:00.000Z' };
-    expect(reportFollowsAgents(report, [agent('a', 'done', { updatedAt: '2026-10-01T00:05:00.000Z' })])).toBe(true);
-    expect(reportFollowsAgents(report, [agent('a', 'done', { updatedAt: '2026-10-01T00:06:00.000Z' })])).toBe(false);
-    expect(reportFollowsAgents({ id: 's', createdAt: '' }, [agent('a', 'done')])).toBe(false);
+describe('questSucceeded', () => {
+  it('holds only when every agent ended done', () => {
+    expect(questSucceeded(finaleStats([agent('a', 'done'), agent('b', 'done')]))).toBe(true);
+    expect(questSucceeded(finaleStats([agent('a', 'done'), agent('b', 'failed')]))).toBe(false);
+    expect(questSucceeded(finaleStats([agent('a', 'done'), agent('b', 'idle')]))).toBe(false);
   });
 });
 
@@ -148,9 +134,9 @@ describe('useFinale', () => {
     vi.useRealTimers();
   });
 
-  it('celebrates once every agent settles and the parent stops on a summary, after one was seen working', () => {
+  it('celebrates a quest_complete summary once the agents and the parent have settled', () => {
     render([agent('a', 'working'), agent('b', 'done')], { status: 'processing' }, null);
-    render([agent('a', 'done'), agent('b', 'done')], { status: 'processing' }, null);
+    render([agent('a', 'done'), agent('b', 'done')], { status: 'processing' }, S1);
     settle();
     expect(latest?.shown).toBe(false);
 
@@ -160,59 +146,26 @@ describe('useFinale', () => {
     expect(latest?.shown).toBe(true);
   });
 
-  it('waits when the agents settle but the parent has not written a summary since', () => {
+  it('never celebrates without a marked summary, however settled the run looks', () => {
     render([agent('a', 'working')], { status: 'processing' }, null);
     render([agent('a', 'done')], { status: 'done' }, null);
     settle();
     expect(latest?.shown).toBe(false);
-
-    // The last reply predates an agent's final change: it is not the report on that work.
-    render([agent('a', 'done', { updatedAt: '2026-10-01T00:20:00.000Z' })], { status: 'done' }, S1);
-    settle();
-    expect(latest?.shown).toBe(false);
   });
 
-  it('celebrates when the parent writes its summary after the agents settle', () => {
-    render([agent('a', 'working')], { status: 'processing' }, null);
-    render([agent('a', 'done')], { status: 'done' }, null);
-    settle();
-    render([agent('a', 'done')], { status: 'processing' }, null);
-    render([agent('a', 'done')], { status: 'done' }, S1);
-    settle();
-    expect(latest?.shown).toBe(true);
-  });
-
-  it('celebrates again when the same agents re-run and the parent writes a new summary', () => {
-    render([agent('a', 'working')], {}, null);
-    render([agent('a', 'done')], {}, S1);
-    settle();
-    expect(latest?.shown).toBe(true);
-    act(() => latest?.dismiss());
-
-    render([agent('a', 'working')], { status: 'processing' }, null);
-    render([agent('a', 'done')], { status: 'done' }, null);
-    settle();
-    expect(latest?.shown).toBe(false);
-    render([agent('a', 'done')], { status: 'done' }, summary('s2'));
-    settle();
-    expect(latest?.shown).toBe(true);
-  });
-
-  it('never celebrates a run that was already over when the stage mounted', () => {
+  it('shows a summary marked while the stage was elsewhere, once', () => {
     render([agent('a', 'done')], { status: 'done' });
     settle();
-    expect(latest?.shown).toBe(false);
+    expect(latest?.shown).toBe(true);
   });
 
   it('does not count a needs-you agent as settled', () => {
-    render([agent('a', 'working')]);
     render([agent('a', 'needs-you')]);
     settle();
     expect(latest?.shown).toBe(false);
   });
 
   it('waits out a brief settle so a parent picking straight back up does not trigger it', () => {
-    render([agent('a', 'working')], { status: 'processing' });
     render([agent('a', 'done')], { status: 'done' });
     act(() => {
       vi.advanceTimersByTime(FINALE_SETTLE_MS / 2);
@@ -222,8 +175,7 @@ describe('useFinale', () => {
     expect(latest?.shown).toBe(false);
   });
 
-  it('remembers a seen completion so a reload never replays it, and dismiss hides it', () => {
-    render([agent('a', 'working')]);
+  it('remembers a shown summary so a reload never replays it, and dismiss hides it', () => {
     render([agent('a', 'done')]);
     settle();
     expect(latest?.shown).toBe(true);
@@ -232,25 +184,27 @@ describe('useFinale', () => {
 
     act(() => root.unmount());
     root = createRoot(container);
-    render([agent('a', 'working')]);
     render([agent('a', 'done')]);
     settle();
     expect(latest?.shown).toBe(false);
   });
 
-  it('celebrates again for a new run with new agents', () => {
-    render([agent('a', 'working')]);
-    render([agent('a', 'done')]);
+  it('celebrates again for a later quest_complete in the same session', () => {
+    render([agent('a', 'done')], {}, S1);
     settle();
     act(() => latest?.dismiss());
-    render([agent('a', 'done'), agent('b', 'working')]);
-    render([agent('a', 'done'), agent('b', 'done')]);
+
+    render([agent('a', 'working')], { status: 'processing' }, S1);
+    render([agent('a', 'done')], { status: 'done' }, S1);
+    settle();
+    expect(latest?.shown).toBe(false);
+
+    render([agent('a', 'done')], { status: 'done' }, summary('s2'));
     settle();
     expect(latest?.shown).toBe(true);
   });
 
   it('does not celebrate again when an agent of a finished run is archived or deleted', () => {
-    render([agent('a', 'working'), agent('b', 'working')]);
     render([agent('a', 'done'), agent('b', 'done')]);
     settle();
     act(() => latest?.dismiss());
@@ -261,9 +215,9 @@ describe('useFinale', () => {
   });
 
   it('hides the banner if an agent picks up work again', () => {
-    render([agent('a', 'working')]);
     render([agent('a', 'done')]);
     settle();
+    expect(latest?.shown).toBe(true);
     render([agent('a', 'working')]);
     expect(latest?.shown).toBe(false);
   });

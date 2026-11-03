@@ -49,49 +49,35 @@ export function formatWallTime(ms: number): string {
   return `${Math.floor(minutes / 60)}h ${pad(minutes % 60)}m`;
 }
 
-/** Names a run by the set of its agents, so the same run is recognised across reopens. */
-export function runKey(agents: readonly AgentView[]): string {
-  const ids = agents
-    .map(agent => agent.id)
-    .sort()
-    .join('\n');
-  let hash = 5381;
-  for (let index = 0; index < ids.length; index++) hash = ((hash * 33) ^ ids.charCodeAt(index)) >>> 0;
-  return `${agents.length}-${hash.toString(36)}`;
-}
-
-/** The parent's closing reply: the message "Read the report" lands on. `createdAt` is when its turn settled. */
+/** The parent's final summary: the message "Read the report" lands on. */
 export interface ParentReport {
   id: string;
   createdAt: string;
 }
 
 /**
- * The parent's summary, when its transcript ends on one: an assistant reply with text that neither
- * failed nor was stopped. Anything after it (an agent's "has finished" notice, a new prompt) means
- * the parent has not answered since, so there is no report yet.
+ * The newest reply the parent marked with quest_complete, if any. The mark is the only signal: an
+ * interim reply ("waiting on the install") looks just like a final one from the transcript's shape.
  */
-export function latestParentReport(messages: readonly ChatMessage[]): ParentReport | undefined {
-  const last = messages.at(-1);
-  if (!last || last.role !== 'assistant' || last.system) return undefined;
-  if (last.error || last.stopReason === 'aborted' || last.content.trim() === '') return undefined;
-  return { id: last.id, createdAt: last.createdAt };
+export function latestQuestReport(messages: readonly ChatMessage[]): ParentReport | undefined {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message.role === 'assistant' && message.questComplete === true) {
+      return { id: message.id, createdAt: message.createdAt };
+    }
+  }
+  return undefined;
 }
 
-/** Whether the report was written after every agent last changed, so it speaks for their final work. */
-export function reportFollowsAgents(report: ParentReport, agents: readonly AgentView[]): boolean {
-  const written = Date.parse(report.createdAt);
-  if (Number.isNaN(written)) return false;
-  return agents.every(agent => !(Date.parse(agent.updatedAt) > written));
+/** Whether every agent ended done, which is what earns "Quest complete" over "Quest ended". */
+export function questSucceeded(stats: FinaleStats): boolean {
+  return stats.failed === 0 && stats.done === stats.agents;
 }
 
 /**
- * Whether the "Quest complete" finale is showing: when every agent has settled, the parent has stopped,
- * and the parent's last turn ended on a summary written after the agents finished; and only after an
- * agent was seen working while mounted, so reopening a finished run never replays it. Showing it spends
- * that sighting, so archiving or deleting an agent afterwards never brings it back. The remembered run
- * pairs the agent set with the summary's id, so re-running the same agents to a new summary celebrates
- * again while a reload of the same completion does not. `rootId` scopes the remembered run.
+ * Whether the finale is showing: the parent has marked a summary with quest_complete, nothing is
+ * running, and that summary has not been shown before. Showing it records the summary's id per
+ * `rootId`, so a reload never replays it while a later quest_complete gets a finale of its own.
  */
 export function useFinale(
   rootId: string | undefined,
@@ -101,29 +87,19 @@ export function useFinale(
 ): { shown: boolean; dismiss(): void } {
   const active = agents.some(isActive);
   const parentBusy = isParentBusy(parent);
-  const [sawWork, setSawWork] = useState(active);
-  if (active && !sawWork) setSawWork(true);
   const [shown, setShown] = useState(false);
   if (shown && (active || parentBusy)) setShown(false);
 
-  const complete =
-    sawWork &&
-    agents.length > 0 &&
-    !active &&
-    !parentBusy &&
-    report !== undefined &&
-    reportFollowsAgents(report, agents);
-  const run = complete ? `${runKey(agents)}@${report.id}` : null;
+  const pending = report !== undefined && agents.length > 0 && !active && !parentBusy ? report.id : null;
 
   useEffect(() => {
-    if (run === null || rootId === undefined || readFinaleSeen(rootId) === run) return;
+    if (pending === null || rootId === undefined || readFinaleSeen(rootId) === pending) return;
     const timer = window.setTimeout(() => {
-      writeFinaleSeen(rootId, run);
-      setSawWork(false);
+      writeFinaleSeen(rootId, pending);
       setShown(true);
     }, FINALE_SETTLE_MS);
     return () => window.clearTimeout(timer);
-  }, [rootId, run]);
+  }, [rootId, pending]);
 
   const dismiss = useCallback(() => setShown(false), []);
   return { shown, dismiss };

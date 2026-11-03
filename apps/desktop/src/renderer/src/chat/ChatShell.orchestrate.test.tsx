@@ -470,13 +470,20 @@ describe('orchestrate mode in the chat shell', () => {
     expect(document.activeElement).toBe(el('chat-composer-input'));
   });
 
-  it("celebrates a finished run and reads the report by scrolling to the parent's last reply", async () => {
+  it('celebrates a quest_complete summary and reads the report by scrolling to it', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     const at = '2026-10-01T00:00:00.000Z';
     parentMessages = [
       { id: 'a1', role: 'assistant', content: 'Spawning agents', createdAt: at },
       { id: 'r1', role: 'user', content: 'Report from agent one', createdAt: at, system: true },
-      { id: 'a2', role: 'assistant', content: 'The combined report', createdAt: '2026-10-01T00:10:00.000Z' },
+      {
+        id: 'a2',
+        role: 'assistant',
+        content: 'The combined report',
+        createdAt: '2026-10-01T00:10:00.000Z',
+        questComplete: true,
+      },
+      { id: 'a3', role: 'assistant', content: 'Anything else?', createdAt: '2026-10-01T00:11:00.000Z' },
     ] as ChatMessage[];
     statusSnapshot = [{ sessionId: CHILD.id, status: 'processing' }];
     const scrolled: Element[] = [];
@@ -509,13 +516,18 @@ describe('orchestrate mode in the chat shell', () => {
     expect(scrolled.at(-1)?.hasAttribute('data-report-highlight')).toBe(false);
   });
 
-  it('holds the finale while the parent has not answered since the agents reported', async () => {
+  it('holds the finale for a reply that settled the run but was not marked by quest_complete', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     const at = '2026-10-01T00:00:00.000Z';
     parentMessages = [
       { id: 'a1', role: 'assistant', content: 'Spawning agents', createdAt: at },
       { id: 'r1', role: 'user', content: 'Report from agent one', createdAt: at, system: true },
-      { id: 'r2', role: 'user', content: 'Report from agent two', createdAt: at, system: true },
+      {
+        id: 'a2',
+        role: 'assistant',
+        content: 'Waiting for the install to finish',
+        createdAt: '2026-10-01T00:10:00.000Z',
+      },
     ] as ChatMessage[];
     statusSnapshot = [{ sessionId: CHILD.id, status: 'processing' }];
     await openParent();

@@ -98,7 +98,7 @@ import { OrchestratorSurface } from './orchestrator/OrchestratorSurface';
 import { readIntroSeen, writeIntroSeen, writeSurface, type OrchestratorViewId } from './orchestrator/orchestratorPrefs';
 import { TableView } from './orchestrator/TableView';
 import { TavernView } from './orchestrator/tavern/TavernView';
-import { latestParentReport } from './orchestrator/finale';
+import { latestQuestReport } from './orchestrator/finale';
 import { agentStates } from './orchestrator/roster';
 import { prefersReducedMotion } from './orchestrator/motion';
 import { useOrchestratorPrefs } from './orchestrator/useOrchestrator';
@@ -560,7 +560,7 @@ export function ChatShell({
   const orchestratorView = introPhase === 'off' ? orchestratorPrefs.view : 'tavern';
   const threadHost = useRef<HTMLDivElement | null>(null);
   const parentReport = useMemo(
-    () => (conversation.session?.id === activeId ? latestParentReport(conversation.messages) : undefined),
+    () => (conversation.session?.id === activeId ? latestQuestReport(conversation.messages) : undefined),
     [conversation.session?.id, activeId, conversation.messages]
   );
   const readParentReport = useCallback(

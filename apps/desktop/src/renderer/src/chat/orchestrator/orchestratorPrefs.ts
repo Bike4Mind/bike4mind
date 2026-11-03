@@ -73,7 +73,7 @@ export function writeIntroSeen(): void {
   writeItem(INTRO_SEEN_KEY, '1');
 }
 
-/** The run (see runKey) whose finale this session last showed; only the latest is kept. */
+/** The quest_complete summary whose finale this session last showed; only the latest is kept. */
 export function readFinaleSeen(sessionId: string): string | null {
   return readItem(FINALE_SEEN_KEY + sessionId);
 }
