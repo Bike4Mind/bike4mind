@@ -295,7 +295,7 @@ describe('LoopFormModal stage settings', () => {
 
   it("sends a stage's runner, model, tools and instructions", () => {
     renderForm(saved as never);
-    fireEvent.click(screen.getByRole('button', { name: 'Stage settings' }));
+    fireEvent.click(screen.getByTestId('loop-form-stage-settings-toggle'));
     pick('loop-form-stage-runner-1', 'Desktop');
     expect(screen.getByText('Tickets in this stage wait for your Desktop app to pick them up.')).toBeInTheDocument();
     pick('loop-form-stage-model-1', 'Model Two');
@@ -323,7 +323,7 @@ describe('LoopFormModal stage settings', () => {
       ...saved,
       stageConfig: [{ stage: 'review', runner: 'desktop', instructions: 'Review only' }],
     } as never);
-    fireEvent.click(screen.getByRole('button', { name: 'Stage settings' }));
+    fireEvent.click(screen.getByTestId('loop-form-stage-settings-toggle'));
     expect(screen.getByTestId('loop-form-stage-instructions-1')).toHaveValue('Review only');
     expect(within(screen.getByTestId('loop-form-stage-panel-1')).getByText('desktop')).toBeInTheDocument();
 

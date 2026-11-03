@@ -36,7 +36,8 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     id: string,
     userId: string,
     patch: Record<string, unknown>,
-    expectedStatus?: LoopStatus
+    expectedStatus?: LoopStatus,
+    guard?: { stages?: string[] }
   ): Promise<ILoop | null> {
     if (!mongoose.isValidObjectId(id)) return null;
     const set: Record<string, unknown> = {};
@@ -46,7 +47,12 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
       else if (value !== undefined) set[key] = value;
     }
     const result = await this.loopModel.findOneAndUpdate(
-      { _id: id, userId, ...(expectedStatus && { status: expectedStatus }) },
+      {
+        _id: id,
+        userId,
+        ...(expectedStatus && { status: expectedStatus }),
+        ...(guard?.stages && { stages: guard.stages }),
+      },
       {
         ...(Object.keys(set).length > 0 && { $set: set }),
         ...(Object.keys(unset).length > 0 && { $unset: unset }),

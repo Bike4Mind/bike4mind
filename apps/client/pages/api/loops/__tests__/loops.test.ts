@@ -458,7 +458,7 @@ describe('oversees', () => {
     expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ oversees: [OTHER] }));
 
     await call('item', 'patch', { query: { id: OID }, body: { oversees: [OTHER] } }).result;
-    expect(repo.updateForUser).toHaveBeenCalledWith(OID, 'u1', { oversees: [OTHER] }, 'draft');
+    expect(repo.updateForUser).toHaveBeenCalledWith(OID, 'u1', { oversees: [OTHER] }, 'draft', undefined);
   });
 
   it.each([
@@ -477,9 +477,9 @@ describe('oversees', () => {
   it('clears on null or an empty list', async () => {
     ownLoops(OID);
     await call('item', 'patch', { query: { id: OID }, body: { oversees: [] } }).result;
-    expect(repo.updateForUser).toHaveBeenLastCalledWith(OID, 'u1', { oversees: null }, 'draft');
+    expect(repo.updateForUser).toHaveBeenLastCalledWith(OID, 'u1', { oversees: null }, 'draft', undefined);
     await call('item', 'patch', { query: { id: OID }, body: { oversees: null } }).result;
-    expect(repo.updateForUser).toHaveBeenLastCalledWith(OID, 'u1', { oversees: null }, 'draft');
+    expect(repo.updateForUser).toHaveBeenLastCalledWith(OID, 'u1', { oversees: null }, 'draft', undefined);
   });
 });
 
@@ -738,6 +738,8 @@ describe('stageConfig', () => {
     [[{ stage: 'review', instructions: 'x'.repeat(4001) }], /instructions/],
     [[{ stage: 'review', tools: Array.from({ length: 51 }, (_, i) => `t${i}`) }], /tools/],
     [{ stage: 'review' }, /stageConfig/],
+    [[{ stage: 'review', instructions: 5 }], /instructions must be a string/],
+    [['review'], /stageConfig/],
   ])('rejects an invalid stageConfig with a 400 (%#)', async (stageConfig, message) => {
     repo.findByIdAndUserId.mockResolvedValue(loop({ stages }));
     const result = patch({ stageConfig });
@@ -786,5 +788,20 @@ describe('stageConfig', () => {
     expect(repo.updateForUser.mock.calls[0][2].stageConfig).toEqual([{ stage: 'todo', model: 'm2' }]);
     await patch({ stages: ['review', 'todo'] });
     expect(repo.updateForUser.mock.calls[1][2].stageConfig).toEqual([{ stage: 'review', runner: 'desktop' }]);
+    await patch({ stages: ['doing', 'done'] });
+    expect(repo.updateForUser.mock.calls[2][2].stageConfig).toBeNull();
+  });
+
+  it('writes stageConfig only while the stored stages are the ones it was checked against', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ stages, stageConfig: [{ stage: 'review', model: 'm2' }] }));
+    await patch({ stageConfig: [{ stage: 'review', runner: 'desktop' }] });
+    await patch({ stages: ['todo', 'done'] });
+    await patch({ name: 'Renamed' });
+    expect(repo.updateForUser.mock.calls.map(c => c[4])).toEqual([{ stages }, { stages }, undefined]);
+
+    repo.updateForUser.mockResolvedValue(null);
+    await expect(patch({ stageConfig: [{ stage: 'review', runner: 'desktop' }] })).rejects.toMatchObject({
+      statusCode: 409,
+    });
   });
 });

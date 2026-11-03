@@ -993,6 +993,18 @@ describe('runLoopSchedulerTick - stage config', () => {
     expect(byLoop[todo.id].query).not.toContain('Instructions for the');
   });
 
+  it('keeps the loop tools for a stage that sets only a model', async () => {
+    const loop = await createLoop({ stages: STAGES, stageConfig: [{ stage: 'review', model: 'm2' }] });
+    await createTicket(loop.id, { stage: 'review' });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution.mock.calls[0][0]).toMatchObject({
+      model: 'm2',
+      enabledTools: ['web_search', 'mcp__srv__do_thing'],
+    });
+  });
+
   it('never claims a desktop-stage ticket: an older one is skipped for a newer cloud one', async () => {
     const loop = await createLoop({ stages: STAGES, stageConfig: [{ stage: 'review', runner: 'desktop' }] });
     const desktop = await createTicket(loop.id, { stage: 'review' });

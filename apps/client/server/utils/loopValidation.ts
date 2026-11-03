@@ -18,7 +18,7 @@ const ID_MAX = 200;
 const STAGES_MAX = 20;
 const STAGE_NAME_MAX = 60;
 const OVERSEES_MAX = 5;
-export const STAGE_INSTRUCTIONS_MAX = 4000;
+const STAGE_INSTRUCTIONS_MAX = 4000;
 const INTERVAL_MIN = 5;
 /** One week. */
 const INTERVAL_MAX = 10_080;
@@ -89,9 +89,9 @@ export function validateLoopStageConfig(value: unknown, stages: readonly string[
     const config: ILoopStageConfig = { stage: entry.stage };
     const text = (field: string, max: number) => {
       const v = entry[field];
-      return v === undefined || v === null || (typeof v === 'string' && !v.trim())
-        ? undefined
-        : validateString(field, v, max);
+      if (v === undefined || v === null || (typeof v === 'string' && !v.trim())) return undefined;
+      if (typeof v !== 'string') throw new BadRequestError(`stageConfig ${field} must be a string`);
+      return validateString(field, v, max);
     };
     const instructions = text('instructions', STAGE_INSTRUCTIONS_MAX);
     if (instructions) config.instructions = instructions;
@@ -113,11 +113,8 @@ export function validateLoopStageConfig(value: unknown, stages: readonly string[
 }
 
 /** Drops config for stages no longer in `stages` or now the last one, so a stage edit leaves no orphans. */
-export const pruneStageConfig = (
-  stageConfig: ILoopStageConfig[] | null | undefined,
-  stages: readonly string[]
-): ILoopStageConfig[] | null | undefined =>
-  stageConfig?.filter(entry => stages.includes(entry.stage) && entry.stage !== stages[stages.length - 1]);
+export const pruneStageConfig = (stageConfig: ILoopStageConfig[], stages: readonly string[]): ILoopStageConfig[] =>
+  stageConfig.filter(entry => stages.includes(entry.stage) && entry.stage !== stages[stages.length - 1]);
 
 /**
  * The owner's other loops this loop oversees; `null` or `[]` clears it (returned as null). One message for a

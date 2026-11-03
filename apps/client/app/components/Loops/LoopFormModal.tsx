@@ -120,9 +120,9 @@ export function validateLoopForm(
     };
     if (Object.keys(entry).length === 1) continue;
     if ((instructions?.length ?? 0) > STAGE_INSTRUCTIONS_MAX) {
-      errors.stageConfig = `Stage instructions must be ${STAGE_INSTRUCTIONS_MAX} characters or fewer`;
+      errors.stageConfig ??= `${stage}: instructions must be ${STAGE_INSTRUCTIONS_MAX} characters or fewer`;
     } else if ((settings.tools?.length ?? 0) > TOOLS_MAX) {
-      errors.stageConfig = `Pick ${TOOLS_MAX} tools or fewer per stage`;
+      errors.stageConfig ??= `${stage}: pick ${TOOLS_MAX} tools or fewer`;
     }
     stageConfig.push(entry);
   }
@@ -325,12 +325,15 @@ export default function LoopFormModal({ open, onClose, loop }: LoopFormModalProp
                   variant="soft"
                   endDecorator={
                     <ChipDelete
-                      onDelete={() =>
+                      onDelete={() => {
                         set(
                           'stages',
                           values.stages.filter((_, j) => j !== i)
-                        )
-                      }
+                        );
+                        // So re-adding a stage of the same name starts from defaults.
+                        const { [stage]: _removed, ...rest } = values.stageConfig;
+                        set('stageConfig', rest);
+                      }}
                       data-testid={`loop-form-stage-remove-${i}`}
                     />
                   }
@@ -365,7 +368,9 @@ export default function LoopFormModal({ open, onClose, loop }: LoopFormModalProp
             )}
           </FormControl>
           <Accordion data-testid="loop-form-stage-settings">
-            <AccordionSummary>Stage settings</AccordionSummary>
+            <AccordionSummary slotProps={{ button: { 'data-testid': 'loop-form-stage-settings-toggle' } }}>
+              Stage settings
+            </AccordionSummary>
             <AccordionDetails>
               <Stack gap={2}>
                 {values.stages.slice(0, -1).map((stage, i) => {

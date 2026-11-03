@@ -58,8 +58,8 @@ export interface ILoopStageConfig {
   /** Replaces the loop's `tools`; empty or absent inherits them. */
   tools?: string[];
   /**
-   * Absent means `cloud`. The cloud scheduler never claims a ticket in a `desktop` stage: those are claimed
-   * through the desktop runner contract (`/api/loops/runner/*`).
+   * Absent means `cloud`. The cloud scheduler never claims a ticket in a `desktop` stage; a desktop runner
+   * does.
    */
   runner?: LoopStageRunner;
 }
@@ -99,7 +99,7 @@ export interface ILoop {
   /** Tool allowlist, passed as the run's `enabledTools`. Built-in names or `<lowercased server>__<tool>` for MCP tools. */
   tools: string[];
   stages: string[];
-  /** Keyed by stage name, parallel to `stages`; see `stageConfigOf`. */
+  /** Sparse list keyed by `stage` (one of `stages`, never the last); see `stageConfigOf`. */
   stageConfig?: ILoopStageConfig[] | null;
   /** Enforced at dispatch per UTC day (`startOfUtcDay`); one run can overshoot it. */
   budgetCreditsPerDay?: number;
@@ -136,13 +136,15 @@ export interface ILoopRepository extends IBaseRepository<ILoop> {
   findByIdAndUserId(id: string, userId: string): Promise<ILoop | null>;
   /**
    * Scoped update - a `null` in `patch` unsets the field. With `expectedStatus` it only applies while
-   * the loop still has that status. Returns null when nothing matched.
+   * the loop still has that status, and with `guard.stages` only while its stages are exactly those.
+   * Returns null when nothing matched.
    */
   updateForUser(
     id: string,
     userId: string,
     patch: Record<string, unknown>,
-    expectedStatus?: LoopStatus
+    expectedStatus?: LoopStatus,
+    guard?: { stages?: string[] }
   ): Promise<ILoop | null>;
   deleteForUser(id: string, userId: string): Promise<boolean>;
   /** Atomically leases one due `live` loop with no run in flight and not in `skipIds`, or returns null. */

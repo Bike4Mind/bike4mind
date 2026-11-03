@@ -75,7 +75,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
       const stageConfig = validateLoopStageConfig(body.stageConfig, stages);
       patch.stageConfig = stageConfig?.length ? stageConfig : null;
     } else if (patch.stages && existing.stageConfig) {
-      patch.stageConfig = pruneStageConfig(existing.stageConfig, stages);
+      const pruned = pruneStageConfig(existing.stageConfig, stages);
+      patch.stageConfig = pruned.length ? pruned : null;
     }
     if (body.agentId !== undefined) patch.agentId = body.agentId === null ? null : validateLoopAgentId(body.agentId);
     if (body.budgetCreditsPerDay !== undefined) {
@@ -99,8 +100,10 @@ const handler = baseApi({ auth: 'jwtOnly' })
       patch.nextRunAt = nextRunAtFor({ lastRunAt: existing.lastRunAt, intervalMinutes }, now);
     }
 
-    // Conditional on the status the patch was computed from, so a scheduler write in between is not lost.
-    const updated = await loopRepository.updateForUser(id, req.user!.id, patch, existing.status);
+    // Conditional on the status the patch was computed from, so a scheduler write in between is not lost, and
+    // on the stages stageConfig was checked against, so a concurrent stage edit can't leave orphan config.
+    const guard = patch.stageConfig !== undefined ? { stages: existing.stages } : undefined;
+    const updated = await loopRepository.updateForUser(id, req.user!.id, patch, existing.status, guard);
     if (!updated) throw new ConflictError('Loop changed while saving; reload and try again');
     res.json(updated);
   })
