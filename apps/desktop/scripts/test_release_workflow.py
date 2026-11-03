@@ -4,6 +4,8 @@ import re
 import subprocess
 import unittest
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = (ROOT / '.github/workflows/desktop-release.yml').read_text()
@@ -69,6 +71,19 @@ class ReleaseWorkflowTest(unittest.TestCase):
         self.assertIn('smoke-packaged.mjs', smoke)
         self.assertIn('apps/desktop/release/*.exe', build)
         self.assertIn('installers/latest.yml', job('validate'))
+
+    def test_windows_installer_carries_x64_and_arm64(self):
+        config = yaml.safe_load((ROOT / 'apps/desktop/electron-builder.yml').read_text())
+        self.assertEqual(config['win']['target'], [{'target': 'nsis', 'arch': ['x64', 'arm64']}])
+        self.assertEqual(config['nsis']['artifactName'], '${productName}-${version}-setup.${ext}')
+        build = job('build')
+        command = next(line for line in build.splitlines() if 'electron-builder --win' in line)
+        self.assertIsNone(re.search(r'--(x64|arm64|ia32|armv7l|universal)\b', command))
+        packaging = build.split(command, 1)[1].split('\n          else\n', 1)[0]
+        self.assertIn('7z l "release/Bike4Mind-$DESKTOP_VERSION-setup.exe"', packaging)
+        self.assertIn('for archive in app-64.7z app-arm64.7z; do', packaging)
+        self.assertIn('win-arm64-unpacked/resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-arm64/conpty.node',
+                      packaging)
 
     def test_curated_build_check_runs_between_each_build_and_packaging(self):
         build = job('build')
