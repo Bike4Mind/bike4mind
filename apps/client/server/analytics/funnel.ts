@@ -124,8 +124,9 @@ export type FunnelEvent = 'credits_granted' | 'email_verified' | 'first_value' |
  *
  * `visitId` is the visit the stage happened in (readVisitId on the request), when the stage
  * is the user's own request: it ties the signup to the visit it came from, so the visit's
- * source and its conversion are one session downstream. Omitted, the stage names no visit, as
- * an admin-created account or a background job does.
+ * source and its conversion are one session downstream. A stage recorded by a worker names the
+ * visit of the request that queued its work (first_value: QuestStartBodySchema.visitId). Omitted,
+ * the stage names no visit, as an admin-created account or a background job does.
  */
 export async function emitFunnelEvent(opts: {
   user: FunnelUser;
@@ -220,6 +221,8 @@ export async function recordFirstValue(opts: {
   feature: string;
   now?: Date;
   onRecorded?: () => Promise<void>;
+  /** The visit the value happened in; see emitFunnelEvent. */
+  visitId?: string;
 }): Promise<boolean> {
   if (!signedUpAfterLaunch(opts.user.createdAt)) return false;
   try {
@@ -238,6 +241,7 @@ export async function recordFirstValue(opts: {
             secondsSinceSignup: Math.max(0, Math.round((now.getTime() - createdAt) / 1000)),
           }),
         },
+        visitId: opts.visitId,
       }),
       rewardInviterForFirstAnswer(opts.user.id),
     ]);
@@ -258,6 +262,8 @@ export async function recordFirstValue(opts: {
 export async function recordFirstChatValue(opts: {
   user: FunnelUser & { createdAt?: Date | string | null; firstValueAt?: Date | null };
   loadQuest: () => Promise<{ status?: string; type?: string; creditsUsed?: number } | null | undefined>;
+  /** The visit the question was asked in, carried on the queued turn (QuestStartBodySchema.visitId). */
+  visitId?: string;
 }): Promise<boolean> {
   if (opts.user.firstValueAt || !signedUpAfterLaunch(opts.user.createdAt)) return false;
   const quest = await opts.loadQuest().catch(() => undefined);
@@ -265,6 +271,7 @@ export async function recordFirstChatValue(opts: {
   return recordFirstValue({
     user: opts.user,
     feature: 'chat',
+    visitId: opts.visitId,
     onRecorded: () =>
       logEventSafe({
         userId: opts.user.id,
