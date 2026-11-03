@@ -1,11 +1,12 @@
 import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { userService } from '@bike4mind/services';
-import { newSignupGrant, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
+import { creditService, userService } from '@bike4mind/services';
+import { CreditHolderType, newSignupGrant, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import type { SignupGrantBudgetAlert, SignupProtection } from '@bike4mind/common';
 import {
   mongoose,
   User,
   userRepository,
+  organizationRepository,
   creditTransactionRepository,
   CreditTransaction,
   Quest,
@@ -15,6 +16,7 @@ import {
   Organization,
   AdminSettings,
 } from '@bike4mind/database';
+import { grantCreditPurchase } from '../billing/grantCreditPurchase';
 import {
   createMongoReplSet,
   settleAutoIndexBuilds,
@@ -103,7 +105,7 @@ async function createUser(enrolled = true, n = 0) {
 }
 
 const today = () => clock.toISOString().slice(0, 10);
-const spentToday = async () => (await SignupGrantBudgetDayModel.findById(today()).lean())?.spent ?? 0;
+const spentToday = async () => (await SignupGrantBudgetDayModel.findById(`signup:${today()}`).lean())?.spent ?? 0;
 const creditsOf = async (id: string) => (await User.findById(id))?.currentCredits ?? 0;
 
 describe('signup grant daily budget', () => {
@@ -122,11 +124,11 @@ describe('signup grant daily budget', () => {
     expect(await CreditTransaction.countDocuments({})).toBe(2);
   });
 
-  it('leaves the path unchanged when the budget is 0', async () => {
+  it('pays every signup under an uncapped pool and still counts each draw', async () => {
     const users = await Promise.all([0, 1, 2].map(n => createUser(true, n)));
     const results = await Promise.all(users.map(u => userService.releaseSignupTranche(u.id, adapters)));
     expect(results.map(r => r.creditsGranted)).toEqual([12, 12, 12]);
-    expect(await SignupGrantBudgetDayModel.countDocuments({})).toBe(0);
+    expect(await spentToday()).toBe(36);
     expect(await User.countDocuments({ signupGrantHeldReason: 'budget_exhausted' })).toBe(0);
   });
 
@@ -145,7 +147,7 @@ describe('signup grant daily budget', () => {
     expect(persisted?.signupGrantHeldReason).toBeNull();
     expect(persisted?.signupGrant?.stage).toBe('signup');
     expect(await CreditTransaction.countDocuments({ transactionId: `verify-grant:${second.id}` })).toBe(1);
-    expect(await SignupGrantBudgetDayModel.findById('2030-01-02').lean()).toMatchObject({ spent: 12 });
+    expect(await SignupGrantBudgetDayModel.findById('signup:2030-01-02').lean()).toMatchObject({ spent: 12 });
   });
 
   it('lets a card unlock pay the held tranche plus remainder without drawing the budget', async () => {
@@ -507,5 +509,49 @@ describe('signup grant daily budget', () => {
     await expect(userService.grantFreeCredits(held, failing)).rejects.toThrow('write failed');
     expect(await CreditTransaction.countDocuments({ transactionId: `verify-grant:${held.id}` })).toBe(1);
     expect(await spentToday()).toBe(12);
+  });
+});
+
+describe('paid credits and the signup grant pools', () => {
+  it('pays a purchase, plan credits and a seat grant with both pools at 0 and leaves both counters untouched', async () => {
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '0';
+    const buyer = await createUser(false, 0);
+    const org = await Organization.create({ name: 'Example Org', userId: buyer.id, currentCredits: 0 });
+
+    expect(
+      await grantCreditPurchase({ userId: buyer.id, paymentIntentId: 'pi_pool_e2e', credits: 500, amount: 999 })
+    ).toBe('granted');
+    await creditService.addCredits(
+      {
+        type: 'subscription',
+        ownerId: buyer.id,
+        ownerType: CreditHolderType.User,
+        credits: 300,
+        stripePaymentIntentId: 'in_plan_e2e',
+        metadata: { type: 'subscription_renewal' },
+      },
+      { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository }
+    );
+    await creditService.addCredits(
+      {
+        type: 'subscription',
+        ownerId: org.id,
+        ownerType: CreditHolderType.Organization,
+        credits: 200,
+        stripePaymentIntentId: 'in_seat_e2e',
+        metadata: { type: 'subscription_initial_seats' },
+      },
+      { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: organizationRepository }
+    );
+
+    expect(await creditsOf(buyer.id)).toBe(800);
+    expect((await Organization.findById(org.id))?.currentCredits).toBe(200);
+    expect(await SignupGrantBudgetDayModel.countDocuments()).toBe(0);
+    // The same pools still refuse a free grant, so the paid writes above really ran against 0.
+    for (const pool of ['signup', 'trickle'] as const) {
+      const free = await userService.reserveSignupGrantBudget(adapters.db, `free-${pool}`, 12, { pool });
+      expect(free.outcome).toBe('exhausted');
+    }
+    expect(await SignupGrantBudgetDayModel.countDocuments()).toBe(0);
   });
 });

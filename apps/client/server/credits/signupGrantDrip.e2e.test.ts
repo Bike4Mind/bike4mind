@@ -106,7 +106,8 @@ async function createUser(n = 0) {
 }
 
 const today = () => clock.toISOString().slice(0, 10);
-const spentToday = async () => (await SignupGrantBudgetDayModel.findById(today()).lean())?.spent ?? 0;
+const spentToday = async (pool: 'signup' | 'trickle' = 'trickle') =>
+  (await SignupGrantBudgetDayModel.findById(`${pool}:${today()}`).lean())?.spent ?? 0;
 const creditsOf = async (id: string) => (await User.findById(id))?.currentCredits ?? 0;
 
 const day = (n: number) => new Date(Date.UTC(2030, 0, 1 + n)).toISOString().slice(0, 10);
@@ -305,7 +306,7 @@ describe('signup activity drip', () => {
   it('releases the full remainder on a subscription outside an exhausted budget, once', async () => {
     config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '1000';
     const user = await createSignupStageUser(0);
-    const spent = await spentToday();
+    const spent = await spentToday('signup');
     expect(spent).toBe(1000);
     const subscribe = () =>
       userService.unlockSignupGrant(user.id, 'subscription', {
@@ -314,7 +315,7 @@ describe('signup activity drip', () => {
       });
     expect((await subscribe()).creditsGranted).toBe(9000);
     expect(await creditsOf(user.id)).toBe(10000);
-    expect(await spentToday()).toBe(spent);
+    expect(await spentToday('signup')).toBe(spent);
     expect((await User.findById(user.id))?.signupGrant?.stage).toBe('unlocked');
     expect((await subscribe()).creditsGranted).toBe(0);
   });
@@ -330,6 +331,6 @@ describe('signup activity drip', () => {
       validators: { subscription: async current => current.emailVerified },
     });
     expect(result.creditsGranted).toBe(10000);
-    expect(await spentToday()).toBe(1000);
+    expect(await spentToday('signup')).toBe(1000);
   });
 });

@@ -86,7 +86,7 @@ async function alertCrossing(
 
 /**
  * Draws `amount` credits from today's budget for `pool`. A pool at 0, or with a missing or invalid
- * setting, is 'exhausted' (missing also alerts once per pool-day); no setting value means unmetered.
+ * setting, is 'exhausted' (missing also alerts once per pool-day).
  * 'unmetered' remains only for a non-positive amount or when no counter is wired. `day` pins the draw
  * to a caller-chosen UTC day so a payout keyed by that day books against it.
  */

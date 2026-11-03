@@ -119,7 +119,7 @@ const cron = (maxUsers = 50) =>
     { maxUsers }
   );
 const today = () => clock.toISOString().slice(0, 10);
-const spentToday = async () => (await SignupGrantBudgetDayModel.findById(today()).lean())?.spent ?? 0;
+const spentToday = async () => (await SignupGrantBudgetDayModel.findById(`signup:${today()}`).lean())?.spent ?? 0;
 const creditsOf = async (id: string) => (await User.findById(id))?.currentCredits ?? 0;
 const ledgerRows = (id: string) => CreditTransaction.countDocuments({ transactionId: `verify-grant:${id}` });
 
