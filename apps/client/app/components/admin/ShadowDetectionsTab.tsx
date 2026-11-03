@@ -65,6 +65,8 @@ const ACTION_DISPLAY: Record<ShadowDetectionAction, { label: string; tone: Admin
   restrict: { label: 'Restrict', tone: 'neutral' },
   suspend: { label: 'Suspend', tone: 'warn' },
   blockIp: { label: 'Block IP', tone: 'warn' },
+  confirmHold: { label: 'Confirm hold', tone: 'neutral' },
+  none: { label: 'None', tone: 'neutral' },
 };
 
 export const VERDICT_DISPLAY: Record<ShadowDetectionVerdict, { label: string; tone: AdminStatusTone }> = {

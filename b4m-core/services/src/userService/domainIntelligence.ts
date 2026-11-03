@@ -4,6 +4,7 @@ import {
   emailDomainCandidates,
   emailDomainOf,
   isEmailInDomains,
+  YOUNG_DOMAIN_HOLD_REASON_PREFIX,
 } from '@bike4mind/common';
 import type { DisposableListSource, DomainIntel, SignupProtectionRepository } from '@bike4mind/common';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
@@ -213,7 +214,7 @@ export async function domainHoldReason(
       { ...options.lookup, timeoutMs: options.timeoutMs }
     );
     if (isYoung(intel, options.youngerThanDays, options.lookup?.now ?? new Date()))
-      return `young-domain (<${options.youngerThanDays} days)`;
+      return `${YOUNG_DOMAIN_HOLD_REASON_PREFIX} (<${options.youngerThanDays} days)`;
     // Judged at read time, not cached, so a provider listed after the lookup is still caught.
     for (const hostDomain of new Set(
       intel.mxHosts.map(host => registrableDomain(host, { allowPrivateDomains: true }))

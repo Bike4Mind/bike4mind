@@ -16,15 +16,17 @@ export const SHADOW_DETECTORS = [
   'paymentRisk',
   /** A new account that signed up from the same IP as a blocked account, close in time. */
   'signupIpLinkedToBlocked',
+  'signupDomainHold',
 ] as const;
 export type ShadowDetector = (typeof SHADOW_DETECTORS)[number];
 
 /**
  * The action the detector's policy maps the detection to. contain/suspend/restrict match the admin
  * bulk user actions; blockIp is for actors with no signed-in account, where containing a user is not
- * possible.
+ * possible. confirmHold/none are the signup domain hold assessment's outcomes (confirm the hold, or
+ * leave it for an admin).
  */
-export const SHADOW_DETECTION_ACTIONS = ['contain', 'suspend', 'restrict', 'blockIp'] as const;
+export const SHADOW_DETECTION_ACTIONS = ['contain', 'suspend', 'restrict', 'blockIp', 'confirmHold', 'none'] as const;
 export type ShadowDetectionAction = (typeof SHADOW_DETECTION_ACTIONS)[number];
 
 export const SHADOW_DETECTION_VERDICTS = [

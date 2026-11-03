@@ -185,6 +185,7 @@ const JSON_SETTING_KEYS = new Set<string>([
   'abuseAssessmentConfig',
   'autoContainmentConfig',
   'usagePatternSignalsConfig',
+  'signupDomainHoldAssessmentConfig',
 ]);
 
 const AdminSettingsTab: React.FC = () => {

@@ -4,13 +4,56 @@ export type SignupObservation = { userId: string; email: string; domain: string;
 
 /** Hold reason for a domain found only on the aggregate disposable list (domainHoldReason in b4m-core/services). */
 export const DISPOSABLE_AGGREGATE_HOLD_REASON = 'disposable-aggregate';
+/** Prefix of the hold reason for a freshly registered domain; the full reason names the configured age. */
+export const YOUNG_DOMAIN_HOLD_REASON_PREFIX = 'young-domain';
 
 /**
  * The automated policies that may decide a hold. They only ever confirm (keep credits held); a
- * release always comes from an admin. See apps/workers/src/cron/signupDomainHoldTriage.ts.
+ * release always comes from an admin. See apps/workers/src/cron/signupDomainHoldTriage.ts and
+ * apps/client/server/security/signupDomainHoldAssessment/signupDomainHoldAssessment.ts.
  */
-export const SIGNUP_DOMAIN_HOLD_AUTO_POLICIES = ['disposable-aggregate-rule'] as const;
+export const SIGNUP_DOMAIN_HOLD_AUTO_POLICIES = ['disposable-aggregate-rule', 'advisory-decision'] as const;
 export type SignupDomainHoldAutoPolicy = (typeof SIGNUP_DOMAIN_HOLD_AUTO_POLICIES)[number];
+
+/** Bumped when the assessment question or its feature summary changes, so older verdicts are redone. */
+export const SIGNUP_DOMAIN_HOLD_ASSESSMENT_POLICY_VERSION = 1;
+export const SIGNUP_DOMAIN_HOLD_JUDGMENTS = ['abuse', 'legitimate', 'insufficient_evidence'] as const;
+export type SignupDomainHoldJudgment = (typeof SIGNUP_DOMAIN_HOLD_JUDGMENTS)[number];
+/** Must stay in sync with PlatformDecisionFailureCode in apps/client/server/decisions/platformDecision.ts. */
+export const SIGNUP_DOMAIN_HOLD_ASSESSMENT_FAILURES = [
+  'provider_not_configured',
+  'model_unavailable',
+  'provider_overloaded',
+  'provider_rejected',
+  'provider_error',
+  'malformed_response',
+  'refused',
+  'invalid_request',
+] as const;
+export type SignupDomainHoldAssessmentFailure = (typeof SIGNUP_DOMAIN_HOLD_ASSESSMENT_FAILURES)[number];
+/** Failed assessments of one hold are retried up to this many times per policy version. */
+export const SIGNUP_DOMAIN_HOLD_ASSESSMENT_MAX_ATTEMPTS = 3;
+
+/** The last advisory verdict on a hold; kept after an admin decision as history. */
+export const signupDomainHoldAssessmentSchema = z.discriminatedUnion('outcome', [
+  z.object({
+    outcome: z.literal('judged'),
+    policyVersion: z.number().int(),
+    judgment: z.enum(SIGNUP_DOMAIN_HOLD_JUDGMENTS),
+    confidence: z.number().min(0).max(1),
+    model: z.string(),
+    assessedAt: z.date(),
+  }),
+  z.object({
+    outcome: z.literal('failed'),
+    policyVersion: z.number().int(),
+    failure: z.enum(SIGNUP_DOMAIN_HOLD_ASSESSMENT_FAILURES),
+    attempts: z.number().int().min(1),
+    model: z.string(),
+    assessedAt: z.date(),
+  }),
+]);
+export type SignupDomainHoldAssessment = z.infer<typeof signupDomainHoldAssessmentSchema>;
 
 export const signupDomainReviewSchema = z.object({
   domain: z.string(),
@@ -30,6 +73,7 @@ export const signupDomainReviewSchema = z.object({
       decidedAt: z.date(),
     })
     .optional(),
+  assessment: signupDomainHoldAssessmentSchema.optional(),
 });
 export type SignupDomainReview = z.infer<typeof signupDomainReviewSchema>;
 

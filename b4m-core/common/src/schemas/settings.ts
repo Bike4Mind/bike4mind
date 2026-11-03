@@ -492,6 +492,8 @@ export const SettingKeySchema = z.enum([
   'enableDomainIntelligence',
   'holdSignupsFromDomainsYoungerThanDays',
   'autoConfirmDisposableAggregateHolds',
+  'signupDomainHoldAssessmentEnabled',
+  'signupDomainHoldAssessmentConfig',
   'domainIntelligenceTimeoutMs',
   'paymentRiskAlertsEnabled',
   'paymentRiskYoungAccountMinutes',
@@ -1489,6 +1491,28 @@ export const AutoContainmentConfigSchema = z.object({
 });
 export type AutoContainmentConfig = z.infer<typeof AutoContainmentConfigSchema>;
 
+/**
+ * Operator limits for the advisory assessment of young-domain signup holds
+ * (apps/client/server/security/signupDomainHoldAssessment). Every default spends nothing: no model and
+ * a zero budget. `signupDomainHoldAssessmentEnabled` gates all provider egress on top of this.
+ */
+export const SignupDomainHoldAssessmentConfigSchema = z.object({
+  /** Decisions model to ask; must be served here and have a platform key. Null means no calls. */
+  model: z.enum(DECISION_MODEL_IDS).nullable().prefault(null),
+  /** Platform spend per 24h window (opened by the first call), in USD, at each call's worst-case cost. */
+  dailyBudgetUsd: z.number().min(0).max(1000).prefault(0),
+  /** Provider calls per 24h window (opened by the first call). */
+  maxCallsPerDay: z.number().int().min(0).max(10_000).prefault(100),
+  /** Provider calls in flight at once, across all instances. */
+  maxConcurrency: z.number().int().min(1).max(10).prefault(1),
+  /** Holds assessed per triage run (every 10 minutes). */
+  maxAssessmentsPerRun: z.number().int().min(1).max(100).prefault(20),
+  /** Least confidence in an `abuse` verdict that confirms the hold; anything lower leaves it pending. */
+  minConfirmConfidence: z.number().min(0.5).max(1).prefault(0.9),
+});
+
+export type SignupDomainHoldAssessmentConfig = z.infer<typeof SignupDomainHoldAssessmentConfigSchema>;
+
 export enum ServerStatusEnum {
   Live = 'live',
   Maintenance = 'maintenance',
@@ -2414,6 +2438,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'enableDomainIntelligence', order: 29 },
       { key: 'holdSignupsFromDomainsYoungerThanDays', order: 30 },
       { key: 'autoConfirmDisposableAggregateHolds', order: 30.5 },
+      { key: 'signupDomainHoldAssessmentEnabled', order: 30.6 },
+      { key: 'signupDomainHoldAssessmentConfig', order: 30.7 },
       { key: 'domainIntelligenceTimeoutMs', order: 31 },
       { key: 'paymentRiskAlertsEnabled', order: 32 },
       { key: 'paymentRiskYoungAccountMinutes', order: 33 },
@@ -5594,6 +5620,26 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
       'Confirm Signup Domain Holds whose reason is disposable-aggregate without waiting for an admin, keeping their free credits held. Runs every 10 minutes on stages with scheduled jobs. Each one is recorded in the Admin Audit Log as a system action, and an admin can still Release it from Signup Domain Holds.',
+  }),
+  signupDomainHoldAssessmentEnabled: makeBooleanSetting({
+    key: 'signupDomainHoldAssessmentEnabled',
+    name: 'Advisory Assessment of Young-Domain Holds',
+    defaultValue: false,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Lets a Decisions model judge pending young-domain Signup Domain Holds (abuse, legitimate or insufficient evidence) from a summary of counts and flags: domain age, mail provider class, whether the site answers with content, signup timing and network spread. It never sees emails, IPs, the domain name or site text. It only ever confirms a hold (keeps free credits held) on a confident abuse verdict, recorded in the Admin Audit Log as a system action; it never releases one, and every other verdict leaves the hold for an admin. Paid from the platform key and budget. Off means no provider calls.',
+  }),
+  signupDomainHoldAssessmentConfig: makeObjectSetting({
+    key: 'signupDomainHoldAssessmentConfig',
+    name: 'Advisory Assessment of Young-Domain Holds: Model and Limits',
+    defaultValue: SignupDomainHoldAssessmentConfigSchema.parse({}),
+    description:
+      'The Decisions model to ask (it must have a platform key), the daily USD budget and call cap, concurrent calls, holds per 10-minute run, and the least confidence in an abuse verdict that confirms a hold. The defaults make no calls. The assessment only ever confirms; it never releases a hold.',
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    dependsOn: 'signupDomainHoldAssessmentEnabled',
+    schema: SignupDomainHoldAssessmentConfigSchema,
   }),
   domainIntelligenceTimeoutMs: makeNumberSetting({
     key: 'domainIntelligenceTimeoutMs',
