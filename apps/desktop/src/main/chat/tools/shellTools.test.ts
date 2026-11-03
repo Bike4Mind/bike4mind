@@ -492,6 +492,19 @@ describe('shellApproval when the session-script check cannot finish', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('keys the run apart from the same command before the check failed', async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-approval-fail-')));
+    try {
+      const context: ToolContext = { roots: [root], signal: new AbortController().signal, protectedPaths: [] };
+      const before = await shellApproval('bash_execute', { command: './run.sh', cwd: root }, context);
+      vi.spyOn(sessionScripts, 'sessionScriptRun').mockRejectedValue(new Error('unreadable'));
+      const failed = await shellApproval('bash_execute', { command: './run.sh', cwd: root }, context);
+      expect(failed.key).not.toBe(before.key);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('a worktree session reading its main checkout', () => {

@@ -488,7 +488,7 @@ export async function shellApproval(
     !!gitProgram ||
     unreachable.length > 0;
   // An exact "always" for the run lapses when the script is written again.
-  const runKey = script ? `${key}\x00${script.generation}` : key;
+  const runKey = script ? `${key}\x00${script.generation}` : scriptCheckFailed ? `${key}\x00unchecked` : key;
   if (script && context.sessionId) expectShellRun(runKey, context.sessionId, script.hooks);
   return {
     detail: [detail, ...reasons].join('\n\n'),
