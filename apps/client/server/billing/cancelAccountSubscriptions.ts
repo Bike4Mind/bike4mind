@@ -2,7 +2,7 @@ import { organizationRepository, userRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { isStripeConfigured, stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { TERMINAL_SUBSCRIPTION_STATUSES } from '@bike4mind/server-utils/lib/subscriptions/types';
-import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
+import { voidOpenSubscriptionInvoices } from '@bike4mind/server-utils/integrations/stripe/dunning';
 
 /**
  * Why an account's subscriptions are being ended. Stamped into Stripe's cancellation comment so

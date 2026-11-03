@@ -17,7 +17,7 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   isStripeConfigured: mocks.isStripeConfigured,
   stripe: { subscriptions: { list: mocks.list, cancel: mocks.cancel } },
 }));
-vi.mock('@server/integrations/stripe/dunning', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/dunning', () => ({
   voidOpenSubscriptionInvoices: mocks.voidOpenSubscriptionInvoices,
 }));
 
