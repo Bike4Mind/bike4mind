@@ -73,6 +73,7 @@ export enum AuthStrategy {
   Google = 'google',
   Facebook = 'facebook',
   Github = 'github',
+  Apple = 'apple',
   Okta = 'okta',
   SAML = 'saml',
 }

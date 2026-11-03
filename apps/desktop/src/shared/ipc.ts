@@ -41,6 +41,7 @@ import type {
   ChatQueuedMessage,
   ChatSession,
   ChatSessionStatusEvent,
+  ChatSessionExportResult,
   ChatSessionSummary,
   ChatStreamEvent,
   ChatVideoJob,
@@ -113,9 +114,11 @@ import type {
   ModelRemoveResult,
   ModelStoreLocation,
   ModelRuntimeStatus,
+  LoadedModelState,
 } from './models';
 import type { AccountUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
+import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewDevice, SimulatorViewState } from './simulator';
 import type { LocalHistoryResult, LocalHistoryState } from './history';
 
 /**
@@ -171,6 +174,7 @@ export const IPC_CHANNELS = {
    */
   chatSetApprovalMode: 'chat:set-approval-mode',
   chatSetSessionArchived: 'chat:set-session-archived',
+  chatExportSession: 'chat:export-session',
   chatListSessions: 'chat:list-sessions',
   chatCreateSession: 'chat:create-session',
   chatCreateCodeSession: 'chat:create-code-session',
@@ -342,6 +346,7 @@ export const IPC_CHANNELS = {
   modelsDismissPull: 'models:dismiss-pull',
   modelsRemove: 'models:remove',
   modelsGetStoreLocation: 'models:get-store-location',
+  modelsGetLoadedState: 'models:get-loaded-state',
   /** Hugging Face sign-in: whether a token is saved, save one, forget it. None of them returns the token. */
   modelsGetHfAccess: 'models:get-hf-access',
   modelsSaveHfAccess: 'models:save-hf-access',
@@ -370,6 +375,13 @@ export const IPC_CHANNELS = {
    * renderer's to enforce. See @shared/browserUrl.
    */
   browserNavigate: 'browser:navigate',
+  /**
+   * Show an HTML artifact full-size in a conversation's browser. Renderer -> main.
+   *
+   * Carries the content, never a url: main stores it and mints the `b4m-artifact:` address
+   * itself, so the url bar's refusal of the app's own schemes stays intact.
+   */
+  browserOpenArtifact: 'browser:open-artifact',
   /** Back, forward or reload from the pane's url bar. Renderer -> main. */
   browserGo: 'browser:go',
   /** Open, switch to or close a tab from the pane's tab strip. Renderer -> main. */
@@ -381,6 +393,20 @@ export const IPC_CHANNELS = {
    * a navigation is also what settles whether there is anything to go back to.
    */
   browserPageState: 'browser:page-state',
+  /**
+   * The live iOS Simulator view (macOS). Renderer -> main: read the state, list devices, attach
+   * or detach a device, and the user's own touches from the pane, which are the user acting and
+   * so never reach the tool approval gate. See @shared/simulator.
+   */
+  simulatorGetState: 'simulator:get-state',
+  simulatorListDevices: 'simulator:list-devices',
+  simulatorAttach: 'simulator:attach',
+  simulatorDetach: 'simulator:detach',
+  simulatorInput: 'simulator:input',
+  /** main -> renderer push: the view's status changed (attached, live, failed). */
+  simulatorState: 'simulator:state',
+  /** main -> renderer push: one JPEG frame of the attached screen, at up to 10 a second. */
+  simulatorFrame: 'simulator:frame',
   /**
    * Importing the user's own Chrome cookies, per site. Renderer -> main, every one of them.
    *
@@ -534,6 +560,13 @@ export interface BrowserNavigateRequest {
   url: string;
 }
 
+/** An HTML artifact to show full-size in `sessionId`'s browser. */
+export interface BrowserOpenArtifactRequest {
+  sessionId: string;
+  title: string;
+  content: string;
+}
+
 /** The history controls, which take no url. */
 export type BrowserGoAction = 'back' | 'forward' | 'reload';
 
@@ -619,6 +652,8 @@ export interface DesktopApi {
     remove(name: string, serverId?: string): Promise<ModelRemoveResult>;
     /** The folder a pull would land in, and its free space on this computer. */
     getStoreLocation(serverId?: string): Promise<ModelStoreLocation>;
+    /** Whether a `local:` chat model is loaded on its Ollama server now. */
+    getLoadedState(modelId: string): Promise<LoadedModelState>;
     /** Whether a Hugging Face token is saved; the token itself never comes back to the renderer. */
     getHfToken(): Promise<HfTokenStatus>;
     /** Saves the token once Hugging Face accepts it. */
@@ -680,9 +715,10 @@ export interface DesktopApi {
   chat: {
     /**
      * Models this deployment offers the agent, from the server's own catalog. `force` skips
-     * the main-process cache, which is what a "try again" affordance needs.
+     * the main-process cache, which is what a "try again" affordance needs; `'local'` re-reads
+     * device and server models but keeps the cached hosted list.
      */
-    listModels(force?: boolean): Promise<ChatModelCatalog>;
+    listModels(force?: boolean | 'local'): Promise<ChatModelCatalog>;
     /** A model server's listing finished after the list was read; read it again without forcing. */
     onModelsChanged(listener: () => void): () => void;
     /** The models Settings may pin the next-prompt hint to: small hosted ones, then local ones. */
@@ -716,6 +752,8 @@ export interface DesktopApi {
     setApprovalMode(sessionId: string, mode: ChatApprovalMode): Promise<ChatSessionSummary | null>;
     /** Move a conversation into or out of the sidebar's Archived section. Reversible. */
     setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null>;
+    /** Save a conversation as Markdown or JSON, by the extension picked in the save dialog. Rejects on a write failure. */
+    exportSession(sessionId: string): Promise<ChatSessionExportResult>;
     listSessions(): Promise<ChatSessionSummary[]>;
     /** Start a Chat session: no project, the mode everything before this was. */
     createSession(request?: CreateSessionRequest): Promise<CreatedSession>;
@@ -975,6 +1013,17 @@ export interface DesktopApi {
    * through its tools in main. What is here is the url bar: the one part of driving the page
    * that the user cannot do by clicking on it, because the page has no chrome of its own.
    */
+  /** The live iOS Simulator view; `available` is false off macOS. */
+  simulator: {
+    getState(): Promise<SimulatorViewState>;
+    listDevices(): Promise<SimulatorViewDevice[]>;
+    /** Rejects with the setup problem and its fix when the device cannot be shown. */
+    attach(udid: string): Promise<SimulatorViewState>;
+    detach(): Promise<void>;
+    input(input: SimulatorPaneInput): Promise<void>;
+    onState(listener: (state: SimulatorViewState) => void): () => void;
+    onFrame(listener: (frame: SimulatorFrame) => void): () => void;
+  };
   browser: {
     /** Draw this conversation's page at these bounds, or nothing. Returns what the bar draws. */
     setPane(request: BrowserPaneRequest): Promise<BrowserPaneState>;
@@ -985,6 +1034,8 @@ export interface DesktopApi {
     freezeFrame(request: BrowserFreezeFrameRequest): Promise<string | null>;
     /** Open a url the user typed. Rejects with a reason for a scheme that is refused. */
     navigate(request: BrowserNavigateRequest): Promise<BrowserPaneState>;
+    /** Open an HTML artifact full-size; in a new tab when the active one is showing a page. */
+    openArtifact(request: BrowserOpenArtifactRequest): Promise<BrowserPaneState>;
     go(request: BrowserGoRequest): Promise<BrowserPaneState>;
     tab(request: BrowserTabRequest): Promise<BrowserPaneState>;
     /** Subscribe to page state; returns the unsubscribe. */

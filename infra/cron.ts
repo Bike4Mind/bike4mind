@@ -115,6 +115,26 @@ const signupBaselineReport = runsScheduledJobs
     })
   : undefined;
 
+// Auto-confirms Signup Domain Holds that need no judgment (it never releases one). A failed hold
+// throws so signupDomainHoldTriageLambdaErrors in alarms.ts sees it; the next run retries.
+const signupDomainHoldTriageCron = runsScheduledJobs
+  ? new sst.aws.Cron('signupDomainHoldTriage', {
+      schedule: 'rate(10 minutes)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/signupDomainHoldTriage.handler',
+        runtime: 'nodejs24.x',
+        timeout: '2 minutes',
+        memory: '512 MB',
+        retries: 0,
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+      },
+    })
+  : undefined;
+
 // Refreshes the disposable email domain lists the signup gate reads. Its SourceFailures metric feeds
 // disposableDomainRefreshFailures in alarms.ts.
 const disposableDomainRefreshCron = runsScheduledJobs
@@ -417,6 +437,23 @@ const signupRiskSweepCron = runsScheduledJobs
             resources: ['*'],
           },
         ],
+      },
+    })
+  : undefined;
+
+// Account campaign sweep - correlates the last 72h of signups into candidate coordinated-account
+// groups and records them as shadow detections for admin review. Observation only: no rescoring,
+// reviewState change or account action.
+const accountCampaignSweepCron = runsScheduledJobs
+  ? new sst.aws.Cron('accountCampaignSweep', {
+      schedule: 'cron(45 * * * ? *)', // Hourly at :45
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/accountCampaignSweep.handler',
+        runtime: 'nodejs24.x',
+        timeout: '5 minutes',
+        link: [...allSecrets],
+        environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
       },
     })
   : undefined;
@@ -1446,6 +1483,7 @@ export {
   oauthAbuseAutoBlockCron,
   signupGrantHeldRelease,
   disposableDomainRefreshCron,
+  signupDomainHoldTriageCron,
   dataLakeVectorIndexKeepWarmCron,
   modelDiscoveryCronEnabled,
   dailyUserActivityReport,
@@ -1468,6 +1506,7 @@ export {
   telemetryCleanupCron,
   signupIpRetentionCron,
   signupRiskSweepCron,
+  accountCampaignSweepCron,
   creditLotSweepCron,
   voiceHoldSweepCron,
   creditHoldSweepCron,

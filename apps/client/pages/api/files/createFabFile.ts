@@ -6,6 +6,7 @@ import {
   FileEvents,
   MODAL_MEDIA_PREFIX,
   Permission,
+  hasAdminPermission,
   createdFabFileResponseSchema,
 } from '@bike4mind/common';
 import {
@@ -78,8 +79,10 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
       const parsed = createFabFileSchema.parse(req.body);
       const releaseNotesOnly = isReleaseNotesOnlyUpload(req);
       // A release-notes key arrives with the owner's admin role withheld; it still counts when the owner is an admin.
+      // settings:manage is what lets a delegated admin edit modals, so it covers their media too.
       const adminModalMedia =
-        (!!user.isAdmin || (releaseNotesOnly && persistedIsAdmin(user))) && parsed.purpose === 'modal-media';
+        (hasAdminPermission(user, 'settings:manage') || (releaseNotesOnly && persistedIsAdmin(user))) &&
+        parsed.purpose === 'modal-media';
       if (!adminModalMedia && releaseNotesOnly) {
         throw new ForbiddenError("This API key may only upload What's New media; files:write is required", {
           required_scopes: FILES_WRITE_SCOPES,

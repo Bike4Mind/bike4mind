@@ -1,15 +1,10 @@
-import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD, Permission } from '@bike4mind/common';
-import { getFabFileById } from '@server/managers/fabFileManager';
+import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
-import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Request } from 'express';
-import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
-import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';
-import { Resource } from 'sst';
+import { requestFileRechunk } from '@server/files/requestFileRechunk';
 
 const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
   asyncHandler(async (req: Request<{ fabFileId: string; chunkSize?: string }>, res) => {
@@ -36,30 +31,12 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
       throw new BadRequestError(`chunkSize must be at least ${MIN_PASSAGE_TOKEN_TARGET} tokens`);
     }
 
-    const fabFile = await getFabFileById(fabFileId, req.ability!, Permission.update);
-    if (!fabFile) throw new NotFoundError('FabFile not found');
+    const outcome = await requestFileRechunk(req, { fabFileId, chunkSize });
+    if (outcome.status === 'not_found') throw new NotFoundError('FabFile not found');
+    if (outcome.status === 'denied') throw new BadRequestError('Unauthorized');
+    if (outcome.status === 'already_chunking') throw new BadRequestError('FabFile is currently being chunked');
 
-    if (!req.ability?.can?.(Permission.update, fabFile)) throw new BadRequestError('Unauthorized');
-
-    if (fabFile.isChunking) throw new BadRequestError('FabFile is currently being chunked');
-    await consumeFileUploadBudget(req, 1);
-
-    await sendToClient(req.user.id, Resource.websocket.managementEndpoint, {
-      action: 'update_file_chunk_vector_status',
-      fabFileId,
-      chunkStatus: 'ongoing',
-    });
-
-    const queueUrl = getSourceQueueUrl('fabFileChunkQueue');
-    if (!queueUrl) throw new Error('Chunk queue URL not found');
-
-    const messageId = await sendToQueue(queueUrl, {
-      fabFileId: fabFile._id,
-      userId: fabFile.userId,
-      chunkSize,
-    });
-
-    return res.json({ messageId });
+    return res.json({ messageId: outcome.messageId });
   })
 );
 

@@ -69,6 +69,22 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "APPLE_CLIENT_ID": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "APPLE_KEY_ID": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "APPLE_PRIVATE_KEY": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "APPLE_TEAM_ID": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "GITHUB_CLIENT_ID": {
       "type": "sst.sst.Secret"
       "value": string

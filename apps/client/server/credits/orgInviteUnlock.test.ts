@@ -23,7 +23,12 @@ vi.mock('@bike4mind/database', () => ({
   organizationRepository: { findMembershipOrgIds: h.memberships, findById: h.org },
   Organization: { updateOne: h.reserve, exists: h.missingCounter },
 }));
-vi.mock('@bike4mind/services', () => ({ userService: { unlockSignupGrant: h.unlock } }));
+vi.mock('@bike4mind/services', () => ({
+  userService: {
+    unlockSignupGrant: h.unlock,
+    resolveDripLimits: async () => ({ dailyCredits: 1000, dripCap: 28, dripCapSource: 'setting' }),
+  },
+}));
 import { unlockSignupGrantFromOrgInvite, unlockSignupGrantFromAcceptedOrgInvite } from './orgInviteUnlock';
 
 describe('organization invite unlock evidence', () => {

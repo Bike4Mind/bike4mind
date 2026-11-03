@@ -111,12 +111,14 @@ export function useForceResetMFA() {
   });
 }
 
+export const MFA_STATUS_QUERY_KEY = ['mfa', 'status'] as const;
+
 /**
  * Hook to get MFA status for the current user
  */
 export function useMFAStatus(enabled = true) {
   return useQuery<MFAStatusResponse, Error>({
-    queryKey: ['mfa', 'status'],
+    queryKey: MFA_STATUS_QUERY_KEY,
     queryFn: async () => {
       const response = await api.get('/api/auth/mfa/status');
       return response.data;

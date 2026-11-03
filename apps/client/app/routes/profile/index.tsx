@@ -110,12 +110,12 @@ const ProfilePage = () => {
   const search = useSearch({ strict: false });
   const rawTab = (search as { tab?: string })?.tab;
   const rawSubtab = (search as { subtab?: string })?.subtab;
+  const rawSection = (search as { section?: string })?.section;
   const activeTab = rawTab || ProfileTab.Profile;
   const tabListRef = useRef<HTMLDivElement>(null);
   const { t } = useTranslation();
   const { data: friendRequests } = useGetFriendRequests(currentUser?.id);
   const { currentSession } = useSessions();
-  const isAdmin = currentUser?.isAdmin ?? false;
   const {
     data: publishedArtifacts,
     isPending: publishedPending,
@@ -144,24 +144,24 @@ const ProfilePage = () => {
       navigate({ to: '/profile', search: { tab: ProfileTab.Usage }, replace: true });
       return;
     }
+    // The security settings moved out of Settings > General into the Security tab.
+    if (rawTab === ProfileTab.Settings && rawSection === 'security') {
+      navigate({ to: '/profile', search: { tab: ProfileTab.Security }, replace: true });
+      return;
+    }
     const subtab = LEGACY_SETTINGS_REDIRECTS[rawTab];
     if (subtab) {
       navigate({ to: '/profile', search: { tab: ProfileTab.Settings, subtab }, replace: true });
       return;
     }
-    // Redirect to Profile if user navigates to a hidden tab.
-    // Wait for currentUser to hydrate before checking admin status, and for
-    // the published query to settle, to avoid bouncing users who are still loading.
+    // Redirect to Profile if user navigates to a hidden tab. Wait for currentUser to hydrate
+    // and for the published query to settle, to avoid bouncing users who are still loading.
     if (!currentUser) return;
-    if (rawTab === ProfileTab.Security && !isAdmin) {
-      navigate({ to: '/profile', search: { tab: ProfileTab.Profile }, replace: true });
-      return;
-    }
     if (rawTab === ProfileTab.Published && !publishedPending && !publishedError && !hasPublishedArtifacts) {
       navigate({ to: '/profile', search: { tab: ProfileTab.Profile }, replace: true });
       return;
     }
-  }, [rawTab, rawSubtab, navigate, currentUser, isAdmin, publishedPending, publishedError, hasPublishedArtifacts]);
+  }, [rawTab, rawSubtab, rawSection, navigate, currentUser, publishedPending, publishedError, hasPublishedArtifacts]);
 
   const profileName = currentUser?.name || currentUser?.username;
   useDocumentTitle(profileName ? `${profileName}'s Profile` : 'Profile');
@@ -172,7 +172,7 @@ const ProfilePage = () => {
     tabListRef.current
       ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
       ?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
-  }, [activeTab, isAdmin, hasPublishedArtifacts]);
+  }, [activeTab, hasPublishedArtifacts]);
 
   const handleClose = () => {
     if (currentSession?.id) {
@@ -294,16 +294,14 @@ const ProfilePage = () => {
             </Tooltip>
           </PageTab>
 
-          {isAdmin && (
-            <PageTab data-testid="security-tab" value={ProfileTab.Security} aria-label="Security">
-              <Tooltip title="View security events and alerts">
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                  <SecurityIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
-                  <TabLabel active={activeTab === ProfileTab.Security}>Security</TabLabel>
-                </Box>
-              </Tooltip>
-            </PageTab>
-          )}
+          <PageTab data-testid="security-tab" value={ProfileTab.Security} aria-label="Security">
+            <Tooltip title="Two-factor sign-in, signed-in devices and sign-in activity">
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <SecurityIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
+                <TabLabel active={activeTab === ProfileTab.Security}>Security</TabLabel>
+              </Box>
+            </Tooltip>
+          </PageTab>
 
           {hasPublishedArtifacts && (
             <PageTab data-testid="published-tab" value={ProfileTab.Published} aria-label="Live Artifacts">
@@ -343,11 +341,9 @@ const ProfilePage = () => {
           {activeTab === ProfileTab.Integrations && <IntegrationsTabContent />}
         </StyledTabPanel>
 
-        {isAdmin && (
-          <StyledTabPanel value={ProfileTab.Security}>
-            {activeTab === ProfileTab.Security && <SecurityTabContent />}
-          </StyledTabPanel>
-        )}
+        <StyledTabPanel value={ProfileTab.Security}>
+          {activeTab === ProfileTab.Security && <SecurityTabContent />}
+        </StyledTabPanel>
 
         {hasPublishedArtifacts && (
           <StyledTabPanel value={ProfileTab.Published}>

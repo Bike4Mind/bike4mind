@@ -397,7 +397,7 @@ export interface ChatApprovalAnswer {
 
 /**
  * What the user attached to a turn: an image the model looks at, or a text file inlined into
- * the prompt.
+ * the prompt. A PDF is stored whole but reaches the model as its extracted text.
  *
  * Deliberately NOT the same thing as the file tools. The tools are the model going and looking
  * for something; an attachment is the user handing something over - "here is the screenshot of
@@ -407,7 +407,7 @@ export interface ChatApprovalAnswer {
  * because this descriptor is what gets persisted into the session JSON, and that file is read
  * in full every time the sidebar lists conversations.
  */
-export type ChatAttachmentKind = 'image' | 'text';
+export type ChatAttachmentKind = 'image' | 'text' | 'pdf';
 
 export interface ChatAttachment {
   id: string;
@@ -421,6 +421,8 @@ export interface ChatAttachment {
   sourceBytes: number;
   /** Set when the file was too big to send whole; the model is told so in the attachment itself. */
   truncated?: boolean;
+  /** Page count, for a PDF. */
+  pages?: number;
 }
 
 /**
@@ -968,6 +970,8 @@ export interface ChatModelOption {
   pending?: boolean;
   /** Set with `unavailable` when its server wants credentials: `rejected` when it turned down the ones Desktop sent. */
   wantsCredentials?: 'missing' | 'rejected';
+  /** Listed by the server but refused at call time (ModelInfo.disabled); the picker prefers an enabled route of it. */
+  disabled?: boolean;
   /** USD per token by context tier, as the server's catalog publishes it. Absent when unpriced. */
   pricing?: Record<number, { input: number; output: number; cache_read?: number; cache_write?: number }>;
 }
@@ -1275,6 +1279,12 @@ export interface ChatSession extends ChatSessionMeta {
   replyInFlight?: { messageId: string; startedAt: number };
   /** The worktree being cut right now, added the same way; see the 'workspace' stream event. */
   preparingWorkspace?: WorkspacePreparation;
+}
+
+/** What exporting a conversation did; `saved` is false when the user dismissed the save dialog. */
+export interface ChatSessionExportResult {
+  saved: boolean;
+  path?: string;
 }
 
 /** A worktree being cut ahead of a session's first turn. `since` is epoch ms. */

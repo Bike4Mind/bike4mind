@@ -53,6 +53,12 @@ describe('selectUsableModels', () => {
     );
   });
 
+  it('marks a model the server lists as disabled, and only on an explicit true', () => {
+    expect(selectUsableModels([wireModel({ disabled: true })])[0]).toMatchObject({ disabled: true });
+    expect(selectUsableModels([wireModel({ disabled: 'yes' })])[0]).not.toHaveProperty('disabled');
+    expect(selectUsableModels([wireModel()])[0]).not.toHaveProperty('disabled');
+  });
+
   it('carries the release date only when the server sent a non-empty string', () => {
     expect(selectUsableModels([wireModel({ releaseDate: '2025-04-14' })])[0]).toMatchObject({
       releaseDate: '2025-04-14',
@@ -435,6 +441,28 @@ describe('ModelCatalog', () => {
 
   it('refetches on force, which is what the picker retry needs', async () => {
     await catalog.list();
+    await catalog.list(true);
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-reads device models on 'local' but serves the hosted list from cache", async () => {
+    const local = { models: vi.fn().mockResolvedValue([]) };
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => ({ get }) as unknown as AuthenticatedApiClient,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      local as never
+    );
+    await catalog.list();
+    local.models.mockResolvedValue([{ id: 'local:ollama:qwen', name: 'qwen' }]);
+
+    const refreshed = await catalog.list('local');
+    expect(refreshed.models.map(model => model.id)).toEqual(['claude-sonnet-4-5-20250929', 'local:ollama:qwen']);
+    expect(local.models).toHaveBeenCalledTimes(2);
+    expect(get).toHaveBeenCalledTimes(1);
+
     await catalog.list(true);
     expect(get).toHaveBeenCalledTimes(2);
   });

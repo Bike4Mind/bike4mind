@@ -169,3 +169,44 @@ describe('registerModelsIpc', () => {
     });
   });
 });
+
+describe('modelsGetLoadedState', () => {
+  const loaded = (name: string, expiresAt: string | null) => ({
+    name,
+    sizeBytes: 1,
+    vramBytes: 1,
+    contextLength: null,
+    expiresAt,
+  });
+
+  it("reads this computer's Ollama for an `ollama` runtime id and a saved server's for `srv-`", async () => {
+    const { invoke, local, remote } = setup('chat-only');
+    local.loaded = async () => [loaded('qwen3:8b', '2026-11-02T12:05:00Z')];
+    remote.loaded = async () => [];
+
+    expect(await invoke(IPC_CHANNELS.modelsGetLoadedState, 'local:ollama:qwen3:8b')).toEqual({
+      kind: 'loaded',
+      expiresAt: Date.parse('2026-11-02T12:05:00Z'),
+    });
+    expect(await invoke(IPC_CHANNELS.modelsGetLoadedState, 'local:srv-gpu:qwen3:8b')).toEqual({ kind: 'unloaded' });
+  });
+
+  it('answers unsupported for an OpenAI-compatible server, an unknown runtime and a malformed id', async () => {
+    const { invoke, remote } = setup('unsupported');
+    const ask = vi.fn(async () => []);
+    remote.loaded = ask;
+
+    for (const id of ['local:srv-gpu:qwen', 'local:srv-gone:qwen', 'local:other:qwen', 'claude-sonnet', 42]) {
+      expect(await invoke(IPC_CHANNELS.modelsGetLoadedState, id)).toEqual({ kind: 'unsupported' });
+    }
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it('answers unknown when the server cannot be asked', async () => {
+    const { invoke, local } = setup('allowed');
+    local.loaded = async () => {
+      throw new Error('connection refused');
+    };
+    expect(await invoke(IPC_CHANNELS.modelsGetLoadedState, 'local:ollama:qwen3:8b')).toEqual({ kind: 'unknown' });
+  });
+});

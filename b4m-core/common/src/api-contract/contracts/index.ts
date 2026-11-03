@@ -11,6 +11,7 @@ import { synthesizeSpeechContract } from './tts.contract';
 import { generateMusicContract } from './music.contract';
 import { generateSoundEffectContract } from './soundEffects.contract';
 import { getMeContract } from './me.contract';
+import { registerPushTokenContract, unregisterPushTokenContract } from './pushTokens.contract';
 import { getCreditBalanceContract } from './credits.contract';
 import { listModelsContract } from './models.contract';
 import { generateImageContract } from './imageGeneration.contract';
@@ -21,6 +22,10 @@ import {
   listFilesContract,
   updateFileContract,
   deleteFileContract,
+  chunkFileContract,
+  searchFilesContract,
+  getFilesByIdsContract,
+  bulkDeleteFilesContract,
 } from './files.contract';
 import { createEmbeddingsContract } from './embeddings.contract';
 import { postSlackMessageContract } from './slackMessages.contract';
@@ -120,6 +125,8 @@ export const CONTRACTS: readonly EndpointContract[] = [
   generateMusicContract,
   generateSoundEffectContract,
   getMeContract,
+  registerPushTokenContract,
+  unregisterPushTokenContract,
   getCreditBalanceContract,
   listModelsContract,
   generateImageContract,
@@ -129,6 +136,10 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listFilesContract,
   updateFileContract,
   deleteFileContract,
+  chunkFileContract,
+  searchFilesContract,
+  getFilesByIdsContract,
+  bulkDeleteFilesContract,
   createEmbeddingsContract,
   createTextRefinementContract,
   createDecisionContract,

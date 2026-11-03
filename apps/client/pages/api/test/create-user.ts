@@ -32,6 +32,10 @@ interface CreateTestUserBody {
   // /accept-policies interstitial. Defaults to true - test users start fully onboarded like
   // `emailVerified`. Pass false to mint an un-consented user for testing the gate itself.
   acceptedPolicies?: boolean;
+  // Pass true to admin-approve the account for the new-account trust gate (assertOutboundActionAllowed),
+  // so a minutes-old test user can send invites. Defaults to false like a real signup; note the flag
+  // also counts as paid standing for thinking visibility (userApiKeyService/trust.ts).
+  apiKeyTrustApproved?: boolean;
   // Starting credit balance. Defaults to a deliberately enormous grant so latency/tool suites
   // never run dry mid-run. Pass a small value to mint a low-balance user for the credit-gate spec.
   initialCredits?: number;
@@ -65,6 +69,7 @@ const handler = baseApi({ auth: false }).post(
       tags,
       includePredefinedTags,
       acceptedPolicies,
+      apiKeyTrustApproved,
       initialCredits,
     } = req.body;
 
@@ -97,6 +102,7 @@ const handler = baseApi({ auth: false }).post(
           // Stamp AUP/ToS acceptance so the seeded user clears the consent gate and isn't bounced
           // to /accept-policies on first load. Defaults on; opt out to test the gate itself.
           ...((acceptedPolicies ?? true) ? { aupAcceptedVersion: CURRENT_POLICY_VERSION } : {}),
+          apiKeyTrustApproved: apiKeyTrustApproved === true,
         },
         isAdmin: isAdmin ?? false,
         adminPermissions: parsedPermissions?.data,

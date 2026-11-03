@@ -11,6 +11,7 @@ const {
   withdrawListingsMock,
   deleteAuthEventsMock,
   retainTracesMock,
+  removeFromDetectionsMock,
 } = vi.hoisted(() => ({
   deleteEmbedMock: vi.fn(),
   deleteRequestsMock: vi.fn(),
@@ -22,6 +23,7 @@ const {
   withdrawListingsMock: vi.fn(),
   deleteAuthEventsMock: vi.fn(),
   retainTracesMock: vi.fn(),
+  removeFromDetectionsMock: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -30,6 +32,7 @@ vi.mock('@bike4mind/database', () => ({
   embedConversationRepository: { deleteAllForUser: deleteEmbedMock },
   integrationRequestRepository: { deleteAllForUser: deleteRequestsMock },
   hideDeletedAuthorAnnotations: hideAnnotationsMock,
+  shadowDetectionRepository: { removeUser: removeFromDetectionsMock },
 }));
 vi.mock('@server/auth/signupNetworkLimits', () => ({ retainDeletedSignupTraces: retainTracesMock }));
 vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
@@ -56,6 +59,7 @@ beforeEach(() => {
   hideAnnotationsMock.mockReset().mockResolvedValue(0);
   withdrawListingsMock.mockReset().mockResolvedValue(0);
   deleteAuthEventsMock.mockReset().mockResolvedValue(0);
+  removeFromDetectionsMock.mockReset().mockResolvedValue(0);
   retainTracesMock.mockReset().mockResolvedValue(0);
   revokeDriveMock.mockReset().mockResolvedValue('revoked');
   revokeAtlassianMock.mockReset().mockResolvedValue('revoked');
@@ -73,7 +77,18 @@ describe('purgeDeletedUserData', () => {
     expect(hideAnnotationsMock).toHaveBeenCalledWith('u1');
     expect(withdrawListingsMock).toHaveBeenCalledWith('u1');
     expect(deleteAuthEventsMock).toHaveBeenCalledWith('u1');
+    expect(removeFromDetectionsMock).toHaveBeenCalledWith('u1');
     expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('logs instead of throwing when removing the user from shadow detections fails', async () => {
+    removeFromDetectionsMock.mockRejectedValue(new Error('detections down'));
+
+    await expect(
+      purgeDeletedUserData('u1', { deletedBy: 'admin1', logger, integrationGrants: null })
+    ).resolves.toBeUndefined();
+
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('shadow detections'));
   });
 
   it('logs instead of throwing when deleting auth events fails', async () => {

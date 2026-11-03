@@ -36,6 +36,10 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', () => ({ cliTools: { executeServerTool: vi.fn() } }));
 
 vi.mock('@server/decisions/runDecision', () => ({ runDecision: vi.fn() }));
+// The billed web tools pull the credit-hold stack in; this suite only checks they are handed over.
+vi.mock('@server/cli/webToolExecutors', () => ({
+  buildWebToolExecutors: vi.fn(() => ({ web_search: vi.fn(), web_fetch: vi.fn() })),
+}));
 // decisionErrors pulls the input resolver and the data-lake access chain in at import time; this
 // handler test only needs the executor to exist.
 vi.mock('@server/decisions/decisionErrors', () => ({ describeDecisionFailure: vi.fn() }));
@@ -202,6 +206,38 @@ describe('decide on the CLI tools endpoint', () => {
     const [, context] = vi.mocked(executeToolWithLogging).mock.calls[0];
     expect(typeof context.executors?.decide).toBe('function');
     expect(context.userId).toBe('user-1');
+  });
+});
+
+describe('billed web tools on the CLI tools endpoint', () => {
+  beforeEach(() => {
+    vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'user-1', email: 'u@example.com' } as any);
+    vi.mocked(checkRateLimit).mockResolvedValue(undefined);
+  });
+
+  it.each(['web_search', 'web_fetch'])('hands the handler a billed executor for %s', async toolName => {
+    vi.mocked(executeToolWithLogging).mockResolvedValue({ success: true, content: 'ok' } as any);
+    const body = JSON.stringify({ toolName, input: { query: 'q', url: 'https://example.com' } });
+
+    const { status } = parse((await handleToolRequest(makeEvent({ body }))) as any);
+
+    expect(status).toBe(200);
+    const [, context] = vi.mocked(executeToolWithLogging).mock.calls[0];
+    expect(typeof context.executors?.[toolName as 'web_search' | 'web_fetch']).toBe('function');
+  });
+
+  it('answers 422 with the insufficient_credits code when the caller cannot afford the call', async () => {
+    vi.mocked(executeToolWithLogging).mockResolvedValue({
+      success: false,
+      error: 'You do not have enough credits for web search.',
+      errorCode: 'insufficient_credits',
+    } as any);
+    const body = JSON.stringify({ toolName: 'web_search', input: { query: 'q' } });
+
+    const { status, body: responseBody } = parse((await handleToolRequest(makeEvent({ body }))) as any);
+
+    expect(status).toBe(422);
+    expect(responseBody).toMatchObject({ success: false, errorCode: 'insufficient_credits' });
   });
 });
 

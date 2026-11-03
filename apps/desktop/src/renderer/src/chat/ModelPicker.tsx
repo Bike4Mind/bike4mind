@@ -15,7 +15,7 @@ import ModalDialog from '@mui/joy/ModalDialog';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { ChatModelOption } from '@shared/chat';
-import { findModelOption, isLocalModel, parseLocalModelId } from '@shared/chat';
+import { findModelOption, parseLocalModelId } from '@shared/chat';
 import { LOCAL_SERVER_ID, serverIdOfRuntime } from '@shared/modelServers';
 import { CloudIcon, ServerIcon } from './icons';
 import {
@@ -36,6 +36,7 @@ import {
   useModelPickerFilters,
   visibleControls,
 } from './modelPickerFilters';
+import { mergeRouteVariants } from './modelRouteVariants';
 import type { NoLocalModels } from './noLocalModels';
 import { formatCredits } from './statusLine';
 import type { ModelCatalogController } from './useChat';
@@ -82,17 +83,23 @@ export function groupByServer(models: readonly ChatModelOption[]): ModelGroup[] 
 }
 
 /**
- * Newest release first, undated after, each run in its incoming order - except that a model listed
- * under several providers (one name, same date) keeps its rows together so they read as one choice.
- * Only hosted models carry dates; local ones keep catalog order inside their own groups.
+ * Newest first, undated after, else incoming order. Hosted rows sharing a name sort together on the
+ * newest date among them, since one route can lack it; local rows keep catalog order. Relies on only
+ * route twins sharing a hosted name (alignRouteTwinNames in b4m-core/llm-adapters/src/routeTwinNames.ts).
  */
 export function sortByRecency(models: readonly ChatModelOption[]): ChatModelOption[] {
   const firstOfName = new Map<string, number>();
-  models.forEach((model, index) => firstOfName.set(model.name, firstOfName.get(model.name) ?? index));
+  const dateOfName = new Map<string, string>();
+  models.forEach((model, index) => {
+    firstOfName.set(model.name, firstOfName.get(model.name) ?? index);
+    const date = model.releaseDate;
+    if (date && !modelServer(model) && date > (dateOfName.get(model.name) ?? '')) dateOfName.set(model.name, date);
+  });
+  const dateOf = (model: ChatModelOption) => (modelServer(model) ? model.releaseDate : dateOfName.get(model.name));
   return models
     .map((model, index) => ({ model, index }))
     .sort((a, b) => {
-      const [da, db] = [a.model.releaseDate, b.model.releaseDate];
+      const [da, db] = [dateOf(a.model), dateOf(b.model)];
       if (da !== db) {
         if (da && db) return da < db ? 1 : -1;
         return da ? -1 : 1;
@@ -203,7 +210,7 @@ function FilterChip({
       variant={selected ? 'soft' : 'plain'}
       color={selected ? 'primary' : 'neutral'}
       onClick={onClick}
-      slotProps={{ action: { 'data-testid': testId, role: 'menuitemradio', 'aria-checked': selected } }}
+      slotProps={{ action: { 'data-testid': testId, 'aria-pressed': selected } }}
     >
       {label}
     </Chip>
@@ -227,7 +234,7 @@ function FilterControls({
     <Box data-testid="model-picker-filters">
       {shown.location && (
         <Stack direction="row" role="group" aria-label="Location" sx={row}>
-          {(options.hasLocal ? (['all', 'hosted', 'local'] as const) : (['all', 'hosted'] as const)).map(location => (
+          {(['all', 'hosted', 'local'] as const).map(location => (
             <FilterChip
               key={location}
               selected={filters.location === location}
@@ -333,7 +340,7 @@ export function ModelPicker({
   local,
   switchCredits,
   servers,
-  hasHistory,
+  hasHistory = false,
   sessionId,
 }: {
   catalog: ModelCatalogController;
@@ -351,9 +358,9 @@ export function ModelPicker({
   /** Saved model servers, offered as filters even when they list no chat model. */
   servers?: readonly ServerRef[];
   /** The conversation has messages, so moving it from a local model to a hosted one sends them. */
-  hasHistory: boolean;
+  hasHistory?: boolean;
   /** The conversation the picker is acting for; a pending hosted-switch question is dropped when it changes. */
-  sessionId: string | null;
+  sessionId?: string | null;
 }) {
   const [filter, setFilter] = useState('');
   const [savedFilters, setFilters] = useModelPickerFilters();
@@ -404,18 +411,19 @@ export function ModelPicker({
   const unavailable = missing && !selecting;
   const serverDown = current?.pending ? undefined : current?.unavailable;
 
-  const details = useMemo(() => rowDetails(models), [models]);
-  const options = useMemo(() => filterOptions(models, servers), [models, servers]);
+  const rows = useMemo(() => mergeRouteVariants(models, current?.id ?? null), [models, current?.id]);
+  const details = useMemo(() => rowDetails(rows), [rows]);
+  const options = useMemo(() => filterOptions(rows, servers), [rows, servers]);
   const filters = useMemo(() => effectiveFilters(savedFilters, options), [savedFilters, options]);
   const matches = useMemo(
     () =>
-      sortByRecency(models).filter(
+      sortByRecency(rows).filter(
         model => matchesFilters(model, filters) && matchesQuery(model, filter, details.get(model.id))
       ),
-    [models, details, filter, filters]
+    [rows, details, filter, filters]
   );
   const groups = useMemo(() => groupByServer(matches), [matches]);
-  const warnHosted = hasHistory && !!modelId && isLocalModel(modelId);
+  const warnHosted = hasHistory && !!modelId && !!parseLocalModelId(modelId);
   const emptyServer =
     filters.server && !models.some(model => modelServer(model)?.id === filters.server)
       ? options.servers.find(server => server.id === filters.server)?.name
@@ -458,7 +466,7 @@ export function ModelPicker({
       </MenuButton>
 
       <Menu size="sm" placement="top-start" sx={{ maxHeight: 400, overflow: 'auto', minWidth: 320, maxWidth: 440 }}>
-        {models.length > FILTER_THRESHOLD && (
+        {rows.length > FILTER_THRESHOLD && (
           <Box sx={{ px: 1, pb: 0.5 }}>
             <Input
               size="sm"

@@ -1,4 +1,10 @@
-import { hasPaidSignupDrip, signupActiveSeconds, type IUserDocument } from '@bike4mind/common';
+import {
+  hasPaidSignupDrip,
+  signupGrantDripOpen,
+  signupGrantDripRemaining,
+  signupActiveSeconds,
+  type IUserDocument,
+} from '@bike4mind/common';
 import {
   adminSettingsRepository,
   creditLotRepository,
@@ -12,9 +18,11 @@ import { resolveSignupDripPeriod, type SignupDripPeriod } from './signupDripPeri
 type DripResult = Awaited<ReturnType<typeof userService.dripSignupGrant>>;
 const noGrant = (): DripResult => ({ creditsGranted: 0, currentCredits: null });
 
-export async function isActivityDripEnabled(): Promise<boolean> {
-  const enabled = await adminSettingsRepository.findBySettingName('signupGrantActivityEnabled');
-  return enabled?.settingValue === 'true' || (enabled?.settingValue as unknown) === true;
+type DripLimits = Awaited<ReturnType<typeof userService.resolveDripLimits>>;
+
+/** The drip runs whenever the schedule pays a positive daily amount; there is no separate on/off toggle. */
+export async function isDripScheduleOn(): Promise<boolean> {
+  return (await userService.resolveDripLimits(adminSettingsRepository)).dailyCredits > 0;
 }
 
 export async function resolveRequiredActiveSeconds(): Promise<number> {
@@ -25,7 +33,7 @@ export async function resolveRequiredActiveSeconds(): Promise<number> {
 
 /** The server-accrued active time in this earning window reached the minimum. */
 async function qualifiesForPeriod(user: IUserDocument, period: SignupDripPeriod): Promise<boolean> {
-  if (!(await isActivityDripEnabled())) return false;
+  if (!(await isDripScheduleOn())) return false;
   const activity = user.signupGrant?.activity;
   if (activity?.day !== period.day || activity.period !== period.key) return false;
   return activity.ms >= (await resolveRequiredActiveSeconds()) * 1000;
@@ -35,14 +43,19 @@ async function qualifiesForPeriod(user: IUserDocument, period: SignupDripPeriod)
  * Pays the activity drip for the earning window of `now` unless the account is ineligible, already paid or capped.
  * Called by the heartbeat and, via unlockSignupGrantFromActivity, the eligibility route; the ledger id keeps each window to one payout.
  */
-export async function payActivityDripForDay(userId: string, now: Date = new Date(), resolvedPeriod?: SignupDripPeriod) {
+export async function payActivityDripForDay(
+  userId: string,
+  now: Date = new Date(),
+  resolvedPeriod?: SignupDripPeriod,
+  resolvedLimits?: DripLimits
+) {
   const user = await userRepository.findById(userId);
   const grant = user?.signupGrant;
-  if (!user || !grant || grant.stage === 'pending_email' || grant.stage === 'unlocked') return noGrant();
+  if (!user || !grant || !signupGrantDripOpen(grant)) return noGrant();
   const period = resolvedPeriod ?? (await resolveSignupDripPeriod(signupProtection.grantBudget?.now?.() ?? now));
   if (hasPaidSignupDrip(grant, period.day, period.key)) return noGrant();
-  const { dailyCredits, maxCredits } = await userService.resolveDripLimits(adminSettingsRepository);
-  if (!(dailyCredits > 0) || !(maxCredits > 0) || (grant.dripCredits ?? 0) >= maxCredits) return noGrant();
+  const { dailyCredits, dripCap } = resolvedLimits ?? (await userService.resolveDripLimits(adminSettingsRepository));
+  if (!(dailyCredits > 0) || signupGrantDripRemaining(grant, dripCap) <= 0) return noGrant();
   return userService.dripSignupGrant(
     userId,
     period.day,
