@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react';
+import { act, type ComponentProps } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import type { ModelServerView } from '@shared/modelServers';
@@ -25,6 +25,7 @@ import {
 } from '@shared/models';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
+import { FOCUS_RELOAD_MIN_MS } from '../chat/useChat';
 import type { ModelsInUse } from './InstalledTab';
 import { ModelsScreen } from './ModelsScreen';
 import type { ChatWith } from './modelTarget';
@@ -445,7 +446,8 @@ async function mount(
   inUse?: ModelsInUse,
   tab: 'curated' | 'installed' = 'installed',
   chatWith?: ChatWith,
-  chatError?: { message: string; onDismiss: () => void }
+  chatError?: { message: string; onDismiss: () => void },
+  catalog?: ComponentProps<typeof ModelsScreen>['catalog']
 ) {
   host = document.createElement('div');
   document.body.appendChild(host);
@@ -458,6 +460,7 @@ async function mount(
           inUse={inUse}
           onOpenModelServers={openModelServers}
           chatWith={chatWith}
+          catalog={catalog}
           chatError={chatError?.message}
           onDismissChatError={chatError?.onDismiss}
         />
@@ -2336,5 +2339,118 @@ describe('Hugging Face token changes across windows', () => {
     expect(q('models-hf-token')?.dataset.state).toBe('unset');
     await click(q('models-installed-tab'));
     expect(pushToken).toBeNull();
+  });
+});
+
+describe('ModelsScreen catalog refresh', () => {
+  const installedModel = (name: string, extra: Partial<typeof capabilities> = {}) => ({
+    name,
+    sizeBytes: 1,
+    quantization: null,
+    family: null,
+    parameterSize: null,
+    modifiedAt: null,
+    capabilities: { ...capabilities, ...extra, completion: !extra.embeddings },
+    loaded: false,
+    fit: null,
+  });
+  const entry = (name: string) => ({ id: `local:ollama:${name}`, name, backend: 'ollama' });
+  const busy = () => q('models-refresh-btn')?.querySelector('[role="progressbar"]') != null;
+
+  it('reloads the catalog and the installed list from the refresh button, busy while it runs', async () => {
+    let finish: () => void = () => {};
+    const reload = vi.fn(() => new Promise<void>(resolve => (finish = resolve)));
+    await mount(undefined, 'installed', undefined, undefined, { models: [], loading: false, reload });
+    reload.mockClear();
+    const listed = calls.listInstalled.mock.calls.length;
+    act(() => q('models-refresh-btn')?.click());
+    await flush();
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(calls.listInstalled.mock.calls.length).toBe(listed + 1);
+    expect(busy()).toBe(true);
+    await act(async () => finish());
+    await flush();
+    expect(busy()).toBe(false);
+  });
+
+  it('reloads once for a chat model the catalog lacks, not again for the same set, and again for a new one', async () => {
+    const reload = vi.fn(async () => {});
+    bridge.installed = {
+      ok: true,
+      models: [installedModel('cli-pulled'), installedModel('embed', { embeddings: true })],
+    };
+    await mount(undefined, 'installed', undefined, undefined, { models: [entry('other')], loading: false, reload });
+    expect(reload).toHaveBeenCalledTimes(1);
+    bridge.installed = { ok: true, models: [installedModel('cli-pulled')] };
+    await act(async () => pushInstalled('local'));
+    await flush();
+    expect(reload).toHaveBeenCalledTimes(1);
+    bridge.installed = { ok: true, models: [installedModel('cli-pulled'), installedModel('another')] };
+    await act(async () => pushInstalled('local'));
+    await flush();
+    expect(reload).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not reload when the catalog lists every chat model', async () => {
+    const reload = vi.fn(async () => {});
+    bridge.installed = { ok: true, models: [installedModel('qwen'), installedModel('embed', { embeddings: true })] };
+    await mount(undefined, 'installed', undefined, undefined, { models: [entry('Qwen')], loading: false, reload });
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  const rerender = async (catalog: NonNullable<ComponentProps<typeof ModelsScreen>['catalog']>) => {
+    act(() =>
+      root?.render(
+        <CssVarsProvider theme={desktopTheme}>
+          <ModelsScreen onClose={() => {}} catalog={catalog} />
+        </CssVarsProvider>
+      )
+    );
+    await flush();
+    await flush();
+  };
+
+  it('waits while the catalog is loading, then reloads exactly once', async () => {
+    const reload = vi.fn(async () => {});
+    bridge.installed = { ok: true, models: [installedModel('cli-pulled')] };
+    await mount(undefined, 'installed', undefined, undefined, { models: [], loading: true, reload });
+    expect(reload).not.toHaveBeenCalled();
+    await rerender({ models: [], loading: false, reload });
+    expect(reload).toHaveBeenCalledTimes(1);
+    await rerender({ models: [], loading: true, reload });
+    await rerender({ models: [], loading: false, reload });
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('forgets a mismatch once the catalog lists the model, so a later one reloads again', async () => {
+    const reload = vi.fn(async () => {});
+    bridge.installed = { ok: true, models: [installedModel('cli-pulled')] };
+    await mount(undefined, 'installed', undefined, undefined, { models: [], loading: false, reload });
+    expect(reload).toHaveBeenCalledTimes(1);
+    await rerender({ models: [entry('cli-pulled')], loading: false, reload });
+    await rerender({ models: [], loading: false, reload });
+    expect(reload).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes the installed list on window focus at most once per throttle window', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      await mount();
+      const listed = calls.listInstalled.mock.calls.length;
+      const focus = async () => {
+        act(() => {
+          window.dispatchEvent(new Event('focus'));
+        });
+        await flush();
+      };
+      await focus();
+      expect(calls.listInstalled.mock.calls.length).toBe(listed);
+      vi.setSystemTime(Date.now() + FOCUS_RELOAD_MIN_MS + 1);
+      await focus();
+      await focus();
+      expect(calls.listInstalled.mock.calls.length).toBe(listed + 1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

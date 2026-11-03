@@ -816,6 +816,7 @@ export function ChatShell({
           inUse={modelsInUse}
           onOpenModelServers={onOpenModelServers}
           chatWith={chatWith}
+          catalog={catalog}
           chatError={chatOnError}
           onDismissChatError={() => setChatOnError(null)}
         />

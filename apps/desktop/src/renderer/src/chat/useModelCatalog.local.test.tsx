@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import type { ChatModelCatalog, ChatModelOption } from '@shared/chat';
 import type { ModelRuntimeStatus } from '@shared/models';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { LOCAL_STATUS_POLL_MS, useModelCatalog, type ModelCatalogController } from './useChat';
+import { FOCUS_RELOAD_MIN_MS, LOCAL_STATUS_POLL_MS, useModelCatalog, type ModelCatalogController } from './useChat';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -191,5 +191,42 @@ describe('useModelCatalog when a model finishes installing', () => {
     expect(installedListeners).toHaveLength(1);
     await act(async () => root.render(null));
     expect(installedListeners).toHaveLength(0);
+  });
+
+  it('reloads on focus once the last load is older than the throttle, and not before', async () => {
+    await mount(false);
+    listModels.mockClear();
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(listModels).not.toHaveBeenCalled();
+
+    await tick(FOCUS_RELOAD_MIN_MS);
+    listModels.mockResolvedValue({ models: [model] });
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(listModels).toHaveBeenCalledTimes(1);
+    expect(listModels).toHaveBeenCalledWith(true);
+    expect(catalog.models).toEqual([model]);
+  });
+
+  it('does not reload on focus while the window is hidden or after unmount', async () => {
+    await mount(false);
+    await tick(FOCUS_RELOAD_MIN_MS);
+    listModels.mockClear();
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(listModels).not.toHaveBeenCalled();
+
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+    await act(async () => root.render(null));
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(listModels).not.toHaveBeenCalled();
   });
 });

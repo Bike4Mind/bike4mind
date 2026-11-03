@@ -285,6 +285,9 @@ export interface ModelCatalogController {
 /** How often local mode checks that Ollama still answers (one cheap request) while the window is visible. */
 export const LOCAL_STATUS_POLL_MS = 5_000;
 
+/** The least time between catalog reloads that window focus may start. */
+export const FOCUS_RELOAD_MIN_MS = 30_000;
+
 /**
  * The models this server offers, refetched when the environment changes.
  *
@@ -295,6 +298,9 @@ export const LOCAL_STATUS_POLL_MS = 5_000;
  * `local` (signed out, device models only) also polls Ollama's status, because it starting,
  * stopping or gaining a model raises no event. The list is reread only when reachability changes
  * or while it is empty.
+ *
+ * Window focus also reloads it (at most once per `FOCUS_RELOAD_MIN_MS`), since a model pulled
+ * outside Desktop raises no event.
  */
 export function useModelCatalog(local = false): ModelCatalogController {
   const [models, setModels] = useState<ChatModelOption[]>([]);
@@ -302,12 +308,14 @@ export function useModelCatalog(local = false): ModelCatalogController {
   const [error, setError] = useState<string | null>(null);
   const [runtime, setRuntime] = useState<ModelRuntimeStatus | null>(null);
   const latestLoad = useRef(0);
+  const lastLoadAt = useRef(0);
   const seen = useRef({ empty: true, reachable: null as boolean | null });
   seen.current = { empty: models.length === 0, reachable: runtime?.reachable ?? null };
 
   const load = useCallback(
     async (force: boolean, quiet = false) => {
       const mine = ++latestLoad.current;
+      lastLoadAt.current = Date.now();
       if (!quiet) setLoading(true);
       const [catalog, status] = await Promise.all([
         window.b4m.chat.listModels(force),
@@ -342,6 +350,20 @@ export function useModelCatalog(local = false): ModelCatalogController {
       document.removeEventListener('visibilitychange', tick);
     };
   }, [local, load]);
+
+  // Models pulled outside Desktop (the CLI, Ollama itself) raise no event; coming back to the window is the cue.
+  useEffect(() => {
+    const onFocus = () => {
+      if (document.hidden || Date.now() - lastLoadAt.current < FOCUS_RELOAD_MIN_MS) return;
+      void load(true, true);
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
+  }, [load]);
 
   useEffect(() => {
     void load(false);
