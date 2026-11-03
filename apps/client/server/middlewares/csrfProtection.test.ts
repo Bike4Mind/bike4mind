@@ -3,7 +3,9 @@ import { csrfProtection } from './csrfProtection';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import type { Request, Response, NextFunction } from 'express';
 
-const makeReq = (overrides: Partial<{ method: string; headers: Record<string, string> }> = {}): Request =>
+const makeReq = (
+  overrides: Partial<{ method: string; headers: Record<string, string>; user: { id: string } }> = {}
+): Request =>
   ({
     method: 'POST',
     headers: {},
@@ -60,12 +62,23 @@ describe('csrfProtection', () => {
 
   describe('cookie-less bearer JWT exemption', () => {
     const jwt = 'Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln';
+    const authenticatedUser = { id: 'user-1' };
     const foreign = { origin: 'https://evil.example.com', 'sec-fetch-site': 'cross-site' };
 
     it('allows a bearer JWT with a foreign Origin and no cookies', () => {
       const next = makeNext();
-      csrfProtection()(makeReq({ headers: { authorization: jwt, ...foreign } }), makeRes(), next);
+      csrfProtection()(
+        makeReq({ headers: { authorization: jwt, ...foreign }, user: authenticatedUser }),
+        makeRes(),
+        next
+      );
       expect(next).toHaveBeenCalledOnce();
+    });
+
+    it('still rejects a bearer-shaped header when no principal was authenticated', () => {
+      expect(() =>
+        csrfProtection()(makeReq({ headers: { authorization: jwt, ...foreign } }), makeRes(), makeNext())
+      ).toThrow(ForbiddenError);
     });
 
     it('still rejects a cookie-bearing request with a foreign Origin', () => {
@@ -79,7 +92,10 @@ describe('csrfProtection', () => {
       cookieName => {
         expect(() =>
           csrfProtection()(
-            makeReq({ headers: { authorization: jwt, cookie: `${cookieName}=abc.def`, ...foreign } }),
+            makeReq({
+              headers: { authorization: jwt, cookie: `${cookieName}=abc.def`, ...foreign },
+              user: authenticatedUser,
+            }),
             makeRes(),
             makeNext()
           )
@@ -93,7 +109,11 @@ describe('csrfProtection', () => {
 
     it('does not exempt a malformed bearer value', () => {
       expect(() =>
-        csrfProtection()(makeReq({ headers: { authorization: 'Bearer notajwt', ...foreign } }), makeRes(), makeNext())
+        csrfProtection()(
+          makeReq({ headers: { authorization: 'Bearer notajwt', ...foreign }, user: authenticatedUser }),
+          makeRes(),
+          makeNext()
+        )
       ).toThrow(ForbiddenError);
     });
   });
