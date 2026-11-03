@@ -266,6 +266,20 @@ describe('resolveCallerDefaultModel', () => {
     expect(await resolveDefault()).toBe('premium');
   });
 
+  it('falls back from a media default while text models are open', async () => {
+    mocks.getAvailableModels.mockResolvedValue([textModel('premium', { type: 'image' }), cheap, cheaper]);
+    mocks.loadFreeTierAllowedModels.mockResolvedValue(Object.assign(new Set(['cheap']), { textModelsOpen: true }));
+
+    expect(await resolveDefault()).toBe('cheap');
+  });
+
+  it('falls back from a default missing from the catalog while text models are open', async () => {
+    mocks.getAvailableModels.mockResolvedValue([cheap, cheaper]);
+    mocks.loadFreeTierAllowedModels.mockResolvedValue(Object.assign(new Set(['cheap']), { textModelsOpen: true }));
+
+    expect(await resolveDefault()).toBe('cheap');
+  });
+
   it('keeps the default when it is allowlisted', async () => {
     mocks.loadFreeTierAllowedModels.mockResolvedValue(new Set(['cheap', 'premium']));
 
