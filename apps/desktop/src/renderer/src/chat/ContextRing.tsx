@@ -96,7 +96,7 @@ export function ContextRing({
       onClose={() => setOpen(false)}
       sx={{ whiteSpace: 'pre-line', maxWidth: 360 }}
     >
-      <Box sx={{ display: 'inline-flex', position: 'relative' }} data-testid="composer-context">
+      <Box tabIndex={0} sx={{ display: 'inline-flex', position: 'relative' }} data-testid="composer-context">
         <CircularProgress
           determinate
           value={ring.arc}
