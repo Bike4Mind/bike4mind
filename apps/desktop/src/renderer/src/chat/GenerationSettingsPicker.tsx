@@ -27,7 +27,7 @@ const LABELS: Record<GenerationField, string> = {
   thinkingBudgetTokens: 'Thinking budget',
 };
 
-const WIDTH = 340;
+const WIDTH = 360;
 const numberFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 3 });
 
 function shown(value: number | undefined): string {
@@ -44,11 +44,9 @@ function noteFor(control: NumericControl, stored: number | undefined, sent: numb
   if (control.locked) return control.locked.reason;
   const parts = [defaultText(control)];
   if (stored !== undefined && sent !== undefined && sent !== stored) {
-    parts.push(
-      `Saved as ${numberFormat.format(stored)}, outside this model's range, so it sends ${numberFormat.format(sent)}`
-    );
+    parts.push(`Saved as ${numberFormat.format(stored)}, sent as ${numberFormat.format(sent)} on this model`);
   }
-  if (control.includesThinking) parts.push('The limit includes thinking');
+  if (control.includesThinking) parts.push('Thinking counts toward it');
   return `${parts.join('. ')}.`;
 }
 
@@ -123,6 +121,7 @@ function FieldRow({
       <Input
         size="sm"
         type="number"
+        variant={locked ? 'soft' : 'outlined'}
         value={locked ? String(locked.value) : draft}
         placeholder={
           control.default !== undefined
@@ -139,7 +138,7 @@ function FieldRow({
         onKeyDown={event => {
           if (event.key === 'Enter' && !locked) commit();
         }}
-        sx={{ width: 112, flexShrink: 0 }}
+        sx={{ width: 112, flexShrink: 0, ...(locked ? { color: 'text.tertiary' } : {}) }}
         slotProps={{
           input: {
             min: control.min,

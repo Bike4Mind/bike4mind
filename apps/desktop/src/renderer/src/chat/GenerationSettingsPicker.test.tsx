@@ -157,7 +157,7 @@ describe('GenerationSettingsPicker', () => {
     await open();
     expect(rows()).toEqual(['temperature', 'topP', 'topK', 'minP', 'repeatPenalty', 'maxOutputTokens']);
     expect(note('temperature')).toBe('Model default: 0.6.');
-    expect(note('maxOutputTokens')).toBe('Model default: no limit. The limit includes thinking.');
+    expect(note('maxOutputTokens')).toBe('Model default: no limit. Thinking counts toward it.');
     expect(input('temperature').placeholder).toBe('0.6');
     expect(input('maxOutputTokens').placeholder).toBe('No limit');
     expect(byTestId('generation-settings-reset-all-btn')).toBeNull();
@@ -177,7 +177,7 @@ describe('GenerationSettingsPicker', () => {
     expect(byTestId('generation-settings-reset-all-btn')).toBeNull();
     expect(note('thinkingBudgetTokens')).toBe('Model default: 16,000.');
     expect(input('maxOutputTokens').placeholder).toBe('64,000');
-    expect(note('maxOutputTokens')).toBe('Model default: 64,000. The limit includes thinking.');
+    expect(note('maxOutputTokens')).toBe('Model default: 64,000. Thinking counts toward it.');
   });
 
   it('saves a typed value clamped into range, keeping the other overrides', async () => {
@@ -224,9 +224,7 @@ describe('GenerationSettingsPicker', () => {
     expect(byTestId('generation-settings-btn')?.textContent).toBe('Params: 1 set');
     await open();
     expect(input('maxOutputTokens').value).toBe('64000');
-    expect(note('maxOutputTokens')).toBe(
-      "Model default: 128,000. Saved as 2,048, outside this model's range, so it sends 64,000."
-    );
+    expect(note('maxOutputTokens')).toBe('Model default: 128,000. Saved as 2,048, sent as 64,000 on this model.');
     await blur('maxOutputTokens');
     await type('maxOutputTokens', '64000');
     expect(onChange).not.toHaveBeenCalled();
