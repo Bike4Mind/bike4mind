@@ -68,6 +68,11 @@ const RECHECK_AFTER_MS = 10_000;
 const RESOLVE_TIMEOUT_MS = 5_000;
 /** How long a picker load waits on a down server's check before listing its last models. */
 export const PICKER_CHECK_WAIT_MS = 2_000;
+/**
+ * How long a picker load waits on an online server's model list before showing its last names, disabled. A LAN
+ * Ollama lists in well under a second; this leaves room for an SSH server's connection setup.
+ */
+export const PICKER_LIST_WAIT_MS = 3_000;
 
 interface ServerClient extends LocalChat {
   listModels(): Promise<ChatModelOption[]>;
@@ -90,6 +95,10 @@ interface Entry {
   product: OpenAICompatibleProduct | null;
   /** From the last listing, so a conversation saved on an alias still finds its model while the server is down. */
   aliasIds?: ReadonlyMap<string, string[]>;
+  listing?: Promise<ChatModelOption[] | null>;
+  /** A listing that landed after the picker stopped waiting, kept for the next models() call. */
+  late?: ChatModelOption[];
+  reporting?: Promise<ChatModelOption[] | null>;
 }
 
 export interface ModelServerRegistryDeps {
@@ -97,6 +106,8 @@ export interface ModelServerRegistryDeps {
   logger: { debug(message: string): void; warn(message: string): void };
   /** Called with the full list whenever a server or its health changes. */
   changed?(servers: ModelServerView[]): void;
+  /** A server's model listing outlasted the picker's wait and has now finished, so the picker should list again. */
+  listedLate?(serverId: string): void;
   /** Resolves a host name to its addresses; defaults to `dns.lookup` with `all: true`. */
   resolve?(host: string): Promise<string[]>;
   fetchFor?(endpoint: ServerEndpoint): FetchLike;
@@ -370,7 +381,7 @@ export class ModelServerRegistry {
     return this.views();
   }
 
-  /** Every saved server's chat models. A server that does not answer lists its last models, disabled. */
+  /** Every saved server's chat models. A server that does not answer, or not in time, lists its last models, disabled. */
   async models(): Promise<ChatModelOption[]> {
     await this.load();
     const lists = await Promise.all(
@@ -390,34 +401,23 @@ export class ModelServerRegistry {
           const check = (running ?? this.checkEntry(entry).then(() => this.emit())).catch(() => undefined);
           await within(check, PICKER_CHECK_WAIT_MS, undefined);
         }
+        let reason: string | null = null;
         if (entry.health.state === 'online' || entry.health.state === 'unknown') {
-          try {
-            const listed = await entry.client.listModels();
-            void this.deps.store
-              .setModels(
-                entry.record.id,
-                listed.map(model => model.name)
-              )
-              .catch(() => undefined);
-            entry.record = { ...entry.record, models: listed.map(model => model.name) };
-            entry.aliasIds = aliasIdsOf(listed);
+          const late = entry.late;
+          entry.late = undefined;
+          const listing = late ? null : this.listEntry(entry);
+          // undefined: still listing when the wait ran out.
+          const listed = listing ? await within(listing, PICKER_LIST_WAIT_MS, undefined) : late;
+          if (listed) {
             if (entry.health.state === 'unknown') void this.check(entry.record.id);
             return listed.map(model => ({ ...model, server }));
-          } catch (raw) {
-            const err = this.unwrapFailure(raw, entry);
-            entry.health = failureHealth(err, entry.record.name, entry.scope, this.platform) ?? {
-              ...entry.health,
-              state: 'unreachable',
-              error: withLocalNetworkHint(
-                `${entry.record.name}: ${describeFailure(err)}`,
-                errorCode(err),
-                entry.scope,
-                this.platform
-              ),
-            };
+          }
+          if (listed === undefined && listing) {
+            this.reportLate(entry, listing);
+            reason = `${entry.record.name} is still listing its models`;
           }
         }
-        const reason = unavailableReason(entry);
+        reason ??= unavailableReason(entry);
         const runtimeId = serverRuntimeId(entry.record.id);
         return entry.record.models.map(name => {
           const aliasIds = entry.aliasIds?.get(name);
@@ -433,6 +433,50 @@ export class ModelServerRegistry {
       })
     );
     return lists.flat();
+  }
+
+  /** One listing per server at a time; null when it failed, with the server's health updated to say why. */
+  private listEntry(entry: Entry): Promise<ChatModelOption[] | null> {
+    entry.listing ??= entry.client
+      .listModels()
+      .then(
+        listed => {
+          const names = listed.map(model => model.name);
+          void this.deps.store.setModels(entry.record.id, names).catch(() => undefined);
+          entry.record = { ...entry.record, models: names };
+          entry.aliasIds = aliasIdsOf(listed);
+          return listed;
+        },
+        (raw: unknown) => {
+          const err = this.unwrapFailure(raw, entry);
+          entry.health = failureHealth(err, entry.record.name, entry.scope, this.platform) ?? {
+            ...entry.health,
+            state: 'unreachable',
+            error: withLocalNetworkHint(
+              `${entry.record.name}: ${describeFailure(err)}`,
+              errorCode(err),
+              entry.scope,
+              this.platform
+            ),
+          };
+          return null;
+        }
+      )
+      .finally(() => {
+        entry.listing = undefined;
+      });
+    return entry.listing;
+  }
+
+  /** Once a listing the picker stopped waiting for lands, says so once, and the next models() returns it. */
+  private reportLate(entry: Entry, listing: Promise<ChatModelOption[] | null>): void {
+    if (entry.reporting === listing) return;
+    entry.reporting = listing;
+    void listing.then(listed => {
+      if (listed) entry.late = listed;
+      else this.emit();
+      this.deps.listedLate?.(entry.record.id);
+    });
   }
 
   /** The chat client for a `srv-<id>` runtime id; null for any other id. */

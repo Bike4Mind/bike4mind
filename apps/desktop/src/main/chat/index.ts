@@ -485,6 +485,11 @@ export function registerChat(
       models.forgetLocal();
       send(IPC_CHANNELS.modelServersChanged, servers);
     },
+    // The chat model list reloads on this channel, and its next local read gets the finished listing.
+    listedLate: serverId => {
+      models.forgetLocal();
+      send(IPC_CHANNELS.modelsInstalledChanged, serverId);
+    },
     localSpecsChanged: () => {
       forgetLocalContexts();
       localSizing.forget?.();

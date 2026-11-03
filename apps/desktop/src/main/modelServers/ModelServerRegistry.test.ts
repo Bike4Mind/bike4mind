@@ -4,7 +4,7 @@ import type { SecretCipher, StoreFile } from '../chat/mcp/McpServerStore';
 import { ServerCredentialsError, ServerUnreachableError } from './errors';
 import type { ChatModelOption } from '@shared/chat';
 import type { ModelServerProbeResult } from '@shared/modelServers';
-import { ModelServerRegistry, PICKER_CHECK_WAIT_MS } from './ModelServerRegistry';
+import { ModelServerRegistry, PICKER_CHECK_WAIT_MS, PICKER_LIST_WAIT_MS } from './ModelServerRegistry';
 import { ModelServerStore } from './ModelServerStore';
 import {
   describeSshFailure,
@@ -46,6 +46,8 @@ function fakeOllama(models = ['qwen2.5:0.5b']) {
     forbidden: false,
     wantToken: null as string | null,
     versionGate: null as Promise<void> | null,
+    /** Holds `/api/tags` on an origin until it settles. */
+    tagsGates: new Map<string, Promise<void>>(),
     /** The system error code a request to a `down` origin fails with. */
     downCode: 'ECONNREFUSED',
   };
@@ -69,6 +71,7 @@ function fakeOllama(models = ['qwen2.5:0.5b']) {
       calls.push({ origin: url.origin, path: url.pathname, credentials });
       if (state.down.has(url.origin)) throw new TypeError('fetch failed', { cause: { code: state.downCode } });
       if (url.pathname === '/api/version') await state.versionGate;
+      if (url.pathname === '/api/tags') await state.tagsGates.get(url.origin);
       return handler(url.pathname, credentials);
     };
   return { state, calls, fetchFor };
@@ -81,16 +84,18 @@ function registry(
 ) {
   const store = new ModelServerStore(cipher, memoryFile(), { debug: () => undefined, warn: () => undefined });
   const changed = vi.fn();
+  const listedLate = vi.fn();
   const instance = new ModelServerRegistry({
     store,
     logger: options.logger ?? { debug: () => undefined, warn: () => undefined },
     platform: options.platform,
     changed,
+    listedLate,
     fetchFor: fake.fetchFor,
     localFetch: async () => json({ version: '0.12.0' }),
     resolve: typeof resolve === 'function' ? resolve : async host => resolve[host] ?? [],
   });
-  return { registry: instance, store, changed };
+  return { registry: instance, store, changed, listedLate };
 }
 
 const none = { type: 'none' as const };
@@ -401,6 +406,106 @@ describe('ModelServerRegistry', () => {
     expect(model).toMatchObject({ name: 'qwen2.5:0.5b', server: { name: 'gpu box' } });
     expect(model.unavailable).toMatch(/gpu box is unreachable/);
     expect((await servers.views())[1].health.state).toBe('unreachable');
+  });
+
+  describe('a server slow to list its models', () => {
+    const SLOW = 'http://127.0.0.2:11434';
+    const FAST = 'http://127.0.0.3:11434';
+
+    /** Two servers listed once, so each has saved names; then the next listing on SLOW waits for `release`. */
+    async function slowAndFast() {
+      const names = ['qwen2.5:0.5b'];
+      const fake = fakeOllama(names);
+      const { registry: servers, listedLate } = registry(fake);
+      await servers.add({ address: SLOW, credential: none, name: 'slow', kind: 'ollama', access: 'chat' });
+      await servers.add({ address: FAST, credential: none, name: 'fast', kind: 'ollama', access: 'chat' });
+      await servers.models();
+      const slowId = (await servers.views())[1].id;
+      names.push('llama3.2:3b');
+      let release: () => void = () => {};
+      fake.state.tagsGates.set(SLOW, new Promise<void>(resolve => (release = resolve)));
+      const listedBefore = tagCalls(fake, SLOW);
+      return { fake, servers, listedLate, slowId, listedBefore, release: () => release() };
+    }
+
+    function tagCalls(fake: ReturnType<typeof fakeOllama>, origin: string): number {
+      return fake.calls.filter(call => call.origin === origin && call.path === '/api/tags').length;
+    }
+
+    /** Lists with fake timers past the wait; the listing on SLOW is still held. */
+    async function listPastTheWait(servers: ModelServerRegistry): Promise<ChatModelOption[]> {
+      vi.useFakeTimers();
+      try {
+        let listed: ChatModelOption[] | null = null;
+        void servers.models().then(result => {
+          listed = result;
+        });
+        await vi.advanceTimersByTimeAsync(PICKER_LIST_WAIT_MS);
+        if (!listed) throw new Error('models() still waiting after the wait');
+        return listed;
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+
+    const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+
+    it('shows its saved names, disabled, while the fast server lists as usual', async () => {
+      const { servers, listedLate, release } = await slowAndFast();
+      const listed = await listPastTheWait(servers);
+      expect(listed.filter(model => model.server?.name === 'slow')).toEqual([
+        expect.objectContaining({ name: 'qwen2.5:0.5b', unavailable: 'slow is still listing its models' }),
+      ]);
+      const fast = listed.filter(model => model.server?.name === 'fast');
+      expect(fast.map(model => model.name).sort()).toEqual(['llama3.2:3b', 'qwen2.5:0.5b']);
+      expect(fast.every(model => model.unavailable === undefined)).toBe(true);
+      expect(listedLate).not.toHaveBeenCalled();
+      release();
+    });
+
+    it('says once when the slow list lands, and the next listing returns it without asking again', async () => {
+      const { fake, servers, listedLate, slowId, listedBefore, release } = await slowAndFast();
+      await listPastTheWait(servers);
+      await listPastTheWait(servers);
+      expect(tagCalls(fake, SLOW)).toBe(listedBefore + 1);
+
+      release();
+      await settle();
+      await settle();
+      expect(listedLate).toHaveBeenCalledTimes(1);
+      expect(listedLate).toHaveBeenCalledWith(slowId);
+
+      const next = await servers.models();
+      expect(tagCalls(fake, SLOW)).toBe(listedBefore + 1);
+      const slow = next.filter(model => model.server?.name === 'slow');
+      expect(slow.map(model => model.name).sort()).toEqual(['llama3.2:3b', 'qwen2.5:0.5b']);
+      expect(slow.every(model => model.unavailable === undefined)).toBe(true);
+      expect(listedLate).toHaveBeenCalledTimes(1);
+    });
+
+    it('waits for a listing that finishes in time, as before', async () => {
+      const { fake, servers, listedLate, listedBefore, release } = await slowAndFast();
+      setTimeout(release, 20);
+      const listed = await servers.models();
+      expect(listed.filter(model => model.server?.name === 'slow').every(model => !model.unavailable)).toBe(true);
+      expect(listed).toHaveLength(4);
+      expect(tagCalls(fake, SLOW)).toBe(listedBefore + 1);
+      await settle();
+      expect(listedLate).not.toHaveBeenCalled();
+    });
+
+    it('shows a listing that fails in time as unreachable, as before, and reports nothing', async () => {
+      const { fake, servers, listedLate, release } = await slowAndFast();
+      fake.state.tagsGates.clear();
+      fake.state.down.add(SLOW);
+      const listed = await servers.models();
+      expect(listed.filter(model => model.server?.name === 'slow')).toEqual([
+        expect.objectContaining({ name: 'qwen2.5:0.5b', unavailable: expect.stringMatching(/slow is unreachable/) }),
+      ]);
+      expect((await servers.views())[1].health.state).toBe('unreachable');
+      expect(listedLate).not.toHaveBeenCalled();
+      release();
+    });
   });
 
   describe('the macOS Local Network hint', () => {
