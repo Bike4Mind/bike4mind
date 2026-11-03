@@ -557,6 +557,27 @@ describe('ChatService tool loop', () => {
       expect(failed).toMatchObject({ model: 'test-model', error: 'the server fell over' });
       expect(failed?.rounds?.map(round => [round.text, round.model])).toEqual([['Reading the config.', 'test-model']]);
     });
+
+    it('when the continued run fails, keeping the artifacts the reply already published', async () => {
+      service = build({ rounds: 1 });
+      const { id } = await service.createSession();
+      await service.send(id, 'build it');
+      await firstRequest();
+      streams[0].write(frame({ type: 'content', text: 'Reading the config.' }));
+      await driveRounds(1, () => '{"pattern":"*"}');
+      await waitFor(events, 'done');
+      const stopped = await reply(id);
+      const artifact = { id: 'a1', type: 'code', title: 'Plan', content: 'step 1', mimeType: 'text/plain' };
+      await store.updateMessage(id, stopped?.id ?? '', { artifacts: [artifact] });
+
+      events.length = 0;
+      expect(await service.continueReply(id)).toMatchObject({ ok: true });
+      await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+      streams[1].destroy(new Error('the server fell over'));
+      await waitFor(events, 'error');
+
+      expect((await reply(id))?.artifacts).toEqual([artifact]);
+    });
   });
 
   it('records each round with the calls it made, so a reply can be drawn in order', async () => {

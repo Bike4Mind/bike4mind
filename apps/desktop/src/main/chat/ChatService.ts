@@ -3459,6 +3459,8 @@ export class ChatService {
         model: resume ? resume.model : session.model,
         error: message,
         ...stop,
+        // A resumed reply is rewritten in place, so whatever it already held must be passed back
+        // or the write clears it: its artifact markup is long gone from `content`.
         ...(resume
           ? {
               rounds: [
@@ -3468,6 +3470,7 @@ export class ChatService {
                   session.model
                 ),
               ],
+              ...(resume.artifacts.length > 0 ? { artifacts: resume.artifacts } : {}),
             }
           : {}),
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
