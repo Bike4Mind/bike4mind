@@ -19,6 +19,7 @@ import { isChatCapable } from '@shared/models';
 import type { CompletionMessage, CompletionRequest } from '../chat/completions';
 import type { LocalChat } from '../chat/localChat';
 import { LOCAL_CONTEXT_TARGET_TOKENS } from '../chat/localContext';
+import { OPENAI_COMPATIBLE_EFFORT_LEVELS, openAICompatibleControls } from '../chat/modelControls';
 import type { CompletionStreamEvent } from '../chat/streamEvents';
 import { estimatedRate, llamaServerRate, type StreamTiming } from '../chat/tokenRate';
 import { ServerCredentialsError, ServerForbiddenError } from './errors';
@@ -32,7 +33,7 @@ export interface OpenAICompatibleServer {
   hasCredentials(): boolean;
   /** Removes the server's credential from text it sent, such as an error inside a streamed reply. */
   redact: (text: string, response: Response) => string;
-  /** Tools went off or came back on, so the server's view and the model list changed. */
+  /** Tools went off or came back on, or a model first replied with reasoning, so the model list changed. */
   toolsChanged?: () => void;
 }
 
@@ -151,6 +152,31 @@ interface StreamChunk {
 
 const STOP_REASONS: Record<string, string> = { length: 'max_tokens', tool_calls: 'tool_use', stop: 'stop' };
 
+/** gpt-oss is the template family these servers pass `reasoning_effort` to; nothing else names its levels. */
+function takesReasoningEffort(model: string): boolean {
+  return /gpt-oss/i.test(model);
+}
+
+/**
+ * A conversation's sampling overrides as the product's body fields. vLLM spells the repeat penalty
+ * `repetition_penalty`; an unknown product gets only the OpenAI fields.
+ */
+function samplingFields(
+  product: OpenAICompatibleProduct | null,
+  generation: CompletionRequest['generation']
+): Record<string, number> {
+  if (!generation) return {};
+  const fields: Record<string, number> = {};
+  if (generation.temperature !== undefined) fields.temperature = generation.temperature;
+  if (generation.topP !== undefined) fields.top_p = generation.topP;
+  if (product === null) return fields;
+  if (generation.topK !== undefined) fields.top_k = generation.topK;
+  if (generation.repeatPenalty !== undefined)
+    fields[product === 'vllm' ? 'repetition_penalty' : 'repeat_penalty'] = generation.repeatPenalty;
+  if (generation.minP !== undefined && product !== 'lmstudio') fields.min_p = generation.minP;
+  return fields;
+}
+
 function tokenCount(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
@@ -180,6 +206,8 @@ export class OpenAICompatibleChat implements LocalChat {
   private readonly unlistedContexts = new Set<string>();
   /** Names from the last listing, for the server's hint. */
   private listed: string[] = [];
+  /** Models a reply came back from with reasoning split out, which is what earns them a thinking switch. */
+  private readonly thinkers = new Set<string>();
 
   constructor(private readonly server: OpenAICompatibleServer) {
     this.runtime = new OpenAICompatibleRuntime({
@@ -199,18 +227,29 @@ export class OpenAICompatibleChat implements LocalChat {
     const chat = models.filter(model => isChatCapable(model.capabilities, 'openai-compatible'));
     this.listed = chat.map(model => model.name);
     this.smallChanged(before);
-    return chat.map(model => ({
-      id: localModelId(this.server.runtimeId, model.name),
-      name: model.name,
-      backend: localBackend(this.server.runtimeId),
-      ...(model.capabilities.vision ? { supportsVision: true } : {}),
-      ...(this.contexts.has(model.name) ? { contextWindow: this.contexts.get(model.name), contextFixed: true } : {}),
-      ...(model.baseModel ? { baseModel: model.baseModel } : {}),
-      ...(model.aliases?.length
-        ? { aliasIds: model.aliases.map(alias => localModelId(this.server.runtimeId, alias)) }
-        : {}),
-      ...(this.toolsOffFor(model.name) ? { supportsTools: false } : {}),
-    }));
+    return chat.map(model => {
+      const thinks = this.thinkers.has(model.name);
+      const controls = openAICompatibleControls(this.server.product, {
+        ...(this.contexts.has(model.name) ? { contextWindow: this.contexts.get(model.name) } : {}),
+        effortLevels: takesReasoningEffort(model.name),
+      });
+      return {
+        id: localModelId(this.server.runtimeId, model.name),
+        name: model.name,
+        backend: localBackend(this.server.runtimeId),
+        ...(model.capabilities.vision ? { supportsVision: true } : {}),
+        ...(this.contexts.has(model.name) ? { contextWindow: this.contexts.get(model.name), contextFixed: true } : {}),
+        ...(model.baseModel ? { baseModel: model.baseModel } : {}),
+        ...(model.aliases?.length
+          ? { aliasIds: model.aliases.map(alias => localModelId(this.server.runtimeId, alias)) }
+          : {}),
+        ...(this.toolsOffFor(model.name) ? { supportsTools: false } : {}),
+        // The server does not say which models think, so a model earns the switch by thinking once.
+        ...(thinks && !controls.effort ? { thinkingToggle: true } : {}),
+        supportsReasoningEffort: controls.effort !== undefined,
+        controls,
+      };
+    });
   }
 
   async contextTokens(modelId: string, signal?: AbortSignal): Promise<number> {
@@ -283,6 +322,8 @@ export class OpenAICompatibleChat implements LocalChat {
           stream_options: { include_usage: true },
           messages: toOpenAIMessages(request.messages),
           ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
+          ...samplingFields(this.server.product, request.generation),
+          ...this.thinkingFields(model, request),
           ...(withTools && tools.length > 0 ? { tools } : {}),
         }),
       });
@@ -313,13 +354,37 @@ export class OpenAICompatibleChat implements LocalChat {
       onNotice(why);
     }
     if (!response.ok || !response.body) throw await this.httpError(response);
-    await this.readStream(response.body, onEvent, text => this.server.redact(text, response));
+    await this.readStream(
+      response.body,
+      onEvent,
+      text => this.server.redact(text, response),
+      () => this.learnThinking(model)
+    );
+  }
+
+  /**
+   * gpt-oss templates take a `reasoning_effort` level and cannot stop reasoning; other templates
+   * that think take Off as `chat_template_kwargs.enable_thinking`. Thinking left on sends nothing.
+   */
+  private thinkingFields(model: string, request: CompletionRequest): Record<string, unknown> {
+    if (takesReasoningEffort(model)) {
+      const level = request.reasoningEffort;
+      return level && OPENAI_COMPATIBLE_EFFORT_LEVELS.includes(level) ? { reasoning_effort: level } : {};
+    }
+    return request.thinking === false ? { chat_template_kwargs: { enable_thinking: false } } : {};
+  }
+
+  private learnThinking(model: string): void {
+    if (this.thinkers.has(model)) return;
+    this.thinkers.add(model);
+    this.server.toolsChanged?.();
   }
 
   private async readStream(
     body: ReadableStream<Uint8Array>,
     onEvent: (event: CompletionStreamEvent) => void,
-    redact: (text: string) => string
+    redact: (text: string) => string,
+    onReasoning: () => void
   ) {
     const calls = new Map<number, { id?: string; name: string; arguments: string }>();
     let stopReason: string | undefined;
@@ -363,6 +428,7 @@ export class OpenAICompatibleChat implements LocalChat {
         const reasoning = delta?.reasoning_content ?? delta?.reasoning;
         if (typeof reasoning === 'string' && reasoning) {
           streamed();
+          onReasoning();
           onEvent({ type: 'content', text: `<think>${reasoning}</think>` });
         }
         if (typeof delta?.content === 'string' && delta.content) {

@@ -26,30 +26,38 @@ export function supportsReasoningEffort(model: string): boolean {
   return REASONING_SUPPORTED_MODELS.has(model) || ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS.has(model);
 }
 
+/** The levels Desktop sent before models listed their own; see reasoningEffortFor. */
+const UNLISTED_EFFORTS: readonly ReasoningEffortSetting[] = ['minimal', 'low', 'medium', 'high'];
+
 /**
  * The effort to put on a request for `model`, or undefined to send none.
  *
- * Gated on the adapters' own lists rather than a provider check: the server forwards the field
- * to whatever backend serves the model, and only these models accept it. Claude turns also
- * enable `thinking` (see completions.ts), so this sizes that thinking and 'none' and
- * 'minimal' map to 'low' - see resolveAnthropicEffort in llm-adapters.
+ * Only a level the model's `controls.effort` lists: main builds those from what the backend acts
+ * on (the server's published levels for a hosted model, Ollama's `think` values, the gpt-oss
+ * levels of an OpenAI-compatible server). Without a listed option, when the catalog could not be
+ * read, it falls back to the adapters' own model sets and the levels every one of them takes.
  */
 export function reasoningEffortFor(
   setting: ReasoningEffortSetting | undefined,
-  model: string
+  model: string,
+  option?: Pick<ChatModelOption, 'controls'>
 ): ReasoningEffort | undefined {
   if (!setting || setting === 'default') return undefined;
-  return supportsReasoningEffort(model) ? setting : undefined;
+  if (option?.controls) return option.controls.effort?.levels.includes(setting) ? setting : undefined;
+  return supportsReasoningEffort(model) && UNLISTED_EFFORTS.includes(setting) ? setting : undefined;
 }
 
 /**
- * Whether a turn asks the server for thinking. Every model does except a `thinkingToggle` one
- * switched off: leaving the flag out is what makes the server send Ollama `think:false`, since a
- * thinking-capable Ollama model otherwise thinks by default.
+ * Whether a turn asks for thinking. Every model does except a `thinkingToggle` one switched off,
+ * and a turn sent at effort `none`: with thinking requested the server keeps a Claude thinking
+ * and reads `none` as its lowest effort. Leaving the flag out is also what makes the server send
+ * Ollama `think:false`, since a thinking-capable Ollama model otherwise thinks by default.
  */
 export function requestsThinking(
   setting: ReasoningEffortSetting | undefined,
-  option: Pick<ChatModelOption, 'thinkingToggle'> | undefined
+  option: Pick<ChatModelOption, 'thinkingToggle'> | undefined,
+  effort?: ReasoningEffort
 ): boolean {
+  if (effort === 'none') return false;
   return !(option?.thinkingToggle && setting === THINKING_OFF_SETTING);
 }

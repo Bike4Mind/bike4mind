@@ -64,4 +64,37 @@ describe('ReasoningEffortPicker', () => {
   it('keeps a model the catalog never stated a flag for usable', () => {
     expect(markup('some-local-ollama', [{ id: 'some-local-ollama', name: 'Local' }])).toContain('Effort: High');
   });
+
+  it('draws nothing for a local model that cannot think', () => {
+    const plain: ChatModelOption = {
+      id: 'local:ollama:llama3.2',
+      name: 'llama3.2',
+      supportsReasoningEffort: false,
+      controls: {},
+    };
+    expect(markup(plain.id, [plain])).toBe('');
+  });
+
+  it('shows a stored level the model does not list as Default, since nothing is sent for it', () => {
+    const listed: ChatModelOption = {
+      id: 'gpt-5',
+      name: 'GPT-5',
+      supportsReasoningEffort: true,
+      controls: { effort: { levels: ['none', 'low', 'high', 'xhigh'], scope: 'request' } },
+    };
+    expect(markup('gpt-5', [listed], 'minimal')).toContain('Effort: Default');
+    expect(markup('gpt-5', [listed], 'xhigh')).toContain('Effort: Extra high');
+  });
+
+  it('shows a stored Off on a local model with think levels as the lowest level it runs at', () => {
+    const gptOss: ChatModelOption = {
+      id: 'local:ollama:gpt-oss:20b',
+      name: 'gpt-oss:20b',
+      supportsReasoningEffort: true,
+      thinkingToggle: true,
+      controls: { effort: { levels: ['low', 'medium', 'high'], scope: 'request' } },
+    };
+    expect(markup(gptOss.id, [gptOss], 'minimal')).toContain('Effort: Low');
+    expect(markup(gptOss.id, [gptOss], 'medium')).toContain('Effort: Medium');
+  });
 });

@@ -1,7 +1,8 @@
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ChatModels } from '@bike4mind/common';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { publicVideoModel } from './media/__fixtures__/videoModels';
-import { ModelCatalog, resolveDefaultModel, selectUsableModels } from './ModelCatalog';
+import { ModelCatalog, parseEffortsPage, resolveDefaultModel, selectUsableModels } from './ModelCatalog';
 import { GIB, stubArch, unifiedMachine } from './fitStub.testHelper';
 import { forgetLocalContexts, OllamaLocal } from './OllamaLocal';
 
@@ -102,6 +103,54 @@ describe('selectUsableModels', () => {
     expect(selectUsableModels(undefined)).toEqual([]);
     expect(selectUsableModels({ models: [] })).toEqual([]);
   });
+
+  it('offers the effort levels the server publishes, and the old four where it publishes none', () => {
+    const gpt = wireModel({ id: ChatModels.GPT5, backend: 'openai', can_think: true });
+    const [listed] = selectUsableModels([gpt], new Map([[ChatModels.GPT5, ['none', 'low', 'xhigh'] as const]]));
+    expect(listed).toMatchObject({
+      supportsReasoningEffort: true,
+      controls: { effort: { levels: ['none', 'low', 'xhigh'] } },
+    });
+    expect(selectUsableModels([gpt])[0]?.controls?.effort?.levels).toEqual(['minimal', 'low', 'medium', 'high']);
+
+    const [none] = selectUsableModels([gpt], new Map([[ChatModels.GPT5, []]]));
+    expect(none).toMatchObject({ supportsReasoningEffort: false });
+    expect(none?.controls).not.toHaveProperty('effort');
+  });
+
+  it('pins temperature for a model the catalog dispatches with max_completion_tokens', () => {
+    const [model] = selectUsableModels([
+      wireModel({
+        id: 'some-new-reasoner',
+        backend: 'openai',
+        can_think: true,
+        dispatchProfile: { maxTokensParam: 'max_completion_tokens' },
+      }),
+    ]);
+    expect(model?.controls?.temperature?.locked?.value).toBe(1);
+  });
+});
+
+describe('parseEffortsPage', () => {
+  it('reads each row that states its levels and drops levels it does not know', () => {
+    expect(
+      parseEffortsPage({
+        data: [
+          { id: 'a', reasoning_efforts: ['none', 'turbo', 'high'] },
+          { id: 'b' },
+          { reasoning_efforts: ['low'] },
+          null,
+        ],
+        next_cursor: 'next',
+      })
+    ).toEqual({ efforts: [['a', ['none', 'high']]], nextCursor: 'next' });
+  });
+
+  it('answers null for anything that is not a page', () => {
+    expect(parseEffortsPage({ models: [] })).toBeNull();
+    expect(parseEffortsPage(undefined)).toBeNull();
+    expect(parseEffortsPage({ data: [], next_cursor: '' })).toEqual({ efforts: [], nextCursor: null });
+  });
 });
 
 describe('resolveDefaultModel', () => {
@@ -129,9 +178,15 @@ describe('resolveDefaultModel', () => {
 });
 
 describe('ModelCatalog', () => {
-  let get: ReturnType<typeof vi.fn>;
+  /** GET /api/models; the effort levels on /api/v1/models go to `effortsPage` instead. */
+  let get: Mock<(path: string, config?: unknown) => Promise<unknown>>;
+  let effortsPage: Mock<(config?: unknown) => Promise<unknown>>;
   let environmentUrl: string;
   let catalog: ModelCatalog;
+  const client = () =>
+    ({
+      get: (path: string, config?: unknown) => (path === '/api/v1/models' ? effortsPage(config) : get(path, config)),
+    }) as unknown as AuthenticatedApiClient;
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -139,11 +194,12 @@ describe('ModelCatalog', () => {
 
   beforeEach(() => {
     get = vi.fn().mockResolvedValue({ models: [wireModel(), wireModel({ id: 'dall-e-3', type: 'image' })] });
+    effortsPage = vi.fn().mockResolvedValue({ data: [], next_cursor: null });
     environmentUrl = 'http://localhost:3000';
     catalog = new ModelCatalog(
       {
         logger: { debug: vi.fn(), warn: vi.fn() },
-        getApiClient: () => ({ get }) as unknown as AuthenticatedApiClient,
+        getApiClient: client,
         getEnvironmentUrl: () => environmentUrl,
       },
       { models: async () => [] } as never
@@ -161,7 +217,7 @@ describe('ModelCatalog', () => {
     catalog = new ModelCatalog(
       {
         logger: { debug: vi.fn(), warn: vi.fn() },
-        getApiClient: () => ({ get }) as unknown as AuthenticatedApiClient,
+        getApiClient: client,
         getEnvironmentUrl: () => environmentUrl,
       },
       local as never
@@ -299,7 +355,7 @@ describe('ModelCatalog', () => {
     catalog = new ModelCatalog(
       {
         logger: { debug: vi.fn(), warn: vi.fn() },
-        getApiClient: () => ({ get }) as unknown as AuthenticatedApiClient,
+        getApiClient: client,
         getEnvironmentUrl: () => environmentUrl,
       },
       local as never
@@ -327,7 +383,7 @@ describe('ModelCatalog', () => {
     catalog = new ModelCatalog(
       {
         logger: { debug: vi.fn(), warn: vi.fn() },
-        getApiClient: () => ({ get }) as unknown as AuthenticatedApiClient,
+        getApiClient: client,
         getEnvironmentUrl: () => environmentUrl,
       },
       local as never
@@ -395,7 +451,7 @@ describe('ModelCatalog', () => {
     catalog = new ModelCatalog(
       {
         logger: { debug: vi.fn(), warn: vi.fn() },
-        getApiClient: () => (failed ? ({ get } as unknown as AuthenticatedApiClient) : null),
+        getApiClient: () => (failed ? client() : null),
         getEnvironmentUrl: () => environmentUrl,
       },
       { models: async () => [{ id: 'local:ollama:qwen', name: 'qwen' }] } as never
@@ -483,6 +539,31 @@ describe('ModelCatalog', () => {
   it('reports an empty catalog without an error', async () => {
     get.mockResolvedValueOnce({ models: [] });
     expect(await catalog.list()).toEqual({ models: [] });
+  });
+
+  it('reads the effort levels from every page of the public list beside the catalog', async () => {
+    get.mockResolvedValue({
+      models: [wireModel({ id: 'first', backend: 'openai' }), wireModel({ id: 'second', backend: 'openai' })],
+    });
+    effortsPage
+      .mockResolvedValueOnce({ data: [{ id: 'first', reasoning_efforts: ['none', 'high'] }], next_cursor: 'page-2' })
+      .mockResolvedValueOnce({ data: [{ id: 'second', reasoning_efforts: ['xhigh'] }], next_cursor: null });
+
+    const levels = (await catalog.list()).models.map(model => model.controls?.effort?.levels);
+    expect(levels).toEqual([['none', 'high'], ['xhigh']]);
+    expect(effortsPage).toHaveBeenCalledTimes(2);
+    expect(effortsPage.mock.calls[1]?.[0]).toMatchObject({ params: { limit: 100, cursor: 'page-2' } });
+  });
+
+  it.each([
+    ['fails', () => effortsPage.mockRejectedValue(new Error('not found'))],
+    ['answers another shape', () => effortsPage.mockResolvedValue({ models: [] })],
+  ])('keeps the list and the old effort levels when the public list %s', async (_, arrange) => {
+    get.mockResolvedValue({ models: [wireModel({ id: ChatModels.GPT5, backend: 'openai' })] });
+    arrange();
+    const { models, error } = await catalog.list();
+    expect(error).toBeUndefined();
+    expect(models[0]?.controls?.effort?.levels).toEqual(['minimal', 'low', 'medium', 'high']);
   });
 
   it('refuses to guess while signed out', async () => {

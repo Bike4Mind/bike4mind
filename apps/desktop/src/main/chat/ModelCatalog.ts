@@ -1,8 +1,14 @@
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import { supportsOneHourPromptCache, type VideoModel } from '@bike4mind/common';
+import {
+  CompletionReasoningEffortSchema,
+  supportsOneHourPromptCache,
+  type ReasoningEffort,
+  type VideoModel,
+} from '@bike4mind/common';
 import type { ChatModelCatalog, ChatModelOption } from '@shared/chat';
 import type { ModelListOptions } from '../modelServers/ModelServerRegistry';
 import { parseVideoModels } from './media/videoModels';
+import { hostedControls } from './modelControls';
 import { supportsReasoningEffort } from './reasoningEffort';
 import { currentLocalContext, OllamaLocal } from './OllamaLocal';
 
@@ -46,9 +52,23 @@ interface WireModel {
   supportsTools?: unknown;
   supportsVision?: unknown;
   can_think?: unknown;
+  thinkingStyle?: unknown;
+  dispatchProfile?: unknown;
   pricing?: unknown;
   disabled?: unknown;
 }
+
+/**
+ * The public projection of the same list, read only for `reasoning_efforts`: the server computes
+ * those in llm-adapters, which this client cannot import, and `/api/models` does not carry them.
+ */
+const PUBLIC_MODELS_PATH = '/api/v1/models';
+const PUBLIC_MODELS_PAGE = 100;
+const PUBLIC_MODELS_MAX_PAGES = 5;
+const PUBLIC_MODELS_TIMEOUT_MS = 5_000;
+
+/** Effort levels by model id, as `/api/v1/models` lists them. */
+export type HostedEfforts = ReadonlyMap<string, readonly ReasoningEffort[]>;
 
 export interface ModelCatalogLogger {
   debug(message: string): void;
@@ -120,14 +140,15 @@ export class ModelCatalog {
         ? entry.models
         : null;
     // The device and the server are asked at the same time; neither waits on the other.
-    const [local, hosted] = await Promise.all([
+    const [local, hosted, efforts] = await Promise.all([
       this.listLocal(force !== false),
       api && !hostedHit
         ? api.get<{ models?: WireModel[] }>(MODELS_PATH).then(
-            response => ({ ok: true as const, models: selectUsableModels(response?.models) }),
+            response => ({ ok: true as const, wire: response?.models }),
             (err: unknown) => ({ ok: false as const, err })
           )
         : null,
+      api && !hostedHit ? this.readEfforts(api) : null,
     ]);
     if (hostedHit) return { models: this.mergeLocal(hostedHit, local) };
     if (!api || !hosted) return local.length ? { models: local } : { models: [], error: 'Sign in to see models.' };
@@ -139,7 +160,7 @@ export class ModelCatalog {
         ? { models: local }
         : { models: [], error: 'Could not load the model list from this server.' };
     }
-    const models = hosted.models;
+    const models = selectUsableModels(hosted.wire, efforts ?? undefined);
 
     if (models.length === 0) {
       this.cache = null;
@@ -154,6 +175,33 @@ export class ModelCatalog {
     };
     this.deps.logger.debug(`CHAT: ${models.length} model(s) available`);
     return { models: this.mergeLocal(models, local) };
+  }
+
+  /**
+   * Every listed model's effort levels, or null when the server publishes none (an older server, a
+   * failed read). Any failure leaves the list itself alone: the models then keep the levels Desktop
+   * always offered.
+   */
+  private async readEfforts(api: AuthenticatedApiClient): Promise<HostedEfforts | null> {
+    const efforts = new Map<string, readonly ReasoningEffort[]>();
+    let cursor: string | null = null;
+    try {
+      for (let page = 0; page < PUBLIC_MODELS_MAX_PAGES; page++) {
+        const response: unknown = await api.get<unknown>(PUBLIC_MODELS_PATH, {
+          params: { limit: PUBLIC_MODELS_PAGE, ...(cursor ? { cursor } : {}) },
+          timeout: PUBLIC_MODELS_TIMEOUT_MS,
+        });
+        const read = parseEffortsPage(response);
+        if (!read) return null;
+        for (const [id, levels] of read.efforts) efforts.set(id, levels);
+        cursor = read.nextCursor;
+        if (!cursor) break;
+      }
+    } catch (err) {
+      this.deps.logger.debug(`CHAT: effort levels unavailable: ${err instanceof Error ? err.message : 'unknown'}`);
+      return null;
+    }
+    return efforts;
   }
 
   /** Device discovery never depends on the configured server or account. */
@@ -283,35 +331,72 @@ export function selectImageModels(wire: unknown): string[] {
  * claims it read your files. Image, video and speech models are filtered for the same reason
  * the CLI filters them: they cannot answer a completion request at all.
  */
-export function selectUsableModels(wire: unknown): ChatModelOption[] {
+export function selectUsableModels(wire: unknown, efforts?: HostedEfforts): ChatModelOption[] {
   if (!Array.isArray(wire)) return [];
 
   return wire
     .filter((model): model is WireModel => !!model && typeof model === 'object')
     .filter(model => model.type === 'text' && model.supportsTools === true && typeof model.id === 'string')
-    .map(model => ({
-      id: model.id as string,
-      name: typeof model.name === 'string' && model.name ? model.name : (model.id as string),
-      ...(typeof model.backend === 'string' ? { backend: model.backend } : {}),
-      ...(typeof model.releaseDate === 'string' && model.releaseDate ? { releaseDate: model.releaseDate } : {}),
-      ...(typeof model.contextWindow === 'number' ? { contextWindow: model.contextWindow } : {}),
-      ...(typeof model.max_tokens === 'number' && model.max_tokens > 0 ? { maxOutputTokens: model.max_tokens } : {}),
-      // Carried through only when the server stated it. Absent is "not said", which the
-      // attachment gate treats differently from an explicit false - see ChatService.
-      ...(typeof model.supportsVision === 'boolean' ? { supportsVision: model.supportsVision } : {}),
-      // Decided here rather than read off the wire: the catalog does not report it, and the
-      // renderer has to disable the effort picker on a model that would ignore the field.
-      supportsReasoningEffort: supportsReasoningEffort(model.id as string),
-      // Direct Anthropic only: it is the one backend Desktop marks for caching (see supportsPromptCache).
-      ...(model.backend === 'anthropic' &&
-      supportsOneHourPromptCache({ id: model.id as string, backend: model.backend })
-        ? { supportsOneHourCache: true }
-        : {}),
-      supportsTools: true,
-      ...(model.backend === 'ollama' && model.can_think === true ? { thinkingToggle: true } : {}),
-      ...(model.disabled === true ? { disabled: true } : {}),
-      ...pricingOf(model.pricing),
-    }));
+    .map(model => {
+      const id = model.id as string;
+      const maxOutputTokens =
+        typeof model.max_tokens === 'number' && model.max_tokens > 0 ? model.max_tokens : undefined;
+      const controls = hostedControls(
+        {
+          id,
+          ...(typeof model.backend === 'string' ? { backend: model.backend } : {}),
+          canThink: model.can_think === true,
+          ...(typeof model.thinkingStyle === 'string' ? { thinkingStyle: model.thinkingStyle } : {}),
+          ...(maxOutputTokens ? { maxOutputTokens } : {}),
+          maxCompletionTokens: maxTokensParamOf(model.dispatchProfile) === 'max_completion_tokens',
+        },
+        efforts?.get(id),
+        supportsReasoningEffort(id)
+      );
+      return {
+        id,
+        name: typeof model.name === 'string' && model.name ? model.name : id,
+        ...(typeof model.backend === 'string' ? { backend: model.backend } : {}),
+        ...(typeof model.releaseDate === 'string' && model.releaseDate ? { releaseDate: model.releaseDate } : {}),
+        ...(typeof model.contextWindow === 'number' ? { contextWindow: model.contextWindow } : {}),
+        ...(maxOutputTokens ? { maxOutputTokens } : {}),
+        // Carried through only when the server stated it. Absent is "not said", which the
+        // attachment gate treats differently from an explicit false - see ChatService.
+        ...(typeof model.supportsVision === 'boolean' ? { supportsVision: model.supportsVision } : {}),
+        // Always stated: the renderer disables the effort picker on a model that would ignore the field.
+        supportsReasoningEffort: controls.effort !== undefined,
+        // Direct Anthropic only: it is the one backend Desktop marks for caching (see supportsPromptCache).
+        ...(model.backend === 'anthropic' && supportsOneHourPromptCache({ id, backend: model.backend })
+          ? { supportsOneHourCache: true }
+          : {}),
+        supportsTools: true,
+        ...(model.backend === 'ollama' && model.can_think === true ? { thinkingToggle: true } : {}),
+        ...(model.disabled === true ? { disabled: true } : {}),
+        ...pricingOf(model.pricing),
+        controls,
+      };
+    });
+}
+
+function maxTokensParamOf(profile: unknown): unknown {
+  return profile && typeof profile === 'object' ? (profile as { maxTokensParam?: unknown }).maxTokensParam : undefined;
+}
+
+const KNOWN_EFFORTS: ReadonlySet<string> = new Set(CompletionReasoningEffortSchema.options);
+
+/** One page of `/api/v1/models`, or null when the answer is not that shape. */
+export function parseEffortsPage(
+  wire: unknown
+): { efforts: [string, ReasoningEffort[]][]; nextCursor: string | null } | null {
+  if (!wire || typeof wire !== 'object') return null;
+  const { data, next_cursor: nextCursor } = wire as { data?: unknown; next_cursor?: unknown };
+  if (!Array.isArray(data)) return null;
+  const efforts = data.flatMap((row): [string, ReasoningEffort[]][] => {
+    const { id, reasoning_efforts: levels } = (row ?? {}) as { id?: unknown; reasoning_efforts?: unknown };
+    if (typeof id !== 'string' || !Array.isArray(levels)) return [];
+    return [[id, levels.filter((level): level is ReasoningEffort => KNOWN_EFFORTS.has(level))]];
+  });
+  return { efforts, nextCursor: typeof nextCursor === 'string' && nextCursor ? nextCursor : null };
 }
 
 /** Only well-formed tiers, so a malformed row prices nothing rather than a wrong figure. */
