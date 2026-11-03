@@ -283,6 +283,7 @@ import EnsureSpendAlertIndexes from './20260921238300_ensure-spend-alert-indexes
 // `20260921238300` row from the migrations collection.
 import GrantPackagesFromInvites from './20260921238400_grant-packages-from-invites';
 import EnsureGrantPackageIndexes from './20260921238500_ensure-grant-package-indexes';
+import AllowGpt4oMiniTtsWhereTts1IsFree from './20260921237400_allow-gpt-4o-mini-tts-where-tts-1-is-free';
 import EnsureReferralInviterIndexes from './20260921239500_ensure-referral-inviter-indexes';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
@@ -494,6 +495,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureSpendAlertIndexes,
   GrantPackagesFromInvites,
   EnsureGrantPackageIndexes,
+  AllowGpt4oMiniTtsWhereTts1IsFree,
   EnsureReferralInviterIndexes,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
