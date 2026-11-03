@@ -1,4 +1,6 @@
 import {
+  accountCampaignGroupSchema,
+  accountCampaignMemberSchema,
   shadowDetectionItemSchema,
   shadowDetectionVerdictEntrySchema,
   type ShadowDetectionList,
@@ -13,9 +15,18 @@ import { z } from 'zod';
 const ENDPOINT = '/api/admin/shadow-detections';
 export const SHADOW_DETECTIONS_QUERY_KEY = ['admin-shadow-detections'];
 
+const campaignGroupRowSchema = accountCampaignGroupSchema.extend({
+  window: z.object({ from: z.string(), to: z.string() }),
+  firstObservedAt: z.string(),
+  lastObservedAt: z.string(),
+  members: z.array(accountCampaignMemberSchema.extend({ signedUpAt: z.string() })),
+});
+export type CampaignGroupRow = z.infer<typeof campaignGroupRowSchema>;
+
 /** A detection as it arrives over JSON: the dates are ISO strings. */
 export const shadowDetectionRowSchema = shadowDetectionItemSchema.extend({
   detectedAt: z.string(),
+  group: campaignGroupRowSchema.nullable(),
   verdicts: z.array(shadowDetectionVerdictEntrySchema.extend({ reviewedAt: z.string() })),
 });
 export type ShadowDetectionRow = z.infer<typeof shadowDetectionRowSchema>;
