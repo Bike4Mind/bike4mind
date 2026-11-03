@@ -4792,24 +4792,40 @@ export class ChatService {
     const ended = outcome === 'completed' ? 'finished' : outcome === 'aborted' ? 'was stopped' : 'failed';
 
     for (const relay of pending) {
-      const content =
-        `[App notice: "${target.title}" (${sessionId}) ${ended} the turn your message started. ` +
-        'Use session_read on that id to see what it said.]';
-      const display = `${target.title} ${ended} the turn your message started`;
-      const sender = await this.deps.store.get(relay.fromSessionId);
-      if (!sender || sender.archived) continue;
-      if (hops >= MAX_MESSAGE_HOPS || !this.deps.queue || this.abandoning.has(sender.id)) {
-        await this.deliverChildReport(sender.id, { localOnly: false, content, display });
-        continue;
-      }
-      this.deps.queue.enqueueRelay(sender.id, content, {
-        fromSessionId: sessionId,
-        fromTitle: target.title,
+      await this.notifySender(
+        relay,
+        sessionId,
+        target.title,
         hops,
-        kind: 'done',
-      });
-      this.flushQueue(sender.id);
+        `[App notice: "${target.title}" (${sessionId}) ${ended} the turn your message started. ` +
+          'Use session_read on that id to see what it said.]',
+        `${target.title} ${ended} the turn your message started`
+      );
     }
+  }
+
+  /** Deliver one notify notice back to its sender; see notifySenders for the hop and busy rules. */
+  private async notifySender(
+    relay: ChatRelayOrigin,
+    targetId: string,
+    targetTitle: string,
+    hops: number,
+    content: string,
+    display: string
+  ): Promise<void> {
+    const sender = await this.deps.store.get(relay.fromSessionId);
+    if (!sender || sender.archived) return;
+    if (hops >= MAX_MESSAGE_HOPS || !this.deps.queue || this.abandoning.has(sender.id)) {
+      await this.deliverChildReport(sender.id, { localOnly: false, content, display });
+      return;
+    }
+    this.deps.queue.enqueueRelay(sender.id, content, {
+      fromSessionId: targetId,
+      fromTitle: targetTitle,
+      hops,
+      kind: 'done',
+    });
+    this.flushQueue(sender.id);
   }
 
   /**
@@ -4838,6 +4854,17 @@ export class ChatService {
         return;
       }
       this.emit({ type: 'message', sessionId, message });
+      if (queued.relay.notify && queued.relay.kind !== 'done') {
+        await this.notifySender(
+          queued.relay,
+          sessionId,
+          updated.title,
+          queued.relay.hops + 1,
+          `[App notice: "${updated.title}" (${sessionId}) did not run your message; it was not started as a turn there. ` +
+            'Use session_read on that id to see where it landed.]',
+          `${updated.title} did not run your message`
+        );
+      }
     }
   }
 

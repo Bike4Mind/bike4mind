@@ -581,6 +581,42 @@ describe('ChatService session_send', () => {
     expect(queue.list(archived.id)).toHaveLength(0);
   });
 
+  it('tells a sender that asked to be notified when its message never runs', async () => {
+    const sender = await codeSession('Sender');
+    const target = await codeSession('Target');
+
+    await service.send(target.id, 'a question the user asked');
+    await awaitStream(0);
+    await service.send(sender.id, 'go');
+    await awaitStream(1);
+    streams[1].write(
+      frame({
+        type: 'tool_use',
+        tools: [
+          {
+            id: 'n-stranded',
+            name: 'session_send',
+            arguments: JSON.stringify({ session_id: target.id, message: 'run later', notify_when_done: true }),
+          },
+        ],
+      })
+    );
+    streams[1].write(frame('[DONE]'));
+    await vi.waitUntil(() => queue.list(target.id).length === 1, { timeout: 5000, interval: 5 });
+
+    service.stop(target.id);
+
+    await vi.waitUntil(
+      async () =>
+        JSON.stringify(queue.list(sender.id)).includes('did not run your message') ||
+        JSON.stringify(post.mock.calls).includes('did not run your message') ||
+        ((await store.get(sender.id))?.messages ?? []).some(message =>
+          /did not run your message/.test(message.content)
+        ),
+      { timeout: 5000, interval: 10 }
+    );
+  });
+
   it('keeps a relayed message in the target transcript when its turn never runs', async () => {
     const sender = await codeSession('Sender');
     const target = await codeSession('Target');
