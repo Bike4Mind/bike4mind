@@ -64,6 +64,7 @@ describe('resolveScopes', () => {
       payerType: 'Organization',
       payerId: 'o1',
       adminPath: '/admin/users/u2',
+      paidBy: 'Acme',
     });
   });
 
@@ -84,6 +85,7 @@ describe('resolveScopes', () => {
       payerType: 'Organization',
       payerId: 'o1',
       adminPath: null,
+      paidBy: 'Acme',
     });
   });
 
@@ -133,6 +135,14 @@ describe('resolveScopes', () => {
     expect(vi.mocked(deps.findUsersByIds).mock.calls[0]?.[0].sort()).toEqual(['u1', 'u2']);
     expect(deps.findApiKeysByIds).toHaveBeenCalledTimes(1);
     expect(deps.findAgentsByIds).toHaveBeenCalledTimes(1);
+    expect(deps.findOrganizationsByIds).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(deps.findOrganizationsByIds).mock.calls[0]?.[0]).toEqual(['o1']);
+  });
+
+  it('falls back to the organization id when the paying organization is missing', async () => {
+    const deps = makeDeps({ findOrganizationsByIds: vi.fn(async () => []) });
+    const result = await resolveScopes([{ scopeType: 'apiKey', scopeId: 'k2' }], deps);
+    expect(result.get('apiKey:k2')?.paidBy).toBe('o1');
   });
 
   it('skips the user lookup when no scope needs one', async () => {

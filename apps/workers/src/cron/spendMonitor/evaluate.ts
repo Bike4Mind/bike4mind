@@ -171,7 +171,8 @@ async function persistDecision(
     deps.logger.log('spend-monitor-evaluation-lost-race', { alertId: decision.id, kind: decision.kind });
     return null;
   }
-  if (decision.kind === 'resolve') return { kind: 'resolve', alert: merged };
+  // A resolve for an incident the channel never saw announced would be a stray message.
+  if (decision.kind === 'resolve') return existing.lastNotifiedAt ? { kind: 'resolve', alert: merged } : null;
   if (decision.kind === 'update') return null;
   // An incident whose opening post never landed is still announced as an open.
   return { kind: existing.lastNotifiedAt ? 'escalate' : 'open', alert: merged };

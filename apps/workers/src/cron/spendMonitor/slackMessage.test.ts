@@ -60,7 +60,16 @@ describe('buildSpendAlertMessage', () => {
   it('omits the user button for an org scope without an admin path', () => {
     const out = json(build({ scope: { label: 'Acme', payerType: 'Organization', payerId: 'o1', adminPath: null } }));
     expect(out).not.toContain('/admin/users/');
-    expect(out).toContain('Spend Monitor');
+    expect(out).toContain('Credit analytics');
+    expect(out).not.toContain('Paid by');
+  });
+
+  it('names the paying organization when it differs from the scope label', () => {
+    const out = json(
+      build({ scope: { ...userScope, label: 'org-key (jane@example.com)', payerType: 'Organization', paidBy: 'Acme' } })
+    );
+    expect(out).toContain('Paid by');
+    expect(out).toContain('Acme');
   });
 
   it('renders no history and n/a when baseline and ratio are missing', () => {

@@ -191,6 +191,25 @@ describe('evaluateSpend', () => {
     expect(JSON.stringify(fakes.posts[0])).not.toContain('escalated');
   });
 
+  it('resolves an incident whose open was never announced without posting a stray resolve', async () => {
+    const fakes = createFakes();
+    const platform = windowBuckets('platform', 'all', 100);
+    fakes.setRollups([...platform, ...windowBuckets('User', 'u1', 2000)]);
+    fakes.post.mockRejectedValueOnce(new Error('slack down'));
+
+    await expect(run(fakes)).resolves.toMatchObject({ posted: 0 });
+    expect(fakes.alerts[0].lastNotifiedAt).toBeUndefined();
+
+    fakes.nextWindow();
+    fakes.setRollups(platform);
+    await run(fakes);
+    fakes.nextWindow();
+    await expect(run(fakes)).resolves.toMatchObject({ posted: 0 });
+    expect(fakes.alerts[0]).toMatchObject({ status: 'resolved' });
+    expect(fakes.alerts[0]).not.toHaveProperty('openKey');
+    expect(fakes.post).toHaveBeenCalledTimes(1);
+  });
+
   it('resolves an account that left the window after 2 runs, posts the resolve, and reopens fresh later', async () => {
     const fakes = createFakes();
     const platform = windowBuckets('platform', 'all', 100);

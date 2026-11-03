@@ -6,6 +6,8 @@ export type ResolvedScope = {
   payerType: 'User' | 'Organization' | 'unknown';
   payerId: string | null;
   adminPath: string | null;
+  /** Set when an organization pays for a scope whose label names someone else. */
+  paidBy?: string;
 };
 
 export type ScopeKey = { scopeType: SpendRollupScopeType; scopeId: string };
@@ -60,19 +62,33 @@ function resolveOwned(
 
 /** One batched lookup per entity type; owners of keys and agents share the single final user lookup. */
 export async function resolveScopes(keys: ScopeKey[], deps: ResolveScopeDeps): Promise<Map<string, ResolvedScope>> {
-  const [organizations, apiKeys, agents] = await Promise.all([
-    deps.findOrganizationsByIds(idsOfType(keys, 'Organization')),
+  const [apiKeys, agents] = await Promise.all([
     deps.findApiKeysByIds(idsOfType(keys, 'apiKey')),
     deps.findAgentsByIds(idsOfType(keys, 'Agent')),
   ]);
-  const organizationsById = indexById(organizations);
   const apiKeysById = indexById(apiKeys);
   const agentsById = indexById(agents);
+
+  const organizationIds = new Set(idsOfType(keys, 'Organization'));
+  for (const apiKey of apiKeys) {
+    if (apiKey.billingOwnerType === CreditHolderType.Organization && apiKey.organizationId) {
+      organizationIds.add(apiKey.organizationId);
+    }
+  }
+  for (const agent of agents) if (!agent.userId && agent.organizationId) organizationIds.add(agent.organizationId);
 
   const userIds = new Set(idsOfType(keys, 'User'));
   for (const apiKey of apiKeys) userIds.add(apiKey.userId);
   for (const agent of agents) if (agent.userId) userIds.add(agent.userId);
-  const users = indexById(userIds.size > 0 ? await deps.findUsersByIds([...userIds]) : []);
+
+  const [organizations, userRows] = await Promise.all([
+    deps.findOrganizationsByIds([...organizationIds]),
+    userIds.size > 0 ? deps.findUsersByIds([...userIds]) : Promise.resolve([]),
+  ]);
+  const organizationsById = indexById(organizations);
+  const users = indexById(userRows);
+  const organizationName = (organizationId: string): string =>
+    organizationsById.get(organizationId)?.name ?? organizationId;
 
   const resolved = new Map<string, ResolvedScope>();
   for (const { scopeType, scopeId } of keys) {
@@ -97,7 +113,12 @@ export async function resolveScopes(keys: ScopeKey[], deps: ResolveScopeDeps): P
         if (!apiKey) return unknownScope(scopeType, scopeId);
         const owner = resolveOwned(ownerLabel => `${apiKey.name} (${ownerLabel})`, apiKey.userId, users);
         if (apiKey.billingOwnerType === CreditHolderType.Organization && apiKey.organizationId) {
-          return { ...owner, payerType: 'Organization', payerId: apiKey.organizationId };
+          return {
+            ...owner,
+            payerType: 'Organization',
+            payerId: apiKey.organizationId,
+            paidBy: organizationName(apiKey.organizationId),
+          };
         }
         return owner;
       }
@@ -113,6 +134,7 @@ export async function resolveScopes(keys: ScopeKey[], deps: ResolveScopeDeps): P
             payerType: 'Organization',
             payerId: agent.organizationId,
             adminPath: null,
+            paidBy: organizationName(agent.organizationId),
           };
         }
         return unknownScope(scopeType, scopeId);

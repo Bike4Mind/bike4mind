@@ -71,7 +71,7 @@ export async function handler(event: unknown): Promise<{ status: 'ok' | 'disable
   }
 
   const slackEnabled = getSettingsValue('spendMonitorSlackEnabled', settings) ?? false;
-  const webhookUrl = resolveAlarmWebhookUrl(Resource);
+  const webhookUrl = resolveAlarmWebhookUrl(Resource, 'cost');
   const { breaches, posted } = await evaluateSpend(
     now,
     {

@@ -89,7 +89,7 @@ export const ADMIN_LINKS: Record<AlarmLinkKey, { label: string; path: string }> 
   'integration-health': { label: 'Integration health', path: '/admin?tab=integration-health' },
   'system-secrets': { label: 'System secrets', path: '/admin?tab=system-secrets' },
   'rate-limits': { label: 'Rate limits', path: '/admin?tab=rate-limits' },
-  'spend-monitor': { label: 'Spend Monitor', path: '/admin?tab=credit-analytics' },
+  'spend-monitor': { label: 'Credit analytics', path: '/admin?tab=credit-analytics' },
 };
 
 const SIGNUP_ACTION =

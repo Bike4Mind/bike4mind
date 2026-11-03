@@ -96,6 +96,7 @@ export function buildSpendAlertMessage(input: SpendAlertMessageInput): SlackAlar
     `*Normal (15m)*\n${baseline === null ? 'no history' : formatAmount(alert.rule, baseline, creditUsd)}`,
     `*Ratio*\n${ratio === null ? 'n/a' : `x${ratio.toFixed(1)}`}`,
   ];
+  if (scope.paidBy) fields.push(`*Paid by*\n${safe(scope.paidBy)}`);
 
   const sections: string[] = [];
   if (breakdown?.topModels.length) {
