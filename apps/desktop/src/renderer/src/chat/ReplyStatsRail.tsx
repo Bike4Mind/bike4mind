@@ -141,15 +141,16 @@ function setRailDrawn(id: string, drawn: boolean): void {
   drawnListeners.forEach(listener => listener());
 }
 
+function subscribeRailDrawn(listener: () => void): () => void {
+  drawnListeners.add(listener);
+  return () => {
+    drawnListeners.delete(listener);
+  };
+}
+
 /** Whether the rail for this reply is on screen: it draws nothing when it has nothing to show, or has thrown. */
 export function useRailDrawn(id: string): boolean {
-  return useSyncExternalStore(
-    listener => {
-      drawnListeners.add(listener);
-      return () => drawnListeners.delete(listener);
-    },
-    () => drawnRails.has(id)
-  );
+  return useSyncExternalStore(subscribeRailDrawn, () => drawnRails.has(id));
 }
 
 /** A rail is a margin note: one that throws drops itself rather than the thread. */
