@@ -9,7 +9,12 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
-import { replayAbuseAssessments, summarizeDetection } from '@server/security/abuseAssessment/abuseAssessment';
+import {
+  loadAbuseAssessmentSettings,
+  replayAbuseAssessments,
+  summarizeDetection,
+} from '@server/security/abuseAssessment/abuseAssessment';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { respond } from '@server/utils/respond';
 
 const ONE_MINUTE_MS = 60_000;
@@ -39,6 +44,16 @@ const handler = adminApi({
     asyncHandler(async (req, res) => {
       const parsed = abuseAssessmentReplayRequestSchema.safeParse(req.body);
       if (!parsed.success) throw new BadRequestError('Expected 1-50 detection ids and 1-3 decision models');
+      const settings = await loadAbuseAssessmentSettings();
+      if (!settings.enabled) {
+        respond(res, abuseAssessmentReplayResponseSchema, {
+          status: 'stopped',
+          reason: 'disabled',
+          rows: [],
+          missing: [],
+        });
+        return;
+      }
       const ids = [...new Set(parsed.data.detectionIds)];
       const found = await Promise.all(ids.map(id => shadowDetectionRepository.findById(id)));
       const detections = found.filter((detection): detection is ShadowDetectionItem => detection !== null);
@@ -58,7 +73,24 @@ const handler = adminApi({
         models: parsed.data.models,
         logger: req.logger,
         deadline,
+        settings,
       });
+      if (result.rows.length > 0) {
+        try {
+          await recordAdminActionFromRequest(req, {
+            action: 'security.detection.replayed',
+            target: { kind: 'system', id: 'abuse-assessment-replay', displayName: 'Abuse assessment replay' },
+            summary: `replayed advisory assessments (${result.rows.length} rows)`,
+            details: {
+              detectionIds: detections.map(detection => detection.id),
+              models: parsed.data.models,
+              rows: result.rows.length,
+            },
+          });
+        } catch (error) {
+          req.logger.error('Audit entry failed for abuse assessment replay', error);
+        }
+      }
       respond(res, abuseAssessmentReplayResponseSchema, { ...result, missing });
     })
   );

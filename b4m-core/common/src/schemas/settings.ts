@@ -1429,9 +1429,9 @@ export type UsagePatternSignalsConfig = z.infer<typeof UsagePatternSignalsConfig
 export const AbuseAssessmentConfigSchema = z.object({
   /** Decisions model to ask; must be served here and have a platform key. Null means no calls. */
   model: z.enum(DECISION_MODEL_IDS).nullable().prefault(null),
-  /** Platform spend per rolling 24h, in USD, metered at each call's worst-case cost. */
+  /** Platform spend per 24h window (opened by the first call), in USD, at each call's worst-case cost. */
   dailyBudgetUsd: z.number().min(0).max(1000).prefault(0),
-  /** Provider calls per rolling 24h, across admin, sweep and replay runs. */
+  /** Provider calls per 24h window (opened by the first call), across admin, sweep and replay runs. */
   maxCallsPerDay: z.number().int().min(0).max(10_000).prefault(100),
   /** Provider calls in flight at once, across all instances. */
   maxConcurrency: z.number().int().min(1).max(10).prefault(2),
@@ -4442,7 +4442,7 @@ export const settingsMap = {
     name: 'Advisory Abuse Assessment: Model and Limits',
     defaultValue: AbuseAssessmentConfigSchema.parse({}),
     description:
-      'The Decisions model to ask (it must have a platform key), the daily USD budget and call cap, concurrent calls, and the hourly sweep (on/off, rollout percent of unreviewed detections, detections per run, lookback hours). The defaults make no calls.',
+      'The Decisions model to ask (it must have a platform key), the daily USD budget and call cap, concurrent calls, and the hourly sweep (on/off, rollout percent of unreviewed detections, detections per run, lookback hours). The defaults make no calls. Prefer a pinned model id (jev-1.13.0 over jev-latest): judgments are cached per model id, so an alias that moves keeps serving older judgments until the evidence changes.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.ABUSE_ASSESSMENT.id,
     order: 2,

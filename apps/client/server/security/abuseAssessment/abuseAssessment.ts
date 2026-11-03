@@ -8,7 +8,7 @@
  * - The platform accounting policy uses platform keys only and meters a platform budget and call
  *   cap; the assessed accounts' credits and personal keys are never touched.
  * - Results are cached per (detection, evidence hash, policy version, model); unknown results are
- *   retried a bounded number of times.
+ *   retried a bounded number of times, then at most once a day.
  * - A provider failure is stored as `unknown` with a diagnostic code, never as a judgment.
  * - Advisory only: nothing here writes to a user, an API key, credits, riskScore or reviewState.
  */
@@ -21,11 +21,13 @@ import {
   ABUSE_ASSESSMENT_POLICY_VERSION,
   RISK_EVIDENCE_VERSION,
   DecisionResponseMismatchError,
+  abuseAssessmentGroupEvidenceSchema,
   getDecisionModelCapabilities,
   type AbuseAssessmentConfig,
   type AbuseAssessmentFailureCode,
   type AbuseAssessmentFeatureSummary,
   type AbuseAssessmentGroupEvidence,
+  type AbuseAssessmentItem,
   type AbuseAssessmentReplayResponse,
   type AbuseAssessmentReplayRow,
   type AbuseAssessmentJudgment,
@@ -130,13 +132,14 @@ export const loadAbuseAssessmentSettings = async (): Promise<AbuseAssessmentSett
 const toMicroUsd = (usd: number) => Math.ceil(usd * 1_000_000);
 
 /**
- * The internal policy: platform keys only, and a rolling-24h call cap and USD budget shared by every
- * assessment path. The budget is metered at each call's worst-case cost and not refunded, so it can
- * only under-spend.
+ * The internal policy: platform keys only, and a call cap and USD budget per 24h window shared by
+ * every assessment path. The budget is metered at each call's worst-case cost and not refunded, so it
+ * can only under-spend. A zero budget refuses every call, free models included.
  */
 export const platformDecisionAccounting = (config: AbuseAssessmentConfig, logger: Logger): DecisionAccounting => ({
   resolveProviderKey: provider => resolvePlatformDecisionProviderKey(provider, logger),
   reserve: async ({ maxCostUsd }) => {
+    if (config.dailyBudgetUsd <= 0) throw new AssessmentSkipped('budget_exhausted');
     const calls = await cacheRepository.tryIncrementWithinLimitFixedWindow(CALLS_KEY, config.maxCallsPerDay, DAY_MS);
     if (!calls.success) throw new AssessmentSkipped('call_cap_reached');
     const spend = await cacheRepository.tryAddWithinLimitFixedWindow(
@@ -262,6 +265,19 @@ async function withCallSlot<T>(cacheKey: string, maxConcurrency: number, work: (
   }
 }
 
+/**
+ * The stored judgment for a key, or null when a call should be made. An unknown result is retried
+ * up to the attempt cap, then once a day, so an outage does not retire the detection for good.
+ */
+async function readCache(cacheKey: string): Promise<AbuseAssessmentItem | null> {
+  const cached = await abuseAssessmentRepository.findByCacheKey(cacheKey);
+  if (!cached) return null;
+  if (cached.result !== 'unknown') return cached;
+  const recent = Date.now() - cached.assessedAt.getTime() < DAY_MS;
+  if (cached.attempts >= ABUSE_ASSESSMENT_MAX_ATTEMPTS && recent) throw new AssessmentSkipped('attempts_exhausted');
+  return null;
+}
+
 export type AbuseAssessmentDeps = {
   groupEvidence?: AbuseAssessmentGroupEvidenceSource;
 };
@@ -277,13 +293,14 @@ export async function summarizeDetection(
   let group: AbuseAssessmentGroupEvidence | null = null;
   if (deps.groupEvidence) {
     try {
-      group = await deps.groupEvidence({
+      const produced = await deps.groupEvidence({
         detection,
         refFor: userId => {
           const ref = accountRef(detection.userIds.indexOf(userId));
           return refs.includes(ref) ? ref : null;
         },
       });
+      group = produced === null ? null : abuseAssessmentGroupEvidenceSchema.parse(produced);
     } catch (error) {
       logger.warn('Abuse assessment group evidence failed; assessing without it', {
         detectionId: detection.id,
@@ -322,40 +339,46 @@ export async function assessShadowDetection({
     const summary = await summarizeDetection(detection, logger, deps);
     const hash = evidenceHash(summary);
     const cacheKey = assessmentCacheKey(detection.id, hash, model);
-    const cached = await abuseAssessmentRepository.findByCacheKey(cacheKey);
-    if (cached && cached.result !== 'unknown') return { status: 'assessed', cached: true, item: cached };
-    if (cached && cached.attempts >= ABUSE_ASSESSMENT_MAX_ATTEMPTS) throw new AssessmentSkipped('attempts_exhausted');
+    const cached = await readCache(cacheKey);
+    if (cached) return { status: 'assessed', cached: true, item: cached };
 
-    const output = await withCallSlot(cacheKey, resolved.config.maxConcurrency, () =>
-      askModel({ model, summary, config: resolved.config, logger })
-    );
-    const item = await abuseAssessmentRepository.save({
+    return await withCallSlot(
       cacheKey,
-      detectionId: detection.id,
-      result: output.result,
-      probabilities: output.result === 'unknown' ? [] : output.probabilities,
-      confidence: output.result === 'unknown' ? null : output.confidence,
-      model,
-      modelVersion: output.modelVersion,
-      policyVersion: ABUSE_ASSESSMENT_POLICY_VERSION,
-      evidenceVersion: RISK_EVIDENCE_VERSION,
-      evidenceHash: hash,
-      featureSummary: summary,
-      failure: output.result === 'unknown' ? output.failure : null,
-      costUsd: output.costUsd,
-      trigger,
-      requestedBy,
-      assessedAt: new Date(),
-    });
-    logger.info('Abuse assessment recorded', {
-      detectionId: detection.id,
-      model,
-      result: item.result,
-      failure: item.failure,
-      attempts: item.attempts,
-      trigger,
-    });
-    return { status: 'assessed', cached: false, item };
+      resolved.config.maxConcurrency,
+      async (): Promise<AbuseAssessmentRunResponse> => {
+        // Another caller may have finished between the read above and taking the claim.
+        const settled = await readCache(cacheKey);
+        if (settled) return { status: 'assessed', cached: true, item: settled };
+        const output = await askModel({ model, summary, config: resolved.config, logger });
+        const item = await abuseAssessmentRepository.save({
+          cacheKey,
+          detectionId: detection.id,
+          result: output.result,
+          probabilities: output.result === 'unknown' ? [] : output.probabilities,
+          confidence: output.result === 'unknown' ? null : output.confidence,
+          model,
+          modelVersion: output.modelVersion,
+          policyVersion: ABUSE_ASSESSMENT_POLICY_VERSION,
+          evidenceVersion: RISK_EVIDENCE_VERSION,
+          evidenceHash: hash,
+          featureSummary: summary,
+          failure: output.result === 'unknown' ? output.failure : null,
+          costUsd: output.costUsd,
+          trigger,
+          requestedBy,
+          assessedAt: new Date(),
+        });
+        logger.info('Abuse assessment recorded', {
+          detectionId: detection.id,
+          model,
+          result: item.result,
+          failure: item.failure,
+          attempts: item.attempts,
+          trigger,
+        });
+        return { status: 'assessed', cached: false, item };
+      }
+    );
   } catch (error) {
     if (error instanceof AssessmentSkipped) return { status: 'skipped', reason: error.reason };
     throw error;
@@ -369,6 +392,7 @@ export type AbuseAssessmentSweepResult =
       considered: number;
       assessed: number;
       cached: number;
+      errors: number;
       skipped: Record<string, number>;
     };
 
@@ -381,7 +405,12 @@ const RUN_ENDING_SKIPS: ReadonlySet<AbuseAssessmentSkipReason> = new Set([
   'call_cap_reached',
 ]);
 
-/** The hourly sweep: assesses unreviewed detections inside the rollout, within the run's cap. */
+/**
+ * The hourly sweep: assesses unreviewed detections inside the rollout, newest first. Only fresh
+ * assessments count toward the run's cap, so detections already judged (cache hits) never crowd out
+ * older ones. Settings are re-read after each fresh assessment, so switching the feature off stops a
+ * run in progress.
+ */
 export async function sweepAbuseAssessments({
   logger,
   now = new Date(),
@@ -393,35 +422,48 @@ export async function sweepAbuseAssessments({
   shouldStop?: () => boolean;
   deps?: AbuseAssessmentDeps;
 }): Promise<AbuseAssessmentSweepResult> {
-  const settings = await loadAbuseAssessmentSettings();
+  let settings = await loadAbuseAssessmentSettings();
+  const sweepOn = ({ enabled, config }: AbuseAssessmentSettings) =>
+    enabled && config.sweepEnabled && config.sweepRolloutPercent > 0 && config.model !== null;
+  if (!sweepOn(settings)) return { status: 'disabled' };
+
   const { config } = settings;
-  if (!settings.enabled || !config.sweepEnabled || config.sweepRolloutPercent === 0 || !config.model) {
-    return { status: 'disabled' };
-  }
-
   const since = new Date(now.getTime() - config.sweepLookbackHours * 60 * 60 * 1000);
-  const candidates = (await shadowDetectionRepository.listUnreviewedSince(since, config.maxAssessmentsPerSweep * 10))
-    .filter(detection => rolloutBucket(detection.id) < config.sweepRolloutPercent)
-    .slice(0, config.maxAssessmentsPerSweep);
+  const candidates = (
+    await shadowDetectionRepository.listUnreviewedSince(since, config.maxAssessmentsPerSweep * 10)
+  ).filter(detection => rolloutBucket(detection.id) < config.sweepRolloutPercent);
 
-  const tally = { considered: candidates.length, assessed: 0, cached: 0, skipped: {} as Record<string, number> };
+  const tally = { considered: 0, assessed: 0, cached: 0, errors: 0, skipped: {} as Record<string, number> };
   for (const detection of candidates) {
+    if (tally.assessed >= config.maxAssessmentsPerSweep) break;
     if (shouldStop()) return { status: 'stopped', ...tally };
-    const outcome = await assessShadowDetection({
-      detectionId: detection.id,
-      trigger: 'sweep',
-      requestedBy: null,
-      logger,
-      settings,
-      deps,
-    });
-    if (outcome.status === 'assessed') {
-      if (outcome.cached) tally.cached += 1;
-      else tally.assessed += 1;
-      continue;
+    tally.considered += 1;
+    try {
+      const outcome = await assessShadowDetection({
+        detectionId: detection.id,
+        trigger: 'sweep',
+        requestedBy: null,
+        logger,
+        settings,
+        deps,
+      });
+      if (outcome.status === 'skipped') {
+        tally.skipped[outcome.reason] = (tally.skipped[outcome.reason] ?? 0) + 1;
+        if (RUN_ENDING_SKIPS.has(outcome.reason)) return { status: 'stopped', ...tally };
+        continue;
+      }
+      if (outcome.cached) {
+        tally.cached += 1;
+        continue;
+      }
+      tally.assessed += 1;
+      settings = await loadAbuseAssessmentSettings();
+      if (!sweepOn(settings)) return { status: 'stopped', ...tally };
+    } catch (error) {
+      // One bad detection must not block every later run while it stays in the lookback.
+      tally.errors += 1;
+      logger.error(`Abuse assessment sweep failed on detection ${detection.id}`, error);
     }
-    tally.skipped[outcome.reason] = (tally.skipped[outcome.reason] ?? 0) + 1;
-    if (RUN_ENDING_SKIPS.has(outcome.reason)) return { status: 'stopped', ...tally };
   }
   return { status: 'success', ...tally };
 }
@@ -436,14 +478,16 @@ export async function replayAbuseAssessments({
   models,
   logger,
   deadline = Number.POSITIVE_INFINITY,
+  settings: given,
 }: {
+  settings?: AbuseAssessmentSettings;
   /** Epoch ms after which no new call starts; the rows so far come back with `time_budget`. */
   deadline?: number;
   examples: readonly { id: string; label: ShadowDetectionVerdict | null; summary: AbuseAssessmentFeatureSummary }[];
   models: readonly DecisionModelId[];
   logger: Logger;
 }): Promise<Omit<AbuseAssessmentReplayResponse, 'missing'>> {
-  const settings = await loadAbuseAssessmentSettings();
+  const settings = given ?? (await loadAbuseAssessmentSettings());
   if (!settings.enabled) return { status: 'stopped', reason: 'disabled', rows: [] };
   const rows: AbuseAssessmentReplayRow[] = [];
   for (const model of models) {
@@ -456,7 +500,9 @@ export async function replayAbuseAssessments({
     for (const example of examples) {
       if (Date.now() >= deadline) return { status: 'stopped', reason: 'time_budget', rows };
       try {
-        const output = await askModel({ model, summary: example.summary, config: settings.config, logger });
+        const output = await withCallSlot(`replay:${model}:${example.id}`, settings.config.maxConcurrency, () =>
+          askModel({ model, summary: example.summary, config: settings.config, logger })
+        );
         rows.push({
           exampleId: example.id,
           label: example.label,

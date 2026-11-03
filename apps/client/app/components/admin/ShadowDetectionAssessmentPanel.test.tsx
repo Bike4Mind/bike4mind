@@ -10,8 +10,10 @@ import { ShadowDetectionAssessmentPanel } from './ShadowDetectionAssessmentPanel
 const hooks = vi.hoisted(() => ({
   useAbuseAssessments: vi.fn(),
   useRequestAbuseAssessment: vi.fn(),
+  currentUser: { adminPermissions: ['support:read', 'users:moderate'] } as { adminPermissions: string[] },
 }));
 vi.mock('@client/app/hooks/data/shadowDetections', () => hooks);
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: hooks.currentUser }) }));
 
 const DETECTION_ID = 'a'.repeat(24);
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -53,6 +55,7 @@ const mutateAsync = vi.fn();
 describe('ShadowDetectionAssessmentPanel', () => {
   beforeEach(() => {
     mutateAsync.mockReset();
+    hooks.currentUser = { adminPermissions: ['support:read', 'users:moderate'] };
     hooks.useAbuseAssessments.mockReturnValue({ data: [makeItem()], isPending: false, error: null });
     hooks.useRequestAbuseAssessment.mockReturnValue({ mutateAsync, isPending: false, error: null });
   });
@@ -83,6 +86,13 @@ describe('ShadowDetectionAssessmentPanel', () => {
     fireEvent.click(screen.getByTestId('shadow-detection-assess-btn'));
     await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith(DETECTION_ID));
     expect((await screen.findByTestId('shadow-detection-assessment-outcome')).textContent).toContain('reused');
+  });
+
+  it('hides Assess now from a support-only admin', () => {
+    hooks.currentUser = { adminPermissions: ['support:read'] };
+    renderPanel();
+    expect(screen.getByTestId('shadow-detection-assessment-result')).toBeTruthy();
+    expect(screen.queryByTestId('shadow-detection-assess-btn')).toBeNull();
   });
 
   it('shows the reason when the assessment is skipped', async () => {

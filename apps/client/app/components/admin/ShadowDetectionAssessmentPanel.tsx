@@ -1,6 +1,12 @@
 import React, { useState } from 'react';
 import { Alert, Box, Button, Stack, Typography } from '@mui/joy';
-import type { AbuseAssessmentFailureCode, AbuseAssessmentResult, AbuseAssessmentSkipReason } from '@bike4mind/common';
+import {
+  hasAdminPermission,
+  type AbuseAssessmentFailureCode,
+  type AbuseAssessmentResult,
+  type AbuseAssessmentSkipReason,
+} from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
 import {
   useAbuseAssessments,
   useRequestAbuseAssessment,
@@ -118,11 +124,19 @@ type Props = { detectionId: string; enabled: boolean };
 export const ShadowDetectionAssessmentPanel: React.FC<Props> = ({ detectionId, enabled }) => {
   const assessments = useAbuseAssessments(detectionId, { enabled });
   const request = useRequestAbuseAssessment();
+  const { currentUser } = useUser();
+  // Asking spends platform budget, so it needs the moderation permission the POST route enforces.
+  const canAssess = hasAdminPermission(currentUser, 'users:moderate');
   const [outcome, setOutcome] = useState<string | null>(null);
 
   const assess = async () => {
     setOutcome(null);
-    const result = await request.mutateAsync(detectionId);
+    let result;
+    try {
+      result = await request.mutateAsync(detectionId);
+    } catch {
+      return; // request.error renders the failure.
+    }
     if (result.status === 'skipped') setOutcome(SKIP_MESSAGES[result.reason]);
     else if (result.cached) setOutcome('The evidence is unchanged, so the existing assessment was reused.');
   };
@@ -164,19 +178,21 @@ export const ShadowDetectionAssessmentPanel: React.FC<Props> = ({ detectionId, e
           {getErrorMessage(request.error)}
         </Alert>
       )}
-      <Box>
-        <Button
-          size="sm"
-          variant="outlined"
-          color="neutral"
-          loading={request.isPending}
-          disabled={request.isPending}
-          onClick={() => void assess()}
-          data-testid="shadow-detection-assess-btn"
-        >
-          Assess now
-        </Button>
-      </Box>
+      {canAssess && (
+        <Box>
+          <Button
+            size="sm"
+            variant="outlined"
+            color="neutral"
+            loading={request.isPending}
+            disabled={request.isPending}
+            onClick={() => void assess()}
+            data-testid="shadow-detection-assess-btn"
+          >
+            Assess now
+          </Button>
+        </Box>
+      )}
     </Stack>
   );
 };

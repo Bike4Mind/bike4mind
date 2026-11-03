@@ -308,6 +308,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'moderation.incident.viewed': { category: 'support', severity: 'notice', write: 'strict' },
   // bestEffort: the AbuseAssessment record is the source of truth; an advisory assessment never acts.
   'security.detection.assessed': { category: 'access', severity: 'info', write: 'bestEffort' },
+  'security.detection.replayed': { category: 'access', severity: 'info', write: 'bestEffort' },
   'moderation.incident.verdict_recorded': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.published_artifact.taken_down': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.published_artifact.takedown_reverted': { category: 'support', severity: 'notice', write: 'strict' },

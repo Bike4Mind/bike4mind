@@ -15,6 +15,7 @@ const h = vi.hoisted(() => ({
   findById: vi.fn(),
   assess: vi.fn(),
   replay: vi.fn(),
+  loadSettings: vi.fn(),
   summarize: vi.fn(),
   record: vi.fn(),
 }));
@@ -45,6 +46,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/security/abuseAssessment/abuseAssessment', () => ({
   assessShadowDetection: h.assess,
   replayAbuseAssessments: h.replay,
+  loadAbuseAssessmentSettings: h.loadSettings,
   summarizeDetection: h.summarize,
 }));
 vi.mock('@server/utils/adminAudit', async importOriginal => ({
@@ -125,6 +127,7 @@ beforeEach(async () => {
   h.findById.mockReset().mockResolvedValue(null);
   h.assess.mockReset();
   h.replay.mockReset().mockResolvedValue({ status: 'completed', reason: null, rows: [] });
+  h.loadSettings.mockReset().mockResolvedValue({ enabled: true, config: { model: null } });
   h.summarize.mockReset().mockResolvedValue({ summarized: true });
   h.record.mockReset().mockResolvedValue(null);
   if (!h.handlers.assessments) await loadRoutes();
@@ -283,6 +286,7 @@ describe('POST /api/admin/shadow-detections/assessment-replay', () => {
       models: ['test-decisions'],
       logger: (req as unknown as { logger: unknown }).logger,
       deadline: expect.any(Number),
+      settings: { enabled: true, config: { model: null } },
     });
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ status: 'completed', reason: null, rows: [], missing: [OTHER_DETECTION_ID] });
@@ -297,5 +301,56 @@ describe('POST /api/admin/shadow-detections/assessment-replay', () => {
     expect(h.replay).toHaveBeenCalledWith(
       expect.objectContaining({ examples: [expect.objectContaining({ id: DETECTION_ID, label: null })] })
     );
+  });
+
+  it('answers stopped/disabled without reading any detection when the feature is off', async () => {
+    h.loadSettings.mockResolvedValue({ enabled: false, config: { model: null } });
+    const { req, res } = request('POST', { body: { detectionIds: [DETECTION_ID], models: ['test-decisions'] } });
+
+    await h.handlers.replay.post(req, res);
+
+    expect(res._getJSONData()).toEqual({ status: 'stopped', reason: 'disabled', rows: [], missing: [] });
+    expect(h.findById).not.toHaveBeenCalled();
+    expect(h.replay).not.toHaveBeenCalled();
+    expect(h.record).not.toHaveBeenCalled();
+  });
+
+  it('audits a replay that returned rows', async () => {
+    h.findById.mockResolvedValue(detection());
+    h.replay.mockResolvedValue({
+      status: 'completed',
+      reason: null,
+      rows: [
+        {
+          exampleId: DETECTION_ID,
+          label: null,
+          model: 'test-decisions',
+          result: 'abuse',
+          probabilities: [],
+          confidence: 0.9,
+          failure: null,
+        },
+      ],
+    });
+    const { req, res } = request('POST', { body: { detectionIds: [DETECTION_ID], models: ['test-decisions'] } });
+
+    await h.handlers.replay.post(req, res);
+
+    expect(h.record).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'security.detection.replayed',
+        details: { detectionIds: [DETECTION_ID], models: ['test-decisions'], rows: 1 },
+      })
+    );
+  });
+
+  it('writes no audit entry when a replay returned no rows', async () => {
+    h.findById.mockResolvedValue(detection());
+    const { req, res } = request('POST', { body: { detectionIds: [DETECTION_ID], models: ['test-decisions'] } });
+
+    await h.handlers.replay.post(req, res);
+
+    expect(h.record).not.toHaveBeenCalled();
   });
 });

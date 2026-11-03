@@ -1,4 +1,9 @@
-import { AbuseAssessmentConfigSchema, type AbuseAssessmentItem, type ShadowDetectionItem } from '@bike4mind/common';
+import {
+  ABUSE_ASSESSMENT_MAX_ATTEMPTS,
+  AbuseAssessmentConfigSchema,
+  type AbuseAssessmentItem,
+  type ShadowDetectionItem,
+} from '@bike4mind/common';
 import { DecisionProviderError } from '@bike4mind/utils/decisionProviders';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -177,12 +182,46 @@ describe('assessShadowDetection', () => {
   });
 
   it('retries an unknown result until the attempt cap', async () => {
-    mocks.findByCacheKey.mockResolvedValue({ result: 'unknown', attempts: 1 } as AbuseAssessmentItem);
+    mocks.findByCacheKey.mockResolvedValue({
+      result: 'unknown',
+      attempts: 1,
+      assessedAt: new Date(),
+    } as AbuseAssessmentItem);
     expect(await run()).toMatchObject({ status: 'assessed', item: { result: 'abuse' } });
 
-    mocks.findByCacheKey.mockResolvedValue({ result: 'unknown', attempts: 3 } as AbuseAssessmentItem);
+    mocks.findByCacheKey.mockResolvedValue({
+      result: 'unknown',
+      attempts: ABUSE_ASSESSMENT_MAX_ATTEMPTS,
+      assessedAt: new Date(),
+    } as AbuseAssessmentItem);
     expect(await run()).toEqual({ status: 'skipped', reason: 'attempts_exhausted' });
     expect(mocks.providerDecide).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries an exhausted unknown once it is more than a day old', async () => {
+    mocks.findByCacheKey.mockResolvedValue({
+      result: 'unknown',
+      attempts: ABUSE_ASSESSMENT_MAX_ATTEMPTS,
+      assessedAt: new Date(Date.now() - 25 * 60 * 60 * 1000),
+    } as AbuseAssessmentItem);
+    expect(await run()).toMatchObject({ status: 'assessed', item: { result: 'abuse' } });
+    expect(mocks.providerDecide).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns the judgment another caller stored between the first read and the claim', async () => {
+    mocks.findByCacheKey
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ result: 'abuse', attempts: 1 } as AbuseAssessmentItem);
+    expect(await run()).toMatchObject({ status: 'assessed', cached: true, item: { result: 'abuse' } });
+    expect(mocks.providerDecide).not.toHaveBeenCalled();
+    expect(mocks.save).not.toHaveBeenCalled();
+  });
+
+  it('refuses a zero budget without touching the call counter or the provider', async () => {
+    mocks.settings.config = AbuseAssessmentConfigSchema.parse({ model: 'gpt-6-luna', dailyBudgetUsd: 0 });
+    expect(await run()).toEqual({ status: 'skipped', reason: 'budget_exhausted' });
+    expect(mocks.callCap).not.toHaveBeenCalled();
+    expect(mocks.providerDecide).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -221,6 +260,19 @@ describe('assessShadowDetection', () => {
     });
     expect(outcome).toMatchObject({ status: 'assessed', item: { featureSummary: { group: null } } });
   });
+
+  it('logs and skips group evidence of an invalid shape, still assessing', async () => {
+    const warn = vi.fn();
+    const outcome = await assessShadowDetection({
+      detectionId: DETECTION_ID,
+      trigger: 'admin',
+      requestedBy: null,
+      logger: { info: vi.fn(), warn, error: vi.fn(), debug: vi.fn() } as never,
+      deps: { groupEvidence: async () => ({ unexpectedKey: 1 }) as never },
+    });
+    expect(outcome).toMatchObject({ status: 'assessed', item: { featureSummary: { group: null } } });
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('sweepAbuseAssessments', () => {
@@ -242,6 +294,54 @@ describe('sweepAbuseAssessments', () => {
     const result = await sweepAbuseAssessments({ logger });
     expect(result).toMatchObject({ status: 'stopped', skipped: { budget_exhausted: 1 } });
     expect(mocks.providerDecide).not.toHaveBeenCalled();
+  });
+
+  describe('with the sweep on', () => {
+    const OTHER_ID = '65f000000000000000000002';
+    const sweepConfig = (maxAssessmentsPerSweep: number) =>
+      AbuseAssessmentConfigSchema.parse({
+        model: 'gpt-6-luna',
+        dailyBudgetUsd: 1,
+        sweepEnabled: true,
+        sweepRolloutPercent: 100,
+        maxAssessmentsPerSweep,
+      });
+
+    beforeEach(() => {
+      mocks.listUnreviewed.mockResolvedValue([detection, { ...detection, id: OTHER_ID }]);
+    });
+
+    it('counts only fresh assessments toward the cap, so a cache hit does not crowd out older ones', async () => {
+      mocks.settings.config = sweepConfig(1);
+      mocks.findByCacheKey.mockResolvedValueOnce({ result: 'abuse', attempts: 1 } as AbuseAssessmentItem);
+
+      const result = await sweepAbuseAssessments({ logger });
+
+      expect(result).toMatchObject({ status: 'success', considered: 2, cached: 1, assessed: 1, errors: 0 });
+      expect(mocks.providerDecide).toHaveBeenCalledTimes(1);
+    });
+
+    it('counts a failing detection as an error and carries on with the next', async () => {
+      mocks.settings.config = sweepConfig(5);
+      mocks.findDetection.mockRejectedValueOnce(new Error('db down'));
+
+      const result = await sweepAbuseAssessments({ logger });
+
+      expect(result).toMatchObject({ status: 'success', considered: 2, errors: 1, assessed: 1 });
+    });
+
+    it('stops when settings reloaded after a fresh assessment show the feature off', async () => {
+      mocks.settings.config = sweepConfig(5);
+      mocks.providerDecide.mockImplementation(async () => {
+        mocks.settings.enabled = false;
+        return answer({ abuse: 0.7, legitimate_automation: 0.1, insufficient_evidence: 0.2 });
+      });
+
+      const result = await sweepAbuseAssessments({ logger });
+
+      expect(result).toMatchObject({ status: 'stopped', considered: 1, assessed: 1 });
+      expect(mocks.providerDecide).toHaveBeenCalledTimes(1);
+    });
   });
 });
 
