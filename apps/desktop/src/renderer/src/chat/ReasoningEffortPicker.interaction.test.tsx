@@ -137,4 +137,29 @@ describe('the local thinking switch', () => {
     await act(async () => options[4]?.click());
     expect(onSelect).toHaveBeenLastCalledWith('xhigh');
   });
+
+  it('names the model default on the Default item when one is set', async () => {
+    const gpt: ChatModelOption = {
+      id: 'gpt-5',
+      name: 'GPT-5',
+      supportsReasoningEffort: true,
+      controls: { effort: { levels: ['low', 'high'], scope: 'request' } },
+    };
+    await act(async () =>
+      root.render(
+        <CssVarsProvider>
+          <ReasoningEffortPicker
+            models={[gpt]}
+            modelId="gpt-5"
+            effort="default"
+            defaultEffort="high"
+            onSelect={onSelect}
+          />
+        </CssVarsProvider>
+      )
+    );
+    await act(async () => button().click());
+    const first = document.querySelector<HTMLElement>('[data-testid="effort-picker-option"]');
+    expect(first?.querySelector('p')?.textContent).toContain('Default (High)');
+  });
 });

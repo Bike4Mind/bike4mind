@@ -2,7 +2,7 @@ import type { ChatModelOption } from '@shared/chat';
 import { requestGeneration, type ModelControls } from '@shared/generation';
 import { describe, expect, it } from 'vitest';
 import { auxiliaryGeneration, turnEffortSetting, turnGeneration, turnThinks } from './modelDefaults';
-import { ollamaControls } from './modelControls';
+import { ollamaControls, openAICompatibleControls } from './modelControls';
 
 const controls: ModelControls = ollamaControls({ inspected: true, contextWindow: 32_768, thinks: true });
 
@@ -71,6 +71,43 @@ describe('auxiliaryGeneration', () => {
     expect(auxiliaryGeneration(defaults, gemma)).toEqual({ temperature: 0.5, topP: 0.8, topK: 40 });
     expect(auxiliaryGeneration(undefined, qwen)).toEqual({});
     expect(auxiliaryGeneration(defaults, undefined)).toEqual({});
+  });
+
+  it('uses the thinking sampling when the model always thinks or its effort has no none', () => {
+    const sampling = { thinking: { temperature: 1, topP: 0.95 }, nonThinking: { temperature: 0.7, topP: 0.8 } };
+    const seeded = (option: Partial<ChatModelOption>) =>
+      auxiliaryGeneration(undefined, { ...qwen, catalogSampling: sampling, ...option });
+    expect(seeded({ thinkingAlwaysOn: true })).toEqual({ temperature: 1, topP: 0.95 });
+    const effort = (levels: ('none' | 'low' | 'high')[]) => ({
+      controls: { ...controls, effort: { levels, scope: 'request' as const } },
+    });
+    expect(seeded(effort(['low', 'high']))).toEqual({ temperature: 1, topP: 0.95 });
+    expect(seeded(effort(['none', 'low', 'high']))).toEqual({ temperature: 0.7, topP: 0.8 });
+  });
+});
+
+describe('catalog sampling on an OpenAI-compatible server', () => {
+  const sampling = qwen.catalogSampling;
+  const compatible = (product: Parameters<typeof openAICompatibleControls>[0]): ChatModelOption => ({
+    ...qwen,
+    id: 'local:srv-abc123:qwen3.8:27b',
+    catalogSampling: sampling,
+    controls: openAICompatibleControls(product, { effortLevels: false, thinks: true }),
+  });
+
+  const sent = (option: ChatModelOption) =>
+    requestGeneration(turnGeneration(undefined, undefined, option, true), option.controls);
+
+  it('seeds a curated model and sends only the fields the server takes', () => {
+    expect(sent(compatible(null))).toEqual({ temperature: 1, topP: 0.95, presencePenalty: 1.5 });
+    expect(sent(compatible('llama-server'))).toEqual({
+      temperature: 1,
+      topP: 0.95,
+      topK: 20,
+      minP: 0,
+      presencePenalty: 1.5,
+      repeatPenalty: 1,
+    });
   });
 });
 

@@ -1,6 +1,9 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
+import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
+import { ChatModels } from '@bike4mind/common';
 import type { ChatModelOption } from '@shared/chat';
 import type { ModelSettings } from '@shared/modelSettings';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -48,7 +51,12 @@ function option(extra: Partial<ChatModelOption> = {}): ChatModelOption {
   };
 }
 
-async function setup(listed: ChatModelOption, defaults?: () => Promise<ModelSettings>, show: object = {}) {
+async function setup(
+  listed: ChatModelOption,
+  defaults?: (modelId: string) => Promise<ModelSettings>,
+  show: object = {},
+  catalog: object = {}
+) {
   const bodies: OllamaBody[] = [];
   vi.stubGlobal(
     'fetch',
@@ -75,6 +83,7 @@ async function setup(listed: ChatModelOption, defaults?: () => Promise<ModelSett
       cached: () => [listed],
       listLocal: async () => [listed],
       list: async () => ({ models: [listed] }),
+      ...catalog,
     } as unknown as ModelCatalog,
     ...(defaults ? { modelSettings: { get: defaults } } : {}),
     local: new OllamaLocal(),
@@ -179,6 +188,89 @@ describe('per-model defaults and catalog sampling on a local turn', () => {
     await service.renameSession(id, 'Named');
     await send(id);
     expect(turn()?.options).toMatchObject(WIRE_THINKING);
+  });
+
+  it('looks defaults up by the listed id when the chat is saved on an alias of it', async () => {
+    const alias = 'local:openai-compatible:qwen3.8-27b';
+    const lookups: string[] = [];
+    const defaults = async (modelId: string) => {
+      lookups.push(modelId);
+      return modelId === MODEL ? { generation: { temperature: 0.6 } } : {};
+    };
+    const { service, send, turn, title } = await setup(option({ aliasIds: [alias] }), defaults);
+    const { id } = await service.createSession();
+    await service.setSessionModel(id, alias);
+    await send(id);
+    expect(turn()?.options).toMatchObject({ ...WIRE_THINKING, temperature: 0.6 });
+    expect((await title())?.options).toMatchObject({ temperature: 0.6 });
+    expect(lookups).not.toContain(alias);
+  });
+
+  it('seeds from the thinking sampling when only the last known toggle says the model thinks', async () => {
+    const listed = option({
+      thinkingToggle: undefined,
+      catalogSampling: { thinking: { temperature: 1 }, nonThinking: { temperature: 0.7 } },
+    });
+    const { service, send, turn } = await setup(
+      listed,
+      async () => ({}),
+      {},
+      {
+        listLocal: undefined,
+        list: async () => ({ models: [listed], error: 'The model list could not be loaded.' }),
+        lastKnownThinkingToggle: () => true,
+      }
+    );
+    const { id } = await service.createSession();
+    await service.renameSession(id, 'Named');
+    await send(id);
+    expect(turn()?.options).toMatchObject({ temperature: 1 });
+  });
+
+  it('sends a hosted model none of the device-side defaults', async () => {
+    const model = ChatModels.GEMINI_2_5_FLASH_LITE;
+    const hostedOption: ChatModelOption = {
+      id: model,
+      name: 'Flash Lite',
+      backend: 'gemini',
+      controls: { temperature: { min: 0, max: 2, step: 0.05, scope: 'request' } },
+    };
+    const bodies: { options: Record<string, unknown> }[] = [];
+    const post = vi.fn().mockImplementation((_url: string, body: { options: Record<string, unknown> }) => {
+      bodies.push(body);
+      const stream = new PassThrough();
+      stream.end(`data: ${JSON.stringify({ type: 'content', text: 'ok' })}\n\ndata: [DONE]\n\n`);
+      return Promise.resolve({ data: stream, status: 200 });
+    });
+    const directory = await mkdtemp(join(tmpdir(), 'b4m-model-defaults-'));
+    roots.push(directory);
+    const get = vi.fn(async () => ({ generation: { temperature: 0.9 } }));
+    const service = new ChatService({
+      store: new SessionStore(directory, model),
+      access: { list: async () => [] } as unknown as AccessStore,
+      models: {
+        cached: () => [hostedOption],
+        listLocal: async () => [],
+        list: async () => ({ models: [hostedOption] }),
+        lastKnownThinkingToggle: () => undefined,
+      } as unknown as ModelCatalog,
+      modelSettings: { get },
+      getEnvironmentUrl: () => 'http://localhost:3000',
+      logger: { debug: vi.fn(), warn: vi.fn() },
+      emit: () => {},
+      getApiClient: () =>
+        ({
+          get: vi.fn().mockResolvedValue({}),
+          getAxiosInstance: () => ({ post }),
+        }) as unknown as AuthenticatedApiClient,
+    } as ConstructorParameters<typeof ChatService>[0]);
+    services.push(service);
+    const { id } = await service.createSession();
+    await service.renameSession(id, 'Named');
+    await service.send(id, 'hello');
+    await vi.waitUntil(() => !service.isSessionBusy(id) && bodies.length > 0, { timeout: 3000, interval: 5 });
+    expect(get).not.toHaveBeenCalled();
+    expect(bodies[0]?.options).not.toHaveProperty('temperature');
   });
 
   it('sends nothing extra for a model with no defaults and no catalog entry', async () => {

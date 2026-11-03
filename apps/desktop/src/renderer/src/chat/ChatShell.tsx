@@ -15,6 +15,7 @@ import { findModelOption, isLocalBackend, isLocalModel, SESSION_TITLE_MAX_LENGTH
 import { composerBlock, isLocalMode, noLocalModels } from './noLocalModels';
 import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
+import type { ModelEffort } from '@shared/modelSettings';
 import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
 import { BlankChat, BlankChatGreeting } from './BlankChat';
@@ -403,6 +404,23 @@ export function ChatShell({
    * that handle them - the same reasoning the model picker applies to an unreadable list.
    */
   const modelOption = findModelOption(catalog.models, conversation.session?.model);
+  const [defaultEffort, setDefaultEffort] = useState<ModelEffort | null>(null);
+  const defaultsModelId = modelOption && isLocalModel(modelOption.id) ? modelOption.id : null;
+  // Re-read on returning from the Models screen, where the defaults are edited.
+  useEffect(() => {
+    setDefaultEffort(null);
+    if (!defaultsModelId || screen !== 'conversation') return;
+    let live = true;
+    void Promise.resolve()
+      .then(() => window.b4m.chat.getModelSettings(defaultsModelId))
+      .then(
+        settings => live && setDefaultEffort(settings?.effort ?? null),
+        () => undefined
+      );
+    return () => {
+      live = false;
+    };
+  }, [defaultsModelId, screen]);
   const sessionCacheTtl = conversation.session?.promptCacheTtl ?? DEFAULT_PROMPT_CACHE_TTL;
   // Main sends the hour only to a model that takes it; see ChatService cacheTtlField.
   const cacheTtlFor = (model: ChatModelOption | undefined): PromptCacheTtl =>
@@ -1356,6 +1374,7 @@ export function ChatShell({
                   models={catalog.models}
                   modelId={conversation.session?.model ?? null}
                   effort={conversation.session?.reasoningEffort ?? 'default'}
+                  defaultEffort={defaultEffort}
                   disabled={!activeId}
                   onSelect={effort => void conversation.setReasoningEffort(effort)}
                 />

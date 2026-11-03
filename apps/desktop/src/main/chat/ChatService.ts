@@ -2745,20 +2745,22 @@ export class ChatService {
         const reason = modelOption.unavailable.replace(/\.$/, '');
         throw new Error(`${reason}. Pick another model, or check the server under Settings, Model servers.`);
       }
-      const modelDefaults = await this.modelDefaults(session.model);
+      const modelDefaults = await this.modelDefaults(modelOption?.id ?? session.model);
       const thinkingToggle =
         modelOption?.thinkingToggle ??
         (catalog?.error ? this.deps.models?.lastKnownThinkingToggle(session.model) : undefined);
       const effortSetting = turnEffortSetting(session.reasoningEffort, modelDefaults, modelOption);
       const effort = reasoningEffortFor(effortSetting, session.model, modelOption);
-      const askForThinking = requestsThinking(
-        effortSetting,
-        { ...modelOption, ...(thinkingToggle ? { thinkingToggle } : {}) },
-        effort
-      );
+      const thinkingOption = { ...modelOption, ...(thinkingToggle ? { thinkingToggle } : {}) };
+      const askForThinking = requestsThinking(effortSetting, thinkingOption, effort);
       // Only what this model's controls list, so a setting made on another model is never sent here.
       const { maxOutputTokens: outputOverride, ...overrides } = requestGeneration(
-        turnGeneration(session.generation, modelDefaults, modelOption, turnThinks(effortSetting, modelOption, effort)),
+        turnGeneration(
+          session.generation,
+          modelDefaults,
+          modelOption,
+          turnThinks(effortSetting, thinkingOption, effort)
+        ),
         modelOption?.controls
       );
       const generationField = Object.keys(overrides).length > 0 ? { generation: overrides } : {};
@@ -5901,10 +5903,8 @@ export class ChatService {
     if (isLocalModel(request.model)) {
       const thinking = createThinkFilter();
       const listed = this.deps.models?.lastLocal?.() ?? this.deps.models?.cached() ?? undefined;
-      const sampling = auxiliaryGeneration(
-        await this.modelDefaults(request.model),
-        findModelOption(listed, request.model)
-      );
+      const option = findModelOption(listed, request.model);
+      const sampling = auxiliaryGeneration(await this.modelDefaults(option?.id ?? request.model), option);
       await (this.deps.local ?? new OllamaLocal()).stream(
         { ...request, thinking: false, ...(Object.keys(sampling).length > 0 ? { generation: sampling } : {}) },
         event =>
