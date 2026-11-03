@@ -231,6 +231,52 @@ describe('signup activity drip', () => {
     });
   });
 
+  it('pays a card unlock on a reopened grant the headroom to the raised cap', async () => {
+    const user = await createSignupStageUser();
+    for (let n = 0; n < 10; n++) await drip(user.id, n);
+    expect((await User.findById(user.id))?.signupGrant).toMatchObject({ stage: 'unlocked', dripCredits: 9000 });
+    config.signupGrantDripCap = '15000';
+    expect((await drip(user.id, 10)).creditsGranted).toBe(1000);
+    expect((await User.findById(user.id))?.signupGrant).toMatchObject({ stage: 'signup', creditsReleased: 11000 });
+
+    const card = { ...adapters, validators: { card_verified: async () => true } };
+    expect((await userService.unlockSignupGrant(user.id, 'card_verified', card)).creditsGranted).toBe(5000);
+    expect(await creditsOf(user.id)).toBe(16000);
+    expect((await User.findById(user.id))?.signupGrant).toMatchObject({
+      stage: 'unlocked',
+      unlockedBy: 'card_verified',
+      unlockCredits: 15000,
+      creditsReleased: 16000,
+      dripCredits: 10000,
+      nextCondition: null,
+    });
+    expect((await drip(user.id, 11)).creditsGranted).toBe(0);
+  });
+
+  it('pays a subscription unlock after a cap raise the full grant under the live cap', async () => {
+    const user = await createSignupStageUser();
+    expect((await drip(user.id, 0)).creditsGranted).toBe(1000);
+    expect((await drip(user.id, 1)).creditsGranted).toBe(1000);
+    // The subscription unlock reads the real settings collection, not the in-memory config above.
+    await AdminSettings.create([
+      { settingName: 'signupUnlockPaymentHoldHours', settingValue: '0' },
+      { settingName: 'signupGrantDripCap', settingValue: '15000' },
+    ]);
+
+    expect((await unlockSignupGrantFromSubscription(user.id)).creditsGranted).toBe(13000);
+    expect(await creditsOf(user.id)).toBe(16000);
+    expect((await User.findById(user.id))?.signupGrant).toMatchObject({
+      stage: 'unlocked',
+      unlockedBy: 'subscription',
+      unlockCredits: 15000,
+      creditsReleased: 16000,
+      dripCredits: 2000,
+      nextCondition: null,
+    });
+    config.signupGrantDripCap = '15000';
+    expect((await drip(user.id, 2)).creditsGranted).toBe(0);
+  });
+
   it('alerts once a day when the cap falls back to the registry default', async () => {
     delete config.verifiedUnlockCredits;
     delete config.signupGrantActivityMaxCredits;

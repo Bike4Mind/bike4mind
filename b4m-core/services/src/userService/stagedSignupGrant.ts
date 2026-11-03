@@ -8,6 +8,7 @@ import {
   signupGrantDripRemaining,
   settingsMap,
   signupGrantRemaining,
+  signupGrantUnlockCredits,
   SignupRiskScoringSchema,
   type IUserDocument,
   type PaymentUnlockReason,
@@ -189,8 +190,11 @@ async function releaseStage(
           // and the grant stays open while the cap still has room.
           unlockCredits = Math.max(grant.unlockCredits, target - grant.signupCredits);
           dripRemainingAfter = signupGrantDripRemaining({ dripCredits: dripped + dripAmount }, dripCap);
+        } else if (evidence === true || 'unlockedOrgId' in evidence) {
+          unlockCredits = signupGrantUnlockCredits(grant, (await resolveDripLimits(db.adminSettings)).dripCap);
+          target = grant.signupCredits + unlockCredits;
         } else {
-          target = evidence === true || 'unlockedOrgId' in evidence ? maximum : evidence.cumulativeCredits;
+          target = evidence.cumulativeCredits;
         }
         if (!Number.isSafeInteger(target) || target < 0 || target > grant.signupCredits + unlockCredits)
           throw new Error('Invalid unlock entitlement');
@@ -412,9 +416,10 @@ async function holdPaymentUnlock(
   // Same domain protection as a payout, so a protected account records no hold either.
   if (db.signupProtection && (await protectSignupCredits(userId, db))) return { ...noGrant(), withheld: true };
   const hours = await resolvePaymentUnlockHoldHours(db.adminSettings);
+  const { dripCap } = await resolveDripLimits(db.adminSettings);
   const releaseAt = await withTransaction<Date | null>(async () => {
     const user = await db.users.findById(userId);
-    if (!isReleaseEligible(user, 'signup') || signupGrantRemaining(user.signupGrant) === 0) return null;
+    if (!isReleaseEligible(user, 'signup') || signupGrantRemaining(user.signupGrant, dripCap) === 0) return null;
     if (user.signupGrant.heldUnlock) return user.signupGrant.heldUnlock.releaseAt;
     if (!(await validate(user))) return null;
     const heldAt = grantClock(db);

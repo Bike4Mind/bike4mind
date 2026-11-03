@@ -21,7 +21,7 @@ export default function SignupGrantStatus() {
     );
   }
   if (!grant) return null;
-  const remaining = signupGrantRemaining(grant);
+  const remaining = signupGrantRemaining(grant, dripCap);
   return (
     <Stack spacing={1} data-testid="signup-grant-status">
       <Typography level="body-sm" data-testid="signup-grant-released">

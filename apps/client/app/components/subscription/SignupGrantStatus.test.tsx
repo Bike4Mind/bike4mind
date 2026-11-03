@@ -68,10 +68,15 @@ describe('signup grant status', () => {
     show();
     expect(screen.getByTestId('signup-grant-unlock-paths')).toHaveTextContent('for about 30 minutes');
   });
-  it('omits the daily drip when the unlock pool is 0', () => {
-    h.grant = { ...h.grant!, unlockCredits: 0 };
+  it('omits the daily drip when a closed grant has an unlock pool of 0', () => {
+    h.grant = { ...h.grant!, unlockCredits: 0, stage: 'unlocked', unlockedBy: 'card_verified', creditsReleased: 1000 };
     show();
     expect(screen.queryByTestId('signup-grant-unlock-paths')).toBeNull();
+  });
+  it('counts the live cap as still locked while the grant is open, as an unlock pays it', () => {
+    h.grant = { ...h.grant!, unlockCredits: 0, creditsReleased: 1000 };
+    show();
+    expect(screen.getByTestId('signup-grant-released')).toHaveTextContent('9,000 more credits are still locked');
   });
   it('omits the daily drip once the account has dripped up to the cap', () => {
     h.grant = { ...h.grant!, dripCredits: 9000 };

@@ -75,8 +75,18 @@ export function signupActiveSeconds(value: unknown): number {
   return Number.isInteger(seconds) && seconds >= 60 && seconds <= 7200 ? seconds : DEFAULT_SIGNUP_ACTIVE_SECONDS;
 }
 
-export function signupGrantRemaining(grant: SignupGrant): number {
-  return Math.max(0, grant.signupCredits + grant.unlockCredits - grant.creditsReleased);
+/** Pass the live `dripCap` wherever an unlock pays, so the remainder matches what the unlock releases. */
+export function signupGrantRemaining(grant: SignupGrant, dripCap?: number): number {
+  const unlockCredits = dripCap === undefined ? grant.unlockCredits : signupGrantUnlockCredits(grant, dripCap);
+  return Math.max(0, grant.signupCredits + unlockCredits - grant.creditsReleased);
+}
+
+/**
+ * The locked pool a full unlock releases up to. While the drip is still open the live cap governs it,
+ * so an unlock after a cap raise pays the raised headroom; a grant a verification unlock closed keeps it.
+ */
+export function signupGrantUnlockCredits(grant: SignupGrant, dripCap: number): number {
+  return signupGrantDripOpen(grant) ? Math.max(grant.unlockCredits, dripCap) : grant.unlockCredits;
 }
 
 /** Credits the drip may still pay under `dripCap`; never negative when the cap was lowered below what was dripped. */
