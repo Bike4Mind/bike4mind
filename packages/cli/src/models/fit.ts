@@ -85,13 +85,17 @@ export function rateDownload(sizeBytes: number, reading: MachineReading, trained
   return reading.hardware.confidence === 'low' ? { ...rated, gpuUnread: true } : rated;
 }
 
-/** A need and the limit it is compared with, with more decimals while they would read the same. */
+/**
+ * A need past its limit and that limit as shown, with more decimals while they would read the same, then rounded
+ * apart to whole MB.
+ */
 function needAndLimit(needBytes: number, limitBytes: number): [string, string] {
   const shown: [string, string] = [formatBytes(needBytes), formatBytes(limitBytes)];
   for (let digits = 2; digits <= 3 && shown[0] === shown[1]; digits++) {
     const fine = (bytes: number) => `${(bytes / 1e9).toFixed(digits)} GB`;
     shown.splice(0, 2, fine(needBytes), fine(limitBytes));
   }
+  if (shown[0] === shown[1]) return [`${Math.ceil(needBytes / 1e6)} MB`, `${Math.floor(limitBytes / 1e6)} MB`];
   return shown;
 }
 

@@ -92,6 +92,7 @@ export class ChatCompletionInvoke {
     authOrigin,
     apiKeyId,
     adminRoleWithheld,
+    visitId,
   }: {
     body: z.infer<typeof ChatCompletionInvokeParamsSchema>;
     userId: string;
@@ -101,6 +102,8 @@ export class ChatCompletionInvoke {
     apiKeyId?: string;
     /** See QuestStartBodySchema.adminRoleWithheld. */
     adminRoleWithheld?: boolean;
+    /** Read by the door from the request's visit cookie - never from `body` (see QuestStartBodySchema.visitId). */
+    visitId?: string;
   }) {
     // Fail at the door, not later in the worker that builds the tools.
     assertAuthOriginMatchesApiKey(authOrigin, apiKeyId);
@@ -523,6 +526,7 @@ export class ChatCompletionInvoke {
         authOrigin,
         apiKeyId,
         ...(adminRoleWithheld ? { adminRoleWithheld } : {}),
+        ...(visitId ? { visitId } : {}),
         systemPrompt,
         promptMeta: PromptMetaZodSchema.parse(quest.promptMeta),
         sessionId: session.id,

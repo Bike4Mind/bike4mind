@@ -447,4 +447,37 @@ describe('recordFirstChatValue', () => {
     const loadQuest = () => Promise.reject(new Error('db down'));
     await expect(recordFirstChatValue({ user, loadQuest })).resolves.toBe(false);
   });
+
+  describe('the visit the question was asked in', () => {
+    const visitId = 'c'.repeat(32);
+    const loadQuest = async () => ({ status: 'done', type: 'message' });
+
+    it('names it as the session of first_value', async () => {
+      expect(await recordFirstChatValue({ user, loadQuest, visitId })).toBe(true);
+      expect(mockEmit).toHaveBeenCalledTimes(1);
+      expect(mockEmit.mock.calls[0][0]).toMatchObject({ event: 'first_value', sessionId: visitId });
+    });
+
+    it('names no visit when the turn carried none', async () => {
+      expect(await recordFirstChatValue({ user, loadQuest })).toBe(true);
+      expect(mockEmit.mock.calls[0][0]).not.toHaveProperty('sessionId');
+    });
+
+    it('emits once for a redelivered turn, under the visit it carried', async () => {
+      mockUpdateOne.mockResolvedValueOnce({ modifiedCount: 1 }).mockResolvedValueOnce({ modifiedCount: 0 });
+      expect(await recordFirstChatValue({ user, loadQuest, visitId })).toBe(true);
+      expect(await recordFirstChatValue({ user, loadQuest, visitId })).toBe(false);
+      expect(mockEmit.mock.calls.map(([event]) => event.sessionId)).toEqual([visitId]);
+    });
+
+    it('changes nothing for a user whose first answer is already recorded', async () => {
+      const quest = vi.fn(loadQuest);
+      expect(
+        await recordFirstChatValue({ user: { ...user, firstValueAt: new Date() }, loadQuest: quest, visitId })
+      ).toBe(false);
+      expect(quest).not.toHaveBeenCalled();
+      expect(mockUpdateOne).not.toHaveBeenCalled();
+      expect(mockEmit).not.toHaveBeenCalled();
+    });
+  });
 });

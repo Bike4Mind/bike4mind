@@ -182,6 +182,11 @@ jobs:
             codesign --verify --deep --strict "$app_dir/Bike4Mind.app"
           elif [ "$PLATFORM" = win ]; then
             pnpm exec electron-builder --win --publish never -c.publish.provider=generic "-c.publish.url=$B4M_UPDATE_FEED_URL" "-c.extraMetadata.version=$DESKTOP_VERSION"
+            # 7z can exit non-zero on warnings (an Authenticode signature, for one); the grep decides.
+            contents=$(7z l "release/Bike4Mind-$DESKTOP_VERSION-setup.exe") || true
+            for archive in app-64.7z app-arm64.7z; do
+              grep -qF "$archive" <<< "$contents" || { echo "Installer is missing $archive"; exit 1; }
+            done
           else
             pnpm exec electron-builder --linux --publish never -c.publish.provider=generic "-c.publish.url=$B4M_UPDATE_FEED_URL" "-c.extraMetadata.version=$DESKTOP_VERSION"
           fi

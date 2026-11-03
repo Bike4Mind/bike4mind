@@ -59,6 +59,7 @@ import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
 import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
 import { requestTurnAuth } from '@server/auth/turnAuth';
+import { readVisitId } from '@server/analytics/visitSession';
 import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { admitApiKeyCompletion, NO_COMPLETION_QUOTA } from '@server/utils/untrustedCompletionQuota';
 import { checkFreeTierDailySpendCap } from '@server/billing/freeTierDailyCapGate';
@@ -279,6 +280,8 @@ async function handleChat(
       // The key (when one authenticated the turn) also attributes a lake write a tool drives.
       ...turnAuth,
       adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
+      // The visit the question was asked in, so the queued turn's first_value names it. A key turn names none.
+      visitId: turnAuth.authOrigin === 'session' ? readVisitId(req.headers.cookie) : undefined,
     });
   } catch (error) {
     // invoke validates a caller-supplied model (unknown, disabled, no longer accessible) before it

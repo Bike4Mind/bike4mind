@@ -3,12 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadCuratedManifest } from '@bike4mind/local-models';
 import { AUTO_LOCAL_CONTEXT } from '@shared/localContextSetting';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { unifiedMachine } from '../chat/fitStub.testHelper';
 import { HardwareProbe, localContextSizing } from '../chat/localContextSizing';
 import { installedProjectorBytes, pinnedProjectorSizes } from './projectorBytes';
 
 const digest = (n: number) => String(n).repeat(64);
+const here = { onThisComputer: true };
 
 describe('installedProjectorBytes', () => {
   let storeDir: string;
@@ -27,21 +28,54 @@ describe('installedProjectorBytes', () => {
   afterEach(() => rm(storeDir, { recursive: true, force: true }));
 
   it("reads this computer's projector blobs from the model folder", async () => {
-    expect(await installedProjectorBytes({ projectorBlobs: [digest(1), digest(2)], storeDir })).toBe(3500);
-    expect(await installedProjectorBytes({ projectorBlobs: [], storeDir })).toBe(0);
+    expect(await installedProjectorBytes({ projectorBlobs: [digest(1), digest(2)], storeDir }, here)).toBe(3500);
+    expect(await installedProjectorBytes({ projectorBlobs: [], storeDir }, here)).toBe(0);
   });
 
   it('counts none unless every projector size is known', async () => {
-    expect(await installedProjectorBytes({ projectorBlobs: [digest(1), digest(3)], storeDir })).toBe(0);
-    expect(await installedProjectorBytes({ projectorBlobs: [digest(1), null], storeDir })).toBe(0);
-    expect(await installedProjectorBytes({ projectorBlobs: [digest(1)], storeDir: null })).toBe(0);
-    expect(await installedProjectorBytes(undefined)).toBe(0);
+    expect(await installedProjectorBytes({ projectorBlobs: [digest(1), digest(3)], storeDir }, here)).toBe(0);
+    expect(await installedProjectorBytes({ projectorBlobs: [digest(1), null], storeDir }, here)).toBe(0);
+    expect(await installedProjectorBytes({ projectorBlobs: [digest(1)], storeDir: null }, here)).toBe(0);
+    expect(await installedProjectorBytes(undefined, here)).toBe(0);
   });
 
   it("looks a saved server's projectors up in the pins and never reads this computer's disk for them", async () => {
-    const pinned = new Map([[digest(3), 4000]]);
-    expect(await installedProjectorBytes({ projectorBlobs: [digest(3)], storeDir }, pinned)).toBe(4000);
-    expect(await installedProjectorBytes({ projectorBlobs: [digest(1)], storeDir }, pinned)).toBe(0);
+    const server = { pinned: new Map([[digest(3), 4000]]), onThisComputer: false };
+    expect(await installedProjectorBytes({ projectorBlobs: [digest(3)], storeDir }, server)).toBe(4000);
+    expect(await installedProjectorBytes({ projectorBlobs: [digest(1)], storeDir }, server)).toBe(0);
+  });
+
+  it("falls back to the pins for a projector blob this computer's folder does not hold", async () => {
+    const pinned = new Map([
+      [digest(3), 4000],
+      [digest(1), 9999],
+    ]);
+    expect(
+      await installedProjectorBytes({ projectorBlobs: [digest(1), digest(3)], storeDir }, { ...here, pinned })
+    ).toBe(5000);
+    expect(await installedProjectorBytes({ projectorBlobs: [digest(3)], storeDir: null }, { ...here, pinned })).toBe(
+      4000
+    );
+  });
+
+  it('reads a projector once per digest and again after forget or a new digest', async () => {
+    const projectorBytes = vi.fn(async () => 2500);
+    const sizing = localContextSizing({
+      setting: async () => AUTO_LOCAL_CONTEXT,
+      hardware: new HardwareProbe(async () => unifiedMachine(16)),
+      projectorBytes,
+    });
+    const facts = { name: 'vision', modelfile: 'FROM x', sizeBytes: 5e9, digest: 'one' };
+    expect((await sizing.footprint(facts)).projectorBytes).toBe(2500);
+    expect((await sizing.footprint(facts)).projectorBytes).toBe(2500);
+    expect(projectorBytes).toHaveBeenCalledTimes(1);
+    await sizing.footprint({ ...facts, digest: 'two' });
+    expect(projectorBytes).toHaveBeenCalledTimes(2);
+    sizing.forget?.();
+    await sizing.footprint({ ...facts, digest: 'two' });
+    expect(projectorBytes).toHaveBeenCalledTimes(3);
+    expect((await sizing.footprint({ ...facts, modelfile: undefined, digest: 'three' })).projectorBytes).toBe(0);
+    expect(projectorBytes).toHaveBeenCalledTimes(3);
   });
 
   it("sizes chat's projector from the Modelfile Ollama shows", async () => {

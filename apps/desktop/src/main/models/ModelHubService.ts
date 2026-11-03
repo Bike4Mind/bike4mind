@@ -739,10 +739,10 @@ export class ModelHubService {
           parameters: inspection.parameters ?? null,
           contextLength: inspection.contextLength ?? null,
           // Chat reads this computer's blobs the same way (main/chat/localContextSizing.ts).
-          projectorBytes: await installedProjectorBytes(
-            inspection.contents,
-            target.local ? undefined : pinnedProjectorSizes(this.#deps.curated())
-          ),
+          projectorBytes: await installedProjectorBytes(inspection.contents, {
+            pinned: this.pinnedProjectors(),
+            onThisComputer: target.local,
+          }),
         }))
         .catch(() => {
           // A busy daemon can time out once; read it again next time instead of rating by size for the session.
@@ -970,6 +970,11 @@ export class ModelHubService {
       buildId: pick.build,
       recommended: index === recommended,
     }));
+  }
+
+  /** Projector sizes the curated list pins, by blob digest; chat sizes installed models from the same map. */
+  pinnedProjectors(): ReadonlyMap<string, number> {
+    return pinnedProjectorSizes(this.#deps.curated());
   }
 
   /**

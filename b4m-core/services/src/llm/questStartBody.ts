@@ -71,6 +71,12 @@ export const QuestStartBodySchema = z
      * on the user it reloads. Server-set like `apiKeyId`; absent means not withheld.
      */
     adminRoleWithheld: z.boolean().optional(),
+    /**
+     * The visit the turn was asked in, read from the visit cookie by the chat route, so the worker's
+     * first_value names it. Server-set like `apiKeyId`, never from a client body; absent for a key or
+     * non-browser turn. Any string: the route has checked its shape, and analytics must not fail a turn.
+     */
+    visitId: z.string().optional(),
     /** See ChatCompletionInvokeParamsSchema.systemPrompt - must stay in sync with it. */
     systemPrompt: z.string().max(PROMPT_TEXT_MAX).optional(),
     enableAgents: z.boolean().optional(),

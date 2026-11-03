@@ -547,6 +547,9 @@ describe('estimateFit', () => {
     const m16 = machine('unified', 16);
     expect(memoryBudgets(m16)).toEqual({ gpu: 16 * GIB * 0.66, ramPool: 16 * GIB * (0.75 - 0.66), cpuOnly: false });
     expect(memoryBudgets(machine('unified', 64))).toMatchObject({ gpu: 48 * GIB, ramPool: 0 });
+    // A firmware carve-out sits outside the RAM the OS sees, so all of that RAM's reserve can take spilled layers.
+    expect(memoryBudgets(strix(31, 96))).toMatchObject({ gpu: 96 * GIB, ramPool: 31 * GIB * 0.75 });
+    expect(memoryBudgets(strix(125, 62))).toMatchObject({ gpu: 62 * GIB, ramPool: 125 * GIB * 0.75 - 62 * GIB });
     // 8.5 GiB of weights stays all-GPU below the floor rather than offloading at the target.
     expect(fit({ hardware: m16, weightsGiB: 8.5, runtime: OLLAMA })).toMatchObject({
       verdict: 'slow',

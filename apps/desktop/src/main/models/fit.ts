@@ -46,13 +46,18 @@ function limits(budgetBytes: number, ramPoolBytes: number, marginBytes: number) 
   return { usable: budgetBytes - marginBytes, machine: budgetBytes + ramPoolBytes - marginBytes };
 }
 
-/** Need and limit as shown, with more decimals while they would read the same. */
+/**
+ * A need past its limit and that limit as shown, with more decimals while they would read the same, then rounded
+ * apart to whole MiB.
+ */
 function needAndLimit(needBytes: number, limitBytes: number): [string, string] {
   const shown: [string, string] = [formatMemory(needBytes), formatMemory(limitBytes)];
   for (let digits = 2; digits <= 3 && shown[0] === shown[1]; digits++) {
     const fine = (bytes: number) => `${Number((bytes / 1024 ** 3).toFixed(digits))} GiB`;
     shown.splice(0, 2, fine(needBytes), fine(limitBytes));
   }
+  if (shown[0] === shown[1])
+    return [`${Math.ceil(needBytes / 1024 ** 2)} MiB`, `${Math.floor(limitBytes / 1024 ** 2)} MiB`];
   return shown;
 }
 

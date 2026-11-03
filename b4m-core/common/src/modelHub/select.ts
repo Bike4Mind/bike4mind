@@ -114,8 +114,12 @@ function runtimeOrder(build: HubBuild): HubRuntime[] {
 export function ollamaBuildBytes(build: HubBuild): { weightsBytes: number; mmprojBytes: number } {
   const source = build.ollama;
   const pinned = source && source.kind !== 'create' ? source.layers?.projectorBytes : undefined;
+  // A library layer carries Ollama's own projector blob, which can differ from a Hugging Face mmproj file.
+  if (source?.kind === 'library') {
+    const mmprojBytes = pinned ?? build.mmproj?.sizeBytes ?? 0;
+    return { weightsBytes: source.sizeBytes - mmprojBytes, mmprojBytes };
+  }
   const mmprojBytes = build.mmproj?.sizeBytes ?? pinned ?? 0;
-  if (source?.kind === 'library') return { weightsBytes: source.sizeBytes - mmprojBytes, mmprojBytes };
   return { weightsBytes: build.weights.reduce((sum, w) => sum + w.sizeBytes, 0), mmprojBytes };
 }
 
