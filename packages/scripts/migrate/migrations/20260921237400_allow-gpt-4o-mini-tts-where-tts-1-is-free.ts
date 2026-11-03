@@ -29,8 +29,9 @@ export const withNewTtsDefault = (value: unknown): string | string[] | null => {
 /**
  * The OpenAI TTS default moved from tts-1 to gpt-4o-mini-tts (TTS_DEFAULT_MODEL), and free-tier
  * admission matches model ids exactly (modelAdmission.ts isFreeTierModel). Where an admin made tts-1
- * free, extend that to the model TTS now runs, so free users keep speech after the deploy. Only the
- * platform row: the loader (loadFreeTierAllowedModels) reads no scoped override. Idempotent.
+ * free, extend that to the model TTS now runs, so free users keep speech after the deploy. Updates
+ * every row with this settingName, though the loader (loadFreeTierAllowedModels) reads only the
+ * platform one. Idempotent.
  */
 const migration: MigrationFile = {
   id: 20260921237400,
