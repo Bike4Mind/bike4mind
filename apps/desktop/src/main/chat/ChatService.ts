@@ -123,9 +123,11 @@ import {
   prefetchBase,
   resolveWorkspace,
   type SpareWorktrees,
+  unusedBranchName,
   type WorkspaceOutcome,
 } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
+import { AgentWakeLedger, agentsSettledNotice, agentsSettledSummary, lastReplySnippet } from './agentWake';
 import type { AttachmentStore } from './AttachmentStore';
 import type { SidebarSectionStore } from './SidebarSectionStore';
 import { childOutcomeDisplay, classifyChildOutcome } from './childOutcome';
@@ -656,10 +658,12 @@ export class ChatService {
   private readonly suggesting = new Map<string, AbortController>();
 
   /**
-   * Spawned sessions whose seeded run has not finished, and who to tell when it does.
+   * Spawned sessions with an autonomous turn running, and who to tell when it ends.
    *
-   * Only the AUTONOMOUS turn is tracked. A later turn the user types into the same session is
-   * an ordinary conversation and neither counts against the concurrency cap nor reports back.
+   * Armed for the seeded run and again for every later turn nobody typed (a session_send from the
+   * parent, an automatic turn), so each one reports back. A turn the user types into the same
+   * session is an ordinary conversation and neither counts against the concurrency cap nor
+   * reports back.
    */
   private readonly spawnWatch = new Map<string, { parentSessionId: string }>();
 
@@ -677,6 +681,15 @@ export class ChatService {
 
   /** Finished children waiting for their parent to be idle, so a report never splits a turn. */
   private readonly childReports = new Map<string, ChildReport[]>();
+
+  /** Agent turns that ended since each Orchestrate parent was last woken; see wakeParentForAgents. */
+  private readonly agentWakes = new AgentWakeLedger();
+
+  /**
+   * Agents whose turn has ended but whose report is not recorded yet. A sibling settling in that
+   * gap must still see them as running, or the parent would be woken without them.
+   */
+  private readonly agentsSettling = new Map<string, { parentId: string; settling: symbol }>();
 
   /**
    * Per session, the hop depth of the turn running there and how many messages it has sent.
@@ -1820,6 +1833,8 @@ export class ChatService {
     // running spawned session does not leak one for the rest of the run.
     this.spawnWatch.delete(sessionId);
     this.childReports.delete(sessionId);
+    this.agentWakes.forget(sessionId);
+    this.agentsSettling.delete(sessionId);
     this.turnRelay.delete(sessionId);
     for (const [childId, watch] of this.spawnWatch) {
       if (watch.parentSessionId === sessionId) this.spawnWatch.delete(childId);
@@ -2125,7 +2140,13 @@ export class ChatService {
     if (!released?.relay && !released?.automatic && seedHops === undefined) {
       this.attendedTurns.add(sessionId);
       this.wake?.attended(sessionId);
-    } else this.attendedTurns.delete(sessionId);
+      // The user typing here is what lifts a hold their stop put on agent wakes.
+      this.agentWakes.release(sessionId);
+    } else {
+      this.attendedTurns.delete(sessionId);
+      const parentSessionId = session.origin?.parentSessionId;
+      if (parentSessionId) this.spawnWatch.set(sessionId, { parentSessionId });
+    }
     const replyId = this.startReply(session, api, historyScope, undefined, released?.relay?.hops ?? seedHops ?? 0);
 
     // After the reply is in flight, and never awaited: a first answer that waited on a title
@@ -3589,10 +3610,13 @@ export class ChatService {
       this.flushQueue(sessionId);
       // Behind anything the user queued: their turn is started first and takes the notice itself.
       this.wakeIfIdle(sessionId);
+      // A parent that was busy when its agents settled is woken now, once.
+      void this.wakeParentForAgents(sessionId);
       return;
     }
     // A stopped or failed turn is not followed by an automatic one. Exits after this still wake.
     this.wake?.discard(sessionId);
+    this.agentWakes.hold(sessionId);
     const reason = outcome === 'aborted' ? 'stopped' : outcome === 'expired' ? 'session-expired' : 'failed';
     const stranded = this.deps.queue?.releaseAll(sessionId, reason) ?? [];
     void this.strandRelay(sessionId, stranded).catch(() => undefined);
@@ -4874,9 +4898,12 @@ export class ChatService {
             : 'Nothing is running for it. Start it again, or do the work in this conversation.'),
         display: `The session "${child.title}" could not start and ${outcome}. ${reason}`,
       });
+      // The parent was told this agent started, so its failure counts as one of the batch.
+      this.agentWakes.record(parentId, { sessionId: child.id, title: child.title, outcome: 'failed', lastReply: null });
     } finally {
       this.abandoning.delete(child.id);
     }
+    await this.wakeParentForAgents(parentId);
   }
 
   /**
@@ -4902,7 +4929,8 @@ export class ChatService {
     if (defaultSpawnPlacement(repository) === 'local') return { kind: 'local' };
     const base = await spawnBaseFor(project);
     prefetchBase(project.directory, base);
-    return { kind: 'worktree', branch: suggestBranchName(title, prompt), base };
+    const branch = await unusedBranchName(project.directory, suggestBranchName(title, prompt));
+    return { kind: 'worktree', branch, base };
   }
 
   private async checkSpawnBranch(
@@ -4956,25 +4984,95 @@ export class ChatService {
   }
 
   /**
-   * A spawned session finished its seeded run: give the slot back and tell the parent.
+   * A spawned session's autonomous turn ended: give the slot back, tell the parent, and wake the
+   * parent if that was the last of its agents still running.
    *
-   * The parent is told through its transcript rather than by resuming it. Resuming would mean
-   * the app starting a turn - and spending credits - with nobody having typed anything, which
-   * is the unattended behaviour this task deliberately does not build. What lands instead is a
-   * message the user reads and the model sees on the next turn either of them takes.
+   * The report lands in the parent's transcript. Only an Orchestrate parent is then woken, by one
+   * automatic turn once every agent it started has settled (see wakeParentForAgents): there the
+   * user's switch is the standing instruction to carry the plan on. Any other parent reads the
+   * report on the next turn someone takes, since resuming it would spend credits nobody asked for.
    */
   private async settleSpawnedTurn(sessionId: string, localOnly: boolean): Promise<void> {
     const watch = this.spawnWatch.get(sessionId);
     if (!watch) return;
+    const parentId = watch.parentSessionId;
     this.spawnWatch.delete(sessionId);
+    const settling = Symbol();
+    this.agentsSettling.set(sessionId, { parentId, settling });
+    try {
+      const child = await this.deps.store.get(sessionId);
+      if (!child) return;
+      await this.deliverChildReport(parentId, {
+        localOnly,
+        content: describeChildOutcome(child),
+        display: childOutcomeDisplay(child),
+      });
+      const last = [...child.messages].reverse().find(message => message.role === 'assistant');
+      this.agentWakes.record(parentId, {
+        sessionId,
+        title: child.title,
+        outcome: classifyChildOutcome(child),
+        // A device-local child's words never reach a hosted parent; see flushChildReports.
+        lastReply: localOnly || !last ? null : lastReplySnippet(last.content),
+      });
+    } finally {
+      if (this.agentsSettling.get(sessionId)?.settling === settling) this.agentsSettling.delete(sessionId);
+    }
+    await this.wakeParentForAgents(parentId);
+  }
 
-    const child = await this.deps.store.get(sessionId);
-    if (!child) return;
-    await this.deliverChildReport(watch.parentSessionId, {
-      localOnly,
-      content: describeChildOutcome(child),
-      display: childOutcomeDisplay(child),
-    });
+  /**
+   * Start one turn in an idle Orchestrate parent whose agents have all settled, telling it how
+   * each one ended so it can carry its plan on or write the summary.
+   *
+   * Called after each agent settles and after each of the parent's own turns completes; it does
+   * nothing unless every condition holds at once. The ledger takes the whole batch per wake and
+   * caps wakes per parent, and a parent the user stopped is held until they type there again.
+   */
+  private async wakeParentForAgents(parentId: string): Promise<void> {
+    if (!this.agentWakes.hasPending(parentId) || this.hasTurnInFlight(parentId)) return;
+    if ((this.deps.queue?.list(parentId).length ?? 0) > 0) return;
+    if (await this.agentStillRunning(parentId)) return;
+    const parent = await this.deps.store.get(parentId);
+    if (!parent || parent.archived || !orchestratesAgents(parent)) return;
+    // Re-read after the awaits: a turn that started in the gap ends by calling this again.
+    if (this.hasTurnInFlight(parentId) || (this.deps.queue?.list(parentId).length ?? 0) > 0) return;
+
+    const claim = this.agentWakes.claim(parentId);
+    if (!claim.ok) {
+      if (claim.reason === 'cap') {
+        this.deps.logger.warn(`CHAT: not waking ${parentId} for its agents: too many automatic wakes`);
+      }
+      return;
+    }
+    let started = false;
+    try {
+      const result = await this.startAutomaticTurn(parentId, agentsSettledNotice(claim.agents), {
+        kind: 'agents-settled',
+        sessionIds: claim.agents.map(agent => agent.sessionId),
+        summary: agentsSettledSummary(claim.agents),
+      });
+      started = result.ok;
+      if (!result.ok && !result.busy) this.deps.logger.warn(`CHAT: could not wake ${parentId}: ${result.error}`);
+    } finally {
+      this.agentWakes.finish(parentId, started, claim.agents);
+    }
+  }
+
+  /** Whether any agent this parent started is still working, waiting on approval or has input waiting. */
+  private async agentStillRunning(parentId: string): Promise<boolean> {
+    for (const watch of this.spawnWatch.values()) {
+      if (watch.parentSessionId === parentId) return true;
+    }
+    for (const entry of this.agentsSettling.values()) {
+      if (entry.parentId === parentId) return true;
+    }
+    const sessions = await this.deps.store.list();
+    return sessions.some(
+      entry =>
+        entry.origin?.parentSessionId === parentId &&
+        (this.hasTurnInFlight(entry.id) || (this.deps.queue?.list(entry.id).length ?? 0) > 0)
+    );
   }
 
   /**
@@ -6594,7 +6692,9 @@ const HOST_GUIDANCE: readonly string[] = [
 /**
  * For a session with Orchestrate on. Placed after HOST_GUIDANCE because it overrides that
  * block's suggest-only rule: in such a session session_spawn starts the child at once (see
- * buildHostContext). Children share the parent's working directory, hence the split by file.
+ * buildHostContext), in a worktree of its own in a repository (delegatedPlacement), and the
+ * parent is woken when its agents settle (wakeParentForAgents). Outside a repository children
+ * share the parent's working directory, hence the split by file.
  */
 const ORCHESTRATOR_GUIDANCE: readonly string[] = [
   'The user turned on Orchestrate for this conversation: you are coordinating agents, not doing',
@@ -6602,12 +6702,19 @@ const ORCHESTRATOR_GUIDANCE: readonly string[] = [
   'approve, whatever is said above about suggesting.',
   'For each request, split the work into independent pieces that can run in parallel and start',
   'one agent per piece with session_spawn. Each prompt must be self-contained: what to do, which',
-  'files, and what done means. The agents share this working directory, so give each one',
-  'different files to change. Do not do the delegated work yourself.',
+  'files, and what done means. Do not do the delegated work yourself.',
+  'In a git repository session_spawn gives each agent its own isolated worktree and branch',
+  'automatically; its result names them. So never create worktrees or branches for agents',
+  'yourself, never point an agent at another path, and never remove an agent worktree or delete',
+  'its branch. Merging agent branches into your own branch to combine their work is fine.',
+  'Outside a repository the agents share this working directory, so give each one different',
+  'files to change.',
   `At most ${MAX_CONCURRENT_SPAWNED} agents run at once; plan within that, and if a start is refused for`,
   'the limit, wait for one to finish before starting another.',
-  'Then track them with session_list and session_read. When they finish, review their results',
-  'and combine them into one answer for the user.',
+  'Track them with session_list and session_read if you need to. Once every agent you started',
+  'has stopped running, the app wakes this conversation with how each one ended, so end your',
+  'turn after starting them rather than polling or sleeping. When woken, review their results',
+  'and either carry the plan on or combine them into one final answer for the user.',
   'If the request is too small or does not split - a question, a single-step change - handle it',
   'directly and say so in one short sentence, for example:',
   '"This is small enough to handle directly, so I didn\'t start any agents."',
@@ -7312,9 +7419,14 @@ function frameRelay(message: ChatMessage, text: string): string {
 
 /** The thread's line for a turn the app started; see ChatMessage.display. */
 function automaticDisplay(automatic: ChatAutomaticOrigin): string {
-  return automatic.kind === 'background-exit'
-    ? `Background command finished: ${automatic.summary}`
-    : `Auto-fix: ${automatic.summary}`;
+  switch (automatic.kind) {
+    case 'background-exit':
+      return `Background command finished: ${automatic.summary}`;
+    case 'agents-settled':
+      return `Agents finished: ${automatic.summary}`;
+    case 'auto-fix':
+      return `Auto-fix: ${automatic.summary}`;
+  }
 }
 
 /** Reads one attachment's stored bytes, or null when the file is gone. */

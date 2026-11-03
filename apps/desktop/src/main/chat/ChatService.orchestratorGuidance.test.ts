@@ -35,6 +35,16 @@ describe('ORCHESTRATOR_GUIDANCE', () => {
     expect(text).toContain("so I didn't start any agents.");
   });
 
+  it('says spawned agents get their own worktrees and that the parent is woken, not left polling', () => {
+    const text = build(['/work'], true, true);
+    expect(text).toContain('its own isolated worktree and branch');
+    expect(text).toContain('never create worktrees or branches for agents');
+    expect(text).toContain('never remove an agent worktree or delete');
+    expect(text).toContain('Merging agent branches into your own branch');
+    expect(text).toContain('the app wakes this conversation');
+    expect(text).toContain('rather than polling or sleeping');
+  });
+
   it('is left out when the session does not orchestrate', () => {
     expect(build(['/work'], true, false)).not.toContain('coordinating agents');
   });

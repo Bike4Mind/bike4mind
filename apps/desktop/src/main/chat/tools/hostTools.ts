@@ -252,25 +252,18 @@ export const sessionSpawn: ToolDefinition = {
       ].join('\n');
     }
 
-    let placement = host.delegates ? await host.delegates.placement(title, prompt) : await cardPlacement(input, host);
+    const placement = host.delegates ? await host.delegates.placement(title, prompt) : await cardPlacement(input, host);
 
     context.beginWrite?.();
     if (placement.kind === 'worktree') context.report?.progress(`Creating branch ${placement.branch} and worktree...`);
-    let outcome = await host.spawn(prompt, title, placement);
-    // A delegated branch was chosen here, not by the user, so a collision falls back to the
-    // placement the card offers outside a repository rather than failing the agent.
-    let fallback: string | null = null;
-    if (host.delegates && !outcome.ok && outcome.reason === 'branch' && placement.kind === 'worktree') {
-      fallback = `No worktree was made: ${outcome.message}`;
-      placement = { kind: 'local' };
-      outcome = await host.spawn(prompt, title, placement);
-    }
+    // A worktree that could not be made fails the spawn. Falling back to this working directory
+    // would run the agent un-isolated, editing the parent's files, while it was told otherwise.
+    const outcome = await host.spawn(prompt, title, placement);
     if (!outcome.ok) throw new Error(outcome.message);
     context.report?.label(`Started a session: ${outcome.session.title}`);
     const who = host.delegates ? 'It has' : 'The user gave it';
     return [
       `Started session ${outcome.session.id} ("${outcome.session.title}").`,
-      ...(fallback ? [fallback] : []),
       placement.kind === 'worktree'
         ? `${who} its own worktree on ${placement.branch}, cut from ${placement.base}, so it is NOT editing the files here and its dependencies are installing there now.`
         : host.delegates

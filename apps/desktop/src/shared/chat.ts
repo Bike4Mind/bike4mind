@@ -628,6 +628,8 @@ export interface ChatRelayOrigin {
  * 'auto-fix' runs on the user's standing instruction for a pull request (see main/pr/autoFix.ts),
  * and a guard holds it to the rules they agreed to (no force-push, no merge). 'background-exit'
  * tells the model a background command it started has ended (see main/chat/backgroundWake.ts).
+ * 'agents-settled' tells an Orchestrate parent that every agent it started has stopped running
+ * (see main/chat/agentWake.ts).
  */
 export type ChatAutomaticOrigin =
   | {
@@ -641,6 +643,13 @@ export type ChatAutomaticOrigin =
       kind: 'background-exit';
       processIds: string[];
       /** One line for the thread's collapsed row, e.g. "[a1b2c3d4] exited 0". */
+      summary: string;
+    }
+  | {
+      kind: 'agents-settled';
+      /** The agents whose turns ended since the parent was last woken. */
+      sessionIds: string[];
+      /** One line for the thread's collapsed row, e.g. "3 agents: 2 done, 1 failed". */
       summary: string;
     };
 

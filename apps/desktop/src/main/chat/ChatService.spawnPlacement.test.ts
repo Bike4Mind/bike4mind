@@ -24,7 +24,7 @@ import { ApprovalGate } from './tools/ApprovalGate';
 
 // The real resolveWorkspace behind a gate, so a test can hold the worktree mid-cut and look at what
 // the session is meanwhile. Open by default.
-const gate = vi.hoisted(() => ({ hold: Promise.resolve() }));
+const gate = vi.hoisted(() => ({ hold: Promise.resolve(), fail: null as Error | null }));
 vi.mock('./project/workspace', async importOriginal => {
   const actual = await importOriginal<typeof import('./project/workspace')>();
   return {
@@ -32,6 +32,7 @@ vi.mock('./project/workspace', async importOriginal => {
     prefetchBase: vi.fn(actual.prefetchBase),
     resolveWorkspace: async (...args: Parameters<typeof actual.resolveWorkspace>) => {
       await gate.hold;
+      if (gate.fail) throw gate.fail;
       return actual.resolveWorkspace(...args);
     },
   };
@@ -89,6 +90,7 @@ describe('ChatService spawn placement', () => {
   beforeEach(async () => {
     vi.mocked(prefetchBase).mockClear();
     gate.hold = Promise.resolve();
+    gate.fail = null;
     await repository();
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-place-sessions-')), 'test-model');
     // Bound per test: a previous service replying late must not push into this test's events.
@@ -322,16 +324,32 @@ describe('ChatService spawn placement', () => {
     expect((await store.get(parent.id))?.project?.workingDirectory).toBe(main);
   });
 
-  it('starts a delegated agent in this working directory when its worktree cannot be made, and says so', async () => {
+  it('gives a delegated agent a fresh branch when an earlier attempt left its branch behind', async () => {
     await git(main, ['branch', 'agent/the-thing']);
 
-    const { call } = await delegate();
+    const { parent, call } = await delegate();
 
     expect(call?.status).toBe('done');
-    expect(call?.preview).toContain('No worktree was made');
-    expect(call?.preview).toContain('already exists');
-    expect(call?.preview).toContain('It shares this working directory');
-    expect((await child())?.project).toMatchObject({ workingDirectory: main, workspace: false });
+    expect(call?.preview).toContain('It has its own worktree on agent/the-thing-2, cut from main');
+    await worktreeOf('agent/the-thing-2');
+    expect((await store.get(parent.id))?.project?.workingDirectory).toBe(main);
+  });
+
+  it('never runs a delegated agent in the parent directory when its worktree cannot be made', async () => {
+    gate.fail = new Error('git worktree add timed out after 5 min.');
+
+    const { parent } = await delegate();
+
+    const failed = await vi.waitUntil(() => events.find(event => event.type === 'spawn-failed'), {
+      timeout: 5000,
+      interval: 10,
+    });
+    expect(failed).toMatchObject({ sessionId: parent.id });
+    expect(failed.type === 'spawn-failed' ? failed.message : '').toContain(
+      'The worktree could not be created: git worktree add timed out after 5 min.'
+    );
+    await vi.waitUntil(async () => (await child()) === undefined, { timeout: 5000, interval: 10 });
+    expect(seedPosted('do the thing')).toBe(false);
   });
 
   it('starts nothing when the model only suggests, and leaves the tool call done', async () => {
