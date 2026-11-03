@@ -16,7 +16,7 @@ import {
   projectDisplayName,
   unusableProjectReason,
 } from './git';
-import { appWorktreeRoot, resolveWorkspace, SpareWorktrees, worktreeFolderName } from './workspace';
+import { appWorktreeRoot, resolveWorkspace, SpareWorktrees, unusedBranchName, worktreeFolderName } from './workspace';
 
 /**
  * Real git repositories in a temp directory rather than a mocked child_process: the whole
@@ -309,6 +309,65 @@ describe('resolveWorkspace', () => {
     await git(occupied.workingDirectory, ['checkout', '--quiet', '--detach', 'HEAD']);
 
     await expect(resolveWorkspace(main, { branch: 'agent/three' })).rejects.toThrow(/holding a detached HEAD/);
+  });
+
+  /** Runs the real `worktree add`, then fails it the way a timeout kill does, after it made things. */
+  function failWorktreeAddAfterIt() {
+    const originalGit = projectGit.git;
+    const timeouts: (number | undefined)[] = [];
+    const spy = vi.spyOn(projectGit, 'git').mockImplementation(async (directory, args, options) => {
+      if (args[0] !== 'worktree' || args[1] !== 'add') return originalGit(directory, args, options);
+      timeouts.push(options?.timeoutMs);
+      await originalGit(directory, args, options);
+      throw new projectGit.GitError(args, 'Updating files:  4% (616/15405)\r', options?.timeoutMs);
+    });
+    return { spy, timeouts };
+  }
+
+  it('gives worktree add its own long timeout', async () => {
+    const { spy, timeouts } = failWorktreeAddAfterIt();
+    try {
+      await resolveWorkspace(main, { base: 'main', branch: 'agent/slow' }).catch(() => undefined);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(timeouts).toEqual([projectGit.WORKTREE_ADD_TIMEOUT_MS]);
+  });
+
+  it('leaves no folder, registration or branch behind when a new worktree fails, so a retry works', async () => {
+    const path = join(root, worktreeFolderName('agent/slow'));
+    const { spy } = failWorktreeAddAfterIt();
+    let failure: unknown;
+    try {
+      failure = await resolveWorkspace(main, { base: 'main', branch: 'agent/slow' }).catch((err: unknown) => err);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect((failure as Error).message).toBe('git worktree add timed out after 5 min.');
+    await expect(stat(path)).rejects.toThrow();
+    expect((await listWorktrees(main)).some(entry => entry.branch === 'agent/slow')).toBe(false);
+    expect(await branchExists(main, 'agent/slow')).toBe(false);
+
+    expect(await resolveWorkspace(main, { base: 'main', branch: 'agent/slow' })).toEqual({
+      workingDirectory: path,
+      branch: 'agent/slow',
+      outcome: 'created',
+    });
+  });
+
+  it('keeps a branch it did not create when checking it out fails', async () => {
+    await git(main, ['branch', 'feat/kept']);
+    const { spy } = failWorktreeAddAfterIt();
+    try {
+      await resolveWorkspace(main, { branch: 'feat/kept' }).catch(() => undefined);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(await branchExists(main, 'feat/kept')).toBe(true);
+    await expect(stat(join(root, worktreeFolderName('feat/kept')))).rejects.toThrow();
   });
 
   it('reuses a worktree registered for the branch even at an unexpected path', async () => {
@@ -751,5 +810,21 @@ describe('SpareWorktrees', () => {
     } finally {
       await spares.dispose();
     }
+  });
+});
+
+describe('unusedBranchName', () => {
+  it('answers the name itself when nothing holds it', async () => {
+    const { main } = await bareLayoutRepository();
+
+    expect(await unusedBranchName(main, 'agent/review')).toBe('agent/review');
+  });
+
+  it('steps past a leftover branch and a branch held by a worktree', async () => {
+    const { container, main } = await bareLayoutRepository();
+    await git(main, ['branch', 'agent/review']);
+    await git(main, ['worktree', 'add', '--quiet', '-b', 'agent/review-2', join(container, 'review-2')]);
+
+    expect(await unusedBranchName(main, 'agent/review')).toBe('agent/review-3');
   });
 });

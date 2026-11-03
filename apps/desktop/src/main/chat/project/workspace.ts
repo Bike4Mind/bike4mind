@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { ChatProject } from '@shared/chat';
 import type {
@@ -20,6 +20,7 @@ import {
   git,
   listWorktrees,
   resolveBaseRef,
+  WORKTREE_ADD_TIMEOUT_MS,
 } from './git';
 
 /**
@@ -849,7 +850,7 @@ export async function resolveWorkspace(
 
   if (await branchExists(projectDirectory, branch)) {
     timer?.lap('checks');
-    await git(projectDirectory, ['worktree', 'add', path, branch]);
+    await addWorktree(projectDirectory, path, ['worktree', 'add', path, branch], null);
     timer?.lap('worktreeAdd');
     return { workingDirectory: path, branch, outcome: 'created' };
   }
@@ -861,8 +862,72 @@ export async function resolveWorkspace(
   const fromSpare = (await spares?.take(projectDirectory, container, branch, path, from)) ?? false;
   // --no-track for the reason the shell helper gives: a feature branch should not track the
   // base it forked from, or a later `git push` would aim at the wrong ref.
-  if (!fromSpare) await git(projectDirectory, ['worktree', 'add', '--no-track', '-b', branch, path, from]);
+  if (!fromSpare) {
+    await addWorktree(projectDirectory, path, ['worktree', 'add', '--no-track', '-b', branch, path, from], branch);
+  }
   timer?.lap(fromSpare ? 'spareSwitch' : 'worktreeAdd');
   spares?.refill(projectDirectory, container, from);
   return { workingDirectory: path, branch, outcome: 'created' };
 }
+
+/**
+ * Check out a new worktree at `path`, which did not exist before, or leave nothing behind.
+ *
+ * A failed or timed-out add leaves a half-populated folder, often a registration, and with `-b`
+ * the branch, and each of those makes the next attempt at the same branch fail. `createdBranch`
+ * is the branch this call creates, and only that one is deleted: never a branch that was there.
+ */
+async function addWorktree(
+  projectDirectory: string,
+  path: string,
+  args: readonly string[],
+  createdBranch: string | null
+): Promise<void> {
+  try {
+    await git(projectDirectory, args, { timeoutMs: WORKTREE_ADD_TIMEOUT_MS });
+  } catch (err) {
+    // "already exists" means another writer made the branch first; it is theirs, not ours.
+    const raced = err instanceof Error && /already exists/i.test(err.message);
+    await discardFailedWorktree(projectDirectory, path, raced ? null : createdBranch);
+    throw err;
+  }
+}
+
+async function discardFailedWorktree(
+  projectDirectory: string,
+  path: string,
+  createdBranch: string | null
+): Promise<void> {
+  await git(projectDirectory, ['worktree', 'remove', '--force', path]).catch(() => undefined);
+  await rm(path, { recursive: true, force: true }).catch(() => undefined);
+  // Drops a registration whose folder is now gone, which would otherwise hold the branch.
+  await git(projectDirectory, ['worktree', 'prune']).catch(() => undefined);
+  if (createdBranch && (await branchExists(projectDirectory, createdBranch))) {
+    await git(projectDirectory, ['branch', '-D', createdBranch]).catch(() => undefined);
+  }
+}
+
+/**
+ * `wanted`, or the first of `wanted-2`, `wanted-3`... that no branch and no worktree holds.
+ *
+ * For a branch name the app picked itself (an Orchestrate spawn), where a leftover branch from an
+ * earlier attempt must not block the next one. Never for a name the user typed: that collision is
+ * theirs to see. Falls back to `wanted` when nothing free is found or git cannot be read, and the
+ * caller's own existence check then refuses it with a reason.
+ */
+export async function unusedBranchName(projectDirectory: string, wanted: string): Promise<string> {
+  try {
+    const worktrees = await listWorktrees(projectDirectory);
+    for (let attempt = 1; attempt <= MAX_BRANCH_NAME_ATTEMPTS; attempt++) {
+      const candidate = attempt === 1 ? wanted : `${wanted}-${attempt}`;
+      if (worktrees.some(entry => entry.branch === candidate)) continue;
+      if (await branchExists(projectDirectory, candidate)) continue;
+      return candidate;
+    }
+  } catch {
+    // Unreadable: the caller's check reports it.
+  }
+  return wanted;
+}
+
+const MAX_BRANCH_NAME_ATTEMPTS = 20;
