@@ -1,5 +1,5 @@
 import { posix } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parseBash } from './bashParser';
 
 // The parser finds its wasm by this host's path rules, so it is loaded before Windows rules are mocked in.
@@ -7,6 +7,9 @@ import { parseBash } from './bashParser';
 
 const touched: string[] = [];
 const asked: string[] = [];
+const distroUser: { current: { path: string; home: string } | null } = {
+  current: { path: '/usr/bin', home: '/home/me' },
+};
 
 vi.doMock('node:path', async () => {
   const { win32 } = await vi.importActual<typeof import('node:path')>('node:path');
@@ -32,7 +35,7 @@ vi.doMock('../../wsl/wslPath', async () => {
   return {
     ...actual,
     wslLocation: (directory: string) => actual.parseWslPath(directory),
-    wslUserEnvironment: async () => ({ path: '/usr/bin', home: '/home/me' }),
+    wslUserEnvironment: async () => distroUser.current,
     wslRealpath: async (distro: string, linuxPath: string) => {
       asked.push(`${distro}:${linuxPath}`);
       return posix.normalize(linuxPath);
@@ -123,5 +126,36 @@ describe('the folders a command in a WSL project may reach unasked', () => {
 
     expect(toolchain?.directories).toEqual([]);
     expect(secret?.directories).toEqual(['\\\\wsl.localhost\\Ubuntu\\home\\me\\.cargo']);
+  });
+});
+
+describe('a script that names the home folder before the distro has said where it is', () => {
+  const root = '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo';
+
+  afterEach(() => {
+    distroUser.current = { path: '/usr/bin', home: '/home/me' };
+  });
+
+  it.each(['cat ~/notes.txt', 'cat $HOME/notes.txt', 'cat ~me/notes.txt', 'cd', 'cd ~ && ls', 'echo hi > ~/out.txt'])(
+    'gets no scan for %s, so it is asked about with nothing to remember',
+    async command => {
+      distroUser.current = null;
+
+      expect(await scanShell(command, root, [root])).toBeNull();
+    }
+  );
+
+  it('still scans a script that never names the home folder', async () => {
+    distroUser.current = null;
+
+    const scan = await scanShell('cat README.md && ls /tmp', root, [root]);
+
+    expect(scan?.commands.map(entry => entry.coverable)).toEqual([true, true]);
+  });
+
+  it('scans the same script once the distro has answered', async () => {
+    const scan = await scanShell('cat ~/notes.txt', root, [root]);
+
+    expect(scan?.directories).toEqual(['\\\\wsl.localhost\\Ubuntu\\home\\me']);
   });
 });

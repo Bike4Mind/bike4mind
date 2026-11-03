@@ -1102,13 +1102,14 @@ const ASSIGNMENT_OWNERS = new Set(['command', 'declaration_command', 'variable_a
 /**
  * The home folder `~` and a bare `cd` reach, and the temp folders a command may use freely. A
  * command in a WSL folder runs in Linux, so they are the distro user's, on the share. When the
- * distro cannot say, `~` is taken as the distro's root, which no project contains.
+ * distro cannot say (yet), `known` is false and `home` is the distro's root: a path built from it
+ * is not where the command will run, so `scanShell` gives no scan for a script that uses it.
  */
-async function shellHome(startDirectory: string): Promise<{ home: string; temp: string[] }> {
+async function shellHome(startDirectory: string): Promise<{ home: string; known: boolean; temp: string[] }> {
   const wsl = wslLocation(startDirectory);
-  if (!wsl) return { home: homedir(), temp: [tmpdir(), '/tmp', '/private/tmp'] };
+  if (!wsl) return { home: homedir(), known: true, temp: [tmpdir(), '/tmp', '/private/tmp'] };
   const user = await wslUserEnvironment(wsl.distro);
-  return { home: wslUncPath(wsl, user?.home ?? '/'), temp: [wslUncPath(wsl, '/tmp')] };
+  return { home: wslUncPath(wsl, user?.home ?? '/'), known: !!user, temp: [wslUncPath(wsl, '/tmp')] };
 }
 
 /** A path in a WSL distro that none of `roots` is in. */
@@ -1135,7 +1136,13 @@ export async function scanShell(
   if (!tree) return null;
 
   try {
-    const { home, temp } = await shellHome(startDirectory);
+    const { home, known: homeKnown, temp } = await shellHome(startDirectory);
+    let homeGuessed = false;
+    const expand = (text: string): string => {
+      const expanded = expandHome(text, home);
+      if (!homeKnown && expanded !== text) homeGuessed = true;
+      return expanded;
+    };
     const allowed = [...roots, ...temp];
     const commands: ShellCommand[] = [];
     const paths = new Set<string>([await realpathNearest(startDirectory)]);
@@ -1152,14 +1159,14 @@ export async function scanShell(
     let readOnly = true;
 
     const noteEnvFile = (raw: string): void => {
-      const path = expandHome(unquote(raw), home);
+      const path = expand(unquote(raw));
       if (isDynamic(path)) return;
       if (globPrefix(path) === path ? isEnvFile(path) : globMayMatchEnvFile(path)) envFiles.add(path);
     };
 
     /** A `probe` only reads, so a toolchain folder it names is recorded as a path, not an outside folder to grant. */
     const check = async (raw: string, cwd: string, probe = false): Promise<string | null> => {
-      const text = expandHome(unquote(raw), home);
+      const text = expand(unquote(raw));
       const prefix = globPrefix(text);
       if (!prefix || isDynamic(prefix)) return null;
       // A glob can expand to `..` (`~/.nvm*/../.ssh`, `~/.nvm/.?/.ssh`), so a dot after the glob never stays inside.
@@ -1265,7 +1272,7 @@ export async function scanShell(
         for (const arg of rest) {
           const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : arg;
           if (value.startsWith('-')) continue;
-          const prefix = globPrefix(expandHome(unquote(value), home));
+          const prefix = globPrefix(expand(unquote(value)));
           if (!prefix || isDynamic(prefix)) continue;
           const target = resolve(state.cwd, prefix);
           if (inUngrantedDistro(target, allowed)) {
@@ -1300,7 +1307,7 @@ export async function scanShell(
         return;
       }
       const target = rest.find(arg => arg === '-' || !arg.startsWith('-'));
-      const next = target === '-' ? state.previous : await check(target ?? home, state.cwd);
+      const next = target === '-' ? state.previous : await check(target ?? '~', state.cwd);
       if (next === null) return;
       if (program === 'pushd') state.stack.push(state.cwd);
       state.previous = state.cwd;
@@ -1308,7 +1315,7 @@ export async function scanShell(
     };
 
     const noteWrite = (raw: string, into = writes): void => {
-      const text = expandHome(unquote(raw), home);
+      const text = expand(unquote(raw));
       if (text && !isDynamic(text) && !HARMLESS_REDIRECT_TARGETS.has(text)) into.add(resolve(state.cwd, text));
     };
 
@@ -1417,6 +1424,7 @@ export async function scanShell(
     };
 
     await visit(tree.rootNode);
+    if (homeGuessed) return null;
     return {
       commands,
       paths: [...paths],
