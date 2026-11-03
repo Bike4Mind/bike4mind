@@ -2,8 +2,9 @@
  * Posts one Security alert per actor whose probing of the API scores past the admin threshold in
  * the window (scoring: ./apiProbeScoring.ts). Settings: probeDetector* in
  * b4m-core/common/src/schemas/settings.ts. Schedule: rate(5 minutes), production only
- * (infra/cron.ts apiProbeDetector). Hosted only: it reads the server function's CloudWatch log group,
- * which a self-host deployment does not have.
+ * (infra/apiProbeDetector.ts). Hosted only: it reads the server function's CloudWatch log group,
+ * which a self-host deployment does not have. The alert names raw client IPs for the Security
+ * channel; only the dedupe cache keys are hashed, since they persist outside it.
  */
 
 import { createHash } from 'node:crypto';
@@ -31,7 +32,7 @@ import {
   type ProbeSignal,
 } from './apiProbeScoring';
 
-/** Set by infra/cron.ts; the Next.js server function's log group. */
+/** Set by infra/apiProbeDetector.ts; the Next.js server function's log group. */
 export const API_SERVER_LOG_GROUP_ENV = 'API_SERVER_LOG_GROUP';
 
 const MINUTE_MS = 60_000;

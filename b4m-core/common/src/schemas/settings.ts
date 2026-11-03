@@ -3604,7 +3604,7 @@ export const settingsMap = {
     min: 1,
     int: true,
     description:
-      'Score at which an actor is reported. Each refused fetch scores 10, each failed webhook signature 5 and each invalid-id lookup 2. A 401, 403 or 404 scores 1, but only from an IP and account pair that also reached 10 or more distinct paths in the window.',
+      'Score at which an actor is reported. Each refused fetch scores 10, each failed webhook signature 5 and each invalid-id lookup 2. A 401, 403 or 404 scores 1, but only from an IP and account pair that also reached 10 or more distinct paths in the window. Webhook failures carry no account, so 5 from one Stripe IP (for example after a signing-secret rotation) is enough at the default threshold.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.PROBE_DETECTION.id,
     order: 2,
