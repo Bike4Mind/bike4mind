@@ -28,7 +28,7 @@ function allowRules(rules: readonly string[]): PermissionRuleSet {
   );
 }
 
-// A `gh` stub first on PATH, so the GitHub commands below run without the network or an account.
+// Tool stubs first on PATH, so the commands below run without the network or an account.
 const stub = vi.hoisted(() => ({ bin: '' }));
 vi.mock('./tools/userPath', () => ({ resolveUserPath: async () => `${stub.bin}:${process.env.PATH ?? ''}` }));
 
@@ -81,7 +81,7 @@ describe('ChatService untrusted content in a reply', () => {
     stub.bin = await realpath(await mkdtemp(join(tmpdir(), 'b4m-taint-bin-')));
     await writeFile(join(stub.bin, 'gh'), '#!/bin/sh\necho \'[{"number":1,"title":"t"}]\'\n', 'utf8');
     await chmod(join(stub.bin, 'gh'), 0o755);
-    for (const tool of ['pnpm', 'npm', 'npx', 'make']) {
+    for (const tool of ['pnpm', 'npm', 'npx', 'make', 'curl']) {
       await writeFile(join(stub.bin, tool), '#!/bin/sh\necho ok\n', 'utf8');
       await chmod(join(stub.bin, tool), 0o755);
     }

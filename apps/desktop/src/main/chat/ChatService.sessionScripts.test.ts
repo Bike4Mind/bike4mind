@@ -22,8 +22,8 @@ function toolTurn(id: string, name: string, input: Record<string, unknown>): str
 
 type Round = [string, Record<string, unknown>];
 
-// Tool stubs first on PATH. These tests check approval decisions; spawning real git or package
-// runners can outlast the 5 s settle wait on a loaded CI machine.
+// Tool stubs first on PATH. These tests check approval decisions; a real git, package runner or
+// curl can outlast the 5 s settle wait (curl hangs where a closed loopback port drops the SYN).
 const stub = vi.hoisted(() => ({ bin: '' }));
 vi.mock('./tools/userPath', () => ({ resolveUserPath: async () => `${stub.bin}:${process.env.PATH ?? ''}` }));
 
@@ -50,7 +50,7 @@ describe('ChatService running a script written in the same session', () => {
 
   beforeAll(async () => {
     stub.bin = await realpath(await mkdtemp(join(tmpdir(), 'b4m-scripts-bin-')));
-    for (const tool of ['git', 'npm', 'npx']) {
+    for (const tool of ['git', 'npm', 'npx', 'curl']) {
       await writeFile(join(stub.bin, tool), '#!/bin/sh\nexit 0\n', 'utf8');
       await chmod(join(stub.bin, tool), 0o755);
     }
