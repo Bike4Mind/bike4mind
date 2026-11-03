@@ -224,7 +224,9 @@ export function withWslEnv(env: NodeJS.ProcessEnv, names: readonly string[]): No
 
 /**
  * The env for a `wslCommand`. Only WSLENV names cross into Linux, so the Windows PATH stays
- * behind and the distro user's PATH goes in its place; `names` are passed through as well.
+ * behind and the distro user's PATH goes in its place, absolute entries only: the command starts
+ * in the project folder, where an empty or relative entry would find a program the project holds.
+ * `names` are passed through as well.
  */
 export async function wslCommandEnv(
   env: NodeJS.ProcessEnv,
@@ -232,8 +234,12 @@ export async function wslCommandEnv(
   names: readonly string[] = []
 ): Promise<NodeJS.ProcessEnv> {
   const user = await wslUserEnvironment(distro);
-  if (!user) return wslSpawnEnv(withWslEnv(env, names));
-  return wslSpawnEnv(withWslEnv({ ...env, [LINUX_PATH_ENV]: user.path }, [...names, LINUX_PATH_ENV]));
+  const path = user?.path
+    .split(':')
+    .filter(entry => entry.startsWith('/'))
+    .join(':');
+  if (!path) return wslSpawnEnv(withWslEnv(env, names));
+  return wslSpawnEnv(withWslEnv({ ...env, [LINUX_PATH_ENV]: path }, [...names, LINUX_PATH_ENV]));
 }
 
 const REALPATH_TIMEOUT_MS = 5_000;

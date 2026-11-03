@@ -15,6 +15,7 @@ import {
   type UserEnvironmentProbe,
   withWslEnv,
   wslCommand,
+  wslCommandEnv,
   wslEnvNames,
   wslLocation,
   wslUncPath,
@@ -172,6 +173,22 @@ describe('the user environment probe', () => {
     clock += 24 * 60 * 60_000;
     expect(await ask()).toEqual(FOUND);
     expect(probe).toHaveBeenCalledTimes(3);
+  });
+
+  it('hands a command the absolute entries of the distro user PATH and no others', async () => {
+    const distro = `b4m-${randomUUID()}`;
+    const found = { path: '/home/me/.nvm/bin::bin:./node_modules/.bin:/usr/bin:.', home: '/home/me' };
+    await wslUserEnvironment(distro, Date.now, async () => ({ found, timedOut: false }));
+
+    const env = await wslCommandEnv({ PATH: 'C:\\Windows' }, distro);
+    expect(env.B4M_DESKTOP_LINUX_PATH).toBe('/home/me/.nvm/bin:/usr/bin');
+
+    const bare = `b4m-${randomUUID()}`;
+    await wslUserEnvironment(bare, Date.now, async () => ({
+      found: { path: '.:bin', home: '/home/me' },
+      timedOut: false,
+    }));
+    expect((await wslCommandEnv({}, bare)).B4M_DESKTOP_LINUX_PATH).toBeUndefined();
   });
 
   it('lets a caller that joins a running probe go on without it after 2 s', async () => {
