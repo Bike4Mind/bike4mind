@@ -145,6 +145,7 @@ export const authHolders = {
     ],
     // Authors of cited works and attachments, not platform users.
     unrelatedPaths: ['promptMeta.citables.author', 'attachmentList.attachments.author'],
+    secretPaths: ['callback.url'],
   },
   RegistrationInvite: {
     kind: 'holder',
@@ -252,6 +253,7 @@ export const authHolders = {
       'securityQuestions.answer',
       'authProviders.accessToken',
       'authProviders.refreshToken',
+      'authProviders.samlSessionIndex',
       'googleDrive.accessToken',
       'googleDrive.refreshToken',
       'atlassianConnect.accessToken',
@@ -309,6 +311,6 @@ export const authHolders = {
   WsConnectTicket: {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
-    secretPaths: ['ticket'],
+    secretPaths: ['ticket', 'sid'],
   },
 } satisfies DataHolderRegistry;
