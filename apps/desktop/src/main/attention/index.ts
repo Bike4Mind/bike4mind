@@ -1,5 +1,5 @@
 import { Notification, app, ipcMain } from 'electron';
-import { isAttentionNotice, type AttentionOpenEvent } from '@shared/attention';
+import { parseAttentionNotice, type AttentionOpenEvent } from '@shared/attention';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { appWindows } from '../windows';
 
@@ -15,8 +15,9 @@ export function registerAttention(): void {
   // replaces its older one rather than stacking.
   const live = new Map<string, Notification>();
 
-  ipcMain.handle(IPC_CHANNELS.attentionNotify, (_event, notice: unknown) => {
-    if (!isAttentionNotice(notice) || !Notification.isSupported()) return;
+  ipcMain.handle(IPC_CHANNELS.attentionNotify, (_event, payload: unknown) => {
+    const notice = parseAttentionNotice(payload);
+    if (!notice || !Notification.isSupported()) return;
     const windows = appWindows();
     if (windows.some(window => window.isFocused())) return;
 

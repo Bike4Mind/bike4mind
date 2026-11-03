@@ -84,6 +84,18 @@ describe('attention notices', () => {
     expect(electron.shown).toEqual([]);
   });
 
+  it('trims and caps the title and body before showing them', () => {
+    call(IPC_CHANNELS.attentionNotify, { ...notice, title: `  ${'t'.repeat(500)}  `, body: `${'b'.repeat(900)}\n` });
+    const { title, body } = electron.shown[0].options;
+    expect(title).toBe('t'.repeat(120));
+    expect(body).toBe('b'.repeat(240));
+  });
+
+  it('refuses a notice whose title is blank after trimming', () => {
+    call(IPC_CHANNELS.attentionNotify, { ...notice, title: '   ' });
+    expect(electron.shown).toEqual([]);
+  });
+
   it('focuses the window and tells the renderer what to open when clicked', () => {
     window.isMinimized.mockReturnValue(true);
     call(IPC_CHANNELS.attentionNotify, notice);
