@@ -16,7 +16,7 @@ import {
   type HardwareProfile,
 } from './hardware';
 import { DEFAULT_OLLAMA_URL, OllamaRuntime } from './ollama';
-import { detectOllamaInstall, readOllamaSettings } from './ollamaInstall';
+import { detectOllamaInstall, machineAddresses, readOllamaSettings } from './ollamaInstall';
 import { fitRuntimeFromOllamaSettings, ollamaDefaultContext, ollamaFitConfidence } from './ollamaSettings';
 import { resolveStorePath, storeDisk, type StoreDiskOptions } from './storeDisk';
 import type { LocalRuntime } from './types';
@@ -51,7 +51,13 @@ export interface ModelHostProbeOptions extends HardwareProbeOptions, Pick<StoreD
   runtime?: Pick<LocalRuntime, 'health' | 'loaded' | 'list' | 'inspect'>;
   unitName?: string;
   homeDir?: string;
-  os?: { totalmem(): number; cpus?(): Array<{ model: string }>; release?(): string };
+  os?: {
+    totalmem(): number;
+    cpus?(): Array<{ model: string }>;
+    release?(): string;
+    networkInterfaces?(): ReturnType<typeof nodeOs.networkInterfaces>;
+    hostname?(): string;
+  };
 }
 
 export interface ModelHostProbe {
@@ -102,11 +108,22 @@ export async function probeModelHost(options: ModelHostProbeOptions = {}): Promi
   const url = options.ollamaUrl ?? DEFAULT_OLLAMA_URL;
   const root = options.rootDir ?? '/';
   const os = options.os ?? nodeOs;
+  const { networkInterfaces, hostname } = os;
+  const ownAddresses =
+    networkInterfaces && hostname
+      ? machineAddresses({ networkInterfaces: () => networkInterfaces.call(os), hostname: () => hostname.call(os) })
+      : undefined;
   const runtime = options.runtime ?? new OllamaRuntime({ baseUrl: url });
 
   const [health, install, osRelease, kernel, cpuinfo] = await Promise.all([
     runtime.health(),
-    detectOllamaInstall({ url, exec: options.exec, rootDir: options.rootDir, unitName: options.unitName }),
+    detectOllamaInstall({
+      url,
+      exec: options.exec,
+      rootDir: options.rootDir,
+      unitName: options.unitName,
+      localAddresses: ownAddresses,
+    }),
     readText(join(root, 'etc/os-release')),
     readText(join(root, 'proc/sys/kernel/osrelease')),
     readText(join(root, 'proc/cpuinfo')),

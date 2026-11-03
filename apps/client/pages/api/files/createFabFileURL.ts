@@ -12,6 +12,7 @@ import { Permission, fabFileResponseSchema } from '@bike4mind/common';
 import { fabFilesService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';
 import { respond } from '@server/utils/respond';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
@@ -32,6 +33,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
       const { url } = req.body;
 
       if (!url) throw new BadRequestError('No URL provided');
+      await consumeFileUploadBudget(req, 1);
 
       const newFabFile = await withTransaction(() =>
         fabFilesService.createFabFileByUrl(

@@ -169,6 +169,7 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
   ],
   [ApiKeyScope.ME_READ]: ['GET /api/v1/credits', 'GET /api/v1/me'],
   [ApiKeyScope.OVERWATCH_INGEST_WRITE]: ['POST /api/overwatch/v1/events'],
+  [ApiKeyScope.REWARDS_GRANT]: ['POST /api/partners/rewards/grant'],
   [ApiKeyScope.EMBED_CHAT]: [
     'GET /api/embed/branding',
     'POST /api/embed/chat',
