@@ -126,6 +126,15 @@ describe('formatting', () => {
     expect(formatDuration(187_000)).toBe('3m 7s');
   });
 
+  it('rounds before picking the unit, so no edge reads as the next unit up', () => {
+    expect(formatDuration(999.4)).toBe('999ms');
+    expect(formatDuration(999.6)).toBe('1.0s');
+    expect(formatDuration(59_940)).toBe('59.9s');
+    expect(formatDuration(59_950)).toBe('1m 0s');
+    expect(formatDuration(119_600)).toBe('2m 0s');
+    expect(formatDuration(-5)).toBe('0ms');
+  });
+
   it('keeps a small share from rounding away', () => {
     expect(formatShare(0.3)).toBe('30%');
     expect(formatShare(0.001)).toBe('<1%');
