@@ -26,8 +26,12 @@ afterEach(() => {
   container.remove();
 });
 
-async function render(result: LocalUsageResult | null) {
-  const getLocal = vi.fn(() => (result ? Promise.resolve(result) : new Promise<LocalUsageResult>(() => {})));
+async function render(result: LocalUsageResult | null | (() => Promise<LocalUsageResult>)) {
+  const getLocal = vi.fn(
+    typeof result === 'function'
+      ? result
+      : () => (result ? Promise.resolve(result) : new Promise<LocalUsageResult>(() => {}))
+  );
   (window as unknown as { b4m: unknown }).b4m = { usage: { getLocal } };
   container = document.createElement('div');
   document.body.append(container);
@@ -79,10 +83,28 @@ describe('SignedOutProfile', () => {
     expect(has('profile-local-usage')).toBe(false);
   });
 
-  it('draws neither layout until the local read answers, so it does not jump from one to the other', async () => {
+  it('shows the prompt and Back at once, with a loading line, while the local read is pending', async () => {
     const { has } = await render(null);
+    expect(has('profile-signed-out')).toBe(true);
+    expect(has('profile-back-btn')).toBe(true);
     expect(has('profile-local-loading')).toBe(true);
-    expect(has('profile-signed-out')).toBe(false);
+    expect(has('profile-local-usage')).toBe(false);
+  });
+
+  it('keeps the page, with the error, when a refresh fails after a successful read', async () => {
+    const answers: LocalUsageResult[] = [
+      { ok: true, usage: localUsageFixture({ replies: 2, outputTokens: 50 }) },
+      { ok: false, error: 'Could not read local model usage.' },
+    ];
+    const { has, getLocal } = await render(() => Promise.resolve(answers.shift() ?? answers[0]));
+    expect(has('profile-local-usage')).toBe(true);
+
+    await act(async () => {
+      container.querySelector<HTMLElement>('[data-testid="profile-refresh-btn"]')?.click();
+    });
+    expect(getLocal).toHaveBeenCalledTimes(2);
+    expect(has('profile-screen')).toBe(true);
+    expect(has('profile-local-error')).toBe(true);
   });
 
   it('never shows figures counted from an account folder', async () => {

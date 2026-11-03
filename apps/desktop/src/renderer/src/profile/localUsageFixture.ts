@@ -1,7 +1,10 @@
 import type { LocalUsage, LocalUsageFigures } from '@shared/usage';
 
 /** A LocalUsage for tests: one model on this computer, with `totals` overridden as given. */
-export function localUsageFixture(totals: Partial<LocalUsageFigures> = {}): LocalUsage {
+export function localUsageFixture(
+  totals: Partial<LocalUsageFigures> = {},
+  scope: LocalUsage['scope'] = 'device'
+): LocalUsage {
   const figures: LocalUsageFigures = {
     replies: 0,
     outputTokens: 0,
@@ -39,7 +42,7 @@ export function localUsageFixture(totals: Partial<LocalUsageFigures> = {}): Loca
     byModel: figures.replies ? [{ key: 'llama3.2', label: 'llama3.2', ...row }] : [],
     byServer: figures.replies ? [{ key: 'ollama', label: 'This computer', ...row }] : [],
     allTimeReplies: Math.max(figures.replies, 1),
-    scope: 'device',
+    scope,
     readAt: Date.parse('2026-11-02T15:20:00.000Z'),
   };
 }

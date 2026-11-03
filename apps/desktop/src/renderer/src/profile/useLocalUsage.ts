@@ -4,12 +4,8 @@ import type { LocalUsageResult, UsageWindowId } from '@shared/usage';
 const READ_FAILED: LocalUsageResult = { ok: false, error: 'Could not read local model usage.' };
 
 /**
- * One window of self-hosted model usage, counted in main from this device's conversations.
- *
- * `reload` is the screen's refresh counter: a new value reads past main's cache once. `scopeKey`
- * names who is signed in, and an answer read under another key is never returned. Within one key
- * the last answer stays until the next lands, so a window toggle or a refresh does not drop the
- * section out and back in. Null until the first answer for this key.
+ * One window of local model usage. A new `reload` reads past main's cache; an answer read under
+ * another `scopeKey` is never returned, and within one key the last answer stays until the next.
  */
 export function useLocalUsage(windowId: UsageWindowId, reload: number, scopeKey: string): LocalUsageResult | null {
   const [answer, setAnswer] = useState<{ scopeKey: string; result: LocalUsageResult } | null>(null);
