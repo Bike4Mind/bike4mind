@@ -93,7 +93,9 @@ import {
   buildToolUseInstruction,
   downgradeForcedToolChoice,
   hasCitationsEnabled,
+  isStrictSchemaRejection,
   markToolStrict,
+  withStrictOff,
 } from './forcedToolChoice';
 import { buildJsonSchemaInstruction } from './responseFormatHelpers';
 import { logToolRound, summarizeToolOutcomes } from './toolRoundTiming';
@@ -1520,6 +1522,9 @@ export class AnthropicBackend implements ICompletionBackend {
     }
     applyAnthropicOutputCeiling(apiParams, options.outputTokenCeiling);
 
+    // Set once the provider accepts this round's request; only an error before that can be a schema rejection.
+    let requestAccepted = false;
+
     // Setup the actual API call with API-specific options
     try {
       const func: { name?: string; id?: string; parameters?: string }[] = [];
@@ -1693,6 +1698,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
                 }
               ).then(r => r.result);
+              requestAccepted = true;
 
               // Clear request timeout once stream is created (connection established)
               if (requestTimeout) clearTimeout(requestTimeout);
@@ -2753,6 +2759,7 @@ export class AnthropicBackend implements ICompletionBackend {
               onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
             }
           ).then(r => r.result);
+          requestAccepted = true;
         } finally {
           release?.();
         }
@@ -3201,6 +3208,18 @@ export class AnthropicBackend implements ICompletionBackend {
         }
       }
     } catch (error) {
+      // Strict mode can reject a schema the unconstrained path accepts. The one retry sends no strict schema,
+      // so its own error surfaces as-is.
+      const sentStrictSchema =
+        !!apiParams.output_config?.format || !!apiParams.tools?.some(tool => 'strict' in tool && tool.strict === true);
+      if (toolCallCount === 0 && !requestAccepted && sentStrictSchema && isStrictSchemaRejection(error)) {
+        this.logger.warn('[AnthropicBackend] Schema rejected under strict mode; retrying once with strict off', {
+          model,
+          anthropicMessage: error instanceof Error ? error.message : undefined,
+        });
+        await this.complete(model, messages, withStrictOff(options), cb, toolsUsed);
+        return;
+      }
       // Emit CloudWatch metric for rate limit errors (after SDK exhausts retries)
       if (error instanceof RateLimitError) {
         // Determine feature area and request type for ops visibility

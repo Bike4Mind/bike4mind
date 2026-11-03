@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { APIConnectionError, APIError } from '@anthropic-ai/sdk';
 import { ChatModels, supportsForcedToolChoice, type ModelInfo, type ResponseFormat } from '@bike4mind/common';
 import { AnthropicBackend } from './anthropicBackend';
 import type { CompletionInfo, ICompletionOptions, ICompletionOptionTools } from './backend';
@@ -14,6 +15,7 @@ import {
   buildToolUseInstruction,
   declaresOpenObject,
   isStrictCompatibleSchema,
+  isStrictSchemaRejection,
 } from './forcedToolChoice';
 
 type Params = Record<string, unknown> & {
@@ -1052,6 +1054,145 @@ describe('AnthropicBackend json_schema with document citations', () => {
     expect(captured[0]).not.toHaveProperty('thinking');
     expect(JSON.parse(out.text())).toEqual(RESULT);
     expect(out.mode()).toBe('tool_use');
+  });
+});
+
+// Built the way the SDK builds it from an HTTP error response.
+const anthropicError = (status: number, type: string, message: string) =>
+  APIError.generate(status, { type: 'error', error: { type, message } }, undefined, new Headers());
+
+const schemaRejection = () =>
+  anthropicError(400, 'invalid_request_error', 'tools.0.custom.input_schema: schema is not supported in strict mode');
+
+describe('AnthropicBackend retry after a strict schema rejection', () => {
+  it('resends the forced json_schema tool once, without strict and with the schema as sent by the caller', async () => {
+    const { backend, captured } = buildBackend((_params, turn) => {
+      if (turn === 1) throw schemaRejection();
+      return toolUseResponse('extract_user', RESULT);
+    });
+    const out = capture();
+    await run(backend, ChatModels.CLAUDE_5_5_HAIKU, { stream: false, responseFormat: RESPONSE_FORMAT }, out.cb);
+
+    expect(captured).toHaveLength(2);
+    expect(captured[0].tools?.[0].strict).toBe(true);
+    expect(captured[1].tools).toEqual([
+      { name: 'extract_user', description: 'Extract user info', input_schema: SCHEMA },
+    ]);
+    expect(captured[1].tool_choice).toEqual({ type: 'tool', name: 'extract_user', disable_parallel_tool_use: true });
+    expect(JSON.parse(out.text())).toEqual(RESULT);
+    expect(out.mode()).toBe('tool_use');
+  });
+
+  it('moves a rejected output_config.format to the prompt instruction on the streaming path', async () => {
+    const { backend, captured } = buildBackend((_params, turn) => {
+      if (turn === 1) throw schemaRejection();
+      return textStream(JSON.stringify(RESULT));
+    });
+    const out = capture();
+    await run(backend, ChatModels.CLAUDE_5_5_OPUS, { stream: true, responseFormat: RESPONSE_FORMAT }, out.cb);
+
+    expect(captured).toHaveLength(2);
+    expect(captured[0].output_config).toEqual({ format: { type: 'json_schema', schema: SCHEMA } });
+    expect(captured[1]).not.toHaveProperty('output_config');
+    expect(systemText(captured[1].system)).toContain('Schema name: extract_user');
+    expect(JSON.parse(out.text())).toEqual(RESULT);
+    expect(out.mode()).toBe('best-effort');
+  });
+
+  it('drops strict from the downgraded named tool and keeps it off on later tool rounds', async () => {
+    const { backend, captured } = buildBackend((_params, turn) => {
+      if (turn === 1) throw schemaRejection();
+      return turn === 2 ? toolUseResponse('get_weather', { city: 'NYC' }) : textResponse('done');
+    });
+    await run(backend, ChatModels.CLAUDE_5_5_OPUS, {
+      stream: false,
+      tools: [weatherTool(STRICT_PARAMS)],
+      tool_choice: { type: 'function', function: { name: 'get_weather' } },
+    });
+
+    expect(captured).toHaveLength(3);
+    expect(captured[0].tools?.[0].strict).toBe(true);
+    expect(captured[1].tools?.[0]).not.toHaveProperty('strict');
+    expect(captured[2].tools).toEqual(captured[1].tools);
+    for (const params of captured) {
+      expect(params.tool_choice).toEqual({ type: 'auto' });
+      expect(systemText(params.system)).toContain(buildToolUseInstruction({ toolName: 'get_weather' }));
+    }
+  });
+
+  it('retries only once and surfaces the second error unchanged', async () => {
+    const second = schemaRejection();
+    const { backend, captured } = buildBackend((_params, turn) => {
+      throw turn === 1 ? schemaRejection() : second;
+    });
+
+    await expect(
+      run(backend, ChatModels.CLAUDE_5_5_HAIKU, { stream: false, responseFormat: RESPONSE_FORMAT })
+    ).rejects.toBe(second);
+    expect(captured).toHaveLength(2);
+  });
+
+  it.each([
+    ['a 400 that is not about the schema', () => anthropicError(400, 'invalid_request_error', 'prompt is too long')],
+    ['an auth error', () => anthropicError(401, 'authentication_error', 'invalid x-api-key')],
+    ['a permission error', () => anthropicError(403, 'permission_error', 'not allowed to use this schema')],
+  ])('does not retry %s', async (_label, makeError) => {
+    const error = makeError();
+    const { backend, captured } = buildBackend(() => {
+      throw error;
+    });
+
+    await expect(
+      run(backend, ChatModels.CLAUDE_5_5_HAIKU, { stream: false, responseFormat: RESPONSE_FORMAT })
+    ).rejects.toBe(error);
+    expect(captured).toHaveLength(1);
+  });
+
+  it('does not retry a request that carried no strict schema', async () => {
+    const error = schemaRejection();
+    const { backend, captured } = buildBackend(() => {
+      throw error;
+    });
+
+    await expect(
+      run(backend, ChatModels.CLAUDE_5_5_HAIKU, { stream: false, responseFormat: formatWithStrict(false) })
+    ).rejects.toBe(error);
+    expect(captured).toHaveLength(1);
+  });
+
+  it('does not retry a rejection on a later tool round, after the first request was accepted', async () => {
+    const error = schemaRejection();
+    const { backend, captured } = buildBackend((_params, turn) => {
+      if (turn === 2) throw error;
+      return turn === 1 ? toolUseResponse('get_weather', { city: 'NYC' }) : textResponse('done');
+    });
+
+    await expect(
+      run(backend, ChatModels.CLAUDE_5_5_OPUS, {
+        stream: false,
+        tools: [weatherTool(STRICT_PARAMS)],
+        tool_choice: { type: 'function', function: { name: 'get_weather' } },
+      })
+    ).rejects.toBe(error);
+    expect(captured).toHaveLength(2);
+  });
+});
+
+describe('isStrictSchemaRejection', () => {
+  it.each([
+    ['a 400 invalid_request_error naming the schema', schemaRejection(), true],
+    [
+      'a 400 invalid_request_error naming the compiled grammar',
+      anthropicError(400, 'invalid_request_error', 'compiled grammar is too large'),
+      true,
+    ],
+    ['a 400 that is not about the schema', anthropicError(400, 'invalid_request_error', 'prompt is too long'), false],
+    ['a 401', anthropicError(401, 'authentication_error', 'invalid x-api-key'), false],
+    ['a 429', anthropicError(429, 'rate_limit_error', 'schema requests are rate limited'), false],
+    ['a connection error', new APIConnectionError({ message: 'Connection error.' }), false],
+    ['a plain Error', new Error('400 schema'), false],
+  ])('%s -> %s', (_label, error, expected) => {
+    expect(isStrictSchemaRejection(error)).toBe(expected);
   });
 });
 

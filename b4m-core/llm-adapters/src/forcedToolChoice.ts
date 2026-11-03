@@ -395,6 +395,40 @@ export function buildStructuredOutputFormat(schema: Record<string, unknown>): JS
   return { type: 'json_schema', schema: hoistRepeatedObjects(converted) };
 }
 
+/**
+ * Whether an Anthropic API error is a schema rejection: a 400 invalid_request_error whose message names
+ * the schema, strict mode or the compiled grammar. Connection, auth and rate-limit errors never match.
+ */
+export function isStrictSchemaRejection(error: unknown): boolean {
+  if (!isRecord(error) || error.status !== 400 || !isRecord(error.error)) return false;
+  const body = error.error.error;
+  return (
+    isRecord(body) &&
+    body.type === 'invalid_request_error' &&
+    typeof body.message === 'string' &&
+    /schema|strict|grammar/i.test(body.message)
+  );
+}
+
+/** `options` with `strict: false` on the json_schema response format and on the downgraded named tool. */
+export function withStrictOff(options: Partial<ICompletionOptions>): Partial<ICompletionOptions> {
+  const { responseFormat, tools } = options;
+  const toolName = options._internal?.downgradedToolChoice?.toolName;
+  return {
+    ...options,
+    ...(responseFormat?.type === 'json_schema'
+      ? { responseFormat: { ...responseFormat, json_schema: { ...responseFormat.json_schema, strict: false } } }
+      : {}),
+    ...(tools && toolName
+      ? {
+          tools: tools.map(tool =>
+            tool.toolSchema.name === toolName ? { ...tool, toolSchema: { ...tool.toolSchema, strict: false } } : tool
+          ),
+        }
+      : {}),
+  };
+}
+
 /** Whether any document block asks for citations, which the API refuses alongside output_config.format. */
 export function hasCitationsEnabled(messages: MessageParam[]): boolean {
   return messages.some(
