@@ -3,9 +3,13 @@ import type { LoadedModelState } from '@shared/models';
 import { LOADED_POLL_MS } from './contextStatus';
 
 /**
- * Whether `modelId` is loaded on its Ollama server, read on mount and every LOADED_POLL_MS while
- * `active` and the window is visible. A runtime that answers `unsupported` is not asked again.
- * `refresh` asks once now, for a tooltip that just opened.
+ * Whether `modelId` is loaded on its Ollama server: read when `active` turns on, then every
+ * LOADED_POLL_MS while the window is visible and the last read succeeded. `refresh` asks once
+ * now, for a tooltip that just opened, and restarts the interval if that read succeeds.
+ *
+ * A failed read (`unknown`) stops the interval until the next hover or visibility return: a read
+ * of a saved server that is down re-marks its health, which reloads the model catalog. A runtime
+ * that answers `unsupported` is not asked again. Nothing from before a turn is kept past it.
  */
 export function useLoadedModelState(
   modelId: string | null,
@@ -16,39 +20,37 @@ export function useLoadedModelState(
 
   useEffect(() => {
     if (!modelId || !active) return;
+    const id = modelId;
     let disposed = false;
     let unsupported = false;
+    let latest = 0;
     let timer: ReturnType<typeof setInterval> | null = null;
     const stop = () => {
       if (timer !== null) clearInterval(timer);
       timer = null;
     };
-    const read = () => {
+    const start = () => {
+      if (timer === null) timer = setInterval(read, LOADED_POLL_MS);
+    };
+    function read() {
       if (unsupported || document.visibilityState === 'hidden') return;
-      window.b4m.models.getLoadedState(modelId).then(
+      const request = ++latest;
+      window.b4m.models.getLoadedState(id).then(
         state => {
-          if (disposed) return;
-          setResult({ modelId, state });
-          if (state.kind === 'unsupported') {
-            unsupported = true;
-            stop();
-          }
+          if (disposed || request !== latest) return;
+          setResult({ modelId: id, state });
+          if (state.kind === 'unsupported') unsupported = true;
+          if (state.kind === 'unsupported' || state.kind === 'unknown') stop();
+          else if (document.visibilityState !== 'hidden') start();
         },
         () => undefined
       );
-    };
-    const start = () => {
-      if (timer === null && !unsupported) timer = setInterval(read, LOADED_POLL_MS);
-    };
+    }
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') stop();
-      else {
-        read();
-        start();
-      }
+      else read();
     };
     read();
-    if (document.visibilityState !== 'hidden') start();
     document.addEventListener('visibilitychange', onVisibility);
     ask.current = read;
     return () => {
@@ -56,6 +58,7 @@ export function useLoadedModelState(
       stop();
       document.removeEventListener('visibilitychange', onVisibility);
       ask.current = () => undefined;
+      setResult(null);
     };
   }, [modelId, active]);
 

@@ -124,7 +124,7 @@ export function Composer({
    * need to act on, and those still win.
    */
   usage?: ComposerUsage | null;
-  /** Drawn left of the credits ring while a conversation is open: the context ring. */
+  /** The context ring, left of the credits ring; hidden while `disabled` or `notReady`, as that ring is. */
   contextStatus?: ReactNode;
   /**
    * What the placeholder says while `disabled` holds - the step that IS open, named by the
@@ -691,7 +691,7 @@ export function Composer({
 
         {footer}
 
-        {!disabled && contextStatus}
+        {!disabled && !notReady && contextStatus}
 
         {shownUsage && (
           <Tooltip

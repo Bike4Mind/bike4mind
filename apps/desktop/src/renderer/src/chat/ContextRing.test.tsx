@@ -54,6 +54,14 @@ function render(props: Partial<Props> = {}) {
 
 const query = (testId: string) => document.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
 
+function deferred() {
+  let resolve: (state: LoadedModelState) => void = () => undefined;
+  const promise = new Promise<LoadedModelState>(done => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 /** Lets a resolved IPC promise land. */
 const settle = () => act(async () => {});
 
@@ -188,5 +196,92 @@ describe('ContextRing', () => {
     render({ promptCache: undefined });
     act(() => vi.advanceTimersByTime(LOADED_POLL_MS * 3));
     expect(getLoadedState).not.toHaveBeenCalled();
+  });
+
+  it('pauses polling after a failed read until the next hover or return to the window', async () => {
+    getLoadedState.mockResolvedValue({ kind: 'unknown' });
+    render({ modelId: LOCAL, promptCache: undefined });
+    await settle();
+    act(() => vi.advanceTimersByTime(LOADED_POLL_MS * 3));
+    expect(getLoadedState).toHaveBeenCalledTimes(1);
+
+    hover();
+    await settle();
+    expect(getLoadedState).toHaveBeenCalledTimes(2);
+    expect(tooltip()).toBe('34k / 262k context (13%)');
+
+    setVisibility('hidden');
+    setVisibility('visible');
+    await settle();
+    expect(getLoadedState).toHaveBeenCalledTimes(3);
+
+    getLoadedState.mockResolvedValue({ kind: 'loaded', expiresAt: NOW + 250_000 });
+    setVisibility('hidden');
+    setVisibility('visible');
+    await settle();
+    expect(getLoadedState).toHaveBeenCalledTimes(4);
+    act(() => vi.advanceTimersByTime(LOADED_POLL_MS));
+    await settle();
+    expect(getLoadedState).toHaveBeenCalledTimes(5);
+  });
+
+  it('drops a response that arrives after a newer one', async () => {
+    const first = deferred();
+    const second = deferred();
+    getLoadedState.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    render({ modelId: LOCAL, promptCache: undefined });
+    hover();
+    expect(getLoadedState).toHaveBeenCalledTimes(2);
+
+    second.resolve({ kind: 'unloaded' });
+    await settle();
+    first.resolve({ kind: 'loaded', expiresAt: NOW + 250_000 });
+    await settle();
+    expect(tooltip()).toBe('34k / 262k context (13%)\nModel not loaded');
+  });
+
+  it('does not show the pre-turn state once a turn ends', async () => {
+    render({ modelId: LOCAL, promptCache: undefined });
+    await settle();
+    hover();
+    await settle();
+    expect(tooltip()).toMatch(/Model loaded, unloads in/);
+
+    draw({ modelId: LOCAL, promptCache: undefined, streaming: true });
+    const after = deferred();
+    getLoadedState.mockReturnValueOnce(after.promise);
+    draw({ modelId: LOCAL, promptCache: undefined, streaming: false });
+    await settle();
+    expect(tooltip()).toBe('34k / 262k context (13%)');
+
+    after.resolve({ kind: 'unloaded' });
+    await settle();
+    expect(tooltip()).toBe('34k / 262k context (13%)\nModel not loaded');
+  });
+
+  it("never shows one local model's state for another", async () => {
+    render({ modelId: LOCAL, promptCache: undefined });
+    await settle();
+    hover();
+    await settle();
+    expect(tooltip()).toMatch(/Model loaded, unloads in/);
+
+    const late = deferred();
+    const other = deferred();
+    getLoadedState.mockReturnValueOnce(late.promise);
+    act(() => vi.advanceTimersByTime(LOADED_POLL_MS));
+    expect(getLoadedState).toHaveBeenLastCalledWith(LOCAL);
+    getLoadedState.mockReturnValueOnce(other.promise);
+    draw({ modelId: 'local:ollama:llama3', promptCache: undefined });
+    await settle();
+    expect(getLoadedState).toHaveBeenLastCalledWith('local:ollama:llama3');
+    expect(tooltip()).toBe('34k / 262k context (13%)');
+
+    late.resolve({ kind: 'loaded', expiresAt: NOW + 250_000 });
+    await settle();
+    expect(tooltip()).toBe('34k / 262k context (13%)');
+    other.resolve({ kind: 'unloaded' });
+    await settle();
+    expect(tooltip()).toBe('34k / 262k context (13%)\nModel not loaded');
   });
 });

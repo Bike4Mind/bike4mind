@@ -5,6 +5,7 @@ import { CssVarsProvider } from '@mui/joy/styles';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Composer } from './Composer';
+import { ContextRing } from './ContextRing';
 import type { ComposerUsage } from './statusLine';
 import type { AttachmentDraft } from './useAttachments';
 
@@ -510,5 +511,23 @@ describe('the attach shortcut', () => {
     mount();
     const button = host?.querySelector('[data-testid="composer-attach-btn"]');
     expect(button?.getAttribute('aria-keyshortcuts')).toBe('Control+U');
+  });
+});
+
+describe('the context ring slot', () => {
+  const contextStatus = (
+    <ContextRing tokens={34_000} limit={262_000} modelId="claude-opus-5-5" promptCache={undefined} streaming={false} />
+  );
+
+  it('draws the context ring left of the credits ring', () => {
+    const markup = statusMarkup({ contextStatus });
+    const context = markup.indexOf('data-testid="composer-context-ring"');
+    expect(context).toBeGreaterThan(-1);
+    expect(context).toBeLessThan(markup.indexOf('data-testid="composer-status"'));
+  });
+
+  it('hides it with the credits ring while disabled or not ready', () => {
+    expect(statusMarkup({ contextStatus, disabled: true })).not.toContain('composer-context-ring');
+    expect(statusMarkup({ contextStatus, notReady: 'No folder' })).not.toContain('composer-context-ring');
   });
 });

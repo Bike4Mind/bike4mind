@@ -480,6 +480,7 @@ export function ChatShell({
   const closePanelPopover = useCallback(() => setPanelPopoverOpen(false), []);
   useEffect(() => setPanelPopoverOpen(false), [activeId, panelDocked, screen]);
 
+  const promptCache = useMemo(() => latestReply(conversation.messages)?.promptCache, [conversation.messages]);
   const composerUsage: ComposerUsage = useMemo(() => {
     const reply = latestReply(conversation.messages, turnOpen);
     // The figure ChatService.autoCompact decides on, so red means the same thing on both sides.
@@ -1199,7 +1200,7 @@ export function ChatShell({
           )}
 
           <CacheExpiryNote
-            stamp={latestReply(conversation.messages)?.promptCache}
+            stamp={promptCache}
             model={modelOption}
             contextTokens={composerUsage.contextTokens ?? 0}
             ttl={cacheTtlFor(modelOption)}
@@ -1229,7 +1230,7 @@ export function ChatShell({
                 tokens={composerUsage.contextSnapshot?.inputTokens ?? composerUsage.contextTokens}
                 limit={composerUsage.contextLimit}
                 modelId={conversation.session?.model ?? null}
-                promptCache={latestReply(conversation.messages)?.promptCache}
+                promptCache={promptCache}
                 streaming={turnOpen}
               />
             }
