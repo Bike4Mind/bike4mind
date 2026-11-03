@@ -151,10 +151,10 @@ describe('active session heartbeat', () => {
     expect((await pingEvery60s(user.id, 0, 60)).creditsGranted).toBe(1000);
     expect(await pingEvery60s(user.id, 300, 360)).toMatchObject({ creditsGranted: 0, withheld: true });
     const budgets = await SignupGrantBudgetDayModel.find().lean();
-    expect(budgets.map(row => [row._id, row.spent])).toEqual([['2030-03-01', 1000]]);
+    expect(budgets.map(row => [row._id, row.spent])).toEqual([['trickle:2030-03-01', 1000]]);
     config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '5000';
     expect((await ping(user.id, 420)).creditsGranted).toBe(1000);
-    expect((await SignupGrantBudgetDayModel.findById('2030-03-01'))?.spent).toBe(2000);
+    expect((await SignupGrantBudgetDayModel.findById('trickle:2030-03-01'))?.spent).toBe(2000);
   });
 
   it('requires activity in the new window on the eligibility fallback too', async () => {
@@ -330,7 +330,7 @@ describe('active session heartbeat', () => {
     expect(await ping(second.id, 660)).toMatchObject({ creditsGranted: 1000, paidToday: true });
   });
 
-  it('withholds while a held signup tranche exists, then pays on retry', async () => {
+  it('pays the drip from the trickle pool while a signup tranche is held on the signup pool', async () => {
     const user = await createSignupStageUser(0);
     const held = await User.create({
       username: 'held',
@@ -342,9 +342,9 @@ describe('active session heartbeat', () => {
       signupGrantHeldAt: at(0),
       signupGrant: { ...(await newSignupGrant(adminSettingsRepository)), stage: 'pending_email' },
     });
-    expect(await pingEvery60s(user.id, 0, 600)).toMatchObject({ creditsGranted: 0, withheld: true });
-    await User.updateOne({ _id: held.id }, { $unset: { signupGrantHeldReason: 1 } });
-    expect(await ping(user.id, 660)).toMatchObject({ creditsGranted: 1000, paidToday: true });
+    expect(await pingEvery60s(user.id, 0, 600)).toMatchObject({ creditsGranted: 1000, paidToday: true });
+    expect(await dripRows(user.id)).toHaveLength(1);
+    expect((await User.findById(held.id).lean())?.signupGrantHeldReason).toBe('budget_exhausted');
   });
 
   it('accrues nothing at the lifetime cap and resumes once the cap rises', async () => {
