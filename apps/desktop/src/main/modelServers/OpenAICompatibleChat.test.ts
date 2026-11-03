@@ -455,6 +455,66 @@ describe('OpenAICompatibleChat generation settings', () => {
     expect((await open([{ model: 'house' }]).listModels())[0]?.thinkingToggle).toBe(true);
   });
 
+  it('gives a thinker stored without an identity the listed weights, and forgets it when they change', async () => {
+    let size = 4_000_000_000;
+    const fetch: FetchLike = async url => {
+      if (String(url).endsWith('/v1/models'))
+        return Response.json({ object: 'list', data: [{ id: 'house', object: 'model', meta: { size } }] });
+      return sse([delta({ reasoning_content: 'hmm' }), delta({ content: 'ok' }, 'stop'), '[DONE]']);
+    };
+    const add = vi.fn(async (_model: string, _identity: string | undefined) => undefined);
+    const forget = vi.fn(async (_model: string) => undefined);
+    const changed = vi.fn();
+    const client = new OpenAICompatibleChat({
+      runtimeId: 'srv-abc123',
+      baseUrl: BASE,
+      label: 'llama box',
+      product: 'llama-server',
+      fetch,
+      hasCredentials: () => false,
+      redact: text => text,
+      toolsChanged: changed,
+      learnedThinkers: { read: async () => [{ model: 'house' }], add, forget },
+    });
+    expect((await client.listModels())[0]?.thinkingToggle).toBe(true);
+    expect(add).toHaveBeenCalledExactlyOnceWith('house', expect.any(String));
+    await collect(client, ask('house'));
+    expect(add).toHaveBeenCalledOnce();
+    expect(changed).not.toHaveBeenCalled();
+
+    size = 8_000_000_000;
+    expect((await client.listModels())[0]?.thinkingToggle).toBeUndefined();
+    expect(forget).toHaveBeenCalledWith('house');
+  });
+
+  it('keeps a learned thinker when a listing says nothing about the weights', async () => {
+    let meta: { size: number } | null = { size: 4_000_000_000 };
+    const fetch: FetchLike = async url => {
+      if (String(url).endsWith('/v1/models'))
+        return Response.json({ object: 'list', data: [{ id: 'house', object: 'model', meta }] });
+      return sse([delta({ reasoning_content: 'hmm' }), delta({ content: 'ok' }, 'stop'), '[DONE]']);
+    };
+    const add = vi.fn(async (_model: string, _identity: string | undefined) => undefined);
+    const forget = vi.fn(async (_model: string) => undefined);
+    const client = new OpenAICompatibleChat({
+      runtimeId: 'srv-abc123',
+      baseUrl: BASE,
+      label: 'llama box',
+      product: 'llama-server',
+      fetch,
+      hasCredentials: () => false,
+      redact: text => text,
+      learnedThinkers: { read: async () => [], add, forget },
+    });
+    await client.listModels();
+    await collect(client, ask('house'));
+    expect(add).toHaveBeenCalledWith('house', expect.any(String));
+
+    meta = null;
+    expect((await client.listModels())[0]?.thinkingToggle).toBe(true);
+    expect(forget).not.toHaveBeenCalled();
+  });
+
   it('lists a thinking switch for a model once it has replied with reasoning, and effort levels for gpt-oss', async () => {
     const { fetch } = server(['qwen3-8b', 'gpt-oss-20b'], true);
     const changed = vi.fn();
