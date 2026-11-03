@@ -157,7 +157,11 @@ export function ReasoningEffortPicker({
         variant="soft"
         size="sm"
         sx={{ maxWidth: 280 }}
-        title={`${modelId} does not take a reasoning effort.`}
+        title={
+          option?.controls?.thinkingBudgetTokens
+            ? `${modelId} thinks with a token budget instead of an effort. Set it under Params.`
+            : `${modelId} does not take a reasoning effort.`
+        }
       >
         {/* A disabled control fires no pointer events, so the tooltip needs something that does.
             A plain Button rather than a MenuButton: there is no Dropdown to belong to, because

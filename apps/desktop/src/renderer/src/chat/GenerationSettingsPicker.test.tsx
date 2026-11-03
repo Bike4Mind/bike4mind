@@ -26,10 +26,17 @@ const LOCAL: ChatModelOption = {
   controls: {
     temperature: { min: 0, max: 2, step: 0.05, default: 0.6, scope: 'request' },
     topP: { min: 0, max: 1, step: 0.01, default: 0.95, scope: 'request' },
-    topK: { min: 1, max: 200, step: 1, default: 20, scope: 'request' },
+    topK: { min: 0, max: 200, step: 1, default: 20, scope: 'request' },
     minP: { min: 0, max: 1, step: 0.01, default: 0, scope: 'request' },
     repeatPenalty: { min: 0.5, max: 2, step: 0.01, default: 1.1, scope: 'request' },
-    maxOutputTokens: { min: 256, max: 16_384, step: 256, scope: 'request' },
+    maxOutputTokens: {
+      min: 256,
+      max: 16_384,
+      step: 256,
+      unlimitedDefault: true,
+      includesThinking: true,
+      scope: 'request',
+    },
     effort: { levels: ['low', 'high'], scope: 'request' },
   },
 };
@@ -45,15 +52,31 @@ const CLAUDE: ChatModelOption = {
       scope: 'request',
       locked: { value: 1, reason: 'Claude runs at temperature 1 while it thinks.' },
     },
-    maxOutputTokens: { min: 1024, max: 64_000, step: 256, default: 64_000, scope: 'request' },
+    maxOutputTokens: {
+      min: 1024,
+      max: 64_000,
+      step: 256,
+      default: 64_000,
+      budgetHeadroom: 1000,
+      includesThinking: true,
+      scope: 'request',
+    },
     thinkingBudgetTokens: { min: 1024, max: 32_000, step: 1024, default: 16_000, scope: 'request' },
+  },
+};
+
+const ADAPTIVE: ChatModelOption = {
+  id: 'claude-sonnet-4-6',
+  name: 'Claude Sonnet 4.6',
+  controls: {
+    maxOutputTokens: { min: 64_000, max: 128_000, step: 256, default: 128_000, scope: 'request' },
   },
 };
 
 describe('GenerationSettingsPicker', () => {
   let root: Root;
   let container: HTMLDivElement;
-  const onChange = vi.fn<(generation: GenerationSettings) => void>();
+  const onChange = vi.fn<(generation: GenerationSettings) => Promise<boolean> | void>();
 
   async function render(model: ChatModelOption | undefined, generation?: GenerationSettings) {
     await act(async () =>
@@ -69,9 +92,16 @@ describe('GenerationSettingsPicker', () => {
     return document.querySelector<T>(`[data-testid="${id}"]`);
   }
 
+  function input(field: string): HTMLInputElement {
+    const found = byTestId<HTMLInputElement>(`generation-settings-${field}-input`);
+    if (!found) throw new Error(`The ${field} input is missing`);
+    return found;
+  }
+
   async function open() {
     const button = byTestId<HTMLButtonElement>('generation-settings-btn');
     if (!button) throw new Error('The settings button is missing');
+    button.focus();
     await act(async () => button.click());
   }
 
@@ -81,21 +111,36 @@ describe('GenerationSettingsPicker', () => {
     );
   }
 
-  async function type(field: string, text: string) {
-    const input = byTestId<HTMLInputElement>(`generation-settings-${field}-input`);
-    if (!input) throw new Error(`The ${field} input is missing`);
-    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  async function key(target: Element, name: string) {
     await act(async () => {
-      setValue?.call(input, text);
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-    await act(async () => {
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      target.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true }));
     });
   }
 
+  async function type(field: string, text: string) {
+    const target = input(field);
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    await act(async () => {
+      setValue?.call(target, text);
+      target.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await key(target, 'Enter');
+  }
+
+  async function blur(field: string) {
+    const target = input(field);
+    await act(async () => {
+      target.focus();
+      target.blur();
+    });
+  }
+
+  function note(field: string): string | null | undefined {
+    return byTestId(`generation-settings-${field}-default`)?.textContent;
+  }
+
   beforeEach(() => {
-    onChange.mockClear();
+    onChange.mockReset();
     container = document.createElement('div');
     document.body.append(container);
     root = createRoot(container);
@@ -111,9 +156,10 @@ describe('GenerationSettingsPicker', () => {
     expect(byTestId('generation-settings-btn')?.textContent).toBe('Params: Default');
     await open();
     expect(rows()).toEqual(['temperature', 'topP', 'topK', 'minP', 'repeatPenalty', 'maxOutputTokens']);
-    expect(byTestId('generation-settings-temperature-default')?.textContent).toBe('Model default: 0.6');
-    expect(byTestId('generation-settings-maxOutputTokens-default')?.textContent).toBe('Model default');
-    expect(byTestId<HTMLInputElement>('generation-settings-temperature-input')?.placeholder).toBe('0.6');
+    expect(note('temperature')).toBe('Model default: 0.6.');
+    expect(note('maxOutputTokens')).toBe('Model default: no limit. The limit includes thinking.');
+    expect(input('temperature').placeholder).toBe('0.6');
+    expect(input('maxOutputTokens').placeholder).toBe('No limit');
     expect(byTestId('generation-settings-reset-all-btn')).toBeNull();
   });
 
@@ -122,14 +168,16 @@ describe('GenerationSettingsPicker', () => {
     expect(byTestId('generation-settings-btn')?.textContent).toBe('Params: Default');
     await open();
     expect(rows()).toEqual(['temperature', 'maxOutputTokens', 'thinkingBudgetTokens']);
-    const temperature = byTestId<HTMLInputElement>('generation-settings-temperature-input');
-    expect(temperature?.disabled).toBe(true);
-    expect(temperature?.value).toBe('1');
-    expect(byTestId('generation-settings-temperature-default')?.textContent).toBe(
-      'Claude runs at temperature 1 while it thinks.'
-    );
+    const temperature = input('temperature');
+    expect(temperature.readOnly).toBe(true);
+    expect(temperature.disabled).toBe(false);
+    expect(temperature.value).toBe('1');
+    expect(note('temperature')).toBe('Claude runs at temperature 1 while it thinks.');
     expect(byTestId('generation-settings-temperature-reset-btn')).toBeNull();
-    expect(byTestId('generation-settings-thinkingBudgetTokens-default')?.textContent).toBe('Model default: 16,000');
+    expect(byTestId('generation-settings-reset-all-btn')).toBeNull();
+    expect(note('thinkingBudgetTokens')).toBe('Model default: 16,000.');
+    expect(input('maxOutputTokens').placeholder).toBe('64,000');
+    expect(note('maxOutputTokens')).toBe('Model default: 64,000. The limit includes thinking.');
   });
 
   it('saves a typed value clamped into range, keeping the other overrides', async () => {
@@ -137,8 +185,24 @@ describe('GenerationSettingsPicker', () => {
     await open();
     await type('temperature', '5');
     expect(onChange).toHaveBeenLastCalledWith({ topP: 0.9, temperature: 2 });
-    await type('topK', '33.6');
-    expect(onChange).toHaveBeenLastCalledWith({ topP: 0.9, topK: 34 });
+  });
+
+  it('builds an edit made before main answers on the one still on its way', async () => {
+    onChange.mockReturnValue(new Promise<boolean>(() => {}));
+    await render(LOCAL, { topP: 0.9, topK: 12 });
+    await open();
+    await type('temperature', '0.5');
+    await act(async () => byTestId('generation-settings-topK-reset-btn')?.click());
+    expect(onChange).toHaveBeenLastCalledWith({ topP: 0.9, temperature: 0.5 });
+  });
+
+  it('drops an edit main did not save from the next one', async () => {
+    onChange.mockResolvedValueOnce(false);
+    await render(LOCAL, { topP: 0.9 });
+    await open();
+    await type('temperature', '0.5');
+    await type('topK', '30');
+    expect(onChange).toHaveBeenLastCalledWith({ topP: 0.9, topK: 30 });
   });
 
   it('counts the overrides the next turn sends, and resets one or all of them', async () => {
@@ -146,13 +210,43 @@ describe('GenerationSettingsPicker', () => {
     await render(LOCAL, stored);
     expect(byTestId('generation-settings-btn')?.textContent).toBe('Params: 2 set');
     await open();
-    expect(byTestId<HTMLInputElement>('generation-settings-temperature-input')?.value).toBe('0.3');
+    expect(input('temperature').value).toBe('0.3');
 
     await act(async () => byTestId('generation-settings-topK-reset-btn')?.click());
     expect(onChange).toHaveBeenLastCalledWith({ temperature: 0.3, thinkingBudgetTokens: 4096 });
 
     await act(async () => byTestId('generation-settings-reset-all-btn')?.click());
     expect(onChange).toHaveBeenLastCalledWith({});
+  });
+
+  it('shows what the next turn sends for a stored value this model adjusts', async () => {
+    await render(ADAPTIVE, { maxOutputTokens: 2048 });
+    expect(byTestId('generation-settings-btn')?.textContent).toBe('Params: 1 set');
+    await open();
+    expect(input('maxOutputTokens').value).toBe('64000');
+    expect(note('maxOutputTokens')).toBe(
+      "Model default: 128,000. Saved as 2,048, outside this model's range, so it sends 64,000."
+    );
+    await blur('maxOutputTokens');
+    await type('maxOutputTokens', '64000');
+    expect(onChange).not.toHaveBeenCalled();
+    expect(byTestId('generation-settings-maxOutputTokens-reset-btn')).not.toBeNull();
+  });
+
+  it('raises the max output floor with the thinking budget the turn sends', async () => {
+    await render(CLAUDE, { thinkingBudgetTokens: 20_000, maxOutputTokens: 4096 });
+    await open();
+    expect(input('maxOutputTokens').value).toBe('21000');
+    expect(input('maxOutputTokens').min).toBe('21000');
+  });
+
+  it('commits nothing for a field left as it was shown', async () => {
+    await render(LOCAL, { temperature: 0.3 });
+    await open();
+    await blur('temperature');
+    await blur('topP');
+    await type('temperature', '0.30');
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it('clears an override when its field is emptied', async () => {
@@ -167,5 +261,51 @@ describe('GenerationSettingsPicker', () => {
     expect(container.textContent).toBe('');
     await render(undefined);
     expect(container.textContent).toBe('');
+  });
+
+  describe('as a dialog', () => {
+    it('is named, moves focus to the first field it can edit, and describes each field', async () => {
+      await render(CLAUDE, { maxOutputTokens: 30_000 });
+      const button = byTestId<HTMLButtonElement>('generation-settings-btn');
+      expect(button?.getAttribute('aria-haspopup')).toBe('dialog');
+      await open();
+      const dialog = document.querySelector('[role="dialog"]');
+      const title = document.getElementById(dialog?.getAttribute('aria-labelledby') ?? '');
+      expect(title?.textContent).toBe('Params');
+      expect(button?.getAttribute('aria-expanded')).toBe('true');
+      expect(document.activeElement).toBe(input('maxOutputTokens'));
+      for (const field of ['temperature', 'maxOutputTokens']) {
+        const described = document.getElementById(input(field).getAttribute('aria-describedby') ?? '');
+        expect(described?.textContent).toBe(note(field));
+      }
+      expect(byTestId('generation-settings-maxOutputTokens-reset-btn')?.getAttribute('aria-label')).toBe(
+        'Reset Max output tokens'
+      );
+    });
+
+    it('keeps typing keys in the field, and closes on Escape with focus back on the button', async () => {
+      await render(LOCAL);
+      await open();
+      const temperature = input('temperature');
+      expect(document.activeElement).toBe(temperature);
+      await key(temperature, 'ArrowDown');
+      await key(temperature, 'a');
+      expect(document.activeElement).toBe(temperature);
+      expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+
+      await key(temperature, 'Escape');
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+      expect(document.activeElement).toBe(byTestId('generation-settings-btn'));
+    });
+
+    it('lets a locked field take focus so its reason can be read', async () => {
+      await render(CLAUDE);
+      await open();
+      const temperature = input('temperature');
+      await act(async () => temperature.focus());
+      expect(document.activeElement).toBe(temperature);
+      await type('temperature', '0.4');
+      expect(onChange).not.toHaveBeenCalled();
+    });
   });
 });
