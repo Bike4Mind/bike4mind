@@ -1781,6 +1781,8 @@ describe('ChatCompletionProcess', () => {
           return { shouldContinue: true };
         },
       } as any);
+      const onComplete = vi.fn().mockResolvedValue(undefined);
+      service.features.set('mementos', { onComplete } as any);
 
       try {
         await service.process({ body, logger: mockLogger });
@@ -1789,6 +1791,8 @@ describe('ChatCompletionProcess', () => {
       }
 
       expect(seen).toEqual([ChatModels.GPT4]);
+      expect(onComplete).toHaveBeenCalled();
+      expect(onComplete.mock.calls[0][0].model).toBe(ChatModels.GPT4);
     });
   });
 
