@@ -16,7 +16,8 @@ export const BEDROCKNEWS_FIRST_SOLVE_REASON = 'bedrocknews_first_solve';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export type PuzzleTier = 5 | 6 | 7;
+export const PUZZLE_TIERS = [5, 6, 7] as const;
+export type PuzzleTier = (typeof PUZZLE_TIERS)[number];
 
 export interface GrantPuzzleRewardInput {
   userId: string;
@@ -52,6 +53,8 @@ type RewardUser = {
   currentCredits?: number | null;
 } & AccountStateFields;
 
+const PAYABLE_FIELDS = 'emailVerified isSynthetic deletedAt isBanned disputePending moderation.status';
+
 // suspend_pending is not an accountBlockReason; a money path refuses it too.
 const isPayable = (user: RewardUser) =>
   !!user.emailVerified &&
@@ -62,20 +65,24 @@ const isPayable = (user: RewardUser) =>
 
 export async function findPayableUser(userId: string): Promise<{ email: string } | null> {
   const user = await User.findById(userId)
-    .select('email emailVerified isSynthetic deletedAt isBanned disputePending moderation.status')
+    .select(`email ${PAYABLE_FIELDS}`)
     .lean<RewardUser & { email?: string | null }>();
   return user?.email && isPayable(user) ? { email: user.email } : null;
+}
+
+async function loadRewardSettings() {
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: [...SETTING_NAMES], skipCache: true }
+  );
+  return (key: RewardSettingKey) => getSettingsValue(key, settings, settingsMap[key].schema.parse(undefined));
 }
 
 const rungAmount = (tierCredits: number, multiplier: number, hard: boolean) =>
   Math.round(tierCredits * (hard ? multiplier : 1));
 
 export async function rungCredits(rungs: { tier: PuzzleTier; hard: boolean }[]): Promise<number> {
-  const settings = await getSettingsMap(
-    { adminSettings: adminSettingsRepository },
-    { names: [...SETTING_NAMES], skipCache: true }
-  );
-  const setting = (key: RewardSettingKey) => getSettingsValue(key, settings, settingsMap[key].schema.parse(undefined));
+  const setting = await loadRewardSettings();
   const multiplier = setting('BedrockNewsPuzzleHardMultiplier');
   return rungs.reduce(
     (sum, { tier, hard }) => sum + rungAmount(setting(TIER_CREDITS_SETTING[tier]), multiplier, hard),
@@ -117,9 +124,7 @@ export async function grantPuzzleReward({
   tier,
   hard,
 }: GrantPuzzleRewardInput): Promise<GrantPuzzleRewardResult> {
-  const user = await User.findById(userId)
-    .select('emailVerified isSynthetic deletedAt isBanned disputePending moderation.status currentCredits')
-    .lean<RewardUser>();
+  const user = await User.findById(userId).select(`${PAYABLE_FIELDS} currentCredits`).lean<RewardUser>();
   if (!user) return { ok: false, status: 404, code: 'USER_NOT_FOUND' };
 
   const transactionId = `bedrocknews-puzzle:${userId}:${puzzleDate}:${tier}`;
@@ -135,11 +140,7 @@ export async function grantPuzzleReward({
   }
   if (!isPayable(user)) return { ok: false, status: 403, code: 'USER_NOT_ELIGIBLE' };
 
-  const settings = await getSettingsMap(
-    { adminSettings: adminSettingsRepository },
-    { names: [...SETTING_NAMES], skipCache: true }
-  );
-  const setting = (key: RewardSettingKey) => getSettingsValue(key, settings, settingsMap[key].schema.parse(undefined));
+  const setting = await loadRewardSettings();
   const tierCredits = setting(TIER_CREDITS_SETTING[tier]);
   const multiplier = setting('BedrockNewsPuzzleHardMultiplier');
   const amount = rungAmount(tierCredits, multiplier, hard);
