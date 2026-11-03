@@ -2751,7 +2751,11 @@ export class ChatService {
         modelOption?.thinkingToggle ??
         (catalog?.error ? this.deps.models?.lastKnownThinkingToggle(session.model) : undefined);
       const effort = reasoningEffortFor(session.reasoningEffort, session.model, modelOption);
-      const askForThinking = requestsThinking(session.reasoningEffort, { thinkingToggle }, effort);
+      const askForThinking = requestsThinking(
+        session.reasoningEffort,
+        { ...modelOption, ...(thinkingToggle ? { thinkingToggle } : {}) },
+        effort
+      );
       const effortField = effort ? { reasoningEffort: effort } : {};
       // The server keeps 5 minutes for a model without the hour, but sending it there says nothing.
       const cacheTtl: PromptCacheTtl =

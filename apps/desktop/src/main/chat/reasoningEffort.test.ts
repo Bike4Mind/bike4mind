@@ -98,14 +98,30 @@ describe('supportsReasoningEffort', () => {
 describe('requestsThinking', () => {
   const local = { thinkingToggle: true };
 
-  it('turns thinking off only for a local thinking model switched Off', () => {
+  it('turns thinking off only for a local thinking model switched Off, as Off is stored now and was before', () => {
+    expect(requestsThinking('none', local)).toBe(false);
     expect(requestsThinking('minimal', local)).toBe(false);
   });
 
   it('thinks on every other setting of that model, including none stored', () => {
-    for (const setting of ['default', 'low', 'medium', 'high', undefined] as const) {
+    for (const setting of ['default', 'low', 'medium', 'high', 'xhigh', undefined] as const) {
       expect(requestsThinking(setting, local)).toBe(true);
     }
+  });
+
+  it('keeps an older Minimal thinking where it was an effort the server ignored', () => {
+    const learned = { thinkingToggle: true, minimalThinks: true as const };
+    expect(requestsThinking('minimal', learned)).toBe(true);
+    expect(requestsThinking('none', learned)).toBe(false);
+  });
+
+  it('has no switch on a model that lists effort levels, which thinks at the nearest one', () => {
+    const gptOss: Pick<ChatModelOption, 'thinkingToggle' | 'controls'> = {
+      thinkingToggle: true,
+      controls: { effort: { levels: ['low', 'high'], scope: 'request' } },
+    };
+    expect(requestsThinking('minimal', gptOss, 'low')).toBe(true);
+    expect(requestsThinking('none', gptOss, 'low')).toBe(true);
   });
 
   it('thinks on a model without the switch, or one the catalog does not know', () => {

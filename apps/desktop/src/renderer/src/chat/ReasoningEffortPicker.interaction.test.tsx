@@ -78,7 +78,7 @@ describe('the local thinking switch', () => {
     expect(button().textContent).toBe('Thinking: On');
 
     await select('Off');
-    expect(onSelect).toHaveBeenLastCalledWith('minimal');
+    expect(onSelect).toHaveBeenLastCalledWith('none');
     expect(button().textContent).toBe('Thinking: Off');
 
     await select('On');

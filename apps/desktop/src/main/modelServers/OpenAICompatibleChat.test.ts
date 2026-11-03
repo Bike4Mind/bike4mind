@@ -451,9 +451,9 @@ describe('OpenAICompatibleChat generation settings', () => {
     expect(changed).toHaveBeenCalledTimes(2);
     const after = await client.listModels();
     // gpt-oss reasons on every reply but cannot stop, so it keeps its levels and gets no switch.
-    expect(after.map(model => [model.name, model.thinkingToggle])).toEqual([
-      ['qwen3-8b', true],
-      ['gpt-oss-20b', undefined],
+    expect(after.map(model => [model.name, model.thinkingToggle, model.minimalThinks])).toEqual([
+      ['qwen3-8b', true, true],
+      ['gpt-oss-20b', undefined, undefined],
     ]);
   });
 });

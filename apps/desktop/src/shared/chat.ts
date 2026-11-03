@@ -948,13 +948,18 @@ export interface ChatModelOption {
   /** A direct-Anthropic model the server will cache for an hour on request (supportsOneHourPromptCache). */
   supportsOneHourCache?: boolean;
   /**
-   * A local Ollama model that can think. Its server takes no effort, only thinking on or off,
-   * so the effort picker becomes that switch, stored as `default` (on) and
-   * THINKING_OFF_SETTING (off).
+   * A local model that can think. Its server takes no effort, only thinking on or off, so the
+   * effort picker becomes that switch, stored as `default` (on) and THINKING_OFF_SETTING (off);
+   * see thinkingSwitchedOff.
    */
   thinkingToggle?: boolean;
   /** A `thinkingToggle` model whose template always thinks, so the switch shows Off as unavailable. */
   thinkingAlwaysOn?: boolean;
+  /**
+   * A `thinkingToggle` model a stored `minimal` leaves thinking: a saved OpenAI-compatible server's,
+   * where that was an effort the server ignored before the switch existed.
+   */
+  minimalThinks?: true;
   /** Local models can remain useful without tool-call support. */
   supportsTools?: boolean;
   /** A saved model server's model, grouped under it in the picker. Absent for hosted models and this computer's. */
@@ -979,8 +984,21 @@ export interface ChatModelOption {
   controls?: ModelControls;
 }
 
-/** The setting a `thinkingToggle` model's "Off" is stored as; any other setting thinks. */
-export const THINKING_OFF_SETTING = 'minimal' satisfies ReasoningEffortSetting;
+/** The setting a `thinkingToggle` model's "Off" is stored as. */
+export const THINKING_OFF_SETTING = 'none' satisfies ReasoningEffortSetting;
+
+/**
+ * Whether a stored setting switches a `thinkingToggle` model's thinking off, which a model listing
+ * effort levels has no switch for. `minimal` does too unless `minimalThinks`, since Off was stored
+ * that way before `none` existed. Every other setting thinks.
+ */
+export function thinkingSwitchedOff(
+  setting: ReasoningEffortSetting | undefined,
+  option: Pick<ChatModelOption, 'thinkingToggle' | 'minimalThinks' | 'controls'> | undefined
+): boolean {
+  if (!option?.thinkingToggle || option.controls?.effort) return false;
+  return setting === THINKING_OFF_SETTING || (setting === 'minimal' && !option.minimalThinks);
+}
 
 /**
  * How hard a model that reasons thinks before answering.
@@ -1204,8 +1222,8 @@ interface ChatSessionMeta {
    * effort it was held at rather than whatever the last conversation was set to.
    *
    * Only a level the model's `controls.effort` lists is actually sent. For a model with
-   * `thinkingToggle`, `minimal` instead turns thinking off and every other setting turns it on.
-   * Otherwise this is inert.
+   * `thinkingToggle`, it turns thinking off or on instead; see thinkingSwitchedOff. Otherwise
+   * this is inert.
    */
   reasoningEffort: ReasoningEffortSetting;
   /**

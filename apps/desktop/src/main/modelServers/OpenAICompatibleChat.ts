@@ -285,7 +285,7 @@ export class OpenAICompatibleChat implements LocalChat {
           : {}),
         ...(this.toolsOffFor(model.name) ? { supportsTools: false } : {}),
         // The server does not say which models think, so a model earns the switch by thinking once.
-        ...(thinks && !controls.effort ? { thinkingToggle: true } : {}),
+        ...(thinks && !controls.effort ? { thinkingToggle: true, minimalThinks: true as const } : {}),
         supportsReasoningEffort: controls.effort !== undefined,
         controls,
       };
