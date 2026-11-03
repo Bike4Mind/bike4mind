@@ -94,8 +94,8 @@ describe('checkApproval for a Hugging Face build', () => {
     const hub = fakeHub(detail);
     const onReviewed = vi.fn();
     const d = deps(hub, { onReviewed });
-    expect(await checkApproval(hfApproval(), d)).toEqual({ ok: true, ref: 'hf.co/org/repo:Q4_K_M' });
-    expect(hub.getModel).toHaveBeenCalledWith('org/repo', { refresh: true });
+    expect(await checkApproval(hfApproval(), d)).toEqual({ ok: true, ref: 'hf.co/org/repo:Q4_K_M', verified: true });
+    expect(hub.getModel).toHaveBeenCalledWith('org/repo', { refresh: true, signal: d.signal });
     expect(hub.verifyOllamaRef).toHaveBeenCalledWith(detail, detail.builds[0], { signal: d.signal });
     expect(onReviewed).toHaveBeenCalledWith({ label: 'Q4_K_M', sizeBytes: 1024 });
     expect(hub.ollamaLayers).not.toHaveBeenCalled();
@@ -158,6 +158,31 @@ describe('checkApproval for a Hugging Face build', () => {
     expect(await checkApproval(confirmed, deps(restricted, { checkAfterPull: true }))).toEqual({
       ok: false,
       reason: 'license-required',
+    });
+  });
+
+  describe('with checkAfterPull, an uncurated build is deferred only past the needs-access block', () => {
+    const check = (hub: PullCheckHub) =>
+      checkApproval(hfApproval({ accessConfirmed: true }), deps(hub, { checkAfterPull: true }));
+    const noChecksum = hubBuild({ files: [{ path: 'model-Q4_K_M.gguf', sizeBytes: 1024, sha256: null, url: 'u' }] });
+
+    it('keeps a missing checksum on a non-gated build blocked', async () => {
+      expect(await check(fakeHub(hubDetail({ builds: [noChecksum] })))).toEqual({
+        ok: false,
+        reason: 'blocked',
+        block: 'no-checksum',
+      });
+    });
+
+    it('keeps an unsupported quant blocked', async () => {
+      const hub = fakeHub(hubDetail({ builds: [hubBuild({ ollamaRefIssue: 'unsupported-quant' })] }));
+      expect(await check(hub)).toEqual({ ok: false, reason: 'blocked', block: 'unsupported-quant' });
+    });
+
+    it('keeps a masked gated build with no Ollama ref blocked', async () => {
+      const masked = { ...noChecksum, ollamaRef: null };
+      const hub = fakeHub(hubDetail({ gated: true, ollamaNeedsSshKey: true, builds: [masked] }));
+      expect(await check(hub)).toEqual({ ok: false, reason: 'blocked', block: 'needs-access' });
     });
   });
 
@@ -224,7 +249,11 @@ describe('checkApproval for a curated Hugging Face build', () => {
   it('passes when the source serves the reviewed layers at the proven tag', async () => {
     const { build, detail, hub, approval } = setup();
     const result = await checkApproval(approval, deps(hub));
-    expect(result).toEqual({ ok: true, ref: `hf.co/${detail.id}:${build.quant.label}` });
+    expect(result).toEqual({
+      ok: true,
+      ref: `hf.co/${detail.id}:${build.quant.label}`,
+      verified: true,
+    });
     expect(hub.ollamaLayers).toHaveBeenCalledWith(build.hf?.repo, build.quant.label, expect.anything());
   });
 
@@ -376,7 +405,7 @@ describe('checkApproval for a curated library build', () => {
     const { build, library, approval, libraryLayers, hub } = setup();
     const onReviewed = vi.fn();
     const d = deps(hub, { libraryLayers, onReviewed });
-    expect(await checkApproval(approval, d)).toEqual({ ok: true, ref: library.ref });
+    expect(await checkApproval(approval, d)).toEqual({ ok: true, ref: library.ref, verified: true });
     expect(libraryLayers).toHaveBeenCalledWith(library.ref, { signal: d.signal });
     expect(onReviewed).toHaveBeenCalledWith({ label: build.quant.label, sizeBytes: library.sizeBytes });
     expect(hub.getModel).not.toHaveBeenCalled();

@@ -24,7 +24,7 @@ describe('JobManager', () => {
     const job = await jobs.create(request(), ACTOR);
     expect(job).toMatchObject({ state: 'checking', repo: 'org/repo', startedBy: ACTOR, cancelledBy: null });
     await until(() => fake.pulls.length === 1, 'pull');
-    expect(hub.getModel).toHaveBeenCalledWith('org/repo', { refresh: true });
+    expect(hub.getModel).toHaveBeenCalledWith('org/repo', expect.objectContaining({ refresh: true }));
     expect(state(job.id)).toBe('downloading');
     fake.pulls[0].progress(400);
     expect(jobs.get(job.id).progress).toMatchObject({ completedBytes: 400, totalBytes: 1000 });
@@ -273,6 +273,56 @@ describe('JobManager', () => {
     await jobs.removeModel('tiny:1b', ACTOR);
     expect(audits.at(-1)).toMatchObject({ event: 'remove', ref: 'tiny:1b', login: 'ana' });
   });
+
+  it('treats a name without a tag as its :latest tag when a job is pulling it', async () => {
+    const { jobs } = setup({ hub: () => fakeHub(() => new Promise<never>(() => {})) });
+    await jobs.create(request({ ref: 'hf.co/org/repo:latest' }), ACTOR);
+    expect(jobs.busy('hf.co/org/repo')?.ref).toBe('hf.co/org/repo:latest');
+    await expect(jobs.removeModel('hf.co/org/repo', ACTOR)).rejects.toMatchObject({ status: 409, code: 'model-busy' });
+    await expect(jobs.create(request({ buildId: 'other', ref: 'hf.co/org/repo' }), OTHER)).rejects.toMatchObject({
+      status: 409,
+      code: 'job-exists',
+    });
+  });
+
+  it('audits a failed pull and a job found interrupted at load', async () => {
+    const { jobs, fake, audits, state } = setup();
+    fake.runtime.pull.mockRejectedValueOnce(new Error('disk full'));
+    const job = await jobs.create(request(), ACTOR);
+    await until(() => state(job.id) === 'failed', 'failed');
+    expect(jobs.get(job.id).error?.code).toBe('pull-failed');
+    expect(audits.at(-1)).toMatchObject({
+      event: 'pull-failed',
+      job: job.id,
+      device: 'Laptop',
+      detail: 'Ollama could not download hf.co/org/repo:Q4_K_M: disk full',
+    });
+
+    const loaded = setup({}, [storedJob(jobId(1), 'downloading')]);
+    await loaded.jobs.load();
+    expect(loaded.audits).toEqual([
+      expect.objectContaining({
+        event: 'interrupted',
+        job: jobId(1),
+        detail: 'b4m-host stopped while the job was downloading.',
+      }),
+    ]);
+  });
+
+  it('reads whether the tag existed again when a resume pulls another ref', async () => {
+    const saved = storedJob(jobId(1), 'paused');
+    saved.run = { hadTag: true, hadTagRef: 'hf.co/org/repo:OLD', pulled: false, afterOnly: false };
+    const { jobs, fake, store, state } = setup({}, [saved]);
+    fake.setBlob('f'.repeat(64));
+    await jobs.load();
+    await jobs.resume(jobId(1), ACTOR);
+    await until(() => fake.pulls.length === 1, 'pull');
+    expect(store.files.get(jobId(1))?.run).toMatchObject({ hadTag: false, hadTagRef: 'hf.co/org/repo:Q4_K_M' });
+    fake.pulls[0].finish();
+    await until(() => state(jobId(1)) === 'failed', 'failed');
+    expect(jobs.get(jobId(1)).error?.message).toContain('so it was removed');
+    expect(fake.runtime.remove).toHaveBeenCalledWith('hf.co/org/repo:Q4_K_M');
+  });
 });
 
 /** A gate a fake can wait on, opened by the test. */
@@ -372,7 +422,12 @@ describe('JobManager races', () => {
     await first.jobs.close();
     await until(() => first.store.files.get(job.id)?.job.state === 'verifying', 'saved verifying');
     const saved = structuredClone([...first.store.files.values()]);
-    expect(saved[0].run).toEqual({ hadTag: false, pulled: true, afterOnly: false });
+    expect(saved[0].run).toEqual({
+      hadTag: false,
+      hadTagRef: 'hf.co/org/repo:Q4_K_M',
+      pulled: true,
+      afterOnly: false,
+    });
 
     const second = setup({}, saved);
     second.fake.installed.add('hf.co/org/repo:Q4_K_M');
@@ -440,6 +495,25 @@ describe('JobManager races', () => {
 });
 
 describe('JobManager admission', () => {
+  it('caps jobs running at once, and admits a resume only below the cap', async () => {
+    const labels = ['Q4_K_M', 'Q8_0', 'Q6_K'];
+    const builds = labels.map(label => build({ id: `model-${label}`, label, ollamaRef: `hf.co/org/repo:${label}` }));
+    const { jobs, fake } = setup({ maxActive: 2, hub: () => fakeHub(() => detail({ builds })) });
+    const of = (label: string) => request({ buildId: `model-${label}`, ref: `hf.co/org/repo:${label}` });
+    const first = await jobs.create(of('Q4_K_M'), ACTOR);
+    await jobs.create(of('Q8_0'), ACTOR);
+    await until(() => fake.pulls.length === 2, 'pulls');
+    await expect(jobs.create(of('Q6_K'), ACTOR)).rejects.toMatchObject({ status: 429, code: 'too-many-jobs' });
+
+    await jobs.pause(first.id, ACTOR);
+    const third = await jobs.create(of('Q6_K'), ACTOR);
+    await expect(jobs.resume(first.id, ACTOR)).rejects.toMatchObject({ status: 429, code: 'too-many-jobs' });
+    await until(() => fake.pulls.length === 3, 'third pull');
+    await jobs.pause(third.id, ACTOR);
+    await expect(jobs.resume(first.id, ACTOR)).resolves.toMatchObject({ id: first.id });
+    await jobs.close();
+  });
+
   it('caps unfinished jobs, paused and interrupted ones included', async () => {
     const saved = Array.from({ length: 32 }, (_, i) =>
       storedJob(
@@ -613,6 +687,27 @@ describe('curated approvals', () => {
     await until(() => state(job.id) === 'failed', 'failed');
     expect(jobs.get(job.id).error).toMatchObject({ code: 'not-listed', message: expect.stringContaining('no longer') });
     expect(fake.runtime.pull).not.toHaveBeenCalled();
+  });
+
+  it('checks nothing it cannot check after a pull: removes weights whose tag was new, keeps others, and says so', async () => {
+    for (const hadTag of [false, true]) {
+      const saved = storedJob(jobId(1), 'verifying', {}, libraryRequest());
+      saved.run = { hadTag, pulled: true, afterOnly: false };
+      const unlisted = (): HubManifest => ({ ...manifest, entries: [] });
+      const { jobs, fake, audits, state } = setup({ curated: unlisted }, [saved]);
+      fake.installed.add(library.ref);
+      await jobs.load();
+      await until(() => state(jobId(1)) === 'failed', 'failed');
+      const { error } = jobs.get(jobId(1));
+      expect(error?.code).toBe('unverified');
+      expect(error?.message).toContain('was downloaded, but');
+      expect(error?.message).not.toContain('nothing was downloaded');
+      expect(error?.message).toContain(hadTag ? 'It is still installed' : 'so it was removed');
+      if (hadTag) expect(fake.runtime.remove).not.toHaveBeenCalled();
+      else expect(fake.runtime.remove).toHaveBeenCalledWith(library.ref);
+      expect(audits.at(-1)).toMatchObject({ event: 'check-failed', job: jobId(1), detail: error?.message });
+      expect(fake.runtime.pull).not.toHaveBeenCalled();
+    }
   });
 
   it('refuses when the library no longer serves the reviewed layers', async () => {

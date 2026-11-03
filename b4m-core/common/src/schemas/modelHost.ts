@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { FitRuntime, HardwareProfile } from '../modelHub/fit';
-import { HUB_RUNTIMES, KV_CACHE_TYPES } from './modelHub';
+import { HfRepoSchema, HUB_RUNTIMES, KV_CACHE_TYPES, OllamaLibRefSchema, Sha256Schema } from './modelHub';
 
 /** Bounds keep a hostile model host from making clients allocate without limit; a host clamps to them before parsing. */
 export const MODEL_HOST_LIMITS = {
@@ -187,20 +187,11 @@ export type ModelHostHello = z.infer<typeof ModelHostHelloSchema>;
 export const ModelHostErrorSchema = z.object({ code: TextSchema, message: z.string().max(L.path) });
 export type ModelHostError = z.infer<typeof ModelHostErrorSchema>;
 
-const Sha256HexSchema = z.string().regex(/^[0-9a-f]{64}$/);
-const HubRepoIdSchema = z
-  .string()
-  .max(200)
-  .regex(/^[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*$/);
 // A Hugging Face build id is its file path without `.gguf`, with at most one folder.
 const HubBuildIdSchema = z
   .string()
   .max(256)
   .regex(/^(?:\w[\w.-]*\/)?\w[\w.-]*$/);
-const LibraryRefSchema = z
-  .string()
-  .max(128)
-  .regex(/^[a-z0-9][a-z0-9._-]*:[a-z0-9][\w.-]*$/);
 const HubPullRefSchema = z
   .string()
   .max(400)
@@ -209,31 +200,39 @@ const CuratedIdSchema = z
   .string()
   .max(128)
   .regex(/^[a-z0-9][a-z0-9._-]*$/);
-const LicenseIdsSchema = z.array(z.string().min(1).max(128)).max(16);
+const LicenseIdsSchema = z
+  .array(
+    z
+      .string()
+      .max(128)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._+-]*$/)
+  )
+  .max(16);
+/** Printable text: no control, format or line-separator characters, and not blank. */
 const LabelSchema = z
   .string()
-  .min(1)
   .max(128)
-  .regex(/^\P{Cc}+$/u, 'must not contain control characters');
+  .regex(/^[^\p{C}\p{Zl}\p{Zp}]+$/u, 'must not contain control characters')
+  .refine(value => value.trim().length > 0, 'must not be blank');
 
 /** The device that asked, as it names itself; a label until devices hold tokens. */
 export const PullDeviceSchema = z.object({ id: LabelSchema, name: LabelSchema });
 
 /** The layer digests the user reviewed for a curated build; null or missing means the build pins none of that kind. */
 export const PullApprovedLayersSchema = z.object({
-  model: Sha256HexSchema,
-  template: Sha256HexSchema.nullable().optional(),
-  params: Sha256HexSchema.nullable().optional(),
-  license: Sha256HexSchema.nullable().optional(),
-  projector: Sha256HexSchema.nullable().optional(),
-  draft: Sha256HexSchema.nullable().optional(),
+  model: Sha256Schema,
+  template: Sha256Schema.nullable().optional(),
+  params: Sha256Schema.nullable().optional(),
+  license: Sha256Schema.nullable().optional(),
+  projector: Sha256Schema.nullable().optional(),
+  draft: Sha256Schema.nullable().optional(),
 });
 export type PullApprovedLayers = z.infer<typeof PullApprovedLayersSchema>;
 
 /** A curated build, named in the host's own curated list. */
 export const PullApprovedCuratedSchema = z.object({
   entryId: CuratedIdSchema,
-  buildId: z.string().min(1).max(256),
+  buildId: HubBuildIdSchema,
   layers: PullApprovedLayersSchema,
 });
 
@@ -244,11 +243,11 @@ export const PullApprovedCuratedSchema = z.object({
 export const PullJobRequestSchema = z.discriminatedUnion('source', [
   z.object({
     source: z.literal('hf'),
-    repo: HubRepoIdSchema,
+    repo: HfRepoSchema,
     buildId: HubBuildIdSchema,
     revision: z.string().regex(/^[0-9a-f]{40}$/),
     ref: HubPullRefSchema,
-    sha256: Sha256HexSchema,
+    sha256: Sha256Schema,
     sizeBytes: z.number().int().positive().max(L.bytes),
     licenses: LicenseIdsSchema,
     licenseAccepted: z.boolean(),
@@ -258,8 +257,8 @@ export const PullJobRequestSchema = z.discriminatedUnion('source', [
   }),
   z.object({
     source: z.literal('library'),
-    ref: LibraryRefSchema,
-    manifestDigest: Sha256HexSchema,
+    ref: OllamaLibRefSchema,
+    manifestDigest: Sha256Schema,
     sizeBytes: z.number().int().positive().max(L.bytes),
     licenses: LicenseIdsSchema,
     licenseAccepted: z.boolean(),

@@ -158,6 +158,10 @@ export function layersMatch(approved: PullApprovedLayers, build: HubBuild): bool
   return PINNED.every(kind => (approved[kind] ?? null) === (pins[kind] ?? null));
 }
 
+/** Ollama reads a name without a tag as `<name>:latest`. */
+const tagged = (name: string) => (/:[^/]*$/.test(name) ? name : `${name}:latest`);
+const modelKey = (name: string) => ollamaModelKey(tagged(name));
+
 /** The repo part of `hf.co/<repo>:<tag>` or `huggingface.co/<repo>:<tag>`. */
 const refRepo = (ref: string) => ref.replace(/^(?:hf\.co|huggingface\.co)\//, '').replace(/:[^/]*$/, '');
 
@@ -271,7 +275,9 @@ export class JobManager {
       );
       if (entry.job.state === 'verifying' && entry.run.pulled) recheck.push(entry);
       else if (isActive(entry.job.state)) {
+        const was = entry.job.state;
         entry.job = { ...entry.job, state: 'interrupted', updatedAt: this.#now() };
+        this.#audit(entry, 'interrupted', entry.job.startedBy, `b4m-host stopped while the job was ${was}.`);
         await this.#persist(entry);
       }
       this.#jobs.set(entry.job.id, entry);
@@ -315,17 +321,17 @@ export class JobManager {
 
   /** Whether an active job is pulling `name`, under any spelling Ollama lists it by. */
   busy(name: string): PullJob | null {
-    const key = ollamaModelKey(name);
+    const key = modelKey(name);
     for (const { job } of this.#jobs.values())
-      if (isActive(job.state) && ollamaRefAliases(job.ref).includes(key)) return job;
+      if (isActive(job.state) && ollamaRefAliases(tagged(job.ref)).includes(key)) return job;
     return null;
   }
 
   /** Another unfinished job that pulls into the same Ollama tag. */
   #tagHolder(ref: string, self: Entry | null): PullJob | null {
-    const key = ollamaModelKey(ref);
+    const key = modelKey(ref);
     for (const entry of this.#jobs.values()) {
-      if (entry !== self && !isFinal(entry.job.state) && ollamaModelKey(entry.job.ref) === key) return entry.job;
+      if (entry !== self && !isFinal(entry.job.state) && modelKey(entry.job.ref) === key) return entry.job;
     }
     return null;
   }
@@ -642,7 +648,7 @@ export class JobManager {
   async #run(entry: Entry, signal: AbortSignal): Promise<void> {
     if (entry.run.pulled) {
       const plan = this.#storedPlan(entry);
-      if (!plan.ok) return this.#fail(entry, plan.code, plan.message);
+      if (!plan.ok) return this.#uncheckable(entry);
       return this.#verifyStep(entry, plan);
     }
     let phase: 'checking' | 'downloading' = 'checking';
@@ -656,12 +662,16 @@ export class JobManager {
       }
       entry.plan = plan;
       entry.run = { ...entry.run, afterOnly: plan.afterOnly };
-      // Computed once and saved before the first pull: after a pull, the tag is there whoever made it.
-      if (entry.run.hadTag === undefined) entry.run = { ...entry.run, hadTag: await this.#hasTag(plan.ref) };
+      // Read once per ref and saved before its first pull: after a pull, the tag is there whoever made it.
+      if (this.#hadTag(entry, plan.ref) === undefined) {
+        entry.run = { ...entry.run, hadTag: await this.#hasTag(plan.ref), hadTagRef: plan.ref };
+      }
       if (signal.aborted) return await this.#stopped(entry);
       const holder = this.#tagHolder(plan.ref, entry);
       if (holder) {
-        return await this.#fail(entry, 'job-exists', `Job ${holder.id} is already getting ${plan.ref}.`);
+        const message = `Job ${holder.id} is already getting ${plan.ref}.`;
+        this.#audit(entry, 'check-failed', entry.job.startedBy, message);
+        return await this.#fail(entry, 'job-exists', message);
       }
       phase = 'downloading';
       await this.#set(entry, {
@@ -686,7 +696,7 @@ export class JobManager {
         phase === 'checking'
           ? `Could not check ${sourceName(entry.request)} against what you reviewed: ${errorText(error)}`
           : `Ollama could not download ${entry.job.ref}: ${errorText(error)}`;
-      if (phase === 'checking') this.#audit(entry, 'check-failed', entry.job.startedBy, message);
+      this.#audit(entry, phase === 'checking' ? 'check-failed' : 'pull-failed', entry.job.startedBy, message);
       await this.#fail(entry, phase === 'checking' ? 'check-error' : 'pull-failed', message);
     }
   }
@@ -695,7 +705,7 @@ export class JobManager {
     entry.verifying = true;
     try {
       await this.#set(entry, { state: 'verifying', progress: { ...entry.job.progress, status: 'verifying' } });
-      const failure = await this.#verify(plan, entry.run.hadTag ?? null).catch((error: unknown) => ({
+      const failure = await this.#verify(plan, this.#hadTag(entry, plan.ref) ?? null).catch((error: unknown) => ({
         code: 'unverified',
         message: `b4m-host could not check ${plan.ref} after downloading it: ${errorText(error)}`,
       }));
@@ -726,12 +736,39 @@ export class JobManager {
     return curated.ok ? { ...base, verify: { kind: 'curated', build: curated.build } } : curated;
   }
 
+  /** `hadTag` when it was read for `ref`; files written before `hadTagRef` read it for the job's ref. */
+  #hadTag(entry: Entry, ref: string): boolean | null | undefined {
+    return modelKey(entry.run.hadTagRef ?? entry.job.ref) === modelKey(ref) ? entry.run.hadTag : undefined;
+  }
+
+  /**
+   * A finished pull whose approved build this host's curated list no longer pins, so nothing can check it. Like an
+   * unverified download, it is removed when the job's pull created the tag and left in place otherwise.
+   */
+  async #uncheckable(entry: Entry): Promise<void> {
+    const { ref } = entry.job;
+    const head = `${ref} was downloaded, but this b4m-host's curated list no longer pins the build you approved, so it could not be checked`;
+    const message =
+      this.#hadTag(entry, ref) !== false
+        ? `${head}. It is still installed; remove it unless you trust it.`
+        : await this.#o.runtime.remove(ref).then(
+            () => `${head}, so it was removed.`,
+            (error: unknown) => `${head}. Removing it failed (${errorText(error)}); remove ${ref} by hand.`
+          );
+    this.#audit(entry, 'check-failed', entry.job.startedBy, message);
+    await this.#fail(entry, 'unverified', message);
+  }
+
   async #stopped(entry: Entry): Promise<void> {
     const reason = entry.stop ?? 'shutdown';
     if (reason === 'space') return this.#spaceStopped(entry);
     const race = reason === 'shutdown' ? null : await this.#settleRace(entry);
     if (reason === 'cancel') {
+      if (race) this.#audit(entry, 'cancelled', entry.job.cancelledBy ?? entry.job.startedBy, race);
       return this.#finish(entry, 'cancelled', null, joinNotices(entry.job.notice, race));
+    }
+    if (reason === 'shutdown') {
+      this.#audit(entry, 'interrupted', entry.job.startedBy, `b4m-host stopped while the job was ${entry.job.state}.`);
     }
     await this.#set(entry, {
       state: reason === 'pause' ? 'paused' : 'interrupted',
@@ -746,7 +783,7 @@ export class JobManager {
    */
   async #settleRace(entry: Entry): Promise<string | null> {
     const { plan } = entry;
-    if (!plan || entry.run.hadTag !== false || (await this.#hasTag(plan.ref)) !== true) return null;
+    if (!plan || this.#hadTag(entry, plan.ref) !== false || (await this.#hasTag(plan.ref)) !== true) return null;
     const failure = await this.#verify(plan, false).catch((error: unknown) => ({
       code: 'unverified',
       message: `b4m-host could not check ${plan.ref}: ${errorText(error)}`,
@@ -759,10 +796,10 @@ export class JobManager {
   async #spaceStopped(entry: Entry): Promise<void> {
     const message = entry.spaceRefusal ?? 'The model is larger than the free space on the host.';
     const { plan } = entry;
-    if (plan && entry.run.hadTag === false && (await this.#hasTag(plan.ref)) === true) {
+    if (plan && this.#hadTag(entry, plan.ref) === false && (await this.#hasTag(plan.ref)) === true) {
       await this.#o.runtime.remove(plan.ref).catch(error => this.#o.log(`removing ${plan.ref}: ${errorText(error)}`));
     }
-    this.#o.audit({ event: 'admission-refused', job: entry.job.id, ref: entry.job.ref, detail: message });
+    this.#audit(entry, 'admission-refused', entry.job.startedBy, message);
     await this.#fail(
       entry,
       'insufficient-space',
@@ -1002,8 +1039,8 @@ export class JobManager {
 
   async #hasTag(ref: string): Promise<boolean | null> {
     try {
-      const aliases = ollamaRefAliases(ref);
-      return (await this.#o.runtime.list()).some(model => aliases.includes(ollamaModelKey(model.name)));
+      const aliases = ollamaRefAliases(tagged(ref));
+      return (await this.#o.runtime.list()).some(model => aliases.includes(modelKey(model.name)));
     } catch {
       return null;
     }

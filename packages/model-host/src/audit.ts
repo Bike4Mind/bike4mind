@@ -11,6 +11,9 @@ export const AUDIT_EVENTS = [
   'dismiss',
   'remove',
   'digest-failed',
+  'pull-failed',
+  'cancelled',
+  'interrupted',
   'done',
 ] as const;
 export type AuditEvent = (typeof AUDIT_EVENTS)[number];
@@ -22,6 +25,7 @@ export interface AuditEntry {
   revision?: string | null;
   sha256?: string | null;
   licensesAccepted?: string[] | null;
+  /** `device` and `login` are labels the client reports, never verified identities. */
   device?: string | null;
   login?: string | null;
   via?: 'ssh' | 'local';
@@ -45,15 +49,23 @@ export function createAuditLog(
   const path = join(stateDir, 'audit.jsonl');
   let size: number | null = null;
   let chain = Promise.resolve();
-  const write = async (line: string) => {
-    size ??= await stat(path).then(
+  const currentSize = () =>
+    stat(path).then(
       info => info.size,
       () => 0
     );
+  const write = async (line: string) => {
+    size ??= await currentSize();
     const bytes = Buffer.byteLength(line);
     if (size > 0 && size + bytes > maxBytes) {
-      await rename(path, `${path}.1`);
-      size = 0;
+      try {
+        await rename(path, `${path}.1`);
+        size = 0;
+      } catch (error) {
+        // The file may have been moved or deleted meanwhile; the line is still appended.
+        log(`audit log ${path}: rotating: ${error instanceof Error ? error.message : String(error)}`);
+        size = await currentSize();
+      }
     }
     await appendFile(path, line, { mode: 0o640 });
     size += bytes;

@@ -6,12 +6,13 @@ import {
   PullJobActionSchema,
   PullJobRequestSchema,
   type ModelHostHello,
+  type PullJob,
   type PullJobActor,
 } from '@bike4mind/common/modelHub';
 import type { ModelHostProbe, RuntimeHealth } from '@bike4mind/local-models';
 import { cached } from './cached';
 import { HostEvents } from './events';
-import type { JobManager, JobManagerOptions } from './jobs';
+import { isActive, isFinal, type JobManager, type JobManagerOptions } from './jobs';
 import { readOllamaKey } from './ollamaKey';
 import type { HostMode } from './paths';
 import { createRouter, type Route, type RouteContext } from './router';
@@ -158,12 +159,14 @@ export function createHostApp(options: HostAppOptions): HostApp {
 
   if (jobs) {
     const manager = jobs;
+    // A stop that has not settled by the time the manager stops waiting answers 202: the job is still ending.
     const action =
-      (run: (id: string, who: PullJobActor) => Promise<unknown>) =>
+      (run: (id: string, who: PullJobActor) => Promise<unknown>, settled: (job: PullJob) => boolean = () => true) =>
       async ({ res, conn, body, params }: RouteContext) => {
         const { device } = parseBody(body, PullJobActionSchema, true);
         await run(params.id, actor(conn, device));
-        sendJson(res, 200, manager.get(params.id));
+        const job = manager.get(params.id);
+        sendJson(res, settled(job) ? 200 : 202, job);
       };
     routes.push(
       {
@@ -201,13 +204,19 @@ export function createHostApp(options: HostAppOptions): HostApp {
         method: 'POST',
         path: '/v1/jobs/:id/cancel',
         role: 'manage',
-        handle: action((id, who) => manager.cancel(id, who)),
+        handle: action(
+          (id, who) => manager.cancel(id, who),
+          job => isFinal(job.state)
+        ),
       },
       {
         method: 'POST',
         path: '/v1/jobs/:id/pause',
         role: 'manage',
-        handle: action((id, who) => manager.pause(id, who)),
+        handle: action(
+          (id, who) => manager.pause(id, who),
+          job => !isActive(job.state)
+        ),
       },
       {
         method: 'POST',

@@ -282,10 +282,11 @@ export async function serve(options: ServeOptions): Promise<void> {
   } finally {
     clearInterval(lockCheck);
     options.signal.removeEventListener('abort', stop);
+    // No new requests while the jobs stop; the audit lines they write go out before exit.
+    await server?.close();
     await app?.jobs?.close();
     await flushAudit();
     app?.close();
-    await server?.close();
     for (const { lock } of locks) await lock.release();
   }
   if (lockLost) throw lockLost;

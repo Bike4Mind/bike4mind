@@ -83,7 +83,7 @@ export async function curatedLicensesMatch(
  * `ApprovalDeps.checkAfterPull`).
  */
 export type ApprovalResult =
-  | { ok: true; ref: string; verified?: false }
+  | { ok: true; ref: string; verified: boolean }
   | {
       ok: false;
       reason:
@@ -141,7 +141,7 @@ async function checkHub(approval: HubPullApproval, deps: ApprovalDeps): Promise<
   )
     return { ok: false, reason: 'not-listed' };
   const hub = await deps.hub();
-  const detail = await hub.getModel(repo, { refresh: true });
+  const detail = await hub.getModel(repo, { refresh: true, signal });
   if (signal.aborted) return { ok: false, reason: 'cancelled' };
   const build = detail.builds.find(candidate => candidate.id === approval.buildId);
   if (!build) return { ok: false, reason: 'build-missing' };
@@ -174,7 +174,7 @@ async function checkHub(approval: HubPullApproval, deps: ApprovalDeps): Promise<
     const layers = await checkReviewedLayers(curated.build, tag, layerSources(deps), signal);
     if (!layers.ok) return layers;
   }
-  return { ok: true, ref };
+  return { ok: true, ref, verified: true };
 }
 
 async function checkLibrary(approval: LibraryPullApproval, deps: ApprovalDeps): Promise<ApprovalResult> {
@@ -193,7 +193,7 @@ async function checkLibrary(approval: LibraryPullApproval, deps: ApprovalDeps): 
   if (!runtime.ok) return runtime;
   const layers = await checkReviewedLayers(curated.build, null, layerSources(deps), deps.signal);
   if (!layers.ok) return layers;
-  return { ok: true, ref: library.ref };
+  return { ok: true, ref: library.ref, verified: true };
 }
 
 function layerSources(deps: ApprovalDeps): LayerSources {

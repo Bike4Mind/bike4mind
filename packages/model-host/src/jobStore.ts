@@ -9,6 +9,8 @@ import { PullJobRequestSchema, PullJobSchema, type PullJob, type PullJobRequest 
 export const RunStateSchema = z.object({
   /** Whether Ollama listed the tag before the first pull; null when it could not say, missing until known. */
   hadTag: z.boolean().nullable().optional(),
+  /** The ref `hadTag` was read for; missing in older files, where it is the job's ref. */
+  hadTagRef: z.string().max(1000).optional(),
   /** The pull finished, so only the check of the installed weights is left. */
   pulled: z.boolean(),
   /** Nothing proved the file before the pull (a gated or private repo), so the check after it is the only one. */
@@ -101,6 +103,7 @@ export function createJobStore(stateDir: string, log: (line: string) => void): J
         const handle = await open(draft, 'wx', 0o640);
         try {
           await handle.writeFile(`${JSON.stringify(record)}\n`);
+          await handle.sync();
           await handle.close();
           await rename(draft, path);
         } catch (error) {
