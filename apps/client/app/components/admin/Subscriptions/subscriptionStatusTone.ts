@@ -42,7 +42,7 @@ export const OWNER_ALERT_DISPLAY: Readonly<
   owner_blocked: {
     label: 'Owner blocked',
     tone: 'bad',
-    title: 'The paying account is banned, suspended or disputed but Stripe still bills it. Cancel it in Stripe.',
+    title: 'The paying account is banned or suspended but Stripe still bills it. Cancel it in Stripe.',
   },
 };
 

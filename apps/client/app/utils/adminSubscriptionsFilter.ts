@@ -150,7 +150,7 @@ export type AdminSubscriptionBilledInterval = { interval: BilledInterval; interv
 export type AdminSubscriptionMrr = { amount: number; currency: string };
 
 /**
- * A live Stripe-billed row whose paying account is gone or blocked (banned, disputed, suspended):
+ * A live Stripe-billed row whose paying account is gone or blocked (banned or suspended):
  * it will keep renewing against that account's card until someone cancels it. For an organization
  * the paying account is its billing owner.
  */
