@@ -77,11 +77,13 @@ const ESTIMATES = {
   speed: 'timed by this app from the stream',
 } as const;
 
-/** "820ms", "12.3s", "3m 7s". */
+/** "820ms", "12.3s", "3m 7s"; rounded before the unit is picked, so 999.6ms reads "1.0s", not "1000ms". */
 export function formatDuration(ms: number): string {
-  if (ms < 1000) return `${Math.round(Math.max(0, ms))}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  return formatElapsed(ms);
+  const clamped = Math.max(0, ms);
+  if (Math.round(clamped) < 1000) return `${Math.round(clamped)}ms`;
+  const tenths = Math.round(clamped / 100);
+  if (tenths < 600) return `${(tenths / 10).toFixed(1)}s`;
+  return formatElapsed(Math.round(clamped / 1000) * 1000);
 }
 
 /** "30%", or "<1%" where rounding would say a share that is there is not. */
