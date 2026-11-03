@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { parseHubManifest, type HubBuild, type HubManifestInput, type HubRole } from '../schemas/modelHub';
-import { fixtureManifest, machine, OLD_PINS, PINS, sha } from './__fixtures__/hubManifest';
+import { fixtureManifest, machine, OLD_PINS, ownEval, PINS, sha } from './__fixtures__/hubManifest';
 import { DECODE_CONSTANTS } from './decode';
 import { computeBufferBytes, type HardwareProfile } from './fit';
 import {
@@ -179,6 +179,95 @@ describe('pickForMachine decode speed', () => {
       return best?.fit.decode?.tokensPerSec ?? 0;
     };
     expect(rate(speculative) / rate(fixtureManifest())).toBeCloseTo(DECODE_CONSTANTS.speculativeGain);
+  });
+
+  it('counts speculative decoding on an Ollama build that ships a draft', () => {
+    const gemmaOnly = (draft: boolean) =>
+      withManifest(m => {
+        m.entries = m.entries.filter(e => e.id === 'gemma-12b');
+        if (draft) m.entries[0].builds[0].draft = { kind: 'mtp-embedded', layers: 1 };
+      });
+    const rate = (manifest: HubManifestInput) => {
+      const { best } = pick('mac-64', 'chat', { manifest, hardware: withBandwidth(400) });
+      expect(best?.runtime).toBe('ollama');
+      return best?.fit.decode?.tokensPerSec ?? 0;
+    };
+    expect(rate(gemmaOnly(true)) / rate(gemmaOnly(false))).toBeCloseTo(DECODE_CONSTANTS.speculativeGain);
+  });
+
+  it('keeps an embedding model in its ranked place however slowly its weights would decode', () => {
+    const bigEmbedder = withManifest(m => {
+      const large = structuredClone(m.entries.find(e => e.id === 'embed-small')!);
+      large.id = 'embed-large';
+      large.name = 'embed-large';
+      large.params = { totalB: 8, activeB: null };
+      const [first] = large.builds;
+      first.weights = [{ ...first.weights[0], sizeBytes: 16e9 }];
+      first.ollama = { kind: 'library', ref: 'embed-large:8b', sizeBytes: 16e9, digest: sha(901) };
+      first.evidence = [ownEval(sha(901), { runtime: 'ollama' })];
+      m.entries.push(large);
+      m.rankings.embeddings = ['embed-large', 'embed-small'];
+    });
+    const { best, alternates } = pick('mac-64', 'embeddings', { manifest: bigEmbedder, hardware: withBandwidth(120) });
+    expect(best?.entry.id).toBe('embed-large');
+    expect(best?.fit.decode?.tokensPerSec).toBeLessThan(SLOW_DECODE_TOKENS_PER_SEC);
+    expect(alternates.map(c => c.entry.id)).toEqual(['embed-small']);
+  });
+
+  it('compares a candidate without an estimate to none that has one, by ranking alone', () => {
+    const unsized = (ids: string[]) =>
+      withManifest(m => {
+        const moe = structuredClone(m.entries.find(e => e.id === 'moe-35b')!);
+        moe.id = 'unsized-moe';
+        moe.name = 'unsized-moe';
+        moe.params = { totalB: 35, activeB: null };
+        delete moe.builds[0].tensorStats;
+        m.entries.push(moe);
+        m.rankings.chat = ids;
+        m.entries = m.entries.filter(e => ids.includes(e.id));
+      });
+    const { best, alternates } = pick('mac-64', 'chat', {
+      manifest: unsized(['dense-9b-tuned', 'unsized-moe']),
+      hardware: withBandwidth(60),
+    });
+    expect(best?.entry.id).toBe('dense-9b-tuned');
+    expect(best?.fit.decode?.tokensPerSec).toBeLessThan(SLOW_DECODE_TOKENS_PER_SEC);
+    expect(alternates.map(c => [c.entry.id, c.fit.decode])).toEqual([['unsized-moe', null]]);
+  });
+
+  describe('on a GPU that holds the dense model but not the MoE experts', () => {
+    const nvidia = (gbps?: number): HardwareProfile => ({
+      ...MACHINES['nv-12+32'],
+      ...(gbps && { memoryBandwidthBytesPerSec: gbps * 1e9 }),
+    });
+    const ranked = (...ids: string[]) =>
+      withManifest(m => {
+        m.rankings.chat = ids;
+        m.entries = m.entries.filter(e => ids.includes(e.id));
+      });
+    const chat = (ids: string[], gbps?: number) =>
+      pick('nv-12+32', 'chat', { manifest: ranked(...ids), hardware: nvidia(gbps) });
+
+    it('ranks an offloaded MoE as slow, so a resident dense model over the bar passes it', () => {
+      const { best, alternates } = chat(['moe-35b', 'dense-9b-tuned'], 100);
+      expect(best?.entry.id).toBe('dense-9b-tuned');
+      expect(best?.fit).toMatchObject({ verdict: 'tight', placement: 'gpu' });
+      expect(best?.fit.decode?.tokensPerSec).toBeGreaterThanOrEqual(SLOW_DECODE_TOKENS_PER_SEC);
+      expect(alternates.map(c => [c.entry.id, c.fit.placement])).toEqual([['moe-35b', 'expert-offload']]);
+    });
+
+    it('keeps the ranking between an offloaded MoE and a resident model under the bar', () => {
+      const { best, alternates } = chat(['dense-9b-tuned', 'moe-35b'], 60);
+      expect(best?.entry.id).toBe('dense-9b-tuned');
+      expect(best?.fit.decode?.tokensPerSec).toBeLessThan(SLOW_DECODE_TOKENS_PER_SEC);
+      expect(alternates.map(c => c.fit.placement)).toEqual(['expert-offload']);
+    });
+
+    it('leaves the ranking alone when the machine has no known bandwidth', () => {
+      const { best } = chat(['moe-35b', 'dense-9b-tuned']);
+      expect(best?.entry.id).toBe('moe-35b');
+      expect(best?.fit.placement).toBe('expert-offload');
+    });
   });
 });
 

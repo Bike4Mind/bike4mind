@@ -138,6 +138,7 @@ function fitInputs(entry: HubEntry, build: HubBuild, runtime: HubRuntime, option
     const library = source?.kind === 'library';
     const hasDraft = build.draft !== undefined || entry.arch.mtpLayers > 0;
     const draftNumPredict = source && source.kind !== 'library' ? source.modelfile.draftNumPredict : undefined;
+    const draftMax = hasDraft ? (draftNumPredict ?? OLLAMA_DEFAULT_DRAFT_MAX) : 0;
     // Ollama loads a model's projector whenever it has one.
     const model: FitModel = {
       arch: entry.arch,
@@ -151,7 +152,8 @@ function fitInputs(entry: HubEntry, build: HubBuild, runtime: HubRuntime, option
       kv: ollama?.kvType ? { k: ollama.kvType, v: ollama.kvType } : undefined,
       flashAttn: ollama?.flashAttention === false ? 'off' : 'auto',
       slots: family && OLLAMA_SINGLE_SLOT_ARCHS.has(family.ggufArch) ? 1 : (ollama?.numParallel ?? 1),
-      draftMax: hasDraft ? (draftNumPredict ?? OLLAMA_DEFAULT_DRAFT_MAX) : 0,
+      draftMax,
+      speculative: draftMax > 0,
     };
     return { model, runtime: fitRuntime, contextCap: undefined };
   }
@@ -270,9 +272,10 @@ function beatsTierA(c: HubCandidate, tierA: HubCandidate | undefined): boolean {
 
 /**
  * The best curated build for a role on this machine, plus one alternate per other listed entry. Candidates are
- * ordered by verdict (fast, tight, slow; a slow one below the mode floor last), then by estimated decode (under
- * SLOW_DECODE_TOKENS_PER_SEC last; no estimate counts as fast enough), then by the manifest ranking for the role
- * (unranked entries follow in manifest order), then by build preference.
+ * ordered by verdict (fast, tight, slow; a slow one below the mode floor last), then by decode speed (an offloaded
+ * load or an estimate under SLOW_DECODE_TOKENS_PER_SEC last; skipped for embeddings and between candidates that
+ * lack an estimate), then by the manifest ranking for the role (unranked entries follow in manifest order), then by
+ * build preference.
  */
 export function pickForMachine(options: PickOptions): HubPick {
   const { manifest, role } = options;
@@ -281,20 +284,30 @@ export function pickForMachine(options: PickOptions): HubPick {
     const i = ranking.indexOf(entry.id);
     return i >= 0 ? i : ranking.length + manifest.entries.indexOf(entry);
   };
-  const slowDecode = (c: HubCandidate) =>
-    (c.fit.decode?.tokensPerSec ?? Infinity) < SLOW_DECODE_TOKENS_PER_SEC ? 1 : 0;
-  const fitClass = (c: HubCandidate) => [
-    VERDICT_RANK[c.fit.verdict],
-    c.fit.context < c.fit.floor ? 1 : 0,
-    slowDecode(c),
-  ];
-  const key = (c: HubCandidate) => [...fitClass(c), rankOf(c.entry), c.entry.builds.indexOf(c.build)];
-  const byKey = (a: HubCandidate, b: HubCandidate) => {
-    const ka = key(a);
-    const kb = key(b);
-    return ka.reduce((d, v, i) => d || v - kb[i], 0);
+  // 1 for a load split across GPU and RAM or an estimate under the bar, 0 for a faster one, null without an estimate.
+  const slowDecode = (c: HubCandidate): 0 | 1 | null => {
+    if (ROLE_MODE[role] === 'embeddings') return null;
+    if (c.fit.placement === 'expert-offload' || c.fit.placement === 'layer-offload') return 1;
+    const rate = c.fit.decode?.tokensPerSec;
+    return rate === undefined ? null : rate < SLOW_DECODE_TOKENS_PER_SEC ? 1 : 0;
   };
-  const sameClass = (a: HubCandidate, b: HubCandidate) => fitClass(a).every((v, i) => v === fitClass(b)[i]);
+  const byDecode = (a: HubCandidate, b: HubCandidate) => {
+    const slowA = slowDecode(a);
+    const slowB = slowDecode(b);
+    return slowA === null || slowB === null ? 0 : slowA - slowB;
+  };
+  const fitClass = (c: HubCandidate) => [VERDICT_RANK[c.fit.verdict], c.fit.context < c.fit.floor ? 1 : 0];
+  const byKey = (a: HubCandidate, b: HubCandidate) => {
+    const kb = fitClass(b);
+    return (
+      fitClass(a).reduce((d, v, i) => d || v - kb[i], 0) ||
+      byDecode(a, b) ||
+      rankOf(a.entry) - rankOf(b.entry) ||
+      a.entry.builds.indexOf(a.build) - b.entry.builds.indexOf(b.build)
+    );
+  };
+  const sameClass = (a: HubCandidate, b: HubCandidate) =>
+    fitClass(a).every((v, i) => v === fitClass(b)[i]) && byDecode(a, b) === 0;
   const perEntry = manifest.entries
     .filter(entry => listedInCurated(entry, options))
     .map(entry => fittingBuilds(entry, options).sort(byKey))
