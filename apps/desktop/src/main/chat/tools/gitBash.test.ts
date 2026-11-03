@@ -137,6 +137,29 @@ describe('findGitBash', () => {
     expect(relative.checked).not.toContain('Git\\bin\\bash.exe');
   });
 
+  it('skips a drive-less PATH folder or registered install path, which follow the current drive', async () => {
+    const driveless = probe(
+      ['\\Tools\\Git', 'C:\\Program Files\\Git'],
+      { [REG_MACHINE]: registered('HKEY_LOCAL_MACHINE', '\\Tools\\Git') },
+      ['\\Tools\\Git\\cmd\\git.exe'],
+      '\\Tools\\Git\\cmd'
+    );
+    expect(await findGitBash(driveless)).toBe('C:\\Program Files\\Git\\bin\\bash.exe');
+    expect(driveless.checked).not.toContain('\\Tools\\Git\\cmd\\git.exe');
+    expect(driveless.checked).not.toContain('\\Tools\\Git\\bin\\bash.exe');
+  });
+
+  it('skips an exec path that reports a drive-less install', async () => {
+    const shim = probe(
+      ['\\Tools\\Git', 'C:\\Program Files\\Git'],
+      { 'C:\\Shims\\git.exe --exec-path': '/Tools/Git/mingw64/libexec/git-core\n' },
+      ['C:\\Shims\\git.exe'],
+      'C:\\Shims'
+    );
+    expect(await findGitBash(shim)).toBe('C:\\Program Files\\Git\\bin\\bash.exe');
+    expect(shim.checked).not.toContain('\\Tools\\Git\\bin\\bash.exe');
+  });
+
   it('falls back to the standard install folders', async () => {
     const perUser = probe(['C:\\Users\\someone\\AppData\\Local\\Programs\\Git']);
     expect(await findGitBash(perUser)).toBe('C:\\Users\\someone\\AppData\\Local\\Programs\\Git\\bin\\bash.exe');

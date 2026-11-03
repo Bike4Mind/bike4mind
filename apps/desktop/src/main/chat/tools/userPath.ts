@@ -63,12 +63,12 @@ async function isExecutableFile(file: string, platform: NodeJS.Platform): Promis
   }
 }
 
-const WINDOWS_ROOTED = /^(?:[a-z]:[\\/]|[\\/]{2}[^\\/])/i;
+/** A drive or UNC prefix; `\dir` alone follows the current drive, so it is not rooted. */
+export const WINDOWS_ROOTED = /^(?:[a-z]:[\\/]|[\\/]{2}[^\\/])/i;
 
 /**
  * The absolute path of `name` in the first absolute PATH directory that has it, `<name>.exe` on
- * Windows. Relative entries are skipped, so nothing resolves from the working directory; on Windows
- * an entry counts only with a drive or UNC prefix, since `\dir` follows the current drive.
+ * Windows. Relative entries are skipped, so nothing resolves from the working directory.
  */
 export async function findOnPath(
   name: string,

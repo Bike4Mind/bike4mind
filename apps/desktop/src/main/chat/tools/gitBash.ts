@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { access, constants } from 'node:fs/promises';
 import { win32 } from 'node:path';
+import { WINDOWS_ROOTED } from './userPath';
 
 const PROBE_TIMEOUT_MS = 5_000;
 
@@ -39,7 +40,7 @@ function registryInstallPaths(output: string): string[] {
 async function gitOnPath(probe: GitBashProbe): Promise<string | null> {
   for (const entry of (probe.env.Path ?? probe.env.PATH ?? '').split(';')) {
     const directory = entry.trim().replace(/^"(.*)"$/, '$1');
-    if (!win32.isAbsolute(directory)) continue;
+    if (!WINDOWS_ROOTED.test(directory)) continue;
     const gitExe = win32.join(directory, 'git.exe');
     if (await probe.exists(gitExe)) return gitExe;
   }
@@ -99,7 +100,7 @@ function inSystemDirectory(path: string, env: NodeJS.ProcessEnv): boolean {
 export async function findGitBash(probe: GitBashProbe): Promise<string | null> {
   const seen = new Set<string>();
   for await (const root of candidateRoots(probe)) {
-    if (!win32.isAbsolute(root)) continue;
+    if (!WINDOWS_ROOTED.test(root)) continue;
     const bash = win32.join(root, 'bin', 'bash.exe');
     const key = bash.toLowerCase();
     if (seen.has(key)) continue;
