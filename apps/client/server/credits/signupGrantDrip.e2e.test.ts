@@ -11,6 +11,7 @@ import {
   signupGrantBudgetRepository,
   SignupGrantBudgetDayModel,
   AdminSettings,
+  seedSignupGrantPools,
 } from '@bike4mind/database';
 import {
   createMongoReplSet,
@@ -255,6 +256,29 @@ describe('signup activity drip', () => {
     expect(held?.tags).toContain(PENDING_FREE_CREDITS_TAG);
     expect(await creditsOf(dripper.id)).toBe(1000);
     expect(await creditsOf(signup.id)).toBe(0);
+  });
+
+  it('pays signup and drip grants after the pool seed on prod-shaped settings (old budget 0, no pools)', async () => {
+    delete config.signupGrantSignupPoolDaily;
+    delete config.signupGrantTricklePoolDaily;
+    config.signupGrantDailyBudget = '0';
+    try {
+      await seedSignupGrantPools({
+        findOne: async ({ settingName }) => (settingName in config ? { settingValue: config[settingName] } : null),
+        updateOne: async ({ settingName }, { $setOnInsert }) => {
+          if (!(settingName in config)) config[settingName] = $setOnInsert.settingValue;
+        },
+      });
+      const dripper = await createSignupStageUser(0);
+      clock = new Date(`${day(0)}T09:00:00Z`);
+      expect(await drip(dripper.id, 0)).toMatchObject({ creditsGranted: 1000 });
+      const signup = await createUser(1);
+      expect(await userService.releaseSignupTranche(signup.id, adapters)).toMatchObject({ creditsGranted: 1000 });
+      expect((await User.findById(signup.id))?.signupGrantHeldReason ?? null).toBeNull();
+      expect(notify).not.toHaveBeenCalled();
+    } finally {
+      delete config.signupGrantDailyBudget;
+    }
   });
 
   it('does not pay a drip on a reservation another attempt still owns', async () => {
