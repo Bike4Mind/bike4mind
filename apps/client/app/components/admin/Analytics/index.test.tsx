@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { cloneElement, type ReactElement, type ReactNode } from 'react';
 import {
   createMemoryHistory,
   createRootRoute,
@@ -17,6 +17,15 @@ import { parseAdminSearch } from '../adminTabParams';
 const mocks = vi.hoisted(() => ({ get: vi.fn() }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get } }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
+
+vi.mock('recharts', async importOriginal => {
+  const actual = await importOriginal<typeof import('recharts')>();
+  return {
+    ...actual,
+    ResponsiveContainer: ({ children }: { children: ReactElement }) =>
+      cloneElement(children, { width: 600, height: 260 } as Record<string, unknown>),
+  };
+});
 
 import AnalyticsTab from './index';
 import { readAnalyticsFilters, writeAnalyticsFilters } from './analyticsTabSearch';
@@ -229,6 +238,27 @@ describe('AnalyticsTab', () => {
       })
     );
     expect(router.state.location.search.range).toBeUndefined();
+  });
+
+  it('drills into the clicked bar window regardless of the hovered column', async () => {
+    const router = await renderPage('/admin?tab=analytics&range=7d');
+    const chart = await screen.findByTestId('analytics-signups-chart');
+    const bars = await waitFor(() => {
+      const found = chart.querySelectorAll('.recharts-bar-rectangle path');
+      expect(found.length).toBeGreaterThan(1);
+      return found;
+    });
+    // Rectangles render per series in bucket order: legit (06-14), suspected (06-14), unclassified (06-15).
+    const lastBar = bars[bars.length - 1];
+    fireEvent.mouseMove(bars[0]);
+    fireEvent.click(lastBar);
+    await waitFor(() =>
+      expect(router.state.location.search).toMatchObject({
+        tab: 'users',
+        createdFrom: '2026-06-15T00:00:00.000Z',
+        createdTo: '2026-06-16T00:00:00.000Z',
+      })
+    );
   });
 
   it('lists the signup signals as inline bars', async () => {

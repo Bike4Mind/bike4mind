@@ -43,6 +43,12 @@ export function SignupsSection({ data, loading, error, onRetry, onShowDefaultRan
   )} not classified yet. Bars are ${BUCKET_UNIT[bucket]}; click one to list its accounts.`;
   const axisTick = { fontSize: 12, fill: admin.inkMuted };
 
+  // Bar entries carry the row they were drawn from, so the click resolves the bucket without tooltip state.
+  const selectBar = (entry: { payload?: { start?: string } }) => {
+    const picked = buckets.find(b => b.start === entry.payload?.start);
+    if (picked) onSelectWindow(toWindow(picked));
+  };
+
   const partialCell = (entry: SignupBucket, fill: string, baseOpacity = 1) => (
     <Cell
       key={entry.start}
@@ -61,18 +67,7 @@ export function SignupsSection({ data, loading, error, onRetry, onShowDefaultRan
       sx={{ cursor: 'pointer' }}
     >
       <ResponsiveContainer width="100%" height={260}>
-        <BarChart
-          data={rows}
-          margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
-          barCategoryGap={1}
-          onClick={state => {
-            // null outside the plot (legend, axis gutters); Number(null) would be 0 and pick the first bucket
-            const raw = state?.activeTooltipIndex;
-            if (raw == null) return;
-            const picked = buckets[Number(raw)];
-            if (picked) onSelectWindow(toWindow(picked));
-          }}
-        >
+        <BarChart data={rows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }} barCategoryGap={1}>
           <CartesianGrid vertical={false} stroke={admin.border} />
           <XAxis dataKey="label" tick={axisTick} minTickGap={24} tickLine={false} />
           <YAxis tick={axisTick} width={40} allowDecimals={false} axisLine={false} tickLine={false} />
@@ -95,10 +90,18 @@ export function SignupsSection({ data, loading, error, onRetry, onShowDefaultRan
             stackId="signups"
             fill={colors.likelyLegit}
             isAnimationActive={false}
+            onClick={selectBar}
           >
             {rows.map(entry => partialCell(entry, colors.likelyLegit))}
           </Bar>
-          <Bar dataKey="suspected" name="Suspected" stackId="signups" fill={colors.suspected} isAnimationActive={false}>
+          <Bar
+            dataKey="suspected"
+            name="Suspected"
+            stackId="signups"
+            fill={colors.suspected}
+            isAnimationActive={false}
+            onClick={selectBar}
+          >
             {rows.map(entry => partialCell(entry, colors.suspected))}
           </Bar>
           <Bar
@@ -108,6 +111,7 @@ export function SignupsSection({ data, loading, error, onRetry, onShowDefaultRan
             fill={admin.inkMuted}
             fillOpacity={0.4}
             isAnimationActive={false}
+            onClick={selectBar}
           >
             {rows.map(entry => partialCell(entry, admin.inkMuted, 0.4))}
           </Bar>
