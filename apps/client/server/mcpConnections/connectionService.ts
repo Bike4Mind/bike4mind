@@ -4,6 +4,7 @@ import {
   BadRequestError,
   ConflictError,
   ForbiddenError,
+  INTEGRATION_CATALOG,
   McpConnectionCapError,
   McpConnectionSlugConflictError,
   NotFoundError,
@@ -237,12 +238,19 @@ export async function createUserConnection(
   options: InvokeRemoteMcpOptions = {}
 ): Promise<IMcpConnectionPublic> {
   const prepared = prepareConnectionUrl(body.url, context.network);
-  // A preset connects to its own server only: a body naming a preset with another host is refused
-  // before the policy runs, so a preset id can never carry a custom URL past `presets_only`.
+  // A preset connects to its own server only, with the sign-in its catalog entry declares: a body
+  // naming a preset with another host or auth kind is refused before the policy runs, so a preset id
+  // can never carry a custom URL past `presets_only`.
   if (body.presetId && getMcpPresetHost(body.presetId) !== prepared.urlHost) {
     audit(actor, 'connection_created', { urlHost: prepared.urlHost }).failure('preset_host_mismatch');
     throw new BadRequestError('This URL is not the server of the chosen connector preset', {
       code: 'preset_host_mismatch',
+    });
+  }
+  if (body.presetId && INTEGRATION_CATALOG[body.presetId].remoteMcp?.auth !== body.auth.kind) {
+    audit(actor, 'connection_created', { urlHost: prepared.urlHost }).failure('preset_auth_mismatch');
+    throw new BadRequestError('The chosen connector preset needs a different sign-in method', {
+      code: 'preset_auth_mismatch',
     });
   }
   assertPolicyAllows(

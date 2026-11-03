@@ -442,6 +442,15 @@ describe('POST /api/mcp-connections', () => {
     expect(h.audits).toContainEqual({ action: 'connection_created', outcome: 'failure:preset_host_mismatch' });
   });
 
+  it('refuses a preset paired with a sign-in its catalog entry does not declare, before writing', async () => {
+    h.context = context({ policies: [CustomMcpPolicySchema.parse({ mode: 'any', allowUnauthenticated: true })] });
+    const result = await createConnection({ presetId: 'linear', auth: { kind: 'none' } });
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ code: 'preset_auth_mismatch' });
+    expect(repo.createWithinUserCap).not.toHaveBeenCalled();
+    expect(h.audits).toContainEqual({ action: 'connection_created', outcome: 'failure:preset_auth_mismatch' });
+  });
+
   it('refuses an unknown preset id and keeps the other policy gates on a preset', async () => {
     h.context = context({ policies: [CustomMcpPolicySchema.parse({})] });
     const unknown = await createConnection({ presetId: 'hubspot' });
