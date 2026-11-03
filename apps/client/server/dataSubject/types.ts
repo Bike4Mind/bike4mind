@@ -63,7 +63,7 @@ export type DataHolder =
       kind: 'subject';
       secretPaths: readonly string[];
       /** References to the person held on OTHER users' documents (the referrer of someone they invited). */
-      references: readonly UserReference[];
+      references: readonly AttributionReference[];
       unrelatedPaths?: readonly string[];
     }
   | {
