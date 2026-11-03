@@ -239,16 +239,9 @@ describe('business metric persisted behavior', () => {
     const window = comparisonWindow(new Date('2026-10-26T13:05:00Z'));
     await BusinessMetricState.create({ _id: 'unused', expiresAt: new Date(Date.now() + 86_400_000) });
     const post = vi.fn(async () => true);
-    const sameMetric = {
-      metricName: 'same metric',
-      direction: 'increase' as const,
-      message: 'same metric\n120 vs 100',
-    };
-    const failedMetric = {
-      metricName: 'failed metric',
-      direction: 'increase' as const,
-      message: 'failed metric\n120 vs 100',
-    };
+    const shape = { current: 120, previous: 100, delta: 20, percent: 20, median: null, contributors: [] };
+    const sameMetric = { metricName: 'same metric', direction: 'increase' as const, ...shape };
+    const failedMetric = { metricName: 'failed metric', direction: 'increase' as const, ...shape };
     await Promise.all(Array.from({ length: 5 }, () => deliverAnomalies(window, [sameMetric], post)));
     expect(post).toHaveBeenCalledTimes(1);
     expect(await deliverAnomalies(window, [sameMetric], post)).toBe(0);

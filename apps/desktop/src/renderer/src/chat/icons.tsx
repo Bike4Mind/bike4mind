@@ -320,6 +320,15 @@ export function GlobeIcon() {
   );
 }
 
+export function PhoneIcon() {
+  return (
+    <Glyph>
+      <rect x="4.5" y="1.75" width="7" height="12.5" rx="1.75" />
+      <path d="M7 12h2" />
+    </Glyph>
+  );
+}
+
 export function TerminalIcon() {
   return (
     <Glyph>
@@ -516,6 +525,15 @@ export function AskIcon() {
       <path d="M3.5 3h9a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H7l-3 2.5V11h-.5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />
       <path d="M6.6 5.9a1.45 1.45 0 1 1 2 1.35c-.4.2-.6.45-.6.9" />
       <path d="M8 9.4v.05" />
+    </Glyph>
+  );
+}
+
+export function DocumentIcon({ size }: { size?: number } = {}) {
+  return (
+    <Glyph size={size}>
+      <path d="M4 1.75h5l3 3v9.5H4z" />
+      <path d="M9 1.75v3h3M6 8h4M6 10.5h4" />
     </Glyph>
   );
 }

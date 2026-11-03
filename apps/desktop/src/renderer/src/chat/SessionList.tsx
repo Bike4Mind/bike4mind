@@ -308,6 +308,7 @@ interface RowActions {
   togglePin: (session: ChatSessionSummary) => void;
   toggleArchived: (session: ChatSessionSummary) => void;
   rename: (session: ChatSessionSummary, title: string) => void;
+  download: (session: ChatSessionSummary) => void;
   /** Null takes the session out of its section. */
   moveToSection: (sessionId: string, sectionId: string | null) => void;
   /** Opens the name dialog for a section the session will be moved into. */
@@ -592,6 +593,9 @@ const SessionRow = memo(function SessionRow({
                         <ChevronIcon open={false} />
                       </MenuItem>
                     )}
+                    <MenuItem onClick={() => actions.download(session)} data-testid="chat-download-session-btn">
+                      Download
+                    </MenuItem>
                     <MenuItem onClick={() => actions.toggleArchived(session)} data-testid="chat-archive-session-btn">
                       {session.archived ? 'Unarchive' : 'Archive'}
                     </MenuItem>
@@ -961,8 +965,11 @@ export function SessionList({
   onTogglePin,
   onToggleArchived,
   onRename,
+  onDownload,
   renameError,
   onDismissRenameError,
+  downloadError,
+  onDismissDownloadError,
   sectionError,
   onDismissSectionError,
   userSections,
@@ -992,9 +999,13 @@ export function SessionList({
   onTogglePin: (session: ChatSessionSummary) => void;
   onToggleArchived: (session: ChatSessionSummary) => void;
   onRename: (session: ChatSessionSummary, title: string) => void;
+  onDownload: (session: ChatSessionSummary) => void;
   /** Set when a rename was refused and rolled back; cleared by clicking it. */
   renameError?: string | null;
   onDismissRenameError?: () => void;
+  /** Set when saving a conversation to a file failed; cleared by clicking it. */
+  downloadError?: string | null;
+  onDismissDownloadError?: () => void;
   sectionError?: string | null;
   onDismissSectionError?: () => void;
   /** The user's own sections and which sessions sit in them; see useSidebarSections. */
@@ -1100,6 +1111,7 @@ export function SessionList({
     onTogglePin,
     onToggleArchived,
     onRename,
+    onDownload,
     sectionActions,
   });
   target.current = {
@@ -1110,6 +1122,7 @@ export function SessionList({
     onTogglePin,
     onToggleArchived,
     onRename,
+    onDownload,
     sectionActions,
   };
 
@@ -1129,6 +1142,7 @@ export function SessionList({
       togglePin: session => target.current.onTogglePin(session),
       toggleArchived: session => target.current.onToggleArchived(session),
       rename: (session, title) => target.current.onRename(session, title),
+      download: session => target.current.onDownload(session),
       moveToSection: (sessionId, sectionId) => moveSession(sessionId, sectionId),
       requestNewSection: sessionId => setNameRequest({ kind: 'create', sessionId }),
       drag: sessionId => {
@@ -1470,6 +1484,18 @@ export function SessionList({
             data-testid="chat-rename-error"
           >
             {renameError}
+          </Alert>
+        )}
+        {downloadError && (
+          <Alert
+            size="sm"
+            color="danger"
+            variant="soft"
+            sx={{ cursor: 'pointer', mx: 0.5 }}
+            onClick={onDismissDownloadError}
+            data-testid="chat-download-error"
+          >
+            {downloadError}
           </Alert>
         )}
         {sectionError && (

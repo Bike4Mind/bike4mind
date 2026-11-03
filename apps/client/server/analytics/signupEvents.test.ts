@@ -279,6 +279,38 @@ describe('emitPurchaseEvents', () => {
     expect(credited.metadata).toMatchObject({ attribution: 'self-reported', touch: 'first', userAction: false });
   });
 
+  describe('the visit the purchase was made in', () => {
+    const visitId = 'a'.repeat(32);
+    const hostAndWidgets = (p: string) => (p === 'widgets' || p === 'bike4mind' ? 'key' : undefined);
+    const sessions = () => Object.fromEntries(mockEmit.mock.calls.map(([c]) => [c.productId, c.sessionId]));
+
+    // As a signup's visit goes on the host's signup_completed and not on the credited `signup`:
+    // only the host's stream holds the visit the id names.
+    it.each([
+      ['a credit pack', { paymentId: 'pi_9', kind: 'credits' as const, billingReason: undefined }],
+      ['the invoice that opened a subscription', { billingReason: 'subscription_create' }],
+    ])('names it on the host copy of %s, and only there', async (_label, over) => {
+      mockKeyFor.mockImplementation(hostAndWidgets);
+      await expect(emitPurchaseEvents(invoice({ ...over, visitId }))).resolves.toEqual(['bike4mind', 'widgets']);
+      expect(sessions()).toEqual({ bike4mind: visitId, widgets: undefined });
+    });
+
+    it.each(['subscription_cycle', 'subscription_update', 'manual', null])(
+      'names none on a %s invoice, which happened in no visit, whatever the caller passes',
+      async billingReason => {
+        mockKeyFor.mockImplementation(hostAndWidgets);
+        await emitPurchaseEvents(invoice({ billingReason, visitId }));
+        expect(sessions()).toEqual({ bike4mind: undefined, widgets: undefined });
+      }
+    );
+
+    it('names none when no visit was recorded', async () => {
+      mockKeyFor.mockImplementation(hostAndWidgets);
+      await emitPurchaseEvents(invoice());
+      expect(mockEmit.mock.calls.every(([c]) => !('sessionId' in c))).toBe(true);
+    });
+  });
+
   it('sends the host a copy with no campaign for a user with no stored acquisition', async () => {
     mockKeyFor.mockImplementation((p: string) => (p === 'bike4mind' ? 'key' : undefined));
     await expect(emitPurchaseEvents(invoice({ user: { id: 'u1' } }))).resolves.toEqual(['bike4mind']);
@@ -409,6 +441,15 @@ describe('emitBillingEvent', () => {
       expect(call.metadata).not.toHaveProperty('internal');
       expect(call.metadata).not.toHaveProperty('lane');
     }
+  });
+
+  it("puts a caller's visit on the host copy alone", async () => {
+    mockKeyFor.mockImplementation((p: string) => (p === 'widgets' || p === 'bike4mind' ? 'key' : undefined));
+    const visitId = 'a'.repeat(32);
+    await emitBillingEvent({ user: subscriber, event: 'purchase', occurrence: 'pi_1', metadata: {}, visitId });
+    const byProduct = Object.fromEntries(mockEmit.mock.calls.map(([c]) => [c.productId, c]));
+    expect(byProduct.bike4mind.sessionId).toBe(visitId);
+    expect(byProduct.widgets).not.toHaveProperty('sessionId');
   });
 
   it('sends nothing without an occurrence, for a synthetic user, or without a user', async () => {

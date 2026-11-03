@@ -12,15 +12,16 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import type { Request } from 'express';
 import { rateLimit } from '@server/middlewares/rateLimit';
 
-/** Admin-set reads per minute; 0 turns the dedicated limit off (rateLimit skips a non-positive limit). */
+/** Admin-set reads per minute per key. Infinity (JWT callers, 0/unset setting) skips rateLimit; 0 would block. */
 async function creditReadsPerMinute(req: Request): Promise<number> {
-  if (!req.apiKeyInfo) return 0;
+  if (!req.apiKeyInfo) return Infinity;
 
   const settings = await getSettingsMap(
     { adminSettings: adminSettingsRepository },
     { names: ['apiRateLimitCreditsPerMin'] }
   );
-  return getSettingsValue('apiRateLimitCreditsPerMin', settings, 0);
+  const perMinute = getSettingsValue('apiRateLimitCreditsPerMin', settings, 0);
+  return perMinute > 0 ? perMinute : Infinity;
 }
 
 const handler = nextRouteForContract(getCreditBalanceContract, {

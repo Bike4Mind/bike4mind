@@ -704,6 +704,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/signupGrantHeldReleaseDeadLetter.ts:signupGrantHeldReleaseDlq',
     '1856afc8013710101dc260617d02b2feca7f30a05c0a2444f823a5e1ae6b21c8'
   ),
+  gap(
+    'schedule:infra/cron.ts:accountCampaignSweep',
+    '91f216c1167faa53a3a3f263bada6004ec296646cddba8eac0a90869d53c1b5b'
+  ),
   wired('schedule:infra/cron.ts:adminAuditAlerts', 'affe75eb1ea58ec7de19131925c6c8907a82f258f187996331f5df4183eb3ab0', {
     source: 'apps/workers/src/selfhost/adminAuditAlerts.ts',
     symbol: 'registerAdminAuditAlerts',

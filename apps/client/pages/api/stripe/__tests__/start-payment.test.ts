@@ -162,6 +162,29 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
     );
   });
 
+  it('records the visit the payment started in on the attempt, and never sends it to Stripe', async () => {
+    const visitId = 'a'.repeat(32);
+    const { req, res } = makeReq({ transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 });
+    req.headers.cookie = `b4m_vid=${visitId}`;
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockRecordPaymentStart).toHaveBeenCalledWith(
+      expect.objectContaining({ paymentIntentId: 'pi_1', visitId }),
+      expect.anything()
+    );
+    expect(JSON.stringify(mockPaymentIntentsCreate.mock.calls)).not.toContain(visitId);
+  });
+
+  it('records no visit for a visit cookie this server did not mint', async () => {
+    const { req, res } = makeReq({ transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 });
+    req.headers.cookie = 'b4m_vid=forged-visit';
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockRecordPaymentStart.mock.calls[0][0].visitId).toBeUndefined();
+  });
+
   it('creates a payment intent for a non-subscribed user buying per-credit', async () => {
     const { req, res } = makeReq({ transactionType: TransactionType.PerCredit, credits: 500 });
 

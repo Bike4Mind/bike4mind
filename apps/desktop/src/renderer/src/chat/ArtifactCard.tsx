@@ -1,14 +1,16 @@
-import { useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useState } from 'react';
 import Box from '@mui/joy/Box';
 import Chip from '@mui/joy/Chip';
+import IconButton from '@mui/joy/IconButton';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
+import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import { useTheme } from '@mui/joy/styles';
 import type { ChatArtifact, ChatArtifactView } from '@shared/chat';
 import { ArtifactPublishControl } from './ArtifactPublishControl';
 import { HtmlArtifactFrame } from './HtmlArtifactFrame';
-import { ChevronIcon } from './icons';
+import { ChevronIcon, GlobeIcon } from './icons';
 import { thinScrollbarSx } from './layout';
 import { type MermaidFailure, renderMermaidDiagram } from './mermaidDiagram';
 
@@ -188,6 +190,31 @@ function MermaidArtifact({
   );
 }
 
+type OpenableArtifact = Pick<ChatArtifact, 'title' | 'content'>;
+
+/**
+ * Opens an HTML artifact full-size in the active conversation's browser pane. A context rather
+ * than a prop, as WebLinkContext is, so the memoized turns between ChatShell and the card do not
+ * grow one; absent, the card offers no button.
+ */
+export const ArtifactBrowserContext = createContext<((artifact: OpenableArtifact) => void) | undefined>(undefined);
+
+/**
+ * Show `sessionId`'s pane, then hand main the artifact; main picks the url (see
+ * BrowserManager.openArtifact). The pane is shown first because the open resolves only once the
+ * page has loaded. A failed load arrives as the pane's own error state.
+ */
+export function openArtifactInSessionBrowser(
+  artifact: OpenableArtifact,
+  sessionId: string | null,
+  showPane: () => void,
+  open: typeof window.b4m.browser.openArtifact = request => window.b4m.browser.openArtifact(request)
+): void {
+  if (!sessionId) return;
+  showPane();
+  void open({ sessionId, title: artifact.title, content: artifact.content }).catch(() => undefined);
+}
+
 /** The drawing's share of a filled card: whatever the footer leaves. */
 const fillSx = { flex: 1, minHeight: 0 } as const;
 
@@ -237,6 +264,7 @@ export function ArtifactCard({
   // Passed straight to MermaidArtifact as its failure callback: a useState setter is stable,
   // so the compile effect is not re-run by this component re-rendering.
   const [diagramFailure, setDiagramFailure] = useState<MermaidFailure | undefined>(undefined);
+  const openInBrowser = useContext(ArtifactBrowserContext);
 
   const rendered = RENDERED_TYPES.has(artifact.type) && !diagramFailure;
   const note = rendered
@@ -269,6 +297,21 @@ export function ArtifactCard({
           <Chip size="sm" variant="soft" color="neutral" data-testid="chat-artifact-type">
             {TYPE_LABEL[artifact.type] ?? artifact.type}
           </Chip>
+          {openInBrowser && artifact.type === 'html' && (
+            <Tooltip title="Open in browser" size="sm">
+              <IconButton
+                size="sm"
+                variant="plain"
+                color="neutral"
+                aria-label="Open in browser"
+                sx={{ my: -0.75 }}
+                onClick={() => openInBrowser({ title: artifact.title, content: artifact.content })}
+                data-testid="artifact-open-in-browser-btn"
+              >
+                <GlobeIcon />
+              </IconButton>
+            </Tooltip>
+          )}
         </Stack>
       )}
 

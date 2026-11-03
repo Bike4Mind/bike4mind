@@ -78,6 +78,7 @@ function Harness({ activeId, mode }: { activeId: string | null; mode: ChatSessio
       onTogglePin={session => void togglePin(session)}
       onToggleArchived={session => void toggleArchived(session)}
       onRename={(session, title) => void rename(session, title)}
+      onDownload={() => {}}
       renameError={renameError}
       onDismissRenameError={clearRenameError}
       userSections={EMPTY_SIDEBAR_SECTIONS}
