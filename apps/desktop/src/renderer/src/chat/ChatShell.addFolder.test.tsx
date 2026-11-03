@@ -32,6 +32,7 @@ window.ResizeObserver ??= class {
 } as unknown as typeof ResizeObserver;
 
 const NOTES = '/work/notes';
+const LAST_SESSION_KEY = 'b4m.chat.lastSession';
 
 const summary = (
   id: string,
@@ -654,6 +655,54 @@ describe('Add folder in a Chat composer', () => {
     expect(byTestId('chat-add-folder-error')).toBeNull();
   });
 
+  it('makes its own chat when the first-run seed it was waiting on never settles', async () => {
+    stubBridge([]);
+    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValue(NOTES);
+    addContextDirectory.mockResolvedValue({ status: 'added', path: NOTES, session: summary('fresh', 'chat', [NOTES]) });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      await addFolderFromMenu();
+      await act(async () => void (await vi.advanceTimersByTimeAsync(1_000)));
+      expect(createSession).toHaveBeenCalledTimes(1);
+
+      await act(async () => void (await vi.advanceTimersByTimeAsync(10_000)));
+    } finally {
+      vi.useRealTimers();
+    }
+    await act(async () => undefined);
+
+    expect(createSession).toHaveBeenCalledTimes(2);
+    expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('fresh', NOTES);
+    expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
+  });
+
+  it('makes its own chat when the first-run chat it was waiting on is deleted before the folder is picked', async () => {
+    const stored = stubBridge([]);
+    const seed = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => seed.promise);
+    await renderShell();
+
+    const picked = deferred<string | null>();
+    pickProjectDirectory.mockReturnValue(picked.promise);
+    addContextDirectory.mockResolvedValue({ status: 'added', path: NOTES, session: summary('fresh', 'chat', [NOTES]) });
+    await addFolderFromMenu();
+    const seeded = summary('seeded');
+    stored.set('seeded', seeded);
+    await act(async () => seed.resolve({ session: seeded }));
+    await act(async () => undefined);
+    await deleteOpenChat();
+
+    await act(async () => picked.resolve(NOTES));
+    await act(async () => undefined);
+
+    expect(createSession).toHaveBeenCalledTimes(2);
+    expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('fresh', NOTES);
+    expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
+  });
+
   it('after the seed chat is deleted, Add folder with no chat open makes its own chat and shares into it', async () => {
     const stored = stubBridge([]);
     const seeded = summary('seeded');
@@ -714,6 +763,51 @@ describe('Add folder in a Chat composer', () => {
     expect(createSession).toHaveBeenCalledTimes(1);
   });
 
+  it('does not open the chat Add folder made in Code mode when the switch came while it was being made', async () => {
+    window.localStorage.removeItem(LAST_SESSION_KEY);
+    const stored = stubBridge([], { createCodeSession: () => new Promise(() => undefined) });
+    seedFails();
+    const made = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => made.promise);
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValue(NOTES);
+    addContextDirectory.mockResolvedValue({ status: 'added', path: NOTES, session: summary('fresh', 'chat', [NOTES]) });
+    await addFolderFromMenu();
+    await act(async () => byTestId('mode-switch-code-btn')?.click());
+    await act(async () => undefined);
+    const fresh = summary('fresh');
+    stored.set('fresh', fresh);
+    await act(async () => made.resolve({ session: fresh }));
+    await act(async () => undefined);
+    expect(window.localStorage.getItem(LAST_SESSION_KEY)).toBeNull();
+
+    await act(async () => byTestId('mode-switch-chat-btn')?.click());
+    await act(async () => undefined);
+    expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('fresh', NOTES);
+    expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
+  });
+
+  it('does not open the first-run chat in Code mode when the switch came while it was being made', async () => {
+    window.localStorage.removeItem(LAST_SESSION_KEY);
+    const stored = stubBridge([], { createCodeSession: () => new Promise(() => undefined) });
+    const seed = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => seed.promise);
+    await renderShell();
+
+    await act(async () => byTestId('mode-switch-code-btn')?.click());
+    await act(async () => undefined);
+    const seeded = summary('seeded');
+    stored.set('seeded', seeded);
+    await act(async () => seed.resolve({ session: seeded }));
+    await act(async () => undefined);
+    expect(window.localStorage.getItem(LAST_SESSION_KEY)).toBeNull();
+
+    await act(async () => byTestId('mode-switch-chat-btn')?.click());
+    await act(async () => undefined);
+    expect(JSON.parse(window.localStorage.getItem(LAST_SESSION_KEY) ?? 'null')).toEqual({ id: 'seeded', mode: 'chat' });
+  });
+
   it('shares into the new chat by id without waiting for it to load', async () => {
     stubBridge([]);
     seedFails();
@@ -755,7 +849,7 @@ describe('Add folder in a Chat composer', () => {
     expect(addContextDirectory).toHaveBeenCalledTimes(1);
   });
 
-  it("applies a share that landed during a chat's first read to that read only, then reads main on reopen", async () => {
+  it('reads a chat again when a share lands during its first read, then reads main on reopen', async () => {
     const stored = stubBridge([]);
     seedFails();
     const firstRead = deferred<void>();
@@ -1158,6 +1252,25 @@ describe('Add folder in a Chat composer', () => {
     expect(byTestId('chat-add-folder-error')).toBeNull();
 
     await openSessionRow('New conversation');
+    expect(byTestId('chat-add-folder-error')?.textContent).toContain('filesystem root cannot be shared');
+  });
+
+  it('shows a refusal that lands after a switch to Code mode once its chat is back in Chat mode', async () => {
+    stubBridge([summary('alpha', 'chat', undefined, 'Alpha'), summary('code-1', 'code', undefined, 'Code one')]);
+    await renderShell();
+    await openSessionRow('Alpha');
+
+    const share = deferred<ShareDirectoryResult>();
+    addContextDirectory.mockReturnValue(share.promise);
+    await addFolderFromMenu();
+    await act(async () => byTestId('mode-switch-code-btn')?.click());
+    await act(async () => undefined);
+    await act(async () => share.resolve({ status: 'refused', error: 'The filesystem root cannot be shared.' }));
+    await act(async () => undefined);
+    expect(byTestId('chat-add-folder-error')).toBeNull();
+
+    await act(async () => byTestId('mode-switch-chat-btn')?.click());
+    await act(async () => undefined);
     expect(byTestId('chat-add-folder-error')?.textContent).toContain('filesystem root cannot be shared');
   });
 
