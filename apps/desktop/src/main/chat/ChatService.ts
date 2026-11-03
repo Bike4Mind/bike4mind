@@ -2793,10 +2793,7 @@ export class ChatService {
       const contextBlock = this.projectContext.get(session.id, project?.workingDirectory, project?.directory);
       const skillsBlock = this.skillsPrompt?.get(session.id, skillRoot) ?? Promise.resolve('');
       if (!resume) await this.reportSuggestionOutcomes(session);
-      const readAttachment: AttachmentReader = {
-        bytes: attachment => this.deps.attachments?.read(session.id, attachment.id) ?? Promise.resolve(null),
-        pdfText: attachment => this.deps.attachments?.readPdfText(session.id, attachment.id) ?? Promise.resolve(null),
-      };
+      const readAttachment = this.attachmentReader(session.id);
       const projectContext = await contextBlock;
       const skillsSection = await skillsBlock;
       let toolsSupported = modelOption?.supportsTools !== false && (!localTurn || !!modelOption);
@@ -3710,6 +3707,13 @@ export class ChatService {
     for (const entry of [...entries].reverse()) this.deps.queue?.restore(sessionId, entry);
   }
 
+  private attachmentReader(sessionId: string): AttachmentReader {
+    return {
+      bytes: attachment => this.deps.attachments?.read(sessionId, attachment.id) ?? Promise.resolve(null),
+      pdfText: attachment => this.deps.attachments?.readPdfText(sessionId, attachment.id) ?? Promise.resolve(null),
+    };
+  }
+
   /**
    * One arrival as the next request carries it: built by the same code a replay uses, so this
    * turn's wire and the next turn's rebuild agree. Text goes as a one-block array rather than a
@@ -3717,10 +3721,7 @@ export class ChatService {
    * already holds text (this round's screenshot turn) and drops it there.
    */
   private async arrivalWire(session: ChatSession, message: ChatMessage): Promise<CompletionMessage | null> {
-    const [turn] = await toCompletionMessages(
-      { ...session, messages: [message] },
-      (attachment: ChatAttachment) => this.deps.attachments?.read(session.id, attachment.id) ?? Promise.resolve(null)
-    );
+    const [turn] = await toCompletionMessages({ ...session, messages: [message] }, this.attachmentReader(session.id));
     if (!turn) return null;
     return typeof turn.content === 'string' ? { ...turn, content: [{ type: 'text', text: turn.content }] } : turn;
   }
