@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { ContextRing } from './ContextRing';
 import { LOADED_POLL_MS } from './contextStatus';
+import { REFRESH_AFTER_FAILURE_MS } from './useLoadedModelState';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -77,6 +78,15 @@ function hover() {
     query('composer-context')?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
   });
   act(() => vi.advanceTimersByTime(200));
+}
+
+function unhover() {
+  act(() => {
+    query('composer-context')?.dispatchEvent(
+      new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body })
+    );
+  });
+  act(() => vi.advanceTimersByTime(1_000));
 }
 
 const COLD_LOCAL = '34k / 262k context (13%)\nModel not loaded: the next reply loads it first and re-reads 34k tokens';
@@ -231,6 +241,39 @@ describe('ContextRing', () => {
     act(() => vi.advanceTimersByTime(LOADED_POLL_MS));
     await settle();
     expect(getLoadedState).toHaveBeenCalledTimes(5);
+  });
+
+  it('does not re-ask on every hover while the last read failed', async () => {
+    getLoadedState.mockResolvedValue({ kind: 'unknown' });
+    render({ modelId: LOCAL, promptCache: undefined });
+    await settle();
+    expect(getLoadedState).toHaveBeenCalledTimes(1);
+
+    hover();
+    await settle();
+    unhover();
+    hover();
+    await settle();
+    expect(getLoadedState).toHaveBeenCalledTimes(1);
+
+    unhover();
+    act(() => vi.advanceTimersByTime(REFRESH_AFTER_FAILURE_MS));
+    hover();
+    await settle();
+    expect(getLoadedState).toHaveBeenCalledTimes(2);
+  });
+
+  it('treats a rejected read like a failed one', async () => {
+    getLoadedState.mockResolvedValueOnce({ kind: 'loaded', expiresAt: NOW + 250_000 });
+    render({ modelId: LOCAL, promptCache: undefined });
+    await settle();
+    getLoadedState.mockRejectedValueOnce(new Error('ipc'));
+    act(() => vi.advanceTimersByTime(LOADED_POLL_MS));
+    await settle();
+    expect(getLoadedState).toHaveBeenCalledTimes(2);
+    act(() => vi.advanceTimersByTime(LOADED_POLL_MS * 3));
+    await settle();
+    expect(getLoadedState).toHaveBeenCalledTimes(2);
   });
 
   it('drops a response that arrives after a newer one', async () => {
