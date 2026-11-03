@@ -36,10 +36,10 @@ function bucket(outputTokens: number): LocalUsageBucket {
 function service(overrides: Partial<LocalUsageServiceDeps> = {}) {
   let now = NOW;
   let scope: string | null = 'device-local';
-  const buckets = vi.fn(async () => [bucket(10)]);
+  const buckets = vi.fn(async () => ({ scope: 'device' as const, buckets: [bucket(10)] }));
   const deps: LocalUsageServiceDeps = {
     logger: { warn: vi.fn() },
-    buckets,
+    scan: buckets,
     scopeKey: () => scope,
     serverNames: async () => new Map(),
     now: () => now,
@@ -92,11 +92,29 @@ describe('LocalUsageService', () => {
     const failing = vi
       .fn()
       .mockRejectedValueOnce(new Error('disk'))
-      .mockResolvedValue([bucket(1)]);
-    const { service: usage } = service({ buckets: failing });
+      .mockResolvedValue({ scope: 'device', buckets: [bucket(1)] });
+    const { service: usage } = service({ scan: failing });
     expect(await usage.usage('last-year' as never)).toEqual({ ok: false, error: 'Unknown usage window.' });
     expect(await usage.usage('last-24-hours')).toMatchObject({ ok: false });
     expect(await usage.usage('last-24-hours')).toMatchObject({ ok: true });
+  });
+
+  it('says which kind of scope the figures came from', async () => {
+    const scan = vi.fn(async () => ({ scope: 'account' as const, buckets: [bucket(1)] }));
+    const { service: usage } = service({ scan });
+    expect(await usage.usage('last-24-hours')).toMatchObject({ ok: true, usage: { scope: 'account' } });
+  });
+
+  it('names servers by runtime id when the saved servers cannot be read', async () => {
+    const scan = vi.fn(async () => ({
+      scope: 'device' as const,
+      buckets: [{ ...bucket(5), model: 'local:srv-box:qwen3' }],
+    }));
+    const { service: usage } = service({ scan, serverNames: () => Promise.reject(new Error('locked')) });
+    expect(await usage.usage('last-24-hours')).toMatchObject({
+      ok: true,
+      usage: { byServer: [{ label: 'srv-box', outputTokens: 5 }] },
+    });
   });
 
   it('computes from the session store without opening any connection', async () => {
@@ -130,7 +148,7 @@ describe('LocalUsageService', () => {
     const store = new SessionStore(root, 'hosted-model');
     const usage = new LocalUsageService({
       logger: { warn: vi.fn() },
-      buckets: () => store.localUsageBuckets(),
+      scan: () => store.localUsage(),
       scopeKey: () => null,
       serverNames: async () => new Map([['box', 'Studio box']]),
       now: () => NOW,

@@ -20,7 +20,14 @@ import { normalizeGeneration, type GenerationSettings } from '@shared/generation
 import { storedReasoningEffortSetting } from './reasoningEffort';
 import { isPromptCacheTtl, type PromptCacheTtl } from '@bike4mind/common';
 import type { SessionWritesStore, StoredSessionWrites } from './tools/sessionScripts';
-import { assertScopeKey, migrateLegacySessions, sessionScopeKey, type SessionScope } from './sessionScope';
+import type { LocalUsageScope } from '@shared/usage';
+import {
+  assertScopeKey,
+  DEVICE_LOCAL_SCOPE_KEY,
+  migrateLegacySessions,
+  sessionScopeKey,
+  type SessionScope,
+} from './sessionScope';
 import { isLocalUsageBucket, sessionUsageBuckets, type LocalUsageBucket } from '../usage/localUsage';
 
 /** Session ids are generated here, but arrive back from the renderer over IPC - see `filePath`. */
@@ -128,6 +135,11 @@ const LOCAL_USAGE_INDEX_VERSION = 1;
 interface IndexedLocalUsage {
   size: number;
   mtimeMs: number;
+  buckets: LocalUsageBucket[];
+}
+
+export interface LocalUsageScan {
+  scope: LocalUsageScope;
   buckets: LocalUsageBucket[];
 }
 
@@ -312,6 +324,8 @@ export class SessionStore implements SessionWritesStore {
   private readonly summaryIndexes = new Map<string, Promise<Map<string, IndexedSummary>>>();
   /** Per scope directory; see LOCAL_USAGE_INDEX. */
   private readonly localUsageIndexes = new Map<string, Promise<Map<string, IndexedLocalUsage>>>();
+  /** The scan running per scope directory; see localUsage. */
+  private readonly localUsageScans = new Map<string, Promise<LocalUsageBucket[]>>();
 
   constructor(
     private readonly baseDirectory: string,
@@ -636,16 +650,28 @@ export class SessionStore implements SessionWritesStore {
   }
 
   /**
-   * Local-model usage buckets for every session in the current scope.
+   * Local-model usage buckets for every session in the current scope, and which kind of scope
+   * that is.
    *
    * A transcript is parsed only when its size or mtime moved since the index saw it, and at most
    * LIST_READ_CONCURRENCY at a time; each is reduced to its buckets before the next is read, so a
    * first build never holds the whole history in memory.
    */
-  async localUsageBuckets(): Promise<LocalUsageBucket[]> {
+  async localUsage(): Promise<LocalUsageScan> {
     const directory = await this.directoryFor(true);
-    if (!directory) return [];
+    if (!directory) return { scope: 'none', buckets: [] };
+    const scope = this.scope && basename(directory) === DEVICE_LOCAL_SCOPE_KEY ? 'device' : 'account';
 
+    // One scan per folder at a time: two overlapping ones would each prune what the other just indexed.
+    let scanning = this.localUsageScans.get(directory);
+    if (!scanning) {
+      scanning = this.scanLocalUsage(directory).finally(() => this.localUsageScans.delete(directory));
+      this.localUsageScans.set(directory, scanning);
+    }
+    return { scope, buckets: await scanning };
+  }
+
+  private async scanLocalUsage(directory: string): Promise<LocalUsageBucket[]> {
     let entries: string[];
     try {
       entries = await readdir(directory);

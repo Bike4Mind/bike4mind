@@ -80,7 +80,10 @@ export interface LocalUsageFigures {
   estimatedEvalMs: number;
   promptTokens: number;
   promptMs: number;
-  /** Replies that reported a model load time, and that time summed. */
+  /**
+   * Server-timed replies that reported a load time, and those times summed. Ollama reports one on
+   * every request, warm or not, so this is an average per reply rather than a count of loads.
+   */
   loads: number;
   loadMs: number;
   draftTokens: number;
@@ -117,7 +120,14 @@ export interface LocalUsage {
   byServer: LocalUsageRow[];
   /** Local replies in this scope across all time, so a screen can tell "none ever" from "none lately". */
   allTimeReplies: number;
+  /**
+   * Which conversations these were counted from: the signed-out device folder, an account's
+   * folder, or none while no scope is known. A signed-out screen shows only `device`.
+   */
+  scope: LocalUsageScope;
   readAt: number;
 }
+
+export type LocalUsageScope = 'device' | 'account' | 'none';
 
 export type LocalUsageResult = { ok: true; usage: LocalUsage } | { ok: false; error: string };

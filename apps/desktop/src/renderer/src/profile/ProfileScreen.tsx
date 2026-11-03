@@ -14,7 +14,7 @@ import type { AccountUsage, UsageWindowId } from '@shared/usage';
 import { ArrowLeftIcon, ReloadIcon } from '../chat/icons';
 import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from '../chat/layout';
 import { FleetIntegrationCard } from './FleetIntegrationCard';
-import { LocalUsageCard } from './LocalUsageCard';
+import { LocalUsageSection } from './LocalUsageCard';
 import { Stat } from './Stat';
 import { UsageBarChart } from './UsageBarChart';
 import { UsageBreakdown } from './UsageBreakdown';
@@ -131,7 +131,7 @@ export function ProfileScreen({ state, onClose }: { state: AuthState; onClose: (
   const [reload, setReload] = useState(0);
   const { result, refresh } = useAccountUsage(windowId);
   const profile = useAccountProfile(reload);
-  const local = useLocalUsage(windowId, reload);
+  const local = useLocalUsage(windowId, reload, `${state.environment.url}\n${state.user?.id ?? ''}`);
 
   const usage = result?.ok ? result.usage : null;
 
@@ -207,7 +207,7 @@ export function ProfileScreen({ state, onClose }: { state: AuthState; onClose: (
             <UsageCharts usage={result.usage} />
           )}
 
-          {local?.ok && <LocalUsageCard usage={local.usage} />}
+          <LocalUsageSection result={local} />
         </Box>
       </Box>
     </Stack>

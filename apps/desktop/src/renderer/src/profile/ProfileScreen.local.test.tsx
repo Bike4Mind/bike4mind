@@ -38,8 +38,8 @@ afterEach(() => {
   container.remove();
 });
 
-async function render(local: LocalUsageResult) {
-  const getLocal = vi.fn(async () => local);
+async function render(local: LocalUsageResult | ((id: string) => Promise<LocalUsageResult>)) {
+  const getLocal = vi.fn(typeof local === 'function' ? local : async () => local);
   (window as unknown as { b4m: unknown }).b4m = {
     account: { getProfile: () => new Promise(() => {}) },
     usage: { getHistory: async () => NO_CREDITS, getLocal },
@@ -48,15 +48,17 @@ async function render(local: LocalUsageResult) {
   container = document.createElement('div');
   document.body.append(container);
   root = createRoot(container);
-  await act(async () =>
-    root.render(
-      <CssVarsProvider>
-        <ProfileScreen state={STATE} onClose={() => {}} />
-      </CssVarsProvider>
-    )
-  );
+  const show = (state: AuthState) =>
+    act(async () =>
+      root.render(
+        <CssVarsProvider>
+          <ProfileScreen state={state} onClose={() => {}} />
+        </CssVarsProvider>
+      )
+    );
+  await show(STATE);
   const find = (id: string) => container.querySelector<HTMLElement>(`[data-testid="${id}"]`);
-  return { getLocal, find };
+  return { getLocal, find, show };
 }
 
 describe('ProfileScreen local usage', () => {
@@ -81,5 +83,40 @@ describe('ProfileScreen local usage', () => {
 
     await act(async () => find('profile-refresh-btn')!.click());
     expect(getLocal).toHaveBeenLastCalledWith('last-30-days', true);
+
+    const day = container.querySelector<HTMLElement>('[data-window="last-24-hours"]')!;
+    await act(async () => day.click());
+    expect(getLocal).toHaveBeenLastCalledWith('last-24-hours', false);
+  });
+
+  it('keeps the card on screen while another window is read', async () => {
+    const { find } = await render(id =>
+      id === 'last-24-hours'
+        ? Promise.resolve({ ok: true, usage: localUsageFixture({ replies: 2 }) })
+        : new Promise(() => {})
+    );
+    const thirty = container.querySelector<HTMLElement>('[data-window="last-30-days"]')!;
+    await act(async () => thirty.click());
+    expect(find('profile-local-usage')).not.toBeNull();
+  });
+
+  it('says so when the local read fails', async () => {
+    const { find } = await render({ ok: false, error: 'Could not read local model usage.' });
+    expect(find('profile-local-error')?.textContent).toBe('Could not read local model usage.');
+    expect(find('profile-local-usage')).toBeNull();
+  });
+
+  it('drops the previous account figures when the account changes', async () => {
+    let answer: (result: LocalUsageResult) => void = () => {};
+    const { find, show } = await render(async () => ({ ok: true, usage: localUsageFixture({ replies: 2 }) }));
+    expect(find('profile-local-usage')).not.toBeNull();
+
+    (window as unknown as { b4m: { usage: { getLocal: unknown } } }).b4m.usage.getLocal = () =>
+      new Promise<LocalUsageResult>(resolve => (answer = resolve));
+    await show({ ...STATE, user: { id: 'user-2', nickname: 'Grace Hopper' } });
+    expect(find('profile-local-usage')).toBeNull();
+
+    await act(async () => answer({ ok: true, usage: localUsageFixture({ replies: 1 }) }));
+    expect(find('profile-local-usage')).not.toBeNull();
   });
 });

@@ -2,7 +2,7 @@ import Box from '@mui/joy/Box';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import type { LocalUsage, LocalUsageRow } from '@shared/usage';
+import type { LocalUsage, LocalUsageResult, LocalUsageRow } from '@shared/usage';
 import { formatTokens } from '../chat/statusLine';
 import { formatSeconds, formatTokenRate } from '../chat/tokenRate';
 import { Stat } from './Stat';
@@ -34,6 +34,19 @@ const LOCAL_METRIC: BreakdownMetric<LocalUsageRow> = {
     return rate ? [replies(row.replies), rate] : [replies(row.replies)];
   },
 };
+
+/** The card for an answer, a one-line error for a failed read, and nothing while reading. */
+export function LocalUsageSection({ result }: { result: LocalUsageResult | null }) {
+  if (!result) return null;
+  if (!result.ok) {
+    return (
+      <Typography level="body-sm" color="warning" sx={{ mb: 1.5 }} data-testid="profile-local-error">
+        {result.error}
+      </Typography>
+    );
+  }
+  return <LocalUsageCard usage={result.usage} />;
+}
 
 /**
  * Replies from self-hosted models in the window: how many, how much they wrote, and how fast.
@@ -89,9 +102,9 @@ export function LocalUsageCard({ usage }: { usage: LocalUsage }) {
           {prompt && <Stat label="Prompt" value={prompt} testId="profile-local-prompt" />}
           {totals.loads > 0 && (
             <Stat
-              label="Model load"
+              label="Avg load time"
               value={formatSeconds(totals.loadMs / totals.loads)}
-              caption={`mean of ${formatCount(totals.loads)} ${totals.loads === 1 ? 'load' : 'loads'}`}
+              caption="per timed Ollama reply"
               testId="profile-local-load"
             />
           )}

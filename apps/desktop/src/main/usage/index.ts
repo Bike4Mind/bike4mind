@@ -34,12 +34,12 @@ export function registerUsage(auth: AuthService): UsageService {
 /** Self-hosted model usage, read from the session store in whichever scope chat is in. */
 export function registerLocalUsage(
   auth: AuthService,
-  store: Pick<SessionStore, 'localUsageBuckets'>,
+  store: Pick<SessionStore, 'localUsage'>,
   servers: Pick<ModelServerRegistry, 'views'>
 ): LocalUsageService {
   const service = new LocalUsageService({
     logger: createMainLogger(VERBOSE),
-    buckets: () => store.localUsageBuckets(),
+    scan: () => store.localUsage(),
     scopeKey: () => {
       const scope = sessionScopeForChat(auth.getState());
       return scope ? sessionScopeKey(scope) : null;
