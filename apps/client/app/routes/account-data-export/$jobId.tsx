@@ -27,6 +27,12 @@ const AccountDataExportPage = () => {
     }
   }, [download.data]);
 
+  // The signed URL lasts minutes while the export lasts a day, so a late click gets a fresh one.
+  const refreshDownload = async () => {
+    const result = await download.refetch();
+    if (result.data) window.location.assign(result.data.url);
+  };
+
   return (
     <Box
       sx={theme => ({
@@ -57,7 +63,13 @@ const AccountDataExportPage = () => {
             {download.data && (
               <Typography level="body-md" data-testid="account-data-export-ready">
                 Your download should start shortly. If it does not,{' '}
-                <Link href={download.data.url} data-testid="account-data-export-download-link">
+                <Link
+                  component="button"
+                  type="button"
+                  disabled={download.isFetching}
+                  onClick={() => void refreshDownload()}
+                  data-testid="account-data-export-download-link"
+                >
                   download {download.data.filename}
                 </Link>
                 . This export is available until{' '}
@@ -65,7 +77,7 @@ const AccountDataExportPage = () => {
                 .
               </Typography>
             )}
-            {download.isError && (
+            {download.isError && !download.isFetching && (
               <Typography level="body-md" color="danger" data-testid="account-data-export-error">
                 {failureMessage(download.error)}
               </Typography>

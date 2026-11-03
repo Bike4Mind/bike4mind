@@ -1,12 +1,19 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 const JOB_ID = '7d0c1f5e-9a7b-4c1e-8f0a-2b3c4d5e6f70';
 const state = vi.hoisted(() => ({
-  download: {} as { isPending?: boolean; isError?: boolean; error?: unknown; data?: unknown },
+  download: {} as {
+    isPending?: boolean;
+    isError?: boolean;
+    isFetching?: boolean;
+    error?: unknown;
+    data?: unknown;
+    refetch?: () => Promise<unknown>;
+  },
   useDownload: vi.fn(),
 }));
 
@@ -47,9 +54,25 @@ describe('AccountDataExportPage', () => {
 
     expect(state.useDownload).toHaveBeenCalledWith(JOB_ID);
     expect(assign).toHaveBeenCalledWith('https://files.example.com/x.zip');
-    expect(screen.getByTestId('account-data-export-download-link').getAttribute('href')).toBe(
-      'https://files.example.com/x.zip'
-    );
+  });
+
+  it('fetches a fresh signed link when the fallback link is clicked', async () => {
+    const refetch = vi.fn().mockResolvedValue({ data: { url: 'https://files.example.com/fresh.zip' } });
+    state.download = {
+      data: {
+        url: 'https://files.example.com/x.zip',
+        filename: 'account-data-2026-03-01.zip',
+        expiresAt: '2026-03-02T00:00:00Z',
+      },
+      refetch,
+    };
+    wrap(<AccountDataExportPage />);
+    assign.mockClear();
+
+    fireEvent.click(screen.getByTestId('account-data-export-download-link'));
+
+    await waitFor(() => expect(assign).toHaveBeenCalledWith('https://files.example.com/fresh.zip'));
+    expect(refetch).toHaveBeenCalledOnce();
   });
 
   it('says the export expired on a 410', () => {

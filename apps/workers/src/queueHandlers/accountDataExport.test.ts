@@ -63,10 +63,12 @@ vi.mock('@bike4mind/server-utils/memory/ledgerMemoryStore', () => ({
 }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
 
-import { dispatch } from './accountDataExport';
+import { dispatch, MAX_FILE_BYTES } from './accountDataExport';
 
 const logger = { updateMetadata: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-const context = { getRemainingTimeInMillis: () => 15 * 60 * 1000 } as Context;
+const FULL_BUDGET_MS = 15 * 60 * 1000;
+let remainingMs: () => number = () => FULL_BUDGET_MS;
+const context = { getRemainingTimeInMillis: () => remainingMs() } as Context;
 const run = (body: unknown = { exportJobId: JOB_ID, userId: USER_ID }) =>
   (dispatch as unknown as (event: SQSEvent, context: Context, logger: unknown) => Promise<void>)(
     { Records: [{ body: JSON.stringify(body) }] } as SQSEvent,
@@ -102,6 +104,7 @@ const notFound = () => Object.assign(new Error('Not Found'), { name: 'NotFound' 
 beforeEach(() => {
   vi.clearAllMocks();
   process.env.APP_URL = 'https://app.example.com/';
+  remainingMs = () => FULL_BUDGET_MS;
   h.uploaded = null;
   h.notebooks = [{ id: 'nb-1', name: 'Trip/plans' }];
   h.getMetadata.mockRejectedValue(notFound());
@@ -167,6 +170,7 @@ describe('account data export worker', () => {
       'README.txt',
       'agents.json',
       'artifacts/artifact_1-Plan.json',
+      'artifacts/index.json',
       'files/f1-notes.txt',
       'files/f2-notes.txt',
       'files/index.json',
@@ -189,6 +193,9 @@ describe('account data export worker', () => {
     expect(memories.mementos[0]).toMatchObject({ summary: 'Likes tea' });
     expect(memories.beliefs).toEqual([{ id: 'b1', fact: 'Lives in Paris', evidenceTier: 'stated', confidence: 0.9 }]);
     expect(JSON.parse(entries.get('artifacts/artifact_1-Plan.json')!).content).toBe('# Plan v2');
+    expect(JSON.parse(entries.get('artifacts/index.json')!)).toEqual([
+      { id: 'artifact_1', title: 'Plan', type: 'markdown', path: 'artifacts/artifact_1-Plan.json' },
+    ]);
 
     expect(h.fabFind).toHaveBeenCalledWith({ userId: USER_ID, deletedAt: null }, expect.anything());
     expect(h.artifactFind).toHaveBeenCalledWith({ userId: USER_ID, deletedAt: null }, expect.anything());
@@ -199,6 +206,48 @@ describe('account data export worker', () => {
         body: expect.stringContaining(`https://app.example.com/account-data-export/${JOB_ID}`),
       })
     );
+  });
+
+  it('lists a file over the size limit as omitted without copying it', async () => {
+    h.fabFind.mockResolvedValue([
+      {
+        id: 'big',
+        fileName: 'huge.bin',
+        fileSize: MAX_FILE_BYTES + 1,
+        mimeType: 'application/octet-stream',
+        filePath: 'u/huge.bin',
+        moderationStatus: 'clean',
+      },
+    ]);
+
+    await run();
+
+    const entries = await unzip(h.uploaded!);
+    const index = JSON.parse(entries.get('files/index.json')!);
+    expect(index).toHaveLength(1);
+    expect(index[0]).toMatchObject({ id: 'big', omitted: 'size_limit' });
+    expect(index[0].path).toBeUndefined();
+    expect(h.getContent).not.toHaveBeenCalled();
+    expect(entries.has('files/big-huge.bin')).toBe(false);
+  });
+
+  it('still ships the zip and the email when the time budget is nearly spent', async () => {
+    remainingMs = () => 4 * 60 * 1000;
+
+    await run();
+
+    const entries = await unzip(h.uploaded!);
+    const files = JSON.parse(entries.get('files/index.json')!);
+    expect(
+      files.filter((f: { omitted?: string }) => f.omitted === 'time_limit').map((f: { id: string }) => f.id)
+    ).toEqual(['f1', 'f2']);
+    expect(h.getContent).not.toHaveBeenCalled();
+    expect(JSON.parse(entries.get('artifacts/index.json')!)).toEqual([
+      { id: 'artifact_1', title: 'Plan', type: 'markdown', omitted: 'time_limit' },
+    ]);
+    expect(entries.has('artifacts/artifact_1-Plan.json')).toBe(false);
+    expect(h.uploadFile).toHaveBeenCalledOnce();
+    expect(h.publish).toHaveBeenCalledOnce();
   });
 
   it('only re-sends the email when the export already exists', async () => {

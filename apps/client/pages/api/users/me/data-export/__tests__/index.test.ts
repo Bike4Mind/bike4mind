@@ -6,7 +6,8 @@ const h = vi.hoisted(() => ({
   uses: [] as unknown[],
   send: vi.fn(),
   logAuthAudit: vi.fn(),
-  rateLimit: vi.fn((options: unknown) => ({ rateLimit: options })),
+  tryIncrement: vi.fn(),
+  decrement: vi.fn(),
   stepUpGate: vi.fn(() => 'stepUpGate'),
   csrfProtection: vi.fn(() => 'csrfProtection'),
   baseApiOptions: undefined as unknown,
@@ -30,7 +31,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: h.csrfProtection }));
 vi.mock('@server/auth/stepUp', () => ({ stepUpGate: h.stepUpGate }));
-vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: h.rateLimit }));
+vi.mock('@bike4mind/database', () => ({
+  cacheRepository: { tryIncrementWithinLimitFixedWindow: h.tryIncrement, decrementCounter: h.decrement },
+}));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.send }));
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
   getSourceQueueUrl: (name: string) => `http://queue/${name}`,
@@ -38,8 +41,10 @@ vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: h.logAuthAudit }));
 
 import { ForbiddenError } from '@bike4mind/common';
+import { TooManyRequestsError } from '@bike4mind/utils';
 import '../index';
 
+const RATE_KEY = 'rate-limit:665f1c2e8b3a4d0012345678:account-data-export';
 const USER_ID = '665f1c2e8b3a4d0012345678';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -53,16 +58,14 @@ async function run(user: Record<string, unknown> = { id: USER_ID }) {
 beforeEach(() => {
   h.send.mockReset().mockResolvedValue(undefined);
   h.logAuthAudit.mockReset();
+  h.tryIncrement.mockReset().mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 3600000) });
+  h.decrement.mockReset().mockResolvedValue(0);
 });
 
 describe('POST /api/users/me/data-export', () => {
-  it('is browser-session only, step-up gated and limited to one request per hour', () => {
+  it('is browser-session only and step-up gated', () => {
     expect(h.baseApiOptions).toEqual({ auth: 'jwtOnly' });
-    expect(h.uses).toEqual([
-      'csrfProtection',
-      'stepUpGate',
-      { rateLimit: { limit: 1, windowMs: 3600000, bucket: 'account-data-export' } },
-    ]);
+    expect(h.uses).toEqual(['csrfProtection', 'stepUpGate']);
   });
 
   it("queues an export of the caller's own data and audits it", async () => {
@@ -95,5 +98,29 @@ describe('POST /api/users/me/data-export', () => {
 
     expect(res._getStatusCode()).toBe(500);
     expect(h.logAuthAudit).not.toHaveBeenCalled();
+    expect(h.decrement).toHaveBeenCalledWith(RATE_KEY);
+  });
+
+  it('keeps the quota slot after a successful enqueue', async () => {
+    await run();
+
+    expect(h.tryIncrement).toHaveBeenCalledWith(RATE_KEY, 1, 3600000);
+    expect(h.decrement).not.toHaveBeenCalled();
+  });
+
+  it('answers 429 without queueing when the hourly quota is spent', async () => {
+    h.tryIncrement.mockResolvedValue({ success: false, count: 1, expiresAt: new Date(Date.now() + 120000) });
+
+    await expect(run()).rejects.toBeInstanceOf(TooManyRequestsError);
+    expect(h.send).not.toHaveBeenCalled();
+    expect(h.decrement).not.toHaveBeenCalled();
+  });
+
+  it('still answers 500 when releasing the quota slot fails', async () => {
+    h.send.mockRejectedValueOnce(new Error('broker unavailable'));
+    h.decrement.mockRejectedValueOnce(new Error('db down'));
+
+    const res = await run();
+    expect(res._getStatusCode()).toBe(500);
   });
 });

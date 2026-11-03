@@ -188,9 +188,13 @@ async function writeFiles(
         const body = await storage.getContent(file.filePath);
         if (!(body instanceof Readable)) throw new Error('Storage returned a non-stream body');
         const zipPath = names.name('files', file.fileName, file.id);
+        let streamed = 0;
+        body.on('data', (chunk: Buffer) => {
+          streamed += chunk.length;
+        });
         await appendEntry(archive, body, zipPath, true);
         entry.path = zipPath;
-        copiedBytes += file.fileSize ?? 0;
+        copiedBytes += file.fileSize ?? streamed;
       } catch (error) {
         if (!isMissingObjectError(error)) throw error;
         logger.warn('Account data export: file object missing', { fileId: file.id });
@@ -239,15 +243,36 @@ async function writeMemories(archive: Archiver, userId: string) {
   );
 }
 
+interface ArtifactIndexEntry {
+  id: string;
+  title?: string;
+  type?: string;
+  createdAt?: string;
+  path?: string;
+  omitted?: 'time_limit';
+}
+
 async function writeArtifacts(archive: Archiver, names: ZipNames, userId: string, remainingMs: () => number) {
   const artifacts = await artifactRepository.find({ userId, deletedAt: null }, { sort: { createdAt: 1 } });
+  const index: ArtifactIndexEntry[] = [];
   for (const artifact of artifacts) {
-    if (remainingMs() < UPLOAD_RESERVE_MS) throw new Error('Account data export run budget exhausted');
+    const entry: ArtifactIndexEntry = {
+      id: artifact.id,
+      title: artifact.title,
+      type: artifact.type,
+      createdAt: iso(artifact.createdAt),
+    };
+    index.push(entry);
+    if (remainingMs() < UPLOAD_RESERVE_MS) {
+      entry.omitted = 'time_limit';
+      continue;
+    }
     // Newest content row, the same rule the viewer and the notebook export resolve the body by.
     const [latest] = await artifactContentRepository.find(
       { artifactId: artifact.id },
       { sort: { version: -1 }, limit: 1 }
     );
+    const zipPath = names.name('artifacts', artifact.title, artifact.id, '.json');
     await appendEntry(
       archive,
       json({
@@ -260,10 +285,12 @@ async function writeArtifacts(archive: Archiver, names: ZipNames, userId: string
         metadata: artifact.metadata,
         content: latest?.content,
       }),
-      names.name('artifacts', artifact.title, artifact.id, '.json')
+      zipPath
     );
+    entry.path = zipPath;
   }
-  return artifacts.length;
+  await appendEntry(archive, json(index), 'artifacts/index.json');
+  return { count: index.length, omitted: index.filter(a => a.omitted).length };
 }
 
 async function writeAgentsAndProjects(archive: Archiver, userId: string) {
@@ -315,10 +342,13 @@ profile.json       Your profile: name, username, email, photo, and when the acco
 notebooks/         One JSON file per notebook: its messages, and the knowledge files, artifacts,
                    tools and agents attached to it. Knowledge file bytes are under files/.
 files/             The original bytes of every file you uploaded. files/index.json lists each file;
-                   an "omitted" value says why a file's bytes are not included (moderation hold,
+                   an "omitted" value says why a file's bytes are not included (a moderation
+                   hold, including files still being scanned,
                    the ${Math.round(MAX_FILE_BYTES / 1024 ** 3)} GB export limit, time limit, or missing from storage).
 memories.json      Memories saved about you, from both memory systems.
-artifacts/         One JSON file per artifact you own, with its latest content.
+artifacts/         One JSON file per artifact you own, with its latest content. artifacts/index.json
+                   lists every artifact; an "omitted" value of time_limit means the export ran out
+                   of time before that artifact was written.
 agents.json        Agents you created.
 projects.json      Projects you own.
 
@@ -355,7 +385,13 @@ async function buildArchive(
     await writeAgentsAndProjects(archive, userId);
     await archive.finalize();
     await closed;
-    logger.info('Account data export built', { notebooks, files: files.count, filesOmitted: files.omitted, artifacts });
+    logger.info('Account data export built', {
+      notebooks,
+      files: files.count,
+      filesOmitted: files.omitted,
+      artifacts: artifacts.count,
+      artifactsOmitted: artifacts.omitted,
+    });
   } catch (error) {
     archive.abort();
     output.destroy();
