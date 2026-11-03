@@ -351,7 +351,7 @@ The Curated tab then picks models for that server and shows fit badges for it, a
 
 This computer has the same Hardware fields. Desktop detects this computer's hardware itself and shows what it found next to the fields. Fill in only what it got wrong: an entered figure replaces the detected one for fit badges, Curated picks and the context size local chat uses. Select Use detected hardware to go back.
 
-You can also enter memory bandwidth in GB/s. It does not change ratings. A fit badge's details use it to estimate how fast replies come early in a chat, unless the model has to be split between GPU memory and system RAM. On a machine with a discrete GPU the field is the GPU memory bandwidth, so enter the GPU's figure and not the system RAM's. On a machine with unified memory, enter the bandwidth of the memory the CPU and GPU share. Without it, Desktop shows that estimate only for hardware whose bandwidth it already knows.
+You can also enter memory bandwidth in GB/s. It does not change ratings. A fit badge's details use it to estimate how fast replies come early in a chat, unless the model has to be split between GPU memory and system RAM. Curated picks use the same estimate to rank a model that would reply slowly, or that has to be split, after one that would not. On a machine with a discrete GPU the field is the GPU memory bandwidth, so enter the GPU's figure and not the system RAM's. On a machine with unified memory, enter the bandwidth of the memory the CPU and GPU share. Without it, Desktop shows that estimate only for hardware whose bandwidth it already knows.
 
 ## Troubleshooting
 

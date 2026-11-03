@@ -300,7 +300,8 @@ function SpecsFields({
         />
       )}
       <Typography level="body-xs" textColor="text.tertiary">
-        Ratings use the memory figures. Bandwidth sets the reply speed a fit badge estimates
+        Ratings use the memory figures. Bandwidth sets the reply speed a fit badge estimates and ranks slow models lower
+        in Curated picks
         {gpuBandwidth ? ", so enter the GPU's own figure, not the system RAM's." : '.'}
       </Typography>
       {problem && (
