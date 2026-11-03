@@ -320,6 +320,15 @@ export function GlobeIcon() {
   );
 }
 
+export function PhoneIcon() {
+  return (
+    <Glyph>
+      <rect x="4.5" y="1.75" width="7" height="12.5" rx="1.75" />
+      <path d="M7 12h2" />
+    </Glyph>
+  );
+}
+
 export function TerminalIcon() {
   return (
     <Glyph>

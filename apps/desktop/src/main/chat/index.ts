@@ -138,6 +138,8 @@ import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
 import { keepSessionWritesIn } from './tools/sessionScripts';
 import type { PreparedImage } from './tools/types';
 import { desktopScreenCapturer } from './screen/desktopScreen';
+import { parsePaneInput, SimulatorLiveView } from './simulator/SimulatorLiveView';
+import { XcodeSimulatorDriver } from './simulator/XcodeSimulatorDriver';
 import { devLog } from '../devlog/DevLogSink';
 import { registerPullRequests } from '../pr';
 import type { PrMonitor } from '../pr/PrMonitor';
@@ -279,6 +281,8 @@ export interface RegisteredChat {
   mcp: McpManager;
   /** The agent's hidden browser windows, closed with the last app window and on quit. */
   browser: BrowserManager;
+  /** The live iOS Simulator view, whose stream is stopped on quit. */
+  simulatorView: SimulatorLiveView;
   /** Each conversation's pull request, and the timers that watch it. */
   pullRequests: PrMonitor;
   /** Import from Claude; started once the window is up so it never delays launch. */
@@ -621,6 +625,19 @@ export function registerChat(
       })
   );
 
+  const simulatorDriver = new XcodeSimulatorDriver();
+  const simulatorView = new SimulatorLiveView(
+    simulatorDriver,
+    {
+      state: state => send(IPC_CHANNELS.simulatorState, state),
+      // Not through `send`: it logs every payload, and these are frames at 10 a second.
+      frame: (udid, jpeg) => {
+        for (const window of appWindows()) window.webContents.send(IPC_CHANNELS.simulatorFrame, { udid, bytes: jpeg });
+      },
+    },
+    { available: process.platform === 'darwin' }
+  );
+
   const service = new ChatService({
     store,
     access,
@@ -655,6 +672,7 @@ export function registerChat(
     browser,
     pullRequests,
     screen: desktopScreenCapturer(app.getName()),
+    ...(process.platform === 'darwin' ? { simulator: { driver: simulatorDriver, view: simulatorView } } : {}),
     prepareImage: prepareToolImage,
     history,
     local,
@@ -1146,6 +1164,21 @@ export function registerChat(
     return mcp.state();
   });
 
+  ipcMain.handle(IPC_CHANNELS.simulatorGetState, () => simulatorView.current());
+  ipcMain.handle(IPC_CHANNELS.simulatorListDevices, async () =>
+    process.platform === 'darwin' ? (await simulatorDriver.devices()).devices : []
+  );
+  ipcMain.handle(IPC_CHANNELS.simulatorAttach, (_event, udid: unknown) => {
+    if (typeof udid !== 'string' || !udid) throw new Error('No simulator was named.');
+    return simulatorView.attach(udid);
+  });
+  ipcMain.handle(IPC_CHANNELS.simulatorDetach, () => simulatorView.detach());
+  ipcMain.handle(IPC_CHANNELS.simulatorInput, (_event, value: unknown) => {
+    const input = parsePaneInput(value);
+    if (!input) throw new Error('That simulator input is not one the pane sends.');
+    return simulatorView.input(input);
+  });
+
   // The view is attached to the window that asked, so the request carries no window id: a
   // second app window asking puts the page in ITS pane, and the first one's pane falls back to
   // its empty state on its next report.
@@ -1326,6 +1359,7 @@ export function registerChat(
     background,
     mcp,
     browser,
+    simulatorView,
     pullRequests,
     claudeImport,
     spareWorktrees,

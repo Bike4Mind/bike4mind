@@ -223,6 +223,8 @@ import {
   type ImageContext,
   type ScreenCapturer,
   type ScreenContext,
+  type SimulatorContext,
+  type SimulatorDriver,
   type ToolContext,
   type ToolDefinition,
   type ToolReporter,
@@ -492,6 +494,14 @@ export interface ChatServiceDeps {
   pullRequests?: Pick<PrMonitor, 'bindForAgent' | 'dismiss'>;
   /** Other apps' windows, for screen_capture. Absent in tests that do not exercise it; the tool is then not declared. */
   screen?: ScreenCapturer;
+  /**
+   * The iOS Simulator and the user's live view of it. Wired on macOS only, so on any other
+   * platform (and in tests that do not exercise it) the simulator tools are not declared.
+   */
+  simulator?: {
+    driver: SimulatorDriver;
+    view: { attach(udid: string): Promise<unknown>; detach(): void; attachedUdid(): string | undefined };
+  };
   /** Fits an image a tool shows the model. Absent in tests, where file_read then describes an image in text. */
   prepareImage?: ImageContext['prepare'];
   history?: LocalHistory;
@@ -2724,6 +2734,18 @@ export class ChatService {
             keepScreenshot: (bytes, caption) => this.keepScreenshot(sessionId, bytes, caption),
           }
         : undefined;
+      const simulatorDeps = this.deps.simulator;
+      const simulator: SimulatorContext | undefined = simulatorDeps
+        ? {
+            driver: simulatorDeps.driver,
+            keepScreenshot: (bytes, caption) => this.keepScreenshot(sessionId, bytes, caption),
+            attached: () => simulatorDeps.view.attachedUdid(),
+            attach: async udid => {
+              await simulatorDeps.view.attach(udid);
+            },
+            detach: () => simulatorDeps.view.detach(),
+          }
+        : undefined;
       const offerExplore = shouldOfferExplore(catalog?.models ?? [], session.model);
       const exploreFor = (granted: readonly string[]): ExploreContext | undefined =>
         api && !localTurn && granted.length > 0 && offerExplore
@@ -2770,6 +2792,7 @@ export class ChatService {
               explore: !!explore,
               browser: !!browser,
               screen: !!screen,
+              simulator: !!simulator,
               memory: !!memory,
               skills: !!skills,
               web: !!web,
@@ -2833,6 +2856,7 @@ export class ChatService {
           memory: !!memory,
           ask,
           screen: !!screen,
+          simulator: !!simulator,
         }),
       });
       const schemaFor = (name: string): ToolSchema | undefined =>
@@ -2906,7 +2930,8 @@ export class ChatService {
           toolsSupported && ask,
           session.model,
           toolsSupported && !!web,
-          toolsSupported && !!screen
+          toolsSupported && !!screen,
+          toolsSupported && !!simulator
         );
       wire.unshift(
         deferred ? buildDeferredSystemMessage(session.project, projectContext, skillsSection) : systemMessage()
@@ -3235,6 +3260,7 @@ export class ChatService {
                 explore,
                 browser,
                 screen,
+                simulator,
                 images,
                 memory,
                 skills,
@@ -3820,6 +3846,7 @@ export class ChatService {
       explore: ExploreContext | undefined;
       browser: BrowserContext | undefined;
       screen: ScreenContext | undefined;
+      simulator: SimulatorContext | undefined;
       images: ImageContext | undefined;
       memory: MemoryStore | undefined;
       skills: SkillContext | undefined;
@@ -3854,6 +3881,7 @@ export class ChatService {
       explore,
       browser,
       screen,
+      simulator,
       images,
       memory,
       skills,
@@ -4003,6 +4031,7 @@ export class ChatService {
           ...(explore ? { explore } : {}),
           ...(browser ? { browser } : {}),
           ...(screen ? { screen } : {}),
+          ...(simulator ? { simulator } : {}),
           ...(images ? { images } : {}),
           ...(memory ? { memory } : {}),
           ...(skills ? { skills } : {}),
@@ -6116,7 +6145,8 @@ export function buildSystemMessage(
   ask = false,
   modelId = '',
   web = false,
-  screen = false
+  screen = false,
+  simulator = false
 ): CompletionMessage {
   if (roots.length === 0) {
     return {
@@ -6127,6 +6157,7 @@ export function buildSystemMessage(
         // read nothing on disk can still open a page, and needs to be told how.
         ...(browser ? BROWSER_GUIDANCE : []),
         ...(screen ? SCREEN_GUIDANCE : []),
+        ...(simulator ? SIMULATOR_GUIDANCE : []),
         ...(web ? WEB_GUIDANCE : []),
         ...(media ? MEDIA_GUIDANCE : []),
         ...(host ? HOST_GUIDANCE : []),
@@ -6154,6 +6185,7 @@ export function buildSystemMessage(
       ...localToolLines(ask, projectContext ? 'below' : null, explore, patchEdits),
       ...(browser ? BROWSER_GUIDANCE : []),
       ...(screen ? SCREEN_GUIDANCE : []),
+      ...(simulator ? SIMULATOR_GUIDANCE : []),
       ...(web ? WEB_GUIDANCE : []),
       ...HONESTY_LINES,
       ...(media ? MEDIA_GUIDANCE : []),
@@ -6348,6 +6380,7 @@ export function buildToolStateText(state: {
   memory: boolean;
   ask: boolean;
   screen: boolean;
+  simulator?: boolean;
 }): string {
   const { roots, ask, mcpServers } = state;
   const mcp = mcpServers ? (ask ? 'manage' : 'read') : null;
@@ -6365,6 +6398,7 @@ export function buildToolStateText(state: {
         ]),
     ...(state.browser ? BROWSER_GUIDANCE : []),
     ...(state.screen ? SCREEN_GUIDANCE : []),
+    ...(state.simulator ? SIMULATOR_GUIDANCE : []),
     ...(state.media ? MEDIA_GUIDANCE : []),
     ...(state.host ? HOST_GUIDANCE : []),
     ...(state.memory ? MEMORY_GUIDANCE : []),
@@ -6468,6 +6502,16 @@ const SCREEN_GUIDANCE: readonly string[] = [
   'see. To check a desktop app - an Electron dev build you started with bash_background, say -',
   'wait for its window to open, then capture it by title instead of guessing how it looks. Each',
   'capture asks the user first. For web pages use the browser tools.',
+];
+
+const SIMULATOR_GUIDANCE: readonly string[] = [
+  'The simulator_* tools run and drive iOS apps in the iOS Simulator on this Mac. When the user',
+  'wants to see or try their iOS app, call simulator_view to open their live panel first, then',
+  'simulator_build (xcodebuild for a scheme) and simulator_launch with the .app it returns. Check',
+  'the app with simulator_screenshot rather than predicting it from the code: the image is in',
+  'points, so read tap coordinates straight off it for simulator_input. Each device asks the user',
+  'once. A failure that names a Fix (no Xcode, an unaccepted license, the wrong xcode-select, a',
+  'missing runtime or AXe) is for the user to run: tell them the exact fix and do not retry.',
 ];
 
 const WEB_GUIDANCE: readonly string[] = [

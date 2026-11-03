@@ -46,6 +46,7 @@ import type { TerminalCreateRequest, TerminalDataEvent, TerminalsChangedEvent } 
 import type { UpdateState } from '@shared/update';
 import type { UsageWindowId } from '@shared/usage';
 import type { FleetState } from '@shared/fleet';
+import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewState } from '@shared/simulator';
 
 // Written out one method per channel rather than a generic invoke(channel, ...args)
 // passthrough: a passthrough would let renderer code reach every handler main ever
@@ -298,6 +299,23 @@ const api: DesktopApi = {
     withdraw: listingId => ipcRenderer.invoke(IPC_CHANNELS.skillMarketWithdraw, listingId),
     copyShareLink: listingId => ipcRenderer.invoke(IPC_CHANNELS.skillMarketCopyShareLink, listingId),
     openSource: url => ipcRenderer.invoke(IPC_CHANNELS.skillMarketOpenSource, url),
+  },
+  simulator: {
+    getState: () => ipcRenderer.invoke(IPC_CHANNELS.simulatorGetState),
+    listDevices: () => ipcRenderer.invoke(IPC_CHANNELS.simulatorListDevices),
+    attach: (udid: string) => ipcRenderer.invoke(IPC_CHANNELS.simulatorAttach, udid),
+    detach: () => ipcRenderer.invoke(IPC_CHANNELS.simulatorDetach),
+    input: (input: SimulatorPaneInput) => ipcRenderer.invoke(IPC_CHANNELS.simulatorInput, input),
+    onState: listener => {
+      const handler = (_event: unknown, state: SimulatorViewState) => listener(state);
+      ipcRenderer.on(IPC_CHANNELS.simulatorState, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.simulatorState, handler);
+    },
+    onFrame: listener => {
+      const handler = (_event: unknown, frame: SimulatorFrame) => listener(frame);
+      ipcRenderer.on(IPC_CHANNELS.simulatorFrame, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.simulatorFrame, handler);
+    },
   },
   browser: {
     setPane: (request: BrowserPaneRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserSetPane, request),
