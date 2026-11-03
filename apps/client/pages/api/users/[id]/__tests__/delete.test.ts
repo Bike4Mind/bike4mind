@@ -80,7 +80,7 @@ async function run(options: { user?: { id: string; isAdmin: boolean }; body?: un
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   Object.assign(req, { user: options.user ?? { id: 'admin1', isAdmin: true }, logger });
   const call = (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
-  return { res, call };
+  return { res, call, logger };
 }
 
 beforeEach(() => {
@@ -424,6 +424,20 @@ describe('DELETE /api/users/[id]/delete', () => {
       const { call } = await run({ user: { id: 'u1', isAdmin: true }, id: 'u1' });
       await expect(call).rejects.toThrow(ForbiddenError);
       expect(mockCancelSubscriptions).not.toHaveBeenCalled();
+    });
+
+    it('rethrows the original error when the fallback cancellation audit also fails', async () => {
+      mockCancelSubscriptions.mockResolvedValue({ canceled: ['sub_a'], failed: [] });
+      mockRecord.mockRejectedValueOnce(new Error('tx failed')).mockRejectedValueOnce(new Error('audit down'));
+      mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
+        await db.users.delete('u1');
+        return { id: 'u1' };
+      });
+
+      const { call, logger } = await run();
+
+      await expect(call).rejects.toThrow('tx failed');
+      expect(logger.error).toHaveBeenCalled();
     });
 
     it('does not purge when the audit write aborts the delete transaction', async () => {

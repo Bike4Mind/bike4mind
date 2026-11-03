@@ -119,11 +119,15 @@ const handler = baseApi().delete(
           } catch (error) {
             // The cancel already happened and cannot roll back, so record it on its own (best-effort).
             if (canceledEntry) {
-              await recordAdminActionFromRequest(req, {
-                ...canceledEntry,
-                target: deletedUserTarget(id, target),
-                reason,
-              });
+              try {
+                await recordAdminActionFromRequest(req, {
+                  ...canceledEntry,
+                  target: deletedUserTarget(id, target),
+                  reason,
+                });
+              } catch (auditError) {
+                req.logger.error('Failed to record the subscription cancellation after a failed delete', auditError);
+              }
             }
             throw error;
           }
