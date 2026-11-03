@@ -61,7 +61,7 @@ const SIGNAL_LABELS: Record<ProbeSignal, string> = {
   refusedFetch: 'refused fetch targets',
   webhookSignature: 'failed Stripe webhook signatures',
   invalidId: 'invalid-id lookups',
-  denied: '401/403 denials',
+  denied: '401/403 denials from API handlers',
   notFound: '404s',
 };
 
@@ -146,8 +146,8 @@ export function formatProbeAlert(input: {
   const lines = [
     `:mag: *Probable API probing (${escapeSlackText(stage)})*`,
     `Window: ${window.start.toISOString()} to ${window.end.toISOString()}`,
-    `Score ${actor.score} (threshold ${threshold}), ~${actor.distinctPaths} distinct paths ` +
-      `(401/403/404 count from ${BREADTH_GATE_PATHS}+ paths per IP and account)`,
+    `Score ${actor.score} (threshold ${threshold}), ~${actor.distinctPaths} distinct failing paths ` +
+      `(handler 401/403s and 404s count from ${BREADTH_GATE_PATHS}+ failing paths per IP and account)`,
     '*Signals*',
     ...signalLines,
     '*Accounts*',

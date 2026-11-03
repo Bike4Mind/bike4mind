@@ -205,7 +205,7 @@ describe('formatProbeAlert', () => {
     expect(text).toContain('Score 42 (threshold 25)');
     expect(text).toContain('- 3 refused fetch targets');
     expect(text).toContain('- 6 invalid-id lookups');
-    expect(text).not.toContain('404s');
+    expect(text).not.toMatch(/^- \d+ 404s$/m);
     expect(text).toContain(
       '`user-a` - <https://app.example.com/admin/users/user-a|Open in admin> (3 h old, already banned)'
     );
@@ -227,5 +227,19 @@ describe('formatProbeAlert', () => {
     });
     expect(text).toContain('- none signed in');
     expect(text).not.toContain('bulk Contain');
+  });
+
+  it('labels denials as the handler 401/403s the query counts, not every 401/403', () => {
+    const text = formatProbeAlert({
+      actor: { ...actor, counts: { ...actor.counts, denied: 4, notFound: 9 } },
+      users: new Map(),
+      threshold: 25,
+      window,
+      stage: 'production',
+      appUrl: undefined,
+    });
+    expect(text).toContain('- 4 401/403 denials from API handlers');
+    expect(text).toContain('- 9 404s');
+    expect(text).toContain('~14 distinct failing paths');
   });
 });

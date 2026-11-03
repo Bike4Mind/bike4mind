@@ -9,7 +9,7 @@ const declaration = source
   .slice(source.indexOf('export const apiProbeDetector ='), source.indexOf('if (apiProbeDetector &&'))
   .replace('export const', 'const');
 
-function loadTarget(code = declaration) {
+function loadTarget(code = declaration): Record<string, unknown> {
   const cron = vi.fn(function (_name: string, _args: Record<string, unknown>) {
     return {};
   });

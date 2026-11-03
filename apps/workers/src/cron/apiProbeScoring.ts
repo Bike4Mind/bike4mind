@@ -11,6 +11,11 @@
  * Request metadata (`clientIp`, `userId`) comes from apps/client/server/middlewares/requestLogger.ts.
  * Paths are parsed from the error handler line's raw URL, not the `path` field: apps/client/server/middlewares/logging.ts
  * folds every catch-all miss into `/api/:unmatchedApiPath` and keeps the query string.
+ *
+ * `denied` counts only 401/403s that reach the error handler, i.e. ones an API handler throws (an
+ * ownership or role check). The sign-in middleware's own 401/403s (apps/client/server/auth/auth.ts:
+ * missing or expired token, MFA, policy acceptance) are written directly and never logged at warn,
+ * so they are not counted; they are dominated by expired sessions, not probing.
  */
 
 import { rowToObject } from '../utils/logsInsights';
@@ -30,8 +35,8 @@ export const SIGNAL_WEIGHTS: ProbeSignalCounts = {
 };
 
 /**
- * 401/403/404 alone are routine (an expired session polling a handful of routes), so they score
- * only for a pair that also reached this many distinct paths, the shape of route enumeration.
+ * Handler 401/403s and 404s alone are routine (a stale tab polling a handful of routes), so they
+ * score only for a pair that also failed on this many distinct paths, the shape of route enumeration.
  */
 export const BREADTH_GATE_PATHS = 10;
 
