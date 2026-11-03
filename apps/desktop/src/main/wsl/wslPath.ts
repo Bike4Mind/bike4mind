@@ -129,18 +129,29 @@ function probeUserEnvironment(distro: string): Promise<UserEnvironmentProbe> {
     );
     let stdout = '';
     let timedOut = false;
+    let settled = false;
+    const finish = (found: WslUserEnvironment | null) => {
+      if (settled) return;
+      settled = true;
+      resolve({ found, timedOut });
+    };
+    // Also ends a wsl.exe that answered but is still held open by something a startup file left running.
     const timer = setTimeout(() => {
-      timedOut = true;
+      timedOut = !settled;
       child.kill('SIGKILL');
     }, USER_ENV_TIMEOUT_MS);
     child.stdout?.setEncoding('utf8');
-    child.stdout?.on('data', (chunk: string) => (stdout += chunk));
-    const finish = (found: WslUserEnvironment | null) => {
+    child.stdout?.on('data', (chunk: string) => {
+      stdout += chunk;
+      // The answer is whole at the third marker, whenever and however the shell exits after it.
+      if (stdout.split(MARKER).length > 3) finish(parseUserEnvironment(stdout));
+    });
+    const ended = () => {
       clearTimeout(timer);
-      resolve({ found, timedOut });
+      finish(null);
     };
-    child.on('error', () => finish(null));
-    child.on('close', code => finish(code === 0 && !timedOut ? parseUserEnvironment(stdout) : null));
+    child.on('error', ended);
+    child.on('close', ended);
   });
 }
 

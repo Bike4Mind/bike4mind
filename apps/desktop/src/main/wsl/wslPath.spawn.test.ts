@@ -47,6 +47,26 @@ describe('wsl.exe spawns', () => {
     expect(await found).toEqual({ path: '/usr/bin', home: '/home/me' });
   });
 
+  it('takes the answer at the third marker, while wsl.exe is still held open', async () => {
+    const found = wslUserEnvironment(`b4m-${randomUUID()}`);
+    const probe = lastSpawn();
+    probe.child.stdout.write(`Welcome\n${ANSWER.slice(0, -4)}`);
+    probe.child.stdout.write(ANSWER.slice(-4));
+    expect(await Promise.race([found, new Promise(resolve => setTimeout(() => resolve('pending'), 1000))])).toEqual({
+      path: '/usr/bin',
+      home: '/home/me',
+    });
+  });
+
+  it('keeps an answer the shell gave before exiting non-zero', async () => {
+    const found = wslUserEnvironment(`b4m-${randomUUID()}`);
+    const probe = lastSpawn();
+    probe.child.stdout.write(ANSWER);
+    probe.child.stdout.end();
+    probe.child.emit('close', 1);
+    expect(await found).toEqual({ path: '/usr/bin', home: '/home/me' });
+  });
+
   it('starts the realpath session from the System32 wsl.exe', async () => {
     const answer = wslRealpath(`b4m-${randomUUID()}`, '/home/me/link');
     const session = lastSpawn();
