@@ -4,11 +4,11 @@
  * the same `IterationStream` the chat uses; the snapshot fills in earlier steps.
  */
 import { FC, useEffect, useRef } from 'react';
-import { Box, CircularProgress, Stack, Typography } from '@mui/joy';
+import { CircularProgress, Stack, Typography } from '@mui/joy';
 import { Link } from '@tanstack/react-router';
 import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useAgentExecutionDispatch } from '@client/app/hooks/useAgentExecution';
-import { useAgentExecutionStore } from '@client/app/stores/useAgentExecutionStore';
+import { isActiveStatus, useAgentExecutionStore } from '@client/app/stores/useAgentExecutionStore';
 import { AGENT_TRACE_ROUTE, buildAgentTraceSearch } from '@client/app/utils/agentTraceLink';
 import IterationStream from './IterationStream';
 
@@ -27,6 +27,11 @@ const AgentRunViewer: FC<AgentRunViewerProps> = ({ executionId }) => {
 
   const viewed = useAgentExecutionStore(state => state.viewedExecutionIds[executionId]);
   const hasExecution = useAgentExecutionStore(state => !!state.executions[executionId]);
+  // A found run whose snapshot steps have not arrived yet would otherwise render as an empty frame.
+  const awaitingSteps = useAgentExecutionStore(state => {
+    const execution = state.executions[executionId];
+    return !!execution && execution.iterations.length === 0 && isActiveStatus(execution.status);
+  });
 
   useEffect(() => () => dispatchRef.current.unsubscribe(executionId), [executionId]);
 
@@ -36,6 +41,18 @@ const AgentRunViewer: FC<AgentRunViewerProps> = ({ executionId }) => {
     if (readyState === ReadyState.OPEN) dispatchRef.current.subscribe(executionId);
   }, [executionId, readyState]);
 
+  const loading = (
+    <Stack
+      data-testid="agent-run-viewer-loading"
+      direction="row"
+      spacing={1}
+      sx={{ alignItems: 'center', justifyContent: 'center', py: 4 }}
+    >
+      <CircularProgress size="sm" />
+      <Typography level="body-sm">Loading run...</Typography>
+    </Stack>
+  );
+
   let body;
   if (viewed === 'not_found') {
     body = (
@@ -44,27 +61,31 @@ const AgentRunViewer: FC<AgentRunViewerProps> = ({ executionId }) => {
       </Typography>
     );
   } else if (!hasExecution || viewed === 'pending') {
-    body = (
-      <Box data-testid="agent-run-viewer-loading" sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-        <CircularProgress size="sm" />
-      </Box>
-    );
+    body = loading;
   } else {
-    body = <IterationStream executionId={executionId} />;
+    // The stream still renders under the loader, so a just-started run keeps its abort and gate controls.
+    body = (
+      <>
+        {awaitingSteps && loading}
+        <IterationStream executionId={executionId} />
+      </>
+    );
   }
 
   return (
     <Stack data-testid="agent-run-viewer" spacing={2}>
       {body}
-      <Typography level="body-sm">
-        <Link
-          to={AGENT_TRACE_ROUTE}
-          search={buildAgentTraceSearch(executionId)}
-          data-testid="agent-run-viewer-history-link"
-        >
-          Open in run history
-        </Link>
-      </Typography>
+      {viewed !== 'not_found' && (
+        <Typography level="body-sm">
+          <Link
+            to={AGENT_TRACE_ROUTE}
+            search={buildAgentTraceSearch(executionId)}
+            data-testid="agent-run-viewer-history-link"
+          >
+            Open in run history
+          </Link>
+        </Typography>
+      )}
     </Stack>
   );
 };

@@ -1,4 +1,4 @@
-import type { ILoop, IWorkItem, LoopUnsureFields, WorkItemPatch, WorkItemStatus } from '@bike4mind/common';
+import type { ILoop, ILoopEvent, IWorkItem, LoopUnsureFields, WorkItemPatch, WorkItemStatus } from '@bike4mind/common';
 import { loopRepository, workItemRepository, type IPendingGate } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLoopsEnabled } from './loopValidation';
@@ -115,6 +115,21 @@ export async function makeDueIfReady(loop: ILoop, now = new Date()): Promise<voi
 export const UNSURE_PREFIX = 'Unsure';
 export const unsureReason = (gateReason?: string): string =>
   (gateReason ? `${UNSURE_PREFIX}: ${gateReason}` : UNSURE_PREFIX).slice(0, 1000);
+
+/** An unsure/auto-resumed event as the events API returns it (no `userId`). */
+export const unsureRow = (event: ILoopEvent) => ({
+  id: event.id,
+  kind: event.kind,
+  source: event.source,
+  executionId: event.executionId,
+  workItemId: event.workItemId,
+  ticketTitle: event.ticketTitle,
+  iteration: event.iteration,
+  confidence: event.confidence,
+  reason: event.reason,
+  resolution: event.resolution,
+  createdAt: event.createdAt,
+});
 
 /**
  * The `unsure` loop event for a gate. Written by the loop scheduler (on detach) and by `gate_response`

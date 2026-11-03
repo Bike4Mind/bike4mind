@@ -225,13 +225,21 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     id: string,
     userId: string,
     patch: WorkItemPatch,
-    expectedStatus?: WorkItemStatus
+    expectedStatus?: WorkItemStatus,
+    guard?: { statusReason?: string; loopId?: string }
   ): Promise<IWorkItem | null> {
     if (!mongoose.isValidObjectId(id)) return null;
 
     const { set, unset } = splitPatch(patch);
     const result = await this.workItemModel.findOneAndUpdate(
-      { _id: id, userId, deletedAt: null, ...(expectedStatus && { status: expectedStatus }) },
+      {
+        _id: id,
+        userId,
+        deletedAt: null,
+        ...(expectedStatus && { status: expectedStatus }),
+        ...(guard?.statusReason !== undefined && { statusReason: guard.statusReason }),
+        ...(guard?.loopId && { loopId: guard.loopId }),
+      },
       {
         ...(Object.keys(set).length > 0 && { $set: set }),
         ...(Object.keys(unset).length > 0 && { $unset: unset }),

@@ -279,6 +279,27 @@ describe('WorkItemRepository', () => {
   });
 
   describe('updateForUser', () => {
+    it('applies a guard only while statusReason and loopId still match', async () => {
+      const loopId = '507f1f77bcf86cd799439011';
+      const itemId = (await create('Parked', { status: 'blocked', statusReason: 'Unsure: Q', loopId })).id;
+      const reopen = { status: 'open' as const, statusReason: null };
+
+      expect(
+        await workItemRepository.updateForUser(itemId, USER, reopen, 'blocked', { statusReason: 'other' })
+      ).toBeNull();
+      expect(
+        await workItemRepository.updateForUser(itemId, USER, reopen, 'blocked', {
+          statusReason: 'Unsure: Q',
+          loopId: '507f1f77bcf86cd799439012',
+        })
+      ).toBeNull();
+      const updated = await workItemRepository.updateForUser(itemId, USER, reopen, 'blocked', {
+        statusReason: 'Unsure: Q',
+        loopId,
+      });
+      expect(updated?.status).toBe('open');
+    });
+
     it('clears closedAt via $unset when passed null', async () => {
       const itemId = (await create('Closed', { status: 'closed', closedAt: new Date() })).id;
 

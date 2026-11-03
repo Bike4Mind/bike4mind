@@ -614,6 +614,44 @@ describe('runLoopSchedulerTick - unsure', () => {
     expect((await ticketOf(ticket.id)).status).not.toBe('blocked');
   });
 
+  it('leaves a ticket the run parked with loop_ticket_unsure blocked, and never folds the answered ask', async () => {
+    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
+    const ticket = await createTicket(loop.id, { status: 'blocked', statusReason: 'Unsure: EU or US?' });
+    await loopEventRepository.recordUnsure({
+      source: 'asked',
+      loopId: loop.id,
+      userId: 'user-1',
+      executionId: 'exec-0',
+      workItemId: ticket.id,
+      ticketTitle: 'Research X',
+      reason: 'EU or US?',
+      requestedAt: new Date(1000),
+    });
+    executions['exec-0'] = { userId: 'user-1', status: 'completed', result: { answer: 'asked' } };
+
+    await runLoopSchedulerTick(NOW, logger);
+    expect(await ticketOf(ticket.id)).toMatchObject({
+      status: 'blocked',
+      statusReason: 'Unsure: EU or US?',
+      stage: 'todo',
+    });
+
+    // The owner answers: these three writes mirror the resolve route (apps/client, tested there), and the next
+    // run is shown the answer.
+    const [asked] = await eventsOf(loop.id);
+    await loopEventRepository.resolveAsked(asked.id, 'user-1', loop.id, { outcome: 'resumed', at: NOW, note: 'EU' });
+    await workItemRepository.updateForUser(ticket.id, 'user-1', { status: 'open', statusReason: null }, 'blocked');
+    await loopRepository.makeDueNow(loop.id, NOW);
+    h.startAgentExecution.mockClear();
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+    expect(h.startAgentExecution.mock.calls[0][0].query).toContain('Owner answered your question "EU or US?": "EU"');
+    // Folding the answered ask would advance the ticket past the stage the owner just answered for.
+    expect(await ticketOf(ticket.id)).toMatchObject({ stage: 'todo', status: 'in_progress' });
+  });
+
   it('folds a resumed run that went stale as stalled, and leaves a fresh one alone', async () => {
     const loop = await createLoop({ nextRunAt: LATER });
     const ticket = await createTicket(loop.id);

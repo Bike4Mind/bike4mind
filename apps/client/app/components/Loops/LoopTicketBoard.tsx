@@ -27,6 +27,7 @@ import {
   type ILoopTicket,
   type ILoopTicketsResponse,
 } from '@client/app/hooks/data/loops';
+import { LoopMarkdown } from './loopUi';
 
 const TITLE_MAX = 300;
 const DESCRIPTION_MAX = 10_000;
@@ -86,8 +87,10 @@ function TicketCard({
         )}
       </Stack>
       {ticket.status === 'blocked' && ticket.statusReason && (
-        <Typography level="body-xs" color="danger" data-testid="loop-ticket-blocked-reason">
-          {ticket.statusReason}
+        <Typography level="body-xs" color="danger" component="div">
+          <LoopMarkdown level="body-xs" testId="loop-ticket-blocked-reason">
+            {ticket.statusReason}
+          </LoopMarkdown>
         </Typography>
       )}
       <Select

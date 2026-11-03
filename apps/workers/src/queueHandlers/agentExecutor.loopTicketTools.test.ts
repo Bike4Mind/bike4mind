@@ -11,7 +11,9 @@ const items = vi.hoisted(() => ({
   updateForUser: vi.fn(),
   findNextReadyForLoop: vi.fn(),
 }));
+const events = vi.hoisted(() => ({ recordUnsure: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
+  loopEventRepository: events,
   loopRepository: loops,
   workItemRepository: items,
   adminSettingsRepository: { getSettingsValue: async () => true },
@@ -47,13 +49,14 @@ beforeEach(() => {
 });
 
 describe('resolveLoopTicketTools', () => {
-  it('offers the three tools only on a loop run with EnableLoops on', () => {
-    expect(resolveLoopTicketTools({ loopId: OWN, loopsEnabled: true, userId: 'u1' }).loopTicketEnabledTools).toEqual(
-      LOOP_TICKET_TOOL_NAMES
-    );
+  it('offers the tools only on a loop run with EnableLoops on', () => {
+    expect(
+      resolveLoopTicketTools({ loopId: OWN, loopsEnabled: true, userId: 'u1', executionId: 'exec-1' })
+        .loopTicketEnabledTools
+    ).toEqual(LOOP_TICKET_TOOL_NAMES);
     for (const off of [
-      { loopId: OWN, loopsEnabled: false, userId: 'u1' },
-      { loopId: undefined, loopsEnabled: true, userId: 'u1' },
+      { loopId: OWN, loopsEnabled: false, userId: 'u1', executionId: 'exec-1' },
+      { loopId: undefined, loopsEnabled: true, userId: 'u1', executionId: 'exec-1' },
     ]) {
       const { loopTicketEnabledTools, loopTicketExternalTools } = resolveLoopTicketTools(off);
       expect(loopTicketEnabledTools).toEqual([]);
@@ -71,7 +74,7 @@ describe('resolveLoopTicketTools', () => {
 
 describe('loop_ticket_create', () => {
   it('files into its own loop by default and into another loop of the same user', async () => {
-    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN });
+    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
     await run(tools, 'loop_ticket_create', { title: 'A' });
     await run(tools, 'loop_ticket_create', { title: 'B', loopId: SIBLING, stage: 'doing' });
 
@@ -86,27 +89,27 @@ describe('loop_ticket_create', () => {
   });
 
   it("refuses another user's loop with the same text as a missing one", async () => {
-    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN });
+    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
     expect(await run(tools, 'loop_ticket_create', { title: 'A', loopId: FOREIGN })).toBe('Error: loop not found');
     expect(await run(tools, 'loop_ticket_create', { title: 'A', loopId: 'nope' })).toBe('Error: loop not found');
     expect(items.create).not.toHaveBeenCalled();
   });
 
   it('returns validation errors to the model', async () => {
-    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN });
+    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
     expect(await run(tools, 'loop_ticket_create', { title: '' })).toMatch(/^Error: .*title/);
     expect(await run(tools, 'loop_ticket_create', { title: 'A', stage: 'nope' })).toMatch(/^Error: stage must be/);
   });
 
   it(`stops after ${MAX_TICKET_CREATES_PER_INVOCATION} creates in one invocation`, async () => {
-    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN });
+    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
     for (let i = 0; i < MAX_TICKET_CREATES_PER_INVOCATION; i++)
       await run(tools, 'loop_ticket_create', { title: `T${i}` });
     expect(await run(tools, 'loop_ticket_create', { title: 'one too many' })).toMatch(/^Error: at most/);
     expect(items.create).toHaveBeenCalledTimes(MAX_TICKET_CREATES_PER_INVOCATION);
   });
   it('files a blocked owner step with its reason, and requires the reason', async () => {
-    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN });
+    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
     expect(await run(tools, 'loop_ticket_create', { title: 'A', status: 'blocked' })).toMatch(/reason is required/);
     expect(await run(tools, 'loop_ticket_create', { title: 'A', status: 'closed' })).toMatch(/^Error: status must be/);
     expect(items.create).not.toHaveBeenCalled();
@@ -121,7 +124,7 @@ describe('loop_ticket_create', () => {
 describe('loop_ticket_update', () => {
   it('refuses a plain work item as not found', async () => {
     items.findByIdForUser.mockResolvedValue({ id: 'w1', title: 'Plain', status: 'open', dependencies: [] });
-    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN });
+    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
     expect(await run(tools, 'loop_ticket_update', { id: 'w1', status: 'closed' })).toBe('Error: ticket not found');
     expect(items.updateForUser).not.toHaveBeenCalled();
   });
@@ -134,7 +137,7 @@ describe('loop_ticket_update', () => {
       status: 'in_progress',
       dependencies: [],
     });
-    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN });
+    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
     expect(await run(tools, 'loop_ticket_update', { id: 't1', status: 'blocked' })).toMatch(/reason is required/);
 
     await run(tools, 'loop_ticket_update', { id: 't1', status: 'blocked', reason: 'needs a login' });
@@ -155,7 +158,7 @@ describe('loop_ticket_update', () => {
       dependencies: [],
     });
     items.updateForUser.mockResolvedValueOnce(null);
-    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN });
+    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
 
     expect(await run(tools, 'loop_ticket_update', { id: 't1', status: 'closed' })).toMatch(/^Error: ticket changed/);
     expect(items.updateForUser).toHaveBeenCalledWith('t1', 'u1', expect.anything(), 'in_progress');
@@ -169,7 +172,7 @@ describe('loop_ticket_update', () => {
       status: 'open',
       dependencies: [],
     });
-    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN });
+    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
 
     expect(await run(tools, 'loop_ticket_update', { id: 't1', loopId: FOREIGN })).toBe('Error: loop not found');
     await run(tools, 'loop_ticket_update', { id: 't1', loopId: SIBLING });
@@ -179,5 +182,71 @@ describe('loop_ticket_update', () => {
       expect.objectContaining({ loopId: SIBLING, stage: 'todo', status: 'open' }),
       'open'
     );
+  });
+});
+
+describe('loop_ticket_unsure', () => {
+  const ticket = (overrides: Record<string, unknown> = {}) => ({
+    id: 't1',
+    loopId: OWN,
+    title: 'Pick a region',
+    stage: 'doing',
+    status: 'in_progress',
+    dependencies: [],
+    ...overrides,
+  });
+
+  it('records an asked unsure event for the run, then blocks the ticket as Unsure', async () => {
+    items.findByIdForUser.mockResolvedValue(ticket());
+    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
+
+    const result = JSON.parse(await run(tools, 'loop_ticket_unsure', { id: 't1', question: ' EU or US? ' }));
+
+    expect(events.recordUnsure).toHaveBeenCalledTimes(1);
+    expect(events.recordUnsure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'asked',
+        loopId: OWN,
+        userId: 'u1',
+        executionId: 'exec-1',
+        workItemId: 't1',
+        ticketTitle: 'Pick a region',
+        reason: 'EU or US?',
+      })
+    );
+    expect(items.updateForUser).toHaveBeenCalledWith(
+      't1',
+      'u1',
+      expect.objectContaining({ status: 'blocked', statusReason: 'Unsure: EU or US?' }),
+      'in_progress'
+    );
+    expect(result).toMatchObject({ status: 'blocked', statusReason: 'Unsure: EU or US?' });
+  });
+
+  it('records the event before parking the ticket, and does not invite a retry when the park loses a race', async () => {
+    items.findByIdForUser.mockResolvedValue(ticket());
+    items.updateForUser.mockResolvedValueOnce(null);
+    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
+
+    const result = await run(tools, 'loop_ticket_unsure', { id: 't1', question: 'Q' });
+
+    expect(result).not.toMatch(/^Error/);
+    expect(result).toContain('not parked');
+    expect(events.recordUnsure.mock.invocationCallOrder[0]).toBeLessThan(
+      items.updateForUser.mock.invocationCallOrder[0]
+    );
+  });
+
+  it("refuses an empty question, another loop's ticket and a closed ticket, writing nothing", async () => {
+    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
+    items.findByIdForUser.mockResolvedValue(ticket());
+    expect(await run(tools, 'loop_ticket_unsure', { id: 't1', question: '  ' })).toBe('Error: question is required');
+    items.findByIdForUser.mockResolvedValue(ticket({ loopId: SIBLING }));
+    expect(await run(tools, 'loop_ticket_unsure', { id: 't1', question: 'Q' })).toBe('Error: ticket not found');
+    items.findByIdForUser.mockResolvedValue(ticket({ status: 'closed' }));
+    expect(await run(tools, 'loop_ticket_unsure', { id: 't1', question: 'Q' })).toBe('Error: ticket is closed');
+
+    expect(events.recordUnsure).not.toHaveBeenCalled();
+    expect(items.updateForUser).not.toHaveBeenCalled();
   });
 });

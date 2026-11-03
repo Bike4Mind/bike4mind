@@ -37,9 +37,9 @@ export interface ILoopTicket {
 /** An unsure event as served by GET /api/loops/:id/events (apps/client/pages/api/loops/[id]/events.ts). */
 export type ILoopUnsureRow = Pick<
   ILoopEvent,
-  'id' | 'kind' | 'executionId' | 'workItemId' | 'ticketTitle' | 'iteration' | 'confidence' | 'reason'
+  'id' | 'kind' | 'source' | 'executionId' | 'workItemId' | 'ticketTitle' | 'iteration' | 'confidence' | 'reason'
 > & {
-  resolution?: { outcome: LoopGateOutcome; by?: string; at: string };
+  resolution?: { outcome: LoopGateOutcome; by?: string; at: string; note?: string };
   createdAt: string;
 };
 
@@ -157,7 +157,21 @@ export const useUpdateLoop = () =>
       (await api.patch<ILoop>(`/api/loops/${id}`, patch)).data
   );
 
-export const useDeleteLoop = () => useLoopMutation((id: string) => api.delete(`/api/loops/${id}`));
+/**
+ * Unlike the other mutations this must not refetch the deleted loop: its detail, tickets and events queries
+ * are still mounted until the caller navigates away, and refetching them is three 404s.
+ */
+export const useDeleteLoop = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/api/loops/${id}`),
+    onSuccess: async (_data, id) => {
+      await queryClient.cancelQueries({ queryKey: loopKeys.detail(id) });
+      return queryClient.invalidateQueries({ queryKey: loopKeys.all, predicate: query => query.queryKey[1] !== id });
+    },
+    onError: onLoopError(queryClient),
+  });
+};
 
 export const useRunLoop = () =>
   useLoopMutation(
@@ -187,4 +201,20 @@ export const useOverrideDirective = () =>
       action: LoopDirectiveOwnerAction;
       note?: string;
     }) => api.post(`/api/loops/${loopId}/events/${eventId}/override`, { action, ...(note && { note }) })
+  );
+
+/** The owner's answer to a question a run asked with loop_ticket_unsure; a resume needs the answer as `note`. */
+export const useResolveUnsure = () =>
+  useLoopMutation(
+    ({
+      loopId,
+      eventId,
+      outcome,
+      note,
+    }: {
+      loopId: string;
+      eventId: string;
+      outcome: LoopGateOutcome;
+      note?: string;
+    }) => api.post(`/api/loops/${loopId}/events/${eventId}/resolve`, { outcome, ...(note && { note }) })
   );

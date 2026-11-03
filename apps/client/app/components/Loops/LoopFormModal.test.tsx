@@ -28,7 +28,11 @@ vi.mock('@client/app/hooks/data/mcpServers', () => ({
   }),
 }));
 vi.mock('@client/app/hooks/data/agents', () => ({ useGetAgents: () => ({ data: [{ id: 'a1', name: 'Alpha' }] }) }));
-vi.mock('@client/app/components/Agent/OrchestrationSection', () => ({ PICKABLE_TOOLS: ['web_search'] }));
+vi.mock('@client/app/components/Agent/OrchestrationSection', () => ({
+  PICKABLE_TOOLS: ['web_search', 'weather_info'],
+}));
+const config = vi.hoisted(() => ({ toolAvailability: undefined as Record<string, boolean> | undefined }));
+vi.mock('@client/app/hooks/data/settings', () => ({ useConfig: () => ({ data: config }) }));
 
 import LoopFormModal, { validateLoopForm, type LoopFormValues } from './LoopFormModal';
 
@@ -112,7 +116,47 @@ describe('LoopFormModal', () => {
       </CssVarsProvider>
     );
 
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    config.toolAvailability = undefined;
+  });
+
+  const openTools = () => fireEvent.click(screen.getByRole('combobox', { name: /tools/i }));
+
+  it('lists every tool while availability is loading, and hides an unavailable one once it is known', () => {
+    const { unmount } = renderForm();
+    openTools();
+    expect(screen.getByRole('option', { name: 'Web Search' })).toBeInTheDocument();
+    unmount();
+
+    config.toolAvailability = { web_search: false, weather_info: true };
+    renderForm();
+    openTools();
+    expect(screen.queryByRole('option', { name: /Web Search/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Weather/ })).toBeInTheDocument();
+    expect(screen.queryByTestId('loop-form-tools-unavailable-warning')).not.toBeInTheDocument();
+  });
+
+  it('keeps a saved unavailable tool selected and labelled, warns about it, and clears the warning once removed', () => {
+    config.toolAvailability = { web_search: false };
+    renderForm({
+      id: 'l1',
+      name: 'Digest',
+      goal: 'Summarize',
+      intervalMinutes: 30,
+      tools: ['web_search'],
+      stages: ['todo', 'done'],
+    } as never);
+    expect(screen.getByTestId('loop-form-tools-unavailable-warning')).toHaveTextContent(
+      "Web Search isn't available on this server, so runs skip it."
+    );
+    openTools();
+    const option = screen.getByRole('option', { name: 'Web Search (unavailable)' });
+    expect(option).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.click(option);
+    expect(screen.queryByTestId('loop-form-tools-unavailable-warning')).not.toBeInTheDocument();
+  });
 
   it('shows inline errors and submits nothing when invalid', () => {
     renderForm();
