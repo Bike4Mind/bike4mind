@@ -547,6 +547,16 @@ describe('orchestrate mode in the chat shell', () => {
     expect(query('orchestrator-peek-drawer')).not.toBeNull();
   });
 
+  it('ignores a clicked notice whose session has since been deleted, staying on the open conversation', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    await openParent(PARENT_B.title);
+
+    await act(async () => attentionOpen?.({ sessionId: 'deleted-agent', rootId: 'deleted-parent' }));
+    await act(async () => undefined);
+    expect(el('chat-session-title').textContent).toBe(PARENT_B.title);
+    expect(window.localStorage.getItem('b4m.orchestrator.surface.deleted-parent')).toBeNull();
+  });
+
   it('opens an agent session from the stage', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, 'table');

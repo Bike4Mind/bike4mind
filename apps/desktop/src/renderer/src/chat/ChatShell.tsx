@@ -572,6 +572,8 @@ export function ChatShell({
   // The agent a clicked needs-you notice asked for; handed to its parent's stage once that is open.
   const [noticeFocus, setNoticeFocus] = useState<{ rootId: string; agentId: string } | null>(null);
   const openNotice = ({ sessionId, rootId }: AttentionOpenEvent) => {
+    // A notice outlives its session in the OS notification centre; a deleted one has nothing to open.
+    if (!sessions.some(session => session.id === rootId)) return;
     if (rootId === activeId) setOrchestratorSurface('orchestrate');
     else writeSurface(rootId, 'orchestrate');
     selectSession(rootId);
