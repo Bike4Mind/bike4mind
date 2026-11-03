@@ -73,7 +73,8 @@ const STRIPE_REQUEST_TIMEOUT_MS = 10_000;
 async function cancelCustomerSubscriptions(
   customerId: string,
   comment: string,
-  result: AccountSubscriptionCancellation
+  result: AccountSubscriptionCancellation,
+  logger: Pick<Logger, 'info'>
 ): Promise<void> {
   // Stripe, not the local rows, is read: a row can lag a renewal, and a deleted account's rows are
   // the very ones that went unnoticed. Stripe's default listing already omits canceled history, and
@@ -100,9 +101,21 @@ async function cancelCustomerSubscriptions(
     // An open invoice keeps Stripe's dunning retries running after the cancel. Best-effort: the
     // subscription is already canceled, which is what this call is for.
     try {
-      await voidOpenSubscriptionInvoices(subscription.id, { timeoutMs: STRIPE_REQUEST_TIMEOUT_MS });
-    } catch {
-      // Dunning on a canceled subscription is noise, not a renewal; nothing to report.
+      const { voided, failed } = await voidOpenSubscriptionInvoices(subscription.id, {
+        timeoutMs: STRIPE_REQUEST_TIMEOUT_MS,
+      });
+      if (voided.length > 0 || failed.length > 0) {
+        logger.info('[Billing] voided open invoices after canceling a subscription', {
+          subscriptionId: subscription.id,
+          voided: voided.length,
+          failed: failed.length,
+        });
+      }
+    } catch (error) {
+      logger.info('[Billing] could not void open invoices after canceling a subscription', {
+        subscriptionId: subscription.id,
+        error: reasonOf(error),
+      });
     }
   }
 }
@@ -140,7 +153,7 @@ export async function cancelAccountSubscriptions(
   const comment = CANCELLATION_COMMENT[input.reason];
   for (const customerId of customerIds) {
     try {
-      await cancelCustomerSubscriptions(customerId, comment, result);
+      await cancelCustomerSubscriptions(customerId, comment, result, logger);
     } catch (error) {
       result.failed.push({ customerId, subscriptionId: null, reason: reasonOf(error) });
     }

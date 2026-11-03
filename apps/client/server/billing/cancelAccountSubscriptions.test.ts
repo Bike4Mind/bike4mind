@@ -105,6 +105,23 @@ describe('cancelAccountSubscriptions', () => {
     const result = await cancelAccountSubscriptions({ userId: 'user-1', reason: 'suspended' }, logger);
 
     expect(result).toEqual({ canceled: ['sub_a'], failed: [] });
+    expect(logger.info).toHaveBeenCalledWith('[Billing] could not void open invoices after canceling a subscription', {
+      subscriptionId: 'sub_a',
+      error: 'list failed',
+    });
+  });
+
+  it('logs the invoices voided after a cancel', async () => {
+    mocks.subscriptionsList.mockResolvedValue(subs(['sub_a', 'past_due']));
+    mocks.voidOpenSubscriptionInvoices.mockResolvedValue({ voided: ['in_1', 'in_2'], failed: ['in_3'] });
+
+    await cancelAccountSubscriptions({ userId: 'user-1', reason: 'suspended' }, logger);
+
+    expect(logger.info).toHaveBeenCalledWith('[Billing] voided open invoices after canceling a subscription', {
+      subscriptionId: 'sub_a',
+      voided: 2,
+      failed: 1,
+    });
   });
 
   it('does nothing without Stripe or without a customer', async () => {
