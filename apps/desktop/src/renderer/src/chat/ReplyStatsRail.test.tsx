@@ -300,6 +300,39 @@ describe('the reply stats rail and its footer fallback', () => {
       expect(replies().some(reply => reply.hasAttribute('aria-owns'))).toBe(false);
     });
 
+    it('stops reading a reply to its rail once the rail is unmounted', () => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      render([message('flaky', { content: 'Done.', stats })], { statsRail: true });
+      expect(replies()[0]?.hasAttribute('aria-owns')).toBe(true);
+
+      const live: TurnProgress = { startedAt: Date.now() - 4000, tokens: null, messageId: 'flaky' };
+      render([message('flaky', { content: 'Working', stats })], { statsRail: true, streaming: true, liveTurn: live });
+      expect(cellOf('flaky')).toBeNull();
+      expect(replies()[0]?.hasAttribute('aria-owns')).toBe(false);
+    });
+
+    it('keeps a group of turns on the same element as the thread grows around it', () => {
+      const prompt = message('u2', { role: 'user', content: 'And 223?' });
+      const promptGroup = () =>
+        Array.from(container.querySelectorAll('[data-testid="chat-turn-group"]')).find(group =>
+          group.textContent?.includes('And 223?')
+        );
+      render([...settled, prompt], { statsRail: true });
+      const group = promptGroup();
+      expect(group).toBeDefined();
+
+      const reply = message('a2', { content: 'Yes.', stats });
+      render([...settled, prompt, reply], { statsRail: true });
+      expect(promptGroup()).toBe(group);
+
+      render([...settled, prompt, reply, message('u3', { role: 'user', content: 'x' })], { statsRail: true });
+      expect(promptGroup()).toBe(group);
+
+      const older = [message('a0', { content: 'Earlier.', stats }), message('u0', { role: 'user', content: 'z' })];
+      render([...older, ...settled, prompt], { statsRail: true });
+      expect(promptGroup()).toBe(group);
+    });
+
     it('does not read a reply to a rail that threw', () => {
       vi.spyOn(console, 'error').mockImplementation(() => undefined);
       render([{ ...settled[1]!, id: 'unreadable' }], { statsRail: true });
