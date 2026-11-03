@@ -52,11 +52,13 @@ describe('cancelAccountSubscriptions', () => {
     expect(mocks.findOrgs).toHaveBeenCalledWith({ userId: 'user-1' });
     expect(result).toEqual({ canceled: ['sub_active', 'sub_trial', 'sub_org'], failed: [] });
     expect(mocks.subscriptionsCancel).toHaveBeenCalledTimes(3);
-    expect(mocks.subscriptionsCancel).toHaveBeenCalledWith('sub_active', {
-      prorate: false,
-      cancellation_details: { comment: expect.stringContaining('suspended') },
-    });
-    expect(mocks.voidOpenSubscriptionInvoices).toHaveBeenCalledWith('sub_org');
+    expect(mocks.subscriptionsCancel).toHaveBeenCalledWith(
+      'sub_active',
+      { prorate: false, cancellation_details: { comment: expect.stringContaining('suspended') } },
+      { timeout: expect.any(Number) }
+    );
+    expect(mocks.subscriptionsList).toHaveBeenCalledWith(expect.anything(), { timeout: expect.any(Number) });
+    expect(mocks.voidOpenSubscriptionInvoices).toHaveBeenCalledWith('sub_org', { timeoutMs: expect.any(Number) });
     expect(logger.error).not.toHaveBeenCalled();
   });
 

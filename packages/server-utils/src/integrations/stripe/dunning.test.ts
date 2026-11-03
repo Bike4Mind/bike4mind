@@ -33,6 +33,15 @@ describe('voidOpenSubscriptionInvoices', () => {
     expect(result).toEqual({ voided: ['in_a', 'in_b'], failed: [] });
   });
 
+  it('passes a per-request timeout to every Stripe call when one is given', async () => {
+    mockList.mockResolvedValue({ data: [openInvoice('in_a')] });
+
+    await voidOpenSubscriptionInvoices('sub_1', { timeoutMs: 5000 });
+
+    expect(mockList).toHaveBeenCalledWith(expect.anything(), { timeout: 5000 });
+    expect(mockVoidInvoice).toHaveBeenCalledWith('in_a', undefined, { timeout: 5000 });
+  });
+
   it('queries only open invoices of that subscription', async () => {
     mockList.mockResolvedValue({ data: [] });
 

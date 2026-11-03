@@ -1,3 +1,4 @@
+import type Stripe from 'stripe';
 import { stripe } from './stripe';
 
 export interface VoidOpenInvoicesResult {
@@ -13,6 +14,8 @@ export interface VoidOpenInvoicesOptions {
    * created strictly before this instant are voided.
    */
   createdBefore?: number | null;
+  /** Per Stripe request timeout (ms); the client default applies when unset. */
+  timeoutMs?: number;
 }
 
 /**
@@ -42,19 +45,23 @@ export async function voidOpenSubscriptionInvoices(
   subscriptionId: string,
   options: VoidOpenInvoicesOptions = {}
 ): Promise<VoidOpenInvoicesResult> {
-  const open = await stripe.invoices.list({
+  const params: Stripe.InvoiceListParams = {
     subscription: subscriptionId,
     status: 'open',
     limit: 100,
     ...(options.createdBefore ? { created: { lt: options.createdBefore } } : {}),
-  });
+  };
+  const requestOptions = options.timeoutMs ? { timeout: options.timeoutMs } : undefined;
+  const open = await (requestOptions ? stripe.invoices.list(params, requestOptions) : stripe.invoices.list(params));
 
   const voided: string[] = [];
   const failed: string[] = [];
 
   for (const invoice of open.data) {
     try {
-      await stripe.invoices.voidInvoice(invoice.id);
+      await (requestOptions
+        ? stripe.invoices.voidInvoice(invoice.id, undefined, requestOptions)
+        : stripe.invoices.voidInvoice(invoice.id));
       voided.push(invoice.id);
     } catch {
       failed.push(invoice.id);
