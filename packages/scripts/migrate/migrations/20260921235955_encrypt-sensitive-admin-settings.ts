@@ -1,3 +1,4 @@
+import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { AdminSettings } from '@bike4mind/database';
 import { allSettingDefinitions, SENSITIVE_SETTING_MASK } from '@bike4mind/common';
 import { encryptAtRest, isEncrypted, isSecretsAtRestConfigured } from '@bike4mind/utils/security';
@@ -11,12 +12,17 @@ import { type MigrationFile } from './index';
  * remembers to run it by hand. This is the same backfill as a registered migration, so every
  * stage converges on deploy. Same skip rules as the CLI: string values only, ciphertext left
  * alone (idempotent), and the display mask never persisted as a secret.
+ *
+ * Also fail-closed: it throws when a stage still holds plaintext and has no key, which blocks every
+ * migration with a higher id until the key is configured. Set SECRET_ENCRYPTION_KEY before running
+ * `migrate up` by hand.
  */
 const migration: MigrationFile = {
   id: 20260921235955,
   name: 'Encrypt sensitive admin settings at rest',
 
   up: async () => {
+    // The registration import above makes contributed settings visible to this process.
     const sensitiveNames = allSettingDefinitions()
       .filter(def => def.isSensitive === true)
       .map(def => def.key);
