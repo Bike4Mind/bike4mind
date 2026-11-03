@@ -3,7 +3,7 @@ import { createMocks } from 'node-mocks-http';
 
 const { handlers, repo, audit } = vi.hoisted(() => ({
   handlers: {} as Record<string, (req: unknown, res: unknown) => unknown>,
-  repo: { listPackages: vi.fn(), create: vi.fn(), findById: vi.fn(), update: vi.fn() },
+  repo: { listPackages: vi.fn(), create: vi.fn(), findById: vi.fn(), updatePackage: vi.fn() },
   audit: vi.fn(),
 }));
 
@@ -129,13 +129,13 @@ describe('/api/admin/grant-packages/[id] (PATCH)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     repo.findById.mockResolvedValue(stored);
-    repo.update.mockImplementation(async (_id, patch) => ({ ...stored, ...patch }));
+    repo.updatePackage.mockImplementation(async (_id, patch) => ({ ...stored, ...patch }));
   });
 
   it('requires a reason to remove the cap', async () => {
     const { req, res } = makeReqRes('PATCH', { query: { id: 'p1' }, body: { totalCap: null } });
     await expect(handlers.patch(req, res)).rejects.toThrow(/outdated version/i);
-    expect(repo.update).not.toHaveBeenCalled();
+    expect(repo.updatePackage).not.toHaveBeenCalled();
   });
 
   it('removes the cap with a reason and audits the change', async () => {
@@ -145,7 +145,7 @@ describe('/api/admin/grant-packages/[id] (PATCH)', () => {
     });
     await handlers.patch(req, res);
     expect(res._getStatusCode()).toBe(200);
-    expect(repo.update).toHaveBeenCalledWith('p1', { totalCap: null, reason: 'Sales-approved campaign' });
+    expect(repo.updatePackage).toHaveBeenCalledWith('p1', { totalCap: null, reason: 'Sales-approved campaign' });
     expect(audit).toHaveBeenCalledWith(
       req,
       expect.objectContaining({
@@ -158,7 +158,7 @@ describe('/api/admin/grant-packages/[id] (PATCH)', () => {
   it('deactivates without a reason', async () => {
     const { req, res } = makeReqRes('PATCH', { query: { id: 'p1' }, body: { active: false } });
     await handlers.patch(req, res);
-    expect(repo.update).toHaveBeenCalledWith('p1', { active: false });
+    expect(repo.updatePackage).toHaveBeenCalledWith('p1', { active: false });
   });
 
   it('404s an unknown package', async () => {

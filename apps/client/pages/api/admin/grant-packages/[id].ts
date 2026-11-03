@@ -38,7 +38,7 @@ const handler = adminApi({
     );
 
     const updated = await withTransaction(async () => {
-      const pkg = await grantPackageRepository.update(id, reason ? { ...data, reason } : data);
+      const pkg = await grantPackageRepository.updatePackage(id, reason ? { ...data, reason } : data);
       if (!pkg) throw new NotFoundError('Grant package not found');
       const changes: AuditChange[] = changedFields.map(field => ({
         field,

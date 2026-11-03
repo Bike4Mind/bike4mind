@@ -192,8 +192,13 @@ describe('GrantPackageRepository admin reads and writes', () => {
       dailyCap: null,
       createdBy: 'synthetic-admin',
     });
-    const updated = await grantPackageRepository.update(created.id, { totalCap: null, reason: 'Internal testing' });
+    const updated = await grantPackageRepository.updatePackage(created.id, {
+      totalCap: null,
+      reason: 'Internal testing',
+    });
     expect(updated).toMatchObject({ totalCap: null, reason: 'Internal testing', redeemedTotal: 0, active: true });
-    expect(await grantPackageRepository.update(new mongoose.Types.ObjectId().toString(), { active: false })).toBeNull();
+    expect(
+      await grantPackageRepository.updatePackage(new mongoose.Types.ObjectId().toString(), { active: false })
+    ).toBeNull();
   });
 });

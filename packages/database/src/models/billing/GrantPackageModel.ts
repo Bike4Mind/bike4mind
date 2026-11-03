@@ -126,7 +126,7 @@ export class GrantPackageRepository implements IGrantPackageRepository {
     return toDocument(doc.toObject());
   }
 
-  async update(id: string, patch: UpdateGrantPackageInput & { reason?: string | null }) {
+  async updatePackage(id: string, patch: UpdateGrantPackageInput & { reason?: string | null }) {
     if (!Types.ObjectId.isValid(id)) return null;
     const doc = await GrantPackage.findByIdAndUpdate(id, { $set: patch }, { new: true, runValidators: true }).lean();
     return doc ? toDocument(doc) : null;
