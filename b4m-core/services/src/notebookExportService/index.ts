@@ -268,7 +268,13 @@ export class NotebookExportService {
     }
   }
 
-  private async getSessionsToExport(userId: string, options: NotebookExportOptions) {
+  /** Id and name of every notebook `buildNotebooks` would visit, without building any of them. */
+  async listNotebooks(userId: string, options: NotebookExportOptions): Promise<{ id: string; name: string }[]> {
+    const sessions = await this.getSessionsToExport(userId, options, { name: 1 });
+    return sessions.map(session => ({ id: session.id, name: session.name }));
+  }
+
+  private async getSessionsToExport(userId: string, options: NotebookExportOptions, projection?: Record<string, 1>) {
     const query: SessionQuery = { userId };
 
     // Filter by specific notebook IDs
@@ -302,7 +308,9 @@ export class NotebookExportService {
       }
     }
 
-    return await this.adapters.sessionRepository.find(query);
+    return projection
+      ? await this.adapters.sessionRepository.find(query, projection as ExportReadOptions)
+      : await this.adapters.sessionRepository.find(query);
   }
 
   private async exportSession(
@@ -660,6 +668,8 @@ export class NotebookExportService {
           });
           return null;
         }
+
+        if (options.imagesAsKeys) return imagePath;
 
         try {
           const imageContent = await this.adapters.fileStorageService.getFileContent(imagePath);

@@ -903,6 +903,65 @@ describe('notebook export - image bytes', () => {
   });
 });
 
+describe('notebook export - images as keys', () => {
+  const images = ['images/user-1/shot.png', 'images/user-1/held.png'];
+  const makeWith = (over: AdapterOverrides = {}) => {
+    const getFileContent = vi.fn().mockResolvedValue(Buffer.from('bytes'));
+    const findOne = vi.fn(async ({ filePath }: { filePath: string }) =>
+      filePath === images[1] ? { id: 'f', moderationStatus: 'pending' } : null
+    );
+    const { adapters } = makeAdapters({
+      chatHistoryRepository: {
+        find: vi
+          .fn()
+          .mockResolvedValueOnce([{ id: 'msg-1', timestamp: new Date('2026-01-01T00:00:00Z'), images }])
+          .mockResolvedValue([]),
+      },
+      knowledgeRepository: { find: vi.fn().mockResolvedValue([]), findOne },
+      fileStorageService: { getFileContent },
+      ...over,
+    });
+    return { adapters, getFileContent };
+  };
+  const build = async (adapters: NotebookExportAdapters) => {
+    const out = [];
+    for await (const nb of new NotebookExportService(adapters).buildNotebooks('user-1', {
+      ...OPTIONS,
+      imagesAsKeys: true,
+    })) {
+      out.push(nb);
+    }
+    return out;
+  };
+
+  it('returns the key without reading the bytes, and still drops a held upload', async () => {
+    const { adapters, getFileContent } = makeWith();
+    const [notebook] = await build(adapters);
+
+    expect(notebook.chatHistory[0].images).toEqual([images[0]]);
+    expect(getFileContent).not.toHaveBeenCalled();
+  });
+
+  it('skips an image whose moderation lookup fails', async () => {
+    const { adapters } = makeWith({
+      knowledgeRepository: { find: vi.fn().mockResolvedValue([]), findOne: vi.fn().mockRejectedValue(new Error('x')) },
+    });
+    const [notebook] = await build(adapters);
+
+    expect(notebook.chatHistory[0].images).toEqual([]);
+  });
+});
+
+describe('notebook export - listing', () => {
+  it('lists id and name of the notebooks the build would visit', async () => {
+    const { adapters } = makeAdapters();
+    const list = await new NotebookExportService(adapters).listNotebooks('user-1', OPTIONS);
+
+    expect(list).toEqual([{ id: 'session-1', name: 'Notebook One' }]);
+    expect(adapters.sessionRepository.find).toHaveBeenCalledWith({ userId: 'user-1' }, { name: 1 });
+  });
+});
+
 describe('buildNotebooks', () => {
   it('yields each notebook without storing a file', async () => {
     const { adapters, uploaded } = makeAdapters();

@@ -12,6 +12,8 @@ const h = vi.hoisted(() => ({
   uploaded: null as Buffer | null,
   getMetadata: vi.fn(),
   getContent: vi.fn(),
+  genMetadata: vi.fn(),
+  genContent: vi.fn(),
   uploadFile: vi.fn(),
   publish: vi.fn(),
   userFindById: vi.fn(),
@@ -22,7 +24,7 @@ const h = vi.hoisted(() => ({
   agentFind: vi.fn(),
   projectFind: vi.fn(),
   readProfile: vi.fn(),
-  notebooks: [] as Array<{ id: string; name: string }>,
+  notebooks: [] as Array<{ id: string; name: string; chatHistory?: Array<{ images?: string[] }> }>,
 }));
 
 vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
@@ -49,13 +51,17 @@ vi.mock('@bike4mind/services', () => ({
   notebookExportService: {
     NotebookExportService: class {
       async *buildNotebooks() {
-        yield* h.notebooks;
+        for (const notebook of h.notebooks) yield { chatHistory: [], ...notebook };
+      }
+      async listNotebooks() {
+        return h.notebooks.map(({ id, name }) => ({ id, name }));
       }
     },
   },
 }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ getMetadata: h.getMetadata, getContent: h.getContent, uploadFile: h.uploadFile }),
+  getGeneratedImageStorage: () => ({ getMetadata: h.genMetadata, getContent: h.genContent }),
 }));
 vi.mock('@bike4mind/server-utils/memory/factCipher', () => ({ createKeyProvider: () => ({}) }));
 vi.mock('@bike4mind/server-utils/memory/ledgerMemoryStore', () => ({
@@ -112,6 +118,8 @@ beforeEach(() => {
     h.uploaded = await readFile(localPath);
   });
   h.getContent.mockImplementation(async () => Readable.from([Buffer.from('file-bytes')]));
+  h.genMetadata.mockResolvedValue({ size: 9 });
+  h.genContent.mockImplementation(async () => Readable.from([Buffer.from('image-png')]));
   h.userFindById.mockResolvedValue({
     id: USER_ID,
     name: 'Ada',
@@ -175,6 +183,7 @@ describe('account data export worker', () => {
       'files/f2-notes.txt',
       'files/index.json',
       'memories.json',
+      'notebooks/index.json',
       'notebooks/nb-1-Trip_plans.json',
       'profile.json',
       'projects.json',
@@ -206,6 +215,85 @@ describe('account data export worker', () => {
         body: expect.stringContaining(`https://app.example.com/account-data-export/${JOB_ID}`),
       })
     );
+  });
+
+  describe('notebook images', () => {
+    const chat = (...images: string[][]) => ({
+      id: 'nb-1',
+      name: 'Trip/plans',
+      chatHistory: images.map(i => ({ images: i })),
+    });
+    const notebookImages = async () => {
+      const entries = await unzip(h.uploaded!);
+      const notebook = JSON.parse(entries.get('notebooks/nb-1-Trip_plans.json')!);
+      return { entries, images: notebook.chatHistory.map((m: { images: unknown }) => m.images) };
+    };
+
+    it('copies a generated image under images/ once and references it by path', async () => {
+      h.notebooks = [chat(['generated/a.png'], ['generated/a.png'])];
+
+      await run();
+
+      const { entries, images } = await notebookImages();
+      const imagePaths = [...entries.keys()].filter(k => k.startsWith('images/'));
+      expect(imagePaths).toHaveLength(1);
+      expect(imagePaths[0]).toMatch(/^images\/[0-9a-f]{10}-a\.png$/);
+      expect(entries.get(imagePaths[0])).toBe('image-png');
+      expect(images).toEqual([[{ path: imagePaths[0] }], [{ path: imagePaths[0] }]]);
+      expect(h.genContent).toHaveBeenCalledTimes(1);
+    });
+
+    it("references an image that is one of the user's files by file id without copying it", async () => {
+      h.notebooks = [chat(['u/notes.txt'])];
+
+      await run();
+
+      const { entries, images } = await notebookImages();
+      expect(images).toEqual([[{ fileId: 'f1' }]]);
+      expect([...entries.keys()].some(k => k.startsWith('images/'))).toBe(false);
+      expect(h.genContent).not.toHaveBeenCalled();
+    });
+
+    it('marks a generated image missing from storage as unavailable', async () => {
+      h.genMetadata.mockRejectedValue(notFound());
+      h.notebooks = [chat(['generated/gone.png'])];
+
+      await run();
+
+      const { entries, images } = await notebookImages();
+      expect(images).toEqual([[{ key: 'generated/gone.png', omitted: 'unavailable' }]]);
+      expect([...entries.keys()].some(k => k.startsWith('images/'))).toBe(false);
+    });
+
+    it('marks an image over the shared byte budget as size_limit', async () => {
+      h.genMetadata.mockResolvedValue({ size: MAX_FILE_BYTES + 1 });
+      h.notebooks = [chat(['generated/big.png'])];
+
+      await run();
+
+      expect((await notebookImages()).images).toEqual([[{ key: 'generated/big.png', omitted: 'size_limit' }]]);
+      expect(h.genContent).not.toHaveBeenCalled();
+    });
+  });
+
+  it('stops building notebooks on a low budget and lists the rest as omitted', async () => {
+    remainingMs = () => 7 * 60 * 1000;
+    h.notebooks = [
+      { id: 'nb-1', name: 'Trip/plans' },
+      { id: 'nb-2', name: 'Other' },
+    ];
+
+    await run();
+
+    const entries = await unzip(h.uploaded!);
+    expect([...entries.keys()].some(k => k.startsWith('notebooks/') && k !== 'notebooks/index.json')).toBe(false);
+    expect(JSON.parse(entries.get('notebooks/index.json')!)).toEqual([
+      { id: 'nb-1', name: 'Trip/plans', omitted: 'time_limit' },
+      { id: 'nb-2', name: 'Other', omitted: 'time_limit' },
+    ]);
+    expect(entries.get('files/f1-notes.txt')).toBe('file-bytes');
+    expect(h.uploadFile).toHaveBeenCalledOnce();
+    expect(h.publish).toHaveBeenCalledOnce();
   });
 
   it('lists a file over the size limit as omitted without copying it', async () => {

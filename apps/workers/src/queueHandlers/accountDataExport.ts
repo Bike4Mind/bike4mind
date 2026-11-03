@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { createWriteStream, promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
@@ -23,7 +24,7 @@ import { secureParameters } from '@bike4mind/utils';
 import { notebookExportService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
-import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import {
   ACCOUNT_DATA_EXPORT_TTL_MS,
   accountDataExportKey,
@@ -46,6 +47,8 @@ const AccountDataExportPayload = z.object({
 export const MAX_FILE_BYTES = 3 * 1024 ** 3;
 // Left for the upload and the email once the file copy stops.
 const UPLOAD_RESERVE_MS = 5 * 60 * 1000;
+// Notebooks stop earlier than the file copy, so files and artifacts still get time.
+const NOTEBOOK_RESERVE_MS = UPLOAD_RESERVE_MS + 3 * 60 * 1000;
 
 type Archiver = archiver.Archiver;
 type Storage = ReturnType<typeof getFilesStorage>;
@@ -87,6 +90,29 @@ function appendEntry(archive: Archiver, source: string | Buffer | Readable, name
   });
 }
 
+/** Bytes copied into the zip so far, shared by files/ and images/ against MAX_FILE_BYTES. */
+interface ByteBudget {
+  copiedBytes: number;
+}
+
+/** Streams one storage body into the zip, stored uncompressed, and returns the bytes that went through. */
+async function appendStream(archive: Archiver, body: unknown, zipPath: string): Promise<number> {
+  if (!(body instanceof Readable)) throw new Error('Storage returned a non-stream body');
+  let streamed = 0;
+  // A Transform, not a 'data' listener: that would start the flow before archiver pipes the entry.
+  const counted = body.pipe(
+    new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        streamed += chunk.length;
+        callback(null, chunk);
+      },
+    })
+  );
+  body.once('error', error => counted.destroy(error));
+  await appendEntry(archive, counted, zipPath, true);
+  return streamed;
+}
+
 const json = (value: unknown) => JSON.stringify(value, null, 2);
 const iso = (value: Date | string | null | undefined) => (value ? new Date(value).toISOString() : undefined);
 
@@ -96,7 +122,61 @@ async function writeProfile(archive: Archiver, userId: string) {
   await appendEntry(archive, json({ ...safe, createdAt: iso(user?.createdAt) }), 'profile.json');
 }
 
-async function writeNotebooks(archive: Archiver, names: ZipNames, userId: string, logger: Logger) {
+type FabFileRow = Awaited<ReturnType<typeof fabFileRepository.find>>[number];
+
+interface PlannedFile {
+  file: FabFileRow;
+  zipPath?: string;
+}
+
+/** Reads the user's files and fixes their zip names up front, so notebooks can point at them by id. */
+async function planFiles(names: ZipNames, userId: string) {
+  const rows = await fabFileRepository.find(
+    { userId, deletedAt: null },
+    { sort: { createdAt: 1 }, fileName: 1, fileSize: 1, mimeType: 1, filePath: 1, createdAt: 1, moderationStatus: 1 }
+  );
+  const fileIdByPath = new Map<string, string>();
+  const planned: PlannedFile[] = rows.map(file => {
+    if (file.filePath) fileIdByPath.set(file.filePath, file.id);
+    const copyable = isImageServeable(file) && !!file.filePath;
+    return { file, zipPath: copyable ? names.name('files', file.fileName, file.id) : undefined };
+  });
+  return { planned, fileIdByPath };
+}
+
+type ImageRef =
+  { fileId: string } | { path: string } | { key: string; omitted: 'size_limit' | 'time_limit' | 'unavailable' };
+
+interface NotebookIndexEntry {
+  id: string;
+  name: string;
+  path?: string;
+  omitted?: 'time_limit';
+}
+
+const NOTEBOOK_OPTIONS = {
+  includeKnowledge: true,
+  includeArtifacts: true,
+  includeTools: true,
+  includeAgents: true,
+  anonymize: false,
+  includeMetadata: true,
+  includeImages: true,
+  // Image keys stay keys: bytes are copied under images/ or found under files/, never inlined.
+  imagesAsKeys: true,
+  // Knowledge bytes ship once, under files/, instead of base64 inside every notebook that uses them.
+  maxFileSize: 0,
+};
+
+async function writeNotebooks(
+  archive: Archiver,
+  names: ZipNames,
+  userId: string,
+  fileIdByPath: Map<string, string>,
+  budget: ByteBudget,
+  remainingMs: () => number,
+  logger: Logger
+) {
   const service = new NotebookExportService({
     sessionRepository,
     chatHistoryRepository: questRepository,
@@ -122,22 +202,74 @@ async function writeNotebooks(archive: Archiver, names: ZipNames, userId: string
     logger,
   });
 
-  let count = 0;
-  for await (const notebook of service.buildNotebooks(userId, {
-    includeKnowledge: true,
-    includeArtifacts: true,
-    includeTools: true,
-    includeAgents: true,
-    anonymize: false,
-    includeMetadata: true,
-    includeImages: true,
-    // Knowledge bytes ship once, under files/, instead of base64 inside every notebook that uses them.
-    maxFileSize: 0,
-  })) {
-    await appendEntry(archive, json(notebook), names.name('notebooks', notebook.name, notebook.id, '.json'));
-    count++;
+  const generated = getGeneratedImageStorage();
+  const copied = new Map<string, ImageRef>();
+  const resolveImage = async (key: string): Promise<ImageRef> => {
+    const fileId = fileIdByPath.get(key);
+    if (fileId) return { fileId };
+    const known = copied.get(key);
+    if (known) return known;
+
+    let ref: ImageRef;
+    if (remainingMs() < NOTEBOOK_RESERVE_MS) {
+      ref = { key, omitted: 'time_limit' };
+    } else {
+      try {
+        const { size = 0 } = await generated.getMetadata(key);
+        if (budget.copiedBytes + size > MAX_FILE_BYTES) {
+          ref = { key, omitted: 'size_limit' };
+        } else {
+          const body = await generated.getContent(key);
+          const ext = path.extname(key);
+          const zipPath = names.name(
+            'images',
+            path.basename(key, ext),
+            createHash('sha1').update(key).digest('hex').slice(0, 10),
+            /^\.\w{1,8}$/.test(ext) ? ext : ''
+          );
+          budget.copiedBytes += await appendStream(archive, body, zipPath);
+          ref = { path: zipPath };
+        }
+      } catch (error) {
+        if (!isMissingObjectError(error)) throw error;
+        logger.warn('Account data export: generated image missing', { key });
+        ref = { key, omitted: 'unavailable' };
+      }
+    }
+    copied.set(key, ref);
+    return ref;
+  };
+
+  const index: NotebookIndexEntry[] = [];
+  const iterator = service.buildNotebooks(userId, NOTEBOOK_OPTIONS);
+  let stopped = false;
+  for (;;) {
+    if (remainingMs() < NOTEBOOK_RESERVE_MS) {
+      stopped = true;
+      break;
+    }
+    const next = await iterator.next();
+    if (next.done) break;
+    const notebook = next.value;
+    const chatHistory = [];
+    for (const message of notebook.chatHistory) {
+      const images = message.images ? await Promise.all(message.images.map(resolveImage)) : undefined;
+      chatHistory.push(images ? { ...message, images } : message);
+    }
+    const zipPath = names.name('notebooks', notebook.name, notebook.id, '.json');
+    await appendEntry(archive, json({ ...notebook, chatHistory }), zipPath);
+    index.push({ id: notebook.id, name: notebook.name, path: zipPath });
   }
-  return count;
+  await iterator.return(undefined);
+
+  if (stopped) {
+    const written = new Set(index.map(n => n.id));
+    for (const { id, name } of await service.listNotebooks(userId, NOTEBOOK_OPTIONS)) {
+      if (!written.has(id)) index.push({ id, name, omitted: 'time_limit' });
+    }
+  }
+  await appendEntry(archive, json(index), 'notebooks/index.json');
+  return { count: index.filter(n => n.path).length, omitted: index.filter(n => n.omitted).length };
 }
 
 interface FileIndexEntry {
@@ -152,20 +284,14 @@ interface FileIndexEntry {
 
 async function writeFiles(
   archive: Archiver,
-  names: ZipNames,
-  userId: string,
+  planned: PlannedFile[],
   storage: Storage,
+  budget: ByteBudget,
   remainingMs: () => number,
   logger: Logger
 ) {
-  const files = await fabFileRepository.find(
-    { userId, deletedAt: null },
-    { sort: { createdAt: 1 }, fileName: 1, fileSize: 1, mimeType: 1, filePath: 1, createdAt: 1, moderationStatus: 1 }
-  );
-
   const index: FileIndexEntry[] = [];
-  let copiedBytes = 0;
-  for (const file of files) {
+  for (const { file, zipPath } of planned) {
     const entry: FileIndexEntry = {
       id: file.id,
       name: file.fileName,
@@ -177,31 +303,17 @@ async function writeFiles(
 
     if (!isImageServeable(file)) {
       entry.omitted = 'moderation';
-    } else if (!file.filePath) {
+    } else if (!file.filePath || !zipPath) {
       entry.omitted = 'unavailable';
-    } else if (copiedBytes + (file.fileSize ?? 0) > MAX_FILE_BYTES) {
+    } else if (budget.copiedBytes + (file.fileSize ?? 0) > MAX_FILE_BYTES) {
       entry.omitted = 'size_limit';
     } else if (remainingMs() < UPLOAD_RESERVE_MS) {
       entry.omitted = 'time_limit';
     } else {
       try {
-        const body = await storage.getContent(file.filePath);
-        if (!(body instanceof Readable)) throw new Error('Storage returned a non-stream body');
-        const zipPath = names.name('files', file.fileName, file.id);
-        let streamed = 0;
-        // A Transform, not a 'data' listener: that would start the flow before archiver pipes the entry.
-        const counted = body.pipe(
-          new Transform({
-            transform(chunk: Buffer, _encoding, callback) {
-              streamed += chunk.length;
-              callback(null, chunk);
-            },
-          })
-        );
-        body.once('error', error => counted.destroy(error));
-        await appendEntry(archive, counted, zipPath, true);
+        const streamed = await appendStream(archive, await storage.getContent(file.filePath), zipPath);
         entry.path = zipPath;
-        copiedBytes += file.fileSize ?? streamed;
+        budget.copiedBytes += file.fileSize ?? streamed;
       } catch (error) {
         if (!isMissingObjectError(error)) throw error;
         logger.warn('Account data export: file object missing', { fileId: file.id });
@@ -347,7 +459,14 @@ Created: ${exportedAt.toISOString()}
 
 profile.json       Your profile: name, username, email, photo, and when the account was created.
 notebooks/         One JSON file per notebook: its messages, and the knowledge files, artifacts,
-                   tools and agents attached to it. Knowledge file bytes are under files/.
+                   tools and agents attached to it.
+                   notebooks/index.json lists every notebook; an "omitted" value of time_limit
+                   means the export ran out of time before that notebook was written.
+                   Images in messages are listed as references: { "fileId" } for one of your
+                   uploaded files (see files/), { "path" } for a copy under images/, or
+                   { "key", "omitted" } when the image could not be copied (size_limit,
+                   time_limit, or unavailable).
+images/            Images generated in your notebooks.
 files/             The original bytes of every file you uploaded. files/index.json lists each file;
                    an "omitted" value says why a file's bytes are not included (a moderation
                    hold, including files still being scanned,
@@ -359,8 +478,9 @@ artifacts/         One JSON file per artifact you own, with its latest content. 
 agents.json        Agents you created.
 projects.json      Projects you own.
 
-Deleted items, data shared with you by others, and credentials (passwords, API keys, tokens,
-two-factor secrets and connected-app grants) are not included.
+Deleted items, other data shared with you by others, and credentials (passwords, API keys, tokens,
+two-factor secrets and connected-app grants) are not included. The exception is notebooks, which also
+include the artifacts and files attached to them that others shared with you.
 `;
 
 async function buildArchive(
@@ -385,15 +505,18 @@ async function buildArchive(
   try {
     await appendEntry(archive, readme(new Date()), 'README.txt');
     await writeProfile(archive, userId);
-    const notebooks = await writeNotebooks(archive, names, userId, logger);
-    const files = await writeFiles(archive, names, userId, storage, remainingMs, logger);
+    const budget: ByteBudget = { copiedBytes: 0 };
+    const { planned, fileIdByPath } = await planFiles(names, userId);
+    const notebooks = await writeNotebooks(archive, names, userId, fileIdByPath, budget, remainingMs, logger);
+    const files = await writeFiles(archive, planned, storage, budget, remainingMs, logger);
     await writeMemories(archive, userId);
     const artifacts = await writeArtifacts(archive, names, userId, remainingMs);
     await writeAgentsAndProjects(archive, userId);
     await archive.finalize();
     await closed;
     logger.info('Account data export built', {
-      notebooks,
+      notebooks: notebooks.count,
+      notebooksOmitted: notebooks.omitted,
       files: files.count,
       filesOmitted: files.omitted,
       artifacts: artifacts.count,

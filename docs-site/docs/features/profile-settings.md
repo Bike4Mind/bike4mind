@@ -111,6 +111,8 @@ The **Application Settings** area of the Settings tab has a **Notebooks** card a
 **Knowledge Files card:**
 - **Export All** - Download all your knowledge files as a zip. The zip holds the extracted text of each file, not the original files: images are not included, and very long files are shortened. When anything is shortened or left out, the zip includes a `README.txt` that names it.
 
+**Download your data:** In the **Danger zone** section, **Download your data** with **Request export** builds a zip of your whole account: your profile, notebooks (with the images generated in them), the original bytes of your uploaded files, memories, artifacts, agents and projects. You can request one export per hour. When it is ready, Bike4Mind emails you a link to a download page, and the link works for 24 hours. If an account is very large, some file bytes can be left out; `files/index.json` in the zip says which and why.
+
 **Delete all:** The **Danger zone** section at the bottom of the Settings tab has two buttons, **Delete all notebooks** and **Delete all knowledge files**. Each asks you to confirm and cannot be undone. Export first if you want a copy.
 
 **Import LLM History:** The **Import LLM History** button at the top of the section imports chat history from OpenAI or Claude.
