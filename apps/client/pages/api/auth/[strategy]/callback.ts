@@ -46,6 +46,29 @@ function isReplayedOrExpiredCode(err: unknown): boolean {
 /** The form fields Apple's form_post response may carry; anything else is dropped. */
 const APPLE_FORM_POST_FIELDS = ['code', 'state', 'user', 'error', 'error_description'] as const;
 
+/**
+ * Apple's first-authorization `user` field also carries the email. Only the name is read from it (the
+ * email comes from the verified id_token), so forward just the name and keep the address out of the URL.
+ */
+function appleUserNameOnly(rawUser: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawUser);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return undefined;
+  const name: unknown = (parsed as { name?: unknown }).name;
+  if (typeof name !== 'object' || name === null) return undefined;
+  const { firstName, lastName } = name as { firstName?: unknown; lastName?: unknown };
+  return JSON.stringify({
+    name: {
+      ...(typeof firstName === 'string' ? { firstName } : {}),
+      ...(typeof lastName === 'string' ? { lastName } : {}),
+    },
+  });
+}
+
 const handler = baseApi({ auth: false })
   .use(async (req, res, next) => {
     // Validate if the strategy is valid
@@ -69,7 +92,9 @@ const handler = baseApi({ auth: false })
     const params = new URLSearchParams();
     for (const field of APPLE_FORM_POST_FIELDS) {
       const value = body[field];
-      if (typeof value === 'string') params.set(field, value);
+      if (typeof value !== 'string') continue;
+      const forwarded = field === 'user' ? appleUserNameOnly(value) : value;
+      if (forwarded !== undefined) params.set(field, forwarded);
     }
     // passport-oauth2 treats only `access_denied` as a cancelled consent; Apple names it differently.
     if (params.get('error') === 'user_cancelled_authorize') params.set('error', 'access_denied');

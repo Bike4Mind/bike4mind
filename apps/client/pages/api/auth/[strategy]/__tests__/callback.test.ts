@@ -664,6 +664,19 @@ describe('POST /api/auth/apple/callback (form_post bounce)', () => {
     expect(cancelled.res._getRedirectUrl()).toBe('/api/auth/apple/callback?state=s&error=access_denied');
   });
 
+  it('forwards only the name from the user field, never the email', () => {
+    const user = JSON.stringify({ name: { firstName: 'Ada', lastName: 'L' }, email: 'ada@example.com' });
+    const { run, res } = post('apple', { code: 'c', state: 's', user });
+    run();
+    const forwarded = new URL(res._getRedirectUrl(), 'http://localhost').searchParams.get('user');
+    expect(forwarded).toBe(JSON.stringify({ name: { firstName: 'Ada', lastName: 'L' } }));
+    expect(res._getRedirectUrl()).not.toContain('example.com');
+
+    const malformed = post('apple', { code: 'c', state: 's', user: 'not-json' });
+    malformed.run();
+    expect(malformed.res._getRedirectUrl()).toBe('/api/auth/apple/callback?code=c&state=s');
+  });
+
   it('refuses a POST for any other strategy', () => {
     expect(post('github', { code: 'c' }).run).toThrow(/Invalid auth strategy/);
   });
