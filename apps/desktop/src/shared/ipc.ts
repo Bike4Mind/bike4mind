@@ -118,6 +118,7 @@ import type {
 } from './models';
 import type { AccountUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
+import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewDevice, SimulatorViewState } from './simulator';
 import type { LocalHistoryResult, LocalHistoryState } from './history';
 
 /**
@@ -390,6 +391,20 @@ export const IPC_CHANNELS = {
    * a navigation is also what settles whether there is anything to go back to.
    */
   browserPageState: 'browser:page-state',
+  /**
+   * The live iOS Simulator view (macOS). Renderer -> main: read the state, list devices, attach
+   * or detach a device, and the user's own touches from the pane, which are the user acting and
+   * so never reach the tool approval gate. See @shared/simulator.
+   */
+  simulatorGetState: 'simulator:get-state',
+  simulatorListDevices: 'simulator:list-devices',
+  simulatorAttach: 'simulator:attach',
+  simulatorDetach: 'simulator:detach',
+  simulatorInput: 'simulator:input',
+  /** main -> renderer push: the view's status changed (attached, live, failed). */
+  simulatorState: 'simulator:state',
+  /** main -> renderer push: one JPEG frame of the attached screen, at up to 10 a second. */
+  simulatorFrame: 'simulator:frame',
   /**
    * Importing the user's own Chrome cookies, per site. Renderer -> main, every one of them.
    *
@@ -994,6 +1009,17 @@ export interface DesktopApi {
    * through its tools in main. What is here is the url bar: the one part of driving the page
    * that the user cannot do by clicking on it, because the page has no chrome of its own.
    */
+  /** The live iOS Simulator view; `available` is false off macOS. */
+  simulator: {
+    getState(): Promise<SimulatorViewState>;
+    listDevices(): Promise<SimulatorViewDevice[]>;
+    /** Rejects with the setup problem and its fix when the device cannot be shown. */
+    attach(udid: string): Promise<SimulatorViewState>;
+    detach(): Promise<void>;
+    input(input: SimulatorPaneInput): Promise<void>;
+    onState(listener: (state: SimulatorViewState) => void): () => void;
+    onFrame(listener: (frame: SimulatorFrame) => void): () => void;
+  };
   browser: {
     /** Draw this conversation's page at these bounds, or nothing. Returns what the bar draws. */
     setPane(request: BrowserPaneRequest): Promise<BrowserPaneState>;
