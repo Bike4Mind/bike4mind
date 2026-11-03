@@ -27,6 +27,8 @@ interface StoreDocument extends Record<string, unknown> {
   servers: StoredServer[];
   /** This computer's entered hardware, which overrides its probe. */
   localSpecs?: ModelServerSpecs;
+  /** By server id, the models that replied with reasoning, which earns them a thinking switch. */
+  thinkers?: Record<string, string[]>;
 }
 
 export const MAX_MODEL_SERVERS = 20;
@@ -188,12 +190,34 @@ export class ModelServerStore {
     });
   }
 
+  async thinkers(id: string): Promise<string[]> {
+    return storedThinkers((await this.load()).thinkers)[id] ?? [];
+  }
+
+  /** Remembers that `model` on this server thinks; the server's OpenAI-compatible API never says so. */
+  addThinker(id: string, model: string): Promise<void> {
+    return this.commit(document => {
+      const all = storedThinkers(document.thinkers);
+      const names = all[id] ?? [];
+      if (this.readOnly || !document.servers.some(server => server.id === id) || names.includes(model))
+        return { document, result: undefined };
+      const thinkers = { ...all, [id]: [...names, model].slice(-MAX_LISTED_MODELS) };
+      return { document: { ...document, thinkers }, result: undefined };
+    });
+  }
+
   remove(id: string): Promise<void> {
     return this.commit(document => {
       this.assertWritable();
       const servers = document.servers.filter(server => server.id !== id);
       if (servers.length === document.servers.length) return { document, result: undefined };
-      return { document: { ...document, servers }, applied: () => this.secrets.delete(id), result: undefined };
+      const { [id]: _removed, ...thinkers } = storedThinkers(document.thinkers);
+      const { thinkers: _previous, ...rest } = document;
+      return {
+        document: { ...rest, servers, ...(Object.keys(thinkers).length > 0 ? { thinkers } : {}) },
+        applied: () => this.secrets.delete(id),
+        result: undefined,
+      };
     });
   }
 
@@ -312,6 +336,15 @@ export class ModelServerStore {
 
 function sameList(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((name, index) => name === b[index]);
+}
+
+function storedThinkers(raw: unknown): Record<string, string[]> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  return Object.fromEntries(
+    Object.entries(raw).flatMap(([id, names]) =>
+      Array.isArray(names) ? [[id, names.filter((name): name is string => typeof name === 'string')]] : []
+    )
+  );
 }
 
 function hasId(value: unknown): value is StoredServer {

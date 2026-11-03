@@ -515,7 +515,7 @@ export class ModelServerRegistry {
     entry.floor = entry.listSeq + 1;
   }
 
-  /** Rows listed before a server's tool support changed carry the old `supportsTools`. */
+  /** Rows listed before a server's tool support changed, or a model first thought, carry the old values. */
   private toolsChanged(id: string): void {
     const entry = this.entries.get(id);
     if (entry) entry.kept = undefined;
@@ -855,6 +855,10 @@ export class ModelServerRegistry {
             hasCredentials,
             redact: redactServerResponse,
             toolsChanged: () => this.toolsChanged(record.id),
+            learnedThinkers: {
+              read: () => this.deps.store.thinkers(record.id),
+              add: model => this.deps.store.addThinker(record.id, model),
+            },
           });
     const runtime: LocalRuntime =
       record.kind === 'ollama'
