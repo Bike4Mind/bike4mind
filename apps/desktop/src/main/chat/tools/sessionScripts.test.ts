@@ -123,6 +123,13 @@ describe('sessionScriptRun', () => {
     ['cat setup.sh | sh.exe', 'setup.sh'],
     ['nice --adj 5 make', 'Makefile'],
     ['cat run.sh | nice --adj 5 bash', 'run.sh'],
+    ["env -S './run.sh'", './run.sh'],
+    ["env -S 'bash run.sh'", 'run.sh'],
+    ['env -S make', 'Makefile'],
+    ['env -iS make build', 'Makefile'],
+    ['env --split-string=./run.sh', './run.sh'],
+    ['env -S \'bash -c "cd sub && ./y.sh"\'', './y.sh'],
+    ['cat run.sh | env -S bash', 'run.sh'],
     ["git -c alias.z='!sh run.sh' z", 'run.sh'],
     ['/usr/bin/git -c core.hooksPath=./run.sh commit', './run.sh'],
   ])('finds %s', async (command, name) => {

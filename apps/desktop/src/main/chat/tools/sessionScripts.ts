@@ -5,7 +5,7 @@ import { parseWslPath, wslLocation } from '../../wsl/wslPath';
 import { directoryOptionValues } from './bashArity';
 import { parseBash } from './bashParser';
 import { hostPhysicalTarget, isWithin, operandTargets, resolveOperand } from './paths';
-import { expandHome, isWrapper, pastWrapper, programName, shellHome, unquote, words } from './shellScan';
+import { expandHome, isWrapper, pastWrapper, programName, shellHome, splitString, unquote, words } from './shellScan';
 import { repositoryRoot } from './shellWrites';
 import type { ToolContext } from './types';
 
@@ -451,6 +451,8 @@ async function scanScripts(
 
   const visitCommand = async (node: Node, piped: boolean): Promise<void> => {
     const tokens = words(node).map(unquote);
+    const split = splitString(words(node));
+    if (split) await scanScripts(split.command, cwd, sessionId, found, hooks);
     const { start, wrapped, launched } = skipWrappers(tokens);
     const [executable, ...args] = tokens.slice(start);
     if (executable === undefined) return;
@@ -528,7 +530,7 @@ async function scanScripts(
       node.namedChildren.some(child => {
         if (child?.type !== 'command') return false;
         const tokens = words(child).map(unquote);
-        return INTERPRETER.test(programName(tokens[skipWrappers(tokens).start] ?? ''));
+        return splitString(tokens) !== null || INTERPRETER.test(programName(tokens[skipWrappers(tokens).start] ?? ''));
       });
     for (const child of node.namedChildren) if (child) await visit(child, piped || feedsInterpreter);
   };

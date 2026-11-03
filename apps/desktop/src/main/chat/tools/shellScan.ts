@@ -456,17 +456,21 @@ export const programName = (executable: string): string =>
 /** Whether a word names a wrapper (`sudo`, `/usr/bin/env`). */
 export const isWrapper = (word: string): boolean => WRAPPERS.has(programName(unquote(word)));
 
+/** The long option `given` names, read as getopt_long reads it: an exact name, or an abbreviation of exactly one. */
+function longOptionName(wrapper: Wrapper, given: string): string | undefined {
+  const names = [...(wrapper.long ?? []), ...(wrapper.flags ?? [])];
+  if (names.includes(given)) return given;
+  const named = names.filter(option => option.startsWith(given));
+  return named.length === 1 ? named[0] : undefined;
+}
+
 /**
- * Whether long option `given` takes the next word, read as getopt_long reads it: an exact name, or
- * an abbreviation of exactly one option. getopt_long refuses an ambiguous one; it is read as a flag,
- * so a program named right after it is still found.
+ * Whether long option `given` takes the next word. getopt_long refuses an ambiguous abbreviation; it
+ * is read as a flag, so a program named right after it is still found.
  */
 function longTakesValue(wrapper: Wrapper, given: string): boolean {
-  const values = wrapper.long ?? [];
-  const flags = wrapper.flags ?? [];
-  if (values.includes(given) || flags.includes(given)) return values.includes(given);
-  const named = [...values, ...flags].filter(option => option.startsWith(given));
-  return named.length === 1 && values.includes(named[0]);
+  const name = longOptionName(wrapper, given);
+  return name !== undefined && (wrapper.long ?? []).includes(name);
 }
 
 /** How many words one of a wrapper's options spans: two when its value is the next word. */
@@ -480,17 +484,22 @@ function optionWords(wrapper: Wrapper, word: string): 1 | 2 {
   return 1;
 }
 
-/** Where the words of `name`'s options (and, for env and sudo, assignments) that start at `from` end. */
-function wrapperOptionsEnd(name: string, tokens: readonly string[], from: number): number {
+/**
+ * The words of `name`'s options that start at `from`, as indices into `tokens`, and where its own words
+ * (options, their values and, for env and sudo, assignments) end.
+ */
+function wrapperWords(name: string, tokens: readonly string[], from: number): { options: number[]; end: number } {
   const wrapper = WRAPPERS.get(name) ?? NO_OPTIONS;
+  const options: number[] = [];
   let at = from;
-  let options = true;
+  let reading = true;
   while (at < tokens.length) {
     const word = unquote(tokens[at]);
-    if (options && word === '--') {
-      options = false;
+    if (reading && word === '--') {
+      reading = false;
       at++;
-    } else if (options && word.startsWith('-')) {
+    } else if (reading && word.startsWith('-')) {
+      options.push(at);
       at += optionWords(wrapper, word);
     } else if (wrapper.assignments && /^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) {
       at++;
@@ -498,7 +507,7 @@ function wrapperOptionsEnd(name: string, tokens: readonly string[], from: number
       break;
     }
   }
-  return Math.min(at, tokens.length);
+  return { options, end: Math.min(at, tokens.length) };
 }
 
 /**
@@ -508,13 +517,12 @@ function wrapperOptionsEnd(name: string, tokens: readonly string[], from: number
 export function pastWrapper(tokens: readonly string[], at: number): number {
   const name = programName(unquote(tokens[at] ?? ''));
   const wrapper = WRAPPERS.get(name);
-  const end = wrapperOptionsEnd(name, tokens, at + 1);
+  const { options, end } = wrapperWords(name, tokens, at + 1);
   const describes = wrapper?.describes ?? '';
-  const options = tokens.slice(at + 1, end).map(unquote);
-  if (options.some(word => /^-[^-]/.test(word) && [...word.slice(1)].some(letter => describes.includes(letter)))) {
-    return tokens.length;
-  }
-  return Math.min(end + (wrapper?.operands ?? 0), tokens.length);
+  const describing = options
+    .map(index => unquote(tokens[index]))
+    .some(word => /^-[^-]/.test(word) && [...word.slice(1)].some(letter => describes.includes(letter)));
+  return describing ? tokens.length : Math.min(end + (wrapper?.operands ?? 0), tokens.length);
 }
 
 /** Where the command a run of leading wrappers (`sudo`, `env X=1`, `timeout 5`) runs starts in `tokens`. */
@@ -522,6 +530,42 @@ function wrappedStart(tokens: readonly string[]): number {
   let start = 0;
   while (start < tokens.length && isWrapper(tokens[start])) start = pastWrapper(tokens, start);
   return start;
+}
+
+/** Whether one of env's option words is `-S` (`--split-string`), which reads its value as a command line. */
+function splitsString(word: string): boolean {
+  const env = WRAPPERS.get('env') ?? NO_OPTIONS;
+  if (word.startsWith('--')) return longOptionName(env, word.slice(2).split('=')[0]) === 'split-string';
+  return [...word.slice(1)].find(letter => env.values.includes(letter)) === 'S';
+}
+
+export interface SplitString {
+  /** The index of the `env` in the tokens. */
+  env: number;
+  /** The index of its `-S` word. */
+  option: number;
+  /** The command line env runs: itself, the value it splits, and the words after that value. */
+  command: string;
+}
+
+/** The `env -S 'bash run.sh'` in a run of leading wrappers, which runs its value as a command line; null when none. */
+export function splitString(tokens: readonly string[]): SplitString | null {
+  for (let at = 0; at < tokens.length && isWrapper(tokens[at]); at = pastWrapper(tokens, at)) {
+    if (programName(unquote(tokens[at])) !== 'env') continue;
+    const option = wrapperWords('env', tokens, at + 1).options.find(index => splitsString(unquote(tokens[index])));
+    if (option === undefined) continue;
+    const word = unquote(tokens[option]);
+    const glued = word.startsWith('--')
+      ? word.includes('=')
+        ? word.slice(word.indexOf('=') + 1)
+        : undefined
+      : word.slice(word.indexOf('S') + 1) || undefined;
+    const value = glued ?? unquote(tokens[option + 1] ?? '');
+    const next = option + (glued === undefined ? 2 : 1);
+    // env reads options and assignments in the value too, as `env -S '-i FOO=1 make'`.
+    return { env: at, option, command: [tokens[at], value, ...tokens.slice(next)].join(' ') };
+  }
+  return null;
 }
 
 /** The command a wrapper runs, with the wrapper's own words dropped. */
@@ -720,6 +764,8 @@ const STDIN_SCRIPT = /^(python[\d.]*|node|ruby|perl|php|bun|osascript|sh|bash|zs
  */
 export function opaqueForm(tokens: readonly string[]): string | null {
   const normalised = tokens.map(unquote);
+  const split = splitString(normalised);
+  if (split) return tokens.slice(0, split.option + 1).join(' ');
   const start = wrappedStart(normalised);
   const executable = normalised[start];
   if (executable === undefined) return null;
@@ -806,6 +852,12 @@ function sendsBody(method: string | undefined): boolean {
  */
 export function outboundReason(raw: readonly string[], stdin = false): string | null {
   const tokens = raw.map(unquote);
+  const split = splitString(tokens);
+  if (split) {
+    const option = tokens[split.option];
+    const shown = option.startsWith('--') ? option.split('=')[0] : option.slice(0, option.indexOf('S') + 1);
+    return `${basename(tokens[split.env])} ${shown}`;
+  }
   const start = wrappedStart(tokens);
   if (start >= tokens.length) return null;
   // As written, for the reason shown; `name` is what the program is looked up by.
@@ -1031,7 +1083,7 @@ function sortRunsOrWrites(args: readonly string[]): boolean {
  * the text. The duration and option values are inert; only the wrapped command matters.
  */
 function timeoutCommand(raw: readonly string[]): string[] | null {
-  const at = wrapperOptionsEnd('timeout', raw, 0);
+  const at = wrapperWords('timeout', raw, 0).end;
   const duration = raw[at];
   if (duration === undefined || !/^\d+(\.\d+)?[smhd]?$/.test(unquote(duration))) return null;
   const command = raw.slice(at + 1);
