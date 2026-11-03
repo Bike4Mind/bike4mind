@@ -483,13 +483,16 @@ describe('the reply stats rail in the shell', () => {
     expect(escapingAbsolutes()).toEqual([]);
   });
 
-  it('drops both below the breakpoint, and the stats go back to the hover footer', async () => {
+  it('drops the rail below the breakpoint, the stats going back to the hover footer, and keeps the toggle', async () => {
     paneWidth(1175);
     await open('chatting', 'chat');
 
-    expect(find('chat-toggle-reply-stats-btn')).toBeNull();
     expect(find('chat-reply-stats-rail')).toBeNull();
     expect(get('chat-message-cost').textContent).toContain('4.0s total');
+    const toggle = get('chat-toggle-reply-stats-btn') as HTMLButtonElement;
+    expect(toggle.disabled).toBe(false);
+    await act(async () => toggle.click());
+    expect(window.localStorage.getItem('b4m.chat.replyStats.rail')).toBe('0');
   });
 
   it('turns the rail off from the header and remembers it', async () => {
