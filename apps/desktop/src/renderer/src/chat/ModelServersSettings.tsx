@@ -249,6 +249,10 @@ function SpecsFields({
   };
   const placeholder = (bytes: number | null | undefined) =>
     bytes ? String(Math.round((bytes / 1024 ** 3) * 10) / 10) : undefined;
+  // A model held in discrete GPU memory is rated against that memory's bandwidth, not the system RAM's.
+  const sharedMemory = server.local ? probed?.memoryKind === 'unified' : draft.unified;
+  const gpuBandwidth =
+    !sharedMemory && (draft.gpu.trim() !== '' || (server.local && probed?.memoryKind === 'discrete'));
   const field = (key: 'ram' | 'gpu' | 'bandwidth', label: string, testId: string, hint?: string) => (
     <FormControl size="sm" sx={{ flex: 1, minWidth: 130 }}>
       <FormLabel>{label}</FormLabel>
@@ -278,7 +282,11 @@ function SpecsFields({
       <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
         {field('ram', 'RAM (GB)', 'model-servers-specs-ram-input', placeholder(probed?.totalMemoryBytes))}
         {field('gpu', 'GPU memory (GB)', 'model-servers-specs-gpu-input', placeholder(probed?.gpuMemoryBytes))}
-        {field('bandwidth', 'Memory bandwidth (GB/s)', 'model-servers-specs-bandwidth-input')}
+        {field(
+          'bandwidth',
+          gpuBandwidth ? 'GPU memory bandwidth (GB/s)' : 'Memory bandwidth (GB/s)',
+          'model-servers-specs-bandwidth-input'
+        )}
       </Stack>
       {!server.local && (
         <Checkbox
@@ -290,7 +298,8 @@ function SpecsFields({
         />
       )}
       <Typography level="body-xs" textColor="text.tertiary">
-        Ratings use the memory figures. Bandwidth sets the reply speed a fit badge estimates.
+        Ratings use the memory figures. Bandwidth sets the reply speed a fit badge estimates
+        {gpuBandwidth ? ", so enter the GPU's own figure, not the system RAM's." : '.'}
       </Typography>
       {problem && (
         <Alert size="sm" color="danger" variant="soft" data-testid="model-servers-specs-error">
