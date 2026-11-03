@@ -86,6 +86,7 @@ vi.mock('@bike4mind/services', async orig => ({
   userService: {
     // The real block-state rules, so a snapshot missing any block field is caught.
     entersBlockedState: (await orig<typeof import('@bike4mind/services')>()).userService.entersBlockedState,
+    accountBlockReasons: (await orig<typeof import('@bike4mind/services')>()).userService.accountBlockReasons,
     adminUpdateUser: (...a: unknown[]) => mockAdminUpdateUser(...a),
     setThrottleTier: (...a: unknown[]) => mockSetThrottleTier(...a),
     updateUser: (...a: unknown[]) => mockUpdateUser(...a),
@@ -835,6 +836,20 @@ describe('PUT /api/users/:id/update - ends sessions on credential and account-st
     );
     // The ban itself still succeeds.
     expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('cancels on a moderation suspension, but not on a dispute flag alone', async () => {
+    adminEdit(BEFORE, { ...BEFORE, moderation: { status: 'suspended' } });
+    await run({ user: ADMIN, userId: 'target', body: { name: 'x' } }).promise;
+    expect(mockCancelAccountSubscriptions).toHaveBeenCalledTimes(1);
+
+    mockCancelAccountSubscriptions.mockClear();
+    mockPropagateAccountRisk.mockClear();
+    adminEdit(BEFORE, { ...BEFORE, disputePending: true });
+    await run({ user: ADMIN, userId: 'target', body: { name: 'x' } }).promise;
+    // The hold still reaches linked accounts; only the irreversible cancel is withheld.
+    expect(mockPropagateAccountRisk).toHaveBeenCalledTimes(1);
+    expect(mockCancelAccountSubscriptions).not.toHaveBeenCalled();
   });
 
   it('cancels no subscriptions for an edit that does not block the account', async () => {
