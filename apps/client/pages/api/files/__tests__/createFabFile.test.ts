@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   // The acting principal's org-admin set, as a test input rather than a Mongo read. The gates that
   // consume it are the real ones.
   administeredOrgIds: [] as string[],
+  consumeFileUploadBudget: vi.fn(async (_req: unknown, _fileCount: number) => undefined),
   baseApiOptions: undefined as unknown,
 }));
 
@@ -71,6 +72,8 @@ vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<Record<string, unknown>>();
   return { ...actual, getSettingsMap: vi.fn(async () => ({})) };
 });
+
+vi.mock('@server/files/fileUploadBudget', () => ({ consumeFileUploadBudget: h.consumeFileUploadBudget }));
 
 vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'test-fab-bucket' } } }));
 
@@ -129,6 +132,51 @@ const tagNamesOf = (callIndex = 0) => {
   const persisted = h.fabFileCreate.mock.calls[callIndex][0] as { tags?: { name: string }[] };
   return persisted.tags?.map(t => t.name).sort();
 };
+
+describe('POST /api/files/createFabFile - upload allowance', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.findByDatalakeTag.mockResolvedValue(LAKE);
+    h.lakeFind.mockResolvedValue([]);
+    h.userFindById.mockResolvedValue({ id: 'u1', storageLimit: 1000, currentStorageSize: 0 });
+    h.fabFileCreate.mockImplementation(async data => ({ id: 'f1', ...data }));
+  });
+
+  it('spends one unit of the allowance for the file', async () => {
+    await run(body(), makeRes().res);
+
+    expect(h.consumeFileUploadBudget).toHaveBeenCalledTimes(1);
+    expect(h.consumeFileUploadBudget.mock.calls[0][1]).toBe(1);
+  });
+
+  it('creates no file when the allowance refuses the upload', async () => {
+    h.consumeFileUploadBudget.mockRejectedValueOnce(new Error('Upload limit reached'));
+
+    await expect(run(body(), makeRes().res)).rejects.toThrow('Upload limit reached');
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+
+  it('does not spend the allowance on a request an earlier gate refuses', async () => {
+    h.lakeFind.mockResolvedValue([LAKE]);
+
+    await expect(
+      run(body({ tags: [{ name: 'acme:legal', strength: 1 }] }), makeRes().res, {
+        apiKeyInfo: { scopes: ['files:write'] },
+      })
+    ).rejects.toThrow(/datalake:write is required/);
+    expect(h.consumeFileUploadBudget).not.toHaveBeenCalled();
+  });
+
+  // Deliberate: the type, size and quota checks live inside fabFilesService.createFabFile, which runs
+  // in the route's transaction, and the allowance counter must not (see fileUploadBudget.ts).
+  it('spends the allowance before the service refuses an unsupported file type', async () => {
+    await expect(run(body({ fileName: 'a.exe', mimeType: 'application/x-msdownload' }), makeRes().res)).rejects.toThrow(
+      /is not supported/
+    );
+    expect(h.consumeFileUploadBudget).toHaveBeenCalledTimes(1);
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+});
 
 describe('POST /api/files/createFabFile - data-lake tags', () => {
   beforeEach(() => {

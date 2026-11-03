@@ -8,6 +8,7 @@ import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Request } from 'express';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
+import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';
 import { Resource } from 'sst';
 
 const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
@@ -41,6 +42,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
     if (!req.ability?.can?.(Permission.update, fabFile)) throw new BadRequestError('Unauthorized');
 
     if (fabFile.isChunking) throw new BadRequestError('FabFile is currently being chunked');
+    await consumeFileUploadBudget(req, 1);
 
     await sendToClient(req.user.id, Resource.websocket.managementEndpoint, {
       action: 'update_file_chunk_vector_status',

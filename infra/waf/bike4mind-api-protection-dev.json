@@ -485,51 +485,6 @@
                     },
                     {
                       "ByteMatchStatement": {
-                        "SearchString": "/api/admin/security-dashboard/code-semgrep-ingest",
-                        "FieldToMatch": {
-                          "UriPath": {}
-                        },
-                        "TextTransformations": [
-                          {
-                            "Priority": 0,
-                            "Type": "LOWERCASE"
-                          }
-                        ],
-                        "PositionalConstraint": "EXACTLY"
-                      }
-                    },
-                    {
-                      "ByteMatchStatement": {
-                        "SearchString": "/api/admin/security-dashboard/packages-ingest",
-                        "FieldToMatch": {
-                          "UriPath": {}
-                        },
-                        "TextTransformations": [
-                          {
-                            "Priority": 0,
-                            "Type": "LOWERCASE"
-                          }
-                        ],
-                        "PositionalConstraint": "EXACTLY"
-                      }
-                    },
-                    {
-                      "ByteMatchStatement": {
-                        "SearchString": "/api/admin/security-dashboard/secrets-ingest",
-                        "FieldToMatch": {
-                          "UriPath": {}
-                        },
-                        "TextTransformations": [
-                          {
-                            "Priority": 0,
-                            "Type": "LOWERCASE"
-                          }
-                        ],
-                        "PositionalConstraint": "EXACTLY"
-                      }
-                    },
-                    {
-                      "ByteMatchStatement": {
                         "SearchString": "/api/admin/security-dashboard/cloud-prowler-ingest",
                         "FieldToMatch": {
                           "UriPath": {}
@@ -633,51 +588,6 @@
                     },
                     {
                       "ByteMatchStatement": {
-                        "SearchString": "/api/admin/security-dashboard/code-semgrep-ingest",
-                        "FieldToMatch": {
-                          "UriPath": {}
-                        },
-                        "TextTransformations": [
-                          {
-                            "Priority": 0,
-                            "Type": "LOWERCASE"
-                          }
-                        ],
-                        "PositionalConstraint": "EXACTLY"
-                      }
-                    },
-                    {
-                      "ByteMatchStatement": {
-                        "SearchString": "/api/admin/security-dashboard/packages-ingest",
-                        "FieldToMatch": {
-                          "UriPath": {}
-                        },
-                        "TextTransformations": [
-                          {
-                            "Priority": 0,
-                            "Type": "LOWERCASE"
-                          }
-                        ],
-                        "PositionalConstraint": "EXACTLY"
-                      }
-                    },
-                    {
-                      "ByteMatchStatement": {
-                        "SearchString": "/api/admin/security-dashboard/secrets-ingest",
-                        "FieldToMatch": {
-                          "UriPath": {}
-                        },
-                        "TextTransformations": [
-                          {
-                            "Priority": 0,
-                            "Type": "LOWERCASE"
-                          }
-                        ],
-                        "PositionalConstraint": "EXACTLY"
-                      }
-                    },
-                    {
-                      "ByteMatchStatement": {
                         "SearchString": "/api/admin/security-dashboard/cloud-prowler-ingest",
                         "FieldToMatch": {
                           "UriPath": {}
@@ -737,51 +647,6 @@
                     {
                       "ByteMatchStatement": {
                         "SearchString": "/api/admin/security-dashboard/web-owasp-ingest",
-                        "FieldToMatch": {
-                          "UriPath": {}
-                        },
-                        "TextTransformations": [
-                          {
-                            "Priority": 0,
-                            "Type": "LOWERCASE"
-                          }
-                        ],
-                        "PositionalConstraint": "EXACTLY"
-                      }
-                    },
-                    {
-                      "ByteMatchStatement": {
-                        "SearchString": "/api/admin/security-dashboard/code-semgrep-ingest",
-                        "FieldToMatch": {
-                          "UriPath": {}
-                        },
-                        "TextTransformations": [
-                          {
-                            "Priority": 0,
-                            "Type": "LOWERCASE"
-                          }
-                        ],
-                        "PositionalConstraint": "EXACTLY"
-                      }
-                    },
-                    {
-                      "ByteMatchStatement": {
-                        "SearchString": "/api/admin/security-dashboard/packages-ingest",
-                        "FieldToMatch": {
-                          "UriPath": {}
-                        },
-                        "TextTransformations": [
-                          {
-                            "Priority": 0,
-                            "Type": "LOWERCASE"
-                          }
-                        ],
-                        "PositionalConstraint": "EXACTLY"
-                      }
-                    },
-                    {
-                      "ByteMatchStatement": {
-                        "SearchString": "/api/admin/security-dashboard/secrets-ingest",
                         "FieldToMatch": {
                           "UriPath": {}
                         },

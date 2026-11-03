@@ -184,7 +184,7 @@ const wafLogGroupName = externalLogDestination
 
 // Personal stages can use the shared dev router even without a local WAF resource.
 const partition = aws.getPartitionOutput().partition;
-const queryWebAclArn =
+export const wafQueryWebAclArn =
   wafWebAcl?.arn ??
   $interpolate`arn:${partition}:wafv2:us-east-1:${aws.getCallerIdentityOutput().accountId}:global/webacl/bike4mind-api-protection-*`;
 const queryLogGroupArn =
@@ -195,7 +195,7 @@ export const wafReadPermissions = [
   { actions: ['logs:StartQuery', 'logs:GetQueryResults'], resources: [queryLogGroupArn] },
   // StopQuery does not support resource-level permissions.
   { actions: ['logs:StopQuery'], resources: ['*'] },
-  { actions: ['wafv2:GetLoggingConfiguration'], resources: [queryWebAclArn] },
+  { actions: ['wafv2:GetLoggingConfiguration'], resources: [wafQueryWebAclArn] },
 ];
 
 /**
