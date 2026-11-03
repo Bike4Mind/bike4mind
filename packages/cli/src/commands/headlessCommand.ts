@@ -22,7 +22,7 @@ import { McpManager } from '../utils/mcpAdapter';
 import { buildProjectAgentStore, loadProjectContext } from '../bootstrap/projectStores.js';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import { createSseBackend } from '../bootstrap/sseTransport.js';
-import { attachOllama, resolveHeadlessModel } from '../bootstrap/buildLlmBackend.js';
+import { attachLocalModels, resolveHeadlessModel } from '../bootstrap/buildLlmBackend.js';
 import { createHeadlessLlmBackendDeps } from './headlessOllama.js';
 import { FallbackLlmBackend } from '../llm/FallbackLlmBackend';
 import { setWebSocketToolExecutor } from '../llm/ToolRouter';
@@ -100,17 +100,31 @@ interface HeadlessJsonResult {
   toolCalls: number;
 }
 
+export const STDIN_HINT_DELAY_MS = 3000;
+export const STDIN_HINT = 'Waiting for input on stdin. If you are not piping anything in, add </dev/null.\n';
+
 /** Read all data from stdin if it's being piped (non-TTY). Returns empty string if no piped data. */
-async function readStdin(): Promise<string> {
+export async function readStdin(): Promise<string> {
   if (process.stdin.isTTY) {
     return '';
   }
 
   return new Promise<string>((resolve, reject) => {
     const chunks: Buffer[] = [];
-    process.stdin.on('data', chunk => chunks.push(chunk as Buffer));
-    process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8').trim()));
-    process.stdin.on('error', reject);
+    const hintTimer = setTimeout(() => process.stderr.write(STDIN_HINT), STDIN_HINT_DELAY_MS);
+    hintTimer.unref();
+    process.stdin.on('data', chunk => {
+      clearTimeout(hintTimer);
+      chunks.push(chunk as Buffer);
+    });
+    process.stdin.on('end', () => {
+      clearTimeout(hintTimer);
+      resolve(Buffer.concat(chunks).toString('utf-8').trim());
+    });
+    process.stdin.on('error', err => {
+      clearTimeout(hintTimer);
+      reject(err);
+    });
   });
 }
 
@@ -220,7 +234,15 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     // modules are registered in a `-p` run.
     // `session` is declared below; the getter only runs once a completion is sent.
     const sse = await createSseBackend({ apiClient, model: config.defaultModel, getSessionId: () => session.id });
-    const attached = await attachOllama(sse.llm, config, {}, createHeadlessLlmBackendDeps(options.verbose));
+    const attached = await attachLocalModels(
+      sse.llm,
+      config,
+      {
+        servers: 'default',
+        onNotice: text => process.stderr.write(`Notice: ${sanitizeTerminalText(text)}\n`),
+      },
+      createHeadlessLlmBackendDeps(options.verbose)
+    );
     const { llm, models } = attached;
     for (const warning of attached.warnings) process.stderr.write(`${sanitizeTerminalText(warning)}\n`);
     const { modelInfo, warning } = resolveHeadlessModel(models, config, attached);

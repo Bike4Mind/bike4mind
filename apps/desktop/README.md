@@ -18,7 +18,8 @@ No Node.js, pnpm, or source checkout is required.
    and drag Bike4Mind into Applications.
 2. On Linux x64, download the `.AppImage`, mark it executable (`chmod +x <file>.AppImage`),
    and launch it. Some distributions require FUSE support to run AppImages.
-3. On Windows x64, download `setup.exe` and run it. The installer is not code signed yet,
+3. On Windows, download `setup.exe` and run it. The one installer covers x64 and ARM64
+   Windows and installs the build native to the PC. It is not code signed yet,
    so SmartScreen shows a warning on first run. In-app updates work on Windows. The local
    tool layer (shell commands, file access, sandboxing) is built around a POSIX shell and
    is not yet verified on Windows.
@@ -179,7 +180,7 @@ gitignored.
 | -------------------- | ---------------------------------------------------------- |
 | `pnpm package`       | everything the host platform can build                     |
 | `pnpm package:mac`   | `dmg` and `zip`, both for arm64 and x64                    |
-| `pnpm package:win`   | `nsis` installer, x64                                      |
+| `pnpm package:win`   | one `nsis` installer holding both x64 and arm64            |
 | `pnpm package:linux` | `AppImage`, x64                                            |
 | `pnpm package:dir`   | an unpacked `.app`/directory, no installer - the fast loop |
 
@@ -217,7 +218,8 @@ dispatches on `main`. PR runs are isolated from the main release concurrency gro
 
 The workflow installs from the frozen lockfile, builds shared packages, runs desktop
 typechecks on macOS, Linux and Windows, runs the desktop unit tests on macOS and Linux (the
-suite assumes a POSIX shell), then packages Apple Silicon, Linux x64 and Windows x64.
+suite assumes a POSIX shell), then packages Apple Silicon, Linux x64 and Windows (one
+installer for x64 and arm64, built on an x64 runner).
 The three platform jobs run in parallel; Turbo also builds independent shared packages
 in parallel while respecting dependency order. Intel macOS release builds are temporarily
 paused; local x64 packaging remains available. Publication waits for all build jobs and
@@ -261,9 +263,10 @@ to avoid system prompts or accessing a real login keychain. It does not verify s
 credential persistence. This does
 not verify Gatekeeper approval on a fresh machine.
 
-The Windows job runs the NSIS installer silently into a temporary directory and runs the same
-startup checks against the installed app. `win-x64-smoke-results` contains the screenshot and
-logs. It does not verify SmartScreen behaviour or a real user profile.
+The Windows job checks that the installer embeds both the x64 and arm64 app archives, runs it
+silently into a temporary directory and runs the same startup checks against the installed app.
+The runner is x64, so only the x64 half is launched. `win-x64-smoke-results` contains the
+screenshot and logs. It does not verify SmartScreen behaviour or a real user profile.
 
 Installer versions follow SemVer, selected automatically by
 `scripts/desktop_release_version.py`. The first release uses the package version
@@ -322,6 +325,8 @@ Local testing can build with `B4M_CURATED_DEV_KEYS=1` in the shell and use the r
 The override is ignored in packaged apps and builds without test keys. Test-key
 builds use a separate cache directory and are rejected by `curated:check-build`;
 never enable the dev flag for a release.
+The same `B4M_CURATED_MANIFEST_URL` and `CURATED_PUBLIC_URL` variables also configure every npm CLI release and feature-branch snapshot publish: they bake the URL into the CLI, and the release gate checks `packages/cli/dist` the same way.
+A dev build that cached a list under the old signature format drops it on next start, and a republish at a lower sequence is refused until the `curated-test-keys/` directory is deleted.
 
 The validation job generates `latest-mac.yml`, `latest-linux.yml` and `latest.yml` (Windows) from the actual
 installer bytes, with SHA-512 and size. ZIP and setup.exe blockmaps are mandatory; AppImage blockmaps
@@ -349,7 +354,8 @@ partial manifest. Published assets are not overwritten on retry.
    signing provides bundle integrity, not publisher identity or notarization.
    Fresh-download Gatekeeper acceptance remains untested; Open Anyway may be needed.
 5. When enabling online Curated lists, set `B4M_CURATED_MANIFEST_URL` and
-   `CURATED_PUBLIC_URL` together as described above; otherwise leave both unset.
+   `CURATED_PUBLIC_URL` together as described above; otherwise leave both unset. They also
+   enable online lists in every npm CLI release and feature-branch snapshot.
 6. Merge through review, then inspect the first trusted run's signatures, notarization,
    packaged startup evidence, and destination release asset set. Confirm anonymous
    `latest-linux.yml` and `latest.yml` downloads redirect successfully (also `latest-mac.yml` for

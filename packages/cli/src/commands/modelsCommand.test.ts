@@ -40,7 +40,7 @@ import {
 } from '../models/localModels.js';
 import { machineReader, type MachineReader } from '../models/fit.js';
 import type { OllamaManifestInfo } from './ollamaRegistry.js';
-import type { HubBuild } from '@bike4mind/common';
+import type { HubBuild, HubManifest } from '@bike4mind/common';
 import { curatedBuilds, reviewable, reviewedInspection, reviewedLayers } from '../test-utils/curatedReviewed.js';
 
 const REPO = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
@@ -239,7 +239,7 @@ function harness(
     libraryLayers?: ModelsDeps['libraryLayers'];
     resolveRuntime?: ModelsDeps['resolveRuntime'];
     confirm?: ModelsDeps['confirm'];
-    curated?: ModelsDeps['curated'];
+    curated?: () => HubManifest;
     hardware?: ModelsDeps['hardware'];
     answers?: boolean[];
     isTTY?: boolean;
@@ -747,6 +747,65 @@ describe('models curated', () => {
     const getModel = vi.fn();
     return { resolveRuntime, getModel, h: harness({ resolveRuntime, hub: fakeHub({ getModel }) }) };
   };
+
+  it('names where the list came from only when the CLI can fetch one, and checks first on --refresh', async () => {
+    const plain = harness();
+    await runModelsCommand('curated', { _: [], refresh: true }, plain.deps);
+    expect(plain.lines.some(line => /Bundled with this CLI|Updated online/.test(line))).toBe(false);
+    expect(JSON.parse((await jsonLines(plain.deps)).join('\n'))).not.toHaveProperty('source');
+
+    const order: string[] = [];
+    const curatedSource = {
+      refresh: vi.fn(async () => void order.push('refresh')),
+      origin: () => ({
+        text: 'Updated online, sequence 7',
+        origin: 'updated' as const,
+        sequence: 7,
+        check: 'updated' as const,
+        stale: false,
+        checkedAt: '2026-10-28T12:00:00.000Z',
+      }),
+    };
+    const text = harness({ curated: () => (order.push('list'), bundled()) });
+    await runModelsCommand('curated', { _: [], refresh: true }, { ...text.deps, curatedSource });
+    expect(order).toEqual(['refresh', 'list']);
+    expect(text.lines[0]).toMatch(/^Curated list from /);
+    expect(text.lines[1]).toBe('Updated online, sequence 7');
+
+    await runModelsCommand('curated', { _: [] }, { ...text.deps, curatedSource });
+    expect(curatedSource.refresh).toHaveBeenCalledTimes(1);
+
+    const json = await jsonLines({ ...text.deps, curatedSource });
+    expect(JSON.parse(json.join('\n')).source).toEqual({
+      origin: 'updated',
+      sequence: 7,
+      check: 'updated',
+      stale: false,
+      checkedAt: '2026-10-28T12:00:00.000Z',
+    });
+  });
+
+  it('says so on --refresh when this CLI has no online curated list, in text only', async () => {
+    const plain = harness();
+    await runModelsCommand('curated', { _: [], refresh: true }, plain.deps);
+    expect(plain.lines).toContain('This CLI has no online curated list; showing the bundled one.');
+    const quiet = harness();
+    await runModelsCommand('curated', { _: [] }, quiet.deps);
+    expect(quiet.lines.some(line => /no online curated list/.test(line))).toBe(false);
+    const lines: string[] = [];
+    await runModelsCommand(
+      'curated',
+      { _: [], refresh: true, 'output-format': 'json' },
+      { ...plain.deps, log: line => lines.push(line) }
+    );
+    expect(lines.join('\n')).not.toMatch(/no online curated list/);
+  });
+
+  async function jsonLines(deps: ModelsDeps): Promise<string[]> {
+    const lines: string[] = [];
+    await runModelsCommand('curated', { _: [], 'output-format': 'json' }, { ...deps, log: line => lines.push(line) });
+    return lines;
+  }
 
   it("lists this computer's picks in slot order, then every build, without contacting a runtime", async () => {
     const { resolveRuntime, getModel, h } = offline();
@@ -1542,7 +1601,7 @@ describe('models pull fit check', () => {
     expect(await runModelsCommand('pull', { _: [], ref: `${REPO}:Q4_K_M` }, h.deps)).toBe(0);
     const fit = h.lines.find(line => line.startsWith('Fit:'));
     expect(fit).toMatch(/^Fit: {6}fits\. Rough estimate from the file size: about \d+ MB before context memory/);
-    expect(fit).toContain('at the 32K context the CLI requests, of the 51.5 GB a model can use in RAM here.');
+    expect(fit).toContain('at the 32K context the CLI requests, of the 51.3 GB a model can use in RAM here.');
   });
 
   it('refuses a too-large build before asking anything unless --force', async () => {
@@ -1550,7 +1609,9 @@ describe('models pull fit check', () => {
     await expect(runModelsCommand('pull', { _: [], ref: `${REPO}:Q4_K_M` }, h.deps)).rejects.toThrow(
       `Nothing was downloaded: this build is rated too large for this machine. Pick a smaller quant from: b4m models show ${REPO}, or re-run with --force to download it anyway.`
     );
-    expect(h.lines.find(line => line.startsWith('Fit:'))).toMatch(/^Fit: {6}too large\. .*exceeds the 51\.5 GB/);
+    expect(h.lines.find(line => line.startsWith('Fit:'))).toMatch(
+      /^Fit: {6}too large\. .*more than the 51\.3 GB this computer can hold for a model\.$/
+    );
     expect(h.questions).toEqual([]);
     expect(h.runtime.pull).not.toHaveBeenCalled();
   });

@@ -7,7 +7,7 @@
 
 import { WebClient } from '@slack/web-api';
 import { Logger } from '@bike4mind/observability';
-import { IModelConfig, McpServerName } from '@bike4mind/common';
+import { IModelConfig, McpServerName, type ISlackChannelConfigRepository } from '@bike4mind/common';
 import { getSlackDb } from '../di/registry';
 import { SlackClient } from '../SlackClient';
 import { AppHomeBuilder } from '../views/AppHomeBuilder';
@@ -254,9 +254,10 @@ export async function handleChannelConfigRemove(
   }
 
   try {
-    const { slackChannelConfigRepository: channelConfigRepo } = getSlackDb();
-    await (channelConfigRepo as any).deleteByChannelId(channelId);
-    Logger.info('[Slack Interactive] Channel config removed', { channelId, slackUserId });
+    const channelConfigRepo = getSlackDb().slackChannelConfigRepository as ISlackChannelConfigRepository;
+    // Scoped to this workspace, and leaves an API posting opt-in to the organization route that owns it.
+    const removed = await channelConfigRepo.removeModelConfigByChannelId(channelId, slackTeamId);
+    Logger.info('[Slack Interactive] Channel config removed', { channelId, slackTeamId, slackUserId, removed });
 
     return {};
   } catch (error) {
@@ -289,7 +290,7 @@ export async function handleChannelModelConfigSubmission(
 
   try {
     const { slackChannelConfigRepository: channelConfigRepoForUpsert } = getSlackDb();
-    await (channelConfigRepoForUpsert as any).upsertByChannelId(submission.channelId, {
+    const saved = await (channelConfigRepoForUpsert as any).upsertByChannelId(submission.channelId, {
       slackTeamId: submission.slackTeamId,
       preferredModel: submission.preferredModel,
       temperature: submission.temperature,
@@ -298,6 +299,20 @@ export async function handleChannelModelConfigSubmission(
       githubRepo: submission.githubRepo ?? null,
       configuredBy: user.id,
     });
+    if (!saved) {
+      logger.warn('[Slack Interactive] Channel is API-posting enabled by another workspace', {
+        channelId: submission.channelId,
+        slackTeamId: submission.slackTeamId,
+        slackUserId: user.id,
+      });
+      return {
+        response_action: 'errors',
+        errors: {
+          model_block:
+            "This shared channel is enabled for API posting by the other workspace's organization, so its settings can only be changed from that workspace.",
+        },
+      };
+    }
 
     logger.info('[Slack Interactive] Channel model config saved', {
       channelId: submission.channelId,

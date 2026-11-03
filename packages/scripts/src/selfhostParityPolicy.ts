@@ -685,7 +685,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   broker(
     'queue:infra/waf.ts:WafAlarmSlackHandlerDlq',
-    '6066a79188816238482fa1a91f2da527bdd8017cdd3fb815fe2b4002ff234a93',
+    'f2961ff5df989be1ef7ddf10631fe2499d4458ea709faca15171de84142a2fd5',
     ['ssm:GetParameter']
   ),
   broker(
@@ -1036,7 +1036,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    'e6b7b85d5466e078a0ed8fb8c819111ec3805343b118dbf97a56b8269fda7bfe',
+    'a770f99a575fcdeb10ba6c48e81497217cc5646cef095e0dd257dc9a4ce4a4a5',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gap('service:infra/searxng.ts:Searxng', '16fc0b23bc4d075e5c4e98cbb502ff6dfc37aac7fbf9bd4f7429cd4202b2f370'),
@@ -1050,7 +1050,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:DlqAlarmTopic',
-    '936acea5051b13af219bc5a015800453b5e1b209cadda34b315e4b9c31db5624',
+    'f5c3c5a3b59fe1e0eb63f58a7338ae1dc614ee70d24b44619f26290d7db803f1',
     ['ssm:GetParameter']
   ),
   gap(
@@ -1059,17 +1059,17 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'snsSubscription:infra/serviceHealthAlarms.ts:ServiceHealthAlarmTopic',
-    'e049191c0ab4767b337b43790f36eb45df8e11dfb8fbf0043e8d5249583168e5',
+    'b9684de008b3f96066f602e384ac8ca09caa3e766eec7e143d645e0581223a02',
     ['ssm:GetParameter']
   ),
   gap(
     'snsSubscription:infra/waf.ts:WafAlarmSlackHandlerSubscription',
-    '49907efa33b805b563e7f36381353886fc10ddd1beb74721772e36c1d24e14a8',
+    'cc4e60428fac88be1d07e98d03a3c7db89cb6c48f8ee7d61df00a2a336817381',
     ['lambda:InvokeFunction', 'ssm:GetParameter']
   ),
   gap(
     'snsSubscription:infra/waf.ts:WafOobAlarmTopicEmailSub',
-    'c39161f23c01b940505e3caa92cd7ef982273ad081f5d91b83756b93ad8279c6',
+    '7ec141237e2361d750e23d941542e3370946c5f9a835bdc2f5ca6b0413256dc9',
     ['ssm:GetParameter']
   ),
 ];

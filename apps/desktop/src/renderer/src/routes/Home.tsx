@@ -45,6 +45,7 @@ export function Home() {
         <ChatShell
           key={chatScope.current}
           auth={state}
+          onOpenModelServers={() => void navigate({ to: '/settings', search: { section: 'servers' } })}
           account={status =>
             state?.status === 'signed-in' || state?.reauthRequired ? (
               <SignedInPanel state={state} status={status} />

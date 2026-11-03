@@ -139,12 +139,15 @@ void app.whenReady().then(async () => {
     spareWorktrees,
     modelServers,
     localContext,
+    capabilityLedger,
   } = registerChat(auth, {
     sessionClosed: sessionId => terminals.killSession(sessionId),
     releaseSessionTerminals: sessionId => terminals.acquireSessionCleanup(sessionId),
     observeStream: event => fleet.observe(event),
+    cancelModelPull: key => models.stop(key),
+    pinnedProjectors: () => models.pinnedProjectors(),
   });
-  const models = registerModels(modelServers, { localContext: () => localContext.read() });
+  const models = registerModels(modelServers, { localContext: () => localContext.read() }, capabilityLedger);
   fleet.setDirectoryResolver(async sessionId => {
     const session = await chat.getSession(sessionId);
     return session?.project?.workingDirectory ?? session?.grantedDirectories?.[0] ?? null;

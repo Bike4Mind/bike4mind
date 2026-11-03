@@ -2,8 +2,11 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   ADMIN_LINKS,
   ALARM_CATALOG,
+  ALARM_CATEGORIES,
   alarmCatalogEntry,
+  alarmCategory,
   alarmSuffix,
+  dlqCatalogEntry,
   appUrlFromEnv,
   composeAlarmMessage,
   describeFields,
@@ -95,7 +98,7 @@ describe('formatAlarmSlackMessage on production', () => {
       { label: 'WAF block list', url: 'https://app.example.com/admin?tab=security-dashboard' },
     ]);
     expect(contextOf(message)).toBe(
-      'production  |  level page  |  bike4mind-production-signup-code-send-burst  |  12:39 UTC, 27 Oct'
+      'production  |  level page  |  category abuse  |  bike4mind-production-signup-code-send-burst  |  12:39 UTC, 27 Oct'
     );
     expect(message?.text).toBe(
       ':rotating_light: PRODUCTION ALARM: Sign-in code emails spiking: 18 sign-in code emails in the 5 minutes ending 12:39 UTC; the ceiling is 15.'
@@ -309,6 +312,33 @@ describe('formatAlarmSlackMessage on production', () => {
   it('returns null for INSUFFICIENT_DATA', () => {
     expect(formatAlarmSlackMessage({ ...sample, NewStateValue: 'INSUFFICIENT_DATA' }, 'production')).toBeNull();
   });
+
+  it('posts no resolved line for an OK that does not follow an ALARM', () => {
+    // A new alarm settles INSUFFICIENT_DATA -> OK as soon as it has data; a deploy that creates
+    // many alarms would otherwise flood the channel with resolutions of nothing.
+    expect(
+      formatAlarmSlackMessage({ ...sample, NewStateValue: 'OK', OldStateValue: 'INSUFFICIENT_DATA' }, 'production')
+    ).toBeNull();
+    expect(formatAlarmSlackMessage({ ...sample, NewStateValue: 'OK', OldStateValue: 'OK' }, 'production')).toBeNull();
+    expect(
+      formatAlarmSlackMessage({ ...sample, NewStateValue: 'OK', OldStateValue: 'ALARM' }, 'production')
+    ).not.toBeNull();
+  });
+
+  it('names the category in the footer of alarms and resolutions', () => {
+    expect(contextOf(formatAlarmSlackMessage(sample, 'production'))).toBe(
+      'production  |  level warn  |  category abuse  |  bike4mind-production-signup-code-send-rate  |  05:00 UTC, 27 Oct'
+    );
+    const spend = { ...sample, AlarmName: 'bike4mind-production-provider-reported-spend-hourly-anthropic' };
+    expect(contextOf(formatAlarmSlackMessage(spend, 'production'))).toContain('level page  |  category cost  |  ');
+    expect(
+      contextOf(formatAlarmSlackMessage({ ...spend, NewStateValue: 'OK', OldStateValue: 'ALARM' }, 'production'))
+    ).toBe(
+      'category cost  |  bike4mind-production-provider-reported-spend-hourly-anthropic  |  <https://us-east-2.console.aws.amazon.com/cloudwatch/home?region=us-east-2#alarmsV2:alarm/bike4mind-production-provider-reported-spend-hourly-anthropic|Open in CloudWatch>'
+    );
+    const unknown = { ...sample, AlarmName: 'bike4mind-production-something-new' };
+    expect(contextOf(formatAlarmSlackMessage(unknown, 'production'))).toContain('category infra');
+  });
 });
 
 describe('formatAlarmSlackMessage on other stages', () => {
@@ -321,7 +351,7 @@ describe('formatAlarmSlackMessage on other stages', () => {
     expect(topBlocks(message)).toHaveLength(1);
     expect(message?.text).not.toContain('<!channel>');
     expect(contextOf(message)).toBe(
-      'staging  |  level page  |  bike4mind-dev-signup-code-send-burst  |  12:39 UTC, 27 Oct'
+      'staging  |  level page  |  category abuse  |  bike4mind-dev-signup-code-send-burst  |  12:39 UTC, 27 Oct'
     );
   });
 
@@ -337,7 +367,7 @@ describe('formatAlarmSlackMessage on other stages', () => {
   });
 
   it('resolves on dev in the same quiet green shape', () => {
-    const message = formatAlarmSlackMessage({ ...devBurst, NewStateValue: 'OK' }, 'dev');
+    const message = formatAlarmSlackMessage({ ...devBurst, NewStateValue: 'OK', OldStateValue: 'ALARM' }, 'dev');
     expect(attachment(message).color).toBe('#2EB67D');
     expect(bodyOf(message)[0].text?.text).toContain('staging  |  back to normal at 12:39 UTC');
   });
@@ -345,7 +375,7 @@ describe('formatAlarmSlackMessage on other stages', () => {
   it('drops warn-level alarms and their resolutions on stages other than production', () => {
     const devWarn = { ...sample, AlarmName: 'bike4mind-dev-signup-code-send-rate' };
     expect(formatAlarmSlackMessage(devWarn, 'dev')).toBeNull();
-    expect(formatAlarmSlackMessage({ ...devWarn, NewStateValue: 'OK' }, 'dev')).toBeNull();
+    expect(formatAlarmSlackMessage({ ...devWarn, NewStateValue: 'OK', OldStateValue: 'ALARM' }, 'dev')).toBeNull();
     expect(formatAlarmSlackMessage({ ...devWarn, AlarmName: 'bike4mind-pr-123-unknown' }, 'pr-123')).toBeNull();
     expect(formatAlarmSlackMessage(sample, 'production')).not.toBeNull();
   });
@@ -369,6 +399,50 @@ describe('ALARM_CATALOG', () => {
     for (const entry of Object.values(ALARM_CATALOG)) {
       for (const key of entry.links ?? []) expect(ADMIN_LINKS[key]).toBeDefined();
     }
+  });
+
+  it('gives every entry a category from the closed set', () => {
+    for (const entry of Object.values(ALARM_CATALOG)) expect(ALARM_CATEGORIES).toContain(entry.category);
+    expect(dlqCatalogEntry('dlq-email-send-messages')?.category).toBe('jobs');
+    expect(dlqCatalogEntry('dlq-email-send-age')?.category).toBe('jobs');
+  });
+
+  it('files only provider-reported spend and ungranted purchases under cost', () => {
+    const cost = Object.entries(ALARM_CATALOG)
+      .filter(([, entry]) => entry.category === 'cost')
+      .map(([key]) => key)
+      .sort();
+    expect(cost).toEqual(['provider-reported-spend-hourly', 'ungranted-credit-purchases']);
+    // Ledger spend alarms catch credit farms, so they stay with the abuse signals.
+    for (const key of [
+      'llm-spend-hourly',
+      'llm-spend-rate',
+      'llm-spend-young-accounts',
+      'young-account-spend-rate',
+      'completion-credit-overdraft',
+    ]) {
+      expect(ALARM_CATALOG[key].category).toBe('abuse');
+    }
+  });
+
+  it('resolves a category per alarm name, infra when unknown', () => {
+    expect(
+      alarmCategory({ ...sample, AlarmName: 'bike4mind-production-llm-spend-hourly-anthropic' }, 'production')
+    ).toBe('abuse');
+    expect(
+      alarmCategory(
+        { ...sample, AlarmName: 'bike4mind-production-provider-reported-spend-hourly-openai' },
+        'production'
+      )
+    ).toBe('cost');
+    expect(
+      alarmCategory({ ...sample, AlarmName: 'bike4mind-production-ungranted-credit-purchases' }, 'production')
+    ).toBe('cost');
+    expect(alarmCategory({ ...sample, AlarmName: 'bike4mind-dev-dlq-email-send-messages' }, 'dev')).toBe('jobs');
+    expect(alarmCategory({ ...sample, AlarmName: 'waf-runtime-blocker-prod-no-successful-run' }, 'production')).toBe(
+      'security'
+    );
+    expect(alarmCategory({ ...sample, AlarmName: 'bike4mind-production-something-new' }, 'production')).toBe('infra');
   });
 
   it('pages for the alarms that need a human now', () => {
@@ -566,6 +640,69 @@ describe('resolveAlarmWebhookUrl', () => {
         SLACK_ERROR_REPORTING_WEBHOOK_URL: errors,
       })
     ).toBe(fallback);
+  });
+
+  const alarms = { value: 'https://hooks.slack.example/alarms' };
+  const cost = { value: 'https://hooks.slack.example/cost' };
+
+  it('sends cost alarms to the cost channel only when that secret is set', () => {
+    const all = {
+      SLACK_ALARMS_WEBHOOK_URL: alarms,
+      SLACK_COST_ALARMS_WEBHOOK_URL: cost,
+      SLACK_ERROR_REPORTING_WEBHOOK_URL: errors,
+    };
+    expect(resolveAlarmWebhookUrl(all, 'cost')).toBe(cost.value);
+    expect(resolveAlarmWebhookUrl({ ...all, SLACK_COST_ALARMS_WEBHOOK_URL: undefined }, 'cost')).toBe(alarms.value);
+    expect(resolveAlarmWebhookUrl({ ...all, SLACK_COST_ALARMS_WEBHOOK_URL: { value: 'not-configured' } }, 'cost')).toBe(
+      alarms.value
+    );
+    expect(
+      resolveAlarmWebhookUrl(
+        { SLACK_COST_ALARMS_WEBHOOK_URL: { value: '' }, SLACK_ERROR_REPORTING_WEBHOOK_URL: errors },
+        'cost'
+      )
+    ).toBe(errors.value);
+  });
+
+  it('keeps every other category off the cost channel', () => {
+    const all = {
+      SLACK_ALARMS_WEBHOOK_URL: alarms,
+      SLACK_COST_ALARMS_WEBHOOK_URL: cost,
+      SLACK_ERROR_REPORTING_WEBHOOK_URL: errors,
+    };
+    for (const category of ['abuse', 'jobs', 'infra', 'security'] as const) {
+      expect(resolveAlarmWebhookUrl(all, category)).toBe(alarms.value);
+    }
+    expect(resolveAlarmWebhookUrl(all)).toBe(alarms.value);
+  });
+
+  it('treats a secret the function never linked as unset', () => {
+    // sst's Resource throws on an unlinked name; relays outside this repo need not link the new secret.
+    const linked = new Proxy(
+      { SLACK_ALARMS_WEBHOOK_URL: alarms, SLACK_ERROR_REPORTING_WEBHOOK_URL: errors },
+      {
+        get(target, prop) {
+          if (prop in target) return target[prop as keyof typeof target];
+          throw new Error(`"${String(prop)}" is not linked in your sst.config.ts`);
+        },
+      }
+    );
+    expect(resolveAlarmWebhookUrl(linked, 'cost')).toBe(alarms.value);
+  });
+
+  it('falls back to the error-reporting channel when only that secret is linked', () => {
+    // The shape of an outside subscriber to alarmToSlack.handler that links neither alarms secret.
+    const errorsOnly = new Proxy(
+      { SLACK_ERROR_REPORTING_WEBHOOK_URL: errors },
+      {
+        get(target, prop) {
+          if (prop in target) return target[prop as keyof typeof target];
+          throw new Error(`"${String(prop)}" is not linked in your sst.config.ts`);
+        },
+      }
+    );
+    expect(resolveAlarmWebhookUrl(errorsOnly, 'cost')).toBe(errors.value);
+    expect(resolveAlarmWebhookUrl(errorsOnly, 'infra')).toBe(errors.value);
   });
 });
 

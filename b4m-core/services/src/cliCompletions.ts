@@ -792,6 +792,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       (options?.thinking === undefined && modelInfo && isAdaptiveThinkingByDefault(runModel, modelInfo)
         ? 'medium'
         : undefined));
+  const explicitReasoning =
+    !suppressThinking && (options?.reasoningEffort !== undefined || options?.thinking?.enabled === true);
 
   const completionOptions: Partial<ICompletionOptions> = {
     temperature: options?.temperature,
@@ -806,6 +808,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       : {}),
     ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(explicitReasoning ? { explicitReasoning } : {}),
     ...(responseFormatEnabled && options?.response_format ? { responseFormat: options.response_format } : {}),
     ...(thinking ? { thinking } : {}),
     ...(shadowModelInfo ? { modelIdentityId: model, modelDisplayName: requestedModelInfo?.name } : {}),

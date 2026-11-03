@@ -486,6 +486,7 @@ export const SettingKeySchema = z.enum([
   'signupNetworkAlertMaxPerIp',
   'signupNetworkAlertMaxPerHostingAsn',
   'signupNetworkAlertMaxPerAsn',
+  'shadowDetectionRecordingEnabled',
   'paymentRiskAutoRefundEnabled',
   'paymentRiskAutoRefundMinUnspentPercent',
   'paymentRiskCheckoutMaxBlockedAttempts',
@@ -707,6 +708,8 @@ export const SettingKeySchema = z.enum([
   'apiRateLimitBasicPerMin',
   'apiRateLimitProPerMin',
   'apiRateLimitCreditsPerMin',
+  'apiRateLimitDefaultWritePerMin',
+  'apiRateLimitDefaultWriteMode',
   'apiKeyAccess',
   'shadowTierModelAllowlist',
   'shadowTierRequestsPerMin',
@@ -1126,6 +1129,14 @@ function makeStringSetting(
       : z.string(),
   };
 }
+
+/**
+ * The default per-user write limit's modes and its default cap. Shared with the middleware that reads
+ * them (apps/client/server/middlewares/defaultWriteRateLimit.ts), which falls back to these values.
+ */
+export const DEFAULT_WRITE_RATE_LIMIT_MODES = ['off', 'log', 'enforce'] as const;
+export type DefaultWriteRateLimitMode = (typeof DEFAULT_WRITE_RATE_LIMIT_MODES)[number];
+export const DEFAULT_WRITE_RATE_LIMIT_PER_MIN = 120;
 
 /**
  * Data-lake semantic-search scan budgets. Declared here so the admin-settings default and the
@@ -2297,6 +2308,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'signupNetworkAlertMaxPerIp', order: 42 },
       { key: 'signupNetworkAlertMaxPerHostingAsn', order: 43 },
       { key: 'signupNetworkAlertMaxPerAsn', order: 44 },
+      { key: 'shadowDetectionRecordingEnabled', order: 44.5 },
       { key: 'paymentRiskAutoRefundEnabled', order: 45 },
       { key: 'paymentRiskAutoRefundMinUnspentPercent', order: 46 },
       { key: 'paymentRiskCheckoutMaxBlockedAttempts', order: 47 },
@@ -2404,14 +2416,17 @@ export const API_SERVICE_GROUPS = {
   RATE_LIMITING: {
     id: 'rateLimitingService',
     name: 'API Rate Limiting',
-    description: 'Per-user request rate limits on every per-user rate-limited API route, tunable per subscription tier',
+    description:
+      'Per-user request rate limits on API routes: per subscription tier on rate-limited routes, plus a default cap on every signed-in write',
     icon: 'Speed',
     settings: [
       { key: 'apiRateLimitFreePerMin', order: 1 },
       { key: 'apiRateLimitBasicPerMin', order: 2 },
       { key: 'apiRateLimitProPerMin', order: 3 },
       { key: 'apiRateLimitCreditsPerMin', order: 4 },
-      { key: 'apiKeyAccess', order: 5 },
+      { key: 'apiRateLimitDefaultWritePerMin', order: 5 },
+      { key: 'apiRateLimitDefaultWriteMode', order: 6 },
+      { key: 'apiKeyAccess', order: 7 },
     ],
   },
   API_KEY_TRUST: {
@@ -3429,6 +3444,32 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 4,
   }),
+  // Both read by apps/client/server/middlewares/defaultWriteRateLimit.ts, which falls back to log mode
+  // at DEFAULT_WRITE_RATE_LIMIT_PER_MIN when they cannot be read.
+  apiRateLimitDefaultWritePerMin: makeNumberSetting({
+    key: 'apiRateLimitDefaultWritePerMin',
+    name: 'Default Write Rate Limit (writes/min per user)',
+    defaultValue: DEFAULT_WRITE_RATE_LIMIT_PER_MIN,
+    min: 1,
+    max: 100000,
+    int: true,
+    description:
+      "Shared per-minute cap on one signed-in user's write requests (POST, PUT, PATCH, DELETE), counted together across all routes. Reads, API-key requests (metered per key), admins, developer-tagged users and routes that opt out are not counted. What happens at the cap is set by Default Write Rate Limit Mode. Changes apply within 15 seconds.",
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.RATE_LIMITING.id,
+    order: 5,
+  }),
+  apiRateLimitDefaultWriteMode: makeStringSetting({
+    key: 'apiRateLimitDefaultWriteMode',
+    name: 'Default Write Rate Limit Mode',
+    defaultValue: 'log',
+    description:
+      '"log": writes over the cap are allowed and logged, to measure real usage before enforcing. "enforce": writes over the cap get 429 Too Many Requests. "off": not counted at all. Changes apply within 15 seconds.',
+    options: [...DEFAULT_WRITE_RATE_LIMIT_MODES],
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.RATE_LIMITING.id,
+    order: 6,
+  }),
   // Enforced at mint AND on every key-authenticated request (apiKeyAccessGate.ts), so
   // tightening it also cuts off keys that already exist.
   apiKeyAccess: makeStringSetting({
@@ -3442,7 +3483,7 @@ export const settingsMap = {
     options: ['all', 'paid', 'disabled'],
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
-    order: 5,
+    order: 7,
   }),
   // Auto-block of IPs with repeated failed OAuth sign-ins, plus per-IP limits on the OAuth routes.
   oauthAbuseAutoBlockEnabled: makeBooleanSetting({
@@ -5240,6 +5281,15 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
       'Alert when more self-serve accounts than this signed up from one network (ASN) within the window, hosting or not. Consumer ISPs are busy networks, so keep this well above normal traffic. 0 turns the check off.',
+  }),
+  shadowDetectionRecordingEnabled: makeBooleanSetting({
+    key: 'shadowDetectionRecordingEnabled',
+    name: 'Record Shadow Detections',
+    defaultValue: true,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Record what the abuse detectors (such as the signup network burst alerts) would have done to an account, for admin review on the Detections page. Recording never acts: no access, credits or API keys change.',
   }),
   paymentRiskAutoRefundEnabled: makeBooleanSetting({
     key: 'paymentRiskAutoRefundEnabled',

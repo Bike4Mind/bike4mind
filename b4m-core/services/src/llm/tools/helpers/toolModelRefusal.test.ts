@@ -32,7 +32,7 @@ describe('toolModelRefusal', () => {
 
     await expect(
       toolModelRefusal(context, refusingWith(refusal), 'flux-pro-1.1-ultra', 'image_generation')
-    ).resolves.toBe('Error: Model "flux-pro-1.1-ultra" requires a paid plan.');
+    ).resolves.toMatch(/^Error: Model "flux-pro-1.1-ultra" requires a paid plan\. .*Do not retry it this turn/);
     expect(context.logger.warn).toHaveBeenCalledWith(expect.stringContaining('[image_generation]'), {
       modelId: 'flux-pro-1.1-ultra',
     });

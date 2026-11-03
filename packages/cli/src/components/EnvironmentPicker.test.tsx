@@ -9,21 +9,48 @@ import { EnvironmentPicker } from './EnvironmentPicker';
 // left to typecheck: driving ink-select-input navigation deterministically in
 // ink-testing-library requires render-cycle waits that make the test flaky.
 describe('EnvironmentPicker', () => {
-  it('offers only local dev and custom (never a hosted option)', () => {
-    const { lastFrame } = render(<EnvironmentPicker onSelect={() => {}} />);
-    const frame = lastFrame();
-    expect(frame).toContain('Local dev server');
-    expect(frame).toContain('Custom / self-hosted URL');
-    // The picker only renders when unconfigured, which implies no baked default,
-    // so a hosted-service option is never offered.
-    expect(frame).not.toContain('Hosted service');
+  describe('with a baked default', () => {
+    const defaultUrl = 'https://app.example.com';
+
+    it('lists the default first, then local dev, then custom', () => {
+      const { lastFrame } = render(<EnvironmentPicker onSelect={() => {}} defaultUrl={defaultUrl} />);
+      const frame = lastFrame() ?? '';
+      const hosted = frame.indexOf('Hosted (app.example.com)');
+      const dev = frame.indexOf('Local dev server');
+      const custom = frame.indexOf('Custom / self-hosted URL');
+      expect(hosted).toBeGreaterThan(-1);
+      expect(dev).toBeGreaterThan(hosted);
+      expect(custom).toBeGreaterThan(dev);
+    });
+
+    it('preselects the default with a single marker', () => {
+      const { lastFrame } = render(<EnvironmentPicker onSelect={() => {}} defaultUrl={defaultUrl} />);
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('\u{276F} Hosted (app.example.com)');
+      expect(frame).not.toContain('\u{276F} \u{276F}');
+    });
+
+    it('selects the build default on Enter', () => {
+      const onSelect = vi.fn();
+      const { stdin } = render(<EnvironmentPicker onSelect={onSelect} defaultUrl={defaultUrl} />);
+      stdin.write('\r');
+      expect(onSelect).toHaveBeenCalledWith({ target: 'prod' });
+    });
   });
 
-  it('selects the highlighted option on Enter', () => {
-    const onSelect = vi.fn();
-    // Unbranded build: first (highlighted) option is the local dev server.
-    const { stdin } = render(<EnvironmentPicker onSelect={onSelect} />);
-    stdin.write('\r');
-    expect(onSelect).toHaveBeenCalledWith({ target: 'dev' });
+  describe('without a baked default', () => {
+    it('offers only local dev and custom', () => {
+      const { lastFrame } = render(<EnvironmentPicker onSelect={() => {}} defaultUrl="" />);
+      const frame = lastFrame() ?? '';
+      expect(frame).not.toContain('Hosted');
+      expect(frame.indexOf('Local dev server')).toBeLessThan(frame.indexOf('Custom / self-hosted URL'));
+    });
+
+    it('selects local dev on Enter', () => {
+      const onSelect = vi.fn();
+      const { stdin } = render(<EnvironmentPicker onSelect={onSelect} defaultUrl="" />);
+      stdin.write('\r');
+      expect(onSelect).toHaveBeenCalledWith({ target: 'dev' });
+    });
   });
 });

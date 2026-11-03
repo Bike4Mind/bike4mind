@@ -1414,8 +1414,9 @@ export class ChatService {
   /**
    * Pin this conversation to a model. Not validated against the catalog: see `reconcileModel`.
    *
-   * Reached only from the model picker, which is what makes it the one place a pick is
-   * remembered for the next conversation. Nothing the app chooses by itself comes through here.
+   * Reached only from a user's pick: the model picker, or Use in chat on the Models screen. That
+   * is what makes it the one place a pick is remembered for the next conversation. Nothing the
+   * app chooses by itself comes through here.
    */
   async setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null> {
     const updated = await this.deps.store.setModel(sessionId, model);

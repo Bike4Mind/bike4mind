@@ -1,8 +1,8 @@
 import { createHash, createPrivateKey, createPublicKey, sign, verify, type KeyObject } from 'node:crypto';
 import { z } from 'zod';
 
-/** Prefixed to the manifest bytes before signing, so a signature over another kind of file never verifies here. */
-export const CURATED_SIGNATURE_DOMAIN = 'b4m-model-hub-curated-v2\n';
+/** Prefixed to the manifest's sha256 before signing, so a signature over any other message never verifies here. */
+export const CURATED_SIGNATURE_DOMAIN = 'b4m-model-hub-curated-v2-digest\n';
 export const CURATED_MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
 export const CURATED_MAX_SIGNATURE_BYTES = 8 * 1024;
 /** Must equal HUB_MAX_SEQUENCE in @bike4mind/common (schemas/modelHub.ts); this package does not depend on it. */
@@ -87,8 +87,12 @@ export function parseCuratedSignatureFile(bytes: Uint8Array): CuratedSignatureFi
   return { sequence: parsed.data.sequence ?? null, signatures: parsed.data.signatures };
 }
 
+/**
+ * The statement every signer signs with pure Ed25519: the domain, then the 32 raw bytes of sha256 over the manifest.
+ * It stays under the 4096-byte message cap of a KMS signing key, which the manifest itself does not.
+ */
 export function curatedSignedMessage(manifest: Uint8Array): Buffer {
-  return Buffer.concat([Buffer.from(CURATED_SIGNATURE_DOMAIN, 'utf8'), manifest]);
+  return Buffer.concat([Buffer.from(CURATED_SIGNATURE_DOMAIN, 'utf8'), createHash('sha256').update(manifest).digest()]);
 }
 
 function signatureBytes(sig: string): Buffer | null {
@@ -99,7 +103,7 @@ function signatureBytes(sig: string): Buffer | null {
 
 /**
  * Accepts when at least one entry names a key in `keys` that is not in `revoked` and its Ed25519 signature over the
- * domain-prefixed raw bytes verifies; other entries are ignored. A recovery key is never treated as revoked.
+ * digest statement verifies; other entries are ignored. A recovery key is never treated as revoked.
  */
 export function verifyCurated(
   manifest: Uint8Array,
@@ -144,7 +148,7 @@ function verifiesUnder(key: CuratedKey, message: Buffer, sig: string): boolean {
   }
 }
 
-/** Base64 Ed25519 signature over the domain-prefixed bytes. */
+/** Base64 Ed25519 signature over the digest statement. */
 export function signCurated(manifest: Uint8Array, privateKey: KeyObject): string {
   return sign(null, curatedSignedMessage(manifest), privateKey).toString('base64');
 }

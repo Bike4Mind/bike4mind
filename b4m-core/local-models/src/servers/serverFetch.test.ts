@@ -1,5 +1,5 @@
 import http, { type IncomingHttpHeaders } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import net, { type AddressInfo } from 'node:net';
 import { gzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -178,6 +178,73 @@ describe('createServerFetch', () => {
     expect(error).toBeInstanceOf(TypeError);
     expect(error.message).toBe('gpu box answered with an invalid HTTP status (999).');
     await vi.waitFor(() => expect(closed).toBe(true));
+  });
+
+  it('waits through a slow first byte but drops a reply that goes silent after its headers', async () => {
+    let closed = false;
+    const target = await serve((_req, res) => {
+      res.on('close', () => (closed = true));
+      setTimeout(() => {
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.write('data: one\n\n');
+      }, 150);
+    });
+    const fetch = createServerFetch(endpoint(target.origin), { bodyIdleTimeoutMs: 100 });
+    const response = await fetch(`${target.origin}/v1/chat/completions`);
+    expect(response.status).toBe(200);
+    const error = await failure(response.text());
+    expect(String(error.message) + String((error.cause as Error | undefined)?.message)).toContain(
+      'gpu box stopped sending its reply for 0.1 s. Desktop stopped waiting.'
+    );
+    await vi.waitFor(() => expect(closed).toBe(true));
+  });
+
+  it('cuts off a credentialed error body that stalls after its headers', async () => {
+    let closed = false;
+    const target = await serve((_req, res) => {
+      res.on('close', () => (closed = true));
+      res.writeHead(500, { 'content-type': 'application/json' });
+      res.write('{"error":"par');
+    });
+    const fetch = createServerFetch(endpoint(target.origin), { bodyIdleTimeoutMs: 100 });
+    const response = await fetch(`${target.origin}/v1/chat/completions`);
+    expect(response.status).toBe(500);
+    expect(await response.text()).toBe('{"error":"par');
+    await vi.waitFor(() => expect(closed).toBe(true));
+  });
+
+  it('waits through a prefill that starts after the headers were sent', async () => {
+    const target = await serve((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.flushHeaders();
+      setTimeout(() => res.end('data: one\n\n'), 250);
+    });
+    const fetch = createServerFetch(endpoint(target.origin), { bodyIdleTimeoutMs: 100 });
+    const response = await fetch(`${target.origin}/v1/chat/completions`);
+    expect(await response.text()).toBe('data: one\n\n');
+  });
+
+  it('lets a pull go silent while the server verifies the download', async () => {
+    const target = await serve((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/x-ndjson' });
+      res.write('{"status":"verifying sha256 digest"}\n');
+      setTimeout(() => res.end('{"status":"success"}\n'), 250);
+    });
+    const fetch = createServerFetch(endpoint(target.origin), { bodyIdleTimeoutMs: 100 });
+    const response = await fetch(`${target.origin}/api/pull`, { method: 'POST', body: '{}' });
+    expect(await response.text()).toBe('{"status":"verifying sha256 digest"}\n{"status":"success"}\n');
+  });
+
+  it('turns on TCP keepalive for the request socket', async () => {
+    const target = await serve(ok);
+    const spy = vi.spyOn(net.Socket.prototype, 'setKeepAlive');
+    try {
+      const fetch = createServerFetch(endpoint(target.origin));
+      await (await fetch(`${target.origin}/api/version`)).json();
+      expect(spy).toHaveBeenCalledWith(true, 30_000);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('rejects a refused connection like fetch does, without the credential in the error', async () => {

@@ -1,10 +1,9 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+// The client Desktop and the CLI share, so these tests pin what the script publishes to what they accept.
+import { CuratedListSource, CuratedStore, loadCuratedManifest } from '@bike4mind/local-models';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-// Desktop's own client, so these tests pin what the script publishes to what Desktop accepts.
-import { CuratedSource } from '../../../../apps/desktop/src/main/models/curated/CuratedSource';
-import { CuratedStore } from '../../../../apps/desktop/src/main/models/curated/CuratedStore';
 import { verifyCandidate } from './catalogChecks';
 import { EXIT, publishCandidate } from './publishCurated';
 import { CURATED_PREFIX, type PublishStore, type PutCondition } from './publishStore';
@@ -53,12 +52,14 @@ const lines: string[] = [];
 const publish = (candidate: ReturnType<typeof list>) =>
   publishCandidate(candidate, { store, keyring, log: line => lines.push(line), dryRun: false });
 const desktop = (profile = 'a') =>
-  new CuratedSource({
+  new CuratedListSource({
     url: `${ORIGIN}${CURATED_PREFIX}latest.json`,
     keys: keyring,
     store: new CuratedStore(path.join(dir, profile)),
     bundledText: new TextDecoder().decode(catalogBytes(1)),
+    load: json => loadCuratedManifest(line => lines.push(line), json),
     allowLoopbackHttp: false,
+    userAgent: 'Bike4Mind-Test',
     fetch: store.fetch,
     log: line => lines.push(line),
     onChange: () => {},

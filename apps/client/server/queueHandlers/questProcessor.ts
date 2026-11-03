@@ -416,6 +416,7 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
   await recordFirstChatValue({
     user,
     loadQuest: () => questRepository.findById(params.questId),
+    visitId: params.visitId,
   });
 
   return;

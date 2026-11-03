@@ -171,7 +171,7 @@ jobs:
           else
             pnpm build
           fi
-          pnpm --filter @bike4mind/scripts curated:check-build out --expect-url "$CURATED_PUBLIC_URL"
+          pnpm --filter @bike4mind/scripts curated:check-build out --expect-url "$CURATED_PUBLIC_URL" --also-scan ../../b4m-core/local-models/dist
           if [ "$PLATFORM" = mac ]; then
             for key in CSC_LINK CSC_KEY_PASSWORD CSC_KEYCHAIN CSC_NAME; do
               if [ -n "${!key:-}" ]; then echo "Certificate credentials are not allowed in ad-hoc packaging: $key"; exit 1; fi
@@ -182,6 +182,11 @@ jobs:
             codesign --verify --deep --strict "$app_dir/Bike4Mind.app"
           elif [ "$PLATFORM" = win ]; then
             pnpm exec electron-builder --win --publish never -c.publish.provider=generic "-c.publish.url=$B4M_UPDATE_FEED_URL" "-c.extraMetadata.version=$DESKTOP_VERSION"
+            # 7z can exit non-zero on warnings (an Authenticode signature, for one); the grep decides.
+            contents=$(7z l "release/Bike4Mind-$DESKTOP_VERSION-setup.exe") || true
+            for archive in app-64.7z app-arm64.7z; do
+              grep -qF "$archive" <<< "$contents" || { echo "Installer is missing $archive"; exit 1; }
+            done
           else
             pnpm exec electron-builder --linux --publish never -c.publish.provider=generic "-c.publish.url=$B4M_UPDATE_FEED_URL" "-c.extraMetadata.version=$DESKTOP_VERSION"
           fi
@@ -200,7 +205,7 @@ jobs:
             if [ -z "${!key}" ]; then echo "Missing signing credential: $key"; exit 1; fi
           done
           pnpm build
-          pnpm --filter @bike4mind/scripts curated:check-build out --expect-url "$CURATED_PUBLIC_URL"
+          pnpm --filter @bike4mind/scripts curated:check-build out --expect-url "$CURATED_PUBLIC_URL" --also-scan ../../b4m-core/local-models/dist
           pnpm exec electron-builder --mac dmg zip "--$ARCH" --publish never -c.publish.provider=generic "-c.publish.url=$B4M_UPDATE_FEED_URL" -c.forceCodeSigning=true -c.mac.notarize=true "-c.extraMetadata.version=$DESKTOP_VERSION"
           app_dir=release/mac
           if [ "$ARCH" = arm64 ]; then app_dir=release/mac-arm64; fi

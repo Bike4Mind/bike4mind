@@ -1,8 +1,23 @@
-import { join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { stat, statfs } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { app, ipcMain, powerSaveBlocker, safeStorage } from 'electron';
-import { HuggingFaceHub, OllamaRuntime, ollamaLibraryLayers, probeHardware } from '@bike4mind/local-models';
+import {
+  CuratedListSource,
+  CuratedStore,
+  type CuratedListSettings as SourceListSettings,
+  type CuratedSourceView as SourceView,
+  HuggingFaceHub,
+  OllamaRuntime,
+  PRODUCTION_CURATED_KEYS,
+  curatedStoreRoot,
+  ollamaLibraryLayers,
+  probeHardware,
+  resolveCuratedUrl,
+} from '@bike4mind/local-models';
 import { IPC_CHANNELS } from '@shared/ipc';
-import type { CuratedList, HfTokenResult, ModelPull } from '@shared/models';
+import type { CuratedList, CuratedListSettings, CuratedSourceView, HfTokenResult, ModelPull } from '@shared/models';
 import { localHardware } from '../chat/localContextSizing';
 import { createMainLogger } from '../logger';
 import type { ModelServerRegistry } from '../modelServers/ModelServerRegistry';
@@ -10,34 +25,56 @@ import { privateFile } from '../privateFile';
 import { appWindows } from '../windows';
 import { HuggingFaceTokenStore } from './HuggingFaceTokenStore';
 import { BUNDLED_CURATED_TEXT } from './curated/bundled';
-import { CuratedSource } from './curated/CuratedSource';
-import { CuratedStore, curatedStoreRoot } from './curated/CuratedStore';
 import { curatedDevOverrides } from './curated/devKey';
-import { resolveCuratedUrl } from './curated/fetchCurated';
-import { PRODUCTION_CURATED_KEYS } from './curated/keys';
 import { invalid, registerModelsIpc, serverArg, text } from './ipc';
+import { loadCuratedManifest } from './loadCuratedManifest';
 import { ModelHubService, type ModelHubServiceDeps } from './ModelHubService';
+import { PullLedger } from './pullLedger';
 
 // Room for a daemon busy finishing a pull on a loaded machine, which the library's short default reads as stopped.
 const RUNTIME_HEALTH_TIMEOUT_MS = 10_000;
+const LINUX_SERVICE_STORE = '/usr/share/ollama/.ollama/models';
 
 const warn = (message: string) => console.warn(message);
+
+const isMissing = (error: unknown) => error instanceof Error && 'code' in error && error.code === 'ENOENT';
+
+/** Free bytes on the disk holding `path`; Ollama makes its folder on first pull, so a missing one is read upward. */
+async function freeBytes(path: string): Promise<number> {
+  for (let current = path; ; current = dirname(current)) {
+    try {
+      const stats = await statfs(current);
+      return stats.bavail * stats.bsize;
+    } catch (error) {
+      if (!isMissing(error) || dirname(current) === current) throw error;
+    }
+  }
+}
+
+// Fails typecheck when the renderer's mirrored types in shared/models.ts drift from local-models in either direction.
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+export const curatedTypesMatch: [Same<CuratedSourceView, SourceView>, Same<CuratedListSettings, SourceListSettings>] = [
+  true,
+  true,
+];
 
 /**
  * The curated list's source. The URL is baked in at build time from B4M_CURATED_MANIFEST_URL (see the `define`
  * block in electron.vite.config.ts); a fork that sets nothing, or a build with no trusted key, uses its bundled list.
  */
-function curatedSource(onChange: () => void): CuratedSource {
+function curatedSource(onChange: () => void): CuratedListSource {
   const allowLoopbackHttp = !app.isPackaged;
   // A constant false in release builds, so the test key and its module are not in the bundle at all.
   const dev = __B4M_CURATED_DEV_KEYS__ ? curatedDevOverrides(app.isPackaged, process.env) : null;
-  return new CuratedSource({
+  const desktopVersion = app.getVersion();
+  return new CuratedListSource({
     url: resolveCuratedUrl(dev?.url ?? process.env.B4M_CURATED_MANIFEST_URL, allowLoopbackHttp),
     keys: [...PRODUCTION_CURATED_KEYS, ...(dev?.keys ?? [])],
     store: new CuratedStore(curatedStoreRoot(app.getPath('userData'), dev !== null)),
     bundledText: BUNDLED_CURATED_TEXT,
-    desktopVersion: app.getVersion(),
+    load: json => loadCuratedManifest(warn, json, { desktopVersion }),
     allowLoopbackHttp,
+    userAgent: 'Bike4Mind-Desktop',
     log: warn,
     onChange,
   });
@@ -49,7 +86,8 @@ function curatedSource(onChange: () => void): CuratedSource {
  */
 export function registerModels(
   servers: Pick<ModelServerRegistry, 'hubServer' | 'onServerSaved' | 'specs'>,
-  { localContext }: Pick<ModelHubServiceDeps, 'localContext'>
+  { localContext }: Pick<ModelHubServiceDeps, 'localContext'>,
+  capabilityLedger: ConstructorParameters<typeof PullLedger>[0]
 ): ModelHubService {
   const send = (channel: string, payload?: ModelPull[] | string) => {
     for (const window of appWindows()) window.webContents.send(channel, payload);
@@ -75,7 +113,24 @@ export function registerModels(
     specs: id => servers.specs(id),
     localContext,
     curated: () => source.current(),
-    onPullsChanged: pulls => send(IPC_CHANNELS.modelsPullsChanged, pulls),
+    onPullsChanged: pulls => {
+      send(IPC_CHANNELS.modelsPullsChanged, pulls);
+      void ledger.settled(pulls);
+    },
+    onPullStarted: pull =>
+      void service
+        .storeLocation(pull.serverId)
+        .catch(() => null)
+        .then(location => ledger.started(pull, location)),
+    freeSpace: freeBytes,
+    // Ollama's own default; a daemon started with OLLAMA_MODELS elsewhere shows its folder once a model is installed.
+    defaultStoreDir: () => {
+      if (process.env.OLLAMA_MODELS) return process.env.OLLAMA_MODELS;
+      // The official Linux install script runs the daemon as its own user, whose home is here.
+      if (process.platform === 'linux' && existsSync(LINUX_SERVICE_STORE)) return LINUX_SERVICE_STORE;
+      return join(homedir(), '.ollama', 'models');
+    },
+    pathExists: async path => (await stat(path)).isDirectory(),
     // Once, right away: the picker's reload waits for any recheck the pull or removal started.
     onInstalledChanged: serverId => send(IPC_CHANNELS.modelsInstalledChanged, serverId),
     keepAwake: on => {
@@ -87,6 +142,8 @@ export function registerModels(
     },
     warn,
   });
+  const ledger = new PullLedger(capabilityLedger, () => service.pulls(), warn);
+  void ledger.retireAll();
   servers.onServerSaved(id => {
     service.serverChanged(id);
     // Entered hardware may have changed, which re-rates the open lists.

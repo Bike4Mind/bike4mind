@@ -289,6 +289,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/whats-new',
   },
+  postSlackMessage: {
+    method: 'POST',
+    path: '/api/v1/slack/messages',
+  },
   publishSkillMarketListing: {
     method: 'POST',
     path: '/api/v1/skills/market/listings',

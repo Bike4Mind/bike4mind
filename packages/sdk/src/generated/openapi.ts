@@ -1416,6 +1416,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/slack/messages': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Post a Slack message
+     * @description Posts a message to a Slack channel, or a reply in a thread with `thread_ts`, as the Bike4Mind bot. Returns the message `ts`; pass it back as `thread_ts` to reply in that thread. Three things must hold: the key carries `slack:post`; the channel is in a Slack workspace connected to an organization the key's owner belongs to (an organization-billed key must bill that same organization); and an owner of that same organization (or a platform admin) has enabled the channel for API posting, optionally limited to listed key ids. Disconnecting the workspace turns every opt-in off. `slack:post` is a confined scope: a posting key carries no other scope and reaches no other route. Mint one from the organization's Slack integration settings. The bot must also be a member of the channel: invite it with `/invite @<bot name>`. `text` is at most 3000 characters and is the notification fallback when `blocks` (Block Kit, at most 49 blocks and 40000 serialized characters) is sent. Blocks are limited to section, header, divider, context, image, rich_text; nothing a reader can act on is accepted: no interactive elements, `action_id`, `confirm`, or `url` outside a rich_text link, and a section `accessory` must be an image. Broadcast mentions (`<!channel>`, `<!here>`, `<!everyone>`, user groups, and bare `@channel` / `@here` / `@everyone`) are posted as plain text that notifies nobody; `<@U...>` user mentions are kept. Every post ends with a context block naming the posting user and key, and carries message metadata marking it as an API post; Slack actions on it are ignored. A block Slack rejects as malformed answers 422. Rate limited to 30 messages a minute and 1,000 a day per key and per user, and 60 a minute per channel, on top of the key's own limits. Authenticate with an API key (`b4m_live_`) carrying `slack:post`.
+     */
+    post: operations['postSlackMessage'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2235,11 +2255,11 @@ export interface components {
               };
             };
         /**
-         * @description Reasoning effort hint. Honoured by the OpenAI (reasoning models only, and not alongside tools on some of them), Kimi (K3 only), DeepSeek and Anthropic Claude (direct and Bedrock) adapters; each maps it onto its own scale. On Claude, `none` turns thinking off where the model allows it (otherwise it runs at the lowest effort), so short `max_tokens` replies stream visible text from the start; `minimal` maps to `low`. When `thinking.enabled` is also set on a Claude model, thinking stays on and this sets its effort instead, with `none` and `minimal` mapping to `low`. Claude models that reason inside `max_tokens` never have that ceiling raised, and on older Claude models any level above `none` turns thinking on (it is off by default there), forces temperature to 1 and drops top_p, and a thinking budget that cannot fit under `max_tokens` is skipped. On the direct Anthropic API, a json_schema `response_format` with no tools is served by a forced tool on models that support forced tool use, and that tool cannot run alongside thinking, so there only `none` is honoured; models served by native structured outputs honour every level. Silently ignored by every other adapter (Gemini, xAI, Ollama) and by non-reasoning models, so sending it there is a no-op.
+         * @description Reasoning effort hint. Honoured by the OpenAI (reasoning models only, and not alongside tools on some of them), Kimi (K3 only), DeepSeek and Anthropic Claude (direct and Bedrock) adapters; each maps it onto its own scale. On Claude, `none` turns thinking off where the model allows it (otherwise it runs at the lowest effort), so short `max_tokens` replies stream visible text from the start; `minimal` maps to `low`. When `thinking.enabled` is also set on a Claude model, thinking stays on and this sets its effort instead, with `none` and `minimal` mapping to `low`. Claude models that reason inside `max_tokens` never have that ceiling raised, and on older Claude models any level above `none` turns thinking on (it is off by default there), forces temperature to 1 and drops top_p, and a thinking budget that cannot fit under `max_tokens` is skipped. On the direct Anthropic API, a json_schema `response_format` with no tools is served by a forced tool on models that support forced tool use, and that tool cannot run alongside thinking. When this field names a level above `none` for a model with adaptive thinking, the schema is served by native structured outputs instead and the level is honoured; thinking then counts against `max_tokens`, which is not raised. A schema that native structured outputs cannot express (for example one that declares `additionalProperties` other than false), or a request whose documents ask for citations, keeps the forced tool and only `none` is honoured. Older Claude models that think with a budget keep the forced tool, so there only `none` is honoured; models served by native structured outputs honour every level. Silently ignored by every other adapter (Gemini, xAI, Ollama) and by non-reasoning models, so sending it there is a no-op.
          * @enum {string}
          */
         reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
-        /** @description Ask a model that can think to think on this turn. On Claude, `reasoningEffort` then sets how much it thinks, and `budget_tokens` (default 16000, minimum 1024, maximum 32000) sizes thinking on older Claude models. Ignored by models that cannot think, and on the direct Anthropic API when a json_schema `response_format` is served by a forced tool, which cannot run alongside thinking. */
+        /** @description Ask a model that can think to think on this turn. On Claude, `reasoningEffort` then sets how much it thinks, and `budget_tokens` (default 16000, minimum 1024, maximum 32000) sizes thinking on older Claude models. Ignored by models that cannot think. With a json_schema `response_format` on the direct Anthropic API, a model with adaptive thinking serves the schema through native structured outputs so thinking can run, within `max_tokens`, unless the schema or a citations document keeps it on the forced tool; older Claude models that think with a budget serve it through a forced tool, which cannot run alongside thinking, and ignore this. */
         thinking?: {
           enabled: boolean;
           budget_tokens?: number;
@@ -6614,6 +6634,68 @@ export interface components {
           /** @description Shown to the author. */
           note: string;
         };
+    /**
+     * @example {
+     *       "ok": true,
+     *       "channel_id": "C0123ABCDEF",
+     *       "ts": "1730000000.123456"
+     *     }
+     */
+    postSlackMessageResponse200: {
+      /** @enum {boolean} */
+      ok: true;
+      channel_id: string;
+      ts: string;
+    };
+    postSlackMessageResponse401: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?:
+        'slack_bot_not_in_channel' | 'slack_channel_archived' | 'slack_channel_restricted' | 'provider_rejected';
+    };
+    postSlackMessageResponse409: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?:
+        'slack_bot_not_in_channel' | 'slack_channel_archived' | 'slack_channel_restricted' | 'provider_rejected';
+    };
+    /**
+     * @example {
+     *       "channel_id": "C0123ABCDEF",
+     *       "text": "Shipped v1.4.2 to production: 3 changes",
+     *       "blocks": [
+     *         {
+     *           "type": "section",
+     *           "text": {
+     *             "type": "mrkdwn",
+     *             "text": "*Shipped v1.4.2 to production*\n- Faster export"
+     *           }
+     *         }
+     *       ]
+     *     }
+     */
+    postSlackMessageRequest: {
+      channel_id: string;
+      text: string;
+      blocks?: ({
+        type: string;
+      } & {
+        [key: string]: unknown;
+      })[];
+      thread_ts?: string;
+    };
   };
   responses: never;
   parameters: never;
@@ -20510,6 +20592,195 @@ export interface operations {
       };
       /** @description Per-key rate limit exceeded. */
       429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  postSlackMessage: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['postSlackMessageRequest'];
+      };
+    };
+    responses: {
+      /** @description The message was posted. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['postSlackMessageResponse200'];
+        };
+      };
+      /** @description Missing/invalid credentials, or Slack refused the connected workspace credentials (`errorCode: "provider_rejected"`; an organization owner must reconnect the workspace). */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['postSlackMessageResponse401'];
+        };
+      };
+      /** @description The key lacks `slack:post`, the request was not made with an API key, or the channel is not enabled for API posting by an organization the key's owner belongs to (or not for this key). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The bot is not a member of the channel (`errorCode: "slack_bot_not_in_channel"`; invite it), or the channel is archived (`errorCode: "slack_channel_archived"`), or the channel restricts posting, such as announcement-only or thread-only (`errorCode: "slack_channel_restricted"`). */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['postSlackMessageResponse409'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-key rate limit exceeded, or Slack is rate limiting the bot. Honor `Retry-After`. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Slack failed to post the message. */
+      502: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;

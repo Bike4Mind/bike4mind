@@ -353,4 +353,5 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'PATCH /api/admin/release-notes/:id',
     'POST /api/files/createFabFile',
   ],
+  [ApiKeyScope.SLACK_POST]: ['POST /api/v1/slack/messages'],
 };

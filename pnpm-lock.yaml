@@ -2320,6 +2320,9 @@ importers:
       '@bike4mind/mcp':
         specifier: workspace:*
         version: link:../../b4m-core/mcp
+      '@bike4mind/model-host':
+        specifier: workspace:*
+        version: link:../model-host
       '@bike4mind/observability':
         specifier: workspace:*
         version: link:../../b4m-core/observability
@@ -2461,6 +2464,27 @@ importers:
         specifier: '>=9.0.0'
         version: 9.39.2(jiti@2.7.0)
 
+  packages/model-host:
+    devDependencies:
+      '@bike4mind/common':
+        specifier: workspace:*
+        version: link:../../b4m-core/common
+      '@bike4mind/local-models':
+        specifier: workspace:*
+        version: link:../../b4m-core/local-models
+      tsdown:
+        specifier: ^0.22.3
+        version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.12
+        version: 4.1.12(@opentelemetry/api@1.9.0)(@types/node@25.9.6)(@vitest/coverage-v8@4.1.12)(@vitest/ui@4.1.12)(jsdom@29.1.1(@noble/hashes@2.4.0)(canvas@3.2.1))(msw@2.15.0(@types/node@25.9.6)(typescript@5.9.3))(vite@8.3.4(@types/node@25.9.6)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
+      zod:
+        specifier: ^4.6.6
+        version: 4.6.6
+
   packages/scripts:
     dependencies:
       '@anthropic-ai/sdk':
@@ -2566,6 +2590,12 @@ importers:
       '@types/yargs':
         specifier: ^17.0.35
         version: 17.0.35
+      ajv:
+        specifier: ^8.20.0
+        version: 8.20.0
+      ajv-formats:
+        specifier: ^3.0.1
+        version: 3.0.1(ajv@8.20.0)
       aws-sdk-client-mock:
         specifier: ^4.1.0
         version: 4.1.0
@@ -2663,6 +2693,9 @@ importers:
       '@bike4mind/llm-adapters':
         specifier: workspace:*
         version: link:../../b4m-core/llm-adapters
+      '@bike4mind/local-models':
+        specifier: workspace:*
+        version: link:../../b4m-core/local-models
       '@bike4mind/mcp':
         specifier: workspace:*
         version: link:../../b4m-core/mcp
