@@ -116,8 +116,15 @@ const ElevenLabsVoiceRows = ({ value, onChange }: Omit<VoiceSampleListProps, 'pr
   const { data: voices, isLoading, isError } = useElevenLabsTtsVoices();
 
   if (isLoading) return <CircularProgress size="sm" data-testid="voice-sample-list-loading" />;
+  if (isError) {
+    return (
+      <Typography level="body-xs" sx={{ color: 'text.tertiary' }} data-testid="voice-sample-list-error">
+        Could not load ElevenLabs voices. Synthesis uses the voice configured in your account settings.
+      </Typography>
+    );
+  }
   // Empty when no ElevenLabs key is configured; synthesis then uses the account voice.
-  if (isError || !voices?.length) {
+  if (!voices?.length) {
     return (
       <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
         ElevenLabs uses the voice configured in your account settings.

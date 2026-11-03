@@ -73,6 +73,17 @@ describe('VoiceSampleList (OpenAI)', () => {
     expect(screen.getByRole('button', { name: 'Stop Echo sample' })).toBeTruthy();
   });
 
+  it('ignores an error from a superseded sample', async () => {
+    renderList('openai');
+
+    await clickPlay('alloy');
+    await clickPlay('echo');
+    act(() => FakeAudio.instances[0].onerror?.());
+
+    expect(screen.getByRole('button', { name: 'Stop Echo sample' })).toBeTruthy();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
   it('says so when the browser blocks playback', async () => {
     FakeAudio.playResult = () => Promise.reject(new DOMException('blocked', 'NotAllowedError'));
     renderList('openai');
@@ -132,5 +143,13 @@ describe('VoiceSampleList (ElevenLabs)', () => {
 
     expect(screen.getByText('ElevenLabs uses the voice configured in your account settings.')).toBeTruthy();
     expect(screen.queryByTestId('voice-sample-list')).toBeNull();
+  });
+
+  it('says the list failed to load instead of showing the no-key note', () => {
+    useElevenLabsTtsVoicesMock.mockReturnValue({ data: undefined, isLoading: false, isError: true });
+    renderList('elevenlabs');
+
+    expect(screen.getByTestId('voice-sample-list-error')).toBeTruthy();
+    expect(screen.queryByText('ElevenLabs uses the voice configured in your account settings.')).toBeNull();
   });
 });
