@@ -1,5 +1,45 @@
 import { describe, expect, it } from 'vitest';
-import { createRoundProbe } from './turnTiming';
+import { createRoundProbe, startRoundTimer } from './turnTiming';
+
+describe('startRoundTimer', () => {
+  it('stamps the first token, the thinking span and the first text, counting readable thinking only', () => {
+    let clock = 1_000;
+    const timer = startRoundTimer(() => clock);
+    clock = 1_200;
+    timer.firstToken();
+    timer.reasoning(false);
+    clock = 1_300;
+    timer.reasoning(true);
+    clock = 4_000;
+    timer.reasoning(true);
+    timer.firstToken();
+    clock = 4_100;
+    timer.text();
+    clock = 4_600;
+    timer.text();
+    clock = 5_000;
+
+    expect(timer.reasoningFrames()).toBe(2);
+    expect(timer.end()).toEqual({
+      startedAt: 1_000,
+      firstTokenAt: 1_200,
+      firstReasoningAt: 1_200,
+      lastReasoningAt: 4_000,
+      firstTextAt: 4_100,
+      endedAt: 5_000,
+    });
+  });
+
+  it('leaves the stamps out of a round that neither thought nor wrote', () => {
+    let clock = 0;
+    const timer = startRoundTimer(() => clock);
+    clock = 50;
+    timer.firstToken();
+    clock = 90;
+    expect(timer.end()).toEqual({ startedAt: 0, firstTokenAt: 50, endedAt: 90 });
+    expect(timer.reasoningFrames()).toBe(0);
+  });
+});
 
 describe('createRoundProbe', () => {
   it('measures from the request going out and reports the desktop work before it', () => {

@@ -3,16 +3,37 @@ import type { ChatRoundTiming } from '@shared/chat';
 /**
  * Times one request. `firstToken` is called for every streamed event that carries anything,
  * and only the first counts: a tool-only round still has a first token, which is the point.
+ * `reasoning` takes a thinking frame, `readable` false for a bare marker; `text` visible text.
  */
 export function startRoundTimer(now: () => number = Date.now) {
   const startedAt = now();
   let firstTokenAt: number | undefined;
+  let firstReasoningAt: number | undefined;
+  let lastReasoningAt: number | undefined;
+  let firstTextAt: number | undefined;
+  let reasoningFrames = 0;
   return {
     firstToken(): void {
       firstTokenAt ??= now();
     },
+    reasoning(readable: boolean): void {
+      const at = now();
+      firstReasoningAt ??= at;
+      lastReasoningAt = at;
+      if (readable) reasoningFrames++;
+    },
+    text(): void {
+      firstTextAt ??= now();
+    },
+    reasoningFrames: () => reasoningFrames,
     end(): ChatRoundTiming {
-      return { startedAt, ...(firstTokenAt !== undefined ? { firstTokenAt } : {}), endedAt: now() };
+      return {
+        startedAt,
+        ...(firstTokenAt !== undefined ? { firstTokenAt } : {}),
+        ...(firstReasoningAt !== undefined ? { firstReasoningAt, lastReasoningAt } : {}),
+        ...(firstTextAt !== undefined ? { firstTextAt } : {}),
+        endedAt: now(),
+      };
     },
   };
 }

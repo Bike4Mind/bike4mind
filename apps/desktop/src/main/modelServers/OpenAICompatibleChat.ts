@@ -143,7 +143,13 @@ interface StreamChunk {
     };
     finish_reason?: unknown;
   }[];
-  usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } | null;
+  usage?: {
+    prompt_tokens?: unknown;
+    completion_tokens?: unknown;
+    /** vLLM sends this only with `--enable-prompt-tokens-details`. */
+    prompt_tokens_details?: { cached_tokens?: unknown } | null;
+    completion_tokens_details?: { reasoning_tokens?: unknown } | null;
+  } | null;
   /** llama-server only. */
   timings?: unknown;
   error?: { message?: unknown } | unknown;
@@ -323,7 +329,8 @@ export class OpenAICompatibleChat implements LocalChat {
   ) {
     const calls = new Map<number, { id?: string; name: string; arguments: string }>();
     let stopReason: string | undefined;
-    let usage: { inputTokens?: number; outputTokens?: number } | undefined;
+    let usage: { inputTokens?: number; outputTokens?: number; reasoningTokens?: number } | undefined;
+    let cachedTokens: number | undefined;
     let reported: ChatTokenRate | undefined;
     // Stamped per network read, so deltas buffered into one read count as one arrival.
     let readAt = 0;
@@ -383,10 +390,13 @@ export class OpenAICompatibleChat implements LocalChat {
         if (chunk.usage) {
           const inputTokens = tokenCount(chunk.usage.prompt_tokens);
           const outputTokens = tokenCount(chunk.usage.completion_tokens);
+          const reasoningTokens = tokenCount(chunk.usage.completion_tokens_details?.reasoning_tokens);
           usage = {
             ...(inputTokens !== undefined ? { inputTokens } : {}),
             ...(outputTokens !== undefined ? { outputTokens } : {}),
+            ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
           };
+          cachedTokens = tokenCount(chunk.usage.prompt_tokens_details?.cached_tokens) ?? cachedTokens;
         }
         reported = llamaServerRate(chunk.timings) ?? reported;
       },
@@ -410,7 +420,10 @@ export class OpenAICompatibleChat implements LocalChat {
       .filter(call => call.name)
       .map(call => ({ name: call.name, arguments: call.arguments || '{}', ...(call.id ? { id: call.id } : {}) }));
     if (tools.length > 0) onEvent({ type: 'tool_use', tools });
-    const rate = reported ?? estimatedRate(usage?.outputTokens, timing);
+    let rate = reported ?? estimatedRate(usage?.outputTokens, timing);
+    // llama-server reports the cache in its timings too; a server with only the usage details is read here.
+    if (rate && rate.cachedPromptTokens === undefined && cachedTokens !== undefined)
+      rate = { ...rate, cachedPromptTokens: cachedTokens };
     onEvent({
       type: 'content',
       stopReason: stopReason ?? 'stop',

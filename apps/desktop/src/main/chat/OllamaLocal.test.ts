@@ -793,6 +793,7 @@ describe('OllamaLocal', () => {
         eval_count: 48,
         eval_duration: 2_000_000_000,
         load_duration: 1_200_000_000,
+        total_duration: 3_300_000_000,
       })}\n`
     );
     expect(events).toEqual([
@@ -800,7 +801,7 @@ describe('OllamaLocal', () => {
         type: 'content',
         stopReason: 'end_turn',
         usage: { inputTokens: 30, outputTokens: 48 },
-        rate: { evalTokens: 48, evalMs: 2000, promptTokens: 30, promptMs: 60, loadMs: 1200 },
+        rate: { evalTokens: 48, evalMs: 2000, promptTokens: 30, promptMs: 60, loadMs: 1200, totalMs: 3300 },
       },
     ]);
   });

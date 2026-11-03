@@ -22,6 +22,7 @@ import type {
   ChatPromptCacheStamp,
   ChatQueuedMessage,
   ChatReplyRound,
+  ChatReplyStats,
   ChatSentRound,
   ChatSession,
   ChatSessionStatusEvent,
@@ -129,6 +130,7 @@ import type { SidebarSectionStore } from './SidebarSectionStore';
 import { childOutcomeDisplay, classifyChildOutcome } from './childOutcome';
 import { createPhaseTracker, RESPONDING, THINKING, WAITING } from './modelPhase';
 import { createRoundProbe, startRoundTimer, type RoundPhases } from './turnTiming';
+import { buildReplyStats } from './replyStats';
 import { devLog } from '../devlog/DevLogSink';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import {
@@ -595,6 +597,7 @@ interface ResumedReply {
   contextSnapshot?: ContextSnapshot;
   /** The model the reply started on, which a resumed run keeps stamping it with. */
   model?: string;
+  stats?: ChatReplyStats;
 }
 
 /** One round as it is produced, before its artifact markup is parsed out of the text. */
@@ -603,6 +606,7 @@ interface RawRound {
   toolCallIds: string[];
   reasoning: string;
   timing: ChatRoundTiming;
+  reasoningFrames: number;
   usage?: ChatUsage;
   sent: ChatSentRound;
 }
@@ -2210,6 +2214,7 @@ export class ChatService {
       ...(startedOn ? { model: startedOn } : {}),
       ...(last.usage ? { usage: last.usage } : {}),
       ...(last.contextSnapshot ? { contextSnapshot: last.contextSnapshot } : {}),
+      ...(last.stats ? { stats: last.stats } : {}),
     });
     return { ok: true, messageId: replyId };
   }
@@ -2672,6 +2677,22 @@ export class ChatService {
     // Only this run's rounds: the resumed ones were parsed and cleaned when they were stored,
     // and putting them back through the artifact parser would mint their ids a second time.
     let produced: RawRound[] = [];
+    // Reset with `produced` when a mid-turn message starts a new reply.
+    let replyStartedAt = turnStartedAt;
+    let toolMs = 0;
+    // None for a reply that never reached the model: a refused turn has nothing to show.
+    const replyStats = (): ChatReplyStats | undefined =>
+      produced.length > 0 || resume?.stats
+        ? buildReplyStats({
+            startedAt: replyStartedAt,
+            endedAt: Date.now(),
+            rounds: produced,
+            toolMs,
+            ...(usage ? { usage } : {}),
+            local: isLocalModel(session.model),
+            ...(resume?.stats ? { earlier: resume.stats } : {}),
+          })
+        : undefined;
 
     try {
       // Read before any await: a folder changed while the config loads must still reach the first refresh.
@@ -3009,6 +3030,7 @@ export class ChatService {
           cacheable && !localTurn && lastTiming
             ? { cachedAt: lastTiming.firstTokenAt ?? lastTiming.endedAt, ttl: cacheTtl, model: session.model }
             : undefined;
+        const stats = replyStats();
 
         const message: ChatMessage = {
           id: replyId,
@@ -3022,6 +3044,7 @@ export class ChatService {
           ...(thinking ? { thinking } : {}),
           ...(artifacts.length > 0 ? { artifacts } : {}),
           ...(usage ? { usage } : {}),
+          ...(stats ? { stats } : {}),
           ...(promptCache ? { promptCache } : {}),
           ...(contextSnapshot ? { contextSnapshot } : {}),
           ...(deferred ? { deferred } : {}),
@@ -3039,6 +3062,7 @@ export class ChatService {
           ...(keepRounds ? { rounds: withoutSent(rounds) } : {}),
           ...(artifacts.length > 0 ? { artifacts } : {}),
           ...(promptCache ? { promptCache } : {}),
+          ...(stats ? { stats } : {}),
         });
       };
 
@@ -3114,6 +3138,8 @@ export class ChatService {
             // An empty split is either a bare thinking marker or text the filter is holding
             // back as a possible partial marker; only the first is a thinking frame.
             const marker = !split.text && !split.reasoning && THINK_MARKER.test(event.text);
+            if (split.reasoning || marker) timer.reasoning(!!split.reasoning);
+            if (split.text) timer.text();
             probe?.frame(split.text ? 'text' : split.reasoning ? 'reasoning' : marker ? 'marker' : 'text');
             if (split.text) setPhase(RESPONDING);
             else if (split.reasoning || marker) setPhase(THINKING);
@@ -3167,7 +3193,9 @@ export class ChatService {
               onCompletionEvent,
               controller.signal
             );
-        append(splitThinking.flush());
+        const held = splitThinking.flush();
+        if (held.text) timer.text();
+        append(held);
         const timing = timer.end();
         if (probe) this.logRoundPhases(sessionId, session.model, roundIndex, probe.end());
 
@@ -3182,6 +3210,7 @@ export class ChatService {
           // round has stopped. See readableThinking.
           reasoning: turnReasoning || readableThinking(turnThinking),
           timing,
+          reasoningFrames: timer.reasoningFrames(),
           ...(turnUsage ? { usage: turnUsage } : {}),
           sent: { ...(turnThinking ? { thinking: turnThinking } : {}), text: turnText },
         };
@@ -3251,6 +3280,7 @@ export class ChatService {
         // With no working directory a command defaults to the first root, so a call the model wrote
         // for the old first root must not run in whichever folder is now first.
         const baseMoved = !workingDirectory && baseBefore !== undefined && roots[0] !== baseBefore;
+        const toolsStartedAt = Date.now();
         const settled = baseMoved
           ? requested.map((request): ChatToolCall => {
               const call: ChatToolCall = {
@@ -3298,6 +3328,7 @@ export class ChatService {
               replyId,
               controller.signal
             );
+        toolMs += Date.now() - toolsStartedAt;
         toolCalls.push(...settled);
 
         // The system message is left as it was, so the cached prefix survives: a card's own result
@@ -3431,6 +3462,8 @@ export class ChatService {
           content = '';
           toolCalls = [];
           produced = [];
+          replyStartedAt = Date.now();
+          toolMs = 0;
           usage = undefined;
           contextSnapshot = undefined;
           thinking = undefined;
@@ -3493,6 +3526,7 @@ export class ChatService {
         this.emit({ type: 'error', sessionId, messageId: replyId, message, ...stop });
         return expired ? 'expired' : 'failed';
       }
+      const stats = replyStats();
       // Persisted even though it failed: a thread that silently drops the turn leaves the
       // user's own prompt sitting there with no explanation next time they open it.
       await this.settleReply(sessionId, !!resume, historyScope, {
@@ -3519,6 +3553,7 @@ export class ChatService {
           : {}),
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
         ...(usage ? { usage } : {}),
+        ...(stats ? { stats } : {}),
         ...(contextSnapshot ? { contextSnapshot } : {}),
         ...(deferredTurn ? { deferred: true } : {}),
       });
@@ -3529,6 +3564,7 @@ export class ChatService {
         message,
         ...stop,
         ...(contextSnapshot ? { contextSnapshot } : {}),
+        ...(stats ? { stats } : {}),
       });
       return expired ? 'expired' : 'failed';
     }
@@ -3608,6 +3644,7 @@ export class ChatService {
       thinking: message.thinking,
       artifacts: message.artifacts,
       usage: message.usage,
+      stats: message.stats,
       promptCache: message.promptCache,
       contextSnapshot: message.contextSnapshot,
       // Never cleared: rounds a deferred run already sent keep replaying as they were sent.
