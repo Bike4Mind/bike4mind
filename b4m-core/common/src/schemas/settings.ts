@@ -448,6 +448,7 @@ export const SettingKeySchema = z.enum([
   'blockedEmailDomains',
   'apiKeyTrustGateEnabled',
   'apiKeyMinAccountAgeDays',
+  'apiKeyAccountAgeTrustsKeys',
   'requireThreeDSecureOnFirstPurchase',
   'threeDSecureNewAccountDays',
   'maxActiveKeysUntrusted',
@@ -737,6 +738,12 @@ export const SettingKeySchema = z.enum([
   'oauthAbuseLookbackHours',
   'oauthRateLimitPerIp',
   'oauthRateLimitWindowMinutes',
+
+  // PER-ACTOR API PROBE DETECTION
+  'probeDetectorEnabled',
+  'probeDetectorScoreThreshold',
+  'probeDetectorWindowMinutes',
+  'probeDetectorDedupeHours',
 
   // OVERWATCH ROLLUP CRON SETTINGS
   'overwatchRollupSync',
@@ -2456,11 +2463,12 @@ export const API_SERVICE_GROUPS = {
     settings: [
       { key: 'apiKeyTrustGateEnabled', order: 1 },
       { key: 'apiKeyMinAccountAgeDays', order: 2 },
-      { key: 'maxActiveKeysUntrusted', order: 3 },
-      { key: 'apiKeyUntrustedRateLimitPerMin', order: 4 },
-      { key: 'apiKeyUntrustedRequestsPerDay', order: 5 },
-      { key: 'apiKeyUntrustedTokensPerMin', order: 6 },
-      { key: 'apiKeyUntrustedMaxConcurrent', order: 7 },
+      { key: 'apiKeyAccountAgeTrustsKeys', order: 3 },
+      { key: 'maxActiveKeysUntrusted', order: 4 },
+      { key: 'apiKeyUntrustedRateLimitPerMin', order: 5 },
+      { key: 'apiKeyUntrustedRequestsPerDay', order: 6 },
+      { key: 'apiKeyUntrustedTokensPerMin', order: 7 },
+      { key: 'apiKeyUntrustedMaxConcurrent', order: 8 },
     ],
   },
   FREE_TIER_MODELS: {
@@ -2529,6 +2537,19 @@ export const API_SERVICE_GROUPS = {
       { key: 'oauthAbuseLookbackHours', order: 5 },
       { key: 'oauthRateLimitPerIp', order: 6 },
       { key: 'oauthRateLimitWindowMinutes', order: 7 },
+    ],
+  },
+  PROBE_DETECTION: {
+    id: 'probeDetectionService',
+    name: 'API Probe Detection',
+    description:
+      'Posts one Security alert per actor (user and the IPs it used) whose refused fetches, forged webhooks and denied or unmatched API requests add up past the threshold. Hosted deployments only.',
+    icon: 'Security',
+    settings: [
+      { key: 'probeDetectorEnabled', order: 1 },
+      { key: 'probeDetectorScoreThreshold', order: 2 },
+      { key: 'probeDetectorWindowMinutes', order: 3 },
+      { key: 'probeDetectorDedupeHours', order: 4 },
     ],
   },
   DATA_LAKE_AUDIT: {
@@ -3615,6 +3636,53 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.AUTH_ABUSE.id,
     order: 7,
   }),
+  // Scheduled per-actor probe detector: apps/workers/src/cron/apiProbeDetector.ts.
+  probeDetectorEnabled: makeBooleanSetting({
+    key: 'probeDetectorEnabled',
+    name: 'API Probe Alerts',
+    defaultValue: true,
+    description: "Post a Security alert when one actor's probing signals in the window reach the score threshold.",
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.PROBE_DETECTION.id,
+    order: 1,
+  }),
+  probeDetectorScoreThreshold: makeNumberSetting({
+    key: 'probeDetectorScoreThreshold',
+    name: 'API Probe Score Threshold',
+    defaultValue: 25,
+    min: 1,
+    int: true,
+    description:
+      'Score at which an actor is reported. Each refused fetch scores 10, each failed webhook signature 5 and each invalid-id lookup 2. A 404, or a 401 or 403 from an API handler, scores 1, but only from an IP and account pair that also failed on 10 or more distinct paths in the window. Webhook failures carry no account, so 5 from one Stripe IP (for example after a signing-secret rotation) is enough at the default threshold.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.PROBE_DETECTION.id,
+    order: 2,
+  }),
+  probeDetectorWindowMinutes: makeNumberSetting({
+    key: 'probeDetectorWindowMinutes',
+    name: 'API Probe Window (minutes)',
+    defaultValue: 15,
+    min: 5,
+    max: 60,
+    int: true,
+    description: 'Sliding window each run scores. Runs every 5 minutes, so a longer window rescans more log data.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.PROBE_DETECTION.id,
+    order: 3,
+  }),
+  probeDetectorDedupeHours: makeNumberSetting({
+    key: 'probeDetectorDedupeHours',
+    name: 'API Probe Re-alert After (hours)',
+    defaultValue: 6,
+    min: 1,
+    max: 168,
+    int: true,
+    description:
+      'An actor already reported is not reported again until this long has passed, unless it shows up from a new IP or account.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.PROBE_DETECTION.id,
+    order: 4,
+  }),
   tagLineMain: makeStringSetting({
     key: 'tagLineMain',
     name: 'Tag Line Main',
@@ -4170,7 +4238,8 @@ export const settingsMap = {
   }),
   // New-account trust gate for API keys and outbound actions (see assertOutboundActionAllowed). A trusted
   // account has a verified email AND one of: a purchase or active plan, an account older than
-  // apiKeyMinAccountAgeDays, or admin approval (user.apiKeyTrustApproved). See userApiKeyService/trust.ts.
+  // apiKeyMinAccountAgeDays, or admin approval (user.apiKeyTrustApproved). apiKeyAccountAgeTrustsKeys off
+  // drops the account-age path for API keys only. See userApiKeyService/trust.ts.
   apiKeyTrustGateEnabled: makeBooleanSetting({
     key: 'apiKeyTrustGateEnabled',
     name: 'API Key Trust Gate',
@@ -4195,6 +4264,17 @@ export const settingsMap = {
     order: 2,
     dependsOn: 'apiKeyTrustGateEnabled',
   }),
+  apiKeyAccountAgeTrustsKeys: makeBooleanSetting({
+    key: 'apiKeyAccountAgeTrustsKeys',
+    name: 'API Key Trust: Account Age Lifts Key Limits',
+    defaultValue: true,
+    description:
+      'On (default): an account older than the minimum age is trusted for API keys, so the untrusted key cap, rate limits and quotas stop applying to it. Off: only a purchase, an active plan or admin approval lifts them, at any account age. Account age still unlocks outbound actions either way.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
+    order: 3,
+    dependsOn: 'apiKeyTrustGateEnabled',
+  }),
   maxActiveKeysUntrusted: makeNumberSetting({
     key: 'maxActiveKeysUntrusted',
     name: 'API Key Trust: Max Active Keys (untrusted)',
@@ -4206,7 +4286,7 @@ export const settingsMap = {
       'Active personal API keys a verified but untrusted account may hold. 0 blocks untrusted accounts from minting entirely. Org-billed keys are not limited by this.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
-    order: 3,
+    order: 4,
     dependsOn: 'apiKeyTrustGateEnabled',
   }),
   apiKeyUntrustedRateLimitPerMin: makeNumberSetting({
@@ -4220,7 +4300,7 @@ export const settingsMap = {
       "Per-minute ceiling applied at request time to personal API keys whose owner is untrusted, including keys minted before the gate existed. A key's own lower limit still wins.",
     category: 'SecOps',
     group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
-    order: 4,
+    order: 5,
     dependsOn: 'apiKeyTrustGateEnabled',
   }),
   apiKeyUntrustedRequestsPerDay: makeNumberSetting({
@@ -4234,7 +4314,7 @@ export const settingsMap = {
       "Per-day request ceiling for each personal API key whose owner is untrusted, applied at request time and counted per key. A key's own lower limit still wins. 0 disables it.",
     category: 'SecOps',
     group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
-    order: 5,
+    order: 6,
     dependsOn: 'apiKeyTrustGateEnabled',
   }),
   apiKeyUntrustedTokensPerMin: makeNumberSetting({
@@ -4248,7 +4328,7 @@ export const settingsMap = {
       'Tokens per rolling minute for an untrusted account using its personal API keys. Counts every settled model call the account billed to itself in the last minute, from any surface (input, output and prompt-cache tokens, each counted once); usage billed to an organization is left out. A completion is admitted while the account is under the limit, and its tokens count against the requests that follow. 0 disables it.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
-    order: 6,
+    order: 7,
     dependsOn: 'apiKeyTrustGateEnabled',
   }),
   apiKeyUntrustedMaxConcurrent: makeNumberSetting({
@@ -4262,7 +4342,7 @@ export const settingsMap = {
       "Completions an untrusted account's personal API keys may have in flight at once, on the streaming completion routes and blocking chat turns. 0 disables it.",
     category: 'SecOps',
     group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
-    order: 7,
+    order: 8,
     dependsOn: 'apiKeyTrustGateEnabled',
   }),
   usagePatternSignalsEnabled: makeBooleanSetting({
