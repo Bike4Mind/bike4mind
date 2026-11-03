@@ -2731,19 +2731,22 @@ export class ChatService {
     // Reset with `produced` when a mid-turn message starts a new reply.
     let replyStartedAt = turnStartedAt;
     let toolMs = 0;
-    // None for a reply that never reached the model: a refused turn has nothing to show.
-    const replyStats = (): ChatReplyStats | undefined =>
-      produced.length > 0 || resume?.stats
-        ? buildReplyStats({
-            startedAt: replyStartedAt,
-            endedAt: Date.now(),
-            rounds: produced,
-            toolMs,
-            ...(usage ? { usage } : {}),
-            local: isLocalModel(session.model),
-            ...(resume?.stats ? { earlier: resume.stats } : {}),
-          })
-        : undefined;
+    // None for a reply continued from one stored before stats were kept: its earlier runs' time is
+    // unknown, so nothing measured now could stand for the whole reply its usage covers.
+    const replyStats = (): ChatReplyStats | undefined => {
+      if (resume && !resume.stats) return undefined;
+      // A run refused before reaching the model adds nothing; a fresh reply that never ran has none.
+      if (produced.length === 0) return resume?.stats;
+      return buildReplyStats({
+        startedAt: replyStartedAt,
+        endedAt: Date.now(),
+        rounds: produced,
+        toolMs,
+        ...(usage ? { usage } : {}),
+        local: isLocalModel(session.model),
+        ...(resume?.stats ? { earlier: resume.stats } : {}),
+      });
+    };
 
     try {
       // Read before any await: a folder changed while the config loads must still reach the first refresh.
