@@ -12,33 +12,63 @@ export function startRoundTimer(now: () => number = Date.now) {
   let lastReasoningAt: number | undefined;
   let firstTextAt: number | undefined;
   let reasoningFrames = 0;
-  let blank = false;
+  // Bare markers wait for what follows them: readable thinking or text keeps them, while whitespace
+  // makes theirs an empty block, which is what a model with thinking off emits and is no thinking.
+  let markerFirstAt: number | undefined;
+  let markerLastAt: number | undefined;
+  let readSinceText = false;
+  let emptyBlockOpen = false;
+  const stamp = (at: number) => {
+    firstReasoningAt ??= at;
+    lastReasoningAt = at;
+  };
+  const keepMarkers = () => {
+    if (markerFirstAt === undefined || markerLastAt === undefined) return;
+    stamp(markerFirstAt);
+    stamp(markerLastAt);
+    markerFirstAt = markerLastAt = undefined;
+  };
   return {
     firstToken(): void {
       firstTokenAt ??= now();
     },
     reasoning(text: string): void {
-      // A block holding only whitespace is no thinking: what a model with thinking off emits.
-      if (text && !text.trim()) {
-        blank = true;
+      const at = now();
+      if (!text) {
+        if (emptyBlockOpen) emptyBlockOpen = false;
+        else {
+          markerFirstAt ??= at;
+          markerLastAt = at;
+        }
         return;
       }
-      const at = now();
-      firstReasoningAt ??= at;
-      lastReasoningAt = at;
-      if (text) reasoningFrames++;
+      if (!text.trim()) {
+        // Within readable thinking, whitespace is part of it.
+        if (!readSinceText) {
+          markerFirstAt = markerLastAt = undefined;
+          emptyBlockOpen = true;
+        }
+        return;
+      }
+      keepMarkers();
+      stamp(at);
+      reasoningFrames++;
+      readSinceText = true;
+      emptyBlockOpen = false;
     },
     text(): void {
       firstTextAt ??= now();
+      keepMarkers();
+      readSinceText = false;
+      emptyBlockOpen = false;
     },
     reasoningFrames: () => reasoningFrames,
     end(): ChatRoundTiming {
-      // The markers around that whitespace are no thinking either.
-      const thought = firstReasoningAt !== undefined && (reasoningFrames > 0 || !blank);
+      keepMarkers();
       return {
         startedAt,
         ...(firstTokenAt !== undefined ? { firstTokenAt } : {}),
-        ...(thought ? { firstReasoningAt, lastReasoningAt } : {}),
+        ...(firstReasoningAt !== undefined ? { firstReasoningAt, lastReasoningAt } : {}),
         ...(firstTextAt !== undefined ? { firstTextAt } : {}),
         endedAt: now(),
       };
