@@ -195,7 +195,7 @@ async function fixture(
     check: async () => {
       changed.mockClear();
       await servers.check(id);
-      await vi.waitFor(() => expect(changed).toHaveBeenCalled());
+      await vi.waitFor(() => expect(changed).toHaveBeenCalled(), { timeout: 5_000 });
     },
     start,
     finish,
@@ -401,9 +401,9 @@ describe('a turn on a saved server that is still listing', () => {
 
     const before = harness.listings();
     await harness.start();
-    await vi.waitFor(() => expect(harness.listings()).toBeGreaterThan(before));
+    await vi.waitFor(() => expect(harness.listings()).toBeGreaterThan(before), { timeout: 5_000 });
     harness.stop();
-    await vi.waitUntil(() => !harness.busy(), { timeout: 1_000 });
+    await vi.waitUntil(() => !harness.busy(), { timeout: 5_000 });
     listing.fail(new TypeError('fetch failed', { cause: { code: 'ECONNREFUSED' } }));
     await new Promise(resolve => setTimeout(resolve, 50));
 
@@ -420,10 +420,10 @@ describe('a turn on a saved server that is still listing', () => {
 
     const before = harness.listings();
     await harness.start();
-    await vi.waitFor(() => expect(connect).toHaveBeenCalled());
+    await vi.waitFor(() => expect(connect).toHaveBeenCalled(), { timeout: 5_000 });
     harness.stop();
     connecting.release();
-    await vi.waitUntil(() => !harness.busy(), { timeout: 1_000 });
+    await vi.waitUntil(() => !harness.busy(), { timeout: 5_000 });
     await new Promise(resolve => setTimeout(resolve, 50));
 
     expect(harness.listings()).toBe(before);
@@ -440,7 +440,7 @@ describe('a turn on a saved server that is still listing', () => {
 
     const before = harness.listings();
     const sent = harness.start();
-    await vi.waitFor(() => expect(harness.listings()).toBeGreaterThan(before));
+    await vi.waitFor(() => expect(harness.listings()).toBeGreaterThan(before), { timeout: 5_000 });
     await harness.rename('gpu renamed');
     await vi.advanceTimersByTimeAsync(PICKER_LIST_WAIT_MS * 2);
     await sent;

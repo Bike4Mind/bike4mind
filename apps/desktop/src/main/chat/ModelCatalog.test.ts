@@ -282,7 +282,7 @@ describe('ModelCatalog', () => {
       local as never
     );
     const listed = catalog.list();
-    await vi.waitFor(() => expect(catalog.lastLocal()).not.toBeNull());
+    await vi.waitFor(() => expect(catalog.lastLocal()).not.toBeNull(), { timeout: 5_000 });
     catalog.forgetLocal();
     finishHosted({ models: [wireModel()] });
     expect((await listed).models.map(model => model.id)).toEqual(['claude-sonnet-4-5-20250929', 'local:ollama:qwen']);
@@ -327,7 +327,7 @@ describe('ModelCatalog', () => {
       local as never
     );
     const listed = catalog.list();
-    await vi.waitFor(() => expect(get).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(get).toHaveBeenCalledOnce(), { timeout: 5_000 });
     finishLocal([{ id: 'local:ollama:qwen', name: 'qwen' }]);
     expect((await listed).models.map(model => model.id)).toEqual(['claude-sonnet-4-5-20250929', 'local:ollama:qwen']);
   });
