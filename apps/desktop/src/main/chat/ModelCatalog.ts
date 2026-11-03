@@ -8,7 +8,7 @@ import {
 import type { ChatModelCatalog, ChatModelOption } from '@shared/chat';
 import type { ModelListOptions } from '../modelServers/ModelServerRegistry';
 import { parseVideoModels } from './media/videoModels';
-import { hostedControls } from './modelControls';
+import { hostedControls, withOllamaContext } from './modelControls';
 import { supportsReasoningEffort } from './reasoningEffort';
 import { currentLocalContext, OllamaLocal } from './OllamaLocal';
 
@@ -340,7 +340,12 @@ const VIDEO_MODELS_PATH = '/api/v1/video-models';
 function withCurrentContexts(models: ChatModelOption[]): ChatModelOption[] {
   return models.map(model => {
     const tokens = currentLocalContext(model.id);
-    return tokens === undefined || tokens === model.contextWindow ? model : { ...model, contextWindow: tokens };
+    if (tokens === undefined || tokens === model.contextWindow) return model;
+    return {
+      ...model,
+      contextWindow: tokens,
+      ...(model.controls ? { controls: withOllamaContext(model.controls, tokens) } : {}),
+    };
   });
 }
 

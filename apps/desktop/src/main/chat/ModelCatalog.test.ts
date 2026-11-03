@@ -458,6 +458,7 @@ describe('ModelCatalog', () => {
       expect(grown).toBeGreaterThan(65536);
       expect(catalog.cached()?.find(model => model.id === 'local:ollama:qwen')?.contextWindow).toBe(grown);
       expect((await contextOf())?.contextWindow).toBe(grown);
+      expect((await contextOf())?.controls?.maxOutputTokens?.max).toBe(grown);
 
       hardware = unifiedMachine(10);
       forgetLocalContexts();

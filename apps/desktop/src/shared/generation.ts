@@ -48,10 +48,12 @@ export type ControlScope = 'request' | 'load';
 export interface NumericControl {
   min: number;
   max: number;
-  /** For the composer's slider; a value is never rounded to it. */
+  /** The number input's step; a value is never rounded to it. */
   step: number;
   /** What the model runs with while the setting is untouched; absent when Desktop cannot know it. */
   default?: number;
+  /** Max output with no default because, untouched, a reply runs until the model stops or the context is full. */
+  unlimitedDefault?: true;
   /** Shown at `value` and not editable. Nothing is sent for a locked control. */
   locked?: { value: number; reason: string };
   /**

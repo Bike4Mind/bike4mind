@@ -6,6 +6,7 @@ import {
   MAX_THINKING_BUDGET_TOKENS,
   NO_TEMPERATURE_MODELS,
   REASONING_SUPPORTED_MODELS,
+  stripBedrockRegionPrefix,
   type ReasoningEffort,
 } from '@bike4mind/common';
 import type { OpenAICompatibleProduct } from '@bike4mind/local-models';
@@ -15,7 +16,13 @@ import type { ModelControls, NumericControl } from '@shared/generation';
 type Range = Pick<NumericControl, 'min' | 'max' | 'step'>;
 
 const TEMPERATURE: Range = { min: 0, max: 2, step: 0.05 };
+/** Bedrock's model families take 0 to 1, Claude included. */
+const UNIT_TEMPERATURE: Range = { min: 0, max: 1, step: 0.05 };
 const TOP_P: Range = { min: 0, max: 1, step: 0.01 };
+/** vLLM refuses a top_p of 0. */
+const OPENAI_TOP_P: Range = { min: 0.01, max: 1, step: 0.01 };
+/** 0 turns top_k off in llama.cpp, which Ollama and llama-server run. */
+const LLAMA_CPP_TOP_K: Range = { min: 0, max: 200, step: 1 };
 const TOP_K: Range = { min: 1, max: 200, step: 1 };
 const MIN_P: Range = { min: 0, max: 1, step: 0.01 };
 const REPEAT_PENALTY: Range = { min: 0.5, max: 2, step: 0.01 };
@@ -71,21 +78,27 @@ export function ollamaControls(facts: OllamaModelFacts): ModelControls {
     facts.inspected ? (modelfileParameter(facts.parameters, name) ?? OLLAMA_DEFAULTS[name]) : undefined;
   const numPredict = facts.inspected ? modelfileParameter(facts.parameters, 'num_predict') : undefined;
   const levels = effortLevels(facts.thinkingValues ?? []);
-  const maxOutputTokens = outputControl(
-    MIN_OUTPUT_TOKENS,
-    facts.contextWindow,
-    numPredict !== undefined && numPredict > 0 ? numPredict : undefined,
-    facts.thinks
-  );
+  const limited = numPredict !== undefined && numPredict > 0;
+  const output = outputControl(MIN_OUTPUT_TOKENS, facts.contextWindow, limited ? numPredict : undefined, facts.thinks);
+  // Ollama's own num_predict default is -1, which a Modelfile can also set.
+  const maxOutputTokens =
+    output && facts.inspected && !limited ? { ...output, unlimitedDefault: true as const } : output;
   return {
     temperature: control(TEMPERATURE, known('temperature')),
     topP: control(TOP_P, known('top_p')),
-    topK: control(TOP_K, known('top_k')),
+    topK: control(LLAMA_CPP_TOP_K, known('top_k')),
     minP: control(MIN_P, known('min_p')),
     repeatPenalty: control(REPEAT_PENALTY, known('repeat_penalty')),
     ...(maxOutputTokens ? { maxOutputTokens } : {}),
     ...(levels.length > 0 ? { effort: { levels, scope: 'request' } } : {}),
   };
+}
+
+/** An Ollama model's controls once its context is settled, which bounds a reply as at listing. */
+export function withOllamaContext(controls: ModelControls, contextWindow: number): ModelControls {
+  const { maxOutputTokens: output, ...rest } = controls;
+  if (!output) return controls;
+  return contextWindow > output.min ? { ...rest, maxOutputTokens: { ...output, max: contextWindow } } : rest;
 }
 
 /** Effort levels an OpenAI-compatible server's `reasoning_effort` takes for the gpt-oss templates. */
@@ -107,10 +120,11 @@ export function openAICompatibleControls(
     undefined,
     facts.effortLevels || facts.thinks === true
   );
+  const topK = control(product === 'llama-server' ? LLAMA_CPP_TOP_K : TOP_K);
   return {
     temperature: control(TEMPERATURE),
-    topP: control(TOP_P),
-    ...(product !== null ? { topK: control(TOP_K), repeatPenalty: control(REPEAT_PENALTY) } : {}),
+    topP: control(OPENAI_TOP_P),
+    ...(product !== null ? { topK, repeatPenalty: control(REPEAT_PENALTY) } : {}),
     ...(product === 'llama-server' || product === 'vllm' ? { minP: control(MIN_P) } : {}),
     ...(maxOutputTokens ? { maxOutputTokens } : {}),
     ...(facts.effortLevels ? { effort: { levels: [...OPENAI_COMPATIBLE_EFFORT_LEVELS], scope: 'request' } } : {}),
@@ -153,15 +167,18 @@ function reasonsWithinOutputBudget(model: HostedModelFacts): boolean {
 
 /**
  * Temperature as the completions server treats it (llm-adapters): dropped for the models that reject
- * it and for Gemini and DeepSeek while they think, pinned at 1 for OpenAI's reasoning models and for
- * Claude while it thinks with a budget. Desktop asks every hosted Claude to think.
+ * it, for Gemini and DeepSeek while they think and by the Bedrock DeepSeek adapter, pinned at 1 for
+ * OpenAI's reasoning models and for Claude while it thinks with a budget. Desktop asks every hosted
+ * Claude to think.
  */
 function hostedTemperature(model: HostedModelFacts): NumericControl | undefined {
   if (NO_TEMPERATURE_MODELS.has(model.id)) return undefined;
   const claude = servedAsClaude(model);
   if (claude && thinksAdaptively(model)) return undefined;
   if (model.canThink && (model.backend === 'gemini' || model.backend === 'deepseek')) return undefined;
-  const range: Range = claude ? { min: 0, max: 1, step: 0.05 } : TEMPERATURE;
+  const bedrock = model.backend === 'bedrock';
+  if (bedrock && stripBedrockRegionPrefix(model.id).startsWith('deepseek.')) return undefined;
+  const range = claude || bedrock ? UNIT_TEMPERATURE : TEMPERATURE;
   if (FIXED_TEMPERATURE_MODELS.has(model.id) || (model.maxCompletionTokens && model.canThink)) {
     return { ...control(range), locked: { value: 1, reason: 'This model only runs at temperature 1.' } };
   }
