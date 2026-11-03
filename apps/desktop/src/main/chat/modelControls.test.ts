@@ -1,7 +1,13 @@
 import { ChatModels, MAX_THINKING_BUDGET_TOKENS } from '@bike4mind/common';
-import { effectiveControls, requestGeneration } from '@shared/generation';
+import { effectiveControls, GENERATION_BOUNDS, GENERATION_FIELDS, requestGeneration } from '@shared/generation';
 import { describe, expect, it } from 'vitest';
-import { hostedControls, modelfileParameter, ollamaControls, openAICompatibleControls } from './modelControls';
+import {
+  hostedControls,
+  modelfileParameter,
+  ollamaControls,
+  openAICompatibleControls,
+  withOllamaContext,
+} from './modelControls';
 
 const MODELFILE = ['temperature 0.6', 'top_k 20', 'num_predict 4096', 'stop "<|im_end|>"'].join('\n');
 
@@ -26,6 +32,30 @@ describe('ollamaControls', () => {
     expect(controls.maxOutputTokens).toEqual({ min: 256, max: 32_768, step: 256, default: 4096, scope: 'request' });
     expect(controls).not.toHaveProperty('effort');
     expect(controls).not.toHaveProperty('thinkingBudgetTokens');
+  });
+
+  it('gives max output no default and says untouched means no limit when num_predict is unset or -1', () => {
+    for (const parameters of [undefined, 'num_predict -1']) {
+      const output = ollamaControls({
+        inspected: true,
+        contextWindow: 8192,
+        ...(parameters ? { parameters } : {}),
+      }).maxOutputTokens;
+      expect(output).not.toHaveProperty('default');
+      expect(output?.unlimitedDefault).toBe(true);
+    }
+    expect(
+      ollamaControls({ inspected: true, parameters: MODELFILE, contextWindow: 8192 }).maxOutputTokens
+    ).not.toHaveProperty('unlimitedDefault');
+    expect(ollamaControls({ inspected: false, contextWindow: 8192 }).maxOutputTokens).not.toHaveProperty(
+      'unlimitedDefault'
+    );
+  });
+
+  it('follows the context Ollama settles on, and drops max output when no room is left', () => {
+    const controls = ollamaControls({ inspected: true, parameters: MODELFILE, contextWindow: 8192 });
+    expect(withOllamaContext(controls, 65_536).maxOutputTokens).toMatchObject({ max: 65_536, default: 4096 });
+    expect(withOllamaContext(controls, 128)).not.toHaveProperty('maxOutputTokens');
   });
 
   it('states no defaults before the model is inspected', () => {
@@ -59,6 +89,14 @@ describe('openAICompatibleControls', () => {
     ['vllm', ['maxOutputTokens', 'minP', 'repeatPenalty', 'temperature', 'topK', 'topP']],
   ] as const)('adds the fields %s documents', (product, fields) => {
     expect(Object.keys(openAICompatibleControls(product, { effortLevels: false })).sort()).toEqual(fields);
+  });
+
+  it('keeps top_p above 0, which vLLM refuses, and lets llama-server turn top_k off at 0', () => {
+    const vllm = openAICompatibleControls('vllm', { effortLevels: false });
+    expect(vllm.topP?.min).toBe(0.01);
+    expect(vllm.topK?.min).toBe(1);
+    expect(openAICompatibleControls('llama-server', { effortLevels: false }).topK?.min).toBe(0);
+    expect(ollamaControls({ inspected: false, contextWindow: 8192 }).topK?.min).toBe(0);
   });
 
   it('leaves half the context for the prompt and lists gpt-oss effort levels', () => {
@@ -129,16 +167,31 @@ describe('hostedControls', () => {
     expect(controls.effort?.levels).toEqual(['low', 'medium', 'high', 'xhigh']);
   });
 
-  it('drops temperature for a model that rejects it and for a thinking Gemini', () => {
-    expect(
-      hostedControls({ id: ChatModels.KIMI_K2_6, backend: 'moonshot', canThink: true }, [], false)
-    ).not.toHaveProperty('temperature');
+  it('drops temperature for a model that rejects it and for a thinking Gemini or DeepSeek', () => {
+    expect(hostedControls({ id: ChatModels.KIMI_K2_6, backend: 'kimi', canThink: true }, [], false)).not.toHaveProperty(
+      'temperature'
+    );
     expect(
       hostedControls({ id: ChatModels.GEMINI_2_5_PRO, backend: 'gemini', canThink: true }, undefined, false)
     ).not.toHaveProperty('temperature');
     expect(
+      hostedControls({ id: 'deepseek-reasoner-next', backend: 'deepseek', canThink: true }, undefined, false)
+    ).not.toHaveProperty('temperature');
+    expect(
       hostedControls({ id: 'gemini-2.0-flash', backend: 'gemini', canThink: false }, undefined, false).temperature
     ).toEqual({ min: 0, max: 2, step: 0.05, scope: 'request' });
+  });
+
+  it("gives Bedrock rows Bedrock's 0 to 1 temperature, and none where the DeepSeek adapter drops it", () => {
+    expect(
+      hostedControls({ id: 'us.amazon.nova-pro-v1:0', backend: 'bedrock', canThink: false }, undefined, false)
+        .temperature
+    ).toEqual({ min: 0, max: 1, step: 0.05, scope: 'request' });
+    for (const id of [ChatModels.DEEPSEEK_R1_BEDROCK, ChatModels.DEEPSEEK_V3_1]) {
+      expect(hostedControls({ id, backend: 'bedrock', canThink: false }, undefined, false)).not.toHaveProperty(
+        'temperature'
+      );
+    }
   });
 
   it('pins temperature at 1 for a fixed-temperature model and a max_completion_tokens thinker', () => {
@@ -152,6 +205,13 @@ describe('hostedControls', () => {
         false
       ).temperature?.locked?.value
     ).toBe(1);
+    expect(
+      hostedControls(
+        { id: 'some-new-chat-model', backend: 'openai', canThink: false, maxCompletionTokens: true },
+        undefined,
+        false
+      ).temperature
+    ).not.toHaveProperty('locked');
   });
 
   it('lists the levels the server publishes, in order, else the old four for a known reasoning model', () => {
@@ -206,5 +266,39 @@ describe('hostedControls', () => {
       scope: 'request',
     });
     expect(hostedControls(gpt, undefined, false)).not.toHaveProperty('maxOutputTokens');
+  });
+});
+
+describe('every range', () => {
+  it('stays inside the bounds the per-chat setter accepts', () => {
+    const all = [
+      ollamaControls({ inspected: true, contextWindow: 262_144, thinkingValues: ['low', 'high'] }),
+      ...(['llama-server', 'vllm', 'lmstudio', null] as const).map(product =>
+        openAICompatibleControls(product, { contextWindow: 1_048_576, effortLevels: true })
+      ),
+      hostedControls(
+        { id: ChatModels.CLAUDE_4_5_SONNET, backend: 'anthropic', canThink: true, maxOutputTokens: 64_000 },
+        undefined,
+        false
+      ),
+      hostedControls(
+        { id: 'us.amazon.nova-pro-v1:0', backend: 'bedrock', canThink: false, maxOutputTokens: 10_000 },
+        undefined,
+        false
+      ),
+      hostedControls(
+        { id: 'gemini-2.0-flash', backend: 'gemini', canThink: false, maxOutputTokens: 8192 },
+        undefined,
+        false
+      ),
+    ];
+    for (const controls of all) {
+      for (const field of GENERATION_FIELDS) {
+        const range = controls[field];
+        if (!range) continue;
+        expect(range.min, field).toBeGreaterThanOrEqual(GENERATION_BOUNDS[field].min);
+        expect(range.max, field).toBeLessThanOrEqual(GENERATION_BOUNDS[field].max);
+      }
+    }
   });
 });
