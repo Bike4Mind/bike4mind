@@ -2733,8 +2733,9 @@ export class ChatCompletionProcess {
         logger,
       });
       const modelInfo = shadowModelInfo ?? requestedModelInfo;
-      // The model id handed to features and tools that call the backend themselves.
-      const runModel = shadowModelInfo ? shadowModelInfo.id : model;
+      // The model id handed to features and tools that call the backend themselves: the
+      // post-resolution id, never a retired pin the provider would reject.
+      const runModel = shadowModelInfo ? shadowModelInfo.id : resolvedModelId;
       // Reuse trusted federation provenance across primary and fallback chat backends.
       // Direct-SDK consumers below keep the original static key table.
       const chatApiKeyTable = withFederatedSharedKeys(apiKeyTable, sharedAdminKeyProviders(apiKeyTable));
