@@ -58,6 +58,7 @@ function stub(
     fits?: boolean;
     placement?: FitPlacement;
     context?: number;
+    tokensPerSec?: number;
     memory?: { weightsBytes?: number; offloadedBytes?: number };
   } = {}
 ) {
@@ -69,6 +70,10 @@ function stub(
     nCpuMoe: 0,
     ubatch: 1024,
     fits: options.fits ?? totalGiB + 1 <= 12,
+    decode:
+      options.tokensPerSec === undefined
+        ? null
+        : { tokensPerSec: options.tokensPerSec, bytesPerToken: GIB, bandwidthBytesPerSec: GIB },
     memory: {
       weightsBytes: 0,
       offloadedBytes: 0,
@@ -219,6 +224,40 @@ describe('fitFromArch', () => {
     expect(fit.detail).toContain('GPU memory');
     expect(fit.detail).toContain('40K');
     expect(fit.detail).not.toContain('CPU');
+    expect(fit.detail).not.toContain('Replies');
+  });
+
+  it('passes MoE expert sizes and the active parameter share to the estimator', () => {
+    stub(6);
+    fitFromArch(DENSE, 4 * GIB, cpu(16), 16384, { expertBytesPerLayer: 7, activeParamsFraction: 0.15 });
+    expect(estimateFit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: { arch: DENSE, weightsBytes: 4 * GIB, expertBytesPerLayer: 7, activeParamsFraction: 0.15 },
+      })
+    );
+  });
+
+  it.each([
+    [45.4, 'Replies at about 45 tokens/s early in a chat.'],
+    [0.4, 'Replies at under 1 token/s early in a chat.'],
+  ])('adds the estimated reply speed of %d tokens/s to a plan that fits', (tokensPerSec, sentence) => {
+    stub(6, { placement: 'gpu', tokensPerSec });
+    expect(fitFromArch(DENSE, 4 * GIB, gpu(24, 64), 16384).detail).toMatch(new RegExp(`\\. ${sentence}$`));
+  });
+
+  it('puts the reply speed after the tight note, for this computer and a saved server', () => {
+    stub(10.5, { placement: 'gpu', tokensPerSec: 20 });
+    expect(fitFromArch(DENSE, 4 * GIB, gpu(12, 64), 16384).detail).toMatch(
+      /Close other apps first, or this computer may slow down\. Replies at about 20 tokens\/s early in a chat\.$/
+    );
+    expect(fitFromArch(DENSE, 4 * GIB, gpu(12, 64), 16384, { where: 'server' }).detail).toMatch(
+      /Close other apps on that server first, or it may slow down\. Replies at about 20 tokens\/s early in a chat\.$/
+    );
+  });
+
+  it('leaves the reply speed out of a plan that does not fit', () => {
+    stub(13, { fits: false, placement: 'gpu', tokensPerSec: 20 });
+    expect(fitFromArch(DENSE, 4 * GIB, gpu(12, 64), 16384).detail).not.toContain('Replies');
   });
 });
 

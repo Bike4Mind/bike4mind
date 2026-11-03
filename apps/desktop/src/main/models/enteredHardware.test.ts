@@ -29,10 +29,22 @@ const specs = (overrides: Partial<ModelServerSpecs> = {}): ModelServerSpecs => (
 });
 
 describe('withEnteredSpecs', () => {
-  it('returns the probe untouched without entered memory', () => {
+  it('returns the probe untouched without entered figures', () => {
     const probed = probe();
     expect(withEnteredSpecs(probed, null)).toBe(probed);
-    expect(withEnteredSpecs(probed, specs({ bandwidthGBps: 256 }))).toBe(probed);
+    expect(withEnteredSpecs(probed, specs())).toBe(probed);
+  });
+
+  it('adds entered bandwidth in bytes per second, with or without entered memory', () => {
+    const probed = probe();
+    expect(withEnteredSpecs(probed, specs({ bandwidthGBps: 256 }))).toEqual({
+      ...probed,
+      memoryBandwidthBytesPerSec: 256e9,
+    });
+    expect(withEnteredSpecs(probed, specs({ ramGiB: 64, bandwidthGBps: 256 }))).toMatchObject({
+      totalMemoryBytes: 64 * GIB,
+      memoryBandwidthBytesPerSec: 256e9,
+    });
   });
 
   it('replaces RAM alone and keeps what the probe knew about the GPU', () => {
@@ -86,5 +98,10 @@ describe('serverHardware', () => {
     ],
   ] as const)('describes %s', (_label, entered, expected) => {
     expect(serverHardware(entered)).toMatchObject({ ...expected, confidence: 'high' });
+  });
+
+  it('carries entered bandwidth in bytes per second', () => {
+    expect(serverHardware(specs({ ramGiB: 64 }))?.memoryBandwidthBytesPerSec).toBeNull();
+    expect(serverHardware(specs({ ramGiB: 64, bandwidthGBps: 1008 }))?.memoryBandwidthBytesPerSec).toBe(1008e9);
   });
 });
