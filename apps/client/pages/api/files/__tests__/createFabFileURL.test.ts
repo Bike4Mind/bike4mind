@@ -5,6 +5,7 @@ const h = vi.hoisted(() => ({
   createFabFileByUrl: vi.fn(),
   logEvent: vi.fn(),
   signUrl: vi.fn(),
+  consumeFileUploadBudget: vi.fn(async (_req: unknown, _fileCount: number) => undefined),
   baseApiOptions: undefined as unknown,
 }));
 
@@ -17,6 +18,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return { use: () => ({ post: (h: unknown) => h }) };
   },
 }));
+
+vi.mock('@server/files/fileUploadBudget', () => ({ consumeFileUploadBudget: h.consumeFileUploadBudget }));
 
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
@@ -91,6 +94,20 @@ describe('POST /api/files/createFabFileURL', () => {
       mimeType: 'text/plain',
       fileUrl: 'https://example.test/page',
     });
+  });
+
+  it('spends one unit of the allowance for the import', async () => {
+    await run(makeRes().res);
+
+    expect(h.consumeFileUploadBudget).toHaveBeenCalledTimes(1);
+    expect(h.consumeFileUploadBudget.mock.calls[0][1]).toBe(1);
+  });
+
+  it('imports nothing when the allowance refuses the upload', async () => {
+    h.consumeFileUploadBudget.mockRejectedValueOnce(new Error('Upload limit reached'));
+
+    await expect(run(makeRes().res)).rejects.toThrow('Upload limit reached');
+    expect(h.createFabFileByUrl).not.toHaveBeenCalled();
   });
 
   it('requires files:write at the baseApi route gate', () => {
