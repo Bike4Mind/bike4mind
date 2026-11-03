@@ -66,7 +66,7 @@ describe('scheduled business metric alert', () => {
       })
     );
     const body = JSON.stringify(mocks.post.mock.calls[0][1]);
-    expect(body).toContain('Top movers: Large +120');
+    expect(body).toContain('Top models: Large +120');
     expect(body).toContain('https://app.example.com/admin?tab=analytics');
     expect(body).toContain('category business  |  staging  |  12:00 UTC, 26 Oct');
     expect(mocks.collect).toHaveBeenCalledWith({

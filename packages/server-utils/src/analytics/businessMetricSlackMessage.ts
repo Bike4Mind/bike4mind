@@ -97,28 +97,45 @@ function contributorLink(row: MetricContributor, appUrl: string | undefined): st
   return escapeMrkdwn(row.label);
 }
 
+/** Families whose contributors are the accounts themselves, one per signup or active user. */
+const ACCOUNT_FAMILIES = new Set(['verifiedSignups', 'activeUsers']);
+const KIND_HEADINGS = new Map([
+  ['user', 'Top users'],
+  ['model', 'Top models'],
+  ['org', 'Top orgs'],
+]);
+
+function capped(rows: MetricContributor[], render: (row: MetricContributor) => string): string {
+  const shown = rows.slice(0, MAX_CONTRIBUTORS);
+  const more = rows.length - shown.length;
+  return `${shown.map(render).join(', ')}${more > 0 ? ` and ${more} more` : ''}`;
+}
+
 /**
- * "Top movers: Claude Opus 5.5 -2,958 credits, user ...dc47 -524 credits and 3 more". A list where
- * every row moved by exactly one (signups, active users) is the accounts themselves: on a rise
- * the first few are linked so a suspected farm account is one click away; on a fall the line is
- * omitted, since yesterday's accounts are not actionable.
+ * One line per contributor kind ("Top users: user ...dc47 -524 credits and 3 more"), since a
+ * usage row is labelled with its user, model and org and each kind splits the same total. For
+ * signups and active users the contributors are the accounts: on a rise the new ones are linked
+ * so a suspected farm account is one click away; on a fall the line is omitted, since
+ * yesterday's accounts are not actionable.
  */
 export function describeContributors(
   anomaly: BusinessMetricAnomaly,
   metric: MetricDescription,
   appUrl: string | undefined
 ): string | undefined {
-  const rows = anomaly.contributors;
-  if (rows.length === 0) return undefined;
-  const shown = rows.slice(0, MAX_CONTRIBUTORS);
-  const more = rows.length - shown.length;
-  const rest = more > 0 ? ` and ${more} more` : '';
-  if (rows.every(row => /^(user|org):/.test(row.label) && Math.abs(row.value) === 1)) {
-    if (anomaly.direction === 'decrease') return undefined;
-    return `Accounts: ${shown.map(row => contributorLink(row, appUrl)).join(', ')}${rest}`;
+  if (ACCOUNT_FAMILIES.has(metric.family)) {
+    const added = anomaly.contributors.filter(row => row.value > 0);
+    if (anomaly.direction === 'decrease' || added.length === 0) return undefined;
+    return `Accounts: ${capped(added, row => contributorLink(row, appUrl))}`;
   }
-  const movers = shown.map(row => `${contributorLink(row, appUrl)} ${formatMetricDelta(row.value, metric)}`);
-  return `Top movers: ${movers.join(', ')}${rest}`;
+  const byKind = new Map<string, MetricContributor[]>();
+  for (const row of anomaly.contributors) {
+    const heading = KIND_HEADINGS.get(row.label.split(':')[0]) ?? 'Top movers';
+    byKind.set(heading, [...(byKind.get(heading) ?? []), row]);
+  }
+  if (byKind.size === 0) return undefined;
+  const render = (row: MetricContributor) => `${contributorLink(row, appUrl)} ${formatMetricDelta(row.value, metric)}`;
+  return [...byKind].map(([heading, rows]) => `${heading}: ${capped(rows, render)}`).join('\n');
 }
 
 function anomalySection(anomaly: BusinessMetricAnomaly, appUrl: string | undefined): string {
@@ -143,7 +160,7 @@ function buttons(anomalies: BusinessMetricAnomaly[], appUrl: string | undefined)
   const rising = (family: string) =>
     anomalies.some(anomaly => anomaly.direction === 'increase' && anomaly.metricName.split(':')[0] === family);
   if (rising('verifiedSignups') || rising('activeUsers'))
-    list.push({ label: 'Signup activity', url: `${origin}/admin?tab=users&recentSignups=hour` });
+    list.push({ label: 'Signup activity', url: `${origin}/admin?tab=users&signedUp=hour` });
   if (rising('credits') || rising('spendUsd'))
     list.push({ label: 'Credit analytics', url: `${origin}/admin?tab=credit-analytics` });
   return list;
@@ -187,7 +204,7 @@ export function formatBusinessMetricSlackMessage(
       })),
     });
   }
-  const stamp = `${clock(window.end)} UTC, ${dayLabel(window.end)}`;
+  const stamp = `${window.mode === 'daily' ? 'closed ' : ''}${clock(window.end)} UTC, ${dayLabel(window.end)}`;
   const context = ['category business', options.stage ? escapeMrkdwn(options.stage) : undefined, stamp].filter(
     Boolean
   ) as string[];

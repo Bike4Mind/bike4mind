@@ -117,7 +117,7 @@ describe('business metric Slack message', () => {
     );
     expect(credits).toContain('young accounts');
     expect(spend).toContain(
-      '*Estimated openai spend* up 112.5%\nNow *USD 42.50*, previous USD 20.00, median warming up'
+      '*Estimated OpenAI spend* up 112.5%\nNow *USD 42.50*, previous USD 20.00, median warming up'
     );
     expect(receipts).toContain(
       '*Stripe receipts (USD)* up from zero\nNow *USD 1,234.56*, previous USD 0.00, 7-day median USD 1.00'
@@ -150,11 +150,14 @@ describe('business metric Slack message', () => {
     );
     const [section] = sectionTexts(message);
     expect(section).toContain(
-      `Top movers: <https://app.example.com/admin/users/${userId}|user \u2026e89e> -2,965 credits, Claude Opus 5.5 -2,958 credits, Claude Haiku 5.5 -1,269 credits and 2 more`
+      `Top users: <https://app.example.com/admin/users/${userId}|user \u2026e89e> -2,965 credits, ` +
+        '<https://app.example.com/admin/users/6ae44d7c08b61d93f6ad61f4|user \u202661f4> -517 credits\n' +
+        'Top models: Claude Opus 5.5 -2,958 credits, Claude Haiku 5.5 -1,269 credits\n' +
+        'Top orgs: <https://app.example.com/admin?tab=organizations&orgId=6ae60bba8b1a3c07be7a484a|org \u2026484a> -524 credits'
     );
     expect(section).not.toContain('org:');
-    expect(section).not.toContain('6ae44d7c08b61d93f6ad61f4');
     expect(section.replace(/<[^|>]+\|/g, '')).not.toContain(userId);
+    expect(section.replace(/<[^|>]+\|/g, '')).not.toContain('6ae44d7c08b61d93f6ad61f4');
   });
 
   it('links organizations to the organizations tab and keeps labels unlinked without an app url', () => {
@@ -172,10 +175,11 @@ describe('business metric Slack message', () => {
       ],
     });
     expect(describeContributors(credits, describeMetric('credits'), appUrl)).toBe(
-      'Top movers: <https://app.example.com/admin?tab=organizations&orgId=6ae60bba8b1a3c07be7a484a|org \u2026484a> +2,000 credits, &lt;script&gt; +1,000 credits'
+      'Top orgs: <https://app.example.com/admin?tab=organizations&orgId=6ae60bba8b1a3c07be7a484a|org \u2026484a> +2,000 credits\n' +
+        'Top models: &lt;script&gt; +1,000 credits'
     );
     expect(describeContributors(credits, describeMetric('credits'), undefined)).toBe(
-      'Top movers: org \u2026484a +2,000 credits, &lt;script&gt; +1,000 credits'
+      'Top orgs: org \u2026484a +2,000 credits\nTop models: &lt;script&gt; +1,000 credits'
     );
   });
 
@@ -199,6 +203,50 @@ describe('business metric Slack message', () => {
     expect(describeContributors(anomaly(), describeMetric('verifiedSignups'), appUrl)).toBeUndefined();
   });
 
+  it('lists only the newly active accounts on an active-user rise', () => {
+    const rise = anomaly({
+      metricName: 'activeUsers',
+      direction: 'increase',
+      contributors: [
+        { label: 'user:aaaaaaaaaaaaaaaaaaaa1111', value: 1 },
+        { label: 'user:bbbbbbbbbbbbbbbbbbbb2222', value: -1 },
+      ],
+    });
+    expect(describeContributors(rise, describeMetric('activeUsers'), undefined)).toBe('Accounts: user \u20261111');
+  });
+
+  it('shows one-unit request movers with their deltas instead of as accounts', () => {
+    const rows = [
+      { label: 'user:aaaaaaaaaaaaaaaaaaaa1111', value: 1 },
+      { label: 'user:bbbbbbbbbbbbbbbbbbbb2222', value: -1 },
+    ];
+    const rise = anomaly({ metricName: 'requests:user', direction: 'increase', contributors: rows });
+    expect(describeContributors(rise, describeMetric('requests:user'), undefined)).toBe(
+      'Top users: user \u20261111 +1, user \u20262222 -1'
+    );
+    const fall = anomaly({ metricName: 'requests:user', contributors: rows });
+    expect(describeContributors(fall, describeMetric('requests:user'), undefined)).toBe(
+      'Top users: user \u20261111 +1, user \u20262222 -1'
+    );
+  });
+
+  it('caps the attachment at 40 metric sections and counts the rest', () => {
+    const many = Array.from({ length: 43 }, (_, index) => anomaly({ metricName: `revenueMinor:c${index}` }));
+    const message = formatBusinessMetricSlackMessage(intraday, many);
+    const sections = sectionTexts(message);
+    expect(sections).toHaveLength(41);
+    expect(sections.at(-1)).toBe('3 more anomalies not shown.');
+    expect(message.blocks[0]).toMatchObject({ text: { text: expect.stringContaining('43 anomalies') } });
+    expect(attachmentBlocks(message).length).toBeLessThanOrEqual(50);
+  });
+
+  it('labels the daily footer stamp as the close time', () => {
+    const footer = attachmentBlocks(formatBusinessMetricSlackMessage(daily, [anomaly()])).at(-1);
+    expect(footer).toMatchObject({
+      elements: [{ type: 'mrkdwn', text: 'category business  |  closed 00:00 UTC, 3 Nov' }],
+    });
+  });
+
   it('adds admin buttons only with an app url and colours the bar by the worst signal', () => {
     const quiet = formatBusinessMetricSlackMessage(intraday, [anomaly()]);
     expect(attachmentBlocks(quiet).some(block => block.type === 'actions')).toBe(false);
@@ -213,7 +261,7 @@ describe('business metric Slack message', () => {
     const actions = attachmentBlocks(farm).find(block => block.type === 'actions');
     expect(actions?.elements?.map(element => [element.text?.text, element.url])).toEqual([
       ['Open analytics', 'https://app.example.com/admin?tab=analytics'],
-      ['Signup activity', 'https://app.example.com/admin?tab=users&recentSignups=hour'],
+      ['Signup activity', 'https://app.example.com/admin?tab=users&signedUp=hour'],
     ]);
     const footer = attachmentBlocks(farm).at(-1);
     expect(footer).toMatchObject({

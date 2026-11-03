@@ -36,16 +36,17 @@ an outage or a sign-in problem; a one-hour dip is usually noise.
 Now 2,667 credits, previous 6,811 credits, 7-day median 6,811 credits
 Fewer credits were charged than yesterday. Fine if usage fell too; otherwise check that
 metering still charges every completion.
-Top movers: user ...e89e -2,965 credits, Claude Opus 5.5 -2,958 credits,
-Claude Haiku 5.5 -1,269 credits and 2 more
+Top users: user ...e89e -2,965 credits, user ...61f4 -517 credits
+Top models: Claude Opus 5.5 -2,958 credits, Claude Haiku 5.5 -1,269 credits
+Top orgs: org ...484a -524 credits
 
 [Open analytics]
 
 category business  |  production  |  16:00 UTC, 2 Nov
 ```
 
-The midnight run is titled `2 Nov closed-day compare` and explains that it compares the closed
-UTC day against the day before. Labels, units, the one-line meaning per direction and the
+The midnight run is titled `2 Nov closed-day compare`, explains that it compares the closed
+UTC day against the day before, and stamps the footer `closed 00:00 UTC, 3 Nov`. Labels, units, the one-line meaning per direction and the
 abuse/dip/growth signal live in `packages/server-utils/src/analytics/businessMetricLabels.ts`;
 the layout is `businessMetricSlackMessage.ts` next to it. Counts print whole, credits say
 `credits`, provider spend says `USD`, and Stripe receipts print in major units with their
@@ -53,10 +54,11 @@ currency code.
 
 Contributors never appear as raw ids. Users and organizations render as admin links (the user
 page, or the organizations tab opened on that organization) labelled by the last four
-characters of the id; models render by display name. At most three are shown, followed by
-"and N more". When every contributor moved by exactly one (signups, active users) the rows are
-the accounts themselves: on a rise the first three are linked as `Accounts:` so a suspected
-farm account is one click away, and on a fall the line is omitted. Buttons appear only when
+characters of the id; models render by display name. A usage row counts toward its user, its
+model and its organization, so movers get one line per kind (`Top users`, `Top models`,
+`Top orgs`), each showing at most three followed by "and N more". For signups and active users
+the contributors are the accounts themselves: on a rise the first three new ones are linked as
+`Accounts:` so a suspected farm account is one click away, and on a fall the line is omitted. Buttons appear only when
 `SERVER_DOMAIN` is set: `Open analytics` always, `Signup activity` when signups or active users
 rose, `Credit analytics` when credits or spend rose.
 
