@@ -63,8 +63,8 @@ const LOOKALIKE_SOURCE =
 const LOOKALIKE_LATIN = 'aeopcxyijsdhlaovikptu';
 const LOOKALIKE = new RegExp(`[${LOOKALIKE_SOURCE}]`, 'g');
 
-// Compares letters and digits only, so "A.C.M.E", "Ac-me" and "A C M E" all match a denylisted "acme". Lookalike
-// letters and sharp s are folded too; this is a best-effort net, not a full Unicode confusables skeleton.
+// Folds case, lookalike letters and sharp s and keeps letters and digits only; this is a best-effort net, not a
+// full Unicode confusables skeleton.
 const foldForDenylist = (text: string): string =>
   text
     .normalize('NFKC')
@@ -74,11 +74,44 @@ const foldForDenylist = (text: string): string =>
     .replace(LOOKALIKE, c => LOOKALIKE_LATIN[LOOKALIKE_SOURCE.indexOf(c)])
     .replace(/[^\p{L}\p{N}]+/gu, '');
 
-/** Returns the first denylist term the text contains after folding case, punctuation and lookalike letters. */
+// Words are runs of letters and digits; a camelCase step, an acronym running into a word (GPUAcme), a digit
+// next to a letter and an uncased letter (CJK, modifier letters) next to any letter also count as breaks, so
+// "A.C.M.E", "Ac-me", "ACME_Corp", "AcmeCorp", "GPUAcme" and "v2Acme" all yield a word that starts with "acme".
+// Format characters, combining marks and the invisible Hangul fillers are separators, so they cannot glue a
+// name onto the word before it. A name buried inside one word with letters of its own case on both sides
+// ("myacmes") is the one spelling this net lets through, in exchange for not tripping on ordinary two-word copy.
+const denylistWords = (text: string): string[] =>
+  text
+    .normalize('NFKC')
+    .replace(/[\p{Cf}\p{M}\u115f\u1160\u3164\uffa0]/gu, ' ')
+    .replace(
+      /(?<=\p{Ll})(?=\p{Lu})|(?<=\p{Lu})(?=\p{Lu}\p{Ll})|(?<=\p{N})(?=\p{L})|(?<=\p{L})(?=\p{N})|(?<=[\p{Lo}\p{Lm}\p{Lt}])(?=\p{L})|(?<=\p{L})(?=[\p{Lo}\p{Lm}\p{Lt}])/gu,
+      ' '
+    )
+    .split(/[^\p{L}\p{N}]+/u)
+    .map(foldForDenylist)
+    .filter(Boolean);
+
+/**
+ * Returns the first denylist term the text contains after folding case, punctuation and lookalike letters.
+ * A match must start or end where a word does, so "A C M E", "Ac-me", "Acmes", "AcmeCloud" and "XACME" match
+ * "acme" but "session quest" does not match "onque": a term buried mid-word at both ends is ordinary copy
+ * running into the next word, while one that begins or ends a word is still the name.
+ */
 export const findDenied = (text: string, denylist: string[]): string | undefined => {
-  const folded = foldForDenylist(text);
+  const words = denylistWords(text);
+  const boundaries = new Set<number>([0]);
+  let joined = '';
+  for (const word of words) {
+    joined += word;
+    boundaries.add(joined.length);
+  }
   return denylist.find(term => {
     const foldedTerm = foldForDenylist(term);
-    return foldedTerm.length > 0 && folded.includes(foldedTerm);
+    if (!foldedTerm) return false;
+    for (let at = joined.indexOf(foldedTerm); at !== -1; at = joined.indexOf(foldedTerm, at + 1)) {
+      if (boundaries.has(at) || boundaries.has(at + foldedTerm.length)) return true;
+    }
+    return false;
   });
 };
