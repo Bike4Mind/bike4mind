@@ -35,7 +35,7 @@ export function roundThinking(round: StatsRound, local = false): { ms: number; d
   if (
     firstReasoningAt !== undefined &&
     lastReasoningAt !== undefined &&
-    (local || lastReasoningAt > firstReasoningAt)
+    (lastReasoningAt > firstReasoningAt || (local && round.reasoningFrames > 0))
   ) {
     return { ms: lastReasoningAt - firstReasoningAt, derived: false };
   }

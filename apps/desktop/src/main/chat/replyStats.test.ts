@@ -92,6 +92,22 @@ describe('roundThinking', () => {
     ).toEqual({ ms: 3_000, derived: true });
   });
 
+  it('does not treat a self-hosted lone bare marker as a readable frame', () => {
+    expect(
+      roundThinking(
+        round({
+          startedAt: 0,
+          firstTokenAt: 3_000,
+          firstReasoningAt: 3_000,
+          lastReasoningAt: 3_000,
+          firstTextAt: 3_000,
+          endedAt: 4_000,
+        }),
+        true
+      )
+    ).toEqual({ ms: 3_000, derived: true });
+  });
+
   it('estimates to the first text, not to an earlier first output', () => {
     expect(
       roundThinking(
@@ -137,6 +153,24 @@ describe('roundGeneration', () => {
         )
       )
     ).toEqual({ tokens: 2_000, ms: 20_306 });
+  });
+
+  it('keeps a hosted round whose single thinking frame spans nothing as an estimate', () => {
+    expect(
+      roundGeneration(
+        round(
+          {
+            startedAt: 0,
+            firstTokenAt: 2_000,
+            firstReasoningAt: 2_000,
+            lastReasoningAt: 2_000,
+            firstTextAt: 2_100,
+            endedAt: 4_100,
+          },
+          { reasoningFrames: 1, reasoning: 'Hm.', usage: { outputTokens: 500 } }
+        )
+      )
+    ).toEqual({ tokens: 500, ms: 4_100 });
   });
 
   it('leaves out a tool call that arrived whole, whose tokens took no measurable time', () => {
