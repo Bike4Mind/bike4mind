@@ -2,7 +2,8 @@ import type { ChatModelOption } from '@shared/chat';
 import { isLocalModel } from '@shared/chat';
 
 // Bedrock cross-region inference profiles prefix the foundation-model id with a geography. Must stay
-// in sync with BEDROCK_PROFILE_PREFIX in apps/client/app/utils/pickerModelDedupe.ts.
+// in sync with BEDROCK_PROFILE_PREFIX in apps/client/app/utils/pickerModelDedupe.ts and
+// b4m-core/llm-adapters/src/routeTwinNames.ts.
 const BEDROCK_PROFILE_PREFIX = /^(global|us-gov|us|eu|apac|jp|au|ca)\./i;
 
 /**
