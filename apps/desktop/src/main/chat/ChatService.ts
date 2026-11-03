@@ -4752,7 +4752,9 @@ export class ChatService {
   }
 
   private emitHeld(sessionId: string): void {
-    this.emit({ type: 'held-relays', sessionId, held: this.heldRelaysFor(sessionId) });
+    const held = this.heldRelaysFor(sessionId);
+    this.deps.activity?.heldChanged(sessionId, held.length > 0);
+    this.emit({ type: 'held-relays', sessionId, held });
   }
 
   /** Remember a relay whose sender asked to hear when the turn running it ends. */
