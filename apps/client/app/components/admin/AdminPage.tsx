@@ -66,6 +66,7 @@ const AgentExecutionsTab = dynamic(() => import('./AgentExecutionsTab'), { ssr: 
 const WaitlistTab = dynamic(() => import('./WaitlistTab'), { ssr: false });
 const SignupDomainHoldsTab = dynamic(() => import('./SignupDomainHoldsTab'), { ssr: false });
 const SignupRiskReviewTab = dynamic(() => import('./SignupRiskReviewTab'), { ssr: false });
+const ModerationIncidentsTab = dynamic(() => import('./ModerationIncidentsTab'), { ssr: false });
 const ShadowDetectionsTab = dynamic(() => import('./ShadowDetectionsTab'), { ssr: false });
 const HeldSignupGrantsTab = dynamic(() => import('./HeldSignupGrantsTab'), { ssr: false });
 const PartnerSignupRulesTab = dynamic(() => import('./PartnerSignupRulesTab'), { ssr: false });
@@ -202,6 +203,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           </TabPanel>
           <TabPanel value={AdminTab.SignupRiskReview} sx={{ padding: 0 }}>
             {activeTab === AdminTab.SignupRiskReview && <SignupRiskReviewTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.ModerationIncidents} sx={{ padding: 0 }}>
+            {activeTab === AdminTab.ModerationIncidents && <ModerationIncidentsTab />}
           </TabPanel>
           <TabPanel value={AdminTab.ShadowDetections} sx={{ padding: 0 }}>
             {activeTab === AdminTab.ShadowDetections && <ShadowDetectionsTab />}

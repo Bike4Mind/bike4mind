@@ -299,6 +299,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'security.blocked_ip.auto_added': { category: 'access', severity: 'notice', write: 'strict' },
   // bestEffort: the verdict history on the ShadowDetection record is the source of truth; grading never acts.
   'security.detection.reviewed': { category: 'access', severity: 'info', write: 'bestEffort' },
+  'moderation.incident.viewed': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.incident.verdict_recorded': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.published_artifact.taken_down': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.published_artifact.takedown_reverted': { category: 'support', severity: 'notice', write: 'strict' },
