@@ -1,4 +1,5 @@
 import type { ChatReplyStats, ChatReplyStatsEstimate, ChatRoundTiming, ChatUsage } from '@shared/chat';
+import { MIN_ESTIMATE_SPAN_MS } from './tokenRate';
 
 /** What one request adds to its reply's stats; ChatService's raw rounds fit this shape. */
 export interface StatsRound {
@@ -42,6 +43,23 @@ export function roundThinking(round: StatsRound): { ms: number; derived: boolean
   return { ms: nonNegative(shown - startedAt), derived: true };
 }
 
+/**
+ * The tokens one request generated and the time it spent on them, timed from its first output or,
+ * when it thought without streaming the thinking, from the request. Null where a server timed the
+ * request itself, or where the span is too short to tell from latency: a tool call that arrives
+ * whole, say, carries all its tokens in no time at all.
+ */
+export function roundGeneration(round: StatsRound): { tokens: number; ms: number } | null {
+  const output = round.usage?.outputTokens;
+  const { startedAt, firstTokenAt, endedAt } = round.timing;
+  if (round.usage?.rate || output === undefined || firstTokenAt === undefined) return null;
+  const hidden = roundThinking(round)?.derived === true;
+  // From the first output, that token's own time is the prompt's, as in estimatedRate.
+  const tokens = hidden ? output : output - 1;
+  const ms = endedAt - (hidden ? startedAt : firstTokenAt);
+  return tokens > 0 && ms >= MIN_ESTIMATE_SPAN_MS ? { tokens, ms } : null;
+}
+
 /** The reply's stats from its rounds, folded onto a continued reply's earlier runs. */
 export function buildReplyStats(input: ReplyStatsInput): ChatReplyStats {
   const { earlier } = input;
@@ -52,8 +70,13 @@ export function buildReplyStats(input: ReplyStatsInput): ChatReplyStats {
   let reasoningFrames = earlier?.reasoningFrames ?? 0;
   let firstTokenAt = earlier?.firstTokenAt;
   let firstTextAt = earlier?.firstTextAt;
+  let generation = earlier?.generation;
 
   for (const round of input.rounds) {
+    const generated = roundGeneration(round);
+    if (generated) {
+      generation = { tokens: (generation?.tokens ?? 0) + generated.tokens, ms: (generation?.ms ?? 0) + generated.ms };
+    }
     const { timing } = round;
     modelMs += nonNegative(timing.endedAt - timing.startedAt);
     if (timing.firstTokenAt !== undefined) {
@@ -89,6 +112,7 @@ export function buildReplyStats(input: ReplyStatsInput): ChatReplyStats {
     ...(reasoningMs !== undefined ? { reasoningMs } : {}),
     ...(reasoningFrames > 0 ? { reasoningFrames } : {}),
     ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
+    ...(generation ? { generation } : {}),
     ...(derived.size > 0 ? { derived: [...derived].sort() } : {}),
   };
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatReplyStats } from '@shared/chat';
-import { buildReplyStats, roundThinking, type StatsRound } from './replyStats';
+import { buildReplyStats, roundGeneration, roundThinking, type StatsRound } from './replyStats';
 
 const round = (timing: StatsRound['timing'], extra: Partial<StatsRound> = {}): StatsRound => ({
   timing,
@@ -67,7 +67,115 @@ describe('roundThinking', () => {
   });
 });
 
+describe('roundGeneration', () => {
+  it('times a streamed answer from its first output, leaving out that token', () => {
+    expect(
+      roundGeneration(
+        round({ startedAt: 0, firstTokenAt: 800, firstTextAt: 800, endedAt: 2_800 }, { usage: { outputTokens: 101 } })
+      )
+    ).toEqual({ tokens: 100, ms: 2_000 });
+  });
+
+  it('times thinking the server never streamed from the request, since it came before the first output', () => {
+    expect(
+      roundGeneration(
+        round(
+          { startedAt: 0, firstTokenAt: 20_000, firstTextAt: 20_000, endedAt: 20_306 },
+          { usage: { outputTokens: 2_000, reasoningTokens: 1_900 } }
+        )
+      )
+    ).toEqual({ tokens: 2_000, ms: 20_306 });
+  });
+
+  it('leaves out a tool call that arrived whole, whose tokens took no measurable time', () => {
+    expect(
+      roundGeneration(
+        round({ startedAt: 0, firstTokenAt: 29_990, endedAt: 30_000 }, { usage: { outputTokens: 3_000 } })
+      )
+    ).toBeNull();
+  });
+
+  it('leaves out a round a server timed itself, a round with no count and one with a single token', () => {
+    const timing = { startedAt: 0, firstTokenAt: 100, endedAt: 5_000 };
+    expect(
+      roundGeneration(round(timing, { usage: { outputTokens: 90, rate: { evalTokens: 90, evalMs: 3_000 } } }))
+    ).toBeNull();
+    expect(roundGeneration(round(timing))).toBeNull();
+    expect(roundGeneration(round(timing, { usage: { outputTokens: 1 } }))).toBeNull();
+    expect(roundGeneration(round({ startedAt: 0, endedAt: 5_000 }, { usage: { outputTokens: 90 } }))).toBeNull();
+  });
+});
+
 describe('buildReplyStats', () => {
+  it('rates a tool round that arrived whole by the answer alone, not by its tokens over no time', () => {
+    const stats = buildReplyStats({
+      startedAt: 0,
+      endedAt: 32_000,
+      rounds: [
+        round({ startedAt: 0, firstTokenAt: 29_990, endedAt: 30_000 }, { usage: { outputTokens: 3_000 } }),
+        round(
+          { startedAt: 31_000, firstTokenAt: 31_500, firstTextAt: 31_500, endedAt: 31_800 },
+          { usage: { outputTokens: 20 } }
+        ),
+      ],
+      toolMs: 1_000,
+      usage: { outputTokens: 3_020 },
+      local: false,
+    });
+    expect(stats.generation).toEqual({ tokens: 19, ms: 300 });
+  });
+
+  it('rates a tool round from the call starting when the server announced it', () => {
+    const stats = buildReplyStats({
+      startedAt: 0,
+      endedAt: 32_000,
+      rounds: [
+        round({ startedAt: 0, firstTokenAt: 500, endedAt: 30_000 }, { usage: { outputTokens: 3_000 } }),
+        round(
+          { startedAt: 31_000, firstTokenAt: 31_500, firstTextAt: 31_500, endedAt: 31_800 },
+          { usage: { outputTokens: 20 } }
+        ),
+      ],
+      toolMs: 1_000,
+      usage: { outputTokens: 3_020 },
+      local: false,
+    });
+    expect(stats.generation).toEqual({ tokens: 3_018, ms: 29_800 });
+  });
+
+  it("rates from the rounds' own usage, leaving out what a sub-agent spent", () => {
+    const stats = buildReplyStats({
+      startedAt: 0,
+      endedAt: 3_000,
+      rounds: [
+        round({ startedAt: 0, firstTokenAt: 500, firstTextAt: 500, endedAt: 2_500 }, { usage: { outputTokens: 201 } }),
+      ],
+      toolMs: 0,
+      usage: { outputTokens: 9_201 },
+      local: false,
+    });
+    expect(stats.generation).toEqual({ tokens: 200, ms: 2_000 });
+  });
+
+  it('adds a continued run to the earlier generation, and has none when no round could be timed', () => {
+    const earlier: ChatReplyStats = {
+      startedAt: 0,
+      endedAt: 9_000,
+      totalMs: 9_000,
+      modelMs: 9_000,
+      streamMs: 8_000,
+      toolMs: 0,
+      generation: { tokens: 400, ms: 8_000 },
+    };
+    const next = round(
+      { startedAt: 100_000, firstTokenAt: 100_500, firstTextAt: 100_500, endedAt: 102_500 },
+      { usage: { outputTokens: 101 } }
+    );
+    const base = { startedAt: 100_000, endedAt: 103_000, toolMs: 0, local: false };
+    expect(buildReplyStats({ ...base, rounds: [next], earlier }).generation).toEqual({ tokens: 500, ms: 10_000 });
+    expect(buildReplyStats({ ...base, rounds: [round(next.timing)] }).generation).toBeUndefined();
+  });
+
   it('times a plain hosted reply that did not think', () => {
     expect(
       buildReplyStats({

@@ -161,6 +161,32 @@ describe('ChatService reply stats', () => {
     expect(stats.totalMs).toBeGreaterThanOrEqual(stats.modelMs + stats.toolMs);
   });
 
+  it('times a tool round from the call starting, so its tokens are rated over the time they took', async () => {
+    const id = await session();
+    await services[0].send(id, 'list');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+    streams[0].write(frame({ type: 'content', toolStarted: { name: 'glob_files', id: 'c1' } }));
+    await pause(300);
+    streams[0].write(
+      frame({
+        type: 'tool_use',
+        tools: [{ id: 'c1', name: 'glob_files', arguments: '{"pattern":"*"}' }],
+        usage: { outputTokens: 40 },
+      })
+    );
+    streams[0].write(frame('[DONE]'));
+    await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+    streams[1].write(frame({ type: 'content', text: 'nothing here', usage: { outputTokens: 3 } }));
+    streams[1].write(frame('[DONE]'));
+    await settled();
+
+    const reply = (await store.get(id))?.messages.find(message => message.role === 'assistant');
+    const timing = reply!.rounds![0].timing!;
+    expect(timing.endedAt - timing.firstTokenAt!).toBeGreaterThanOrEqual(280);
+    expect(reply?.stats?.generation?.tokens).toBe(39);
+    expect(reply?.stats?.generation?.ms).toBeGreaterThanOrEqual(280);
+  });
+
   it('estimates a self-hosted model thinking tokens from its thinking frames', async () => {
     localStream.mockImplementation(async (_request, emit) => {
       for (let i = 0; i < 3; i++) {

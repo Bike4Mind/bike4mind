@@ -1,8 +1,8 @@
 import type { ChatRoundTiming } from '@shared/chat';
 
 /**
- * Times one request. `firstToken` is called for every streamed event that carries anything,
- * and only the first counts: a tool-only round still has a first token, which is the point.
+ * Times one request. `firstToken` is called for every streamed event that carries anything, a
+ * call starting included, and only the first counts: a tool-only round still has a first token.
  * `reasoning` takes a thinking frame, `readable` false for a bare marker; `text` visible text.
  */
 export function startRoundTimer(now: () => number = Date.now) {

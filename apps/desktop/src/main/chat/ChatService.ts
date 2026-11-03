@@ -3197,7 +3197,8 @@ export class ChatService {
           // `error` never reaches here (the transport throws on it); `meta` carries no reply.
           if (event.type === 'meta') probe?.frame('meta');
           if (event.type === 'error' || event.type === 'meta') return;
-          if (event.text || event.type === 'tool_use') timer.firstToken();
+          // A call starting is output too: its arguments stream from there, and the round is timed from it.
+          if (event.text || event.type === 'tool_use' || event.toolStarted) timer.firstToken();
           if (event.text) {
             const split = splitThinking.push(event.text);
             // An empty split is either a bare thinking marker or text the filter is holding
