@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 
 const { mockGetSettingsMap } = vi.hoisted(() => ({ mockGetSettingsMap: vi.fn() }));
 
@@ -74,6 +75,24 @@ describe('previewTicket', () => {
   it('maps a network error or timeout to BEDROCKNEWS_UNAVAILABLE', async () => {
     mockFetch.mockRejectedValue(new DOMException('timed out', 'TimeoutError'));
     expect(await previewTicket(TICKET)).toEqual({ ok: false, code: 'BEDROCKNEWS_UNAVAILABLE', status: 502 });
+  });
+
+  it('joins a base URL that ends in slashes without doubling them', async () => {
+    mockGetSettingsMap.mockResolvedValue({ BedrockNewsApiUrl: `${BASE}//`, BedrockNewsPartnerKey: 'secret-key' });
+    mockFetch.mockResolvedValue(json(200, { status: 'open', expiresAt: 'x', rungs: [] }));
+    await previewTicket(TICKET);
+    expect(mockFetch.mock.calls[0][0]).toBe(`${BASE}/api/headword/partner/tickets/${TICKET}`);
+  });
+
+  it('warns with the error name but never the full ticket or the partner key', async () => {
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
+    mockFetch.mockRejectedValue(new TypeError(`Failed to parse URL from ${BASE}/tickets/${TICKET}`));
+    await previewTicket(TICKET);
+    const logged = JSON.stringify(warn.mock.calls);
+    expect(logged).toContain('TypeError');
+    expect(logged).not.toContain(TICKET);
+    expect(logged).not.toContain('secret-key');
+    warn.mockRestore();
   });
 });
 
