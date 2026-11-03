@@ -1351,7 +1351,7 @@ export async function scanShell(
           if (!prefix || isDynamic(prefix)) continue;
           // A Windows program run through interop opens a Windows path where Windows would, so that place is judged.
           const passed = windowsProgram ? wordValue(value) : '';
-          if (/^[A-Za-z]:|\\/.test(passed)) {
+          if (/^[A-Za-z]:|^[\\/]{2}|\\/.test(passed)) {
             await check(passed, state.cwd, false, 'windows');
             continue;
           }
