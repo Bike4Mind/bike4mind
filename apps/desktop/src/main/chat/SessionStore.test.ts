@@ -222,17 +222,13 @@ describe('SessionStore', () => {
 
   describe('reply stats', () => {
     const stats: ChatReplyStats = {
-      startedAt: 1_000,
-      firstTokenAt: 1_400,
-      firstTextAt: 3_000,
-      endedAt: 6_000,
       totalMs: 5_000,
       modelMs: 4_800,
-      streamMs: 4_400,
       toolMs: 0,
+      firstTokenMs: 400,
       reasoningMs: 1_500,
-      reasoningFrames: 60,
       reasoningTokens: 60,
+      generation: { tokens: 89, ms: 4_000 },
       derived: ['reasoningTokens'],
     };
 

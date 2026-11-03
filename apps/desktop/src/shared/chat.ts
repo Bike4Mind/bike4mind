@@ -1143,30 +1143,24 @@ export interface ChatTokenRate {
 export type ChatReplyStatsEstimate = 'reasoningMs' | 'reasoningTokens';
 
 /**
- * One reply's timing, measured by this app on every backend. Times are epoch ms, durations ms.
- * Kept on the message rather than its rounds, because a plain reply stores no rounds.
+ * One reply's timing, measured by this app on every backend, in ms. Kept on the message rather
+ * than its rounds, because a plain reply stores no rounds.
  */
 export interface ChatReplyStats {
-  /** The turn starting, or the mid-turn message this reply answers; a continued reply keeps its first start. */
-  startedAt: number;
-  /** The first streamed delta of any kind. */
-  firstTokenAt?: number;
-  /** The first visible text, after any thinking. */
-  firstTextAt?: number;
-  endedAt: number;
-  /** Wall time the reply ran; on a continued reply, the pause before Continue is left out. */
+  /**
+   * Wall time from the reply's first request to its end, tools and approval waits included; on a
+   * continued reply, the pause before Continue is left out.
+   */
   totalMs: number;
   /** Waiting on the model, summed over the reply's requests. */
   modelMs: number;
-  /** The part of modelMs after each request's first delta: generation plus the network. */
-  streamMs: number;
   /** Running tools between requests, approval waits included. */
   toolMs: number;
+  /** From the first request that streamed anything to its first delta. */
+  firstTokenMs?: number;
   /** Thinking, summed over the requests that thought. */
   reasoningMs?: number;
-  /** Stream frames that carried readable thinking. */
-  reasoningFrames?: number;
-  /** Thinking tokens: the server's count, else estimated from reasoningFrames on a self-hosted model. */
+  /** Thinking tokens: the server's count, else on a self-hosted model the readable thinking frames. */
   reasoningTokens?: number;
   /**
    * Output tokens over the time spent generating them, summed over the requests where that time can

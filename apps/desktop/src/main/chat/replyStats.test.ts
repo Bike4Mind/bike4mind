@@ -59,6 +59,58 @@ describe('roundThinking', () => {
     ).toEqual({ ms: 2_000, derived: true });
   });
 
+  it('estimates rather than measure a single thinking frame, which spans nothing', () => {
+    expect(
+      roundThinking(
+        round(
+          {
+            startedAt: 0,
+            firstTokenAt: 2_000,
+            firstReasoningAt: 2_000,
+            lastReasoningAt: 2_000,
+            firstTextAt: 2_100,
+            endedAt: 3_000,
+          },
+          { reasoningFrames: 1, reasoning: 'Hm.' }
+        )
+      )
+    ).toEqual({ ms: 2_100, derived: true });
+  });
+
+  it('counts a lone bare marker as thinking, estimated from the wait before the text', () => {
+    expect(
+      roundThinking(
+        round({
+          startedAt: 0,
+          firstTokenAt: 3_000,
+          firstReasoningAt: 3_000,
+          lastReasoningAt: 3_000,
+          firstTextAt: 3_000,
+          endedAt: 4_000,
+        })
+      )
+    ).toEqual({ ms: 3_000, derived: true });
+  });
+
+  it('estimates to the first text, not to an earlier first output', () => {
+    expect(
+      roundThinking(
+        round(
+          { startedAt: 0, firstTokenAt: 1_000, firstTextAt: 6_000, endedAt: 8_000 },
+          { usage: { outputTokens: 400, reasoningTokens: 50 } }
+        )
+      )
+    ).toEqual({ ms: 6_000, derived: true });
+  });
+
+  it('never reports a negative wait', () => {
+    expect(
+      roundThinking(
+        round({ startedAt: 5_000, firstTokenAt: 4_000, firstTextAt: 4_000, endedAt: 6_000 }, { reasoning: 'x' })
+      )
+    ).toEqual({ ms: 0, derived: true });
+  });
+
   it('reports nothing for a round that did not think', () => {
     expect(roundThinking(round({ startedAt: 0, firstTokenAt: 100, firstTextAt: 100, endedAt: 900 }))).toBeNull();
     expect(
@@ -109,7 +161,6 @@ describe('roundGeneration', () => {
 describe('buildReplyStats', () => {
   it('rates a tool round that arrived whole by the answer alone, not by its tokens over no time', () => {
     const stats = buildReplyStats({
-      startedAt: 0,
       endedAt: 32_000,
       rounds: [
         round({ startedAt: 0, firstTokenAt: 29_990, endedAt: 30_000 }, { usage: { outputTokens: 3_000 } }),
@@ -127,7 +178,6 @@ describe('buildReplyStats', () => {
 
   it('rates a tool round from the call starting when the server announced it', () => {
     const stats = buildReplyStats({
-      startedAt: 0,
       endedAt: 32_000,
       rounds: [
         round({ startedAt: 0, firstTokenAt: 500, endedAt: 30_000 }, { usage: { outputTokens: 3_000 } }),
@@ -145,7 +195,6 @@ describe('buildReplyStats', () => {
 
   it("rates from the rounds' own usage, leaving out what a sub-agent spent", () => {
     const stats = buildReplyStats({
-      startedAt: 0,
       endedAt: 3_000,
       rounds: [
         round({ startedAt: 0, firstTokenAt: 500, firstTextAt: 500, endedAt: 2_500 }, { usage: { outputTokens: 201 } }),
@@ -159,11 +208,8 @@ describe('buildReplyStats', () => {
 
   it('adds a continued run to the earlier generation, and has none when no round could be timed', () => {
     const earlier: ChatReplyStats = {
-      startedAt: 0,
-      endedAt: 9_000,
       totalMs: 9_000,
       modelMs: 9_000,
-      streamMs: 8_000,
       toolMs: 0,
       generation: { tokens: 400, ms: 8_000 },
     };
@@ -171,40 +217,30 @@ describe('buildReplyStats', () => {
       { startedAt: 100_000, firstTokenAt: 100_500, firstTextAt: 100_500, endedAt: 102_500 },
       { usage: { outputTokens: 101 } }
     );
-    const base = { startedAt: 100_000, endedAt: 103_000, toolMs: 0, local: false };
+    const base = { endedAt: 103_000, toolMs: 0, local: false };
     expect(buildReplyStats({ ...base, rounds: [next], earlier }).generation).toEqual({ tokens: 500, ms: 10_000 });
     expect(buildReplyStats({ ...base, rounds: [round(next.timing)] }).generation).toBeUndefined();
   });
 
-  it('times a plain hosted reply that did not think', () => {
+  it('times a plain hosted reply from its request, leaving out the setup before it', () => {
     expect(
       buildReplyStats({
-        startedAt: 1_000,
         endedAt: 4_000,
         rounds: [round({ startedAt: 1_100, firstTokenAt: 1_600, firstTextAt: 1_600, endedAt: 3_900 })],
         toolMs: 0,
         usage: { inputTokens: 10, outputTokens: 200 },
         local: false,
       })
-    ).toEqual({
-      startedAt: 1_000,
-      firstTokenAt: 1_600,
-      firstTextAt: 1_600,
-      endedAt: 4_000,
-      totalMs: 3_000,
-      modelMs: 2_800,
-      streamMs: 2_300,
-      toolMs: 0,
-    });
+    ).toEqual({ totalMs: 2_900, modelMs: 2_800, toolMs: 0, firstTokenMs: 500 });
   });
 
-  it('sums a tool reply over its rounds and keeps the first token and text from the first that had them', () => {
+  it('sums a tool reply over its rounds and takes the first token from the first round that had one', () => {
     const stats = buildReplyStats({
-      startedAt: 0,
       endedAt: 10_000,
       rounds: [
+        round({ startedAt: 100, endedAt: 300 }),
         round(
-          { startedAt: 100, firstTokenAt: 500, firstReasoningAt: 500, lastReasoningAt: 1_500, endedAt: 2_000 },
+          { startedAt: 400, firstTokenAt: 700, firstReasoningAt: 700, lastReasoningAt: 1_700, endedAt: 2_000 },
           { reasoning: 'look first' }
         ),
         round({ startedAt: 6_000, firstTokenAt: 6_500, firstTextAt: 6_500, endedAt: 9_900 }),
@@ -213,22 +249,28 @@ describe('buildReplyStats', () => {
       usage: { outputTokens: 300, reasoningTokens: 120 },
       local: false,
     });
-    expect(stats).toMatchObject({
-      firstTokenAt: 500,
-      firstTextAt: 6_500,
-      totalMs: 10_000,
-      modelMs: 5_800,
-      streamMs: 4_900,
+    expect(stats).toEqual({
+      totalMs: 9_900,
+      modelMs: 5_700,
       toolMs: 4_000,
+      firstTokenMs: 300,
       reasoningMs: 1_000,
       reasoningTokens: 120,
     });
-    expect(stats.derived).toBeUndefined();
+  });
+
+  it('never reports a negative time from a clock that stepped back', () => {
+    const stats = buildReplyStats({
+      endedAt: 900,
+      rounds: [round({ startedAt: 1_000, firstTokenAt: 950, endedAt: 990 })],
+      toolMs: 0,
+      local: false,
+    });
+    expect(stats).toEqual({ totalMs: 0, modelMs: 0, toolMs: 0, firstTokenMs: 0 });
   });
 
   it('takes the server thinking count as exact and marks an estimated thinking time', () => {
     const stats = buildReplyStats({
-      startedAt: 0,
       endedAt: 8_000,
       rounds: [
         round(
@@ -257,17 +299,22 @@ describe('buildReplyStats', () => {
         { reasoningFrames: 80, reasoning: 'thinking' }
       ),
     ];
+    expect(buildReplyStats({ endedAt: 3_000, rounds, toolMs: 0, usage: { outputTokens: 100 }, local: true })).toEqual({
+      totalMs: 3_000,
+      modelMs: 3_000,
+      toolMs: 0,
+      firstTokenMs: 300,
+      reasoningMs: 2_000,
+      reasoningTokens: 80,
+      derived: ['reasoningTokens'],
+    });
     expect(
-      buildReplyStats({ startedAt: 0, endedAt: 3_000, rounds, toolMs: 0, usage: { outputTokens: 100 }, local: true })
-    ).toMatchObject({ reasoningMs: 2_000, reasoningFrames: 80, reasoningTokens: 80, derived: ['reasoningTokens'] });
-    expect(
-      buildReplyStats({ startedAt: 0, endedAt: 3_000, rounds, toolMs: 0, usage: { outputTokens: 50 }, local: true })
+      buildReplyStats({ endedAt: 3_000, rounds, toolMs: 0, usage: { outputTokens: 50 }, local: true })
     ).toMatchObject({ reasoningTokens: 50 });
   });
 
   it('prefers a self-hosted server thinking count over the frames', () => {
     const stats = buildReplyStats({
-      startedAt: 0,
       endedAt: 3_000,
       rounds: [
         round({ startedAt: 0, firstReasoningAt: 300, lastReasoningAt: 2_300, endedAt: 3_000 }, { reasoningFrames: 80 }),
@@ -282,7 +329,6 @@ describe('buildReplyStats', () => {
 
   it('never counts hosted frames as tokens: a hosted frame carries many', () => {
     const stats = buildReplyStats({
-      startedAt: 0,
       endedAt: 3_000,
       rounds: [
         round({ startedAt: 0, firstReasoningAt: 300, lastReasoningAt: 2_300, endedAt: 3_000 }, { reasoningFrames: 9 }),
@@ -292,26 +338,19 @@ describe('buildReplyStats', () => {
       local: false,
     });
     expect(stats.reasoningTokens).toBeUndefined();
-    expect(stats.reasoningFrames).toBe(9);
   });
 
   it('folds a continued run onto the earlier one, leaving out the pause before Continue', () => {
     const earlier: ChatReplyStats = {
-      startedAt: 1_000,
-      firstTokenAt: 1_500,
-      firstTextAt: 2_000,
-      endedAt: 61_000,
       totalMs: 60_000,
       modelMs: 20_000,
-      streamMs: 15_000,
       toolMs: 40_000,
+      firstTokenMs: 500,
       reasoningMs: 3_000,
-      reasoningFrames: 40,
       reasoningTokens: 40,
       derived: ['reasoningTokens'],
     };
     const stats = buildReplyStats({
-      startedAt: 500_000,
       endedAt: 510_000,
       rounds: [
         round(
@@ -332,18 +371,26 @@ describe('buildReplyStats', () => {
       earlier,
     });
     expect(stats).toEqual({
-      startedAt: 1_000,
-      firstTokenAt: 1_500,
-      firstTextAt: 2_000,
-      endedAt: 510_000,
-      totalMs: 70_000,
+      totalMs: 69_900,
       modelMs: 28_900,
-      streamMs: 23_600,
       toolMs: 40_000,
+      firstTokenMs: 500,
       reasoningMs: 4_000,
-      reasoningFrames: 50,
       reasoningTokens: 50,
       derived: ['reasoningTokens'],
     });
+  });
+
+  it('drops an earlier thinking-token estimate once the server reports a count', () => {
+    const stats = buildReplyStats({
+      endedAt: 2_000,
+      rounds: [round({ startedAt: 0, firstTokenAt: 100, firstTextAt: 100, endedAt: 2_000 })],
+      toolMs: 0,
+      usage: { outputTokens: 500, reasoningTokens: 120 },
+      local: true,
+      earlier: { totalMs: 1_000, modelMs: 1_000, toolMs: 0, reasoningTokens: 40, derived: ['reasoningTokens'] },
+    });
+    expect(stats.reasoningTokens).toBe(120);
+    expect(stats.derived).toBeUndefined();
   });
 });

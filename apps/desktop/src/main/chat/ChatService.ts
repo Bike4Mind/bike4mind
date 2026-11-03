@@ -2729,7 +2729,6 @@ export class ChatService {
     // and putting them back through the artifact parser would mint their ids a second time.
     let produced: RawRound[] = [];
     // Reset with `produced` when a mid-turn message starts a new reply.
-    let replyStartedAt = turnStartedAt;
     let toolMs = 0;
     // None for a reply continued from one stored before stats were kept: its earlier runs' time is
     // unknown, so nothing measured now could stand for the whole reply its usage covers.
@@ -2738,7 +2737,6 @@ export class ChatService {
       // A run refused before reaching the model adds nothing; a fresh reply that never ran has none.
       if (produced.length === 0) return resume?.stats;
       return buildReplyStats({
-        startedAt: replyStartedAt,
         endedAt: Date.now(),
         rounds: produced,
         toolMs,
@@ -3533,7 +3531,6 @@ export class ChatService {
           content = '';
           toolCalls = [];
           produced = [];
-          replyStartedAt = Date.now();
           toolMs = 0;
           usage = undefined;
           contextSnapshot = undefined;

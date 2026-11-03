@@ -11,10 +11,8 @@ export interface StatsRound {
 }
 
 export interface ReplyStatsInput {
-  /** When this run of the reply started; see ChatReplyStats.startedAt. */
-  startedAt: number;
   endedAt: number;
-  /** This run's requests, in order. */
+  /** This run's requests, in order; the first one's start is the run's. */
   rounds: readonly StatsRound[];
   toolMs: number;
   /** The whole reply's usage, a continued reply's earlier runs included. */
@@ -62,37 +60,32 @@ export function roundGeneration(round: StatsRound): { tokens: number; ms: number
 
 /** The reply's stats from its rounds, folded onto a continued reply's earlier runs. */
 export function buildReplyStats(input: ReplyStatsInput): ChatReplyStats {
-  const { earlier } = input;
-  const derived = new Set<ChatReplyStatsEstimate>(earlier?.derived ?? []);
+  const { earlier, rounds } = input;
+  // Re-decided below, so a server count arriving on a continued reply clears an earlier estimate.
+  const derived = new Set<ChatReplyStatsEstimate>(earlier?.derived?.filter(estimate => estimate !== 'reasoningTokens'));
   let modelMs = earlier?.modelMs ?? 0;
-  let streamMs = earlier?.streamMs ?? 0;
   let reasoningMs = earlier?.reasoningMs;
-  let reasoningFrames = earlier?.reasoningFrames ?? 0;
-  let firstTokenAt = earlier?.firstTokenAt;
-  let firstTextAt = earlier?.firstTextAt;
+  let firstTokenMs = earlier?.firstTokenMs;
   let generation = earlier?.generation;
+  // An earlier run's estimate stands in for the frames it was counted from.
+  let reasoningFrames = earlier?.derived?.includes('reasoningTokens') ? (earlier.reasoningTokens ?? 0) : 0;
 
-  for (const round of input.rounds) {
-    const generated = roundGeneration(round);
-    if (generated) {
-      generation = { tokens: (generation?.tokens ?? 0) + generated.tokens, ms: (generation?.ms ?? 0) + generated.ms };
-    }
+  for (const round of rounds) {
     const { timing } = round;
     modelMs += nonNegative(timing.endedAt - timing.startedAt);
-    if (timing.firstTokenAt !== undefined) {
-      streamMs += nonNegative(timing.endedAt - timing.firstTokenAt);
-      firstTokenAt ??= timing.firstTokenAt;
-    }
-    firstTextAt ??= timing.firstTextAt;
+    if (timing.firstTokenAt !== undefined) firstTokenMs ??= nonNegative(timing.firstTokenAt - timing.startedAt);
     reasoningFrames += round.reasoningFrames;
     const thinking = roundThinking(round);
     if (thinking) {
       reasoningMs = (reasoningMs ?? 0) + thinking.ms;
       if (thinking.derived) derived.add('reasoningMs');
     }
+    const generated = roundGeneration(round);
+    if (generated) {
+      generation = { tokens: (generation?.tokens ?? 0) + generated.tokens, ms: (generation?.ms ?? 0) + generated.ms };
+    }
   }
 
-  derived.delete('reasoningTokens');
   let reasoningTokens = input.usage?.reasoningTokens;
   if (reasoningTokens === undefined && input.local && reasoningFrames > 0) {
     const output = input.usage?.outputTokens;
@@ -100,17 +93,14 @@ export function buildReplyStats(input: ReplyStatsInput): ChatReplyStats {
     derived.add('reasoningTokens');
   }
 
+  // From this run's first request: the turn's setup before it (servers, catalog, memory) is not the reply's.
+  const startedAt = rounds[0]?.timing.startedAt ?? input.endedAt;
   return {
-    startedAt: earlier?.startedAt ?? input.startedAt,
-    ...(firstTokenAt !== undefined ? { firstTokenAt } : {}),
-    ...(firstTextAt !== undefined ? { firstTextAt } : {}),
-    endedAt: input.endedAt,
-    totalMs: (earlier?.totalMs ?? 0) + nonNegative(input.endedAt - input.startedAt),
+    totalMs: (earlier?.totalMs ?? 0) + nonNegative(input.endedAt - startedAt),
     modelMs,
-    streamMs,
     toolMs: (earlier?.toolMs ?? 0) + input.toolMs,
+    ...(firstTokenMs !== undefined ? { firstTokenMs } : {}),
     ...(reasoningMs !== undefined ? { reasoningMs } : {}),
-    ...(reasoningFrames > 0 ? { reasoningFrames } : {}),
     ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
     ...(generation ? { generation } : {}),
     ...(derived.size > 0 ? { derived: [...derived].sort() } : {}),

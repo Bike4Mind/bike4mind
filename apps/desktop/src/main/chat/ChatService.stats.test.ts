@@ -7,6 +7,7 @@ import { localBackend, localModelId, type ChatModelOption, type ChatStreamEvent 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import type { ModelCatalog } from './ModelCatalog';
+import { MessageQueue } from './MessageQueue';
 import { OLLAMA_RUNTIME_ID, type OllamaLocal } from './OllamaLocal';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
@@ -58,6 +59,7 @@ describe('ChatService reply stats', () => {
       } as unknown as ModelCatalog,
       local: { stream: localStream } as unknown as OllamaLocal,
       access: { list: accessList } as unknown as AccessStore,
+      queue: new MessageQueue(() => undefined),
       logger: { debug: vi.fn(), warn: vi.fn() },
       getApiClient: () =>
         ({
@@ -72,7 +74,20 @@ describe('ChatService reply stats', () => {
 
   afterEach(() => {
     for (const service of services.splice(0)) service.dispose();
+    vi.restoreAllMocks();
   });
+
+  /** Every tool round takes at least TOOL_MS, so tool time is something a test can see. */
+  const TOOL_MS = 60;
+  const slowTools = () => {
+    type RunTools = (...args: unknown[]) => Promise<unknown>;
+    const proto = ChatService.prototype as unknown as { runTools: RunTools };
+    const run = proto.runTools;
+    vi.spyOn(proto, 'runTools').mockImplementation(async function (this: unknown, ...args: unknown[]) {
+      await pause(TOOL_MS);
+      return run.apply(this, args);
+    });
+  };
 
   async function session(model = 'test-model'): Promise<string> {
     const { id } = await services[0].createSession();
@@ -105,17 +120,30 @@ describe('ChatService reply stats', () => {
     });
 
     expect(reply?.rounds).toBeUndefined();
-    expect(reply?.stats).toMatchObject({
-      firstTokenAt: expect.any(Number),
-      firstTextAt: expect.any(Number),
+    expect(reply?.stats).toEqual({
+      totalMs: expect.any(Number),
       modelMs: expect.any(Number),
-      streamMs: expect.any(Number),
       toolMs: 0,
+      firstTokenMs: expect.any(Number),
     });
     expect(reply!.stats!.totalMs).toBeGreaterThanOrEqual(reply!.stats!.modelMs);
-    expect(reply!.stats!.streamMs).toBeGreaterThanOrEqual(15);
-    expect(reply?.stats?.reasoningMs).toBeUndefined();
+    expect(reply!.stats!.modelMs).toBeGreaterThanOrEqual(15);
     expect(end).toMatchObject({ type: 'done', stats: reply?.stats });
+  });
+
+  it('times the first token and the total from the request, not the setup before it', async () => {
+    const folders = accessList.getMockImplementation()!;
+    accessList.mockImplementation(async () => {
+      await pause(150);
+      return folders();
+    });
+    const { reply } = await hostedTurn(async stream => {
+      stream.write(frame({ type: 'content', text: 'Hello', usage: { outputTokens: 1 } }));
+    });
+
+    const stats = reply!.stats!;
+    expect(stats.totalMs - stats.modelMs).toBeLessThan(100);
+    expect(stats.firstTokenMs).toBeLessThanOrEqual(stats.modelMs);
   });
 
   it('times hosted thinking from the markers around it', async () => {
@@ -143,6 +171,7 @@ describe('ChatService reply stats', () => {
   });
 
   it('counts tool time apart from model time', async () => {
+    slowTools();
     const id = await session();
     await services[0].send(id, 'list');
     await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
@@ -159,8 +188,30 @@ describe('ChatService reply stats', () => {
     expect(reply?.rounds).toHaveLength(2);
     expect(reply?.rounds?.[1].timing?.firstTextAt).toEqual(expect.any(Number));
     const stats = reply!.stats!;
-    expect(stats.toolMs).toBeGreaterThanOrEqual(0);
+    expect(stats.toolMs).toBeGreaterThanOrEqual(TOOL_MS - 5);
     expect(stats.totalMs).toBeGreaterThanOrEqual(stats.modelMs + stats.toolMs);
+  });
+
+  it('starts a new reply after a mid-turn message with its own clock and no tool time', async () => {
+    slowTools();
+    const id = await session();
+    await services[0].send(id, 'list');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+    expect(await services[0].send(id, 'and the hidden ones?')).toMatchObject({ ok: true, queued: true });
+    streams[0].write(
+      frame({ type: 'tool_use', tools: [{ id: 'c1', name: 'glob_files', arguments: '{"pattern":"*"}' }] })
+    );
+    streams[0].write(frame('[DONE]'));
+    await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+    streams[1].write(frame({ type: 'content', text: 'none' }));
+    streams[1].write(frame('[DONE]'));
+    await vi.waitUntil(() => events.filter(event => event.type === 'done').length === 2, { timeout: 3000 });
+
+    const replies = (await store.get(id))!.messages.filter(message => message.role === 'assistant');
+    expect(replies).toHaveLength(2);
+    expect(replies[0].stats!.toolMs).toBeGreaterThanOrEqual(TOOL_MS - 5);
+    expect(replies[1].stats!.toolMs).toBe(0);
+    expect(replies[1].stats!.totalMs - replies[1].stats!.modelMs).toBeLessThan(TOOL_MS / 2);
   });
 
   it('times a tool round from the call starting, so its tokens are rated over the time they took', async () => {
@@ -208,7 +259,7 @@ describe('ChatService reply stats', () => {
     await settled();
 
     const reply = (await store.get(id))?.messages.find(message => message.role === 'assistant');
-    expect(reply?.stats).toMatchObject({ reasoningFrames: 3, reasoningTokens: 3, derived: ['reasoningTokens'] });
+    expect(reply?.stats).toMatchObject({ reasoningTokens: 3, derived: ['reasoningTokens'] });
     expect(reply?.stats?.reasoningMs).toBeGreaterThanOrEqual(15);
     expect(reply?.usage?.rate).toEqual({ evalTokens: 10, evalMs: 200, totalMs: 900, loadMs: 300 });
     expect(reply?.rounds?.[0].timing).toMatchObject({
@@ -238,7 +289,7 @@ describe('ChatService reply stats', () => {
     expect(reply?.stats).toBeDefined();
     expect(reply?.stats?.reasoningMs).toBeUndefined();
     expect(reply?.stats?.reasoningTokens).toBeUndefined();
-    expect(reply?.stats?.reasoningFrames).toBeUndefined();
+    expect(reply?.stats?.derived).toBeUndefined();
   });
 
   it('keeps what was measured on a reply that failed', async () => {
@@ -256,15 +307,7 @@ describe('ChatService reply stats', () => {
   it('carries a continued reply on from the stats it stopped with', async () => {
     const id = await session();
     await store.appendMessage(id, { id: 'u1', role: 'user', content: 'go', createdAt: new Date().toISOString() });
-    const earlier = {
-      startedAt: 1_000,
-      firstTokenAt: 1_200,
-      endedAt: 9_000,
-      totalMs: 8_000,
-      modelMs: 3_000,
-      streamMs: 2_500,
-      toolMs: 5_000,
-    };
+    const earlier = { totalMs: 8_000, modelMs: 3_000, toolMs: 5_000, firstTokenMs: 200 };
     await store.appendMessage(id, {
       id: 'a1',
       role: 'assistant',
@@ -282,7 +325,7 @@ describe('ChatService reply stats', () => {
     const end = await settled();
 
     const reply = (await store.get(id))?.messages.find(message => message.id === 'a1');
-    expect(reply?.stats).toMatchObject({ startedAt: 1_000, firstTokenAt: 1_200, toolMs: 5_000 });
+    expect(reply?.stats).toMatchObject({ firstTokenMs: 200, toolMs: 5_000 });
     // Past what was stored: the update has to write the new run's stats, not keep the old ones.
     expect(reply!.stats!.totalMs).toBeGreaterThanOrEqual(8_025);
     expect(reply!.stats!.totalMs).toBeLessThan(8_000 + 3_000);
