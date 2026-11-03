@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from 'react';
+import { Component, memo, useEffect, useState, type ReactNode } from 'react';
 import Box from '@mui/joy/Box';
 import Typography from '@mui/joy/Typography';
 import type { ChatMessage, ChatUsage } from '@shared/chat';
@@ -130,6 +130,19 @@ interface RailProps {
   span: number;
 }
 
+/** A rail is a margin note: one that throws drops itself rather than the thread. */
+class RailErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  render() {
+    return this.state.failed ? null : this.props.children;
+  }
+}
+
 /**
  * A reply's stats as margin notes left of it, top-aligned with its first line: the grid cell in
  * turnGridSx's rail column beside the reply and the turns after it. The sticky block inside keeps
@@ -139,7 +152,15 @@ interface RailProps {
  * A screen reader gets one sentence per reply in place of a label and a value per row, so a long
  * thread reads as its replies with a short note after each.
  */
-export const ReplyStatsRail = memo(function ReplyStatsRail({ message, turn, span }: RailProps) {
+export function ReplyStatsRail(props: RailProps) {
+  return (
+    <RailErrorBoundary>
+      <RailCell {...props} />
+    </RailErrorBoundary>
+  );
+}
+
+const RailCell = memo(function RailCell({ message, turn, span }: RailProps) {
   const { hidden } = useReplyStatsPrefs();
   const showDollars = useShowDollarCosts();
   const now = useClock(turn?.startedAt ?? null);
