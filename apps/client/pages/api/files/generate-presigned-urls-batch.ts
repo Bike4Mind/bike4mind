@@ -13,6 +13,7 @@ import {
   isLakeIngestable,
 } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';
 import { createFabFile } from '@server/managers/fabFileManager';
 import {
   adminSettingsRepository,
@@ -249,6 +250,9 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req:
   if (datalakeTag) {
     await applyFallbackTags([{ name: datalakeTag, strength: DATALAKE_TAG_STRENGTH }]);
   }
+
+  // Spent after every gate above, so a batch they refuse costs nothing.
+  await consumeFileUploadBudget(req, data.files.length);
 
   const results = await Promise.all(
     resolvedFiles.map(async ({ item: fileItem, mimeType }) => {

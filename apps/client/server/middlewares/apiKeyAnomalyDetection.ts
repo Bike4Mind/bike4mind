@@ -8,6 +8,7 @@ const EPHEMERAL_IP_SCOPES: ReadonlySet<ApiKeyScopeValue> = new Set<ApiKeyScopeVa
   ApiKeyScope.OVERWATCH_INGEST_WRITE,
   ApiKeyScope.QA_INGEST,
   ApiKeyScope.RELEASE_NOTES_WRITE,
+  ApiKeyScope.REWARDS_GRANT,
 ]);
 
 /**
@@ -24,8 +25,8 @@ export const apiKeyAnomalyDetection = (): RequestHandler => {
       return next();
     }
 
-    // Ingest and release-video keys emit from load-balanced product backends or CI runners with
-    // ephemeral IPs by design; detection would trip the commonIPs baseline on every run.
+    // Ingest, release-video and partner reward keys emit from load-balanced product backends or CI
+    // runners with ephemeral IPs by design; detection would trip the commonIPs baseline on every run.
     const scopes = req.apiKeyInfo?.scopes;
     if (scopes?.some(scope => EPHEMERAL_IP_SCOPES.has(scope))) {
       return next();
