@@ -20,6 +20,7 @@ import {
   wslCommandEnv,
   wslEnvNames,
   wslLocation,
+  wslOperandPlaces,
   wslUncPath,
   wslUserEnvironment,
 } from './wslPath';
@@ -109,6 +110,19 @@ describe('mapping between Linux and Windows paths', () => {
       expect(share).toBe(`\\\\wsl$\\Ubuntu\\home\\me\\a${String.fromCharCode(0xf000 + char.charCodeAt(0))}b`);
       expect(parseWslPath(share)?.linuxPath).toBe(`/home/me/a${char}b`);
     }
+  });
+
+  it('reads back a Linux name that holds one of the share spelling characters itself as that name', () => {
+    for (const held of ['\u{f05c}', '\u{f03a}', '\u{f001}', '\u{f07c}']) {
+      const linuxPath = `/home/me/a${held}b\\c`;
+      expect(parseWslPath(wslUncPath(location, linuxPath))?.linuxPath).toBe(linuxPath);
+    }
+    // Windows is given the share's own spelling, which the share opens as `a\b`.
+    expect(toWindowsPath(location, '/home/me/a\u{f05c}b')).toBe('\\\\wsl$\\Ubuntu\\home\\me\\a\u{f05c}b');
+    expect(wslOperandPlaces({ ...location, linuxPath: '/home/me/a\u{f05c}b' }, 'x\\y', 'windows')).toEqual([
+      wslUncPath(location, '/home/me/a\u{f05c}b/x\\y'),
+      '\\\\wsl$\\Ubuntu\\home\\me\\a\u{f05c}b\\x\\y',
+    ]);
   });
 
   it('maps a folder argument in the same distro, and nothing else', () => {

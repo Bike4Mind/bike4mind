@@ -28,13 +28,22 @@ vi.doMock('node:fs/promises', async () => {
   );
   return { ...missing, default: missing };
 });
+/** Symlinks in the distro, Linux path to Linux target. */
+const links = new Map<string, string>();
+
 vi.doMock('../../wsl/wslPath', async () => {
   const actual = await vi.importActual<typeof import('../../wsl/wslPath')>('../../wsl/wslPath');
   return {
     ...actual,
     wslLocation: (directory: string) => actual.parseWslPath(directory),
     wslUserEnvironment: async () => ({ path: '/usr/bin', home: '/home/me' }),
-    wslRealpath: async (_distro: string, linuxPath: string) => posix.normalize(linuxPath),
+    wslRealpath: async (_distro: string, linuxPath: string) => {
+      const path = posix.normalize(linuxPath);
+      for (const [link, target] of links) {
+        if (path === link || path.startsWith(`${link}/`)) return target + path.slice(link.length);
+      }
+      return path;
+    },
   };
 });
 
@@ -83,5 +92,22 @@ describe('the scripts a command in a WSL project runs, by Linux rules', () => {
     await recordSessionWrite(context, `${ROOT}\\a\u{f05c}b\\package.json`);
 
     expect((await sessionScriptRun("cd 'a\\b' && npm test", ROOT, session))?.names).toEqual(['a\\b/package.json']);
+  });
+});
+
+describe('the scripts a command in a WSL project runs, followed through the distro', () => {
+  afterEach(async () => {
+    links.clear();
+    await forgetSessionWrites(session);
+  });
+
+  it('records a write to a Linux name holding a share spelling character under that name', async () => {
+    const odd = 'x\u{f05c}';
+    links.set(`/home/me/repo/${odd}`, '/home/me/repo/real');
+    const scan = await scanShell(`echo x > '${odd}/s.sh'`, ROOT, [ROOT]);
+    for (const written of scan?.writes ?? []) await recordSessionWrite(context, written);
+
+    expect((await sessionScriptRun('sh real/s.sh', ROOT, session))?.names).toEqual(['real/s.sh']);
+    expect((await sessionScriptRun(`cd '${odd}' && sh s.sh`, ROOT, session))?.names).toEqual(['s.sh']);
   });
 });

@@ -12,6 +12,16 @@ const distroUser: { current: { path: string; home: string } | null } = {
 };
 
 const unresolvable = { current: false };
+/** Symlinks in the distro, Linux path to Linux target. */
+const links = new Map<string, string>();
+
+const followLinks = (linuxPath: string): string => {
+  const path = posix.normalize(linuxPath);
+  for (const [link, target] of links) {
+    if (path === link || path.startsWith(`${link}/`)) return target + path.slice(link.length);
+  }
+  return path;
+};
 
 vi.doMock('node:path', async () => {
   const { win32 } = await vi.importActual<typeof import('node:path')>('node:path');
@@ -40,7 +50,7 @@ vi.doMock('../../wsl/wslPath', async () => {
     wslUserEnvironment: async () => distroUser.current,
     wslRealpath: async (distro: string, linuxPath: string) => {
       asked.push(`${distro}:${linuxPath}`);
-      return unresolvable.current ? null : posix.normalize(linuxPath);
+      return unresolvable.current ? null : followLinks(linuxPath);
     },
   };
 });
@@ -316,5 +326,32 @@ describe('a script that names the home folder before the distro has said where i
     const scan = await scanShell('cat ~/notes.txt', root, [root]);
 
     expect(scan?.directories).toEqual(['\\\\wsl.localhost\\Ubuntu\\home\\me']);
+  });
+});
+
+describe('symlinks and odd names in a WSL project, followed by the distro', () => {
+  const root = '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo';
+  /** A Linux name holding U+F05C itself, which the share also uses to spell `\`. */
+  const odd = 'x\u{f05c}';
+
+  afterEach(() => {
+    links.clear();
+  });
+
+  it('asks the distro about a name holding a share spelling character under its own Linux name', async () => {
+    links.set(`/home/me/repo/${odd}`, '/home/me');
+    asked.length = 0;
+
+    const scan = await scanShell(`cat '${odd}/notes.txt'`, root, [root]);
+
+    expect(asked).toContain(`Ubuntu:/home/me/repo/${odd}/notes.txt`);
+    expect(scan?.directories).toHaveLength(1);
+  });
+
+  it('resolves operands after a cd into such a name against that same name', async () => {
+    links.set(`/home/me/repo/${odd}/up`, '/home/me');
+
+    expect((await scanShell(`cd '${odd}' && cat up/notes.txt`, root, [root]))?.directories).toHaveLength(1);
+    expect((await scanShell(`cd '${odd}' && cat notes.txt`, root, [root]))?.directories).toEqual([]);
   });
 });

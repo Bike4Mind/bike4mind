@@ -20,6 +20,8 @@ const WSL_UNC = /^(?:[\\/]{2}[?.][\\/]UNC[\\/]|[\\/]{2})(wsl\.localhost|wsl\$)[\
 // eslint-disable-next-line no-control-regex -- control characters are among them
 const NOT_IN_WINDOWS_NAMES = /[\x01-\x1f"*:<>?\\|]/g;
 const SHARE_SPELLED = /[\u{f001}-\u{f01f}\u{f022}\u{f02a}\u{f03a}\u{f03c}\u{f03e}\u{f03f}\u{f05c}\u{f07c}]/gu;
+/** One the share spells, or one a Linux name holds as itself, kept behind a NUL by `wslUncPath`. */
+const SPELLED_OR_KEPT = new RegExp(`\\0?${SHARE_SPELLED.source}`, 'gu');
 
 /** One Linux file name as the WSL share lists it and opens it, so a `\` in it is never a Windows separator. */
 export function shareName(name: string): string {
@@ -27,7 +29,9 @@ export function shareName(name: string): string {
 }
 
 function linuxName(name: string): string {
-  return name.replace(SHARE_SPELLED, char => String.fromCharCode(char.charCodeAt(0) - 0xf000));
+  return name.replace(SPELLED_OR_KEPT, found =>
+    found.length === 2 ? found.slice(1) : String.fromCharCode(found.charCodeAt(0) - 0xf000)
+  );
 }
 
 /** A relative path a Linux program printed, with `/` between names, spelled as the share spells it. */
@@ -52,9 +56,21 @@ export function wslLocation(directory: string, platform: NodeJS.Platform = proce
   return platform === 'win32' ? parseWslPath(directory) : null;
 }
 
-export function wslUncPath(location: Pick<WslLocation, 'host' | 'distro'>, linuxPath: string): string {
+/** The share path Windows is given for `linuxPath`, spelled as the share spells it. */
+function sharePath(location: Pick<WslLocation, 'host' | 'distro'>, linuxPath: string): string {
   const rest = linuxPath.split('/').filter(Boolean).map(shareName).join('\\');
   return `\\\\${location.host}\\${location.distro}\\${rest}`;
+}
+
+/**
+ * `linuxPath` as a share path that `parseWslPath` reads back unchanged. The share reads U+F05C as
+ * `\` (and so on), so a name holding one of those itself keeps it behind a NUL, which no Windows path holds.
+ */
+export function wslUncPath(location: Pick<WslLocation, 'host' | 'distro'>, linuxPath: string): string {
+  return sharePath(
+    location,
+    linuxPath.replace(SHARE_SPELLED, char => `\0${char}`)
+  );
 }
 
 /** How an operand is read: by bash itself (`cd`, a redirect), by a program, or by a Windows program run through interop. */
@@ -71,14 +87,14 @@ export function wslOperandPlaces(cwd: WslLocation, operand: string, reader: Oper
   if (reader === 'windows' || (reader === 'program' && parseWslPath(operand))) {
     // A drive-relative `C:x` is relative to a per-drive folder no part of this app can see; its drive root stands in.
     const windows = operand.replace(/^([A-Za-z]:)(?![\\/])/, '$1\\');
-    places.push(win32.resolve(wslUncPath(cwd, cwd.linuxPath), windows));
+    places.push(win32.resolve(sharePath(cwd, cwd.linuxPath), windows));
   }
   return places;
 }
 
 /** A path a Linux program printed, as Windows reaches it; anything not absolute is returned as is. */
 export function toWindowsPath(location: Pick<WslLocation, 'host' | 'distro'>, path: string): string {
-  return path.startsWith('/') ? wslUncPath(location, path) : path;
+  return path.startsWith('/') ? sharePath(location, path) : path;
 }
 
 /** A Windows path to a folder in the same distro, as a Linux program there must be given it. */
