@@ -155,6 +155,7 @@ export async function undoAdminUsersBulk(
       deps
     );
   const stillBlocked = new Set(stillBlockedDomains);
+  const failedUserIds = new Set(failures.map(failure => failure.snapshot.userId));
   return {
     restored: attempted - failures.length,
     failed: failures.map(failure => ({ userId: failure.snapshot.userId, error: failure.error })),
@@ -162,7 +163,10 @@ export async function undoAdminUsersBulk(
     remaining: notAttempted.length,
     unblockedDomains: (record.blockedDomains ?? []).filter(domain => !stillBlocked.has(domain)),
     stillBlockedDomains,
-    subscriptionsNotRestored: record.users.slice(0, attempted).flatMap(user => user.canceledSubscriptions ?? []),
+    subscriptionsNotRestored: record.users
+      .slice(0, attempted)
+      .filter(user => !failedUserIds.has(user.userId))
+      .flatMap(user => user.canceledSubscriptions ?? []),
   };
 }
 
