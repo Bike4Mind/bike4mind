@@ -131,7 +131,24 @@ export const AuditEventTable: React.FC<AuditEventTableProps> = ({
     {
       id: 'reason',
       label: 'Reason',
-      render: entry => <Typography level="body-sm">{entry.reason || 'No reason recorded'}</Typography>,
+      // Reasons can run to a paragraph; the row shows two lines and the drawer shows the rest.
+      render: entry => (
+        <Typography
+          level="body-sm"
+          title={entry.reason || undefined}
+          data-testid={`${testIdPrefix}-reason`}
+          sx={{
+            display: '-webkit-box',
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: 'vertical',
+            overflow: 'hidden',
+            overflowWrap: 'anywhere',
+            maxWidth: 360,
+          }}
+        >
+          {entry.reason || 'No reason recorded'}
+        </Typography>
+      ),
     },
     { id: 'severity', label: 'Severity', render: entry => <AuditSeverityChip severity={entry.severity} /> },
   ];
