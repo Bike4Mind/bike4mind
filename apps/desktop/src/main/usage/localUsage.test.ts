@@ -290,7 +290,7 @@ describe('sessionUsageBuckets', () => {
     });
     const hourly = (result: LocalUsageBucket[], iso: string) => result.find(bucket => bucket.hour === Date.parse(iso));
 
-    it('puts each round in the hour it ended and the reply in the hour it began', () => {
+    it('puts each round in the hour it ended and the reply in the hour it was first stored', () => {
       const result = buckets([
         {
           ...reply(began, {
@@ -356,7 +356,7 @@ describe('sessionUsageBuckets', () => {
       ]);
     });
 
-    it('keeps a round with no timing, and what no round carries, in the hour the reply began', () => {
+    it('keeps a round with no timing, and what no round carries, in the hour the reply was first stored', () => {
       const result = buckets([
         {
           ...reply(began, {
