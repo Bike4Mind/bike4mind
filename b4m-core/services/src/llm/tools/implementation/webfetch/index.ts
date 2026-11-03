@@ -263,8 +263,8 @@ export async function firecrawlFetch(
   const wantScreenshot = !!options?.screenshot && !isPdf;
 
   // PDF URLs skip the JS wait action - Firecrawl parses them directly
-  const baseParams = {
-    formats: wantScreenshot ? (['markdown', 'screenshot'] as ('markdown' | 'screenshot')[]) : ['markdown' as const],
+  const baseParams: FirecrawlScrapeParams = {
+    formats: wantScreenshot ? ['markdown', 'screenshot'] : ['markdown'],
     timeout: timeoutMs,
     ...(options?.onlyMainContent !== undefined && { onlyMainContent: options.onlyMainContent }),
     ...(options?.fresh && { maxAge: 0, storeInCache: false }),
