@@ -370,7 +370,8 @@ export function UsersBulkActionDialog({
           <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
             You can undo this for 30 seconds afterwards
             {blockDomains ? ', which also unblocks the domains it added' : ''}. Sessions that were ended stay ended, and
-            live Stripe subscriptions are canceled with no refund and stay canceled.
+            live Stripe subscriptions, including those of organizations they own, are canceled with no refund and stay
+            canceled.
           </Typography>
         )}
       </Stack>
