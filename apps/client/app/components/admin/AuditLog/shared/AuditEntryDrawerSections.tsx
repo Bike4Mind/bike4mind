@@ -6,13 +6,10 @@ import type { AuditChange, AuditEntry } from '@bike4mind/common';
 import { activateOnKey } from './activateOnKey';
 import { copyTextWithToast } from '@client/app/utils/copyToClipboard';
 
-/**
- * Drawer sections hold free-form content (text, tables, link rows), not label/value facts, so they use the
- * `custom` body. The default `facts` body is a two-column `<dl>` that squeezes such content into its label column.
- */
+// Free-form content, not label/value facts: the default `facts` body is a 2-col <dl> that squeezes it into the label column.
 export const DrawerSection: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
   <SectionCard title={title} body="custom">
-    <Stack spacing={1} sx={{ px: 2, py: 1.75, minWidth: 0 }} data-testid="audit-drawer-section-body">
+    <Stack spacing={1} sx={{ px: 2, py: 1.75 }} data-testid="audit-drawer-section-body">
       {children}
     </Stack>
   </SectionCard>
