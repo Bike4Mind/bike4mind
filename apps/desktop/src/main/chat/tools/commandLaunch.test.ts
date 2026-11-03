@@ -38,7 +38,8 @@ describe('launchCommand on Windows', () => {
       expect(run("printf '%s|' 'a\\\\b' \"$((1 + 2))\"").stdout).toBe('a\\\\b|3|');
       expect(run('bash -c \'echo "child=${B4M_DESKTOP_COMMAND:-unset}"\'').stdout).toBe('child=unset\n');
       const failed = run('echo (');
-      expect(failed.status).toBe(2);
+      // bash 5 (Git Bash) exits 2 on an eval syntax error; macOS's /bin/bash 3.2 exits 1.
+      expect(failed.status).not.toBe(0);
       expect(failed.stderr).toContain('`echo (');
       expect(failed.stderr).not.toContain('export');
       expect(failed.stderr).not.toContain(COMMAND_ENV);
