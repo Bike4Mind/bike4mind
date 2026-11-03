@@ -1,8 +1,13 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { findPayableUser } from '@server/partners/bedrocknewsPuzzleReward';
-import { warnIfOperatorFault } from '@server/partners/bedrocknewsClaimStates';
+import { currentBalance, findPayableUser } from '@server/partners/bedrocknewsPuzzleReward';
+import {
+  isClaimResult,
+  ticketFromBody,
+  warnIfOperatorFault,
+  warnMalformed,
+} from '@server/partners/bedrocknewsClaimStates';
 import { redeemTicket, type ClaimResult } from '@server/partners/bedrocknewsTickets';
 
 type RedeemResponse =
@@ -26,14 +31,26 @@ export default baseApi({ auth: 'jwtOnly' })
   .use(csrfProtection())
   .use(rateLimit({ limit: 10, windowMs: 60000 }))
   .post(async (req, res) => {
-    const respond = (body: RedeemResponse) => res.json(body);
+    res.setHeader('Cache-Control', 'no-store');
+    const respond = (body: RedeemResponse, status = 200) => res.status(status).json(body);
+
+    const ticket = ticketFromBody(req.body);
+    if (!ticket) return respond({ state: 'not-found' }, 400);
 
     const user = await findPayableUser(req.user.id);
     if (!user) return respond({ state: 'verify-email' });
 
-    const redeemed = await redeemTicket(String(req.query.ticket), { id: req.user.id, email: user.email });
-    if (redeemed.ok) return respond({ state: 'done', result: redeemed.result });
-
-    warnIfOperatorFault('redeem', redeemed.code);
-    return respond(FAILURE_STATES[redeemed.code] ?? { state: 'unavailable' });
+    const redeemed = await redeemTicket(ticket, { id: req.user.id, email: user.email });
+    if (!redeemed.ok) {
+      warnIfOperatorFault('redeem', redeemed.code);
+      return respond(FAILURE_STATES[redeemed.code] ?? { state: 'unavailable' });
+    }
+    if (!isClaimResult(redeemed.result)) {
+      warnMalformed('redeem');
+      return respond({ state: 'unavailable' });
+    }
+    return respond({
+      state: 'done',
+      result: { ...redeemed.result, balance: await currentBalance(req.user.id) },
+    });
   });

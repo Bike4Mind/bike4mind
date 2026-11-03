@@ -37,8 +37,8 @@ vi.mock('@bike4mind/database', async orig => {
   };
 });
 
-import previewHandler from '../bedrocknews/claims/[ticket]';
-import redeemHandler from '../bedrocknews/claims/[ticket]/redeem';
+import previewHandler from '../bedrocknews/claims/preview';
+import redeemHandler from '../bedrocknews/claims/redeem';
 import { Logger } from '@bike4mind/observability';
 
 const TICKET = 'abcdefghijklmnopqrstuv';
@@ -48,30 +48,35 @@ const SESSION_USER = {
   aupAcceptedVersion: 'grandfathered',
 };
 const EMAIL = 'victor@bike4mind.com';
-const PAYABLE = { emailVerified: true, email: EMAIL };
+const PAYABLE = { emailVerified: true, email: EMAIL, currentCredits: 1630 };
 const RUNGS = [
   { date: '2026-11-02', length: 5, hard: false },
   { date: '2026-11-01', length: 7, hard: true },
 ];
 const RESULT = { claimed: [], total: 130, balance: 1630, firstSolveCredits: 0, capped: 0 };
+const FOREIGN_RESULT = { ...RESULT, balance: 999999 };
 
 const dbUser = (user: unknown) => mockFindById.mockReturnValue({ select: () => ({ lean: async () => user }) });
 
-function fire(method: 'GET' | 'POST', { signedIn = true }: { signedIn?: boolean } = {}) {
+function fire(
+  method: 'POST',
+  { signedIn = true, body = { ticket: TICKET } }: { signedIn?: boolean; body?: unknown } = {}
+) {
   const { req, res } = createMocks(
-    { method, url: `/api/partners/bedrocknews/claims/${TICKET}`, query: { ticket: TICKET }, headers: {} },
+    { method, url: '/api/partners/bedrocknews/claims/x', body: body as Record<string, unknown>, headers: {} },
     { eventEmitter: EventEmitter }
   );
   if (signedIn) (req as { user?: unknown }).user = SESSION_USER;
   return { req: req as any, res: res as any };
 }
 
-const get = async (opts?: { signedIn?: boolean }) => {
-  const { req, res } = fire('GET', opts);
+type Opts = { signedIn?: boolean; body?: unknown };
+const get = async (opts?: Opts) => {
+  const { req, res } = fire('POST', opts);
   await previewHandler(req, res);
   return res;
 };
-const post = async (opts?: { signedIn?: boolean }) => {
+const post = async (opts?: Opts) => {
   const { req, res } = fire('POST', opts);
   await redeemHandler(req, res);
   return res;
@@ -90,8 +95,8 @@ describe('BedrockNews claim routes', () => {
   afterEach(() => warn.mockRestore());
 
   it.each([
-    ['GET', get],
-    ['POST', post],
+    ['preview', get],
+    ['redeem', post],
   ])('%s answers 401 without a session', async (_m, run) => {
     const res = await run({ signedIn: false });
     expect(res._getStatusCode()).toBe(401);
@@ -99,7 +104,41 @@ describe('BedrockNews claim routes', () => {
     expect(mockRedeem).not.toHaveBeenCalled();
   });
 
-  describe('GET preview', () => {
+  describe.each([
+    ['preview', get],
+    ['redeem', post],
+  ])('%s request handling', (_name, run) => {
+    it.each([['short'], ['has spaces in it!!!!!!'], [123], [undefined]])(
+      'rejects ticket %j with 400 not-found',
+      async ticket => {
+        const res = await run({ body: { ticket } });
+        expect(res._getStatusCode()).toBe(400);
+        expect(res._getJSONData()).toEqual({ state: 'not-found' });
+        expect(mockPreview).not.toHaveBeenCalled();
+        expect(mockRedeem).not.toHaveBeenCalled();
+      }
+    );
+
+    it('sends Cache-Control: no-store', async () => {
+      mockPreview.mockResolvedValue(fail('TICKET_EXPIRED', 410));
+      mockRedeem.mockResolvedValue(fail('TICKET_EXPIRED', 410));
+      expect((await run())._getHeaders()['cache-control']).toBe('no-store');
+    });
+  });
+
+  describe('preview', () => {
+    it.each([[{}], [{ status: 'open', rungs: 'nope' }], [{ status: 'open', rungs: [{ length: 4, hard: false }] }]])(
+      'is unavailable for the malformed body %j without a 500',
+      async body => {
+        mockPreview.mockResolvedValue({ ok: true, preview: body });
+        const res = await get();
+        expect(res._getStatusCode()).toBe(200);
+        expect(res._getJSONData()).toEqual({ state: 'unavailable' });
+        expect(warn).toHaveBeenCalled();
+        expect(JSON.stringify(warn.mock.calls)).not.toContain(TICKET);
+      }
+    );
+
     it('is ready with the priced rungs and the session user own email', async () => {
       mockPreview.mockResolvedValue({ ok: true, preview: { status: 'open', expiresAt: 'x', rungs: RUNGS } });
       const res = await get();
@@ -117,10 +156,10 @@ describe('BedrockNews claim routes', () => {
       expect((await get())._getJSONData()).toMatchObject({ state: 'ready' });
     });
 
-    it('is redeemed with the stored result', async () => {
+    it('is redeemed with the stored result and the session user own balance', async () => {
       mockPreview.mockResolvedValue({
         ok: true,
-        preview: { status: 'redeemed', expiresAt: 'x', rungs: RUNGS, result: RESULT },
+        preview: { status: 'redeemed', expiresAt: 'x', rungs: RUNGS, result: FOREIGN_RESULT },
       });
       expect((await get())._getJSONData()).toEqual({ state: 'redeemed', result: RESULT });
     });
@@ -167,12 +206,20 @@ describe('BedrockNews claim routes', () => {
     });
   });
 
-  describe('POST redeem', () => {
+  describe('redeem', () => {
     it('passes the session user id and the DB email, answering done', async () => {
-      mockRedeem.mockResolvedValue({ ok: true, result: RESULT });
+      mockRedeem.mockResolvedValue({ ok: true, result: FOREIGN_RESULT });
       const res = await post();
       expect(res._getJSONData()).toEqual({ state: 'done', result: RESULT });
       expect(mockRedeem).toHaveBeenCalledWith(TICKET, { id: SESSION_USER.id, email: EMAIL });
+    });
+
+    it('is unavailable for a result missing its fields', async () => {
+      mockRedeem.mockResolvedValue({ ok: true, result: {} });
+      const res = await post();
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toEqual({ state: 'unavailable' });
+      expect(warn).toHaveBeenCalled();
     });
 
     it('is verify-email for an ineligible user and does not redeem', async () => {

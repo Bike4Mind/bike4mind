@@ -101,7 +101,7 @@ async function storedCredits(transactionId: string): Promise<number> {
   return row?.credits ?? 0;
 }
 
-async function currentBalance(userId: string): Promise<number> {
+export async function currentBalance(userId: string): Promise<number> {
   const user = await User.findById(userId).select('currentCredits').lean<RewardUser>();
   return user?.currentCredits ?? 0;
 }
