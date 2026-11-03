@@ -41,7 +41,7 @@ const {
   resolveWithinRoots,
   resolveWithinRootsPhysically,
 } = await import('./paths');
-const { shareName } = await import('../../wsl/wslPath');
+const { shareName, wslUncPath } = await import('../../wsl/wslPath');
 
 const REPO = '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo';
 const denied = (promise: Promise<unknown>) => expect(promise).rejects.toBeInstanceOf(PathAccessDenied);
@@ -132,6 +132,15 @@ describe('paths in a WSL folder', () => {
     await denied(resolveWithinRoots('\\\\wsl$\\ubuntu\\home\\me\\repository', [REPO]));
     expect(isWithin(REPO, '\\\\wsl$\\UBUNTU\\home\\me\\repo\\x')).toBe(true);
     expect(isWithin(REPO, '\\\\wsl$\\Ubuntu\\home\\me\\Repo\\x')).toBe(false);
+  });
+
+  it('keeps a Linux name holding a share spelling character apart from the name the share spells the same', () => {
+    const ubuntu = { host: 'wsl.localhost', distro: 'Ubuntu' } as const;
+    // The share spells Linux `x\` as `x<U+F05C>`; Linux `x<U+F05C>` itself is a different folder.
+    const root = '\\\\wsl.localhost\\Ubuntu\\home\\me\\x\u{f05c}';
+
+    expect(isWithin(root, wslUncPath(ubuntu, '/home/me/x\u{f05c}/f'))).toBe(false);
+    expect(isWithin(root, wslUncPath(ubuntu, '/home/me/x\\/f'))).toBe(true);
   });
 
   it('reads a share path given to a command as the Linux name bash takes it for, and as the share place', async () => {
