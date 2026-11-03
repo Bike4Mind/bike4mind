@@ -214,7 +214,7 @@ describe('ssh failures', () => {
     );
     expect(down).toBeInstanceOf(SshConnectionError);
     expect(down.message).toBe(
-      'SSH to gpu works, but nothing answers at 127.0.0.1:11434 there. Start Ollama on that machine.'
+      'SSH to gpu works, but Ollama is not running on it: nothing answers at 127.0.0.1:11434 there. Start Ollama on that machine.'
     );
   });
 
@@ -456,7 +456,7 @@ describe('createSshFetch', () => {
     const outcome = await probeServer(fetch, SSH_OLLAMA_URL, 'gpu', () => 0, 'ollama');
     expect(outcome.refused).toBe(false);
     expect(outcome.error).toBe(
-      'Could not reach gpu: SSH to gpu works, but nothing answers at 127.0.0.1:11434 there. Start Ollama on that machine.'
+      'Could not reach gpu: SSH to gpu works, but Ollama is not running on it: nothing answers at 127.0.0.1:11434 there. Start Ollama on that machine.'
     );
   });
 

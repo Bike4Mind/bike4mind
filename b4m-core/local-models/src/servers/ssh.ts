@@ -202,7 +202,7 @@ export function describeSshFailure(
   }
   if (/open failed: connect failed/i.test(stderr)) {
     return new SshConnectionError(
-      `SSH to ${destination} works, but nothing answers at ${FORWARD_TARGET} there. Start Ollama on that machine.`
+      `SSH to ${destination} works, but Ollama is not running on it: nothing answers at ${FORWARD_TARGET} there. Start Ollama on that machine.`
     );
   }
   if (/administratively prohibited/i.test(stderr)) {
