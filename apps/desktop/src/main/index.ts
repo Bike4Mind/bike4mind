@@ -145,6 +145,7 @@ void app.whenReady().then(async () => {
     releaseSessionTerminals: sessionId => terminals.acquireSessionCleanup(sessionId),
     observeStream: event => fleet.observe(event),
     cancelModelPull: key => models.stop(key),
+    pinnedProjectors: () => models.pinnedProjectors(),
   });
   const models = registerModels(modelServers, { localContext: () => localContext.read() }, capabilityLedger);
   fleet.setDirectoryResolver(async sessionId => {

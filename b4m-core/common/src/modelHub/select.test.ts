@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { parseHubManifest, type HubManifestInput, type HubRole } from '../schemas/modelHub';
-import { fixtureManifest, machine, OLD_PINS, PINS } from './__fixtures__/hubManifest';
+import { parseHubManifest, type HubBuild, type HubManifestInput, type HubRole } from '../schemas/modelHub';
+import { fixtureManifest, machine, OLD_PINS, PINS, sha } from './__fixtures__/hubManifest';
 import { computeBufferBytes, type HardwareProfile } from './fit';
 import {
+  ollamaBuildBytes,
   pickForMachine,
   TIER_C_TOOL_REGRESSION_TOLERANCE,
   type HubCandidate,
@@ -103,6 +104,21 @@ describe('pickForMachine golden picks on the fixture catalog', () => {
     });
     expect(label(best)).toBe('hybrid-27b/iq4@llama-server slow:below-floor 32768 q8_0');
     expect(best?.grade).toBe('A');
+  });
+
+  it('admits a build that loads on a 16 GB Mac only with layers in system RAM, ranked as slow', () => {
+    // Shrunk so it misses the GPU part of unified memory but fits the RAM past it.
+    const manifest = withManifest(m => {
+      const iq3 = m.entries.find(e => e.id === 'hybrid-27b')!.builds.find(b => b.id === 'iq3')!;
+      iq3.weights[0].sizeBytes = 9.6e9;
+    });
+    const { best, alternates } = pick('mac-16', 'chat', { manifest });
+    expect(label(best)).toBe('dense-9b-tuned/q4@llama-server tight:reduced-context 32768 q8_0');
+    const spilled = alternates.find(c => c.entry.id === 'hybrid-27b');
+    expect(spilled?.fit).toMatchObject({ verdict: 'slow', reason: 'layer-offload', placement: 'layer-offload' });
+    // Ahead of a slow all-GPU load below the mode floor.
+    const ordered = [best, ...alternates].map(c => c?.entry.id);
+    expect(ordered.indexOf('hybrid-27b')).toBeLessThan(ordered.indexOf('gemma-12b'));
   });
 
   it('lists one alternate per other entry and labels a stale eval as pending', () => {
@@ -466,5 +482,43 @@ describe('pickForMachine runtimes', () => {
     expect(vision.runtime).toBe('llama-server');
     expect(vision.fit.memory.mmprojBytes).toBe(0.21e9);
     expect(chat.fit.memory.mmprojBytes).toBe(0);
+  });
+});
+
+describe('ollamaBuildBytes', () => {
+  const layers = (projectorBytes?: number) => ({
+    template: null,
+    params: null,
+    license: null,
+    numCtx: null,
+    projector: projectorBytes === undefined ? null : sha(1),
+    projectorBytes,
+    draft: null,
+  });
+  const build = (over: Partial<HubBuild>) => ({ weights: [], ...over }) as HubBuild;
+  const library = (projectorBytes?: number) =>
+    build({
+      ollama: { kind: 'library', ref: 'vision:12b', sizeBytes: 7e9, digest: sha(2), layers: layers(projectorBytes) },
+    });
+
+  it('takes a pinned projector out of a library layer, which includes it', () => {
+    expect(ollamaBuildBytes(library(0.175e9))).toEqual({ weightsBytes: 7e9 - 0.175e9, mmprojBytes: 0.175e9 });
+    expect(ollamaBuildBytes(library())).toEqual({ weightsBytes: 7e9, mmprojBytes: 0 });
+  });
+
+  it("takes Ollama's pinned projector out of a library layer over a Hugging Face mmproj file", () => {
+    const both = {
+      ...library(0.175e9),
+      mmproj: { path: 'mmproj.gguf', sizeBytes: 0.85e9, sha256: sha(4) },
+    } as HubBuild;
+    expect(ollamaBuildBytes(both)).toEqual({ weightsBytes: 7e9 - 0.175e9, mmprojBytes: 0.175e9 });
+  });
+
+  it('adds a pinned projector beside Hugging Face weights, which leave it out', () => {
+    const pinned = build({
+      weights: [{ path: 'model.gguf', sizeBytes: 8.4e9, sha256: sha(3) }],
+      ollama: { kind: 'hf-pull', modelfile: { dropStops: [] }, layers: layers(0.93e9) },
+    } as Partial<HubBuild>);
+    expect(ollamaBuildBytes(pinned)).toEqual({ weightsBytes: 8.4e9, mmprojBytes: 0.93e9 });
   });
 });
