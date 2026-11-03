@@ -184,14 +184,12 @@ export function describeSshFailure(
 ): Error {
   const terminal = `\`ssh ${destination}\``;
   // Windows ssh.exe keeps its own known_hosts and keys, so a WSL terminal does not help, and BatchMode cannot prompt.
-  const connectOnce =
-    platform === 'win32'
-      ? `a Windows terminal (PowerShell or Command Prompt, not WSL) with ${terminal}`
-      : `a terminal with ${terminal}`;
-  const passphrase =
-    platform === 'win32'
-      ? ` ${app} cannot ask for a passphrase, so a key that has one must be loaded into ssh-agent.`
-      : '';
+  const windows = platform === 'win32';
+  const shell = windows ? 'a Windows terminal (PowerShell or Command Prompt, not WSL)' : 'a terminal';
+  const connectOnce = `${shell} with ${terminal}`;
+  const passphrase = windows
+    ? ` ${app} cannot ask for a passphrase, so a key that has one must be loaded into ssh-agent.`
+    : '';
   if (/REMOTE HOST IDENTIFICATION HAS CHANGED/i.test(stderr)) {
     return new SshRefusedError(
       `The host key of ${destination} has changed since this computer last connected. Check why, then connect once from ${connectOnce} to trust the new key.`
@@ -212,7 +210,7 @@ export function describeSshFailure(
   }
   if (/: Permission denied \(|Too many authentication failures|no more authentication methods/i.test(stderr)) {
     return new SshRefusedError(
-      `${destination} refused the SSH login. Check that ${terminal} works in a terminal. ${app} cannot ask for a password or passphrase, so load a key that has one into ssh-agent with ssh-add.`
+      `${destination} refused the SSH login. Check that ${terminal} works in ${shell}. ${app} cannot ask for a password or passphrase, so load a key that has one into ssh-agent with ssh-add.`
     );
   }
   // Over a shared connection ssh reports every refused forward the same way, so name both causes.

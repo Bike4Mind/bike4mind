@@ -205,6 +205,13 @@ describe('ssh failures', () => {
     expect(err.message).toMatch(/ssh-agent/);
   });
 
+  it('points a refused login on Windows at a Windows terminal, whose keys WSL does not share', () => {
+    const err = describeSshFailure('me@gpu: Permission denied (publickey).\n', 255, 'me@gpu', 'Desktop', 'win32');
+    expect(err.message).toMatch(
+      /Check that `ssh me@gpu` works in a Windows terminal \(PowerShell or Command Prompt, not WSL\)\./
+    );
+  });
+
   it('names a server that forbids forwarding, and one without Ollama running', () => {
     expect(
       describeSshFailure(
