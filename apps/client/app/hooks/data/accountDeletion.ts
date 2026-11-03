@@ -1,3 +1,4 @@
+import { isAxiosError } from 'axios';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -39,11 +40,16 @@ export function useRequestAccountDeletion() {
   });
 }
 
-/** Cancel a pending deletion, then reload so the app boots with full access again. */
+/** Cancel a pending deletion, then reload so the app boots with full access again.
+ * A 404 means nothing is scheduled (already cancelled): the same end state. */
 export function useCancelAccountDeletion() {
   return useMutation({
     mutationFn: async () => {
-      await api.delete('/api/account/deletion');
+      try {
+        await api.delete('/api/account/deletion');
+      } catch (error) {
+        if (!(isAxiosError(error) && error.response?.status === 404)) throw error;
+      }
     },
     onSuccess: () => {
       window.location.replace('/');
