@@ -9,6 +9,7 @@ import {
   type ChatModelOption,
   type ReasoningEffortSetting,
 } from '@shared/chat';
+import { effortSent } from '@shared/generation';
 
 /** An unset or unrecognised value is `default`: a typo must not silently change how a model reasons. */
 export function parseReasoningEffortSetting(raw: string | undefined): ReasoningEffortSetting {
@@ -32,19 +33,24 @@ const UNLISTED_EFFORTS: readonly ReasoningEffortSetting[] = ['minimal', 'low', '
 /**
  * The effort to put on a request for `model`, or undefined to send none.
  *
- * Only a level the model's `controls.effort` lists: main builds those from what the backend acts
- * on (the server's published levels for a hosted model, Ollama's `think` values, the gpt-oss
- * levels of an OpenAI-compatible server). Without a listed option, when the catalog could not be
- * read, it falls back to the adapters' own model sets and the levels every one of them takes.
+ * Only a level the model's `controls.effort` lists, the nearest one when the setting is not
+ * listed (see effortSent): main builds those from what the backend acts on (the server's
+ * published levels for a hosted model, Ollama's `think` values, the gpt-oss levels of an
+ * OpenAI-compatible server). Without a listed option, when the catalog could not be read, it
+ * falls back to the adapters' own model sets and the levels every one of them takes.
  */
 export function reasoningEffortFor(
   setting: ReasoningEffortSetting | undefined,
   model: string,
   option?: Pick<ChatModelOption, 'controls'>
 ): ReasoningEffort | undefined {
-  if (!setting || setting === 'default') return undefined;
-  if (option?.controls) return option.controls.effort?.levels.includes(setting) ? setting : undefined;
-  return supportsReasoningEffort(model) && UNLISTED_EFFORTS.includes(setting) ? setting : undefined;
+  if (!setting) return undefined;
+  const levels = option?.controls
+    ? (option.controls.effort?.levels ?? [])
+    : supportsReasoningEffort(model)
+      ? UNLISTED_EFFORTS
+      : [];
+  return effortSent(setting, levels);
 }
 
 /**

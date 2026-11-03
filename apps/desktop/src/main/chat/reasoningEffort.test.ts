@@ -1,5 +1,5 @@
 import { ChatModels } from '@bike4mind/common';
-import type { ChatModelOption } from '@shared/chat';
+import type { ChatModelOption, ReasoningEffortSetting } from '@shared/chat';
 import { describe, expect, it } from 'vitest';
 import {
   parseReasoningEffortSetting,
@@ -50,13 +50,25 @@ describe('reasoningEffortFor', () => {
     };
     expect(reasoningEffortFor('none', ChatModels.GPT5, option)).toBe('none');
     expect(reasoningEffortFor('xhigh', ChatModels.GPT5, option)).toBe('xhigh');
-    expect(reasoningEffortFor('minimal', ChatModels.GPT5, option)).toBeUndefined();
+    expect(reasoningEffortFor('default', ChatModels.GPT5, option)).toBeUndefined();
     expect(reasoningEffortFor('high', ChatModels.GPT5, { controls: {} })).toBeUndefined();
   });
 
-  it('keeps none and xhigh off a model whose levels are unknown', () => {
-    expect(reasoningEffortFor('none', ChatModels.GPT5)).toBeUndefined();
-    expect(reasoningEffortFor('xhigh', ChatModels.GPT5)).toBeUndefined();
+  it('sends the nearest listed level for a stored one the model no longer lists', () => {
+    const listed = (...levels: ReasoningEffortSetting[]): Pick<ChatModelOption, 'controls'> => ({
+      controls: { effort: { levels, scope: 'request' } },
+    });
+    expect(reasoningEffortFor('minimal', ChatModels.GPT5, listed('low', 'medium', 'high'))).toBe('low');
+    expect(reasoningEffortFor('xhigh', ChatModels.GPT5, listed('low', 'medium', 'high'))).toBe('high');
+    expect(reasoningEffortFor('medium', ChatModels.GPT5, listed('low', 'high'))).toBe('low');
+    expect(reasoningEffortFor('minimal', ChatModels.GPT5, listed('none', 'low', 'xhigh'))).toBe('low');
+    expect(reasoningEffortFor('none', ChatModels.GPT5, listed('low', 'high'))).toBe('low');
+    expect(reasoningEffortFor('low', ChatModels.GPT5, listed('none'))).toBeUndefined();
+  });
+
+  it('keeps none and xhigh off a model whose levels are unknown, at the nearest of the old four', () => {
+    expect(reasoningEffortFor('none', ChatModels.GPT5)).toBe('minimal');
+    expect(reasoningEffortFor('xhigh', ChatModels.GPT5)).toBe('high');
     expect(reasoningEffortFor('minimal', ChatModels.GPT5)).toBe('minimal');
   });
 });

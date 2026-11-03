@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { ChatModels } from '@bike4mind/common';
-import type { ChatModelOption } from '@shared/chat';
+import type { ChatModelOption, ReasoningEffortSetting } from '@shared/chat';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { COMPACT_MAX_TOKENS } from './compaction';
@@ -126,6 +126,60 @@ describe('per-conversation generation settings on a hosted model', () => {
     await vi.waitUntil(() => !service.isSessionBusy(id), { timeout: 3000, interval: 5 });
     expect(bodies[0]?.max_tokens).toBe(8192);
     expect(bodies[0]?.options).not.toHaveProperty('temperature');
+  });
+});
+
+describe('reasoning effort through a hosted model controls', () => {
+  interface Body {
+    messages: { role: string; content: unknown }[];
+    options: { reasoningEffort?: string; thinking?: { enabled: boolean } };
+  }
+
+  async function turnWith(levels: ReasoningEffortSetting[], setting: ReasoningEffortSetting): Promise<Body> {
+    const option: ChatModelOption = {
+      id: ChatModels.GPT5,
+      name: 'GPT-5',
+      backend: 'openai',
+      supportsReasoningEffort: true,
+      controls: { effort: { levels, scope: 'request' } },
+    };
+    const bodies: Body[] = [];
+    const post = vi.fn().mockImplementation((_url: string, body: Body) => {
+      bodies.push(body);
+      const stream = new PassThrough();
+      stream.end(frame({ type: 'content', text: 'ok' }) + frame('[DONE]'));
+      return Promise.resolve({ data: stream, status: 200 });
+    });
+    const store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-effort-')), option.id);
+    const service = serviceFor(option, {
+      store,
+      getApiClient: () =>
+        ({
+          get: vi.fn().mockResolvedValue({}),
+          getAxiosInstance: () => ({ post }),
+        }) as unknown as AuthenticatedApiClient,
+    });
+    const { id } = await service.createSession();
+    await service.renameSession(id, 'Named');
+    await service.setSessionReasoningEffort(id, setting);
+    await service.send(id, 'hello');
+    await vi.waitUntil(() => !service.isSessionBusy(id), { timeout: 3000, interval: 5 });
+    return bodies[0] as Body;
+  }
+
+  it('sends a level only the controls list, with thinking on', async () => {
+    const body = await turnWith(['none', 'low', 'high', 'xhigh'], 'xhigh');
+    expect(body.options).toMatchObject({ reasoningEffort: 'xhigh', thinking: { enabled: true } });
+  });
+
+  it('sends none and asks for no thinking', async () => {
+    const body = await turnWith(['none', 'low', 'high', 'xhigh'], 'none');
+    expect(body.options.reasoningEffort).toBe('none');
+    expect(body.options).not.toHaveProperty('thinking');
+  });
+
+  it('sends the nearest listed level for a stored one the model no longer lists', async () => {
+    expect((await turnWith(['low', 'medium', 'high'], 'minimal')).options.reasoningEffort).toBe('low');
   });
 });
 
