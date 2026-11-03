@@ -31,6 +31,11 @@ export type NewAccountSpendCapAdapters = {
   adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
   /** Settled AI spend on the user's own credits since `since`, plus their holds not yet settled. */
   personalSpendSince(userId: string, since: Date): Promise<SpendSample[]>;
+  /**
+   * Told about each refusal, e.g. to alert LiveOps (apps/client/server/billing/fraudBlockAlert.ts).
+   * Best-effort: a failure is logged and the refusal stands.
+   */
+  onRefused?(event: NewAccountSpendCapRefusalEvent): Promise<void>;
 };
 
 export type NewAccountSpendCapUser = Pick<IUserDocument, 'id' | 'createdAt' | 'isAdmin' | 'newAccountSpendCapLifted'>;
@@ -43,6 +48,12 @@ export type NewAccountSpendCapRefusal = {
   spentCredits: number;
   /** When enough spend ages out of the window for this request to fit; null when it never can. */
   resetsAt: Date | null;
+};
+
+export type NewAccountSpendCapRefusalEvent = {
+  userId: string;
+  refusal: NewAccountSpendCapRefusal;
+  requestedCredits: number;
 };
 
 const WINDOWS = [
@@ -168,6 +179,14 @@ export async function checkNewAccountSpendCap(
     requestedCredits,
     resetsAt: refusal.resetsAt?.toISOString() ?? null,
   });
+  try {
+    await adapters.onRefused?.({ userId: user.id, refusal, requestedCredits });
+  } catch (error) {
+    logger?.error('[NEW_ACCOUNT_SPEND_CAP] Refusal notification failed', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
   return newAccountSpendCapMessage(refusal, requestedCredits, now);
 }
 

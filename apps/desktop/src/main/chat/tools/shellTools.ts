@@ -16,6 +16,7 @@ import {
   shellCommandRan,
 } from './sessionScripts';
 import { commandEnv, launchCommand } from './commandLaunch';
+import { commandExit, signalCommandTree } from './commandTree';
 import type { SandboxedCommand } from './sandbox';
 import {
   capOutputMiddle,
@@ -181,8 +182,7 @@ class CappedOutput {
 }
 
 function runCommand(
-  executable: string,
-  args: readonly string[],
+  launch: SandboxedCommand,
   cwd: string,
   env: NodeJS.ProcessEnv,
   timeoutMs: number,
@@ -190,12 +190,13 @@ function runCommand(
   options: RunOptions = {}
 ): Promise<CommandOutcome> {
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, [...args], {
+    const child = spawn(launch.executable, [...launch.args], {
       cwd,
       // Its own process group, so the timeout reaches the command's children too: signalling
       // the shell alone would leave whatever it spawned running. It is also what lets the
       // command be moved to the background intact - see `moveToBackground` below.
       detached: true,
+      windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       env,
     });
@@ -211,12 +212,7 @@ function runCommand(
     let withdrawMove: (() => void) | undefined;
 
     const signalGroup = (value: NodeJS.Signals) => {
-      if (child.pid === undefined) return;
-      try {
-        process.kill(-child.pid, value);
-      } catch {
-        // Already gone, or the group outlived its leader; nothing left to signal.
-      }
+      if (child.pid !== undefined) signalCommandTree({ pid: child.pid, child, launch }, value);
     };
 
     const stopChild = () => {
@@ -268,13 +264,14 @@ function runCommand(
       finish();
       reject(error);
     };
-    const onClose = (code: number | null, closeSignal: NodeJS.Signals | null) => {
+    const onClose = (closeCode: number | null, closeSignal: NodeJS.Signals | null) => {
       finish();
+      const exit = commandExit(closeCode, closeSignal, child);
       resolve({
         stdout: stdout.toString(),
         stderr: stderr.toString(),
-        exitCode: code,
-        signal: closeSignal,
+        exitCode: exit.code,
+        signal: exit.signal,
         timedOut,
         watchStopped,
       });
@@ -608,8 +605,8 @@ export const bashExecute: ToolDefinition = {
     const startedAt = new Date().toISOString();
     let moved = false;
     try {
-      const env = await commandEnv();
-      const outcome = await runCommand(launch.executable, launch.args, cwd, env, timeoutMs, context.signal, {
+      const env = await commandEnv(launch);
+      const outcome = await runCommand(launch, cwd, env, timeoutMs, context.signal, {
         ...bashExecuteRunOptions,
         ...movableOptions(context, { command, cwd, startedAt, launch }),
       });

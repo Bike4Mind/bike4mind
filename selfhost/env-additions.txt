@@ -41,7 +41,7 @@ WEBSOCKET_URL=wss://chat.example.com/ws
 
 # DO NOT change WEBSOCKET_MANAGEMENT_ENDPOINT - it is an internal, compose-network
 # address the app + fanout push to, never reached from the browser. Leave as:
-# WEBSOCKET_MANAGEMENT_ENDPOINT=http://ws:3001
+# WEBSOCKET_MANAGEMENT_ENDPOINT=http://ws:3002
 
 # -- MinIO / S3 credentials (required: change off the dev default) --
 # The example ships the conventional local default (minioadmin). Change it before

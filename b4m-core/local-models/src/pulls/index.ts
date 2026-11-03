@@ -15,6 +15,7 @@ export {
   type PullCheckHub,
 } from './approval';
 export {
+  checkInstalledBlob,
   checkInstalledDigest,
   checkReviewedLayers,
   checkRuntime,

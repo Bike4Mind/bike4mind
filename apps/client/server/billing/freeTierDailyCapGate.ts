@@ -38,7 +38,8 @@ export function isFreeTierDailyCapError(error: unknown): error is TooManyRequest
 
 /**
  * Whether the free-tier daily caps can refuse this user's personally billed turns: not an admin
- * and on the free rate tier. The admin credit summary uses it so its cap chip matches this gate.
+ * and on the free rate tier, i.e. without paid standing (`@server/entitlements/paidStanding`). The
+ * admin credit summary uses it so its cap chip matches this gate.
  */
 export async function isFreeTierCapUser(
   user: IUserDocument,
@@ -51,7 +52,16 @@ export async function isFreeTierCapUser(
   // that mock @bike4mind/database but never reach the cap check.
   const { resolveUserRateTier } = await import('@server/utils/userRateTier');
   // Without `throttle`: a restricted user keeps the cap of their subscription tier.
-  const tier = await resolveUserRateTier({ id: user.id, isAdmin: user.isAdmin, tags: user.tags }, req, options);
+  const tier = await resolveUserRateTier(
+    {
+      id: user.id,
+      isAdmin: user.isAdmin,
+      tags: user.tags,
+      lastCreditsPurchasedAt: user.lastCreditsPurchasedAt,
+    },
+    req,
+    options
+  );
   return tier === 'free';
 }
 

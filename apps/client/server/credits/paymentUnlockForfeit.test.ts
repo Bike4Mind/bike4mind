@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   forfeitPaymentUnlock: vi.fn(),
   findByStripeCustomerId: vi.fn(),
   retrieveCharge: vi.fn(),
+  alertFraudBlock: vi.fn(),
 }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
@@ -13,6 +14,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/services', () => ({ userService: { forfeitPaymentUnlock: mocks.forfeitPaymentUnlock } }));
 vi.mock('@server/auth/signupProtection', () => ({ signupProtection: {} }));
+vi.mock('@server/billing/fraudBlockAlert', () => ({ alertFraudBlock: mocks.alertFraudBlock }));
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   stripe: { charges: { retrieve: mocks.retrieveCharge } },
 }));
@@ -49,6 +51,17 @@ describe('payment unlock forfeit helpers', () => {
     expect(mocks.retrieveCharge.mock.calls).toEqual([['ch_1'], ['ch_2']]);
     expect(forfeitedWith()).toEqual([['user_1', 'fraud_warning']]);
     expect(logger.warn).toHaveBeenCalledWith('Could not find user for early fraud warning issfr_2');
+  });
+
+  it('alerts LiveOps when a held unlock is actually cancelled, not on a replay', async () => {
+    await forfeitHeldUnlockForRefund({ customer: 'cus_1' }, logger);
+    mocks.forfeitPaymentUnlock.mockResolvedValueOnce({ outcome: 'already_forfeited' });
+    await forfeitHeldUnlockForRefund({ customer: 'cus_1' }, logger);
+    expect(mocks.alertFraudBlock).toHaveBeenCalledExactlyOnceWith({
+      kind: 'signupUnlockForfeited',
+      userId: 'user_1',
+      details: ['*Cause:* payment refund'],
+    });
   });
 
   it('propagates a failed forfeit so the webhook is retried', async () => {

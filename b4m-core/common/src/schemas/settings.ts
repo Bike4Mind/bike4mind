@@ -728,6 +728,7 @@ export const SettingKeySchema = z.enum([
 
   // FREE-TIER MODEL ALLOWLIST
   'freeTierModelGateEnabled',
+  'freeTierModelGateScope',
   'freeTierAllowedModels',
 
   // OAUTH SIGN-UP ABUSE CONTROLS
@@ -2473,7 +2474,8 @@ export const API_SERVICE_GROUPS = {
     icon: 'Security',
     settings: [
       { key: 'freeTierModelGateEnabled', order: 1 },
-      { key: 'freeTierAllowedModels', order: 2 },
+      { key: 'freeTierModelGateScope', order: 2 },
+      { key: 'freeTierAllowedModels', order: 3 },
     ],
   },
   THINKING_VISIBILITY: {
@@ -3435,7 +3437,7 @@ export const settingsMap = {
     max: 100000,
     int: true,
     description:
-      'Max requests per minute on tier-limited API routes (including in-app chat and API chat) for Basic-tier subscribers (e.g. Professional plan). AI helper routes keep their own fixed caps.',
+      'Max requests per minute on tier-limited API routes (including in-app chat and API chat) for Basic-tier subscribers (e.g. Professional plan), and for accounts that bought credits or hold a standalone plan without a ladder plan. AI helper routes keep their own fixed caps.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 2,
@@ -4297,10 +4299,22 @@ export const settingsMap = {
     // Self-host has no billing stack, so every account would read as free; the gate is hosted-only by default.
     defaultValue: process.env.B4M_SELF_HOST === 'true' ? false : true,
     description:
-      'Restricts accounts without an active paid plan (Basic or Pro, org seats included) or a past credit purchase to the free-tier model allowlist across all modalities, on web chat, media generation, CLI, API keys, agents and fallbacks. Admins and developer-tagged users are exempt. Off lets every account call every model it can otherwise access. Changes reach running servers within about 5 minutes (settings cache).',
+      'Restricts accounts without an active paid plan (Basic or Pro, org seats included) or a past credit purchase to the free-tier model allowlist across all modalities, on web chat, media generation, CLI, API keys, agents and fallbacks (Gate Scope can limit it to media models). Admins and developer-tagged users are exempt. Off lets every account call every model it can otherwise access. Changes reach running servers within about 5 minutes (settings cache).',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.FREE_TIER_MODELS.id,
     order: 1,
+  }),
+  freeTierModelGateScope: makeStringSetting({
+    key: 'freeTierModelGateScope',
+    name: 'Free-Tier Model Gate Scope',
+    defaultValue: 'all',
+    description:
+      'Which models the Free-Tier Model Gate covers. "all" (default): every model outside the allowlist is paid-only. "media": text models are open to free accounts, paid from their credit balance (only while Enforce Credits is on; with it off they run unbilled), and only media models (image, video, music, sound and voice) need the allowlist or a paid plan. A model the catalog does not report as text stays gated.',
+    options: ['all', 'media'],
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.FREE_TIER_MODELS.id,
+    order: 2,
+    dependsOn: 'freeTierModelGateEnabled',
   }),
   freeTierAllowedModels: makeObjectSetting<string[]>({
     key: 'freeTierAllowedModels',
@@ -4316,10 +4330,10 @@ export const settingsMap = {
       ChatModels.GEMINI_2_5_FLASH_LITE,
     ],
     description:
-      'Model IDs free accounts may call across all modalities while the Free-Tier Model Gate is on, one per line. Media models are paid-only unless explicitly listed. Conversational voice uses the ID elevenlabs. A model missing here, including a newly added one and the Default API Model, is paid-only. A free account that calls the chat or agent-execution API without a model starts on the first text model listed here that it can use.',
+      'Model IDs free accounts may call across all modalities while the Free-Tier Model Gate is on, one per line (with the gate scope set to "media", text models pass without being listed). Media models are paid-only unless explicitly listed. Conversational voice uses the ID elevenlabs. A model missing here, including a newly added one and the Default API Model, is paid-only (with the scope set to "media", only a missing media model is). A free account that calls the chat or agent-execution API without a model starts on the first text model listed here that it can use.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.FREE_TIER_MODELS.id,
-    order: 2,
+    order: 3,
     dependsOn: 'freeTierModelGateEnabled',
     schema: z.array(z.string()),
   }),
