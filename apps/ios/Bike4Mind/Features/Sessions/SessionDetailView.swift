@@ -159,7 +159,7 @@ private struct ChatScreen: View {
       if model.sendsAsAgentRun {
         Label("Agent run: leave anytime, progress shows on your Lock Screen", systemImage: "bolt.circle.fill")
           .font(Tokens.Typography.meta)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(Tokens.Palette.secondaryText)
           .accessibilityIdentifier("chat-composer-agent-hint")
       }
       composerRow
@@ -227,8 +227,12 @@ private struct ChatScreen: View {
       .focused($composerFocused)
       .padding(.horizontal, Tokens.Spacing.m)
       .padding(.vertical, Tokens.Spacing.s + 2)
-      .background(Tokens.Palette.assistantBubble)
+      .background(Tokens.Palette.groupedBackground)
       .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.bubble, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: Tokens.Radius.bubble, style: .continuous)
+          .strokeBorder(Tokens.Palette.divider, lineWidth: 1)
+      }
       .submitLabel(.send)
       .onSubmit(send)
       .accessibilityIdentifier("chat-composer-field")

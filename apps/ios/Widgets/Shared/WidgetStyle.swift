@@ -9,9 +9,9 @@ enum WidgetStyle {
   static func color(for tone: QuestActivityPresentation.Tone) -> Color {
     switch tone {
     case .active: .accentColor
-    case .attention: .orange
-    case .success: .green
-    case .failure: .red
+    case .attention: BrandTheme.warning
+    case .success: BrandTheme.success
+    case .failure: BrandTheme.destructive
     case .neutral: .secondary
     }
   }

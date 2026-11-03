@@ -23,11 +23,16 @@ private struct CreditsContent: View {
       LabeledContent {
         value
       } label: {
-        Label("Credits", systemImage: "creditcard")
+        Label {
+          Text("Credits")
+        } icon: {
+          Image(systemName: "creditcard").foregroundStyle(Tokens.Palette.brand)
+        }
       }
       .accessibilityIdentifier("settings-credits-row")
       .task { await model.load() }
     }
+    .listRowBackground(Tokens.Palette.groupedBackground)
   }
 
   @ViewBuilder
@@ -35,7 +40,7 @@ private struct CreditsContent: View {
     if let balance = model.balance {
       Text(CreditsViewModel.formatted(balance.credits))
         .monospacedDigit()
-        .foregroundStyle(.primary)
+        .foregroundStyle(Tokens.Palette.primaryText)
     } else {
       switch model.state {
       case .failed(let error):

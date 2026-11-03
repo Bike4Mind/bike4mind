@@ -29,6 +29,7 @@ private struct SessionsListScreen: View {
 
   var body: some View {
     content
+      .background(Tokens.Palette.background)
       .navigationTitle("Sessions")
       .toolbar {
         if captureJobs.isVisible {
@@ -91,23 +92,27 @@ private struct SessionsListScreen: View {
 
   private var sessionList: some View {
     List {
-      if case .failed(let error) = model.state {
-        InlineErrorBanner(message: error.message) { Task { await model.refresh() } }
-      }
-      ForEach(model.sessions) { session in
-        NavigationLink(value: session) {
-          SessionRow(session: session)
+      Group {
+        if case .failed(let error) = model.state {
+          InlineErrorBanner(message: error.message) { Task { await model.refresh() } }
         }
-        .task { await model.loadMoreIfNeeded(currentItem: session) }
+        ForEach(model.sessions) { session in
+          NavigationLink(value: session) {
+            SessionRow(session: session)
+          }
+          .task { await model.loadMoreIfNeeded(currentItem: session) }
+        }
+        if model.isLoadingMore {
+          ProgressView().frame(maxWidth: .infinity).listRowSeparator(.hidden)
+        }
+        if let error = model.loadMoreError {
+          InlineErrorBanner(message: error.message) { Task { await model.loadMore() } }
+        }
       }
-      if model.isLoadingMore {
-        ProgressView().frame(maxWidth: .infinity).listRowSeparator(.hidden)
-      }
-      if let error = model.loadMoreError {
-        InlineErrorBanner(message: error.message) { Task { await model.loadMore() } }
-      }
+      .listRowBackground(Color.clear)
     }
     .listStyle(.plain)
+    .scrollContentBackground(.hidden)
     .accessibilityIdentifier("sessions-list")
   }
 }
@@ -119,6 +124,7 @@ private struct SessionRow: View {
     VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
       Text(session.name.isEmpty ? "Untitled" : session.name)
         .font(.headline)
+        .foregroundStyle(Tokens.Palette.primaryText)
         .lineLimit(2)
       // At accessibility text sizes the time and model stack instead of truncating.
       ViewThatFits(in: .horizontal) {

@@ -63,8 +63,8 @@ enum QuestActivityStyle {
   /// Only the states that need the user stand out; a running quest keeps the system's lock screen material.
   static func background(for presentation: QuestActivityPresentation) -> Color? {
     switch presentation.tone {
-    case .attention: Color.orange.opacity(0.28)
-    case .failure: Color.red.opacity(0.16)
+    case .attention: BrandTheme.warning.opacity(0.28)
+    case .failure: BrandTheme.destructive.opacity(0.16)
     case .active, .success, .neutral: nil
     }
   }

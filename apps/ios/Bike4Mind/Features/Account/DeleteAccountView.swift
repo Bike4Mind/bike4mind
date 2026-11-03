@@ -30,58 +30,68 @@ private struct DeleteAccountContent: View {
   var body: some View {
     @Bindable var model = model
     Form {
-      Section {
-        Text(
-          "Deleting your account removes your profile, conversations, notebooks, files and any remaining credits, and cancels active subscriptions."
-        )
-        Text(
-          "Your account is held for \(AccountDeletionViewModel.gracePeriodDays) days first. Sign in again within that time to restore it; after that it is permanently deleted and cannot be recovered."
-        )
-      } header: {
-        Text("What happens")
+      Group {
+        formSections
       }
-
-      if case .blockedByOrganizations(let organizations) = model.state {
-        organizationsSection(organizations)
-      }
-
-      Section {
-        TextField("Type DELETE to confirm", text: $model.confirmation)
-          .textInputAutocapitalization(.characters)
-          .autocorrectionDisabled()
-          .focused($isFieldFocused)
-          .submitLabel(.done)
-          .disabled(model.isDeleting)
-          .accessibilityIdentifier("delete-account-confirm-field")
-      } header: {
-        Text("Confirm")
-      } footer: {
-        if let message = failureMessage {
-          Text(message)
-            .foregroundStyle(Tokens.Palette.destructive)
-            .accessibilityIdentifier("delete-account-error-text")
-        }
-      }
-
-      Section {
-        Button(role: .destructive) {
-          isFieldFocused = false
-          Task { await model.submit() }
-        } label: {
-          HStack {
-            if model.isDeleting { ProgressView() }
-            Text(model.isDeleting ? "Deleting..." : "Delete my account")
-          }
-          .frame(maxWidth: .infinity, minHeight: 44)
-        }
-        .disabled(!model.canSubmit)
-        .accessibilityIdentifier("delete-account-submit-btn")
-      }
+      .listRowBackground(Tokens.Palette.groupedBackground)
     }
+    .brandedListChrome()
     .navigationTitle("Delete Account")
     .navigationBarTitleDisplayMode(.inline)
     .interactiveDismissDisabled(model.isDeleting)
     .navigationBarBackButtonHidden(model.isDeleting)
+  }
+
+  @ViewBuilder
+  private var formSections: some View {
+    @Bindable var model = model
+    Section {
+      Text(
+        "Deleting your account removes your profile, conversations, notebooks, files and any remaining credits, and cancels active subscriptions."
+      )
+      Text(
+        "Your account is held for \(AccountDeletionViewModel.gracePeriodDays) days first. Sign in again within that time to restore it; after that it is permanently deleted and cannot be recovered."
+      )
+    } header: {
+      Text("What happens")
+    }
+
+    if case .blockedByOrganizations(let organizations) = model.state {
+      organizationsSection(organizations)
+    }
+
+    Section {
+      TextField("Type DELETE to confirm", text: $model.confirmation)
+        .textInputAutocapitalization(.characters)
+        .autocorrectionDisabled()
+        .focused($isFieldFocused)
+        .submitLabel(.done)
+        .disabled(model.isDeleting)
+        .accessibilityIdentifier("delete-account-confirm-field")
+    } header: {
+      Text("Confirm")
+    } footer: {
+      if let message = failureMessage {
+        Text(message)
+          .foregroundStyle(Tokens.Palette.destructive)
+          .accessibilityIdentifier("delete-account-error-text")
+      }
+    }
+
+    Section {
+      Button(role: .destructive) {
+        isFieldFocused = false
+        Task { await model.submit() }
+      } label: {
+        HStack {
+          if model.isDeleting { ProgressView() }
+          Text(model.isDeleting ? "Deleting..." : "Delete my account")
+        }
+        .frame(maxWidth: .infinity, minHeight: 44)
+      }
+      .disabled(!model.canSubmit)
+      .accessibilityIdentifier("delete-account-submit-btn")
+    }
   }
 
   private func organizationsSection(_ organizations: [AccountOrganization]) -> some View {

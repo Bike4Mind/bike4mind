@@ -21,11 +21,15 @@ private struct NotificationSettingsContent: View {
 
   var body: some View {
     Form {
-      masterSection
-      if model.isMasterEnabled {
-        categorySection
+      Group {
+        masterSection
+        if model.isMasterEnabled {
+          categorySection
+        }
       }
+      .listRowBackground(Tokens.Palette.groupedBackground)
     }
+    .brandedListChrome()
     .navigationTitle("Notifications")
     .navigationBarTitleDisplayMode(.inline)
     // Reloads on return from iOS Settings, where the user may have changed the system switch.

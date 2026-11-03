@@ -38,6 +38,7 @@ struct MessageBubble: View {
     }
     .padding(.horizontal, Tokens.Spacing.m)
     .padding(.vertical, Tokens.Spacing.s + 2)
+    .foregroundStyle(Tokens.Palette.primaryText)
     .background(isUser ? Tokens.Palette.userBubble : Tokens.Palette.assistantBubble)
     .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.bubble, style: .continuous))
     .overlay {

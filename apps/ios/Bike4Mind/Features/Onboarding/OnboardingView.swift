@@ -57,6 +57,7 @@ private struct OnboardingPageView: View {
           .accessibilityHidden(true)
         Text(page.title)
           .font(.title.bold())
+          .foregroundStyle(Tokens.Palette.primaryText)
           .multilineTextAlignment(.center)
           .accessibilityAddTraits(.isHeader)
         Text(page.message)

@@ -48,14 +48,18 @@ struct VoiceRecorderPanel: View {
     switch model.state {
     case .idle, .failed:
       if case .failed(let error) = model.state {
-        Text(error.message).font(.footnote).foregroundStyle(.red).multilineTextAlignment(.center)
+        Text(error.message).font(.footnote).foregroundStyle(Tokens.Palette.destructive)
+          .multilineTextAlignment(.center)
           .accessibilityIdentifier("voice-error-label")
       }
       recordButton(symbol: "mic.circle.fill", label: "Start recording") { await model.start() }
-      Text("Tap to start, tap again to stop.").font(.footnote).foregroundStyle(.secondary)
+      Text("Tap to start, tap again to stop.").font(.footnote)
+        .foregroundStyle(Tokens.Palette.secondaryText)
     case .recording:
-      recordButton(symbol: "stop.circle.fill", label: "Stop recording", tint: .red) { await model.stop() }
-      Text("Recording").font(.footnote).foregroundStyle(.secondary)
+      recordButton(symbol: "stop.circle.fill", label: "Stop recording", tint: Tokens.Palette.destructive) {
+        await model.stop()
+      }
+      Text("Recording").font(.footnote).foregroundStyle(Tokens.Palette.secondaryText)
     case .transcribing, .transcribed:
       ProgressView("Transcribing")
     }

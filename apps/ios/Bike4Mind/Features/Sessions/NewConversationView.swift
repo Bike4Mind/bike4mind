@@ -19,8 +19,12 @@ struct NewConversationView: View {
           .lineLimit(4...12)
           .focused($focused)
           .padding(Tokens.Spacing.m)
-          .background(Tokens.Palette.assistantBubble)
+          .background(Tokens.Palette.groupedBackground)
           .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.card, style: .continuous))
+          .overlay {
+            RoundedRectangle(cornerRadius: Tokens.Radius.card, style: .continuous)
+              .strokeBorder(Tokens.Palette.divider, lineWidth: 1)
+          }
           .accessibilityIdentifier("new-conversation-field")
         if let failure = model.failure {
           Label(failure.message, systemImage: "exclamationmark.circle")
@@ -35,6 +39,8 @@ struct NewConversationView: View {
         Spacer()
       }
       .padding(Tokens.Spacing.m)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      .background(Tokens.Palette.background)
       .navigationTitle("New conversation")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {

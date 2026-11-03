@@ -39,6 +39,7 @@ struct SignInView: View {
         .accessibilityHidden(true)
       Text("Bike4Mind")
         .font(Tokens.Typography.wordmark)
+        .foregroundStyle(Tokens.Palette.primaryText)
       Text("Your AI workspace, in your pocket.")
         .font(Tokens.Typography.tagline)
         .foregroundStyle(Tokens.Palette.secondaryText)

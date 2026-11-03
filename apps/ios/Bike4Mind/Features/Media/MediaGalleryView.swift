@@ -22,6 +22,7 @@ private struct GalleryContent: View {
 
   var body: some View {
     content
+      .background(Tokens.Palette.background)
       .navigationTitle("Media")
       .toolbar { ToolbarItem(placement: .principal) { filter } }
       .navigationDestination(for: MediaItem.self) { item in
@@ -127,7 +128,7 @@ private struct MediaCell: View {
         switch phase {
         case .success(let image): image.resizable().scaledToFill()
         case .failure: placeholder("photo")
-        default: Tokens.Palette.assistantBubble
+        default: Tokens.Palette.groupedBackground
         }
       }
     case .video: placeholder("play.rectangle.fill")
@@ -137,8 +138,8 @@ private struct MediaCell: View {
 
   private func placeholder(_ symbol: String) -> some View {
     ZStack {
-      Tokens.Palette.assistantBubble
-      Image(systemName: symbol).font(.title).foregroundStyle(.secondary)
+      Tokens.Palette.groupedBackground
+      Image(systemName: symbol).font(.title).foregroundStyle(Tokens.Palette.secondaryText)
     }
   }
 

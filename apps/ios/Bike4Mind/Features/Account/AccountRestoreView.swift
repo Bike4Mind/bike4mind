@@ -40,9 +40,11 @@ private struct AccountRestoreContent: View {
           .accessibilityHidden(true)
         Text("Your account is scheduled for deletion")
           .font(.title2.bold())
+          .foregroundStyle(Tokens.Palette.primaryText)
           .multilineTextAlignment(.center)
           .accessibilityAddTraits(.isHeader)
         Text(deadlineText)
+          .foregroundStyle(Tokens.Palette.primaryText)
           .multilineTextAlignment(.center)
         Text(
           "Restoring your account brings back your conversations and files. It does not reinstate subscriptions that were canceled; you will need to subscribe again."

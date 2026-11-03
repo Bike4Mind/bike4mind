@@ -30,6 +30,7 @@ struct Bike4MindApp: App {
   var body: some Scene {
     WindowGroup {
       RootView()
+        .tint(Tokens.Palette.brand)
         .environment(auth)
         .environment(services)
         .onOpenURL { services.events.handle(url: $0) }

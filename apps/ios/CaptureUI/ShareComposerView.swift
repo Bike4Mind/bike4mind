@@ -2,7 +2,8 @@ import B4MKit
 import SwiftUI
 
 /// The destination picker, note field and Send button shared by the share extension and the in-app capture
-/// sheet. Compiled into both targets, so it uses only system styling and B4MKit.
+/// sheet. Compiled into both targets, so it uses only system styling plus B4MKit's BrandTheme; the explicit
+/// tint matters in the share extension, which has no asset-catalog accent of its own.
 struct ShareComposerView: View {
   @State var model: ShareComposerModel
   let onFinish: () -> Void
@@ -27,6 +28,7 @@ struct ShareComposerView: View {
           }
         }
     }
+    .tint(BrandTheme.accent)
     .task { await model.load() }
     .interactiveDismissDisabled(model.phase == .submitting)
   }
@@ -71,7 +73,8 @@ struct ShareComposerView: View {
       }
       Section("Destination") {
         if let warning = model.loadWarning {
-          Label(warning, systemImage: "exclamationmark.triangle").foregroundStyle(.orange).font(.footnote)
+          Label(warning, systemImage: "exclamationmark.triangle")
+            .foregroundStyle(BrandTheme.warning).font(.footnote)
         }
         NavigationLink {
           DestinationPicker(model: model)
@@ -91,7 +94,7 @@ struct ShareComposerView: View {
       }
       if case .failed(let message) = model.phase {
         Section {
-          Label(message, systemImage: "exclamationmark.octagon").foregroundStyle(.red)
+          Label(message, systemImage: "exclamationmark.octagon").foregroundStyle(BrandTheme.destructive)
             .accessibilityIdentifier("share-error-label")
         }
       }
