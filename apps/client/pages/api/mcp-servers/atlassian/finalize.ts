@@ -144,7 +144,7 @@ const finalizeConnection = async (userId: string, resourceId: string) => {
 
     // Try to get and store available tools (non-blocking)
     try {
-      const { invokeMcpHandler } = await import('@server/utils/invokeMcpHandler');
+      const { invokeMcpHandler } = await import('@bike4mind/server-utils/utils/invokeMcpHandler');
       const result = await invokeMcpHandler<any>({
         envVariables: plaintextEnvVariables,
         name: 'atlassian',

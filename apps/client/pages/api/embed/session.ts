@@ -22,12 +22,13 @@
  */
 
 import { baseApi } from '@server/middlewares/baseApi';
+import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { embedCors } from '@server/middlewares/embedCors';
 import { verifyEmbedApiKey } from '@server/cli/auth';
-import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@server/auth/apiKeyAuthFailure';
+import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { randomUUID } from 'crypto';
-import { flattenHeaders } from '@server/utils/flattenHeaders';
+import { flattenHeaders } from '@bike4mind/server-utils/utils/flattenHeaders';
 import { signEmbedSessionToken, EMBED_SESSION_TTL_SECONDS } from '@server/embed/embedSessionToken';
 import { resolveEmbedOriginDecision } from '@server/embed/firstPartyOrigin';
 import { IdentifiedEmbedMintSchema, resolveIdentifiedEmbedUser } from '@server/embed/identifiedEmbedUser';
@@ -42,6 +43,7 @@ const PER_CLIENT_IDENTIFIED_RATE_LIMIT = 300;
 
 const handler = baseApi({ auth: false })
   .use(embedCors())
+  .use(checkBlockedIP({ surface: 'app', writesOnly: true }))
   .use(rateLimit({ limit: MINT_RATE_LIMIT, windowMs: RATE_WINDOW_MS, bucket: 'embed-session-mint' }))
   .post(async (req, res) => {
     const headers = flattenHeaders(req.headers);

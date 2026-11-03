@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Focus: the chunk-failure path must persist a per-file error and account the file as
 // failed in its batch (so a bad file is visible instead of silently stuck at
 // chunkCount:0), then re-throw so SQS retries then routes to the DLQ.
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
   // Declared, not spread from the real module: this mock exists to keep `utils`' import-time
   // Config/DB wiring out of the test. Any NEW export the handler starts importing has to be added
@@ -150,7 +150,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })),
 }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => h.sendToClient(...a) }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => h.sendToClient(...a) }));
 vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: (...a: unknown[]) => h.finalizeBatchIfComplete(...a),
   completedBatchStatus: (...a: unknown[]) => h.completedBatchStatus(...a),

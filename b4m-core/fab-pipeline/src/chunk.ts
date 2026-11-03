@@ -416,7 +416,7 @@ export class SmartChunker {
           chunks = await this.chunkText(textContent);
           break;
         }
-        this.logger.error(`Unsupported file type: ${mimeType}`);
+        this.logger.warn(`Unsupported file type: ${mimeType}`);
         return [];
     }
 

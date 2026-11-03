@@ -53,4 +53,11 @@ describe('TitanBedrockBackend identity reminder', () => {
     expect(inputText).toBe('System: You are terse.\n\nUser: hi\n\nAssistant:');
     expect(inputText).not.toContain('platform_identity');
   });
+
+  it('names modelIdentityId in place of the serving model', () => {
+    const inputText = inputTextOf([{ role: 'user', content: 'hi' }], { modelIdentityId: 'requested-model' });
+
+    expect(inputText).toContain(buildIdentityReminder('requested-model'));
+    expect(inputText).not.toContain(REMINDER);
+  });
 });

@@ -1,5 +1,5 @@
 import { orgGoogleDriveConnectionRepository } from '@bike4mind/database';
-import { decryptStoredToken } from '@server/integrations/google/drive/common';
+import { decryptStoredToken } from '@bike4mind/server-utils/integrations/google/drive/common';
 import { lakeConnectionOwnerOf, type IOrgGoogleDriveConnectionDocument } from '@bike4mind/common';
 
 /**

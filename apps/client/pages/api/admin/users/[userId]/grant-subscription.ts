@@ -11,19 +11,14 @@ import { organizationService, creditService } from '@bike4mind/services';
 import { ApiKeyScope, CreditHolderType, IOrganizationDocument } from '@bike4mind/common';
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/subscriptions/constants';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
-import { entitlementsForPriceIds } from '@client/lib/entitlements/registry';
+import { entitlementsForPriceIds } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { grantIndividualAdminSubscription } from '@server/subscriptions/grantIndividualAdminSubscription';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { sendToClient } from '@server/websocket/utils';
-import {
-  denySelfAdminAction,
-  isSelfOrImpersonator,
-  parseAdminActionReason,
-  recordAdminActionFromRequest,
-} from '@server/utils/adminAudit';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
+import { isSelfOrImpersonator, parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { dayjs } from '@bike4mind/common';
 import { z } from 'zod';
 import { Resource } from 'sst';
@@ -65,13 +60,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     if (typeof userId !== 'string' || !userId) {
       throw new BadRequestError('Invalid user ID');
     }
-    if (isSelfOrImpersonator(req.user, userId)) {
-      await denySelfAdminAction(req, {
-        action: 'user.subscription.denied',
-        attempted: 'user.subscription.granted',
-        target: { kind: 'user', id: userId, displayName: req.user.email ?? req.user.username },
-      });
-    }
+    // Self-grants are allowed for now, pending scoped admin permissions; they still write the
+    // ledger and a strict audit entry, flagged so they can be found.
+    const selfGrant = isSelfOrImpersonator(req.user, userId);
     const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
 
     if (seats < teamPlan.minSeats) {
@@ -100,13 +91,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         priceId,
         durationMonths,
         grantedBy: req.user.id,
-        onGranted: async ({ credits, creditTransactionId }) => {
+        grantedReason: reason,
+        onGranted: async ({ credits, creditTransactionId, subscriptionId }) => {
           await recordAdminActionFromRequest(req, {
             action: 'user.subscription.granted',
             target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
             summary: `granted individual subscription for ${durationMonths} month(s)`,
             reason,
-            details: { subscriptionType: 'individual', priceId, credits, durationMonths },
+            details: { subscriptionType: 'individual', priceId, credits, durationMonths, subscriptionId, selfGrant },
             related: creditTransactionId ? { creditTransactionId } : undefined,
           });
         },
@@ -146,6 +138,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         success: true,
         message: `Individual subscription granted for ${durationMonths} month(s)`,
         credits: grant.credits,
+        subscriptionRecordId: grant.subscriptionRecordId,
       });
     } else if (subscriptionType === 'team') {
       if (!organizationName && !organizationId) {
@@ -193,6 +186,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         );
       }
 
+      const teamSubscriptionId = `admin_grant_${randomUUID()}`;
+      let subscriptionRecordId = '';
+
       // Now handle the subscription creation within transaction
       await withTransaction(async () => {
         // Check for existing active team subscription
@@ -207,22 +203,24 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         }
 
         // Create subscription record
-        await subscriptionRepository.create({
+        const created = await subscriptionRepository.create({
           ownerType: SubscriptionOwnerType.Organization,
           ownerId: targetOrganization.id,
           // Sentinel id for admin grants - not a Stripe subscription, but the
           // unique index on subscriptionId is non-sparse (DocumentDB constraint),
           // so every row needs a real value (mirrors organizations/grant.ts).
-          subscriptionId: `admin_grant_${randomUUID()}`,
+          subscriptionId: teamSubscriptionId,
           priceId: ORGANIZATION_SUBSCRIPTION_PRICE_ID,
           status: 'active',
           source: SubscriptionSource.AdminGrant,
           grantedBy: req.user.id,
+          grantedReason: reason,
           periodStartsAt,
           periodEndsAt,
           canceledAt: null,
           quantity: seats,
         });
+        subscriptionRecordId = String(created.id);
 
         // Add credits to organization
         const creditsToAdd = seats * teamPlan.creditsPerSeat * durationMonths;
@@ -240,6 +238,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
               creditLots: creditLotRepository,
             },
             creditHolderMethods: organizationRepository,
+            lotFundingSource: 'granted',
           }
         );
 
@@ -262,6 +261,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
             credits: creditsToAdd,
             durationMonths,
             organizationOwnerId: targetOrganization.userId,
+            subscriptionId: teamSubscriptionId,
+            selfGrant,
           },
           related: creditTransactionId ? { creditTransactionId } : undefined,
         });
@@ -311,6 +312,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         success: true,
         message: `Team subscription granted for ${durationMonths} month(s)`,
         organizationId: targetOrganization.id,
+        subscriptionRecordId,
         seats,
         credits: seats * teamPlan.creditsPerSeat * durationMonths,
       });

@@ -71,7 +71,7 @@ vi.mock('@bike4mind/services', async orig => {
 });
 
 // Fire-and-forget writes: keep them off the DB / out of the output.
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/analytics/analyticsMiddleware', () => ({
   analyticsMiddleware: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));

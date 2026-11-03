@@ -57,6 +57,10 @@ export const DEPRECATED_MODEL_MAP: Record<string, string> = {
   'claude-3-5-sonnet-20241022': 'claude-sonnet-4-6',
   'claude-3-7-sonnet-20250219': 'claude-sonnet-4-6',
   'claude-sonnet-4-20250514': 'claude-sonnet-4-6',
+  // Mirrors the Bedrock Opus 4 / 4.1 entries above. The catalog hides both snapshots, so an
+  // agent still pinned to one finds no model and fails. Opus 4.8 is cheaper ($15/$75 -> $5/$25).
+  'claude-opus-4-20250514': 'claude-opus-4-8',
+  'claude-opus-4-1-20250805': 'claude-opus-4-8',
   'claude-3-opus-20240229': 'claude-opus-4-8',
   'claude-3-haiku-20240307': 'claude-haiku-5-5',
   // OpenAI-hosted models retired from the API (https://platform.openai.com/docs/deprecations).

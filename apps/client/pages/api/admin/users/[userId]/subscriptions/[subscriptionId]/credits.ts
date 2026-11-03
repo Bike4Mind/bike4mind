@@ -5,16 +5,22 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
-import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { subscriptionRepository } from '@server/models/Subscription';
+import {
+  denySelfAdminAction,
+  isSelfOrImpersonator,
+  parseAdminActionReason,
+  recordAdminActionFromRequest,
+} from '@server/utils/adminAudit';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';
 import { z } from 'zod';
 
 const UpdateCreditsSchema = z.object({
-  creditsPerCycle: z.int().positive(),
+  // null clears the override, returning the subscription to its plan's own rate.
+  creditsPerCycle: z.int().positive().nullable(),
 });
 
 interface RequestQuery {
@@ -56,15 +62,39 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).put(
     if (!subscription) {
       throw new NotFoundError('Subscription not found');
     }
+    // Same owner rule as the comp route: the user, or the organization's billing owner.
+    const ownerUserId =
+      subscription.ownerType === SubscriptionOwnerType.Organization
+        ? (await organizationRepository.findById(subscription.ownerId))?.userId
+        : subscription.ownerId;
+    if (ownerUserId && isSelfOrImpersonator(req.user, ownerUserId)) {
+      await denySelfAdminAction(req, {
+        action: 'user.credits.denied',
+        attempted: 'user.credits.adjusted',
+        target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
+      });
+    }
+    if (creditsPerCycle === null && subscription.customCreditsPerCycle == null) {
+      throw new BadRequestError('This subscription has no credits override to clear.');
+    }
 
     // details.credits is the signed change in the effective per-cycle rate, derived as the admin
     // subscriptions listing derives it, so a raise counts toward the grant thresholds.
-    const recordRateChange = (previousCreditsPerCycle: number, organizationId?: string) =>
-      recordAdminActionFromRequest(req, {
+    // A null `creditsPerCycle` clears the override, so the new effective rate is the plan's own.
+    const recordRateChange = (
+      previousCreditsPerCycle: number,
+      defaultCreditsPerCycle: number,
+      organizationId?: string
+    ) => {
+      const effectiveCreditsPerCycle = creditsPerCycle ?? defaultCreditsPerCycle;
+      return recordAdminActionFromRequest(req, {
         action: 'user.credits.adjusted',
         target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
         organizationId,
-        summary: `set subscription credits to ${creditsPerCycle} per billing cycle`,
+        summary:
+          creditsPerCycle === null
+            ? 'cleared the subscription credits override'
+            : `set subscription credits to ${creditsPerCycle} per billing cycle`,
         reason,
         changes: [
           {
@@ -74,24 +104,32 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).put(
           },
         ],
         details: {
-          credits: creditsPerCycle - previousCreditsPerCycle,
+          credits: effectiveCreditsPerCycle - previousCreditsPerCycle,
           subscriptionId,
           previousCreditsPerCycle,
-          creditsPerCycle,
+          creditsPerCycle: effectiveCreditsPerCycle,
         },
       });
+    };
 
-    // Handle individual (user) subscription
-    if (subscription.ownerType === SubscriptionOwnerType.User) {
-      const previousCreditsPerCycle =
-        subscription.customCreditsPerCycle ?? SUBSCRIPTION_PLANS_MAP[subscription.priceId]?.credits ?? 0;
-
-      // This is an individual subscription - update customCreditsPerCycle
-      await withTransaction(async () => {
+    const writeRate = async () => {
+      if (creditsPerCycle === null) await subscriptionRepository.clearCustomCreditsPerCycle(subscriptionId);
+      else
         await subscriptionRepository.updateByStripeSubscriptionId(subscriptionId, {
           customCreditsPerCycle: creditsPerCycle,
         });
-        await recordRateChange(previousCreditsPerCycle);
+    };
+    const rateLabel = creditsPerCycle === null ? 'the plan default' : creditsPerCycle.toLocaleString();
+
+    // Handle individual (user) subscription
+    if (subscription.ownerType === SubscriptionOwnerType.User) {
+      const defaultCreditsPerCycle = SUBSCRIPTION_PLANS_MAP[subscription.priceId]?.credits ?? 0;
+      const previousCreditsPerCycle = subscription.customCreditsPerCycle ?? defaultCreditsPerCycle;
+
+      // This is an individual subscription - update customCreditsPerCycle
+      await withTransaction(async () => {
+        await writeRate();
+        await recordRateChange(previousCreditsPerCycle, defaultCreditsPerCycle);
 
         req.logger.info(
           `Admin ${req.user.id} set customCreditsPerCycle to ${creditsPerCycle} for individual subscription ${subscriptionId} (user ${userId})`,
@@ -115,7 +153,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).put(
 
       return res.status(200).json({
         success: true,
-        message: `Successfully updated subscription credits to ${creditsPerCycle.toLocaleString()} per billing cycle`,
+        message: `Successfully updated subscription credits to ${rateLabel} per billing cycle`,
         creditsPerCycle,
       });
     }
@@ -132,14 +170,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).put(
         throw new NotFoundError('Subscription ID not found');
       }
 
-      const previousCreditsPerCycle =
-        subscription.customCreditsPerCycle ?? subscription.quantity * (await getTeamPlanSettings()).creditsPerSeat;
+      const defaultCreditsPerCycle = subscription.quantity * (await getTeamPlanSettings()).creditsPerSeat;
+      const previousCreditsPerCycle = subscription.customCreditsPerCycle ?? defaultCreditsPerCycle;
 
       await withTransaction(async () => {
-        await subscriptionRepository.updateByStripeSubscriptionId(subscriptionId, {
-          customCreditsPerCycle: creditsPerCycle,
-        });
-        await recordRateChange(previousCreditsPerCycle, organization.id);
+        await writeRate();
+        await recordRateChange(previousCreditsPerCycle, defaultCreditsPerCycle, organization.id);
 
         req.logger.info(
           `Admin ${req.user.id} set customCreditsPerCycle to ${creditsPerCycle} for team subscription ${subscriptionId} (organization ${organization.id})`,
@@ -187,7 +223,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).put(
 
       return res.status(200).json({
         success: true,
-        message: `Successfully updated subscription credits to ${creditsPerCycle.toLocaleString()} per billing cycle for organization ${organization.name}`,
+        message: `Successfully updated subscription credits to ${rateLabel} per billing cycle for organization ${organization.name}`,
         creditsPerCycle,
       });
     }

@@ -11,7 +11,7 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { toPublicArtifactVersion } from '@server/artifacts/toPublicArtifact';
-import { ARTIFACT_DB, hideArtifactDenial } from '@server/artifacts/artifactAccess';
+import { ARTIFACT_DB, hideArtifactDenial } from '@bike4mind/server-utils/artifacts/artifactAccess';
 
 const handler = nextRouteForContract(getArtifactVersionContract, {
   exemptReadsFromDailyRateLimit: true,

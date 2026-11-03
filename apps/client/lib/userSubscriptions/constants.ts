@@ -1,6 +1,10 @@
-import { LIBREONCOLOGY_PRO_PRICE_ID } from '@client/lib/entitlements/registry';
+import { LIBREONCOLOGY_PRO_PRICE_ID } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/subscriptions/constants';
-import { SubscriptionPlanDetail, SubscriptionPlanInterval, UserSubscriptionTier } from './types';
+import {
+  SubscriptionPlanDetail,
+  SubscriptionPlanInterval,
+  UserSubscriptionTier,
+} from '@bike4mind/server-utils/lib/userSubscriptions/types';
 
 const isTestMode = process.env.NEXT_PUBLIC_SEED_STAGE_NAME !== 'production';
 

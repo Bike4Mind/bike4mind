@@ -30,7 +30,7 @@ vi.mock('@bike4mind/database', () => ({
   FeedbackTextModel: { deleteOne: vi.fn() },
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 import '../delete';
 

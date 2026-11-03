@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import Stripe from 'stripe';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { creditTransactionRepository, organizationRepository, userRepository } from '@bike4mind/database';
 import { creditService, organizationService } from '@bike4mind/services';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
@@ -14,7 +14,7 @@ import type { Logger } from '@bike4mind/observability';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 
 // Vitest hoists these mocks above the imports.
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     findByStripeSubscriptionId: vi.fn(),
     // The org duplicate guard must not read active-only, or a past_due row is invisible to it
@@ -55,7 +55,7 @@ vi.mock('@bike4mind/services', () => ({
   organizationService: { create: vi.fn() },
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   sendToClient: vi.fn().mockResolvedValue(undefined),
 }));
 

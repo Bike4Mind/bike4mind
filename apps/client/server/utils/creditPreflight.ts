@@ -9,6 +9,7 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { CreditHolderType, UnprocessableEntityError, type IUserDocument } from '@bike4mind/common';
 import type { ILogger } from '@bike4mind/observability';
 import { reserveRequestCredits, type CreditLedgerEntry } from '@server/billing/reserveRequestCredits';
+import { attributeToRequestApiKey } from '@server/billing/attributeToRequestApiKey';
 
 // A billing state, not a bug. Each caller maps it onto its own established
 // response (422 `insufficient_credits` or 400) so this change does not
@@ -94,7 +95,8 @@ export async function assertPreflightCredits({
 /** The slice of an authenticated request a hold reads. */
 export interface PreflightBillingRequest {
   user: IUserDocument;
-  apiKeyInfo?: Pick<Express.ApiKeyInfo, 'billingOwnerType' | 'organizationId'>;
+  apiKeyInfo?: Pick<Express.ApiKeyInfo, 'billingOwnerType' | 'organizationId'> &
+    Partial<Pick<Express.ApiKeyInfo, 'keyId'>>;
   logger: ILogger;
 }
 
@@ -157,7 +159,14 @@ export async function holdPreflightCredits({
     ownerType: reservation.ownerType,
     async settle(credits, entry) {
       if (reservation.reservedCredits > 0) return reservation.settle(credits, entry);
-      return chargeDirectly({ userId: user.id, reservation, credits, entry, featureLabel, logger });
+      return chargeDirectly({
+        userId: user.id,
+        reservation,
+        credits,
+        entry: attributeToRequestApiKey(entry, req),
+        featureLabel,
+        logger,
+      });
     },
     async release() {
       await reservation.refund();

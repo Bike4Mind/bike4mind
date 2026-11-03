@@ -50,4 +50,11 @@ describe('LlamaBedrockBackend identity reminder', () => {
     expect(prompt).toBe('System: You are terse.\n\nHuman: hi\n\nAssistant:');
     expect(prompt).not.toContain('platform_identity');
   });
+
+  it('names modelIdentityId in place of the serving model', () => {
+    const prompt = promptOf([{ role: 'user', content: 'hi' }], { modelIdentityId: 'requested-model' });
+
+    expect(prompt).toContain(buildIdentityReminder('requested-model'));
+    expect(prompt).not.toContain(REMINDER);
+  });
 });

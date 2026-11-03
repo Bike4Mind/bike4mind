@@ -141,6 +141,7 @@ export function emitChatRetryMetric(retry: ITurnRetry, logger?: Logger): void {
 export class TurnTimingRecorder {
   private readonly timing: ITurnTiming;
   private retryCount = 0;
+  private storedRetry?: (retry: ITurnRetry) => ITurnRetry;
 
   constructor(
     private readonly turnStartedAt: Date,
@@ -180,7 +181,9 @@ export class TurnTimingRecorder {
   recordRetry(error: Error, delayMs: number, model: string): ITurnRetry {
     const retry = describeTurnRetry(error, delayMs, model);
     this.retryCount += 1;
-    if (this.timing.retries.length < MAX_RECORDED_RETRIES) this.timing.retries.push(retry);
+    if (this.timing.retries.length < MAX_RECORDED_RETRIES) {
+      this.timing.retries.push(this.storedRetry ? this.storedRetry(retry) : retry);
+    }
     this.logger?.info(`[ChatRetry] ${retry.reason} on ${model}, retrying in ${retry.delayMs}ms`, {
       ...retry,
       attempt: this.retryCount,
@@ -188,6 +191,11 @@ export class TurnTimingRecorder {
     emitChatRetryMetric(retry, this.logger);
     this.changed();
     return retry;
+  }
+
+  /** Rewrites each retry before it reaches the quest; the server log and metric keep the original. */
+  maskStoredRetries(mask: (retry: ITurnRetry) => ITurnRetry): void {
+    this.storedRetry = mask;
   }
 
   recordFallbackHop(): void {

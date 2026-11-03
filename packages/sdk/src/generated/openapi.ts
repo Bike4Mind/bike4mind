@@ -514,6 +514,46 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/sessions/{id}/quests': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List a session's quests
+     * @description Lists the turns (quests) of a session's conversation, oldest first: what was sent, the visible reply, its status and the credits it cost. Works for a session you own or one shared with you. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`. Re-read a non-terminal turn with `GET /api/v1/quests/{id}`. While a tool awaits approval the turn carries `pendingAction` (owner only). Deleted turns are not listed. A session that does not exist, was deleted, or is not visible to you is `404`. An API key needs `notebooks:read` or `notebooks:write`.
+     */
+    get: operations['listSessionQuests'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/credits/transactions': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List the caller's credit transactions
+     * @description Lists the authenticated caller's credit ledger, newest first: purchases, subscription grants and spend, each with a signed `credits` amount. Covers the personal ledger only (the same one `GET /api/v1/credits` reports); organization pools are not included. Limited to the last `days` (default 30, at most 365) and filterable to credits `added` or `deducted`. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`. Changing `days` or `type` starts a new listing, so drop the cursor when you do. The subject is always the credential holder; this endpoint accepts no user or owner id. Responses are never cacheable. An API key needs `me:read`, the scope that opens the rest of the caller's commercial state.
+     */
+    get: operations['listCreditTransactions'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/data-lakes': {
     parameters: {
       query?: never;
@@ -1416,6 +1456,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/slack/messages': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Post a Slack message
+     * @description Posts a message to a Slack channel, or a reply in a thread with `thread_ts`, as the Bike4Mind bot. Returns the message `ts`; pass it back as `thread_ts` to reply in that thread. Three things must hold: the key carries `slack:post`; the channel is in a Slack workspace connected to an organization the key's owner belongs to (an organization-billed key must bill that same organization); and an owner of that same organization (or a platform admin) has enabled the channel for API posting, optionally limited to listed key ids. Disconnecting the workspace turns every opt-in off. `slack:post` is a confined scope: a posting key carries no other scope and reaches no other route. Mint one from the organization's Slack integration settings. The bot must also be a member of the channel: invite it with `/invite @<bot name>`. `text` is at most 3000 characters and is the notification fallback when `blocks` (Block Kit, at most 49 blocks and 40000 serialized characters) is sent. Blocks are limited to section, header, divider, context, image, rich_text; nothing a reader can act on is accepted: no interactive elements, `action_id`, `confirm`, or `url` outside a rich_text link, and a section `accessory` must be an image. Broadcast mentions (`<!channel>`, `<!here>`, `<!everyone>`, user groups, and bare `@channel` / `@here` / `@everyone`) are posted as plain text that notifies nobody; `<@U...>` user mentions are kept. Every post ends with a context block naming the posting user and key, and carries message metadata marking it as an API post; Slack actions on it are ignored. A block Slack rejects as malformed answers 422. Rate limited to 30 messages a minute and 1,000 a day per key and per user, and 60 a minute per channel, on top of the key's own limits. Authenticate with an API key (`b4m_live_`) carrying `slack:post`.
+     */
+    post: operations['postSlackMessage'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1570,7 +1630,18 @@ export interface components {
             /** @enum {string} */
             exclusionReason?: 'duplicate' | 'disabled' | 'token_limit';
           }[];
-          promptText?: string;
+          promptText?: {
+            blocks: {
+              /** @enum {string} */
+              source: 'hardcoded' | 'admin' | 'user' | 'project' | 'session' | 'org' | 'caller';
+              name: string;
+              text?: string;
+              redacted: boolean;
+              /** @enum {string} */
+              placement: 'system' | 'user_turn' | 'mixed';
+            }[];
+            sizeCapped: boolean;
+          };
           performance: {
             total_ms: number;
             phases: {
@@ -1800,6 +1871,11 @@ export interface components {
       lakeScopeExplicit?: boolean;
       /** @description Whether the session grounds on your own library alongside its lakes. Absent when never set. */
       includeLibraryFiles?: boolean;
+      /**
+       * @description The chat's prompt-cache lifetime. Absent when never set, which follows your default.
+       * @enum {string}
+       */
+      promptCacheTtl?: '5m' | '1h';
       lastUsedModel?: string | null;
       /** Format: date-time */
       firstCreated: string;
@@ -1823,6 +1899,11 @@ export interface components {
       lakeScopeExplicit?: boolean;
       /** @description Whether the session grounds on your own library alongside its lakes. Absent when never set. */
       includeLibraryFiles?: boolean;
+      /**
+       * @description The chat's prompt-cache lifetime. Absent when never set, which follows your default.
+       * @enum {string}
+       */
+      promptCacheTtl?: '5m' | '1h';
       lastUsedModel?: string | null;
       /** Format: date-time */
       firstCreated: string;
@@ -1852,6 +1933,11 @@ export interface components {
       lakeScope?: string[] | null;
       /** @description Whether the session grounds on your own library (files you own, or that are shared with you or your groups) alongside its lakes. `false` confines retrieval to lake content, including when every lake is in scope; the session's attached files still reach the model and stay searchable by its knowledge-base tools. Omit to leave it unchanged; while never set, the library is excluded only when a lake was picked for the session (Data Lakes mode or an explicit lake scope), not when lake tags were derived from an attached file. While `forceKnowledgeRetrieval` is `false` the library is included regardless; the stored value applies again once it is turned back on. */
       includeLibraryFiles?: boolean;
+      /**
+       * @description How long the prompt cache of this chat lives between messages: `5m` (the default) or `1h`. A 1-hour cache costs more to write and the same to read; it applies only on models that support it, and other models keep the 5-minute cache. Omit to leave it unchanged.
+       * @enum {string}
+       */
+      promptCacheTtl?: '5m' | '1h';
       /** @description Defaults to true when omitted. When knowledgeIds grows, the newly-added file ids are also appended to every project that contains this session, granting every member of that project access to those files. This propagation is append-only and cannot be undone through the UI - pass false if newly-attached files should not be shared with the project. */
       propagateToProjects?: boolean;
     };
@@ -1876,6 +1962,11 @@ export interface components {
       lakeScopeExplicit?: boolean;
       /** @description Whether the session grounds on your own library alongside its lakes. Absent when never set. */
       includeLibraryFiles?: boolean;
+      /**
+       * @description The chat's prompt-cache lifetime. Absent when never set, which follows your default.
+       * @enum {string}
+       */
+      promptCacheTtl?: '5m' | '1h';
       lastUsedModel?: string | null;
       /** Format: date-time */
       firstCreated: string;
@@ -1973,6 +2064,8 @@ export interface components {
             reasoningTokens?: number;
             cacheReadInputTokens?: number;
             cacheCreationInputTokens?: number;
+            /** @description The part of cacheCreationInputTokens written with the 1-hour TTL. Absent when there were none. */
+            cacheWrite1hInputTokens?: number;
           };
           credits?: {
             used?: number;
@@ -2136,6 +2229,8 @@ export interface components {
       )[];
       temperature?: number;
       max_tokens?: number;
+      /** @description Your own identifier for the conversation this request belongs to. Recorded with the request's credit usage so spend can be grouped by conversation. Not interpreted otherwise. */
+      sessionId?: string;
       options?: {
         temperature?: number;
         maxTokens?: number;
@@ -2200,15 +2295,20 @@ export interface components {
               };
             };
         /**
-         * @description Reasoning effort hint. Honoured by the OpenAI (reasoning models only, and not alongside tools on some of them), Kimi (K3 only), DeepSeek and Anthropic Claude (direct and Bedrock) adapters; each maps it onto its own scale. On Claude, `none` turns thinking off where the model allows it (otherwise it runs at the lowest effort), so short `max_tokens` replies stream visible text from the start; `minimal` maps to `low`. When `thinking.enabled` is also set on a Claude model, thinking stays on and this sets its effort instead, with `none` and `minimal` mapping to `low`. Claude models that reason inside `max_tokens` never have that ceiling raised, and on older Claude models any level above `none` turns thinking on (it is off by default there), forces temperature to 1 and drops top_p, and a thinking budget that cannot fit under `max_tokens` is skipped. On the direct Anthropic API, a json_schema `response_format` with no tools is served by a forced tool on models that support forced tool use, and that tool cannot run alongside thinking, so there only `none` is honoured; models served by native structured outputs honour every level. Silently ignored by every other adapter (Gemini, xAI, Ollama) and by non-reasoning models, so sending it there is a no-op.
+         * @description Reasoning effort hint. Honoured by the OpenAI (reasoning models only, and not alongside tools on some of them), Kimi (K3 only), DeepSeek and Anthropic Claude (direct and Bedrock) adapters; each maps it onto its own scale. On Claude, `none` turns thinking off where the model allows it (otherwise it runs at the lowest effort), so short `max_tokens` replies stream visible text from the start; `minimal` maps to `low`. When `thinking.enabled` is also set on a Claude model, thinking stays on and this sets its effort instead, with `none` and `minimal` mapping to `low`. Claude models that reason inside `max_tokens` never have that ceiling raised, and on older Claude models any level above `none` turns thinking on (it is off by default there), forces temperature to 1 and drops top_p, and a thinking budget that cannot fit under `max_tokens` is skipped. On the direct Anthropic API, a json_schema `response_format` with no tools is served by a forced tool on models that support forced tool use, and that tool cannot run alongside thinking. When this field names a level above `none` for a model with adaptive thinking, the schema is served by native structured outputs instead and the level is honoured; thinking then counts against `max_tokens`, which is not raised. A schema that native structured outputs cannot express (for example one that declares `additionalProperties` other than false), or a request whose documents ask for citations, keeps the forced tool and only `none` is honoured. Older Claude models that think with a budget keep the forced tool, so there only `none` is honoured; models served by native structured outputs honour every level. Silently ignored by every other adapter (Gemini, xAI, Ollama) and by non-reasoning models, so sending it there is a no-op.
          * @enum {string}
          */
         reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
-        /** @description Ask a model that can think to think on this turn. On Claude, `reasoningEffort` then sets how much it thinks, and `budget_tokens` (default 16000, minimum 1024, maximum 32000) sizes thinking on older Claude models. Ignored by models that cannot think, and on the direct Anthropic API when a json_schema `response_format` is served by a forced tool, which cannot run alongside thinking. */
+        /** @description Ask a model that can think to think on this turn. On Claude, `reasoningEffort` then sets how much it thinks, and `budget_tokens` (default 16000, minimum 1024, maximum 32000) sizes thinking on older Claude models. Ignored by models that cannot think. With a json_schema `response_format` on the direct Anthropic API, a model with adaptive thinking serves the schema through native structured outputs so thinking can run, within `max_tokens`, unless the schema or a citations document keeps it on the forced tool; older Claude models that think with a budget serve it through a forced tool, which cannot run alongside thinking, and ignore this. */
         thinking?: {
           enabled: boolean;
           budget_tokens?: number;
         };
+        /**
+         * @description Prompt-cache lifetime for this request, where the server places cache breakpoints (Claude on the direct Anthropic API or Bedrock, on requests the server caches: CLI and Desktop always, other callers once the conversation has a prior assistant turn). `5m` (the default) writes at 1.25x the input rate; `1h` writes at 2x and keeps the cached prefix for an hour between requests. Reads cost the same either way. Models without 1-hour caching ignore `1h` and keep `5m`. Every breakpoint in a request must share one TTL: with `1h`, set no `cache_control` of your own unless it also carries `ttl: "1h"`.
+         * @enum {string}
+         */
+        cacheTtl?: '5m' | '1h';
       };
     };
     /**
@@ -2698,6 +2798,7 @@ export interface components {
           | 'anthropic'
           | 'gemini'
           | 'ollama'
+          | 'openai-compatible'
           | 'bfl'
           | 'xai'
           | 'kimi'
@@ -2840,6 +2941,8 @@ export interface components {
       };
       session: {
         id: string;
+      } & {
+        [key: string]: unknown;
       };
       originalPrompt: string;
       enhancedPrompt: string;
@@ -3908,6 +4011,11 @@ export interface components {
       lakeScopeExplicit?: boolean;
       /** @description Whether the session grounds on your own library alongside its lakes. Absent when never set. */
       includeLibraryFiles?: boolean;
+      /**
+       * @description The chat's prompt-cache lifetime. Absent when never set, which follows your default.
+       * @enum {string}
+       */
+      promptCacheTtl?: '5m' | '1h';
       lastUsedModel?: string | null;
       /** Format: date-time */
       firstCreated: string;
@@ -3977,11 +4085,98 @@ export interface components {
         lakeScopeExplicit?: boolean;
         /** @description Whether the session grounds on your own library alongside its lakes. Absent when never set. */
         includeLibraryFiles?: boolean;
+        /**
+         * @description The chat's prompt-cache lifetime. Absent when never set, which follows your default.
+         * @enum {string}
+         */
+        promptCacheTtl?: '5m' | '1h';
         lastUsedModel?: string | null;
         /** Format: date-time */
         firstCreated: string;
         /** Format: date-time */
         lastUpdated: string;
+      }[];
+      next_cursor: string | null;
+    };
+    listSessionQuestsResponse200: {
+      data: {
+        id: string;
+        /** @description What the user sent. Null for a turn that carries no prompt. */
+        prompt: string | null;
+        /** @description The visible answer, as `GET /api/v1/quests/{id}` reports it. Null while there is none yet. */
+        reply: string | null;
+        /**
+         * @description `done` and `stopped` are terminal. Absent on turns written before status tracking.
+         * @enum {string}
+         */
+        status?: 'pending' | 'running' | 'done' | 'stopped';
+        /**
+         * @description `error` marks a failed turn; `reply` then holds the failure text.
+         * @enum {string}
+         */
+        type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
+        /**
+         * @description Machine-readable failure class, present only on `type: "error"` turns that have one.
+         * @enum {string}
+         */
+        errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+        /**
+         * Format: date-time
+         * @description When the turn started; the sort key of the listing.
+         */
+        createdAt: string;
+        /** @description Credits billed for the turn. Absent until it is billed. */
+        creditsUsed?: number;
+        /** @description Set while a tool awaits approval on this turn. Only the session owner is shown it; a session shared with you never carries it. */
+        pendingAction?: {
+          /** @description The tool awaiting approval. */
+          tool: string;
+          /** @description The arguments the tool would run with. */
+          params: {
+            [key: string]: unknown;
+          };
+          /** @description When the approval was requested, in Unix milliseconds. It lapses after 15 minutes. */
+          ts: number;
+        };
+      }[];
+      next_cursor: string | null;
+    };
+    listCreditTransactionsResponse200: {
+      data: {
+        id: string;
+        /**
+         * @description What moved the credits, e.g. `purchase`, `subscription`, `text_generation_usage`.
+         * @enum {string}
+         */
+        type:
+          | 'purchase'
+          | 'subscription'
+          | 'generic_add'
+          | 'received_credit'
+          | 'text_generation_usage'
+          | 'image_generation_usage'
+          | 'image_edit_usage'
+          | 'video_generation_usage'
+          | 'realtime_voice_usage'
+          | 'tool_usage'
+          | 'completion_api_usage'
+          | 'decision_usage'
+          | 'speech_to_text_usage'
+          | 'text_to_speech_usage'
+          | 'sound_effects_usage'
+          | 'music_generation_usage'
+          | 'transfer_credit'
+          | 'generic_deduct';
+        /** @description Signed change to the balance: positive when credits were added, negative when they were spent. */
+        credits: number;
+        description?: string;
+        /**
+         * @description The surface that spent the credits, on usage rows that record one.
+         * @enum {string}
+         */
+        source?: 'web' | 'cli' | 'desktop' | 'api' | 'agent' | 'system';
+        /** Format: date-time */
+        createdAt: string;
       }[];
       next_cursor: string | null;
     };
@@ -6561,6 +6756,68 @@ export interface components {
           /** @description Shown to the author. */
           note: string;
         };
+    /**
+     * @example {
+     *       "ok": true,
+     *       "channel_id": "C0123ABCDEF",
+     *       "ts": "1730000000.123456"
+     *     }
+     */
+    postSlackMessageResponse200: {
+      /** @enum {boolean} */
+      ok: true;
+      channel_id: string;
+      ts: string;
+    };
+    postSlackMessageResponse401: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?:
+        'slack_bot_not_in_channel' | 'slack_channel_archived' | 'slack_channel_restricted' | 'provider_rejected';
+    };
+    postSlackMessageResponse409: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?:
+        'slack_bot_not_in_channel' | 'slack_channel_archived' | 'slack_channel_restricted' | 'provider_rejected';
+    };
+    /**
+     * @example {
+     *       "channel_id": "C0123ABCDEF",
+     *       "text": "Shipped v1.4.2 to production: 3 changes",
+     *       "blocks": [
+     *         {
+     *           "type": "section",
+     *           "text": {
+     *             "type": "mrkdwn",
+     *             "text": "*Shipped v1.4.2 to production*\n- Faster export"
+     *           }
+     *         }
+     *       ]
+     *     }
+     */
+    postSlackMessageRequest: {
+      channel_id: string;
+      text: string;
+      blocks?: ({
+        type: string;
+      } & {
+        [key: string]: unknown;
+      })[];
+      thread_ts?: string;
+    };
   };
   responses: never;
   parameters: never;
@@ -11546,6 +11803,295 @@ export interface operations {
       };
       /** @description Request failed validation. */
       422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  listSessionQuests: {
+    parameters: {
+      query?: {
+        limit?: number;
+        cursor?: string;
+      };
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description One page of quests, oldest first. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['listSessionQuestsResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key holds neither `notebooks:read` nor `notebooks:write`. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No session with that id is visible to the caller. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description `limit` is out of range, or `cursor` is malformed or was issued by a different endpoint. A cursor is opaque: pass back exactly the `next_cursor` you were given. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  listCreditTransactions: {
+    parameters: {
+      query?: {
+        limit?: number;
+        cursor?: string;
+        /** @description Only transactions from the last this-many days. Changing it starts a new listing: drop the cursor. */
+        days?: number;
+        /** @description `added` lists credits received, `deducted` credits spent. Changing it starts a new listing: drop the cursor. */
+        type?: 'all' | 'added' | 'deducted';
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description One page of transactions, newest first. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['listCreditTransactionsResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key does not hold `me:read`. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description `limit`, `days` or `type` is out of range, or `cursor` is malformed or was issued by a different endpoint. A cursor is opaque: pass back exactly the `next_cursor` you were given. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
@@ -20457,6 +21003,195 @@ export interface operations {
       };
       /** @description Per-key rate limit exceeded. */
       429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  postSlackMessage: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['postSlackMessageRequest'];
+      };
+    };
+    responses: {
+      /** @description The message was posted. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['postSlackMessageResponse200'];
+        };
+      };
+      /** @description Missing/invalid credentials, or Slack refused the connected workspace credentials (`errorCode: "provider_rejected"`; an organization owner must reconnect the workspace). */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['postSlackMessageResponse401'];
+        };
+      };
+      /** @description The key lacks `slack:post`, the request was not made with an API key, or the channel is not enabled for API posting by an organization the key's owner belongs to (or not for this key). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The bot is not a member of the channel (`errorCode: "slack_bot_not_in_channel"`; invite it), or the channel is archived (`errorCode: "slack_channel_archived"`), or the channel restricts posting, such as announcement-only or thread-only (`errorCode: "slack_channel_restricted"`). */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['postSlackMessageResponse409'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-key rate limit exceeded, or Slack is rate limiting the bot. Honor `Retry-After`. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Slack failed to post the message. */
+      502: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;

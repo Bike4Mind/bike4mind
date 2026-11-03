@@ -1,7 +1,11 @@
 import type { Request, Response, NextFunction } from 'express';
 import { OVERWATCH_UNKNOWN_SESSION_ID } from '@bike4mind/common';
 import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
-import { isAnalyticsConfigured, emitActiveEvent, sanitizeReferrer } from './emitActiveEvent';
+import {
+  isAnalyticsConfigured,
+  emitActiveEvent,
+  sanitizeReferrer,
+} from '@bike4mind/server-utils/analytics/emitActiveEvent';
 import { readUtmCookie } from '@bike4mind/server-utils/analytics/cookies';
 import { readVisitId } from './visitSession';
 import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';

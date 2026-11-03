@@ -13,6 +13,10 @@ import { ForbiddenError } from '@bike4mind/utils';
 vi.mock('@server/billing/assertMediaModelAdmission', () => ({ assertMediaModelAdmission: vi.fn(async () => {}) }));
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 
 vi.mock('@server/utils/untrustedCompletionQuota', () => ({
   admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => {} }),

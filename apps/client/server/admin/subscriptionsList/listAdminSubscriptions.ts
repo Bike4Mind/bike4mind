@@ -14,7 +14,7 @@ import type {
   AdminSubscriptionsListResponse,
   AdminSubscriptionsSummary,
 } from '@client/app/utils/adminSubscriptionsFilter';
-import { Subscription } from '@server/models/Subscription';
+import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import {
   adminSubscriptionsSort,
   buildAdminSubscriptionsMatch,
@@ -34,7 +34,7 @@ export const OWNER_SEARCH_LIMIT = 500;
 
 type Condition = Record<string, unknown>;
 
-type SubscriptionDoc = {
+export type SubscriptionDoc = {
   _id: mongoose.Types.ObjectId;
   subscriptionId: string;
   ownerType: AdminSubscriptionRow['ownerType'];
@@ -44,10 +44,14 @@ type SubscriptionDoc = {
   source?: AdminSubscriptionRow['source'];
   quantity: number;
   customCreditsPerCycle?: number | null;
-  periodStartsAt: Date;
-  periodEndsAt: Date;
+  // Rows copied in by the UserSubscription migration were raw inserts that skipped schema validation, so
+  // these required-in-schema dates can be missing on legacy documents.
+  periodStartsAt?: Date | null;
+  periodEndsAt?: Date | null;
   canceledAt?: Date | null;
-  createdAt: Date;
+  cancelAt?: Date | null;
+  cancelAtPeriodEnd?: boolean;
+  createdAt?: Date | null;
   unitAmount?: number | null;
   currency?: string | null;
   interval?: string | null;
@@ -202,10 +206,11 @@ export async function toAdminSubscriptionRows(
     quantity: doc.quantity,
     customCreditsPerCycle: doc.customCreditsPerCycle ?? null,
     mrr: subscriptionMrr(doc),
-    periodStartsAt: doc.periodStartsAt.toISOString(),
-    periodEndsAt: doc.periodEndsAt.toISOString(),
+    periodStartsAt: isoOrNull(doc.periodStartsAt),
+    periodEndsAt: isoOrNull(doc.periodEndsAt),
     canceledAt: isoOrNull(doc.canceledAt),
-    createdAt: doc.createdAt.toISOString(),
+    cancelAt: isoOrNull(doc.cancelAt ?? (doc.cancelAtPeriodEnd ? doc.periodEndsAt : null)),
+    createdAt: isoOrNull(doc.createdAt),
   }));
 }
 
@@ -273,7 +278,8 @@ export async function adminSubscriptionsSummary(
   };
 }
 
-export type ExportCursor = { createdAt: Date; id: string };
+/** `createdAt` is null past the rows that lack one: `{ createdAt: null }` matches a missing field and those sort last. */
+export type ExportCursor = { createdAt: Date | null; id: string };
 
 /** One keyset page of the export, newest first. Reads `limit` rows; the caller asks for one extra to probe for more. */
 export async function adminSubscriptionsExportPage(
@@ -287,6 +293,9 @@ export async function adminSubscriptionsExportPage(
         $or: [
           { createdAt: { $lt: after.createdAt } },
           { createdAt: after.createdAt, _id: { $lt: new mongoose.Types.ObjectId(after.id) } },
+          // $lt on a Date never matches a missing createdAt, so a dated cursor must reach the undated tail
+          // explicitly. A null cursor is already inside that tail and must not restart it.
+          ...(after.createdAt ? [{ createdAt: null }] : []),
         ],
       }
     : null;

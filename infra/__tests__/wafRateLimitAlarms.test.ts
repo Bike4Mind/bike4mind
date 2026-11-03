@@ -79,13 +79,13 @@ describe('WAF sign-in code edge-signal alarm', () => {
     );
   });
 
-  it('alarms at 5 per 5 minutes to the looked-up Slack topic and the email topic', async () => {
+  it('alarms at 5 per 5 minutes to the looked-up Slack topic only', async () => {
     await loadWafResources();
 
     type Arn = { apply: (callback: (value: string) => string) => string };
     const resolve = (arns: unknown) =>
       (arns as (string | Arn)[]).map(arn => (typeof arn === 'string' ? arn : arn.apply(v => v)));
-    const actions = ['looked-up-topic-arn', 'WafOobAlarmTopic-arn'];
+    const actions = ['looked-up-topic-arn'];
     const call = resources.alarm.mock.calls.find(([name]) => name === 'wafOtcEdgeSignalRate');
     expect(call?.[1]).toMatchObject({
       metricName: 'OtcEdgeSignalRequests',

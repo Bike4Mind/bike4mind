@@ -1,6 +1,6 @@
 import type { drive_v3 } from '@googleapis/drive';
 import type { Logger } from '@bike4mind/observability';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import {
   User,
   adminSettingsRepository,
@@ -41,7 +41,7 @@ import {
   getValidConnectionDriveAccessToken,
   isTerminalDriveGrantError,
   releaseDriveConnection,
-} from '@server/integrations/google/drive/common';
+} from '@bike4mind/server-utils/integrations/google/drive/common';
 import {
   createDriveClient,
   isDriveAuthError,
@@ -64,7 +64,7 @@ import {
   isUnderRoot,
   DriveWalkTimeBudgetExceededError,
   type WalkedDriveFile,
-} from '@server/integrations/google/drive/driveContent';
+} from '@bike4mind/server-utils/integrations/google/drive/driveContent';
 import {
   MAX_INGEST_CANDIDATES,
   MAX_INGEST_FILE_BYTES,

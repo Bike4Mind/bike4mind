@@ -5,6 +5,7 @@
  * the `restrictToDataLake` opt-in reach the search call untouched, and each refusal is an outcome.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 import type { Request } from 'express';
 import { BadRequestError, CreditHolderType, getQuestErrorCode } from '@bike4mind/common';
 
@@ -58,8 +59,9 @@ vi.mock('@bike4mind/services', () => ({
     openSearchChunkAdapter: undefined,
   },
 }));
+const mockCreateTokenizer = vi.hoisted(() => vi.fn(() => ({ countTokens: async () => 3 })));
 vi.mock('@bike4mind/utils', () => ({
-  createTokenizer: () => ({ countTokens: async () => 3 }),
+  createTokenizer: mockCreateTokenizer,
   getSettingsByNames: vi.fn(),
   normalizeId: (value: unknown) => (value == null ? undefined : String(value)),
 }));
@@ -113,6 +115,12 @@ beforeEach(() => {
 });
 
 describe('runLakeSemanticSearch', () => {
+  it('builds the shared tokenizer with a neutral logger, not the request logger it would pin', async () => {
+    await runLakeSemanticSearch(req, input());
+    expect(mockCreateTokenizer).toHaveBeenCalledOnce();
+    expect(mockCreateTokenizer.mock.calls[0][0]).toEqual({ logger: expect.any(Logger) });
+  });
+
   it('hands the scope to the search and sets restrictToDataLake only when asked', async () => {
     await expect(runLakeSemanticSearch(req, input({ restrictToDataLake: true }))).resolves.toEqual({
       kind: 'ok',
@@ -189,6 +197,15 @@ describe('runLakeSemanticSearch billing owner and source', () => {
 
     expect(mockFindAccessibleById).not.toHaveBeenCalled();
     expect(recorded()).toMatchObject({ organization: null, source: 'api' });
+  });
+
+  it('records the authenticating key on the embedding charge, and none for a JWT caller', async () => {
+    await runLakeSemanticSearch(apiKeyReq({ keyId: 'key-1', billingOwnerType: CreditHolderType.User }), input());
+    expect(recorded()).toMatchObject({ apiKeyId: 'key-1' });
+
+    mockRecordOperationalUsage.mockClear();
+    await runLakeSemanticSearch(jwtReq, input());
+    expect(recorded().apiKeyId).toBeUndefined();
   });
 
   it('bills the user for an org-billed key that carries no organization id', async () => {

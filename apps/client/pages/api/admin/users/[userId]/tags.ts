@@ -7,7 +7,7 @@ import {
 } from '@bike4mind/common';
 import { User, withTransaction } from '@bike4mind/database';
 import { isManagedTag } from '@client/lib/entitlements/managedUserTags';
-import { normalizeTag } from '@client/lib/entitlements/registry';
+import { normalizeTag } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { adminApi } from '@server/middlewares/adminApi';
 import { noteSubject } from '@server/users/adminUserNotes';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';

@@ -199,7 +199,10 @@ export function DataTable<Row>({
   };
 
   const columnCount = columns.length + (selectable ? 1 : 0) + (rowActions ? 1 : 0);
-  if (error) return <ErrorState message={error} onRetry={onRetry} />;
+  if (error) {
+    const onFirstPage = pagination && pagination.page > 1 ? () => pagination.onPageChange(1) : undefined;
+    return <ErrorState message={error} onRetry={onRetry} onFirstPage={onFirstPage} />;
+  }
   if (!loading && rows.length === 0) {
     // An empty server page past the last record (e.g. after rows were removed) needs a way back.
     if (pagination && pagination.total > 0 && pagination.page > 1)

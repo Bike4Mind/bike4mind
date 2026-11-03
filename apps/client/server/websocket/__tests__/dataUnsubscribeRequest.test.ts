@@ -13,7 +13,7 @@ vi.mock('@bike4mind/common', async importOriginal => ({
   DataUnsubscribeRequestAction: { parse: (x: unknown) => x },
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   withWebSocketContext: vi.fn(
     (handler: (event: unknown, context: unknown, logger: unknown) => Promise<unknown>) => handler
   ),
@@ -25,7 +25,7 @@ vi.mock('@bike4mind/database/infra', () => ({
 }));
 
 const mockIsWithinGraceWindow = vi.fn();
-vi.mock('@server/auth/secretRotationGrace', () => ({
+vi.mock('@bike4mind/server-utils/auth/secretRotationGrace', () => ({
   isRotatedSecretWithinGraceWindow: (...args: unknown[]) => mockIsWithinGraceWindow(...args),
 }));
 

@@ -136,7 +136,7 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
             truncated = true;
             break;
           }
-          after = { createdAt: new Date(last.createdAt), id: last.id };
+          after = { createdAt: last.createdAt ? new Date(last.createdAt) : null, id: last.id };
         }
       } catch (error) {
         // Once the body has started the status line is gone: cut the connection so the download fails

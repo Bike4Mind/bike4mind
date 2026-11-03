@@ -8,7 +8,7 @@ import {
   MIN_PASSAGE_TOKEN_TARGET,
   OVERSIZED_PASSAGE_TOKEN_THRESHOLD,
 } from '@bike4mind/common';
-import type { ApiKeyScopeOption } from '@client/app/constants/apiKeyScopes';
+import type { ApiKeyScopeOption } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 
 // Generated from the same catalog the New-Key modals offer, so the table can't drift from
 // what a user can actually select. A literal `|` would split a GFM table cell.
@@ -149,6 +149,7 @@ use to build a typed client). They are deliberately not repeated here, so the tw
 - Skill Market review (org admins): \`/api/v1/skills/market/review-queue\`,
   \`/api/v1/skills/market/versions/{vid}/review\`
 - Release notes: \`/api/v1/whats-new\`, \`/api/v1/whats-new/media/*\` (public, no key needed)
+- Slack (post to channels an org owner enabled): \`/api/v1/slack/messages\`
 
 Image, video, music and chat work is asynchronous; the Async jobs section of the
 [generated API docs](/api/v1/docs) says what to poll for each kind of job and when it is terminal.

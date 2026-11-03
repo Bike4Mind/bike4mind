@@ -22,13 +22,17 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-const authFail = vi.hoisted(() => ({ getIPsWithHighAttempts: vi.fn().mockResolvedValue([]) }));
+const candidates = vi.hoisted(() => ({ list: [] as Array<{ ip: string; attempts: number }> }));
+// Stands in for the shared runner: hands every candidate to the injected block() and, like the real
+// runner, skips an IP whose block() throws.
+const runner = vi.hoisted(() => ({ runOauthAbuseAutoBlock: vi.fn() }));
+vi.mock('@bike4mind/server-utils/security/oauthAbuseAutoBlock', () => runner);
+const EVALUATED_SINCE = new Date('2026-01-01T00:00:00Z');
 const blockedIP = vi.hoisted(() => ({
   block: vi.fn().mockResolvedValue({ doc: {}, created: true }),
 }));
 const audit = vi.hoisted(() => ({ record: vi.fn(), inTransaction: [] as boolean[], txActive: false }));
 vi.mock('@bike4mind/database', () => ({
-  authFailLogRepository: authFail,
   blockedIPRepository: blockedIP,
   withTransaction: async (fn: () => Promise<unknown>) => {
     audit.txActive = true;
@@ -54,9 +58,23 @@ const ADMIN = { id: 'admin1', isAdmin: true };
 
 describe('POST /api/security/blocked-ips/evaluate - admin gate', () => {
   beforeEach(() => {
-    authFail.getIPsWithHighAttempts.mockClear();
+    candidates.list = [];
+    runner.runOauthAbuseAutoBlock.mockReset().mockImplementation(async ({ deps }) => {
+      const blocked = [];
+      const failed: string[] = [];
+      for (const { ip, attempts } of candidates.list) {
+        const options = { durationMs: 600_000, source: 'auto' as const, escalationLevel: 0 };
+        try {
+          const { created } = await deps.block(ip, `Auto-blocked: ${attempts} failed sign-ins in 10 minutes`, options);
+          if (created) blocked.push({ ip, attempts, durationMs: options.durationMs, escalationLevel: 0 });
+        } catch {
+          // The real runner logs and moves on.
+          failed.push(ip);
+        }
+      }
+      return { evaluatedSince: EVALUATED_SINCE, blocked, failed };
+    });
     blockedIP.block.mockReset().mockResolvedValue({ doc: {}, created: true });
-    authFail.getIPsWithHighAttempts.mockResolvedValue([]);
     audit.record.mockReset().mockImplementation(async () => {
       audit.inTransaction.push(audit.txActive);
       return null;
@@ -64,24 +82,30 @@ describe('POST /api/security/blocked-ips/evaluate - admin gate', () => {
     audit.inTransaction = [];
   });
 
-  it('rejects a non-admin before evaluating', async () => {
+  it('rejects a non-admin before the runner is called', async () => {
     const { req, res } = mocks({ id: 'u1', isAdmin: false });
     await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/admin/i);
-    expect(authFail.getIPsWithHighAttempts).not.toHaveBeenCalled();
+    expect(runner.runOauthAbuseAutoBlock).not.toHaveBeenCalled();
   });
 
-  it('runs the evaluation for an admin', async () => {
-    const { req, res } = mocks({ id: 'admin1', isAdmin: true });
+  it('delegates to the shared runner for an admin and returns blocked IP strings', async () => {
+    candidates.list = [{ ip: '1.1.1.1', attempts: 30 }];
+    const { req, res } = mocks(ADMIN);
     await mockRefs.postHandler!(req, res);
-    expect(authFail.getIPsWithHighAttempts).toHaveBeenCalledTimes(1);
+    expect(runner.runOauthAbuseAutoBlock).toHaveBeenCalledTimes(1);
     expect(res._getStatusCode()).toBe(200);
+    expect(JSON.parse(res._getData())).toEqual({
+      blocked: ['1.1.1.1'],
+      failed: [],
+      evaluatedSince: EVALUATED_SINCE.toISOString(),
+    });
   });
 
   it('records security.blocked_ip.auto_added per added IP inside its block transaction', async () => {
-    authFail.getIPsWithHighAttempts.mockResolvedValue([
+    candidates.list = [
       { ip: '1.1.1.1', attempts: 12 },
       { ip: '2.2.2.2', attempts: 15 },
-    ]);
+    ];
     const { req, res } = mocks(ADMIN);
     await mockRefs.postHandler!(req, res);
     expect(res._getStatusCode()).toBe(200);
@@ -90,7 +114,8 @@ describe('POST /api/security/blocked-ips/evaluate - admin gate', () => {
     expect(audit.record.mock.calls[0][1]).toMatchObject({
       action: 'security.blocked_ip.auto_added',
       target: { kind: 'settings', id: 'blocked-ip:1.1.1.1' },
-      details: { ip: '1.1.1.1', attempts: 12 },
+      details: { ip: '1.1.1.1', durationMs: 600_000, escalationLevel: 0 },
+      reason: 'Auto-blocked: 12 failed sign-ins in 10 minutes',
     });
     expect(audit.inTransaction).toEqual([true, true]);
   });
@@ -102,20 +127,20 @@ describe('POST /api/security/blocked-ips/evaluate - admin gate', () => {
   });
 
   it('skips an IP whose block write fails without recording it', async () => {
-    authFail.getIPsWithHighAttempts.mockResolvedValue([{ ip: '1.1.1.1', attempts: 12 }]);
+    candidates.list = [{ ip: '1.1.1.1', attempts: 12 }];
     blockedIP.block.mockRejectedValue(new Error('write failed'));
     const { req, res } = mocks(ADMIN);
     await mockRefs.postHandler!(req, res);
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData().blocked).toEqual([]);
+    expect(res._getJSONData()).toMatchObject({ blocked: [], failed: ['1.1.1.1'] });
     expect(audit.record).not.toHaveBeenCalled();
   });
 
   it('keeps blocking the remaining IPs after an audit write rejects, then fails the run listing it', async () => {
-    authFail.getIPsWithHighAttempts.mockResolvedValue([
+    candidates.list = [
       { ip: '1.1.1.1', attempts: 12 },
       { ip: '2.2.2.2', attempts: 15 },
-    ]);
+    ];
     audit.record.mockRejectedValueOnce(new Error('audit down'));
     const { req, res } = mocks(ADMIN);
     await mockRefs.postHandler!(req, res);
@@ -125,7 +150,7 @@ describe('POST /api/security/blocked-ips/evaluate - admin gate', () => {
   });
 
   it('does not re-audit an IP that already has an active block', async () => {
-    authFail.getIPsWithHighAttempts.mockResolvedValue([{ ip: '1.1.1.1', attempts: 12 }]);
+    candidates.list = [{ ip: '1.1.1.1', attempts: 12 }];
     blockedIP.block.mockResolvedValue({ doc: { ip: '1.1.1.1' }, created: false });
     const { req, res } = mocks(ADMIN);
     await mockRefs.postHandler!(req, res);

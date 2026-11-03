@@ -3,7 +3,7 @@ import { organizationRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import type { ActivePlanResolver } from '@bike4mind/services';
 import { SubscriptionOwnerType, type ISubscription } from '@bike4mind/server-utils/lib/subscriptions/types';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import type { MembershipRequest } from '@bike4mind/server-utils/dataLakes/requestMembership';
 
 export type ActiveSubscription = ISubscription & IMongoDocument;

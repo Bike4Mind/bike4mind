@@ -7,7 +7,7 @@
  *   pnpm tsx scripts/codemods/move-to-server-utils.ts apps/client/server/memory/factCipher.ts ...
  *
  * Arguments are the files' OLD paths. A file under apps/client/server/X lands at src/X; one under
- * apps/client/{lib,shared,config,services,app/utils}/X keeps its client-relative path, so
+ * apps/client/{lib,shared,config,services,app/utils,app/constants}/X keeps its client-relative path, so
  * apps/client/lib/X lands at src/lib/X. No other client directory can move. Only .ts files can be
  * moved: the package's exports map resolves `./src/*.ts`. Every .ts/.tsx/.mts/.cts/.js/.mjs file (.d.ts included) under apps/client,
  * apps/workers, packages, b4m-core and infra is parsed with the TypeScript compiler API. A
@@ -44,7 +44,7 @@ export const PACKAGE_SRC = 'packages/server-utils/src';
 export const PACKAGE_NAME = '@bike4mind/server-utils';
 
 /** Client directories a file can move from; only server/ drops its prefix in the package. */
-const MOVABLE_ROOTS = ['server', 'lib', 'shared', 'config', 'services', 'app/utils'];
+const MOVABLE_ROOTS = ['server', 'lib', 'shared', 'config', 'services', 'app/utils', 'app/constants'];
 const SCAN_ROOTS = ['apps/client', 'apps/workers', 'packages', 'b4m-core', 'infra'];
 const OVERLAY_DIR = 'packages/premium/';
 const SKIP_DIRS = new Set(['node_modules', '.next', 'dist', '.turbo', 'premium-generated', 'coverage']);

@@ -9,7 +9,7 @@
  * Credential-free like @shared/auth, for the same reason - see src/shared/ipc.ts.
  */
 
-import type { GenerationJobState, ValidationViolation } from '@bike4mind/common';
+import type { GenerationJobState, PromptCacheTtl, ValidationViolation } from '@bike4mind/common';
 import type { ChatImportOrigin } from './claudeImport';
 import type { ChatQuestionAnswer } from './questions';
 import type { SkillSource } from './skills';
@@ -663,8 +663,13 @@ export interface ChatMessage {
    * ordering was never captured for those and cannot be recovered.
    */
   rounds?: ChatReplyRound[];
+  /** The model an assistant reply started on; a continuation on another model does not change it. Absent on older replies. */
+  model?: string;
   /** What the whole reply cost, summed over its requests, on assistant messages. Never sent to the model. */
   usage?: ChatUsage;
+  /** When the reply's last request refreshed the server's prompt cache, and for how long; see ChatPromptCacheStamp. */
+  promptCache?: ChatPromptCacheStamp;
+  contextSnapshot?: import('./contextBreakdown').ContextSnapshot;
   /**
    * Provider-shaped reasoning blocks (Anthropic extended thinking). Opaque: they are replayed
    * verbatim into the next request, because dropping them breaks thinking-plus-tools turns.
@@ -739,6 +744,25 @@ export interface ChatMessage {
    * per request so the replayed history stays byte-identical and the prompt cache holds.
    */
   notes?: string[];
+  /**
+   * On a user turn of a deferred-tools conversation: the optional tools offered from this turn on
+   * and the guidance that goes with them. Stored for the same reason as `notes`; see
+   * chat/deferredTools.ts for how a request replays it.
+   */
+  toolState?: ChatToolState;
+  /**
+   * On an assistant reply from a deferred-tools turn. Its calls were sent after that turn's tool
+   * changes, so a replay keeps them as they were; a call from any other turn gets an addition
+   * before it when its tool is not active there (chat/deferredTools.ts insertToolChanges).
+   */
+  deferred?: boolean;
+}
+
+export interface ChatToolState {
+  /** Optional tool names, sorted. The core tools are always loaded and never listed. */
+  tools: string[];
+  /** The tool and access guidance, read by the model as a reminder on this turn. */
+  text: string;
 }
 
 /**
@@ -862,13 +886,22 @@ export function localBackend(runtimeId: string): string {
  */
 export const NO_LOCAL_MODEL = 'local:';
 
+/** The listed entry for a saved model id, including an id saved on one of its aliases. */
+export function findModelOption<T extends { id: string; aliasIds?: readonly string[] }>(
+  models: readonly T[] | undefined,
+  id: string | null | undefined
+): T | undefined {
+  if (!models || !id) return undefined;
+  return models.find(model => model.id === id) ?? models.find(model => model.aliasIds?.includes(id));
+}
+
 /** The device-local model a conversation moves to: the remembered pick if listed, else the first. */
 export function pickLocalModel(
-  models: readonly { id: string; unavailable?: string }[],
+  models: readonly { id: string; aliasIds?: readonly string[]; unavailable?: string }[],
   remembered?: string | null
 ): string | null {
   const usable = models.filter(model => !model.unavailable);
-  if (remembered && usable.some(model => model.id === remembered)) return remembered;
+  if (remembered && findModelOption(usable, remembered)) return remembered;
   return usable[0]?.id ?? null;
 }
 
@@ -905,6 +938,8 @@ export interface ChatModelOption {
    * absent flag here only means the model was not in a list that had loaded.
    */
   supportsReasoningEffort?: boolean;
+  /** A direct-Anthropic model the server will cache for an hour on request (supportsOneHourPromptCache). */
+  supportsOneHourCache?: boolean;
   /**
    * A local Ollama model that can think. Its server takes no effort, only thinking on or off,
    * so the effort picker becomes that switch, stored as `default` (on) and
@@ -917,8 +952,16 @@ export interface ChatModelOption {
   supportsTools?: boolean;
   /** A saved model server's model, grouped under it in the picker. Absent for hosted models and this computer's. */
   server?: { id: string; name: string };
+  /** A LoRA adapter's base model on the same server, shown with it in the picker. */
+  baseModel?: string;
+  /** `contextWindow` is set by the server (vLLM --max-model-len), so Desktop cannot grow it to fit its tools. */
+  contextFixed?: boolean;
+  /** Ids of the other names a server serves this model under; a conversation saved on one resolves here. */
+  aliasIds?: string[];
   /** Why it cannot be picked now (its server is down or wants credentials); listed disabled. */
   unavailable?: string;
+  /** USD per token by context tier, as the server's catalog publishes it. Absent when unpriced. */
+  pricing?: Record<number, { input: number; output: number; cache_read?: number; cache_write?: number }>;
 }
 
 /** The setting a `thinkingToggle` model's "Off" is stored as; any other setting thinks. */
@@ -956,7 +999,17 @@ export interface ChatModelCatalog {
 }
 
 /**
- * Token counts the SERVER reported, never a client-side estimate.
+ * A generation tool the next Chat turn would declare, as `listCreationTools` answers. Derived from
+ * the same inputs as the request's tool list (see toolsForRequest), so the blank chat never offers
+ * to make something the model will not be given a tool for.
+ */
+export interface CreationTool {
+  name: string;
+}
+
+/**
+ * Token counts the SERVER reported, never a client-side estimate. `rate` is the one exception,
+ * and says so when its timing is this app's own.
  *
  * The completions endpoint reports usage per request, so an agent turn - which makes one
  * request per tool round trip - produces several of these, and the turn's cost is their sum.
@@ -973,6 +1026,28 @@ export interface ChatUsage {
   /** Credits the server charged for these requests. */
   creditsUsed?: number;
   usdCost?: number;
+  /** Generation speed, from self-hosted model servers only; see ChatTokenRate. */
+  rate?: ChatTokenRate;
+}
+
+/**
+ * How fast a self-hosted model server ran these requests, as token counts paired with the time
+ * they took, so requests sum and the rate is always tokens over time. Each pair is present only
+ * when the server reported it.
+ */
+export interface ChatTokenRate {
+  /** Generated tokens timed by `evalMs`. */
+  evalTokens: number;
+  evalMs: number;
+  promptTokens?: number;
+  promptMs?: number;
+  /** Time spent loading the model into memory before the request ran. */
+  loadMs?: number;
+  /** Speculative decoding: tokens the draft proposed and how many the model accepted. */
+  draftTokens?: number;
+  draftAccepted?: number;
+  /** Timed by this app from the first streamed token to the last, because the server reported no timings. */
+  estimated?: boolean;
 }
 
 /**
@@ -1117,6 +1192,12 @@ interface ChatSessionMeta {
    */
   reasoningEffort: ReasoningEffortSetting;
   /**
+   * How long the server's prompt cache for this conversation lives between requests. Absent on
+   * conversations from before the choice existed, which run at '5m'. Sent only to a model that
+   * takes the 1-hour TTL; see `ChatModelOption.supportsOneHourCache`.
+   */
+  promptCacheTtl?: PromptCacheTtl;
+  /**
    * Set on Code sessions that have been pointed at a directory. Absent on a Chat session, and
    * on a Code session nobody has chosen a folder for yet - which is a usable state, not a
    * broken one, and the only thing it cannot do is run a turn.
@@ -1257,13 +1338,22 @@ export type ChatStreamEvent =
       content: string;
       stopReason?: string;
       usage?: ChatUsage;
+      contextSnapshot?: import('./contextBreakdown').ContextSnapshot;
       toolCalls?: ChatToolCall[];
       /** The reply's round structure; see ChatMessage.rounds. Absent when no tool ever ran. */
       rounds?: ChatReplyRound[];
       /** `content` has had their markup removed, so these ride with it rather than following it. */
       artifacts?: ChatArtifact[];
+      promptCache?: ChatPromptCacheStamp;
     }
-  | { type: 'error'; sessionId: string; messageId: string; message: string; stopReason?: string }
+  | {
+      type: 'error';
+      sessionId: string;
+      messageId: string;
+      message: string;
+      stopReason?: string;
+      contextSnapshot?: import('./contextBreakdown').ContextSnapshot;
+    }
   | {
       type: 'background-output';
       sessionId: string;
@@ -1702,6 +1792,18 @@ export type SpawnSuggestionResult = { ok: true; suggestion: ChatSpawnSuggestion 
 export type RelayRefusal = 'hops' | 'fan-out' | 'no-target' | 'archived' | 'self' | 'empty-message' | 'unavailable';
 
 /**
+ * The server-side prompt cache a reply left behind. `cachedAt` is the last request's first
+ * token (or its end when nothing streamed), which is after the cache was written, so an
+ * expiry read off it is late by at most the prompt's processing time, never early.
+ */
+export interface ChatPromptCacheStamp {
+  cachedAt: number;
+  ttl: PromptCacheTtl;
+  /** The cache is per model, so a conversation switched since holds none on its new one. */
+  model: string;
+}
+
+/**
  * One tool round of a reply: what the model said, and then what it went on to run.
  *
  * Holds call IDS rather than the calls, so a call has exactly one home - the message's
@@ -1722,6 +1824,8 @@ export interface ChatReplyRound {
   timing?: ChatRoundTiming;
   /** What this round's request cost, as the server reported it. Never sent to the model. */
   usage?: ChatUsage;
+  /** The model this round's request went to; a continued reply's rounds can differ. Absent on older rounds. */
+  model?: string;
   /**
    * The model's readable reasoning before this round's prose, drawn in the transcript as a row
    * that is closed by default (ReasoningRow) and never drawn for the round still streaming -
@@ -1731,6 +1835,20 @@ export interface ChatReplyRound {
    * `thinking`, never this.
    */
   reasoning?: string;
+  /**
+   * Main only: what this round put on the wire, so later requests replay the turn byte for byte and
+   * read the cache entry its last round wrote (see toCompletionMessages). The exception is a round
+   * that attached tool images, whose images turn is not replayed (see sentRounds in ChatService). Absent on older rounds.
+   * Persisted with the session, but stripped before the renderer sees it (sessionForRenderer).
+   */
+  sent?: ChatSentRound;
+}
+
+/** A round's assistant message as sent, plus any app text appended to its last tool result. */
+export interface ChatSentRound {
+  thinking?: unknown[];
+  text: string;
+  resultNote?: string;
 }
 
 /**

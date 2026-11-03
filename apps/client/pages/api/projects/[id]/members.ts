@@ -9,7 +9,7 @@ import {
 import { projectService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import { PROJECTS_WRITE_SCOPES } from '@server/projects/projectScopes';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { respond } from '@server/utils/respond';
 import { cleanUpRevokedFileReferences, projectRevokeCleanupTargets } from '@server/sharing/revokedFileReferences';
 import { ProjectEvents, projectResponseSchema } from '@bike4mind/common';

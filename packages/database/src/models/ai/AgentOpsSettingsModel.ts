@@ -261,7 +261,7 @@ class AgentOpsSettingsRepository
 }
 
 // Reuse existing model to avoid overwrite errors on hot reload
-const AgentOpsSettings =
+const AgentOpsSettings: Model<IAgentOpsSettingsDocument> =
   mongoose.models.AgentOpsSettings || model<IAgentOpsSettingsDocument>('AgentOpsSettings', AgentOpsSettingsSchema);
 
 const agentOpsSettingsRepository = new AgentOpsSettingsRepository(AgentOpsSettings);

@@ -38,6 +38,7 @@ describe('deleteFabFile', () => {
         findAllInIds: Mock;
         update: Mock;
         deleteManyInIds: Mock;
+        shareable: { updateUserShares: Mock };
       };
       fabFileChunks: {
         deleteManyByFabFileId: Mock;
@@ -75,6 +76,7 @@ describe('deleteFabFile', () => {
           findAllInIds: vi.fn(),
           update: vi.fn(),
           deleteManyInIds: vi.fn(),
+          shareable: { updateUserShares: vi.fn() },
         },
         fabFileChunks: {
           deleteManyByFabFileId: vi.fn(),
@@ -418,12 +420,11 @@ describe('deleteFabFile', () => {
 
       expect(result.action).toBe('unshared');
       expect(result.fabFile?.id).toBe(mockFileId);
-      expect(mockAdapter.db.fabFiles.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          id: mockFileId,
-          users: [],
-        })
-      );
+      expect(mockAdapter.db.fabFiles.shareable.updateUserShares.mock.calls).toStrictEqual([
+        [mockFileId, { remove: { userId: mockUserId } }],
+      ]);
+      expect(mockAdapter.db.fabFiles.update).not.toHaveBeenCalled();
+      expect(result.fabFile?.users).toEqual([]);
       // Should NOT soft-delete or delete S3 objects
       expect(mockAdapter.storage.delete).not.toHaveBeenCalled();
       expect(mockAdapter.db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
@@ -492,6 +493,7 @@ describe('deleteFabFile', () => {
       expect(result.action).toBe('denied');
       expect(result.fabFile).toBeNull();
       expect(mockAdapter.db.fabFiles.update).not.toHaveBeenCalled();
+      expect(mockAdapter.db.fabFiles.shareable.updateUserShares).not.toHaveBeenCalled();
     });
   });
 

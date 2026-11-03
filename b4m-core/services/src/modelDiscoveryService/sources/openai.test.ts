@@ -456,6 +456,22 @@ describe('openai new-model docs', () => {
     }
   });
 
+  it('reads no page for the alias of a dated snapshot the catalog holds', async () => {
+    // planCatalogWrites refuses to introduce that alias, so the page would only
+    // spend a slot of the budget every run.
+    const { seen, route } = routes({
+      list: listing(['gpt-4.1', 'gpt-4.1-2025-04-14']),
+      pricing: { raw: flatPricing(['gpt-4.1']) },
+    });
+    const restore = stubFetch(route);
+    try {
+      await createOpenAiSource(holding('gpt-4.1-2025-04-14')).fetch(makeContext());
+      expect(modelPages(seen)).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
   it('reads nothing at all when no driver supplied the known ids', async () => {
     const { seen, route } = routes({
       list: listing(['gpt-5.4-nano']),

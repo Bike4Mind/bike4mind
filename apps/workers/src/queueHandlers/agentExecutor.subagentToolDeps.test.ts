@@ -116,7 +116,7 @@ const childDoc = {
 const baseSession = { id: 'session-1', userId: 'user-1', disableUserIntegrations: true };
 
 const resolveWorkspaceSettings = vi.hoisted(() => vi.fn());
-vi.mock('@server/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
   premiumWorkspaceSessionSettings: {
     'settings-workspace': { ownedFields: ['disableUserIntegrations'], resolve: resolveWorkspaceSettings },
   },
@@ -247,6 +247,14 @@ describe('processSubagentDispatch tool deps', () => {
       const deps = await dispatchWithSession(baseSession);
 
       expect((deps.user as { isAdmin?: boolean }).isAdmin).toBe(false);
+      const { userRepository } = await import('@bike4mind/database');
+      const users = (deps.db as { users: typeof userRepository }).users;
+      const findUser = vi.spyOn(userRepository, 'findById').mockResolvedValueOnce({ isAdmin: true } as never);
+      try {
+        expect(((await users.findById('user-1')) as { isAdmin?: boolean }).isAdmin).toBe(false);
+      } finally {
+        findUser.mockRestore();
+      }
     } finally {
       vi.mocked(agentExecutionRepository.findById).mockResolvedValue(childDoc as never);
     }

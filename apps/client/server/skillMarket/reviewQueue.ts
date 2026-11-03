@@ -1,7 +1,7 @@
 import { SkillListing, SkillListingVersion } from '@bike4mind/database';
 import { ForbiddenError, type ISkillListing } from '@bike4mind/common';
 import type { TimeIdKeyset } from '@server/utils/cursorPagination';
-import { canReviewListing, type MarketActor } from './market';
+import { canReviewListing, type MarketActor } from '@bike4mind/server-utils/skillMarket/market';
 
 /** 403 unless the actor is a super-admin or administers at least one organization. */
 export function requireReviewer(actor: MarketActor, adminOrgIds: string[]) {

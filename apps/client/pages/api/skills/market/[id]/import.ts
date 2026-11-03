@@ -1,7 +1,7 @@
 // apps/client/pages/api/skills/market/[id]/import.ts
 import { z } from 'zod';
 import { baseApi } from '@client/server/middlewares/baseApi';
-import { importRateLimit } from '@server/skillMarket/market';
+import { importRateLimit } from '@bike4mind/server-utils/skillMarket/market';
 import { importListing } from '@server/skillMarket/importListing';
 
 const bodySchema = z.object({

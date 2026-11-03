@@ -15,7 +15,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const resolveExecutionMementoGatesMock = vi.fn();
 const publishMock = vi.fn();
 
-vi.mock('./resolveExecutionMementoGates', () => ({
+vi.mock('@bike4mind/server-utils/utils/resolveExecutionMementoGates', () => ({
   resolveExecutionMementoGates: (...args: unknown[]) => resolveExecutionMementoGatesMock(...args),
 }));
 vi.mock('@server/utils/eventBus', () => ({

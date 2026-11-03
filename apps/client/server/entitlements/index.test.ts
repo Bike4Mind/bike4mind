@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import {
   getRequestEntitlements,
   getUserEntitlements,
@@ -9,7 +9,7 @@ import {
 } from './index';
 import type { Request } from 'express';
 import type { IUserDocument } from '@bike4mind/common';
-import { __registryRows } from '@client/lib/entitlements/registry';
+import { __registryRows } from '@bike4mind/server-utils/lib/entitlements/registry';
 
 // Minimal req shim - only the fields the entitlement helpers touch.
 const makeReq = (user: {
@@ -20,7 +20,7 @@ const makeReq = (user: {
   emailVerified?: boolean | null;
 }) => ({ user }) as unknown as Request;
 
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     findActiveUserSubscriptions: vi.fn(),
     findActiveSubscriptionsByOwners: vi.fn(async () => []),
@@ -32,11 +32,11 @@ vi.mock('@bike4mind/database', () => ({ organizationRepository: { findPlanHolder
 vi.mock('@bike4mind/observability', () => ({ Logger: { globalInstance: { warn: vi.fn() } } }));
 
 // Fixture registry: behavior of the real rows is covered by
-// lib/entitlements/registry.test.ts; here we test the resolver's wiring and
+// server-utils lib/entitlements/registry.test.ts; here we test the resolver's wiring and
 // gate semantics against controlled mappings (and avoid product literals).
-vi.mock('@client/lib/entitlements/registry', async () => {
-  const actual = await vi.importActual<typeof import('@client/lib/entitlements/registry')>(
-    '@client/lib/entitlements/registry'
+vi.mock('@bike4mind/server-utils/lib/entitlements/registry', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/server-utils/lib/entitlements/registry')>(
+    '@bike4mind/server-utils/lib/entitlements/registry'
   );
   return {
     ...actual,
@@ -63,12 +63,8 @@ vi.mock('@client/lib/entitlements/registry', async () => {
 // Plan price ids are env-dependent, so the ladder read is a fixture; the real mapping is covered by
 // lib/userSubscriptions/utils.test.ts.
 vi.mock('@client/lib/userSubscriptions/utils', () => ({
-  getHighestLadderTier: (subscriptions: readonly { priceId: string }[]) =>
-    subscriptions.some(subscription => subscription.priceId === 'price_ladder_pro')
-      ? 2
-      : subscriptions.some(subscription => subscription.priceId === 'price_ladder_basic')
-        ? 1
-        : undefined,
+  getEntitlingPlanByPriceId: (priceId: string) =>
+    ({ price_ladder_pro: { tier: 2 }, price_ladder_basic: { tier: 1 }, price_standalone: {} })[priceId],
 }));
 
 // DB-backed partner rules (issue #293) are resolved through this server module. Mock it so
@@ -173,10 +169,10 @@ describe('getUserEntitlements', () => {
       await expect(getUserEntitlements(user)).resolves.not.toContain('plan:paid');
     });
 
-    it('is not granted for a plan off the ladder', async () => {
+    it('is granted for a paid plan off the ladder', async () => {
       findActive.mockResolvedValue([{ priceId: 'price_standalone' }]);
 
-      await expect(getUserEntitlements(user)).resolves.not.toContain('plan:paid');
+      await expect(getUserEntitlements(user)).resolves.toContain('plan:paid');
     });
 
     it('is not granted by a passthrough tag', async () => {

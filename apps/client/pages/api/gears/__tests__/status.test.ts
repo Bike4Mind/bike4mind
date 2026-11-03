@@ -20,6 +20,7 @@ const { mocks } = vi.hoisted(() => ({
     overridesByKey: vi.fn(),
     hearthHasAnyChannel: vi.fn(),
     userFindById: vi.fn(),
+    gearMinAgeSetting: vi.fn(),
   },
 }));
 
@@ -64,6 +65,7 @@ vi.mock('@bike4mind/database', () => ({
     stampedKeys: (...a: unknown[]) => mocks.stampedKeys(...a),
   },
   gearOverrideRepository: { byKey: (...a: unknown[]) => mocks.overridesByKey(...a) },
+  adminSettingsRepository: { getSettingsValue: (...a: unknown[]) => mocks.gearMinAgeSetting(...a) },
   hearthRepository: { hasAnyChannelForUser: (...a: unknown[]) => mocks.hearthHasAnyChannel(...a) },
   importHistoryJobRepository: { findOne: (...a: unknown[]) => mocks.importFindOne(...a) },
   rapidReplyAuditLogRepository: { findOne: (...a: unknown[]) => mocks.miscFindOne(...a) },
@@ -232,13 +234,46 @@ describe('GET /api/gears/status', () => {
     await promise;
 
     const body = res._getJSONData() as {
-      gears: Array<{ key: string; rewardPending?: boolean; pendingReason?: string; claimable?: boolean }>;
+      gears: Array<{
+        key: string;
+        rewardPending?: boolean;
+        pendingReason?: string;
+        minAccountAgeDays?: number;
+        claimable?: boolean;
+      }>;
     };
     const projects = body.gears.find(g => g.key === 'projects')!;
     expect(projects.rewardPending).toBe(true);
     expect(projects.pendingReason).toBe('too_new');
+    expect(projects.minAccountAgeDays).toBe(7);
     expect(projects.claimable).toBeUndefined();
   });
+
+  it.each([
+    { setting: 10, ageInDays: 8, pendingReason: 'too_new', minAccountAgeDays: 10, claimable: undefined },
+    { setting: 0, ageInDays: 0.1, pendingReason: undefined, minAccountAgeDays: undefined, claimable: true },
+  ])(
+    'gearRewardMinAccountAgeDays $setting decides too_new for a $ageInDays-day account',
+    async ({ setting, ageInDays, pendingReason, minAccountAgeDays, claimable }) => {
+      mocks.gearMinAgeSetting.mockResolvedValue(setting);
+      mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
+      mocks.userFindById.mockReturnValue({
+        lean: () =>
+          Promise.resolve({ createdAt: new Date(Date.now() - ageInDays * 24 * 60 * 60 * 1000), emailVerified: true }),
+      });
+      const { res, promise } = run({ id: 'u1' });
+      await promise;
+
+      const body = res._getJSONData() as {
+        gears: Array<{ key: string; pendingReason?: string; minAccountAgeDays?: number; claimable?: boolean }>;
+      };
+      const projects = body.gears.find(g => g.key === 'projects')!;
+      expect(mocks.gearMinAgeSetting).toHaveBeenCalledWith('gearRewardMinAccountAgeDays');
+      expect(projects.pendingReason).toBe(pendingReason);
+      expect(projects.minAccountAgeDays).toBe(minAccountAgeDays);
+      expect(projects.claimable).toBe(claimable);
+    }
+  );
 
   it('a paid gear stays claimed with no pendingReason on an untrusted account', async () => {
     mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));

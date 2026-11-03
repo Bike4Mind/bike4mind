@@ -8,6 +8,7 @@ import {
   ResetMfaDialog,
   RestrictDialog,
   SendMessageDialog,
+  ShadowTierDialog,
 } from './accountDialogs';
 import { ProfileTestWrapper, buildProfile } from '../profileTestUtils';
 import type { AdminUserProfile } from '../userProfileModel';
@@ -127,6 +128,109 @@ describe('account dialogs', () => {
 
       await waitFor(() => expect(mocks.update).toHaveBeenCalled());
       expect(onClose).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('ShadowTierDialog', () => {
+    const shadowed = buildProfile({
+      throttle: {
+        tier: 'shadow',
+        source: 'signup_honeypot',
+        reason: 'auto',
+        changedAt: new Date('2026-10-01T00:00:00Z'),
+      },
+      riskSignals: [{ type: 'signup_honeypot', at: new Date('2026-10-01T00:00:00Z') }],
+    });
+    const id = 'profile-shadow-tier-dialog';
+
+    it('shows No signals and moves to the limited tier with a reason', async () => {
+      const { onClose } = renderDialog((user, close) => <ShadowTierDialog user={user} onClose={close} />);
+
+      expect(screen.getByTestId('profile-shadow-tier-current')).toHaveTextContent('Tier standard. Never changed.');
+      expect(screen.getByTestId('profile-shadow-tier-signals')).toHaveTextContent('No signals');
+      expect(confirmButton(id)).toBeDisabled();
+      pickReason(id);
+      fireEvent.click(confirmButton(id));
+
+      await waitFor(() =>
+        expect(mocks.update).toHaveBeenCalledWith({
+          throttleTier: 'shadow',
+          throttleReason: 'Abuse / automated signups',
+        })
+      );
+      expect(onClose).toHaveBeenCalled();
+      expect(await screen.findByTestId('undo-toast-message')).toHaveTextContent('Moved to limited tier');
+      fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+      await waitFor(() =>
+        expect(mocks.update).toHaveBeenLastCalledWith({
+          throttleTier: 'none',
+          throttleReason: 'Undo: Abuse / automated signups',
+        })
+      );
+    });
+
+    it('flags the tier as not in effect for a Developer-tagged user only', () => {
+      renderDialog(
+        (user, close) => <ShadowTierDialog user={user} onClose={close} />,
+        buildProfile({ tags: ['Developer'] })
+      );
+      expect(screen.getByTestId('profile-shadow-tier-exempt')).toHaveTextContent('Not in effect');
+    });
+
+    it('flags the tier as not in effect for an admin', () => {
+      renderDialog((user, close) => <ShadowTierDialog user={user} onClose={close} />, buildProfile({ isAdmin: true }));
+      expect(screen.getByTestId('profile-shadow-tier-exempt')).toBeInTheDocument();
+    });
+
+    it('does not flag a normal user', () => {
+      renderDialog((user, close) => <ShadowTierDialog user={user} onClose={close} />);
+      expect(screen.queryByTestId('profile-shadow-tier-exempt')).not.toBeInTheDocument();
+    });
+
+    it('shows state and signals, and removes the tier', async () => {
+      renderDialog((user, close) => <ShadowTierDialog user={user} onClose={close} />, shadowed);
+
+      expect(screen.getByTestId('profile-shadow-tier-current')).toHaveTextContent(
+        'Tier limited, source signup_honeypot, changed 2026-10-01.'
+      );
+      expect(screen.getByTestId('profile-shadow-tier-signals')).toHaveTextContent('signup_honeypot (2026-10-01)');
+      expect(confirmButton(id)).toHaveTextContent('Remove limited tier');
+      pickReason(id);
+      fireEvent.click(confirmButton(id));
+
+      await waitFor(() =>
+        expect(mocks.update).toHaveBeenCalledWith({ throttleTier: 'none', throttleReason: 'Reviewed, not abusive' })
+      );
+      expect(await screen.findByTestId('undo-toast-message')).toHaveTextContent('Limited tier removed');
+      fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+      await waitFor(() =>
+        expect(mocks.update).toHaveBeenLastCalledWith({
+          throttleTier: 'shadow',
+          throttleReason: 'Undo: Reviewed, not abusive',
+        })
+      );
+    });
+
+    it('stays open and shows no undo toast when the update fails', async () => {
+      mocks.update.mockRejectedValueOnce(new Error('boom'));
+      const { onClose } = renderDialog((user, close) => <ShadowTierDialog user={user} onClose={close} />);
+
+      pickReason(id);
+      fireEvent.click(confirmButton(id));
+
+      await waitFor(() => expect(mocks.update).toHaveBeenCalled());
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.queryByTestId('undo-toast-message')).not.toBeInTheDocument();
+    });
+
+    it('renders a dash for a missing changed date', () => {
+      const throttle = { tier: 'none', source: 'admin', reason: 'ok' } as unknown as AdminUserProfile['throttle'];
+      renderDialog((user, close) => <ShadowTierDialog user={user} onClose={close} />, buildProfile({ throttle }));
+
+      expect(screen.getByTestId('profile-shadow-tier-current')).toHaveTextContent(
+        'Tier standard, source admin, changed -.'
+      );
+      expect(confirmButton(id)).toHaveTextContent('Move to limited tier');
     });
   });
 

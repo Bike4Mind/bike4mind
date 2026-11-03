@@ -29,6 +29,7 @@ describe('buildLocalMcpServer', () => {
     const deps: ModelToolsDeps = {
       hub: vi.fn(),
       ollamaRegistry: vi.fn(),
+      libraryLayers: vi.fn(),
       resolveRuntime: async () => ({ runtime, source: 'env' }),
       defaultModel: async () => undefined,
       machine: async () => ({ unknown: 'not read in this test' }),

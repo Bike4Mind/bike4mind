@@ -125,6 +125,23 @@ describe('runLakeResearch', () => {
     expect(h.settleRun).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['banned', { isBanned: true }],
+    ['dispute-pending', { disputePending: true }],
+    ['suspended', { moderation: { status: 'suspended' } }],
+  ])('fails a run whose lake owner is %s before any search, judgment or charge', async (_label, state) => {
+    h.findUserById.mockResolvedValue({ id: 'owner-1', organizationId: null, ...state });
+
+    expect(await runLakeResearch('run-1', logger)).toEqual({ claimed: true });
+
+    expect(h.executeResearchRun).not.toHaveBeenCalled();
+    expect(h.recordOperationalUsage).not.toHaveBeenCalled();
+    expect(h.settleRun).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({ status: 'failed', spentMicroUsd: 0, error: expect.stringMatching(/owner account/) })
+    );
+  });
+
   it('settles a finished run with its stop reason, spend and totals', async () => {
     await runLakeResearch('run-1', logger);
 
@@ -430,7 +447,10 @@ describe('runLakeResearch', () => {
     // `.catch(() => null)` on the creator lookup means a rejection and a null resolution must
     // behave identically from the caller's side - pinned so that equivalence cannot silently drift.
     it('logs and skips the ledger write when the creator lookup itself rejects', async () => {
-      h.findUserById.mockRejectedValue(new Error('connection reset'));
+      // The pre-execution account gate reads the owner first; it is the settlement read that rejects.
+      h.findUserById
+        .mockResolvedValueOnce({ id: 'owner-1', organizationId: null })
+        .mockRejectedValue(new Error('connection reset'));
 
       await runLakeResearch('run-1', logger);
 

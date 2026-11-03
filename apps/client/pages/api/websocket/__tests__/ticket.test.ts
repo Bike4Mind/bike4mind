@@ -13,6 +13,7 @@ const mockRefs = vi.hoisted(() => ({
   baseApiOptions: undefined as unknown,
   postHandler: undefined as unknown as (req: unknown, res: unknown) => Promise<void>,
   createTicket: vi.fn(),
+  rateLimitOptions: undefined as unknown,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -32,6 +33,13 @@ vi.mock('@server/middlewares/baseApi', () => {
   };
 });
 
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: (options: unknown) => {
+    mockRefs.rateLimitOptions = options;
+    return () => {};
+  },
+}));
+
 vi.mock('@bike4mind/database', () => ({
   wsConnectTicketRepository: { create: mockRefs.createTicket },
 }));
@@ -41,9 +49,14 @@ import '@pages/api/websocket/ticket';
 
 describe('POST /api/websocket/ticket - auth mode', () => {
   it('is minted jwtOnly so an API key cannot mint a connect ticket', () => {
-    expect(mockRefs.baseApiOptions).toEqual({ auth: 'jwtOnly' });
+    // Also out of the default write limit: reconnect retries must not spend the user's write budget.
+    expect(mockRefs.baseApiOptions).toEqual({ auth: 'jwtOnly', defaultWriteRateLimit: false });
     // auth: true would install apiKeyAuth(undefined), letting any valid API key mint.
     expect((mockRefs.baseApiOptions as { auth?: unknown }).auth).not.toBe(true);
+  });
+
+  it('caps mints per user in its own bucket, since each one writes a ticket row', () => {
+    expect(mockRefs.rateLimitOptions).toEqual({ limit: 60, windowMs: 60_000, bucket: 'websocket-ticket' });
   });
 });
 

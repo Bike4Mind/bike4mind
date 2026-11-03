@@ -9,7 +9,7 @@ import {
   type AcquisitionTouches,
 } from '@bike4mind/server-utils/lib/subscriptions/acquisition';
 import { parseCookies } from '@bike4mind/server-utils/analytics/cookies';
-import { resolveServerConsent } from './serverConsent';
+import { resolveServerConsent } from '@bike4mind/server-utils/analytics/serverConsent';
 
 const UTM_FIELDS = ['source', 'medium', 'campaign', 'content'] as const;
 

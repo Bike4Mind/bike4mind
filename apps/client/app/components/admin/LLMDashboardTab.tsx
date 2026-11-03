@@ -19,6 +19,7 @@ import {
   Input,
   useTheme,
 } from '@mui/joy';
+import type { Theme } from '@mui/joy/styles';
 import ImageIcon from '@mui/icons-material/Image';
 import ChatIcon from '@mui/icons-material/Chat';
 import SecurityIcon from '@mui/icons-material/Security';
@@ -40,7 +41,7 @@ import {
 import { useGetUsers } from '@client/app/hooks/data/user';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
-import { KNOWN_ENTITLEMENT_KEYS } from '@client/lib/entitlements/registry';
+import { KNOWN_ENTITLEMENT_KEYS } from '@bike4mind/server-utils/lib/entitlements/registry';
 
 // Available user tags for permissions (used in table display)
 // 'admin' access is handled via user.isAdmin property, not tags
@@ -77,6 +78,34 @@ const getModelVendor = (model: LLMModelConfig): string => {
 };
 
 const SEARCH_DEBOUNCE_MS = 250;
+
+const PINNED_LAYOUT = { height: '100%', overflow: 'hidden' } as const;
+
+// A pinned header taller than the viewport leaves the inner-scrolling table 0px tall, so pin only where
+// ~250-300px of rows fit below the tallest measured chrome (655px at md, 513px at lg); elsewhere the tab scrolls.
+export const llmDashboardRootSx = (theme: Theme) => ({
+  p: 2,
+  width: '100%',
+  display: 'flex',
+  flexDirection: 'column',
+  [`${theme.breakpoints.up('md')} and (min-height: 960px)`]: PINNED_LAYOUT,
+  [`${theme.breakpoints.up('lg')} and (min-height: 770px)`]: PINNED_LAYOUT,
+});
+
+// Joy's Table uses `table-layout: fixed`, so every column needs a pixel width for the
+// table to widen (and scroll) instead of letting the per-key "Allowed" cells overflow it.
+const ALLOWED_KEY_WIDTH_PX = 60;
+const ALLOWED_KEY_GAP_PX = 2;
+// The Allowed cells set their own 8px side padding (not Joy's theme default), plus a 12px inner indent.
+const ALLOWED_CELL_CHROME_PX = 28;
+// Room for the wrapped header label and the "none configured" placeholder.
+const ALLOWED_CELL_MIN_PX = 140;
+
+const allowedColumnWidth = (keyCount: number): number =>
+  Math.max(
+    ALLOWED_CELL_MIN_PX,
+    ALLOWED_CELL_CHROME_PX + keyCount * ALLOWED_KEY_WIDTH_PX + Math.max(keyCount - 1, 0) * ALLOWED_KEY_GAP_PX
+  );
 
 // `query` must already be lowercased and trimmed.
 const matchesSearch = (model: LLMModelConfig, query: string): boolean =>
@@ -467,7 +496,7 @@ const LLMDashboardTab: React.FC = () => {
   }
 
   return (
-    <Sheet sx={{ p: 2, width: '100%', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <Sheet data-testid="llm-dashboard-root" sx={llmDashboardRootSx}>
       <Box sx={{ flexShrink: 0 }}>
         <Alert variant="soft" color="primary" sx={{ mb: 3 }} startDecorator={<SecurityIcon />}>
           <Typography level="body-sm">
@@ -529,7 +558,13 @@ const LLMDashboardTab: React.FC = () => {
           spacing={2}
           sx={{ mb: 3 }}
         >
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ xs: 'stretch', sm: 'center' }}>
+          <Stack
+            direction={{ xs: 'column', sm: 'row' }}
+            spacing={2}
+            alignItems={{ xs: 'stretch', sm: 'center' }}
+            flexWrap="wrap"
+            useFlexGap
+          >
             <Input
               size="sm"
               placeholder="Search models"
@@ -663,8 +698,8 @@ const LLMDashboardTab: React.FC = () => {
       </Box>
 
       {/* Models Table */}
-      <Sheet sx={{ flex: 1, minHeight: 0, overflow: 'auto', overflowX: { xs: 'auto', sm: 'visible' } }}>
-        <Table aria-label="LLM Models table" stickyHeader hoverRow sx={{ minWidth: { xs: '800px', sm: 'auto' } }}>
+      <Sheet sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+        <Table aria-label="LLM Models table" stickyHeader hoverRow>
           <thead style={{ backgroundColor: theme.palette.background.level1 }}>
             {/* Headers */}
             <tr>
@@ -690,7 +725,7 @@ const LLMDashboardTab: React.FC = () => {
               </th>
               <th
                 style={{
-                  width: '15%',
+                  width: '180px',
                   verticalAlign: 'top',
                   cursor: 'pointer',
                   position: 'sticky',
@@ -714,7 +749,7 @@ const LLMDashboardTab: React.FC = () => {
               </th>
               <th
                 style={{
-                  width: '7.5%',
+                  width: '100px',
                   verticalAlign: 'top',
                   cursor: 'pointer',
                   position: 'sticky',
@@ -738,7 +773,7 @@ const LLMDashboardTab: React.FC = () => {
               </th>
               <th
                 style={{
-                  width: '7.5%',
+                  width: '110px',
                   verticalAlign: 'top',
                   cursor: 'pointer',
                   position: 'sticky',
@@ -762,7 +797,7 @@ const LLMDashboardTab: React.FC = () => {
               </th>
               <th
                 style={{
-                  width: '7.5%',
+                  width: '130px',
                   verticalAlign: 'top',
                   cursor: 'pointer',
                   position: 'sticky',
@@ -786,7 +821,7 @@ const LLMDashboardTab: React.FC = () => {
               </th>
               <th
                 style={{
-                  width: '5%',
+                  width: '90px',
                   verticalAlign: 'top',
                   cursor: 'pointer',
                   position: 'sticky',
@@ -812,7 +847,7 @@ const LLMDashboardTab: React.FC = () => {
               </th>
               <th
                 style={{
-                  width: '12%',
+                  width: '180px',
                   verticalAlign: 'top',
                   position: 'sticky',
                   top: 0,
@@ -823,7 +858,7 @@ const LLMDashboardTab: React.FC = () => {
               </th>
               <th
                 style={{
-                  width: '10%',
+                  width: '110px',
                   verticalAlign: 'top',
                   cursor: 'pointer',
                   position: 'sticky',
@@ -847,7 +882,7 @@ const LLMDashboardTab: React.FC = () => {
               </th>
               <th
                 style={{
-                  width: '10%',
+                  width: '110px',
                   verticalAlign: 'top',
                   cursor: 'pointer',
                   position: 'sticky',
@@ -872,11 +907,12 @@ const LLMDashboardTab: React.FC = () => {
               <th
                 style={{
                   verticalAlign: 'top',
-                  width: 'auto',
+                  width: allowedColumnWidth(allUsedTags.length),
                   position: 'sticky',
                   top: 0,
                   zIndex: 1001,
                   paddingLeft: '8px',
+                  paddingRight: '8px',
                 }}
               >
                 <Box
@@ -894,7 +930,7 @@ const LLMDashboardTab: React.FC = () => {
                       display: 'flex',
                       alignItems: 'center',
                       flexDirection: 'row',
-                      gap: 0.3,
+                      gap: `${ALLOWED_KEY_GAP_PX}px`,
                       justifyContent: 'flex-start',
                     }}
                   >
@@ -905,7 +941,8 @@ const LLMDashboardTab: React.FC = () => {
                           display: 'flex',
                           flexDirection: 'column',
                           alignItems: 'center',
-                          minWidth: '60px',
+                          width: ALLOWED_KEY_WIDTH_PX,
+                          flexShrink: 0,
                           textAlign: 'center',
                         }}
                       >
@@ -932,11 +969,12 @@ const LLMDashboardTab: React.FC = () => {
               <th
                 style={{
                   verticalAlign: 'top',
-                  width: 'auto',
+                  width: allowedColumnWidth(allEntitlementKeys.length),
                   position: 'sticky',
                   top: 0,
                   zIndex: 1001,
                   paddingLeft: '8px',
+                  paddingRight: '8px',
                 }}
               >
                 <Box sx={{ display: 'flex', flexDirection: 'column', paddingLeft: '12px' }}>
@@ -948,7 +986,7 @@ const LLMDashboardTab: React.FC = () => {
                       display: 'flex',
                       alignItems: 'center',
                       flexDirection: 'row',
-                      gap: 0.3,
+                      gap: `${ALLOWED_KEY_GAP_PX}px`,
                       justifyContent: 'flex-start',
                     }}
                   >
@@ -964,7 +1002,8 @@ const LLMDashboardTab: React.FC = () => {
                             display: 'flex',
                             flexDirection: 'column',
                             alignItems: 'center',
-                            minWidth: '60px',
+                            width: ALLOWED_KEY_WIDTH_PX,
+                            flexShrink: 0,
                             textAlign: 'center',
                           }}
                         >
@@ -1096,19 +1135,22 @@ const LLMDashboardTab: React.FC = () => {
                       : '-'}
                   </Typography>
                 </td>
-                <td style={{ paddingLeft: '8px' }}>
+                <td style={{ paddingLeft: '8px', paddingRight: '8px' }}>
                   <Box
                     sx={{
                       display: 'flex',
                       alignItems: 'center',
                       flexDirection: 'row',
-                      gap: 0.3,
+                      gap: `${ALLOWED_KEY_GAP_PX}px`,
                       justifyContent: 'flex-start',
                       paddingLeft: '12px',
                     }}
                   >
                     {allUsedTags.map(tag => (
-                      <Box key={tag.value} sx={{ display: 'flex', justifyContent: 'center', minWidth: '60px' }}>
+                      <Box
+                        key={tag.value}
+                        sx={{ display: 'flex', justifyContent: 'center', width: ALLOWED_KEY_WIDTH_PX, flexShrink: 0 }}
+                      >
                         <Tooltip title={`${tag.label} users can access this model`}>
                           <Checkbox
                             checked={model.allowedUserTags.includes(tag.value)}
@@ -1130,13 +1172,13 @@ const LLMDashboardTab: React.FC = () => {
                     ))}
                   </Box>
                 </td>
-                <td style={{ paddingLeft: '8px' }}>
+                <td style={{ paddingLeft: '8px', paddingRight: '8px' }}>
                   <Box
                     sx={{
                       display: 'flex',
                       alignItems: 'center',
                       flexDirection: 'row',
-                      gap: 0.3,
+                      gap: `${ALLOWED_KEY_GAP_PX}px`,
                       justifyContent: 'flex-start',
                       paddingLeft: '12px',
                     }}
@@ -1147,7 +1189,10 @@ const LLMDashboardTab: React.FC = () => {
                       // whitespace-padded value matches its (canonical) column key -
                       // toggling never leaves a near-duplicate behind.
                       return (
-                        <Box key={key} sx={{ display: 'flex', justifyContent: 'center', minWidth: '60px' }}>
+                        <Box
+                          key={key}
+                          sx={{ display: 'flex', justifyContent: 'center', width: ALLOWED_KEY_WIDTH_PX, flexShrink: 0 }}
+                        >
                           <Tooltip title={`Users entitled to "${key}" can access this model`}>
                             <Checkbox
                               checked={current.some(k => normalizeEntitlementKey(k) === key)}
@@ -1181,9 +1226,11 @@ const LLMDashboardTab: React.FC = () => {
         spacing={2}
         alignItems="center"
         justifyContent="space-between"
+        flexWrap="wrap"
+        useFlexGap
         sx={{ mt: 2, px: 1, flexShrink: 0 }}
       >
-        <Stack direction="row" spacing={1} alignItems="center">
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
           <Typography level="body-sm">Rows per page:</Typography>
           <Select
             value={rowsPerPage}
@@ -1196,12 +1243,12 @@ const LLMDashboardTab: React.FC = () => {
             <Option value={25}>25</Option>
             <Option value={50}>50</Option>
           </Select>
-          <Typography level="body-sm" sx={{ ml: 2 }}>
+          <Typography level="body-sm" sx={{ ml: { sm: 2 } }}>
             {startIndex + 1}-{Math.min(endIndex, filteredModels.length)} of {filteredModels.length} models
           </Typography>
         </Stack>
 
-        <Stack direction="row" spacing={1} alignItems="center">
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
           <Button
             size="sm"
             variant="plain"

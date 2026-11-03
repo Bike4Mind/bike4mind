@@ -12,8 +12,12 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { blockedAtZeroTierLimit } from '@server/middlewares/perUserRateLimit';
 // Direct file imports (NOT the @server/deepAgent barrel - its subtree pulls the
 // Lambda-runtime import graph, which deadlocks module init under Next dev).
-import { discardEnrolledMission, enrollMissionForAgent, listMissionsForAgent } from '@server/deepAgent/missions';
-import { canCreateMissions } from '@server/deepAgent/missionAccess';
+import {
+  discardEnrolledMission,
+  enrollMissionForAgent,
+  listMissionsForAgent,
+} from '@bike4mind/server-utils/deepAgent/missions';
+import { canCreateMissions } from '@bike4mind/server-utils/deepAgent/missionAccess';
 import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 import { runMissionFirstWake } from '@server/deepAgent/firstWake';
 

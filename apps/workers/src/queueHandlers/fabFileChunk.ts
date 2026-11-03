@@ -9,7 +9,7 @@ import {
   User,
   withTransaction,
 } from '@bike4mind/database';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { z } from 'zod';
 import { dataLakeService, fabFilesService, scopedSettingsService } from '@bike4mind/services';
 import { DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT } from '@bike4mind/common';
@@ -17,7 +17,11 @@ import { effectiveChunkTokenLimit, FabFileChunkSearchIndex } from '@bike4mind/fa
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
-import { dispatchWithLogger, MARK_PAUSED_MAX_ATTEMPTS, MARK_PAUSED_RETRY_DELAY_MS } from '@server/queueHandlers/utils';
+import {
+  dispatchWithLogger,
+  MARK_PAUSED_MAX_ATTEMPTS,
+  MARK_PAUSED_RETRY_DELAY_MS,
+} from '@bike4mind/server-utils/queueHandlers/utils';
 import {
   finalizeBatchIfComplete,
   completedBatchStatus,

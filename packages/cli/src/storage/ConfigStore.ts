@@ -123,6 +123,7 @@ const AuthTokensSchema = z.object({
  */
 const ApiConfigSchema = z.object({
   customUrl: z.url().optional(),
+  endpointChosen: z.boolean().optional(),
 });
 
 /**
@@ -322,6 +323,7 @@ const CliConfigSchema = z.object({
   fallbackModels: z.array(z.string()).optional(),
   ollamaHost: z.string().optional(),
   localDefaultModel: z.string().optional(),
+  modelServerCredentials: z.record(z.string(), z.object({ secret: z.string() })).optional(),
 });
 
 /**
@@ -960,7 +962,7 @@ export class ConfigStore {
           // pass still applies to the current session and the stamp simply stays behind, so
           // the migration retries on the next launch rather than being silently skipped.
           try {
-            await fs.writeFile(this.configPath, JSON.stringify(rawConfig, null, 2), 'utf-8');
+            await this.writeConfigFile(JSON.stringify(rawConfig, null, 2));
           } catch {
             // Intentionally ignored - see above.
           }
@@ -1350,13 +1352,84 @@ export class ConfigStore {
       changed(key) || (disk[key] !== undefined && typeof disk[key] !== 'string')
         ? next[key]
         : (disk[key] as string | undefined);
+    const credentials = CliConfigSchema.shape.modelServerCredentials.safeParse(disk.modelServerCredentials);
     return {
       ...next,
       defaultModel:
         changed('defaultModel') || typeof disk.defaultModel !== 'string' ? next.defaultModel : disk.defaultModel,
       ollamaHost: optional('ollamaHost'),
       localDefaultModel: optional('localDefaultModel'),
+      modelServerCredentials:
+        patch !== undefined &&
+        Object.prototype.hasOwnProperty.call(patch, 'modelServerCredentials') &&
+        (!wholeConfig || patch.modelServerCredentials !== snapshot.modelServerCredentials)
+          ? next.modelServerCredentials
+          : credentials.success
+            ? credentials.data
+            : next.modelServerCredentials,
     };
+  }
+
+  /** The saved credentials as the file has them now, not as this store loaded them. */
+  async readModelServerCredentials(): Promise<Record<string, { secret: string }>> {
+    try {
+      return await this.readModelServerCredentialsStrict();
+    } catch (error) {
+      logger.debug(
+        `Could not read model server credentials: ${error instanceof Error ? error.message : String(error)}`
+      );
+      return {};
+    }
+  }
+
+  /** Throws when the file exists but cannot be read, so a write never replaces credentials it failed to read. */
+  private async readModelServerCredentialsStrict(): Promise<Record<string, { secret: string }>> {
+    let text: string;
+    try {
+      text = await fs.readFile(this.configPath, 'utf-8');
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return {};
+      throw error;
+    }
+    const raw: unknown = JSON.parse(text);
+    const parsed = z.object({ modelServerCredentials: CliConfigSchema.shape.modelServerCredentials }).safeParse(raw);
+    if (!parsed.success) throw new Error(`${this.configPath} has malformed model server credentials.`);
+    return parsed.data.modelServerCredentials ?? {};
+  }
+
+  /** Writes through a 0600 temp file and a rename, so a reader in another process never sees a half-written file. */
+  private async writeConfigFile(contents: string): Promise<void> {
+    // Rename onto the link's target, so a symlinked config stays a symlink.
+    const target = await fs.realpath(this.configPath).catch(() => this.configPath);
+    const temp = `${target}.${process.pid}.${uuidv4()}.tmp`;
+    try {
+      await fs.writeFile(temp, contents, { encoding: 'utf-8', mode: 0o600 });
+      await fs.rename(temp, target);
+    } catch (error) {
+      await fs.rm(temp, { force: true });
+      throw error;
+    }
+  }
+
+  /** Reloads from the file so the write below carries what other processes saved (a refreshed sign-in token). */
+  private async reloadFromDisk(): Promise<void> {
+    this.config = null;
+    this.globalConfig = null;
+    await this.load();
+  }
+
+  /** Read-modify-write against the file, so a login in another terminal is not undone. */
+  async setModelServerCredential(serverId: string, secret: string): Promise<void> {
+    await this.reloadFromDisk();
+    const current = await this.readModelServerCredentialsStrict();
+    await this.save({ modelServerCredentials: { ...current, [serverId]: { secret } } });
+  }
+
+  async clearModelServerCredential(serverId: string): Promise<void> {
+    await this.reloadFromDisk();
+    const { [serverId]: removed, ...rest } = await this.readModelServerCredentialsStrict();
+    void removed;
+    await this.save({ modelServerCredentials: rest });
   }
 
   /**
@@ -1433,7 +1506,7 @@ export class ConfigStore {
 
     try {
       // Persist ONLY the global layer, never the merged effective config.
-      await fs.writeFile(this.configPath, JSON.stringify(this.globalConfig, null, 2), 'utf-8');
+      await this.writeConfigFile(JSON.stringify(this.globalConfig, null, 2));
 
       // Set secure permissions (0600 - only owner can read/write)
       // This protects auth tokens and API keys from other users
@@ -1635,7 +1708,16 @@ export class ConfigStore {
   async setCustomApiUrl(url: string | null): Promise<void> {
     await this.load();
     // Reset to the build-time default service (null) or set a self-hosted URL.
-    this.globalConfig!.apiConfig = url === null ? undefined : { customUrl: url };
+    this.globalConfig!.apiConfig = url === null ? { endpointChosen: true } : { customUrl: url, endpointChosen: true };
+    await this.save();
+  }
+
+  /** Record that a backend was chosen, so the first-run picker is not shown again. */
+  async markEndpointChosen(): Promise<void> {
+    await this.load();
+    const g = this.globalConfig!;
+    if (g.apiConfig?.endpointChosen) return;
+    g.apiConfig = { ...g.apiConfig, endpointChosen: true };
     await this.save();
   }
 
@@ -1665,13 +1747,13 @@ export class ConfigStore {
     let newApiConfig: CliConfig['apiConfig'];
     if (target === 'prod') {
       newUrl = getDefaultApiUrl();
-      newApiConfig = undefined;
+      newApiConfig = { endpointChosen: true };
     } else if (target === 'dev') {
       newUrl = LOCAL_DEV_URL;
-      newApiConfig = { customUrl: LOCAL_DEV_URL };
+      newApiConfig = { customUrl: LOCAL_DEV_URL, endpointChosen: true };
     } else {
       newUrl = target.customUrl;
-      newApiConfig = { customUrl: target.customUrl };
+      newApiConfig = { customUrl: target.customUrl, endpointChosen: true };
     }
     const envName = getEnvironmentName(newApiConfig);
 
@@ -1679,6 +1761,10 @@ export class ConfigStore {
 
     // No-op when already pointed at the requested environment - leave auth alone.
     if (!swap.changed) {
+      if (!g.apiConfig?.endpointChosen) {
+        g.apiConfig = newApiConfig;
+        await this.save();
+      }
       return { url: newUrl, envName, changed: false, authenticated: isAuthTokenValid(g.auth) };
     }
 

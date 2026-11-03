@@ -385,6 +385,7 @@ async function recordEmbeddingUsage(
         inputTokens: queryTokens,
         costUsd: getEmbeddingModelCost(embeddingModel, queryTokens),
         source: 'system',
+        apiKeyId: context.apiKeyId,
       },
       {
         db: {

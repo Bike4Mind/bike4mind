@@ -25,6 +25,7 @@ import AnalyticsTab from './Analytics';
 import UsersTab from './Users';
 import dynamic from 'next/dynamic';
 import AdminSubscriptions from './Subscriptions';
+import AdminRevenue from './Revenue';
 import OrganizationsTab from './OrganizationsTab';
 import CreditAnalyticsTab from './CreditAnalysis';
 import SecretsRotationTab from './SecretsRotationTab';
@@ -65,14 +66,16 @@ const AgentExecutionsTab = dynamic(() => import('./AgentExecutionsTab'), { ssr: 
 const WaitlistTab = dynamic(() => import('./WaitlistTab'), { ssr: false });
 const SignupDomainHoldsTab = dynamic(() => import('./SignupDomainHoldsTab'), { ssr: false });
 const SignupRiskReviewTab = dynamic(() => import('./SignupRiskReviewTab'), { ssr: false });
+const ShadowDetectionsTab = dynamic(() => import('./ShadowDetectionsTab'), { ssr: false });
 const HeldSignupGrantsTab = dynamic(() => import('./HeldSignupGrantsTab'), { ssr: false });
 const PartnerSignupRulesTab = dynamic(() => import('./PartnerSignupRulesTab'), { ssr: false });
 const OAuthClientsTab = dynamic(() => import('./OAuthClientsTab'), { ssr: false });
+const PreferenceArenaTab = dynamic(() => import('./PreferenceArenaTab'), { ssr: false });
 const AdminGrowthPricingTab = dynamic(() => import('./AdminGrowthPricingTab'), { ssr: false });
 const ModelMetricsTab = dynamic(() => import('./ModelMetrics'), { ssr: false });
 const ModelLifecycleTab = dynamic(() => import('./ModelLifecycleTab'), { ssr: false });
 const EventMetricsTab = dynamic(() => import('./EventMetrics'), { ssr: false });
-const SecurityDashboardMock = dynamic(() => import('./SecurityDashboardMock'), { ssr: false });
+const SecurityDashboard = dynamic(() => import('./SecurityDashboard'), { ssr: false });
 const Team = lazy(() => import('./Team'));
 const SlackWorkspacesTab = dynamic(() => import('./SlackWorkspacesTab'), { ssr: false });
 const SlackMetricsPage = dynamic(() => import('./SlackMetrics'), { ssr: false });
@@ -152,6 +155,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.GrowthPricing} sx={{ padding: 0 }}>
             {activeTab === AdminTab.GrowthPricing && <AdminGrowthPricingTab />}
           </TabPanel>
+          <TabPanel value={AdminTab.PreferenceArena} sx={{ padding: 0 }}>
+            {activeTab === AdminTab.PreferenceArena && <PreferenceArenaTab />}
+          </TabPanel>
           <TabPanel value={AdminTab.AdminSettings} sx={{ padding: 0 }}>
             {activeTab === AdminTab.AdminSettings && <AdminSettingsTab />}
           </TabPanel>
@@ -192,12 +198,16 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.SignupRiskReview} sx={{ padding: 0 }}>
             {activeTab === AdminTab.SignupRiskReview && <SignupRiskReviewTab />}
           </TabPanel>
+          <TabPanel value={AdminTab.ShadowDetections} sx={{ padding: 0 }}>
+            {activeTab === AdminTab.ShadowDetections && <ShadowDetectionsTab />}
+          </TabPanel>
           <TabPanel value={AdminTab.HeldSignupGrants} sx={{ padding: 0 }}>
             {activeTab === AdminTab.HeldSignupGrants && <HeldSignupGrantsTab />}
           </TabPanel>
           <TabPanel value={AdminTab.PartnerSignupRules} sx={{ padding: 0 }}>
             {activeTab === AdminTab.PartnerSignupRules && <PartnerSignupRulesTab />}
           </TabPanel>
+          <TabPanel value={AdminTab.Revenue}>{activeTab === AdminTab.Revenue && <AdminRevenue />}</TabPanel>
           <TabPanel value={AdminTab.Subscriptions}>
             {activeTab === AdminTab.Subscriptions && <AdminSubscriptions />}
           </TabPanel>
@@ -259,7 +269,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
             {activeTab === AdminTab.VoiceSettings && <VoiceSettingsTab />}
           </TabPanel>
           <TabPanel value={AdminTab.SecurityDashboard}>
-            {activeTab === AdminTab.SecurityDashboard && <SecurityDashboardMock />}
+            {activeTab === AdminTab.SecurityDashboard && <SecurityDashboard />}
           </TabPanel>
           <TabPanel value={AdminTab.Team}>{activeTab === AdminTab.Team && <Team />}</TabPanel>
           <TabPanel value={AdminTab.SystemHealth}>

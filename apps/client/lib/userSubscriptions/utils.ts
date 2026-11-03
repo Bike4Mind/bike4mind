@@ -1,5 +1,9 @@
 import { SUBSCRIPTION_PLANS, SUBSCRIPTION_PLANS_MAP, TEAM_PLAN } from '@client/lib/userSubscriptions/constants';
-import { SubscriptionPlanDetail, SubscriptionPlanInterval, UserSubscriptionTier } from './types';
+import {
+  SubscriptionPlanDetail,
+  SubscriptionPlanInterval,
+  UserSubscriptionTier,
+} from '@bike4mind/server-utils/lib/userSubscriptions/types';
 
 export function getIntervalLabel(interval: SubscriptionPlanInterval) {
   switch (interval) {

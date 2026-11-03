@@ -23,6 +23,12 @@ export interface InstalledModel {
   modifiedAt: string | null;
   /** All false when the runtime does not report capabilities; false means "not reported", not "absent". */
   capabilities: ModelCapabilities;
+  /** The context the server runs this model with (vLLM's `max_model_len`), when it says. */
+  contextLength?: number;
+  /** Other names the server answers to for this same model, such as vLLM's extra `--served-model-name`s. */
+  aliases?: string[];
+  /** A LoRA adapter's base model, by the name this list shows it under. */
+  baseModel?: string;
 }
 
 /** Attention layers that share one KV layout. */
@@ -124,6 +130,8 @@ export interface ModelContents {
   draftBlobs?: (string | null)[];
   /** ADAPTER lines; curated builds do not accept adapters, including unreadable paths. */
   adapterBlobs?: (string | null)[];
+  /** The runtime's model folder on its own disk, from the weights' blob path; null when the path does not show it. */
+  storeDir?: string | null;
 }
 
 export interface InspectOptions {

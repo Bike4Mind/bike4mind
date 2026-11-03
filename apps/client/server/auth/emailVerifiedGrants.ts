@@ -9,6 +9,7 @@ import type { INetworkMeta } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { userService } from '@bike4mind/services';
 import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
+import { requestRiskEvidenceRefresh } from '@server/auth/riskEvidence';
 import { applySignupDomainGrant, type SignupDomainGrantResult } from '@server/entitlements/signupDomainGrant';
 import type { SeatCeilingRaiseTrigger } from '@server/organizations/notifySeatCeilingRaised';
 import { createSignupGrantRiskCollector } from '@bike4mind/server-utils/auth/signupGrantRisk';
@@ -145,6 +146,7 @@ export async function applyEmailVerifiedGrants(params: {
     logger.error(`Domain signup grant (${trigger}) failed for user ${user.id}`, error);
   }
   await refreshSignupRiskScore(user.id, logger);
+  await requestRiskEvidenceRefresh(user.id, 'email_verified', logger);
   return {
     creditsGranted: release.creditsGranted + domainGrant.creditsGranted,
     currentCredits: domainGrant.currentCredits ?? release.currentCredits,

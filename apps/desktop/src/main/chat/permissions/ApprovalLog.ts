@@ -10,9 +10,13 @@ export type ApprovalLogEntry = {
   sessionId: string;
   sessionTitle?: string;
   mode?: ChatApprovalMode;
+  /** The project folder the session belongs to, so a summary can group by project. */
+  project?: string;
   tool: string;
   /** See summarizeToolInput. */
   input: string;
+  /** What "always allow" would remember for each sub-command (`git commit *`), redacted like `input`. */
+  patterns?: string[];
   approval: ChatToolApproval;
 };
 
@@ -45,7 +49,7 @@ export class ApprovalLog {
   private chain: Promise<void> = Promise.resolve();
 
   constructor(
-    private readonly filePath: string,
+    readonly filePath: string,
     private readonly warn: (message: string) => void,
     private readonly maxBytes: number = DEFAULT_MAX_BYTES
   ) {}

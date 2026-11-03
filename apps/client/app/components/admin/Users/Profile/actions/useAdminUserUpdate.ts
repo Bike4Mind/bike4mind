@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
-import type { IUser } from '@bike4mind/common';
+import type { IUser, ThrottleTier } from '@bike4mind/common';
 import { updateUserToServer } from '@client/app/utils/userAPICalls';
 import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
 
@@ -10,6 +10,8 @@ export type AdminUserUpdate = Partial<IUser> & {
   creditDelta?: number;
   creditReason?: string;
   roleChangeReason?: string;
+  throttleTier?: ThrottleTier;
+  throttleReason?: string;
   statusChangeReason?: string;
 };
 

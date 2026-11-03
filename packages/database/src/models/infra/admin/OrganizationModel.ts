@@ -293,6 +293,24 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
     );
   }
 
+  /** Same contract as UserRepository.decrementCreditsFloored, against the org pool. */
+  async decrementCreditsFloored(organizationId: string, credits: number): Promise<number> {
+    const available = { $max: [{ $ifNull: ['$currentCredits', 0] }, 0] };
+    const before = await this.organizationModel.findOneAndUpdate(
+      { _id: organizationId },
+      [
+        {
+          $set: {
+            currentCredits: { $subtract: [{ $ifNull: ['$currentCredits', 0] }, { $min: [credits, available] }] },
+          },
+        },
+      ],
+      { new: false, projection: { currentCredits: 1 } }
+    );
+    if (!before) return 0;
+    return Math.min(credits, Math.max(before.currentCredits ?? 0, 0));
+  }
+
   /**
    * Atomically add a member and raise the seat ceiling to fit, in ONE updateOne
    * (aggregation pipeline) - the domain-signup auto-add path for orgs NOT billed through Stripe

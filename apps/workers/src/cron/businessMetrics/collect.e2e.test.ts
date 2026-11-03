@@ -20,7 +20,7 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   }),
 }));
 import { collectBusinessMetrics } from './collect';
-import { Subscription } from '@server/models/Subscription';
+import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { deliverAnomalies, deliveryStore, subscriberMetric } from './deliver';
 import { BusinessMetricState } from '@bike4mind/database';
 

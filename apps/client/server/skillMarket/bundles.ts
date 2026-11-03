@@ -12,7 +12,7 @@ import {
   type ISkillListing,
 } from '@bike4mind/common';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
-import { marketVisibilityFilter, memberOrgIdsFor, type MarketActor } from './market';
+import { marketVisibilityFilter, memberOrgIdsFor, type MarketActor } from '@bike4mind/server-utils/skillMarket/market';
 
 /**
  * Org skill bundles (SkillBundleModel), managed by org admins and super-admins from the Team

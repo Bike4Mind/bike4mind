@@ -7,7 +7,7 @@ import { getClaudeBundleZipContract, type ISkillBundle } from '@bike4mind/common
 import { SkillBundle } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { NotFoundError } from '@server/utils/errors';
-import { memberOrgIdsFor } from '@server/skillMarket/market';
+import { memberOrgIdsFor } from '@bike4mind/server-utils/skillMarket/market';
 import { bundleZipFor } from '@server/skillMarket/claudeMarketplace';
 
 const handler = nextRouteForContract(getClaudeBundleZipContract).get(async (req, res) => {

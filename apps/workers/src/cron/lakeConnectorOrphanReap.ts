@@ -26,7 +26,7 @@ import {
 } from '@bike4mind/database';
 import { lakeConnectionOwnerOf } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { releaseDriveConnection } from '@server/integrations/google/drive/common';
+import { releaseDriveConnection } from '@bike4mind/server-utils/integrations/google/drive/common';
 import { releaseGitHubLakeConnection } from '@server/integrations/github/dataLake/githubLakeConnection';
 import { getGitHubLakeAppConfig } from '@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient';
 import { Config } from '@bike4mind/server-utils/utils/config';

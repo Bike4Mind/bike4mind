@@ -1,18 +1,15 @@
+import { TERMINAL_SUBSCRIPTION_STATUSES } from '@bike4mind/server-utils/lib/subscriptions/types';
 import {
-  DELINQUENT_SUBSCRIPTION_STATUSES,
-  SubscriptionSource,
-  TERMINAL_SUBSCRIPTION_STATUSES,
-} from '@bike4mind/server-utils/lib/subscriptions/types';
-import {
-  CHURNED_WINDOW_MS,
   RENEWS_WINDOW_MS,
   UNKNOWN_PLAN_FILTER,
   type AdminSubscriptionPlan,
   type AdminSubscriptionsFilter,
   type AdminSubscriptionsSortField,
-  type AdminSubscriptionsSummary,
 } from '@client/app/utils/adminSubscriptionsFilter';
 import { SUBSCRIPTION_PLANS, TEAM_PLAN } from '@client/lib/userSubscriptions/constants';
+import { cancelCondition } from './subscriptionViewConditions';
+
+export { viewConditions } from './subscriptionViewConditions';
 
 /**
  * Pure filter, view and sort builders for the admin subscriptions list. Plain objects only, so they
@@ -24,7 +21,6 @@ type Condition = Record<string, unknown>;
 export type PlanCatalog = ReadonlyMap<string, Pick<AdminSubscriptionPlan, 'name' | 'interval'>>;
 
 const TERMINAL = [...TERMINAL_SUBSCRIPTION_STATUSES];
-const DELINQUENT = [...DELINQUENT_SUBSCRIPTION_STATUSES];
 
 /**
  * Every price checkout sells, individual and Team. Price ids come from env per stage and are empty
@@ -54,13 +50,6 @@ function renewsCondition(renews: NonNullable<AdminSubscriptionsFilter['renews']>
   const live = { status: { $nin: TERMINAL } };
   if (renews === 'overdue') return { ...live, periodEndsAt: { $lt: now } };
   return { ...live, periodEndsAt: { $gte: now, $lt: new Date(now.getTime() + RENEWS_WINDOW_MS[renews]) } };
-}
-
-// Stripe's canceled_at, stored verbatim on the row, is set when a cancel is requested; the Stripe
-// subscription-updated handler in apps/workers reads a pending cancel the same way.
-function cancelCondition(cancel: NonNullable<AdminSubscriptionsFilter['cancel']>, now: Date): Condition {
-  if (cancel === 'scheduled') return { status: { $nin: TERMINAL }, canceledAt: { $ne: null } };
-  return { canceledAt: { $gte: new Date(now.getTime() - CHURNED_WINDOW_MS) } };
 }
 
 export type SearchKind = 'subscriptionId' | 'customerId' | 'objectId' | 'text';
@@ -108,19 +97,6 @@ export function buildAdminSubscriptionsMatch(filter: AdminSubscriptionsFilter, c
   if (filter.cancel) conditions.push(cancelCondition(filter.cancel, context.now));
   if (conditions.length === 0) return {};
   return conditions.length === 1 ? conditions[0] : { $and: conditions };
-}
-
-/**
- * The built-in views' conditions. Must stay in sync with the views table in
- * docs/admin-subscriptions-spec.md section 5.1 and the list page's view definitions.
- */
-export function viewConditions(now: Date): Record<keyof AdminSubscriptionsSummary['views'], Condition> {
-  return {
-    paying: { source: SubscriptionSource.Stripe, status: { $in: ['active', 'past_due'] } },
-    pastDue: { status: { $in: DELINQUENT } },
-    comped: { source: SubscriptionSource.AdminGrant, status: { $nin: TERMINAL } },
-    churned: { status: 'canceled', canceledAt: { $gte: new Date(now.getTime() - CHURNED_WINDOW_MS) } },
-  };
 }
 
 /** Always tie-broken on `_id`, so a page boundary never repeats or skips a row. */

@@ -14,12 +14,12 @@ import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
 import { AdminSettings, slackDevWorkspaceRepository } from '@bike4mind/database';
 import { SecopsTriageConfigSchema, SECOPS_TRIAGE_SCAN_SOURCES } from '@bike4mind/common';
-import { GitHubService } from '@server/services/githubService';
+import { GitHubService } from '@bike4mind/server-utils/services/githubService';
 import { createSecopsTriageService } from '@workers/services/secopsTriageService';
 import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { Resource } from 'sst';
 
 const CLOUDWATCH_NAMESPACE = 'Lumina5/SecOpsTriage';

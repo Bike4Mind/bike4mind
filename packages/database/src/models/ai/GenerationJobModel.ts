@@ -29,6 +29,7 @@ const GenerationJobSchema = new Schema<IGenerationJobDocument>(
     ownerType: { type: String, enum: [CreditHolderType.User, CreditHolderType.Organization], required: true },
     ownerId: { type: String, required: true },
     requestedBy: { type: String, required: true },
+    apiKeyId: { type: String },
     source: { type: String, enum: [...GENERATION_JOB_SOURCES], required: true },
     state: { type: String, enum: [...GENERATION_JOB_STATES], required: true },
     // Kind-specific; validated by the kind's Zod schemas at the service boundary, not by Mongoose.

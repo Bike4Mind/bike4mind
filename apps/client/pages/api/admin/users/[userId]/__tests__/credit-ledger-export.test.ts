@@ -225,8 +225,27 @@ describe('GET /api/admin/users/[userId]/credit-ledger-export', () => {
     await promise;
 
     const [header, api, chat] = lines(res);
-    expect(header.endsWith('"Admin note","Request id","Quest id"')).toBe(true);
-    expect(api.endsWith(',"completion-k1-1",""')).toBe(true);
-    expect(chat.endsWith(',"","q-42"')).toBe(true);
+    expect(header).toContain('"Admin note","Request id","Quest id"');
+    expect(api).toContain(',"completion-k1-1","",');
+    expect(chat).toContain(',"","q-42",');
+  });
+
+  it('appends cache tokens, the session and the tools called after the request and quest ids', async () => {
+    h.findLedgerPage.mockResolvedValue([
+      doc(1, {
+        type: 'completion_api_usage',
+        credits: -183,
+        sessionId: 'desktop-session-1',
+        cacheReadTokens: 180000,
+        cacheWriteTokens: 12000,
+        metadata: { requestId: 'r-1', toolNames: ['read_file', 'bash'] },
+      }),
+    ]);
+    const { res, promise } = run();
+    await promise;
+
+    const [header, api] = lines(res);
+    expect(header.endsWith('"Quest id","Cache read tokens","Cache write tokens","Session id","Tools"')).toBe(true);
+    expect(api.endsWith(',"r-1","",180000,12000,"desktop-session-1","read_file bash"')).toBe(true);
   });
 });

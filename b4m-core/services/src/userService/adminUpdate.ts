@@ -10,6 +10,7 @@ import {
 import {
   ConflictError,
   MAX_STORAGE_LIMIT_MB,
+  THROTTLE_TIERS,
   resolveUserStorageLimit,
   CreditHolderType,
   ICreditTransactionRepository,
@@ -70,6 +71,10 @@ export const adminUpdateUserSchema = updateUserSchema.extend({
   // Why the admin role is being granted or revoked. Not a user-doc field: the route records it on
   // the audit entry, and it is stripped from the doc write here.
   roleChangeReason: z.string().max(500).optional(),
+  // Restricted-tier change. Not user-doc fields: the route applies them via `setThrottleTier`
+  // (the only writer of `throttle`) and audits them, so they are stripped from the doc write here.
+  throttleTier: z.enum(THROTTLE_TIERS).optional(),
+  throttleReason: z.string().max(500).optional(),
   // Why `isBanned` or `isModerated` is changing. Like `roleChangeReason`, audit-only and stripped here.
   statusChangeReason: z.string().max(500).optional(),
 });
@@ -177,6 +182,8 @@ export async function adminUpdateUser(
     creditReason,
     creditDelta: signedDelta,
     roleChangeReason,
+    throttleTier: _throttleTier,
+    throttleReason: _throttleReason,
     statusChangeReason,
     ...baseParams
   } = params;
@@ -203,9 +210,6 @@ export async function adminUpdateUser(
   const creditDelta = rawDelta < 0 ? Math.max(rawDelta, -previousBalance) : rawDelta;
   const note = creditReason?.trim() || undefined;
 
-  // Stamp a purchase timestamp only for a net grant: a deduction is not a purchase, and carrying
-  // the field on every other admin save would $set the read snapshot back over a concurrent
-  // purchase stamp (addCredits only stamps for type === 'purchase', so an admin grant needs this).
   const requestedOverride =
     params.storageLimitOverride !== undefined ? params.storageLimitOverride : params.storageLimit;
   const storageParams =
@@ -218,10 +222,22 @@ export async function adminUpdateUser(
           }).limitMb,
         }
       : {};
+  // The stamp confers paid standing, which an admin comps with an `admin_grant` subscription, never
+  // with a credit adjustment alone. A net grant to an account with a purchase on the ledger re-stamps
+  // it: that is the repair for a purchase whose balance $inc (and so its stamp) never ran, which
+  // creditPurchaseReconciliation keeps flagging until the stamp is at least as new as the row.
+  const restoresPurchaseStamp =
+    creditDelta > 0 &&
+    (
+      await db.creditTransactions.findByOwnerWithFilters(params.id, CreditHolderType.User, {
+        transactionTypes: ['purchase'],
+        limit: 1,
+      })
+    ).length > 0;
   const builtParams = {
     ...baseParams,
     ...storageParams,
-    ...(creditDelta > 0 ? { lastCreditsPurchasedAt: new Date() } : {}),
+    ...(restoresPurchaseStamp ? { lastCreditsPurchasedAt: new Date() } : {}),
   };
   const builtUser = applyBaseUserUpdates(user, builtParams);
   // Persist ONLY the fields this request changed, never a spread of the read snapshot -

@@ -191,6 +191,20 @@ describe('redactUserSecretsForSelf', () => {
     }
   });
 
+  it('hides throttle and riskSignals from self views unless re-included via keepAdminOnly', () => {
+    const flagged = {
+      ...fullUser,
+      throttle: { tier: 'shadow', reason: 'r', source: 'admin', changedAt: new Date() },
+      riskSignals: [{ type: 'signup_honeypot', at: new Date() }],
+    } as unknown as IUser;
+    const self = redactUserSecretsForSelf(flagged)!;
+    expect('throttle' in self).toBe(false);
+    expect('riskSignals' in self).toBe(false);
+    const admin = redactUserSecretsForSelf(flagged, { keepAdminOnly: ['throttle', 'riskSignals'] })!;
+    expect(admin.throttle).toBeDefined();
+    expect(admin.riskSignals).toBeDefined();
+  });
+
   it('keeps non-secret profile fields', () => {
     const self = redactUserSecretsForSelf(fullUser)!;
     expect(self.name).toBe('Jane Doe');

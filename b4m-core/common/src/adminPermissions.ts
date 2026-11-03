@@ -9,6 +9,7 @@ export const ADMIN_PERMISSIONS = [
   'keys:revoke',
   'users:delete',
   'settings:manage',
+  'models:curate',
 ] as const;
 
 export const AdminPermissionSchema = z.enum(ADMIN_PERMISSIONS);

@@ -27,9 +27,6 @@ on:
       # .dockerignore now decides whether docs-site/docs reaches the builder, and the
       # client prebuild fails without it - an edit there can break the image on its own.
       - '.dockerignore'
-      # The docs are baked into the image by the same prebuild, so a docs-only edit changes
-      # what ships and has to revalidate it.
-      - 'docs-site/docs/**'
       # Root package.json and pnpm-workspace.yaml drive pnpm install and the turbo build graph in
       # this image, so a manifest-only edit that changes what gets built has to revalidate the image
       # even when the lockfile is unchanged.
@@ -42,6 +39,17 @@ on:
       # change can flip the image build's verdict.
       - '.env.selfhost.example'
       - '.github/workflows/selfhost-image.yml'
+      # Markdown under the trees above is documentation, not an image input, so it is
+      # negated after the positive globs. The two exceptions the image does ship are
+      # re-included below the negation, and so is docs-site/docs (the help prebuild
+      # reads it): order matters, a later positive pattern re-admits a negated path.
+      - '!**/*.md'
+      - '!**/*.mdx'
+      - 'apps/client/content/**'
+      - 'packages/cli/src/agents/defaults/**'
+      # The docs are baked into the image by the same prebuild, so a docs-only edit changes
+      # what ships and has to revalidate it.
+      - 'docs-site/docs/**'
   pull_request:
     paths:
       # The Dockerfile copies all of apps/ and turbo-builds every app but the client too.
@@ -68,6 +76,11 @@ on:
       # change can flip the image build's verdict.
       - '.env.selfhost.example'
       - '.github/workflows/selfhost-image.yml'
+      # Same markdown negation and re-includes as the push trigger above.
+      - '!**/*.md'
+      - '!**/*.mdx'
+      - 'apps/client/content/**'
+      - 'packages/cli/src/agents/defaults/**'
   workflow_dispatch:
 
 concurrency:

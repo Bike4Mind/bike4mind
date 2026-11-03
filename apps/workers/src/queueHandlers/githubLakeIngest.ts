@@ -18,7 +18,7 @@ import {
   orgGitHubLakeConnectionRepository,
 } from '@bike4mind/database';
 import { getSettingByName } from '@bike4mind/utils';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { isSettingEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import {

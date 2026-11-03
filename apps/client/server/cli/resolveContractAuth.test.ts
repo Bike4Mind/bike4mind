@@ -9,7 +9,7 @@ vi.mock('./auth', () => ({
 }));
 
 import { resolveContractAuth } from './resolveContractAuth';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 
 const headers = { authorization: 'Bearer b4m_live_key' };
 

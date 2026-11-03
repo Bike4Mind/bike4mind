@@ -4,15 +4,13 @@ import AddIcon from '@mui/icons-material/Add';
 import DownloadIcon from '@mui/icons-material/Download';
 import HistoryIcon from '@mui/icons-material/History';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
-import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { api } from '@client/app/contexts/ApiContext';
+import { useSignupAnomaly } from '@client/app/hooks/data/admin';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
+import { getServerErrorField } from '@client/app/utils/error';
 import type { AdminUsersListRow } from '@client/app/utils/adminUsersFilter';
 import type { AdminUsersBulkActionType, AdminUsersBulkTarget } from '@client/app/utils/adminUsersBulk';
-import type { SignupAnomalySnapshot } from '@client/app/utils/signupAnomaly';
 import type { SignupTimeseriesRange } from '@client/app/utils/signupSignals';
-import AdminProfileModal from '../AdminProfileModal';
 import {
   AdminPageHeader,
   DataTable,
@@ -57,6 +55,7 @@ const copyToClipboard = async (value: string, what: string) => {
 };
 
 function UserRowActions({ row, onOpen }: { row: AdminUsersListRow; onOpen: () => void }) {
+  const { email } = row;
   return (
     <Dropdown>
       <MenuButton
@@ -81,7 +80,7 @@ function UserRowActions({ row, onOpen }: { row: AdminUsersListRow; onOpen: () =>
           Open profile
         </MenuItem>
         <MenuItem onClick={() => copyToClipboard(row.id, 'User ID')}>Copy user ID</MenuItem>
-        {row.email && <MenuItem onClick={() => copyToClipboard(row.email ?? '', 'Email')}>Copy email</MenuItem>}
+        {email && <MenuItem onClick={() => copyToClipboard(email, 'Email')}>Copy email</MenuItem>}
       </Menu>
     </Dropdown>
   );
@@ -104,7 +103,7 @@ const UsersTab: React.FC = () => {
     value: search,
     debouncedValue: debouncedSearch,
     setValue: setSearch,
-  } = useDebounceValue(useUsersTab.getState().params.search ?? '');
+  } = useDebounceValue(useUsersTab.getState().params.search);
   useEffect(() => {
     if (debouncedSearch === params.search) return;
     setParams({ search: debouncedSearch, page: 1 });
@@ -113,12 +112,7 @@ const UsersTab: React.FC = () => {
   const usersQuery = useAdminUsersList(params);
   const groupsQuery = useAdminUsersDomainGroups(params);
   const summaryQuery = useAdminUsersSummary();
-  const anomalyQuery = useQuery({
-    queryKey: ['admin-signup-anomaly'],
-    queryFn: async () => (await api.get<SignupAnomalySnapshot>('/api/admin/signup-anomaly')).data,
-    staleTime: 60_000,
-    refetchInterval: 60_000,
-  });
+  const anomalyQuery = useSignupAnomaly();
 
   const rows = useMemo(() => usersQuery.data?.users ?? [], [usersQuery.data]);
   const totalUsers = usersQuery.data?.totalUsers ?? 0;
@@ -317,7 +311,7 @@ const UsersTab: React.FC = () => {
             getRowId={row => row.id}
             rowTestId={row => `admin-users-row-${row.id}`}
             loading={usersQuery.isLoading}
-            error={usersQuery.isError ? 'Could not load users.' : undefined}
+            error={usersQuery.isError ? (getServerErrorField(usersQuery.error) ?? 'Could not load users.') : undefined}
             onRetry={() => usersQuery.refetch()}
             empty={
               hasFilters ? (
@@ -366,7 +360,6 @@ const UsersTab: React.FC = () => {
         </>
       )}
 
-      <AdminProfileModal />
       <ComplianceModal />
       <CreateUserModal />
       {/* Mounted only while open, so each run starts from a clean form and idempotency key. */}

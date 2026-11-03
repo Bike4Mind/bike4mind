@@ -49,7 +49,7 @@ vi.mock('@bike4mind/database', () => ({
   activityRepository: {},
   User: { findByIdAndUpdate: h.findByIdAndUpdate },
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@bike4mind/services', () => ({
   sessionService: {

@@ -59,8 +59,8 @@ vi.mock('@bike4mind/database', () => ({
   Session: {},
   User: {},
 }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://x' } } }));
 
 import '@pages/api/invites/[id]/accept';

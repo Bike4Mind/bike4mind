@@ -213,6 +213,36 @@ class AuthFailLogRepository extends BaseRepository<IAuthFailLogDocument> {
     return result;
   }
 
+  /** Like getIPsWithHighAttempts, but counting only rows whose `reason` and `strategy` are listed. */
+  async getIPsWithHighAttemptsForReasons(
+    since: Date,
+    minAttempts: number,
+    reasons: readonly string[],
+    strategies: readonly string[]
+  ): Promise<IIPsWithHighAttempts[]> {
+    return this.model.aggregate<IIPsWithHighAttempts>([
+      { $match: { createdAt: { $gte: since }, reason: { $in: reasons }, strategy: { $in: strategies } } },
+      { $group: { _id: '$ip', attempts: { $sum: 1 } } },
+      { $match: { attempts: { $gte: minAttempts } } },
+      { $project: { _id: 0, ip: '$_id', attempts: 1 } },
+    ]);
+  }
+
+  /** Rows for one IP since `since` whose `reason` and `strategy` are listed. */
+  async countForIPAndReasons(
+    ip: string,
+    since: Date,
+    reasons: readonly string[],
+    strategies: readonly string[]
+  ): Promise<number> {
+    return this.model.countDocuments({
+      ip,
+      createdAt: { $gte: since },
+      reason: { $in: reasons },
+      strategy: { $in: strategies },
+    });
+  }
+
   /**
    * Count failed login attempts for a specific IP within a time window
    * Used for auto-blocking evaluation during authentication

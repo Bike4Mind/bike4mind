@@ -47,7 +47,7 @@ const DEFAULT_MCP_TOOLS = [
   { name: 'notion_read_page', description: 'Read page content' },
 ];
 const mockInvokeMcpHandler = vi.fn();
-vi.mock('@server/utils/invokeMcpHandler', () => ({
+vi.mock('@bike4mind/server-utils/utils/invokeMcpHandler', () => ({
   invokeMcpHandler: (...args: unknown[]) => mockInvokeMcpHandler(...args),
 }));
 

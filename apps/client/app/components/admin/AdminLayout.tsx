@@ -25,6 +25,9 @@ const ADMIN_CONSOLE_PATH = '/admin';
 /** A user profile page belongs to the Users tab, so the sidebar highlights Users there. */
 export const isAdminUserProfilePath = (pathname: string) => pathname.startsWith('/admin/users/');
 
+/** Subscription detail pages (including the by-stripe resolver) belong to the Subscriptions tab. */
+export const isAdminSubscriptionDetailPath = (pathname: string) => pathname.startsWith('/admin/subscriptions/');
+
 type AdminLayoutProps = {
   children: ReactNode;
   /** Must match the flag `routes/admin/index.tsx` passes to AdminPage, which gates the same tab. */
@@ -54,7 +57,11 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
   const { collapsed, toggleCollapsed } = useAdminSidebarCollapsed();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  const activeTab = isAdminUserProfilePath(pathname) ? AdminTab.Users : storedActiveTab;
+  const activeTab = isAdminUserProfilePath(pathname)
+    ? AdminTab.Users
+    : isAdminSubscriptionDetailPath(pathname)
+      ? AdminTab.Subscriptions
+      : storedActiveTab;
 
   const selectTab = (tab: AdminTab) => {
     setDrawerOpen(false);

@@ -38,10 +38,14 @@ const youngVerifiedUser = (overrides: Partial<ApiKeyTrustSubject> = {}): ApiKeyT
   ...overrides,
 });
 
-const assess = (user: ApiKeyTrustSubject, options: { settings?: ApiKeyTrustSettings; hasActivePlan?: boolean } = {}) =>
+const assess = (
+  user: ApiKeyTrustSubject,
+  options: { settings?: ApiKeyTrustSettings; hasActivePlan?: boolean; honorAccountAge?: boolean } = {}
+) =>
   assessApiKeyTrust(user, {
     settings: options.settings ?? SETTINGS,
     hasActivePlan: async () => options.hasActivePlan ?? false,
+    honorAccountAge: options.honorAccountAge,
     now: NOW,
   });
 
@@ -72,10 +76,85 @@ describe('assessApiKeyTrust', () => {
     ['an active plan', youngVerifiedUser(), true],
     ['admin approval', youngVerifiedUser({ apiKeyTrustApproved: true }), false],
     ['account age at the threshold', youngVerifiedUser({ createdAt: new Date(NOW.getTime() - 7 * DAY_MS) }), false],
-    ['a legacy account with no createdAt', youngVerifiedUser({ createdAt: undefined }), false],
     ['a platform admin', youngVerifiedUser({ isAdmin: true, emailVerified: false }), false],
   ])('trusts %s', async (_label, user, hasActivePlan) => {
     expect(await assess(user, { hasActivePlan })).toEqual({ status: 'trusted' });
+  });
+
+  describe('an account with no createdAt', () => {
+    const objectIdAt = (ms: number) =>
+      Math.floor(ms / 1000)
+        .toString(16)
+        .padStart(8, '0') + '0'.repeat(16);
+
+    it('trusts it when the ObjectId is older than the minimum age', async () => {
+      const user = youngVerifiedUser({ createdAt: undefined, id: objectIdAt(NOW.getTime() - 30 * DAY_MS) });
+      expect(await assess(user)).toEqual({ status: 'trusted' });
+    });
+
+    it('does not trust it when the ObjectId is recent', async () => {
+      const user = youngVerifiedUser({ createdAt: undefined, id: objectIdAt(NOW.getTime() - DAY_MS) });
+      expect(await assess(user)).toMatchObject({ status: 'untrusted', reason: 'not_yet_trusted' });
+    });
+
+    it('falls back to the ObjectId when createdAt is unparseable', async () => {
+      const user = youngVerifiedUser({ createdAt: 'not-a-date', id: objectIdAt(NOW.getTime() - 30 * DAY_MS) });
+      expect(await assess(user)).toEqual({ status: 'trusted' });
+    });
+
+    it('treats an unparseable createdAt with no id as brand new, with a valid trustedAfter', async () => {
+      const result = await assess(youngVerifiedUser({ createdAt: 'not-a-date', id: undefined }));
+      expect(result).toMatchObject({ status: 'untrusted', reason: 'not_yet_trusted' });
+      if (result.status === 'untrusted' && result.reason === 'not_yet_trusted') {
+        expect(Number.isFinite(result.trustedAfter.getTime())).toBe(true);
+      }
+    });
+
+    it.each([[undefined], ['not-an-object-id']])('treats it as brand new when the id is %s', async id => {
+      const user = youngVerifiedUser({ createdAt: undefined, id });
+      expect(await assess(user)).toEqual({
+        status: 'untrusted',
+        reason: 'not_yet_trusted',
+        maxActiveKeys: 1,
+        trustedAfter: new Date(NOW.getTime() + 7 * DAY_MS),
+      });
+      expect(await assess(user, { hasActivePlan: true })).toEqual({ status: 'trusted' });
+    });
+  });
+
+  describe('with account age not counted', () => {
+    const oldFreeUser = () => youngVerifiedUser({ createdAt: new Date(NOW.getTime() - 365 * DAY_MS) });
+
+    it('keeps an old, free, unapproved account under the untrusted cap', async () => {
+      expect(await assess(oldFreeUser(), { honorAccountAge: false })).toEqual({
+        status: 'untrusted',
+        reason: 'paid_standing_required',
+        maxActiveKeys: 1,
+      });
+    });
+
+    it('gives a young free account the paid-standing reason, with no waiting date', async () => {
+      expect(await assess(youngVerifiedUser(), { honorAccountAge: false })).toEqual({
+        status: 'untrusted',
+        reason: 'paid_standing_required',
+        maxActiveKeys: 1,
+      });
+    });
+
+    it.each([
+      ['a past purchase', youngVerifiedUser({ lastCreditsPurchasedAt: new Date() }), false],
+      ['an active plan', youngVerifiedUser(), true],
+      ['admin approval', youngVerifiedUser({ apiKeyTrustApproved: true }), false],
+    ])('still trusts %s', async (_label, user, hasActivePlan) => {
+      expect(await assess(user, { hasActivePlan, honorAccountAge: false })).toEqual({ status: 'trusted' });
+    });
+
+    it('still refuses an unverified email first', async () => {
+      expect(await assess(youngVerifiedUser({ emailVerified: false }), { honorAccountAge: false })).toEqual({
+        status: 'untrusted',
+        reason: 'email_unverified',
+      });
+    });
   });
 
   it('skips the plan lookup when a cheap field already settles trust', async () => {
@@ -116,6 +195,17 @@ describe('describeApiKeyTrustRequirement', () => {
     });
     expect(message).toMatch(/^New accounts cannot create API keys yet\./);
   });
+
+  it('offers no waiting date when account age is not counted', () => {
+    const message = describeApiKeyTrustRequirement({
+      status: 'untrusted',
+      reason: 'paid_standing_required',
+      maxActiveKeys: 1,
+    });
+    expect(message).toBe(
+      'Free accounts may hold 1 active API key. To create more, purchase credits or a plan, or contact support.'
+    );
+  });
 });
 
 describe('untrustedOwnerMayMint', () => {
@@ -140,6 +230,12 @@ describe('untrustedOwnerMayMint', () => {
 
   it('refuses everything when the allowance is zero', () => {
     expect(untrustedOwnerMayMint(notYetTrusted(0), 0)).toBe(false);
+  });
+
+  it('applies the same allowance when paid standing is required', () => {
+    const paidStandingRequired = { status: 'untrusted', reason: 'paid_standing_required', maxActiveKeys: 1 } as const;
+    expect(untrustedOwnerMayMint(paidStandingRequired, 0)).toBe(true);
+    expect(untrustedOwnerMayMint(paidStandingRequired, 1)).toBe(false);
   });
 });
 
@@ -195,6 +291,23 @@ describe('createUserApiKey trust gate', () => {
       trustReason: 'not_yet_trusted',
       maxActiveKeys: 1,
       trustedAfter: '2026-10-29T00:00:00.000Z',
+    });
+  });
+
+  it('caps an account that needs paid standing at the untrusted allowance, with no waiting date', async () => {
+    const repo = makeRepo(vi.fn().mockResolvedValue('at_cap'));
+    const error = await mintError(
+      createUserApiKey(
+        'user-1',
+        params,
+        adapters(repo, { status: 'untrusted', reason: 'paid_standing_required', maxActiveKeys: 1 })
+      )
+    );
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(expect.anything(), 1, 'personal');
+    expect(error?.additionalInfo).toEqual({
+      errorCode: API_KEY_TRUST_REQUIRED_ERROR_CODE,
+      trustReason: 'paid_standing_required',
+      maxActiveKeys: 1,
     });
   });
 

@@ -1,5 +1,6 @@
 import type { Theme } from '@mui/joy/styles';
-import { grayAlpha, green, greenAlpha } from '@client/app/utils/themes/colors';
+import { alpha } from '@mui/system';
+import { gray, grayAlpha, green, greenAlpha } from '@client/app/utils/themes/colors';
 
 /**
  * The two chip styles gear rewards are drawn in, shared by the Gears page and
@@ -28,8 +29,25 @@ export const rewardGreen = (theme: Theme) => {
 };
 
 /**
- * The neutral frame: the page's locked and claimed markers, and the sidenav's
- * `Start here` tag.
+ * The primary blue outline of an invitation: the sidenav's `Start here` tag and
+ * the tags overlays put on their rows, so a nudge to explore reads apart from
+ * both the plain rows and the green Claim. White in light, so it sits on the
+ * active row's blue wash as a card; in dark, the chat area's deeper background
+ * under a faint blue wash, so it reads as cut into the sidebar.
+ */
+export const inviteBlue = (theme: Theme) => {
+  const { primary } = theme.palette;
+  const dark = theme.palette.mode === 'dark';
+  return {
+    ink: dark ? primary[300] : primary[500],
+    stroke: dark ? primary[400] : primary[500],
+    fill: dark ? theme.palette.background.body : gray[0],
+    wash: dark ? `linear-gradient(135deg, ${alpha(primary[400], 0.22)}, ${alpha(primary[400], 0.04)})` : 'none',
+  };
+};
+
+/**
+ * The neutral frame: the Gears page's locked and claimed markers.
  */
 export const neutralFrame = (theme: Theme) => ({
   backgroundColor: grayAlpha[150][10],
