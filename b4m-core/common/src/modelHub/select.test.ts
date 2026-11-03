@@ -214,25 +214,30 @@ describe('pickForMachine decode speed', () => {
     expect(alternates.map(c => c.entry.id)).toEqual(['embed-small']);
   });
 
-  it('compares a candidate without an estimate to none that has one, by ranking alone', () => {
-    const unsized = (ids: string[]) =>
-      withManifest(m => {
-        const moe = structuredClone(m.entries.find(e => e.id === 'moe-35b')!);
-        moe.id = 'unsized-moe';
-        moe.name = 'unsized-moe';
-        moe.params = { totalB: 35, activeB: null };
-        delete moe.builds[0].tensorStats;
-        m.entries.push(moe);
-        m.rankings.chat = ids;
-        m.entries = m.entries.filter(e => ids.includes(e.id));
-      });
-    const { best, alternates } = pick('mac-64', 'chat', {
-      manifest: unsized(['dense-9b-tuned', 'unsized-moe']),
-      hardware: withBandwidth(60),
+  // An MoE entry with neither tensor stats nor an active parameter share, so its decode speed has no estimate.
+  const addUnsizedMoe = (m: HubManifestInput, weightsBytes?: number) => {
+    const moe = structuredClone(m.entries.find(e => e.id === 'moe-35b')!);
+    moe.id = 'unsized-moe';
+    moe.name = 'unsized-moe';
+    moe.params = { totalB: 35, activeB: null };
+    delete moe.builds[0].tensorStats;
+    if (weightsBytes) moe.builds[0].weights = [{ ...moe.builds[0].weights[0], sizeBytes: weightsBytes }];
+    m.entries.push(moe);
+  };
+
+  it('counts a model without a decode estimate as slow once the bandwidth is known', () => {
+    const ids = ['unsized-moe', 'dense-9b-tuned'];
+    const manifest = withManifest(m => {
+      addUnsizedMoe(m);
+      m.rankings.chat = ids;
+      m.entries = m.entries.filter(e => ids.includes(e.id));
     });
-    expect(best?.entry.id).toBe('dense-9b-tuned');
-    expect(best?.fit.decode?.tokensPerSec).toBeLessThan(SLOW_DECODE_TOKENS_PER_SEC);
-    expect(alternates.map(c => [c.entry.id, c.fit.decode])).toEqual([['unsized-moe', null]]);
+    const at = (gbps: number) => pick('mac-64', 'chat', { manifest, hardware: withBandwidth(gbps) });
+    const fast = at(300);
+    expect(fast.best?.entry.id).toBe('dense-9b-tuned');
+    expect(fast.alternates.map(c => [c.entry.id, c.fit.decode])).toEqual([['unsized-moe', null]]);
+    // Both under the bar: the ranking decides.
+    expect(at(60).best?.entry.id).toBe('unsized-moe');
   });
 
   describe('on a GPU that holds the dense model but not the MoE experts', () => {
@@ -261,6 +266,36 @@ describe('pickForMachine decode speed', () => {
       expect(best?.entry.id).toBe('dense-9b-tuned');
       expect(best?.fit.decode?.tokensPerSec).toBeLessThan(SLOW_DECODE_TOKENS_PER_SEC);
       expect(alternates.map(c => c.fit.placement)).toEqual(['expert-offload']);
+    });
+
+    it('picks the same best whatever order the entries are listed in', () => {
+      const permutations = <T>(items: T[]): T[][] =>
+        items.length <= 1
+          ? [items]
+          : items.flatMap((item, i) =>
+              permutations([...items.slice(0, i), ...items.slice(i + 1)]).map(rest => [item, ...rest])
+            );
+      // Ranked in this order: an offloaded MoE, one with no estimate, and a resident dense model over the bar.
+      const ids = ['moe-35b', 'unsized-moe', 'dense-9b-tuned'];
+      const listed = (order: string[]) =>
+        withManifest(m => {
+          addUnsizedMoe(m, 9.8e9);
+          m.rankings.chat = ids;
+          m.entries = order.map(id => m.entries.find(e => e.id === id)!);
+        });
+      const picks = permutations(ids).map(order =>
+        pick('nv-12+32', 'chat', { manifest: listed(order), hardware: nvidia(300) })
+      );
+      const [first] = picks;
+      expect([first.best, ...first.alternates].map(c => `${c.entry.id} ${c.fit.verdict}:${c.fit.placement}`)).toEqual([
+        'dense-9b-tuned tight:gpu',
+        'moe-35b tight:expert-offload',
+        'unsized-moe tight:gpu',
+      ]);
+      for (const { best, alternates } of picks) {
+        expect(best?.entry.id).toBe('dense-9b-tuned');
+        expect(alternates.map(c => c.entry.id)).toEqual(['moe-35b', 'unsized-moe']);
+      }
     });
 
     it('leaves the ranking alone when the machine has no known bandwidth', () => {

@@ -8,7 +8,7 @@ import type {
   KvCacheType,
   ProducerTier,
 } from '../schemas/modelHub';
-import { activeParamsFraction } from './decode';
+import { activeParamsFraction, memoryBandwidth } from './decode';
 import { estimateFit, type FitMode, type FitModel, type FitResult, type FitRuntime, type HardwareProfile } from './fit';
 import { entryTier, gradeBuild, isCurrentOwnEval, meetsGrade, type BuildGrade, type RuntimePins } from './grade';
 
@@ -273,9 +273,9 @@ function beatsTierA(c: HubCandidate, tierA: HubCandidate | undefined): boolean {
 /**
  * The best curated build for a role on this machine, plus one alternate per other listed entry. Candidates are
  * ordered by verdict (fast, tight, slow; a slow one below the mode floor last), then by decode speed (an offloaded
- * load or an estimate under SLOW_DECODE_TOKENS_PER_SEC last; skipped for embeddings and between candidates that
- * lack an estimate), then by the manifest ranking for the role (unranked entries follow in manifest order), then by
- * build preference.
+ * load, no estimate or one under SLOW_DECODE_TOKENS_PER_SEC last; skipped for embeddings and where the machine's
+ * bandwidth is unknown), then by the manifest ranking for the role (unranked entries follow in manifest order), then
+ * by build preference.
  */
 export function pickForMachine(options: PickOptions): HubPick {
   const { manifest, role } = options;
@@ -284,30 +284,29 @@ export function pickForMachine(options: PickOptions): HubPick {
     const i = ranking.indexOf(entry.id);
     return i >= 0 ? i : ranking.length + manifest.entries.indexOf(entry);
   };
-  // 1 for a load split across GPU and RAM or an estimate under the bar, 0 for a faster one, null without an estimate.
-  const slowDecode = (c: HubCandidate): 0 | 1 | null => {
-    if (ROLE_MODE[role] === 'embeddings') return null;
-    if (c.fit.placement === 'expert-offload' || c.fit.placement === 'layer-offload') return 1;
-    const rate = c.fit.decode?.tokensPerSec;
-    return rate === undefined ? null : rate < SLOW_DECODE_TOKENS_PER_SEC ? 1 : 0;
-  };
-  const byDecode = (a: HubCandidate, b: HubCandidate) => {
-    const slowA = slowDecode(a);
-    const slowB = slowDecode(b);
-    return slowA === null || slowB === null ? 0 : slowA - slowB;
-  };
-  const fitClass = (c: HubCandidate) => [VERDICT_RANK[c.fit.verdict], c.fit.context < c.fit.floor ? 1 : 0];
+  // Embeddings do not decode; without a known bandwidth no candidate has an estimate, so none is ranked on it.
+  const decodeKnown = ROLE_MODE[role] !== 'embeddings' && memoryBandwidth(options.hardware) !== null;
+  // With the bandwidth known, a load split across GPU and RAM or one without an estimate counts as slow.
+  const slowDecode = (c: HubCandidate) =>
+    !decodeKnown
+      ? 0
+      : c.fit.placement === 'expert-offload' || c.fit.placement === 'layer-offload'
+        ? 1
+        : (c.fit.decode?.tokensPerSec ?? 0) < SLOW_DECODE_TOKENS_PER_SEC
+          ? 1
+          : 0;
+  const fitClass = (c: HubCandidate) => [
+    VERDICT_RANK[c.fit.verdict],
+    c.fit.context < c.fit.floor ? 1 : 0,
+    slowDecode(c),
+  ];
+  const key = (c: HubCandidate) => [...fitClass(c), rankOf(c.entry), c.entry.builds.indexOf(c.build)];
   const byKey = (a: HubCandidate, b: HubCandidate) => {
-    const kb = fitClass(b);
-    return (
-      fitClass(a).reduce((d, v, i) => d || v - kb[i], 0) ||
-      byDecode(a, b) ||
-      rankOf(a.entry) - rankOf(b.entry) ||
-      a.entry.builds.indexOf(a.build) - b.entry.builds.indexOf(b.build)
-    );
+    const ka = key(a);
+    const kb = key(b);
+    return ka.reduce((d, v, i) => d || v - kb[i], 0);
   };
-  const sameClass = (a: HubCandidate, b: HubCandidate) =>
-    fitClass(a).every((v, i) => v === fitClass(b)[i]) && byDecode(a, b) === 0;
+  const sameClass = (a: HubCandidate, b: HubCandidate) => fitClass(a).every((v, i) => v === fitClass(b)[i]);
   const perEntry = manifest.entries
     .filter(entry => listedInCurated(entry, options))
     .map(entry => fittingBuilds(entry, options).sort(byKey))
