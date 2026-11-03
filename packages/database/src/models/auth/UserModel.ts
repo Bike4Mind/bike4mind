@@ -1128,6 +1128,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     const result = await this.model
       .updateOne(
         // Re-checks the disqualifiers at write time, so a dispute or suspension landing mid-evaluation wins.
+        // Keep in sync with userService.accountBlockReasons and findPendingRiskReviewIds.
         {
           _id: userId,
           'riskScore.reviewState': 'pending',
@@ -1148,7 +1149,12 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       .find(
         {
           'riskScore.reviewState': 'pending',
+          // Accounts autoApproveRiskReview can never approve stay out, or they crowd newer ones out of a capped sweep.
+          riskReviewReopenedAt: null,
           isBanned: { $ne: true },
+          disputePending: { $ne: true },
+          'moderation.status': { $ne: 'suspended' },
+          'signupGrant.unlockForfeited': null,
           ...(options.afterId ? { _id: { $gt: new mongoose.Types.ObjectId(options.afterId) } } : {}),
         },
         { _id: 1 }
@@ -1160,11 +1166,14 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return rows.map(row => row._id.toString());
   }
 
-  // Rides the user_riskScore_review index on reviewState; approved accounts are few enough to filter.
   async findRiskAutoApprovals(options: { since: Date; limit: number }): Promise<IUserDocument[]> {
     return this.model
       .find(
-        { 'riskScore.reviewState': 'approved', 'riskReviewAutoApproval.decidedAt': { $gte: options.since } },
+        {
+          'riskScore.reviewState': 'approved',
+          isBanned: { $ne: true },
+          'riskReviewAutoApproval.decidedAt': { $gte: options.since },
+        },
         { email: 1, username: 1, riskScore: 1, riskReviewAutoApproval: 1 }
       )
       .sort({ 'riskReviewAutoApproval.decidedAt': -1 })

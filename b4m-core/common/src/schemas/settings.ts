@@ -5586,7 +5586,7 @@ export const settingsMap = {
     description:
       'Approves a pending signup risk review without an admin. settledPayment: a successful card payment ' +
       '(credit pack or subscription) that Stripe Radar rated normal, on a card no other account paid with in ' +
-      'the last 90 days, at least minPaymentAgeHours old. quietAccount (off by default): an account at least ' +
+      'the payment-attempt retention window, at least minPaymentAgeHours old. quietAccount (off by default): an account at least ' +
       'minAccountAgeDays old, scoring at most maxScore, not rescored for minQuietDays and named in no open ' +
       'shadow detection. Neither applies to a banned, suspended or disputed account, one whose payment unlock ' +
       'was forfeited, one with a signup tranche held for review, or one an admin reopened. Each approval is ' +

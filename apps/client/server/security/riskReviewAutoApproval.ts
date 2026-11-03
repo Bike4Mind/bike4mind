@@ -39,7 +39,7 @@ const AUDIT_ACTOR = 'signup-risk-auto-approval';
 
 const POLICY_REASONS: Readonly<Record<SignupRiskAutoApprovalPolicy, string>> = {
   settled_payment:
-    'Successful card payment rated normal by Stripe Radar, on a card no other account paid with in the last 90 days',
+    'Successful card payment rated normal by Stripe Radar, on a card no other account paid with within the payment-attempt retention window',
   quiet_account: 'Account aged past the quiet-account rule with no new risk signals and no open detections',
 };
 
@@ -73,8 +73,10 @@ async function hasSettledPayment(
   rule: SignupRiskAutoApproval['settledPayment'],
   now: Date
 ): Promise<boolean> {
+  // Counted over every retained attempt: the newest-50 read below can be pushed past a block by started rows.
+  const blocked = await paymentAttemptRepository.countRadarBlocked({ userId, ipHash: null, since: new Date(0) });
+  if (blocked.account > 0) return false;
   const attempts = await paymentAttemptRepository.findByUser(userId, PAYMENT_LOOKBACK);
-  if (attempts.some(attempt => attempt.radarBlocked)) return false;
   const standingSince = now.getTime() - rule.minPaymentAgeHours * HOUR_MS;
   for (const attempt of attempts) {
     if (attempt.outcome !== 'succeeded' || attempt.riskLevel !== RADAR_NORMAL_RISK) continue;

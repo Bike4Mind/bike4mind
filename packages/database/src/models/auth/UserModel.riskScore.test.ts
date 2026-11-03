@@ -243,6 +243,18 @@ describe('UserRepository.findPendingRiskReviewIds', () => {
 
     expect([...first, ...second]).toEqual(ids);
   });
+
+  it('leaves out accounts that cannot be approved automatically', async () => {
+    const eligible = await createUser(undefined, 'pending');
+    const set = (id: string, fields: Record<string, unknown>) =>
+      User.collection.updateOne({ _id: new mongoose.Types.ObjectId(id) }, { $set: fields });
+    await set(await createUser(undefined, 'pending'), { riskReviewReopenedAt: new Date() });
+    await set(await createUser(undefined, 'pending'), { disputePending: true });
+    await set(await createUser(undefined, 'pending'), { 'moderation.status': 'suspended' });
+    await set(await createUser(undefined, 'pending'), { 'signupGrant.unlockForfeited': { at: new Date() } });
+
+    await expect(userRepository.findPendingRiskReviewIds({ limit: 10 })).resolves.toEqual([eligible]);
+  });
 });
 
 describe('UserRepository.findRiskAutoApprovals', () => {
@@ -260,5 +272,13 @@ describe('UserRepository.findRiskAutoApprovals', () => {
     const rows = await userRepository.findRiskAutoApprovals({ since: new Date('2026-10-01T00:00:00Z'), limit: 10 });
 
     expect(rows.map(row => row.id)).toEqual([newer, older]);
+  });
+
+  it('leaves out banned accounts', async () => {
+    const id = await createUser(undefined, 'pending');
+    await userRepository.autoApproveRiskReview(id, { policy: 'settled_payment', decidedAt: new Date() });
+    await User.collection.updateOne({ _id: new mongoose.Types.ObjectId(id) }, { $set: { isBanned: true } });
+
+    await expect(userRepository.findRiskAutoApprovals({ since: new Date(0), limit: 10 })).resolves.toEqual([]);
   });
 });

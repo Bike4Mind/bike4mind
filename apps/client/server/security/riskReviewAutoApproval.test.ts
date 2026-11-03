@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   autoApprove: vi.fn(),
   pendingIds: vi.fn(),
   attempts: vi.fn(),
+  radarBlocked: vi.fn(),
   accountsForCard: vi.fn(),
   openDetections: vi.fn(),
   record: vi.fn(),
@@ -22,7 +23,11 @@ vi.mock('@bike4mind/database', () => ({
     autoApproveRiskReview: h.autoApprove,
     findPendingRiskReviewIds: h.pendingIds,
   },
-  paymentAttemptRepository: { findByUser: h.attempts, countAccountsForCard: h.accountsForCard },
+  paymentAttemptRepository: {
+    findByUser: h.attempts,
+    countRadarBlocked: h.radarBlocked,
+    countAccountsForCard: h.accountsForCard,
+  },
   shadowDetectionRepository: { countOpenForUser: h.openDetections },
   adminAuditLogRepository: {},
   adminSettingsRepository: {},
@@ -89,6 +94,7 @@ beforeEach(() => {
   h.findById.mockResolvedValue(pendingUser());
   h.autoApprove.mockResolvedValue(true);
   h.attempts.mockResolvedValue([payment()]);
+  h.radarBlocked.mockResolvedValue({ account: 0, network: null });
   h.accountsForCard.mockResolvedValue(1);
   h.openDetections.mockResolvedValue(0);
   h.record.mockImplementation(async () => expect(h.inTransaction).toBe(true));
@@ -129,7 +135,7 @@ describe('autoApproveRiskReview: settled payment', () => {
   });
 
   it('does not approve when any of the account payments was blocked by Radar', async () => {
-    h.attempts.mockResolvedValue([payment(), payment({ paymentIntentId: 'pi_2', radarBlocked: true })]);
+    h.radarBlocked.mockResolvedValue({ account: 1, network: null });
 
     const result = await autoApproveRiskReview(USER_ID, { rules: RULES, trigger: 'stripe/webhook', now: NOW });
 
