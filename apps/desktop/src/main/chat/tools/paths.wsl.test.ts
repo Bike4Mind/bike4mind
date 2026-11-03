@@ -9,6 +9,15 @@ vi.mock('node:path', async importOriginal => {
 
 const realpaths = new Map<string, string | null>();
 const asked: string[] = [];
+const onShare = new Set<string>();
+
+vi.mock('node:fs/promises', async importOriginal => ({
+  ...(await importOriginal<typeof import('node:fs/promises')>()),
+  stat: async (path: string) => {
+    if (onShare.has(path)) return {};
+    throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+  },
+}));
 
 vi.mock('../../wsl/wslPath', async importOriginal => {
   const actual = await importOriginal<typeof import('../../wsl/wslPath')>();
@@ -22,7 +31,8 @@ vi.mock('../../wsl/wslPath', async importOriginal => {
   };
 });
 
-const { PathAccessDenied, isWithin, resolveWithinRoots, resolveWithinRootsPhysically } = await import('./paths');
+const { PathAccessDenied, hostRealpath, isWithin, resolveWithinRoots, resolveWithinRootsPhysically } =
+  await import('./paths');
 
 const REPO = '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo';
 const denied = (promise: Promise<unknown>) => expect(promise).rejects.toBeInstanceOf(PathAccessDenied);
@@ -30,7 +40,20 @@ const denied = (promise: Promise<unknown>) => expect(promise).rejects.toBeInstan
 describe('paths in a WSL folder', () => {
   beforeEach(() => {
     realpaths.clear();
+    onShare.clear();
     asked.length = 0;
+  });
+
+  it('resolves a path in the distro to its share path only when it exists there', async () => {
+    onShare.add(`${REPO}\\src`);
+    realpaths.set('/home/me/repo/link', '/home/me/other');
+    onShare.add('\\\\wsl.localhost\\Ubuntu\\home\\me\\other');
+
+    expect(await hostRealpath(`${REPO}\\src`)).toBe(`${REPO}\\src`);
+    expect(await hostRealpath(`${REPO}\\link`)).toBe('\\\\wsl.localhost\\Ubuntu\\home\\me\\other');
+    await expect(hostRealpath(`${REPO}\\missing`)).rejects.toThrow('ENOENT');
+    realpaths.set('/home/me/repo/broken', null);
+    await expect(hostRealpath(`${REPO}\\broken`)).rejects.toThrow('Cannot resolve');
   });
 
   it('resolves a shell argument inside the distro, by Linux rules, against the Linux folder', async () => {

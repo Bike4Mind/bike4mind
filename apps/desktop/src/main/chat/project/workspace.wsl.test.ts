@@ -102,7 +102,7 @@ const projectFor = (directory: string, workingDirectory: string, workspaceBranch
   contextDirectories: [],
 });
 
-describe('worktrees of a WSL project', () => {
+describe.skipIf(process.platform === 'win32')('worktrees of a WSL project', () => {
   it('gives Linux git Linux paths and reads its answers back onto the share', async () => {
     const { repo } = await repository();
     const project = share(repo);
