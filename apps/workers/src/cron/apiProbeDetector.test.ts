@@ -144,6 +144,36 @@ describe('apiProbeDetector handler', () => {
     expect(mocks.deleteByKey).not.toHaveBeenCalled();
   });
 
+  it('releases its claims when the account lookup throws, so the next run retries', async () => {
+    mocks.findLinkStatesByIds.mockRejectedValueOnce(new Error('mongo down'));
+    await expect(handler(event)).rejects.toThrow('mongo down');
+    expect(mocks.claimed.size).toBe(0);
+
+    const retry = await handler({ time: '2026-10-30T12:05:00Z' });
+    expect(retry).toMatchObject({ alerted: 1 });
+  });
+
+  it('releases the claims it already took when a later claim throws', async () => {
+    mocks.claimDedup
+      .mockImplementationOnce(async (key: string) => {
+        mocks.claimed.add(key);
+        return { claimed: true };
+      })
+      .mockRejectedValueOnce(new Error('cache down'));
+    await expect(handler(event)).rejects.toThrow('cache down');
+    expect(mocks.claimed.size).toBe(0);
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('reports a scan that hit the row limit', async () => {
+    mocks.runQuery.mockResolvedValue(
+      Array.from({ length: 1_000 }, (_, index) => raw({ ip: `10.0.${Math.floor(index / 256)}.${index % 256}` }))
+    );
+    const result = await handler(event);
+    expect(result).toMatchObject({ truncated: true });
+    expect(mocks.error).toHaveBeenCalledWith('api-probe-scan-truncated', expect.objectContaining({ rows: 1_000 }));
+  });
+
   it('caps the posts of one run', async () => {
     mocks.runQuery.mockResolvedValue(
       Array.from({ length: 7 }, (_, index) => raw({ ip: `192.0.2.${index + 1}`, refusedFetch: '3' }))

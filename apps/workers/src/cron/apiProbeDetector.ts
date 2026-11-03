@@ -96,11 +96,21 @@ export function probeDedupeKeys(actor: Pick<ProbeActor, 'ips' | 'userIds'>): str
  */
 export async function claimProbeAlert(actor: ProbeActor, dedupeMs: number): Promise<string[]> {
   const claimed: string[] = [];
-  for (const key of probeDedupeKeys(actor)) {
-    const result = await cacheRepository.claimDedup(key, { score: actor.score }, dedupeMs);
-    if (result.claimed) claimed.push(key);
+  try {
+    for (const key of probeDedupeKeys(actor)) {
+      const result = await cacheRepository.claimDedup(key, { score: actor.score }, dedupeMs);
+      if (result.claimed) claimed.push(key);
+    }
+  } catch (error) {
+    await releaseClaims(claimed);
+    throw error;
   }
   return claimed;
+}
+
+/** Best effort: a failed delete must not mask the error that triggered the release. */
+async function releaseClaims(keys: string[]): Promise<void> {
+  await Promise.allSettled(keys.map(key => cacheRepository.deleteByKey(key)));
 }
 
 function adminUserRef(userId: string, appUrl: string | undefined): string {
@@ -200,6 +210,8 @@ export async function handler(event: unknown): Promise<ProbeDetectorResult> {
     truncated,
     actors: actors.map(actor => ({ score: actor.score, ips: actor.ips.length, users: actor.userIds.length })),
   });
+  // Rows past the limit are dropped, so an actor ranked just below the cut goes unreported.
+  if (truncated) logger.error('api-probe-scan-truncated', { rows: rows.length, limit: QUERY_ROW_LIMIT });
 
   const appUrl = appUrlFromEnv();
   let alerted = 0;
@@ -215,16 +227,22 @@ export async function handler(event: unknown): Promise<ProbeDetectorResult> {
       suppressed++;
       continue;
     }
-    const users = new Map((await userRepository.findLinkStatesByIds(actor.userIds)).map(user => [user.id, user]));
-    const outcome = await postMessageToSlackWithOutcome(
-      formatProbeAlert({ actor, users, threshold: policy.threshold, window, stage: Resource.App.stage, appUrl }),
-      'SlackSecurityAlertsWebhookUrl',
-      { timeoutMs: 5_000 }
-    );
+    let outcome: Awaited<ReturnType<typeof postMessageToSlackWithOutcome>>;
+    try {
+      const users = new Map((await userRepository.findLinkStatesByIds(actor.userIds)).map(user => [user.id, user]));
+      outcome = await postMessageToSlackWithOutcome(
+        formatProbeAlert({ actor, users, threshold: policy.threshold, window, stage: Resource.App.stage, appUrl }),
+        'SlackSecurityAlertsWebhookUrl',
+        { timeoutMs: 5_000 }
+      );
+    } catch (error) {
+      await releaseClaims(claimed);
+      throw error;
+    }
     // A failed post releases this run's claims so the next run retries. 'unconfigured' keeps them:
     // security alerts are switched off, and the Slack module already warned about that.
     if (outcome === 'failed') {
-      await Promise.all(claimed.map(key => cacheRepository.deleteByKey(key)));
+      await releaseClaims(claimed);
       logger.error('api-probe-alert-not-delivered', { score: actor.score });
       continue;
     }
