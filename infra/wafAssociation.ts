@@ -43,3 +43,15 @@ export function resolveExternalWafAssociation(args: {
 
   return args.enableWaf === 'true' && webAclName ? { webAclName } : undefined;
 }
+
+/**
+ * Whether the attached ACL inserts the WAF label headers read by apps/client/server/auth/networkMeta.ts.
+ * For an external ACL, WAF_LABEL_FORWARDING=true also vouches for its forged-header block rule.
+ */
+export function resolveWafLabelForwarding(args: {
+  attachedAcl: 'none' | 'stage' | 'external';
+  labelForwarding: string | undefined;
+}): boolean {
+  if (args.attachedAcl === 'stage') return true;
+  return args.attachedAcl === 'external' && args.labelForwarding === 'true';
+}

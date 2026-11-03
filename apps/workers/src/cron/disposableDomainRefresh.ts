@@ -25,18 +25,34 @@ export const DISPOSABLE_LIST_SOURCES: Record<DisposableListSource, string> = {
     'https://raw.githubusercontent.com/disposable-email-domains/disposable-email-domains/main/disposable_email_blocklist.conf',
   // 7c/fakefilter, BSD-3-Clause
   fakefilter: 'https://raw.githubusercontent.com/7c/fakefilter/main/txt/data.txt',
+  // tompec/disposable-email-domains (UserCheck), MIT; a JSON array of domain suffixes
+  tompec: 'https://raw.githubusercontent.com/tompec/disposable-email-domains/main/index.json',
 };
+
+const JSON_ARRAY_SOURCES: ReadonlySet<DisposableListSource> = new Set(['tompec']);
 
 const FETCH_TIMEOUT_MS = 30_000;
 /** A snapshot smaller than this share of the last good count is treated as truncated. */
 const MIN_SNAPSHOT_SHARE = 0.5;
 
-/** Listed domains, lowercased as published. Drops comments, bare public suffixes and mailbox providers. */
+/** Listed domains, lowercased as published. Drops comments, bare public suffixes, mailbox providers and relays. */
 export function parseDisposableList(text: string): Set<string> {
+  return filterDomains(text.split('\n').map(line => line.replace(/#.*/, '')));
+}
+
+/** parseDisposableList for a JSON array of domains. Throws on anything else so a bad payload keeps the last good entries. */
+export function parseDisposableJsonList(text: string): Set<string> {
+  const parsed: unknown = JSON.parse(text);
+  if (!Array.isArray(parsed) || !parsed.every(entry => typeof entry === 'string'))
+    throw new Error('Expected a JSON array of domain strings');
+  return filterDomains(parsed);
+}
+
+function filterDomains(entries: Iterable<string>): Set<string> {
   const domains = new Set<string>();
-  for (const line of text.split('\n')) {
-    const domain = line.replace(/#.*/, '').trim().toLowerCase();
-    if (!domain || userService.PUBLIC_MAILBOX_DOMAINS.has(domain)) continue;
+  for (const entry of entries) {
+    const domain = entry.trim().toLowerCase();
+    if (!domain || userService.PUBLIC_MAILBOX_DOMAINS.has(domain) || userService.isPrivacyRelayDomain(domain)) continue;
     if (!registrableDomain(domain, { allowPrivateDomains: true })) continue;
     domains.add(domain);
   }
@@ -54,7 +70,8 @@ export function rejectSnapshot(size: number, previousCount: number | undefined):
 async function refreshSource(source: DisposableListSource, previousCount: number | undefined, runAt: Date) {
   const response = await fetch(DISPOSABLE_LIST_SOURCES[source], { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const domains = parseDisposableList(await response.text());
+  const text = await response.text();
+  const domains = JSON_ARRAY_SOURCES.has(source) ? parseDisposableJsonList(text) : parseDisposableList(text);
   const rejected = rejectSnapshot(domains.size, previousCount);
   if (rejected) throw new Error(rejected);
   await disposableDomainRepository.replaceDisposableSource(source, domains, runAt);

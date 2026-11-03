@@ -31,6 +31,28 @@ describe('toolsForRequest', () => {
     expect(declared).toContain('mcp__notion_search');
   });
 
+  it('declares the ten simulator tools only when the simulator is available', () => {
+    const declared = names({ roots: [], media: false, host: false, simulator: true });
+    expect(declared.filter(name => name.startsWith('simulator_')).sort()).toEqual(
+      [
+        'simulator_appearance',
+        'simulator_boot',
+        'simulator_build',
+        'simulator_devices',
+        'simulator_input',
+        'simulator_launch',
+        'simulator_open_url',
+        'simulator_rotate',
+        'simulator_screenshot',
+        'simulator_view',
+      ].sort()
+    );
+    for (const options of [{ simulator: false }, {}]) {
+      const none = names({ roots: [], media: false, host: false, ...options });
+      expect(none.filter(name => name.startsWith('simulator_'))).toEqual([]);
+    }
+  });
+
   it('declares generate_video only when the server offers a video model', () => {
     const gemini = publicVideoModel('gemini-omni-1.1-flash');
     expect(names({ roots: [], media: true, host: false })).not.toContain('generate_video');
