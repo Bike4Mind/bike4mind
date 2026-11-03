@@ -1,4 +1,4 @@
-import { Component, memo, useEffect, useState, type ReactNode } from 'react';
+import { Component, memo, useEffect, useLayoutEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import Box from '@mui/joy/Box';
 import Typography from '@mui/joy/Typography';
 import type { ChatMessage, ChatUsage } from '@shared/chat';
@@ -19,10 +19,11 @@ import { describeReplyCost, formatCreditsSpent, type TurnProgress } from './stat
 
 /**
  * The thread's turns as a grid: a zero-width first column for the rails, which draw out to its
- * left, and the turns in the second. A rail spans its reply's row and the rows after it up to the
- * next reply (see railRows), so the browser sizes those rows to hold it: a reply never moves for
- * its own rail, and nothing is measured. Extra height lands after the reply and above the turns
- * that follow, so a prompt stays one gap above its own answer.
+ * left, and the turns in the second. The turns between two replies are one item (see
+ * TurnGroup), and a rail spans its reply's row and that group's, so the browser sizes the rows to
+ * hold it: a reply never moves for its own rail, and nothing is measured. Extra height lands
+ * between the reply and its group, whose turns stay one gap apart, and a prompt stays one gap
+ * above its own answer.
  */
 export const turnGridSx = {
   display: 'grid',
@@ -130,6 +131,27 @@ interface RailProps {
   span: number;
 }
 
+const drawnRails = new Set<string>();
+const drawnListeners = new Set<() => void>();
+
+function setRailDrawn(id: string, drawn: boolean): void {
+  if (drawnRails.has(id) === drawn) return;
+  if (drawn) drawnRails.add(id);
+  else drawnRails.delete(id);
+  drawnListeners.forEach(listener => listener());
+}
+
+/** Whether the rail for this reply is on screen: it draws nothing when it has nothing to show, or has thrown. */
+export function useRailDrawn(id: string): boolean {
+  return useSyncExternalStore(
+    listener => {
+      drawnListeners.add(listener);
+      return () => drawnListeners.delete(listener);
+    },
+    () => drawnRails.has(id)
+  );
+}
+
 /** A rail is a margin note: one that throws drops itself rather than the thread. */
 class RailErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
@@ -152,20 +174,24 @@ class RailErrorBoundary extends Component<{ children: ReactNode }, { failed: boo
  * A screen reader gets one sentence per reply in place of a label and a value per row, so a long
  * thread reads as its replies with a short note after each.
  */
-export function ReplyStatsRail(props: RailProps) {
+export const ReplyStatsRail = memo(function ReplyStatsRail(props: RailProps) {
   return (
-    <RailErrorBoundary>
+    // Keyed on live or stored, so a rail that threw on a live frame gets another go on the stored stats.
+    <RailErrorBoundary key={props.turn ? 'live' : 'stored'}>
       <RailCell {...props} />
     </RailErrorBoundary>
   );
-}
+});
 
-const RailCell = memo(function RailCell({ message, turn, span }: RailProps) {
+function RailCell({ message, turn, span }: RailProps) {
   const { hidden } = useReplyStatsPrefs();
   const showDollars = useShowDollarCosts();
   const now = useClock(turn?.startedAt ?? null);
   const { rows, shown, credits, usage } = railContent(message, turn, now, hidden);
-  if (shown.length === 0 && !credits) return null;
+  const drawn = shown.length > 0 || !!credits;
+  useLayoutEffect(() => setRailDrawn(message.id, drawn), [message.id, drawn]);
+  useLayoutEffect(() => () => setRailDrawn(message.id, false), [message.id]);
+  if (!drawn) return null;
   const title = [describeReplyStats(rows), describeReplyCost(usage, showDollars)].filter(
     (line): line is string => line !== null
   );
@@ -214,4 +240,4 @@ const RailCell = memo(function RailCell({ message, turn, span }: RailProps) {
       </Box>
     </Box>
   );
-});
+}
