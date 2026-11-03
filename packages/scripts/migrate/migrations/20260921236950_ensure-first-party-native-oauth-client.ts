@@ -4,7 +4,21 @@ import { OAuthClientModel } from '@bike4mind/database';
 import { type MigrationFile } from './index';
 
 export const NATIVE_OAUTH_CLIENT_ID = 'b4m-ios-app';
-export const NATIVE_OAUTH_REDIRECT_URI = 'https://app.bike4mind.com/ios/auth-callback';
+const NATIVE_OAUTH_REDIRECT_PATH = '/ios/auth-callback';
+export const NATIVE_OAUTH_REDIRECT_URI = `https://app.bike4mind.com${NATIVE_OAUTH_REDIRECT_PATH}`;
+
+/**
+ * The prod URI plus, on non-prod deploys, the one on this deploy's own origin (APP_URL). Without the
+ * latter a preview/dev/staging DB would carry a redirect URI that can never match, and $setOnInsert
+ * could not repair it later.
+ */
+export function resolveNativeOAuthRedirectUris(appUrl = process.env.APP_URL): string[] {
+  const origin = appUrl?.trim().replace(/\/+$/, '');
+  const uris = origin
+    ? [`${origin}${NATIVE_OAUTH_REDIRECT_PATH}`, NATIVE_OAUTH_REDIRECT_URI]
+    : [NATIVE_OAUTH_REDIRECT_URI];
+  return [...new Set(uris)];
+}
 
 /**
  * Registers the first-party native client for the OAuth authorization-code + PKCE flow.
@@ -25,7 +39,7 @@ const migration: MigrationFile = {
           clientId: NATIVE_OAUTH_CLIENT_ID,
           clientSecretHash: throwawayHash,
           name: 'Bike4Mind Native App',
-          redirectUris: [NATIVE_OAUTH_REDIRECT_URI],
+          redirectUris: resolveNativeOAuthRedirectUris(),
           allowedScopes: ['openid', 'email', 'profile'],
           tokenEndpointAuthMethod: 'none',
           clientType: 'first-party',
