@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import Box from '@mui/joy/Box';
 import Typography from '@mui/joy/Typography';
 import type { ChatMessage, ChatUsage } from '@shared/chat';
@@ -17,24 +17,114 @@ import {
 import { REPLY_STATS_RAIL_INSET, REPLY_STATS_RAIL_WIDTH, useReplyStatsPrefs } from './replyStatsPrefs';
 import { describeReplyCost, formatCreditsSpent, type TurnProgress } from './statusLine';
 
-/** One row's height, in px: body-xs at its own line height. */
-export const RAIL_ROW_HEIGHT = 18;
+/** The clear space between one rail's last row and the next rail's first, in px. */
+export const RAIL_GAP = 16;
+
+export interface RailBox {
+  /** The reply's message id. */
+  id: string;
+  /** Where the rail is drawn, in viewport px, with its reply's push. */
+  top: number;
+  /** The push it was drawn with. */
+  push: number;
+  height: number;
+}
+
+export interface RailSpacing {
+  /** How far each reply is pushed down, in px; a reply left where it is has no entry. */
+  pushes: ReadonlyMap<string, number>;
+  /** Room after the thread's last turn for a rail that runs past it, in px. */
+  endSpace: number;
+}
+
+export const NO_RAIL_SPACING: RailSpacing = { pushes: new Map(), endSpace: 0 };
+
+const finite = (value: number): number => (Number.isFinite(value) ? value : 0);
 
 /**
- * How far a rail may run past the end of its reply, in px: the thread's 24px gap, the shortest
- * turn that can sit between two replies (a 22px relay or automatic row) and the gap again, less
- * a row's worth of space so two rails never touch.
+ * Where each reply goes so its rail starts RAIL_GAP below the one above it. A rail sits left of
+ * the column, so it runs on beside whatever follows its reply and only another rail can meet it;
+ * a reply is pushed down only when its rail would. `end` is where the thread's last turn ends,
+ * and the room after it keeps the last rail inside the scroll, which the thread follows to.
  */
-const NEXT_REPLY_CLEARANCE = 24 + 22 + 24 - 12;
+export function railSpacing(rails: readonly RailBox[], end: number): RailSpacing {
+  const pushes = new Map<string, number>();
+  // How far this spacing moves what follows, against how it is drawn now.
+  let shift = 0;
+  let above: number | null = null;
+  for (const rail of rails) {
+    const drawnPush = finite(rail.push);
+    const height = finite(rail.height);
+    if (height <= 0) {
+      shift -= drawnPush;
+      continue;
+    }
+    const unpushed = finite(rail.top) - drawnPush + shift;
+    const push: number = above === null ? 0 : Math.max(0, Math.ceil(above + RAIL_GAP - unpushed));
+    if (push > 0) pushes.set(rail.id, push);
+    shift += push - drawnPush;
+    above = unpushed + push + height;
+  }
+  const endSpace = above === null ? 0 : Math.max(0, Math.ceil(above - (finite(end) + shift)));
+  return { pushes, endSpace };
+}
+
+function sameSpacing(a: RailSpacing, b: RailSpacing): boolean {
+  if (a.endSpace !== b.endSpace || a.pushes.size !== b.pushes.size) return false;
+  for (const [id, push] of a.pushes) if (b.pushes.get(id) !== push) return false;
+  return true;
+}
+
+function measureRails(column: HTMLElement, end: HTMLElement, drawn: RailSpacing): RailSpacing {
+  const rails = Array.from(column.querySelectorAll<HTMLElement>('[data-rail-for]'), rail => {
+    const id = rail.dataset.railFor ?? '';
+    const rows = rail.firstElementChild;
+    return {
+      id,
+      top: rail.getBoundingClientRect().top,
+      push: drawn.pushes.get(id) ?? 0,
+      height: rows instanceof HTMLElement ? rows.offsetHeight : 0,
+    };
+  });
+  return railSpacing(rails, end.getBoundingClientRect().top);
+}
 
 /**
- * How tall a reply has to be for a rail of `rows` to end before the next reply's begins. The
- * rail is out of flow, so a one-line answer with a full rail would otherwise run into the next.
- * The last reply holds its whole rail: one hanging past the thread's end would lengthen the
- * scroll beyond what the thread follows to, and a reader at the bottom would stop following.
+ * The thread's railSpacing, measured after every render and whenever the column resizes. `end`
+ * is the element after the thread's last turn, the one the auto-scroll brings into view.
  */
-export function railReserve(rows: number, last = false): number {
-  return Math.max(0, rows * RAIL_ROW_HEIGHT - (last ? 0 : NEXT_REPLY_CLEARANCE));
+export function useRailSpacing(
+  column: RefObject<HTMLElement | null>,
+  end: RefObject<HTMLElement | null>,
+  enabled: boolean
+): RailSpacing {
+  // A stat ticked in Settings changes a rail's height without rendering the thread.
+  useReplyStatsPrefs();
+  const [spacing, setSpacing] = useState<RailSpacing>(NO_RAIL_SPACING);
+  const drawn = useRef(spacing);
+
+  const measure = useCallback(() => {
+    const next =
+      enabled && column.current && end.current
+        ? measureRails(column.current, end.current, drawn.current)
+        : NO_RAIL_SPACING;
+    if (!sameSpacing(drawn.current, next)) setSpacing(next);
+  }, [column, end, enabled]);
+
+  useLayoutEffect(() => {
+    drawn.current = spacing;
+    measure();
+  });
+
+  useEffect(() => {
+    const el = column.current;
+    if (!enabled || !el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [column, enabled, measure]);
+
+  return enabled ? spacing : NO_RAIL_SPACING;
 }
 
 interface RailContent {
@@ -67,20 +157,6 @@ export function railContent(
   const stats = turn.continued && !message.stats ? undefined : liveReplyStats(turn, now, message.stats);
   const rows = replyStats({ stats, usage }, { live: true });
   return { rows, shown: rows.filter(row => !hidden.has(row.id)), credits: null, usage };
-}
-
-/** The minimum height a reply needs while its rail is drawn; see railReserve. */
-export function useRailReserve(
-  message: ChatMessage,
-  turn: TurnProgress | null | undefined,
-  rail: boolean,
-  last: boolean
-): number {
-  const { hidden } = useReplyStatsPrefs();
-  if (!rail) return 0;
-  // The row count does not depend on the clock, so the last stamp stands in for it.
-  const { shown, credits } = railContent(message, turn, turn?.lastEventAt ?? turn?.startedAt ?? 0, hidden);
-  return railReserve(shown.length + (credits ? 1 : 0), last);
 }
 
 /** Ticks once a second while a turn runs, as the status line's own clock does. */
@@ -139,9 +215,9 @@ const visuallyHiddenSx = {
 /**
  * A reply's stats as margin notes left of it, top-aligned with its first line.
  *
- * Absolute inside the turn, so it scrolls and windows with its reply and moves nothing; the
- * sticky block inside keeps it in view down a long reply and lets it leave with the reply's end.
- * No card, only a hairline on the reply's side, so it reads as notes set apart from the text
+ * Absolute inside the turn, so it scrolls and windows with its reply and runs on past a short one;
+ * the sticky block inside keeps it in view down a long reply and lets it leave with the reply's
+ * end. No card, only a hairline on the reply's side, so it reads as notes set apart from the text
  * rather than as a panel competing with it.
  *
  * A screen reader gets one sentence per reply in place of a label and a value per row, so a long
@@ -150,10 +226,13 @@ const visuallyHiddenSx = {
 export const ReplyStatsRail = memo(function ReplyStatsRail({
   message,
   turn,
+  push = 0,
 }: {
   message: ChatMessage;
   /** The turn in flight, while this is the reply it is writing. */
   turn?: TurnProgress | null;
+  /** The reply's push down from the top of its turn; see railSpacing. */
+  push?: number;
 }) {
   const { hidden } = useReplyStatsPrefs();
   const showDollars = useShowDollarCosts();
@@ -168,11 +247,12 @@ export const ReplyStatsRail = memo(function ReplyStatsRail({
     <Box
       sx={{
         position: 'absolute',
-        top: 0,
+        top: push,
         bottom: 0,
         right: `calc(100% + ${REPLY_STATS_RAIL_INSET}px)`,
         width: REPLY_STATS_RAIL_WIDTH,
       }}
+      data-rail-for={message.id}
       data-testid="chat-reply-stats-rail"
     >
       <Box

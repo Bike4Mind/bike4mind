@@ -30,7 +30,7 @@ import { useShowDollarCosts } from './costDisplay';
 import { describeReplyCost, formatCreditsSpent, type TurnProgress } from './statusLine';
 import { describeReplyStats, FOOTER_STATS, messageStats } from './replyStats';
 import { useReplyStatsPrefs } from './replyStatsPrefs';
-import { ReplyStatsRail, useRailReserve } from './ReplyStatsRail';
+import { ReplyStatsRail, useRailSpacing } from './ReplyStatsRail';
 import { clampWindow, extendWindow, initialWindow, WINDOW_STEP, type ThreadWindow } from './threadWindow';
 import { ToolCallList, type MoveCallToBackground, type RespondToApproval } from './ToolCallList';
 import { OrphanVideoJobs } from './VideoJobCard';
@@ -294,7 +294,7 @@ function ReplyCost({ message }: { message: ChatMessage }) {
  * offered while the reply is still being written.
  *
  * With the stats rail on, the reply's stats sit left of it and the cost moves there with them,
- * leaving Copy alone in the gap. A short reply is held tall enough for its rail; see railReserve.
+ * leaving Copy alone in the gap. The rail runs on beside what follows a short reply; see railSpacing.
  *
  * Memoized, as every turn is: a streaming reply re-renders the thread once a frame, and only the
  * last turn's props change on those frames.
@@ -308,7 +308,7 @@ const AssistantTurn = memo(function AssistantTurn({
   live = false,
   skipRounds = 0,
   rail = false,
-  lastTurn = false,
+  railPush = 0,
   liveTurn = null,
 }: {
   message: ChatMessage;
@@ -325,12 +325,11 @@ const AssistantTurn = memo(function AssistantTurn({
   skipRounds?: number;
   /** Draw the stats rail beside the reply rather than the stats in its hover footer. */
   rail?: boolean;
-  /** The thread's last message, which nothing follows for its rail to run into; see railReserve. */
-  lastTurn?: boolean;
+  /** How far down to start the reply, in px, so its rail clears the one above; see railSpacing. */
+  railPush?: number;
   /** The turn in flight, while this is the reply it is writing; the rail's live figures. */
   liveTurn?: TurnProgress | null;
 }) {
-  const reserve = useRailReserve(message, liveTurn, rail, lastTurn);
   const toolCalls = message.toolCalls ?? [];
   const rounds = roundsOf(message);
   // Hidden from the front of the WHOLE list rather than drawn from a slice of it, so a round
@@ -342,7 +341,7 @@ const AssistantTurn = memo(function AssistantTurn({
     <Box
       sx={{
         minWidth: 0,
-        ...(reserve > 0 ? { minHeight: reserve } : {}),
+        ...(railPush > 0 ? { pt: `${railPush}px` } : {}),
         position: 'relative',
         [`& .${REPLY_COST_CLASS}`]: { opacity: 0, pointerEvents: 'none', transition: 'opacity 120ms' },
         [`&:hover .${REPLY_COST_CLASS}`]: { opacity: 1, pointerEvents: 'auto' },
@@ -400,7 +399,7 @@ const AssistantTurn = memo(function AssistantTurn({
           than of the answer being written. */}
       {status && <Box sx={{ mt: 1 }}>{status}</Box>}
 
-      {rail ? <ReplyStatsRail message={message} turn={liveTurn} /> : <ReplyCost message={message} />}
+      {rail ? <ReplyStatsRail message={message} turn={liveTurn} push={railPush} /> : <ReplyCost message={message} />}
 
       {!live && message.content.trim().length > 0 && (
         <Box sx={{ position: 'absolute', top: '100%', left: 0 }}>
@@ -765,6 +764,7 @@ export function MessageThread({
   const boundary = lastBoundaryIndex(messages);
   // By id: a queued prompt or a relayed message can land after the reply while it is still written.
   const liveReplyId = streaming ? (liveTurn?.messageId ?? last?.id) : undefined;
+  const railSpacing = useRailSpacing(column, bottom, statsRail && !empty);
 
   // One function for both sides of the divider, taking each message's index in the WHOLE thread,
   // so a turn drawn inside the disclosure is the same turn with the same Continue and status
@@ -787,8 +787,7 @@ export function MessageThread({
         {...(index === messages.length - 1 && streaming ? { status, live: true } : {})}
         {...(message.id === liveReplyId ? { liveTurn } : {})}
         {...(skipRounds > 0 ? { skipRounds } : {})}
-        {...(statsRail ? { rail: true } : {})}
-        {...(statsRail && index === messages.length - 1 ? { lastTurn: true } : {})}
+        {...(statsRail ? { rail: true, railPush: railSpacing.pushes.get(message.id) ?? 0 } : {})}
       />
     );
   };
@@ -867,7 +866,11 @@ export function MessageThread({
         {footer}
         {/* Stays the LAST child: the auto-scroll targets it, so anything below it would be
             scrolled past rather than brought into view. */}
-        <div ref={bottom} />
+        <div
+          ref={bottom}
+          style={railSpacing.endSpace > 0 ? { height: railSpacing.endSpace } : undefined}
+          data-testid="chat-thread-end"
+        />
       </Stack>
     </Box>
   );
