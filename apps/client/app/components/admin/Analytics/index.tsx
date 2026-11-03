@@ -292,7 +292,7 @@ const AnalyticsTab = () => {
       </Box>
 
       <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="analytics-footer">
-        Counts exclude staff, system and test accounts. Days are UTC.
+        Counts exclude admin, system, flagged test and staff-domain accounts. Days are UTC.
       </Typography>
     </Stack>
   );

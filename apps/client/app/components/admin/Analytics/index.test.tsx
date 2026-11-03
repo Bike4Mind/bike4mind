@@ -181,7 +181,7 @@ describe('AnalyticsTab', () => {
     expect(within(strip).getByText('Coming soon')).toBeInTheDocument();
     expect(screen.getByTestId('analytics-last-updated')).toHaveTextContent('Last updated');
     expect(screen.getByTestId('analytics-footer')).toHaveTextContent(
-      'Counts exclude staff, system and test accounts. Days are UTC.'
+      'Counts exclude admin, system, flagged test and staff-domain accounts. Days are UTC.'
     );
     expect(screen.getByTestId('analytics-active-users-chart')).toHaveAttribute('aria-label');
   });
