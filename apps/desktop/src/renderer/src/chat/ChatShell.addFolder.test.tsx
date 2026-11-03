@@ -712,6 +712,168 @@ describe('Add folder in a Chat composer', () => {
     expect(JSON.parse(window.localStorage.getItem(LAST_SESSION_KEY) ?? 'null')).toEqual({ id: 'made', mode: 'chat' });
   });
 
+  it('shares into a late first-run chat that opened when the chat Add folder was making fails', async () => {
+    const stored = stubBridge([]);
+    const seed = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => seed.promise);
+    const made = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => made.promise);
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValue(NOTES);
+    addContextDirectory.mockResolvedValue({
+      status: 'added',
+      path: NOTES,
+      session: summary('seeded', 'chat', [NOTES]),
+    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      await addFolderFromMenu();
+      await act(async () => void (await vi.advanceTimersByTimeAsync(3_500)));
+    } finally {
+      vi.useRealTimers();
+    }
+    const seeded = summary('seeded');
+    stored.set('seeded', seeded);
+    await act(async () => seed.resolve({ session: seeded }));
+    await act(async () => undefined);
+    await act(async () => made.reject(new Error('disk full')));
+    await act(async () => undefined);
+
+    expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('seeded', NOTES);
+    expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
+    expect(byTestId('chat-add-folder-error')).toBeNull();
+  });
+
+  it('shares into a chat the user opened during the first-run wait, making none', async () => {
+    const stored = stubBridge([]);
+    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValue(NOTES);
+    addContextDirectory.mockResolvedValue({ status: 'added', path: NOTES, session: summary('other', 'chat', [NOTES]) });
+    const other = summary('other', 'chat', undefined, 'Other');
+    stored.set('other', other);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      await addFolderFromMenu();
+      createSession.mockResolvedValueOnce({ session: other });
+      await act(async () => byTestId('chat-new-session-btn')?.click());
+      await act(async () => void (await vi.advanceTimersByTimeAsync(3_500)));
+    } finally {
+      vi.useRealTimers();
+    }
+    await act(async () => undefined);
+
+    expect(createSession).toHaveBeenCalledTimes(2);
+    expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('other', NOTES);
+    expect(document.querySelectorAll('[data-testid="chat-session-item"]')).toHaveLength(1);
+    expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
+  });
+
+  it('shares into a late first-run chat that already has messages and removes the one it made', async () => {
+    const stored = stubBridge([]);
+    const seed = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => seed.promise);
+    const made = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => made.promise);
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValue(NOTES);
+    addContextDirectory.mockResolvedValue({
+      status: 'added',
+      path: NOTES,
+      session: summary('seeded', 'chat', [NOTES]),
+    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      await addFolderFromMenu();
+      await act(async () => void (await vi.advanceTimersByTimeAsync(3_500)));
+    } finally {
+      vi.useRealTimers();
+    }
+    const seeded = { ...summary('seeded'), messageCount: 2 };
+    const fresh = summary('made');
+    stored.set('seeded', seeded);
+    stored.set('made', fresh);
+    await act(async () => seed.resolve({ session: seeded }));
+    await act(async () => undefined);
+    await act(async () => made.resolve({ session: fresh }));
+    await act(async () => undefined);
+
+    expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('seeded', NOTES);
+    expect(deleteSession).toHaveBeenCalledExactlyOnceWith('made', false);
+    expect(document.querySelectorAll('[data-testid="chat-session-item"]')).toHaveLength(1);
+    expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
+  });
+
+  it('makes no chat when the shell unmounts while Add folder waits on the first-run seed', async () => {
+    stubBridge([]);
+    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValue(NOTES);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      await addFolderFromMenu();
+      act(() => root?.unmount());
+      root = null;
+      await vi.advanceTimersByTimeAsync(3_500);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(createSession).toHaveBeenCalledTimes(1);
+    expect(addContextDirectory).not.toHaveBeenCalled();
+  });
+
+  it('shares nothing when the shell unmounts while the chat Add folder is making is created', async () => {
+    stubBridge([]);
+    seedFails();
+    const made = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => made.promise);
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValue(NOTES);
+    await addFolderFromMenu();
+    expect(createSession).toHaveBeenCalledTimes(2);
+    act(() => root?.unmount());
+    root = null;
+    await made.resolve({ session: summary('fresh') });
+    await tick();
+
+    expect(addContextDirectory).not.toHaveBeenCalled();
+  });
+
+  it('shares into the first-run chat that lands within the wait after a switch to Code mode', async () => {
+    const stored = stubBridge([], { createCodeSession: () => new Promise(() => undefined) });
+    const seed = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => seed.promise);
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValue(NOTES);
+    addContextDirectory.mockResolvedValue({
+      status: 'added',
+      path: NOTES,
+      session: summary('seeded', 'chat', [NOTES]),
+    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      await addFolderFromMenu();
+      await act(async () => byTestId('mode-switch-code-btn')?.click());
+      const seeded = summary('seeded');
+      stored.set('seeded', seeded);
+      await act(async () => seed.resolve({ session: seeded }));
+      await act(async () => void (await vi.advanceTimersByTimeAsync(1_000)));
+    } finally {
+      vi.useRealTimers();
+    }
+    await act(async () => undefined);
+
+    expect(createSession).toHaveBeenCalledTimes(1);
+    expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('seeded', NOTES);
+  });
+
   it('makes no chat when the window switched to Code mode while Add folder waited on the first-run seed', async () => {
     stubBridge([], { createCodeSession: () => new Promise(() => undefined) });
     createSession.mockImplementationOnce(() => new Promise(() => undefined));

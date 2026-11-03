@@ -694,6 +694,15 @@ export function ChatShell({
   openChatId.current = activeSummary?.mode === 'chat' ? activeId : null;
   const modeRef = useRef(mode);
   modeRef.current = mode;
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
+  const unmounted = useRef(false);
+  useEffect(() => {
+    unmounted.current = false;
+    return () => {
+      unmounted.current = true;
+    };
+  }, []);
   // The first-run Chat seed's create while it is in flight, so Add folder joins it instead of making a second chat.
   const seedInFlight = useRef<Promise<string | null> | null>(null);
   const deletedChats = useRef(new Set<string>());
@@ -731,20 +740,43 @@ export function ChatShell({
       }
       const seeded = seedAtClick && (await settledWithin(seedAtClick, SEED_WAIT_MS));
       const joined = seeded && !deletedChats.current.has(seeded) ? seeded : null;
-      if (!joined && modeRef.current !== 'chat') return;
-      // A seed that lands after the wait opens empty; the chat made here replaces it.
-      let lateSeed: string | null = null;
+      if (unmounted.current || (!joined && modeRef.current !== 'chat')) return;
+      // A chat the user opened during the wait cannot be the seed, which has not landed.
+      const openNow = openChatId.current;
+      if (!joined && openNow) {
+        await shareInto(openNow, () => shareFolderTo(openNow, path));
+        return;
+      }
+      // A seed that lands after the wait opens empty; the chat made here replaces it unless it has messages.
+      const late = { id: null as string | null };
       if (seedAtClick && !seeded)
         void seedAtClick.then(
-          id => (lateSeed = id),
+          id => (late.id = id),
           () => undefined
         );
       if (!joined) markSessionStart('new');
-      const created = joined || (await create());
+      let created: string;
+      try {
+        created = joined || (await create());
+      } catch (error) {
+        const seed = late.id;
+        if (!unmounted.current && modeRef.current === 'chat' && seed && openChatId.current === seed) {
+          await shareInto(seed, () => shareFolderTo(seed, path));
+          return;
+        }
+        throw error;
+      }
+      if (unmounted.current) return;
+      const lateOpen = late.id && openChatId.current === late.id ? late.id : null;
+      if (lateOpen && (sessionsRef.current.find(session => session.id === lateOpen)?.messageCount ?? 0) > 0) {
+        void shareInto(lateOpen, () => shareFolderTo(lateOpen, path));
+        await remove(created).catch(() => undefined);
+        return;
+      }
       void shareInto(created, () => shareFolderTo(created, path));
       // Opened in Code mode, a chat would be remembered as the session to reopen there.
       if (modeRef.current === 'chat')
-        setActiveId(current => (current === null || current === lateSeed ? created : current));
+        setActiveId(current => (current === null || current === late.id ? created : current));
     } catch (error) {
       if (openChatId.current || modeRef.current !== 'chat') return;
       setAddFolderAlerts(current => ({
@@ -759,7 +791,7 @@ export function ChatShell({
     } finally {
       addingFolder.current = false;
     }
-  }, [activeId, shareFolderTo, shareInto, clearAddFolderAlert, create, markSessionStart]);
+  }, [activeId, shareFolderTo, shareInto, clearAddFolderAlert, create, remove, markSessionStart]);
   // A failure from before any chat existed retires when a chat opens or the mode switches; the rest stay with their chat.
   useEffect(() => {
     clearAddFolderAlert(NO_CHAT);
