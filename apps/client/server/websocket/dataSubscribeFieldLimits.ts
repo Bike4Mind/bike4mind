@@ -81,6 +81,8 @@ export function resolveFieldLimits(
       signupGrantAssessment: false,
       riskScore: false,
       riskEvidence: false,
+      riskReviewAutoApproval: false,
+      riskReviewReopenedAt: false,
       throttle: false,
       riskSignals: false,
       signupLanding: false,

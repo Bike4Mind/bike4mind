@@ -20,8 +20,8 @@ import { systemAuditActor } from '@server/utils/adminAudit';
 /**
  * Approves a pending signup risk review on evidence an abuser cannot cheaply produce, so a
  * legitimate account is not held from AI access until an admin gets to it. Only ever moves pending
- * to approved (which an admin can reopen from the Risk review tab); never moves anything into
- * pending, and no model verdict is evidence here. Rules and defaults: SignupRiskAutoApprovalSchema.
+ * to approved (which an admin can reopen from the Risk review tab, after which these rules leave the
+ * account to admins); never moves anything into pending, and no model verdict is evidence here. Rules and defaults: SignupRiskAutoApprovalSchema.
  * Triggers: the Stripe webhook after a payment succeeds, and an hourly sweep for windows and the
  * quiet-account rule (apps/workers/src/cron/signupGrantHeldRelease.ts).
  */
@@ -38,7 +38,8 @@ const RADAR_NORMAL_RISK = 'normal';
 const AUDIT_ACTOR = 'signup-risk-auto-approval';
 
 const POLICY_REASONS: Readonly<Record<SignupRiskAutoApprovalPolicy, string>> = {
-  settled_payment: 'Successful card payment rated normal by Stripe Radar, on a card no other account has used',
+  settled_payment:
+    'Successful card payment rated normal by Stripe Radar, on a card no other account paid with in the last 90 days',
   quiet_account: 'Account aged past the quiet-account rule with no new risk signals and no open detections',
 };
 
@@ -46,14 +47,19 @@ export type RiskReviewAutoApprovalTrigger = 'stripe/webhook' | 'cron/signupGrant
 
 export type RiskReviewAutoApprovalOutcome =
   | { outcome: 'approved'; policy: SignupRiskAutoApprovalPolicy }
-  | { outcome: 'skipped'; reason: 'not_pending' | 'blocked' | 'no_evidence' };
+  | { outcome: 'skipped'; reason: 'not_pending' | 'reopened' | 'blocked' | 'grant_held' | 'no_evidence' };
 
-export const loadRiskReviewAutoApprovalRules = async (): Promise<SignupRiskAutoApproval> =>
-  getSettingsValue(
-    'signupRiskAutoApproval',
-    await getSettingsMap({ adminSettings: adminSettingsRepository }),
-    SignupRiskAutoApprovalSchema.parse({})
-  );
+const RULES_OFF: SignupRiskAutoApproval = SignupRiskAutoApprovalSchema.parse({
+  settledPayment: { enabled: false },
+  quietAccount: { enabled: false },
+});
+
+export async function loadRiskReviewAutoApprovalRules(): Promise<SignupRiskAutoApproval> {
+  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+  if (settings.signupRiskAutoApproval === undefined) return SignupRiskAutoApprovalSchema.parse({});
+  // A stored value that no longer parses turns every rule off: approving is the direction a bad value must not take.
+  return getSettingsValue('signupRiskAutoApproval', settings, RULES_OFF);
+}
 
 const anyRuleEnabled = (rules: SignupRiskAutoApproval) => rules.settledPayment.enabled || rules.quietAccount.enabled;
 
@@ -120,7 +126,11 @@ export async function autoApproveRiskReview(
 ): Promise<RiskReviewAutoApprovalOutcome> {
   const user = await userRepository.findById(userId);
   if (user?.riskScore?.reviewState !== 'pending') return { outcome: 'skipped', reason: 'not_pending' };
+  if (user.riskReviewReopenedAt) return { outcome: 'skipped', reason: 'reopened' };
   if (isDisqualified(user)) return { outcome: 'skipped', reason: 'blocked' };
+  // Approving drops the account from the queue, and only the admin approve path pays a held tranche
+  // (riskReviewGrantRelease.ts), so an account with one stays for an admin.
+  if (userService.isSignupGrantHeldForReview(user)) return { outcome: 'skipped', reason: 'grant_held' };
   const policy = await findQualifyingPolicy(user, rules, now);
   if (!policy) return { outcome: 'skipped', reason: 'no_evidence' };
 
@@ -142,6 +152,7 @@ export async function autoApproveRiskReview(
     );
     return true;
   });
+  // The write re-checks state and disqualifiers, so a false here is a race lost to an admin or a block.
   return approved ? { outcome: 'approved', policy } : { outcome: 'skipped', reason: 'not_pending' };
 }
 

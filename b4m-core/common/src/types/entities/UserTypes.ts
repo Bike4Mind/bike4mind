@@ -848,6 +848,9 @@ export interface IUser extends ICreditHolder {
   /** Set when the pending review was approved automatically; any admin review decision clears it. */
   riskReviewAutoApproval?: ISignupRiskAutoApproval | null;
 
+  /** Set when an admin reopens a decided review; the automatic approval rules never act on it again. */
+  riskReviewReopenedAt?: Date | null;
+
   /**
    * Behavioral evidence and its refresh state (b4m-core/common/src/schemas/riskEvidence.ts).
    * Shadow-only: never feeds riskScore.reviewState. Admin-only, like riskScore.
@@ -1103,10 +1106,14 @@ export interface IUserRepository
   countPendingRiskReviews: () => Promise<number>;
   /**
    * Move a user's review from `from` to `to`, only if it is still `from`; false when it was not
-   * (already decided or no score). Used for admin approve and its undo; clears riskReviewAutoApproval.
+   * (already decided or no score). Used for admin approve and its undo; clears riskReviewAutoApproval,
+   * and a move back to pending stamps riskReviewReopenedAt.
    */
   setRiskReviewState: (userId: string, from: SignupRiskReviewState, to: SignupRiskReviewState) => Promise<boolean>;
-  /** Approve a pending, unbanned user's review and record why; false when it was no longer pending. */
+  /**
+   * Approve a pending review and record why; false when it was no longer pending, an admin reopened
+   * it, or the account is banned, disputed, suspended or has forfeited its payment unlock.
+   */
   autoApproveRiskReview: (userId: string, approval: ISignupRiskAutoApproval) => Promise<boolean>;
   /** Ids of unbanned users whose review is pending, in id order; pass the last id back as `afterId`. */
   findPendingRiskReviewIds: (options: { afterId?: string; limit: number }) => Promise<string[]>;

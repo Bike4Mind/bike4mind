@@ -1115,7 +1115,10 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     const result = await this.model
       .updateOne(
         { _id: userId, 'riskScore.reviewState': from },
-        { $set: { 'riskScore.reviewState': to }, $unset: { riskReviewAutoApproval: 1 } }
+        {
+          $set: { 'riskScore.reviewState': to, ...(to === 'pending' ? { riskReviewReopenedAt: new Date() } : {}) },
+          $unset: { riskReviewAutoApproval: 1 },
+        }
       )
       .exec();
     return result.modifiedCount === 1;
@@ -1124,7 +1127,16 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   async autoApproveRiskReview(userId: string, approval: ISignupRiskAutoApproval): Promise<boolean> {
     const result = await this.model
       .updateOne(
-        { _id: userId, 'riskScore.reviewState': 'pending', isBanned: { $ne: true } },
+        // Re-checks the disqualifiers at write time, so a dispute or suspension landing mid-evaluation wins.
+        {
+          _id: userId,
+          'riskScore.reviewState': 'pending',
+          riskReviewReopenedAt: null,
+          isBanned: { $ne: true },
+          disputePending: { $ne: true },
+          'moderation.status': { $ne: 'suspended' },
+          'signupGrant.unlockForfeited': null,
+        },
         { $set: { 'riskScore.reviewState': 'approved', riskReviewAutoApproval: approval } }
       )
       .exec();
@@ -1745,6 +1757,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
       required: false,
       default: undefined,
     },
+    // Written by setRiskReviewState on an admin reopen - see IUser.riskReviewReopenedAt.
+    riskReviewReopenedAt: { type: Date, required: false, default: undefined },
     // Written by userService.refreshRiskEvidence - see IUser.riskEvidence.
     riskEvidence: { type: RiskEvidenceSchema, required: false, default: undefined },
     isSynthetic: { type: Boolean, required: false },

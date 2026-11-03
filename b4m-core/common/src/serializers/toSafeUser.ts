@@ -51,6 +51,7 @@ export const USER_SECRET_FIELDS = [
   'signupMeta',
   'riskScore',
   'riskReviewAutoApproval',
+  'riskReviewReopenedAt',
   'riskEvidence',
   'freeCreditClaimEmail',
   'grantPackageId',

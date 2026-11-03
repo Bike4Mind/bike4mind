@@ -23,6 +23,7 @@ export const SignupRiskAutoApprovals: React.FC<{
   const decision = useSignupRiskReviewDecision();
   const openProfile = useOpenUserProfile();
   const [reopening, setReopening] = useState<SignupRiskAutoApprovalRow | null>(null);
+  const [reopenError, setReopenError] = useState<string | null>(null);
 
   if (rows.length === 0) return null;
 
@@ -92,6 +93,7 @@ export const SignupRiskAutoApprovals: React.FC<{
             data-testid={`signup-risk-reopen-${row.userId}`}
             onClick={() => {
               decision.reset();
+              setReopenError(null);
               setReopening(row);
             }}
           >
@@ -113,13 +115,25 @@ export const SignupRiskAutoApprovals: React.FC<{
           if (!reopening) return;
           decision.mutate(
             { action: 'reopen', userIds: [reopening.userId], reason },
-            { onSuccess: () => setReopening(null) }
+            {
+              // The route answers 200 per batch; a failed or skipped id is only in the body.
+              onSuccess: result => {
+                if (result.failedUserIds.length > 0) setReopenError('Reopening failed. Try again.');
+                else if (result.skippedUserIds.length > 0)
+                  setReopenError('This account was already decided by someone else. Refreshing the list.');
+                else setReopening(null);
+              },
+            }
           );
         }}
         data-testid="signup-risk-reopen-dialog"
         testIds={{ confirm: 'signup-risk-reopen-confirm-btn', reason: 'signup-risk-reopen-reason' }}
       >
-        {decision.error && <Alert color="danger">{getErrorMessage(decision.error)}</Alert>}
+        {(decision.error || reopenError) && (
+          <Alert color="danger" data-testid="signup-risk-reopen-error">
+            {decision.error ? getErrorMessage(decision.error) : reopenError}
+          </Alert>
+        )}
       </ActionDialog>
     </Stack>
   );

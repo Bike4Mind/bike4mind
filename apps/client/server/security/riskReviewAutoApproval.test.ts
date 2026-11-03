@@ -100,6 +100,7 @@ describe('autoApproveRiskReview: settled payment', () => {
     const result = await autoApproveRiskReview(USER_ID, { rules: RULES, trigger: 'stripe/webhook', now: NOW });
 
     expect(result).toEqual({ outcome: 'approved', policy: 'settled_payment' });
+    expect(h.accountsForCard).toHaveBeenCalledWith('fp_1');
     expect(h.autoApprove).toHaveBeenCalledWith(USER_ID, { policy: 'settled_payment', decidedAt: NOW });
     expect(h.record).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -178,6 +179,33 @@ describe('autoApproveRiskReview: settled payment', () => {
     const result = await autoApproveRiskReview(USER_ID, { rules: RULES, trigger: 'stripe/webhook', now: NOW });
 
     expect(result).toEqual({ outcome: 'skipped', reason: 'not_pending' });
+    expect(h.autoApprove).not.toHaveBeenCalled();
+  });
+
+  it('leaves an account an admin reopened to admins, even with a qualifying payment', async () => {
+    h.findById.mockResolvedValue(pendingUser({ riskReviewReopenedAt: NOW }));
+
+    const result = await autoApproveRiskReview(USER_ID, {
+      rules: RULES,
+      trigger: 'cron/signupGrantHeldRelease',
+      now: NOW,
+    });
+
+    expect(result).toEqual({ outcome: 'skipped', reason: 'reopened' });
+    expect(h.autoApprove).not.toHaveBeenCalled();
+  });
+
+  it('leaves an account with a signup tranche held for review to the admin approve path, which pays it', async () => {
+    h.findById.mockResolvedValue(
+      pendingUser({
+        signupGrantAssessment: { band: 'review', status: 'evaluated' },
+        signupGrant: { stage: 'signup', creditsReleased: 0, signupCredits: 100 },
+      })
+    );
+
+    const result = await autoApproveRiskReview(USER_ID, { rules: RULES, trigger: 'stripe/webhook', now: NOW });
+
+    expect(result).toEqual({ outcome: 'skipped', reason: 'grant_held' });
     expect(h.autoApprove).not.toHaveBeenCalled();
   });
 
@@ -292,6 +320,24 @@ describe('sweepRiskReviewAutoApprovals', () => {
 
     expect(result).toEqual({ scanned: 2, approved: 1, failed: 1 });
     expect(h.pendingIds).toHaveBeenNthCalledWith(2, { afterId: other, limit: 2 });
+  });
+
+  it('turns both rules off when the stored setting no longer parses', async () => {
+    h.settings.mockResolvedValue({ signupRiskAutoApproval: { settledPayment: { enabled: 'yes' } } });
+
+    const result = await sweepRiskReviewAutoApprovals(logger, { maxUsers: 10, now: NOW });
+
+    expect(result).toEqual({ scanned: 0, approved: 0, failed: 0 });
+    expect(h.pendingIds).not.toHaveBeenCalled();
+  });
+
+  it('applies the defaults when nothing is stored', async () => {
+    h.pendingIds.mockResolvedValueOnce([USER_ID]).mockResolvedValueOnce([]);
+    h.attempts.mockResolvedValue([payment({ createdAt: new Date(NOW.getTime() - 60_000) })]);
+
+    const result = await sweepRiskReviewAutoApprovals(logger, { maxUsers: 10, now: NOW });
+
+    expect(result).toEqual({ scanned: 1, approved: 1, failed: 0 });
   });
 
   it('reads nothing when both rules are off', async () => {

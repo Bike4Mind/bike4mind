@@ -173,3 +173,92 @@ describe('UserRepository.setRiskReviewState', () => {
     expect((await User.findById(id).lean())?.riskScore).toBeUndefined();
   });
 });
+
+describe('UserRepository.autoApproveRiskReview', () => {
+  const approval = { policy: 'settled_payment' as const, decidedAt: new Date('2026-11-01T00:00:00Z') };
+
+  it('approves a pending review and records the policy', async () => {
+    const id = await createUser(undefined, 'pending');
+
+    await expect(userRepository.autoApproveRiskReview(id, approval)).resolves.toBe(true);
+    const user = await User.findById(id).lean();
+    expect(user?.riskScore?.reviewState).toBe('approved');
+    expect(user?.riskReviewAutoApproval).toEqual(approval);
+  });
+
+  it.each([
+    ['banned', { isBanned: true }],
+    ['disputed', { disputePending: true }],
+    ['suspended', { 'moderation.status': 'suspended' }],
+    ['forfeited', { 'signupGrant.unlockForfeited': { cause: 'refund', at: new Date() } }],
+    ['reopened by an admin', { riskReviewReopenedAt: new Date() }],
+  ])('refuses a %s account at write time', async (_label, set) => {
+    const id = await createUser(undefined, 'pending');
+    await User.collection.updateOne({ _id: new mongoose.Types.ObjectId(id) }, { $set: set });
+
+    await expect(userRepository.autoApproveRiskReview(id, approval)).resolves.toBe(false);
+    expect((await User.findById(id).lean())?.riskScore?.reviewState).toBe('pending');
+  });
+
+  it('refuses a review that is no longer pending', async () => {
+    const id = await createUser(undefined, 'approved');
+
+    await expect(userRepository.autoApproveRiskReview(id, approval)).resolves.toBe(false);
+    expect((await User.findById(id).lean())?.riskReviewAutoApproval).toBeUndefined();
+  });
+
+  it('is undone by an admin reopen, which clears the marker and blocks another automatic approval', async () => {
+    const id = await createUser(undefined, 'pending');
+    await userRepository.autoApproveRiskReview(id, approval);
+
+    await expect(userRepository.setRiskReviewState(id, 'approved', 'pending')).resolves.toBe(true);
+    const reopened = await User.findById(id).lean();
+    expect(reopened?.riskReviewAutoApproval).toBeUndefined();
+    expect(reopened?.riskReviewReopenedAt).toBeInstanceOf(Date);
+    await expect(userRepository.findRiskAutoApprovals({ since: new Date(0), limit: 10 })).resolves.toEqual([]);
+    await expect(userRepository.autoApproveRiskReview(id, approval)).resolves.toBe(false);
+  });
+
+  it('leaves no reopen marker when an admin approves', async () => {
+    const id = await createUser(undefined, 'pending');
+
+    await userRepository.setRiskReviewState(id, 'pending', 'approved');
+    expect((await User.findById(id).lean())?.riskReviewReopenedAt).toBeUndefined();
+  });
+});
+
+describe('UserRepository.findPendingRiskReviewIds', () => {
+  it('returns unbanned pending accounts in id order, paging after the given id', async () => {
+    const ids = [
+      await createUser(undefined, 'pending'),
+      await createUser(undefined, 'pending'),
+      await createUser(undefined, 'pending'),
+    ];
+    const banned = await createUser(undefined, 'pending');
+    await User.collection.updateOne({ _id: new mongoose.Types.ObjectId(banned) }, { $set: { isBanned: true } });
+    await createUser(undefined, 'approved');
+
+    const first = await userRepository.findPendingRiskReviewIds({ limit: 2 });
+    const second = await userRepository.findPendingRiskReviewIds({ afterId: first[1], limit: 2 });
+
+    expect([...first, ...second]).toEqual(ids);
+  });
+});
+
+describe('UserRepository.findRiskAutoApprovals', () => {
+  it('returns approved accounts approved automatically since the cutoff, newest first', async () => {
+    const decided = (iso: string) => ({ policy: 'settled_payment' as const, decidedAt: new Date(iso) });
+    const older = await createUser(undefined, 'pending');
+    const newer = await createUser(undefined, 'pending');
+    const stale = await createUser(undefined, 'pending');
+    await userRepository.autoApproveRiskReview(older, decided('2026-11-01T00:00:00Z'));
+    await userRepository.autoApproveRiskReview(newer, decided('2026-11-02T00:00:00Z'));
+    await userRepository.autoApproveRiskReview(stale, decided('2026-09-01T00:00:00Z'));
+    const byAdmin = await createUser(undefined, 'pending');
+    await userRepository.setRiskReviewState(byAdmin, 'pending', 'approved');
+
+    const rows = await userRepository.findRiskAutoApprovals({ since: new Date('2026-10-01T00:00:00Z'), limit: 10 });
+
+    expect(rows.map(row => row.id)).toEqual([newer, older]);
+  });
+});
