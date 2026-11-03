@@ -11,6 +11,7 @@ import { useForceResetMFA } from '@client/app/hooks/data/mfa';
 import { useSendSystemMessage } from '@client/app/hooks/data/inbox';
 import { ActionDialog, ADMIN_REASON_PRESETS, ChangePreview, undoAdminReason, useUndoToast } from '../../../shared';
 import { useAdminUserUpdate, adminUpdateErrorMessage } from './useAdminUserUpdate';
+import { warnSubscriptionCancelFailures } from './warnSubscriptionCancelFailures';
 import type { ProfileDialogProps } from './profileActions';
 import { accountStatus, displayName } from '../userProfileModel';
 
@@ -303,8 +304,9 @@ export const DeleteUserDialog: React.FC<ProfileDialogProps & { onDeleted: () => 
   const deleteUser = useDeleteUser();
 
   const handleConfirm = async (reason: string) => {
-    await deleteUser.mutateAsync({ id: user.id, reason });
+    const response = await deleteUser.mutateAsync({ id: user.id, reason });
     onClose();
+    warnSubscriptionCancelFailures(response);
     onDeleted();
   };
 

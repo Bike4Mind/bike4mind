@@ -26,6 +26,13 @@ export type AccountSubscriptionCancellation = {
 
 export const NO_SUBSCRIPTIONS_CANCELED: AccountSubscriptionCancellation = { canceled: [], failed: [] };
 
+/** The admin response field for a single-user cancel: absent unless something was canceled or failed. */
+export function subscriptionCancellationResponse(
+  result: AccountSubscriptionCancellation | null
+): { subscriptionCancellation: AccountSubscriptionCancellation } | Record<string, never> {
+  return result && (result.canceled.length > 0 || result.failed.length > 0) ? { subscriptionCancellation: result } : {};
+}
+
 const AUDIT_CONTEXT: Record<AccountSubscriptionCancelReason, string> = {
   suspended: 'on suspending the account',
   contained: 'on containing the account',
