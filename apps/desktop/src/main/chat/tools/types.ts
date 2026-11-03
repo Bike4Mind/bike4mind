@@ -614,6 +614,8 @@ export interface ApprovalPrompt {
    * project, a read of a `.env` file, or a command that can send data out.
    */
   askInAuto?: true;
+  /** An "always" on this card allows this call only and is never recorded. */
+  allowOnce?: true;
   /**
    * Proven by the shell scan to keep to this computer or only read from GitHub (see
    * shellScan's `containedCommand`), so untrusted content read earlier in the reply is no reason

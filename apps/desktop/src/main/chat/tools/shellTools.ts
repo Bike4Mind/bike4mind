@@ -494,6 +494,7 @@ export async function shellApproval(
     detail: [detail, ...reasons].join('\n\n'),
     key: runKey,
     ...(asks ? { askInAuto: true as const } : {}),
+    ...(scriptCheckFailed && !script ? { allowOnce: true as const } : {}),
     ...(scan.contained ? { contained: true as const } : {}),
     always: {
       namespace: tool,

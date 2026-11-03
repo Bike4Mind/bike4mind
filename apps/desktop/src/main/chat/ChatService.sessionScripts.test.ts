@@ -10,6 +10,7 @@ import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
+import * as sessionScripts from './tools/sessionScripts';
 import { bashExecute } from './tools/shellTools';
 
 function frame(payload: unknown): string {
@@ -403,6 +404,22 @@ describe('ChatService running a script written in the same session', () => {
 
     const asked = await awaitCall('bash_execute', 'awaiting-approval');
     expect(asked.approvalDetail).not.toContain('written in this session');
+  });
+
+  it('asks again after an "always" on a run whose script check failed', async () => {
+    vi.spyOn(sessionScripts, 'sessionScriptRun').mockRejectedValue(new Error('unreadable'));
+    const id = await session('auto');
+    await reply(id, [shell('bash run.sh')]);
+    const first = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(first.approvalDetail).toContain('Could not check');
+    approvals.resolve(first.approvalId!, { decision: 'always' });
+    await settled('bash_execute');
+
+    events.length = 0;
+    const next = streams.length;
+    streams[next - 1].write(toolTurn('again', 'bash_execute', { command: 'bash run.sh', cwd: root }));
+    streams[next - 1].write(frame('[DONE]'));
+    await awaitCall('bash_execute', 'awaiting-approval');
   });
 
   it('lets an exact "always" stand only until the script is written again', async () => {
