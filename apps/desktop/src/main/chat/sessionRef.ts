@@ -73,10 +73,12 @@ const MODE_RANK: Record<ChatApprovalMode, number> = { ask: 0, auto: 1, full: 2 }
  * another what its own user never allowed, so the receiver's user decides instead.
  */
 export function relayHoldReason(
-  from: Pick<ChatSession, 'project' | 'approvalMode'>,
-  to: Pick<ChatSession, 'project' | 'approvalMode'>
+  from: Pick<ChatSession, 'project' | 'approvalMode' | 'origin'>,
+  to: Pick<ChatSession, 'id' | 'project' | 'approvalMode'>
 ): ChatRelayHoldReason | null {
   if (from.project?.directory !== to.project?.directory) return 'other-project';
+  // The parent chose the child's mode, so the child reporting back widens nothing.
+  if (from.origin?.parentSessionId === to.id) return null;
   // `?? 'ask'` for a session stored before the mode existed, which is what it is relaunched at.
   if (MODE_RANK[to.approvalMode ?? 'ask'] > MODE_RANK[from.approvalMode ?? 'ask']) return 'looser-mode';
   return null;

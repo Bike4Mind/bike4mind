@@ -50,18 +50,31 @@ describe('relayHoldReason', () => {
   const web = project('/work/web');
 
   it('delivers within one project at the same or a stricter mode', () => {
-    expect(relayHoldReason({ project: web, approvalMode: 'auto' }, { project: web, approvalMode: 'auto' })).toBeNull();
-    expect(relayHoldReason({ project: web, approvalMode: 'full' }, { project: web, approvalMode: 'ask' })).toBeNull();
+    expect(
+      relayHoldReason({ project: web, approvalMode: 'auto' }, { id: 'to', project: web, approvalMode: 'auto' })
+    ).toBeNull();
+    expect(
+      relayHoldReason({ project: web, approvalMode: 'full' }, { id: 'to', project: web, approvalMode: 'ask' })
+    ).toBeNull();
   });
 
   it('holds for another project, a missing project on either side, or a looser receiver', () => {
     const api = project('/work/api');
-    expect(relayHoldReason({ project: web, approvalMode: 'full' }, { project: api, approvalMode: 'ask' })).toBe(
+    expect(
+      relayHoldReason({ project: web, approvalMode: 'full' }, { id: 'to', project: api, approvalMode: 'ask' })
+    ).toBe('other-project');
+    expect(relayHoldReason({ project: web, approvalMode: 'ask' }, { id: 'to', approvalMode: 'ask' })).toBe(
       'other-project'
     );
-    expect(relayHoldReason({ project: web, approvalMode: 'ask' }, { approvalMode: 'ask' })).toBe('other-project');
-    expect(relayHoldReason({ project: web, approvalMode: 'ask' }, { project: web, approvalMode: 'auto' })).toBe(
-      'looser-mode'
-    );
+    expect(
+      relayHoldReason({ project: web, approvalMode: 'ask' }, { id: 'to', project: web, approvalMode: 'auto' })
+    ).toBe('looser-mode');
+  });
+
+  it('delivers from a spawned child to its parent even when the parent runs looser', () => {
+    const origin = { parentSessionId: 'parent-1', depth: 1, seedPrompt: 'go' };
+    const parent = { id: 'parent-1', project: web, approvalMode: 'full' } as const;
+    expect(relayHoldReason({ project: web, approvalMode: 'auto', origin }, parent)).toBeNull();
+    expect(relayHoldReason({ project: web, approvalMode: 'auto' }, parent)).toBe('looser-mode');
   });
 });
