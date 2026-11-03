@@ -6,7 +6,7 @@ import type { BackgroundProcessInfo } from '@shared/chat';
 import type { OutputStream } from './outputBuffer';
 import { isWithin, realpathNearest, resolveWithinRoots } from './paths';
 import { writesOwnRepository } from './ownRepository';
-import { scanShell } from './shellScan';
+import { inUngrantedDistro, scanShell } from './shellScan';
 import {
   expectShellRun,
   gitRunsConfiguredProgram,
@@ -419,11 +419,13 @@ export async function shellApproval(
 
   let startDirectory: string;
   const directories: string[] = [];
+  const ungranted: string[] = [];
   try {
     startDirectory = await realpathNearest(await resolveCwd(input, context.roots, context.workingDirectory));
   } catch {
     startDirectory = context.workingDirectory ?? context.roots[0] ?? process.cwd();
-    directories.push(resolve(startDirectory, cwd));
+    const target = resolve(startDirectory, cwd);
+    (inUngrantedDistro(target, context.roots) ? ungranted : directories).push(target);
   }
 
   const scan = await scanShell(command, startDirectory, context.roots).catch(() => null);
@@ -434,6 +436,7 @@ export async function shellApproval(
   for (const tree of scan.writtenTrees) await recordSessionTreeWrite(context, tree);
   const script = await sessionScriptRun(command, startDirectory, context.sessionId).catch(() => null);
   const gitProgram = gitRunsConfiguredProgram(scan.commands);
+  const unreachable = [...new Set([...ungranted, ...scan.ungranted])];
   const reasons = [
     ...(scan.envFiles.length > 0 ? [`Reads ${scan.envFiles.join(', ')}, which usually holds secrets.`] : []),
     ...(scan.outbound.length > 0 ? [`Can send data off this computer (${scan.outbound.join(', ')}).`] : []),
@@ -446,8 +449,8 @@ export async function shellApproval(
       ? ['Runs git in a repository whose .git or .husky folder was changed in this session.']
       : []),
     ...(gitProgram ? [`Sets ${gitProgram}, which makes git run a program.`] : []),
-    ...(scan.ungranted.length > 0
-      ? [`Reaches ${scan.ungranted.join(', ')}, in a WSL distro this project has no folder in.`]
+    ...(unreachable.length > 0
+      ? [`Reaches ${unreachable.join(', ')}, in a WSL distro this project has no folder in.`]
       : []),
   ];
   // A push or gh write to the folder's own origin still says so on the card, but does not stop
@@ -460,7 +463,7 @@ export async function shellApproval(
   const main = scan.readOnly && context.workingDirectory ? await mainCheckoutOf(context.workingDirectory) : null;
   const outside = main ? scan.directories.filter(directory => !isWithin(main, directory)) : scan.directories;
   const asks =
-    scan.envFiles.length > 0 || ownRepository.includes(false) || !!script || !!gitProgram || scan.ungranted.length > 0;
+    scan.envFiles.length > 0 || ownRepository.includes(false) || !!script || !!gitProgram || unreachable.length > 0;
   // An exact "always" for the run lapses when the script is written again.
   const runKey = script ? `${key}\x00${script.generation}` : key;
   if (script && context.sessionId) expectShellRun(runKey, context.sessionId, script.hooks);
@@ -480,6 +483,7 @@ export async function shellApproval(
       })),
       directories: [...new Set([...directories, ...outside])],
       paths: scan.paths ?? [],
+      ungranted: unreachable,
     },
   };
 }

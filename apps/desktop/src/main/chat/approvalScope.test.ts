@@ -18,6 +18,11 @@ describe('describeAlways', () => {
     expect(describeAlways(always([]), CWD, HOME)).toBeUndefined();
   });
 
+  it('offers nothing for a command that reaches a distro no folder is in', () => {
+    const unreachable = { ...always(['cat *']), ungranted: ['\\\\wsl.localhost\\Debian\\etc\\hosts'] };
+    expect(describeAlways(unreachable, CWD, HOME)).toBeUndefined();
+  });
+
   it('names the patterns a command would allow', () => {
     expect(describeAlways(always(['git status *']), CWD, HOME)?.shown).toBe('`git status *`');
   });

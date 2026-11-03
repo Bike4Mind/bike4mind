@@ -56,7 +56,7 @@ describe('a path in a distro no root is in', () => {
     const scan = await scanShell(`cat '${OTHER}'`, root, [root]);
 
     expect(scan?.ungranted).toEqual([OTHER]);
-    expect(scan?.paths).toContain(OTHER);
+    expect(scan?.paths ?? []).not.toContain(OTHER);
     expect(inDebian(touched)).toEqual([]);
     expect(inDebian(asked)).toEqual([]);
   });

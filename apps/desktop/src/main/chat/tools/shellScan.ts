@@ -1112,7 +1112,7 @@ async function shellHome(startDirectory: string): Promise<{ home: string; temp: 
 }
 
 /** A path in a WSL distro that none of `roots` is in. */
-function inUngrantedDistro(path: string, roots: readonly string[]): boolean {
+export function inUngrantedDistro(path: string, roots: readonly string[]): boolean {
   const distro = wslLocation(path)?.distro.toLowerCase();
   return distro !== undefined && !roots.some(root => wslLocation(root)?.distro.toLowerCase() === distro);
 }
@@ -1167,7 +1167,6 @@ export async function scanShell(
       const target = resolve(cwd, prefix);
       if (inUngrantedDistro(target, allowed)) {
         // Outside without a look: reading it over the share would start that distro.
-        paths.add(target);
         ungranted.add(target);
         return target;
       }

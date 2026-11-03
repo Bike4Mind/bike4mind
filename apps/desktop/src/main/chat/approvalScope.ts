@@ -46,6 +46,7 @@ export function describeAlways(
   workingDirectory?: string,
   home: string = homedir()
 ): AlwaysScope | undefined {
+  if (always.ungranted?.length) return undefined;
   const patterns = [...new Set(always.commands.map(command => command.pattern))].map(pattern => `\`${pattern}\``);
   if (patterns.length === 0 && always.directories.length === 0) return undefined;
   const short = always.directories.map(directory => `${shortenDirectory(directory, workingDirectory, home)}${sep}*`);
