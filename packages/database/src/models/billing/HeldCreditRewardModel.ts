@@ -72,8 +72,14 @@ export const heldCreditRewardRepository = {
       .lean();
     return row?.credits ?? null;
   },
-  async listHeld(limit: number): Promise<HeldCreditReward[]> {
-    const rows = await HeldCreditRewardModel.find({ status: 'held' }).sort({ heldAt: 1, _id: 1 }).limit(limit).lean();
+  async listHeld(limit: number, maxCredits?: number): Promise<HeldCreditReward[]> {
+    const rows = await HeldCreditRewardModel.find({
+      status: 'held',
+      ...(maxCredits !== undefined ? { credits: { $lte: maxCredits } } : {}),
+    })
+      .sort({ heldAt: 1, _id: 1 })
+      .limit(limit)
+      .lean();
     return rows.map(toReward);
   },
   async settle(transactionId: string, status: 'paid' | 'void', at: Date = new Date()) {

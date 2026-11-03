@@ -119,6 +119,7 @@ async function releaseStage(
     // Detection may notify reviewers; keep it outside the retried payout transaction.
     if (await protectSignupCredits(userId, db)) {
       if (expected === 'pending_email') await db.users.addTagsToUser(userId, [PENDING_FREE_CREDITS_TAG]);
+      await dropBudgetHold(db.users, userId, user.signupGrantHeldReason);
       return { ...noGrant(), withheld: true };
     }
   }
@@ -219,7 +220,7 @@ async function releaseStage(
           const queued = dripDay
             ? await queueHeadBlocks(db, 'trickle', db.signupProtection?.grantBudget?.heldRewards, amount, dripDay)
             : expected === 'pending_email' &&
-              !user.signupGrantHeldReason &&
+              user.signupGrantHeldReason !== 'budget_exhausted' &&
               (await hasSignupBacklog(db.users, signupGrantBudgetDay(grantClock(db))));
           const reservation = queued
             ? { outcome: 'exhausted' as const, release: async () => {} }
@@ -240,7 +241,7 @@ async function releaseStage(
                 id: userId,
                 signupGrantHeldReason: 'budget_exhausted',
                 // Kept from the first hold so a retried account keeps its place in the queue.
-                ...(user.signupGrantHeldReason ? {} : { signupGrantHeldAt: grantClock(db) }),
+                ...(user.signupGrantHeldReason === 'budget_exhausted' ? {} : { signupGrantHeldAt: grantClock(db) }),
               });
             }
             return { ...noGrant(), withheld: true, budgetExhausted: true };
@@ -342,6 +343,20 @@ async function releaseStage(
     await clearHeldReason(db.users, userId);
     return noGrant();
   }
+}
+
+/**
+ * A grant withheld for signup domain review is no longer waiting on the signup pool. Its budget hold
+ * would keep it in the held-release cron's scan and count as signup backlog (hasSignupBacklog) for as
+ * long as the review stays open, queueing every new grant behind it. It stays tagged, so the admin
+ * domain release (apps/client/pages/api/admin/signup-domain-holds.ts) still pays it.
+ */
+export async function dropBudgetHold(
+  users: FreeCreditAdapters['db']['users'],
+  userId: string,
+  heldReason: string | null | undefined
+) {
+  if (heldReason === 'budget_exhausted') await users.update({ id: userId, signupGrantHeldReason: null });
 }
 
 async function clearHeldReason(users: FreeCreditAdapters['db']['users'], userId: string) {

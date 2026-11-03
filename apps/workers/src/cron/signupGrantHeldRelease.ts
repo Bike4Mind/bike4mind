@@ -1,6 +1,8 @@
 /**
- * Pays free signup grants held by the daily budget, oldest first, against the new day's budget, then
- * the payment unlocks whose settling window has passed (userService.releaseDueHeldUnlocks).
+ * Pays, in order: gear and first-answer referral rewards queued for the trickle pool
+ * (creditService.releaseHeldCreditRewards), free signup grants held by the signup pool, oldest first,
+ * against the new day's budget, then the payment unlocks whose settling window has passed
+ * (userService.releaseDueHeldUnlocks).
  * Schedule: hourly (infra/cron.ts signupGrantHeldRelease), so the day's first run drains the backlog.
  * Self-host equivalent: apps/workers/src/selfhost/signupGrantHeldRelease.ts.
  */
@@ -29,9 +31,16 @@ export async function runSignupGrantHeldRelease(
       }
     );
     if (rewards.scanned > 0) logger.info('[signupGrantHeldRelease] held rewards done', rewards);
-    await alertForReleasedReferralRewards(
-      rewards.paidRewards.filter(paid => paid.source === 'referral_first_answer').map(paid => paid.creditTransactionId)
-    );
+    try {
+      await alertForReleasedReferralRewards(
+        rewards.paidRewards
+          .filter(paid => paid.source === 'referral_first_answer')
+          .map(paid => paid.creditTransactionId)
+      );
+    } catch (error) {
+      // The payouts above have committed; only the post-payout spend check failed.
+      logger.error('[signupGrantHeldRelease] referral spend alert failed after paying held rewards', error);
+    }
   } catch (error) {
     logger.error('[signupGrantHeldRelease] held rewards failed', error);
   }

@@ -59,7 +59,7 @@ beforeEach(() => {
     storedSettings({
       turnstileEnabled: true,
       turnstileFailClosed: false,
-      signupGrantDailyBudget: 5000,
+      signupGrantSignupPoolDaily: 5000,
       newAccountSpendCapDays: 7,
       paymentRiskAlertsEnabled: true,
       paymentRiskAutoRefundEnabled: false,
@@ -96,7 +96,7 @@ describe('getIncidentState', () => {
       queues: { riskReviewsPending: 4, heldGrants: 9, domainHoldsPending: 2 },
       payments: { last24h: window(5), last7d: window(20) },
     });
-    expect(h.getSpent).toHaveBeenCalledWith('2026-11-02');
+    expect(h.getSpent).toHaveBeenCalledWith('signup:2026-11-02');
     expect(h.countDomainHolds).toHaveBeenCalledWith({ status: 'held_pending_review' });
     expect(h.summarizeWindow.mock.calls.map(([since]) => (since as Date).toISOString())).toEqual([
       new Date(NOW.getTime() - DAY_MS).toISOString(),
@@ -104,10 +104,14 @@ describe('getIncidentState', () => {
     ]);
   });
 
-  it('reports an unmetered budget and switched-off caps as null, with setting defaults for the rest', async () => {
+  it('reports a paused signup pool and switched-off caps as null, with setting defaults for the rest', async () => {
     h.secret = 'not-configured';
     h.settings.mockResolvedValue(
-      storedSettings({ signupGrantDailyBudget: 0, newAccountSpendCapDays: 0, paymentRiskCheckoutMaxBlockedAttempts: 0 })
+      storedSettings({
+        signupGrantSignupPoolDaily: 0,
+        newAccountSpendCapDays: 0,
+        paymentRiskCheckoutMaxBlockedAttempts: 0,
+      })
     );
 
     const { defenses } = await getIncidentState(NOW);

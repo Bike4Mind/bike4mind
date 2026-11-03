@@ -11,6 +11,9 @@ import { GEAR_TRUST_MIN_AGE_DAYS } from '@client/lib/gears/keys';
 export const creditText = (gear: GearStatus) =>
   `${gear.credits.toLocaleString()} credit${gear.credits === 1 ? '' : 's'}`;
 
+/** When a queued reward pays: the claim toast and the queued chip's tooltip both say it this way. */
+export const QUEUED_PAYOUT_TEXT = 'pays out as soon as the daily reward budget allows';
+
 const minAgeText = (gear: GearStatus) => {
   const days = gear.minAccountAgeDays ?? GEAR_TRUST_MIN_AGE_DAYS;
   return `${days} day${days === 1 ? '' : 's'}`;
@@ -139,7 +142,7 @@ export const RewardChip = ({
         <Tooltip
           title={
             gear.rewardQueued
-              ? `Reward queued - ${creditText(gear)} pays out once today's reward budget allows`
+              ? `Reward queued - ${creditText(gear)} ${QUEUED_PAYOUT_TEXT}`
               : `Reward claimed - ${creditText(gear)}`
           }
         >
@@ -279,6 +282,8 @@ export const PendingRewardNote = ({ gear }: { gear: GearStatus }) => (
       ? `Verify your email to claim ${creditText(gear)}.`
       : gear.pendingReason === 'too_new'
         ? `Claimable for ${creditText(gear)} once your account is ${minAgeText(gear)} old.`
-        : `Once someone else opens your artifact link while signed in, you can claim ${creditText(gear)}.`}
+        : gear.pendingReason === 'unavailable'
+          ? "This reward isn't available for your account."
+          : `Once someone else opens your artifact link while signed in, you can claim ${creditText(gear)}.`}
   </Typography>
 );

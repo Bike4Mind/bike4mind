@@ -52,3 +52,15 @@ export async function seedSignupGrantPools(store: SignupGrantPoolSeedStore): Pro
     );
   }
 }
+
+/**
+ * The self-host boot seed: runs on every container start, so it seeds only while neither pool row exists.
+ * Once either is written the pools are the operator's, and a row they later remove stays removed (paused)
+ * rather than coming back on the next restart.
+ */
+export async function seedSignupGrantPoolsOnFirstBoot(store: SignupGrantPoolSeedStore): Promise<boolean> {
+  for (const settingName of Object.values(SIGNUP_GRANT_POOL_SETTING_NAMES))
+    if (await store.findOne({ settingName })) return false;
+  await seedSignupGrantPools(store);
+  return true;
+}

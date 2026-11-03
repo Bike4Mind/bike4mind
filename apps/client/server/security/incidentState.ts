@@ -23,7 +23,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const SETTING_NAMES = [
   'turnstileEnabled',
   'turnstileFailClosed',
-  'signupGrantDailyBudget',
+  'signupGrantSignupPoolDaily',
   'newAccountSpendCapDays',
   'paymentRiskAlertsEnabled',
   'paymentRiskAutoRefundEnabled',
@@ -79,11 +79,13 @@ async function getDefenses(now: Date): Promise<IncidentDefenses> {
     },
   };
 
-  const limit = getSettingsValue('signupGrantDailyBudget', settings) ?? 0;
+  // The signup pool meters the grants an abuse burst draws on; 0 (or unset) pauses it.
+  const limit = getSettingsValue('signupGrantSignupPoolDaily', settings) ?? 0;
   if (limit > 0) {
     const day = userService.signupGrantBudgetDay(now);
     try {
-      defenses.grantBudget = { limit, spentToday: await signupGrantBudgetRepository.getSpent(day), day };
+      const spentToday = await signupGrantBudgetRepository.getSpent(userService.signupGrantCounterKey('signup', day));
+      defenses.grantBudget = { limit, spentToday, day };
     } catch (error) {
       Logger.globalInstance.warn('Incident state: grant budget read failed', { error });
       defenses.error = 'Signup grant budget spend could not be read';

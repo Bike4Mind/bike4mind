@@ -66,7 +66,9 @@ export const signupGrantBudgetDay = (now: Date = new Date()) => now.toISOString(
 
 type HeldRewardQueue = NonNullable<NonNullable<SignupProtection['grantBudget']>['heldRewards']>;
 
-const counterKey = (pool: SignupGrantPool, day: string) => `${pool}:${day}`;
+/** The spend counter's key for one pool's UTC day; readers outside this module (the security dashboard) use it too. */
+export const signupGrantCounterKey = (pool: SignupGrantPool, day: string) => `${pool}:${day}`;
+const counterKey = signupGrantCounterKey;
 
 async function alertCrossing(
   budgetConfig: NonNullable<SignupProtection['grantBudget']>,
@@ -113,6 +115,19 @@ export async function queueHeadBlocks(
 }
 
 /**
+ * True when the enclosing refundBudgetOnFailure scope already drew today's `pool` budget for
+ * `transactionId`, i.e. an earlier attempt of a retried transaction. That draw is this payout's own, so
+ * the queue check must not count it against the payout and hold a reward it has already paid for.
+ */
+export function drawnInRefundScope(adapters: BudgetAdapters, pool: SignupGrantPool, transactionId: string): boolean {
+  const scope = refundScope.getStore();
+  const budgetConfig = adapters.signupProtection?.grantBudget;
+  if (!scope || !budgetConfig) return false;
+  const day = signupGrantBudgetDay(budgetConfig.now?.());
+  return !!scopeDraws.get(scope)?.has(`${counterKey(pool, day)}|${transactionId}`);
+}
+
+/**
  * Draws `amount` credits from today's budget for `pool`. A pool at 0, or with a missing or invalid
  * setting, is 'exhausted' (missing also alerts once per pool-day).
  * 'unmetered' remains only for a non-positive amount or when no counter is wired. `day` pins the draw
@@ -145,12 +160,19 @@ export async function reserveSignupGrantBudget(
   const reservedSpent = async () => reservation.spent;
   if (reservation.spent * 2 >= budget) await alertCrossing(budgetConfig, pool, day, 50, reservedSpent, budget);
   if (reservation.spent >= budget) await alertCrossing(budgetConfig, pool, day, 100, reservedSpent, budget);
+  // Once only: payNow and the enclosing refund scope can both release this draw, and by the second call a
+  // newer attempt may hold a draw under the same transaction id, which a repeat refund would hand back.
+  let released = false;
   const release = !reservation.fresh
     ? noop
-    : () =>
-        budgetConfig.repository.refund(key, transactionId, amount).catch(error => {
+    : async () => {
+        if (released) return;
+        released = true;
+        if (scope) scopeDraws.get(scope)?.delete(drawKey);
+        await budgetConfig.repository.refund(key, transactionId, amount).catch(error => {
           console.warn('[signup-grant-budget] Refund failed; the day may under-report remaining budget', error);
         });
+      };
   if (scope && reservation.fresh) {
     scope.push(release);
     const draws = scopeDraws.get(scope) ?? new Map<string, () => Promise<void>>();

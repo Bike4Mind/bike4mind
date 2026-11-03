@@ -440,7 +440,7 @@ function DefensesCard({ signals, state }: { signals: Source<IncidentSignals>; st
           )
         )}
       </Fact>
-      <Fact label="Grant budget" data-testid="security-incident-grant-budget">
+      <Fact label="Signup pool" data-testid="security-incident-grant-budget">
         {stateFact(() =>
           grantBudget ? (
             <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
@@ -452,7 +452,7 @@ function DefensesCard({ signals, state }: { signals: Source<IncidentSignals>; st
           ) : defensesError ? (
             <Unavailable error={defensesError} />
           ) : (
-            <StatusChip tone="neutral" label="Unmetered" />
+            <StatusChip tone="neutral" label="Paused" />
           )
         )}
       </Fact>

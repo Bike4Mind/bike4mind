@@ -20,6 +20,7 @@ import {
   ClaimButton,
   creditText,
   PendingRewardNote,
+  QUEUED_PAYOUT_TEXT,
   RewardChip,
   rewardState,
 } from '@client/app/components/gears/gearReward';
@@ -105,13 +106,12 @@ const GearsPage = () => {
       onSuccess: result => {
         if (result.creditsAwarded) toast.success(`Reward claimed - ${creditText(gear)} for ${gear.title}`);
         else if (result.queued)
-          toast.success(
-            `Reward claimed - ${creditText(gear)} for ${gear.title} will arrive once today's free credits allow`
-          );
+          toast.success(`Reward queued - ${creditText(gear)} for ${gear.title} ${QUEUED_PAYOUT_TEXT}`);
       },
       onError: error =>
         toast.error(
-          isAxiosError(error) && error.response?.status === 403
+          // Keyed on the route's error code: other 403s (an impersonation session) are not a refused account.
+          isAxiosError(error) && error.response?.data?.error === 'account_blocked'
             ? "This reward isn't available for your account."
             : "Couldn't claim the reward. Try again."
         ),

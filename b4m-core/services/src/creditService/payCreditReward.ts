@@ -1,6 +1,11 @@
 import { CreditHolderType, type IAdminSettingsRepository, type SignupProtection } from '@bike4mind/common';
 import { accountBlockReasons, type AccountStateFields } from '../userService/accountState';
-import { queueHeadBlocks, reserveSignupGrantBudget, resolvePoolBudget } from '../userService/signupGrantBudget';
+import {
+  drawnInRefundScope,
+  queueHeadBlocks,
+  reserveSignupGrantBudget,
+  resolvePoolBudget,
+} from '../userService/signupGrantBudget';
 import { addCreditsWithLedgerRow, DuplicateCreditTransactionError, type AddCreditsAdapters } from './addCredits';
 
 export type CreditRewardSource = 'gear' | 'referral_first_answer';
@@ -24,7 +29,8 @@ export interface HeldCreditRewardRepository {
   findByTransactionIds(transactionIds: string[]): Promise<HeldCreditRewardRow[]>;
   /** Credits of the oldest held reward of at most `maxCredits`, or null when none is queued. */
   oldestHeldCredits(maxCredits?: number): Promise<number | null>;
-  listHeld(limit: number): Promise<HeldCreditRewardRow[]>;
+  /** Oldest held rewards first; `maxCredits` leaves out rewards larger than that (a whole day's pool). */
+  listHeld(limit: number, maxCredits?: number): Promise<HeldCreditRewardRow[]>;
   settle(transactionId: string, status: 'paid' | 'void'): Promise<void>;
 }
 
@@ -113,9 +119,16 @@ async function payNow(reward: HeldCreditRewardInput, adapters: PayCreditRewardAd
     }
     // The draw stays spent only for a ledger row that committed; a rolled-back one hands it back here,
     // or via refundBudgetOnFailure when the caller's own transaction rolls back after this returns.
-    const committed = await adapters.db.creditTransactions
-      .findOne({ transactionId: reward.transactionId })
-      .catch(() => null);
+    // An unreadable ledger keeps the draw: under-counting the pool beats paying a committed row unmetered.
+    const committed = await adapters.db.creditTransactions.findOne({ transactionId: reward.transactionId }).then(
+      row => !!row,
+      readError => {
+        adapters.logger?.error('[payCreditReward] could not confirm the ledger row; keeping the draw', readError, {
+          transactionId: reward.transactionId,
+        });
+        return true;
+      }
+    );
     if (!committed) await reservation.release();
     throw error;
   }
@@ -138,7 +151,10 @@ export async function payCreditReward(
   // A voided row was refused at release; answering 'duplicate' would read as claimed and loop the user.
   if (own) return { outcome: own.status === 'held' ? 'queued' : own.status === 'void' ? 'blocked' : 'duplicate' };
 
-  if (!(await queueHeadBlocks(adapters, 'trickle', adapters.heldRewards, reward.credits))) {
+  if (
+    drawnInRefundScope(adapters, 'trickle', reward.transactionId) ||
+    !(await queueHeadBlocks(adapters, 'trickle', adapters.heldRewards, reward.credits))
+  ) {
     const paid = await payNow(reward, adapters);
     if (paid.status === 'paid') return { outcome: 'paid', creditTransactionId: paid.creditTransactionId };
     if (paid.status === 'duplicate') return { outcome: 'duplicate' };
@@ -173,7 +189,10 @@ export async function releaseHeldCreditRewards(
     budgetExhausted: false,
     paidRewards: [],
   };
-  for (const reward of await adapters.heldRewards.listHeld(limit)) {
+  // Rewards above the whole daily pool can never pay; scanning them would let enough of them fill the
+  // window and starve every payable reward queued behind them.
+  const { budget } = await resolvePoolBudget(adapters.adminSettings, 'trickle');
+  for (const reward of await adapters.heldRewards.listHeld(limit, budget > 0 ? budget : undefined)) {
     result.scanned++;
     try {
       if (await adapters.db.creditTransactions.findOne({ transactionId: reward.transactionId })) {
@@ -188,8 +207,9 @@ export async function releaseHeldCreditRewards(
       const paid = await payNow(reward, adapters);
       if (paid.status === 'exhausted') {
         // A reward above the whole daily budget never fits; stopping at it would starve the queue behind it.
-        const { budget } = await resolvePoolBudget(adapters.adminSettings, 'trickle');
-        if (budget > 0 && reward.credits > budget) continue;
+        // The scan already leaves those out; this covers a pool lowered while the run is under way.
+        const { budget: current } = await resolvePoolBudget(adapters.adminSettings, 'trickle');
+        if (current > 0 && reward.credits > current) continue;
         result.budgetExhausted = true;
         break;
       }
