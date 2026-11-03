@@ -63,7 +63,10 @@ export function isInternalIdentity(
   return !!staffRegex && typeof identity.email === 'string' && staffRegex.test(identity.email);
 }
 
-/** User flags that mark an account as staff, a service identity or a test fixture rather than a customer. */
+/**
+ * User flags that mark an account as staff, a service identity or a test fixture rather than a customer.
+ * Not `isInternal` yet: event marks read it (server-utils analytics/lane.ts), reports using this list do not.
+ */
 export const INTERNAL_ACCOUNT_FLAGS = ['isAdmin', 'isSystem', 'isSynthetic'] as const;
 
 /**

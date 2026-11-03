@@ -130,7 +130,9 @@ async function markAll(ids: Types.ObjectId[], field: 'isInternal' | 'isSynthetic
  *
  * Reports what it marks before it writes, by rule, and how many it changed after. Idempotent: it
  * only ever sets a flag to true on an account that does not have it, so a re-run marks nothing.
- * Run again after adding a staff domain or a test domain to pick up the accounts already on it.
+ * The runner records it as applied and never runs it again by itself: after adding a staff or test
+ * domain, delete its row from the migrations collection and it reruns on the next `migrate up`.
+ * Not `migrate down <id>`, which also undoes every applied migration above that id.
  */
 // Id below the fail-closed OAuth backfill (20260922000001), so that one cannot block it.
 const migration: MigrationFile = {
