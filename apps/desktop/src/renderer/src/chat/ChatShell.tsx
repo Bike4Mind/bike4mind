@@ -167,10 +167,13 @@ type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market' | 
  */
 export type AccountStrip = (status: ReactNode) => ReactNode;
 
+/** Key of the Add folder alert for a failure before any chat existed. */
+const NO_CHAT = '';
+
 /** `lead`, plus the main-side reason with Electron's IPC wrapper stripped, when there is one. */
 function failure(lead: string, error: unknown): string {
   const reason = error instanceof Error ? error.message : String(error);
-  const detail = reason.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '');
+  const detail = reason.replace(/^Error invoking remote method '[^']*': (?:Error(?:: |$))?/, '');
   return detail ? `${lead}: ${detail}` : lead;
 }
 
@@ -224,7 +227,17 @@ export function ChatShell({
   const settling = loading || restoring;
   const [importedInline] = useImportedInline();
 
-  const conversation = useConversation(activeId, apply);
+  const [addFolderErrors, setAddFolderErrors] = useState<Record<string, string>>({});
+  const clearAddFolderError = useCallback(
+    (chatId: string) =>
+      setAddFolderErrors(current => {
+        if (!(chatId in current)) return current;
+        const { [chatId]: _dropped, ...rest } = current;
+        return rest;
+      }),
+    []
+  );
+  const conversation = useConversation(activeId, apply, clearAddFolderError);
   // The header follows the sidebar's copy of the title, so a rename from any row - including
   // its optimistic title and any rollback - shows above the thread too.
   const activeSummary = useMemo(() => sessions.find(session => session.id === activeId), [sessions, activeId]);
@@ -658,8 +671,6 @@ export function ChatShell({
    */
   const shareFolder = conversation.project.addContextDirectory;
   const shareFolderTo = conversation.addContextDirectoryTo;
-  // chatId is the chat the folder was meant for; null is a failure before any chat exists.
-  const [addFolderError, setAddFolderError] = useState<{ chatId: string | null; message: string } | null>(null);
   const addingFolder = useRef(false);
   const openChatId = useRef(activeId);
   openChatId.current = activeId;
@@ -669,14 +680,14 @@ export function ChatShell({
     try {
       await share();
     } catch (error) {
-      setAddFolderError({
-        chatId,
-        message: failure('Desktop could not share the folder, so the folder was not added', error),
-      });
+      setAddFolderErrors(current => ({
+        ...current,
+        [chatId]: failure('Desktop could not share the folder, so the folder was not added', error),
+      }));
     }
   }, []);
   const addFolder = useCallback(async () => {
-    setAddFolderError(null);
+    clearAddFolderError(activeId ?? NO_CHAT);
     if (activeId) {
       await shareInto(activeId, () => shareFolder());
       return;
@@ -700,26 +711,26 @@ export function ChatShell({
       setActiveId(current => current ?? created);
     } catch (error) {
       if (openChatId.current || modeRef.current !== 'chat') return;
-      setAddFolderError({
-        chatId: null,
-        message: failure(
+      setAddFolderErrors(current => ({
+        ...current,
+        [NO_CHAT]: failure(
           picked
             ? 'Desktop could not start a conversation, so the folder was not added'
             : 'Desktop could not open the folder picker, so the folder was not added',
           error
         ),
-      });
+      }));
     } finally {
       addingFolder.current = false;
     }
-  }, [activeId, shareFolder, shareFolderTo, shareInto, create, markSessionStart]);
+  }, [activeId, shareFolder, shareFolderTo, shareInto, clearAddFolderError, create, markSessionStart]);
   // A failure from before any chat existed retires when a chat opens; any alert retires on a mode switch.
   useEffect(() => {
-    setAddFolderError(null);
+    setAddFolderErrors({});
   }, [mode]);
   useEffect(() => {
-    if (activeId) setAddFolderError(current => (current?.chatId === null ? null : current));
-  }, [activeId]);
+    if (activeId) clearAddFolderError(NO_CHAT);
+  }, [activeId, clearAddFolderError]);
 
   /** "Use in chat" on the Models screen: a new Chat conversation already on that model. */
   const [chatOnError, setChatOnError] = useState<string | null>(null);
@@ -1298,17 +1309,17 @@ export function ChatShell({
             </Box>
           )}
 
-          {addFolderError && addFolderError.chatId === activeId && (
+          {addFolderErrors[activeId ?? NO_CHAT] && (
             <Box sx={contentColumnSx}>
               <Alert
                 size="sm"
                 color="danger"
                 variant="soft"
                 sx={{ cursor: 'pointer' }}
-                onClick={() => setAddFolderError(null)}
+                onClick={() => clearAddFolderError(activeId ?? NO_CHAT)}
                 data-testid="chat-add-folder-error"
               >
-                {addFolderError.message}
+                {addFolderErrors[activeId ?? NO_CHAT]}
               </Alert>
             </Box>
           )}

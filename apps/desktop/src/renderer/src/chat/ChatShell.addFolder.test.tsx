@@ -5,6 +5,7 @@ import { CssVarsProvider } from '@mui/joy/styles';
 import type { ChatSession, ChatSessionSummary } from '@shared/chat';
 import type { ShareDirectoryResult } from '@shared/directoryRequest';
 import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
+import { NO_SKILLS } from '@shared/skills';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
@@ -90,13 +91,14 @@ function stubBridge(sessions: ChatSessionSummary[]) {
       chat: quietBridge({
         listSessions: async () => sessions,
         getSession: async (id: string) => {
-          await heldLoads.get(id);
           const session = stored.get(id);
+          await heldLoads.get(id);
           return session ? ({ ...session, messages: [] } as unknown as ChatSession) : null;
         },
         getQueuedMessages: async () => [],
         getSessionStatuses: async () => [],
         listModels: async () => ({ models: [] }),
+        listSkills: async () => NO_SKILLS,
         listArtifacts: async () => ({ artifacts: [], total: 0 }),
         createSession,
         pickProjectDirectory,
@@ -180,6 +182,26 @@ const sidebarRow = (title: string) =>
 
 async function openSessionRow(title: string): Promise<void> {
   await act(async () => sidebarRow(title)?.click());
+  await act(async () => undefined);
+}
+
+async function deleteOpenChat(): Promise<void> {
+  await act(async () => byTestId('chat-session-menu-btn')?.click());
+  await act(async () => byTestId('chat-delete-session-btn')?.click());
+  await act(async () => byTestId('delete-session-confirm-btn')?.click());
+  await act(async () => undefined);
+}
+
+async function typeCommand(text: string): Promise<void> {
+  const input = byTestId<HTMLTextAreaElement>('chat-composer-input');
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+  act(() => {
+    setter?.call(input, text);
+    input?.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await act(async () => {
+    input?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  });
   await act(async () => undefined);
 }
 
@@ -674,7 +696,7 @@ describe('Add folder in a Chat composer', () => {
     await renderShell();
 
     pickProjectDirectory.mockResolvedValueOnce(NOTES);
-    createSession.mockRejectedValueOnce(new Error(''));
+    createSession.mockRejectedValueOnce(new Error("Error invoking remote method 'chat:create-session': Error"));
     await addFolderFromMenu();
     expect(byTestId('chat-add-folder-error')?.textContent).toBe(
       'Desktop could not start a conversation, so the folder was not added'
@@ -703,6 +725,180 @@ describe('Add folder in a Chat composer', () => {
 
     expect(addContextDirectory).toHaveBeenCalledTimes(1);
     expect(chips()).toHaveLength(0);
+  });
+
+  it("drops a chat's share-failure alert once /add-dir succeeds there", async () => {
+    stubBridge([summary('blank-1')]);
+    await renderShell();
+    await act(async () => byTestId('chat-session-item')?.click());
+    await act(async () => undefined);
+
+    addContextDirectory.mockRejectedValueOnce(new Error('share store offline'));
+    await addFolderFromMenu();
+    expect(byTestId('chat-add-folder-error')).not.toBeNull();
+
+    addContextDirectory.mockResolvedValue({
+      status: 'added',
+      path: NOTES,
+      session: summary('blank-1', 'chat', [NOTES]),
+    });
+    await typeCommand(`/add-dir ${NOTES}`);
+    expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
+    expect(byTestId('chat-add-folder-error')).toBeNull();
+  });
+
+  it("keeps one chat's share-failure alert when Add folder is used in another chat", async () => {
+    stubBridge([summary('alpha', 'chat', undefined, 'Alpha'), summary('beta', 'chat', undefined, 'Beta')]);
+    await renderShell();
+    await openSessionRow('Alpha');
+    addContextDirectory.mockRejectedValueOnce(new Error('share store offline'));
+    await addFolderFromMenu();
+    expect(byTestId('chat-add-folder-error')).not.toBeNull();
+
+    await openSessionRow('Beta');
+    addContextDirectory.mockResolvedValue({
+      status: 'added',
+      path: NOTES,
+      session: summary('beta', 'chat', [NOTES], 'Beta'),
+    });
+    await addFolderFromMenu();
+    expect(chips()).toHaveLength(1);
+
+    await openSessionRow('Alpha');
+    expect(byTestId('chat-add-folder-error')?.textContent).toContain('share store offline');
+  });
+
+  it('keeps a refusal for a chat the user left and shows it when that chat is reopened', async () => {
+    const stored = stubBridge([]);
+    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    const made = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => made.promise);
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValue(NOTES);
+    addContextDirectory.mockResolvedValue({ status: 'refused', error: 'The filesystem root cannot be shared.' });
+    await addFolderFromMenu();
+
+    const other = summary('other', 'chat', undefined, 'Other');
+    stored.set('other', other);
+    createSession.mockResolvedValueOnce({ session: other });
+    await act(async () => byTestId('chat-new-session-btn')?.click());
+    await act(async () => undefined);
+    const fresh = summary('fresh');
+    stored.set('fresh', fresh);
+    await act(async () => made.resolve({ session: fresh }));
+    await act(async () => undefined);
+    expect(byTestId('chat-add-folder-error')).toBeNull();
+
+    await openSessionRow('New conversation');
+    expect(byTestId('chat-add-folder-error')?.textContent).toContain('filesystem root cannot be shared');
+  });
+
+  it('shows a refusal, an "already" notice and a warning for a freshly made chat in that chat', async () => {
+    for (const [result, testId, text] of [
+      [{ status: 'refused', error: 'The filesystem root cannot be shared.' }, 'chat-send-error', 'filesystem root'],
+      [{ status: 'already', path: NOTES }, 'chat-notice', 'already shared'],
+      [
+        {
+          status: 'added',
+          path: NOTES,
+          warning: 'This is your home folder.',
+          session: summary('fresh', 'chat', [NOTES]),
+        },
+        'chat-notice',
+        'home folder',
+      ],
+    ] as const) {
+      stubBridge([]);
+      createSession.mockImplementationOnce(() => new Promise(() => undefined));
+      await renderShell();
+
+      const share = deferred<ShareDirectoryResult>();
+      pickProjectDirectory.mockResolvedValue(NOTES);
+      addContextDirectory.mockReturnValue(share.promise);
+      await addFolderFromMenu();
+      await act(async () => share.resolve(result as ShareDirectoryResult));
+      await act(async () => undefined);
+
+      expect(byTestId(testId)?.textContent).toContain(text);
+      expect(byTestId('chat-add-folder-error')).toBeNull();
+      act(() => root?.unmount());
+      host?.remove();
+      root = null;
+      host = null;
+    }
+  });
+
+  it('does not bring back a failure from before any chat existed after the seed chat is deleted', async () => {
+    const stored = stubBridge([]);
+    const seed = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => seed.promise);
+    createSession.mockRejectedValueOnce(new Error('disk full'));
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValueOnce(NOTES);
+    await addFolderFromMenu();
+    expect(byTestId('chat-add-folder-error')).not.toBeNull();
+
+    const seeded = summary('seeded');
+    stored.set('seeded', seeded);
+    await act(async () => seed.resolve({ session: seeded }));
+    await act(async () => undefined);
+    expect(byTestId('chat-add-folder-error')).toBeNull();
+
+    await deleteOpenChat();
+    expect(byTestId('chat-add-folder-error')).toBeNull();
+  });
+
+  it('does not bring back a start failure after the chat the user opened meanwhile is deleted', async () => {
+    const stored = stubBridge([]);
+    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    const made = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => made.promise);
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValue(NOTES);
+    await addFolderFromMenu();
+
+    const other = summary('other', 'chat', undefined, 'Other');
+    stored.set('other', other);
+    createSession.mockResolvedValueOnce({ session: other });
+    await act(async () => byTestId('chat-new-session-btn')?.click());
+    await act(async () => undefined);
+    await act(async () => made.reject(new Error('disk full')));
+    await act(async () => undefined);
+
+    await deleteOpenChat();
+    expect(byTestId('chat-add-folder-error')).toBeNull();
+  });
+
+  it('clears a stale error in the seeded chat when the picked folder is shared into it', async () => {
+    const stored = stubBridge([]);
+    const seed = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => seed.promise);
+    await renderShell();
+
+    const picked = deferred<string | null>();
+    pickProjectDirectory.mockReturnValue(picked.promise);
+    await addFolderFromMenu();
+    const seeded = summary('seeded');
+    stored.set('seeded', seeded);
+    await act(async () => seed.resolve({ session: seeded }));
+    await act(async () => undefined);
+
+    addContextDirectory.mockResolvedValueOnce({ status: 'refused', error: 'Not a folder.' });
+    await typeCommand('/add-dir /nowhere');
+    expect(byTestId('chat-send-error')).not.toBeNull();
+
+    addContextDirectory.mockResolvedValue({
+      status: 'added',
+      path: NOTES,
+      session: summary('seeded', 'chat', [NOTES]),
+    });
+    await act(async () => picked.resolve(NOTES));
+    await act(async () => undefined);
+    expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
+    expect(byTestId('chat-send-error')).toBeNull();
   });
 
   it('keeps Add folder off while the open chat is still loading', async () => {
