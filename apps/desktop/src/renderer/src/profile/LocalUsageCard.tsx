@@ -2,7 +2,7 @@ import Box from '@mui/joy/Box';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import type { LocalUsage, LocalUsageResult, LocalUsageRow } from '@shared/usage';
+import type { LocalUsage, LocalUsageFigures, LocalUsageResult, LocalUsageRow } from '@shared/usage';
 import { formatTokens } from '../chat/statusLine';
 import { formatSeconds, formatTokenRate } from '../chat/tokenRate';
 import { Stat } from './Stat';
@@ -35,6 +35,11 @@ const LOCAL_METRIC: BreakdownMetric<LocalUsageRow> = {
   },
 };
 
+/** Replies can be 0 while tokens exist: a hosted reply continued on a local model. */
+export function hasLocalActivity(totals: LocalUsageFigures): boolean {
+  return totals.replies > 0 || totals.outputTokens > 0 || totals.contextTokens > 0;
+}
+
 /** The card for an answer, a one-line error for a failed read, and nothing while reading. */
 export function LocalUsageSection({ result }: { result: LocalUsageResult | null }) {
   if (!result) return null;
@@ -57,7 +62,7 @@ export function LocalUsageSection({ result }: { result: LocalUsageResult | null 
  */
 export function LocalUsageCard({ usage }: { usage: LocalUsage }) {
   const { totals } = usage;
-  if (totals.replies === 0) return null;
+  if (!hasLocalActivity(totals)) return null;
 
   const windowLabel = WINDOW_LABELS[usage.window].toLowerCase();
   const generation = formatTokenRate({ evalTokens: totals.evalTokens, evalMs: totals.evalMs });
@@ -87,7 +92,11 @@ export function LocalUsageCard({ usage }: { usage: LocalUsage }) {
             <Stat
               label="Generation"
               value={generation}
-              caption={`timed ${formatCount(totals.timedReplies)} of ${replies(totals.replies)}`}
+              caption={
+                totals.replies > 0
+                  ? `timed ${formatCount(totals.timedReplies)} of ${replies(totals.replies)}`
+                  : undefined
+              }
               testId="profile-local-generation"
             />
           )}

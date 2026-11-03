@@ -20,7 +20,12 @@ window.matchMedia ??= ((query: string) => ({
   dispatchEvent: () => false,
 })) as typeof window.matchMedia;
 
-const localUsageFixture = (totals: Parameters<typeof scopedFixture>[0] = {}) => scopedFixture(totals, 'account');
+const ACCOUNT_1 = 'https://example.invalid\nuser-1';
+const ACCOUNT_2 = 'https://example.invalid\nuser-2';
+const localUsageFixture = (totals: Parameters<typeof scopedFixture>[0] = {}, account = ACCOUNT_1) => ({
+  ...scopedFixture(totals, 'account'),
+  account,
+});
 
 const STATE: AuthState = {
   status: 'signed-in',
@@ -129,7 +134,20 @@ describe('ProfileScreen local usage', () => {
     await show({ ...STATE, user: { id: 'user-2', nickname: 'Grace Hopper' } });
     expect(find('profile-local-usage')).toBeNull();
 
-    await act(async () => answer({ ok: true, usage: localUsageFixture({ replies: 1 }) }));
+    await act(async () => answer({ ok: true, usage: localUsageFixture({ replies: 1 }, ACCOUNT_2) }));
+    expect(find('profile-local-usage')).not.toBeNull();
+  });
+
+  it('drops an answer counted for another account than the one on screen', async () => {
+    const { find } = await render({ ok: true, usage: localUsageFixture({ replies: 2 }, ACCOUNT_2) });
+    expect(find('profile-local-usage')).toBeNull();
+  });
+
+  it('draws the card for a window whose local tokens all come from replies that started elsewhere', async () => {
+    const { find } = await render({
+      ok: true,
+      usage: localUsageFixture({ replies: 0, outputTokens: 40, contextTokens: 400 }),
+    });
     expect(find('profile-local-usage')).not.toBeNull();
   });
 });

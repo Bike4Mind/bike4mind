@@ -125,6 +125,8 @@ export interface LocalUsage {
    * folder, or none while no scope is known. A signed-out screen shows only `device`.
    */
   scope: LocalUsageScope;
+  /** `<environment url>\n<account id>` the figures were counted for; set for an `account` scope. */
+  account?: string;
   readAt: number;
 }
 
