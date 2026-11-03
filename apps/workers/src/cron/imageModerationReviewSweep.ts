@@ -5,7 +5,7 @@
  * path (packages/server-utils/src/moderation/incidentReviewSweep.ts).
  *
  * Publishes the oldest unalerted and oldest pending incident ages and a reviewer-list-empty flag
- * on every run; the alarms in infra/imageModerationReviewSweep.ts watch them.
+ * on every run; the alarms in infra/imageModerationReviewAlarms.ts watch them.
  *
  * Schedule: rate(15 minutes) (REVIEW_SWEEP_INTERVAL_MINUTES).
  */
