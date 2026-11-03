@@ -110,6 +110,7 @@ const ArenaPage = lazy(() => import('./routes/arena'));
 const AtlassianSelectSitePage = lazy(() => import('./routes/integrations/atlassian/select-site'));
 const ActivatePage = lazy(() => import('./routes/activate'));
 const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
+const BedrockNewsClaimPage = lazy(() => import('./routes/partners/bedrocknews-claim'));
 const HudPage = lazy(() => import('./routes/hud'));
 const HearthPage = lazy(() => import('./routes/hearth'));
 const StudioPage = lazy(() => import('./routes/studio/$modality'));
@@ -1274,6 +1275,21 @@ const desktopDownloadRoute = createRoute({
   ),
 });
 
+// BedrockNews Headword credit claim - no layout; the page sends signed-out visitors to /login itself
+const bedrockNewsClaimRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/partners/bedrocknews/claim',
+  beforeLoad: ({ location }) => enforceConsentRedirect(location),
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <BedrockNewsClaimPage />
+    </Suspense>
+  ),
+  validateSearch: (search: Record<string, unknown>): { ticket?: string } => ({
+    ticket: optionalStringParam(search, 'ticket'),
+  }),
+});
+
 // OAuth Authorization endpoint - no layout, public
 const oauthAuthorizeRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -1387,6 +1403,7 @@ const routeTree = rootRoute.addChildren([
   atlassianSelectSiteRoute,
   // OAuth Authorization endpoint
   oauthAuthorizeRoute,
+  bedrockNewsClaimRoute,
 ]);
 
 // createBrowserHistory() monkey-patches window.history.pushState/replaceState to detect
