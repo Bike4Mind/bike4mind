@@ -213,6 +213,7 @@ export function buildSignupNetworkShadowDetection(input: {
       threshold: burst.max,
     })),
     windowMinutes,
+    group: null,
     detectedAt,
   };
 }
