@@ -21,10 +21,10 @@ const EXPECTED_REFERENCES = [
   '../../packages/server-utils/src/app/constants/apiKeyScopeEndpoints.generated.ts',
   // The scope catalog: lists it among the admin-only scopes for the mint UI; grants no reach.
   '../../packages/server-utils/src/app/constants/apiKeyScopes.ts',
+  '../../packages/server-utils/src/files/fileScopes.ts',
   'pages/api/admin/release-notes/[id].ts',
   'pages/api/admin/release-notes/index.ts',
   'pages/api/admin/users/[userId]/generate-api-key.ts',
-  'server/files/fileScopes.ts',
   // Reads the scope to skip IP-baseline alerts for the job's CI runners; grants no reach.
   'server/middlewares/apiKeyAnomalyDetection.ts',
 ];

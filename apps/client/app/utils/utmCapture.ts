@@ -12,7 +12,7 @@ const TTL_SECONDS = 30 * 60;
 //   marketing site's parent-domain `b4m-first-touch`, which only visitors who came through the
 //   marketing site carry. It has its own name so the two can never be confused or overwrite
 //   each other; the server prefers the marketing site's when both exist.
-// Both are read server-side at checkout (server/analytics/acquisition.ts).
+// Both are read server-side at checkout (packages/server-utils/src/analytics/acquisition.ts).
 export const LAST_TOUCH_COOKIE_NAME = ACQUISITION_COOKIES.lastTouch;
 export const APP_FIRST_TOUCH_COOKIE_NAME = ACQUISITION_COOKIES.appFirstTouch;
 const LAST_TOUCH_TTL_SECONDS = 30 * 24 * 60 * 60;

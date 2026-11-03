@@ -115,7 +115,7 @@ vi.mock('@bike4mind/server-utils/utils/cloudwatch', async () => {
 import '../index';
 
 /**
- * Built inline rather than imported from server/auth/ability.ts, which pulls an unresolvable
+ * Built inline rather than imported from packages/server-utils/src/auth/ability.ts, which pulls an unresolvable
  * `tldts` transitive dependency under this vitest setup. MUST STAY IN SYNC with the admin feedback
  * rules there: an unconditional read grant is what makes accessibleBy narrow to {}.
  */

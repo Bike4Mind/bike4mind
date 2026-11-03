@@ -44,7 +44,7 @@ export const isOverlayPath = (p: string) => OVERLAY_PATH_PREFIXES.some(prefix =>
 const HELPER_SOURCES = [
   'server/agents/agentScopes.ts',
   'server/dataLakes/dataLakeScopes.ts',
-  'server/files/fileScopes.ts',
+  '../../packages/server-utils/src/files/fileScopes.ts',
   'server/projects/projectScopes.ts',
   'server/cli/auth.ts',
 ];

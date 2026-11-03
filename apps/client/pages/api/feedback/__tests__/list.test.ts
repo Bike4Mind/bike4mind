@@ -106,7 +106,7 @@ import { FEEDBACK_LIST_DEFAULT_LIMIT, FEEDBACK_LIST_MAX_LIMIT } from '@bike4mind
 import { FEEDBACK_LIST_FIELDS } from '../index';
 
 /**
- * Built inline rather than imported from server/auth/ability.ts, which pulls an unresolvable
+ * Built inline rather than imported from packages/server-utils/src/auth/ability.ts, which pulls an unresolvable
  * `tldts` transitive dependency under this vitest setup. MUST STAY IN SYNC with the admin feedback
  * rules there: an unconditional read grant is what makes accessibleBy narrow to {}.
  */

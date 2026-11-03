@@ -53,15 +53,15 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 | `signupGrantDripCap` | Admin Settings > User Management > Credits System > Signup Grant Drip Cap | The per-account drip total and the unlock pool snapshotted at enrollment (`resolveSignupGrantSchedule`). Unset reads as the registry default, 0: nothing drips and an invite pays its initial share at signup, the rest on unlock. A stored cap of 0 also drips nothing but pays an invite in full at signup. | no. Caps free credits. | Signup and starter credits |
 | `signupGrantInviteBonusCredits` | Admin Settings > User Management > Credits System > Signup Grant Invite Bonus Credits | Registered only; no reader yet. Default 0. | no. | Signup and starter credits |
 | `ReferralCreditsAmount` | Growth and Pricing > Signup and starter credits | The referred-user grant at registration (`register.ts`), the referral send route (`apps/client/pages/api/reg-invites/refer.ts`) and the "invited person gets N credits" line (`ReferralModal.tsx`). | no. A free grant. | Signup and starter credits |
-| `ReferralFirstAnswerCredits` | Growth and Pricing > Referral rewards for inviters | The inviter payout when the invited friend has a first answer and a verified email (`apps/client/server/referrals/firstAnswerReward.ts`). Only friends who signed up on or after the first-value launch date (`FIRST_VALUE_LAUNCH_AT` in `apps/client/server/analytics/funnel.ts`) qualify. Default 0 (off). | no. A free grant. | Signup and starter credits |
+| `ReferralFirstAnswerCredits` | Growth and Pricing > Referral rewards for inviters | The inviter payout when the invited friend has a first answer and a verified email (`packages/server-utils/src/referrals/firstAnswerReward.ts`). Only friends who signed up on or after the first-value launch date (`FIRST_VALUE_LAUNCH_AT` in `apps/client/server/analytics/funnel.ts`) qualify. Default 0 (off). | no. A free grant. | Signup and starter credits |
 | `preferenceArenaCreditsPerVote` | Growth and Pricing > Preference arena | The arena vote reward (`apps/client/server/preferenceArena/`), judged by `judgeArenaVote` in `b4m-core/common/src/preferenceArena.ts`. Default 0 (off). | no. A free grant. | Signup and starter credits |
 | `preferenceArenaDailyVoteCap` | Growth and Pricing > Preference arena | The same arena vote judge. Default 0 earns nothing. | no. A limit. | Usage limits |
 | `preferenceArenaLifetimeCreditCap` | Growth and Pricing > Preference arena | The same arena vote judge. Default 0 earns nothing. | no. A limit. | Usage limits |
-| `ReferralFirstPaymentCredits` | Growth and Pricing > Referral rewards for inviters | The reward held for the inviter on the invited friend's first full-price Professional payment (`apps/client/server/referrals/subscriptionReward.ts`), locked when the payment is recorded. Payments made while both payment rewards are 0 are not counted, so after activation the next eligible payment takes the first step. Default 0 (off). | no. A free grant. | Signup and starter credits |
-| `ReferralSecondPaymentCredits` | Growth and Pricing > Referral rewards for inviters | The reward held for the inviter on the invited friend's second full-price Professional payment (`apps/client/server/referrals/subscriptionReward.ts`), locked when the payment is recorded. Payments made while both payment rewards are 0 are not counted, so after activation the next eligible payment takes the first step. Default 0 (off). | no. A free grant. | Signup and starter credits |
-| `ReferralHoldDays` | Growth and Pricing > Referral rewards for inviters | Days a payment reward is held before the release job credits it (`apps/client/server/referrals/subscriptionReward.ts`, `apps/workers/src/cron/referralRewardRelease.ts`). | no. A hold period. | Signup and starter credits |
+| `ReferralFirstPaymentCredits` | Growth and Pricing > Referral rewards for inviters | The reward held for the inviter on the invited friend's first full-price Professional payment (`packages/server-utils/src/referrals/subscriptionReward.ts`), locked when the payment is recorded. Payments made while both payment rewards are 0 are not counted, so after activation the next eligible payment takes the first step. Default 0 (off). | no. A free grant. | Signup and starter credits |
+| `ReferralSecondPaymentCredits` | Growth and Pricing > Referral rewards for inviters | The reward held for the inviter on the invited friend's second full-price Professional payment (`packages/server-utils/src/referrals/subscriptionReward.ts`), locked when the payment is recorded. Payments made while both payment rewards are 0 are not counted, so after activation the next eligible payment takes the first step. Default 0 (off). | no. A free grant. | Signup and starter credits |
+| `ReferralHoldDays` | Growth and Pricing > Referral rewards for inviters | Days a payment reward is held before the release job credits it (`packages/server-utils/src/referrals/subscriptionReward.ts`, `apps/workers/src/cron/referralRewardRelease.ts`). | no. A hold period. | Signup and starter credits |
 | `ReferralInvitesPerUser` | Growth and Pricing > Referral rewards for inviters | The starting invite count at registration (`register.ts`). New signups only. | no. A limit. | Usage limits |
-| `ReferralAlertRewardsPerDay` | Growth and Pricing > Referral rewards for inviters | The 24-hour reward-count alert in `apps/client/server/referrals/firstAnswerReward.ts`, also checked when a held reward is released (`apps/client/server/referrals/subscriptionReward.ts`). | no. An alert threshold. | Usage limits |
+| `ReferralAlertRewardsPerDay` | Growth and Pricing > Referral rewards for inviters | The 24-hour reward-count alert in `packages/server-utils/src/referrals/firstAnswerReward.ts`, also checked when a held reward is released (`packages/server-utils/src/referrals/subscriptionReward.ts`). | no. An alert threshold. | Usage limits |
 | `blockDisposableEmails` | Admin Settings > User Management > Credits System | `shouldBlockDisposableEmail` (`b4m-core/services/src/userService/disposableEmail.ts`), called from registration, the email-verified grant (`apps/client/server/auth/emailVerifiedGrants.ts`) and the OAuth starting-grant backfill. | no. Stops free-credit farming. | Signup and starter credits |
 | `blockedEmailDomains` | Admin Settings > User Management > Credits System | `isAdminBlockedEmailDomain` inside `shouldBlockDisposableEmail` (`b4m-core/services/src/userService/disposableEmail.ts`), so the same readers as `blockDisposableEmails`. Entries are normalized and validated on save in `apps/client/pages/api/settings/update.ts`. | no. Stops free-credit farming from domains the disposable list misses. | Signup and starter credits |
 | `syntheticUserEmailDomains` | Admin Settings > User Management > Credits System | Funnel analytics (`apps/client/server/analytics/funnel.ts`), and the reserved `persona-` username check (`b4m-core/services/src/userService/reservedUsername.ts`), which lets a verified email on one of these domains choose that prefix. | no. Flags test accounts. | Signup and starter credits |
@@ -156,7 +156,7 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`) appear because they 
 
 - `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
 - `apps/client/app/components/admin/AdminSettingsTab.tsx`
-- `apps/client/server/referrals/firstAnswerReward.ts`
+- `packages/server-utils/src/referrals/firstAnswerReward.ts`
 
 </details>
 
@@ -164,7 +164,7 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`) appear because they 
 
 - `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
 - `apps/client/app/components/admin/AdminSettingsTab.tsx`
-- `apps/client/server/referrals/subscriptionReward.ts`
+- `packages/server-utils/src/referrals/subscriptionReward.ts`
 
 </details>
 
@@ -172,7 +172,7 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`) appear because they 
 
 - `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
 - `apps/client/app/components/admin/AdminSettingsTab.tsx`
-- `apps/client/server/referrals/subscriptionReward.ts`
+- `packages/server-utils/src/referrals/subscriptionReward.ts`
 
 </details>
 
@@ -180,7 +180,7 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`) appear because they 
 
 - `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
 - `apps/client/app/components/admin/AdminSettingsTab.tsx`
-- `apps/client/server/referrals/subscriptionReward.ts`
+- `packages/server-utils/src/referrals/subscriptionReward.ts`
 
 </details>
 
@@ -196,8 +196,8 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`) appear because they 
 
 - `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
 - `apps/client/app/components/admin/AdminSettingsTab.tsx`
-- `apps/client/server/referrals/firstAnswerReward.ts`
-- `apps/client/server/referrals/subscriptionReward.ts`
+- `packages/server-utils/src/referrals/firstAnswerReward.ts`
+- `packages/server-utils/src/referrals/subscriptionReward.ts`
 
 </details>
 
@@ -330,7 +330,7 @@ No match outside the definition and tests.
 - `apps/client/app/hooks/data/teamPlanSettings.ts`
 - `packages/server-utils/src/lib/subscriptions/schema.ts`
 - `apps/client/pages/api/admin/users/[userId]/grant-subscription.ts`
-- `apps/client/server/services/organizationService.ts`
+- `packages/server-utils/src/services/organizationService.ts`
 - `b4m-core/common/src/constants/organization.ts`
 - `b4m-core/common/src/utils/teamPlanSettings.ts`
 
@@ -348,7 +348,7 @@ No match outside the definition and tests.
 - `apps/client/pages/api/admin/organizations/grant.ts`
 - `apps/client/pages/api/admin/partner-signup-rules/backfill.ts`
 - `apps/client/pages/api/admin/users/[userId]/grant-subscription.ts`
-- `apps/client/server/services/organizationService.ts`
+- `packages/server-utils/src/services/organizationService.ts`
 - `b4m-core/common/src/constants/organization.ts`
 - `b4m-core/common/src/types/entities/OrganizationTypes.ts`
 - `b4m-core/common/src/utils/teamPlanSettings.ts`

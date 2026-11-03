@@ -2,7 +2,7 @@
  * The quest-start request schema.
  *
  * Kept in its own leaf module (deps: zod + @bike4mind/common only) because
- * apps/client's server/utils/eventBus.ts needs it to type two event payloads,
+ * server-utils' utils/eventBus.ts needs it to type two event payloads,
  * and eventBus is imported by hundreds of API routes. Defining it in
  * ChatCompletionFeatures.ts instead would make every one of those routes trace
  * ChatCompletionProcess and the whole tool registry into its bundle, since
