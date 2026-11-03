@@ -11,11 +11,6 @@
  * Request metadata (`clientIp`, `userId`) comes from apps/client/server/middlewares/requestLogger.ts.
  * Paths are parsed from the error handler line's raw URL, not the `path` field: apps/client/server/middlewares/logging.ts
  * folds every catch-all miss into `/api/:unmatchedApiPath` and keeps the query string.
- *
- * `denied` counts only 401/403s that reach the error handler, i.e. ones an API handler throws (an
- * ownership or role check). The sign-in middleware's own 401/403s (apps/client/server/auth/auth.ts:
- * missing or expired token, MFA, policy acceptance) are written directly and never logged at warn,
- * so they are not counted; they are dominated by expired sessions, not probing.
  */
 
 import { rowToObject } from '../utils/logsInsights';
@@ -51,6 +46,7 @@ export const REQUEST_PATH_PATTERN = `^[A-Z]+ (?<reqPath>[^ ?]+)[^ ]* ${ARROW} [0
 const SIGNAL_EXPRESSIONS: Record<ProbeSignal, string> = {
   refusedFetch: `strcontains(message, "${ARROW} 400: Refusing to fetch")`,
   webhookSignature: 'strcontains(message, "Stripe webhook signature verification failed")',
+  // The error handler also writes the 404 status line for a remapped request, so it counts as notFound too.
   invalidId: 'strcontains(message, "[cast-id-remap]")',
   denied: `strcontains(message, "${ARROW} 401:") + strcontains(message, "${ARROW} 403:")`,
   notFound: `strcontains(message, "${ARROW} 404:")`,
