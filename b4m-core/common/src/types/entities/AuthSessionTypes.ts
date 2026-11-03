@@ -18,9 +18,6 @@ export type AuthSessionCreatedVia =
   | 'ios'
   | 'legacy-migration';
 
-/** Client id of the first-party native OAuth client; shared by the seed migration and the token endpoint. */
-export const NATIVE_OAUTH_CLIENT_ID = 'b4m-ios-app';
-
 /** Device/agent metadata captured at session creation, for the active-sessions list. */
 export interface IAuthSessionDevice {
   userAgent?: string;
