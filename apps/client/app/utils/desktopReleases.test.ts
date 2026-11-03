@@ -15,6 +15,10 @@ const githubRelease = (overrides: Record<string, unknown> = {}) => ({
       name: 'Bike4Mind-0.42.0-x64.AppImage',
       browser_download_url: `${BASE}/releases/download/desktop-v0.42.0/Bike4Mind-0.42.0-x64.AppImage`,
     },
+    {
+      name: 'Bike4Mind-0.42.0-setup.exe',
+      browser_download_url: `${BASE}/releases/download/desktop-v0.42.0/Bike4Mind-0.42.0-setup.exe`,
+    },
     { name: 'install.sh', browser_download_url: `${BASE}/releases/download/desktop-v0.42.0/install.sh` },
     { name: 'SHA256SUMS.txt', browser_download_url: `${BASE}/releases/download/desktop-v0.42.0/SHA256SUMS.txt` },
   ],
@@ -28,6 +32,7 @@ describe('parseDesktopRelease', () => {
       releaseUrl: `${BASE}/releases/tag/desktop-v0.42.0`,
       macArm64DmgUrl: `${BASE}/releases/download/desktop-v0.42.0/Bike4Mind-0.42.0-arm64.dmg`,
       linuxX64AppImageUrl: `${BASE}/releases/download/desktop-v0.42.0/Bike4Mind-0.42.0-x64.AppImage`,
+      windowsSetupUrl: `${BASE}/releases/download/desktop-v0.42.0/Bike4Mind-0.42.0-setup.exe`,
     });
   });
 
@@ -35,6 +40,7 @@ describe('parseDesktopRelease', () => {
     const release = parseDesktopRelease(githubRelease({ assets: [] }));
     expect(release?.macArm64DmgUrl).toBeUndefined();
     expect(release?.linuxX64AppImageUrl).toBeUndefined();
+    expect(release?.windowsSetupUrl).toBeUndefined();
   });
 
   it('drops links that point outside the releases repo', () => {
