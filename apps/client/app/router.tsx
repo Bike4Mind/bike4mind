@@ -15,6 +15,7 @@ import {
 } from '@tanstack/react-router';
 import { TanStackRouterDevtools } from '@tanstack/router-devtools';
 import { CircularProgress, Box, Typography } from '@mui/joy';
+import AccountDeletionPendingGate from '@client/app/components/auth/AccountDeletionPendingGate';
 import NotebookLayout from '@client/app/components/layouts/Notebook';
 import { useUser } from '@client/app/contexts/UserContext';
 import { buildRedirectTo } from '@client/app/utils/authRedirect';
@@ -227,15 +228,19 @@ function RootComponent() {
   // NotebookLayout draws its own main beside the sidebar nav, so only pages outside it get one here.
   // display: contents keeps the page a direct child of the providers' grid.
   const inNotebookLayout = useRouterState({ select: s => s.matches.some(m => m.routeId === layoutRoute.id) });
+  // At the root so every route, including those outside ProviderBundle, shows only the cancel
+  // screen for a deletion-pending session.
   return (
     <>
-      {inNotebookLayout ? (
-        <Outlet />
-      ) : (
-        <Box component="main" sx={{ display: 'contents' }}>
+      <AccountDeletionPendingGate>
+        {inNotebookLayout ? (
           <Outlet />
-        </Box>
-      )}
+        ) : (
+          <Box component="main" sx={{ display: 'contents' }}>
+            <Outlet />
+          </Box>
+        )}
+      </AccountDeletionPendingGate>
       {process.env.NEXT_PUBLIC_ENABLE_DEVTOOLS === 'true' && <TanStackRouterDevtools position="top-right" />}
     </>
   );
