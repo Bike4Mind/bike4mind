@@ -23,6 +23,10 @@ export {
   listFilesContract,
   updateFileContract,
   deleteFileContract,
+  chunkFileContract,
+  searchFilesContract,
+  getFilesByIdsContract,
+  bulkDeleteFilesContract,
 } from './contracts/files.contract';
 export { createEmbeddingsContract } from './contracts/embeddings.contract';
 export { postSlackMessageContract } from './contracts/slackMessages.contract';
