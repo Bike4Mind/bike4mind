@@ -160,6 +160,7 @@ function ollamaSampling(generation: CompletionRequest['generation']): Record<str
     ...(generation.topK !== undefined ? { top_k: generation.topK } : {}),
     ...(generation.minP !== undefined ? { min_p: generation.minP } : {}),
     ...(generation.repeatPenalty !== undefined ? { repeat_penalty: generation.repeatPenalty } : {}),
+    ...(generation.presencePenalty !== undefined ? { presence_penalty: generation.presencePenalty } : {}),
   };
 }
 

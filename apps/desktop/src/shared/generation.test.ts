@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeGeneration, parseGenerationInput, requestGeneration, type ModelControls } from './generation';
+import {
+  catalogSeed,
+  layeredGeneration,
+  normalizeGeneration,
+  parseGenerationInput,
+  requestGeneration,
+  type ModelControls,
+} from './generation';
 
 describe('normalizeGeneration', () => {
   it('keeps the known fields that hold finite numbers', () => {
@@ -81,5 +88,33 @@ describe('requestGeneration', () => {
     expect(requestGeneration({ temperature: 0.2, topK: 20 }, pinned)).toEqual({});
     expect(requestGeneration({ temperature: 0.2 }, undefined)).toEqual({});
     expect(requestGeneration(undefined, controls)).toEqual({});
+  });
+});
+
+describe('layeredGeneration', () => {
+  it('takes each field from the highest layer that sets it', () => {
+    expect(
+      layeredGeneration({
+        chat: { temperature: 0.2 },
+        model: { temperature: 0.5, topK: 30, presencePenalty: 0.5 },
+        catalog: { temperature: 1, topK: 20, topP: 0.95, presencePenalty: 1.5 },
+      })
+    ).toEqual({ temperature: 0.2, topK: 30, topP: 0.95, presencePenalty: 0.5 });
+  });
+
+  it('is empty when no layer sets anything', () => {
+    expect(layeredGeneration({})).toEqual({});
+    expect(layeredGeneration({ chat: {}, model: undefined })).toEqual({});
+  });
+});
+
+describe('catalogSeed', () => {
+  const sampling = { thinking: { temperature: 1 }, nonThinking: { temperature: 0.7 } };
+
+  it("picks the turn's thinking state and never falls back to the other one", () => {
+    expect(catalogSeed(sampling, true)).toEqual({ temperature: 1 });
+    expect(catalogSeed(sampling, false)).toEqual({ temperature: 0.7 });
+    expect(catalogSeed({ thinking: { temperature: 1 } }, false)).toBeUndefined();
+    expect(catalogSeed(undefined, true)).toBeUndefined();
   });
 });

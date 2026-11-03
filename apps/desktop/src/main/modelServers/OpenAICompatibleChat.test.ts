@@ -278,7 +278,7 @@ describe('OpenAICompatibleChat', () => {
 });
 
 describe('OpenAICompatibleChat generation settings', () => {
-  const generation = { temperature: 0.3, topP: 0.85, topK: 25, minP: 0.04, repeatPenalty: 1.08 };
+  const generation = { temperature: 0.3, topP: 0.85, topK: 25, minP: 0.04, repeatPenalty: 1.08, presencePenalty: 1.5 };
 
   function server(names: readonly string[] = ['qwen3-8b', 'gpt-oss-20b'], reasoning = false) {
     const bodies: Record<string, unknown>[] = [];
@@ -302,16 +302,24 @@ describe('OpenAICompatibleChat generation settings', () => {
   });
 
   it.each([
-    ['llama-server', { temperature: 0.3, top_p: 0.85, top_k: 25, repeat_penalty: 1.08, min_p: 0.04 }],
-    ['vllm', { temperature: 0.3, top_p: 0.85, top_k: 25, repetition_penalty: 1.08, min_p: 0.04 }],
-    ['lmstudio', { temperature: 0.3, top_p: 0.85, top_k: 25, repeat_penalty: 1.08 }],
-    [null, { temperature: 0.3, top_p: 0.85 }],
+    [
+      'llama-server',
+      { temperature: 0.3, top_p: 0.85, top_k: 25, repeat_penalty: 1.08, min_p: 0.04, presence_penalty: 1.5 },
+    ],
+    [
+      'vllm',
+      { temperature: 0.3, top_p: 0.85, top_k: 25, repetition_penalty: 1.08, min_p: 0.04, presence_penalty: 1.5 },
+    ],
+    ['lmstudio', { temperature: 0.3, top_p: 0.85, top_k: 25, repeat_penalty: 1.08, presence_penalty: 1.5 }],
+    [null, { temperature: 0.3, top_p: 0.85, presence_penalty: 1.5 }],
   ] as const)('sends the sampling fields %s takes', async (product, expected) => {
     const { fetch, bodies } = server();
     await collect(chat(fetch, product), ask('qwen3-8b', { generation }));
     const sampling = Object.fromEntries(
       Object.entries(bodies[0] ?? {}).filter(([key]) =>
-        ['temperature', 'top_p', 'top_k', 'min_p', 'repeat_penalty', 'repetition_penalty'].includes(key)
+        ['temperature', 'top_p', 'top_k', 'min_p', 'repeat_penalty', 'repetition_penalty', 'presence_penalty'].includes(
+          key
+        )
       )
     );
     expect(sampling).toEqual(expected);

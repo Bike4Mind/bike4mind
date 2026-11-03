@@ -26,6 +26,7 @@ const LLAMA_CPP_TOP_K: Range = { min: 0, max: 200, step: 1 };
 const TOP_K: Range = { min: 1, max: 200, step: 1 };
 const MIN_P: Range = { min: 0, max: 1, step: 0.01 };
 const REPEAT_PENALTY: Range = { min: 0.5, max: 2, step: 0.01 };
+const PRESENCE_PENALTY: Range = { min: 0, max: 2, step: 0.05 };
 const MIN_OUTPUT_TOKENS = 256;
 const OUTPUT_STEP = 256;
 /** The hosted API's own floor for a legacy thinking budget, and its default when none is sent. */
@@ -58,7 +59,14 @@ export function modelfileParameter(parameters: string | undefined, name: string)
 }
 
 /** What Ollama applies when neither the request nor the Modelfile sets a value (api.DefaultOptions). */
-const OLLAMA_DEFAULTS = { temperature: 0.8, top_p: 0.9, top_k: 40, min_p: 0, repeat_penalty: 1.1 } as const;
+const OLLAMA_DEFAULTS = {
+  temperature: 0.8,
+  top_p: 0.9,
+  top_k: 40,
+  min_p: 0,
+  repeat_penalty: 1.1,
+  presence_penalty: 0,
+} as const;
 
 export interface OllamaModelFacts {
   /** False while `/api/show` has not answered: the ranges are known, the model's defaults are not. */
@@ -89,6 +97,7 @@ export function ollamaControls(facts: OllamaModelFacts): ModelControls {
     topK: control(LLAMA_CPP_TOP_K, known('top_k')),
     minP: control(MIN_P, known('min_p')),
     repeatPenalty: control(REPEAT_PENALTY, known('repeat_penalty')),
+    presencePenalty: control(PRESENCE_PENALTY, known('presence_penalty')),
     ...(maxOutputTokens ? { maxOutputTokens } : {}),
     ...(levels.length > 0 ? { effort: { levels, scope: 'request' } } : {}),
   };
@@ -124,6 +133,7 @@ export function openAICompatibleControls(
   return {
     temperature: control(TEMPERATURE),
     topP: control(OPENAI_TOP_P),
+    presencePenalty: control(PRESENCE_PENALTY),
     ...(product !== null ? { topK, repeatPenalty: control(REPEAT_PENALTY) } : {}),
     ...(product === 'llama-server' || product === 'vllm' ? { minP: control(MIN_P) } : {}),
     ...(maxOutputTokens ? { maxOutputTokens } : {}),

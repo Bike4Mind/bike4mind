@@ -45,6 +45,7 @@ import {
   serverRuntimeId,
   type ModelServerAddInput,
   type ModelServerHealth,
+  type ModelServerKind,
   type ModelServerProbeInput,
   type ModelServerProbeResult,
   type ModelServerSpecs,
@@ -220,6 +221,12 @@ export class ModelServerRegistry {
   specs(id: string): ModelServerSpecs | null {
     if (id === LOCAL_SERVER_ID) return this.localSpecs;
     return this.entries.get(id)?.record.specs ?? null;
+  }
+
+  /** What a server or this computer runs; null for a server that is not saved. */
+  kind(id: string): ModelServerKind | null {
+    if (id === LOCAL_SERVER_ID) return 'ollama';
+    return this.entries.get(id)?.record.kind ?? null;
   }
 
   /** Tests an address or SSH destination without saving it. */

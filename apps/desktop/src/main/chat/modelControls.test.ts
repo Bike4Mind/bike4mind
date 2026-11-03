@@ -29,6 +29,10 @@ describe('ollamaControls', () => {
     expect(controls.topP?.default).toBe(0.9);
     expect(controls.minP?.default).toBe(0);
     expect(controls.repeatPenalty?.default).toBe(1.1);
+    expect(controls.presencePenalty?.default).toBe(0);
+    expect(
+      ollamaControls({ inspected: true, parameters: 'presence_penalty 1.5', contextWindow: 8192 }).presencePenalty
+    ).toMatchObject({ min: 0, max: 2, default: 1.5 });
     expect(controls.maxOutputTokens).toEqual({ min: 256, max: 32_768, step: 256, default: 4096, scope: 'request' });
     expect(controls).not.toHaveProperty('effort');
     expect(controls).not.toHaveProperty('thinkingBudgetTokens');
@@ -61,7 +65,7 @@ describe('ollamaControls', () => {
   it('states no defaults before the model is inspected', () => {
     const controls = ollamaControls({ inspected: false, contextWindow: 8192 });
     expect(Object.keys(controls).sort()).toEqual(
-      ['maxOutputTokens', 'minP', 'repeatPenalty', 'temperature', 'topK', 'topP'].sort()
+      ['maxOutputTokens', 'minP', 'presencePenalty', 'repeatPenalty', 'temperature', 'topK', 'topP'].sort()
     );
     expect(Object.values(controls).some(control => 'default' in control)).toBe(false);
   });
@@ -79,14 +83,14 @@ describe('ollamaControls', () => {
 describe('openAICompatibleControls', () => {
   it('gives an unknown server only the OpenAI fields', () => {
     const controls = openAICompatibleControls(null, { effortLevels: false });
-    expect(Object.keys(controls).sort()).toEqual(['maxOutputTokens', 'temperature', 'topP']);
+    expect(Object.keys(controls).sort()).toEqual(['maxOutputTokens', 'presencePenalty', 'temperature', 'topP']);
     expect(controls.maxOutputTokens?.max).toBe(32_768);
   });
 
   it.each([
-    ['lmstudio', ['maxOutputTokens', 'repeatPenalty', 'temperature', 'topK', 'topP']],
-    ['llama-server', ['maxOutputTokens', 'minP', 'repeatPenalty', 'temperature', 'topK', 'topP']],
-    ['vllm', ['maxOutputTokens', 'minP', 'repeatPenalty', 'temperature', 'topK', 'topP']],
+    ['lmstudio', ['maxOutputTokens', 'presencePenalty', 'repeatPenalty', 'temperature', 'topK', 'topP']],
+    ['llama-server', ['maxOutputTokens', 'minP', 'presencePenalty', 'repeatPenalty', 'temperature', 'topK', 'topP']],
+    ['vllm', ['maxOutputTokens', 'minP', 'presencePenalty', 'repeatPenalty', 'temperature', 'topK', 'topP']],
   ] as const)('adds the fields %s documents', (product, fields) => {
     expect(Object.keys(openAICompatibleControls(product, { effortLevels: false })).sort()).toEqual(fields);
   });
