@@ -1,4 +1,5 @@
-import { resolveConsent } from './consentRegion';
+import { HOP_PARAM } from '@bike4mind/server-utils/lib/hopNames';
+import { publishResolvedConsent, resolveConsent } from './consentRegion';
 
 const VISIT_BEACON_PATH = '/api/analytics/visit';
 
@@ -29,7 +30,51 @@ function visitLanding(): VisitLanding {
   return { ...(referrer && { referrer }), landingPath };
 }
 
-function send(body: VisitLanding | { awaitingConsent: true }): void {
+/** The longest hop token sent on; the server refuses a longer one anyway. */
+const MAX_HOP_TOKEN = 128;
+
+/**
+ * Take a verified-hop token off the landing URL, and return it.
+ *
+ * A source product's redirect lands here with a single-use token in `b4m_hop`
+ * (server/analytics/hops.ts). It is removed from the address bar at once, with replaceState so
+ * the landing is not a history entry of its own: left in the URL it would be bookmarked, shared,
+ * copied into a support ticket, or sent as the Referer of every request the page makes later. The
+ * other query parameters and the fragment are kept.
+ *
+ * Must run before the router resolves (it rewrites the query of a signed-out landing) and before
+ * anything reads the page URL for a third party.
+ */
+function takeHopToken(): string | null {
+  try {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has(HOP_PARAM)) return null;
+    const token = url.searchParams.get(HOP_PARAM) ?? '';
+    url.searchParams.delete(HOP_PARAM);
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+    return token.length > 0 && token.length <= MAX_HOP_TOKEN ? token : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The hop token this page landed with, until a beacon carries it; null when there is none. */
+let hopToken: string | null = null;
+
+/**
+ * The hop token for the beacon about to go, once. Publishes this load's consent resolution first,
+ * because the server decides from that cookie whether the hop may be linked to this visit, and on
+ * a first visit nothing has published it yet.
+ */
+function hopBody(): { hop?: string } {
+  if (hopToken === null) return {};
+  const hop = hopToken;
+  hopToken = null;
+  publishResolvedConsent(resolveConsent());
+  return { hop };
+}
+
+function send(body: (VisitLanding & { hop?: string }) | { awaitingConsent: true }): void {
   try {
     void fetch(VISIT_BEACON_PATH, {
       method: 'POST',
@@ -76,18 +121,27 @@ let held: VisitLanding | null = null;
  * first visit from search or a shared link usually lands on the banner. So the beacon holds
  * the landing and says the visit is awaiting consent, and the server holds the visit's event
  * until releaseVisitBeacon() follows with the answer.
+ *
+ * It also takes a verified-hop token off the URL (takeHopToken) and sends it for the server to
+ * redeem, with the landing or, while consent is awaited, with the release. A token held past its
+ * 10 minutes by a visitor who has not answered no longer redeems.
  */
 export function beaconVisit(): void {
-  if (typeof window === 'undefined' || typeof fetch !== 'function') return;
+  if (typeof window === 'undefined') return;
+  // Off the URL even where the beacon cannot be sent: the address bar is the leak.
+  hopToken = takeHopToken();
+  if (typeof fetch !== 'function') return;
   const consent = resolveConsent();
   if (consent === 'unset') {
+    // The hop token waits with the landing: the server redeems it with the beacon that releases
+    // the visit, once the answer is known.
     held = visitLanding();
     window.addEventListener('pagehide', releaseVisitBeacon);
     document.addEventListener('visibilitychange', releaseWhenHidden);
     send({ awaitingConsent: true });
     return;
   }
-  send(consent === 'granted' ? visitLanding() : {});
+  send({ ...(consent === 'granted' ? visitLanding() : {}), ...hopBody() });
 }
 
 /**
@@ -107,7 +161,7 @@ export function releaseVisitBeacon(): void {
   held = null;
   window.removeEventListener('pagehide', releaseVisitBeacon);
   document.removeEventListener('visibilitychange', releaseWhenHidden);
-  send(landing);
+  send({ ...landing, ...hopBody() });
 }
 
 function releaseWhenHidden(): void {

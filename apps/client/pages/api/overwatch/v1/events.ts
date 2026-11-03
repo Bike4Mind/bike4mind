@@ -18,9 +18,9 @@ const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 const FIVE_MINUTES_MS = 5 * 60 * 1000;
 
 // `requiredScopes` must stay in sync with the in-handler scope check below. The
-// gate is what keeps an ingest key confined to this route (see CONFINED_SCOPES in
-// apiKeyScopeGate.ts); the in-handler check is what gives this route its own
-// error shape, and still guards the non-baseApi callers.
+// gate is what keeps an ingest key confined to the ingest routes, this one and
+// hops.ts (see CONFINED_SCOPES in apiKeyScopeGate.ts); the in-handler check is what
+// gives this route its own error shape, and still guards the non-baseApi callers.
 const handler = baseApi({
   maxBodySize: 256 * 1024,
   requiredScopes: [ApiKeyScope.OVERWATCH_INGEST_WRITE],
