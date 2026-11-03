@@ -25,6 +25,7 @@ const ticket = (id: string, overrides: Partial<ILoopTicket> = {}): ILoopTicket =
   stage: 'todo',
   status: 'open',
   dependencies: [],
+  runCount: 0,
   ready: false,
   createdAt: '2026-10-29T10:00:00.000Z',
   updatedAt: '2026-10-29T10:00:00.000Z',
@@ -46,6 +47,7 @@ const data: ILoopTicketsResponse = {
     { stage: 'doing', tickets: [ticket('busy', { stage: 'doing', status: 'in_progress', executionId: 'e1' })] },
     { stage: 'done', tickets: [] },
   ],
+  runLimit: 6,
 };
 
 const renderBoard = () =>
@@ -80,6 +82,30 @@ describe('LoopTicketBoard', () => {
     expect(within(screen.getByTestId('loop-ticket-blocked')).getByText('2 deps')).toBeInTheDocument();
   });
 
+  it('queues a ticket further along first, and shows how many runs a ticket has used', () => {
+    const later: ILoopTicketsResponse = {
+      stages: [
+        { stage: 'todo', tickets: [ticket('first', { ready: true, runCount: 2 })] },
+        {
+          stage: 'doing',
+          tickets: [ticket('along', { stage: 'doing', ready: true, createdAt: '2026-10-29T12:00:00.000Z' })],
+        },
+      ],
+      runLimit: 6,
+    };
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <LoopTicketBoard loop={loop} data={later} onViewRun={onViewRun} />
+      </CssVarsProvider>
+    );
+    const queued = screen.getByTestId('loop-ticket-strip-ready').textContent!;
+    expect(queued.indexOf('Ticket along')).toBeLessThan(queued.indexOf('Ticket first'));
+    expect(within(screen.getByTestId('loop-ticket-first')).getByTestId('loop-ticket-run-count')).toHaveTextContent(
+      'Run 2 of 6'
+    );
+    expect(within(screen.getByTestId('loop-ticket-along')).queryByTestId('loop-ticket-run-count')).toBeNull();
+  });
+
   it('opens the run of a ticket that has one', () => {
     renderBoard();
     fireEvent.click(within(screen.getByTestId('loop-ticket-busy')).getByTestId('loop-ticket-view-run-link'));
@@ -95,7 +121,10 @@ describe('LoopTicketBoard', () => {
   });
 
   it('labels a ticket left in a removed stage instead of showing an empty select', () => {
-    const orphan: ILoopTicketsResponse = { stages: [{ stage: 'todo', tickets: [ticket('o', { stage: 'review' })] }] };
+    const orphan: ILoopTicketsResponse = {
+      stages: [{ stage: 'todo', tickets: [ticket('o', { stage: 'review' })] }],
+      runLimit: 6,
+    };
     render(
       <CssVarsProvider theme={appTheme}>
         <LoopTicketBoard loop={loop} data={orphan} onViewRun={onViewRun} />

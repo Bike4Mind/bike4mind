@@ -34,6 +34,7 @@ import { toCallerSafeError } from '@server/utils/loadAgentExecutionTrace';
 import {
   advancePatch,
   makeDueIfReady,
+  ticketRunLimit,
   unsureEventFields,
   unsureReason,
   UNSURE_PREFIX,
@@ -60,8 +61,6 @@ export const MAX_RESUMED_FOLDS_PER_TICK = 100;
 export const MAX_ACTIVE_LOOP_RUNS = 4;
 /** Due loops claimed per tick, started or not (a deferred or paused loop does not use a run slot). */
 export const MAX_CLAIMS_PER_TICK = 100;
-/** Runs a ticket gets per stage it has to move through before the scheduler blocks it for its owner. */
-export const TICKET_RUNS_PER_STAGE = 3;
 /** Ceiling on the idle back-off, as a multiple of the loop's interval (and never past a day). */
 export const MAX_BACKOFF_FACTOR = 8;
 
@@ -73,6 +72,7 @@ const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 export const BUDGET_PAUSE_REASON = 'Daily budget reached; resumes 00:00 UTC';
 export { USER_BUDGET_PAUSE_REASON };
+export { TICKET_RUNS_PER_STAGE, ticketRunLimit } from '@server/utils/loopTickets';
 
 /** What a daily budget allows spent by `now`: 1/24 in the first UTC hour, all of it in the last. Unspent allowance carries forward. */
 export function pacedAllowance(budget: number, now: Date): number {
@@ -93,8 +93,6 @@ export function runCreditCap(limits: Array<number | undefined>): number | undefi
   const set = limits.filter((limit): limit is number => limit !== undefined);
   return set.length > 0 ? Math.max(0, Math.min(...set)) : undefined;
 }
-
-export const ticketRunLimit = (stages: string[]): number => TICKET_RUNS_PER_STAGE * (stages.length - 1);
 
 /** Minutes until the next run after `idleStreak` idle runs in a row: doubling, capped at 8x and at a day. */
 export function backoffMinutes(intervalMinutes: number, idleStreak: number): number {

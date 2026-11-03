@@ -97,6 +97,17 @@ export interface ILoop {
 }
 
 /**
+ * GET /api/loops/budget: what all of the caller's loops spent today (since `startOfUtcDay`) against the
+ * all-loops cap. `effectiveCap` is the lower of the admin and user caps; each is absent when unset.
+ */
+export interface ILoopsBudget {
+  creditsToday: number;
+  userDailyCredits?: number;
+  adminDailyCredits?: number;
+  effectiveCap?: number;
+}
+
+/**
  * A loop as the loops API returns it: `creditsUsed` sums its top-level runs still within the execution TTL,
  * `creditsToday` those started since `startOfUtcDay`; `blockedTickets` counts its live blocked tickets.
  */

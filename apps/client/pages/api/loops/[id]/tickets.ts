@@ -3,7 +3,7 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { loopRepository, workItemRepository } from '@bike4mind/database';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { assertLoopsEnabled, LOOP_RATE_LIMIT, LOOP_RATE_WINDOW_MS } from '@server/utils/loopValidation';
-import { LOOP_TICKET_CLOSED_WINDOW } from '@server/utils/loopTickets';
+import { LOOP_TICKET_CLOSED_WINDOW, ticketRunLimit } from '@server/utils/loopTickets';
 
 /** A loop's tickets grouped by stage, in the loop's stage order. A ticket in a stage the loop no longer has lists under the first stage. */
 const handler = baseApi({ auth: 'jwtOnly' })
@@ -33,13 +33,17 @@ const handler = baseApi({ auth: 'jwtOnly' })
         statusReason: ticket.statusReason,
         dependencies: ticket.dependencies,
         executionId: ticket.executionId,
+        runCount: ticket.runCount ?? 0,
         ready: ticket.status === 'open' && ticket.dependencies.every(depId => !openDeps.has(depId)),
         createdAt: ticket.createdAt,
         updatedAt: ticket.updatedAt,
       });
     }
 
-    res.json({ stages: Array.from(groups, ([stage, stageTickets]) => ({ stage, tickets: stageTickets })) });
+    res.json({
+      stages: Array.from(groups, ([stage, stageTickets]) => ({ stage, tickets: stageTickets })),
+      runLimit: ticketRunLimit(loop.stages),
+    });
   });
 
 export default handler;

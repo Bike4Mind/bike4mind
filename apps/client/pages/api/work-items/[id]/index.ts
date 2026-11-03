@@ -86,9 +86,10 @@ const handler = baseApi()
     if (loop) {
       // A ticket moved into another loop starts over in that loop.
       if (movesLoop || body.stage !== undefined || status !== undefined) {
+        // An owner move gives the ticket a fresh run allowance (the scheduler blocks it at ticketRunLimit).
         Object.assign(
           patch,
-          { loopId: loop.id },
+          { loopId: loop.id, runCount: 0 },
           ticketMovePatch(loop, movesLoop ? undefined : existing, { stage: body.stage, status, reason: body.reason })
         );
       }

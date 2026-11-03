@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { classifyToolPermission, LOOP_DIRECTIVE_TOOL_NAMES, LOOP_OVERSEER_TOOL_NAMES } from '@bike4mind/common';
 
-const loops = vi.hoisted(() => ({ findByIdAndUserId: vi.fn(), updateForUser: vi.fn() }));
+const loops = vi.hoisted(() => ({ findByIdAndUserId: vi.fn(), updateForUser: vi.fn(), endBackoff: vi.fn() }));
 const directives = vi.hoisted(() => ({
   create: vi.fn(),
   countByExecution: vi.fn(),
@@ -154,8 +154,9 @@ describe('loop_directive_issue', () => {
       state: 'open',
       replies: [],
     });
-    // The worker's goal, tools and status have no write path from here.
+    // The worker's goal, tools and status have no write path from here; only an idle back-off ends.
     expect(loops.updateForUser).not.toHaveBeenCalled();
+    expect(loops.endBackoff).toHaveBeenCalledWith(WORKER, expect.any(Date));
   });
 
   it.each([

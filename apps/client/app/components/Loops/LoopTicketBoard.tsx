@@ -48,10 +48,12 @@ const STATUS_LABEL: Record<WorkItemStatus, string> = {
 function TicketCard({
   ticket,
   stages,
+  runLimit,
   onViewRun,
 }: {
   ticket: ILoopTicket;
   stages: string[];
+  runLimit?: number;
   onViewRun: (executionId: string) => void;
 }) {
   const moveTicket = useMoveLoopTicket();
@@ -65,6 +67,11 @@ function TicketCard({
         {ticket.dependencies.length > 0 && (
           <Typography level="body-xs">
             {ticket.dependencies.length} {ticket.dependencies.length === 1 ? 'dep' : 'deps'}
+          </Typography>
+        )}
+        {ticket.runCount > 0 && runLimit !== undefined && (
+          <Typography level="body-xs" data-testid="loop-ticket-run-count">
+            Run {ticket.runCount} of {runLimit}
           </Typography>
         )}
         {ticket.executionId && (
@@ -204,8 +211,11 @@ export default function LoopTicketBoard({
 }) {
   const [adding, setAdding] = useState(false);
   const all = data?.stages.flatMap(group => group.tickets) ?? [];
-  // Same order the scheduler picks in (WorkItemModel.findNextReadyForLoop): oldest created first.
-  const ready = all.filter(t => t.ready).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  // Same order the scheduler picks in (WorkItemModel.listReadyForLoop): furthest stage first, then oldest.
+  const stageIndex = (t: ILoopTicket) => loop.stages.indexOf(t.stage ?? '');
+  const ready = all
+    .filter(t => t.ready)
+    .sort((a, b) => stageIndex(b) - stageIndex(a) || a.createdAt.localeCompare(b.createdAt));
 
   return (
     <Stack gap={2}>
@@ -236,7 +246,13 @@ export default function LoopTicketBoard({
               {group.stage} ({group.tickets.length})
             </Typography>
             {group.tickets.map(ticket => (
-              <TicketCard key={ticket.id} ticket={ticket} stages={loop.stages} onViewRun={onViewRun} />
+              <TicketCard
+                key={ticket.id}
+                ticket={ticket}
+                stages={loop.stages}
+                runLimit={data?.runLimit}
+                onViewRun={onViewRun}
+              />
             ))}
           </Stack>
         ))}

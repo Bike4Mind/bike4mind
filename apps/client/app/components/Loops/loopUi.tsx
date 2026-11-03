@@ -40,6 +40,20 @@ export function nextRunLabel(loop: Pick<ILoop, 'status' | 'nextRunAt' | 'activeE
   return new Date(loop.nextRunAt).getTime() <= Date.now() ? 'due' : relativeTimeFormat(loop.nextRunAt);
 }
 
+/**
+ * Why a live loop runs less often: after idle runs in a row the scheduler doubles its wait
+ * (apps/workers/src/cron/loopScheduler.ts, backoffMinutes). Null when it is not backing off.
+ */
+export function backoffLabel(
+  loop: Pick<ILoop, 'status' | 'idleStreak' | 'nextRunAt' | 'activeExecutionId'>,
+  now = Date.now()
+): string | null {
+  if (loop.status !== 'live' || !loop.idleStreak || !loop.nextRunAt || loop.activeExecutionId) return null;
+  const minutes = Math.max(0, Math.round((new Date(loop.nextRunAt).getTime() - now) / 60_000));
+  const runs = loop.idleStreak === 1 ? 'run' : `${loop.idleStreak} runs`;
+  return `Backing off: next run in ${minutes} min, nothing changed in the last ${runs}`;
+}
+
 /** The owner rule the inbox notice sweep uses (`loopStatusNeedsOwner`), plus blocked tickets. */
 export const loopNeedsOwner = (loop: Pick<ILoopWithUsage, 'status' | 'statusReason' | 'blockedTickets'>) =>
   loopStatusNeedsOwner(loop) || loop.blockedTickets > 0;

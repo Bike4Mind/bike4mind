@@ -146,6 +146,13 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     ]);
   }
 
+  /** Ends an idle back-off without making the loop due now: it next runs by `nextRunAt` at the latest. */
+  async endBackoff(id: string, nextRunAt: Date): Promise<void> {
+    await this.loopModel.updateOne({ _id: id, idleStreak: { $gt: 0 } }, [
+      { $set: { idleStreak: 0, nextRunAt: { $min: ['$nextRunAt', nextRunAt] } } },
+    ]);
+  }
+
   async markErroredIfFailing(id: string, maxFailures: number): Promise<void> {
     await this.loopModel.updateOne(
       { _id: id, status: 'live', consecutiveFailures: { $gte: maxFailures } },

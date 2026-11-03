@@ -12,6 +12,10 @@ import { assertLoopsEnabled } from './loopValidation';
 /** Closed tickets returned per loop by the tickets route; older ones stay in the DB. */
 export const LOOP_TICKET_CLOSED_WINDOW = 50;
 
+/** Runs a ticket gets per stage it moves through before the loop scheduler blocks it for its owner. */
+export const TICKET_RUNS_PER_STAGE = 3;
+export const ticketRunLimit = (stages: string[]): number => TICKET_RUNS_PER_STAGE * (stages.length - 1);
+
 export const lastStageOf = (loop: Pick<ILoop, 'stages'>): string => loop.stages.at(-1) ?? '';
 
 /** A requested stage checked against the loop; omitted means the first stage. */

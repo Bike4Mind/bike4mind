@@ -267,6 +267,8 @@ export function buildLoopDirectiveTools({
             state: 'open',
             replies: [],
           } as Omit<ILoopDirective, 'id' | 'createdAt' | 'updatedAt'>);
+          // A worker backed off for idling has news now: back to its plain interval (still not due now).
+          await loopRepository.endBackoff(target.id, new Date(Date.now() + target.intervalMinutes * 60_000));
           return { id: created.id, loopId: target.id, state: created.state };
         }),
       toolSchema: {

@@ -6,6 +6,7 @@ import type {
   ILoopDirective,
   ILoopDirectiveReply,
   ILoopEvent,
+  ILoopsBudget,
   ILoopWithUsage,
   LoopDirectiveOwnerAction,
   LoopGateOutcome,
@@ -25,7 +26,9 @@ export interface ILoopTicket {
   statusReason?: string;
   dependencies: string[];
   executionId?: string;
-  /** Open with every dependency closed: the scheduler works the oldest of these next. */
+  /** Runs that claimed it since its owner last moved it; the loop blocks it at `runLimit`. */
+  runCount: number;
+  /** Open with every dependency closed: the scheduler works the furthest-along, then oldest, next. */
   ready: boolean;
   createdAt: string;
   updatedAt: string;
@@ -58,6 +61,7 @@ export const countNeedsYou = (events: ILoopEventRow[] = []) =>
 
 export interface ILoopTicketsResponse {
   stages: { stage: string; tickets: ILoopTicket[] }[];
+  runLimit: number;
 }
 
 /** Every loops query shares the `['loops']` prefix, so one invalidation refreshes list, detail, tickets and events. */
@@ -66,6 +70,7 @@ export const loopKeys = {
   detail: (id: string) => ['loops', id] as const,
   tickets: (id: string) => ['loops', id, 'tickets'] as const,
   events: (id: string) => ['loops', id, 'events'] as const,
+  budget: ['loops', 'budget'] as const,
 };
 
 export type LoopFormPayload = Pick<ILoop, 'name' | 'goal' | 'intervalMinutes' | 'tools' | 'stages'> & {
@@ -129,6 +134,19 @@ export const useLoopEvents = (id: string) =>
     enabled: !!id,
     refetchInterval: DETAIL_POLL_MS,
   });
+
+export const useLoopsBudget = () =>
+  useQuery({
+    queryKey: loopKeys.budget,
+    queryFn: async () => (await api.get<ILoopsBudget>('/api/loops/budget')).data,
+    refetchInterval: LIST_POLL_MS,
+  });
+
+/** Sets the caller's all-loops daily cap; null clears it. */
+export const useSetLoopsBudget = () =>
+  useLoopMutation(
+    async (dailyCredits: number | null) => (await api.put<ILoopsBudget>('/api/loops/budget', { dailyCredits })).data
+  );
 
 export const useCreateLoop = () =>
   useLoopMutation(async (payload: LoopFormPayload) => (await api.post<ILoop>('/api/loops', payload)).data);

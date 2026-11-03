@@ -270,6 +270,14 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     super(model);
   }
 
+  /** Sets the user's own all-loops daily credit cap; null clears it. */
+  async setLoopsDailyCredits(userId: string, credits: number | null): Promise<void> {
+    await this.model.updateOne(
+      { _id: userId },
+      credits === null ? { $unset: { loopsDailyCredits: '' } } : { $set: { loopsDailyCredits: credits } }
+    );
+  }
+
   /** Remove the given group ids from EVERY user that has them (group-type revoke/delete). */
   async removeGroupsFromAllUsers(groupIds: string[]): Promise<void> {
     if (groupIds.length === 0) return;

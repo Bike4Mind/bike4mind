@@ -8,7 +8,7 @@ import { startOfUtcDay } from '@bike4mind/common';
  */
 
 type Handler = (req: any, res: any) => Promise<unknown>;
-type Method = 'get' | 'post' | 'patch' | 'delete';
+type Method = 'get' | 'post' | 'put' | 'patch' | 'delete';
 
 const handlers = vi.hoisted(() => ({}) as Record<string, Partial<Record<Method, Handler>>>);
 const currentModule = vi.hoisted(() => ({ name: '' }));
@@ -21,6 +21,7 @@ vi.mock('@server/middlewares/baseApi', () => {
       use: () => chain,
       get: (fn: Handler) => ((slot.get = fn), chain),
       post: (fn: Handler) => ((slot.post = fn), chain),
+      put: (fn: Handler) => ((slot.put = fn), chain),
       patch: (fn: Handler) => ((slot.patch = fn), chain),
       delete: (fn: Handler) => ((slot.delete = fn), chain),
     };
@@ -52,16 +53,18 @@ const directives = vi.hoisted(() => ({
   findByIdForUser: vi.fn(),
   transition: vi.fn(),
 }));
-const settings = vi.hoisted(() => ({ EnableLoops: true as unknown }));
-const executions = vi.hoisted(() => ({ sumCreditsByLoop: vi.fn() }));
+const settings = vi.hoisted(() => ({ EnableLoops: true as unknown, LoopsDailyCreditsPerUser: 0 as unknown }));
+const executions = vi.hoisted(() => ({ sumCreditsByLoop: vi.fn(), sumLoopCreditsForUser: vi.fn() }));
+const users = vi.hoisted(() => ({ findById: vi.fn(), setLoopsDailyCredits: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   loopRepository: repo,
   agentExecutionRepository: executions,
   workItemRepository: tickets,
   loopEventRepository: loopEvents,
   loopDirectiveRepository: directives,
+  userRepository: users,
   adminSettingsRepository: {
-    getSettingsValue: async (key: string) => settings[key as 'EnableLoops'],
+    getSettingsValue: async (key: string) => settings[key as keyof typeof settings],
     findAll: async () => [],
   },
 }));
@@ -85,6 +88,8 @@ currentModule.name = 'tickets';
 await import('@pages/api/loops/[id]/tickets');
 currentModule.name = 'events';
 await import('@pages/api/loops/[id]/events');
+currentModule.name = 'budget';
+await import('@pages/api/loops/budget');
 currentModule.name = 'override';
 await import('@pages/api/loops/[id]/events/[eventId]/override');
 
@@ -125,9 +130,12 @@ beforeEach(() => {
   resolveDefaultChatModel.mockResolvedValue({ model: 'default-model' });
   repo.create.mockImplementation(async (doc: Record<string, unknown>) => ({ id: OID, ...doc }));
   repo.updateForUser.mockImplementation(async (_id: string, _u: string, patch: Record<string, unknown>) => loop(patch));
+  settings.LoopsDailyCreditsPerUser = 0;
+  users.findById.mockResolvedValue({});
+  executions.sumLoopCreditsForUser.mockResolvedValue(0);
 });
 
-it.each(['collection', 'item', 'run'])('%s route refuses API keys (jwtOnly)', mod => {
+it.each(['collection', 'item', 'run', 'budget'])('%s route refuses API keys (jwtOnly)', mod => {
   expect(baseApiOptions[mod]).toEqual({ auth: 'jwtOnly' });
 });
 
@@ -418,7 +426,7 @@ describe('POST /api/loops/:id/run', () => {
   it('makes a live loop due now', async () => {
     repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'live' }));
     await call('run', 'post', { query: { id: OID } }).result;
-    expect(repo.updateForUser).toHaveBeenCalledWith(OID, 'u1', { nextRunAt: expect.any(Date) }, 'live');
+    expect(repo.updateForUser).toHaveBeenCalledWith(OID, 'u1', { nextRunAt: expect.any(Date), idleStreak: 0 }, 'live');
   });
 
   it('is a 409 when the loop stopped being live mid-request', async () => {
@@ -430,6 +438,71 @@ describe('POST /api/loops/:id/run', () => {
   it('is a 409 for a loop that is not live', async () => {
     repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'paused' }));
     await expect(call('run', 'post', { query: { id: OID } }).result).rejects.toMatchObject({ statusCode: 409 });
+  });
+});
+
+describe('PATCH /api/loops/:id idle back-off', () => {
+  it('an edit ends the back-off and puts a live loop back on its interval', async () => {
+    const lastRunAt = new Date(Date.now() - 5 * 60_000);
+    repo.findByIdAndUserId.mockResolvedValue(
+      loop({ status: 'live', idleStreak: 3, lastRunAt, nextRunAt: new Date(Date.now() + 8 * 3_600_000) })
+    );
+    await call('item', 'patch', { query: { id: OID }, body: { name: 'Renamed' } }).result;
+    expect(repo.updateForUser).toHaveBeenCalledWith(
+      OID,
+      'u1',
+      expect.objectContaining({ idleStreak: 0, nextRunAt: new Date(lastRunAt.getTime() + 15 * 60_000) }),
+      'live'
+    );
+  });
+
+  it('leaves a loop that is not backing off alone', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'live' }));
+    await call('item', 'patch', { query: { id: OID }, body: { name: 'Renamed' } }).result;
+    expect(repo.updateForUser.mock.calls[0][2]).not.toHaveProperty('idleStreak');
+  });
+});
+
+describe('/api/loops/budget', () => {
+  it("returns today's all-loops spend against the lower of the admin and user caps", async () => {
+    settings.LoopsDailyCreditsPerUser = 50;
+    users.findById.mockResolvedValue({ loopsDailyCredits: 30 });
+    executions.sumLoopCreditsForUser.mockResolvedValue(12);
+    const { res, result } = call('budget', 'get');
+    await result;
+    expect(executions.sumLoopCreditsForUser).toHaveBeenCalledWith('u1', startOfUtcDay(new Date()));
+    expect(res._getJSONData()).toEqual({
+      creditsToday: 12,
+      userDailyCredits: 30,
+      adminDailyCredits: 50,
+      effectiveCap: 30,
+    });
+  });
+
+  it('reports no cap when neither is set', async () => {
+    const { res, result } = call('budget', 'get');
+    await result;
+    expect(res._getJSONData()).toEqual({ creditsToday: 0 });
+  });
+
+  it('sets, clears and validates the user cap', async () => {
+    await call('budget', 'put', { body: { dailyCredits: 40 } }).result;
+    expect(users.setLoopsDailyCredits).toHaveBeenCalledWith('u1', 40);
+    await call('budget', 'put', { body: { dailyCredits: null } }).result;
+    expect(users.setLoopsDailyCredits).toHaveBeenLastCalledWith('u1', null);
+    for (const dailyCredits of [0, -1, 'ten', undefined]) {
+      await expect(call('budget', 'put', { body: { dailyCredits } }).result).rejects.toMatchObject({ statusCode: 400 });
+    }
+    expect(users.setLoopsDailyCredits).toHaveBeenCalledTimes(2);
+  });
+
+  it('is a 404 when EnableLoops is off', async () => {
+    settings.EnableLoops = false;
+    await expect(call('budget', 'get').result).rejects.toMatchObject({ statusCode: 404 });
+    await expect(call('budget', 'put', { body: { dailyCredits: 5 } }).result).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    expect(users.setLoopsDailyCredits).not.toHaveBeenCalled();
   });
 });
 

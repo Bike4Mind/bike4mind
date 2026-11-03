@@ -25,6 +25,7 @@ import {
   formatSpendToday,
   lastRunLabel,
   LoopStatusChip,
+  backoffLabel,
   nextRunLabel,
 } from '@client/app/components/Loops/loopUi';
 import {
@@ -99,6 +100,11 @@ export default function LoopDetailPage() {
             </Link>
           )}
         </Stack>
+        {backoffLabel(loop) && (
+          <Typography level="body-sm" color="neutral" data-testid="loop-detail-backoff">
+            {backoffLabel(loop)}
+          </Typography>
+        )}
         <LoopOversightLine loopId={loop.id} oversees={loop.oversees ?? []} loops={loops} />
         <AccordionGroup variant="outlined" sx={{ borderRadius: 'sm' }}>
           <Accordion>
