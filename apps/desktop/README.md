@@ -25,10 +25,11 @@ No Node.js, pnpm, or source checkout is required.
    A project opened from `\\wsl.localhost\<distro>\...` (or `\\wsl$\<distro>\...`) runs git,
    shell commands, search and the terminal inside that WSL distro instead, with the distro's own
    git and toolchain and the PATH of the user's login shell there; such a project does not need
-   Git for Windows. `gh` still runs on Windows, so finding a project's open pull request by
-   branch needs `gh` installed and signed in on the Windows side; it is pointed at the repository
-   gh would pick from the distro's remotes (the one `gh repo set-default` marked, else `upstream`,
-   else `origin`), so it needs no git on Windows.
+   Git for Windows, but the distro needs bash and GNU coreutils (a path check uses `realpath -z`),
+   so a minimal distro such as Alpine denies every path. `gh` still runs on Windows, so finding a
+   project's open pull request by branch needs `gh` installed and signed in on the Windows side;
+   it is pointed at the repository gh would pick from the distro's remotes (the one
+   `gh repo set-default` marked, else `upstream`, else `origin`), so it needs no git on Windows.
    The rest of the local tool layer (file access, sandboxing) is not yet verified on Windows.
 
 New distribution releases require Developer ID signing and notarization. Legacy unsigned
