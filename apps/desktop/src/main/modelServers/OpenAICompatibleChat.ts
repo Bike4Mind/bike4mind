@@ -15,6 +15,7 @@ import {
   type HintApp,
 } from '@bike4mind/local-models/servers';
 import { localBackend, localModelId, parseLocalModelId, type ChatModelOption } from '@shared/chat';
+import { isChatCapable } from '@shared/models';
 import type { CompletionMessage, CompletionRequest } from '../chat/completions';
 import type { LocalChat } from '../chat/localChat';
 import { LOCAL_CONTEXT_TARGET_TOKENS } from '../chat/localContext';
@@ -192,7 +193,7 @@ export class OpenAICompatibleChat implements LocalChat {
     const models = await this.runtime.list();
     const before = this.smallKey();
     this.learnContexts(models);
-    const chat = models.filter(model => !model.capabilities.embeddings || model.capabilities.completion);
+    const chat = models.filter(model => isChatCapable(model.capabilities, 'openai-compatible'));
     this.listed = chat.map(model => model.name);
     this.smallChanged(before);
     return chat.map(model => ({

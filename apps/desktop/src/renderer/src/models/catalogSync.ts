@@ -1,15 +1,6 @@
 import { isLocalBackend, type ChatModelOption } from '@shared/chat';
 import { LOCAL_SERVER_ID, type ModelServerKind } from '@shared/modelServers';
-import type { LocalModelEntry } from '@shared/models';
-
-/**
- * Mirrors the catalog's own chat filter per server kind: OllamaLocal.ts (needs `completion`) and
- * OpenAICompatibleChat.ts (`!embeddings || completion`), both under apps/desktop/src/main.
- */
-function chatCapable(model: LocalModelEntry, kind: ModelServerKind): boolean {
-  const { embeddings, completion } = model.capabilities;
-  return kind === 'ollama' ? completion : !embeddings || completion;
-}
+import { isChatCapable, type LocalModelEntry } from '@shared/models';
 
 /**
  * Installed chat models the catalog cannot start a chat on, sorted by name: no entry, or one marked
@@ -30,7 +21,7 @@ export function missingFromCatalog(
       .map(option => option.name.toLowerCase())
   );
   return installed
-    .filter(model => chatCapable(model, kind) && !listed.has(model.name.toLowerCase()))
+    .filter(model => isChatCapable(model.capabilities, kind) && !listed.has(model.name.toLowerCase()))
     .map(model => model.name)
     .sort();
 }
