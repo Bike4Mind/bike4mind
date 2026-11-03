@@ -159,8 +159,8 @@ export class BackgroundProcessRegistry {
       const env = await commandEnv(launch, { B4M_DESKTOP_BACKGROUND: '1' });
       child = spawn(launch.executable, launch.args, {
         cwd: request.cwd,
-        // Detached so the child leads its own process group: that is what makes one signal
-        // reach the command's whole tree rather than just the shell.
+        // Detached so the child leads its own process group and one signal reaches the whole
+        // tree, except a WSL command, which stays attached (see `spawnsDetached`).
         detached: spawnsDetached(launch),
         windowsHide: true,
         // The watch pipe the child blocks on. Its write end stays open in this process for
