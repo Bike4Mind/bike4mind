@@ -1,8 +1,9 @@
 import React from 'react';
-import { beforeEach, describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import GeneralSettingsTab from './GeneralSettingsTab';
 
 const mutation = { mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false };
@@ -143,5 +144,21 @@ describe('GeneralSettingsTab danger zone', () => {
     });
     expect(screen.queryByTestId('delete-all-notebooks-confirm')).toBeNull();
     expect(screen.queryByTestId('delete-all-files-confirm')).toBeNull();
+  });
+});
+
+describe('GeneralSettingsTab delete account', () => {
+  afterEach(() => useAccessToken.setState({ impersonating: false }));
+
+  it('shows the delete account button for the account owner', () => {
+    renderTab();
+    expect(screen.getByTestId('settings-delete-account-btn')).toBeTruthy();
+  });
+
+  it('hides the delete account button while impersonating', () => {
+    useAccessToken.setState({ impersonating: true });
+    renderTab();
+    expect(screen.queryByTestId('settings-delete-account-btn')).toBeNull();
+    expect(screen.getByTestId('settings-delete-all-notebooks-btn')).toBeTruthy();
   });
 });
