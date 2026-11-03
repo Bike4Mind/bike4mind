@@ -14,6 +14,7 @@ import { isEnvFile } from './envFiles';
 import { ghReadFiles, repositoryWrite, type RepositoryWrite } from './ownRepository';
 import {
   PathAccessDenied,
+  onAnotherComputer,
   operandPlaces,
   operandTargets,
   realpathNearest,
@@ -1201,6 +1202,11 @@ export async function scanShell(
           paths.add(physical);
         } else {
           paths.add(lexical);
+          // Named without a look, so the scan opens no connection to that computer.
+          if (physical === null && onAnotherComputer(lexical)) {
+            directories.add(dirname(lexical));
+            continue;
+          }
           paths.add(await realpathNearest(lexical));
           if (probe && stays && (await isToolchainPath(prefix, cwd, home))) continue;
           const isDirectory = (await stat(lexical).catch(() => null))?.isDirectory() === true;
@@ -1287,6 +1293,7 @@ export async function scanShell(
       for (const directory of directoryOptionValues(tokens)) await check(directory, state.cwd);
       if (!TOUCHES_FILES.has(program)) {
         const here = wslLocation(state.cwd);
+        const windowsProgram = here !== null && /\.exe$/i.test(unquote(wrapped ?? ''));
         // Programs outside the folder-discovery list can still name permission files (sed,
         // awk, dd, ...). Record static operands for the permission-file floor too, including
         // option values, without treating every ordinary argument as an outside folder grant.
@@ -1295,6 +1302,11 @@ export async function scanShell(
           if (value.startsWith('-')) continue;
           const prefix = globPrefix(expand(unquote(value)));
           if (!prefix || isDynamic(prefix)) continue;
+          // A Windows program run through interop opens a Windows path where Windows would, so that place is judged.
+          if (windowsProgram && /^[A-Za-z]:|\\/.test(prefix)) {
+            await check(value, state.cwd, false, 'windows');
+            continue;
+          }
           const targets = operandTargets(state.cwd, prefix);
           const unreachable = targets.filter(target => inUngrantedDistro(target, allowed));
           for (const target of unreachable) ungranted.add(target);

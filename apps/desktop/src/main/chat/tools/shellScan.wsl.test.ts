@@ -248,6 +248,41 @@ describe('where a command in a WSL project lands after a cd, by Linux rules', ()
   });
 });
 
+describe('a Windows program run from a WSL project', () => {
+  const root = '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo';
+
+  it.each([
+    ['cmd.exe /c type C:\\Users\\me\\notes.txt', ['C:\\Users\\me']],
+    ['/mnt/c/Windows/System32/cmd.exe /c type C:\\Users\\me\\notes.txt', ['C:\\Users\\me']],
+    ["powershell.exe -Command Get-Content 'C:/Users/me/notes.txt'", ['C:\\Users\\me']],
+    ['notepad.exe C:notes.txt', ['C:\\']],
+    ['notepad.exe ..\\..\\notes.txt', ['\\\\wsl.localhost\\Ubuntu\\home']],
+    ['cmd.exe /c type \\\\fileserver\\share\\notes.txt', ['\\\\fileserver\\share\\']],
+  ])('names the Windows place a Windows path operand opens: %s', async (command, expected) => {
+    touched.length = 0;
+
+    const scan = await scanShell(command, root, [root]);
+
+    expect(scan?.directories).toEqual(expected);
+    expect(touched.filter(path => path.includes('fileserver'))).toEqual([]);
+  });
+
+  it.each(['cmd.exe /c dir', 'git.exe status', 'explorer.exe .', 'cmd.exe /c type notes.txt'])(
+    'asks about no folder for %s',
+    async command => {
+      const scan = await scanShell(command, root, [root]);
+
+      expect(scan?.directories).toEqual([]);
+    }
+  );
+
+  it('leaves a Windows-looking operand of a Linux program to Linux rules', async () => {
+    const scan = await scanShell('sed -n p C:/Users/me/notes.txt', root, [root]);
+
+    expect(scan?.directories).toEqual([]);
+  });
+});
+
 describe('a script that names the home folder before the distro has said where it is', () => {
   const root = '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo';
 
