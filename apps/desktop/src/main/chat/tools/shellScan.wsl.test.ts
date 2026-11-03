@@ -349,6 +349,12 @@ describe('a Windows program run from a WSL project', () => {
     'xargs -ia',
     'xargs --max-procs 4',
     'sudo -u root timeout -s KILL 5',
+    'nice --adj 5',
+    'xargs --max-a 1',
+    'timeout --kill 5 10',
+    'timeout --sig KILL 5',
+    'sudo --us bob',
+    'sudo --login',
   ])('finds the Windows program %s runs', async wrapper => {
     const scan = await scanShell(`${wrapper} notepad.exe 'C:\\Users\\me\\notes.txt'`, root, [root]);
 

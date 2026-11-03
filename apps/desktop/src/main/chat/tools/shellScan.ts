@@ -324,56 +324,145 @@ interface Wrapper {
   glued?: string;
   /** Long options whose value is the next word unless written with `=`. */
   long?: readonly string[];
+  /** Long options that take no value in the next word, so an abbreviation can be told from one of `long`. */
+  flags?: readonly string[];
   /** Whether `NAME=value` words after the options set the command's environment. */
   assignments?: boolean;
   /** Words after the options that come before the command: timeout's duration. */
   operands?: number;
 }
 
-const WRAPPERS: Readonly<Record<string, Wrapper>> = {
-  sudo: {
-    values: 'aCcDgpRrTtUu',
-    glued: 'h',
-    long: [
-      'auth-type',
-      'chdir',
-      'chroot',
-      'close-from',
-      'command-timeout',
-      'group',
-      'host',
-      'login-class',
-      'other-user',
-      'prompt',
-      'role',
-      'type',
-      'user',
-    ],
-    assignments: true,
-  },
-  env: { values: 'CPSafu', long: ['argv0', 'chdir', 'file', 'split-string', 'unset'], assignments: true },
-  command: { values: '' },
-  exec: { values: 'a' },
-  nohup: { values: '' },
+const WRAPPERS: ReadonlyMap<string, Wrapper> = new Map([
+  [
+    'sudo',
+    {
+      values: 'aCcDgpRrTtUu',
+      glued: 'h',
+      long: [
+        'auth-type',
+        'chdir',
+        'chroot',
+        'close-from',
+        'command-timeout',
+        'group',
+        'host',
+        'login-class',
+        'other-user',
+        'prompt',
+        'role',
+        'type',
+        'user',
+      ],
+      flags: [
+        'askpass',
+        'background',
+        'bell',
+        'edit',
+        'help',
+        'list',
+        'login',
+        'no-update',
+        'non-interactive',
+        'preserve-env',
+        'preserve-groups',
+        'remove-timestamp',
+        'reset-timestamp',
+        'set-home',
+        'shell',
+        'stdin',
+        'validate',
+        'version',
+      ],
+      assignments: true,
+    },
+  ],
+  [
+    'env',
+    {
+      values: 'CPSafu',
+      long: ['argv0', 'chdir', 'file', 'split-string', 'unset'],
+      flags: [
+        'block-signal',
+        'debug',
+        'default-signal',
+        'help',
+        'ignore-environment',
+        'ignore-signal',
+        'list-signal-handling',
+        'null',
+        'version',
+      ],
+      assignments: true,
+    },
+  ],
+  ['command', { values: '' }],
+  ['exec', { values: 'a' }],
+  ['nohup', { values: '', flags: ['help', 'version'] }],
   // bash's `time` keyword times a whole simple command, assignments included.
-  time: { values: 'fo', long: ['format', 'output'], assignments: true },
-  nice: { values: 'n', long: ['adjustment'] },
-  timeout: { values: 'ks', long: ['kill-after', 'signal'], operands: 1 },
-  xargs: {
-    values: 'EILPadns',
-    glued: 'eil',
-    long: ['arg-file', 'delimiter', 'max-args', 'max-chars', 'max-procs', 'process-slot-var'],
-  },
-};
+  [
+    'time',
+    {
+      values: 'fo',
+      long: ['format', 'output'],
+      flags: ['append', 'help', 'portability', 'quiet', 'verbose', 'version'],
+      assignments: true,
+    },
+  ],
+  ['nice', { values: 'n', long: ['adjustment'], flags: ['help', 'version'] }],
+  [
+    'timeout',
+    {
+      values: 'ks',
+      long: ['kill-after', 'signal'],
+      flags: ['foreground', 'help', 'preserve-status', 'verbose', 'version'],
+      operands: 1,
+    },
+  ],
+  [
+    'xargs',
+    {
+      values: 'EILPadns',
+      glued: 'eil',
+      long: ['arg-file', 'delimiter', 'max-args', 'max-chars', 'max-procs', 'process-slot-var'],
+      flags: [
+        'eof',
+        'exit',
+        'help',
+        'interactive',
+        'max-lines',
+        'no-run-if-empty',
+        'null',
+        'open-tty',
+        'replace',
+        'show-limits',
+        'verbose',
+        'version',
+      ],
+    },
+  ],
+]);
 
-const isWrapperName = (name: string): boolean => Object.hasOwn(WRAPPERS, name);
+const NO_OPTIONS: Wrapper = { values: '' };
 
 /** Whether a word names a wrapper (`sudo`, `/usr/bin/env`). */
-export const isWrapper = (word: string): boolean => isWrapperName(basename(unquote(word)));
+export const isWrapper = (word: string): boolean => WRAPPERS.has(basename(unquote(word)));
+
+/**
+ * Whether long option `given` takes the next word, read as getopt_long reads it: an exact name, or
+ * an abbreviation of exactly one option. getopt_long refuses an ambiguous one; it is read as a flag,
+ * so a program named right after it is still found.
+ */
+function longTakesValue(wrapper: Wrapper, given: string): boolean {
+  const values = wrapper.long ?? [];
+  const flags = wrapper.flags ?? [];
+  if (values.includes(given) || flags.includes(given)) return values.includes(given);
+  const named = [...values, ...flags].filter(option => option.startsWith(given));
+  return named.length === 1 && values.includes(named[0]);
+}
 
 /** How many words one of a wrapper's options spans: two when its value is the next word. */
 function optionWords(wrapper: Wrapper, word: string): 1 | 2 {
-  if (word.startsWith('--')) return !word.includes('=') && (wrapper.long ?? []).includes(word.slice(2)) ? 2 : 1;
+  if (word.startsWith('--')) return !word.includes('=') && longTakesValue(wrapper, word.slice(2)) ? 2 : 1;
   // A value letter ends the cluster: `-Eu bob` and `-ubob` are both `-E -u bob`.
   for (let at = 1; at < word.length; at++) {
     if (wrapper.glued?.includes(word[at])) return 1;
@@ -384,7 +473,7 @@ function optionWords(wrapper: Wrapper, word: string): 1 | 2 {
 
 /** Where the words of `name`'s options (and, for env and sudo, assignments) that start at `from` end. */
 function wrapperOptionsEnd(name: string, tokens: readonly string[], from: number): number {
-  const wrapper = WRAPPERS[name] ?? { values: '' };
+  const wrapper = WRAPPERS.get(name) ?? NO_OPTIONS;
   let at = from;
   let options = true;
   while (at < tokens.length) {
@@ -406,7 +495,7 @@ function wrapperOptionsEnd(name: string, tokens: readonly string[], from: number
 /** The index past the wrapper at `tokens[at]` and its own words: options and their values, assignments, timeout's duration. */
 export function pastWrapper(tokens: readonly string[], at: number): number {
   const name = basename(unquote(tokens[at] ?? ''));
-  return Math.min(wrapperOptionsEnd(name, tokens, at + 1) + (WRAPPERS[name]?.operands ?? 0), tokens.length);
+  return Math.min(wrapperOptionsEnd(name, tokens, at + 1) + (WRAPPERS.get(name)?.operands ?? 0), tokens.length);
 }
 
 /** Where the command a run of leading wrappers (`sudo`, `env X=1`, `timeout 5`) runs starts in `tokens`. */
@@ -433,7 +522,7 @@ export function requiresExactShellRule(command: string): boolean {
     head[1] !== undefined ||
     head[2] !== undefined ||
     executable !== program ||
-    isWrapperName(program) ||
+    WRAPPERS.has(program) ||
     /^(curl|wget|rsync|aws|gsutil|gcloud|docker|podman)$/.test(program) ||
     (program === 'gh' &&
       (/^(?:api|"api"|'api')(?:\s|$)/.test(argumentsText) || !/^[A-Za-z]+\s+[A-Za-z]+(?:\s|$)/.test(argumentsText)))
