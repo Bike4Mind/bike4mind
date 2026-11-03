@@ -84,7 +84,8 @@ export function groupByServer(models: readonly ChatModelOption[]): ModelGroup[] 
 
 /**
  * Newest first, undated after, else incoming order. Hosted rows sharing a name sort together on the
- * newest date among them, since one route can lack it; local rows keep catalog order.
+ * newest date among them, since one route can lack it; local rows keep catalog order. Relies on only
+ * route twins sharing a hosted name (alignRouteTwinNames in b4m-core/llm-adapters/src/routeTwinNames.ts).
  */
 export function sortByRecency(models: readonly ChatModelOption[]): ChatModelOption[] {
   const firstOfName = new Map<string, number>();
@@ -465,7 +466,7 @@ export function ModelPicker({
       </MenuButton>
 
       <Menu size="sm" placement="top-start" sx={{ maxHeight: 400, overflow: 'auto', minWidth: 320, maxWidth: 440 }}>
-        {models.length > FILTER_THRESHOLD && (
+        {rows.length > FILTER_THRESHOLD && (
           <Box sx={{ px: 1, pb: 0.5 }}>
             <Input
               size="sm"
