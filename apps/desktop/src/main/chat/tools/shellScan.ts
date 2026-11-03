@@ -1345,16 +1345,20 @@ export async function scanShell(
         // awk, dd, ...). Record static operands for the permission-file floor too, including
         // option values, without treating every ordinary argument as an outside folder grant.
         for (const arg of rest) {
+          // A Windows program run through interop opens a Windows path where Windows would, so that place is
+          // judged, for the word bash passes and for the part after an `=` in it.
+          if (windowsProgram) {
+            const word = wordValue(arg);
+            const passed = [...new Set([word, word.slice(word.indexOf('=') + 1)])].filter(
+              part => !part.startsWith('-') && /^[A-Za-z]:|^[\\/]{2}|\\/.test(part)
+            );
+            for (const part of passed) await check(part, state.cwd, false, 'windows');
+            if (passed.length > 0) continue;
+          }
           const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : arg;
           if (value.startsWith('-')) continue;
           const prefix = globPrefix(expand(unquote(value)));
           if (!prefix || isDynamic(prefix)) continue;
-          // A Windows program run through interop opens a Windows path where Windows would, so that place is judged.
-          const passed = windowsProgram ? wordValue(value) : '';
-          if (/^[A-Za-z]:|^[\\/]{2}|\\/.test(passed)) {
-            await check(passed, state.cwd, false, 'windows');
-            continue;
-          }
           const targets = operandTargets(state.cwd, prefix);
           const unreachable = targets.filter(target => inUngrantedDistro(target, allowed));
           for (const target of unreachable) ungranted.add(target);
