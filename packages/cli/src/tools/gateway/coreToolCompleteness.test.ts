@@ -62,6 +62,8 @@ describe('core descriptor completeness', () => {
       'normal'
     );
 
+    await fs.rm(dir, { recursive: true, force: true });
+
     expect(tools.length).toBeGreaterThan(0);
     expect(missingDescriptors(names(tools))).toEqual([]);
   });

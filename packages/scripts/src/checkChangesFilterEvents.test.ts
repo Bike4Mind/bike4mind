@@ -350,7 +350,10 @@ describe('readActionConsumers', () => {
     fs.writeFileSync(path.join(dir, 'unrelated.yml'), 'uses: actions/checkout@v4\n');
     fs.writeFileSync(path.join(dir, 'README.md'), 'uses: ./.github/actions/changes-filter\n');
 
-    expect(readActionConsumers(dir).sort()).toEqual(['ci.yml', 'release.yaml']);
+    const consumers = readActionConsumers(dir).sort();
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    expect(consumers).toEqual(['ci.yml', 'release.yaml']);
   });
 });
 

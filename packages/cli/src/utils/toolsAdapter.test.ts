@@ -709,6 +709,8 @@ describe('generateCliTools checkpoint wiring', () => {
     const target = path.join(dir, 'made.txt');
     await createFile!.toolFn({ path: target, content: 'hello' });
 
+    await fs.rm(dir, { recursive: true, force: true });
+
     expect(createCheckpoint).toHaveBeenCalledWith('create_file', [target], 'before-create_file-made.txt');
   });
 });
