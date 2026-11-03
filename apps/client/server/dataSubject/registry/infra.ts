@@ -30,8 +30,13 @@ export const infraHolders = {
   AdminSavedView: {
     kind: 'holder',
     references: [{ path: 'ownerId', matchBy: 'userId', action: 'deleteDocument' }],
+    unrelatedPaths: ['shared'],
   },
-  AdminSettings: { kind: 'noUserData', note: 'Platform configuration; secret values are encrypted at rest.' },
+  AdminSettings: {
+    kind: 'noUserData',
+    // Not erased per person: a staff address in a notification setting is operator configuration.
+    note: 'Platform configuration. Some settings hold staff email addresses (alert recipients), which the operator maintains.',
+  },
   AdminSupportAccessAuditLog: {
     kind: 'holder',
     references: [
@@ -44,7 +49,11 @@ export const infraHolders = {
       { path: 'targetUserId', matchBy: 'userId', action: 'anonymize' },
     ],
   },
-  BusinessMetricState: { kind: 'noUserData', note: 'Platform metric sampling state; `subscribers` is a count.' },
+  BusinessMetricState: {
+    kind: 'noUserData',
+    note: 'Platform metric sampling state; `subscribers` is a count.',
+    unrelatedPaths: ['subscribers'],
+  },
   // Keys embed user ids (`rate-limit:<userId>:<route>`) but a key is one opaque string with no field to match on, and
   // every row expires on its TTL.
   Cache: {
@@ -54,7 +63,13 @@ export const infraHolders = {
   // Activity counters behind platform metrics: the row stays for the aggregates, the person's identity goes.
   CounterLog: {
     kind: 'holder',
-    references: [{ path: 'userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['userName'] }],
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['userName'] },
+      // Free-form context on admin and membership counters.
+      { path: 'metadata.targetUserId', matchBy: 'userId', action: 'anonymize' },
+      { path: 'metadata.memberEmail', matchBy: 'email', action: 'anonymize' },
+      { path: 'metadata.email', matchBy: 'email', action: 'anonymize' },
+    ],
   },
   Counters: { kind: 'noUserData', note: 'Platform-wide named counters.' },
   // `messageBody` is the replayed queue message and may carry user content; it is not scanned.
@@ -72,15 +87,28 @@ export const infraHolders = {
       { path: 'recipientFilter.specificEmails', matchBy: 'email', action: 'pullFromArray' },
       { path: 'testEmailAddresses', matchBy: 'email', action: 'pullFromArray' },
     ],
-    unrelatedPaths: ['totalEmailsSent'],
+    // `subscriberIds` are newsletter subscriber records, not user ids; the flags select whole audiences.
+    unrelatedPaths: [
+      'totalEmailsSent',
+      'recipientFilter.allUsers',
+      'recipientFilter.allSubscribers',
+      'recipientFilter.subscriberIds',
+    ],
   },
   EmailPreferences: {
     kind: 'holder',
     references: [
-      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
-      { path: 'email', matchBy: 'email', action: 'deleteDocument' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
+      {
+        path: 'email',
+        matchBy: 'email',
+        action: 'retain',
+        reason: 'Suppression record: keeps the address from being mailed again after an objection (Art. 21).',
+      },
     ],
     secretPaths: ['unsubscribeToken'],
+    // A newsletter subscriber record, not a user id.
+    unrelatedPaths: ['subscriberId'],
   },
   // A delivered message is the recipient's own data. Rows for a `subscriber` or `direct` recipient carry no user id,
   // so they are found by address.
@@ -116,7 +144,7 @@ export const infraHolders = {
       { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
       { path: 'sharedWithUsers', matchBy: 'userId', action: 'pullFromArray' },
     ],
-    unrelatedPaths: ['platformEmailAddress', 'rawEmailS3Key'],
+    unrelatedPaths: ['platformEmailAddress', 'rawEmailS3Key', 'sharedWithTeams'],
   },
   IntegrationAuditLog: {
     kind: 'holder',
@@ -189,6 +217,7 @@ export const infraHolders = {
   OrgGitHubLakeConnection: {
     kind: 'holder',
     references: [{ path: 'connectedBy', matchBy: 'userId', action: 'anonymize' }],
+    secretPaths: ['ingestClaimToken'],
   },
   OrgGoogleDriveConnection: {
     kind: 'holder',
@@ -218,12 +247,12 @@ export const infraHolders = {
   Organization: {
     kind: 'holder',
     references: [
-      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['billingContact'] },
       { path: 'users.userId', matchBy: 'userId', action: 'pullFromArray' },
       { path: 'adminUserIds', matchBy: 'userId', action: 'pullFromArray' },
       { path: 'userDetails.id', matchBy: 'userId', action: 'pullFromArray' },
     ],
-    unrelatedPaths: ['userDetails.email'],
+    unrelatedPaths: ['userDetails.email', 'maxCreditsPerMember'],
   },
   OverwatchProduct: { kind: 'noUserData', note: 'Tracked product catalogue entry.' },
   // The event `userId` is an HMAC of the Bike4Mind user id under a server-side salt (`pseudonymizeUserId`), not the id.
@@ -309,6 +338,7 @@ export const infraHolders = {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
     secretPaths: ['downloadUrl'],
+    unrelatedPaths: ['includeUserNames'],
   },
   SreErrorPattern: { kind: 'noUserData', note: 'Learned error diagnosis pattern.' },
   // `fixVerdict.by` is a GitHub login of a staff reviewer, not a Bike4Mind user reference.
@@ -318,6 +348,7 @@ export const infraHolders = {
       { path: 'affectedUserIds', matchBy: 'userId', action: 'pullFromArray' },
       { path: 'dismissedByUserId', matchBy: 'userId', action: 'anonymize' },
     ],
+    unmatchedPaths: { 'fixVerdict.by': 'GitHub login of the reviewer; no link to a user id is stored.' },
   },
   StorageDriftRecord: {
     kind: 'holder',
@@ -328,7 +359,11 @@ export const infraHolders = {
     references: [{ path: 'lastModifiedBy', matchBy: 'userId', action: 'anonymize' }],
     secretPaths: ['encryptedValue', 'previousEncryptedValue'],
   },
-  TaskSchedule: { kind: 'noUserData', note: 'Queued job handler and payload; transient, expires on `expireAt`.' },
+  TaskSchedule: {
+    kind: 'holder',
+    // A job queued for the person (a reminder, a digest) would otherwise run after the erasure.
+    references: [{ path: 'payload.userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
   // The cached teammates are GitHub contributors, not Bike4Mind users; they go with the owner's cache.
   TeamMetricsCache: {
     kind: 'holder',

@@ -35,3 +35,13 @@ function mergeRegistries(registries: readonly DataHolderRegistry[]): DataHolderR
 
 /** Keyed by Mongoose model name (`mongoose.modelNames()`), not collection name. */
 export const DATA_HOLDER_REGISTRY: DataHolderRegistry = mergeRegistries(DOMAIN_REGISTRIES);
+
+/**
+ * Models registered in this process that the registry does not classify. Some models register only
+ * when an optional package is installed at deploy time, which this repo's coverage test cannot see,
+ * so a caller that walks the registry to export or erase must assert this is empty at runtime
+ * rather than silently skip a collection.
+ */
+export function findUnclassifiedModels(modelNames: readonly string[]): string[] {
+  return modelNames.filter(name => !(name in DATA_HOLDER_REGISTRY));
+}

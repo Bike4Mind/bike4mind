@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { mongoose } from '@bike4mind/database';
-import { listSchemaPaths, looksLikeUserReference, schemaDeclaresPath } from './schemaPaths';
+import { listSchemaLeaves, listSchemaPaths, looksLikeUserReference, schemaDeclaresPath } from './schemaPaths';
 
 const schema = new mongoose.Schema({
   userId: String,
@@ -42,11 +42,45 @@ describe('looksLikeUserReference', () => {
     'createdBy',
     'revokedBy',
     'userEmail',
+    'memberIds',
+    'participants',
+    'receiverName',
+    'created_by',
+    'permissions.canWrite',
+    'sharedWith',
+    'billingContact',
+    'uid',
+    'author.id',
+    'adminUserId',
   ])('flags %s', path => {
     expect(looksLikeUserReference(path)).toBe(true);
   });
 
-  it.each(['title', 'organizationId', 'sessionId', 'status', 'users.permissions'])('ignores %s', path => {
+  it.each([
+    'title',
+    'organizationId',
+    'sessionId',
+    'status',
+    'users.permissions',
+    'isAdmin',
+    'cancelledAt',
+    'items.id',
+    'members._id',
+  ])('ignores %s', path => {
     expect(looksLikeUserReference(path)).toBe(false);
+  });
+});
+
+describe('listSchemaLeaves', () => {
+  it('marks paths declared as a reference to User, including arrays of them', () => {
+    const refSchema = new mongoose.Schema({
+      owner: { type: String, ref: 'User' },
+      watchers: [{ type: String, ref: 'User' }],
+      project: { type: String, ref: 'Project' },
+    });
+    const refsUser = listSchemaLeaves(refSchema)
+      .filter(leaf => leaf.refsUser)
+      .map(leaf => leaf.path);
+    expect(refsUser.sort()).toEqual(['owner', 'watchers']);
   });
 });
