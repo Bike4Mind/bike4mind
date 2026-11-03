@@ -3,7 +3,7 @@ import { referService } from '@bike4mind/services';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { RegInviteEvents } from '@bike4mind/common';
+import { ApiKeyScope, RegInviteEvents } from '@bike4mind/common';
 import { grantPackageRepository, registrationInviteRepository } from '@bike4mind/database';
 import { z } from 'zod';
 
@@ -16,7 +16,7 @@ const createRegInviteSchema = z.object({
   grantPackageId: z.string().min(1).optional(),
 });
 
-const handler = baseApi().post(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
   outboundActionGate(),
   asyncHandler<unknown, unknown, z.infer<typeof createRegInviteSchema>>(async (req, res) => {
     const {
