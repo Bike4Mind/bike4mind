@@ -464,6 +464,25 @@ const INLINE_SCRIPT: Record<string, RegExp> = {
   dash: SHELL_C,
 };
 
+/** PowerShell's switch for a command string: any prefix of -Command, -CommandWithArgs or -EncodedCommand. */
+function powershellCommand(arg: string): boolean {
+  const name = /^(?:--?|\/)([A-Za-z]+)$/.exec(arg)?.[1]?.toLowerCase();
+  if (name === undefined) return false;
+  return name === 'ec' || name === 'cwa' || ['commandwithargs', 'encodedcommand'].some(full => full.startsWith(name));
+}
+
+/**
+ * Windows shells, named without `.exe`, and the switch that hands each a command line: cmd's `/c`
+ * (or `/k`, `/r`, and `//c` as Git Bash needs it) and PowerShell's `-Command`.
+ */
+const WINDOWS_INLINE_SCRIPT = new Map<string, (arg: string) => boolean>([
+  ['cmd', arg => /^\/(.*\/)?[ckr]/i.test(arg)],
+  ['powershell', powershellCommand],
+  ['pwsh', powershellCommand],
+]);
+
+const windowsInlineScript = (program: string) => WINDOWS_INLINE_SCRIPT.get(program.toLowerCase().replace(/\.exe$/, ''));
+
 /**
  * The option letters whose value is glued to the flag, so a letter after one is that value rather
  * than another flag: `ruby -rset` loads the library `set`, it does not run `-e`. Only list letters
@@ -596,6 +615,11 @@ export function opaqueForm(tokens: readonly string[]): string | null {
   const head = (count: number) => tokens.slice(0, start + count).join(' ');
   if (program === 'eval' || program === 'source' || program === '.') return head(1);
   if (program === 'deno' && args[0] === 'eval') return head(2);
+  const windowsInline = windowsInlineScript(program);
+  if (windowsInline) {
+    const at = args.findIndex(windowsInline);
+    return at === -1 ? null : head(2 + at);
+  }
   const inline = /^python[\d.]*$/.test(program) ? DASH_C : INLINE_SCRIPT[program];
   if (!inline && !STDIN_SCRIPT.test(program)) return null;
   const { options, operands } = interpreterOptions(program, args);
@@ -758,6 +782,9 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
   if (program === 'eval') return 'eval';
   // A name built from a command substitution carries what it read into the lookup itself.
   if (RESOLVERS.has(program) && computed) return `${program} with a computed argument`;
+  const windowsInline = windowsInlineScript(program);
+  const windowsSwitch = windowsInline ? args.find(windowsInline) : undefined;
+  if (windowsSwitch !== undefined) return `${program} ${windowsSwitch}`;
   const inlineScript = /^python[\d.]*$/.test(program) ? DASH_C : INLINE_SCRIPT[program];
   // A script's own arguments are not options: `python3 x.py -config` never runs an inline script.
   const { options, operands } = interpreterOptions(program, args);

