@@ -67,7 +67,9 @@ export async function countUntrackedFile(
 ): Promise<{ file: ChangedFile; bytesRead: number }> {
   // git in a WSL folder runs in the distro and prints Linux names; the share spells them its own way.
   const root = join(directory);
-  const absolute = join(root, wslLocation(directory) ? shareRelativePath(path) : path);
+  const spelled = wslLocation(directory) ? shareRelativePath(path) : path;
+  if (spelled === null) return { file: uncounted(path), bytesRead: 0 };
+  const absolute = join(root, spelled);
   const inside = absolute !== root && isWithin(root, absolute);
   if (!inside || !(await lstat(absolute)).isFile()) return { file: uncounted(path), bytesRead: 0 };
 

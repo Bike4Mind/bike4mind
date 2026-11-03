@@ -117,8 +117,12 @@ describe('mapping between Linux and Windows paths', () => {
       const linuxPath = `/home/me/a${held}b\\c`;
       expect(parseWslPath(wslUncPath(location, linuxPath))?.linuxPath).toBe(linuxPath);
     }
-    // Windows is given the share's own spelling, which the share opens as `a\b`.
-    expect(toWindowsPath(location, '/home/me/a\u{f05c}b')).toBe('\\\\wsl$\\Ubuntu\\home\\me\\a\u{f05c}b');
+    // The share opens its own spelling as `a\b`, so a path git prints keeps the name behind a NUL,
+    // and a relative listing leaves it out.
+    const printed = toWindowsPath(location, '/home/me/a\u{f05c}b');
+    expect(printed).toBe('\\\\wsl$\\Ubuntu\\home\\me\\a\0\u{f05c}b');
+    expect(parseWslPath(printed)?.linuxPath).toBe('/home/me/a\u{f05c}b');
+    expect(shareRelativePath('src/a\u{f05c}b/x.ts')).toBeNull();
     expect(wslOperandPlaces({ ...location, linuxPath: '/home/me/a\u{f05c}b' }, 'x\\y', 'windows')).toEqual([
       wslUncPath(location, '/home/me/a\u{f05c}b/x\\y'),
       '\\\\wsl$\\Ubuntu\\home\\me\\a\u{f05c}b\\x\\y',

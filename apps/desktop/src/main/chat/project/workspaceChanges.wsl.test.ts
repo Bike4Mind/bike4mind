@@ -46,6 +46,15 @@ describe('counting an untracked file git listed', () => {
     expect(counted).toMatchObject({ file: { path: 'a\\..\\..\\outside.txt', added: 1 }, bytesRead: 4 });
   });
 
+  it('leaves uncounted a Linux name no Windows path reaches, rather than the name the share gives it', async () => {
+    const project = '\\\\wsl$\\Ubuntu\\home\\me\\proj';
+    files.set(`${project}\\a\u{f05c}b`, 'one\ntwo\n');
+
+    const counted = await countUntrackedFile(project, 'a\u{f05c}b');
+
+    expect(counted).toEqual({ file: { path: 'a\u{f05c}b', added: 0, removed: 0, untracked: true }, bytesRead: 0 });
+  });
+
   it('counts a listed name only when joining it stays below the folder', async () => {
     files.set('C:\\outside.txt', 'one\ntwo\n');
 

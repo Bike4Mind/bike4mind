@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('./git', () => ({ git: async () => 'a\\b/c.txt\0x?y.md\0' }));
+vi.mock('./git', () => ({ git: async () => 'a\\b/c.txt\0x?y.md\0held\u{f03f}.md\0' }));
 vi.mock('./memory', () => ({ memoryStoreFor: async () => undefined }));
 vi.mock('./instructions', () => ({
   defaultUserInstructionsRoot: () => '/nowhere',
@@ -20,6 +20,12 @@ describe('the project tree for names git lists', () => {
     expect(tree).toContain('a\u{f05c}b/ (1 file)');
     expect(tree).toContain('x\u{f03f}y.md');
     expect(tree).not.toContain('x?y.md');
+  });
+
+  it('leaves out a WSL name holding a share spelling character itself, which no Windows path reaches', async () => {
+    const tree = await loadProjectContext('\\\\wsl.localhost\\Ubuntu\\home\\me\\proj');
+
+    expect(tree).not.toContain('held');
   });
 
   it('keeps names elsewhere as git printed them', async () => {

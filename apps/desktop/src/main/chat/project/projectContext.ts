@@ -20,7 +20,7 @@ async function listFiles(directory: string): Promise<string[]> {
     const out = await git(directory, ['ls-files', '-z', '--cached', '--others', '--exclude-standard']);
     const listed = out.split('\0').filter(Boolean);
     // Git in the distro prints Linux names; the walk, glob and grep show them as the share spells them.
-    return wslLocation(directory) ? listed.map(shareRelativePath) : listed;
+    return wslLocation(directory) ? listed.flatMap(path => shareRelativePath(path) ?? []) : listed;
   } catch {
     return walk(directory);
   }

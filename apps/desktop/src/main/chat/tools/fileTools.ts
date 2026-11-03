@@ -160,9 +160,10 @@ async function trackedButIgnored(base: string): Promise<string[]> {
 
 /**
  * For a path git or rg printed relative to `directory`: in a WSL folder they ran in the distro, so
- * the path is respelled the way Windows opens it over the share. Elsewhere it is kept as printed.
+ * the path is respelled the way Windows opens it over the share, or null when Windows cannot open
+ * it there (see `shareRelativePath`). Elsewhere it is kept as printed.
  */
-function hostSpelling(directory: string): (path: string) => string {
+function hostSpelling(directory: string): (path: string) => string | null {
   return wslLocation(directory) ? shareRelativePath : path => path;
 }
 
@@ -190,11 +191,17 @@ interface FileListing {
  */
 async function listFiles(base: string, context: ToolContext): Promise<FileListing> {
   const tracked = await gitListing(base);
-  if (tracked) return { files: tracked.map(hostSpelling(base)).sort(), complete: true };
+  if (tracked) {
+    const spelled = hostSpelling(base);
+    return { files: tracked.flatMap(path => spelled(path) ?? []).sort(), complete: true };
+  }
 
   const inDistro = await listDistroFiles(base, IGNORED, MAX_WALKED_FILES, context.signal);
   if (inDistro) {
-    const files = inDistro.files.map(file => ({ ...file, path: shareRelativePath(file.path) }));
+    const files = inDistro.files.flatMap(file => {
+      const path = shareRelativePath(file.path);
+      return path === null ? [] : [{ ...file, path }];
+    });
     return {
       files: files.map(file => file.path).sort(),
       complete: inDistro.complete,
@@ -633,9 +640,14 @@ export const grepSearch: ToolDefinition = {
         maxFileBytes: MAX_SEARCH_FILE_BYTES,
         signal: context.signal,
         // Filtered here rather than with rg --glob, which would also override .gitignore.
-        onFile: file =>
-          (include !== undefined && !matchesInclude(spelled(file.path), include)) ||
-          tally.add(spelled(file.path), file.matches, shown => renderRipgrepFile(file, shown, around, expression)),
+        onFile: file => {
+          const path = spelled(file.path);
+          return (
+            path === null ||
+            (include !== undefined && !matchesInclude(path, include)) ||
+            tally.add(path, file.matches, shown => renderRipgrepFile(file, shown, around, expression))
+          );
+        },
       }));
 
     // rg lists files itself with no walk cap, so a search it ran leaves nothing unsearched.
@@ -643,7 +655,7 @@ export const grepSearch: ToolDefinition = {
     const ranRipgrep = viaRipgrep === 'done' || viaRipgrep === 'stopped' || viaRipgrep === 'timed-out';
     if (ranRipgrep && viaRipgrep === 'done') {
       // rg honours .gitignore even for a file git tracks; the JavaScript listing does not.
-      for (const file of (await trackedButIgnored(directory)).map(spelled)) {
+      for (const file of (await trackedButIgnored(directory)).flatMap(path => spelled(path) ?? [])) {
         if (tally.truncated || context.signal.aborted) break;
         const absolute = listedPath(directory, file);
         if (!absolute || (include && !matchesInclude(file, include))) continue;

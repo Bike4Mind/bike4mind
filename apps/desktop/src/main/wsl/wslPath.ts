@@ -34,9 +34,14 @@ function linuxName(name: string): string {
   );
 }
 
-/** A relative path a Linux program printed, with `/` between names, spelled as the share spells it. */
-export function shareRelativePath(path: string): string {
-  return path.split('/').map(shareName).join('/');
+const HOLDS_SHARE_SPELLING = new RegExp(SHARE_SPELLED.source, 'u');
+
+/**
+ * A relative path a Linux program printed, with `/` between names, spelled as the share spells it.
+ * Null when a name holds a character the share spells another with, which no Windows path reaches.
+ */
+export function shareRelativePath(path: string): string | null {
+  return HOLDS_SHARE_SPELLING.test(path) ? null : path.split('/').map(shareName).join('/');
 }
 
 /** Also reads the `\\?\UNC\...` and `\\.\UNC\...` spellings of the share. */
@@ -101,9 +106,9 @@ export function wslOperandPlaces(cwd: WslLocation, operand: string, reader: Oper
   return places;
 }
 
-/** A path a Linux program printed, as Windows reaches it; anything not absolute is returned as is. */
+/** A path a Linux program printed, as `wslUncPath` spells it; anything not absolute is returned as is. */
 export function toWindowsPath(location: Pick<WslLocation, 'host' | 'distro'>, path: string): string {
-  return path.startsWith('/') ? sharePath(location, path) : path;
+  return path.startsWith('/') ? wslUncPath(location, path) : path;
 }
 
 /** A Windows path to a folder in the same distro, as a Linux program there must be given it. */

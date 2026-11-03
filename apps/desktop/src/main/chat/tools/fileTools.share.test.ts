@@ -99,6 +99,48 @@ describe('names listed in a WSL folder, opened over the share', () => {
     expect(glob).not.toContain('x?y.txt');
   });
 
+  // Linux `a\b` and Linux `a<U+F05C>b` are both `a<U+F05C>b` on the share, which opens the first.
+  describe('a Linux name holding a share spelling character itself', () => {
+    const shared = `a\u{f05c}b`;
+    const count = (text: string) => text.split(shared).length - 1;
+
+    beforeEach(() => {
+      files.set(`${PROJECT}\\${shared}`, 'needle\n');
+    });
+
+    it('is left out of a distro listing', async () => {
+      listDistroFiles.mockResolvedValue({
+        complete: true,
+        files: [
+          { path: 'a\\b', size: 7, modified: 1 },
+          { path: shared, size: 7, modified: 1 },
+        ],
+      });
+
+      expect(count(await globFiles.run({ pattern: '*', path: PROJECT }, context()))).toBe(1);
+    });
+
+    it('is left out of a git listing', async () => {
+      listed.tracked = `a\\b\0${shared}\0`;
+
+      expect(count(await globFiles.run({ pattern: '*', path: PROJECT }, context()))).toBe(1);
+    });
+
+    it('is left out of what ripgrep found and what git tracks and ignores', async () => {
+      listed.ignored = `${shared}\0`;
+      ripgrepSearch.mockImplementation(async ({ onFile }) => {
+        for (const path of ['a\\b', shared]) {
+          onFile({ path, matches: 1, lines: [{ number: 1, text: 'needle', match: true }] });
+        }
+        return 'done';
+      });
+
+      const result = await grepSearch.run({ pattern: 'needle', path: PROJECT, outputMode: 'files' }, context());
+
+      expect(count(result)).toBe(1);
+    });
+  });
+
   it('greps a tracked name that holds a backslash at the share spelling of it', async () => {
     files.set(SPELLED, 'needle tracked in the folder\n');
     listed.tracked = 'a\\..\\..\\outside.txt\0';
