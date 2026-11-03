@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   sendToQueue: vi.fn(),
   sendToClient: vi.fn(),
   getSourceQueueUrl: vi.fn(),
+  consumeFileUploadBudget: vi.fn(async (_req: unknown, _fileCount: number) => undefined),
   baseApiOptions: undefined as unknown,
 }));
 
@@ -30,6 +31,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test' } } }));
 
+vi.mock('@server/files/fileUploadBudget', () => ({ consumeFileUploadBudget: h.consumeFileUploadBudget }));
 vi.mock('@server/managers/fabFileManager', () => ({ getFabFileById: h.getFabFileById }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: h.sendToClient }));
@@ -249,6 +251,24 @@ describe('reprocess handler (unit) - authorization', () => {
     const { res } = makeRes();
 
     await expect(run({ fabFileId: 'f1', dataLakeId: LAKE_ID }, res)).rejects.toThrow(/currently being chunked/i);
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('spends one unit of the allowance for the reprocess', async () => {
+    h.getFabFileById.mockResolvedValue(memberFile());
+
+    await run({ fabFileId: 'f1' }, makeRes().res, OWNER);
+
+    expect(h.consumeFileUploadBudget).toHaveBeenCalledTimes(1);
+    expect(h.consumeFileUploadBudget.mock.calls[0][1]).toBe(1);
+  });
+
+  it('resets and enqueues nothing when the allowance refuses the reprocess', async () => {
+    h.getFabFileById.mockResolvedValue(memberFile());
+    h.consumeFileUploadBudget.mockRejectedValueOnce(new Error('Upload limit reached'));
+
+    await expect(run({ fabFileId: 'f1' }, makeRes().res, OWNER)).rejects.toThrow('Upload limit reached');
+    expect(h.resetChunkStateByIds).not.toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
