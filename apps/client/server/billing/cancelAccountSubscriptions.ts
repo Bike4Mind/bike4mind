@@ -127,12 +127,14 @@ async function cancelCustomerSubscriptions(
       result.failed.push({ customerId, subscriptionId: subscription.id, reason: reasonOf(error) });
       continue;
     }
-    // An open invoice keeps Stripe's dunning retries running after the cancel. Best-effort: the
+    // An open invoice keeps Stripe's dunning retries running after the cancel; the
+    // customer.subscription.deleted webhook voids them too, as a backstop. Best-effort: the
     // subscription is already canceled, which is what this call is for.
     if (pastDeadline(deadline)) continue;
     try {
       const { voided, failed } = await voidOpenSubscriptionInvoices(subscription.id, {
-        timeoutMs: requestTimeout(deadline),
+        deadline,
+        timeoutMs: STRIPE_REQUEST_TIMEOUT_MS,
         ...(deadline === undefined ? {} : { maxNetworkRetries: 0 }),
       });
       if (voided.length > 0 || failed.length > 0) {

@@ -16,6 +16,11 @@ export interface VoidOpenInvoicesOptions {
   createdBefore?: number | null;
   /** Per Stripe request timeout (ms); the client default applies when unset. */
   timeoutMs?: number;
+  /**
+   * Epoch ms. Each Stripe request's timeout is capped to the time left, and once it passes the
+   * invoices not yet voided are reported in `failed` without a call.
+   */
+  deadline?: number;
   /** Per Stripe request retry cap; the client default applies when unset. */
   maxNetworkRetries?: number;
 }
@@ -53,20 +58,31 @@ export async function voidOpenSubscriptionInvoices(
     limit: 100,
     ...(options.createdBefore ? { created: { lt: options.createdBefore } } : {}),
   };
-  const requestOptions =
-    options.timeoutMs || options.maxNetworkRetries !== undefined
+  const requestOptionsNow = () => {
+    const timeout =
+      options.deadline === undefined
+        ? options.timeoutMs
+        : Math.max(1, Math.min(options.timeoutMs ?? Infinity, options.deadline - Date.now()));
+    return timeout || options.maxNetworkRetries !== undefined
       ? {
-          ...(options.timeoutMs ? { timeout: options.timeoutMs } : {}),
+          ...(timeout ? { timeout } : {}),
           ...(options.maxNetworkRetries !== undefined ? { maxNetworkRetries: options.maxNetworkRetries } : {}),
         }
       : undefined;
-  const open = await (requestOptions ? stripe.invoices.list(params, requestOptions) : stripe.invoices.list(params));
+  };
+  const listOptions = requestOptionsNow();
+  const open = await (listOptions ? stripe.invoices.list(params, listOptions) : stripe.invoices.list(params));
 
   const voided: string[] = [];
   const failed: string[] = [];
 
   for (const invoice of open.data) {
+    if (options.deadline !== undefined && Date.now() >= options.deadline) {
+      failed.push(invoice.id);
+      continue;
+    }
     try {
+      const requestOptions = requestOptionsNow();
       await (requestOptions
         ? stripe.invoices.voidInvoice(invoice.id, undefined, requestOptions)
         : stripe.invoices.voidInvoice(invoice.id));
