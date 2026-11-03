@@ -17,7 +17,7 @@ import {
 } from '@shared/chat';
 import { effortSent } from '@shared/generation';
 
-const LABELS: Record<ReasoningEffortSetting, string> = {
+export const EFFORT_LABELS: Readonly<Record<ReasoningEffortSetting, string>> = {
   default: 'Default',
   none: 'None',
   minimal: 'Minimal',
@@ -192,7 +192,7 @@ export function ReasoningEffortPicker({
         slotProps={{ root: { 'data-testid': 'effort-picker-btn' } }}
       >
         <Typography level="body-xs" noWrap textColor="inherit">
-          Effort: {LABELS[shown]}
+          Effort: {EFFORT_LABELS[shown]}
         </Typography>
       </MenuButton>
       <Menu size="sm" placement="top-start" sx={{ minWidth: 240 }}>
@@ -206,7 +206,7 @@ export function ReasoningEffortPicker({
             <Stack sx={{ minWidth: 0 }}>
               <Typography level="body-sm" noWrap>
                 {setting === shown ? '\u2022 ' : ''}
-                {LABELS[setting]}
+                {EFFORT_LABELS[setting]}
               </Typography>
               <Typography level="body-xs" textColor="text.tertiary" noWrap>
                 {DESCRIPTIONS[setting]}

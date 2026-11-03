@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { ChatModelOption } from '@shared/chat';
 import type { LocalModelEntry } from '@shared/models';
 import { desktopTheme } from '../theme';
 import { InstalledTab } from './InstalledTab';
@@ -103,5 +104,42 @@ describe('InstalledTab embedding-only rows', () => {
     expect(within(row('qwen3-embedding:0.6b'), 'models-installed-use-btn')).toBeNull();
     expect(within(row('llama3'), 'models-installed-embedding-note')).toBeNull();
     expect(within(row('llama3'), 'models-installed-use-btn')).toBe('Use in chat');
+  });
+});
+
+describe('InstalledTab model settings', () => {
+  it("offers Settings for a model chat lists with controls, and opens that model's dialog", async () => {
+    (window as unknown as { b4m: unknown }).b4m = { chat: { getModelSettings: async () => ({}) } };
+    const chatModel: ChatModelOption = {
+      id: 'local:ollama:llama3',
+      name: 'llama3',
+      controls: { temperature: { min: 0, max: 2, step: 0.05, default: 0.8, scope: 'request' } },
+    };
+    const models: LocalModelEntry[] = [
+      { ...bare, name: 'llama3', capabilities: { ...bare.capabilities, completion: true } },
+      { ...bare, name: 'nomic-embed', capabilities: { ...bare.capabilities, embeddings: true } },
+    ];
+    await act(async () =>
+      root.render(
+        <CssVarsProvider theme={desktopTheme}>
+          <InstalledTab
+            status={null}
+            target={{ id: 'local', name: 'This computer', local: true, management: 'allowed' }}
+            installed={{ ok: true, models }}
+            modelOn={name => (name === 'llama3' ? chatModel : null)}
+            onRetry={() => {}}
+            onExplore={() => {}}
+          />
+        </CssVarsProvider>
+      )
+    );
+    expect(within(row('nomic-embed'), 'models-installed-settings-btn')).toBeNull();
+    const button = row('llama3')?.querySelector<HTMLButtonElement>('[data-testid="models-installed-settings-btn"]');
+    expect(button?.textContent).toBe('Settings');
+    await act(async () => button?.click());
+    expect(document.querySelector('[data-testid="model-defaults-dialog"]')?.textContent).toContain(
+      'Settings for llama3'
+    );
+    expect(document.querySelector('[data-testid="model-defaults-temperature-input"]')).not.toBeNull();
   });
 });

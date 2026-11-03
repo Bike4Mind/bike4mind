@@ -688,19 +688,27 @@ export function ChatShell({
     [create, remove, apply, markSessionStart]
   );
   /** The catalog's own entry for an installed model, so the conversation routes to the server it runs on. */
-  const chatWith = useCallback(
+  const modelWith = useCallback(
     (serverId: string, name: string) => {
       const wanted = name.toLowerCase();
-      const option = catalog.models.find(
-        model =>
-          isLocalBackend(model) &&
-          (!model.unavailable || model.pending) &&
-          (model.server?.id ?? LOCAL_SERVER_ID) === serverId &&
-          model.name.toLowerCase() === wanted
+      return (
+        catalog.models.find(
+          model =>
+            isLocalBackend(model) &&
+            (!model.unavailable || model.pending) &&
+            (model.server?.id ?? LOCAL_SERVER_ID) === serverId &&
+            model.name.toLowerCase() === wanted
+        ) ?? null
       );
+    },
+    [catalog.models]
+  );
+  const chatWith = useCallback(
+    (serverId: string, name: string) => {
+      const option = modelWith(serverId, name);
       return option ? () => void startChatOn(option.id) : null;
     },
-    [catalog.models, startChatOn]
+    [modelWith, startChatOn]
   );
 
   /**
@@ -854,6 +862,7 @@ export function ChatShell({
           inUse={modelsInUse}
           onOpenModelServers={onOpenModelServers}
           chatWith={chatWith}
+          modelWith={modelWith}
           catalog={catalog}
           chatError={chatOnError}
           onDismissChatError={() => setChatOnError(null)}
