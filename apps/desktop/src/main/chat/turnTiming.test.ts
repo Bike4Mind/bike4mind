@@ -119,6 +119,54 @@ describe('startRoundTimer', () => {
 
     expect(timer.end()).toMatchObject({ firstReasoningAt: 1_000, lastReasoningAt: 4_000 });
   });
+
+  const run = (frames: ReadonlyArray<readonly [number, string | null]>) => {
+    let clock = 0;
+    const timer = startRoundTimer(() => clock);
+    for (const [at, text] of frames) {
+      clock = at;
+      if (text === null) timer.text();
+      else timer.reasoning(text);
+    }
+    return timer.end();
+  };
+
+  it('takes whitespace inside readable thinking as part of it, so a closing marker after it still counts', () => {
+    expect(
+      run([
+        [100, ''],
+        [200, 'Okay'],
+        [300, ' '],
+        [900, ''],
+        [950, null],
+      ])
+    ).toMatchObject({ firstReasoningAt: 100, lastReasoningAt: 900 });
+  });
+
+  it('closes an empty block once readable thinking follows it', () => {
+    expect(
+      run([
+        [100, ''],
+        [105, '\n'],
+        [200, 'Okay'],
+        [900, ''],
+        [950, null],
+      ])
+    ).toMatchObject({ firstReasoningAt: 200, lastReasoningAt: 900 });
+  });
+
+  it('closes an empty block sent in one frame once text follows it', () => {
+    // A hosted '<think>\n\n</think>' in one frame reaches the timer as its whitespace alone.
+    expect(
+      run([
+        [100, '\n\n'],
+        [120, null],
+        [1_000, ''],
+        [4_000, ''],
+        [4_100, null],
+      ])
+    ).toMatchObject({ firstReasoningAt: 1_000, lastReasoningAt: 4_000 });
+  });
 });
 
 describe('createRoundProbe', () => {
