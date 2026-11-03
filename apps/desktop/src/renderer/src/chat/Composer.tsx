@@ -76,6 +76,7 @@ export function Composer({
   blockedAction,
   notReady,
   usage,
+  contextStatus,
   placeholder = 'Send a message...',
   disabledPlaceholder,
   onSend,
@@ -123,6 +124,8 @@ export function Composer({
    * need to act on, and those still win.
    */
   usage?: ComposerUsage | null;
+  /** Drawn left of the credits ring while a conversation is open: the context ring. */
+  contextStatus?: ReactNode;
   /**
    * What the placeholder says while `disabled` holds - the step that IS open, named by the
    * owner, which is the only side that knows whether there is no session, or one being made.
@@ -687,6 +690,8 @@ export function Composer({
         <Box sx={{ flex: 1 }} />
 
         {footer}
+
+        {!disabled && contextStatus}
 
         {shownUsage && (
           <Tooltip

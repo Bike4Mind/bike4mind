@@ -100,6 +100,17 @@ export interface LocalModelEntry {
 
 export type InstalledModelsResult = { ok: true; models: LocalModelEntry[] } | { ok: false; error: ModelHubError };
 
+/**
+ * Whether a local chat model is in its Ollama server's memory, read from `/api/ps`. Loaded is only a
+ * proxy for a warm prompt cache. `unsupported` is a runtime with no such report (OpenAI-compatible).
+ */
+export type LoadedModelState =
+  | { kind: 'unsupported' }
+  | { kind: 'unknown' }
+  | { kind: 'unloaded' }
+  /** `expiresAt` is epoch ms when keep-alive unloads it; null when the server gave none. */
+  | { kind: 'loaded'; expiresAt: number | null };
+
 export type HubGatedMode = false | 'auto' | 'manual';
 
 export interface HubModelCard {

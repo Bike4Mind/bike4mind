@@ -71,6 +71,7 @@ import {
   type HubSearchRequest,
   type HubSearchResult,
   type InstalledModelsResult,
+  type LoadedModelState,
   type ModelFit,
   type ModelHubError,
   type ModelHubErrorKind,
@@ -90,6 +91,7 @@ import { ServerCredentialsError, ServerUnreachableError } from '../modelServers/
 import { ServerRedirectError, ServerTransportError } from '@bike4mind/local-models/servers';
 import { serverHardware, withEnteredSpecs } from './enteredHardware';
 import { fitFromArch, fitFromSize, machineView } from './fit';
+import { loadedStateOf, loadedStateTarget } from './loadedState';
 
 export interface ModelRuntimePort {
   readonly baseUrl: string;
@@ -1229,6 +1231,18 @@ export class ModelHubService {
       };
     } catch (error) {
       return { ok: false, error: toModelHubError(error) };
+    }
+  }
+
+  /** Polled by the composer while idle on a local model, so any failure is `unknown` rather than an error. */
+  async loadedState(modelId: string): Promise<LoadedModelState> {
+    const where = loadedStateTarget(modelId);
+    const target = where ? this.#target(where.serverId) : null;
+    if (!where || !target || target.management === 'unsupported') return { kind: 'unsupported' };
+    try {
+      return loadedStateOf(await target.runtime.loaded(), where.model);
+    } catch {
+      return { kind: 'unknown' };
     }
   }
 

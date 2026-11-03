@@ -113,6 +113,7 @@ import type {
   ModelRemoveResult,
   ModelStoreLocation,
   ModelRuntimeStatus,
+  LoadedModelState,
 } from './models';
 import type { AccountUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
@@ -340,6 +341,7 @@ export const IPC_CHANNELS = {
   modelsDismissPull: 'models:dismiss-pull',
   modelsRemove: 'models:remove',
   modelsGetStoreLocation: 'models:get-store-location',
+  modelsGetLoadedState: 'models:get-loaded-state',
   /** Hugging Face sign-in: whether a token is saved, save one, forget it. None of them returns the token. */
   modelsGetHfAccess: 'models:get-hf-access',
   modelsSaveHfAccess: 'models:save-hf-access',
@@ -617,6 +619,8 @@ export interface DesktopApi {
     remove(name: string, serverId?: string): Promise<ModelRemoveResult>;
     /** The folder a pull would land in, and its free space on this computer. */
     getStoreLocation(serverId?: string): Promise<ModelStoreLocation>;
+    /** Whether a `local:` chat model is loaded on its Ollama server now. */
+    getLoadedState(modelId: string): Promise<LoadedModelState>;
     /** Whether a Hugging Face token is saved; the token itself never comes back to the renderer. */
     getHfToken(): Promise<HfTokenStatus>;
     /** Saves the token once Hugging Face accepts it. */

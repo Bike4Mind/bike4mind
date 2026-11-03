@@ -36,6 +36,7 @@ import { modelSwitchCredits } from './modelSwitchCost';
 import { ReasoningEffortPicker } from './ReasoningEffortPicker';
 import { PromptCacheTtlPicker } from './PromptCacheTtlPicker';
 import { CacheExpiryNote } from './CacheExpiryNote';
+import { ContextRing } from './ContextRing';
 import { GrantedFolderChips, SessionChips } from './SessionChips';
 import { SESSION_PANEL_ID, SessionPanel } from './SessionPanel';
 import { panelFitsBesideThread, useElementWidth, useSessionPanelPrefs } from './sessionPanelState';
@@ -1223,6 +1224,15 @@ export function ChatShell({
                   : null
             }
             usage={composerUsage}
+            contextStatus={
+              <ContextRing
+                tokens={composerUsage.contextSnapshot?.inputTokens ?? composerUsage.contextTokens}
+                limit={composerUsage.contextLimit}
+                modelId={conversation.session?.model ?? null}
+                promptCache={latestReply(conversation.messages)?.promptCache}
+                streaming={turnOpen}
+              />
+            }
             placeholder={
               conversation.session?.mode === 'code' ? 'Describe a task or ask a question' : 'Send a message...'
             }
