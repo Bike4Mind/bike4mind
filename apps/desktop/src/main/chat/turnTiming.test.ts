@@ -7,11 +7,13 @@ describe('startRoundTimer', () => {
     const timer = startRoundTimer(() => clock);
     clock = 1_200;
     timer.firstToken();
-    timer.reasoning(false);
+    timer.reasoning('');
     clock = 1_300;
-    timer.reasoning(true);
+    timer.reasoning('Let me');
+    clock = 2_000;
+    timer.reasoning('\n');
     clock = 4_000;
-    timer.reasoning(true);
+    timer.reasoning(' check.');
     timer.firstToken();
     clock = 4_100;
     timer.text();
@@ -37,6 +39,33 @@ describe('startRoundTimer', () => {
     timer.firstToken();
     clock = 90;
     expect(timer.end()).toEqual({ startedAt: 0, firstTokenAt: 50, endedAt: 90 });
+    expect(timer.reasoningFrames()).toBe(0);
+  });
+
+  it('keeps the span of bare markers, as around thinking a provider omitted', () => {
+    let clock = 0;
+    const timer = startRoundTimer(() => clock);
+    clock = 100;
+    timer.reasoning('');
+    clock = 9_100;
+    timer.reasoning('');
+    expect(timer.end()).toMatchObject({ firstReasoningAt: 100, lastReasoningAt: 9_100 });
+    expect(timer.reasoningFrames()).toBe(0);
+  });
+
+  it('drops a block that held only whitespace, markers included', () => {
+    let clock = 0;
+    const timer = startRoundTimer(() => clock);
+    clock = 100;
+    timer.reasoning('');
+    clock = 105;
+    timer.reasoning('\n\n');
+    clock = 110;
+    timer.reasoning('');
+    clock = 120;
+    timer.text();
+    clock = 400;
+    expect(timer.end()).toEqual({ startedAt: 0, firstTextAt: 120, endedAt: 400 });
     expect(timer.reasoningFrames()).toBe(0);
   });
 });

@@ -216,6 +216,29 @@ describe('ChatService reply stats', () => {
     });
   });
 
+  it.each([
+    ['frame by frame', ['<think>', '\n\n', '</think>', '\n\nHello there']],
+    ['in one frame', ['<think>\n\n</think>\n\nHello there']],
+  ])('reports no thinking for an empty block from a model with thinking off, %s', async (_how, frames) => {
+    localStream.mockImplementation(async (_request, emit) => {
+      for (const text of frames) {
+        emit({ type: 'content', text });
+        await pause(5);
+      }
+      emit({ type: 'content', stopReason: 'end_turn', usage: { inputTokens: 40, outputTokens: 8 } });
+    });
+    const id = await session(LOCAL.id);
+    await services[0].send(id, 'hi');
+    await settled();
+
+    const reply = (await store.get(id))?.messages.find(message => message.role === 'assistant');
+    expect(reply?.content).toBe('Hello there');
+    expect(reply?.stats).toBeDefined();
+    expect(reply?.stats?.reasoningMs).toBeUndefined();
+    expect(reply?.stats?.reasoningTokens).toBeUndefined();
+    expect(reply?.stats?.reasoningFrames).toBeUndefined();
+  });
+
   it('keeps what was measured on a reply that failed', async () => {
     post.mockImplementationOnce(() => Promise.reject(new Error('upstream exploded')));
     const id = await session();

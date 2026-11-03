@@ -3,7 +3,7 @@ import type { ChatRoundTiming } from '@shared/chat';
 /**
  * Times one request. `firstToken` is called for every streamed event that carries anything, a
  * call starting included, and only the first counts: a tool-only round still has a first token.
- * `reasoning` takes a thinking frame, `readable` false for a bare marker; `text` visible text.
+ * `reasoning` takes a thinking frame's text, '' for a bare marker; `text` is called on visible text.
  */
 export function startRoundTimer(now: () => number = Date.now) {
   const startedAt = now();
@@ -12,25 +12,33 @@ export function startRoundTimer(now: () => number = Date.now) {
   let lastReasoningAt: number | undefined;
   let firstTextAt: number | undefined;
   let reasoningFrames = 0;
+  let blank = false;
   return {
     firstToken(): void {
       firstTokenAt ??= now();
     },
-    reasoning(readable: boolean): void {
+    reasoning(text: string): void {
+      // A block holding only whitespace is no thinking: what a model with thinking off emits.
+      if (text && !text.trim()) {
+        blank = true;
+        return;
+      }
       const at = now();
       firstReasoningAt ??= at;
       lastReasoningAt = at;
-      if (readable) reasoningFrames++;
+      if (text) reasoningFrames++;
     },
     text(): void {
       firstTextAt ??= now();
     },
     reasoningFrames: () => reasoningFrames,
     end(): ChatRoundTiming {
+      // The markers around that whitespace are no thinking either.
+      const thought = firstReasoningAt !== undefined && (reasoningFrames > 0 || !blank);
       return {
         startedAt,
         ...(firstTokenAt !== undefined ? { firstTokenAt } : {}),
-        ...(firstReasoningAt !== undefined ? { firstReasoningAt, lastReasoningAt } : {}),
+        ...(thought ? { firstReasoningAt, lastReasoningAt } : {}),
         ...(firstTextAt !== undefined ? { firstTextAt } : {}),
         endedAt: now(),
       };
