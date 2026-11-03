@@ -262,12 +262,15 @@ describe('a Windows program run from a WSL project', () => {
   const root = '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo';
 
   it.each([
-    ['cmd.exe /c type C:\\Users\\me\\notes.txt', ['C:\\Users\\me']],
-    ['/mnt/c/Windows/System32/cmd.exe /c type C:\\Users\\me\\notes.txt', ['C:\\Users\\me']],
+    ["cmd.exe /c type 'C:\\Users\\me\\notes.txt'", ['C:\\Users\\me']],
+    ["/mnt/c/Windows/System32/cmd.exe /c type 'C:\\Users\\me\\notes.txt'", ['C:\\Users\\me']],
     ["powershell.exe -Command Get-Content 'C:/Users/me/notes.txt'", ['C:\\Users\\me']],
     ['notepad.exe C:notes.txt', ['C:\\']],
-    ['notepad.exe ..\\..\\notes.txt', ['\\\\wsl.localhost\\Ubuntu\\home']],
-    ['cmd.exe /c type \\\\fileserver\\share\\notes.txt', ['\\\\fileserver\\share\\']],
+    ["notepad.exe '..\\..\\notes.txt'", ['\\\\wsl.localhost\\Ubuntu\\home']],
+    ["cmd.exe /c type '\\\\fileserver\\share\\notes.txt'", ['\\\\fileserver\\share\\']],
+    ['notepad.exe C\\:\\\\Users\\\\me\\\\notes.txt', ['C:\\Users\\me']],
+    ['cmd.exe /c type "C:\\Users\\me\\notes.txt"', ['C:\\Users\\me']],
+    ['cmd.exe /c type C:\\Users\\me\\notes.txt', ['C:\\']],
     ["more.com 'C:\\Users\\me\\notes.txt'", ['C:\\Users\\me']],
     ["run.bat 'C:\\Users\\me\\notes.txt'", ['C:\\Users\\me']],
     ["/mnt/c/tools/viewer 'C:\\Users\\me\\notes.txt'", ['C:\\Users\\me']],

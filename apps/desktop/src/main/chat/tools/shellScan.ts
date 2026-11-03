@@ -1350,8 +1350,9 @@ export async function scanShell(
           const prefix = globPrefix(expand(unquote(value)));
           if (!prefix || isDynamic(prefix)) continue;
           // A Windows program run through interop opens a Windows path where Windows would, so that place is judged.
-          if (windowsProgram && /^[A-Za-z]:|\\/.test(prefix)) {
-            await check(value, state.cwd, false, 'windows');
+          const passed = windowsProgram ? wordValue(value) : '';
+          if (/^[A-Za-z]:|\\/.test(passed)) {
+            await check(passed, state.cwd, false, 'windows');
             continue;
           }
           const targets = operandTargets(state.cwd, prefix);
