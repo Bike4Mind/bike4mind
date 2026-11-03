@@ -47,6 +47,28 @@ const NO_GRANT: SignupDomainGrantResult = {
 };
 
 /**
+ * Counts this signup against the rule's package caps. Null when a cap refused it (logged, and the
+ * package records the cap hit for the admin). Otherwise the release that undoes only what this call
+ * counted: a no-op with no package, or when this user already redeemed it (the stable credit
+ * transactionId dedupes a re-verify).
+ */
+async function reservePackageRedemption(
+  grantPackageId: string | null,
+  userId: string,
+  trigger: SeatCeilingRaiseTrigger,
+  logger: Logger
+): Promise<(() => Promise<void>) | null> {
+  if (!grantPackageId) return async () => {};
+  const reservation = await grantPackageRepository.reserveRedemption(grantPackageId, userId);
+  if (reservation.outcome !== 'refused') return reservation.release;
+  logger.info(
+    `Domain-grant signup credits withheld for user ${userId} (${trigger}): grant package ${grantPackageId} ` +
+      `refused the redemption (${reservation.reason})`
+  );
+  return null;
+}
+
+/**
  * Everything a newly proven email's domain confers at signup: the one-time domain signup credits,
  * partner-rule org membership (with the seat-ceiling / at-capacity alerts), partner-rule user tags,
  * the partner-rule individual subscription, and the entitlement cache wake-up. Shared by every path
@@ -73,27 +95,6 @@ const NO_GRANT: SignupDomainGrantResult = {
  * user already has any non-terminal individual subscription, and its deterministic row id makes a
  * repeat or concurrent grant a no-op.
  */
-/**
- * Counts this signup against the rule's package caps. False when a cap refused it (logged, and the
- * package records the cap hit for the admin); true with no package, or when this user already
- * redeemed it, since the stable credit transactionId dedupes a re-verify.
- */
-async function reservePackageRedemption(
-  grantPackageId: string | null,
-  userId: string,
-  trigger: SeatCeilingRaiseTrigger,
-  logger: Logger
-): Promise<boolean> {
-  if (!grantPackageId) return true;
-  const reservation = await grantPackageRepository.reserveRedemption(grantPackageId, userId);
-  if (reservation.outcome !== 'refused') return true;
-  logger.info(
-    `Domain-grant signup credits withheld for user ${userId} (${trigger}): grant package ${grantPackageId} ` +
-      `refused the redemption (${reservation.reason})`
-  );
-  return false;
-}
-
 export async function applySignupDomainGrant(params: {
   userId: string;
   email: string;
@@ -155,6 +156,7 @@ export async function applySignupDomainGrant(params: {
   }
 
   if (signupCredits > 0) {
+    let releaseRedemption: (() => Promise<void>) | null = null;
     try {
       // Domain credits are not a second pot on top of the signup grant: one canonical inbox earns
       // one free-credit grant, so an alias of an inbox that already earned one is withheld here.
@@ -164,27 +166,29 @@ export async function applySignupDomainGrant(params: {
           `Domain-grant signup credits withheld for user ${userId} (${trigger}): another account ` +
             `already holds the free-credit claim for this inbox`
         );
-      } else if (!(await reservePackageRedemption(grantPackageId, userId, trigger, logger))) {
-        // Cap reached: withheld on purpose, so not a failed core step.
       } else {
-        const holder = await creditService.addCredits(
-          {
-            ownerId: userId,
-            ownerType: CreditHolderType.User,
-            credits: signupCredits,
-            type: 'generic_add',
-            transactionId: `domain-grant-credits:${userId}`,
-            reason: 'domain-grant signup credits',
-            description: 'Signup credits from an email-domain grant',
-          },
-          {
-            db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
-            creditHolderMethods: userRepository,
-          }
-        );
-        result.creditsGranted = signupCredits;
-        result.currentCredits = holder?.currentCredits ?? null;
-        logger.info(`Granted ${signupCredits} one-time domain-grant signup credits to user ${userId} (${trigger})`);
+        releaseRedemption = await reservePackageRedemption(grantPackageId, userId, trigger, logger);
+        // Null means a cap refused it: withheld on purpose, so not a failed core step.
+        if (releaseRedemption) {
+          const holder = await creditService.addCredits(
+            {
+              ownerId: userId,
+              ownerType: CreditHolderType.User,
+              credits: signupCredits,
+              type: 'generic_add',
+              transactionId: `domain-grant-credits:${userId}`,
+              reason: 'domain-grant signup credits',
+              description: 'Signup credits from an email-domain grant',
+            },
+            {
+              db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
+              creditHolderMethods: userRepository,
+            }
+          );
+          result.creditsGranted = signupCredits;
+          result.currentCredits = holder?.currentCredits ?? null;
+          logger.info(`Granted ${signupCredits} one-time domain-grant signup credits to user ${userId} (${trigger})`);
+        }
       }
     } catch (grantError) {
       logger.error(
@@ -192,12 +196,10 @@ export async function applySignupDomainGrant(params: {
           `idempotent transactionId domain-grant-credits:${userId} makes a retry safe`,
         grantError
       );
-      if (grantPackageId) {
-        await grantPackageRepository
-          .releaseRedemption(grantPackageId, userId)
-          .catch(releaseError =>
-            logger.error(`Grant package ${grantPackageId} redemption release failed for user ${userId}`, releaseError)
-          );
+      if (releaseRedemption) {
+        await releaseRedemption().catch(releaseError =>
+          logger.error(`Grant package ${grantPackageId} redemption release failed for user ${userId}`, releaseError)
+        );
       }
       coreStepFailed = true;
     }

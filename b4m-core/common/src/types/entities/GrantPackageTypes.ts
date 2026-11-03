@@ -16,6 +16,11 @@ export interface IGrantPackage {
   active: boolean;
   createdBy: string;
   reason?: string | null;
+  /**
+   * Set only by the invite migration: the package stands in for an invite's own amounts and keeps
+   * the pre-package signup rules (see register.ts), so migrated codes behave exactly as before.
+   */
+  legacy?: boolean;
 }
 
 export interface IGrantPackageDocument extends IGrantPackage {

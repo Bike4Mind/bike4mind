@@ -27,6 +27,7 @@ const handler = adminApi({
     const stored = await grantPackageRepository.findById(id);
     if (!stored) throw new NotFoundError('Grant package not found');
     // Judged on the package as it will be after the edit, so a removed cap or raised amount counts.
+    // Not atomic with the write: two concurrent admin edits are each judged against the pre-edit package.
     const after = { ...stored, ...data };
     const reasonRequired = updateRequiresGrantReason(stored, after, await loadCreditGrantPolicy());
     const reason = reasonRequired ? parseAdminActionReason(rawReason) : undefined;

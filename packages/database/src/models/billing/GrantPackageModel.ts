@@ -25,6 +25,7 @@ const GrantPackageSchema = new Schema<IGrantPackage>(
     active: { type: Boolean, default: true },
     createdBy: { type: String, required: true },
     reason: { type: String, default: null },
+    legacy: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
@@ -165,7 +166,18 @@ export class GrantPackageRepository implements IGrantPackageRepository {
       return { outcome: 'refused', reason: 'total_cap' };
     }
 
-    await GrantPackageRedemption.create([{ packageId, userId, day, dayCounted }]);
+    try {
+      await GrantPackageRedemption.create([{ packageId, userId, day, dayCounted }]);
+    } catch (error) {
+      // A concurrent reserve for this same user (outside a transaction) won the unique row after
+      // both passed the exists check: hand back the counts this call took.
+      if ((error as { code?: unknown } | null)?.code !== 11000) throw error;
+      await GrantPackage.updateOne({ _id: packageId, redeemedTotal: { $gt: 0 } }, { $inc: { redeemedTotal: -1 } });
+      if (dayCounted) {
+        await GrantPackageDayCount.updateOne({ packageId, day, count: { $gt: 0 } }, { $inc: { count: -1 } });
+      }
+      return { outcome: 'already', release: async () => {} };
+    }
     return { outcome: 'reserved', release: () => this.releaseRedemption(packageId, userId) };
   }
 

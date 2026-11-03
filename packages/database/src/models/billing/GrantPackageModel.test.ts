@@ -115,6 +115,17 @@ describe('GrantPackageRepository.reserveRedemption', () => {
     expect(await GrantPackageRedemption.countDocuments({ packageId: id })).toBe(1);
   });
 
+  it('counts concurrent redemptions by the same account once', async () => {
+    const id = await createPackage({ totalCap: 10, dailyCap: 10 });
+    const results = await Promise.all(
+      [1, 2, 3, 4, 5].map(() => grantPackageRepository.reserveRedemption(id, 'same-user'))
+    );
+    expect(results.filter(r => r.outcome === 'reserved')).toHaveLength(1);
+    expect(results.filter(r => r.outcome === 'already')).toHaveLength(4);
+    expect((await reload(id)).redeemedTotal).toBe(1);
+    expect((await GrantPackageDayCount.findOne({ packageId: id }).lean())?.count).toBe(1);
+  });
+
   it('release frees the total and daily slot exactly once', async () => {
     const id = await createPackage({ totalCap: 1, dailyCap: 1 });
     const first = await grantPackageRepository.reserveRedemption(id, 'a');

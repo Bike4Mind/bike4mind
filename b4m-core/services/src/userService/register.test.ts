@@ -177,6 +177,25 @@ describe('registerUser', () => {
       expect(grantPackages.isInboxClaimed).toHaveBeenCalledWith('test@example.com');
     });
 
+    it('stores a 0-credit package amount instead of leaving it to the default grant', async () => {
+      grantPackages.findById.mockResolvedValue({ ...pkg, credits: 0 });
+      await registerUser(baseParams, mockAdapters);
+      const created = mockAdapters.db.users.create.mock.calls[0][0];
+      expect(created.pendingCreditGrant).toBe(0);
+      expect(created.tags).not.toContain(PENDING_FREE_CREDITS_TAG);
+    });
+
+    it('keeps the pre-package rules for a legacy package', async () => {
+      grantPackages.findById.mockResolvedValue({ ...pkg, credits: 7, legacy: true });
+      grantPackages.isInboxClaimed.mockResolvedValue(true);
+      await registerUser(baseParams, mockAdapters);
+      const created = mockAdapters.db.users.create.mock.calls[0][0];
+      expect(created.pendingCreditGrant).toBe(7);
+      expect(created.grantPackageId).toBeUndefined();
+      expect(grantPackages.isInboxClaimed).not.toHaveBeenCalled();
+      expect(grantPackages.reserveRedemption).toHaveBeenCalledWith('pkg-1', 'newUserId');
+    });
+
     it.each([
       ['total_cap', 'This invite code has reached its signup limit'],
       ['daily_cap', 'This invite code has reached its signup limit for today, please try again tomorrow'],

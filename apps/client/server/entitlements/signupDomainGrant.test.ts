@@ -687,12 +687,21 @@ describe('applySignupDomainGrant - rule linked to a grant package', () => {
   });
 
   it('releases the redemption when the credit grant fails', async () => {
-    grantPackages.reserveRedemption.mockResolvedValue({ outcome: 'reserved', release: vi.fn() });
+    const release = vi.fn().mockResolvedValue(undefined);
+    grantPackages.reserveRedemption.mockResolvedValue({ outcome: 'reserved', release });
     mockAddCredits.mockRejectedValue(new Error('ledger down'));
     const result = await run();
     expect(result.creditsGranted).toBe(0);
-    expect(grantPackages.releaseRedemption).toHaveBeenCalledWith('pkg-1', 'user-1');
+    expect(release).toHaveBeenCalledTimes(1);
     expect(result.joinedOrganizationId).toBe('org-1');
+  });
+
+  it('keeps an earlier redemption when a re-verify grant fails', async () => {
+    const release = vi.fn().mockResolvedValue(undefined);
+    grantPackages.reserveRedemption.mockResolvedValue({ outcome: 'already', release });
+    mockAddCredits.mockRejectedValue(new Error('ledger down'));
+    await run();
+    expect(grantPackages.releaseRedemption).not.toHaveBeenCalled();
   });
 
   it('withholds the credits but keeps the membership when the package is inactive or missing', async () => {

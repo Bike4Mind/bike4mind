@@ -46,7 +46,7 @@ export const generateReferralCodes = async (
   if (grantPackageId) {
     const grantPackage = await requireActiveGrantPackage(grantPackageId, db.grantPackages);
     startingCredits = grantPackage.credits;
-    startingStorage = grantPackage.storageMb ?? undefined;
+    startingStorage = grantPackage.storageMb ?? startingStorage;
   }
 
   const resolveExpiry = () => {
@@ -83,7 +83,7 @@ export const generateReferralCodes = async (
   return regInvites;
 };
 
-/** An invite may only point at a package that exists and is still accepting signups. */
+/** An invite may only point at a package that exists and is active; caps are enforced at redemption. */
 export async function requireActiveGrantPackage(grantPackageId: string, grantPackages?: IGrantPackageRepository) {
   const grantPackage = grantPackages ? await grantPackages.findById(grantPackageId) : null;
   if (!grantPackage) throw new BadRequestError('Grant package not found');

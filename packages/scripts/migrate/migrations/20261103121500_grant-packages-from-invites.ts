@@ -10,11 +10,12 @@ export const legacyPackageName = (credits: number, storageMb: number | null) =>
  * Points every invite that carries its own signup credits/storage at an uncapped package with the
  * same amounts, one package per distinct (credits, storage) pair. Referral invites are skipped:
  * register.ts never applies a package to them. startingCredits/startingStorage stay on the invite
- * and users are not touched, so a pending signup grant releases exactly as before. Idempotent: an
+ * and users are not touched, so a pending signup grant releases exactly as before. The packages are
+ * marked legacy, so register.ts keeps the pre-package rules for these codes. Idempotent: an
  * invite that already has a grantPackageId is skipped and packages are upserted by name.
  */
 const migration: MigrationFile = {
-  id: 20260921237400,
+  id: 20261103121500,
   name: 'grant-packages-from-invites',
 
   up: async () => {
@@ -47,6 +48,7 @@ const migration: MigrationFile = {
             dailyCap: null,
             active: true,
             createdBy: 'migration',
+            legacy: true,
           },
         },
         { upsert: true, new: true }

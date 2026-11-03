@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   recordAdminAction: vi.fn(),
   requirePackage: vi.fn(),
   reserve: vi.fn(),
+  claim: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -23,7 +24,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@bike4mind/database', () => ({
-  userRepository: { update: h.update },
+  userRepository: { update: h.update, claimFreeCreditGrant: h.claim },
   grantPackageRepository: { reserveRedemption: h.reserve },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
@@ -282,6 +283,9 @@ describe('POST /api/admin/bulk-create-users', () => {
   describe('grant package', () => {
     const res = () => ({ status: vi.fn().mockReturnThis(), json: vi.fn() });
     const pkg = { id: 'pkg-1', credits: 250, storageMb: 400, active: true };
+    beforeEach(() => {
+      h.claim.mockResolvedValue(true);
+    });
 
     it('creates each row with the package amounts and reserves one redemption per account', async () => {
       h.requirePackage.mockResolvedValue(pkg);
@@ -292,6 +296,21 @@ describe('POST /api/admin/bulk-create-users', () => {
         expect.anything()
       );
       expect(h.reserve).toHaveBeenCalledWith('pkg-1', 'new-1');
+    });
+
+    it('fails a row whose inbox already took a package grant', async () => {
+      h.requirePackage.mockResolvedValue(pkg);
+      h.createUser
+        .mockResolvedValueOnce({ id: 'new-1', email: 'a@b.test', name: 'a' })
+        .mockResolvedValueOnce({ id: 'new-2', email: 'a+1@b.test', name: 'a' });
+      h.reserve.mockResolvedValue({ outcome: 'reserved', release: vi.fn() });
+      h.claim.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+      const r = res();
+      await h.handler!(makeReq([{ email: 'a@b.test' }, { email: 'a+1@b.test' }], { grantPackageId: 'pkg-1' }), r);
+      const { results } = r.json.mock.calls[0][0] as { results: { success: boolean; error?: string }[] };
+      expect(results.map(row => row.success)).toEqual([true, false]);
+      expect(results[1].error).toBe('This inbox has already received a signup grant');
+      expect(h.reserve).toHaveBeenCalledTimes(1);
     });
 
     it('reports a capped row as a failure without failing the batch', async () => {

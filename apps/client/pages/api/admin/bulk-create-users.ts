@@ -3,6 +3,7 @@ import {
   ApiKeyScope,
   MAX_STORAGE_LIMIT_MB,
   AuthEvents,
+  GRANT_PACKAGE_INBOX_CLAIMED_MESSAGE,
   grantPackageRefusalMessage,
   redactUserSecretsForSelf,
   sanitizeUsername,
@@ -71,7 +72,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       : null;
 
     // Package rows create one at a time: each reserves against the same package caps, and parallel
-    // transactions on one package document would mostly fail on write conflicts.
+    // transactions on one package document would contend on write conflicts and retry.
     let packageQueue: Promise<unknown> = Promise.resolve();
     const inPackageQueue = <T>(fn: () => Promise<T>): Promise<T> => {
       const run = packageQueue.then(fn);
@@ -117,6 +118,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
             ? await inPackageQueue(() =>
                 withTransaction(async () => {
                   const created = await createRowUser();
+                  // One package grant per canonical inbox, as on the invite path (freeCredits.ts).
+                  if (
+                    grantPackage.credits > 0 &&
+                    !grantPackage.legacy &&
+                    !(await userRepository.claimFreeCreditGrant(created.id))
+                  ) {
+                    throw new BadRequestError(GRANT_PACKAGE_INBOX_CLAIMED_MESSAGE);
+                  }
                   const reservation = await grantPackageRepository.reserveRedemption(grantPackage.id, created.id);
                   if (reservation.outcome === 'refused') {
                     throw new BadRequestError(grantPackageRefusalMessage(reservation.reason));

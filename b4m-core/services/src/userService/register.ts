@@ -198,6 +198,9 @@ export const registerUser = async (
 
   let invite: IRegInviteDocument | null = null;
   let grantPackage: IGrantPackageDocument | null = null;
+  // A legacy package (migrated from an invite's own amounts) keeps the pre-package rules: subscriber
+  // amounts win, it never claims the inbox, and a 0 amount falls back to ReferralCreditsAmount.
+  let packageGrantsCredits = false;
   let isUnlimitedInvite = false;
   let freeCredits = 0;
   let storageLimitOverride: number | null = null;
@@ -252,10 +255,16 @@ export const registerUser = async (
       grantPackage = db.grantPackages ? await db.grantPackages.findById(invite.grantPackageId) : null;
       if (!grantPackage) throw new BadRequestError('Invalid invite code');
       if (!grantPackage.active) throw new BadRequestError(grantPackageRefusalMessage('inactive'));
+      packageGrantsCredits = !grantPackage.legacy;
       // Early, readable refusal for an alias of an inbox that already took a signup grant. The
       // authoritative claim is made when the grant is released (freeCredits.ts).
       const claimEmail = canonicalizeEmail(normalizedEmail);
-      if (grantPackage.credits > 0 && claimEmail && (await db.grantPackages!.isInboxClaimed(claimEmail))) {
+      if (
+        packageGrantsCredits &&
+        grantPackage.credits > 0 &&
+        claimEmail &&
+        (await db.grantPackages!.isInboxClaimed(claimEmail))
+      ) {
         throw new BadRequestError(GRANT_PACKAGE_INBOX_CLAIMED_MESSAGE);
       }
       if (grantPackage.tags && grantPackage.tags.length > 0) {
@@ -264,27 +273,28 @@ export const registerUser = async (
     }
 
     // Invite code credits/storage (set when generating the code)
-    const inviteCredits = invite.startingCredits || 0;
-    const inviteStorage = invite.startingStorage || 0;
+    const inviteCredits = (grantPackage?.legacy ? grantPackage.credits : invite.startingCredits) || 0;
+    const inviteStorage = (grantPackage?.legacy ? grantPackage.storageMb : invite.startingStorage) || 0;
 
-    // Priority: package > subscriber > invite code > admin default. A package's amount is
-    // authoritative even at 0.
-    freeCredits = grantPackage
-      ? grantPackage.credits
+    // Priority: package > subscriber > invite code > admin default. A non-legacy package's amount is
+    // authoritative even at 0; a legacy package stands in for the invite's own amounts.
+    freeCredits = packageGrantsCredits
+      ? grantPackage!.credits
       : subscriberCredits > 0
         ? subscriberCredits
         : inviteCredits > 0
           ? inviteCredits
           : (parseInt(referralCredits?.settingValue || '0', 10) ?? 0);
 
-    // Priority: package > subscriber > invite code > default (1000)
-    const signupStorage = grantPackage?.storageMb
-      ? grantPackage.storageMb
-      : subscriberStorageFound
-        ? subscriberStorage
-        : inviteStorage > 0
-          ? inviteStorage
-          : null;
+    // Priority: non-legacy package > subscriber > invite code (or legacy package) > default (1000)
+    const signupStorage =
+      packageGrantsCredits && grantPackage!.storageMb
+        ? grantPackage!.storageMb
+        : subscriberStorageFound
+          ? subscriberStorage
+          : inviteStorage > 0
+            ? inviteStorage
+            : null;
     storageLimitOverride = signupStorage === DEFAULT_STORAGE_LIMIT_MB ? null : signupStorage;
   } else {
     // No invite code - only permitted when open registration is enabled or invite check is skipped
@@ -364,8 +374,9 @@ export const registerUser = async (
     planStorageLimit: null,
     currentStorageSize: 0,
     currentCredits: 0,
-    pendingCreditGrant: freeCredits > 0 && !referralGrant ? freeCredits : null,
-    ...(grantPackage ? { grantPackageId: grantPackage.id } : {}),
+    // Stored even at 0 so a package grant is never mistaken for the default open-registration one.
+    pendingCreditGrant: packageGrantsCredits ? freeCredits : freeCredits > 0 && !referralGrant ? freeCredits : null,
+    ...(packageGrantsCredits ? { grantPackageId: grantPackage!.id } : {}),
     ...(signupMeta ? { signupMeta } : {}),
     ...(referralGrant ? { signupGrant: referralGrant } : {}),
     level: 'DemoUser',

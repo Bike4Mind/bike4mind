@@ -15,8 +15,14 @@ export const grantPackageUsage = (pkg: GrantPackageRow) => {
 
 export const useGrantPackageOptions = () =>
   useQuery({
-    queryKey: [GRANT_PACKAGES_QUERY_KEY, { page: 1, pageSize: 100 }],
-    queryFn: () => fetchGrantPackages({ page: 1, limit: 100 }),
+    queryKey: [GRANT_PACKAGES_QUERY_KEY, { all: true }],
+    // Every page, so a package older than the newest 100 can still be picked or shown as selected.
+    queryFn: async () => {
+      const first = await fetchGrantPackages({ page: 1, limit: 100 });
+      const pages = Array.from({ length: Math.max(0, first.meta.totalPages - 1) }, (_, i) => i + 2);
+      const rest = await Promise.all(pages.map(page => fetchGrantPackages({ page, limit: 100 })));
+      return { ...first, data: [...first.data, ...rest.flatMap(r => r.data)] };
+    },
   });
 
 type Props = {

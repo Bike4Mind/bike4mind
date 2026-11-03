@@ -25,7 +25,7 @@ import {
 
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
-import migration from './20260921237400_grant-packages-from-invites';
+import migration from './20261103121500_grant-packages-from-invites';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 let server: Awaited<ReturnType<typeof createMongoReplSet>>;
@@ -68,12 +68,12 @@ const adapters = {
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 } as unknown as Parameters<typeof userService.registerViaOTC>[1];
 
-const signUp = (username: string, inviteCode: string) =>
+const signUp = (username: string, inviteCode: string, email = `${username}@example.test`) =>
   withTransaction(() =>
     userService.registerViaOTC(
       {
         username,
-        email: `${username}@example.test`,
+        email,
         name: username,
         password: '',
         inviteCode,
@@ -107,5 +107,41 @@ describe('invites migrated to grant packages', () => {
 
     const pkg = await GrantPackage.findById(invite?.grantPackageId).lean();
     expect(pkg).toMatchObject({ credits: 250, totalCap: null, redeemedTotal: 1, capHits: 0 });
+  });
+
+  // Before the migration an invite's own amount was exempt from the per-inbox claim.
+  it('still grants an alias of an inbox that already took a grant', async () => {
+    await RegistrationInvite.create({
+      code: 'LEGACY-ALIAS',
+      userId: 'synthetic-admin',
+      unlimitedUse: true,
+      status: RegInviteStatusType.open,
+      startingCredits: 250,
+    });
+    await migration.up();
+
+    const first = await signUp('aliasowner', 'LEGACY-ALIAS', 'aliasowner@example.test');
+    const alias = await signUp('aliasplus', 'LEGACY-ALIAS', 'aliasowner+1@example.test');
+
+    expect((await User.findById(first.id).lean())?.currentCredits).toBe(250);
+    expect((await User.findById(alias.id).lean())?.currentCredits).toBe(250);
+    expect((await User.findById(alias.id).lean())?.grantPackageId).toBeUndefined();
+  });
+
+  it('keeps a storage-only invite on the ReferralCreditsAmount fallback', async () => {
+    await AdminSettings.create({ settingName: 'ReferralCreditsAmount', settingValue: '40' });
+    await RegistrationInvite.create({
+      code: 'LEGACY-STORAGE',
+      userId: 'synthetic-admin',
+      unlimitedUse: true,
+      status: RegInviteStatusType.open,
+      startingStorage: 5000,
+    });
+    await migration.up();
+
+    const user = await signUp('storageonly', 'LEGACY-STORAGE');
+    const stored = await User.findById(user.id).lean();
+    expect(stored?.currentCredits).toBe(40);
+    expect(stored?.storageLimit).toBe(5000);
   });
 });
