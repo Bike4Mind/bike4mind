@@ -34,7 +34,7 @@ import {
   type ActiveSubscriptionsRequest,
 } from '@server/entitlements/activeSubscriptions';
 import { partnerEntitlementsForEmail } from '@server/entitlements/partnerRules';
-import { getHighestLadderTier } from '@client/lib/userSubscriptions/utils';
+import { holdsPaidStanding } from '@server/entitlements/paidStanding';
 import { PAID_PLAN_ENTITLEMENT_KEY, type IUserDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
@@ -59,7 +59,7 @@ export interface EntitlementUser {
   /** Granting a domain entitlement requires BOTH (verified-email gate). */
   email?: string | null;
   emailVerified?: boolean | null;
-  /** Set by a credit purchase (and by an admin credit grant); unlocks `plan:paid` like a subscription. */
+  /** Set by a credit purchase only; unlocks `plan:paid` like a subscription (see paidStanding.ts). */
   lastCreditsPurchasedAt?: Date | null;
 }
 
@@ -126,13 +126,10 @@ export async function getUserEntitlements(
   // subscription. Must stay the only place they are applied for gating.
   const resolved = applyImpliedEntitlements(keys);
   // `plan:paid` unlocks paid-only models (the free-tier gate in modelAdmission.ts), so it comes from
-  // the subscription ladder or a credit purchase alone, never from a passthrough tag or any other source
-  // above. An admin comps it with an `admin_grant` subscription row, which the ladder read honors, or
-  // with any positive single-user credit adjustment, which stamps the purchase field (adminUpdate.ts).
-  // A purchase is "ever bought", the same signal hasPaidStanding (userApiKeyService/trust.ts) reads:
-  // a refund or dispute does not clear the stamp.
+  // paid standing alone (paidStanding.ts), never from a passthrough tag or any other source above.
+  // An admin comps it with an `admin_grant` subscription row.
   const withoutPaidPlan = resolved.filter(key => key !== PAID_PLAN_ENTITLEMENT_KEY);
-  const holdsPaidPlan = Boolean(user.lastCreditsPurchasedAt) || getHighestLadderTier(activeSubscriptions) !== undefined;
+  const holdsPaidPlan = holdsPaidStanding(user, activeSubscriptions);
   return holdsPaidPlan ? [...withoutPaidPlan, PAID_PLAN_ENTITLEMENT_KEY] : withoutPaidPlan;
 }
 

@@ -210,9 +210,6 @@ export async function adminUpdateUser(
   const creditDelta = rawDelta < 0 ? Math.max(rawDelta, -previousBalance) : rawDelta;
   const note = creditReason?.trim() || undefined;
 
-  // Stamp a purchase timestamp only for a net grant: a deduction is not a purchase, and carrying
-  // the field on every other admin save would $set the read snapshot back over a concurrent
-  // purchase stamp (addCredits only stamps for type === 'purchase', so an admin grant needs this).
   const requestedOverride =
     params.storageLimitOverride !== undefined ? params.storageLimitOverride : params.storageLimit;
   const storageParams =
@@ -228,7 +225,8 @@ export async function adminUpdateUser(
   const builtParams = {
     ...baseParams,
     ...storageParams,
-    ...(creditDelta > 0 ? { lastCreditsPurchasedAt: new Date() } : {}),
+    // No lastCreditsPurchasedAt: that stamp confers paid standing, which an admin comps with an
+    // `admin_grant` subscription, never with a credit adjustment.
   };
   const builtUser = applyBaseUserUpdates(user, builtParams);
   // Persist ONLY the fields this request changed, never a spread of the read snapshot -
