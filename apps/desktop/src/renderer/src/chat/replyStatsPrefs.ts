@@ -27,50 +27,77 @@ export function railFitsBesideThread(regionWidth: number | null): boolean {
  * these replace: the header toggle, Settings and every reply read them.
  */
 const RAIL_KEY = 'b4m.chat.replyStats.rail';
-const HIDDEN_KEY = 'b4m.chat.replyStats.hidden';
+/** The stats the user ticked or unticked, as {id: shown}; the rest keep their default. */
+const CHOICES_KEY = 'b4m.chat.replyStats.shown';
 /** The old tok/s switch; off there carries over as the speed stat unticked. */
 const LEGACY_RATE_KEY = 'b4m.chat.showTokenRate';
+
+/**
+ * Off until ticked: a self-hosted server's own timings and the wait for the first token. Each is
+ * a row on every reply, and a reply is held tall enough for all of its rows.
+ */
+export const REPLY_STATS_OFF_BY_DEFAULT: ReadonlySet<ReplyStatId> = new Set([
+  'promptSpeed',
+  'firstToken',
+  'load',
+  'draft',
+]);
 
 export interface ReplyStatsPrefs {
   /** The rail beside the conversation, wherever it fits. */
   rail: boolean;
-  /** Stats the user unticked. Hidden rather than shown is kept, so a stat added later starts on. */
+  /** Stats not shown: the ones unticked, and the ones off by default that were never ticked. */
   hidden: ReadonlySet<ReplyStatId>;
 }
 
-/** Rail on and every stat shown unless stored otherwise; anything unreadable reads as the default. */
+type ReplyStatChoices = Partial<Record<ReplyStatId, boolean>>;
+
+/** Rail on and each stat at its default unless stored otherwise; anything unreadable reads as the default. */
 export function parseReplyStatsPrefs(
   rail: string | null,
-  hidden: string | null,
+  choices: string | null,
   legacyRate: string | null
 ): ReplyStatsPrefs {
-  return { rail: rail !== '0', hidden: parseHidden(hidden, legacyRate) };
+  return { rail: rail !== '0', hidden: hiddenBy(parseChoices(choices, legacyRate)) };
 }
 
-function parseHidden(raw: string | null, legacyRate: string | null): ReadonlySet<ReplyStatId> {
-  if (raw === null) return new Set<ReplyStatId>(legacyRate === '0' ? ['speed'] : []);
+function parseChoices(raw: string | null, legacyRate: string | null): ReplyStatChoices {
+  if (raw === null) return legacyRate === '0' ? { speed: false } : {};
   try {
     const parsed: unknown = JSON.parse(raw);
-    return new Set(Array.isArray(parsed) ? parsed.filter(isReplyStatId) : []);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
+    const choices: ReplyStatChoices = {};
+    for (const [id, shown] of Object.entries(parsed)) {
+      if (isReplyStatId(id) && typeof shown === 'boolean') choices[id] = shown;
+    }
+    return choices;
   } catch {
-    return new Set();
+    return {};
   }
 }
 
+function hiddenBy(choices: ReplyStatChoices): ReadonlySet<ReplyStatId> {
+  return new Set(REPLY_STATS.filter(id => !(choices[id] ?? !REPLY_STATS_OFF_BY_DEFAULT.has(id))));
+}
+
+let choices: ReplyStatChoices = {};
 let prefs = readStored();
 const listeners = new Set<() => void>();
 
 function readStored(): ReplyStatsPrefs {
+  let rail: string | null = null;
+  let stored: string | null = null;
+  let legacyRate: string | null = null;
   try {
     const storage = window.localStorage;
-    return parseReplyStatsPrefs(
-      storage.getItem(RAIL_KEY),
-      storage.getItem(HIDDEN_KEY),
-      storage.getItem(LEGACY_RATE_KEY)
-    );
+    rail = storage.getItem(RAIL_KEY);
+    stored = storage.getItem(CHOICES_KEY);
+    legacyRate = storage.getItem(LEGACY_RATE_KEY);
   } catch {
-    return parseReplyStatsPrefs(null, null, null);
+    // Unreadable storage reads as the defaults.
   }
+  choices = parseChoices(stored, legacyRate);
+  return { rail: rail !== '0', hidden: hiddenBy(choices) };
 }
 
 function publish(next: ReplyStatsPrefs, key: string, value: string): void {
@@ -99,10 +126,12 @@ export function setReplyStatsRail(rail: boolean): void {
 
 export function setReplyStatShown(id: ReplyStatId, shown: boolean): void {
   if (shown !== prefs.hidden.has(id)) return;
-  const hidden = new Set(prefs.hidden);
-  if (shown) hidden.delete(id);
-  else hidden.add(id);
-  publish({ ...prefs, hidden }, HIDDEN_KEY, JSON.stringify(REPLY_STATS.filter(stat => hidden.has(stat))));
+  const next: ReplyStatChoices = { ...choices };
+  // Back at its default it is no choice at all, so a later change of default reaches it.
+  if (shown === !REPLY_STATS_OFF_BY_DEFAULT.has(id)) delete next[id];
+  else next[id] = shown;
+  choices = next;
+  publish({ ...prefs, hidden: hiddenBy(next) }, CHOICES_KEY, JSON.stringify(next));
 }
 
 export function useReplyStatsPrefs(): ReplyStatsPrefs {
@@ -130,7 +159,7 @@ export function reloadReplyStatsPrefs(): void {
 // Another window's change reaches this one's storage, but only this event says it did. A null key is a clear().
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', event => {
-    if (event.key === null || event.key === RAIL_KEY || event.key === HIDDEN_KEY || event.key === LEGACY_RATE_KEY) {
+    if (event.key === null || event.key === RAIL_KEY || event.key === CHOICES_KEY || event.key === LEGACY_RATE_KEY) {
       reloadReplyStatsPrefs();
     }
   });
