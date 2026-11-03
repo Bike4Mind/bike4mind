@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { gitArgumentPath, gitCommand, gitCommandEnv, hostGitArgs, quickGitTimeout } from '../git/hostGitArgs';
+import { wslCommand, wslCommandEnv, wslLocation } from '../wsl/wslPath';
 import { isRepositoryPart } from './activityContract';
 
 export interface RepositoryName {
@@ -95,4 +96,17 @@ export function gitOriginUrl(directory: string): Promise<string | null> {
 /** Every remote's `url` and `gh-resolved` entries, one `remote.<name>.<key> <value>` line each. */
 export function gitRemoteSettings(directory: string): Promise<string | null> {
   return readGitConfig(directory, ['--get-regexp', '^remote\\..*\\.(url|gh-resolved)$']);
+}
+
+/** The host name the distro's `ssh` connects to for `alias` in a WSL folder; null elsewhere or when it cannot say. */
+export async function sshHostName(directory: string, alias: string): Promise<string | null> {
+  const location = wslLocation(directory);
+  if (!location || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(alias)) return null;
+  const command = wslCommand({ ...location, linuxPath: '/' }, 'ssh', ['-G', alias]);
+  const env = await wslCommandEnv(process.env, location.distro);
+  return new Promise(resolve => {
+    execFile(command.file, command.args, { env, timeout: 10_000, windowsHide: true }, (err, stdout) => {
+      resolve(err ? null : (/^hostname (\S+)$/m.exec(stdout)?.[1]?.toLowerCase() ?? null));
+    });
+  });
 }

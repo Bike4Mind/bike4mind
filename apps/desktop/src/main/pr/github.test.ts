@@ -273,14 +273,23 @@ describe('PrGithub', () => {
 
     const AUTH = ['auth', 'status', '--hostname'];
     const listing = (signedInTo: string[] = []) =>
-      vi.fn(async (args: readonly string[]) =>
-        args[0] === 'auth'
-          ? JSON.stringify({ hosts: Object.fromEntries(signedInTo.map(host => [host, [{ active: true }]])) })
-          : JSON.stringify([{ url: REF.url }])
-      );
-    const lookUp = (gh: ReturnType<typeof listing>, settings: string | null) => {
+      vi.fn(async (args: readonly string[]) => {
+        if (args[0] !== 'auth') return JSON.stringify([{ url: REF.url }]);
+        if (signedInTo.includes(args[3] ?? '')) return '';
+        throw new GhError('failed', 'not logged in');
+      });
+    const lookUp = (gh: ReturnType<typeof listing>, settings: string | null, aliases: Record<string, string> = {}) => {
       const remotes = vi.fn().mockResolvedValue(settings);
-      return { remotes, found: new PrGithub(gh, Date.now, remotes, 'win32').findOpenForBranch(WSL, 'feat/x') };
+      const ssh = vi.fn(async (_directory: string, alias: string) => aliases[alias] ?? null);
+      return {
+        remotes,
+        ssh,
+        found: new PrGithub(gh, Date.now, remotes, 'win32', ssh).findOpenForBranch(WSL, 'feat/x'),
+      };
+    };
+    const repoOf = (gh: ReturnType<typeof listing>) => {
+      const listed = gh.mock.calls.map(([args]) => args).find(args => args[0] === 'pr');
+      return listed?.[listed.indexOf('--repo') + 1];
     };
 
     it('names the repo from the distro origin for a WSL project and runs gh outside the folder', async () => {
@@ -289,7 +298,7 @@ describe('PrGithub', () => {
 
       expect(await found).toBe(REF.url);
       expect(remotes).toHaveBeenCalledWith(WSL);
-      expect(gh.mock.calls).toEqual([[[...LIST, '--repo', 'example-org/widgets']]]);
+      expect(gh.mock.calls).toEqual([[[...LIST, '--repo', 'github.com/example-org/widgets']]]);
     });
 
     it('aims at upstream in a fork checkout, where the pull request lives', async () => {
@@ -303,7 +312,7 @@ describe('PrGithub', () => {
       );
 
       await found;
-      expect(gh.mock.calls[0]?.[0]).toEqual([...LIST, '--repo', 'example-org/widgets']);
+      expect(repoOf(gh)).toBe('github.com/example-org/widgets');
     });
 
     it('aims at the remote gh was told to default to, ahead of upstream', async () => {
@@ -317,7 +326,7 @@ describe('PrGithub', () => {
           'remote.mirror.gh-resolved base',
         ].join('\n')
       ).found;
-      expect(marked.mock.calls[0]?.[0]).toEqual([...LIST, '--repo', 'team/widgets']);
+      expect(repoOf(marked)).toBe('github.com/team/widgets');
 
       const named = listing();
       await lookUp(
@@ -328,37 +337,103 @@ describe('PrGithub', () => {
           'remote.origin.gh-resolved other-org/gadgets',
         ].join('\n')
       ).found;
-      expect(named.mock.calls[0]?.[0]).toEqual([...LIST, '--repo', 'other-org/gadgets']);
+      expect(repoOf(named)).toBe('github.com/other-org/gadgets');
     });
 
-    it('leaves out the host of an SSH alias or a proxy name that gh is not signed in to', async () => {
+    it('reads GitHub proxy names as github.com without asking gh or ssh', async () => {
       for (const url of [
-        'git@github-work:example-org/widgets.git',
         'ssh://git@ssh.github.com:443/example-org/widgets.git',
         'https://www.github.com/example-org/widgets',
       ]) {
-        const gh = listing(['github.com']);
-        await lookUp(gh, `remote.origin.url ${url}`).found;
-        expect(gh.mock.calls.map(([args]) => args.slice(0, 3))).toEqual([AUTH, LIST.slice(0, 3)]);
-        expect(gh.mock.calls[1]?.[0]).toEqual([...LIST, '--repo', 'example-org/widgets']);
+        const gh = listing();
+        const { ssh, found } = lookUp(gh, `remote.origin.url ${url}`);
+        await found;
+        expect(gh.mock.calls).toEqual([[[...LIST, '--repo', 'github.com/example-org/widgets']]]);
+        expect(ssh).not.toHaveBeenCalled();
       }
     });
 
-    it('keeps the host of a remote on a server gh is signed in to', async () => {
+    it('follows an SSH host alias to the host its ssh config names', async () => {
+      const gh = listing(['git.example.com']);
+      const { ssh, found } = lookUp(gh, 'remote.origin.url git@github-work:example-org/widgets.git', {
+        'github-work': 'github.com',
+      });
+      await found;
+      expect(ssh).toHaveBeenCalledWith(WSL, 'github-work');
+      expect(repoOf(gh)).toBe('github.com/example-org/widgets');
+
+      const enterprise = listing(['git.example.com']);
+      await lookUp(enterprise, 'remote.origin.url git@work-ghe:team/widgets.git', { 'work-ghe': 'git.example.com' })
+        .found;
+      expect(repoOf(enterprise)).toBe('git.example.com/team/widgets');
+    });
+
+    it('aims at a remote on a server gh is signed in to, under that host', async () => {
       const gh = listing(['git.example.com']);
       await lookUp(gh, 'remote.origin.url https://git.example.com/team/widgets.git').found;
 
-      expect(gh.mock.calls[0]?.[0]).toEqual([...AUTH, 'git.example.com', '--json', 'hosts']);
-      expect(gh.mock.calls[1]?.[0]).toEqual([...LIST, '--repo', 'git.example.com/team/widgets']);
+      expect(gh.mock.calls[0]?.[0]).toEqual([...AUTH, 'git.example.com']);
+      expect(repoOf(gh)).toBe('git.example.com/team/widgets');
     });
 
-    it('leaves out the host when gh cannot say what it is signed in to', async () => {
+    it('never sends a remote on a host gh cannot use to another host', async () => {
+      const both = listing();
+      await lookUp(
+        both,
+        ['remote.origin.url git@github.com:me/widgets.git', 'remote.upstream.url git@gitlab.com:team/widgets.git'].join(
+          '\n'
+        )
+      ).found;
+      expect(repoOf(both)).toBe('github.com/me/widgets');
+
+      for (const settings of [
+        'remote.origin.url https://git.example.com/team/widgets.git',
+        'remote.origin.url git@gitlab.com:team/widgets.git',
+        'remote.origin.url git@unknown-alias:team/widgets.git',
+      ]) {
+        const gh = listing();
+        expect(await lookUp(gh, settings, { 'unknown-alias': 'gitlab.com' }).found).toBeNull();
+        expect(repoOf(gh)).toBeUndefined();
+      }
+    });
+
+    it('finds no host gh is signed in to when gh cannot say', async () => {
       const gh = vi.fn(async (args: readonly string[]) => {
-        if (args[0] === 'auth') throw new GhError('failed', 'unknown flag: --json');
+        if (args[0] === 'auth') throw new GhError('failed', 'unknown flag');
         return '[]';
       });
-      await lookUp(gh, 'remote.origin.url https://git.example.com/team/widgets.git').found;
-      expect(gh.mock.calls[1]?.[0]).toEqual([...LIST, '--repo', 'team/widgets']);
+      expect(await lookUp(gh, 'remote.origin.url https://git.example.com/team/widgets.git').found).toBeNull();
+      expect(gh.mock.calls.every(([args]) => args[0] === 'auth')).toBe(true);
+    });
+
+    it('weighs remotes by name as gh does, and uses a lone remote under any name', async () => {
+      const gh = listing();
+      await lookUp(
+        gh,
+        [
+          'remote.fork.url git@github.com:a/widgets.git',
+          'remote.origin.url git@github.com:b/widgets.git',
+          'remote.github.url git@github.com:c/widgets.git',
+        ].join('\n')
+      ).found;
+      expect(repoOf(gh)).toBe('github.com/c/widgets');
+
+      const lone = listing();
+      await lookUp(lone, 'remote.fork.url git@github.com:me/widgets.git').found;
+      expect(repoOf(lone)).toBe('github.com/me/widgets');
+    });
+
+    it('goes on to the next remote when the one gh was told to default to is on a host it cannot use', async () => {
+      const gh = listing();
+      await lookUp(
+        gh,
+        [
+          'remote.mirror.url git@gitlab.com:team/widgets.git',
+          'remote.mirror.gh-resolved base',
+          'remote.origin.url git@github.com:me/widgets.git',
+        ].join('\n')
+      ).found;
+      expect(repoOf(gh)).toBe('github.com/me/widgets');
     });
 
     it('finds no PR, without running gh, when the WSL remotes cannot be read or name no repository', async () => {
