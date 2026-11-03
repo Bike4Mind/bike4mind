@@ -104,6 +104,26 @@ describe('sweepAccountCampaigns', () => {
     expect(report.groups).toBe(0);
     expect(recordCampaignGroup).not.toHaveBeenCalled();
   });
+
+  it('keeps recording the remaining groups when one write throws', async () => {
+    const otherJa4 = 't13d1715h2_5b57614c22b0_3d5424432f57';
+    loadCampaignScanAccounts.mockResolvedValue({
+      rows: [...campaignRows, ...[100, 101, 102, 103].map(n => row(n, { ja4: otherJa4 }))],
+      truncated: false,
+    });
+    recordCampaignGroup.mockRejectedValueOnce(new Error('write failed'));
+    const onRecordError = vi.fn();
+
+    const report = await sweepAccountCampaigns({ now: NOW, onRecordError });
+
+    expect(report.groups).toBe(2);
+    expect(recordCampaignGroup).toHaveBeenCalledTimes(2);
+    expect(report).toMatchObject({ failed: 1, recorded: { created: 1 } });
+    expect(onRecordError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ detector: 'accountCampaign' })
+    );
+  });
 });
 
 describe('handler', () => {
@@ -113,6 +133,12 @@ describe('handler', () => {
     await handler({}, context);
 
     expect(recordCampaignGroup).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails the invocation after the run when a group failed to record', async () => {
+    recordCampaignGroup.mockRejectedValue(new Error('write failed'));
+
+    await expect(handler({}, context)).rejects.toThrow('failed to record 1 group(s)');
   });
 
   it('does nothing while shadow detection recording is off', async () => {

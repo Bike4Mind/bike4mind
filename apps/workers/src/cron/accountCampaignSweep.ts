@@ -59,17 +59,21 @@ export function toCampaignAccount(row: CampaignScanRow): userService.CampaignAcc
 export type AccountCampaignSweepReport = userService.CampaignScanStats & {
   scanTruncated: boolean;
   recorded: Record<RecordCampaignGroupResult, number>;
+  /** Groups whose write threw; the rest of the run still records. */
+  failed: number;
 };
 
 export async function sweepAccountCampaigns({
   load = loadCampaignScanAccounts,
   commonFingerprints = findSignupFingerprintClusters,
   record = input => shadowDetectionRepository.recordCampaignGroup(input),
+  onRecordError = () => undefined,
   now,
 }: {
   load?: typeof loadCampaignScanAccounts;
   commonFingerprints?: typeof findSignupFingerprintClusters;
   record?: (input: userService.CampaignShadowDetection) => Promise<RecordCampaignGroupResult>;
+  onRecordError?: (error: unknown, group: userService.CampaignShadowDetection) => void;
   now: Date;
 }): Promise<AccountCampaignSweepReport> {
   const window = { from: new Date(now.getTime() - ACCOUNT_CAMPAIGN_WINDOW_HOURS * HOUR_MS), to: now };
@@ -94,11 +98,17 @@ export async function sweepAccountCampaigns({
 
   const recorded: Record<RecordCampaignGroupResult, number> = { created: 0, updated: 0, unchanged: 0, skipped: 0 };
   // Sequential: two groups can share a transitive member, and each write reads the record it may update.
+  let failed = 0;
   for (const group of groups) {
-    const outcome = await record(userService.toCampaignShadowDetection(group, ACCOUNT_CAMPAIGN_WINDOW_HOURS * 60));
-    recorded[outcome] += 1;
+    const detection = userService.toCampaignShadowDetection(group, ACCOUNT_CAMPAIGN_WINDOW_HOURS * 60);
+    try {
+      recorded[await record(detection)] += 1;
+    } catch (error) {
+      failed += 1;
+      onRecordError(error, detection);
+    }
   }
-  return { ...stats, scanTruncated: scan.truncated, recorded };
+  return { ...stats, scanTruncated: scan.truncated, recorded, failed };
 }
 
 export async function handler(_event: unknown, context: Context) {
@@ -118,6 +128,12 @@ export async function handler(_event: unknown, context: Context) {
     return;
   }
 
-  const report = await sweepAccountCampaigns({ now: new Date() });
+  const report = await sweepAccountCampaigns({
+    now: new Date(),
+    onRecordError: (error, group) =>
+      logger.error('Account campaign group failed to record', { userIds: group.userIds, error: String(error) }),
+  });
   logger.log('Account campaign sweep finished', report);
+  // Thrown after the whole run so one bad group cannot starve the rest, but the invocation still fails.
+  if (report.failed > 0) throw new Error(`Account campaign sweep failed to record ${report.failed} group(s)`);
 }

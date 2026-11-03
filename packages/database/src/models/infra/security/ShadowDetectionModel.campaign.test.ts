@@ -1,6 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import mongoose from 'mongoose';
 import type { AccountCampaignGroup, AccountCampaignMembership } from '@bike4mind/common';
 import { setupMongoTest } from '../../../__test__/utils';
+import { User } from '../../auth/UserModel';
 import {
   ShadowDetectionModel,
   shadowDetectionRepository,
@@ -69,7 +71,7 @@ describe('shadowDetectionRepository campaign groups', () => {
   setupMongoTest();
 
   beforeEach(async () => {
-    await ShadowDetectionModel.deleteMany({});
+    await Promise.all([ShadowDetectionModel.deleteMany({}), User.collection.deleteMany({})]);
   });
 
   it('updates an ungraded group in place and moves the revision only when membership changes', async () => {
@@ -199,5 +201,37 @@ describe('shadowDetectionRepository campaign groups', () => {
     expect(await shadowDetectionRepository.removeUser(id(2))).toBe(1);
     expect(await stored()).toEqual([]);
     expect(await shadowDetectionRepository.removeUser(id(9))).toBe(0);
+  });
+
+  it('drops an account deleted since the scan instead of recording it', async () => {
+    await User.collection.insertOne({ _id: new mongoose.Types.ObjectId(id(4)), deletedAt: at(0) });
+
+    expect(await shadowDetectionRepository.recordCampaignGroup(campaign([...TRIO, [4, 'direct']], at(1)))).toBe(
+      'created'
+    );
+    const [record] = await stored();
+    expect(record.userIds).toEqual([id(1), id(2), id(3)]);
+    expect(record.summary).toBe('3 accounts linked by client fingerprint');
+
+    await User.collection.insertOne({ _id: new mongoose.Types.ObjectId(id(3)), deletedAt: at(1) });
+    expect(await shadowDetectionRepository.recordCampaignGroup(campaign([...TRIO, [4, 'direct']], at(2)))).toBe(
+      'skipped'
+    );
+  });
+
+  it('re-reads and prunes a campaign record a sweep rewrote after the deletion read it', async () => {
+    const four: [number, AccountCampaignMembership][] = [...TRIO, [4, 'direct']];
+    await shadowDetectionRepository.recordCampaignGroup(campaign(four, at(0)));
+    const stale = await ShadowDetectionModel.find({}).lean();
+    expect(await shadowDetectionRepository.recordCampaignGroup(campaign([...four, [5, 'transitive']], at(1)))).toBe(
+      'updated'
+    );
+    vi.spyOn(ShadowDetectionModel, 'find').mockReturnValueOnce({ lean: async () => stale } as never);
+
+    expect(await shadowDetectionRepository.removeUser(id(1))).toBe(0);
+
+    const [record] = await stored();
+    expect(record.userIds).toEqual([id(2), id(3), id(4), id(5)]);
+    expect(record.revision).toBe(2);
   });
 });

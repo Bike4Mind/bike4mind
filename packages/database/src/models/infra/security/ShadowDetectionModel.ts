@@ -17,6 +17,7 @@ import {
   type ShadowDetectionVerdictEntry,
   type ShadowDetector,
 } from '@bike4mind/common';
+import { User } from '../../auth/UserModel';
 
 /**
  * What an abuse detector would have done, recorded without acting (contract and rationale in
@@ -137,6 +138,26 @@ function matchingCampaignRecord(candidates: LeanShadowDetection[], direct: strin
   return best?.record ?? null;
 }
 
+/** Bounds removeUser's re-read when sweeps keep rewriting the same record under it. */
+const REMOVE_USER_ATTEMPTS = 3;
+
+/**
+ * The group without members whose account has been deleted since the sweep scanned it, or null once
+ * too few direct members are left. Deletion purges the account from stored records, so a sweep write
+ * that lands after the purge must not put it back.
+ */
+async function withoutDeletedMembers(group: AccountCampaignGroup): Promise<AccountCampaignGroup | null> {
+  const deleted = await User.find(
+    { _id: { $in: group.members.map(member => member.userId) }, deletedAt: { $ne: null } },
+    { _id: 1 }
+  )
+    .lean<{ _id: Types.ObjectId }[]>()
+    .exec();
+  let live: AccountCampaignGroup | null = group;
+  for (const { _id } of deleted) live = live && withoutCampaignMember(live, _id.toString());
+  return live;
+}
+
 const sameMembers = (left: AccountCampaignGroup, right: AccountCampaignGroup) => {
   const key = (group: AccountCampaignGroup) =>
     group.members
@@ -212,28 +233,42 @@ class ShadowDetectionRepository {
     if (input.detector !== 'accountCampaign' || !input.group) {
       throw new Error('recordCampaignGroup records accountCampaign detections with group evidence only');
     }
-    const group = accountCampaignGroupSchema.parse(input.group);
-    const direct = directUserIds(group);
+    const scanned = accountCampaignGroupSchema.parse(input.group);
     const candidates = await ShadowDetectionModel.find({
       detector: 'accountCampaign',
       policyVersion: input.policyVersion,
-      userIds: { $in: direct },
-      'group.lastObservedAt': { $gte: new Date(group.lastObservedAt.getTime() - CAMPAIGN_REOPEN_AFTER_MS) },
+      userIds: { $in: directUserIds(scanned) },
+      'group.lastObservedAt': { $gte: new Date(scanned.lastObservedAt.getTime() - CAMPAIGN_REOPEN_AFTER_MS) },
     })
       .sort({ 'group.lastObservedAt': -1, _id: -1 })
       .limit(CAMPAIGN_MATCH_CANDIDATES)
       .lean<LeanShadowDetection[]>();
+    // After the candidate read: a purge that lands from here on bumps the revision the update below is
+    // conditional on.
+    const group = await withoutDeletedMembers(scanned);
+    if (!group) return 'skipped';
+    const record =
+      group === scanned
+        ? { ...input, group }
+        : {
+            ...input,
+            group,
+            userIds: group.members.map(member => member.userId),
+            summary: accountCampaignSummary(group),
+            signals: accountCampaignSignals(group),
+          };
+    const direct = directUserIds(group);
     const existing = matchingCampaignRecord(candidates, direct);
 
     if (!existing?.group) {
-      await ShadowDetectionModel.create({ ...input, group });
+      await ShadowDetectionModel.create(record);
       return 'created';
     }
 
     if (existing.verdict) {
       const reviewed = new Set(directUserIds(existing.group));
       if (direct.some(userId => !reviewed.has(userId))) {
-        await ShadowDetectionModel.create({ ...input, group });
+        await ShadowDetectionModel.create(record);
         return 'created';
       }
       await ShadowDetectionModel.updateOne(
@@ -248,11 +283,11 @@ class ShadowDetectionRepository {
       { _id: existing._id, revision: existing.revision, verdict: null },
       {
         $set: {
-          summary: input.summary,
-          userIds: input.userIds,
-          signals: input.signals,
-          windowMinutes: input.windowMinutes,
-          wouldAction: input.wouldAction,
+          summary: record.summary,
+          userIds: record.userIds,
+          signals: record.signals,
+          windowMinutes: record.windowMinutes,
+          wouldAction: record.wouldAction,
           group: { ...group, firstObservedAt: existing.group.firstObservedAt },
         },
         ...(membershipChanged ? { $inc: { revision: 1 } } : {}),
@@ -272,21 +307,36 @@ class ShadowDetectionRepository {
   async removeUser(userId: string): Promise<number> {
     const touched = await ShadowDetectionModel.find({ userIds: userId }).lean<LeanShadowDetection[]>();
     const deleteIds: Types.ObjectId[] = [];
+    let deletedCampaigns = 0;
     for (const doc of touched) {
       if (!doc.group) {
         if ((doc.userIds ?? []).every(id => id === userId)) deleteIds.push(doc._id);
         else await ShadowDetectionModel.updateOne({ _id: doc._id }, { $pull: { userIds: userId } });
         continue;
       }
-      const parsed = accountCampaignGroupSchema.safeParse(doc.group);
+      if (await this.removeCampaignMember(doc, userId)) deletedCampaigns += 1;
+    }
+    if (deleteIds.length === 0) return deletedCampaigns;
+    const deleted = await ShadowDetectionModel.deleteMany({ _id: { $in: deleteIds } });
+    return deletedCampaigns + deleted.deletedCount;
+  }
+
+  /**
+   * Prunes one campaign record, or deletes it; true when it was deleted. Each write is conditional on
+   * the revision it was computed from, so a sweep rewrite in between is re-read and pruned again.
+   */
+  private async removeCampaignMember(doc: LeanShadowDetection, userId: string): Promise<boolean> {
+    let current: LeanShadowDetection | null = doc;
+    for (let attempt = 0; attempt < REMOVE_USER_ATTEMPTS; attempt++) {
+      if (!current?.userIds.includes(userId)) return false;
+      const parsed = accountCampaignGroupSchema.safeParse(current.group);
       const pruned = parsed.success ? withoutCampaignMember(parsed.data, userId) : null;
+      const filter = { _id: current._id, revision: current.revision };
       if (!pruned) {
-        deleteIds.push(doc._id);
-        continue;
-      }
-      await ShadowDetectionModel.updateOne(
-        { _id: doc._id },
-        {
+        const { deletedCount } = await ShadowDetectionModel.deleteOne(filter);
+        if (deletedCount === 1) return true;
+      } else {
+        const { matchedCount } = await ShadowDetectionModel.updateOne(filter, {
           $set: {
             group: pruned,
             userIds: pruned.members.map(member => member.userId),
@@ -294,12 +344,12 @@ class ShadowDetectionRepository {
             signals: accountCampaignSignals(pruned),
           },
           $inc: { revision: 1 },
-        }
-      );
+        });
+        if (matchedCount === 1) return false;
+      }
+      current = await ShadowDetectionModel.findById(doc._id).lean<LeanShadowDetection>();
     }
-    if (deleteIds.length === 0) return 0;
-    const deleted = await ShadowDetectionModel.deleteMany({ _id: { $in: deleteIds } });
-    return deleted.deletedCount;
+    throw new Error(`Shadow detection ${doc._id.toString()} kept changing while removing a deleted user`);
   }
 
   /** Newest first; `truncated` is true when more than `limit` records match. */
