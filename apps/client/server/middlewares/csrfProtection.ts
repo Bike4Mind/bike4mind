@@ -2,6 +2,17 @@ import { RequestHandler } from 'express';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { extractApiKeyFromHeaders } from '@server/utils/apiKeyRateLimitCheck';
 import { isLocalAppUrl } from '@server/utils/validators';
+import { ADMIN_RETURN_COOKIE_NAME, REFRESH_COOKIE_NAME, readCookie } from '@bike4mind/server-utils/auth/refreshCookie';
+
+const SESSION_COOKIE_NAMES = [REFRESH_COOKIE_NAME, ADMIN_RETURN_COOKIE_NAME].flatMap(name => [name, `__Host-${name}`]);
+const BEARER_JWT_PATTERN = /^Bearer [\w-]+\.[\w-]+\.[\w-]+$/;
+
+// Checks every name regardless of NODE_ENV: any session cookie at all means ambient credentials.
+const hasSessionCookie = (req: Parameters<RequestHandler>[0]): boolean =>
+  SESSION_COOKIE_NAMES.some(name => readCookie(req, name) !== null);
+
+const hasBearerJwt = (req: Parameters<RequestHandler>[0]): boolean =>
+  typeof req.headers.authorization === 'string' && BEARER_JWT_PATTERN.test(req.headers.authorization.trim());
 
 /**
  * CSRF Protection Middleware
@@ -25,6 +36,14 @@ export const csrfProtection = (): RequestHandler => {
     // ApiKey`, and the canonical `Authorization: Bearer b4m_<key>`) is exempt -
     // sniffing x-api-key alone would CSRF-block the form the spec advertises.
     if (extractApiKeyFromHeaders(req.headers)) {
+      return next();
+    }
+
+    // CSRF defends ambient (cookie) credentials. A request authenticated solely by an
+    // explicit bearer header cannot be forged cross-site, so first-party native clients
+    // (bearer JWT, no cookie jar) skip the origin checks. Any session cookie on the
+    // request keeps the checks on, since the cookie could be what authenticates it.
+    if (hasBearerJwt(req) && !hasSessionCookie(req)) {
       return next();
     }
 

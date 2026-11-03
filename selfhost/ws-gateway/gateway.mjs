@@ -1,19 +1,21 @@
 // Self-host WebSocket gateway.
 //
 // Replaces AWS API Gateway WebSocket for the Docker Compose self-host stack. It
-// has two faces on a single port:
+// has two faces, each on its own port:
 //
-//   1. A browser-facing WebSocket server (WEBSOCKET_URL, e.g. ws://localhost:3001).
+//   1. A browser-facing WebSocket server on PORT (WEBSOCKET_URL, e.g. ws://localhost:3001).
 //      On connect it authenticates by delegating to the app, keeps a
 //      connectionId -> socket map, answers heartbeats locally, and forwards every
 //      other inbound frame to the app to run the real handler logic
 //      (subscribe_query / unsubscribe_query, with the app's CASL scoping intact).
 //
-//   2. An API Gateway Management API emulator (WEBSOCKET_MANAGEMENT_ENDPOINT, e.g.
-//      http://ws:3001). It accepts `POST /@connections/{id}` from the app and the
-//      subscriber-fanout container and relays the body to the live socket, so
-//      server-side pushes (initial data, change-stream fan-out, chat streaming)
-//      reach the browser. Returns 410 for dead connections so callers prune them.
+//   2. An API Gateway Management API emulator on MANAGEMENT_PORT
+//      (WEBSOCKET_MANAGEMENT_ENDPOINT, e.g. http://ws:3002). It accepts
+//      `POST /@connections/{id}` from the app and the subscriber-fanout container
+//      and relays the body to the live socket, so server-side pushes (initial
+//      data, change-stream fan-out, chat streaming) reach the browser. Returns 410
+//      for dead connections so callers prune them. Only services on the private
+//      network call it, so never publish this port or route a proxy to it.
 //
 // The gateway itself holds no auth/model logic; it delegates to the app over an
 // internal, shared-secret HTTP endpoint (POST /api/internal/ws/{action}).
@@ -23,8 +25,15 @@ import crypto from 'node:crypto';
 import { WebSocketServer } from 'ws';
 
 const PORT = Number(process.env.PORT || 3001);
+const MANAGEMENT_PORT = Number(process.env.MANAGEMENT_PORT || 3002);
 const APP_INTERNAL_URL = (process.env.APP_INTERNAL_URL || 'http://app:3000').replace(/\/$/, '');
 const INTERNAL_WS_SECRET = process.env.INTERNAL_WS_SECRET || '';
+
+if (MANAGEMENT_PORT === PORT) {
+  throw new Error(
+    '[ws-gateway] MANAGEMENT_PORT must differ from PORT; the management API is never served on the browser port.'
+  );
+}
 
 if (!INTERNAL_WS_SECRET) {
   console.warn('[ws-gateway] INTERNAL_WS_SECRET is empty; the app will reject internal calls.');
@@ -56,16 +65,22 @@ async function readBody(req) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-// ---- HTTP face: API Gateway Management API emulator + health ----------------
-const server = http.createServer(async (req, res) => {
+function isHealthCheck(req) {
+  return req.method === 'GET' && (req.url === '/health' || req.url === '/');
+}
+
+function sendHealth(res) {
+  res.writeHead(200, { 'content-type': 'text/plain' });
+  res.end('ok');
+}
+
+// ---- Management face: API Gateway Management API emulator + health ----------
+const managementServer = http.createServer(async (req, res) => {
   // A malformed request or a socket race (e.g. ws.send on a half-closed peer)
   // can throw; catch so the connection gets a 500 instead of hanging on an
   // unhandled rejection.
   try {
-    if (req.method === 'GET' && (req.url === '/health' || req.url === '/')) {
-      res.writeHead(200, { 'content-type': 'text/plain' });
-      return res.end('ok');
-    }
+    if (isHealthCheck(req)) return sendHealth(res);
 
     // POST/GET/DELETE /@connections/{connectionId}
     const match = req.url && req.url.match(/^\/@connections\/([^/?]+)/);
@@ -99,13 +114,19 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(404);
     res.end('Not found');
   } catch (err) {
-    console.error('[ws-gateway] http handler error:', err?.message || err);
+    console.error('[ws-gateway] management handler error:', err?.message || err);
     if (!res.headersSent) res.writeHead(500);
     res.end();
   }
 });
 
-// ---- WebSocket face: browser clients ---------------------------------------
+// ---- Browser face: WebSocket upgrades + health only -------------------------
+const server = http.createServer((req, res) => {
+  if (isHealthCheck(req)) return sendHealth(res);
+  res.writeHead(404);
+  res.end('Not found');
+});
+
 const wss = new WebSocketServer({ server });
 
 wss.on('connection', async (ws, req) => {
@@ -178,5 +199,9 @@ wss.on('connection', async (ws, req) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`[ws-gateway] listening on :${PORT} (app=${APP_INTERNAL_URL})`);
+  console.log(`[ws-gateway] browser sockets on :${PORT} (app=${APP_INTERNAL_URL})`);
+});
+
+managementServer.listen(MANAGEMENT_PORT, '0.0.0.0', () => {
+  console.log(`[ws-gateway] management API on :${MANAGEMENT_PORT}`);
 });

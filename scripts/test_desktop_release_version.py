@@ -220,6 +220,7 @@ class DesktopVersionTest(unittest.TestCase):
         notes = release_notes('0.2.0', 'desktop-v0.1.0', 'example/repo', 'example/dist')
         self.assertIn('Version selection: minor', notes)
         self.assertIn('https://github.com/example/dist/releases/latest/download/install.sh', notes)
+        self.assertIn('setup.exe for Windows (one installer for x64 and ARM64)', notes)
         self.assertIn('feat(desktop): add feature', notes)
         self.assertNotIn('feat(web): unrelated', notes)
         self.assertIn('https://github.com/example/repo/commit/', notes)

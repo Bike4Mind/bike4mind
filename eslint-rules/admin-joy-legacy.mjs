@@ -80,7 +80,6 @@ const componentsByFile = {
   'ScopedOverridesByScope.tsx': ['Card'],
   'SecopsTriageTab.tsx': ['Card'],
   'SecretsRotationTab.tsx': ['Table', 'Modal'],
-  'SecurityDashboardOverview.tsx': ['Card'],
   'SlackMetrics/SlackMetricsTab.tsx': ['Card'],
   'SlackWorkspacesTab.tsx': ['Card', 'Modal', 'Table'],
   'SreAgentTab.tsx': ['Card', 'Modal', 'Table'],

@@ -302,12 +302,12 @@ describe('ModelServersSettings access note', () => {
 describe('ModelServersSettings hardware', () => {
   const byTestId = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
   const update = vi.fn(async () => ({ ok: true as const, servers: [] }));
-  const probedHardware = vi.fn(async () => ({
-    memoryKind: 'cpu' as const,
+  const probedHardware = vi.fn(async (): Promise<MachineView> => ({
+    memoryKind: 'cpu',
     totalMemoryBytes: 62 * 1024 ** 3,
     gpuMemoryBytes: null,
     gpuName: null,
-    confidence: 'high' as const,
+    confidence: 'high',
   }));
 
   async function type(testId: string, value: string) {
@@ -337,6 +337,55 @@ describe('ModelServersSettings hardware', () => {
       specs: { ramGiB: 128, gpuMemoryGiB: 96, bandwidthGBps: 256, unified: true },
     });
     expect(probedHardware).not.toHaveBeenCalled();
+  });
+
+  const bandwidthLabel = () => {
+    const input = byTestId('model-servers-specs-bandwidth-input') as HTMLInputElement;
+    return document.querySelector(`label[for="${input.id}"]`)?.textContent;
+  };
+
+  it('asks for the GPU memory bandwidth of a saved server with a discrete GPU, not the shared memory kind', async () => {
+    await show(saved('ollama', 'manage'));
+    await click('model-servers-specs-btn');
+    expect(bandwidthLabel()).toBe('Memory bandwidth (GB/s)');
+    await type('model-servers-specs-gpu-input', '24');
+    expect(bandwidthLabel()).toBe('GPU memory bandwidth (GB/s)');
+    expect(byTestId('model-servers-specs-form')?.textContent).toContain("enter the GPU's own figure");
+    await click('model-servers-specs-unified-checkbox');
+    expect(bandwidthLabel()).toBe('Memory bandwidth (GB/s)');
+    expect(byTestId('model-servers-specs-form')?.textContent).not.toContain("enter the GPU's own figure");
+  });
+
+  it.each([
+    ['discrete', 'GPU memory bandwidth (GB/s)'],
+    ['unified', 'Memory bandwidth (GB/s)'],
+    ['cpu', 'Memory bandwidth (GB/s)'],
+  ] as const)('labels the bandwidth field of this computer by what the probe found: %s', async (memoryKind, label) => {
+    probedHardware.mockResolvedValueOnce({
+      memoryKind,
+      totalMemoryBytes: 62 * 1024 ** 3,
+      gpuMemoryBytes: memoryKind === 'discrete' ? 24 * 1024 ** 3 : null,
+      gpuName: null,
+      confidence: 'high',
+    });
+    await show({ ...saved('ollama', 'manage'), id: 'local', name: 'This computer', local: true });
+    await click('model-servers-specs-btn');
+    expect(bandwidthLabel()).toBe(label);
+  });
+
+  it('asks for the GPU memory bandwidth of this computer only once a discrete GPU has a known memory size', async () => {
+    probedHardware.mockResolvedValueOnce({
+      memoryKind: 'discrete',
+      totalMemoryBytes: 62 * 1024 ** 3,
+      gpuMemoryBytes: null,
+      gpuName: 'Test GPU',
+      confidence: 'low',
+    });
+    await show({ ...saved('ollama', 'manage'), id: 'local', name: 'This computer', local: true });
+    await click('model-servers-specs-btn');
+    expect(bandwidthLabel()).toBe('Memory bandwidth (GB/s)');
+    await type('model-servers-specs-gpu-input', '16');
+    expect(bandwidthLabel()).toBe('GPU memory bandwidth (GB/s)');
   });
 
   it('asks for RAM before saving GPU memory for a saved server', async () => {

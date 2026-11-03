@@ -50,6 +50,12 @@ export const ADMIN_REASON_PRESETS = {
   ipBlock: ['Card testing or payment fraud', 'Abuse / automated signups', 'Credential stuffing', 'Under investigation'],
   ipUnblock: ['Blocked in error', 'Legitimate users affected', 'Threat has ended'],
   signupRiskApproval: ['Verified legitimate user', 'Known customer or partner', 'False positive signal'],
+  shadowDetectionVerdict: [
+    'Reviewed account activity',
+    'Matches a known abuse pattern',
+    'Known customer or integration',
+    'Not enough data to decide',
+  ],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AdminReasonPresetKey = keyof typeof ADMIN_REASON_PRESETS;

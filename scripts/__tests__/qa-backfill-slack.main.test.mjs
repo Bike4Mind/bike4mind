@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterAll } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -19,8 +19,14 @@ const tooOld = at('2026-08-01T00:00:00.000Z');
 const tooNew = at('2026-09-28T01:00:00.000Z');
 const baseArgs = ['--product', 'product-a', '--channel', CHANNEL, '--before', BEFORE];
 
+const inputDirs = [];
+afterAll(async () => {
+  await Promise.all(inputDirs.map(dir => fs.rm(dir, { recursive: true, force: true })));
+});
+
 async function inputFile(messages) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'qa-backfill-'));
+  inputDirs.push(dir);
   const file = path.join(dir, 'history.json');
   await fs.writeFile(file, JSON.stringify({ ok: true, messages }));
   return file;

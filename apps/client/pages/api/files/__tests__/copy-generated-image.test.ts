@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   getMetadata: vi.fn(),
   createFabFile: vi.fn(),
   signUrl: vi.fn(),
+  consumeFileUploadBudget: vi.fn(async (_req: unknown, _fileCount: number) => undefined),
   baseApiOptions: undefined as unknown,
 }));
 
@@ -19,6 +20,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return { use: () => ({ post: (handler: unknown) => handler }) };
   },
 }));
+
+vi.mock('@server/files/fileUploadBudget', () => ({ consumeFileUploadBudget: h.consumeFileUploadBudget }));
 
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 
@@ -97,6 +100,25 @@ describe('POST /api/files/copy-generated-image object-level authz', () => {
     expect(h.download).toHaveBeenCalledWith(KEY);
     expect(h.createFabFile).toHaveBeenCalled();
     expect(json).toHaveBeenCalledWith({ id: 'file-1' });
+  });
+
+  it('spends one unit of the allowance for the copy', async () => {
+    h.findSessionIdsByImage.mockResolvedValue(['s1']);
+    h.findAllAccessibleByIds.mockResolvedValue([{ id: 's1' }]);
+
+    await handler(req('me'), makeRes().res);
+
+    expect(h.consumeFileUploadBudget).toHaveBeenCalledTimes(1);
+    expect(h.consumeFileUploadBudget.mock.calls[0][1]).toBe(1);
+  });
+
+  it('creates no file when the allowance refuses the copy', async () => {
+    h.findSessionIdsByImage.mockResolvedValue(['s1']);
+    h.findAllAccessibleByIds.mockResolvedValue([{ id: 's1' }]);
+    h.consumeFileUploadBudget.mockRejectedValueOnce(new Error('Upload limit reached'));
+
+    await expect(handler(req('me'), makeRes().res)).rejects.toThrow('Upload limit reached');
+    expect(h.createFabFile).not.toHaveBeenCalled();
   });
 
   // createFabFile is mocked here, so this pins only the wiring - which type and precedence the

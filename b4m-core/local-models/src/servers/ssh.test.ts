@@ -169,6 +169,25 @@ describe('ssh failures', () => {
     expect(err.message).toBe("Connect once from a terminal with `ssh me@gpu` to trust this server's host key.");
   });
 
+  it('names a Windows terminal and ssh-agent for an unknown host key on Windows', () => {
+    const err = describeSshFailure('Host key verification failed.\n', 255, 'me@gpu', 'Desktop', 'win32');
+    expect(err).toBeInstanceOf(SshRefusedError);
+    expect(err.message).toBe(
+      "Connect once from a Windows terminal (PowerShell or Command Prompt, not WSL) with `ssh me@gpu` to trust this server's host key. Desktop cannot ask for a passphrase, so a key that has one must be loaded into ssh-agent."
+    );
+    for (const platform of ['darwin', 'linux'] as const) {
+      expect(describeSshFailure('Host key verification failed.\n', 255, 'me@gpu', 'Desktop', platform).message).toBe(
+        "Connect once from a terminal with `ssh me@gpu` to trust this server's host key."
+      );
+    }
+  });
+
+  it('leaves the passphrase advice off the changed host key message', () => {
+    const err = describeSshFailure('REMOTE HOST IDENTIFICATION HAS CHANGED!\n', 255, 'gpu', 'Desktop', 'win32');
+    expect(err.message).toContain('Windows terminal');
+    expect(err.message).not.toContain('passphrase');
+  });
+
   it('says a changed host key changed', () => {
     const err = describeSshFailure(
       '@@@@\nWARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!\nHost key verification failed.\n',
@@ -186,6 +205,13 @@ describe('ssh failures', () => {
     expect(err.message).toMatch(/ssh-agent/);
   });
 
+  it('points a refused login on Windows at a Windows terminal, whose keys WSL does not share', () => {
+    const err = describeSshFailure('me@gpu: Permission denied (publickey).\n', 255, 'me@gpu', 'Desktop', 'win32');
+    expect(err.message).toMatch(
+      /Check that `ssh me@gpu` works in a Windows terminal \(PowerShell or Command Prompt, not WSL\)\./
+    );
+  });
+
   it('names a server that forbids forwarding, and one without Ollama running', () => {
     expect(
       describeSshFailure(
@@ -201,7 +227,7 @@ describe('ssh failures', () => {
     );
     expect(down).toBeInstanceOf(SshConnectionError);
     expect(down.message).toBe(
-      'SSH to gpu works, but nothing answers at 127.0.0.1:11434 there. Start Ollama on that machine.'
+      'SSH to gpu works, but Ollama is not running on it: nothing answers at 127.0.0.1:11434 there. Start Ollama on that machine.'
     );
   });
 
@@ -402,7 +428,7 @@ describe('createSshFetch', () => {
     const ssh = fakeSsh(await ollama(), { stderr: `${debug}Host key verification failed.\n` });
     const fetch = createSshFetch({ destination: 'gpu', label: 'gpu' }, { spawn: ssh.spawn, platform: 'win32' });
     await expect(fetch(`${SSH_OLLAMA_URL}/api/version`)).rejects.toThrow(
-      "Connect once from a terminal with `ssh gpu` to trust this server's host key."
+      "Connect once from a Windows terminal (PowerShell or Command Prompt, not WSL) with `ssh gpu` to trust this server's host key."
     );
     expect(ssh.spawned[0].detached).toBe(false);
   });
@@ -433,7 +459,7 @@ describe('createSshFetch', () => {
     expect(outcome).toMatchObject({
       kind: null,
       refused: true,
-      error: "Connect once from a terminal with `ssh me@gpu` to trust this server's host key.",
+      error: expect.stringContaining('Connect once from a Windows terminal (PowerShell or Command Prompt, not WSL)'),
     });
   });
 
@@ -443,7 +469,7 @@ describe('createSshFetch', () => {
     const outcome = await probeServer(fetch, SSH_OLLAMA_URL, 'gpu', () => 0, 'ollama');
     expect(outcome.refused).toBe(false);
     expect(outcome.error).toBe(
-      'Could not reach gpu: SSH to gpu works, but nothing answers at 127.0.0.1:11434 there. Start Ollama on that machine.'
+      'Could not reach gpu: SSH to gpu works, but Ollama is not running on it: nothing answers at 127.0.0.1:11434 there. Start Ollama on that machine.'
     );
   });
 

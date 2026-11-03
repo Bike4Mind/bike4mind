@@ -18,6 +18,7 @@ export interface DesktopRelease {
   releaseUrl: string;
   macArm64DmgUrl?: string;
   linuxX64AppImageUrl?: string;
+  windowsSetupUrl?: string;
 }
 
 const releaseSchema = z.object({
@@ -41,6 +42,7 @@ export function parseDesktopRelease(json: unknown): DesktopRelease | null {
     releaseUrl: fromReleasesRepo(html_url) ?? DESKTOP_RELEASES_PAGE_URL,
     macArm64DmgUrl: assetUrl(/-arm64\.dmg$/),
     linuxX64AppImageUrl: assetUrl(/-x64\.AppImage$/),
+    windowsSetupUrl: assetUrl(/-setup\.exe$/),
   };
 }
 

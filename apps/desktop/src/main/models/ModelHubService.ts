@@ -51,7 +51,13 @@ import {
   type RuntimeCheck,
   type RuntimeHealth,
 } from '@bike4mind/local-models';
-import type { HubBuild, HubEntry, HubManifest } from '@bike4mind/common';
+import {
+  activeParamsFraction,
+  ollamaBuildBytes,
+  type HubBuild,
+  type HubEntry,
+  type HubManifest,
+} from '@bike4mind/common';
 import {
   licenseKind,
   pullKey,
@@ -90,8 +96,9 @@ import { configuredNumCtx } from '../chat/localChatContext';
 import { ServerCredentialsError, ServerUnreachableError } from '../modelServers/errors';
 import { ServerRedirectError, ServerTransportError } from '@bike4mind/local-models/servers';
 import { serverHardware, withEnteredSpecs } from './enteredHardware';
-import { fitFromArch, fitFromSize, machineView } from './fit';
+import { fitFromArch, fitFromSize, machineView, type FitWhere } from './fit';
 import { loadedStateOf, loadedStateTarget } from './loadedState';
+import { installedProjectorBytes, pinnedProjectorSizes } from './projectorBytes';
 
 export interface ModelRuntimePort {
   readonly baseUrl: string;
@@ -620,6 +627,8 @@ interface Sizing {
   /** What chat sizes num_ctx from: this computer's hardware, or null on a saved server, which chat never measures. */
   chatHardware: HardwareProfile | null;
   rating: 'probe' | 'entered';
+  /** Whose memory `hardware` is, for the verdict's wording. */
+  where: FitWhere;
 }
 
 /** The num_ctx OllamaLocal would send this model with, so a badge rates the load chat makes. */
@@ -627,21 +636,29 @@ function chatContext(
   { chatHardware, setting }: Sizing,
   arch: LocalModelFootprint['arch'],
   weightsBytes: number,
-  bounds: { modelLimit?: number; configured?: number }
+  bounds: { modelLimit?: number; configured?: number; projectorBytes?: number }
 ): number {
-  return chatContextTokens({ setting, footprint: { arch, weightsBytes, hardware: chatHardware }, ...bounds });
+  const { projectorBytes, ...limits } = bounds;
+  return chatContextTokens({
+    setting,
+    footprint: { arch, weightsBytes, projectorBytes, hardware: chatHardware },
+    ...limits,
+  });
 }
 
 /** A reviewed build's fit from its layer shapes, pinned projector and num_ctx; its row and its pull dialog share it. */
 function reviewedFit(entry: HubEntry, build: HubBuild, sizing: Sizing): ModelFit {
-  const library = libraryOf(build);
-  // The library's size already includes the projector; Hugging Face weight sizes leave it out.
-  const weights = library ? library.sizeBytes : (build.weights[0]?.sizeBytes ?? 0);
-  const projector = library ? 0 : (pinsOf(build)?.projectorBytes ?? 0);
-  const context = chatContext(sizing, entry.arch, weights + projector, {
+  const { weightsBytes, mmprojBytes } = ollamaBuildBytes(build);
+  const context = chatContext(sizing, entry.arch, weightsBytes + mmprojBytes, {
     configured: pinsOf(build)?.numCtx ?? undefined,
+    projectorBytes: mmprojBytes,
   });
-  return fitFromArch(entry.arch, weights, sizing.hardware, context, { mmprojBytes: projector });
+  return fitFromArch(entry.arch, weightsBytes, sizing.hardware, context, {
+    mmprojBytes,
+    where: sizing.where,
+    expertBytesPerLayer: build.tensorStats?.expertBytesPerLayer,
+    activeParamsFraction: activeParamsFraction(entry.params),
+  });
 }
 
 /**
@@ -662,7 +679,13 @@ export class ModelHubService {
   /** Installed models' layer shapes by archKey. */
   readonly #archs = new Map<
     string,
-    Promise<{ arch: ModelArch | null; parameters: string | null; contextLength: number | null } | null>
+    Promise<{
+      arch: ModelArch | null;
+      parameters: string | null;
+      contextLength: number | null;
+      projectorBytes: number;
+      expertBytesPerLayer: number | undefined;
+    } | null>
   >();
   /** Model folders read from a runtime, by server id; a guessed default is never kept. */
   readonly #stores = new Map<string, string>();
@@ -691,7 +714,13 @@ export class ModelHubService {
     const [probed, setting] = await Promise.all([this.#machine(), this.#deps.localContext()]);
     const specs = this.#deps.specs?.(LOCAL_SERVER_ID) ?? null;
     const hardware = withEnteredSpecs(probed, specs);
-    return { hardware, setting, chatHardware: hardware, rating: specsRate(specs) ? 'entered' : 'probe' };
+    return {
+      hardware,
+      setting,
+      chatHardware: hardware,
+      rating: specsRate(specs) ? 'entered' : 'probe',
+      where: 'local',
+    };
   }
 
   /** Null for a saved server without entered hardware: its models are not rated. */
@@ -699,7 +728,9 @@ export class ModelHubService {
     if (target.local) return this.#localSizing();
     const hardware = serverHardware(this.#deps.specs?.(target.id) ?? null);
     // Chat sends a saved server the Auto floor whatever the Settings choice, having no measure of it.
-    return hardware ? { hardware, setting: AUTO_LOCAL_CONTEXT, chatHardware: null, rating: 'entered' } : null;
+    return hardware
+      ? { hardware, setting: AUTO_LOCAL_CONTEXT, chatHardware: null, rating: 'entered', where: 'server' }
+      : null;
   }
 
   async #installedFit(
@@ -717,10 +748,16 @@ export class ModelHubService {
       // The installed list was just read, so skip inspect's own re-read of it.
       shown = target.runtime
         .inspect(model.name, { tags: false })
-        .then(inspection => ({
+        .then(async inspection => ({
           arch: inspection.arch,
           parameters: inspection.parameters ?? null,
           contextLength: inspection.contextLength ?? null,
+          // Chat reads this computer's blobs the same way (main/chat/localContextSizing.ts).
+          projectorBytes: await installedProjectorBytes(inspection.contents, {
+            pinned: this.pinnedProjectors(),
+            onThisComputer: target.local,
+          }),
+          expertBytesPerLayer: inspection.tensorStats?.expertBytesPerLayer,
         }))
         .catch(() => {
           // A busy daemon can time out once; read it again next time instead of rating by size for the session.
@@ -733,13 +770,20 @@ export class ModelHubService {
     const arch = inspection?.arch ?? null;
     const limit = arch?.contextMax ?? inspection?.contextLength ?? undefined;
     // Ollama's tag size already includes any projector, as it does for chat's own sizing.
+    const projector = inspection && inspection.projectorBytes < model.sizeBytes ? inspection.projectorBytes : 0;
     const context = chatContext(sizing, arch, model.sizeBytes, {
       modelLimit: inspection?.contextLength ?? undefined,
       configured: configuredNumCtx(inspection?.parameters),
+      projectorBytes: projector,
     });
+    const { where } = sizing;
     return arch
-      ? fitFromArch(arch, model.sizeBytes, hardware, context)
-      : fitFromSize(model.sizeBytes, hardware, context, { limitKnown: limit !== undefined });
+      ? fitFromArch(arch, model.sizeBytes - projector, hardware, context, {
+          mmprojBytes: projector,
+          expertBytesPerLayer: inspection?.expertBytesPerLayer,
+          where,
+        })
+      : fitFromSize(model.sizeBytes, hardware, context, { limitKnown: limit !== undefined, where });
   }
 
   /** A reviewed curated file is rated as its Curated row is; any other file falls back to its size. */
@@ -766,7 +810,10 @@ export class ModelHubService {
         }
       const limit = detail.gguf?.contextLength ?? undefined;
       const context = chatContext(sizing, null, build.sizeBytes + projector, { modelLimit: limit });
-      return fitFromSize(build.sizeBytes + projector, sizing.hardware, context, { limitKnown: limit !== undefined });
+      return fitFromSize(build.sizeBytes + projector, sizing.hardware, context, {
+        limitKnown: limit !== undefined,
+        where: sizing.where,
+      });
     };
   }
 
@@ -942,6 +989,11 @@ export class ModelHubService {
       buildId: pick.build,
       recommended: index === recommended,
     }));
+  }
+
+  /** Projector sizes the curated list pins, by blob digest; chat sizes installed models from the same map. */
+  pinnedProjectors(): ReadonlyMap<string, number> {
+    return pinnedProjectorSizes(this.#deps.curated());
   }
 
   /**
