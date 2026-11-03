@@ -8,7 +8,9 @@
  * - apps/client/server/middlewares/errorHandler.ts (`<METHOD> <url> \u2192 <status>: ...` and `[cast-id-remap]`)
  * - apps/client/pages/api/tools/web-fetch.ts, whose refused targets reach that handler as a 400
  * - apps/client/pages/api/stripe/webhook.ts (signature verification failure)
- * Request metadata (`clientIp`, `path`, `userId`) comes from apps/client/server/middlewares/requestLogger.ts.
+ * Request metadata (`clientIp`, `userId`) comes from apps/client/server/middlewares/requestLogger.ts.
+ * Paths are parsed from the error handler line's raw URL, not the `path` field: apps/client/server/middlewares/logging.ts
+ * folds every catch-all miss into `/api/:unmatchedApiPath` and keeps the query string.
  */
 
 import { rowToObject } from '../utils/logsInsights';
@@ -37,6 +39,9 @@ export const QUERY_ROW_LIMIT = 1_000;
 
 const ARROW = '\u2192';
 
+/** Captures the request path, query string dropped, from an error handler status line. */
+export const REQUEST_PATH_PATTERN = `^[A-Z]+ (?<reqPath>[^ ?]+)[^ ]* ${ARROW} [0-9]{3}:`;
+
 /** Per-line 0/1 indicator for each signal, as Logs Insights expressions over `message`. */
 const SIGNAL_EXPRESSIONS: Record<ProbeSignal, string> = {
   refusedFetch: `strcontains(message, "${ARROW} 400: Refusing to fetch")`,
@@ -54,15 +59,16 @@ const SIGNAL_EXPRESSIONS: Record<ProbeSignal, string> = {
 export const PROBE_QUERY = [
   'filter ispresent(clientIp) or ispresent(userId)',
   'fields coalesce(clientIp, "") as ip, coalesce(userId, "") as uid',
+  `parse message /${REQUEST_PATH_PATTERN}/`,
   ...PROBE_SIGNALS.map(signal => `fields ${SIGNAL_EXPRESSIONS[signal]} as is_${signal}`),
   `fields ${PROBE_SIGNALS.map(signal => `${SIGNAL_WEIGHTS[signal]} * is_${signal}`).join(' + ')} as weight`,
   'stats ' +
     [
       ...PROBE_SIGNALS.map(signal => `sum(is_${signal}) as ${signal}`),
       'sum(weight) as weightTotal',
-      'count_distinct(path) as paths',
-      'earliest(path) as firstPath',
-      'latest(path) as lastPath',
+      'count_distinct(reqPath) as paths',
+      'earliest(reqPath) as firstPath',
+      'latest(reqPath) as lastPath',
     ].join(', ') +
     ' by ip, uid',
   'sort weightTotal desc',

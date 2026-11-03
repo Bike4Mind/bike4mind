@@ -4,6 +4,7 @@ import type { ResultField } from '@aws-sdk/client-cloudwatch-logs';
 import {
   BREADTH_GATE_PATHS,
   PROBE_QUERY,
+  REQUEST_PATH_PATTERN,
   actorsOverThreshold,
   groupProbeActors,
   parseProbeRows,
@@ -39,6 +40,26 @@ describe('PROBE_QUERY', () => {
     expect(PROBE_QUERY).toContain('strcontains(message, "\u2192 404:")');
     expect(PROBE_QUERY).toContain('strcontains(message, "[cast-id-remap]")');
     expect(PROBE_QUERY).toContain('by ip, uid');
+  });
+
+  it('counts breadth over the parsed request path, not the normalized path field', () => {
+    expect(PROBE_QUERY).toContain(`parse message /${REQUEST_PATH_PATTERN}/`);
+    expect(PROBE_QUERY).toContain('count_distinct(reqPath) as paths');
+    expect(PROBE_QUERY).not.toMatch(/\((path)\)/);
+  });
+
+  it.each([
+    ['GET /api/admin \u2192 404: Not found', '/api/admin'],
+    ['GET /api/.env \u2192 404: Not found', '/api/.env'],
+    ['GET /api/notebooks?_=1712345678 \u2192 401: Unauthorized', '/api/notebooks'],
+    ['POST /api/files/abc/share?x=1&y=2 \u2192 403: Forbidden', '/api/files/abc/share'],
+  ])('extracts the request path from %s', (message, expected) => {
+    expect(new RegExp(REQUEST_PATH_PATTERN).exec(message)?.groups?.reqPath).toBe(expected);
+  });
+
+  it('extracts nothing from lines that are not error handler status lines', () => {
+    expect(new RegExp(REQUEST_PATH_PATTERN).exec('Stripe webhook signature verification failed')).toBeNull();
+    expect(new RegExp(REQUEST_PATH_PATTERN).exec('[cast-id-remap] GET /api/x')).toBeNull();
   });
 
   it('never aliases an aggregate to the field it sums, which Logs Insights returns empty', () => {
