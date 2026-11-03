@@ -581,6 +581,8 @@ interface ResumedReply {
   artifacts: ChatArtifact[];
   usage?: ChatUsage;
   contextSnapshot?: ContextSnapshot;
+  /** The model the reply started on, which a resumed run keeps stamping it with. */
+  model?: string;
 }
 
 /** One round as it is produced, before its artifact markup is parsed out of the text. */
@@ -2182,9 +2184,16 @@ export class ChatService {
       // A message stored before rounds were recorded resumes as one round holding everything it
       // said and everything it ran, which is the most the flat shape supports: the turn carries
       // on correctly, and only the ordering of what came BEFORE stays unrecoverable.
-      rounds: last.rounds ?? [{ text: last.content, toolCallIds: (last.toolCalls ?? []).map(call => call.id) }],
+      rounds: last.rounds ?? [
+        {
+          text: last.content,
+          toolCallIds: (last.toolCalls ?? []).map(call => call.id),
+          ...(last.model ? { model: last.model } : {}),
+        },
+      ],
       toolCalls: last.toolCalls ?? [],
       artifacts: last.artifacts ?? [],
+      ...(last.model ? { model: last.model } : {}),
       ...(last.usage ? { usage: last.usage } : {}),
       ...(last.contextSnapshot ? { contextSnapshot: last.contextSnapshot } : {}),
     });
@@ -2970,7 +2979,7 @@ export class ChatService {
           role: 'assistant',
           content: finalContent,
           createdAt: new Date().toISOString(),
-          model: session.model,
+          model: resume ? resume.model : session.model,
           stopReason,
           ...(toolCalls.length > 0 ? { toolCalls } : {}),
           ...(keepRounds ? { rounds } : {}),
@@ -3453,9 +3462,10 @@ export class ChatService {
         role: 'assistant',
         content,
         createdAt: new Date().toISOString(),
-        model: session.model,
+        model: resume ? resume.model : session.model,
         error: message,
         ...stop,
+        ...(resume ? { rounds: resume.rounds } : {}),
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
         ...(usage ? { usage } : {}),
         ...(contextSnapshot ? { contextSnapshot } : {}),

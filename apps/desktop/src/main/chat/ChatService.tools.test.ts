@@ -392,6 +392,84 @@ describe('ChatService tool loop', () => {
     ]);
   });
 
+  describe('a continued reply keeps the model it started on', () => {
+    async function stopThenSwitch(firstRound: () => void): Promise<string> {
+      service = build({ rounds: 1 });
+      const { id } = await service.createSession();
+      await service.send(id, 'build it');
+      await firstRequest();
+      firstRound();
+      await driveRounds(1, () => '{"pattern":"*"}');
+      expect(await waitFor(events, 'done')).toMatchObject({ stopReason: 'tool_turn_limit' });
+
+      await service.setSessionModel(id, ChatModels.CLAUDE_5_SONNET);
+      events.length = 0;
+      expect(await service.continueReply(id)).toMatchObject({ ok: true });
+      await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+      return id;
+    }
+
+    const reply = async (id: string) =>
+      (await service.getSession(id))?.messages.find(message => message.role === 'assistant');
+
+    it('after a budget stop, a switch and Continue', async () => {
+      const id = await stopThenSwitch(() => streams[0].write(frame({ type: 'content', text: 'Reading the config.' })));
+      streams[1].write(frame({ type: 'content', text: 'Done.' }));
+      streams[1].write(frame('[DONE]'));
+      await waitFor(events, 'done');
+
+      const finished = await reply(id);
+      expect(finished?.model).toBe('test-model');
+      expect(finished?.rounds?.map(round => round.model)).toEqual(['test-model', ChatModels.CLAUDE_5_SONNET]);
+    });
+
+    it('after a stop before the first token', async () => {
+      const id = await stopThenSwitch(() => undefined);
+      streams[1].write(frame({ type: 'content', text: 'Done.' }));
+      streams[1].write(frame('[DONE]'));
+      await waitFor(events, 'done');
+
+      const finished = await reply(id);
+      expect(finished?.model).toBe('test-model');
+      expect(finished?.rounds?.map(round => [round.text, round.model])).toEqual([
+        ['', 'test-model'],
+        ['Done.', ChatModels.CLAUDE_5_SONNET],
+      ]);
+    });
+
+    it('when the stored message has no rounds, stamping the one it resumes as', async () => {
+      service = build({ rounds: 1 });
+      const { id } = await service.createSession();
+      await service.send(id, 'build it');
+      await firstRequest();
+      streams[0].write(frame({ type: 'content', text: 'Reading the config.' }));
+      await driveRounds(1, () => '{"pattern":"*"}');
+      await waitFor(events, 'done');
+      const stopped = await reply(id);
+      await store.updateMessage(id, stopped?.id ?? '', { rounds: undefined });
+
+      await service.setSessionModel(id, ChatModels.CLAUDE_5_SONNET);
+      events.length = 0;
+      expect(await service.continueReply(id)).toMatchObject({ ok: true });
+      await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+      streams[1].write(frame({ type: 'content', text: 'Done.' }));
+      streams[1].write(frame('[DONE]'));
+      await waitFor(events, 'done');
+
+      expect((await reply(id))?.rounds?.map(round => round.model)).toEqual(['test-model', ChatModels.CLAUDE_5_SONNET]);
+    });
+
+    it('when the continued run fails', async () => {
+      const id = await stopThenSwitch(() => streams[0].write(frame({ type: 'content', text: 'Reading the config.' })));
+      streams[1].destroy(new Error('the server fell over'));
+      await waitFor(events, 'error');
+
+      const failed = await reply(id);
+      expect(failed).toMatchObject({ model: 'test-model', error: 'the server fell over' });
+      expect(failed?.rounds?.map(round => [round.text, round.model])).toEqual([['Reading the config.', 'test-model']]);
+    });
+  });
+
   it('records each round with the calls it made, so a reply can be drawn in order', async () => {
     const { id } = await service.createSession();
     await service.send(id, 'go');
