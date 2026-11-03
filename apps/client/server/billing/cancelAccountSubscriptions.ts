@@ -8,12 +8,13 @@ import { TERMINAL_SUBSCRIPTION_STATUSES } from '@bike4mind/server-utils/lib/subs
  * Why an account's subscriptions are being ended. Stamped into Stripe's cancellation comment so
  * the dashboard says who cancelled and why.
  */
-export type AccountSubscriptionCancelReason = 'suspended' | 'contained' | 'account_deleted';
+export type AccountSubscriptionCancelReason = 'suspended' | 'contained' | 'account_deleted' | 'deletion_requested';
 
 const CANCELLATION_COMMENT: Record<AccountSubscriptionCancelReason, string> = {
   suspended: 'Canceled automatically: account suspended by an admin',
   contained: 'Canceled automatically: account contained by an admin bulk action',
   account_deleted: 'Canceled automatically: account deleted',
+  deletion_requested: 'Canceled automatically: the user requested account deletion',
 };
 
 export type SubscriptionCancelFailure = { customerId: string; subscriptionId: string | null; reason: string };
@@ -30,6 +31,7 @@ const AUDIT_CONTEXT: Record<AccountSubscriptionCancelReason, string> = {
   suspended: 'on suspending the account',
   contained: 'on containing the account',
   account_deleted: 'before deleting the account',
+  deletion_requested: 'on the user requesting account deletion',
 };
 
 /**

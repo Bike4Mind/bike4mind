@@ -1,4 +1,4 @@
-import type { ISignupRiskScore, UserModerationStatus } from '@bike4mind/common';
+import type { ISignupRiskScore, IUserDeletion, UserModerationStatus } from '@bike4mind/common';
 
 /** The conditions that make an account unusable. The order below is precedence. */
 export type AccountBlockReason = 'banned' | 'disputePending' | 'suspended';
@@ -71,7 +71,11 @@ export function accountBlockedMessage(user: AccountStateFields): string | null {
 export type AiAccessStateFields = AccountStateFields & {
   isModerated?: boolean | null;
   riskScore?: Pick<ISignupRiskScore, 'reviewState'> | null;
+  deletion?: Pick<IUserDeletion, 'scheduledFor'> | null;
 };
+
+export const AI_ACCESS_DELETION_PENDING_MESSAGE =
+  'AI features are unavailable while your account is scheduled for deletion. Cancel the deletion to use them again.';
 
 /**
  * The AI and credit-spend gate, behind createModelAdmission, assertAiAccessAllowed, reserveRequestCredits and
@@ -82,6 +86,8 @@ export type AiAccessStateFields = AccountStateFields & {
 export function aiAccessDeniedMessage(user: AiAccessStateFields): string | null {
   const blocked = accountBlockedMessage(user);
   if (blocked) return blocked;
+  // A queued job or agent run outlives the request that froze the account, so it is refused here too.
+  if (user.deletion?.scheduledFor) return AI_ACCESS_DELETION_PENDING_MESSAGE;
   if (isAiAccessRevoked(user)) return AI_ACCESS_REVOKED_MESSAGE;
   if (user.riskScore?.reviewState === 'pending') return AI_ACCESS_PENDING_REVIEW_MESSAGE;
   return null;

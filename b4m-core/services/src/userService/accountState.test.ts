@@ -6,6 +6,7 @@ import {
   accountBlockReasons,
   accountBlockedMessage,
   aiAccessDeniedMessage,
+  AI_ACCESS_DELETION_PENDING_MESSAGE,
   AI_ACCESS_PENDING_REVIEW_MESSAGE,
   AI_ACCESS_REVOKED_MESSAGE,
   entersBlockedState,
@@ -144,5 +145,12 @@ describe('aiAccessDeniedMessage', () => {
 
   it('allows a clean account', () => {
     expect(aiAccessDeniedMessage({ isBanned: false, disputePending: false, isModerated: false })).toBeNull();
+  });
+
+  it('denies AI access while the account is scheduled for deletion, behind a block reason', () => {
+    const deletion = { scheduledFor: new Date('2026-11-17T00:00:00.000Z') };
+    expect(aiAccessDeniedMessage({ deletion })).toBe(AI_ACCESS_DELETION_PENDING_MESSAGE);
+    expect(aiAccessDeniedMessage({ deletion, isBanned: true })).toBe(ACCOUNT_BANNED_MESSAGE);
+    expect(aiAccessDeniedMessage({ deletion: null })).toBeNull();
   });
 });

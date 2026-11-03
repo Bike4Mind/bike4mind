@@ -1,5 +1,6 @@
 import {
   THROTTLE_SOURCES,
+  ACCOUNT_DELETION_SOURCES,
   THROTTLE_TIERS,
   USER_RISK_SIGNAL_TYPES,
   VERIFIED_SLACK_IDENTITY_FILTER,
@@ -285,6 +286,15 @@ const UserThrottleSchema = new Schema(
     source: { type: String, enum: [...THROTTLE_SOURCES], required: true },
     changedAt: { type: Date, required: true },
     changedBy: { type: String, required: false },
+  },
+  { _id: false }
+);
+
+const UserDeletionSchema = new Schema(
+  {
+    requestedAt: { type: Date, required: true },
+    scheduledFor: { type: Date, required: true },
+    source: { type: String, enum: [...ACCOUNT_DELETION_SOURCES], required: true },
   },
   { _id: false }
 );
@@ -1284,6 +1294,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     throttle: { type: UserThrottleSchema, required: false, default: undefined },
     riskSignals: { type: [UserRiskSignalSchema], required: false, default: undefined },
     disputePending: { type: Boolean, required: false, default: false },
+    deletion: { type: UserDeletionSchema, required: false, default: undefined },
     // No pre-save hook required; enforcement is via requireNonSystemUser() helper, not document-level.
     // Queries for human users MUST use { isSystem: { $ne: true } } - default: false does NOT backfill existing docs.
     isSystem: { type: Boolean, default: false },
@@ -1679,6 +1690,11 @@ UserSchema.index(
     partialFilterExpression: { 'signupGrant.heldUnlock.releaseAt': { $type: 'date' } },
     name: 'user_signupGrant_heldUnlock_releaseAt',
   }
+);
+// Serves the account deletion purge job's scan for grace periods that have ended.
+UserSchema.index(
+  { 'deletion.scheduledFor': 1 },
+  { partialFilterExpression: { 'deletion.scheduledFor': { $type: 'date' } }, name: 'user_deletion_scheduledFor' }
 );
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
 

@@ -119,3 +119,17 @@ describe('adminService.loginAs — MFA secret loading', () => {
     expect(mocks.atomicRecordMfaFailedAttempt).not.toHaveBeenCalled();
   });
 });
+
+describe('adminService.loginAs - deletion-pending target', () => {
+  it('refuses an account in its deletion grace period without notifying it', async () => {
+    vi.clearAllMocks();
+    mockVerifyMFA.mockResolvedValue({ verified: true });
+    const { adapters, mocks } = makeAdapters(freshAdminWithSecret());
+    mocks.findById.mockResolvedValue({ ...targetUser, deletion: { scheduledFor: new Date() } } as never);
+
+    await expect(
+      loginAs(adminJwt, { targetUserId: 'target1', mfaToken: 'anytoken' }, adapters as never)
+    ).rejects.toThrow('scheduled for deletion');
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+});

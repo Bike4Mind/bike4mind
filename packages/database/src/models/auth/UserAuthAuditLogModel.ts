@@ -25,6 +25,9 @@ import BaseRepository from '@bike4mind/db-core';
  * (apps/client/pages/api/email/change.ts, verify-change.ts, cancel-change.ts). The metadata keeps
  * the old and new address: an account-takeover investigation needs to know where the sign-in
  * identity moved to.
+ *
+ * `account_deletion_requested` / `account_deletion_cancelled` record a user scheduling or cancelling
+ * the deletion of their own account (apps/client/pages/api/account/deletion.ts).
  */
 export type UserAuthAuditEvent =
   | 'login_success'
@@ -51,7 +54,9 @@ export type UserAuthAuditEvent =
   | 'email_change_requested'
   | 'email_change_confirmed'
   | 'email_change_failed'
-  | 'email_change_cancelled';
+  | 'email_change_cancelled'
+  | 'account_deletion_requested'
+  | 'account_deletion_cancelled';
 
 export const USER_AUTH_AUDIT_EVENTS: UserAuthAuditEvent[] = [
   'login_success',
@@ -79,6 +84,8 @@ export const USER_AUTH_AUDIT_EVENTS: UserAuthAuditEvent[] = [
   'email_change_confirmed',
   'email_change_failed',
   'email_change_cancelled',
+  'account_deletion_requested',
+  'account_deletion_cancelled',
 ];
 
 export interface IUserAuthAuditLogDocument extends Document {

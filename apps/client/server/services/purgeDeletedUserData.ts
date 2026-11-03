@@ -108,23 +108,25 @@ export async function purgeDeletedUserData(
 }
 
 /**
- * Our copy of the credentials died with the row, but the grants stay live at the provider until
+ * Our copy of the credentials is gone (or about to be), but the grants stay live at the provider until
  * revoked. Same policy as the profile disconnects: revoke, then flag the Drive connections that were
- * syncing on the grant (org ones copy the user's refresh token) so they stop visibly.
+ * syncing on the grant (org ones copy the user's refresh token) so they stop visibly. Best-effort.
+ * `subject` labels the user in the log lines.
  */
-async function revokeIntegrationGrants(
+export async function revokeIntegrationGrants(
   userId: string,
   { googleDrive, atlassianConnect }: UserIntegrationGrants,
-  logger: MinimalLogger
+  logger: MinimalLogger,
+  subject = 'deleted user'
 ): Promise<void> {
-  const context = `deleted user ${userId}`;
+  const context = `${subject} ${userId}`;
 
   try {
     // Both: Atlassian does not document whether revoking the refresh token also kills issued access tokens.
     await revokeAtlassianGrant(atlassianConnect?.refreshToken, context);
     await revokeAtlassianGrant(atlassianConnect?.accessToken, context);
   } catch (err) {
-    logger.error(`Failed to revoke the Atlassian grant for deleted user ${userId}: ${String(err)}`);
+    logger.error(`Failed to revoke the Atlassian grant for ${context}: ${String(err)}`);
   }
 
   if (googleDrive) {
@@ -133,12 +135,10 @@ async function revokeIntegrationGrants(
       await revokeDriveGrant(googleDrive.refreshToken || googleDrive.accessToken, context);
       const affected = await flagConnectionsStoppedByDisconnect(userId, decryptStoredToken(googleDrive.refreshToken));
       logger.info(
-        `Flagged ${affected.affectedOrgConnections} org and ${affected.affectedPersonalConnections} personal Drive connection(s) for deleted user ${userId}`
+        `Flagged ${affected.affectedOrgConnections} org and ${affected.affectedPersonalConnections} personal Drive connection(s) for ${context}`
       );
     } catch (err) {
-      logger.error(
-        `Failed to flag the Drive connections stopped by the revoke for deleted user ${userId}: ${String(err)}`
-      );
+      logger.error(`Failed to flag the Drive connections stopped by the revoke for ${context}: ${String(err)}`);
     }
   }
 }
