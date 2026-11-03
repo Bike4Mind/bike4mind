@@ -112,7 +112,8 @@ export interface DiscoveredPrice extends DiscoveredRates {
 /**
  * How strong the evidence behind a `lifecycle` claim is (sec 5.10). 'typed' is a
  * field a feed publishes as data; 'docs' is a value scraped out of a rendered
- * page. Only 'typed' may hide a model on its own.
+ * page. Only 'typed' may hide a model on its own; a provider's own 'docs' sunset
+ * needs a typed date announcement for the model beside it.
  */
 export type LifecycleEvidence = 'typed' | 'docs';
 

@@ -199,6 +199,57 @@ describe('planLifecycleSignals', () => {
     expect(signals.docs.get('gpt-5')?.corroborated).toBe(true);
   });
 
+  const providerPage: DiscoveredModel = {
+    modelId: 'gpt-5',
+    patch: {
+      lifecycle: {
+        status: 'deprecated',
+        deprecationDate: '2026-08-10',
+        retirementDate: '2026-11-30',
+        replacedBy: 'gpt-6',
+      },
+    },
+    lifecycleEvidence: 'docs',
+  };
+  const typedDate = (modelId = 'gpt-5'): DiscoveredModel => ({
+    modelId,
+    patch: { lifecycle: { deprecationDate: '2026-08-10' } },
+    lifecycleEvidence: 'typed',
+  });
+
+  it('writes a provider page sunset when a typed feed announces a date for the model', () => {
+    const signals = planLifecycleSignals({
+      contributions: [provider('anthropic', [providerPage]), aggregator('litellm', [typedDate()])],
+    });
+
+    const anthropic = signals.contributions.find(contribution => contribution.name === 'anthropic');
+    const litellm = signals.contributions.find(contribution => contribution.name === 'litellm');
+    expect(anthropic?.records[0].patch.lifecycle).toEqual({
+      status: 'deprecated',
+      deprecationDate: '2026-08-10',
+      retirementDate: '2026-11-30',
+    });
+    expect(signals.docs.get('gpt-5')?.corroborated).toBe(true);
+    expect(litellm?.records[0].patch).not.toHaveProperty('lifecycle');
+  });
+
+  it('still withholds a provider page sunset with no typed date anywhere', () => {
+    const signals = planLifecycleSignals({ contributions: [provider('anthropic', [providerPage])] });
+
+    expect(signals.contributions[0].records[0].patch).not.toHaveProperty('lifecycle');
+    expect(signals.docs.get('gpt-5')?.corroborated).toBe(false);
+  });
+
+  it('does not let an aggregator docs page corroborate itself', () => {
+    const signals = planLifecycleSignals({
+      contributions: [aggregator('scraper', [providerPage]), aggregator('litellm', [typedDate()])],
+    });
+
+    const scraper = signals.contributions.find(contribution => contribution.name === 'scraper');
+    expect(scraper?.records[0].patch).not.toHaveProperty('lifecycle');
+    expect(signals.docs.get('gpt-5')?.corroborated).toBe(false);
+  });
+
   it('does not treat a typed active status as corroboration', () => {
     const signals = planLifecycleSignals({
       contributions: [
