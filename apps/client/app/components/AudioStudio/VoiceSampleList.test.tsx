@@ -35,7 +35,7 @@ const renderList = (provider: 'openai' | 'elevenlabs', onChange = vi.fn()) => {
 };
 
 const clickPlay = (voice: string) =>
-  act(async () => fireEvent.click(screen.getByTestId(`voice-sample-play-${voice}-btn`)));
+  act(async () => fireEvent.click(screen.getByTestId(`voice-sample-play-btn-${voice}`)));
 
 beforeEach(() => {
   FakeAudio.instances = [];
@@ -86,9 +86,21 @@ describe('VoiceSampleList (OpenAI)', () => {
   it('offers the preferred-voice row without a sample', () => {
     const onChange = renderList('openai');
 
-    expect(screen.queryByTestId('voice-sample-play-default-btn')).toBeNull();
-    fireEvent.click(screen.getByTestId('voice-sample-select-default-btn'));
+    expect(screen.queryByTestId('voice-sample-play-btn-default')).toBeNull();
+    fireEvent.click(screen.getByTestId('voice-sample-select-btn-default'));
     expect(onChange).toHaveBeenCalledWith('');
+  });
+
+  it('is one tab stop and moves the selection with arrow keys', () => {
+    const onChange = renderList('openai');
+    const radios = screen.getAllByRole('radio');
+
+    expect(radios.map(radio => radio.tabIndex)).toEqual([0, ...radios.slice(1).map(() => -1)]);
+    fireEvent.keyDown(radios[0], { key: 'ArrowDown' });
+    expect(onChange).toHaveBeenLastCalledWith('alloy');
+    expect(document.activeElement).toBe(radios[1]);
+    fireEvent.keyDown(radios[0], { key: 'ArrowUp' });
+    expect(document.activeElement).toBe(radios[radios.length - 1]);
   });
 });
 
@@ -105,12 +117,12 @@ describe('VoiceSampleList (ElevenLabs)', () => {
     const onChange = renderList('elevenlabs');
 
     expect(screen.getByText('female, american')).toBeTruthy();
-    expect(screen.queryByTestId('voice-sample-play-v2-btn')).toBeNull();
+    expect(screen.queryByTestId('voice-sample-play-btn-v2')).toBeNull();
 
     await clickPlay('v1');
     expect(FakeAudio.instances[0].src).toBe('https://x/v1.mp3');
 
-    fireEvent.click(screen.getByTestId('voice-sample-select-v1-btn'));
+    fireEvent.click(screen.getByTestId('voice-sample-select-btn-v1'));
     expect(onChange).toHaveBeenCalledWith('v1');
   });
 

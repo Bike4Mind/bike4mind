@@ -1,3 +1,4 @@
+import { useRef, type KeyboardEvent } from 'react';
 import { CircularProgress, IconButton, List, ListItem, ListItemButton, ListItemContent, Typography } from '@mui/joy';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
@@ -23,6 +24,19 @@ type VoiceSampleListProps = {
 
 const VoiceRows = ({ rows, value, onChange }: { rows: VoiceRow[]; value: string; onChange: (v: string) => void }) => {
   const player = useVoiceSamplePlayer();
+  const radioRefs = useRef<(HTMLElement | null)[]>([]);
+  const selectedIndex = rows.findIndex(row => row.value === value);
+  // Roving tabindex: the group is one tab stop, on the checked radio (or the first when none is).
+  const tabStop = selectedIndex === -1 ? 0 : selectedIndex;
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLElement>, index: number) => {
+    const step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[event.key];
+    if (!step) return;
+    event.preventDefault();
+    const next = (index + step + rows.length) % rows.length;
+    onChange(rows[next].value);
+    radioRefs.current[next]?.focus();
+  };
 
   return (
     <List
@@ -32,7 +46,7 @@ const VoiceRows = ({ rows, value, onChange }: { rows: VoiceRow[]; value: string;
       sx={{ '--List-gap': '2px', maxHeight: 280, overflowY: 'auto', borderRadius: 'sm' }}
       data-testid="voice-sample-list"
     >
-      {rows.map(row => {
+      {rows.map((row, index) => {
         const isActive = player.activeId === row.value;
         const testId = row.value || 'default';
         return (
@@ -46,7 +60,7 @@ const VoiceRows = ({ rows, value, onChange }: { rows: VoiceRow[]; value: string;
                   color="neutral"
                   aria-label={isActive ? `Stop ${row.label} sample` : `Play ${row.label} sample`}
                   onClick={() => row.sample && void player.toggle(row.value, row.sample)}
-                  data-testid={`voice-sample-play-${testId}-btn`}
+                  data-testid={`voice-sample-play-btn-${testId}`}
                 >
                   {isActive ? <StopIcon fontSize="small" /> : <PlayArrowIcon fontSize="small" />}
                 </IconButton>
@@ -57,8 +71,13 @@ const VoiceRows = ({ rows, value, onChange }: { rows: VoiceRow[]; value: string;
               role="radio"
               aria-checked={value === row.value}
               selected={value === row.value}
+              tabIndex={index === tabStop ? 0 : -1}
+              ref={(el: HTMLElement | null) => {
+                radioRefs.current[index] = el;
+              }}
               onClick={() => onChange(row.value)}
-              data-testid={`voice-sample-select-${testId}-btn`}
+              onKeyDown={event => handleKeyDown(event, index)}
+              data-testid={`voice-sample-select-btn-${testId}`}
             >
               <ListItemContent>
                 <Typography level="title-sm">{row.label}</Typography>

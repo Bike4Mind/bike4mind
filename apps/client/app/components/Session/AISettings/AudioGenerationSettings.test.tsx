@@ -64,8 +64,8 @@ describe('AudioGenerationSettings voice picker', () => {
     renderSettings('tts');
 
     expect(screen.queryByTestId('audio-gen-voice-select')).toBeNull();
-    expect(screen.getByTestId('voice-sample-play-alloy-btn')).toBeTruthy();
-    fireEvent.click(screen.getByTestId('voice-sample-select-cedar-btn'));
+    expect(screen.getByTestId('voice-sample-play-btn-alloy')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('voice-sample-select-btn-cedar'));
     expect(useAudioGenSettings.getState().voice).toBe('cedar');
   });
 
