@@ -241,7 +241,18 @@ export function useSessions(): SessionsController {
  * window happened to witness would draw it as idle.
  */
 export function useSessionStatuses(): ReadonlyMap<string, ChatSessionStatus> {
-  const [statuses, setStatuses] = useState<ReadonlyMap<string, ChatSessionStatus>>(() => new Map());
+  return useSessionStatusFeed().statuses;
+}
+
+export interface SessionStatusFeed {
+  statuses: ReadonlyMap<string, ChatSessionStatus>;
+  /** True once the first snapshot has been folded in, so `statuses` is a baseline rather than a gap. */
+  loaded: boolean;
+}
+
+/** `useSessionStatuses` plus whether the initial snapshot has arrived; see that hook for the model. */
+export function useSessionStatusFeed(): SessionStatusFeed {
+  const [feed, setFeed] = useState<SessionStatusFeed>(() => ({ statuses: new Map(), loaded: false }));
 
   useEffect(() => {
     let live = true;
@@ -252,17 +263,18 @@ export function useSessionStatuses(): ReadonlyMap<string, ChatSessionStatus> {
 
     const unsubscribe = window.b4m.chat.onSessionStatus(event => {
       pushed.add(event.sessionId);
-      setStatuses(current => applyStatusEvents(current, [event]));
+      setFeed(current => ({ ...current, statuses: applyStatusEvents(current.statuses, [event]) }));
     });
 
     void window.b4m.chat.getSessionStatuses().then(snapshot => {
       if (!live) return;
-      setStatuses(current =>
-        applyStatusEvents(
-          current,
+      setFeed(current => ({
+        loaded: true,
+        statuses: applyStatusEvents(
+          current.statuses,
           snapshot.filter(entry => !pushed.has(entry.sessionId))
-        )
-      );
+        ),
+      }));
     });
 
     return () => {
@@ -271,7 +283,7 @@ export function useSessionStatuses(): ReadonlyMap<string, ChatSessionStatus> {
     };
   }, []);
 
-  return statuses;
+  return feed;
 }
 
 export interface ModelCatalogController {

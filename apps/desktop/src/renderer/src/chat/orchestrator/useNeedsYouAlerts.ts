@@ -4,19 +4,21 @@ import type { ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import { playChime } from './chime';
 import { enteredNeedsYou, needsYouBody, needsYouCount, needsYouTitle, rootSessionOf } from './needsYou';
 
-const NO_STATUSES: ReadonlyMap<string, ChatSessionStatus> = new Map();
-
 /**
  * Tells the user when any session (an agent or a parent) starts needing them: a chime if the sound
  * setting is on, an OS notice while the window is not focused, and the dock badge kept at the number
  * of sessions waiting. One notice per needs-action entry. A clicked notice comes back on `onOpen`.
+ *
+ * `loaded` is whether the first status snapshot has arrived. That snapshot is the baseline:
+ * sessions already waiting when the window opened are not announced, only later entries are.
  */
 export function useNeedsYouAlerts(
   sessions: readonly ChatSessionSummary[],
   statuses: ReadonlyMap<string, ChatSessionStatus>,
+  loaded: boolean,
   onOpen: (event: AttentionOpenEvent) => void
 ): void {
-  const previous = useRef(NO_STATUSES);
+  const previous = useRef<ReadonlyMap<string, ChatSessionStatus> | null>(null);
   // Refs, so a session-list change between status pushes never re-announces anything.
   const latestSessions = useRef(sessions);
   latestSessions.current = sessions;
@@ -24,7 +26,8 @@ export function useNeedsYouAlerts(
   latestOnOpen.current = onOpen;
 
   useEffect(() => {
-    const entered = enteredNeedsYou(previous.current, statuses);
+    if (!loaded) return;
+    const entered = previous.current ? enteredNeedsYou(previous.current, statuses) : [];
     previous.current = statuses;
     if (entered.length === 0) return;
     playChime();
@@ -34,7 +37,7 @@ export function useNeedsYouAlerts(
         console.warn(`Could not show the needs-you notice: ${String(error)}`)
       );
     }
-  }, [statuses]);
+  }, [statuses, loaded]);
 
   const count = needsYouCount(statuses, sessions);
   useEffect(() => {

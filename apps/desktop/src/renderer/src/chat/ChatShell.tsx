@@ -82,7 +82,7 @@ import { toAttachmentInputs, useAttachmentDraft } from './useAttachments';
 import { useBackgroundProcesses } from './useBackgroundProcesses';
 import { useVideoJobs, VideoJobsContext } from './useVideoJobs';
 import { WebLinkContext } from './WebResults';
-import { useConversation, useModelCatalog, useSessionStatuses, useSessions, type SessionPlacement } from './useChat';
+import { useConversation, useModelCatalog, useSessionStatusFeed, useSessions, type SessionPlacement } from './useChat';
 import { useSidebarSections } from './useSidebarSections';
 import { usePromptSuggestion } from './usePromptSuggestion';
 import { useFileDrop } from './useFileDrop';
@@ -288,7 +288,7 @@ export function ChatShell({
   const localMode = isLocalMode(auth);
   const catalog = useModelCatalog(localMode);
   const noLocal = localMode ? noLocalModels(catalog) : null;
-  const statuses = useSessionStatuses();
+  const { statuses, loaded: statusesLoaded } = useSessionStatusFeed();
   const prSummaries = usePrSummaries();
   const [collapsed, setCollapsed] = useState(false);
   const [screen, setScreen] = useState<ChatScreen>('conversation');
@@ -580,7 +580,7 @@ export function ChatShell({
     if (sessionId === rootId) setDockOpen(true);
     else setNoticeFocus({ rootId, agentId: sessionId });
   };
-  useNeedsYouAlerts(sessions, statuses, openNotice);
+  useNeedsYouAlerts(sessions, statuses, statusesLoaded, openNotice);
   const clearNoticeFocus = useCallback(() => setNoticeFocus(null), []);
   const pickExampleQuest = useCallback(
     (prompt: string) => {

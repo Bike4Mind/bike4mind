@@ -33,12 +33,12 @@ const setBadgeCount = vi.fn(async (_count: number) => undefined);
 const onOpen = vi.fn();
 let focused = false;
 
-const Probe = ({ statuses }: { statuses: ReadonlyMap<string, ChatSessionStatus> }) => {
-  useNeedsYouAlerts(sessions, statuses, onOpen);
+const Probe = ({ statuses, loaded }: { statuses: ReadonlyMap<string, ChatSessionStatus>; loaded: boolean }) => {
+  useNeedsYouAlerts(sessions, statuses, loaded, onOpen);
   return null;
 };
-const render = (entries: Record<string, ChatSessionStatus>) =>
-  act(async () => root.render(<Probe statuses={new Map(Object.entries(entries))} />));
+const render = (entries: Record<string, ChatSessionStatus>, loaded = true) =>
+  act(async () => root.render(<Probe statuses={new Map(Object.entries(entries))} loaded={loaded} />));
 
 beforeEach(() => {
   focused = false;
@@ -96,7 +96,20 @@ describe('useNeedsYouAlerts', () => {
     expect(notify).toHaveBeenCalledTimes(1);
   });
 
+  it('does not announce sessions that were already waiting when the window opened', async () => {
+    await render({}, false);
+    await render({ child: 'needs-action' }, true);
+    expect(chime.playChime).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+    expect(setBadgeCount).toHaveBeenLastCalledWith(1);
+
+    await render({ child: 'processing' });
+    await render({ child: 'needs-action', root: 'needs-action' });
+    expect(notify.mock.calls.map(([notice]) => notice.sessionId)).toEqual(['child', 'root']);
+  });
+
   it('notifies again for a fresh entry after the last was answered', async () => {
+    await render({});
     await render({ child: 'needs-action' });
     await render({ child: 'processing' });
     await render({ child: 'needs-action' });
@@ -104,12 +117,14 @@ describe('useNeedsYouAlerts', () => {
   });
 
   it('names the session itself when the parent is the one waiting', async () => {
+    await render({});
     await render({ root: 'needs-action' });
     expect(notify.mock.calls[0][0]).toMatchObject({ sessionId: 'root', rootId: 'root', title: 'Audit needs you' });
   });
 
   it('stays quiet while the window is focused, but still chimes', async () => {
     focused = true;
+    await render({});
     await render({ child: 'needs-action' });
     expect(notify).not.toHaveBeenCalled();
     expect(chime.playChime).toHaveBeenCalledTimes(1);
