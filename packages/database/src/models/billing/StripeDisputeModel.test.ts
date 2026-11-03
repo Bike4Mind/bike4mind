@@ -47,6 +47,15 @@ describe('StripeDisputeModel', () => {
     expect(closed.closedAt).toBeInstanceOf(Date);
   });
 
+  it('re-files an open user dispute as unmatched, and leaves other records alone', async () => {
+    await stripeDisputeRepository.recordOpened(facts({ subject: 'user', subjectId: 'u1' }));
+    const refiled = await stripeDisputeRepository.markUserGone('dp_test_1');
+    const again = await stripeDisputeRepository.markUserGone('dp_test_1');
+
+    expect(refiled).toMatchObject({ subject: 'unmatched', subjectId: null, state: 'open' });
+    expect(again).toBeNull();
+  });
+
   it('resolves by the system once, attaching the Contain', async () => {
     await stripeDisputeRepository.recordOpened(facts({ subject: 'user', subjectId: 'u1' }));
     const contain = {

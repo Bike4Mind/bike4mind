@@ -672,6 +672,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
       if (!user) {
         // An organization's or an unmatched payment: no account to contain, so it waits for an admin.
+        if (record.subject === 'user') await stripeDisputeRepository.markUserGone(dispute.id);
         if (record.state === 'open') {
           await postMessageToSlack(
             `\u26A0\uFE0F *Stripe Dispute Lost* \u2014 dispute ${dispute.id}\n${orgId ? `*Organization:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.Organization, ownerId: orgId })}` : '*No user or organization found*'}\n${amountLine}\nResolve it in Admin > Disputes.`

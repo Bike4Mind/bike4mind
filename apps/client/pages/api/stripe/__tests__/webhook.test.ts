@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
   findOrgByStripeCustomerId: vi.fn(),
   recordDisputeOpened: vi.fn(),
   recordDisputeClosed: vi.fn(),
+  markDisputeUserGone: vi.fn(),
   resolveLostUserDispute: vi.fn(),
   resolveWonDispute: vi.fn(),
 }));
@@ -56,7 +57,11 @@ vi.mock('@bike4mind/database', () => ({
   },
   organizationRepository: { findByStripeCustomerId: mocks.findOrgByStripeCustomerId },
   realtimeConnectionRepository: {},
-  stripeDisputeRepository: { recordOpened: mocks.recordDisputeOpened, recordClosed: mocks.recordDisputeClosed },
+  stripeDisputeRepository: {
+    recordOpened: mocks.recordDisputeOpened,
+    recordClosed: mocks.recordDisputeClosed,
+    markUserGone: mocks.markDisputeUserGone,
+  },
   userRepository: {
     findById: mocks.findUserById,
     findByStripeCustomerId: mocks.findUserByStripeCustomerId,
@@ -847,6 +852,15 @@ describe('charge.dispute.closed', () => {
     );
     expect(mocks.resolveLostUserDispute).not.toHaveBeenCalled();
     expect(mocks.postMessageToSlack).toHaveBeenCalledWith(expect.stringContaining('Resolve it in Admin > Disputes.'));
+  });
+
+  it('re-files a lost dispute whose user is gone as unmatched so an admin can resolve it', async () => {
+    mocks.recordDisputeClosed.mockResolvedValue({ stripeDisputeId: 'dp_1', subject: 'user', state: 'open' });
+
+    await deliver(closed('lost'));
+
+    expect(mocks.markDisputeUserGone).toHaveBeenCalledExactlyOnceWith('dp_1');
+    expect(mocks.resolveLostUserDispute).not.toHaveBeenCalled();
   });
 
   it('records a lost dispute with no matching account as unmatched', async () => {

@@ -172,6 +172,19 @@ class StripeDisputeRepository {
     return toItem(doc as LeanStripeDispute);
   }
 
+  /**
+   * Re-files an open user dispute whose user no longer exists as unmatched, so an admin can resolve it:
+   * the system has no account left to contain. No-op for any other record.
+   */
+  async markUserGone(stripeDisputeId: string): Promise<StripeDisputeItem | null> {
+    const doc = await StripeDisputeModel.findOneAndUpdate(
+      { stripeDisputeId, subject: 'user', state: 'open' },
+      { $set: { subject: 'unmatched', subjectId: null } },
+      { new: true }
+    ).lean<LeanStripeDispute>();
+    return doc ? toItem(doc) : null;
+  }
+
   async findById(id: string): Promise<(StripeDisputeItem & { containSnapshot: unknown }) | null> {
     if (!Types.ObjectId.isValid(id)) return null;
     const doc = await StripeDisputeModel.findById(id).lean<LeanStripeDispute>();

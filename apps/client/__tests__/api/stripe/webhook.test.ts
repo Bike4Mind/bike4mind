@@ -58,6 +58,7 @@ vi.mock('@bike4mind/database', () => ({
   stripeDisputeRepository: {
     recordOpened: (...args: unknown[]) => mockRecordDisputeOpened(...args),
     recordClosed: (...args: unknown[]) => mockRecordDisputeClosed(...args),
+    markUserGone: vi.fn(),
   },
 }));
 
