@@ -71,4 +71,9 @@ describe('automaticSummary', () => {
     const automatic = { kind: 'background-exit' as const, processIds: ['a1b2c3d4'], summary: '[a1b2c3d4] exited 0' };
     expect(automaticSummary({ automatic })).toBe('Background command finished: [a1b2c3d4] exited 0');
   });
+
+  it('says the agents finished rather than crediting auto-fix', () => {
+    const automatic = { kind: 'agents-settled' as const, sessionIds: ['s1', 's2'], summary: '2 agents: 2 done' };
+    expect(automaticSummary({ automatic })).toBe('Agents finished: 2 agents: 2 done');
+  });
 });
