@@ -10,10 +10,11 @@ const state = vi.hoisted(() => ({
   isHydrated: true,
   dismissed: false,
   updatePreferences: vi.fn(),
-  navigate: vi.fn(),
+  openInNewTab: vi.fn(),
 }));
 
 vi.mock('@client/app/hooks/useDesktopPromoEnabled', () => ({ useDesktopPromoEnabled: () => state.enabled }));
+vi.mock('@client/app/utils/externalLinks', () => ({ openInNewTab: state.openInNewTab }));
 vi.mock('@client/app/contexts/UserSettingsContext', () => ({
   useUserSettings: () => ({
     settings: { desktopPromoDismissed: state.dismissed },
@@ -21,7 +22,6 @@ vi.mock('@client/app/contexts/UserSettingsContext', () => ({
     updatePreferences: state.updatePreferences,
   }),
 }));
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => state.navigate }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -52,7 +52,7 @@ function setWideScreenWithMouse(matches: boolean) {
 beforeEach(() => {
   Object.assign(state, { enabled: true, isHydrated: true, dismissed: false });
   state.updatePreferences.mockReset();
-  state.navigate.mockReset();
+  state.openInNewTab.mockReset();
   setWideScreenWithMouse(true);
 });
 
@@ -61,17 +61,33 @@ afterEach(() => {
 });
 
 describe('DesktopAppPromoButton', () => {
-  it('opens the desktop download page', () => {
+  it('opens the desktop download page in a new tab when the pill is clicked', () => {
     renderButton();
-    fireEvent.click(screen.getByTestId('desktop-promo-open-btn'));
-    expect(state.navigate).toHaveBeenCalledWith({ to: '/desktop' });
+    fireEvent.click(screen.getByTestId('desktop-promo'));
+    expect(state.openInNewTab).toHaveBeenCalledWith('/desktop');
+  });
+
+  it('opens the desktop download page from the keyboard', () => {
+    renderButton();
+    fireEvent.keyDown(screen.getByTestId('desktop-promo'), { key: 'Enter' });
+    expect(state.openInNewTab).toHaveBeenCalledWith('/desktop');
+  });
+
+  it.each(['Enter', ' '])('leaves a %j keydown on the dismiss button to the button itself', key => {
+    renderButton();
+    const dismiss = screen.getByTestId('desktop-promo-dismiss-btn');
+    dismiss.focus();
+    // fireEvent returns false when a handler called preventDefault, which would swallow the click
+    // the browser synthesises from this key.
+    expect(fireEvent.keyDown(dismiss, { key })).toBe(true);
+    expect(state.openInNewTab).not.toHaveBeenCalled();
   });
 
   it('remembers a dismissal in the user preferences', () => {
     renderButton();
     fireEvent.click(screen.getByTestId('desktop-promo-dismiss-btn'));
     expect(state.updatePreferences).toHaveBeenCalledWith({ desktopPromoDismissed: true });
-    expect(state.navigate).not.toHaveBeenCalled();
+    expect(state.openInNewTab).not.toHaveBeenCalled();
   });
 
   it('stays hidden once the user dismissed it', () => {

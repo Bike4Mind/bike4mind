@@ -1,5 +1,5 @@
 import { findRelativeImports, moduleBaseName, stripTypeOnlyImports } from './importStatements';
-import { extractReactDependencies, type ParsedArtifact } from './artifactParser';
+import { extractReactDependencies, type ParsedArtifact } from '@bike4mind/server-utils/app/utils/artifactParser';
 
 /**
  * How a React artifact renders when its reply splits an app across several artifacts. An entry

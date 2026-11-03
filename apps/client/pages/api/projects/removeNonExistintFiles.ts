@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { PROJECTS_WRITE_SCOPES } from '@server/projects/projectScopes';
 import { fabFileRepository, projectRepository, userRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { respond } from '@server/utils/respond';
 import { ProjectEvents, IProjectDocument, removeNonExistentFilesResponseSchema } from '@bike4mind/common';
 import { z } from 'zod';

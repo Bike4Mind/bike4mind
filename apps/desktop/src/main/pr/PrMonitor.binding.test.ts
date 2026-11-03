@@ -82,6 +82,79 @@ describe('PrMonitor binding', () => {
     expect(await store.get(SESSION)).toMatchObject({ number: 611 });
   });
 
+  it.each(['manual', 'agent'] as const)('does not let a detection replace a PR the %s bind chose', async source => {
+    const { store, monitor } = setup();
+    await store.set(SESSION, { ...REF, source, boundAt: '', lastState: 'OPEN' });
+    monitor.observeToolEnd(SESSION, shellCall('gh pr create', 'https://github.com/example-org/widgets/pull/700'));
+    await monitor.idle();
+    expect(await store.get(SESSION)).toMatchObject({ number: 611, source });
+  });
+
+  it('lets a detection replace a chosen PR once it is merged, or once it is cleared', async () => {
+    const { store, monitor } = setup();
+    await store.set(SESSION, { ...REF, source: 'agent', boundAt: '', lastState: 'MERGED' });
+    monitor.observeToolEnd(SESSION, shellCall('gh pr create', 'https://github.com/example-org/widgets/pull/700'));
+    await monitor.idle();
+    expect(await store.get(SESSION)).toMatchObject({ number: 700, source: 'shell' });
+
+    await store.set(SESSION, { ...REF, source: 'agent', boundAt: '' });
+    await monitor.dismiss(SESSION);
+    monitor.observeToolEnd(SESSION, shellCall('gh pr create', 'https://github.com/example-org/widgets/pull/701'));
+    await monitor.idle();
+    expect(await store.get(SESSION)).toMatchObject({ number: 701, source: 'shell' });
+    monitor.dispose();
+  });
+
+  it('reads a chosen PR saved before this launch, and lets a detection replace it if it merged since', async () => {
+    const { store, fake, monitor } = setup();
+    await store.set(SESSION, { ...REF, source: 'manual', boundAt: '', lastState: 'OPEN' });
+    fake.answer(snapshot({ state: 'MERGED' }));
+    monitor.observeToolEnd(SESSION, shellCall('gh pr create', 'https://github.com/example-org/widgets/pull/700'));
+    await monitor.idle();
+    expect(await store.get(SESSION)).toMatchObject({ number: 700, source: 'shell' });
+    monitor.dispose();
+  });
+
+  it('does not let a chosen PR that was not found hold off a detection', async () => {
+    const { store, fake, monitor } = setup();
+    await store.set(SESSION, { ...REF, source: 'agent', boundAt: '' });
+    fake.answer(new GhError('not-found', '#611 was not found in example-org/widgets'));
+    monitor.observeToolEnd(SESSION, shellCall('gh pr create', 'https://github.com/example-org/widgets/pull/700'));
+    await monitor.idle();
+    expect(await store.get(SESSION)).toMatchObject({ number: 700, source: 'shell' });
+    monitor.dispose();
+  });
+
+  it('keeps a chosen PR when the read fails for another reason', async () => {
+    const { store, fake, monitor } = setup();
+    await store.set(SESSION, { ...REF, source: 'agent', boundAt: '' });
+    fake.answer(new GhError('failed', 'network down'));
+    monitor.observeToolEnd(SESSION, shellCall('gh pr create', 'https://github.com/example-org/widgets/pull/700'));
+    await monitor.idle();
+    expect(await store.get(SESSION)).toMatchObject({ number: 611, source: 'agent' });
+    monitor.dispose();
+  });
+
+  it('lets an explicit bind replace a PR the user chose', async () => {
+    const { store, monitor } = setup();
+    await store.set(SESSION, { ...REF, source: 'manual', boundAt: '', lastState: 'OPEN' });
+    expect(await monitor.bindForAgent(SESSION, '#700')).toMatchObject({ ok: true, pr: { number: 700 } });
+    expect(await store.get(SESSION)).toMatchObject({ number: 700, source: 'agent' });
+    await monitor.idle();
+    monitor.dispose();
+  });
+
+  it('pins a detected PR the agent confirms, keeping its options', async () => {
+    const { store, monitor } = setup();
+    await store.set(SESSION, { ...REF, source: 'shell', boundAt: '', autoFix: true });
+    expect(await monitor.bindForAgent(SESSION, REF.url)).toMatchObject({ ok: true, pr: { number: 611 } });
+    expect(await store.get(SESSION)).toMatchObject({ number: 611, source: 'agent', autoFix: true });
+    await store.update(SESSION, current => ({ ...current, autoFix: false }));
+    monitor.observeToolEnd(SESSION, shellCall('gh pr create', 'https://github.com/example-org/widgets/pull/700'));
+    await monitor.idle();
+    expect(await store.get(SESSION)).toMatchObject({ number: 611 });
+  });
+
   it('keeps a dismissed PR hidden when it is detected again, and a manual bind brings it back', async () => {
     const { store, out, monitor } = setup();
     await store.set(SESSION, { ...REF, source: 'shell', boundAt: '' });

@@ -78,10 +78,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           'Tier 1 secrets (SECRET_ENCRYPTION_KEY, MONGODB_URI, SESSION_SECRET, JWT_SECRET) cannot be configured via this API. They must be set using SST CLI.',
       });
     } catch (error) {
-      Logger.error('Error fetching system secrets status:', error);
       if (error instanceof ForbiddenError) {
+        Logger.warn('Error fetching system secrets status:', error.message);
         return res.status(403).json({ error: error.message });
       }
+      Logger.error('Error fetching system secrets status:', error);
       return res.status(500).json({ error: 'Failed to fetch system secrets' });
     }
   })
@@ -169,10 +170,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           : `Secret ${secretName} created successfully`,
       });
     } catch (error) {
-      Logger.error('Error creating/updating system secret:', error);
       if (error instanceof ForbiddenError) {
+        Logger.warn('Error creating/updating system secret:', error.message);
         return res.status(403).json({ error: error.message });
       }
+      Logger.error('Error creating/updating system secret:', error);
       if (error instanceof BadRequestError) {
         return res.status(400).json({ error: error.message });
       }

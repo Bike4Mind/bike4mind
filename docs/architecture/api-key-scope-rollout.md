@@ -12,7 +12,7 @@ This is the sequence that avoids that, and the mechanism that supports it.
 
 1. **Add the enum value** to `ApiKeyScope`
    (`b4m-core/common/src/types/entities/UserApiKeyTypes.ts`).
-2. **Register it in a mint catalog** (`apps/client/app/constants/apiKeyScopes.ts`).
+2. **Register it in a mint catalog** (`packages/server-utils/src/app/constants/apiKeyScopes.ts`).
    An enum value that is in no catalog is unmintable, so no key can ever hold it and
    every route requiring it is permanently 403. `apiKeyScopes.test.ts` fails the build
    on an unregistered value; the three homes are `USER_API_KEY_SCOPES` (self-service),
@@ -53,7 +53,7 @@ An overlay package can add self-service scopes without touching the enum or the 
 }
 ```
 
-Run `pnpm --filter @bike4mind/client codegen` after changing the declaration. The generator (`apps/client/scripts/generate-premium-glue.mjs`) validates the rows and writes `apps/client/app/premium-generated/premiumApiKeyScopes.generated.ts`, which `constants/apiKeyScopes.ts` merges into the catalog, the route gate's known set and both mint routes. With no overlay the list is empty. The contract type is `PremiumApiKeyScope` in `apps/client/app/premiumContract.ts`.
+Run `pnpm --filter @bike4mind/client codegen` after changing the declaration. The generator (`apps/client/scripts/generate-premium-glue.mjs`) validates the rows and writes `packages/server-utils/src/premium-generated/premiumApiKeyScopes.generated.ts`, which `constants/apiKeyScopes.ts` merges into the catalog, the route gate's known set and both mint routes. With no overlay the list is empty. The contract type is `PremiumApiKeyScope` in `@bike4mind/common` (re-exported from `apps/client/app/premiumContract.ts`).
 
 - `value` is `<resource>:<action>`, lowercase, at most 100 characters, matching `^[a-z0-9][a-z0-9-]*:[a-z0-9-]+$`. Wildcard actions (`<res>:*`) are built-in only.
 - The `admin`, `cc-bridge`, `embed` and `datalake` resources are reserved. A value that collides with a built-in scope is dropped at load time; built-ins always win.
@@ -70,7 +70,7 @@ Three scopes -- `embed:chat`, `cc-bridge:connect` and `overwatch-ingest:write` -
 *confined*: each exists to authorize exactly one flow, so a key carrying any of them is
 rejected on every `baseApi` route that does not explicitly name it, rather than falling
 through the opt-in default above. `CONFINED_SCOPES` / `decideScopeGate`
-(`apps/client/server/middlewares/apiKeyScopeGate.ts`) is where that denial lives.
+(`packages/server-utils/src/middlewares/apiKeyScopeGate.ts`) is where that denial lives.
 
 For a confined scope, step 3 is neither optional nor local. Declaring `requiredScopes`
 on *every* route the credential is expected to reach is mandatory, **including routes
@@ -120,7 +120,7 @@ of each handler -
 (`apps/client/server/dataLakes/dataLakeScopes.ts`) for data lakes,
 `assertFilesReadScope` / `assertFilesWriteScope` (`apps/client/server/files/fileScopes.ts`)
 for the `/api/files` doors. Build a new family's asserts on `assertApiKeyScope`
-(`apps/client/server/middlewares/apiKeyScopeGate.ts`), which already follows the two rules
+(`packages/server-utils/src/middlewares/apiKeyScopeGate.ts`), which already follows the two rules
 an assert in this family has to follow:
 
 - **Let a caller with no `apiKeyInfo` through.** That is a JWT/browser caller, for whom

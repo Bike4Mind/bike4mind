@@ -43,6 +43,7 @@ interface InputPromptProps {
   onImageDetected?: (imageData: Buffer) => Promise<string>; // Returns placeholder
   disabled?: boolean;
   history?: string[];
+  onHistoryEntry?: (entry: string) => void; // Called with each submitted input exactly as typed
   commands?: CommandDefinition[]; // Merged built-in + custom commands
   prefillInput?: string; // Pre-fill input (e.g., from rewind)
   onPrefillConsumed?: () => void; // Called after prefill is applied
@@ -85,6 +86,7 @@ export function InputPrompt({
   onImageDetected,
   disabled = false,
   history = [],
+  onHistoryEntry,
   commands = [],
   prefillInput,
   onPrefillConsumed,
@@ -123,11 +125,12 @@ export function InputPrompt({
     onBashModeChange?.(isBashMode);
   }, [isBashMode, onBashModeChange]);
 
-  // Check if command autocomplete should be shown (input starts with / but is not a file path)
-  // Also hide if there's a space after / (e.g., "/ a" means user is typing freely, not a command)
+  // Show command autocomplete for "/cmd" input, but not for file paths, "/ a" (free typing after a space),
+  // or a recalled history entry (so Up/Down keep walking history).
   const commandQuery = value.startsWith('/') ? value.slice(1) : '';
   const shouldShowCommandAutocomplete =
     value.startsWith('/') &&
+    historyIndex === -1 &&
     !disabled &&
     !fileAutocomplete?.active &&
     !looksLikeFilePath(value) &&
@@ -232,6 +235,7 @@ export function InputPrompt({
         const content = pastedContent ?? value;
         if (!content.trim()) return;
         if (pastedContent) clearPaste();
+        onHistoryEntry?.(content);
         onSubmit(content, { followUp: true });
         setValue('');
         setHistoryIndex(-1);
@@ -306,7 +310,9 @@ export function InputPrompt({
     if (pastedContent) {
       const fullContent = pastedContent;
       clearPaste();
+      onHistoryEntry?.(fullContent);
       onSubmit(fullContent);
+      setHistoryIndex(-1);
       return;
     }
 
@@ -336,6 +342,7 @@ export function InputPrompt({
       // Otherwise, autocomplete AND auto-submit (for commands without args)
       setValue(''); // Clear input
       setHistoryIndex(-1); // Reset history navigation
+      onHistoryEntry?.(commandText);
       onSubmit(commandText); // Submit the autocompleted command immediately
       return;
     }
@@ -344,6 +351,7 @@ export function InputPrompt({
     if (isBashMode && onBashCommand) {
       const command = input.slice(1).trim(); // Remove the leading !
       if (command) {
+        onHistoryEntry?.(input);
         onBashCommand(command);
         setValue('');
         setHistoryIndex(-1);
@@ -353,6 +361,7 @@ export function InputPrompt({
     }
 
     // Otherwise submit normally
+    onHistoryEntry?.(input);
     onSubmit(input);
     setValue('');
     setHistoryIndex(-1); // Reset history navigation

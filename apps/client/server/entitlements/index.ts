@@ -26,7 +26,7 @@ import {
   resolveEntitlements,
   normalizeTag,
   BASE_ENTITLEMENT_KEY,
-} from '@client/lib/entitlements/registry';
+} from '@bike4mind/server-utils/lib/entitlements/registry';
 import type { EntitlementKey } from '@bike4mind/server-utils/lib/entitlements/types';
 import {
   getActiveSubscriptionsForUser,

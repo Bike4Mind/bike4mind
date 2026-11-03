@@ -111,6 +111,8 @@ describe('executeCompletion - default effort', () => {
     await run(model);
     expect(capturedOptions?.reasoningEffort).toBe('medium');
     expect(capturedOptions).not.toHaveProperty('thinking');
+    // A route default must not read as the caller's request (a json_schema would leave the forced tool).
+    expect(capturedOptions).not.toHaveProperty('explicitReasoning');
   });
 
   it('keeps medium alongside tools and streaming', async () => {
@@ -126,6 +128,7 @@ describe('executeCompletion - default effort', () => {
   ])('keeps an explicit high on %s', async (_label, model) => {
     await run(model, { reasoningEffort: 'high' });
     expect(capturedOptions?.reasoningEffort).toBe('high');
+    expect(capturedOptions?.explicitReasoning).toBe(true);
   });
 
   it.each([
@@ -148,12 +151,14 @@ describe('executeCompletion - default effort', () => {
     await run(model, { thinking: { enabled: false } });
     expect(capturedOptions).not.toHaveProperty('reasoningEffort');
     expect(capturedOptions).not.toHaveProperty('thinking');
+    expect(capturedOptions).not.toHaveProperty('explicitReasoning');
   });
 
   it('injects no effort when the caller enabled thinking, leaving the effort to the backend', async () => {
     await run(DIRECT, { thinking: { enabled: true } });
     expect(capturedOptions).not.toHaveProperty('reasoningEffort');
     expect(capturedOptions?.thinking).toEqual({ enabled: true, budget_tokens: 16000 });
+    expect(capturedOptions?.explicitReasoning).toBe(true);
   });
 
   it.each([

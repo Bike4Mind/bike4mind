@@ -3,7 +3,7 @@ import React from 'react';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ModelInfo } from '@bike4mind/common';
-import { BASE_ENTITLEMENT_KEY } from '@client/lib/entitlements/registry';
+import { BASE_ENTITLEMENT_KEY } from '@bike4mind/server-utils/lib/entitlements/registry';
 
 // getDefaultModelConfig is a pure function, but its module pulls in React-Query
 // hooks + app contexts at import time; mock those so the unit stays isolated.

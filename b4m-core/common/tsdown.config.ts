@@ -6,6 +6,7 @@ export default defineConfig({
     'src/atlassian/config.ts',
     'src/jira/api.ts',
     'src/utils/skillMd.ts',
+    'src/modelHub/index.ts',
     'src/types/entities/RapidReplyTypes.ts',
     'src/types/entities/UserTypes.ts',
   ],

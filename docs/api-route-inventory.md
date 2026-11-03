@@ -34,7 +34,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-957 routes: 61 contracted, 9 aliases of another route, 208 with no static caller in `apps/client/app`.
+958 routes: 61 contracted, 9 aliases of another route, 208 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -103,7 +103,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | oauth | 13 | 0 | 1 | 4 | 0 | 8 | 9 |
 | ollama | 1 | 0 | 0 | 1 | 0 | 0 | 1 |
 | organizations | 36 | 0 | 35 | 1 | 0 | 0 | 1 |
-| otc | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
+| otc | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
 | overwatch | 1 | 0 | 1 | 0 | 0 | 0 | 1 |
 | ping | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | projects | 9 | 0 | 9 | 0 | 0 | 0 | 0 |
@@ -311,21 +311,13 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/retrieval-rate` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/RetrievalRateTab.tsx` |
 | `/api/admin/scoped-settings` | GET, PUT, DELETE | jwt+key | `admin:*` | no | - | 1: `hooks/data/settings.ts` |
 | `/api/admin/scoped-settings/effective` | GET | jwt+key | `admin:*` | no | - | 0 |
-| `/api/admin/security-dashboard/ai-assessment` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
 | `/api/admin/security-dashboard/attack-simulation` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
 | `/api/admin/security-dashboard/attack-simulation-ingest` | POST | handler | - | no | - | 0 |
 | `/api/admin/security-dashboard/cloud` | GET, POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
 | `/api/admin/security-dashboard/cloud-prowler` | GET, POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
 | `/api/admin/security-dashboard/cloud-prowler-ingest` | POST | handler | - | no | - | 0 |
-| `/api/admin/security-dashboard/code` | GET, POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
-| `/api/admin/security-dashboard/code-semgrep-ingest` | POST | handler | - | no | - | 0 |
 | `/api/admin/security-dashboard/overview` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
-| `/api/admin/security-dashboard/packages` | GET, POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
-| `/api/admin/security-dashboard/packages-ingest` | POST | handler | - | no | - | 0 |
 | `/api/admin/security-dashboard/run-attack-simulation` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
-| `/api/admin/security-dashboard/secrets` | GET, POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
-| `/api/admin/security-dashboard/secrets-ingest` | POST | handler | - | no | - | 0 |
-| `/api/admin/security-dashboard/waf` | GET, POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
 | `/api/admin/security-dashboard/waf-blocked-requests` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
 | `/api/admin/security-dashboard/waf-logs-insights` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
 | `/api/admin/security-dashboard/waf-traffic` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
@@ -1104,6 +1096,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 | Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- |
+| `/api/otc/form-token` | GET | handler | - | no | - | 1: `hooks/data/auth.ts` |
 | `/api/otc/send` | POST | handler | - | no | - | 1: `hooks/data/auth.ts` |
 | `/api/otc/verify` | POST | handler | - | no | - | 1: `hooks/data/auth.ts` |
 

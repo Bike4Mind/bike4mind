@@ -74,7 +74,7 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
 vi.mock('@server/utils/userRateTier', () => ({
   resolveUserRateLimitPerMin: (...a: unknown[]) => mockResolveUserRateLimitPerMin(...a),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<Record<string, unknown>>();
@@ -145,11 +145,11 @@ vi.mock('@server/utils/chatCompletionDefaults', () => ({
   getSharedTokenizer: () => ({}),
 }));
 
-vi.mock('@server/utils/sessionSystemPromptResolver', () => ({
+vi.mock('@bike4mind/server-utils/utils/sessionSystemPromptResolver', () => ({
   sessionWillInjectAuthoredPrompt: (...a: unknown[]) => mockWillInjectAuthoredPrompt(...a),
 }));
 
-vi.mock('@server/utils/systemPrompts/loader', () => ({
+vi.mock('@bike4mind/server-utils/utils/systemPrompts/loader', () => ({
   loadBaseIdentitySystemPromptMessages: (...a: unknown[]) => mockLoadIdentityPrompts(...a),
 }));
 
@@ -482,6 +482,36 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
       const { req, res } = fire();
       await handler(req, res);
       expect((mockInvoke.mock.calls[0][0] as { adminRoleWithheld?: boolean }).adminRoleWithheld).toBe(withheld);
+    });
+  });
+
+  describe('the visit handed to the queued turn (its first_value names it)', () => {
+    const visitId = 'a'.repeat(32);
+    const invokedVisit = () => (mockInvoke.mock.calls[0][0] as { visitId?: string }).visitId;
+
+    it("hands invoke() a browser caller's visit cookie", async () => {
+      const { req, res } = fire({ apiKey: null, headers: { cookie: `b4m_vid=${visitId}` } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedVisit()).toBe(visitId);
+    });
+
+    it.each([
+      ['no visit cookie', null, undefined],
+      ['a visit cookie this server did not mint', null, 'b4m_vid=not-a-visit'],
+      ['an API key, even with a visit cookie', VALID_KEY, `b4m_vid=${visitId}`],
+    ])('hands it no visit for %s', async (_, apiKey, cookie) => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ apiKey, headers: cookie ? { cookie } : {} });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedVisit()).toBeUndefined();
+    });
+
+    it('ignores a client-supplied visitId in the body', async () => {
+      const { req, res } = fire({ apiKey: null, body: { visitId } });
+      await handler(req, res);
+      expect(invokedVisit()).toBeUndefined();
     });
   });
 

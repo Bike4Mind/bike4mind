@@ -411,6 +411,11 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       name: 'Skills',
       description: "Your organization's approved Skill Market listings, served as a Claude Code plugin marketplace.",
     },
+    {
+      name: 'Slack',
+      description:
+        'Post status messages and thread replies to Slack channels through the Bike4Mind bot, without holding a Slack token.',
+    },
   ];
 
   // Attach per-operation vendor extensions + headers by operationId. Restrict to

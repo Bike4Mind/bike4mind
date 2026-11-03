@@ -97,6 +97,34 @@ describe('Users tab params', () => {
   });
 });
 
+describe('Users tab analytics drill-down params', () => {
+  const drillDown = {
+    tab: 'users',
+    page: 1,
+    createdFrom: '2026-10-01T00:00:00.000Z',
+    createdTo: '2026-11-01T00:00:00.000Z',
+    verdict: 'suspected',
+    funnelStep: 'firstAction',
+    activeFrom: '2026-10-03',
+    activeTo: '2026-10-03',
+  };
+
+  it('keeps each key through validateSearch and drops an invalid one', () => {
+    expect(parseAdminSearch(drillDown)).toMatchObject(drillDown);
+    expect(
+      parseAdminSearch({ tab: 'users', verdict: 'maybe', funnelStep: 'bought', activeFrom: '2026-13-01', activeTo: 7 })
+    ).toMatchObject({ verdict: undefined, funnelStep: undefined, activeFrom: undefined, activeTo: undefined });
+  });
+
+  it('keeps them on the users tab and drops them on a switch away', () => {
+    expect(adminSearchForTab(parseAdminSearch(drillDown), 'users')).toMatchObject(drillDown);
+    const switched = adminSearchForTab(parseAdminSearch(drillDown), 'admin-settings');
+    for (const key of ['verdict', 'funnelStep', 'activeFrom', 'activeTo'] as const) {
+      expect(switched[key], key).toBeUndefined();
+    }
+  });
+});
+
 describe('Feedback tab params', () => {
   const feedbackSearch = {
     tab: 'feedback',
@@ -229,5 +257,41 @@ describe('Organizations tab params', () => {
     for (const key of Object.keys(organizationsSearch).filter(key => key !== 'tab')) {
       expect(switched[key as keyof typeof switched], key).toBeUndefined();
     }
+  });
+});
+
+describe('Security tab params', () => {
+  const securitySearch = {
+    tab: 'security-dashboard',
+    securityView: 'scans',
+    securityScan: 'prowler',
+    securityRange: '7d',
+  };
+
+  it('registers the view, scan and range params on the security tab only', () => {
+    expect(ADMIN_TAB_PARAMS['security-dashboard']).toEqual(['securityView', 'securityScan', 'securityRange']);
+    const owners = Object.entries(ADMIN_TAB_PARAMS).filter(([, params]) =>
+      (params as readonly string[]).some(
+        param => param === 'securityView' || param === 'securityScan' || param === 'securityRange'
+      )
+    );
+    expect(owners.map(([slug]) => slug)).toEqual(['security-dashboard']);
+  });
+
+  it('coerces each param in validateSearch and drops invalid ones', () => {
+    expect(parseAdminSearch(securitySearch)).toMatchObject(securitySearch);
+    expect(parseAdminSearch({ securityView: 'overview', securityScan: 'code', securityRange: '30d' })).toMatchObject({
+      securityView: undefined,
+      securityScan: undefined,
+      securityRange: undefined,
+    });
+  });
+
+  it('keeps them on the security tab and drops them on a switch away', () => {
+    expect(adminSearchForTab(securitySearch, 'security-dashboard')).toMatchObject(securitySearch);
+    const switched = adminSearchForTab(securitySearch, 'users');
+    expect(switched.securityView).toBeUndefined();
+    expect(switched.securityScan).toBeUndefined();
+    expect(switched.securityRange).toBeUndefined();
   });
 });

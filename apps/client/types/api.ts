@@ -180,9 +180,14 @@ export const NotebookDownloadRequestSchema = z.object({
   downloadAsZip: z.boolean().prefault(false), // If true, zip all files together
 });
 
-export const MAX_EMAIL_RECIPIENTS = 20;
+export const MAX_EMAIL_RECIPIENTS = 5;
 export const MAX_EMAIL_RECIPIENTS_ERROR = `Maximum ${MAX_EMAIL_RECIPIENTS} recipients per email`;
 export const MAX_EMAIL_MESSAGE_LENGTH = 5000;
+
+// Share-invite request bounds, enforced server side by server/utils/inviteSendLimits.ts.
+export const MAX_INVITE_RECIPIENTS = 25;
+export const MAX_INVITE_RECIPIENTS_ERROR = `Maximum ${MAX_INVITE_RECIPIENTS} recipients per share`;
+export const MAX_INVITE_MESSAGE_LENGTH = 1000;
 
 const BaseEmailRequestSchema = z.object({
   recipients: z

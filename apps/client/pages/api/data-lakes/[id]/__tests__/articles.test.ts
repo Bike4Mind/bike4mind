@@ -230,6 +230,33 @@ describe('GET /api/data-lakes/:id/articles membership arm', () => {
       ['both', 'both'],
     ]);
   });
+
+  it('strips undeclared fields from returned files', async () => {
+    h.search.mockResolvedValue({
+      data: [
+        {
+          id: 'f1',
+          fileName: 'a.md',
+          tags: [{ name: LAKE.datalakeTag }],
+          _id: 'raw-object-id',
+          __v: 7,
+          notInSchema: 'secret',
+        },
+      ],
+      total: 1,
+      hasMore: true,
+    });
+    const { res, json } = makeRes();
+
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res);
+
+    const payload = json.mock.calls[0][0];
+    expect(payload).toMatchObject({ total: 1, hasMore: true });
+    expect(payload.data[0]).toMatchObject({ id: 'f1', fileName: 'a.md', membershipArm: 'meta' });
+    expect(payload.data[0]).not.toHaveProperty('_id');
+    expect(payload.data[0]).not.toHaveProperty('__v');
+    expect(payload.data[0]).not.toHaveProperty('notInSchema');
+  });
 });
 
 describe('GET /api/data-lakes/:id/articles access-event audit', () => {

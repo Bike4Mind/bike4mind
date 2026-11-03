@@ -4,7 +4,7 @@ import { Alert, Box, Button, Chip, Divider, Input, Sheet, Stack, Textarea, Typog
 import type { ColorPaletteProp } from '@mui/joy';
 import { api } from '@client/app/contexts/ApiContext';
 import { useLLM } from '@client/app/contexts/LLMContext';
-import { parseArtifactsWithFallback } from '@client/app/utils/artifactParser';
+import { parseArtifactsWithFallback } from '@bike4mind/server-utils/app/utils/artifactParser';
 import ArtifactRenderer from '@client/app/components/Session/artifacts/ArtifactRenderer';
 import ErrorBoundary from '@client/app/components/common/ErrorBoundary';
 import {

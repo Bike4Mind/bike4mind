@@ -49,7 +49,7 @@ vi.mock('@bike4mind/database', () => ({
   activityRepository: {},
 }));
 vi.mock('@bike4mind/services', () => ({ sessionService: {}, dataLakeService: {}, projectService: {} }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/managers/sessionOrigin', () => ({ resolveSessionOrigin: vi.fn() }));
 vi.mock('@server/entitlements/surfaceAccess', () => ({ surfaceAccessForRequest: vi.fn() }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: vi.fn() }));

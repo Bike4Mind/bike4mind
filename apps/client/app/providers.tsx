@@ -31,6 +31,7 @@ import { QuestPreparationOverlay } from '@client/app/components/QuestPreparation
 import { runLocalStorageCleanup } from '@client/app/utils/localStorageCleanup';
 import { revalidateSessionOnFocus, scheduleSessionRevalidation } from '@client/app/utils/sessionBootstrap';
 import { listenForSiblingRefresh } from '@client/app/utils/refreshCoordinator';
+import { BRANDING_SETTINGS_QUERY_KEY } from '@client/app/hooks/data/queryKeys';
 
 // Lazy load DevTools only when needed (development only)
 const ReactQueryDevtools = lazy(() =>
@@ -41,7 +42,9 @@ const ReactQueryDevtools = lazy(() =>
 
 // Only persist non-user-specific queries that are safe to restore across sessions.
 // Allowlist approach: new queries are excluded by default, preventing stale user data.
-const PERSISTABLE_QUERY_KEYS = new Set(['server-config-public', 'branding-settings', 'admin-settings']);
+// Admin settings are deliberately absent: /api/settings/fetch returns more keys to an admin, so its
+// result is user-specific. Reference key constants, not literals, so a renamed key can't silently drop out.
+const PERSISTABLE_QUERY_KEYS = new Set<string>(['server-config-public', BRANDING_SETTINGS_QUERY_KEY[0]]);
 
 function createIDBPersister(idbValidKey: IDBValidKey = 'reactQuery') {
   return {
@@ -97,9 +100,11 @@ function CoreProviders({ children }: { children: ReactNode }) {
         maxAge: 1000 * 60 * 60 * 4, // 4 hours (default is 24h)
         buster: buildId,
         dehydrateOptions: {
+          // Replaces the default filter, so it must keep its success check: a pending query
+          // dehydrates with its promise, which IndexedDB can't clone (DataCloneError).
           shouldDehydrateQuery: query => {
             const key = query.queryKey[0];
-            return typeof key === 'string' && PERSISTABLE_QUERY_KEYS.has(key);
+            return query.state.status === 'success' && typeof key === 'string' && PERSISTABLE_QUERY_KEYS.has(key);
           },
         },
       }}

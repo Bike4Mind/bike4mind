@@ -14,20 +14,25 @@ import {
   type HubModelView,
   type HubSearchResult,
   type InstalledModelsResult,
+  type MachineView,
   type ModelFit,
   type ModelHubError,
   type ModelPull,
   type ModelPullResult,
   type ModelRuntimeStatus,
+  type ModelStoreLocation,
   type HfTokenStatus,
 } from '@shared/models';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import type { ModelsInUse } from './InstalledTab';
 import { ModelsScreen } from './ModelsScreen';
+import type { ChatWith } from './modelTarget';
 import { DOWN_RECHECK_MS } from './useModelHub';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const GIB = 1024 ** 3;
 
 // jsdom ships no matchMedia, and Joy's colour-scheme provider asks for one on mount.
 window.matchMedia ??= ((query: string) => ({
@@ -64,6 +69,7 @@ function server(id: string, name: string, extra: Partial<ModelServerView> = {}):
     name,
     local: id === 'local',
     kind: 'ollama',
+    transport: 'http',
     address: id === 'local' ? 'http://127.0.0.1:11434' : `http://192.168.1.${id.length}:11434`,
     access: 'manage',
     auth: { type: 'none' },
@@ -72,6 +78,7 @@ function server(id: string, name: string, extra: Partial<ModelServerView> = {}):
     unencrypted: id !== 'local',
     health: { state: 'online', version: '0.40.11', latencyMs: 3, checkedAt: null, error: null },
     models: [],
+    specs: null,
     ...extra,
   };
 }
@@ -199,7 +206,8 @@ function curatedList(): CuratedList {
   return {
     updatedAt: '2026-10-27T00:00:00Z',
     source: { origin: 'bundled', sequence: 1, check: 'off', checkedAt: null, stale: false },
-    machine: { memoryKind: 'cpu', totalMemoryBytes: 62 * 1024 ** 3, gpuMemoryBytes: null, gpuName: null },
+    rating: 'probe',
+    machine: { memoryKind: 'cpu', totalMemoryBytes: 62 * GIB, gpuMemoryBytes: null, gpuName: null, confidence: 'high' },
     picks: [
       { slot: 'best', entryId: 'qwen3-8-27b-gsq', buildId: 'iq3-s', recommended: false },
       { slot: 'fast', entryId: 'gemma-4-e4b', buildId: 'qat-q4-0', recommended: true },
@@ -266,7 +274,7 @@ interface Bridge {
   status: ModelRuntimeStatus;
   installed: InstalledModelsResult;
   /** Per saved server; this computer reads `status` and `installed`. */
-  remote: Record<string, { status: ModelRuntimeStatus; installed: InstalledModelsResult }>;
+  remote: Record<string, { status: ModelRuntimeStatus; installed: InstalledModelsResult; curated?: CuratedList }>;
   servers: ModelServerView[];
   search: HubSearchResult;
   detail: HubDetailResult;
@@ -277,6 +285,7 @@ interface Bridge {
   curatedFailures: number;
   curatedPull: CuratedPullResult;
   token: HfTokenStatus;
+  store: ModelStoreLocation;
 }
 
 let bridge: Bridge;
@@ -302,6 +311,7 @@ const calls = {
   setHfToken: vi.fn(),
   clearHfToken: vi.fn(),
   checkCuratedList: vi.fn(),
+  getStoreLocation: vi.fn(),
 };
 
 beforeEach(() => {
@@ -318,6 +328,7 @@ beforeEach(() => {
     curatedFailures: 0,
     curatedPull: libraryPull(),
     token: { set: false, persisted: true },
+    store: { path: '/home/me/.ollama/models', source: 'runtime', freeBytes: 200 * GIB },
   };
   for (const fn of Object.values(calls)) fn.mockReset();
   window.localStorage.clear();
@@ -370,7 +381,9 @@ beforeEach(() => {
           bridge.curatedFailures -= 1;
           throw new Error('ipc failed');
         }
-        return bridge.curated;
+        // Main rates a saved server only from hardware entered for it.
+        if (!serverId) return bridge.curated;
+        return bridge.remote[serverId]?.curated ?? { ...bridge.curated, rating: null };
       },
       getCuratedPull: async (entryId: string, buildId: string, serverId?: string) => {
         calls.getCuratedPull(entryId, buildId, ...(serverId === undefined ? [] : [serverId]));
@@ -390,6 +403,10 @@ beforeEach(() => {
       resumePull: calls.resumePull,
       dismissPull: calls.dismissPull,
       remove: calls.remove,
+      getStoreLocation: async (serverId?: string) => {
+        calls.getStoreLocation(serverId);
+        return bridge.store;
+      },
       getHfToken: calls.getHfToken,
       setHfToken: calls.setHfToken,
       clearHfToken: calls.clearHfToken,
@@ -413,6 +430,7 @@ beforeEach(() => {
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
+const openModelServers = vi.fn();
 
 afterEach(() => {
   act(() => root?.unmount());
@@ -423,14 +441,26 @@ afterEach(() => {
 
 const flush = () => act(async () => new Promise(resolve => setTimeout(resolve, 0)));
 
-async function mount(inUse?: ModelsInUse, tab: 'curated' | 'installed' = 'installed') {
+async function mount(
+  inUse?: ModelsInUse,
+  tab: 'curated' | 'installed' = 'installed',
+  chatWith?: ChatWith,
+  chatError?: { message: string; onDismiss: () => void }
+) {
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
   act(() =>
     root?.render(
       <CssVarsProvider theme={desktopTheme}>
-        <ModelsScreen onClose={() => {}} inUse={inUse} />
+        <ModelsScreen
+          onClose={() => {}}
+          inUse={inUse}
+          onOpenModelServers={openModelServers}
+          chatWith={chatWith}
+          chatError={chatError?.message}
+          onDismissChatError={chatError?.onDismiss}
+        />
       </CssVarsProvider>
     )
   );
@@ -593,6 +623,39 @@ describe('ModelsScreen curated', () => {
     expect(inside('models-curated-all', 'models-curated-entry')).toHaveLength(3);
   });
 
+  it.each([
+    [
+      'a Mac by its total memory',
+      { memoryKind: 'unified', totalMemoryBytes: 32 * GIB, gpuMemoryBytes: null, gpuName: null, confidence: 'high' },
+      'This computer has 32 GiB of memory, shared with its GPU.',
+    ],
+    [
+      'a Strix Halo by what its GPU can use, not the RAM the OS sees',
+      {
+        memoryKind: 'unified',
+        totalMemoryBytes: 62 * GIB,
+        gpuMemoryBytes: 64 * GIB,
+        gpuName: 'AMD Radeon 8060S Graphics',
+        confidence: 'high',
+      },
+      'This computer has 62 GiB of RAM, and its GPU (AMD Radeon 8060S Graphics) can use 64 GiB of memory.',
+    ],
+    [
+      'a Strix Halo budget that could not be confirmed as a lower bound',
+      { memoryKind: 'unified', totalMemoryBytes: 62 * GIB, gpuMemoryBytes: 31 * GIB, gpuName: null, confidence: 'low' },
+      'This computer has 62 GiB of RAM, and its GPU can use at least 31 GiB of memory. The exact amount could not be confirmed.',
+    ],
+    [
+      'unified memory whose GPU budget could not be measured',
+      { memoryKind: 'unified', totalMemoryBytes: 62 * GIB, gpuMemoryBytes: null, gpuName: null, confidence: 'low' },
+      'This computer has 62 GiB of memory, shared with its GPU. How much of it the GPU can use could not be determined.',
+    ],
+  ] satisfies [string, MachineView, string][])('describes %s', async (_label, machine, text) => {
+    bridge.curated.machine = machine;
+    await mount(undefined, 'curated');
+    expect(q('models-curated-machine')?.textContent).toContain(text);
+  });
+
   it('labels a restricted license', async () => {
     bridge.curated.entries[0] = { ...bridge.curated.entries[0], licenseName: 'other', licenseKind: 'restricted' };
     await mount(undefined, 'curated');
@@ -649,6 +712,38 @@ describe('ModelsScreen curated', () => {
       false,
       false,
     ]);
+  });
+
+  it('offers Use in chat on installed builds that chat lists', async () => {
+    const use = vi.fn();
+    const chatWith = vi.fn<ChatWith>(() => use);
+    bridge.installed = {
+      ok: true,
+      models: [
+        {
+          name: E4B_REF,
+          sizeBytes: 1,
+          quantization: null,
+          family: null,
+          parameterSize: null,
+          modifiedAt: null,
+          capabilities,
+          loaded: false,
+          fit: null,
+        },
+      ],
+    };
+    await mount(undefined, 'curated', chatWith);
+    const rows = inside('models-curated-all', 'models-build-row');
+    expect(rows.map(row => row.querySelector('[data-testid="models-build-use-btn"]') !== null)).toEqual([
+      true,
+      false,
+      false,
+      false,
+    ]);
+    expect(chatWith).toHaveBeenCalledWith('local', E4B_REF);
+    await click(rows[0].querySelector<HTMLElement>('[data-testid="models-build-use-btn"]'));
+    expect(use).toHaveBeenCalledTimes(1);
   });
 
   it('checks a library pick before the dialog, then pulls the reviewed tag', async () => {
@@ -1111,6 +1206,40 @@ describe('ModelsScreen installed', () => {
     expect(calls.remove).toHaveBeenCalledWith('qwen2.5:0.5b', undefined);
   });
 
+  it('offers Use in chat only for the models chat lists', async () => {
+    const entry = (name: string) => ({
+      name,
+      sizeBytes: 1,
+      quantization: null,
+      family: null,
+      parameterSize: null,
+      modifiedAt: null,
+      capabilities,
+      loaded: false,
+      fit: null,
+    });
+    bridge.installed = { ok: true, models: [entry('qwen2.5:0.5b'), entry('nomic-embed-text:latest')] };
+    const use = vi.fn();
+    const chatWith = vi.fn<ChatWith>((_serverId, name) => (name === 'qwen2.5:0.5b' ? use : null));
+    await mount(undefined, 'installed', chatWith);
+    const rows = all('models-installed-row');
+    expect(rows.map(row => row.querySelector('[data-testid="models-installed-use-btn"]') !== null)).toEqual([
+      true,
+      false,
+    ]);
+    await click(rows[0].querySelector<HTMLElement>('[data-testid="models-installed-use-btn"]'));
+    expect(use).toHaveBeenCalledTimes(1);
+    expect(chatWith).toHaveBeenCalledWith('local', 'qwen2.5:0.5b');
+  });
+
+  it('shows why Use in chat did not open a conversation, until dismissed', async () => {
+    const onDismiss = vi.fn();
+    await mount(undefined, 'installed', undefined, { message: 'Desktop could not start a conversation.', onDismiss });
+    expect(q('models-chat-error')?.textContent).toContain('Desktop could not start a conversation.');
+    await click(q('models-chat-error-dismiss-btn'));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
   const onComputer = (name: string) => ({ serverId: 'local', name });
   it.each([
     [{ active: onComputer('qwen2.5:0.5b'), conversations: [onComputer('qwen2.5:0.5b')] }, 'The open conversation'],
@@ -1153,12 +1282,31 @@ describe('ModelsScreen installed', () => {
     await mount();
     expect(q('models-runtime-status')?.dataset.state).toBe('down');
     expect(q('models-installed-runtime-down')?.textContent).toContain('Ollama is not running');
-    expect(q('models-runtime-download-link')?.getAttribute('href')).toBe('https://ollama.com/download');
 
     await openExplore();
     await click(q('models-explore-result-row'));
     expect(q('models-detail-runtime-down')).not.toBeNull();
     expect(q('models-build-pull-btn')?.hasAttribute('disabled')).toBe(true);
+  });
+
+  it('offers Install Ollama and Point at a server with no local runtime, and installs nothing itself', async () => {
+    bridge.status = DOWN;
+    openModelServers.mockReset();
+    await mount(undefined, 'curated');
+    expect(q('models-no-runtime-text')?.textContent).toContain('127.0.0.1:11434');
+    expect(q('models-no-runtime-error')?.textContent).toBe('refused');
+    expect(q('models-curated-runtime-down')).not.toBeNull();
+    expect(calls.pull).not.toHaveBeenCalled();
+    const openExternal = (window as unknown as { b4m: { shell: { openExternal: ReturnType<typeof vi.fn> } } }).b4m.shell
+      .openExternal;
+    expect(openExternal).not.toHaveBeenCalled();
+
+    await click(q('models-install-ollama-btn'));
+    expect(openExternal).toHaveBeenCalledWith('https://ollama.com/download');
+    expect(calls.pull).not.toHaveBeenCalled();
+
+    await click(q('models-point-at-server-btn'));
+    expect(openModelServers).toHaveBeenCalledTimes(1);
   });
 
   it('checks again on its own while Ollama looks down, and lists its models once it answers', async () => {
@@ -1167,6 +1315,7 @@ describe('ModelsScreen installed', () => {
       bridge.status = { ...DOWN, error: 'timed out after 1500ms' };
       await mount();
       expect(q('models-runtime-status')?.dataset.state).toBe('down');
+      expect(q('models-no-runtime-error')?.textContent).toBe('timed out after 1500ms');
 
       bridge.status = RUNNING;
       bridge.installed = {
@@ -1261,6 +1410,34 @@ describe('ModelsScreen explore', () => {
     }
   );
 
+  it('offers Use in chat on an installed build under the name Ollama lists it by', async () => {
+    bridge.installed = {
+      ok: true,
+      models: [
+        {
+          name: `hf.co/${REPO}:Q4_K_M`,
+          sizeBytes: 397_000_000,
+          quantization: 'Q4_K_M',
+          family: 'qwen2',
+          parameterSize: '494M',
+          modifiedAt: null,
+          capabilities,
+          loaded: false,
+          fit: null,
+        },
+      ],
+    };
+    const use = vi.fn();
+    const chatWith = vi.fn<ChatWith>(() => use);
+    await mount(undefined, 'installed', chatWith);
+    await openExplore();
+    await click(q('models-explore-result-row'));
+
+    expect(chatWith).toHaveBeenCalledWith('local', `hf.co/${REPO}:q4_k_m`.toLowerCase());
+    await click(q('models-build-use-btn'));
+    expect(use).toHaveBeenCalledTimes(1);
+  });
+
   it('hides abliterated results until the toggle is on, then labels them', async () => {
     bridge.search = {
       ok: true,
@@ -1323,6 +1500,9 @@ describe('ModelsScreen explore', () => {
 
     await click(button);
     expect(q('models-pull-dialog-size')?.textContent).toContain('491 MB download');
+    expect(q('models-pull-dialog-path')?.dataset.state).toBe('confirmed');
+    expect(q('models-pull-dialog-path')?.textContent).toBe('Saved to /home/me/.ollama/models. 214.7 GB free.');
+    expect(calls.getStoreLocation).toHaveBeenCalledWith(undefined);
     await click(q('models-pull-dialog-cancel-btn'));
     expect(q('models-pull-dialog')).toBeNull();
     expect(calls.pull).not.toHaveBeenCalled();
@@ -1657,6 +1837,16 @@ describe('ModelsScreen servers', () => {
     await click(q(`models-server-option-${id}`));
   }
 
+  it('shows an SSH server by its destination', async () => {
+    const lab = server('lab', 'SSH lab', { transport: 'ssh', address: 'me@gpu', unencrypted: false });
+    bridge.servers = [THIS_COMPUTER, lab];
+    bridge.remote.lab = { status: remoteStatus(lab, { url: 'ssh://me@gpu' }), installed: { ok: true, models: [qwen] } };
+    await mount();
+    await pickServer('lab');
+    expect(q('models-runtime-status')?.textContent).toContain('on SSH lab at me@gpu over SSH');
+    expect(q('models-runtime-status')?.textContent).not.toContain('ssh://');
+  });
+
   it('offers no switcher until a model server is saved', async () => {
     bridge.servers = [THIS_COMPUTER];
     await mount();
@@ -1681,8 +1871,50 @@ describe('ModelsScreen servers', () => {
     await click(q('models-explore-result-row'));
     await click(q('models-build-pull-btn'));
     expect(q('models-pull-dialog-server')?.textContent).toContain('Desktop cannot see how much free space gpu box has');
+    expect(calls.getStoreLocation).toHaveBeenLastCalledWith('gpu');
     await click(q('models-pull-dialog-confirm-btn'));
     expect(calls.pull).toHaveBeenCalledWith(expect.objectContaining({ repo: REPO, serverId: 'gpu' }));
+  });
+
+  it("names a saved server's model folder when its Ollama shows it, and says so plainly when not", async () => {
+    bridge.store = { path: '/var/lib/ollama/models', source: 'runtime', freeBytes: null };
+    await mount();
+    await pickServer('gpu');
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    await click(q('models-build-pull-btn'));
+    expect(q('models-pull-dialog-path')?.textContent).toBe('Saved on gpu box in /var/lib/ollama/models.');
+    await click(q('models-pull-dialog-cancel-btn'));
+
+    bridge.store = { path: null, source: null, freeBytes: null };
+    await click(q('models-build-pull-btn'));
+    expect(q('models-pull-dialog-path')?.textContent).toBe('Saved with the other models on gpu box.');
+    expect(calls.pull).not.toHaveBeenCalled();
+  });
+
+  it("marks Ollama's default folder as a default, and warns when this computer is short of space", async () => {
+    bridge.store = { path: '/home/me/.ollama/models', source: 'default', freeBytes: 100_000_000 };
+    await mount();
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    await click(q('models-build-pull-btn'));
+    const line = q('models-pull-dialog-path');
+    expect(line?.dataset.state).toBe('default');
+    expect(line?.textContent).toBe(
+      "Saved to Ollama's model folder, /home/me/.ollama/models unless Ollama is set to use another one. 100 MB free, which is not enough for this download."
+    );
+  });
+
+  it("says so when this computer's Ollama keeps its models somewhere this disk does not have", async () => {
+    bridge.store = { path: '/root/.ollama/models', source: 'elsewhere', freeBytes: null };
+    await mount();
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    await click(q('models-build-pull-btn'));
+    const line = q('models-pull-dialog-path');
+    expect(line?.dataset.state).toBe('elsewhere');
+    expect(line?.textContent).toContain('/root/.ollama/models as Ollama reports it');
+    expect(line?.textContent).not.toContain('free');
   });
 
   it('shows no pull or remove controls for a Chat only server', async () => {
@@ -1708,7 +1940,8 @@ describe('ModelsScreen servers', () => {
     await pickServer('gpu');
     expect(q('models-runtime-status')?.dataset.state).toBe('down');
     expect(q('models-runtime-status')?.textContent).toContain('Could not reach gpu box: connection refused');
-    expect(q('models-runtime-download-link')).toBeNull();
+    expect(q('models-install-ollama-btn')).toBeNull();
+    expect(q('models-point-at-server-btn')).toBeNull();
     expect(q('models-installed-runtime-down')?.textContent).toContain('gpu box is not reachable');
 
     await pickServer('local');
@@ -1961,7 +2194,46 @@ describe('ModelsScreen servers', () => {
     expect(q('models-curated-picks')?.textContent).toContain('Curated picks');
     expect(q('models-curated-picks')?.textContent).not.toContain('For this computer');
     expect(q('models-curated-machine')?.textContent).not.toContain('This computer');
+    expect(q('models-curated-machine')?.textContent).toContain('Enter its hardware under Settings');
     expect(all('models-fit-badge')).toHaveLength(0);
+  });
+
+  it('rates a saved server from the hardware entered for it', async () => {
+    bridge.remote.gpu.curated = {
+      ...curatedList(),
+      rating: 'entered',
+      machine: {
+        ...curatedList().machine,
+        memoryKind: 'discrete',
+        totalMemoryBytes: 64 * GIB,
+        gpuMemoryBytes: 24 * GIB,
+      },
+    };
+    await mount(undefined, 'curated');
+    await pickServer('gpu');
+    expect(q('models-curated-picks')?.textContent).toContain('For gpu box');
+    expect(q('models-curated-machine')?.textContent).toContain(
+      'gpu box is rated from the hardware entered in Settings: 64 GiB of RAM and 24 GiB of GPU memory.'
+    );
+    expect(all('models-fit-badge').length).toBeGreaterThan(0);
+  });
+
+  it('says when this computer is rated from entered hardware', async () => {
+    bridge.curated = {
+      ...curatedList(),
+      rating: 'entered',
+      machine: {
+        ...curatedList().machine,
+        memoryKind: 'unified',
+        totalMemoryBytes: 128 * GIB,
+        gpuMemoryBytes: 96 * GIB,
+      },
+    };
+    await mount(undefined, 'curated');
+    expect(q('models-curated-picks')?.textContent).toContain('For this computer');
+    expect(q('models-curated-machine')?.textContent).toContain(
+      'This computer is rated from the hardware entered in Settings: 128 GiB of memory shared with its GPU, which can use 96 GiB.'
+    );
   });
 
   it('hides the controls and re-checks the server when Settings sets it to Chat only', async () => {

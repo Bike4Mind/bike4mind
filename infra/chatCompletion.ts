@@ -12,7 +12,7 @@ import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
 import { providerFederation } from './providerFederation';
 import { generationJobQueue } from './queues';
-import { cdnUrlForLambdaEnv, router, routePrefix } from './router';
+import { cdnUrlForLambdaEnv, originVerifySecret, router, routePrefix } from './router';
 import { searxngUrl } from './searxng';
 import { allSecrets, contributedSecretEnvironment, secrets } from './secrets';
 import { cluster, resolvedVpcId, vpc, vpcId } from './vpc';
@@ -184,6 +184,10 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     // inside the VPC.
     ...(searxngUrl ? { SEARXNG_BASE_URL: searxngUrl } : {}),
     ...providerFederation.environment,
+    // Same gate and kill switch as the frontend (infra/web.ts); not under `sst dev`.
+    ...(!$dev && process.env.DISABLE_ORIGIN_VERIFY !== 'true'
+      ? { ORIGIN_VERIFY_SECRET: originVerifySecret.result }
+      : {}),
   },
   logging: {
     // Long enough to investigate a model-fallback or billing report after the fact; these

@@ -31,6 +31,7 @@ function setup() {
     revokeRoot: vi.fn().mockResolvedValue(true),
     untrustProject: vi.fn().mockResolvedValue(true),
     revokeAllow: vi.fn().mockResolvedValue(true),
+    cancelModelPull: vi.fn().mockResolvedValue(true),
   };
   const sessions = vi.fn(async () => []);
   const handlers = capabilityHandlers({
@@ -109,6 +110,23 @@ describe('capability IPC handlers', () => {
     expect(targets.removeSessionDirectory).toHaveBeenCalledWith('session', '/work/private');
     expect(state.grants[0]?.revokedAt).toBeDefined();
     expect(state.audit.map(event => event.type)).toEqual(['revoke', 'grant']);
+  });
+
+  it('stops a download when its grant is revoked in Settings, and keeps the grant while it still runs', async () => {
+    const { ledger, handlers, targets } = setup();
+    const grant = await ledger.grant({
+      subject: { kind: 'desktop-user' },
+      capability: 'model-download',
+      scope: { kind: 'model-pull', value: 'qwen3:0.6b#q4', model: 'qwen3:0.6b', server: 'This computer', bytes: 1 },
+      source: 'approval',
+    });
+    targets.cancelModelPull.mockResolvedValueOnce(false);
+    await expect(handlers.revoke(grant.id)).rejects.toThrow('still active');
+    expect((await handlers.getState()).grants[0]?.revokedAt).toBeUndefined();
+
+    const state = await handlers.revoke(grant.id);
+    expect(targets.cancelModelPull).toHaveBeenLastCalledWith('qwen3:0.6b#q4');
+    expect(state.grants[0]?.revokedAt).toBeDefined();
   });
 
   it('retires in-memory approvals at startup once while retaining conversation paths', async () => {

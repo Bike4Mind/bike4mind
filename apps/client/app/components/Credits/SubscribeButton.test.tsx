@@ -4,7 +4,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import type { IUserSubscription } from '@client/lib/userSubscriptions/types';
+import type { IUserSubscription } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 import SubscribeButton from './SubscribeButton';
 
 const cancelMutate = vi.fn();

@@ -7,7 +7,7 @@ vi.hoisted(() => {
   process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS = 'staff.example.com';
 });
 
-vi.mock('@client/app/premium-generated/premiumEntitlementGrants.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumEntitlementGrants.generated', () => ({
   premiumEntitlementGrants: {
     tagGrants: [{ tag: 'example-pro', entitlements: ['example:pro'] }],
     impliedEntitlements: [{ ifHeld: 'example:pro', alsoGrant: ['example:addon'] }],

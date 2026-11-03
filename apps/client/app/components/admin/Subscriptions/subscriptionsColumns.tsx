@@ -157,6 +157,7 @@ function Mrr({ row }: { row: AdminSubscriptionRow }) {
 }
 
 function Renews({ row, now }: { row: AdminSubscriptionRow; now: Date }) {
+  if (!row.periodEndsAt) return <Dash />;
   const when = formatRelativeDay(row.periodEndsAt, now);
   const title = formatUtc(row.periodEndsAt);
   if (isEnded(row.status)) return <Muted title={title}>{`Ended ${when}`}</Muted>;
@@ -285,7 +286,11 @@ export function subscriptionsColumns({
       width: '7rem',
       render: row => (
         <Stack direction="row" alignItems="center" gap={0.75}>
-          <Muted title={formatUtc(row.createdAt)}>{formatRelativeDay(row.createdAt, now)}</Muted>
+          {row.createdAt ? (
+            <Muted title={formatUtc(row.createdAt)}>{formatRelativeDay(row.createdAt, now)}</Muted>
+          ) : (
+            <Dash />
+          )}
           {row.source === 'stripe' && isNewSince(row.createdAt, newSince) && (
             <StatusChip tone="info" label="New" data-testid={`admin-subscriptions-new-${row.id}`} />
           )}

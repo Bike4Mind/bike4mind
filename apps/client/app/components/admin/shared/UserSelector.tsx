@@ -94,6 +94,9 @@ const UserSelector: React.FC<UserSelectorProps> = ({
         inputValue={inputValue}
         onInputChange={handleInputChange}
         options={users}
+        // The server already matched name, username and email; Joy's default filter would re-match
+        // against the display name only and drop email and username hits.
+        filterOptions={options => options}
         getOptionLabel={option => option.name || option.username || option.email || 'Unknown User'}
         loading={isLoading}
         endDecorator={isLoading ? <CircularProgress size="sm" sx={{ bgcolor: 'background.surface' }} /> : null}

@@ -1,5 +1,6 @@
 import { signupProtection } from '@server/auth/signupProtection';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
 import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
@@ -33,6 +34,7 @@ import {
   isEligibleForFreeCredits,
   releaseVerifiedPendingFreeCredits,
 } from './emailVerifiedGrants';
+import { requestRiskEvidenceRefresh } from './riskEvidence';
 
 const mockLoggerError = vi.fn();
 const logger = { info: vi.fn(), error: (...a: unknown[]) => mockLoggerError(...a) } as unknown as Logger;
@@ -155,6 +157,7 @@ describe('emailVerifiedGrants', () => {
       await applyEmailVerifiedGrants(params);
 
       expect(refreshSignupRiskScore).toHaveBeenCalledWith('user-1', logger);
+      expect(requestRiskEvidenceRefresh).toHaveBeenCalledWith('user-1', 'email_verified', logger);
 
       expect(mockApplySignupDomainGrant).toHaveBeenCalledWith({
         userId: 'user-1',

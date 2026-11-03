@@ -130,6 +130,14 @@ describe('UserSelector', () => {
     await waitFor(() => expect(input().value).toBe('Unknown User'));
   });
 
+  it('offers server matches whose display name does not contain the typed text', async () => {
+    setUsers([GRACE]);
+    renderSelector();
+    await userEvent.type(input(), 'grace@');
+    expect(await screen.findByTestId('user-option-u2')).toBeInTheDocument();
+    expect(screen.queryByText('No options')).not.toBeInTheDocument();
+  });
+
   it('updates the search as the user types', async () => {
     renderSelector();
     await userEvent.type(input(), 'gra');

@@ -28,7 +28,7 @@ vi.mock('@server/billing/meterPlatformCompletion', () => ({
   createRequestCompletionMeter: (...a: unknown[]) => h.createRequestCompletionMeter(...a),
 }));
 vi.mock('@bike4mind/services', () => ({ apiKeyService: { getEffectiveApiKey: h.getEffectiveApiKey } }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => h.sendToClient(...a) }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => h.sendToClient(...a) }));
 vi.mock('@bike4mind/server-utils/dataLakes/runTaxonomyInference', () => ({
   runTaxonomyInference: h.runTaxonomyInference,
   sampleFabFilesForTaxonomy: (files: unknown[]) => files,

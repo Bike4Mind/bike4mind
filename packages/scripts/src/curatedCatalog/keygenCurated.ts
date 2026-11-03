@@ -1,6 +1,6 @@
 /**
  * Generates a curated-list key pair: the private key as passphrase-encrypted PKCS8 PEM outside the repo, and the
- * public entry to add to apps/desktop/src/main/models/curated/keys.json.
+ * public entry to add to catalog/model-hub/keys.json.
  *
  *   pnpm --filter @bike4mind/scripts curated:keygen --out <path-outside-repo> --role signing|recovery
  */
@@ -8,6 +8,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
 import { CURATED_KEY_ROLES, curatedKeyId, type CuratedKey, type CuratedKeyRole } from '@bike4mind/local-models';
+import { KEYRING_PATH } from './catalogChecks';
 import { cliPath, isEntry, isInside, readPassphrase, REPO_ROOT } from './cli';
 
 const MIN_PASSPHRASE = 12;
@@ -40,7 +41,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv, log = console
     const { pem, entry } = generateCuratedKey(role, await readPassphrase(env, true));
     await writeFile(out, pem, { flag: 'wx', mode: 0o600 });
     log(`wrote the encrypted ${role} key to ${out}`);
-    log(`add this entry to apps/desktop/src/main/models/curated/keys.json:\n${JSON.stringify(entry, null, 2)}`);
+    log(`add this entry to ${KEYRING_PATH}:\n${JSON.stringify(entry, null, 2)}`);
     return 0;
   } catch (error) {
     log(`failed: ${error instanceof Error ? error.message : String(error)}`);

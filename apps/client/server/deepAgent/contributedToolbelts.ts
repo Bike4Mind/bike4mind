@@ -1,7 +1,7 @@
-import '@client/lib/settings/registerContributedSettings';
+import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { registerToolbelts, type AgentExtensionContribution } from '@bike4mind/agents';
 import { Logger } from '@bike4mind/observability';
-import { premiumAgentExtensions } from '@server/premium-generated/premiumAgentExtensions.generated';
+import { premiumAgentExtensions } from '@bike4mind/server-utils/premium-generated/premiumAgentExtensions.generated';
 
 // Imported for its side effect by every module that builds a wake act executor, so a contributed
 // role resolves to its toolbelt however the wake is entered.

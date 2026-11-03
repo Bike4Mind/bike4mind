@@ -1,12 +1,87 @@
-import React from 'react';
-import { Box, Chip, CircularProgress, Sheet, Stack, Typography, useTheme } from '@mui/joy';
+import React, { useState } from 'react';
+import { Box, Button, Chip, CircularProgress, Sheet, Stack, Typography, useTheme } from '@mui/joy';
 import BlockIcon from '@mui/icons-material/Block';
 import CheckCircle from '@mui/icons-material/CheckCircle';
-import { useGetBlockedIPs } from '@client/app/hooks/data/admin';
+import { isPermanentIpBlock } from '@bike4mind/common';
+import { useGetBlockedIPs, type BlockedIPItem } from '@client/app/hooks/data/admin';
+import { formatUtc, RelativeTime, StatusChip } from '@client/app/components/admin/shared';
+import {
+  BlockIpDialog,
+  IP_BLOCK_SCOPE_LABELS,
+  UnblockIpDialog,
+} from '@client/app/components/admin/BlockedIPs/IpBlockDialogs';
+
+const blockedBy = (item: BlockedIPItem): string =>
+  item.blockedByName ?? (item.source === 'auto' ? 'Automatic (failed sign-ins)' : '-');
+
+const expiryLabel = (expiresAt: string): string =>
+  isPermanentIpBlock(expiresAt) ? 'Never' : formatUtc(new Date(expiresAt));
+
+const BlockedIPRow: React.FC<{ item: BlockedIPItem; index: number; onUnblock: () => void }> = ({
+  item,
+  index,
+  onUnblock,
+}) => {
+  const theme = useTheme();
+  const scope = item.scope ?? 'login';
+  return (
+    <Sheet
+      variant="outlined"
+      data-testid={`blocked-ip-${index}`}
+      sx={{ borderRadius: 'md', p: 2, borderLeft: `3px solid ${theme.palette.security.high.outlinedBorder}` }}
+    >
+      <Stack direction="row" alignItems="flex-start" gap={1.5}>
+        <Stack gap={0.5} sx={{ minWidth: 0, flex: 1 }}>
+          <Stack direction="row" alignItems="center" gap={1} flexWrap="wrap">
+            <Typography level="body-sm" fontWeight="md" sx={{ fontFamily: 'code' }}>
+              {item.ip}
+            </Typography>
+            <StatusChip
+              tone={scope === 'all' ? 'bad' : 'warn'}
+              label={IP_BLOCK_SCOPE_LABELS[scope]}
+              data-testid={`blocked-ip-${index}-scope`}
+            />
+          </Stack>
+          {item.reason && (
+            <Typography level="body-xs" sx={{ color: theme.palette.text.secondary, overflowWrap: 'anywhere' }}>
+              Reason: {item.reason}
+            </Typography>
+          )}
+          <Typography
+            level="body-xs"
+            sx={{ color: theme.palette.text.tertiary }}
+            data-testid={`blocked-ip-${index}-by`}
+          >
+            Blocked by {blockedBy(item)} <RelativeTime at={item.blockedAt} />
+          </Typography>
+          <Typography
+            level="body-xs"
+            sx={{ color: theme.palette.text.tertiary }}
+            data-testid={`blocked-ip-${index}-expiry`}
+          >
+            Ends: {expiryLabel(item.expiresAt)}
+          </Typography>
+        </Stack>
+        <Button
+          size="sm"
+          variant="outlined"
+          color="neutral"
+          onClick={onUnblock}
+          aria-label={`Unblock ${item.ip}`}
+          data-testid={`blocked-ip-${index}-unblock-btn`}
+        >
+          Unblock
+        </Button>
+      </Stack>
+    </Sheet>
+  );
+};
 
 const BlockedIPsTab: React.FC = () => {
   const theme = useTheme();
   const blockedIPs = useGetBlockedIPs();
+  const [blockOpen, setBlockOpen] = useState(false);
+  const [unblocking, setUnblocking] = useState<BlockedIPItem | null>(null);
 
   const items = blockedIPs.data ?? [];
 
@@ -29,9 +104,18 @@ const BlockedIPsTab: React.FC = () => {
           >
             {items.length} blocked
           </Chip>
+          <Button
+            size="sm"
+            sx={{ ml: 'auto' }}
+            onClick={() => setBlockOpen(true)}
+            data-testid="blocked-ips-tab-block-btn"
+          >
+            Block IP
+          </Button>
         </Stack>
         <Typography level="body-xs" sx={{ color: theme.palette.text.secondary, mt: 0.5 }}>
-          IP addresses currently blocked from accessing your account
+          Sign-in lockouts and admin blocks of an address or range. A block of sign-in, signup, checkout and AI also
+          stops new accounts, purchases and AI usage from that network.
         </Typography>
       </Sheet>
 
@@ -60,32 +144,14 @@ const BlockedIPsTab: React.FC = () => {
         </Sheet>
       ) : (
         <Box data-testid="blocked-ips-tab-list" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-          {items.map((item, idx) => (
-            <Sheet
-              key={item.ip}
-              variant="outlined"
-              data-testid={`blocked-ip-${idx}`}
-              sx={{
-                borderRadius: 'md',
-                p: 2,
-                borderLeft: `3px solid ${theme.palette.security.high.outlinedBorder}`,
-              }}
-            >
-              <Typography level="body-sm" fontWeight="md">
-                {item.ip}
-              </Typography>
-              {item.reason && (
-                <Typography level="body-xs" sx={{ color: theme.palette.text.secondary }}>
-                  Reason: {item.reason}
-                </Typography>
-              )}
-              <Typography level="body-xs" sx={{ color: theme.palette.text.tertiary }}>
-                Blocked: {new Date(item.blockedAt).toLocaleString('en-US', { timeZone: 'UTC' })} UTC
-              </Typography>
-            </Sheet>
+          {items.map((item, index) => (
+            <BlockedIPRow key={item._id} item={item} index={index} onUnblock={() => setUnblocking(item)} />
           ))}
         </Box>
       )}
+
+      {blockOpen && <BlockIpDialog onClose={() => setBlockOpen(false)} />}
+      <UnblockIpDialog block={unblocking} onClose={() => setUnblocking(null)} />
     </Box>
   );
 };

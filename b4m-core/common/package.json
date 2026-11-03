@@ -49,6 +49,16 @@
         "default": "./dist/utils/skillMd.cjs"
       }
     },
+    "./modelHub": {
+      "import": {
+        "types": "./dist/modelHub/index.d.mts",
+        "default": "./dist/modelHub/index.mjs"
+      },
+      "require": {
+        "types": "./dist/modelHub/index.d.cts",
+        "default": "./dist/modelHub/index.cjs"
+      }
+    },
     "./types/entities/RapidReplyTypes": {
       "import": {
         "types": "./dist/types/entities/RapidReplyTypes.d.mts",

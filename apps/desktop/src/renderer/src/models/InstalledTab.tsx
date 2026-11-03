@@ -12,17 +12,10 @@ import ModalDialog from '@mui/joy/ModalDialog';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import {
-  OLLAMA_DOWNLOAD_URL,
-  formatBytes,
-  type InstalledModelsResult,
-  type LocalModelEntry,
-  type ModelRuntimeStatus,
-} from '@shared/models';
-import { ExternalLink } from '../chat/ExternalLink';
+import { formatBytes, type InstalledModelsResult, type LocalModelEntry, type ModelRuntimeStatus } from '@shared/models';
 import { TrashIcon } from '../chat/icons';
 import { FitBadge } from './FitBadge';
-import type { ModelTarget } from './modelTarget';
+import type { ChatOn, ModelTarget } from './modelTarget';
 
 /** A device-side model a chat points at: its Ollama name and the server it runs on. */
 export interface ModelInUse {
@@ -62,7 +55,20 @@ const CAPABILITY_LABELS: [keyof LocalModelEntry['capabilities'], string][] = [
   ['embeddings', 'Embeddings'],
 ];
 
-function InstalledRow({ model, onRemove }: { model: LocalModelEntry; onRemove: (() => void) | null }) {
+/** Contexts are set in powers of two, so 4096 reads as 4K and 131072 as 128K. */
+function contextLabel(tokens: number): string {
+  return tokens >= 1024 ? `${Math.round(tokens / 1024)}K` : String(tokens);
+}
+
+function InstalledRow({
+  model,
+  onUse,
+  onRemove,
+}: {
+  model: LocalModelEntry;
+  onUse: (() => void) | null;
+  onRemove: (() => void) | null;
+}) {
   return (
     <Sheet
       variant="outlined"
@@ -81,11 +87,26 @@ function InstalledRow({ model, onRemove }: { model: LocalModelEntry; onRemove: (
             </Chip>
           )}
           <FitBadge fit={model.fit} />
+          {model.baseModel && (
+            <Chip size="sm" variant="soft" color="primary" data-testid="models-installed-lora-chip">
+              LoRA on {model.baseModel}
+            </Chip>
+          )}
         </Stack>
         <Stack direction="row" flexWrap="wrap" useFlexGap spacing={0.75} sx={{ mt: 0.75 }}>
           <Typography level="body-xs" textColor="text.tertiary">
             {formatBytes(model.sizeBytes)}
           </Typography>
+          {model.contextLength && (
+            <Typography level="body-xs" textColor="text.tertiary" data-testid="models-installed-context">
+              {contextLabel(model.contextLength)} context
+            </Typography>
+          )}
+          {model.aliases && model.aliases.length > 0 && (
+            <Typography level="body-xs" textColor="text.tertiary" data-testid="models-installed-aliases">
+              Also served as {model.aliases.join(', ')}
+            </Typography>
+          )}
           {model.quantization && (
             <Typography level="body-xs" textColor="text.tertiary">
               {model.quantization}
@@ -103,6 +124,11 @@ function InstalledRow({ model, onRemove }: { model: LocalModelEntry; onRemove: (
           ))}
         </Stack>
       </Box>
+      {onUse && (
+        <Button size="sm" variant="soft" onClick={onUse} data-testid="models-installed-use-btn">
+          Use in chat
+        </Button>
+      )}
       {onRemove && (
         <Button
           size="sm"
@@ -124,6 +150,7 @@ export function InstalledTab({
   target,
   installed,
   inUse,
+  chatOn,
   onRetry,
   onExplore,
 }: {
@@ -131,6 +158,7 @@ export function InstalledTab({
   target: ModelTarget;
   installed: InstalledModelsResult | null;
   inUse?: ModelsInUse;
+  chatOn?: ChatOn;
   onRetry: () => void;
   onExplore: () => void;
 }) {
@@ -180,15 +208,8 @@ export function InstalledTab({
       >
         <Typography level="title-md">Ollama is not running</Typography>
         <Typography level="body-sm" sx={{ maxWidth: 440 }}>
-          Local models run in Ollama. Start it if it is installed, or download it from{' '}
-          <ExternalLink href={OLLAMA_DOWNLOAD_URL} testId="models-installed-download-link">
-            ollama.com/download
-          </ExternalLink>
-          , then check again.
+          Your Ollama models show here once it is running.
         </Typography>
-        <Button size="sm" variant="outlined" color="neutral" onClick={onRetry}>
-          Check again
-        </Button>
       </Stack>
     );
   if (!installed)
@@ -238,6 +259,7 @@ export function InstalledTab({
             <InstalledRow
               key={model.name}
               model={model}
+              onUse={chatOn?.(model.name) ?? null}
               onRemove={
                 canManage ? () => setConfirming({ model, serverId: target.local ? undefined : target.id }) : null
               }

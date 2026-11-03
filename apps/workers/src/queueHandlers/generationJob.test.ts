@@ -7,7 +7,7 @@ const { step } = vi.hoisted(() => ({
 
 vi.mock('@server/generationJobs/wiring', () => ({ getGenerationJobEngine: () => ({ step }) }));
 // The real wrapper connects to Mongo; its own contract is covered where it is defined.
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger:
     (handler: (event: SQSEvent, context: Context, logger: unknown) => Promise<unknown>) =>
     (event: SQSEvent, context: Context) =>

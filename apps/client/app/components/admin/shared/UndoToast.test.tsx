@@ -50,6 +50,13 @@ describe('UndoToast', () => {
     expect(screen.getByTestId('undo-toast')).toBeInTheDocument();
   });
 
+  it('shows no Undo button when the caller supplies no reverse action', () => {
+    render(<Trigger options={{ message: 'Comp extended' }} />, { wrapper: TestWrapper });
+    fireEvent.click(screen.getByTestId('trigger-btn'));
+    expect(screen.getByTestId('undo-toast-message')).toHaveTextContent('Comp extended');
+    expect(screen.queryByTestId('undo-toast-undo-btn')).not.toBeInTheDocument();
+  });
+
   it('offers the audit entry only when the caller supplies it', () => {
     const onViewAudit = vi.fn();
     render(

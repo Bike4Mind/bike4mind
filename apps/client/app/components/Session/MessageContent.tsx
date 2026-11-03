@@ -20,7 +20,7 @@ import {
   ANSWER_DIAGNOSIS_TITLE,
   stripSearchResultCardFences,
 } from '@bike4mind/common';
-import { elidedReplyWarning } from '@client/app/utils/artifactParser';
+import { elidedReplyWarning } from '@bike4mind/server-utils/app/utils/artifactParser';
 import DeleteOutline from '@mui/icons-material/DeleteOutline';
 import { Menu, MenuItem, MenuList, ListItemDecorator } from '@mui/joy';
 import Box from '@mui/joy/Box';

@@ -162,6 +162,12 @@ export const SECRET_ROTATION_CONFIG: { [key: string]: SecretRotationEntry } = {
     isAutomatic: false,
     rotationProcess: 'Regenerate webhook URL in Slack app settings and update SST Secret',
   },
+  SLACK_COST_ALARMS_WEBHOOK_URL: {
+    description: 'Slack webhook for cost and provider spend alarm notifications',
+    rotationIntervalDays: 180,
+    isAutomatic: false,
+    rotationProcess: 'Regenerate webhook URL in Slack app settings and update SST Secret',
+  },
   SLACK_SIGNING_SECRET: {
     description: 'Slack app signing secret for request verification',
     rotationIntervalDays: 180,
@@ -221,36 +227,6 @@ export const SECRET_ROTATION_CONFIG: { [key: string]: SecretRotationEntry } = {
   },
   SECOPS_ZAP_INGEST_TOKEN: {
     description: 'SecOps — OWASP ZAP result ingest token',
-    rotationIntervalDays: 180,
-    isAutomatic: false,
-    rotationProcess: 'Generate new token and update SST Secret + corresponding GitHub secret',
-  },
-  SECOPS_CODE_INGEST_TOKEN: {
-    description: 'SecOps — code analysis (Semgrep) ingest token',
-    rotationIntervalDays: 180,
-    isAutomatic: false,
-    rotationProcess: 'Generate new token and update SST Secret + corresponding GitHub secret',
-  },
-  SECOPS_PACKAGES_INGEST_TOKEN: {
-    description: 'SecOps — package scan ingest token',
-    rotationIntervalDays: 180,
-    isAutomatic: false,
-    rotationProcess: 'Generate new token and update SST Secret + corresponding GitHub secret',
-  },
-  SECOPS_PACKAGES_DISPATCH_TOKEN: {
-    description: 'SecOps — package scan dispatch token',
-    rotationIntervalDays: 180,
-    isAutomatic: false,
-    rotationProcess: 'Generate new token and update SST Secret + corresponding GitHub secret',
-  },
-  SECOPS_SECRETS_INGEST_TOKEN: {
-    description: 'SecOps — secrets scan ingest token',
-    rotationIntervalDays: 180,
-    isAutomatic: false,
-    rotationProcess: 'Generate new token and update SST Secret + corresponding GitHub secret',
-  },
-  SECOPS_SECRETS_DISPATCH_TOKEN: {
-    description: 'SecOps — secrets scan dispatch token',
     rotationIntervalDays: 180,
     isAutomatic: false,
     rotationProcess: 'Generate new token and update SST Secret + corresponding GitHub secret',

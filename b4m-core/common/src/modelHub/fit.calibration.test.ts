@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { ModelArchSchema, type ModelArch } from '../schemas/modelHub';
 import { machine } from './__fixtures__/hubManifest';
-import { estimateFit, flashAttnOffBytes, kvCacheBytes, ollamaUbatch, type FitRuntime } from './fit';
+import { FIT_CONSTANTS, estimateFit, flashAttnOffBytes, kvCacheBytes, ollamaUbatch, type FitRuntime } from './fit';
 
 // Linux x64, CPU only, MiB as printed: llama-server b11889 (-np 1, -ub 512, f16 KV, flash attention on) load logs
 // and Ollama 0.40.11 /api/ps sizes, load logs and runner RSS. CUDA and Metal terms are not covered here.
@@ -485,5 +485,66 @@ describe('cache layout variants measured on llama-server b11889', () => {
       runtime: { kind: 'llama-server', slots: 2 },
     });
     expect(plan.memory.recurrentBytes / MIB).toBeCloseTo(43.15, 2);
+  });
+});
+
+// Ollama 0.40.13 on an M4 MacBook Pro with 16 GB, default settings. /api/ps sums llama-server's buffer log lines:
+// projector weights log no buffer line, and an SWA model's two KV caches share one log key, so only the SWA one counts.
+describe('vision builds measured through /api/ps', () => {
+  const GIB = 1024 ** 3;
+  const OLLAMA: FitRuntime = { kind: 'ollama', flashAttn: 'auto', slots: 1, draftMax: 0 };
+  const GEMMA4_12B = ModelArchSchema.parse({
+    contextMax: 262144,
+    blockCount: 48,
+    headCount: 16,
+    embeddingLength: 3840,
+    activeFeedForwardLength: 15360,
+    full: { layers: 8, kvHeads: 1, keyLength: 512, valueLength: 512 },
+    swa: { layers: 40, kvHeads: 8, keyLength: 256, valueLength: 256, window: 1024 },
+  });
+  const QWEN38_27B = ModelArchSchema.parse({
+    contextMax: 262144,
+    blockCount: 64,
+    headCount: 24,
+    embeddingLength: 5120,
+    activeFeedForwardLength: 17408,
+    full: { layers: 16, kvHeads: 4, keyLength: 256, valueLength: 256 },
+    recurrent: { layers: 48, stateBytesPerSeq: 156_893_184, kind: 'gated-delta-net' },
+  });
+  // gemma4:12b-it-qat's model and projector layers, and the IQ2_XS file with its projector.
+  const gemma = { arch: GEMMA4_12B, weightsBytes: 6_975_877_728 + 175_115_264 };
+  const iq2xs = { arch: QWEN38_27B, weightsBytes: 8_422_841_472, mmprojBytes: 931_146_528 };
+  const mac16 = machine('unified', 16);
+  const requested = (model: typeof gemma | typeof iq2xs, context: number, hardware = mac16) =>
+    estimateFit({ model, hardware, mode: 'chat', runtime: OLLAMA, context }).requested!;
+
+  it.each([
+    ['Gemma 4 12B QAT at 64K', gemma, 65536, 175_115_264, 7.3],
+    ['Qwen3.8 27B IQ2_XS at 16K', iq2xs, 16384, 931_146_528, 9.59],
+  ] as const)('%s: what /api/ps counts is at or up to 5%% above its size', (_name, model, ctx, projector, psGiB) => {
+    const plan = requested(model, ctx);
+    const fullKv = model.arch.swa ? kvCacheBytes({ ...model.arch, swa: undefined }, ctx, plan.kv) : 0;
+    const counted = (plan.memory.totalBytes - projector - fullKv) / GIB;
+    expect(counted).toBeGreaterThanOrEqual(psGiB);
+    expect(counted).toBeLessThanOrEqual(psGiB * 1.05);
+  });
+
+  it('matches the KV cache and covers the compute of the same Gemma 4 load at 64K on a CPU', () => {
+    // Ollama 0.40.11 load log, -ub 2048: KV buffers of 1024 and 960 MiB, compute 778.11 MiB.
+    const plan = requested(gemma, 65536, machine('cpu', 62));
+    expect(plan.memory.kvBytes).toBe(1984 * MIB);
+    expect(plan.memory.computeBytes).toBeGreaterThanOrEqual(778.11 * MIB);
+  });
+
+  it('covers the vision compute buffer Ollama 0.40.11 logged for each projector on a CPU', () => {
+    for (const [projectorMiB, computeMiB] of [
+      [167, 13.53 + 58.59],
+      [887.99, 248.1],
+    ])
+      expect(projectorMiB * FIT_CONSTANTS.projectorComputeFraction).toBeGreaterThanOrEqual(computeMiB);
+  });
+
+  it('rates IQ2_XS at 16K as loading with layers past the GPU part, not as too large', () => {
+    expect(requested(iq2xs, 16384)).toMatchObject({ fits: true, placement: 'layer-offload' });
   });
 });

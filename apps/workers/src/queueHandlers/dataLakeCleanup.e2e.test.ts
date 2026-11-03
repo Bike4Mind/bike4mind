@@ -14,13 +14,15 @@ import {
 } from '../../../../packages/database/src/__test__/createMongoServer';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger:
     (fn: (event: SQSEvent, context: Context, logger: Logger) => Promise<void>) => (event: SQSEvent, context: Context) =>
       fn(event, context, { updateMetadata() {}, info() {}, warn() {}, error() {} } as unknown as Logger),
 }));
 vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: process.env.CLEANUP_TEST_S3_BUCKET } } }));
-vi.mock('@server/integrations/google/drive/common', () => ({ releaseDriveConnectionForLake: async () => false }));
+vi.mock('@bike4mind/server-utils/integrations/google/drive/common', () => ({
+  releaseDriveConnectionForLake: async () => false,
+}));
 vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
   releaseGitHubLakeConnectionForLake: async () => null,
 }));

@@ -11,7 +11,7 @@ import {
   PROJECTS_READ_OR_WRITE_SCOPES,
 } from '@server/projects/projectScopes';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { respond } from '@server/utils/respond';
 
 const updateProjectBodySchema = z.object({

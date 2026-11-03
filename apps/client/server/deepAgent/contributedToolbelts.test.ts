@@ -11,7 +11,7 @@ const fixture = vi.hoisted(() => (role: string): ToolbeltProfile => ({
   codeExecute: false,
 }));
 
-vi.mock('@server/premium-generated/premiumAgentExtensions.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumAgentExtensions.generated', () => ({
   premiumAgentExtensions: [{ toolbelts: [fixture('fixture-role')] }],
 }));
 

@@ -56,7 +56,7 @@ vi.mock('@bike4mind/observability', () => ({
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' }, researchEngineQueue: { url: 'queue://research' } } }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://unused/%STAGE%' } }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: mocks.send }));
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger:
     (handler: (event: SQSEvent, context: Context, logger: unknown) => Promise<void>) =>
     (event: SQSEvent, context: Context) =>

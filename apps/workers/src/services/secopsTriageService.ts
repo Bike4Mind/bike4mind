@@ -24,7 +24,7 @@ import { apiKeyService } from '@bike4mind/services';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { SlackClient } from '@bike4mind/slack';
 import type { KnownBlock, Block } from '@slack/web-api';
-import type { GitHubService } from '@server/services/githubService';
+import type { GitHubService } from '@bike4mind/server-utils/services/githubService';
 import type { SecopsTriageConfig, SecopsTriageScanSource } from '@bike4mind/common';
 import { escapeSlackLine, escapeSlackText } from '@bike4mind/common';
 

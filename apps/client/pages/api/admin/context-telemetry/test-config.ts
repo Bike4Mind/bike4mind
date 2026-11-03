@@ -14,7 +14,7 @@ import {
   formatPrimaryAnomaly,
 } from '@bike4mind/server-utils/services/telemetryFingerprint';
 import { checkFingerprintDedup } from '@bike4mind/server-utils/services/issueDedup';
-import { GitHubService } from '@server/services/githubService';
+import { GitHubService } from '@bike4mind/server-utils/services/githubService';
 import {
   getFallbackPriority,
   fetchExistingTelemetryIssues,

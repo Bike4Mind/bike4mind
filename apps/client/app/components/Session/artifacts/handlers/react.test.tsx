@@ -3,7 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, act, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { parseArtifactsWithFallback } from '@client/app/utils/artifactParser';
+import { parseArtifactsWithFallback } from '@bike4mind/server-utils/app/utils/artifactParser';
 import { groupReactArtifacts, type ReactArtifactGroupRole } from '@client/app/utils/reactArtifactGroup';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { getArtifactHandler, type ParsedArtifact } from '../registry';

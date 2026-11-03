@@ -32,7 +32,7 @@ vi.mock('@server/embed/identifiedEmbedUser', async () => {
 });
 
 import handler from '../session';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { verifyEmbedSessionToken } from '@server/embed/embedSessionToken';
 

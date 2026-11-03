@@ -12,6 +12,8 @@
  *
  * Alarm-only: there is no source queue to replay into (recovery is re-emitting the event), so
  * register the queue with createDlqAlarms in infra/dlqAlarms.ts, not DLQ_DESCRIPTORS.
+ * An sst.aws.Cron target must clear SST's literal `{}` input (see youngAccountSpendAlert in
+ * infra/cron.ts), or the queued body is `{}` and there is no event to re-emit.
  * Guarded by infra/__tests__/eventBusDlq.test.ts.
  */
 // eventBus.subscribe returns an Output, so the rule ARN is read inside apply: lifting `.nodes`

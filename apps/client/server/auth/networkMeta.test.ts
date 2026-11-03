@@ -1,14 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
 
 const updateOne = vi.fn();
 const record = vi.fn();
+const alertSignupNetworkBurst = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   User: { updateOne: (...args: unknown[]) => updateOne(...args) },
   authEventRepository: { record: (...args: unknown[]) => record(...args) },
 }));
 
+vi.mock('./signupNetworkAlerts', () => ({
+  alertSignupNetworkBurst: (...args: unknown[]) => alertSignupNetworkBurst(...args),
+}));
+
 import { readNetworkMeta, recordLoginEvent, recordSignupNetwork, type NetworkRequest } from './networkMeta';
+import { requestRiskEvidenceRefresh } from './riskEvidence';
 
 const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
@@ -121,7 +128,19 @@ describe('recordSignupNetwork', () => {
   beforeEach(() => {
     updateOne.mockReset().mockResolvedValue({});
     record.mockReset().mockResolvedValue(undefined);
+    alertSignupNetworkBurst.mockReset().mockResolvedValue(undefined);
     warn.mockClear();
+  });
+
+  it('checks for a signup network burst after the signup event is written, so the count includes it', async () => {
+    await recordSignupNetwork({ req: AWS_REQUEST, userId: 'u1', method: 'google' });
+
+    expect(alertSignupNetworkBurst).toHaveBeenCalledWith({
+      network: expect.objectContaining({ ip: '203.0.113.7', asn: 16509, isDatacenter: true }),
+      userId: 'u1',
+      method: 'google',
+    });
+    expect(record.mock.invocationCallOrder[0]).toBeLessThan(alertSignupNetworkBurst.mock.invocationCallOrder[0]);
   });
 
   it('stamps signupMeta only on a user that has none, and logs a signup event', async () => {
@@ -136,6 +155,7 @@ describe('recordSignupNetwork', () => {
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'u1', type: 'signup', method: 'google', ip: '203.0.113.7' })
     );
+    expect(requestRiskEvidenceRefresh).toHaveBeenCalledWith('u1', 'signup', console);
   });
 
   it('still logs the signup event when the user write fails, and never throws', async () => {
@@ -165,11 +185,17 @@ describe('recordLoginEvent', () => {
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'u1', type: 'login', method: 'otc', asn: 16509 })
     );
+    expect(requestRiskEvidenceRefresh).toHaveBeenCalledWith('u1', 'login', console);
   });
 
   it('never throws when the write fails', async () => {
     record.mockRejectedValueOnce(new Error('db down'));
     await expect(recordLoginEvent({ req: AWS_REQUEST, userId: 'u1', method: 'otc' })).resolves.toBeUndefined();
     expect(warn).toHaveBeenCalledWith('[auth] login event not recorded', 'db down');
+  });
+
+  it('still resolves when the risk evidence refresh rejects', async () => {
+    vi.mocked(requestRiskEvidenceRefresh).mockRejectedValueOnce(new Error('queue down'));
+    await expect(recordLoginEvent({ req: AWS_REQUEST, userId: 'u1', method: 'otc' })).resolves.toBeUndefined();
   });
 });

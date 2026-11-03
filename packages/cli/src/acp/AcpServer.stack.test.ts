@@ -130,6 +130,16 @@ describe('AcpServer agent stack', () => {
     expect(h.captured.tools?.map(t => t.toolSchema.name)).toContain('tool_search');
   });
 
+  it('attaches all saved model servers so fallback and subagent models on other servers resolve', async () => {
+    const { buildLlmBackend } = await import('../bootstrap/buildLlmBackend.js');
+    vi.mocked(buildLlmBackend).mockClear();
+    await buildStack(serverWithStubbedBootstrap());
+
+    expect(buildLlmBackend).toHaveBeenCalledTimes(1);
+    const input = vi.mocked(buildLlmBackend).mock.calls[0][0];
+    expect(input.servers ?? 'all').toBe('all');
+  });
+
   it('leaves the LLM unwrapped when no tools are deferred', async () => {
     deferredToolRegistry.clear();
     await buildStack(serverWithStubbedBootstrap());

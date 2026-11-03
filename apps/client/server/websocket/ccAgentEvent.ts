@@ -3,7 +3,7 @@ import { CcAgentEventAction } from '@bike4mind/common';
 import { resolveBridgeWsAuth } from '@server/websocket/ccAgentAuth';
 import { reportCcAgentPresence } from '@server/websocket/ccAgentHearth';
 import { connectionUserCanAccessTavern } from '@server/websocket/tavernWsAuth';
-import { sendToClient, withWebSocketContext } from '@server/websocket/utils';
+import { sendToClient, withWebSocketContext } from '@bike4mind/server-utils/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 
 /** Limit the hover-preview text we store to keep Mongo documents small. */

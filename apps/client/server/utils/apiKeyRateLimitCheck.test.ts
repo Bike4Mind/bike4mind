@@ -10,7 +10,7 @@ import {
   resolveCounterLimit,
 } from './apiKeyRateLimitCheck';
 import { cacheRepository } from '@bike4mind/database';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 
 // Mock dependencies
 vi.mock('@bike4mind/database', () => ({
@@ -23,7 +23,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({
   logEvent: vi.fn().mockResolvedValue(undefined),
 }));
 

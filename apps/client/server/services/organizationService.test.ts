@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { organizationRepository, inviteRepository } from '@bike4mind/database';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import {
   validateSeatChange,
   setSeats,
@@ -35,7 +35,7 @@ const mockGetTeamPlanSettings = vi.hoisted(() =>
 );
 vi.mock('@bike4mind/server-utils/services/teamPlanSettings', () => ({ getTeamPlanSettings: mockGetTeamPlanSettings }));
 
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     findActiveSubscriptionsByOwner: vi.fn(),
     updateByStripeSubscriptionId: vi.fn(),

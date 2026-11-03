@@ -4,7 +4,7 @@ import { baseApi } from '@client/server/middlewares/baseApi';
 import { Skill, SkillListing, SkillListingReport } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { ForbiddenError } from '@bike4mind/common';
-import { serializeListing, type MarketActor } from '@server/skillMarket/market';
+import { serializeListing, type MarketActor } from '@bike4mind/server-utils/skillMarket/market';
 import { loadVersionQueue, requireReviewer, reviewScope } from '@server/skillMarket/reviewQueue';
 
 const QUEUE_LIMIT = 100;

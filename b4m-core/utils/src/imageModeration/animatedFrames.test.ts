@@ -1,12 +1,17 @@
 import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Jimp } from 'jimp';
-import type { DetectModerationLabelsCommand, RekognitionClient } from '@aws-sdk/client-rekognition';
+import {
+  type DetectModerationLabelsCommand,
+  ProvisionedThroughputExceededException,
+  type RekognitionClient,
+} from '@aws-sdk/client-rekognition';
 import { Logger } from '@bike4mind/observability';
 import { extractAnimationFrames } from './animatedFrames';
 import {
   EXPLICIT_NUDITY_CONFIDENCE,
   ImageModerationBlockedError,
+  ModerationUnavailableError,
   RekognitionImageModerationService,
   UnsupportedImageFormatError,
 } from './index';
@@ -166,5 +171,37 @@ describe('RekognitionImageModerationService.checkImage - animated images', () =>
 
     await expect(service.checkImage(fixture('tiles.png'), 'image/png')).resolves.toBeUndefined();
     expect(send).toHaveBeenCalledTimes(3);
+  });
+
+  it('fails closed once backoff summed across frames would pass the per-image deadline', async () => {
+    // Each frame throttles twice then succeeds: inside its own attempt budget, so only the shared
+    // deadline can stop the scan.
+    const calls = new Map<string, number>();
+    const send = vi.fn(async (command: DetectModerationLabelsCommand) => {
+      const key = Buffer.from(command.input.Image!.Bytes!).toString('base64');
+      const n = (calls.get(key) ?? 0) + 1;
+      calls.set(key, n);
+      if (n <= 2) throw new ProvisionedThroughputExceededException({ message: 'Rate exceeded', $metadata: {} });
+      return { ModerationLabels: [] };
+    });
+    let now = 0;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    vi.spyOn(Math, 'random').mockReturnValue(0.99);
+    const sleep = vi.fn(async (ms: number) => {
+      now += ms;
+    });
+    const service = new RekognitionImageModerationService(
+      { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+      { send } as unknown as RekognitionClient,
+      { sleep, deadlineMs: 1000 }
+    );
+
+    try {
+      // One frame alone sleeps ~594 ms (198 + 396), so all three frames cannot fit in 1000 ms.
+      await expect(service.checkImage(fixture('tiles.png'), 'image/png')).rejects.toThrow(ModerationUnavailableError);
+      expect(now).toBeLessThanOrEqual(1000);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });

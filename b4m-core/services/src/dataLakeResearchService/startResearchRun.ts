@@ -9,7 +9,7 @@ import {
   type IUserRepository,
   type ResearchScheduleSkipReason,
 } from '@bike4mind/common';
-import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
 import { areCreditsEnforced } from '../billing/isOperationalBillingEnabled';
 import { researchRunChange } from '../dataLakeService/diffLakeConfig';
 import type { LakeGrant, ManageActor } from '../dataLakeService/manageRule';
@@ -18,6 +18,7 @@ import {
   type LakeConfigAuditAdapters,
   type LakeConfigAuditLakeRef,
 } from '../dataLakeService/recordLakeConfigChange';
+import { aiAccessDeniedMessage } from '../userService/accountState';
 import { normalizeResearchLevers } from './researchLevers';
 
 /**
@@ -114,7 +115,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * the unbilled spend this gate exists to prevent.
  */
 async function assertResearchRunAffordable(
-  lake: LakeConfigAuditLakeRef,
+  owner: Awaited<ReturnType<IUserRepository['findById']>>,
   costCeilingMicroUsd: number,
   { db }: Pick<StartResearchRunAdapters, 'db'>
 ): Promise<void> {
@@ -123,7 +124,6 @@ async function assertResearchRunAffordable(
   const settings = { adminSettings: db.adminSettings };
   if (!(await areCreditsEnforced(settings))) return;
 
-  const owner = await db.users.findById(lake.createdByUserId);
   if (!owner) {
     // No owner means nothing can be billed (runLakeResearch drops the spend the same way), so the
     // run must not start rather than spend with no balance behind it.
@@ -197,7 +197,12 @@ export async function startResearchRun(
 
   // Last of the three rails, so the two cheap common mistakes (a double-clicked Run, a burst) keep
   // their clearer messages, and before the row is written so a refusal leaves no run behind.
-  await assertResearchRunAffordable(lake, levers.costCeilingMicroUsd, { db });
+  const owner = await db.users.findById(lake.createdByUserId);
+  // The owner pays, so a blocked owner refuses the run whoever starts it, and whether or not credits are enforced.
+  if (owner && aiAccessDeniedMessage(owner)) {
+    throw new ForbiddenError("This data lake's owner account cannot run research. Please contact support.");
+  }
+  await assertResearchRunAffordable(owner, levers.costCeilingMicroUsd, { db });
 
   const run = await db.dataLakeResearchRuns.createRun({
     dataLakeId,

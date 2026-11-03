@@ -9,6 +9,7 @@ import { AUTHORING_RATE_LIMIT_BUCKET, findOwnedAgent } from '@server/agents/v1Ag
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { toV1AuthoringError } from '@server/agents/v1AgentErrors';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAllowed';
 import { type ContractRequest, nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 
@@ -16,6 +17,7 @@ const handler = nextRouteForContract(enhanceAgentFieldContract, {
   rateLimit: perUserRateLimit(AUTHORING_RATE_LIMIT_BUCKET),
 }).post(
   withRequestCompletionQuota(async (req: ContractRequest<typeof enhanceAgentFieldContract>, res) => {
+    await assertOutboundActionAllowed(req.user, req);
     assertAiAccessAllowed(req.user);
     const agent = await findOwnedAgent(req.validatedParams.id, req.user.id);
     const { field_name, current_value, agent_name } = req.validated;

@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import type { IUserSubscription } from '@client/lib/userSubscriptions/types';
+import type { IUserSubscription } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 import { SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import type { BillingView } from '@client/app/utils/billingDeepLink';
 

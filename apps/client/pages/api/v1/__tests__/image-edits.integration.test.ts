@@ -63,7 +63,7 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<Record<string, unknown>>();
@@ -225,6 +225,8 @@ describe('POST /api/v1/image-edits (integration - contract auth + validation)', 
     expect(ImageQuestSchema.safeParse(res._getJSONData()).success).toBe(true);
     expect(mockInvoke).toHaveBeenCalledTimes(1);
     expect(mockInvoke.mock.calls[0][0].adminRoleWithheld).toBe(true);
+    // Carried onto the queued job so its settled ledger row is attributed to the key.
+    expect(mockInvoke.mock.calls[0][0].apiKeyId).toBe('k1');
   });
 
   describe('referenceImageFabFileIds', () => {

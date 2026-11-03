@@ -121,6 +121,26 @@ describe('UserRepository.findPendingRiskReviews', () => {
     expect(rows.map(row => row.id)).toEqual([high, mid, low]);
     expect(await userRepository.findPendingRiskReviews(2).then(r => r.map(row => row.id))).toEqual([high, mid]);
   });
+
+  it('returns the signup grant fields the queue reads to flag a held tranche', async () => {
+    const signupGrant = { stage: 'signup', signupCredits: 12, unlockCredits: 28, creditsReleased: 0 };
+    await scored(60, 'pending', { signupGrant, signupGrantAssessment: { band: 'review' } });
+
+    const [row] = await userRepository.findPendingRiskReviews(10);
+    expect(row.signupGrant).toMatchObject(signupGrant);
+    expect(row.signupGrantAssessment?.band).toBe('review');
+  });
+});
+
+describe('UserRepository.countPendingRiskReviews', () => {
+  it('counts unbanned pending accounts with no limit', async () => {
+    for (const state of ['pending', 'pending', 'pending', 'approved', 'none'] as const)
+      await createUser(undefined, state);
+    const banned = await createUser(undefined, 'pending');
+    await User.collection.updateOne({ _id: new mongoose.Types.ObjectId(banned) }, { $set: { isBanned: true } });
+
+    await expect(userRepository.countPendingRiskReviews()).resolves.toBe(3);
+  });
 });
 
 describe('UserRepository.setRiskReviewState', () => {

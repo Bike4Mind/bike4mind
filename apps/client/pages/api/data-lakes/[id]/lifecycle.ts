@@ -26,7 +26,10 @@ import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrinc
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import type { DataLakeCleanupMessage } from '@bike4mind/server-utils/dataLakes/dataLakeCleanupPayload';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
-import { disableDriveConnectionForLake, enableDriveConnectionForLake } from '@server/integrations/google/drive/common';
+import {
+  disableDriveConnectionForLake,
+  enableDriveConnectionForLake,
+} from '@bike4mind/server-utils/integrations/google/drive/common';
 import {
   disableGitHubConnectionForLake,
   enableGitHubConnectionForLake,

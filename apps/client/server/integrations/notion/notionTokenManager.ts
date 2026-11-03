@@ -200,7 +200,7 @@ export class NotionTokenManager {
       try {
         // Imported inside the try so a module-resolution failure degrades to "no tool schemas"
         // rather than failing the whole OAuth flow. Repeat imports hit the module cache.
-        const { invokeMcpHandler } = await import('@server/utils/invokeMcpHandler');
+        const { invokeMcpHandler } = await import('@bike4mind/server-utils/utils/invokeMcpHandler');
         const result = await invokeMcpHandler<unknown>({
           envVariables: envVars,
           name: 'notion',

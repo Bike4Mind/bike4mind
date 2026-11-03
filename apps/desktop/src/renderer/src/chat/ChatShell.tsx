@@ -8,14 +8,16 @@ import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { AuthState } from '@shared/auth';
-import type { ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
+import { DEFAULT_PROMPT_CACHE_TTL, type PromptCacheTtl } from '@bike4mind/common';
+import type { ChatModelOption, ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import type { SkillMarketListingRef } from '@shared/skillMarket';
-import { isLocalBackend, isLocalModel, SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
+import { findModelOption, isLocalBackend, isLocalModel, SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
 import { composerBlock, isLocalMode, noLocalModels } from './noLocalModels';
 import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
 import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
+import { BlankChat, BlankChatGreeting } from './BlankChat';
 import { SkillMarketPanel } from './SkillMarketPanel';
 import { BackgroundTaskChip, BackgroundTaskPanel } from './BackgroundTaskPanel';
 import { readPanelFlag, spawnedSessions, writePanelFlag } from './backgroundTasks';
@@ -30,7 +32,10 @@ import { GlobeIcon, PanelRightIcon, SearchIcon, TerminalIcon } from './icons';
 import { MessageThread } from './MessageThread';
 import { chatShellRootSx, columnStackSx, contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
+import { modelSwitchCredits } from './modelSwitchCost';
 import { ReasoningEffortPicker } from './ReasoningEffortPicker';
+import { PromptCacheTtlPicker } from './PromptCacheTtlPicker';
+import { CacheExpiryNote } from './CacheExpiryNote';
 import { GrantedFolderChips, SessionChips } from './SessionChips';
 import { SESSION_PANEL_ID, SessionPanel } from './SessionPanel';
 import { panelFitsBesideThread, useElementWidth, useSessionPanelPrefs } from './sessionPanelState';
@@ -75,6 +80,7 @@ import { useFileDrop } from './useFileDrop';
 import { useSkills } from './useSkills';
 import { useSessionStartTiming } from './useSessionStartTiming';
 import { SpawnFailureToast } from './SpawnFailureToast';
+import { useCreationTools } from './useCreationTools';
 
 function SessionHeader({ title, onRename }: { title: string; onRename: (title: string) => void }) {
   const [editing, setEditing] = useState(false);
@@ -156,7 +162,15 @@ type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market' | 
  */
 export type AccountStrip = (status: ReactNode) => ReactNode;
 
-export function ChatShell({ auth, account }: { auth?: AuthState | null; account?: AccountStrip }) {
+export function ChatShell({
+  auth,
+  account,
+  onOpenModelServers,
+}: {
+  auth?: AuthState | null;
+  account?: AccountStrip;
+  onOpenModelServers?: () => void;
+}) {
   const {
     sessions,
     loading,
@@ -235,6 +249,24 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   const [terminalFocus, setTerminalFocus] = useState<{ sessionId: string; seq: number } | null>(null);
   const draft = useAttachmentDraft(activeId);
   const nextPrompt = usePromptSuggestion(activeId);
+  const blankChatId =
+    screen === 'conversation' &&
+    !opening &&
+    activeId &&
+    conversation.session?.mode === 'chat' &&
+    conversation.messages.length === 0
+      ? activeId
+      : null;
+  const creationTools = useCreationTools(
+    `${auth?.status ?? 'none'}:${auth?.environment.url ?? ''}:${auth?.user?.id ?? 'device-local'}`,
+    blankChatId,
+    conversation.session?.model
+  );
+  // Cleared once the composer takes it, or a composer remounted by another screen would take it again.
+  const [composerFill, setComposerFill] = useState<{ id: number; text: string } | null>(null);
+  const fillSeq = useRef(0);
+  const fillComposer = useCallback((text: string) => setComposerFill({ id: ++fillSeq.current, text }), []);
+  const clearComposerFill = useCallback(() => setComposerFill(null), []);
   // Only the conversation screen counts as showing one: main polls what is on screen faster.
   const pullRequest = usePullRequest(screen === 'conversation' ? activeId : null);
   // What the browser pane trades width with; see BrowserPane.
@@ -341,7 +373,11 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
    * it and is silent for the rest, so treating silence as "no" would refuse images on models
    * that handle them - the same reasoning the model picker applies to an unreadable list.
    */
-  const modelOption = catalog.models.find(model => model.id === conversation.session?.model);
+  const modelOption = findModelOption(catalog.models, conversation.session?.model);
+  const sessionCacheTtl = conversation.session?.promptCacheTtl ?? DEFAULT_PROMPT_CACHE_TTL;
+  // Main sends the hour only to a model that takes it; see ChatService cacheTtlField.
+  const cacheTtlFor = (model: ChatModelOption | undefined): PromptCacheTtl =>
+    model?.supportsOneHourCache ? sessionCacheTtl : DEFAULT_PROMPT_CACHE_TTL;
   const modelsInUse = useMemo<ModelsInUse>(() => {
     const inUse = (id: string | undefined) => {
       const model = catalog.models.find(candidate => candidate.id === id && isLocalBackend(candidate));
@@ -368,7 +404,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   const sessionModel = conversation.session?.model;
   const sessionKey = conversation.session?.id;
   const listed = catalog.models.length > 0 && !catalog.loading;
-  const modelListed = catalog.models.some(model => model.id === sessionModel);
+  const modelListed = !!findModelOption(catalog.models, sessionModel);
   useEffect(() => {
     if (!localMode || !listed || !sessionKey || !sessionModel || modelListed) return;
     const key = `${sessionKey}:${sessionModel}:${catalog.models[0]?.id}`;
@@ -447,10 +483,19 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     const reply = latestReply(conversation.messages, turnOpen);
     // The figure ChatService.autoCompact decides on, so red means the same thing on both sides.
     const local = !!conversation.session?.model && isLocalModel(conversation.session.model);
+    const snapshot =
+      reply?.contextSnapshot && reply.contextSnapshot.model === conversation.session?.model
+        ? reply.contextSnapshot
+        : null;
+    const modelWindow = (local ? snapshot?.modelWindow : modelOption?.contextWindow) ?? null;
     return {
-      contextTokens: occupiedTokens(conversation.messages, turnOpen, local),
-      contextLimit: effectiveContextLimit(modelOption?.contextWindow),
-      modelWindow: modelOption?.contextWindow ?? null,
+      contextTokens:
+        reply?.contextSnapshot && reply.contextSnapshot.model !== conversation.session?.model
+          ? null
+          : occupiedTokens(conversation.messages, turnOpen, local),
+      contextSnapshot: snapshot,
+      contextLimit: modelWindow ? effectiveContextLimit(modelWindow) : null,
+      modelWindow,
       credits: credits.balance,
       monthlyAllowance: credits.monthlyAllowance,
       ...(credits.error ? { creditsError: credits.error } : {}),
@@ -567,6 +612,61 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     const created = await startSession();
     if (created) setActiveId(created);
   }, [startSession, markSessionStart]);
+
+  /** "Use in chat" on the Models screen: a new Chat conversation already on that model. */
+  const [chatOnError, setChatOnError] = useState<string | null>(null);
+  const startingChatOn = useRef(false);
+  const startChatOn = useCallback(
+    async (modelId: string) => {
+      if (startingChatOn.current) return;
+      startingChatOn.current = true;
+      setChatOnError(null);
+      try {
+        markSessionStart('new');
+        const created = await create();
+        const updated = await window.b4m.chat.setSessionModel(created, modelId).catch(() => null);
+        if (!updated) {
+          // Opening it anyway would send the first message to the default model, which can be a hosted one.
+          const removed = await remove(created).then(
+            () => true,
+            () => false
+          );
+          setChatOnError(
+            removed
+              ? 'Desktop could not start a conversation on that model. Try again, or pick it in a chat.'
+              : 'Desktop could not start a conversation on that model, and could not remove the empty one it made. Delete it from the sidebar before chatting in it.'
+          );
+          return;
+        }
+        apply(updated);
+        setMode('chat');
+        setActiveId(created);
+        setScreen('conversation');
+      } catch (error) {
+        setChatOnError(
+          `Desktop could not start a conversation: ${error instanceof Error ? error.message : String(error)}`
+        );
+      } finally {
+        startingChatOn.current = false;
+      }
+    },
+    [create, remove, apply, markSessionStart]
+  );
+  /** The catalog's own entry for an installed model, so the conversation routes to the server it runs on. */
+  const chatWith = useCallback(
+    (serverId: string, name: string) => {
+      const wanted = name.toLowerCase();
+      const option = catalog.models.find(
+        model =>
+          isLocalBackend(model) &&
+          !model.unavailable &&
+          (model.server?.id ?? LOCAL_SERVER_ID) === serverId &&
+          model.name.toLowerCase() === wanted
+      );
+      return option ? () => void startChatOn(option.id) : null;
+    },
+    [catalog.models, startChatOn]
+  );
 
   /**
    * New, from a user section's header or menu: the same session New makes, but in that section
@@ -708,7 +808,17 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
       {screen === 'artifacts' ? (
         <ArtifactLibraryPanel onClose={() => setScreen('conversation')} />
       ) : screen === 'models' ? (
-        <ModelsScreen onClose={() => setScreen('conversation')} inUse={modelsInUse} />
+        <ModelsScreen
+          onClose={() => {
+            setChatOnError(null);
+            setScreen('conversation');
+          }}
+          inUse={modelsInUse}
+          onOpenModelServers={onOpenModelServers}
+          chatWith={chatWith}
+          chatError={chatOnError}
+          onDismissChatError={() => setChatOnError(null)}
+        />
       ) : screen === 'skill-market' ? (
         <SkillMarketPanel initial={marketListing} onClose={() => setScreen('customize')} />
       ) : screen === 'customize' ? (
@@ -865,22 +975,35 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                       // sentence pointing at the sidebar: the header above says what the state is, this
                       // says what to do about it, and the composer's placeholder names the same step.
                       noSession={
-                        <Stack spacing={1.5} alignItems="center">
-                          <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-no-session">
-                            {mode === 'code'
-                              ? 'Start a Code session to run a task here.'
-                              : 'Start a conversation to send your first message.'}
-                          </Typography>
-                          <Button
-                            size="sm"
-                            variant="soft"
-                            loading={creatingCode}
-                            onClick={() => void onCreate()}
-                            data-testid="chat-start-session-btn"
-                          >
-                            {mode === 'code' ? 'New Code session' : 'New conversation'}
-                          </Button>
-                        </Stack>
+                        mode === 'code' ? (
+                          <Stack spacing={1.5} alignItems="center">
+                            <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-no-session">
+                              Start a Code session to run a task here.
+                            </Typography>
+                            <Button
+                              size="sm"
+                              variant="soft"
+                              loading={creatingCode}
+                              onClick={() => void onCreate()}
+                              data-testid="chat-start-session-btn"
+                            >
+                              New Code session
+                            </Button>
+                          </Stack>
+                        ) : (
+                          <BlankChatGreeting line="Start a conversation to chat, write, or create something new.">
+                            <Button
+                              size="sm"
+                              variant="soft"
+                              loading={creatingCode}
+                              onClick={() => void onCreate()}
+                              sx={{ mt: 2.5 }}
+                              data-testid="chat-start-session-btn"
+                            >
+                              New conversation
+                            </Button>
+                          </BlankChatGreeting>
+                        )
                       }
                       emptySession={
                         initialCodeSetup ? (
@@ -902,6 +1025,8 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                               preparing={conversation.preparing !== null}
                             />
                           </Box>
+                        ) : blankChatId ? (
+                          <BlankChat sessionId={blankChatId} tools={creationTools} onPick={fillComposer} />
                         ) : undefined
                       }
                       // turnOpen, not `streaming`: a turn this window never saw start - after a reload, or
@@ -1072,6 +1197,15 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             />
           )}
 
+          <CacheExpiryNote
+            stamp={latestReply(conversation.messages)?.promptCache}
+            model={modelOption}
+            contextTokens={composerUsage.contextTokens ?? 0}
+            ttl={cacheTtlFor(modelOption)}
+            turnOpen={turnOpen}
+            sx={contentColumnSx}
+          />
+
           <Composer
             sessionId={activeId}
             disabled={!activeId || creatingCode}
@@ -1104,6 +1238,8 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             onSendQueuedNow={conversation.sendQueuedNow}
             returned={conversation.returned}
             onReturnedConsumed={conversation.clearReturned}
+            fill={composerFill}
+            onFillConsumed={clearComposerFill}
             skills={skills}
             leading={
               <ApprovalModePill
@@ -1122,6 +1258,9 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                   noLocal={noLocal}
                   local={localMode}
                   onOpenModels={() => setScreen('models')}
+                  switchCredits={model =>
+                    modelSwitchCredits(model, composerUsage.contextTokens ?? 0, cacheTtlFor(model))
+                  }
                 />
                 <ReasoningEffortPicker
                   models={catalog.models}
@@ -1129,6 +1268,13 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                   effort={conversation.session?.reasoningEffort ?? 'default'}
                   disabled={!activeId}
                   onSelect={effort => void conversation.setReasoningEffort(effort)}
+                />
+                <PromptCacheTtlPicker
+                  model={modelOption}
+                  ttl={sessionCacheTtl}
+                  contextTokens={composerUsage.contextTokens ?? 0}
+                  disabled={!activeId}
+                  onSelect={ttl => void conversation.setPromptCacheTtl(ttl)}
                 />
               </Stack>
             }

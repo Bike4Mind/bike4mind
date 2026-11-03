@@ -7,6 +7,10 @@ the catalog is reviewed and updated pins arrive in a desktop release or an accep
 Explore remains available for reviewing the live repo.
 Do not refresh digests automatically just to make a check green.
 
+`keys.json` is the one keyring Desktop, the CLI and the publishing scripts trust (`{ keyId, spki, role }` entries; empty until production keys exist).
+A key only reaches users in a Desktop or CLI release built after it lands here.
+Each signature in `<list>.sig` is pure Ed25519 over the 64-byte statement `utf8("b4m-model-hub-curated-v2-digest\n") || sha256(list bytes)`, so a KMS key can sign it as a raw message.
+
 Before a desktop release, and whenever changing this catalog:
 
 1. Build core packages with `pnpm turbo:core:build`.
@@ -21,7 +25,9 @@ Before a desktop release, and whenever changing this catalog:
    with `CURATED_BUILD=gemma-4-e4b/qat-q4-0` when testing different minimum versions. The report logs the
    actual daemon version and declared minimum; a pass on a newer version does not prove the minimum.
 5. Review upstream changes, licenses and model behavior before updating pins. Increment `sequence`,
-   update `updatedAt` and the changelog, run catalog/unit tests, then ship a desktop release. Signed publishing tools are described in
+   update `updatedAt` and the changelog, run catalog/unit tests (after editing the manifest Zod schema, run
+   `pnpm --filter @bike4mind/common build` and then `pnpm --filter @bike4mind/scripts curated:schema` to regenerate
+   `schema/curated-v2.schema.json`), then ship a desktop release. Signed publishing tools are described in
    [packages/scripts](../../packages/scripts/README.md); the production publishing workflow and
    storage configuration are separate work.
 

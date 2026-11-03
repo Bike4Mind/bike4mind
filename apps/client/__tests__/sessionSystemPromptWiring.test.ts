@@ -109,7 +109,7 @@ describe('session systemPromptId resolver wiring', () => {
       .map(f => relative(CLIENT_ROOT, f));
     expect(
       implementations,
-      'loadSystemPromptById must be defined exactly once, in server/utils/sessionSystemPromptResolver.ts'
-    ).toEqual(['server/utils/sessionSystemPromptResolver.ts']);
+      'loadSystemPromptById must be defined exactly once, in packages/server-utils/src/utils/sessionSystemPromptResolver.ts'
+    ).toEqual(['../../packages/server-utils/src/utils/sessionSystemPromptResolver.ts']);
   });
 });

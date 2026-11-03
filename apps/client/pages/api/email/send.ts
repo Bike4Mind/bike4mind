@@ -1,3 +1,4 @@
+import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { sessionRepository, fabFileRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { EmailSendRequestSchema } from '../../../types/api';
@@ -7,8 +8,10 @@ import { Permission, isImageServeable } from '@bike4mind/common';
 import { z } from 'zod';
 import { escapeHtml } from '@client/app/utils/htmlEscape';
 import { sendEmailWithAttachments } from '@server/utils/mailer/emailAttachments';
+import { reserveEmailSendBudget } from '@server/utils/emailSendLimits';
+import { accountBlockReasons, isAiAccessRevoked } from '@bike4mind/services/userService/accountState';
 
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi().post(outboundActionGate(), async (req, res) => {
   try {
     const brand = process.env.APP_NAME || '';
     const userId = req.user?.id;
@@ -40,6 +43,20 @@ const handler = baseApi().post(async (req, res) => {
     }
 
     const { recipients, message: customMessage } = validatedBody;
+
+    if (isAiAccessRevoked(req.user) || accountBlockReasons(req.user).length > 0) {
+      return res.status(403).json({ success: false, message: 'Your account cannot send email.' });
+    }
+
+    // Charged on every request that passes validation, so failed file lookups cannot be retried for free.
+    const refused = await reserveEmailSendBudget(userId, recipients.length);
+    if (refused) {
+      res.setHeader('Retry-After', refused.retryAfter);
+      return res.status(429).json({
+        success: false,
+        message: `Email limit reached. Try again in ${refused.retryAfter} seconds.`,
+      });
+    }
 
     // Handle based on type
     if (validatedBody.type === 'files') {

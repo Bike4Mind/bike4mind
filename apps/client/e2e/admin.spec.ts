@@ -115,15 +115,29 @@ test.describe('Admin - User CRUD', () => {
       await adminPage.searchUser(TEST_USER.name);
       await adminPage.waitForUserVisible(TEST_USER.name);
 
-      await adminPage.clickUserProfileButton(TEST_USER.name);
-      await adminPage.fillProfileField('Name:', EDITED_NAME);
-      await adminPage.saveProfileChanges();
-      await adminPage.closeModal();
+      await adminPage.openEditProfileDialog(TEST_USER.name);
+      await adminPage.fillEditProfileName(EDITED_NAME);
+      await adminPage.saveEditProfile();
 
       // Verify the edit persisted by searching for the new name (the edit happened on the profile page)
       await adminPage.navigateToUsersTab();
       await adminPage.searchUser(EDITED_NAME);
       await adminPage.waitForUserVisible(EDITED_NAME);
+    });
+
+    await test.step('credits tab shows the system-sourced cost card', async () => {
+      await adminPage.gotoAdmin();
+      await adminPage.navigateToUsersTab();
+      await adminPage.searchUser(EDITED_NAME);
+      await adminPage.waitForUserVisible(EDITED_NAME);
+
+      await adminPage.openUserProfile(EDITED_NAME);
+      await adminPage.page.getByTestId('user-profile-tab-credits').click();
+      await expect(adminPage.page.getByTestId('user-credits-system-cost')).toBeVisible({ timeout: TIMEOUTS.ACTION });
+      // A user created moments ago has triggered no system work yet.
+      await expect(adminPage.page.getByTestId('user-credits-system-cost-today')).toContainText('$0.00', {
+        timeout: TIMEOUTS.ACTION,
+      });
     });
 
     await test.step('delete user', async () => {

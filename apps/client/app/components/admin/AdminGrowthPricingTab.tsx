@@ -33,7 +33,7 @@ import { useCreditAnalysisStore } from './CreditAnalysis/store';
  * The growth and monetization knobs, grouped on one page so they can be tuned without hunting
  * through Admin Settings. Storage is the ordinary admin-settings collection. This tab is the only
  * editor for these keys (GROWTH_PRICING_ONLY_KEYS in AdminSettingsTab, whose Credits System group
- * links here), except ReferralCreditsAmount, which keeps a second editor under Referrals.
+ * links here).
  * docs/pricing-settings-inventory.md lists every key in this area; update it when a key moves.
  */
 export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
@@ -52,7 +52,7 @@ export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
     id: 'referral-rewards',
     title: 'Referral rewards for inviters',
     description:
-      'What an inviter earns when an invited friend becomes active or subscribes, plus the hold, starting-invite and alert settings. The starting-invite count, first-answer reward and alert are active today; the payment rewards and hold are saved but not paid out until payment rewards ship.',
+      'What an inviter earns when an invited friend becomes active or subscribes, plus the hold, starting-invite and alert settings. The starting-invite count, first-answer reward, payment rewards (held for the hold period, then released) and alert are all active today; a reward amount of 0 turns that reward off.',
     keys: [
       'ReferralFirstAnswerCredits',
       'ReferralFirstPaymentCredits',
@@ -67,6 +67,22 @@ export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
     title: 'Credits and pricing',
     description: 'How usage is metered and what credits cost.',
     keys: ['enforceCredits', 'pricePerCredit', 'lowCreditsThreshold'],
+  },
+  {
+    id: 'preference-arena',
+    title: 'Preference arena',
+    description:
+      'Verified users compare two blind answers and earn promotional credits for accepted votes. A credits-per-vote of 0 keeps collecting votes with rewards off; low-quality raters are dropped without notice.',
+    keys: [
+      'preferenceArenaEnabled',
+      'preferenceArenaCreditsPerVote',
+      'preferenceArenaDailyVoteCap',
+      'preferenceArenaLifetimeCreditCap',
+      'preferenceArenaMinResponseMs',
+      'preferenceArenaGoldRatePercent',
+      'preferenceArenaMinGoldVotes',
+      'preferenceArenaMinGoldAccuracyPercent',
+    ],
   },
   {
     id: 'team',

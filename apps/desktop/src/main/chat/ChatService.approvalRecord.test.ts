@@ -160,6 +160,7 @@ describe('ChatService approval record', () => {
       mode: 'ask',
       tool: 'bash_execute',
       input: 'touch made.txt',
+      patterns: ['touch *'],
       approval: done.approval,
     });
   });

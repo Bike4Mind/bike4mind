@@ -36,9 +36,6 @@ const NO_API_KEY_AUTH = new Set<string>([
   'rate-limits/ingest.ts',
   'security-dashboard/attack-simulation-ingest.ts',
   'security-dashboard/cloud-prowler-ingest.ts',
-  'security-dashboard/code-semgrep-ingest.ts',
-  'security-dashboard/packages-ingest.ts',
-  'security-dashboard/secrets-ingest.ts',
   'security-dashboard/web-owasp-ingest.ts',
 ]);
 

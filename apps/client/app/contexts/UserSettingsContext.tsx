@@ -1,8 +1,10 @@
 import {
+  DEFAULT_PROMPT_CACHE_TTL,
   IAdminSettings,
   IUserPreferences,
   redactSettingSecretsForBroadcast,
   type AdminSettingDoc,
+  type PromptCacheTtl,
 } from '@bike4mind/common';
 import { useShallow } from 'zustand/react/shallow';
 import { useQueryClient } from '@tanstack/react-query';
@@ -63,6 +65,8 @@ export interface UserSettings {
   showFunTools: boolean;
   showSplashCards: boolean;
   desktopPromoDismissed: boolean;
+  /** Prompt-cache lifetime for chats that have not picked their own. */
+  promptCacheTtl: PromptCacheTtl;
 }
 
 interface UserSettingsContextProps {
@@ -115,6 +119,7 @@ const defaultSettings: UserSettings = {
   showFunTools: false,
   showSplashCards: false,
   desktopPromoDismissed: false,
+  promptCacheTtl: DEFAULT_PROMPT_CACHE_TTL,
 };
 
 // One id for every settings-write failure - preferences AND language - so a burst of failures
@@ -208,6 +213,7 @@ const SCALAR_PREF_KEYS = [
   'showFunTools',
   'showSplashCards',
   'desktopPromoDismissed',
+  'promptCacheTtl',
 ] as const;
 
 /** Apply server preferences on top of defaults. Non-null server values win. */

@@ -3,12 +3,29 @@ import { createMocks } from 'node-mocks-http';
 
 // Middleware: collapse the baseApi chain so `.get(fn)` yields the raw handler,
 // mirroring apps/client/pages/api/auth/okta/__tests__/callback.test.ts.
+const mockChain = vi.hoisted(() => ({ order: [] as string[] }));
 vi.mock('@server/middlewares/baseApi', () => {
-  const chain: any = { use: () => chain, get: (fn: any) => fn };
+  type Chain = { use: () => Chain; get: (fn: unknown) => unknown };
+  const chain: Chain = {
+    use: () => chain,
+    get: fn => {
+      mockChain.order.push('get');
+      return fn;
+    },
+  };
   return { baseApi: () => chain };
 });
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
-  checkBlockedIP: () => (_req: any, _res: any, next: any) => next?.(),
+  checkBlockedIP: () => {
+    mockChain.order.push('checkBlockedIP');
+    return (_req: unknown, _res: unknown, next?: () => void) => next?.();
+  },
+}));
+vi.mock('@server/middlewares/oauthIpRateLimit', () => ({
+  oauthIpRateLimit: (bucket: string) => {
+    mockChain.order.push(`oauthIpRateLimit:${bucket}`);
+    return (_req: unknown, _res: unknown, next?: () => void) => next?.();
+  },
 }));
 const { rateLimitOptions } = vi.hoisted(() => ({ rateLimitOptions: [] as unknown[] }));
 vi.mock('@server/middlewares/rateLimit', () => ({
@@ -43,7 +60,7 @@ vi.mock('@server/auth/signInSecondFactor', () => ({
   resolveSecondFactor: (...a: any[]) => mockResolveSecondFactor(...a),
   logSignInSuccess: (...a: any[]) => mockLogSignInSuccess(...a),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));
 
 const mockEmitSignup = vi.fn().mockResolvedValue([]);
@@ -63,6 +80,7 @@ vi.mock('@server/auth/networkMeta', () => ({
 }));
 
 const mockRefreshSignupRiskScore = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
 vi.mock('@server/auth/signupRiskScore', () => ({
   refreshSignupRiskScore: (...a: unknown[]) => mockRefreshSignupRiskScore(...a),
 }));
@@ -78,7 +96,7 @@ vi.mock('@server/utils/auth/oauthSourceTag', () => ({
 }));
 
 // Import after mocks are registered.
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { verifyStateToken, type VerifyResult, type BaseStatePayload } from '@bike4mind/server-utils/auth/jwtStateStore';
 import { logAuthAudit } from '@server/utils/authAudit';
 
@@ -306,6 +324,31 @@ describe('[strategy]/callback - banned user gate', () => {
   });
 });
 
+describe('[strategy]/callback - guards and refusal metric line', () => {
+  it('registers the block check and the per-IP limit ahead of the get handler', () => {
+    expect(mockChain.order).toEqual(['checkBlockedIP', 'oauthIpRateLimit:oauth-callback', 'get']);
+  });
+
+  it.each([
+    ['registration_closed', 1],
+    ['state_expired', 0],
+    ['internal', 0],
+  ])('logs oauth-signup-refused for %s: %i time(s)', async (code, count) => {
+    const info = vi.fn();
+    mockAuthenticate.mockImplementation(
+      (_s: string, _o: unknown, cb: (...args: unknown[]) => Promise<unknown>) => () => {
+        pending = cb(null, undefined, { code });
+      }
+    );
+    let pending: Promise<unknown> | undefined;
+    const { req, res } = makeReqRes();
+    req.logger = { info };
+    await handler(req, res, vi.fn());
+    await pending;
+    expect(info.mock.calls.filter(c => c[0] === 'oauth-signup-refused')).toHaveLength(count);
+  });
+});
+
 describe('[strategy]/callback - invite gate', () => {
   it('surfaces registration_closed as a login error code', async () => {
     const res = await runCallback(null, undefined, { code: 'registration_closed' });
@@ -356,6 +399,15 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     });
     expect(res._getRedirectUrl()).toMatch(/isNewUser=1/);
     expect(res._getRedirectUrl()).toContain('firstSignupSession=1');
+  });
+
+  it("ties a new account's signup funnel to the visit it came from", async () => {
+    const visitId = 'd'.repeat(32);
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, {
+      cookie: `${touchCookie}; b4m_vid=${visitId}`,
+    });
+
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith(expect.objectContaining({ visitId }));
   });
 
   it("persists a new account's acquisition with the provider as the signup method", async () => {

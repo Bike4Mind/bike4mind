@@ -39,11 +39,14 @@
 import type { Logger } from '@bike4mind/observability';
 import type { IAgentExecution } from '@bike4mind/database';
 import { buildMemoryContext } from '@bike4mind/common';
-import { recallMementosV2 } from '@server/memory/recallMementosV2';
+import { recallMementosV2 } from '@bike4mind/server-utils/memory/recallMementosV2';
 import type { IApiKeyRepository, IMementoRepository, IAdminSettingsRepository } from '@bike4mind/common';
 import { mementoService } from '@bike4mind/services';
 import { type MementoGates } from '@bike4mind/services/llm';
-import { resolveExecutionMementoGates, type MementoGateExecution } from '@server/utils/resolveExecutionMementoGates';
+import {
+  resolveExecutionMementoGates,
+  type MementoGateExecution,
+} from '@bike4mind/server-utils/utils/resolveExecutionMementoGates';
 
 export type MementoRetrievalExecution = Pick<
   IAgentExecution,

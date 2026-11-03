@@ -176,6 +176,21 @@ describe('TurnTimingRecorder', () => {
     expect(timing.fallbackHops).toBe(1);
   });
 
+  it('stores masked retries but returns and logs the original', () => {
+    const recorder = new TurnTimingRecorder(createdAt, processStartedAt);
+    recorder.maskStoredRetries(retry => ({ ...retry, status: undefined, requestId: undefined, model: 'shown' }));
+
+    const original = recorder.recordRetry(withStatus('Overloaded', 529, { requestID: 'req_1' }), 0, 'served');
+    recorder.sink.onRetry({ error: withStatus('Overloaded', 529), delayMs: 0, model: 'served' });
+
+    expect(original).toMatchObject({ status: 529, model: 'served' });
+    for (const stored of recorder.snapshot().retries) {
+      expect(stored).toMatchObject({ reason: 'overloaded', model: 'shown' });
+      expect(stored.status).toBeUndefined();
+      expect(stored.requestId).toBeUndefined();
+    }
+  });
+
   it('caps the persisted retry list', () => {
     const recorder = new TurnTimingRecorder(createdAt, processStartedAt);
 

@@ -7,7 +7,7 @@ import {
   type ReleaseNotesJobPayload,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { MAX_HEADLINE_CHARS } from './limits';
+import { MAX_HEADLINE_CHARS, trimToBoundary } from './limits';
 import type { ReleaseNoteDraft } from './generate';
 
 const MS_PER_HOUR = 60 * 60 * 1000;
@@ -53,15 +53,7 @@ function headlineFromItems(items: ReleaseNote['items'], logger: Logger): string 
       reasons: findGenericCopy('headline', asHeadline(ordered[0].text)),
     });
   }
-  const text = asHeadline((pick ?? ordered[0]).text);
-  if (text.length <= MAX_HEADLINE_CHARS) return text;
-  // Drop a lone high surrogate first, then trimEnd, so the cut never splits an astral character or
-  // leaves a space in front of the ellipsis.
-  const cut = text
-    .slice(0, MAX_HEADLINE_CHARS - 3)
-    .replace(/[\uD800-\uDBFF]$/, '')
-    .trimEnd();
-  return `${cut}...`;
+  return trimToBoundary(asHeadline((pick ?? ordered[0]).text), MAX_HEADLINE_CHARS);
 }
 
 export type FinalizeResult = { kind: 'repair'; reasons: string[] } | { kind: 'ok'; note: ReleaseNote };

@@ -40,6 +40,20 @@ describe('QuestStartBodySchema.disableUserIntegrations', () => {
   });
 });
 
+// The worker's /process route re-parses the dispatched body: a stripped id would leave first_value
+// naming no visit, on the first attempt and on every redelivery of the same body.
+describe('QuestStartBodySchema.visitId', () => {
+  it('keeps the visit the route set, through the JSON round trip the dispatch makes', () => {
+    const visitId = 'a'.repeat(32);
+    const sent = JSON.parse(JSON.stringify(QuestStartBodySchema.parse({ ...body, visitId })));
+    expect(QuestStartBodySchema.parse(sent).visitId).toBe(visitId);
+  });
+
+  it('is absent when the route set none', () => {
+    expect(QuestStartBodySchema.parse(body)).not.toHaveProperty('visitId');
+  });
+});
+
 describe('QuestStartBodySchema.deepResearchConfig', () => {
   it('rejects a depth or duration past the Deep Research ceilings', () => {
     expect(() => QuestStartBodySchema.parse({ ...body, deepResearchConfig: { maxDepth: 1000 } })).toThrow();

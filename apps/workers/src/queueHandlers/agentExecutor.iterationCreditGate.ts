@@ -1,7 +1,7 @@
 import type { AgentStep } from '@bike4mind/agents';
 import type { ModelInfo } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { uncoveredIterationCredits } from './agentExecutor.billing';
+import { nextIterationCredits, uncoveredIterationCredits } from './agentExecutor.billing';
 import type { AggregationGraceReason } from './agentExecutorUtils/truncatedReply';
 
 export function aggregationGraceReasonOf(
@@ -61,6 +61,11 @@ export interface IterationCreditGateArgs {
   lastInputTokens: number;
   /** Live balance of whoever pays for the run, re-read so a snapshot cannot go stale. */
   readBalance: () => Promise<number>;
+  /**
+   * The new-account spend cap's refusal message for an iteration of `requiredCredits`, or null
+   * (creditService.checkNewAccountSpendCap). Read only once the balance covers the iteration.
+   */
+  checkSpendCap: (requiredCredits: number) => Promise<string | null>;
   /** Only read when the gate stops the run, so a live iteration never pays for a snapshot. */
   snapshot: () => { steps: AgentStep[]; partialAnswer: string | undefined };
 }
@@ -73,8 +78,9 @@ export interface IterationCreditGateDeps {
 }
 
 /**
- * Stops the run when the payer's live balance cannot cover the next iteration. Returns true
- * when it stopped, so the caller can leave the loop.
+ * Stops the run when the payer's live balance cannot cover the next iteration, or when the
+ * iteration would take a new account over its spend cap. Returns true when it stopped, so the
+ * caller can leave the loop.
  */
 export async function stopUnfundedIteration(
   args: IterationCreditGateArgs,
@@ -82,21 +88,60 @@ export async function stopUnfundedIteration(
 ): Promise<boolean> {
   const balance = await args.readBalance();
   const uncoveredCredits = uncoveredIterationCredits(balance, args.modelInfo, args.lastInputTokens);
-  if (uncoveredCredits === undefined) return false;
+  if (uncoveredCredits !== undefined) {
+    deps.logger.warn('[Credits] Balance cannot cover the next iteration; stopping execution', {
+      balance,
+      requiredCredits: uncoveredCredits,
+      iterationIndex: args.iterationIndex,
+    });
+    await stopRun(args, deps, 'Insufficient credits to continue agent execution', 'Stopped: out of credits.');
+    return true;
+  }
 
-  deps.logger.warn('[Credits] Balance cannot cover the next iteration; stopping execution', {
-    balance,
-    requiredCredits: uncoveredCredits,
-    iterationIndex: args.iterationIndex,
-  });
+  const spendCapMessage = await args.checkSpendCap(nextIterationCredits(args.modelInfo, args.lastInputTokens));
+  if (spendCapMessage === null) return false;
+  await stopRun(args, deps, spendCapMessage, `Stopped: ${spendCapMessage}`);
+  return true;
+}
+
+async function stopRun(
+  args: IterationCreditGateArgs,
+  deps: IterationCreditGateDeps,
+  failureMessage: string,
+  stoppedMessage: string
+): Promise<void> {
   const { steps, partialAnswer } = args.snapshot();
-  await deps.markFailed(args.executionId, {
-    message: 'Insufficient credits to continue agent execution',
-  });
+  await deps.markFailed(args.executionId, { message: failureMessage });
   await deps.sendWs('failed', { executionId: args.executionId, reason: 'insufficient_credits', partialResult: steps });
   await deps.persistRunAsQuest(
     args.executionId,
-    partialAnswer ? `Stopped: out of credits. Partial response:\n\n${partialAnswer}` : 'Stopped: out of credits.'
+    partialAnswer ? `${stoppedMessage} Partial response:\n\n${partialAnswer}` : stoppedMessage
   );
+}
+
+export interface IterationAccountGateArgs {
+  executionId: string;
+  /** Why the run's user may no longer spend, re-read per iteration; null when they may. */
+  readAccessDenial: () => Promise<string | null>;
+  snapshot: () => { steps: AgentStep[]; partialAnswer: string | undefined };
+}
+
+/**
+ * Stops the run when its user's account was blocked (ban, dispute, suspension) or AI-restricted after the run
+ * was admitted. Independent of enforceCredits: a blocked account spends nothing either way. Returns true when
+ * it stopped.
+ */
+export async function stopBlockedAccountIteration(
+  args: IterationAccountGateArgs,
+  deps: IterationCreditGateDeps
+): Promise<boolean> {
+  const denial = await args.readAccessDenial();
+  if (!denial) return false;
+
+  deps.logger.warn('[Account] Account can no longer use AI; stopping execution', { executionId: args.executionId });
+  const { steps } = args.snapshot();
+  await deps.markFailed(args.executionId, { message: denial });
+  await deps.sendWs('failed', { executionId: args.executionId, reason: 'account_blocked', partialResult: steps });
+  await deps.persistRunAsQuest(args.executionId, `Stopped: ${denial}`);
   return true;
 }

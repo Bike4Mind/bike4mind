@@ -10,6 +10,7 @@ import {
 import {
   ConflictError,
   MAX_STORAGE_LIMIT_MB,
+  THROTTLE_TIERS,
   resolveUserStorageLimit,
   CreditHolderType,
   ICreditTransactionRepository,
@@ -70,6 +71,10 @@ export const adminUpdateUserSchema = updateUserSchema.extend({
   // Why the admin role is being granted or revoked. Not a user-doc field: the route records it on
   // the audit entry, and it is stripped from the doc write here.
   roleChangeReason: z.string().max(500).optional(),
+  // Restricted-tier change. Not user-doc fields: the route applies them via `setThrottleTier`
+  // (the only writer of `throttle`) and audits them, so they are stripped from the doc write here.
+  throttleTier: z.enum(THROTTLE_TIERS).optional(),
+  throttleReason: z.string().max(500).optional(),
   // Why `isBanned` or `isModerated` is changing. Like `roleChangeReason`, audit-only and stripped here.
   statusChangeReason: z.string().max(500).optional(),
 });
@@ -177,6 +182,8 @@ export async function adminUpdateUser(
     creditReason,
     creditDelta: signedDelta,
     roleChangeReason,
+    throttleTier: _throttleTier,
+    throttleReason: _throttleReason,
     statusChangeReason,
     ...baseParams
   } = params;

@@ -1,6 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { PermissionDeniedError, insufficientCreditsError } from '@bike4mind/common';
-import { executeToolsBatch, DEFAULT_MAX_PARALLEL_TOOLS, shouldEndTurnAfterTools } from './executeToolsBatch';
+import {
+  executeToolsBatch,
+  DEFAULT_MAX_PARALLEL_TOOLS,
+  shouldEndTurnAfterTools,
+  ToolBlockedError,
+  toolFailureLogLevel,
+} from './executeToolsBatch';
 
 /** Helper: create a task that resolves after a delay */
 const delayedTask = <T>(value: T, delayMs: number): (() => Promise<T>) => {
@@ -327,5 +333,16 @@ describe('shouldEndTurnAfterTools', () => {
 
   it('ignores nameless slots left by a text block ahead of the tool call', () => {
     expect(shouldEndTurnAfterTools([undefined, 'suggest_links'], tools, 'Answer')).toBe(true);
+  });
+});
+
+describe('toolFailureLogLevel', () => {
+  it('logs a failure guard refusal at warn', () => {
+    expect(toolFailureLogLevel(new ToolBlockedError('Not run'))).toBe('warn');
+  });
+
+  it('logs any other tool failure at error', () => {
+    expect(toolFailureLogLevel(new Error('provider down'))).toBe('error');
+    expect(toolFailureLogLevel('string failure')).toBe('error');
   });
 });

@@ -2,8 +2,9 @@ import { z } from 'zod';
 import {
   HUGGING_FACE_SSH_KEYS_URL,
   HuggingFaceHub,
+  curatedRunner,
   isAbliteratedModel,
-  loadCuratedManifest,
+  ollamaLibraryLayers,
   type PullOptions,
 } from '@bike4mind/local-models';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -15,6 +16,7 @@ import type {
   ServerRequest,
 } from '@modelcontextprotocol/sdk/types.js';
 import { readOllamaManifest } from '../commands/ollamaRegistry.js';
+import { createCliCuratedList } from '../models/curatedList.js';
 import {
   CancelledError,
   NO_LICENSE,
@@ -22,15 +24,19 @@ import {
   buildTag,
   clean,
   formatBytes,
+  hadTagBefore,
   hiddenAbliteratedMessage,
   hubAccessMessage,
+  installedUncheckedMessage,
   licenseName,
   listInstalled,
   findInstalledModel,
   planPull,
   rankSearchHits,
   removeInstalled,
+  requireInstalledReviewed,
   requireRemovable,
+  requireReviewedLayers,
   requireUnchangedLicenses,
   requireUnchangedManifest,
   resolveRuntimeTarget,
@@ -43,7 +49,18 @@ import {
   type PullPlan,
   type RuntimeTarget,
 } from '../models/localModels.js';
+import { shellWord } from '../utils/shellWord.js';
 import { FIT_LABELS, fitForPlan, machineReader, type MachineReader, type ModelFit } from '../models/fit.js';
+import {
+  defaultOn,
+  findModelServer,
+  loadModelServers,
+  noSuchServer,
+  requireManageable,
+  resolveServerTarget,
+  type LoadedModelServers,
+  type SecretFor,
+} from '../models/modelServers.js';
 import type { ConfigStore } from '../storage/ConfigStore.js';
 import { errorResult, toResult } from './tools.js';
 
@@ -52,7 +69,21 @@ type Extra = RequestHandlerExtra<ServerRequest, ServerNotification>;
 export interface ModelToolsDeps extends Omit<ModelSourceDeps, 'signal'> {
   defaultModel: () => Promise<string | undefined>;
   machine: MachineReader;
+  /** Desktop's saved model servers and the CLI's credentials for them; without it `server` is unavailable. */
+  servers?: { load: () => Promise<LoadedModelServers>; secret: () => Promise<SecretFor> };
 }
+
+const serverShape = z
+  .string()
+  .trim()
+  .min(1)
+  .max(100)
+  .optional()
+  .describe(
+    "A model server saved in Desktop, by its name there (the one `b4m models servers` lists); omit it for the user's local Ollama"
+  );
+
+const listShape = { server: serverShape };
 
 /** How long the user has to answer an elicitation prompt (ms). */
 const ELICITATION_TIMEOUT_MS = 10 * 60 * 1000;
@@ -73,6 +104,7 @@ const searchShape = {
 };
 
 const pullShape = {
+  server: serverShape,
   ref: z
     .string()
     .trim()
@@ -88,6 +120,7 @@ const pullShape = {
 };
 
 const removeShape = {
+  server: serverShape,
   name: z.string().trim().min(1).max(300).describe('The installed model name, as models_list shows it'),
 };
 
@@ -195,13 +228,12 @@ function pullElicitation(summary: PullSummary): ElicitRequestFormParams {
   };
 }
 
-const shellWord = (word: string) => (/^[\w.:/@-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`);
-
 /** The `b4m models` command that does the same on the same runtime, asking the user in their terminal. */
 function terminalCommand(target: RuntimeTarget, subcommand: 'pull' | 'rm', subject: string, flags = ''): string {
   // A host from the server's environment is not in the user's shell; --ollama-host would save it to their config.
   const host = target.source === 'env' ? `B4M_OLLAMA_HOST=${shellWord(target.runtime.baseUrl)} ` : '';
-  return `${host}b4m models ${subcommand} ${shellWord(subject)}${flags}`;
+  const server = target.server ? ` --server ${shellWord(target.server.name)}` : '';
+  return `${host}b4m models ${subcommand} ${shellWord(subject)}${server}${flags}`;
 }
 
 /** The ref `b4m models pull` resolves to the same build. */
@@ -210,7 +242,7 @@ function pullRef(plan: PullPlan): string {
   return `${plan.detail.id}:${buildTag(plan.build)}`;
 }
 
-function pullProgress(extra: Extra): PullOptions['onProgress'] {
+function pullProgress(extra: Extra, redact?: (text: string) => string): PullOptions['onProgress'] {
   const progressToken = extra._meta?.progressToken;
   if (progressToken === undefined) return undefined;
   let sent = 0;
@@ -226,7 +258,12 @@ function pullProgress(extra: Extra): PullOptions['onProgress'] {
     extra
       .sendNotification({
         method: 'notifications/progress',
-        params: { progressToken, progress: sent, ...(totalBytes ? { total: totalBytes } : {}), message: clean(status) },
+        params: {
+          progressToken,
+          progress: sent,
+          ...(totalBytes ? { total: totalBytes } : {}),
+          message: clean(redact ? redact(status) : status),
+        },
       })
       .catch(() => {});
   };
@@ -234,14 +271,23 @@ function pullProgress(extra: Extra): PullOptions['onProgress'] {
 
 export function localModelToolsDeps(configStore: ConfigStore | undefined): ModelToolsDeps {
   let hub: HubClient | undefined;
+  const curatedList = createCliCuratedList({ offline: false });
   return {
     hub: () => (hub ??= new HuggingFaceHub({ token: process.env.HF_TOKEN })),
     ollamaRegistry: (name, signal) => readOllamaManifest(name, signal),
+    libraryLayers: (ref, signal) => ollamaLibraryLayers(ref, { signal }),
     resolveRuntime: async () =>
       resolveRuntimeTarget({ env: process.env.B4M_OLLAMA_HOST, config: (await configStore?.load())?.ollamaHost }),
     defaultModel: async () => (await configStore?.load())?.defaultModel,
     machine: machineReader(),
-    curated: () => loadCuratedManifest(message => console.error(message)),
+    curated: () => curatedList.manifest(),
+    servers: {
+      load: () => loadModelServers(),
+      secret: async () => {
+        const credentials = await configStore?.readModelServerCredentials();
+        return id => credentials?.[id]?.secret;
+      },
+    },
   };
 }
 
@@ -253,7 +299,19 @@ export function localModelToolsDeps(configStore: ConfigStore | undefined): Model
  */
 export function registerModelTools(server: McpServer, deps: ModelToolsDeps): void {
   const canElicit = () => Boolean(server.server.getClientCapabilities()?.elicitation?.form);
-  const sources = (signal: AbortSignal): ModelSourceDeps => ({ ...deps, signal });
+  const sources = (signal: AbortSignal, from: ModelToolsDeps = deps): ModelSourceDeps => ({ ...from, signal });
+
+  /** The deps with the runtime swapped for a saved server when the call names one; pull and remove need it manageable. */
+  const scoped = async (name: string | undefined, manage: boolean, signal: AbortSignal): Promise<ModelToolsDeps> => {
+    if (!name) return deps;
+    if (!deps.servers) throw new Error('Model servers are not available here.');
+    const loaded = await abortable(deps.servers.load(), signal);
+    const server = findModelServer(loaded.servers, name);
+    if (!server) throw noSuchServer(loaded, name);
+    if (manage) requireManageable(server);
+    const secret = (await abortable(deps.servers.secret(), signal))(server.id);
+    return { ...deps, resolveRuntime: () => abortable(resolveServerTarget(server, secret), signal) };
+  };
 
   const run = async (fn: () => Promise<CallToolResult>): Promise<CallToolResult> => {
     try {
@@ -277,15 +335,20 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
     {
       title: 'List local models',
       description:
-        "List the models installed on the user's local runtime (Ollama), with size, quantization and capabilities, and which one is loaded or the CLI default.",
-      annotations: { readOnlyHint: true, openWorldHint: false },
+        "List the models installed on the user's local runtime (Ollama), or on one of the model servers saved in Desktop when `server` names it, with size, quantization and capabilities, and which one is loaded or the CLI default.",
+      inputSchema: listShape,
+      annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    extra =>
+    (args, extra) =>
       run(async () => {
-        const target = await abortable(deps.resolveRuntime(), extra.signal);
-        const models = await listInstalled(target.runtime, await deps.defaultModel(), extra.signal);
+        const from = await scoped(args.server, false, extra.signal);
+        const target = await abortable(from.resolveRuntime(), extra.signal);
+        const models = await listInstalled(target.runtime, defaultOn(target, await deps.defaultModel()), extra.signal);
         const { kind, baseUrl } = target.runtime;
-        return toResult({ runtime: { kind, baseUrl, source: target.source }, models });
+        return toResult({
+          runtime: { kind, baseUrl, source: target.source, ...(target.server && { server: target.server.name }) },
+          models,
+        });
       })
   );
 
@@ -331,7 +394,8 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
     },
     (args, extra) =>
       run(async () => {
-        const plan = await planPull(args.ref, sources(extra.signal), 'models_pull ref');
+        const from = await scoped(args.server, true, extra.signal);
+        const plan = await planPull(args.ref, sources(extra.signal, from), 'models_pull ref');
         const fit = await abortable(fitForPlan(plan, deps.machine), extra.signal);
         const summary = pullSummary(plan, fit);
         const tooLarge = fit.verdict === 'too-large';
@@ -376,7 +440,7 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
         }
 
         if (plan.kind === 'ollama') {
-          await requireUnchangedManifest(plan.name, plan.manifest, sources(extra.signal));
+          await requireUnchangedManifest(plan.name, plan.manifest, sources(extra.signal, from));
         } else {
           await requireUnchangedLicenses(plan.hub, plan.detail, plan.license, extra.signal);
         }
@@ -392,8 +456,17 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
             `Hugging Face's registry does not serve this exact ${summary.model} file to Ollama, so nothing was downloaded. Pick another quant.`
           );
         }
+        let hadTag: boolean | null = null;
+        if (plan.curated) {
+          await requireReviewedLayers(plan.curated, ref, sources(extra.signal, from));
+          hadTag = await hadTagBefore(plan.target, ref, extra.signal);
+        }
         try {
-          await plan.target.runtime.pull(ref, { signal: extra.signal, onProgress: pullProgress(extra) });
+          await plan.target.runtime.pull(ref, {
+            runner: plan.curated ? curatedRunner(plan.curated.build) : undefined,
+            signal: extra.signal,
+            onProgress: pullProgress(extra, plan.target.redact),
+          });
         } catch (error) {
           if (extra.signal.aborted) {
             return errorResult(
@@ -401,6 +474,14 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
             );
           }
           throw error;
+        }
+        if (plan.curated) {
+          try {
+            await requireInstalledReviewed(plan.target, plan.curated, ref, hadTag, extra.signal);
+          } catch (error) {
+            if (extra.signal.aborted) return errorResult(installedUncheckedMessage(ref));
+            throw error;
+          }
         }
         return toResult({ status: 'pulled', downloaded: true, installedAs: clean(ref), ...summary });
       })
@@ -417,7 +498,8 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
     },
     (args, extra) =>
       run(async () => {
-        const target: RuntimeTarget = await abortable(deps.resolveRuntime(), extra.signal);
+        const from = await scoped(args.server, true, extra.signal);
+        const target: RuntimeTarget = await abortable(from.resolveRuntime(), extra.signal);
         requireRemovable(target);
         const model = findInstalledModel(await abortable(target.runtime.list(), extra.signal), args.name);
         if (!model)
@@ -462,7 +544,8 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
 
         await removeInstalled(target, model.name, extra.signal);
         const defaultModel = await deps.defaultModel();
-        const wasDefault = !!defaultModel && sameModelName(defaultModel, model.name);
+        const current = defaultOn(target, defaultModel);
+        const wasDefault = !!current && sameModelName(current, model.name);
         return toResult({ status: 'removed', removed: true, ...summary, wasDefault });
       })
   );
