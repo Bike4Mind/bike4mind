@@ -1,13 +1,20 @@
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SessionStore } from './SessionStore';
 
 const MODEL = 'test-model';
 
+const roots: string[] = [];
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map(directory => rm(directory, { recursive: true, force: true })));
+});
+
 async function root(): Promise<string> {
-  return mkdtemp(join(tmpdir(), 'b4m-generation-store-'));
+  const directory = await mkdtemp(join(tmpdir(), 'b4m-generation-store-'));
+  roots.push(directory);
+  return directory;
 }
 
 const ID = 'c0f24b0e-4e40-4a1d-9a2b-2c7d8f0e1a34';

@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -18,11 +18,19 @@ import type { AccessStore } from './tools/AccessStore';
 /** A conversation's overrides reach its own turns, and never a title, a suggestion or a compaction. */
 
 const services: ChatService[] = [];
-afterEach(() => {
+const roots: string[] = [];
+afterEach(async () => {
   for (const service of services.splice(0)) service.dispose();
   vi.unstubAllGlobals();
   forgetLocalContexts();
+  await Promise.all(roots.splice(0).map(directory => rm(directory, { recursive: true, force: true })));
 });
+
+async function storeFor(prefix: string, model: string): Promise<SessionStore> {
+  const directory = await mkdtemp(join(tmpdir(), prefix));
+  roots.push(directory);
+  return new SessionStore(directory, model);
+}
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -75,7 +83,7 @@ describe('per-conversation generation settings on a hosted model', () => {
       stream.end(frame({ type: 'content', text: 'Widget sizing notes' }) + frame('[DONE]'));
       return Promise.resolve({ data: stream, status: 200 });
     });
-    const store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-generation-')), model);
+    const store = await storeFor('b4m-generation-', model);
     const service = serviceFor(option, {
       store,
       getApiClient: () =>
@@ -150,7 +158,7 @@ describe('reasoning effort through a hosted model controls', () => {
       stream.end(frame({ type: 'content', text: 'ok' }) + frame('[DONE]'));
       return Promise.resolve({ data: stream, status: 200 });
     });
-    const store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-effort-')), option.id);
+    const store = await storeFor('b4m-effort-', option.id);
     const service = serviceFor(option, {
       store,
       getApiClient: () =>
@@ -215,7 +223,7 @@ describe('per-conversation generation settings on a local model', () => {
         maxOutputTokens: { min: 256, max: 8192, step: 256, scope: 'request' },
       },
     };
-    const store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-generation-local-')), model);
+    const store = await storeFor('b4m-generation-local-', model);
     const service = serviceFor(option, { store, local: new OllamaLocal() });
     const { id } = await service.createSession();
     await service.setSessionGeneration(id, OVERRIDES);
