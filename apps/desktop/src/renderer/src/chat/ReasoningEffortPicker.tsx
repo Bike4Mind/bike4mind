@@ -62,13 +62,11 @@ const THINKING_CHOICES: readonly { setting: ReasoningEffortSetting; label: strin
  *
  * Only a model the loaded catalog actually carries gives an answer. A list that has not loaded,
  * or a model that has been retired from one that has, says nothing - and a control disabled on
- * a guess would be a worse lie than the one this picker exists to avoid.
+ * a guess would be a worse lie than the one this picker exists to avoid. A model with controls
+ * answers from them, as reasoningEffortFor in main does, even before Ollama has inspected it.
  */
-function supportState(
-  models: readonly ChatModelOption[],
-  modelId: string | null
-): { supported: boolean; known: boolean } {
-  const option = findModelOption(models, modelId);
+function supportState(option: ChatModelOption | undefined): { supported: boolean; known: boolean } {
+  if (option?.controls) return { supported: option.controls.effort !== undefined, known: true };
   if (!option || option.supportsReasoningEffort === undefined) return { supported: true, known: false };
   return { supported: option.supportsReasoningEffort, known: true };
 }
@@ -96,10 +94,10 @@ export function ReasoningEffortPicker({
   disabled?: boolean;
   onSelect: (effort: ReasoningEffortSetting) => void;
 }) {
-  const { supported, known } = supportState(models, modelId);
+  const option = findModelOption(models, modelId);
+  const { supported, known } = supportState(option);
   const unsupported = known && !supported;
   const sx = { fontWeight: 'normal', minWidth: 0 } as const;
-  const option = findModelOption(models, modelId);
   const levels = option?.controls?.effort?.levels ?? UNLISTED_LEVELS;
 
   // A local model whose server takes no effort, only thinking on or off; any setting but Off thinks.

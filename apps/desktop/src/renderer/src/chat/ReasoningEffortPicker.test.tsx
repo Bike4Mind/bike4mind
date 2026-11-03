@@ -75,6 +75,26 @@ describe('ReasoningEffortPicker', () => {
     expect(markup(plain.id, [plain])).toBe('');
   });
 
+  it('draws nothing for an Ollama model not yet inspected, whose controls list no effort', () => {
+    const uninspected: ChatModelOption = {
+      id: 'local:ollama:qwen3:8b',
+      name: 'qwen3:8b',
+      backend: 'ollama',
+      controls: { temperature: { min: 0, max: 2, step: 0.05, scope: 'request' } },
+    };
+    expect(markup(uninspected.id, [uninspected])).toBe('');
+  });
+
+  it('disables itself on a hosted model whose controls list no effort, whatever its flag says', () => {
+    const budget: ChatModelOption = {
+      id: 'claude-opus-4-1',
+      name: 'Claude Opus 4.1',
+      supportsReasoningEffort: true,
+      controls: {},
+    };
+    expect(markup(budget.id, [budget])).toContain('Effort: n/a');
+  });
+
   it('shows a stored level the model does not list as the nearest level it sends instead', () => {
     const listed: ChatModelOption = {
       id: 'gpt-5',

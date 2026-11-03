@@ -742,6 +742,8 @@ describe('OllamaLocal', () => {
     ]);
     // Absent is unknown, which chat treats as tools on; only an explicit false turns them off.
     expect(first[1]).not.toHaveProperty('supportsTools');
+    expect(first[1]).not.toHaveProperty('supportsReasoningEffort');
+    expect(first[1]?.controls).not.toHaveProperty('effort');
 
     slow = new Set(['qwen3:8b', 'fresh']);
     shows.length = 0;
