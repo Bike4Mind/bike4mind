@@ -119,8 +119,9 @@ async function withoutPaidOnlyModels(list: CatalogModelList, user: IUserDocument
 }
 
 /**
- * The model for a request that names none: a free account whose default is paid-only (not listed, and not a text
- * model while text models are open) starts on the first allowlisted text model (admin order) that admission accepts. Read failures propagate, as they do at call time.
+ * The model for a request that names none. A free account whose default is paid-only (not listed, and not a text
+ * model while text models are open) starts on the first allowlisted text model, in admin order, that admission
+ * accepts. Read failures propagate, as they do at call time.
  */
 export async function resolveCallerDefaultModel(
   defaultModel: string,
