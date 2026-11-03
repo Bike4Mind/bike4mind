@@ -51,6 +51,7 @@ const showSchema = z.object({
   model_info: z.record(z.string(), z.unknown()).nullable().optional(),
   parameters: z.string().optional(),
   template: z.string().optional().catch(undefined),
+  modelfile: z.string().optional().catch(undefined),
   /** The `think` values the model honors (booleans or effort names); absent when Ollama does not know. */
   thinking: z
     .object({ values: z.array(z.unknown()) })
@@ -170,6 +171,8 @@ export type ChatFetch = (url: typeof CHAT_URL, init: RequestInit) => Promise<Res
 export interface LocalModelFacts {
   name: string;
   modelInfo?: Record<string, unknown>;
+  /** `/api/show`'s Modelfile, whose FROM lines name the projector blobs. */
+  modelfile?: string;
   sizeBytes?: number;
   digest?: string;
 }
@@ -524,7 +527,12 @@ export class OllamaLocal {
 
   private async facts(name: string, inspection: Inspection): Promise<LocalModelFacts> {
     if (!tagFacts.has(this.key(name))) await this.tags().catch(() => null);
-    return { name, modelInfo: inspection.model_info ?? undefined, ...tagFacts.get(this.key(name)) };
+    return {
+      name,
+      modelInfo: inspection.model_info ?? undefined,
+      modelfile: inspection.modelfile,
+      ...tagFacts.get(this.key(name)),
+    };
   }
 
   /** One `/api/tags` per refresh; a changed digest is a different model under the same name. */
