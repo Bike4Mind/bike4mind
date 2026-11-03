@@ -80,7 +80,8 @@ export function buildReplyStats(input: ReplyStatsInput): ChatReplyStats {
       reasoningMs = (reasoningMs ?? 0) + thinking.ms;
       if (thinking.derived) derived.add('reasoningMs');
     }
-    const generated = roundGeneration(round);
+    // A self-hosted round is rated by its server, or by estimatedRate where its read guard trusts the stream.
+    const generated = input.local ? null : roundGeneration(round);
     if (generated) {
       generation = { tokens: (generation?.tokens ?? 0) + generated.tokens, ms: (generation?.ms ?? 0) + generated.ms };
     }

@@ -222,6 +222,16 @@ describe('buildReplyStats', () => {
     expect(buildReplyStats({ ...base, rounds: [round(next.timing)] }).generation).toBeUndefined();
   });
 
+  it('leaves a self-hosted reply unrated when its server sent no timings and the stream was too bursty to estimate', () => {
+    // 50 tokens in two reads 300ms apart: estimatedRate refuses fewer than three reads, so no rate.
+    const rounds = [
+      round({ startedAt: 0, firstTokenAt: 1_000, firstTextAt: 1_000, endedAt: 1_300 }, { usage: { outputTokens: 50 } }),
+    ];
+    const base = { endedAt: 1_400, rounds, toolMs: 0, usage: { outputTokens: 50 } };
+    expect(buildReplyStats({ ...base, local: true }).generation).toBeUndefined();
+    expect(buildReplyStats({ ...base, local: false }).generation).toEqual({ tokens: 49, ms: 300 });
+  });
+
   it('times a plain hosted reply from its request, leaving out the setup before it', () => {
     expect(
       buildReplyStats({
