@@ -56,6 +56,9 @@ export async function launchCommand(
   return { executable: '/bin/bash', args: ['-c', command], cleanup: async () => undefined };
 }
 
+/** A detached Windows child has no console, and wsl.exe without one exits -1 or drops the output; a WSL command is found by its tag instead. */
+export const spawnsDetached = (launch: Pick<SandboxedCommand, 'wslDistro'>): boolean => !launch.wslDistro;
+
 /** The user's own environment, with the PATH a terminal would have rather than Finder's. */
 export async function commandEnv(launch: SandboxedCommand, extra: NodeJS.ProcessEnv = {}): Promise<NodeJS.ProcessEnv> {
   if (launch.wslDistro) {

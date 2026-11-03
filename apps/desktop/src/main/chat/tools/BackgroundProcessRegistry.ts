@@ -4,7 +4,7 @@ import { StringDecoder } from 'node:string_decoder';
 import type { BackgroundProcessInfo, BackgroundProcessStatus } from '@shared/chat';
 import { parentWatchStdioIndex, wrapWithParentWatchdog } from './backgroundScript';
 import { OutputBuffer, type OutputStream } from './outputBuffer';
-import { commandEnv, launchCommand } from './commandLaunch';
+import { commandEnv, launchCommand, spawnsDetached } from './commandLaunch';
 import { commandExit, signalCommandTree, signalCommandTreesSync, type CommandTree } from './commandTree';
 import type { SandboxedCommand } from './sandbox';
 
@@ -161,7 +161,7 @@ export class BackgroundProcessRegistry {
         cwd: request.cwd,
         // Detached so the child leads its own process group: that is what makes one signal
         // reach the command's whole tree rather than just the shell.
-        detached: true,
+        detached: spawnsDetached(launch),
         windowsHide: true,
         // The watch pipe the child blocks on. Its write end stays open in this process for
         // exactly as long as this process lives, which is the entire mechanism.
