@@ -47,8 +47,11 @@ export interface TurnProgress {
   messageId?: string;
   /** A resumed reply: what its message already stores is from the runs before this one. */
   continued?: boolean;
-  /** Epoch ms the first request went out, after the turn's setup; see withPhase. */
-  requestAt?: number;
+  /**
+   * Epoch ms the first request went out, after the turn's setup; see withPhase. Null on a reply
+   * this window opened mid-stream, whose first request it never saw.
+   */
+  requestAt?: number | null;
   /** Epoch ms the model's first output of any kind arrived, for the stats rail; see withPhase. */
   firstTokenAt?: number;
   /** Thinking time of the phases that have ended, in ms; see withPhase. */

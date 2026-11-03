@@ -600,7 +600,7 @@ export function useConversation(
         // to say so, the 'workspace' one went out before this window was looking.
         setPreparing(current => current ?? loaded?.preparingWorkspace ?? null);
         setStreaming(!!live);
-        setTurn(live ? { startedAt: live.startedAt, tokens: null, messageId: live.messageId } : null);
+        setTurn(live ? { startedAt: live.startedAt, tokens: null, messageId: live.messageId, requestAt: null } : null);
       });
     };
     load();

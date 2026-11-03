@@ -283,8 +283,16 @@ describe('the live turn', () => {
     expect(liveReplyStats(next, 17_500)).toMatchObject({ reasoningMs: 4500, firstTokenMs: 600 });
   });
 
-  it('times the first token from the turn when no request was seen going out', () => {
-    expect(liveReplyStats({ ...turn, firstTokenAt: 10_700 }, 12_000).firstTokenMs).toBe(700);
+  it('shows no first token for a turn whose request it never saw go out', () => {
+    expect(liveReplyStats({ ...turn, firstTokenAt: 10_700 }, 12_000).firstTokenMs).toBeUndefined();
+
+    // Opened mid-reply: a later request's wait must not stand in for the first one.
+    let joined: TurnProgress = { ...turn, requestAt: null };
+    joined = withPhase(joined, { kind: 'waiting' }, 12_000);
+    joined = withPhase(joined, { kind: 'responding' }, 12_400);
+    expect(joined.requestAt).toBeNull();
+    expect(liveReplyStats(joined, 13_000).firstTokenMs).toBeUndefined();
+    expect(liveReplyStats(joined, 13_000, { ...base, firstTokenMs: 900 }).firstTokenMs).toBe(900);
   });
 
   it("builds on a continued reply's earlier runs, taking the server's running thinking count over theirs", () => {

@@ -179,6 +179,25 @@ describe('the live thread, driven by stream events', () => {
     }
   });
 
+  it('keeps the reply a window opened mid-stream is writing, with no first token it did not see', async () => {
+    const chat = (window as unknown as { b4m: { chat: Record<string, unknown> } }).b4m.chat;
+    chat.getSession = async () => ({
+      id: SESSION,
+      messages: [
+        { id: 'u1', role: 'user', content: 'go', createdAt: '2026-10-01T00:00:00.000Z' },
+        { id: MESSAGE, role: 'assistant', content: 'Partway', createdAt: '2026-10-01T00:00:01.000Z' },
+      ],
+      replyInFlight: { messageId: MESSAGE, startedAt: 500 },
+    });
+    await act(async () => root.render(<TurnProbe />));
+    await act(async () => undefined);
+    const probe = () => JSON.parse(container.querySelector('[data-testid="chat-turn-probe"]')?.textContent ?? '{}');
+
+    expect(probe()).toMatchObject({ messageId: MESSAGE, requestAt: null });
+    emit({ type: 'phase', sessionId: SESSION, messageId: MESSAGE, phase: { kind: 'waiting' } });
+    expect(probe().requestAt).toBeNull();
+  });
+
   const text = (delta: string): ChatStreamEvent => ({
     type: 'delta',
     sessionId: SESSION,
