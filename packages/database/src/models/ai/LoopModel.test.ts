@@ -196,6 +196,19 @@ describe('LoopRepository', () => {
     expect(await loopRepository.findById(unscheduled.id)).toMatchObject({ nextRunAt: now, idleStreak: 0 });
   });
 
+  it('endBackoff only touches a loop backing off, and never pushes its next run later', async () => {
+    const now = new Date();
+    const far = new Date(now.getTime() + 8 * 3_600_000);
+    const soon = new Date(now.getTime() + 15 * 60_000);
+    const backingOff = await create({ status: 'live', nextRunAt: far, idleStreak: 3 });
+    const dueSooner = await create({ status: 'live', nextRunAt: now, idleStreak: 1 });
+    const steady = await create({ status: 'live', nextRunAt: far });
+    for (const loop of [backingOff, dueSooner, steady]) await loopRepository.endBackoff(loop.id, soon);
+    expect(await loopRepository.findById(backingOff.id)).toMatchObject({ idleStreak: 0, nextRunAt: soon });
+    expect(await loopRepository.findById(dueSooner.id)).toMatchObject({ idleStreak: 0, nextRunAt: now });
+    expect((await loopRepository.findById(steady.id))?.nextRunAt).toEqual(far);
+  });
+
   it('claimDue skips the users it is told to', async () => {
     const now = new Date();
     const past = new Date(now.getTime() - 60_000);
