@@ -150,6 +150,15 @@ describe('BedrockNews claim routes', () => {
       ]);
     });
 
+    it('is already claimed for an open ticket with nothing left to pay', async () => {
+      mockPreview.mockResolvedValue({ ok: true, preview: { status: 'open', expiresAt: 'x', rungs: [] } });
+      expect((await preview())._getJSONData()).toEqual({
+        state: 'redeemed',
+        result: { claimed: [], total: 0, firstSolveCredits: 0, capped: 0 },
+      });
+      expect(mockRungCredits).not.toHaveBeenCalled();
+    });
+
     it('is in-progress while another redeem holds the ticket', async () => {
       mockPreview.mockResolvedValue({ ok: true, preview: { status: 'redeeming', expiresAt: 'x', rungs: RUNGS } });
       expect((await preview())._getJSONData()).toEqual({ state: 'in-progress' });

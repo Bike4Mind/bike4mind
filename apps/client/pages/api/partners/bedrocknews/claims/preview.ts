@@ -11,6 +11,8 @@ import {
 } from '@server/partners/bedrocknewsClaimStates';
 import { previewTicket } from '@server/partners/bedrocknewsTickets';
 
+const NOTHING_PAID = { claimed: [], total: 0, firstSolveCredits: 0, capped: 0 };
+
 export default baseApi({ auth: 'jwtOnly' })
   .use(csrfProtection())
   .use(rateLimit({ limit: 30, windowMs: 60000 }))
@@ -27,6 +29,9 @@ export default baseApi({ auth: 'jwtOnly' })
       if (status === 'redeemed') {
         return result ? { state: 'redeemed', result: await withOwnBalance(result, user.id) } : { state: 'unavailable' };
       }
+
+      // Everything was paid through another ticket; show it as claimed rather than "Add 0 credits".
+      if (rungs.length === 0) return { state: 'redeemed', result: NOTHING_PAID };
 
       const credits = await rungCredits(rungs.map(({ length, hard }) => ({ tier: length, hard })));
       return { state: 'ready', credits, rungs, account: user.email };
