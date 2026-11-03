@@ -335,6 +335,11 @@ describe('a Windows program run from a WSL project', () => {
     ["env -u TERM notepad.exe 'C:\\Users\\me\\notes.txt'", ['C:\\Users\\me']],
     ["sudo -u me notepad.exe 'C:\\Users\\me\\notes.txt'", ['C:\\Users\\me']],
     ["xargs -I {} notepad.exe 'C:\\Users\\me\\notes.txt'", ['C:\\Users\\me']],
+    ["notepad.exe '\\\\?\\C:\\Users\\me\\notes.txt'", ['C:\\Users\\me']],
+    ["notepad.exe '\\\\.\\C:\\Users\\me\\notes.txt'", ['C:\\Users\\me']],
+    ['notepad.exe //?/C:/Users/me/notes.txt', ['C:\\Users\\me']],
+    ["notepad.exe '\\\\?\\UNC\\fileserver\\share\\notes.txt'", ['\\\\fileserver\\share\\']],
+    ['notepad.exe //./unc/fileserver/share/notes.txt', ['\\\\fileserver\\share\\']],
   ])('names the Windows place a Windows path operand opens: %s', async (command, expected) => {
     touched.length = 0;
 
@@ -403,6 +408,33 @@ describe('a Windows program run from a WSL project', () => {
     const scan = await scanShell(`${wrapper} notepad.exe 'C:\\Users\\me\\notes.txt'`, root, [root]);
 
     expect(scan?.directories).toEqual(['C:\\Users\\me']);
+  });
+
+  it.each([
+    "notepad.exe '\\\\?\\UNC\\wsl.localhost\\Debian\\etc\\hosts'",
+    'notepad.exe //?/UNC/wsl.localhost/Debian/etc/hosts',
+  ])('names the distro %s reaches, offering no folder', async command => {
+    const scan = await scanShell(command, root, [root]);
+
+    expect(scan?.ungranted).toEqual(['\\\\wsl.localhost\\Debian\\etc\\hosts']);
+    expect(scan?.directories).toEqual([]);
+  });
+
+  it('keeps the device prefix of a path that names no drive or share', async () => {
+    const scan = await scanShell("notepad.exe '\\\\?\\Volume{0a1b}\\notes.txt'", root, [root]);
+
+    expect(scan?.directories).toEqual(['\\\\?\\Volume{0a1b}\\']);
+  });
+
+  it('still reads a Windows path operand when the distro cannot resolve a path', async () => {
+    unresolvable.current = true;
+    try {
+      const scan = await scanShell("notepad.exe 'C:\\Users\\me\\notes.txt'", root, [root]);
+
+      expect(scan?.directories).toContain('C:\\Users\\me');
+    } finally {
+      unresolvable.current = false;
+    }
   });
 
   it.each(['cmd.exe /c dir', 'git.exe status', 'explorer.exe .', 'cmd.exe /c type notes.txt'])(

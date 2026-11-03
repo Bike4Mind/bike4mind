@@ -314,6 +314,17 @@ function globPrefix(text: string): string | null {
 }
 
 /**
+ * A Windows path split into a device prefix Windows takes literally and the rest: `\\?\C:\x` and
+ * `\\.\UNC\server\share` name `C:\x` and `\\server\share`, and `\\?\Volume{...}\x` keeps its `\\?\`.
+ */
+function windowsDevicePath(text: string): [string, string] {
+  if (!/^[\\/]{2}[?.][\\/]/.test(text)) return ['', text];
+  const rest = text.slice(4);
+  if (/^UNC[\\/]/i.test(rest)) return ['', `\\\\${rest.slice(4)}`];
+  return /^[A-Za-z]:/.test(rest) ? ['', rest] : [text.slice(0, 4), rest];
+}
+
+/**
  * A program that runs the command after its own words. Any option letter not listed is a flag that
  * takes no value.
  */
@@ -1654,11 +1665,13 @@ export async function scanShell(
       probe = false,
       reader: OperandReader = 'program'
     ): Promise<string | null> => {
-      const text = expand(unquote(raw));
-      const prefix = globPrefix(text);
-      if (!prefix || isDynamic(prefix)) return null;
+      const written = expand(unquote(raw));
+      const [device, text] = reader === 'windows' ? windowsDevicePath(written) : ['', written];
+      const glob = globPrefix(text);
+      if (!glob || isDynamic(glob)) return null;
+      const prefix = device + glob;
       // A glob can expand to `..` (`~/.nvm*/../.ssh`, `~/.nvm/.?/.ssh`), so a dot after the glob never stays inside.
-      const stays = text === prefix || (!text.slice(prefix.length).includes('.') && !prefix.endsWith('.'));
+      const stays = text === glob || (!text.slice(glob.length).includes('.') && !glob.endsWith('.'));
       const places = await operandPlaces(prefix, allowed, cwd, reader);
       for (const { lexical, physical, inside } of places) {
         if (inUngrantedDistro(lexical, allowed)) {
