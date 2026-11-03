@@ -3,6 +3,27 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+describe('resolveUserPath on Windows', () => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  afterEach(() => {
+    if (platform) Object.defineProperty(process, 'platform', platform);
+    vi.unstubAllEnvs();
+    vi.doUnmock('node:child_process');
+  });
+
+  it('uses the inherited PATH as it is, with no shell probe and no Homebrew or Nix folders', async () => {
+    vi.resetModules();
+    const execFile = vi.fn();
+    vi.doMock('node:child_process', () => ({ execFile }));
+    vi.stubEnv('PATH', 'C:\\Windows\\System32;C:\\Tools');
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    const { resolveUserPath } = await import('./userPath');
+
+    expect(await resolveUserPath()).toBe('C:\\Windows\\System32;C:\\Tools');
+    expect(execFile).not.toHaveBeenCalled();
+  });
+});
+
 describe.skipIf(process.platform === 'win32')('resolveUserPath', () => {
   let directory: string;
 

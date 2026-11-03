@@ -30,6 +30,8 @@ function commonBinDirs(): string[] {
  * for the app's lifetime, so main/index.ts starts it at launch.
  */
 export function resolveUserPath(): Promise<string> {
+  // A Windows app gets the user's PATH from the registry however it is launched.
+  if (process.platform === 'win32') return Promise.resolve(process.env.PATH ?? '');
   cachedPath ??= new Promise<string>(resolve => {
     const fallback = [...(process.env.PATH ?? '').split(delimiter), ...commonBinDirs()]
       .filter(Boolean)
