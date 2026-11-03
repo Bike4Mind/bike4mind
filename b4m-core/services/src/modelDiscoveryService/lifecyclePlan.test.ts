@@ -240,6 +240,42 @@ describe('planLifecycleSignals', () => {
     expect(signals.docs.get('gpt-5')?.corroborated).toBe(false);
   });
 
+  it('withholds a provider page sunset when the typed date disagrees with its dates', () => {
+    const signals = planLifecycleSignals({
+      contributions: [
+        provider('anthropic', [providerPage]),
+        aggregator('litellm', [
+          { modelId: 'gpt-5', patch: { lifecycle: { deprecationDate: '2027-01-15' } }, lifecycleEvidence: 'typed' },
+        ]),
+      ],
+    });
+
+    const anthropic = signals.contributions.find(contribution => contribution.name === 'anthropic');
+    expect(anthropic?.records[0].patch).not.toHaveProperty('lifecycle');
+    expect(signals.docs.get('gpt-5')?.corroborated).toBe(false);
+  });
+
+  it('accepts a typed date that matches the page retirement date', () => {
+    const signals = planLifecycleSignals({
+      contributions: [
+        provider('anthropic', [providerPage]),
+        aggregator('litellm', [
+          { modelId: 'gpt-5', patch: { lifecycle: { deprecationDate: '2026-11-30' } }, lifecycleEvidence: 'typed' },
+        ]),
+      ],
+    });
+
+    expect(signals.docs.get('gpt-5')?.corroborated).toBe(true);
+  });
+
+  it('does not let a typed date on a different model corroborate the page', () => {
+    const signals = planLifecycleSignals({
+      contributions: [provider('anthropic', [providerPage]), aggregator('litellm', [typedDate('gpt-4o')])],
+    });
+
+    expect(signals.docs.get('gpt-5')?.corroborated).toBe(false);
+  });
+
   it('does not let an aggregator docs page corroborate itself', () => {
     const signals = planLifecycleSignals({
       contributions: [aggregator('scraper', [providerPage]), aggregator('litellm', [typedDate()])],

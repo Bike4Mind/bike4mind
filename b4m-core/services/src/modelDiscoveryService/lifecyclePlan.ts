@@ -73,7 +73,7 @@ export interface DocsLifecycleSignal {
   modelId: string;
   source: string;
   lifecycle: NonNullable<ModelRecord['lifecycle']>;
-  /** True when a typed sunset, or a typed date beside a provider's own page, lets this docs row be written. */
+  /** True when a typed sunset, or a typed date matching a provider's own page, lets this docs row be written. */
   corroborated: boolean;
 }
 
@@ -100,7 +100,7 @@ export interface LifecycleSignals {
   /**
    * The contributions the catalog planner may overlay. Every uncorroborated docs
    * lifecycle is removed (no typed sunset, and for a provider's own page no typed
-   * date announcement either), because writing `lifecycle.deprecationDate` IS
+   * date matching one of its dates either), because writing `lifecycle.deprecationDate` IS
    * hiding a model - the runtime picker drops it once the date passes - and a
    * parsed page may never do that alone (sec 5.10 tier 2). `replacedBy` is
    * removed even from the corroborated ones: the auto-remap constraints own that
@@ -141,7 +141,7 @@ export function planLifecycleSignals({
   const ordered = providersFirst(contributions);
 
   const typedSunsets = new Set<string>();
-  const typedDateAnnouncements = new Set<string>();
+  const typedDateAnnouncements = new Map<string, Set<string>>();
   const providerSunsets = new Set<string>();
   const aggregatorSunsetSources = new Map<string, Set<string>>();
   for (const contribution of ordered) {
@@ -149,8 +149,13 @@ export function planLifecycleSignals({
       const status = record.patch?.lifecycle?.status;
       const typed = evidenceOf(record) === 'typed';
       const announced = record.patch?.lifecycle;
-      if (typed && (announced?.deprecationDate !== undefined || announced?.retirementDate !== undefined)) {
-        typedDateAnnouncements.add(record.modelId);
+      if (typed) {
+        for (const date of [announced?.deprecationDate, announced?.retirementDate]) {
+          if (date === undefined) continue;
+          const dates = typedDateAnnouncements.get(record.modelId) ?? new Set<string>();
+          dates.add(date);
+          typedDateAnnouncements.set(record.modelId, dates);
+        }
       }
       if (!status || !LIFECYCLE_SUNSET_STATUSES.has(status)) continue;
       if (typed) typedSunsets.add(record.modelId);
@@ -211,12 +216,15 @@ export function planLifecycleSignals({
       if (lifecycle.status === undefined) return withoutLifecycle(record);
       const stated: NonNullable<ModelRecord['lifecycle']> = { ...lifecycle, status: lifecycle.status };
 
-      // A dropped parser never reaches here (returned above). A provider's own page plus an
-      // independent typed date is two sources agreeing; an aggregator's page never qualifies.
+      // A dropped parser never reaches here (returned above). A provider's own page agrees with
+      // a typed feed only when one of its dates matches a typed date; an aggregator's page never qualifies.
+      const typedDates = typedDateAnnouncements.get(record.modelId);
+      const typedDateAgrees =
+        typedDates !== undefined &&
+        [stated.deprecationDate, stated.retirementDate].some(date => date !== undefined && typedDates.has(date));
       const corroborated =
         TERMINAL_STATUSES.has(stated.status) &&
-        (typedSunsets.has(record.modelId) ||
-          (contribution.kind === 'provider' && typedDateAnnouncements.has(record.modelId)));
+        (typedSunsets.has(record.modelId) || (contribution.kind === 'provider' && typedDateAgrees));
       // First writer wins, same precedence the field overlay uses.
       if (!docs.has(record.modelId)) {
         docs.set(record.modelId, {
@@ -766,7 +774,7 @@ function docsSuggestions(input: PlanContext, sunsetting: ReadonlySet<string>): L
       detail:
         `${signal.source} documents this model as ${signal.lifecycle.status}` +
         `${signal.lifecycle.retirementDate ? ` (retirement ${signal.lifecycle.retirementDate})` : ''}; ` +
-        'no typed feed corroborates it (a typed sunset, or a typed date for a provider page), so a parsed page alone may not hide the model',
+        'no typed feed corroborates it (a typed sunset, or a matching typed date for a provider page), so a parsed page alone may not hide the model',
     });
   }
   return suggestions;
