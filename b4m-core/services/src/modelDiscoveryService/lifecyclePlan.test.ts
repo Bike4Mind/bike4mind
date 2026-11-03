@@ -763,6 +763,86 @@ describe('planLifecycle typed transitions', () => {
   });
 });
 
+describe('planLifecycle provider-page sunsets', () => {
+  const base = new Map([active('gpt-5'), active('gpt-6')]);
+  const ratesInForce = rates({ 'gpt-5': [2, 8], 'gpt-6': [1, 4] });
+
+  const run = (typedLifecycle: NonNullable<ModelRecord['lifecycle']>, overrides: Partial<LifecyclePlanInput> = {}) => {
+    const signals = planLifecycleSignals({
+      contributions: [
+        provider('anthropic', [
+          {
+            modelId: 'gpt-5',
+            patch: {
+              lifecycle: {
+                status: 'deprecated',
+                deprecationDate: '2026-08-10',
+                retirementDate: '2026-11-30',
+                replacedBy: 'gpt-6',
+              },
+            },
+            lifecycleEvidence: 'docs',
+          },
+        ]),
+        aggregator('litellm', [{ modelId: 'gpt-5', patch: { lifecycle: typedLifecycle }, lifecycleEvidence: 'typed' }]),
+      ],
+      catalogModelIds: new Set(base.keys()),
+    });
+    return plan({
+      catalogPlan: catalogPlan(signals.contributions, base),
+      base,
+      docs: signals.docs,
+      aggregatorSunsets: signals.aggregatorSunsets,
+      ratesInForce,
+      ...overrides,
+    });
+  };
+  const dateOnly = { deprecationDate: '2026-08-10' };
+  const lifecycleRows = (result: ReturnType<typeof plan>) =>
+    result.rows.filter(row => row.modelId === 'gpt-5' && row.patch.lifecycle !== undefined);
+
+  it('holds the write under suggest when no successor resolves', () => {
+    const result = run(dateOnly, { autoRemap: 'suggest' });
+
+    expect(result.transitions).toEqual([]);
+    expect(lifecycleRows(result)).toEqual([]);
+    expect(result.rows.some(row => row.modelId === 'gpt-5' && row.ownedGroups.includes('lifecycle'))).toBe(false);
+    expect(result.diff.filter(entry => entry.modelId === 'gpt-5' && entry.changedKeys.includes('lifecycle'))).toEqual(
+      []
+    );
+    const suggestions = result.suggestions.filter(suggestion => suggestion.modelId === 'gpt-5');
+    expect(suggestions).toHaveLength(1);
+    expect(suggestions[0].replacedBy).toBe('gpt-6');
+    expect(suggestions[0].detail).toMatch(/held/);
+  });
+
+  it('writes it under apply when the remap is unblocked', () => {
+    const result = run(dateOnly, { autoRemap: 'apply' });
+
+    expect(result.transitions).toHaveLength(1);
+    expect(result.transitions[0]).toMatchObject({ modelId: 'gpt-5', autoApplied: true, replacedBy: 'gpt-6' });
+    expect(lifecycleRows(result)[0].patch.lifecycle).toMatchObject({ replacedBy: 'gpt-6' });
+  });
+
+  it('writes it under suggest when the resolver already knows a successor', () => {
+    const result = run(dateOnly, { autoRemap: 'suggest', knownSuccessor: () => 'gpt-6' });
+
+    expect(result.transitions).toHaveLength(1);
+    expect(result.transitions[0]).toMatchObject({ modelId: 'gpt-5', autoApplied: false, replacedBy: undefined });
+    const lifecycle = lifecycleRows(result)[0].patch.lifecycle;
+    expect(lifecycle).toBeDefined();
+    expect(lifecycle?.replacedBy).toBeUndefined();
+  });
+
+  it('leaves a typed-sunset corroboration unchanged', () => {
+    const result = run({ status: 'deprecated', ...dateOnly }, { autoRemap: 'suggest' });
+
+    expect(result.transitions).toHaveLength(1);
+    expect(result.transitions[0]).toMatchObject({ modelId: 'gpt-5', autoApplied: false });
+    expect(lifecycleRows(result)).toHaveLength(1);
+  });
+});
+
 describe('planLifecycle docs suggestions', () => {
   const docsRun = (base: Map<string, ResolvedCatalogRecord>, lifecycle: NonNullable<ModelRecord['lifecycle']>) => {
     const signals = planLifecycleSignals({

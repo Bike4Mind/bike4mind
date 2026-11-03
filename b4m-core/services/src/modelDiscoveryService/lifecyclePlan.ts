@@ -75,6 +75,8 @@ export interface DocsLifecycleSignal {
   lifecycle: NonNullable<ModelRecord['lifecycle']>;
   /** True when a typed sunset, or a typed date matching a provider's own page, lets this docs row be written. */
   corroborated: boolean;
+  /** What corroborated it; a 'provider-date' row is written only once a successor resolves. */
+  corroboration?: 'typed-sunset' | 'provider-date';
 }
 
 export interface LifecycleSignalsInput {
@@ -104,7 +106,8 @@ export interface LifecycleSignals {
    * hiding a model - the runtime picker drops it once the date passes - and a
    * parsed page may never do that alone (sec 5.10 tier 2). `replacedBy` is
    * removed even from the corroborated ones: the auto-remap constraints own that
-   * field (sec 8).
+   * field (sec 8). A provider page sunset corroborated only by a typed date is
+   * written once a successor resolves.
    */
   contributions: SourceContribution[];
   /** Every docs lifecycle row this run, allowed through or not; the suggestion channel reads it. */
@@ -222,9 +225,14 @@ export function planLifecycleSignals({
       const typedDateAgrees =
         typedDates !== undefined &&
         [stated.deprecationDate, stated.retirementDate].some(date => date !== undefined && typedDates.has(date));
-      const corroborated =
-        TERMINAL_STATUSES.has(stated.status) &&
-        (typedSunsets.has(record.modelId) || (contribution.kind === 'provider' && typedDateAgrees));
+      const terminal = TERMINAL_STATUSES.has(stated.status);
+      const corroboration: DocsLifecycleSignal['corroboration'] =
+        terminal && typedSunsets.has(record.modelId)
+          ? 'typed-sunset'
+          : terminal && contribution.kind === 'provider' && typedDateAgrees
+            ? 'provider-date'
+            : undefined;
+      const corroborated = corroboration !== undefined;
       // First writer wins, same precedence the field overlay uses.
       if (!docs.has(record.modelId)) {
         docs.set(record.modelId, {
@@ -232,6 +240,7 @@ export function planLifecycleSignals({
           source: contribution.name,
           lifecycle: stated,
           corroborated,
+          corroboration,
         });
       }
       // Corroborated docs stay because they carry the precise dates a typed feed
@@ -358,6 +367,11 @@ export interface LifecyclePlanInput {
    * declared; the `availability` credit is the one the read path interprets.
    */
   priorContributors?: ReadonlyMap<string, readonly ICatalogContributor[]>;
+  /**
+   * The resolver's static map and overlay (resolveSuccessorChain), used only to decide whether
+   * hiding a provider-page sunset is safe. Absent reads as no successor known, the fail-closed reading.
+   */
+  knownSuccessor?: (modelId: string) => string | undefined;
   autoRemap: DiscoveryAutoRemapPolicy;
   operatorOwnedModelIds: ReadonlySet<string>;
   /** Every id the static adapter tables ship; an alias among them is curated, never a duplicate. */
@@ -416,10 +430,34 @@ export function planLifecycle(plannerInput: LifecyclePlanInput): LifecyclePlan {
   const transitions: LifecycleTransition[] = [];
   const suggestions: LifecycleSuggestion[] = [];
   const applied = new Map<string, string>();
+  const held = new Set<string>();
 
   for (const entry of pending) {
     const remap = TERMINAL_STATUSES.has(entry.to) ? planRemap(entry, input, sunsetting) : undefined;
     const autoApplied = remap !== undefined && remap.blockers.length === 0 && input.autoRemap === 'apply';
+    const docsSignal = input.docs.get(entry.modelId);
+    if (docsSignal?.corroboration === 'provider-date' && TERMINAL_STATUSES.has(entry.to)) {
+      const successorKnown =
+        autoApplied ||
+        input.knownSuccessor?.(entry.modelId) !== undefined ||
+        lifecycleOf(input.resolvedInForce.get(entry.modelId))?.replacedBy !== undefined;
+      if (!successorKnown) {
+        held.add(entry.modelId);
+        suggestions.push({
+          modelId: entry.modelId,
+          status: entry.to,
+          deprecationDate: entry.lifecycle.deprecationDate,
+          retirementDate: entry.lifecycle.retirementDate,
+          replacedBy: remap?.candidate,
+          source: docsSignal.source,
+          detail:
+            `${docsSignal.source} documents this model as ${entry.to}` +
+            `${entry.lifecycle.retirementDate ? ` (retirement ${entry.lifecycle.retirementDate})` : ''}; ` +
+            'held, no successor resolves: set modelDiscoveryAutoRemap to apply or map it',
+        });
+        continue;
+      }
+    }
     if (remap && autoApplied) applied.set(entry.modelId, remap.candidate);
     else if (remap) {
       suggestions.push({
@@ -450,13 +488,34 @@ export function planLifecycle(plannerInput: LifecyclePlanInput): LifecyclePlan {
     if (!suggested.has(signal.modelId)) suggestions.push(signal);
   }
 
-  const rows = input.catalogPlan.rows.map(row => {
+  const rows: IModelCatalogRowInput[] = [];
+  const diff: CatalogDiffEntry[] = [];
+  input.catalogPlan.rows.forEach((row, index) => {
+    const entry = input.catalogPlan.diff[index];
+    if (row.source === 'discovery' && held.has(row.modelId)) {
+      const ownedGroups = row.ownedGroups.filter(group => group !== 'lifecycle');
+      if (ownedGroups.length === 0) return;
+      rows.push({
+        ...row,
+        patch: omit(row.patch, 'lifecycle'),
+        ownedGroups,
+        contributors: row.contributors?.filter(credit => credit.group !== 'lifecycle'),
+      });
+      diff.push({
+        ...entry,
+        ownedGroups: entry.ownedGroups.filter(group => group !== 'lifecycle'),
+        changedKeys: entry.changedKeys.filter(key => key !== 'lifecycle'),
+      });
+      return;
+    }
     const replacedBy = applied.get(row.modelId);
-    return replacedBy && row.source === 'discovery' && row.patch.lifecycle
-      ? { ...row, patch: { ...row.patch, lifecycle: { ...row.patch.lifecycle, replacedBy } } }
-      : row;
+    rows.push(
+      replacedBy && row.source === 'discovery' && row.patch.lifecycle
+        ? { ...row, patch: { ...row.patch, lifecycle: { ...row.patch.lifecycle, replacedBy } } }
+        : row
+    );
+    diff.push(entry);
   });
-  const diff = [...input.catalogPlan.diff];
 
   // A graduation and a catalog row for the same model carry the same
   // effectiveFrom, and (modelId, effectiveFrom) is unique - appending both drops
@@ -913,6 +972,7 @@ interface HeldLifecycle {
   status?: string;
   deprecationDate?: string;
   retirementDate?: string;
+  replacedBy?: string;
 }
 
 /** lifecycle off a resolved record, which is unnarrowed by construction. */
@@ -924,6 +984,7 @@ function lifecycleOf(resolved: ResolvedCatalogRecord | undefined): HeldLifecycle
     status: stringOf(held.status),
     deprecationDate: stringOf(held.deprecationDate),
     retirementDate: stringOf(held.retirementDate),
+    replacedBy: stringOf(held.replacedBy),
   };
 }
 
