@@ -136,6 +136,8 @@ describe('payCreditReward', () => {
     await creditService.payCreditReward(reward(huge.id, 'projects', 5000), adapters);
     await creditService.payCreditReward(reward(small.id, 'projects'), adapters);
     config.signupGrantTricklePoolDaily = '1000';
+    // An untouched day lets one oversized grant draw (SignupGrantBudgetModel reserve); spend first so it cannot.
+    await signupGrantBudgetRepository.reserve(trickleKey(), 'earlier-drip', 100, 1000);
     const released = await creditService.releaseHeldCreditRewards(adapters, { limit: 10 });
     expect(released).toMatchObject({ paid: 1, budgetExhausted: false });
     expect(await balance(small.id)).toBe(100);
@@ -197,7 +199,11 @@ describe('payCreditReward', () => {
     };
     await creditService.payCreditReward(referral, adapters);
     await User.updateOne({ _id: pending.id }, { 'moderation.status': 'suspend_pending' });
-    await User.updateOne({ _id: friend.id }, { deletedAt: new Date() });
+    // deletedAt is not on the User schema; soft delete writes it through the raw driver (db-core mongo.ts).
+    await User.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(friend.id) },
+      { $set: { deletedAt: new Date() } }
+    );
     config.signupGrantTricklePoolDaily = '1000';
     expect(await creditService.releaseHeldCreditRewards(adapters, { limit: 10 })).toMatchObject({ paid: 0, voided: 2 });
     expect(await balance(pending.id)).toBe(0);
