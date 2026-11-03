@@ -857,7 +857,8 @@ export class ModelServerRegistry {
             toolsChanged: () => this.toolsChanged(record.id),
             learnedThinkers: {
               read: () => this.deps.store.thinkers(record.id),
-              add: model => this.deps.store.addThinker(record.id, model),
+              add: (model, identity) => this.deps.store.addThinker(record.id, model, identity),
+              forget: model => this.deps.store.forgetThinker(record.id, model),
             },
           });
     const runtime: LocalRuntime =

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FetchLike, OpenAICompatibleProduct } from '@bike4mind/local-models';
 import type { CompletionStreamEvent } from '../chat/streamEvents';
 import { ServerCredentialsError, ServerForbiddenError } from './errors';
+import type { LearnedThinker } from './ModelServerStore';
 import { OpenAICompatibleChat, toOpenAIMessages } from './OpenAICompatibleChat';
 
 const BASE = 'http://127.0.0.1:18080';
@@ -383,7 +384,7 @@ describe('OpenAICompatibleChat generation settings', () => {
       fetch,
       hasCredentials: () => false,
       redact: text => text,
-      learnedThinkers: { read: async () => ['qwen3-8b'], add },
+      learnedThinkers: { read: async () => [{ model: 'qwen3-8b' }], add, forget: vi.fn() },
     });
     expect((await client.listModels()).map(model => [model.name, model.thinkingToggle])).toEqual([
       ['qwen3-8b', true],
@@ -392,7 +393,44 @@ describe('OpenAICompatibleChat generation settings', () => {
     await collect(client, ask('qwen3-8b'));
     expect(add).not.toHaveBeenCalled();
     await collect(client, ask('phi-4'));
-    expect(add).toHaveBeenCalledWith('phi-4');
+    expect(add).toHaveBeenCalledWith('phi-4', undefined);
+  });
+
+  it('forgets a learned thinking switch once other weights are served under its name', async () => {
+    let size = 4_000_000_000;
+    const fetch: FetchLike = async url => {
+      if (String(url).endsWith('/v1/models'))
+        return Response.json({ object: 'list', data: [{ id: 'house', object: 'model', meta: { size } }] });
+      return sse([delta({ reasoning_content: 'hmm' }), delta({ content: 'ok' }, 'stop'), '[DONE]']);
+    };
+    const add = vi.fn(async (_model: string, _identity: string | undefined) => undefined);
+    const forget = vi.fn(async (_model: string) => undefined);
+    const open = (read: LearnedThinker[]) =>
+      new OpenAICompatibleChat({
+        runtimeId: 'srv-abc123',
+        baseUrl: BASE,
+        label: 'llama box',
+        product: 'llama-server',
+        fetch,
+        hasCredentials: () => false,
+        redact: text => text,
+        learnedThinkers: { read: async () => read, add, forget },
+      });
+    const client = open([]);
+    await client.listModels();
+    await collect(client, ask('house'));
+    const identity = add.mock.calls[0]?.[1];
+    expect(add).toHaveBeenCalledWith('house', expect.any(String));
+    expect((await client.listModels())[0]?.thinkingToggle).toBe(true);
+    expect((await open([{ model: 'house', identity }]).listModels())[0]?.thinkingToggle).toBe(true);
+
+    size = 8_000_000_000;
+    expect((await client.listModels())[0]?.thinkingToggle).toBeUndefined();
+    expect(forget).toHaveBeenCalledWith('house');
+    forget.mockClear();
+    expect((await open([{ model: 'house', identity }]).listModels())[0]?.thinkingToggle).toBeUndefined();
+    expect(forget).toHaveBeenCalledWith('house');
+    expect((await open([{ model: 'house' }]).listModels())[0]?.thinkingToggle).toBe(true);
   });
 
   it('lists a thinking switch for a model once it has replied with reasoning, and effort levels for gpt-oss', async () => {
