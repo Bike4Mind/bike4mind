@@ -25,7 +25,10 @@ type Round = [string, Record<string, unknown>];
 // Tool stubs first on PATH. These tests check approval decisions; a real git, package runner or
 // curl can outlast the 5 s settle wait (curl hangs where a closed loopback port drops the SYN).
 const stub = vi.hoisted(() => ({ bin: '' }));
-vi.mock('./tools/userPath', () => ({ resolveUserPath: async () => `${stub.bin}:${process.env.PATH ?? ''}` }));
+vi.mock('./tools/userPath', async importOriginal => ({
+  ...(await importOriginal<typeof import('./tools/userPath')>()),
+  resolveUserPath: async () => `${stub.bin}:${process.env.PATH ?? ''}`,
+}));
 
 describe('ChatService running a script written in the same session', () => {
   let service: ChatService;

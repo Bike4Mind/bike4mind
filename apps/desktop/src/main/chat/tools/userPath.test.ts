@@ -1,7 +1,110 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+describe('resolveUserPath on Windows', () => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  afterEach(() => {
+    if (platform) Object.defineProperty(process, 'platform', platform);
+    vi.unstubAllEnvs();
+    vi.doUnmock('node:child_process');
+  });
+
+  it('uses the inherited PATH as it is, with no shell probe and no Homebrew or Nix folders', async () => {
+    vi.resetModules();
+    const execFile = vi.fn();
+    vi.doMock('node:child_process', () => ({ execFile }));
+    vi.stubEnv('PATH', 'C:\\Windows\\System32;C:\\Tools');
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    const { resolveUserPath } = await import('./userPath');
+
+    expect(await resolveUserPath()).toBe('C:\\Windows\\System32;C:\\Tools');
+    expect(execFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('findOnPath', () => {
+  it('takes the first absolute Windows PATH folder with <name>.exe and never looks up a relative one', async () => {
+    const { findOnPath } = await import('./userPath');
+    const checked: string[] = [];
+    const isExecutable = async (file: string) => {
+      checked.push(file);
+      return file === 'C:\\Program Files\\GitHub CLI\\gh.exe';
+    };
+
+    const found = await findOnPath('gh', '.;bin;;D:\\Tools;"C:\\Program Files\\GitHub CLI"', 'win32', isExecutable);
+
+    expect(found).toBe('C:\\Program Files\\GitHub CLI\\gh.exe');
+    expect(checked).toEqual(['D:\\Tools\\gh.exe', 'C:\\Program Files\\GitHub CLI\\gh.exe']);
+    expect(await findOnPath('gh', '.;bin', 'win32', isExecutable)).toBeNull();
+  });
+
+  it('counts a Windows PATH folder only with a drive or UNC prefix', async () => {
+    const { findOnPath } = await import('./userPath');
+    const checked: string[] = [];
+    const isExecutable = async (file: string) => {
+      checked.push(file);
+      return false;
+    };
+
+    await findOnPath('gh', '\\Tools;/usr/bin;C:tools;C:\\bin;D:/bin;\\\\server\\share\\bin', 'win32', isExecutable);
+
+    expect(checked).toEqual(['C:\\bin\\gh.exe', 'D:\\bin\\gh.exe', '\\\\server\\share\\bin\\gh.exe']);
+  });
+
+  it.skipIf(process.platform === 'win32')('skips relative and non-executable entries on POSIX', async () => {
+    const { findOnPath } = await import('./userPath');
+    const directory = await mkdtemp(join(tmpdir(), 'b4m-on-path-'));
+    try {
+      for (const [folder, mode] of [
+        ['here', 0o755],
+        ['plain', 0o644],
+        ['bin', 0o755],
+      ] as const) {
+        await mkdir(join(directory, folder));
+        await writeFile(join(directory, folder, 'gh'), '#!/bin/sh\n', { mode });
+      }
+      const path = ['.', '', 'here', join(directory, 'plain'), join(directory, 'bin')].join(':');
+
+      expect(await findOnPath('gh', path, 'linux')).toBe(join(directory, 'bin', 'gh'));
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('hostProgram', () => {
+  it('gives the bare name off Windows', async () => {
+    const { hostProgram } = await import('./userPath');
+    const isExecutable = vi.fn(async () => true);
+
+    expect(await hostProgram('git', '/usr/bin', 'linux', isExecutable)).toBe('git');
+    expect(await hostProgram('rg', '/opt/homebrew/bin', 'darwin', isExecutable)).toBe('rg');
+    expect(isExecutable).not.toHaveBeenCalled();
+  });
+
+  it('gives the absolute Windows path, keeps it while it exists and finds none when it is gone', async () => {
+    const { hostProgram } = await import('./userPath');
+    const present = new Set(['C:\\Git\\cmd\\git.exe']);
+    const checked: string[] = [];
+    const isExecutable = async (file: string) => {
+      checked.push(file);
+      return present.has(file);
+    };
+    const path = '.;D:\\bin;C:\\Git\\cmd';
+
+    expect(await hostProgram('git', path, 'win32', isExecutable)).toBe('C:\\Git\\cmd\\git.exe');
+    checked.length = 0;
+    expect(await hostProgram('git', path, 'win32', isExecutable)).toBe('C:\\Git\\cmd\\git.exe');
+    expect(checked).toEqual(['C:\\Git\\cmd\\git.exe']);
+
+    present.clear();
+    expect(await hostProgram('git', path, 'win32', isExecutable)).toBeNull();
+    present.add('D:\\bin\\git.exe');
+    expect(await hostProgram('git', path, 'win32', isExecutable)).toBe('D:\\bin\\git.exe');
+  });
+});
 
 describe.skipIf(process.platform === 'win32')('resolveUserPath', () => {
   let directory: string;

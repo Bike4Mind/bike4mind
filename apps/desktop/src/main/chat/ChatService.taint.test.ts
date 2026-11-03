@@ -30,7 +30,10 @@ function allowRules(rules: readonly string[]): PermissionRuleSet {
 
 // Tool stubs first on PATH, so the commands below run without the network or an account.
 const stub = vi.hoisted(() => ({ bin: '' }));
-vi.mock('./tools/userPath', () => ({ resolveUserPath: async () => `${stub.bin}:${process.env.PATH ?? ''}` }));
+vi.mock('./tools/userPath', async importOriginal => ({
+  ...(await importOriginal<typeof import('./tools/userPath')>()),
+  resolveUserPath: async () => `${stub.bin}:${process.env.PATH ?? ''}`,
+}));
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
