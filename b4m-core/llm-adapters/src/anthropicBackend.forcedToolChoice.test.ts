@@ -16,7 +16,14 @@ import {
   declaresOpenObject,
   isStrictCompatibleSchema,
   isStrictSchemaRejection,
+  withStrictOff,
 } from './forcedToolChoice';
+
+// The real withStrictOff, wrapped so one test can make the retry keep its strict schema.
+vi.mock('./forcedToolChoice', async importOriginal => {
+  const actual = await importOriginal<typeof import('./forcedToolChoice')>();
+  return { ...actual, withStrictOff: vi.fn(actual.withStrictOff) };
+});
 
 type Params = Record<string, unknown> & {
   tools?: Array<Record<string, unknown>>;
@@ -1168,6 +1175,22 @@ describe('AnthropicBackend retry after a strict schema rejection', () => {
       run(backend, ChatModels.CLAUDE_5_5_HAIKU, { stream: false, responseFormat: RESPONSE_FORMAT })
     ).rejects.toBe(second);
     expect(captured).toHaveLength(2);
+  });
+
+  it('does not retry the retry, even when it still carries a strict schema', async () => {
+    vi.mocked(withStrictOff).mockImplementationOnce(options => options);
+    const second = schemaRejection();
+    const { backend, captured } = buildBackend((_params, turn) => {
+      if (turn === 1) throw schemaRejection();
+      if (turn === 2) throw second;
+      return toolUseResponse('extract_user', RESULT);
+    });
+
+    await expect(
+      run(backend, ChatModels.CLAUDE_5_5_HAIKU, { stream: false, responseFormat: RESPONSE_FORMAT })
+    ).rejects.toBe(second);
+    expect(captured).toHaveLength(2);
+    expect(captured[1].tools?.[0].strict).toBe(true);
   });
 
   it.each([

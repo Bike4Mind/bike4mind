@@ -3212,16 +3212,29 @@ export class AnthropicBackend implements ICompletionBackend {
         }
       }
     } catch (error) {
-      // Strict mode can reject a schema the unconstrained path accepts. The one retry sends no strict schema,
-      // so its own error surfaces as-is.
+      // Strict mode can reject a schema the unconstrained path accepts. Retried once with strict off; the
+      // retry's own error surfaces as-is.
       const sentStrictSchema =
         !!apiParams.output_config?.format || !!apiParams.tools?.some(tool => 'strict' in tool && tool.strict === true);
-      if (toolCallCount === 0 && !requestAccepted && sentStrictSchema && isStrictSchemaRejection(error)) {
+      if (
+        toolCallCount === 0 &&
+        !requestAccepted &&
+        !options._internal?.strictSchemaRetried &&
+        sentStrictSchema &&
+        isStrictSchemaRejection(error)
+      ) {
         this.logger.warn('[AnthropicBackend] Schema rejected under strict mode; retrying once with strict off', {
           model,
           anthropicMessage: error instanceof Error ? error.message : undefined,
         });
-        await this.complete(model, messages, withStrictOff(options), cb, toolsUsed);
+        const relaxed = withStrictOff(options);
+        await this.complete(
+          model,
+          messages,
+          { ...relaxed, _internal: { ...relaxed._internal, strictSchemaRetried: true } },
+          cb,
+          toolsUsed
+        );
         return;
       }
       // Emit CloudWatch metric for rate limit errors (after SDK exhausts retries)
