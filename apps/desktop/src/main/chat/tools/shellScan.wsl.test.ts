@@ -268,6 +268,15 @@ describe('a Windows program run from a WSL project', () => {
     ['notepad.exe C:notes.txt', ['C:\\']],
     ['notepad.exe ..\\..\\notes.txt', ['\\\\wsl.localhost\\Ubuntu\\home']],
     ['cmd.exe /c type \\\\fileserver\\share\\notes.txt', ['\\\\fileserver\\share\\']],
+    ["more.com 'C:\\Users\\me\\notes.txt'", ['C:\\Users\\me']],
+    ["run.bat 'C:\\Users\\me\\notes.txt'", ['C:\\Users\\me']],
+    ["/mnt/c/tools/viewer 'C:\\Users\\me\\notes.txt'", ['C:\\Users\\me']],
+    ['cmd.ex"e" /c type \'C:\\Users\\me\\notes.txt\'', ['C:\\Users\\me']],
+    ["nohup notepad.exe 'C:\\Users\\me\\notes.txt'", ['C:\\Users\\me']],
+    ["timeout -s KILL 5 notepad.exe 'C:\\Users\\me\\notes.txt'", ['C:\\Users\\me']],
+    ["env -u TERM notepad.exe 'C:\\Users\\me\\notes.txt'", ['C:\\Users\\me']],
+    ["sudo -u me notepad.exe 'C:\\Users\\me\\notes.txt'", ['C:\\Users\\me']],
+    ["xargs -I {} notepad.exe 'C:\\Users\\me\\notes.txt'", ['C:\\Users\\me']],
   ])('names the Windows place a Windows path operand opens: %s', async (command, expected) => {
     touched.length = 0;
 

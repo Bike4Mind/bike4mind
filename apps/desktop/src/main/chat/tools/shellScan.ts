@@ -261,6 +261,35 @@ export function unquote(text: string): string {
   return (first === '"' || first === "'") && text.at(-1) === first ? text.slice(1, -1) : text;
 }
 
+/** A word as bash hands it to the program, with its quotes removed and its backslash escapes applied. */
+function wordValue(word: string): string {
+  let value = '';
+  for (let at = 0; at < word.length; at++) {
+    const char = word[at] as string;
+    if (char === "'") {
+      const end = word.indexOf("'", at + 1);
+      value += word.slice(at + 1, end === -1 ? word.length : end);
+      at = end === -1 ? word.length : end;
+    } else if (char === '"') {
+      for (at++; at < word.length && word[at] !== '"'; at++) {
+        const next = word[at + 1];
+        if (word[at] === '\\' && next !== undefined && '$`"\\\n'.includes(next)) {
+          at++;
+          if (next !== '\n') value += next;
+        } else {
+          value += word[at];
+        }
+      }
+    } else if (char === '\\' && at + 1 < word.length) {
+      at++;
+      if (word[at] !== '\n') value += word[at];
+    } else {
+      value += char;
+    }
+  }
+  return value;
+}
+
 /** `~` and `$HOME` are the user's home, which the shell expands before the program sees it. A Linux home is joined by Linux rules. */
 export function expandHome(text: string, home: string = homedir()): string {
   const rules = home.startsWith('/') ? posix : { join, dirname };
@@ -284,16 +313,28 @@ function globPrefix(text: string): string | null {
   return match.index === 0 ? null : text.slice(0, match.index);
 }
 
-// ponytail: a wrapper's own option values (`sudo -u bob`, `xargs -I {}`) are read as the program;
-// a full per-wrapper option table if that matters.
 const WRAPPERS = new Set(['sudo', 'env', 'command', 'exec', 'nohup', 'time', 'nice', 'timeout', 'xargs']);
+
+/** Each wrapper's options that take the next word as their value (`sudo -u bob`, `timeout -s KILL 5`). */
+const WRAPPER_VALUE_OPTIONS: Record<string, RegExp> = {
+  sudo: /^(-[A-Za-z]*[aCcDgpRrTtUu]|--(auth-type|chdir|chroot|close-from|command-timeout|group|login-class|other-user|prompt|role|type|user))$/,
+  env: /^(-[A-Za-z0]*[CPSu]|--(chdir|split-string|unset))$/,
+  exec: /^-[cl]*a$/,
+  nice: /^(-n|--adjustment)$/,
+  time: /^(-[A-Za-z]*[fo]|--(format|output))$/,
+  timeout: /^(-[A-Za-z]*[ks]|--(kill-after|signal))$/,
+  xargs: /^(-[A-Za-z0]*[EILPadns]|--(arg-file|delimiter|max-args|max-chars|max-procs|process-slot-var))$/,
+};
 
 /** The command a wrapper (`sudo`, `env X=1`, `timeout 5`) runs, with the wrapper's own words dropped. */
 function withoutWrappers(tokens: readonly string[]): string[] {
   let start = 0;
   while (start < tokens.length && WRAPPERS.has(basename(unquote(tokens[start])))) {
+    const valued = WRAPPER_VALUE_OPTIONS[basename(unquote(tokens[start]))];
     start++;
-    while (start < tokens.length && /^(-|\d)|=/.test(tokens[start])) start++;
+    while (start < tokens.length && /^(-|\d)|=/.test(tokens[start])) {
+      start += valued?.test(unquote(tokens[start])) ? 2 : 1;
+    }
   }
   return tokens.slice(start);
 }
@@ -1126,6 +1167,12 @@ export async function shellHome(startDirectory: string): Promise<{ home: string;
 /** `join`, `basename` and `dirname` for operands of a command in `cwd`: Linux ones in a WSL folder. */
 const operandRules = (cwd: string) => (wslLocation(cwd) ? posix : { join, basename, dirname });
 
+/**
+ * A program a WSL command runs through Windows interop: one named as Windows runs it, or any file
+ * on a Windows drive, since interop runs a Windows executable by its content whatever its name.
+ */
+const WINDOWS_PROGRAM = /\.(exe|com|bat|cmd)$|^\/mnt\/[A-Za-z]\//i;
+
 /** A path in a WSL distro that none of `roots` is in. */
 export function inUngrantedDistro(path: string, roots: readonly string[]): boolean {
   const distro = wslLocation(path)?.distro.toLowerCase();
@@ -1293,7 +1340,7 @@ export async function scanShell(
       for (const directory of directoryOptionValues(tokens)) await check(directory, state.cwd);
       if (!TOUCHES_FILES.has(program)) {
         const here = wslLocation(state.cwd);
-        const windowsProgram = here !== null && /\.exe$/i.test(unquote(wrapped ?? ''));
+        const windowsProgram = here !== null && WINDOWS_PROGRAM.test(wordValue(wrapped ?? ''));
         // Programs outside the folder-discovery list can still name permission files (sed,
         // awk, dd, ...). Record static operands for the permission-file floor too, including
         // option values, without treating every ordinary argument as an outside folder grant.
