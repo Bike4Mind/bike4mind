@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { mongoose } from '@bike4mind/database';
-import { listSchemaLeaves, listSchemaPaths, looksLikeUserReference, schemaDeclaresPath } from './schemaPaths';
+import {
+  listSchemaLeaves,
+  listSchemaPaths,
+  looksLikeSecret,
+  looksLikeUserReference,
+  schemaDeclaresPath,
+} from './schemaPaths';
 
 const schema = new mongoose.Schema({
   userId: String,
@@ -82,5 +88,42 @@ describe('listSchemaLeaves', () => {
       .filter(leaf => leaf.refsUser)
       .map(leaf => leaf.path);
     expect(refsUser.sort()).toEqual(['owner', 'watchers']);
+  });
+});
+
+describe('looksLikeSecret', () => {
+  const leaf = (path: string, instance = 'String') => ({ path, refsUser: false, instance });
+
+  it.each([
+    'refreshTokenHash',
+    'accessToken',
+    'oauthConfig.clientSecret',
+    'password',
+    'mfa.totpSecret',
+    'codes.otcHash',
+    'nonce',
+    'sid',
+    'code',
+    'presignedUrl',
+    'apiKey',
+    'private_key',
+  ])('flags %s', path => {
+    expect(looksLikeSecret(leaf(path))).toBe(true);
+  });
+
+  it.each(['contentHash', 'apiKeyId', 'secretName', 'error.code', 'lastError.code', 'tokenEndpoint', 'credentialId'])(
+    'ignores %s',
+    path => {
+      expect(looksLikeSecret(leaf(path))).toBe(false);
+    }
+  );
+
+  it.each([
+    ['hasAccessToken', 'Boolean'],
+    ['maxTokens', 'Number'],
+    ['tokenVersion', 'Number'],
+    ['resetPasswordExpires', 'Date'],
+  ])('ignores %s typed %s', (path, instance) => {
+    expect(looksLikeSecret(leaf(path, instance))).toBe(false);
   });
 });
