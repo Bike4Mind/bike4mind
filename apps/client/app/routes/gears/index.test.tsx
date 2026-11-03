@@ -6,6 +6,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { GearStatus } from '@client/app/hooks/useGearsStatus';
 import { toast } from 'sonner';
+import { AxiosError, type AxiosResponse } from 'axios';
 
 const { state, logEvent } = vi.hoisted(() => ({
   state: {
@@ -133,6 +134,19 @@ describe('GearsPage reward markers', () => {
     state.mutate.mock.calls[0][1].onSuccess({ key: 'projects', queued: true });
     expect(toast.success).toHaveBeenCalledTimes(1);
     expect(vi.mocked(toast.success).mock.calls[0][0]).toMatch(/will arrive once today's free credits allow/);
+  });
+
+  it('does not invite a retry when the reward is refused for the account', async () => {
+    renderPage();
+    await userEvent.click(screen.getByTestId('gear-claim-projects'));
+    vi.mocked(toast.error).mockClear();
+    state.mutate.mock.calls[0][1].onError(
+      new AxiosError('Forbidden', '403', undefined, undefined, {
+        status: 403,
+        data: { error: 'account_blocked' },
+      } as AxiosResponse)
+    );
+    expect(vi.mocked(toast.error).mock.calls[0][0]).toBe("This reward isn't available for your account.");
   });
 
   it('a click on the card itself acts on its CTA and claims nothing', async () => {

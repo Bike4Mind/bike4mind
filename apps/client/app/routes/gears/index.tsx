@@ -1,6 +1,7 @@
 import { Box, Button, TabList, TabPanel, Tabs, Typography } from '@mui/joy';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
+import { isAxiosError } from 'axios';
 import { useClaimGear, type GearKey, type GearStatus } from '@client/app/hooks/useGearsStatus';
 import { useVisibleGears } from '@client/app/hooks/useVisibleGears';
 import { useGearCta } from '@client/app/hooks/useGearCta';
@@ -108,7 +109,12 @@ const GearsPage = () => {
             `Reward claimed - ${creditText(gear)} for ${gear.title} will arrive once today's free credits allow`
           );
       },
-      onError: () => toast.error("Couldn't claim the reward. Try again."),
+      onError: error =>
+        toast.error(
+          isAxiosError(error) && error.response?.status === 403
+            ? "This reward isn't available for your account."
+            : "Couldn't claim the reward. Try again."
+        ),
     });
   };
 

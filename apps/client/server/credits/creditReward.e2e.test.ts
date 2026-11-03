@@ -118,14 +118,30 @@ describe('payCreditReward', () => {
     expect(await balance(roomy.id)).toBe(100);
   });
 
-  it('refuses a draw another attempt owns and leaves that draw in place', async () => {
+  it('queues on a draw another attempt owns and leaves that draw in place', async () => {
     const user = await makeUser();
     const { transactionId } = reward(user.id, 'projects');
     await signupGrantBudgetRepository.reserve(trickleKey(), transactionId, 100, 1000);
-    expect((await creditService.payCreditReward(reward(user.id, 'projects'), adapters)).outcome).toBe('duplicate');
+    expect((await creditService.payCreditReward(reward(user.id, 'projects'), adapters)).outcome).toBe('queued');
     expect(await balance(user.id)).toBe(0);
     expect(await CreditTransaction.countDocuments({ transactionId })).toBe(0);
     expect(await signupGrantBudgetRepository.getSpent(trickleKey())).toBe(100);
+    expect(await HeldCreditRewardModel.findOne({ transactionId }).lean()).toMatchObject({ status: 'held' });
+  });
+
+  it('does not let a queued reward larger than the whole pool block the queue or new rewards', async () => {
+    config.signupGrantTricklePoolDaily = '0';
+    const huge = await makeUser();
+    const small = await makeUser();
+    await creditService.payCreditReward(reward(huge.id, 'projects', 5000), adapters);
+    await creditService.payCreditReward(reward(small.id, 'projects'), adapters);
+    config.signupGrantTricklePoolDaily = '1000';
+    const released = await creditService.releaseHeldCreditRewards(adapters, { limit: 10 });
+    expect(released).toMatchObject({ paid: 1, budgetExhausted: false });
+    expect(await balance(small.id)).toBe(100);
+    expect(await HeldCreditRewardModel.findOne({ userId: huge.id }).lean()).toMatchObject({ status: 'held' });
+    const fresh = await makeUser();
+    expect((await creditService.payCreditReward(reward(fresh.id, 'projects'), adapters)).outcome).toBe('paid');
   });
 
   it('treats its own earlier draw as fresh when a transaction retries inside one refund scope', async () => {

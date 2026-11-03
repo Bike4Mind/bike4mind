@@ -1,6 +1,6 @@
 import { CreditHolderType, type IAdminSettingsRepository, type SignupProtection } from '@bike4mind/common';
 import { accountBlockReasons, type AccountStateFields } from '../userService/accountState';
-import { queueHeadBlocks, reserveSignupGrantBudget } from '../userService/signupGrantBudget';
+import { queueHeadBlocks, reserveSignupGrantBudget, resolvePoolBudget } from '../userService/signupGrantBudget';
 import { addCreditsWithLedgerRow, type AddCreditsAdapters } from './addCredits';
 
 export type CreditRewardSource = 'gear' | 'referral_first_answer';
@@ -121,7 +121,9 @@ export async function payCreditReward(
   if (!(await queueHeadBlocks(adapters, 'trickle', oldest, reward.credits))) {
     const paid = await payNow(reward, adapters);
     if (paid.status === 'paid') return { outcome: 'paid', creditTransactionId: paid.creditTransactionId };
-    if (paid.status !== 'exhausted') return { outcome: 'duplicate' };
+    if (paid.status === 'duplicate') return { outcome: 'duplicate' };
+    // 'contended': another attempt holds today's draw and may still fail or have died before paying, so
+    // queue rather than answer duplicate; the release settles the row once that attempt's ledger row exists.
   }
   await adapters.heldRewards.hold(reward);
   return { outcome: 'queued' };
@@ -165,6 +167,9 @@ export async function releaseHeldCreditRewards(
       }
       const paid = await payNow(reward, adapters);
       if (paid.status === 'exhausted') {
+        // A reward above the whole daily budget never fits; stopping at it would starve the queue behind it.
+        const { budget } = await resolvePoolBudget(adapters.adminSettings, 'trickle');
+        if (budget > 0 && reward.credits > budget) continue;
         result.budgetExhausted = true;
         break;
       }

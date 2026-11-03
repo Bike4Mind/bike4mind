@@ -88,14 +88,10 @@ async function alertCrossing(
 }
 
 /**
- * Draws `amount` credits from today's budget for `pool`. A pool at 0, or with a missing or invalid
- * setting, is 'exhausted' (missing also alerts once per pool-day).
- * 'unmetered' remains only for a non-positive amount or when no counter is wired. `day` pins the draw
- * to a caller-chosen UTC day so a payout keyed by that day books against it.
- */
-/**
  * True when a newer grant must wait behind the queue: the pool's day could no longer cover the oldest
  * held reward (`oldestHeld` credits) once `amount` is drawn. No queue, or no wired budget, never blocks.
+ * A head larger than the whole daily budget can never be paid that day, so it does not block either
+ * (releaseHeldCreditRewards skips it the same way).
  */
 export async function queueHeadBlocks(
   adapters: BudgetAdapters,
@@ -108,10 +104,17 @@ export async function queueHeadBlocks(
   if (!budgetConfig || !oldestHeld) return false;
   const day = dayOverride ?? signupGrantBudgetDay(budgetConfig.now?.());
   const { budget } = await resolvePoolBudget(adapters.adminSettings, pool);
+  if (budget > 0 && oldestHeld > budget) return false;
   const spent = await budgetConfig.repository.getSpent(counterKey(pool, day));
   return budget - spent < oldestHeld + amount;
 }
 
+/**
+ * Draws `amount` credits from today's budget for `pool`. A pool at 0, or with a missing or invalid
+ * setting, is 'exhausted' (missing also alerts once per pool-day).
+ * 'unmetered' remains only for a non-positive amount or when no counter is wired. `day` pins the draw
+ * to a caller-chosen UTC day so a payout keyed by that day books against it.
+ */
 export async function reserveSignupGrantBudget(
   adapters: BudgetAdapters,
   transactionId: string,
