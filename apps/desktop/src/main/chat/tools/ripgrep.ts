@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { resolveUserPath } from './userPath';
+import { hostProgram, resolveUserPath } from './userPath';
 
 export interface RipgrepLine {
   number: number;
@@ -91,9 +91,14 @@ export async function ripgrepSearch(search: RipgrepSearch): Promise<RipgrepOutco
   args.push('--', '.');
 
   const env = { ...process.env, PATH: await resolveUserPath() };
+  const rg = await hostProgram('rg', env.PATH);
+  if (!rg) {
+    unavailableUntil = Date.now() + UNAVAILABLE_RETRY_MS;
+    return 'unavailable';
+  }
 
   return new Promise<RipgrepOutcome>(resolve => {
-    const child = spawn('rg', args, { cwd: search.cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(rg, args, { cwd: search.cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
     let settled = false;
     let stopped = false;
     let stderr = '';

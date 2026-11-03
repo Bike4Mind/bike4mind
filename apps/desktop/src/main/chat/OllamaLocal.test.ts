@@ -784,6 +784,27 @@ describe('OllamaLocal', () => {
     expect(events).toEqual([{ type: 'content', stopReason: 'end_turn', ...(usage ? { usage } : {}) }]);
   });
 
+  it('reports the final frame timings as the generation rate', async () => {
+    const { events } = await streamWith(
+      `${JSON.stringify({
+        done: true,
+        prompt_eval_count: 30,
+        prompt_eval_duration: 60_000_000,
+        eval_count: 48,
+        eval_duration: 2_000_000_000,
+        load_duration: 1_200_000_000,
+      })}\n`
+    );
+    expect(events).toEqual([
+      {
+        type: 'content',
+        stopReason: 'end_turn',
+        usage: { inputTokens: 30, outputTokens: 48 },
+        rate: { evalTokens: 48, evalMs: 2000, promptTokens: 30, promptMs: 60, loadMs: 1200 },
+      },
+    ]);
+  });
+
   it('ignores token counts on partial frames until the final measurement arrives', async () => {
     const { events } = await streamWith(
       `${JSON.stringify({ message: { content: 'answer' }, prompt_eval_count: 20 })}\n${JSON.stringify({ done: true, prompt_eval_count: 30, eval_count: 4 })}\n`

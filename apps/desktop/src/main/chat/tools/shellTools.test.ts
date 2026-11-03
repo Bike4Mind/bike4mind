@@ -10,7 +10,10 @@ import { bashExecute, bashExecuteRunOptions, doubleWrapRefusal, mainCheckoutOf, 
 import type { ToolContext } from './types';
 import { resolveUserPath } from './userPath';
 
-vi.mock('./userPath', () => ({ resolveUserPath: vi.fn(async () => process.env.PATH ?? '') }));
+vi.mock('./userPath', async importOriginal => ({
+  ...(await importOriginal<typeof import('./userPath')>()),
+  resolveUserPath: vi.fn(async () => process.env.PATH ?? ''),
+}));
 
 /**
  * These run REAL commands as the user. Only the PATH lookup is mocked, because the thing being

@@ -14,10 +14,13 @@ type ApiKeyTrustUser = userApiKeyService.ApiKeyTrustSubject & { id: string };
  * Any active subscription (own or an org seat) counts as paid, the same rows that drive
  * entitlements and the rate tier. Pass `req` when `user` is `req.user`, so the subscription read
  * is shared with the rest of the request. A failed read throws rather than guessing either way.
+ * Account age counts per the apiKeyAccountAgeTrustsKeys setting; `honorAccountAge` overrides it for
+ * callers that are not about API keys (the outbound action gate always counts it).
  */
 export async function resolveApiKeyTrust(
   user: ApiKeyTrustUser,
-  req?: ActiveSubscriptionsRequest
+  req?: ActiveSubscriptionsRequest,
+  options: { honorAccountAge?: boolean } = {}
 ): Promise<{
   assessment: userApiKeyService.ApiKeyTrustAssessment;
   settings: Awaited<ReturnType<typeof userApiKeyService.loadApiKeyTrustSettings>>;
@@ -25,6 +28,7 @@ export async function resolveApiKeyTrust(
   const settings = await userApiKeyService.loadApiKeyTrustSettings({ adminSettings: adminSettingsRepository });
   const assessment = await userApiKeyService.assessApiKeyTrust(user, {
     settings,
+    honorAccountAge: options.honorAccountAge ?? settings.accountAgeTrustsKeys,
     hasActivePlan: async () =>
       (await (req ? getRequestActiveSubscriptions(req) : getActiveSubscriptionsForUser(user.id))).length > 0,
   });

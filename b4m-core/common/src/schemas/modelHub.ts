@@ -38,14 +38,14 @@ const HttpsUrlSchema = z
   .max(2048)
   .regex(/^https:\/\//)
   .refine(isPublicHttpsUrl, 'Invalid URL');
-const Sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
+export const Sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
 const CommitShaSchema = z.string().regex(/^[0-9a-f]{40}$/);
 const ByteCountSchema = z.number().int().positive().max(MAX_BYTES);
 const SlugSchema = z
   .string()
   .max(64)
   .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
-const HfRepoSchema = z
+export const HfRepoSchema = z
   .string()
   .max(200)
   .regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/);
@@ -54,7 +54,7 @@ const RepoPathSchema = z
   .string()
   .max(200)
   .regex(/^(?:[A-Za-z0-9_][A-Za-z0-9_.-]*\/)?[A-Za-z0-9_][A-Za-z0-9_.-]*\.gguf$/);
-const OllamaLibRefSchema = z
+export const OllamaLibRefSchema = z
   .string()
   .max(128)
   .regex(/^[a-z0-9][a-z0-9._-]*:[a-z0-9][A-Za-z0-9_.-]*$/);

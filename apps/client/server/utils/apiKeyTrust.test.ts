@@ -17,7 +17,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   getSettingsMap: settingsMap,
 }));
 
-import { applyUntrustedRateLimit, resolveApiKeyTrust } from './apiKeyTrust';
+import { applyUntrustedRateLimit, resolveApiKeyTrust, resolveUntrustedKeyLimits } from './apiKeyTrust';
 import type { ActiveSubscriptionsRequest } from '@server/entitlements/activeSubscriptions';
 
 // Only handed through to the mocked reader, so an opaque stand-in is enough.
@@ -47,6 +47,7 @@ describe('resolveApiKeyTrust', () => {
     expect(settings).toEqual({
       gateEnabled: true,
       minAccountAgeDays: 7,
+      accountAgeTrustsKeys: true,
       maxActiveKeysUntrusted: 1,
       untrustedRateLimitPerMinute: 20,
       untrustedRequestsPerDay: 0,
@@ -79,6 +80,18 @@ describe('resolveApiKeyTrust', () => {
   it('restores current behavior when the gate is switched off', async () => {
     settingsMap.mockResolvedValue({ apiKeyTrustGateEnabled: 'false' });
     const { assessment } = await resolveApiKeyTrust({ ...youngVerified, emailVerified: false });
+    expect(assessment).toEqual({ status: 'trusted' });
+  });
+
+  it('keeps an old free account untrusted when account age does not lift key limits', async () => {
+    settingsMap.mockResolvedValue({ apiKeyAccountAgeTrustsKeys: 'false' });
+    const { assessment } = await resolveApiKeyTrust(oldVerified);
+    expect(assessment).toEqual({ status: 'untrusted', reason: 'paid_standing_required', maxActiveKeys: 1 });
+  });
+
+  it('counts account age anyway when the caller asks to honor it', async () => {
+    settingsMap.mockResolvedValue({ apiKeyAccountAgeTrustsKeys: 'false' });
+    const { assessment } = await resolveApiKeyTrust(oldVerified, undefined, { honorAccountAge: true });
     expect(assessment).toEqual({ status: 'trusted' });
   });
 });
@@ -124,6 +137,18 @@ describe('applyUntrustedRateLimit', () => {
 
   it('leaves a trusted owner untouched', async () => {
     expect(await applyUntrustedRateLimit(oldVerified, { rateLimit: keyLimit })).toBe(keyLimit);
+  });
+
+  it('clamps an old free owner when account age does not lift key limits', async () => {
+    settingsMap.mockResolvedValue({ apiKeyAccountAgeTrustsKeys: 'false', apiKeyUntrustedRequestsPerDay: '200' });
+    const limit = await applyUntrustedRateLimit(oldVerified, { rateLimit: keyLimit });
+    expect(limit).toEqual({ requestsPerMinute: 20, requestsPerDay: 200 });
+  });
+
+  it('flags an old free owner as untrusted for the completion quotas when account age does not lift key limits', async () => {
+    settingsMap.mockResolvedValue({ apiKeyAccountAgeTrustsKeys: 'false' });
+    const { ownerUntrusted } = await resolveUntrustedKeyLimits(oldVerified, { rateLimit: keyLimit });
+    expect(ownerUntrusted).toBe(true);
   });
 
   it('leaves org-billed keys untouched without assessing the owner', async () => {

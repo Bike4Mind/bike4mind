@@ -18,7 +18,7 @@ import {
 import { DEFAULT_OLLAMA_URL, OllamaRuntime } from './ollama';
 import { detectOllamaInstall, machineAddresses, readOllamaSettings } from './ollamaInstall';
 import { fitRuntimeFromOllamaSettings, ollamaDefaultContext, ollamaFitConfidence } from './ollamaSettings';
-import { resolveStorePath, storeDisk, type StoreDiskOptions } from './storeDisk';
+import { resolveStorePath, serviceHome, storeDisk, type StoreDiskOptions } from './storeDisk';
 import type { LocalRuntime } from './types';
 
 /** PRETTY_NAME from `/etc/os-release`. */
@@ -63,6 +63,8 @@ export interface ModelHostProbeOptions extends HardwareProbeOptions, Pick<StoreD
 export interface ModelHostProbe {
   host: HostFacts;
   settings: OllamaSettings;
+  /** The home Ollama runs with, where it keeps `.ollama/id_ed25519.pub`; null when unknown. Not sent to clients. */
+  ollamaHome: string | null;
 }
 
 const readText = (path: string) => readFile(path, 'utf8').catch(() => null);
@@ -212,5 +214,11 @@ export async function probeModelHost(options: ModelHostProbeOptions = {}): Promi
       ),
     })
   );
-  return { host, settings: reported };
+  const ollamaHome = await serviceHome({
+    env,
+    unit: install.unit,
+    rootDir: options.rootDir,
+    homeDir: options.homeDir,
+  }).catch(() => null);
+  return { host, settings: reported, ollamaHome };
 }
