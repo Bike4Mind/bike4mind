@@ -317,6 +317,24 @@ describe('TavernView', () => {
       }
     });
 
+    it('heads back to the bar, not the door, when the agent it is visiting is archived mid-visit', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+      try {
+        const agents = [agentFixture('a', 'working'), agentFixture('b', 'done')];
+        await renderTavern(agents, false, null, { parent: sessionRead('b') });
+        await renderTavern(agents, false, null, { parent: sessionRead('b') });
+        expect(innkeeper().getAttribute('data-pose')).toBe('walking');
+
+        // Still inside the held visit, but b has left the roster.
+        await renderTavern([agents[0]], false, null, { parent: { status: 'processing' } });
+        expect(innkeeper().style.left).toBe(`${INNKEEPER_POINT.x}%`);
+        expect(innkeeper().style.top).toBe(`${INNKEEPER_POINT.y}%`);
+        expect(innkeeper().getAttribute('data-pose')).not.toBe('walking');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('stays behind the bar under reduced motion and highlights the agent instead', async () => {
       setReducedMotion(true);
       const agents = [agentFixture('a', 'working'), agentFixture('b', 'done')];

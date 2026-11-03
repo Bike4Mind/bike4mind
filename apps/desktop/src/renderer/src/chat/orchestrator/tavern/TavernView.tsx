@@ -387,7 +387,9 @@ export function TavernView({
   const placements = usePlacements(agents);
   const arrived = useArrived(introPlaying);
   const act = innkeeperAct(parent, agents);
-  const visit = useHeldVisit(act.pose === 'walking' ? act.target : undefined);
+  const heldVisit = useHeldVisit(act.pose === 'walking' ? act.target : undefined);
+  // A visit held past its agent leaving the roster (archived, deleted) has nowhere to go.
+  const visit = heldVisit !== undefined && placements.has(heldVisit) ? heldVisit : undefined;
   const reducedMotion = prefersReducedMotion();
   const mounted = useRef(false);
   useEffect(() => {
@@ -423,7 +425,7 @@ export function TavernView({
       [INNKEEPER_KEY, INNKEEPER_POINT] as const,
     ])
   );
-  const visitedPoint = visit === undefined ? undefined : (placements.get(visit)?.point ?? DOOR_POINT);
+  const visitedPoint = visit === undefined ? undefined : placements.get(visit)?.point;
   const innkeeperPoint = visitedPoint && !reducedMotion && arrived ? standBeside(visitedPoint) : INNKEEPER_POINT;
 
   return (
