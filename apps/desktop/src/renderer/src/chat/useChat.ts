@@ -510,6 +510,8 @@ export interface ConversationController {
   setApprovalMode: (mode: ChatApprovalMode) => Promise<void>;
   /** Where this Code session is grounded, for the chip row. Inert on a Chat session. */
   project: ProjectBindingController;
+  /** Share `path` into the chat `target`, open or not; throws on an IPC failure. */
+  addContextDirectoryTo: (target: string, path: string) => Promise<void>;
   /** Answer a tool call waiting at the approval gate. Nothing has run until this is called. */
   respondToApproval: (approvalId: string, answer: ChatApprovalAnswer) => void;
 }
@@ -1017,11 +1019,11 @@ export function useConversation(
    * no button whose result they are already looking at.
    */
   const shareDirectory = useCallback(
-    async (path: string | undefined, confirm: boolean) => {
-      if (!sessionId) return;
-      const result = await window.b4m.chat.addContextDirectory(sessionId, path);
+    async (path: string | undefined, confirm: boolean, target = sessionId) => {
+      if (!target) return;
+      const result = await window.b4m.chat.addContextDirectory(target, path);
       if (result.status === 'cancelled') return;
-      const stillOpen = activeSessionId.current === sessionId;
+      const stillOpen = activeSessionId.current === target;
       if (result.status === 'refused') {
         if (stillOpen) setSendError(result.error);
         return;
@@ -1287,6 +1289,14 @@ export function useConversation(
     [shareDirectory]
   );
 
+  // For a chat the window has not opened yet, or has already left: results are routed by id.
+  const addContextDirectoryTo = useCallback(
+    async (target: string, path: string) => {
+      await shareDirectory(path, false, target);
+    },
+    [shareDirectory]
+  );
+
   const removeContextDirectory = useCallback(
     async (directory: string) => {
       if (!sessionId) return;
@@ -1356,6 +1366,7 @@ export function useConversation(
     setPromptCacheTtl,
     setApprovalMode,
     project,
+    addContextDirectoryTo,
     respondToApproval,
   };
 }

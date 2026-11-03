@@ -100,8 +100,17 @@ function stubBridge(sessions: ChatSessionSummary[]) {
         listArtifacts: async () => ({ artifacts: [], total: 0 }),
         createSession,
         pickProjectDirectory,
-        addContextDirectory,
-        removeContextDirectory,
+        // Main stores a grant before it answers, so a load that lands afterwards reads it back.
+        addContextDirectory: async (id: string, path?: string) => {
+          const result = await addContextDirectory(id, path);
+          if (result.status === 'added') stored.set(result.session.id, result.session);
+          return result;
+        },
+        removeContextDirectory: async (id: string, directory: string) => {
+          const updated = await removeContextDirectory(id, directory);
+          if (updated) stored.set(updated.id, updated);
+          return updated;
+        },
       }),
       sidebar: quietBridge({ getSections: async () => EMPTY_SIDEBAR_SECTIONS }),
       getAppInfo: async () => ({ homeDirectory: '/home/test' }),
@@ -488,7 +497,7 @@ describe('Add folder in a Chat composer', () => {
     expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
   });
 
-  it('shares into the new chat only once it has loaded', async () => {
+  it('shares into the new chat by id without waiting for it to load', async () => {
     stubBridge([]);
     createSession.mockImplementationOnce(() => new Promise(() => undefined));
     const loaded = deferred<void>();
@@ -499,12 +508,177 @@ describe('Add folder in a Chat composer', () => {
     addContextDirectory.mockResolvedValue({ status: 'added', path: NOTES, session: summary('fresh', 'chat', [NOTES]) });
     await addFolderFromMenu();
     expect(createSession).toHaveBeenCalledTimes(2);
-    expect(addContextDirectory).not.toHaveBeenCalled();
+    expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('fresh', NOTES);
 
     await act(async () => loaded.resolve());
     await act(async () => undefined);
-    expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('fresh', NOTES);
+    expect(addContextDirectory).toHaveBeenCalledTimes(1);
     expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
+  });
+
+  it('still shares into the new chat when the user leaves it before it loads, and never again on reopen', async () => {
+    const stored = stubBridge([]);
+    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    heldLoads.set('fresh', new Promise(() => undefined));
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValue(NOTES);
+    addContextDirectory.mockResolvedValue({ status: 'added', path: NOTES, session: summary('fresh', 'chat', [NOTES]) });
+    await addFolderFromMenu();
+    expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('fresh', NOTES);
+
+    const other = summary('other', 'chat', undefined, 'Other');
+    stored.set('other', other);
+    createSession.mockResolvedValueOnce({ session: other });
+    await act(async () => byTestId('chat-new-session-btn')?.click());
+    await act(async () => undefined);
+    heldLoads.delete('fresh');
+    await openSessionRow('New conversation');
+
+    expect(addContextDirectory).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not make the Add folder chat take over a chat the user started while it was being created', async () => {
+    const stored = stubBridge([]);
+    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    const made = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => made.promise);
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValue(NOTES);
+    addContextDirectory.mockResolvedValue({ status: 'added', path: NOTES, session: summary('fresh', 'chat', [NOTES]) });
+    await addFolderFromMenu();
+
+    const other = summary('other', 'chat', undefined, 'Other');
+    stored.set('other', other);
+    createSession.mockResolvedValueOnce({ session: other });
+    await act(async () => byTestId('chat-new-session-btn')?.click());
+    await act(async () => undefined);
+
+    const fresh = summary('fresh');
+    stored.set('fresh', fresh);
+    await act(async () => made.resolve({ session: fresh }));
+    await act(async () => undefined);
+
+    expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('fresh', NOTES);
+    expect(chips()).toHaveLength(0);
+  });
+
+  it('shows no start-failure alert in a chat the user opened while the chat was being created', async () => {
+    const stored = stubBridge([]);
+    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    const made = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => made.promise);
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValue(NOTES);
+    await addFolderFromMenu();
+
+    const other = summary('other', 'chat', undefined, 'Other');
+    stored.set('other', other);
+    createSession.mockResolvedValueOnce({ session: other });
+    await act(async () => byTestId('chat-new-session-btn')?.click());
+    await act(async () => undefined);
+    await act(async () => made.reject(new Error('disk full')));
+    await act(async () => undefined);
+
+    expect(byTestId('chat-add-folder-error')).toBeNull();
+  });
+
+  it('shows no start-failure alert in the Code pane when the user switched modes while the chat was being created', async () => {
+    stubBridge([]);
+    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    const made = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => made.promise);
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValue(NOTES);
+    await addFolderFromMenu();
+    await act(async () => byTestId('mode-switch-code-btn')?.click());
+    await act(async () => undefined);
+    await act(async () => made.reject(new Error('disk full')));
+    await act(async () => undefined);
+
+    expect(byTestId('chat-add-folder-error')).toBeNull();
+  });
+
+  it('shows a main-side throw from the share in the open chat, saying the folder was not added', async () => {
+    stubBridge([summary('blank-1')]);
+    await renderShell();
+    await act(async () => byTestId('chat-session-item')?.click());
+    await act(async () => undefined);
+
+    addContextDirectory.mockRejectedValue(
+      new Error("Error invoking remote method 'chat:addContextDirectory': Error: share store offline")
+    );
+    await addFolderFromMenu();
+
+    expect(byTestId('chat-add-folder-error')?.textContent).toBe(
+      'Desktop could not share the folder, so the folder was not added: share store offline'
+    );
+    expect(chips()).toHaveLength(0);
+  });
+
+  it('shows a throw from the share into a freshly made chat on that chat', async () => {
+    stubBridge([]);
+    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValue(NOTES);
+    addContextDirectory.mockRejectedValue(new Error('share store offline'));
+    await addFolderFromMenu();
+    await act(async () => undefined);
+
+    expect(byTestId('chat-add-folder-error')?.textContent).toBe(
+      'Desktop could not share the folder, so the folder was not added: share store offline'
+    );
+  });
+
+  it('keeps a share failure off other chats and shows it when its own chat is open', async () => {
+    stubBridge([summary('alpha', 'chat', undefined, 'Alpha'), summary('beta', 'chat', undefined, 'Beta')]);
+    await renderShell();
+    await openSessionRow('Alpha');
+
+    const share = deferred<ShareDirectoryResult>();
+    addContextDirectory.mockReturnValue(share.promise);
+    await addFolderFromMenu();
+    await openSessionRow('Beta');
+    await act(async () => share.reject(new Error('share store offline')));
+    await act(async () => undefined);
+    expect(byTestId('chat-add-folder-error')).toBeNull();
+
+    await openSessionRow('Alpha');
+    expect(byTestId('chat-add-folder-error')?.textContent).toContain('share store offline');
+  });
+
+  it('keeps a reason that itself contains quotes and colons', async () => {
+    stubBridge([]);
+    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValueOnce(NOTES);
+    createSession.mockRejectedValueOnce(
+      new Error(
+        "Error invoking remote method 'chat:create-session': Error: could not write '/data/sessions': EACCES: permission denied"
+      )
+    );
+    await addFolderFromMenu();
+    expect(byTestId('chat-add-folder-error')?.textContent).toBe(
+      "Desktop could not start a conversation, so the folder was not added: could not write '/data/sessions': EACCES: permission denied"
+    );
+  });
+
+  it('ends the alert without a dangling colon when main gave no reason', async () => {
+    stubBridge([]);
+    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValueOnce(NOTES);
+    createSession.mockRejectedValueOnce(new Error(''));
+    await addFolderFromMenu();
+    expect(byTestId('chat-add-folder-error')?.textContent).toBe(
+      'Desktop could not start a conversation, so the folder was not added'
+    );
   });
 
   it('does not share a folder the user removed again when the new chat is reopened', async () => {
