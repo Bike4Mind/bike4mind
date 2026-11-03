@@ -21,12 +21,12 @@ const DOMAIN_REGISTRIES: readonly DataHolderRegistry[] = [
   socialHolders,
 ];
 
-function mergeRegistries(registries: readonly DataHolderRegistry[]): DataHolderRegistry {
+export function mergeRegistries(registries: readonly DataHolderRegistry[]): DataHolderRegistry {
   const merged: Record<string, DataHolderRegistry[string]> = {};
   for (const registry of registries) {
     for (const [modelName, holder] of Object.entries(registry)) {
       // A spread would let the later domain silently win; two classifications of one model is a bug.
-      if (modelName in merged) throw new Error(`Data holder "${modelName}" is classified twice`);
+      if (Object.hasOwn(merged, modelName)) throw new Error(`Data holder "${modelName}" is classified twice`);
       merged[modelName] = holder;
     }
   }
@@ -43,5 +43,5 @@ export const DATA_HOLDER_REGISTRY: DataHolderRegistry = mergeRegistries(DOMAIN_R
  * rather than silently skip a collection.
  */
 export function findUnclassifiedModels(modelNames: readonly string[]): string[] {
-  return modelNames.filter(name => !(name in DATA_HOLDER_REGISTRY));
+  return modelNames.filter(name => !Object.hasOwn(DATA_HOLDER_REGISTRY, name));
 }
