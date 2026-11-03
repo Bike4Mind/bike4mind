@@ -26,7 +26,8 @@ No Node.js, pnpm, or source checkout is required.
    shell commands, search and the terminal inside that WSL distro instead, with the distro's own
    git and toolchain and the PATH of the user's login shell there; such a project does not need
    Git for Windows, but the distro needs bash and GNU coreutils (a path check uses `realpath -z`),
-   so a minimal distro such as Alpine denies every path. `gh` still runs on Windows, so finding a
+   so a minimal distro such as Alpine denies every path. File search lists the folder with `find -printf`, which needs GNU findutils; with busybox `find` it walks the share from Windows instead, which is slower.
+   `gh` still runs on Windows, so finding a
    project's open pull request by branch needs `gh` installed and signed in on the Windows side;
    it is pointed at the repository gh would pick from the distro's remotes (the one
    `gh repo set-default` marked, else `upstream`, else `origin`), so it needs no git on Windows.

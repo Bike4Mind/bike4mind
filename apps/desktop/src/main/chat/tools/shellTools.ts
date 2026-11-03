@@ -192,9 +192,9 @@ function runCommand(
   return new Promise((resolve, reject) => {
     const child = spawn(launch.executable, [...launch.args], {
       cwd,
-      // Its own process group, except a WSL command (see `spawnsDetached`), so the timeout reaches
-      // the command's children too, not just the shell. It is also what lets the command be moved
-      // to the background intact - see `moveToBackground` below.
+      // Its own process group, so the timeout reaches the command's children too and the command
+      // can be moved to the background intact (see `moveToBackground`). `spawnsDetached` says why
+      // a WSL command is not detached.
       detached: spawnsDetached(launch),
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
