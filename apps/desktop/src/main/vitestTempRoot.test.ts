@@ -1,10 +1,10 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, utimes } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RUN_ROOT_PREFIX, removeDeadRunRoots } from '../../vitest.tempRoot';
+import { RUN_ROOT_PREFIX, STALE_ROOT_AGE_MS, removeDeadRunRoots } from '../../vitest.tempRoot';
 
 describe('test temp root', () => {
   it('points every tmpdir and homedir variable at this file own directories', () => {
@@ -34,15 +34,34 @@ describe('removeDeadRunRoots', () => {
     await rm(parent, { recursive: true, force: true });
   });
 
-  it('removes the roots of dead runs and keeps live, unnamed and unrelated ones', async () => {
+  const age = (name: string, ms: number) => {
+    const then = new Date(Date.now() - ms);
+    return utimes(join(parent, name), then, then);
+  };
+
+  it('removes the old roots of dead runs and keeps live, unnamed and unrelated ones', async () => {
     const deadPid = spawnSync(process.execPath, ['-e', '']).pid;
     const dead = `${RUN_ROOT_PREFIX}${deadPid}-abc123`;
     const keep = [`${RUN_ROOT_PREFIX}${process.pid}-abc123`, `${RUN_ROOT_PREFIX}abc123`, 'unrelated-dir'];
     await Promise.all([dead, ...keep].map(name => mkdir(join(parent, name, 'nested'), { recursive: true })));
+    await Promise.all([dead, ...keep].map(name => age(name, STALE_ROOT_AGE_MS + 60_000)));
 
     await removeDeadRunRoots(parent);
 
     expect(existsSync(join(parent, dead))).toBe(false);
     expect(keep.map(name => existsSync(join(parent, name)))).toEqual([true, true, true]);
+  });
+
+  it('keeps the root of a dead pid until its mtime is old', async () => {
+    const deadPid = spawnSync(process.execPath, ['-e', '']).pid;
+    const fresh = `${RUN_ROOT_PREFIX}${deadPid}-fresh1`;
+    const old = `${RUN_ROOT_PREFIX}${deadPid}-old123`;
+    await Promise.all([fresh, old].map(name => mkdir(join(parent, name, 'nested'), { recursive: true })));
+    await age(fresh, STALE_ROOT_AGE_MS - 60_000);
+    await age(old, STALE_ROOT_AGE_MS + 60_000);
+
+    await removeDeadRunRoots(parent);
+
+    expect([fresh, old].map(name => existsSync(join(parent, name)))).toEqual([true, false]);
   });
 });
