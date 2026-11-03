@@ -143,7 +143,6 @@ export const contentHolders = {
         alsoRedact: ['sourceIp', 'userAgent', 'viewerEmailDomain'],
       },
     ],
-    unrelatedPaths: ['viewerEmailDomain'],
   },
   QuestExternalLink: {
     kind: 'holder',

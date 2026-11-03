@@ -7,6 +7,10 @@
  * Paths are dotted Mongoose paths. A path inside an array of subdocuments is written through the
  * array (`users.userId`), matching how a Mongo filter addresses it.
  *
+ * `dataHolderCoverage.test.ts` cannot see below a `Mixed` field (`metadata`, `payload`), because the
+ * schema declares nothing there. A person or secret stored under one is classified by hand, as
+ * `CreditTransaction` does with `metadata.actorId`.
+ *
  * How one document is handled when several of its references match the person:
  * - `retain` wins: the document is never deleted, though its other references are still pulled or
  *   anonymized and the retained reference's own `alsoRedact` fields are cleared.
