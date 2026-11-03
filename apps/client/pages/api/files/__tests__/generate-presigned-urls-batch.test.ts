@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   batchFindById: vi.fn(),
   appendFiles: vi.fn(),
   orgFindById: vi.fn(),
+  consumeFileUploadBudget: vi.fn(async (_req: unknown, _fileCount: number) => undefined),
   s3ClientConfigs: [] as unknown[],
   baseApiOptions: undefined as unknown,
 }));
@@ -34,6 +35,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
+
+vi.mock('@server/files/fileUploadBudget', () => ({ consumeFileUploadBudget: h.consumeFileUploadBudget }));
 
 // The global setup mocks `sst` without a fabFileBucket, and the route reads its name.
 vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'test-bucket' } } }));
@@ -152,6 +155,30 @@ describe('POST /api/files/generate-presigned-urls-batch - S3 client config', () 
 
   it('requires files:write at the baseApi route gate', () => {
     expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write'] });
+  });
+});
+
+describe('POST /api/files/generate-presigned-urls-batch - upload allowance', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.createFabFile.mockImplementation(async () => ({ id: `f${h.createFabFile.mock.calls.length}` }));
+  });
+
+  it('spends one unit of the allowance per file in the batch, not one per request', async () => {
+    const { res } = makeRes();
+    await run({ files: [file(), file({ fileName: 'b.txt' }), file({ fileName: 'c.txt' })] }, res);
+
+    expect(h.consumeFileUploadBudget).toHaveBeenCalledTimes(1);
+    expect(h.consumeFileUploadBudget.mock.calls[0][1]).toBe(3);
+  });
+
+  it('creates no file and presigns nothing when the allowance refuses the batch', async () => {
+    h.consumeFileUploadBudget.mockRejectedValueOnce(new Error('Upload limit reached'));
+    const { res } = makeRes();
+
+    await expect(run({ files: [file()] }, res)).rejects.toThrow('Upload limit reached');
+    expect(h.createFabFile).not.toHaveBeenCalled();
+    expect(getSignedUrl).not.toHaveBeenCalled();
   });
 });
 

@@ -615,6 +615,9 @@ export function ChatShell({
 
   /** "Use in chat" on the Models screen: a new Chat conversation already on that model. */
   const [chatOnError, setChatOnError] = useState<string | null>(null);
+  useEffect(() => {
+    if (screen !== 'models') setChatOnError(null);
+  }, [screen]);
   const startingChatOn = useRef(false);
   const startChatOn = useCallback(
     async (modelId: string) => {
