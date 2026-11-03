@@ -55,6 +55,26 @@ vi.mock('@bike4mind/database', () => ({
     incrementCredits: vi.fn(),
   },
   paymentAttemptRepository: { findVisitId: (...args: unknown[]) => mockFindVisitId(...args) },
+  stripeDisputeRepository: {
+    recordOpened: (...args: unknown[]) => mockRecordDisputeOpened(...args),
+    recordClosed: (...args: unknown[]) => mockRecordDisputeClosed(...args),
+  },
+}));
+
+// The dispute lifecycle has its own suites (server/billing/stripeDisputes.e2e.test.ts); here only the wiring.
+const mockRecordDisputeOpened = vi.fn();
+const mockRecordDisputeClosed = vi.fn();
+const mockResolveLostUserDispute = vi.fn();
+const mockResolveWonDispute = vi.fn();
+vi.mock('@server/billing/stripeDisputes', () => ({
+  disputeFacts: (dispute: { id: string; status: string }, subject: string, subjectId: string | null) => ({
+    stripeDisputeId: dispute.id,
+    stripeStatus: dispute.status,
+    subject,
+    subjectId,
+  }),
+  resolveLostUserDispute: (...args: unknown[]) => mockResolveLostUserDispute(...args),
+  resolveWonDispute: (...args: unknown[]) => mockResolveWonDispute(...args),
 }));
 
 vi.mock('@bike4mind/database/auth', () => ({
@@ -308,6 +328,8 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
     mockEmitProductEvent.mockResolvedValue(undefined);
     mockRadarRiskLine.mockResolvedValue(null);
     mockFindVisitId.mockResolvedValue(null);
+    mockRecordDisputeOpened.mockResolvedValue(undefined);
+    mockRecordDisputeClosed.mockImplementation(async (facts: object) => ({ ...facts, state: 'open' }));
   });
 
   describe('payment risk wiring', () => {
@@ -1017,16 +1039,25 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
       expect(mockDeactivateAll).not.toHaveBeenCalled();
     });
 
-    it('takes no action when dispute is lost', async () => {
+    it('resolves a lost dispute without clearing the dispute flag', async () => {
+      mockFindByPaymentIntentId.mockResolvedValue(mockTx);
+      mockFindById.mockResolvedValue({ ...mockUser });
+      mockResolveLostUserDispute.mockResolvedValue({ status: 'already_resolved' });
+
       await invokeWebhookWithEvent(makeDisputeClosedEvent('lost'));
 
+      expect(mockResolveLostUserDispute).toHaveBeenCalledOnce();
       expect(mockUserUpdate).not.toHaveBeenCalled();
-      expect(mockPostMessageToSlack).not.toHaveBeenCalled();
     });
 
-    it('takes no action when dispute closes as warning_closed', async () => {
+    it('records a warning_closed dispute and takes no account action', async () => {
+      mockFindByPaymentIntentId.mockResolvedValue(mockTx);
+      mockFindById.mockResolvedValue({ ...mockUser });
+
       await invokeWebhookWithEvent(makeDisputeClosedEvent('warning_closed'));
 
+      expect(mockRecordDisputeClosed).toHaveBeenCalledOnce();
+      expect(mockResolveLostUserDispute).not.toHaveBeenCalled();
       expect(mockUserUpdate).not.toHaveBeenCalled();
       expect(mockPostMessageToSlack).not.toHaveBeenCalled();
     });
