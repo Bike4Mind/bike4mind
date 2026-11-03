@@ -69,6 +69,21 @@ describe('LocalUsageCard', () => {
     expect(html).toContain('75%');
   });
 
+  it('leaves out the timed-reply captions when no reply of the window was timed', () => {
+    const html = card({
+      replies: 0,
+      outputTokens: 40,
+      evalTokens: 40,
+      evalMs: 2000,
+      estimatedEvalTokens: 10,
+      estimatedEvalMs: 1000,
+    });
+    expect(html).toContain('profile-local-generation');
+    expect(html).toContain('profile-local-estimated');
+    expect(html).not.toContain('timed 0');
+    expect(html).not.toContain('timed by this app');
+  });
+
   it('keeps the stream-timed estimate apart from the server-timed rate', () => {
     const html = card({
       replies: 3,

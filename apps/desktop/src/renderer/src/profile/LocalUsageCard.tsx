@@ -93,7 +93,7 @@ export function LocalUsageCard({ usage }: { usage: LocalUsage }) {
               label="Generation"
               value={generation}
               caption={
-                totals.replies > 0
+                totals.timedReplies > 0
                   ? `timed ${formatCount(totals.timedReplies)} of ${replies(totals.replies)}`
                   : undefined
               }
@@ -104,7 +104,9 @@ export function LocalUsageCard({ usage }: { usage: LocalUsage }) {
             <Stat
               label="Estimated generation"
               value={estimated}
-              caption={`${replies(totals.estimatedReplies)} timed by this app`}
+              caption={
+                totals.estimatedReplies > 0 ? `${replies(totals.estimatedReplies)} timed by this app` : undefined
+              }
               testId="profile-local-estimated"
             />
           )}
