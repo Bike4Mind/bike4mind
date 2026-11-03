@@ -14,9 +14,10 @@ const BASELINE_REVIEW = { userId: null, name: 'Baseline' } as const;
  * critical entry older than the baseline window as reviewed so the queue starts with the last week, not
  * the whole history. Idempotent: entries that already have a review are skipped, and createMany ignores
  * a concurrent duplicate.
+ * Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001), which must stay last.
  */
 const migration: MigrationFile = {
-  id: 20261103000000,
+  id: 20260921238300,
   name: 'ensure adminauditreview indexes and baseline',
 
   up: async () => {

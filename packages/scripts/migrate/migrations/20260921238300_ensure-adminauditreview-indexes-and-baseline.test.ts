@@ -20,7 +20,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-import migration from './20261103000000_ensure-adminauditreview-indexes-and-baseline';
+import migration from './20260921238300_ensure-adminauditreview-indexes-and-baseline';
 
 const NOW = new Date('2026-11-03T00:00:00.000Z');
 const objectId = (hex: string) => ({ toString: () => hex });
