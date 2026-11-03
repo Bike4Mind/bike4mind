@@ -4,6 +4,7 @@ import DownloadIcon from '@mui/icons-material/Download';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import { toast } from 'sonner';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
+import { REVENUE_SPARKLINE_DAYS } from '@client/app/utils/adminRevenue';
 import type { AdminSubscriptionRow } from '@client/app/utils/adminSubscriptionsFilter';
 import { downloadData } from '@client/app/utils/download';
 import { AdminTab } from '../adminSidebarConfig';
@@ -11,6 +12,7 @@ import {
   AdminPageHeader,
   DataTable,
   EmptyState,
+  StatSparkline,
   StatStrip,
   StatTile,
   ViewTabs,
@@ -20,6 +22,7 @@ import {
 } from '../shared';
 import { adminFocus } from '../shared/adminStyles';
 import { useAdminModal } from '../useAdminModal';
+import { useAdminRevenueTrend } from '../Revenue/useAdminRevenue';
 import { SUBSCRIPTIONS_SORT_COLUMNS, subscriptionsColumns } from './subscriptionsColumns';
 import { useSubscriptionsSeenOnOpen } from './subscriptionsLastSeen';
 import { MrrDefinitionHelp, atRiskNote, mrrExclusionNote } from './subscriptionsMrr';
@@ -105,12 +108,37 @@ function SubscriptionRowActions({
   );
 }
 
+/** Sparklines from the daily revenue snapshots, or none while they are off, loading, failed or too short to draw. */
+function useTileSparklines(enabled: boolean) {
+  const { data } = useAdminRevenueTrend({ enabled });
+  if (!enabled || !data?.stripeConfigured || data.trend.length < 2) return undefined;
+  const span = `daily, last ${REVENUE_SPARKLINE_DAYS} days`;
+  const line = (values: number[], label: string) => <StatSparkline values={values} label={`${label}, ${span}`} />;
+  return {
+    paying: line(
+      data.trend.map(point => point.payingCount),
+      'Paying customers'
+    ),
+    mrr: line(
+      data.trend.map(point => point.mrr),
+      'MRR'
+    ),
+    pastDue: line(
+      data.trend.map(point => point.pastDueMrr),
+      'MRR at risk from past due subscriptions'
+    ),
+  };
+}
+
 // A failed query has no value to wait for, so it reads as unavailable rather than loading forever.
 const tileValue = (value: number | string | undefined, isError = false) => {
   if (isError) return '\u2014';
   if (value !== undefined) return value;
   return <Skeleton variant="text" level="h3" width="3ch" data-testid="admin-stat-skeleton" />;
 };
+
+// The snapshots cover every Stripe subscription, so a sparkline only sits beside a tile counting the same rows.
+const SPARKLINE_VIEWS = new Set(['paying', 'all']);
 
 const AdminSubscriptions: React.FC = () => {
   useSubscriptionsTabUrlSync();
@@ -242,6 +270,7 @@ const AdminSubscriptions: React.FC = () => {
   const summary = summaryQuery.data;
   const pastDue = summary?.views.pastDue;
   const mrr = summary?.mrr;
+  const sparklines = useTileSparklines(!searching && SPARKLINE_VIEWS.has(activeView?.id ?? ''));
 
   return (
     <Stack
@@ -287,12 +316,17 @@ const AdminSubscriptions: React.FC = () => {
         </Alert>
       )}
       <StatStrip aria-label="Subscription totals for the current filters">
-        <StatTile label="Paying" value={tileValue(summary?.views.paying, summaryQuery.isError)} />
+        <StatTile
+          label="Paying"
+          value={tileValue(summary?.views.paying, summaryQuery.isError)}
+          sparkline={sparklines?.paying}
+        />
         <StatTile
           label="MRR"
           help={<MrrDefinitionHelp />}
           value={tileValue(mrr && formatMoney(mrr.amount, mrr.currency, { compact: true }), summaryQuery.isError)}
           comparison={!summaryQuery.isError && mrr && mrrExclusionNote(mrr)}
+          sparkline={sparklines?.mrr}
         />
         <StatTile
           label="Past due"
@@ -301,6 +335,7 @@ const AdminSubscriptions: React.FC = () => {
           comparison={
             !summaryQuery.isError && pastDue && summary?.pastDueMrr ? atRiskNote(summary.pastDueMrr) : undefined
           }
+          sparkline={sparklines?.pastDue}
         />
         <StatTile
           label="Canceling"

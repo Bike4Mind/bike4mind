@@ -27,6 +27,7 @@ vi.mock('./useOpenSubscriptionRow', () => ({
 }));
 
 import { fakeAdminRouter } from '../__tests__/fakeAdminRouter';
+import { ADMIN_REVENUE_TREND_PATH } from '../Revenue/useAdminRevenue';
 import { NEWEST_PAID_SUBSCRIPTION_QUERY, useSubscriptionsLastSeen } from './subscriptionsLastSeen';
 import { DEFAULT_SUBSCRIPTIONS_PARAMS } from './subscriptionsTabSearch';
 import { useSubscriptionsTab } from './useSubscriptionsTabParams';
@@ -277,6 +278,38 @@ describe('AdminSubscriptions', () => {
     renderTab();
     expect(await screen.findByTestId('admin-subscriptions-new-s1')).toBeTruthy();
     expect(screen.queryByTestId('admin-subscriptions-new-s2')).toBeNull();
+  });
+
+  it('draws snapshot sparklines on the Paying, MRR and Past due tiles only in views that count every paying row', async () => {
+    const trendPoint = (date: string, mrr: number) => ({
+      date,
+      mrr,
+      payingCount: 2,
+      newMrr: 0,
+      churnedMrr: 0,
+      pastDueMrr: 0,
+      cancelingMrr: 0,
+      payingUsers: 2,
+      payingOrgs: 0,
+      mrrByPlan: {},
+    });
+    apiGet.mockImplementation(async (url: string) => {
+      if (url === ADMIN_REVENUE_TREND_PATH)
+        return {
+          data: { stripeConfigured: true, trend: [trendPoint('2026-10-28', 1_900), trendPoint('2026-10-29', 3_800)] },
+        };
+      return { data: url === SUMMARY_PATH ? SUMMARY : listResponse() };
+    });
+    renderTab();
+    await waitFor(() => expect(screen.getAllByTestId('admin-stat-sparkline')).toHaveLength(3));
+    expect(screen.getAllByTestId('admin-stat-sparkline').map(line => line.getAttribute('aria-label'))).toEqual([
+      'Paying customers, daily, last 30 days',
+      'MRR, daily, last 30 days',
+      'MRR at risk from past due subscriptions, daily, last 30 days',
+    ]);
+
+    fireEvent.click(screen.getByTestId('admin-subscriptions-views-comped-btn'));
+    await waitFor(() => expect(screen.queryAllByTestId('admin-stat-sparkline')).toHaveLength(0));
   });
 
   it('applies built-in views through the URL and sends their filters', async () => {

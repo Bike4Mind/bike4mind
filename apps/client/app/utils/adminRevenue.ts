@@ -18,8 +18,32 @@ export const REVENUE_AT_RISK_LIMIT = 10;
 
 export const AdminRevenueQuerySchema = z.object({ range: z.enum(REVENUE_RANGES).default('30d') });
 
-/** `mrr` is in minor units of MRR_CURRENCY. */
-export type RevenueTrendPoint = { date: string; mrr: number; payingCount: number };
+/** One RevenueSnapshot day. Amounts are minor units of MRR_CURRENCY; `newMrr` and `churnedMrr` cover the day itself. */
+export type RevenueTrendPoint = {
+  date: string;
+  mrr: number;
+  payingCount: number;
+  newMrr: number;
+  churnedMrr: number;
+  pastDueMrr: number;
+  cancelingMrr: number;
+  /** Paying customers by owner type. */
+  payingUsers: number;
+  payingOrgs: number;
+  /** MRR by `RevenueTrendPlan.key`; a plan with no rows that day is absent. */
+  mrrByPlan: Record<string, number>;
+};
+
+/** A plan seen in the trend, largest MRR on the last day first. */
+export type RevenueTrendPlan = { key: string; plan: AdminSubscriptionPlan };
+
+/** `RevenueTrendPlan.key` of rows with no price id. */
+export const NO_PRICE_PLAN_KEY = 'none';
+
+/** GET /api/admin/revenue/trend: the last REVENUE_SPARKLINE_DAYS days of snapshots, for the list's tile sparklines. */
+export const REVENUE_SPARKLINE_DAYS = 30;
+export type AdminRevenueTrendResponse =
+  { stripeConfigured: false } | { stripeConfigured: true; trend: RevenueTrendPoint[] };
 
 export type RevenuePlanRow = {
   plan: AdminSubscriptionPlan;
@@ -52,6 +76,7 @@ export type AdminRevenueData = {
   /** The first snapshot in the range, which the MRR tile compares against; null when the range has none. */
   startOfRange: RevenueTrendPoint | null;
   trend: RevenueTrendPoint[];
+  trendPlans: RevenueTrendPlan[];
   /** The first snapshot's day, or today while none exists yet. */
   trendStartsOn: string;
   byPlan: RevenuePlanRow[];
