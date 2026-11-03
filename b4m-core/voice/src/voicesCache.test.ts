@@ -67,6 +67,22 @@ describe('fetchElevenLabsVoices', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it('evicts the least recently used key once 200 keys are cached', async () => {
+    const fetchImpl = mockFetch({ voices: [{ voice_id: 'v1', name: 'Alice' }] });
+
+    for (let i = 0; i < 200; i++) await fetchElevenLabsVoices(`key-${i}`, { fetchImpl });
+    await fetchElevenLabsVoices('key-0', { fetchImpl });
+    await fetchElevenLabsVoices('key-200', { fetchImpl });
+    expect(fetchImpl).toHaveBeenCalledTimes(201);
+
+    await fetchElevenLabsVoices('key-0', { fetchImpl });
+    await fetchElevenLabsVoices('key-200', { fetchImpl });
+    expect(fetchImpl).toHaveBeenCalledTimes(201);
+
+    await fetchElevenLabsVoices('key-1', { fetchImpl });
+    expect(fetchImpl).toHaveBeenCalledTimes(202);
+  });
+
   it('refetches when force=true', async () => {
     const fetchImpl = mockFetch({ voices: [{ voice_id: 'v1', name: 'Alice' }] });
 

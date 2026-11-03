@@ -23,7 +23,7 @@ interface CacheEntry {
 const VOICES_ENDPOINT = 'https://api.elevenlabs.io/v1/voices';
 const TTL_MS = 15 * 60 * 1000;
 
-// Bounds memory when many users bring their own key; the oldest entry is evicted first.
+// Bounds memory when many users bring their own key; the least recently used entry is evicted first.
 const MAX_ENTRIES = 200;
 
 const _cache = new Map<string, CacheEntry>();
@@ -54,6 +54,9 @@ export async function fetchElevenLabsVoices(
 
   const cached = _cache.get(apiKey);
   if (!options.force && cached && Date.now() < cached.expiresAt) {
+    // Re-insert so Map order tracks recency and a busy key is not evicted first.
+    _cache.delete(apiKey);
+    _cache.set(apiKey, cached);
     return cached.voices;
   }
 
