@@ -348,4 +348,11 @@ describe('the context ring cold dot', () => {
     await openBlankSession();
     expect(dot()).toBeNull();
   });
+
+  it('does not show right after a compact either', async () => {
+    const compact: ChatMessage = { ...boundary, content: 'summary', boundary: { kind: 'compact' } };
+    stubBridge({ tools: [], model: LOCAL, messages: [user, reply, compact], loadedState: { kind: 'unloaded' } });
+    await openBlankSession();
+    expect(dot()).toBeNull();
+  });
 });
