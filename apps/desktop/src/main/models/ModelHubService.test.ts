@@ -30,6 +30,7 @@ import { pullKey, type ModelPull } from '@shared/models';
 import type { ModelServerSpecs } from '@shared/modelServers';
 import { describe, expect, it, vi } from 'vitest';
 import { LOCAL_CONTEXT_TARGET_TOKENS } from '../chat/localContext';
+import { fitFromArch } from './fit';
 import { ServerUnreachableError } from '../modelServers/errors';
 import { HuggingFaceTokenStore } from './HuggingFaceTokenStore';
 import {
@@ -1220,6 +1221,37 @@ describe('ModelHubService fit', () => {
     runtime.list.mockResolvedValue([installed({ modifiedAt: '2026-10-02T00:00:00Z' })]);
     await service.installed();
     expect(runtime.inspect).toHaveBeenCalledTimes(2);
+  });
+
+  it('sizes an installed MoE model without layer widths from the expert tensor stats Ollama reports', async () => {
+    const MOE_ARCH: ModelArch = {
+      contextMax: 131072,
+      blockCount: 48,
+      headCount: 32,
+      full: { layers: 48, kvHeads: 4, keyLength: 128, valueLength: 128 },
+      moe: { experts: 128, used: 8, moeLayers: 48 },
+      mtpLayers: 0,
+    };
+    const sizeBytes = 18 * GIB;
+    const expertBytesPerLayer = 0.33 * GIB;
+    const hardware = { ...machine('unified', 64), platform: 'darwin', arch: 'arm64', chip: 'Apple M4 Pro' };
+    const fitWith = async (tensorStats: ModelInspection['tensorStats']) => {
+      const { service, runtime } = harness({ hardware });
+      runtime.list.mockResolvedValue([installed({ name: 'moe:latest', sizeBytes })]);
+      const base = await runtime.inspect('x');
+      runtime.inspect.mockResolvedValue({ ...base, arch: MOE_ARCH, tensorStats });
+      const result = await service.installed();
+      return result.ok ? result.models[0].fit : null;
+    };
+
+    const withStats = await fitWith({ expertBytesPerLayer, nonExpertBytes: sizeBytes - 48 * expertBytesPerLayer });
+    const without = await fitWith(null);
+    expect(withStats).toEqual(fitFromArch(MOE_ARCH, sizeBytes, hardware, withStats!.context, { expertBytesPerLayer }));
+    expect(without).toEqual(fitFromArch(MOE_ARCH, sizeBytes, hardware, without!.context));
+    // The stats size both the compute buffer, in place of the widths, and the weights one decode step reads.
+    expect(withStats?.detail).toContain('Replies at about');
+    expect(without?.detail).not.toContain('Replies');
+    expect(withStats?.detail.split(' Replies')[0]).not.toBe(without?.detail);
   });
 
   it('reads only a few installed models from Ollama at once', async () => {
