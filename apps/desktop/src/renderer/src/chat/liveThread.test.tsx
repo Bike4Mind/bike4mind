@@ -51,11 +51,11 @@ function PhaseProbe() {
 
 function TurnProbe() {
   const { turn, messages } = useConversation(SESSION, () => undefined);
-  const { requestAt, firstTokenAt, thinkingMs, thinkingSince } = turn ?? {};
+  const { messageId, continued, requestAt, firstTokenAt, thinkingMs, thinkingSince } = turn ?? {};
   const stats = messages.at(-1)?.stats ?? null;
   return (
     <output data-testid="chat-turn-probe">
-      {JSON.stringify({ requestAt, firstTokenAt, thinkingMs, thinkingSince, stats })}
+      {JSON.stringify({ messageId, continued, requestAt, firstTokenAt, thinkingMs, thinkingSince, stats })}
     </output>
   );
 }
@@ -149,7 +149,13 @@ describe('the live thread, driven by stream events', () => {
       phaseAt(2000, 'thinking');
       expect(probe()).toMatchObject({ requestAt: 1500, firstTokenAt: 2000, thinkingSince: 2000 });
       phaseAt(5000, 'responding');
-      expect(probe()).toEqual({ requestAt: 1500, firstTokenAt: 2000, thinkingMs: 3000, stats: null });
+      expect(probe()).toEqual({
+        messageId: MESSAGE,
+        requestAt: 1500,
+        firstTokenAt: 2000,
+        thinkingMs: 3000,
+        stats: null,
+      });
 
       // A call that arrives mid-think ends the think: the tool's time is not the model's.
       phaseAt(6000, 'thinking');
@@ -165,6 +171,9 @@ describe('the live thread, driven by stream events', () => {
       emit({ type: 'start', sessionId: SESSION, messageId: 'm2' });
       emit({ type: 'error', sessionId: SESSION, messageId: 'm2', message: 'The server went away', stats: failed });
       expect(probe().stats).toEqual(failed);
+
+      emit({ type: 'start', sessionId: SESSION, messageId: 'm2', baseUsage: { outputTokens: 40 } });
+      expect(probe()).toMatchObject({ messageId: 'm2', continued: true });
     } finally {
       vi.useRealTimers();
     }

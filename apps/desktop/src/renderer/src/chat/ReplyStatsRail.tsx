@@ -41,16 +41,27 @@ interface RailContent {
   usage: ChatUsage | null | undefined;
 }
 
-/** What a reply's rail shows: the live turn's figures while it runs, the stored ones after. */
+/**
+ * What a reply's rail shows: the live turn's figures while it runs, on top of what a continued
+ * reply's earlier runs stored, and the stored ones after.
+ */
 export function railContent(
   message: ChatMessage,
   turn: TurnProgress | null | undefined,
   now: number,
   hidden: ReadonlySet<ReplyStatId>
 ): RailContent {
-  const usage = turn ? turn.usage : message.usage;
-  const rows = turn ? replyStats({ stats: liveReplyStats(turn, now), usage }, { live: true }) : messageStats(message);
-  return { rows, shown: rows.filter(row => !hidden.has(row.id)), credits: formatCreditsSpent(usage), usage };
+  if (!turn) {
+    const rows = messageStats(message);
+    const usage = message.usage;
+    return { rows, shown: rows.filter(row => !hidden.has(row.id)), credits: formatCreditsSpent(usage), usage };
+  }
+  // A resumed run's usage totals include the earlier runs'; until the first lands, the stored one stands.
+  const usage = turn.usage ?? message.usage;
+  // A continued reply stored before stats were kept: its earlier time is unknown, so none is shown.
+  const stats = turn.continued && !message.stats ? undefined : liveReplyStats(turn, now, message.stats);
+  const rows = replyStats({ stats, usage }, { live: true });
+  return { rows, shown: rows.filter(row => !hidden.has(row.id)), credits: null, usage };
 }
 
 /** The minimum height a reply needs while its rail is drawn; see railReserve. */

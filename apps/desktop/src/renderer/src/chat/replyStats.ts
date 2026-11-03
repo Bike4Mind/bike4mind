@@ -174,7 +174,9 @@ export function replyStats(source: ReplyStatsSource, { live = false }: { live?: 
   const generation = live ? null : generationRate(source);
   const cached = cacheReadShare(usage);
   const rate = usage?.rate;
-  const reasoningTokens = stats?.reasoningTokens ?? usage?.reasoningTokens;
+  // The server's count first: while a continued reply runs it covers every run, and the stored
+  // one only the earlier runs.
+  const reasoningTokens = usage?.reasoningTokens ?? stats?.reasoningTokens;
 
   const all: Record<ReplyStatId, ReplyStat | null> = {
     thinking: stat('thinking', stats?.reasoningMs !== undefined ? duration(stats.reasoningMs) : null, thinkingEstimate),
@@ -190,7 +192,7 @@ export function replyStats(source: ReplyStatsSource, { live = false }: { live?: 
     thinkingTokens: stat(
       'thinkingTokens',
       reasoningTokens !== undefined ? formatTokens(reasoningTokens) : null,
-      derived.has('reasoningTokens') && ESTIMATES.thinkingTokens
+      usage?.reasoningTokens === undefined && derived.has('reasoningTokens') && ESTIMATES.thinkingTokens
     ),
     tokens: stat('tokens', usage?.outputTokens !== undefined ? formatTokens(usage.outputTokens) : null),
     speed: stat(
