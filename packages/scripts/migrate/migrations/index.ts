@@ -266,7 +266,7 @@ import EnsureReferralSubscriptionRewardIndexes from './20260921237000_ensure-ref
 import EnsureRevenueSnapshotIndex from './20260921237100_ensure-revenue-snapshot-index';
 import EnsureSpendRollupIndexes from './20260921237200_ensure-spend-rollup-indexes';
 import QueueHeldSignupGrantsForRiskReview from './20260921237300_queue-held-signup-grants-for-risk-review';
-import GrantPackagesFromInvites from './20261103121500_grant-packages-from-invites';
+import GrantPackagesFromInvites from './20260921237500_grant-packages-from-invites';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
