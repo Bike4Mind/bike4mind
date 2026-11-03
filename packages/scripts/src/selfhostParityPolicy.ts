@@ -890,6 +890,11 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'd4acc4d47d84373b51e0aaf008c3f5e4a263bd3a1d99510c1f42628710ca99a0',
     ['cloudwatch:PutMetricData']
   ),
+  // Works the holds the refresh above makes possible, so it ports with it.
+  gap(
+    'schedule:infra/cron.ts:signupDomainHoldTriage',
+    '00afeb7a987d8d584dc1d5959a1bf59cbd78325b5c1d2b04aada6ae2b2f06041'
+  ),
   gap(
     'schedule:infra/cron.ts:modelDiscoveryStalenessCron',
     'f906894c42c72f63c47bff4cd0214d9803e241702098291f3a30a67204b0da99',

@@ -6,12 +6,14 @@ import {
   DomainIntelligenceModel,
   SignupDomainReviewModel,
   User,
+  withTransaction,
 } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { isEligibleForFreeCredits, releaseVerifiedPendingFreeCredits } from '@server/auth/emailVerifiedGrants';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const decisionSchema = z.object({
   domain: z.string().min(1).max(253),
@@ -66,20 +68,35 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
       if (!parsed.success) throw new BadRequestError('Expected a domain and confirm/release action');
       const { domain, action, afterUserId } = parsed.data;
       const status = action === 'release' ? 'released' : 'blocked';
-      const review = await SignupDomainReviewModel.findOneAndUpdate(
-        {
-          domain,
-          status: {
-            $in:
-              action === 'release'
-                ? ['held_pending_review', 'blocked', 'released']
-                : ['held_pending_review', 'blocked'],
+      // A strict audit entry rides in the same transaction, so an unrecorded decision rolls back.
+      const review = await withTransaction(async () => {
+        const previous = await SignupDomainReviewModel.findOneAndUpdate(
+          {
+            domain,
+            status: {
+              $in:
+                action === 'release'
+                  ? ['held_pending_review', 'blocked', 'released']
+                  : ['held_pending_review', 'blocked'],
+            },
           },
-        },
-        // An admin decision supersedes an automated one (signupDomainHoldTriage), so its marker goes.
-        { $set: { status, reviewedBy: req.user.id, reviewedAt: new Date() }, $unset: { autoDecision: 1 } },
-        { new: true }
-      );
+          // An admin decision supersedes an automated one (signupDomainHoldTriage), so its marker goes.
+          { $set: { status, reviewedBy: req.user.id, reviewedAt: new Date() }, $unset: { autoDecision: 1 } },
+          { new: false }
+        );
+        if (!previous) return null;
+        await recordAdminActionFromRequest(req, {
+          action: action === 'release' ? 'signup_domain_hold.released' : 'signup_domain_hold.confirmed',
+          target: { kind: 'system', id: `signup-domain-hold:${domain}`, displayName: domain },
+          summary: `${action === 'release' ? 'released' : 'confirmed'} the signup domain hold on ${domain}`,
+          changes: [{ field: 'status', before: previous.status, after: status }],
+          details: {
+            reason: previous.reason,
+            ...(previous.autoDecision ? { overrodeAutoDecision: previous.autoDecision.policy } : {}),
+          },
+        });
+        return previous;
+      });
       if (!review) throw new BadRequestError('Hold not found or already resolved with another decision');
       let creditsReleased = 0;
       let remaining = 0;

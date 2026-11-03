@@ -62,8 +62,8 @@ export default function SignupDomainHoldsTab() {
         whose mail runs through a disposable provider defer pending free credits. Confirm keeps credits held. Release
         allows future grants and retries existing pending grants. Granted balances are never changed. Configure
         detection in Users settings. Released domains stay exempt from automatic holds. Holds from domains only on the
-        aggregate disposable list are confirmed automatically unless that is turned off in Users settings; each is
-        recorded in the Admin Audit Log as a system action and can still be released here.
+        aggregate disposable list are confirmed automatically on production unless that is turned off in Users settings;
+        each is recorded in the Admin Audit Log as a system action and can still be released here.
       </Typography>
       {decision.error && <Alert color="danger">{getErrorMessage(decision.error)}</Alert>}
       {decision.data?.status === 'blocked' && (

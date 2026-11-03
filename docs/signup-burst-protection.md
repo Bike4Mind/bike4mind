@@ -75,7 +75,9 @@ The `signupDomainHoldTriage` job (`apps/workers/src/cron/signupDomainHoldTriage.
 confirms, which keeps credits held; it never releases. Each confirmation writes a strict
 `signup_domain_hold.auto_confirmed` Admin Audit Log entry with a system actor in the same transaction, and the row
 shows "Auto-confirmed by the disposable list rule". An admin can still **Release** it, which clears the automated
-marker. Other reasons are left for an admin.
+marker. Other reasons are left for an admin. Admin Confirm and Release write strict
+`signup_domain_hold.confirmed` / `signup_domain_hold.released` entries, and a Release that overrides an automated
+confirmation names the policy it overrode.
 
 ## Disposable lists and domain intelligence
 

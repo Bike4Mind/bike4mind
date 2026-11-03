@@ -1,19 +1,30 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SignupDomainReview } from '@bike4mind/common';
 
+const h = vi.hoisted(() => ({
+  listPending: vi.fn(),
+  autoConfirm: vi.fn(),
+  getSettingsMap: vi.fn(),
+  recordAdminAction: vi.fn(),
+}));
+
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%' } }));
 vi.mock('@bike4mind/database', () => ({
   connectDB: vi.fn(),
   adminAuditLogRepository: {},
   adminSettingsRepository: {},
-  signupDomainReviewRepository: {},
-  withTransaction: vi.fn(),
+  signupDomainReviewRepository: { listPending: h.listPending, autoConfirm: h.autoConfirm },
+  withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
-vi.mock('@bike4mind/services', () => ({ adminAuditService: { recordAdminAction: vi.fn() } }));
-vi.mock('@bike4mind/utils', () => ({ getSettingsMap: vi.fn(), getSettingsValue: vi.fn() }));
+vi.mock('@bike4mind/services', () => ({ adminAuditService: { recordAdminAction: h.recordAdminAction } }));
+vi.mock('@bike4mind/utils', () => ({
+  getSettingsMap: h.getSettingsMap,
+  getSettingsValue: (key: string, settings: Record<string, unknown>, fallback: unknown) => settings[key] ?? fallback,
+}));
 
 import {
+  handler,
   runSignupDomainHoldTriage,
   TRIAGE_BATCH_LIMIT,
   type SignupDomainHoldTriageDeps,
@@ -116,5 +127,31 @@ describe('runSignupDomainHoldTriage', () => {
       '[signupDomainHoldTriage] auto-confirm failed',
       expect.objectContaining({ domain: 'one.test' })
     );
+  });
+});
+
+describe('signupDomainHoldTriage handler', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.listPending.mockResolvedValue([hold('one.test')]);
+    h.autoConfirm.mockResolvedValue(true);
+    h.recordAdminAction.mockResolvedValue(null);
+  });
+
+  it('reads the setting fresh and stops when an operator turned it off', async () => {
+    h.getSettingsMap.mockResolvedValue({ autoConfirmDisposableAggregateHolds: false });
+    expect(await handler()).toEqual({ status: 'disabled' });
+    expect(h.getSettingsMap).toHaveBeenCalledWith(expect.anything(), {
+      skipCache: true,
+      names: ['autoConfirmDisposableAggregateHolds'],
+    });
+    expect(h.listPending).not.toHaveBeenCalled();
+  });
+
+  it('defaults on and fails the run when a hold could not be confirmed, so the alarm sees it', async () => {
+    h.getSettingsMap.mockResolvedValue({});
+    h.autoConfirm.mockRejectedValue(new Error('write conflict'));
+    await expect(handler()).rejects.toThrow('1 of 1 holds failed');
+    expect(h.listPending).toHaveBeenCalledWith('disposable-aggregate', TRIAGE_BATCH_LIMIT);
   });
 });

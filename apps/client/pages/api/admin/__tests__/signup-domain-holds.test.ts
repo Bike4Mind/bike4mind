@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 
-const { handlers, find, reviewUpdate, release, eligible, count, baseOptions } = vi.hoisted(() => ({
+const { handlers, find, reviewUpdate, release, eligible, count, baseOptions, recordAudit } = vi.hoisted(() => ({
   handlers: {} as Record<string, (req: unknown, res: unknown) => Promise<void>>,
   find: vi.fn(),
   reviewUpdate: vi.fn(),
@@ -10,6 +10,7 @@ const { handlers, find, reviewUpdate, release, eligible, count, baseOptions } = 
   eligible: vi.fn(),
   count: vi.fn(),
   baseOptions: vi.fn(),
+  recordAudit: vi.fn(),
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -45,8 +46,10 @@ vi.mock('@bike4mind/database', () => {
       ],
     },
     User: { find, countDocuments: count },
+    withTransaction: (fn: () => Promise<unknown>) => fn(),
   };
 });
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: recordAudit }));
 vi.mock('@server/auth/emailVerifiedGrants', () => ({
   isEligibleForFreeCredits: eligible,
   releaseVerifiedPendingFreeCredits: release,
@@ -72,6 +75,7 @@ beforeEach(() => {
   count.mockReset().mockResolvedValue(0);
   release.mockReset().mockResolvedValue({ creditsGranted: 25, tags: [] });
   eligible.mockReset().mockResolvedValue(true);
+  recordAudit.mockReset().mockResolvedValue(null);
 });
 describe('signup domain hold listing', () => {
   it('reports per-source list freshness and the lookup cache size', async () => {
@@ -105,7 +109,7 @@ describe('signup domain hold decisions', () => {
         $set: { status: 'released', reviewedBy: 'admin-1', reviewedAt: expect.any(Date) },
         $unset: { autoDecision: 1 },
       },
-      { new: true }
+      { new: false }
     );
     const filter = find.mock.calls[0][0];
     expect(filter).toMatchObject({ emailVerified: true, tags: PENDING_FREE_CREDITS_TAG });
@@ -178,7 +182,12 @@ describe('signup domain hold decisions', () => {
     expect(count).toHaveBeenCalledTimes(2);
   });
   it('lets an admin release a hold the triage job auto-confirmed, clearing its automated marker', async () => {
-    reviewUpdate.mockResolvedValue({ domain: 'example.net', status: 'released' });
+    reviewUpdate.mockResolvedValue({
+      domain: 'example.net',
+      status: 'blocked',
+      reason: 'disposable-aggregate',
+      autoDecision: { policy: 'disposable-aggregate-rule', decidedAt: new Date() },
+    });
     const { req, res } = makeRequest({ domain: 'example.net', action: 'release' });
     await handlers.post(req, res);
     expect(res._getStatusCode()).toBe(200);
@@ -189,6 +198,32 @@ describe('signup domain hold decisions', () => {
       $unset: { autoDecision: 1 },
     });
     expect(release).toHaveBeenCalled();
+    expect(recordAudit).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'signup_domain_hold.released',
+        changes: [{ field: 'status', before: 'blocked', after: 'released' }],
+        details: { reason: 'disposable-aggregate', overrodeAutoDecision: 'disposable-aggregate-rule' },
+      })
+    );
+  });
+  it('audits a confirmation and records nothing for a missing hold', async () => {
+    reviewUpdate.mockResolvedValue({ domain: 'example.net', status: 'held_pending_review', reason: 'pattern' });
+    const confirmed = makeRequest({ domain: 'example.net', action: 'confirm' });
+    await handlers.post(confirmed.req, confirmed.res);
+    expect(recordAudit).toHaveBeenCalledWith(
+      confirmed.req,
+      expect.objectContaining({
+        action: 'signup_domain_hold.confirmed',
+        changes: [{ field: 'status', before: 'held_pending_review', after: 'blocked' }],
+        details: { reason: 'pattern' },
+      })
+    );
+    recordAudit.mockClear();
+    reviewUpdate.mockResolvedValue(null);
+    const missing = makeRequest({ domain: 'example.net', action: 'confirm' });
+    await expect(handlers.post(missing.req, missing.res)).rejects.toThrow();
+    expect(recordAudit).not.toHaveBeenCalled();
   });
   it('confirmation grants no credits', async () => {
     const { req, res } = makeRequest({ domain: 'example.net', action: 'confirm' });

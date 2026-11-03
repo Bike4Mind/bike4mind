@@ -20,7 +20,7 @@ export const signupDomainReviewSchema = z.object({
   cohortUserIds: z.array(z.string()),
   sampleEmails: z.array(z.string()),
   signupCount: z.number(),
-  /** The admin user id behind the last decision; absent when an automated policy made it. */
+  /** The admin user id behind the last decision; absent while undecided or when a policy decided. */
   reviewedBy: z.string().optional(),
   reviewedAt: z.date().optional(),
   /** Set when an automated policy made the last decision; the next admin decision clears it. */

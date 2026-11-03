@@ -7,8 +7,8 @@
  * Rule: a `disposable-aggregate` hold is confirmed when the autoConfirmDisposableAggregateHolds
  * setting is on. Each confirmation writes a strict Admin Audit Log entry attributed to the system in
  * the same transaction, and the hold's autoDecision marks the row in the admin tab.
- * Schedule: rate(10 minutes) (infra/cron.ts signupDomainHoldTriage). SaaS only, like the hold
- * detector's disposable-list refresh.
+ * Schedule: rate(10 minutes) (infra/cron.ts signupDomainHoldTriage), on stages that run scheduled
+ * jobs. Not on self-host yet; it ports with disposableDomainRefresh (selfhostParityPolicy.ts).
  */
 import {
   DISPOSABLE_AGGREGATE_HOLD_REASON,
