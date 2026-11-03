@@ -251,7 +251,7 @@ export function useUserRevokeSharing(
  * (components, query subscriptions, WebSocket) survives. The server-side revoke differs per path
  * and is done by the caller BEFORE this runs.
  */
-async function tearDownClientSession(opts: {
+export async function tearDownClientSession(opts: {
   setCurrentUser: (user: IUserDocument | null) => void;
   resetTokens: () => void;
   queryClient: QueryClient;

@@ -18,6 +18,7 @@ import PromptMetaInspector from '@client/app/components/Session/PromptMetaInspec
 import FileBrowser from '../components/Files/Browser';
 import SendToDataLakeModal from '@client/app/components/DataLakeWizard/SendToDataLakeModal';
 import MFAEnforcementWrapper from '../components/auth/MFAEnforcementWrapper';
+import AccountDeletionPendingGate from '../components/auth/AccountDeletionPendingGate';
 import EmailVerificationBanner from '@client/app/components/EmailVerificationBanner';
 import CommandPalette from '../components/CommandPalette';
 import { useDataLakeBatchCompletionSync } from '@client/app/hooks/data/dataLakeWizard';
@@ -66,25 +67,29 @@ export const ProviderBundle: React.FC<ProviderBundleProps> = ({ children }) => {
   // routes that render ProviderBundle without NotebookLayout. See its own doc comment.
   useDataLakeBatchCompletionSync();
 
+  // Outermost: a deletion-pending account may reach only the cancel screen's routes, so no data
+  // provider may mount until the gate has ruled that out.
   return (
-    <CoreDataProviders>
-      <SessionProviders>
-        <UIProviders>
-          <ModalErrorBoundary>
-            <ModalManager />
-          </ModalErrorBoundary>
-          <ReferralModal inviteType={ReferralInviteType.referral} />
-          <ReferralRewardNotice />
-          <HelpModal />
-          <PromptMetaInspector />
-          <CreateTeamModal />
-          <FileBrowser />
-          <SendToDataLakeModal />
-          <CommandPalette />
-          <EmailVerificationBanner />
-          {children}
-        </UIProviders>
-      </SessionProviders>
-    </CoreDataProviders>
+    <AccountDeletionPendingGate>
+      <CoreDataProviders>
+        <SessionProviders>
+          <UIProviders>
+            <ModalErrorBoundary>
+              <ModalManager />
+            </ModalErrorBoundary>
+            <ReferralModal inviteType={ReferralInviteType.referral} />
+            <ReferralRewardNotice />
+            <HelpModal />
+            <PromptMetaInspector />
+            <CreateTeamModal />
+            <FileBrowser />
+            <SendToDataLakeModal />
+            <CommandPalette />
+            <EmailVerificationBanner />
+            {children}
+          </UIProviders>
+        </SessionProviders>
+      </CoreDataProviders>
+    </AccountDeletionPendingGate>
   );
 };
