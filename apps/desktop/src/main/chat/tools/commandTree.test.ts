@@ -4,7 +4,14 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { COMMAND_TAG_ENV, WINDOWS_TREE_SCRIPT, commandExit, signalCommandTree, windowsArgs } from './commandTree';
+import {
+  COMMAND_TAG_ENV,
+  WINDOWS_TREE_SCRIPT,
+  commandExit,
+  signalCommandTree,
+  windowsSignalCommands,
+  type CommandTree,
+} from './commandTree';
 
 describe('commandExit', () => {
   it('reads a Git Bash signal exit back as the signal on Windows, by MSYS signal number', () => {
@@ -51,18 +58,39 @@ describe('commandExit', () => {
   });
 });
 
-describe('windowsArgs', () => {
-  it('names taskkill by its absolute System32 path and lists every tag', () => {
-    const child = {} as ChildProcess;
-    const tree = (tag: string) => ({
-      pid: 1,
-      child,
-      launch: { executable: 'C:\\Git\\bin\\bash.exe', args: [], processTag: tag, cleanup: async () => undefined },
-    });
-    const args = windowsArgs([tree('one'), tree('two')]);
-    expect(args.slice(0, 3)).toEqual(['-c', WINDOWS_TREE_SCRIPT, 'b4m-signal']);
-    expect(args[3]).toMatch(/^[A-Z]:\\.*\\System32\\taskkill\.exe$/i);
-    expect(args.slice(4)).toEqual(['KILL', 'one', 'two']);
+describe('windowsSignalCommands', () => {
+  const cleanup = async () => undefined;
+  const child = {} as ChildProcess;
+  const native = (pid: number, tag: string): CommandTree => ({
+    pid,
+    child,
+    launch: { executable: 'C:\\Git\\bin\\bash.exe', args: [], processTag: tag, cleanup },
+  });
+  const wsl = (pid: number, tag: string, distro: string): CommandTree => ({
+    pid,
+    child,
+    launch: { executable: 'wsl.exe', args: [], processTag: tag, wslDistro: distro, cleanup },
+  });
+
+  it('sweeps Git Bash once for every native tree, by tag alone, always forced, with taskkill by absolute path', () => {
+    const [sweep, ...rest] = windowsSignalCommands([native(10, 'a'), native(11, 'b')], 'SIGTERM');
+    expect(rest).toEqual([]);
+    expect(sweep?.file).toBe('C:\\Git\\bin\\bash.exe');
+    expect(sweep?.args.slice(0, 3)).toEqual(['-c', WINDOWS_TREE_SCRIPT, 'b4m-signal']);
+    expect(sweep?.args[3]).toMatch(/^[A-Z]:\\.*\\System32\\taskkill\.exe$/i);
+    expect(sweep?.args.slice(4)).toEqual(['KILL', 'a', 'b']);
+  });
+
+  it('sweeps each distro inside Linux with the signal as sent, and names no pid', () => {
+    const commands = windowsSignalCommands(
+      [wsl(20, 'a', 'Ubuntu'), wsl(21, 'b', 'Ubuntu'), wsl(22, 'c', 'Debian'), native(23, 'd')],
+      'SIGTERM'
+    );
+    expect(commands.map(command => command.file)).toEqual(['C:\\Git\\bin\\bash.exe', 'wsl.exe', 'wsl.exe']);
+    expect(commands[1]?.args.slice(0, 5)).toEqual(['-d', 'Ubuntu', '--exec', 'bash', '-c']);
+    expect(commands[1]?.args.slice(6)).toEqual(['b4m-signal', '', 'TERM', 'a', 'b']);
+    expect(commands[2]?.args.slice(6)).toEqual(['b4m-signal', '', 'TERM', 'c']);
+    expect(commands.flatMap(command => command.args).some(arg => /^2\d$/.test(arg))).toBe(false);
   });
 });
 
@@ -98,6 +126,14 @@ describe.runIf(process.platform === 'linux')('WINDOWS_TREE_SCRIPT', () => {
     expect(untagged.child.exitCode).toBeNull();
     expect(untagged.child.signalCode).toBeNull();
     expect(elsewhere.child.signalCode).toBeNull();
+  });
+
+  it('kills tagged processes with SIGKILL where there is no taskkill, as in a WSL distro', async () => {
+    const tag = randomUUID();
+    const tagged = sleeper(tag);
+    await new Promise(resolve => setTimeout(resolve, 200));
+    spawnSync('bash', ['-c', WINDOWS_TREE_SCRIPT, 'b4m-signal', '', 'KILL', tag]);
+    expect(await tagged.ended).toBe('SIGKILL');
   });
 });
 

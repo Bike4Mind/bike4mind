@@ -1,7 +1,6 @@
 import { execFile } from 'node:child_process';
-import { hostGitArgs } from '../../git/hostGitArgs';
+import { gitCommand, hostGitArgs } from '../../git/hostGitArgs';
 import { parseRemoteLocation, type RemoteLocation, type RepositoryName } from '../../fleet/repository';
-import { hostProgram } from './userPath';
 
 /**
  * What a `git push` or a `gh` write names as its target, read off the command's words alone.
@@ -207,10 +206,10 @@ export function ghReadFiles(tokens: readonly string[]): string[] {
 }
 
 const runGit: GitReader = async (cwd, args) => {
-  const git = await hostProgram('git');
-  if (!git) return null;
+  const command = await gitCommand(cwd, hostGitArgs(['-C', cwd, ...args], cwd));
+  if (!command) return null;
   return new Promise(resolve => {
-    execFile(git, hostGitArgs(['-C', cwd, ...args]), { timeout: 2000 }, (error, stdout) => {
+    execFile(command.file, command.args, { timeout: 2000, windowsHide: true }, (error, stdout) => {
       resolve(error ? null : stdout.trim() || null);
     });
   });

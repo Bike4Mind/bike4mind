@@ -17,7 +17,7 @@ describe('launchCommand on Windows', () => {
   it('runs Git Bash with a fixed argv and the command in the environment', async () => {
     onWindows();
     const command = "printf '%s|' C:\\\\Users 'a\\\\b' *.json";
-    const launch = await launchCommand(command, [], []);
+    const launch = await launchCommand(command, [], [], 'C:\\project');
 
     expect(launch.executable).toBe('C:\\Program Files\\Git\\bin\\bash.exe');
     expect(launch.args).toEqual(['-c', 'export -n B4M_DESKTOP_COMMAND; eval "$B4M_DESKTOP_COMMAND"']);
@@ -48,8 +48,8 @@ describe('launchCommand on Windows', () => {
 
   it('tags each command and passes the tag and the command to the child', async () => {
     onWindows();
-    const first = await launchCommand('echo one', [], []);
-    const second = await launchCommand('echo two', [], []);
+    const first = await launchCommand('echo one', [], [], 'C:\\project');
+    const second = await launchCommand('echo two', [], [], 'C:\\project');
     expect(first.processTag).toMatch(/^[0-9a-f-]{36}$/);
     expect(second.processTag).not.toBe(first.processTag);
 
@@ -63,7 +63,7 @@ describe('launchCommand on Windows', () => {
 
 describe('launchCommand on POSIX', () => {
   it.skipIf(process.platform === 'win32')('passes the command to bash -c with no tag', async () => {
-    const launch = await launchCommand('echo hi', [], []);
+    const launch = await launchCommand('echo hi', [], [], '/tmp');
     expect(launch).toMatchObject({ executable: '/bin/bash', args: ['-c', 'echo hi'] });
     expect(launch.processTag).toBeUndefined();
     expect((await commandEnv(launch))[COMMAND_TAG_ENV]).toBeUndefined();

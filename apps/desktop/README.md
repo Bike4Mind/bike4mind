@@ -22,6 +22,8 @@ No Node.js, pnpm, or source checkout is required.
    Windows and installs the build native to the PC. It is not code signed yet,
    so SmartScreen shows a warning on first run. In-app updates work on Windows. Shell commands
    run in Git Bash, so Code projects need [Git for Windows](https://git-scm.com/download/win).
+   A project opened from `\\wsl.localhost\<distro>\...` runs git, shell commands, search and the
+   terminal inside that WSL distro instead, with its own git, PATH and toolchain.
    The rest of the local tool layer (file access, sandboxing) is not yet verified on Windows.
 
 New distribution releases require Developer ID signing and notarization. Legacy unsigned

@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
+import { wslCommand, wslCommandEnv, wslLocation } from '../../wsl/wslPath';
 import { hostProgram, resolveUserPath } from './userPath';
 
 export interface RipgrepLine {
@@ -90,15 +91,22 @@ export async function ripgrepSearch(search: RipgrepSearch): Promise<RipgrepOutco
   // An explicit "." rather than none: with no path rg may read stdin instead of searching cwd.
   args.push('--', '.');
 
-  const env = { ...process.env, PATH: await resolveUserPath() };
-  const rg = await hostProgram('rg', env.PATH);
+  const wsl = wslLocation(search.cwd);
+  const env = wsl ? await wslCommandEnv(process.env, wsl.distro) : { ...process.env, PATH: await resolveUserPath() };
+  const rg = wsl ? 'rg' : await hostProgram('rg', env.PATH);
   if (!rg) {
     unavailableUntil = Date.now() + UNAVAILABLE_RETRY_MS;
     return 'unavailable';
   }
+  const command = wsl ? wslCommand(wsl, 'rg', args) : { file: rg, args };
 
   return new Promise<RipgrepOutcome>(resolve => {
-    const child = spawn(rg, args, { cwd: search.cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(command.file, command.args, {
+      cwd: wsl ? undefined : search.cwd,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
     let settled = false;
     let stopped = false;
     let stderr = '';
@@ -167,6 +175,8 @@ export async function ripgrepSearch(search: RipgrepSearch): Promise<RipgrepOutco
     child.on('close', code => {
       if (stopped) return finish('stopped');
       if (timedOut) return finish('timed-out');
+      // The folder's distro has no rg; the shell wrapping it exits 127.
+      if (wsl && code === 127) return finish('unavailable');
       // Exit 2 is "an error occurred". With nothing found it cannot be told from "no match", so
       // the caller searches again itself rather than report a clean miss: a size-limited or
       // otherwise rejected pattern would look exactly like that.

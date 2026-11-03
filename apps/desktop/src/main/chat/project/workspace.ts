@@ -18,6 +18,7 @@ import {
   currentBranch,
   fetchRemoteFor,
   git,
+  gitPath,
   listWorktrees,
   resolveBaseRef,
 } from './git';
@@ -337,7 +338,7 @@ export class SpareWorktrees {
     try {
       const head = (await git(projectDirectory, ['rev-parse', '--verify', `${from}^{commit}`])).trim();
       await git(projectDirectory, ['worktree', 'add', '--quiet', '--detach', path, head]);
-      const gitDirectory = (await git(path, ['rev-parse', '--absolute-git-dir'])).trim();
+      const gitDirectory = gitPath(path, (await git(path, ['rev-parse', '--absolute-git-dir'])).trim());
       await writeFile(join(gitDirectory, 'b4m-spare'), `bike4mind-spare:${head}\n`, 'utf8');
     } catch {
       return;
@@ -376,7 +377,7 @@ export class SpareWorktrees {
 
 async function isOwnedSpare(path: string): Promise<boolean> {
   try {
-    const gitDirectory = (await git(path, ['rev-parse', '--absolute-git-dir'])).trim();
+    const gitDirectory = gitPath(path, (await git(path, ['rev-parse', '--absolute-git-dir'])).trim());
     const head = (await git(path, ['rev-parse', 'HEAD'])).trim();
     return (await readFile(join(gitDirectory, 'b4m-spare'), 'utf8')) === `bike4mind-spare:${head}\n`;
   } catch {

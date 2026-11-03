@@ -8,6 +8,7 @@ import {
   type TerminalCreateResult,
   type TerminalInfo,
 } from '@shared/terminal';
+import { wslLocation } from '../wsl/wslPath';
 
 /** Output is coalesced for this long before it crosses to a window (ms): one frame. */
 const FLUSH_MS = 16;
@@ -384,11 +385,14 @@ export class TerminalManager {
     // A Finder launch has no SHELL, and tools run from the terminal read it to pick a shell.
     if (this.deps.platform !== 'win32') env.SHELL ||= this.deps.shell.file;
     if (live.epoch !== epoch) throw new Error('superseded');
-    const pty = this.spawnFn(this.deps.shell.file, this.deps.shell.args, {
+    // cmd refuses a UNC working directory, and a WSL folder wants the distro's own shell anyway.
+    const wsl = wslLocation(cwd, this.deps.platform);
+    const shell = wsl ? { file: 'wsl.exe', args: ['-d', wsl.distro, '--cd', wsl.linuxPath] } : this.deps.shell;
+    const pty = this.spawnFn(shell.file, shell.args, {
       name: 'xterm-256color',
       cols: live.size.cols,
       rows: live.size.rows,
-      cwd,
+      cwd: wsl ? this.deps.home : cwd,
       env,
     });
     live.pty = pty;

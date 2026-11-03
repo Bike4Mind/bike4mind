@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { COMMAND_TAG_ENV } from './commandTree';
 import { resolveGitBash } from './gitBash';
+import { wslCommand, wslCommandEnv, wslLocation } from '../../wsl/wslPath';
 import { resolveUserPath } from './userPath';
 import { sandboxAvailable, sandboxCommand, type SandboxedCommand } from './sandbox';
 
@@ -22,13 +23,26 @@ export const WINDOWS_COMMAND_ARGS: readonly string[] = ['-c', `export -n ${COMMA
 export async function launchCommand(
   command: string,
   roots: readonly string[],
-  protectedPaths: readonly string[]
+  protectedPaths: readonly string[],
+  cwd: string
 ): Promise<SandboxedCommand> {
   if (SANDBOX_SHELL_COMMANDS) {
     if (!sandboxAvailable()) {
       throw new Error('Commands cannot be run on this machine: the macOS sandbox is unavailable.');
     }
     return sandboxCommand(command, roots, protectedPaths);
+  }
+  const wsl = wslLocation(cwd);
+  if (wsl) {
+    // The distro's own bash, so the command gets Linux git, hooks, node_modules and toolchain.
+    const enter = wslCommand(wsl, 'bash', []);
+    return {
+      executable: enter.file,
+      args: [...enter.args, '-c', command],
+      processTag: randomUUID(),
+      wslDistro: wsl.distro,
+      cleanup: async () => undefined,
+    };
   }
   if (process.platform === 'win32') {
     return {
@@ -44,6 +58,10 @@ export async function launchCommand(
 
 /** The user's own environment, with the PATH a terminal would have rather than Finder's. */
 export async function commandEnv(launch: SandboxedCommand, extra: NodeJS.ProcessEnv = {}): Promise<NodeJS.ProcessEnv> {
+  if (launch.wslDistro) {
+    const crossing = { ...process.env, ...extra, [COMMAND_TAG_ENV]: launch.processTag };
+    return wslCommandEnv(crossing, launch.wslDistro, [...Object.keys(extra), COMMAND_TAG_ENV]);
+  }
   const env: NodeJS.ProcessEnv = { ...process.env, PATH: await resolveUserPath(), ...extra, ...launch.env };
   if (SANDBOX_SHELL_COMMANDS) env.B4M_DESKTOP_SANDBOX = '1';
   if (launch.processTag) env[COMMAND_TAG_ENV] = launch.processTag;

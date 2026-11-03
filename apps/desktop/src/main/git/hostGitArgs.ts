@@ -1,17 +1,33 @@
 import { execFile } from 'node:child_process';
 import { hostProgram } from '../chat/tools/userPath';
+import { wslCommand, wslLocation } from '../wsl/wslPath';
 const EMPTY_HOOKS_PATH = process.platform === 'win32' ? 'NUL' : '/dev/null';
 
-/** Config overrides so a repo's own `.git/config` cannot run hooks or a file-system monitor on the host. */
-export const HOST_GIT_CONFIG_ARGS: readonly string[] = [
-  '-c',
-  'core.fsmonitor=false',
-  '-c',
-  `core.hooksPath=${EMPTY_HOOKS_PATH}`,
-];
+function configArgs(emptyHooksPath: string): string[] {
+  return ['-c', 'core.fsmonitor=false', '-c', `core.hooksPath=${emptyHooksPath}`];
+}
 
-export function hostGitArgs(args: readonly string[]): string[] {
-  return [...HOST_GIT_CONFIG_ARGS, ...args];
+/** Config overrides so a repo's own `.git/config` cannot run hooks or a file-system monitor on the host. */
+export const HOST_GIT_CONFIG_ARGS: readonly string[] = configArgs(EMPTY_HOOKS_PATH);
+
+/** The overrides for git run in `directory`: a WSL folder gets Linux git, which needs Linux's null device. */
+function configArgsFor(directory: string | undefined): readonly string[] {
+  return directory && wslLocation(directory) ? configArgs('/dev/null') : HOST_GIT_CONFIG_ARGS;
+}
+
+export function hostGitArgs(args: readonly string[], directory?: string): string[] {
+  return [...configArgsFor(directory), ...args];
+}
+
+/** `git args...` run in `directory`: Linux git through wsl.exe for a WSL folder, the host's git otherwise (null if none). */
+export async function gitCommand(
+  directory: string,
+  args: readonly string[]
+): Promise<{ file: string; args: string[]; cwd?: string } | null> {
+  const location = wslLocation(directory);
+  if (location) return wslCommand(location, 'git', args);
+  const git = await hostProgram('git');
+  return git ? { file: git, args: [...args], cwd: directory } : null;
 }
 
 export type ConfigEntry = { scope: string; key: string; value: string };
@@ -19,31 +35,26 @@ export type ScopedConfigReader = (cwd: string) => Promise<ConfigEntry[]>;
 
 const NETWORK_KEYS = '^(credential\\.(.*\\.)?helper|core\\.sshcommand|core\\.askpass)$';
 
-const readScopedConfig: ScopedConfigReader = async cwd => {
-  const git = await hostProgram('git');
+const readScopedConfig: ScopedConfigReader = async directory => {
+  const command = await gitCommand(directory, ['config', '--show-scope', '-z', '--get-regexp', NETWORK_KEYS]);
   return new Promise(resolve => {
-    if (!git) return resolve([]);
-    execFile(
-      git,
-      ['config', '--show-scope', '-z', '--get-regexp', NETWORK_KEYS],
-      { cwd, timeout: 2000 },
-      (error, stdout) => {
-        if (error) return resolve([]);
-        // `-z` output is `scope\0key\nvalue\0` per entry; a key written without `=` has no value line.
-        const fields = stdout.split('\0');
-        const entries: ConfigEntry[] = [];
-        for (let i = 0; i + 1 < fields.length; i += 2) {
-          const newline = fields[i + 1].indexOf('\n');
-          if (newline === -1) continue;
-          entries.push({
-            scope: fields[i],
-            key: fields[i + 1].slice(0, newline),
-            value: fields[i + 1].slice(newline + 1),
-          });
-        }
-        resolve(entries);
+    if (!command) return resolve([]);
+    execFile(command.file, command.args, { cwd: command.cwd, timeout: 2000, windowsHide: true }, (error, stdout) => {
+      if (error) return resolve([]);
+      // `-z` output is `scope\0key\nvalue\0` per entry; a key written without `=` has no value line.
+      const fields = stdout.split('\0');
+      const entries: ConfigEntry[] = [];
+      for (let i = 0; i + 1 < fields.length; i += 2) {
+        const newline = fields[i + 1].indexOf('\n');
+        if (newline === -1) continue;
+        entries.push({
+          scope: fields[i],
+          key: fields[i + 1].slice(0, newline),
+          value: fields[i + 1].slice(newline + 1),
+        });
       }
-    );
+      resolve(entries);
+    });
   });
 };
 
@@ -77,5 +88,5 @@ export async function hostNetworkGitArgs(
   if (!env.GIT_ASKPASS && setByRepo('core.askpass')) {
     overrides.push('-c', `core.askPass=${lastTrusted('core.askpass') ?? env.SSH_ASKPASS ?? ''}`);
   }
-  return [...HOST_GIT_CONFIG_ARGS, ...overrides, ...args];
+  return [...configArgsFor(cwd), ...overrides, ...args];
 }

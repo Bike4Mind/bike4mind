@@ -3,8 +3,8 @@ import { realpath, stat } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { BranchCheckout } from '@shared/chat';
-import { hostGitArgs, hostNetworkGitArgs } from '../../git/hostGitArgs';
-import { hostProgram } from '../tools/userPath';
+import { gitCommand, hostGitArgs, hostNetworkGitArgs } from '../../git/hostGitArgs';
+import { toWindowsPath, wslCommandEnv, wslLocation } from '../../wsl/wslPath';
 
 const execFileAsync = promisify(execFile);
 
@@ -46,7 +46,13 @@ export function readableGitMessage(stderr: string): string {
 }
 
 export function git(directory: string, args: readonly string[]): Promise<string> {
-  return runGit(directory, args, hostGitArgs(args));
+  return runGit(directory, args, hostGitArgs(args, directory));
+}
+
+/** A path git printed for `directory`, as this host reaches it: git in a WSL folder prints Linux paths. */
+export function gitPath(directory: string, path: string): string {
+  const location = wslLocation(directory);
+  return location ? toWindowsPath(location, path) : path;
 }
 
 /** For calls that reach a remote, which can run configured credential, ssh and askpass commands. */
@@ -56,11 +62,16 @@ function gitNetwork(directory: string, args: readonly string[]): Promise<string>
 
 async function runGit(directory: string, args: readonly string[], fullArgs: readonly string[]): Promise<string> {
   try {
-    const file = await hostProgram('git');
-    if (!file) throw new Error('git is not installed');
-    const { stdout } = await execFileAsync(file, [...fullArgs], {
-      cwd: directory,
+    const command = await gitCommand(directory, fullArgs);
+    if (!command) throw new Error('git is not installed');
+    const wsl = wslLocation(directory);
+    // The distro user's PATH, so a credential helper such as `gh` resolves as it does in their shell.
+    const env = wsl ? await wslCommandEnv(process.env, wsl.distro) : undefined;
+    const { stdout } = await execFileAsync(command.file, command.args, {
+      cwd: command.cwd,
+      env,
       timeout: GIT_TIMEOUT_MS,
+      windowsHide: true,
       maxBuffer: MAX_GIT_OUTPUT_BYTES,
     });
     return stdout;
@@ -135,7 +146,7 @@ export async function branchExists(directory: string, branch: string): Promise<b
 export async function containerDirectory(directory: string): Promise<string> {
   const common = (await git(directory, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim();
   if (!common) throw new GitError(['rev-parse', '--git-common-dir'], 'git named no common directory');
-  return dirname(common);
+  return dirname(gitPath(directory, common));
 }
 
 /**
@@ -219,8 +230,15 @@ export async function isGitDirectory(path: string): Promise<boolean> {
  * tools, and with core.bare unset in a shared config git lists it with a `branch` line, which
  * made it win a lookup for the branch the main worktree actually holds.
  */
+async function worktreeRecords(directory: string): Promise<PorcelainWorktree[]> {
+  return parseWorktreePorcelain(await git(directory, ['worktree', 'list', '--porcelain'])).map(entry => ({
+    ...entry,
+    path: gitPath(directory, entry.path),
+  }));
+}
+
 export async function listWorktrees(directory: string): Promise<WorktreeEntry[]> {
-  const entries = parseWorktreePorcelain(await git(directory, ['worktree', 'list', '--porcelain']));
+  const entries = await worktreeRecords(directory);
   const checkouts: WorktreeEntry[] = [];
   for (const { path, branch, bare } of entries) {
     if (bare || (await isGitDirectory(path))) continue;
@@ -238,7 +256,7 @@ export async function listWorktrees(directory: string): Promise<WorktreeEntry[]>
  * the main worktree - or the bare repo standing in for it - first.
  */
 export async function branchCheckouts(directory: string): Promise<Record<string, BranchCheckout>> {
-  const entries = parseWorktreePorcelain(await git(directory, ['worktree', 'list', '--porcelain']));
+  const entries = await worktreeRecords(directory);
   const own = await samePathAs(directory);
   const checkouts: [string, BranchCheckout][] = [];
   for (const [index, entry] of entries.entries()) {

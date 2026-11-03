@@ -601,7 +601,7 @@ export const bashExecute: ToolDefinition = {
     const requestedTimeout = optionalNumber(input, 'timeout');
     const timeoutMs = Math.min(Math.max(requestedTimeout ?? DEFAULT_TIMEOUT_MS, 1_000), MAX_TIMEOUT_MS);
 
-    const launch = await launchCommand(command, context.roots, context.protectedPaths ?? []);
+    const launch = await launchCommand(command, context.roots, context.protectedPaths ?? [], cwd);
     const startedAt = new Date().toISOString();
     let moved = false;
     try {

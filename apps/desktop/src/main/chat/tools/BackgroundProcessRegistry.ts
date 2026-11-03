@@ -147,7 +147,7 @@ export class BackgroundProcessRegistry {
     this.enforceLimits(request.sessionId);
 
     const wrapped = wrapWithParentWatchdog(request.command);
-    const launch = await launchCommand(wrapped, request.roots, request.protectedPaths);
+    const launch = await launchCommand(wrapped, request.roots, request.protectedPaths, request.cwd);
 
     const info = this.newInfo(request.sessionId, request.command, request.cwd, new Date().toISOString());
 
