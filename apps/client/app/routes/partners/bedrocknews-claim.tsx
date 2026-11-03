@@ -159,6 +159,8 @@ const BedrockNewsClaimPage = () => {
   useEffect(() => {
     if (!ticket) return;
     if (!accessToken) {
+      // Mid sign-out the URL carries redirectTo and the teardown goes to /login itself; redirecting here nests it.
+      if (new URLSearchParams(window.location.search).has('redirectTo')) return;
       navigate({ to: '/login', search: { redirectTo: window.location.pathname + window.location.search } });
       return;
     }

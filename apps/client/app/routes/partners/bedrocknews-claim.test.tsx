@@ -153,6 +153,16 @@ describe('BedrockNewsClaimPage', () => {
     expect(params.get('redirectTo')).toBe(`/partners/bedrocknews/claim?ticket=${TICKET}`);
   });
 
+  it('leaves the login redirect to the sign-out when the token clears mid-logout', async () => {
+    mockPost.mockResolvedValue({ data: READY });
+    window.history.replaceState(null, '', `/partners/bedrocknews/claim?ticket=${TICKET}`);
+    const { rerender } = renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Use another account' }));
+    mockAccessToken = null;
+    rerender(<BedrockNewsClaimPage />);
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
   it('restores the claim URL and shows unavailable when sign-out fails', async () => {
     mockPost.mockResolvedValue({ data: READY });
     mockLogout.mockImplementation((_vars: unknown, options?: { onError?: () => void }) => options?.onError?.());
