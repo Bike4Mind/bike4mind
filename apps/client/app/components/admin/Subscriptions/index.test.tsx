@@ -27,7 +27,7 @@ vi.mock('./useOpenSubscriptionRow', () => ({
 }));
 
 import { fakeAdminRouter } from '../__tests__/fakeAdminRouter';
-import { ADMIN_REVENUE_TREND_PATH } from '../Revenue/useAdminRevenue';
+import { ADMIN_REVENUE_PATH } from '../Revenue/useAdminRevenue';
 import { NEWEST_PAID_SUBSCRIPTION_QUERY, useSubscriptionsLastSeen } from './subscriptionsLastSeen';
 import { DEFAULT_SUBSCRIPTIONS_PARAMS } from './subscriptionsTabSearch';
 import { useSubscriptionsTab } from './useSubscriptionsTabParams';
@@ -293,8 +293,8 @@ describe('AdminSubscriptions', () => {
       payingOrgs: 0,
       mrrByPlan: {},
     });
-    apiGet.mockImplementation(async (url: string) => {
-      if (url === ADMIN_REVENUE_TREND_PATH)
+    apiGet.mockImplementation(async (url: string, config?: { params?: Record<string, unknown> }) => {
+      if (url === ADMIN_REVENUE_PATH && config?.params?.part === 'trend')
         return {
           data: { stripeConfigured: true, trend: [trendPoint('2026-10-28', 1_900), trendPoint('2026-10-29', 3_800)] },
         };

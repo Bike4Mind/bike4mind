@@ -322,7 +322,6 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/release-notes/config` | GET, PUT | jwt+key | `admin:*` | no | - | 1: `components/admin/ReleaseNotes/useReleaseNotes.ts` |
 | `/api/admin/retrieval-rate` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/RetrievalRateTab.tsx` |
 | `/api/admin/revenue` | GET | jwt | `admin:*` | no | - | 1: `components/admin/Revenue/useAdminRevenue.ts` |
-| `/api/admin/revenue/trend` | GET | jwt | `admin:*` | no | - | 1: `components/admin/Revenue/useAdminRevenue.ts` |
 | `/api/admin/saved-views` | GET, POST | jwt | `admin:*` | no | - | 1: `components/admin/Users/List/useUsersSavedViews.ts` |
 | `/api/admin/saved-views/[id]` | PATCH, DELETE | jwt | `admin:*` | no | - | 1: `components/admin/Users/List/useUsersSavedViews.ts` |
 | `/api/admin/scoped-settings` | GET, PUT, DELETE | jwt+key | `admin:*` | no | - | 1: `hooks/data/settings.ts` |

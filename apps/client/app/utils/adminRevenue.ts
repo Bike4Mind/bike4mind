@@ -16,7 +16,11 @@ export const REVENUE_RANGE_DAYS: Readonly<Record<RevenueRange, number>> = { '30d
 
 export const REVENUE_AT_RISK_LIMIT = 10;
 
-export const AdminRevenueQuerySchema = z.object({ range: z.enum(REVENUE_RANGES).default('30d') });
+/** `part=trend` returns only the last REVENUE_SPARKLINE_DAYS days of snapshots, skipping the live totals. */
+export const AdminRevenueQuerySchema = z.object({
+  range: z.enum(REVENUE_RANGES).default('30d'),
+  part: z.enum(['all', 'trend']).default('all'),
+});
 
 /** One RevenueSnapshot day. Amounts are minor units of MRR_CURRENCY; `newMrr` and `churnedMrr` cover the day itself. */
 export type RevenueTrendPoint = {
@@ -40,7 +44,7 @@ export type RevenueTrendPlan = { key: string; plan: AdminSubscriptionPlan };
 /** `RevenueTrendPlan.key` of rows with no price id. */
 export const NO_PRICE_PLAN_KEY = 'none';
 
-/** GET /api/admin/revenue/trend: the last REVENUE_SPARKLINE_DAYS days of snapshots, for the list's tile sparklines. */
+/** GET /api/admin/revenue?part=trend, for the subscriptions list's tile sparklines. */
 export const REVENUE_SPARKLINE_DAYS = 30;
 export type AdminRevenueTrendResponse =
   { stripeConfigured: false } | { stripeConfigured: true; trend: RevenueTrendPoint[] };

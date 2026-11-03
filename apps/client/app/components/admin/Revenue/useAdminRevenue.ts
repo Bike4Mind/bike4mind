@@ -13,12 +13,11 @@ export function useAdminRevenue(range: RevenueRange) {
   });
 }
 
-export const ADMIN_REVENUE_TREND_PATH = '/api/admin/revenue/trend';
-
 export function useAdminRevenueTrend({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ['admin', 'revenue', 'trend'],
-    queryFn: async () => (await api.get<AdminRevenueTrendResponse>(ADMIN_REVENUE_TREND_PATH)).data,
+    queryFn: async () =>
+      (await api.get<AdminRevenueTrendResponse>(ADMIN_REVENUE_PATH, { params: { part: 'trend' } })).data,
     enabled,
     // Snapshots are written once a day.
     staleTime: 5 * 60_000,

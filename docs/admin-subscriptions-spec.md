@@ -407,8 +407,7 @@ The endpoints use the contract pattern only if they become public; these stay ad
 | `GET /api/admin/subscriptions/[id]` | Detail from Mongo |
 | `GET /api/admin/subscriptions/[id]/stripe` | Live read: invoices, payment method, upcoming invoice; cached 60 s |
 | `GET /api/admin/subscriptions/[id]/timeline` | Merged feed |
-| `GET /api/admin/revenue` | Snapshot series and current totals |
-| `GET /api/admin/revenue/trend` | The last 30 days of snapshots only, for the list's tile sparklines |
+| `GET /api/admin/revenue` | Snapshot series and current totals; `part=trend` returns only the last 30 days of snapshots, for the list's tile sparklines |
 | `POST /api/admin/subscriptions/[id]/sync` | Sync from Stripe (5.2, 7) |
 
 `GET /api/admin/subscriptions` takes an optional `cancel` filter, inherited by the list, summary and export routes:
