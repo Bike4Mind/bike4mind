@@ -46,6 +46,7 @@ interface WireModel {
   supportsVision?: unknown;
   can_think?: unknown;
   pricing?: unknown;
+  disabled?: unknown;
 }
 
 export interface ModelCatalogLogger {
@@ -286,6 +287,7 @@ export function selectUsableModels(wire: unknown): ChatModelOption[] {
         : {}),
       supportsTools: true,
       ...(model.backend === 'ollama' && model.can_think === true ? { thinkingToggle: true } : {}),
+      ...(model.disabled === true ? { disabled: true } : {}),
       ...pricingOf(model.pricing),
     }));
 }

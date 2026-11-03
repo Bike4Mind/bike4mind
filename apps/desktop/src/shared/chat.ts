@@ -958,6 +958,8 @@ export interface ChatModelOption {
   aliasIds?: string[];
   /** Why it cannot be picked now (its server is down or wants credentials); listed disabled. */
   unavailable?: string;
+  /** Listed by the server but refused at call time (ModelInfo.disabled); the picker prefers an enabled route of it. */
+  disabled?: boolean;
   /** USD per token by context tier, as the server's catalog publishes it. Absent when unpriced. */
   pricing?: Record<number, { input: number; output: number; cache_read?: number; cache_write?: number }>;
 }

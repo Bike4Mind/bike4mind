@@ -415,6 +415,58 @@ describe('ModelPicker twin rows', () => {
   });
 });
 
+describe('ModelPicker Bedrock route variants', () => {
+  const fable: ChatModelOption[] = [
+    { id: 'claude-fable-5-1', name: 'Claude Fable 5.1', backend: 'anthropic', releaseDate: '2026-10-01' },
+    { id: 'anthropic.claude-fable-5-1', name: 'Claude Fable 5.1', backend: 'bedrock', releaseDate: '2026-10-01' },
+    { id: 'claude-fable-5', name: 'Claude Fable 5', backend: 'anthropic', releaseDate: '2026-06-01' },
+    { id: 'anthropic.claude-fable-5', name: 'Claude Fable 5', backend: 'bedrock', releaseDate: '2026-06-01' },
+    { id: 'global.anthropic.claude-fable-5', name: 'Claude Fable 5', backend: 'bedrock' },
+    { id: 'global.anthropic.claude-fable-5-1', name: 'Claude Fable 5.1', backend: 'bedrock' },
+  ];
+  const credits = (model: ChatModelOption) =>
+    model.backend === 'anthropic' ? 265 : model.id.startsWith('global.') ? 212 : 234;
+  const bullet = String.fromCharCode(0x2022);
+  const rows = () => options().map(option => option.textContent);
+
+  it('shows one row per model and provider, newest first, priced for the variant it picks', () => {
+    const { onSelect } = mount(fable, 'claude-fable-5-1', credits);
+
+    expect(rows()).toEqual([
+      `${bullet} Claude Fable 5.1anthropic`,
+      'Claude Fable 5.1bedrock~212 cr',
+      'Claude Fable 5anthropic~265 cr',
+      'Claude Fable 5bedrock~212 cr',
+    ]);
+    act(() => options()[1]!.click());
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith('global.anthropic.claude-fable-5-1');
+  });
+
+  it('keeps a conversation on a hidden variant selected on its own row, without switching it', () => {
+    const { onSelect } = mount(fable, 'anthropic.claude-fable-5-1', credits);
+
+    expect(el('model-picker-btn').textContent).toBe('Claude Fable 5.1');
+    expect(document.querySelector('[data-testid="model-picker-unavailable"]')).toBeNull();
+    expect(rows()).toEqual([
+      'Claude Fable 5.1anthropic~265 cr',
+      `${bullet} Claude Fable 5.1bedrock`,
+      'Claude Fable 5anthropic~265 cr',
+      'Claude Fable 5bedrock~212 cr',
+    ]);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('narrows the merged rows by provider and by query', () => {
+    mount([...fable, ...MODELS], 'claude-fable-5-1');
+
+    act(() => el('model-picker-provider-bedrock').click());
+    expect(rows()).toEqual(['Claude Fable 5.1bedrock', 'Claude Fable 5bedrock']);
+
+    typeInto(filterBox(), 'fable 5.1');
+    expect(rows()).toEqual(['Claude Fable 5.1bedrock']);
+  });
+});
+
 describe('ModelPicker filters', () => {
   const gpu = { id: 'abc123', name: 'gpu box' };
   const mixed: ChatModelOption[] = [

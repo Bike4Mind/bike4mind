@@ -36,6 +36,7 @@ import {
   useModelPickerFilters,
   visibleControls,
 } from './modelPickerFilters';
+import { mergeRouteVariants } from './modelRouteVariants';
 import type { NoLocalModels } from './noLocalModels';
 import { formatCredits } from './statusLine';
 import type { ModelCatalogController } from './useChat';
@@ -83,16 +84,23 @@ export function groupByServer(models: readonly ChatModelOption[]): ModelGroup[] 
 
 /**
  * Newest release first, undated after, each run in its incoming order - except that a model listed
- * under several providers (one name, same date) keeps its rows together so they read as one choice.
+ * under several providers (one name) keeps its rows together so they read as one choice, dated by
+ * the newest of them, since one route's listing can lack the date another carries.
  * Only hosted models carry dates; local ones keep catalog order inside their own groups.
  */
 export function sortByRecency(models: readonly ChatModelOption[]): ChatModelOption[] {
   const firstOfName = new Map<string, number>();
-  models.forEach((model, index) => firstOfName.set(model.name, firstOfName.get(model.name) ?? index));
+  const dateOfName = new Map<string, string>();
+  models.forEach((model, index) => {
+    firstOfName.set(model.name, firstOfName.get(model.name) ?? index);
+    const date = model.releaseDate;
+    if (date && !modelServer(model) && date > (dateOfName.get(model.name) ?? '')) dateOfName.set(model.name, date);
+  });
+  const dateOf = (model: ChatModelOption) => (modelServer(model) ? model.releaseDate : dateOfName.get(model.name));
   return models
     .map((model, index) => ({ model, index }))
     .sort((a, b) => {
-      const [da, db] = [a.model.releaseDate, b.model.releaseDate];
+      const [da, db] = [dateOf(a.model), dateOf(b.model)];
       if (da !== db) {
         if (da && db) return da < db ? 1 : -1;
         return da ? -1 : 1;
@@ -404,15 +412,16 @@ export function ModelPicker({
   const unavailable = missing && !selecting;
   const serverDown = current?.unavailable;
 
-  const details = useMemo(() => rowDetails(models), [models]);
-  const options = useMemo(() => filterOptions(models, servers), [models, servers]);
+  const rows = useMemo(() => mergeRouteVariants(models, current?.id ?? null), [models, current?.id]);
+  const details = useMemo(() => rowDetails(rows), [rows]);
+  const options = useMemo(() => filterOptions(rows, servers), [rows, servers]);
   const filters = useMemo(() => effectiveFilters(savedFilters, options), [savedFilters, options]);
   const matches = useMemo(
     () =>
-      sortByRecency(models).filter(
+      sortByRecency(rows).filter(
         model => matchesFilters(model, filters) && matchesQuery(model, filter, details.get(model.id))
       ),
-    [models, details, filter, filters]
+    [rows, details, filter, filters]
   );
   const groups = useMemo(() => groupByServer(matches), [matches]);
   const warnHosted = hasHistory && !!modelId && !!parseLocalModelId(modelId);
