@@ -314,7 +314,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     label: 'Settings',
     items: [
       { Icon: Settings, tab: AdminTab.AdminSettings, label: 'General', testid: 'admin-settings-btn' },
-      { Icon: AppWindow, tab: AdminTab.Modals, label: 'Modals' },
+      { Icon: AppWindow, tab: AdminTab.Modals, label: 'Modals', testid: 'admin-modals-tab-btn' },
       { Icon: Newspaper, tab: AdminTab.WhatsNewModals, label: "What's new" },
       { Icon: NotebookText, tab: AdminTab.ReleaseNotes, label: 'Release notes', testid: 'admin-release-notes-btn' },
       { Icon: BookOpen, tab: AdminTab.Documentation, label: 'Docs' },
@@ -357,13 +357,15 @@ export const splitSectionItems = (
 };
 
 /**
- * The sections an admin can see: gated items dropped, then (when `query` is non-blank) only the
- * items whose label or section label contains it. Sections left empty are omitted.
+ * The sections an admin can see: gated items and tabs `canOpenTab` refuses dropped, then (when
+ * `query` is non-blank) only the items whose label or section label contains it. Sections left
+ * empty are omitted.
  */
 export const filterSidebarSections = (
   sections: SidebarSection[],
   gates: Record<SidebarGate, boolean>,
-  query: string
+  query: string,
+  canOpenTab: (tab: AdminTab) => boolean = () => true
 ): SidebarSection[] => {
   const needle = query.trim().toLowerCase();
   return sections
@@ -372,6 +374,7 @@ export const filterSidebarSections = (
       const items = section.items.filter(
         item =>
           (!item.gate || gates[item.gate]) &&
+          canOpenTab(item.tab) &&
           (needle === '' ||
             sectionMatches ||
             [item.label, ...(item.aliases ?? [])].some(name => name.toLowerCase().includes(needle)))
