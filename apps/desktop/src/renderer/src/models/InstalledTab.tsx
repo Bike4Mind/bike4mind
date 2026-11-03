@@ -129,6 +129,11 @@ function InstalledRow({
           Use in chat
         </Button>
       )}
+      {!onUse && model.capabilities.embeddings && !model.capabilities.completion && (
+        <Typography level="body-xs" textColor="text.tertiary" role="note" data-testid="models-installed-embedding-note">
+          Embedding model, not for chat
+        </Typography>
+      )}
       {onRemove && (
         <Button
           size="sm"

@@ -97,7 +97,7 @@ async function attempt<T>(task: () => Promise<T> | T): Promise<T | null> {
   }
 }
 
-async function withTimeout<T>(task: Promise<T>, ms: number): Promise<T | null> {
+export async function withTimeout<T>(task: Promise<T>, ms: number): Promise<T | null> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<null>(resolve => {
     timer = setTimeout(() => resolve(null), ms);

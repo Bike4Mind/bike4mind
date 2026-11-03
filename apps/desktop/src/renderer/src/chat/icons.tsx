@@ -136,9 +136,9 @@ export function FolderPlusIcon() {
 }
 
 /** Which b4m backend answers. A server, not a laptop: this app's agent always runs here. */
-export function ServerIcon() {
+export function ServerIcon({ size }: { size?: number } = {}) {
   return (
-    <Glyph>
+    <Glyph size={size}>
       <rect x="2.5" y="3" width="11" height="4" rx="1.2" />
       <rect x="2.5" y="9" width="11" height="4" rx="1.2" />
       <path d="M5 5h.01M5 11h.01" />
@@ -525,6 +525,15 @@ export function DocumentIcon({ size }: { size?: number } = {}) {
     <Glyph size={size}>
       <path d="M4 1.75h5l3 3v9.5H4z" />
       <path d="M9 1.75v3h3M6 8h4M6 10.5h4" />
+    </Glyph>
+  );
+}
+
+/** A hosted model, as opposed to one on this computer or a saved server (ServerIcon). */
+export function CloudIcon({ size }: { size?: number } = {}) {
+  return (
+    <Glyph size={size}>
+      <path d="M4.75 12.5h6.75a2.75 2.75 0 0 0 .4-5.47 4 4 0 0 0-7.6-.9A3.2 3.2 0 0 0 4.75 12.5z" />
     </Glyph>
   );
 }

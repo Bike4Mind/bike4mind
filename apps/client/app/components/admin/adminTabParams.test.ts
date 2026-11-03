@@ -260,6 +260,22 @@ describe('Organizations tab params', () => {
   });
 });
 
+describe('invite center section param', () => {
+  it('is parsed by parseAdminSearch', () => {
+    expect(parseAdminSearch({ tab: 'waitlist', inviteSection: 'pending' }).inviteSection).toBe('pending');
+  });
+
+  it('drops an unknown section in validateSearch', () => {
+    expect(parseAdminSearch({ tab: 'waitlist', inviteSection: 'nope' }).inviteSection).toBeUndefined();
+  });
+
+  it('is kept on the waitlist tab and dropped on a switch away', () => {
+    const previous = { tab: 'waitlist', inviteSection: 'pending' };
+    expect(adminSearchForTab(previous, 'waitlist')).toMatchObject({ tab: 'waitlist', inviteSection: 'pending' });
+    expect(adminSearchForTab(previous, 'users').inviteSection).toBeUndefined();
+  });
+});
+
 describe('Security tab params', () => {
   const securitySearch = {
     tab: 'security-dashboard',

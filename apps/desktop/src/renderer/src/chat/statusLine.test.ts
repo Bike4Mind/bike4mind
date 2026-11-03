@@ -172,6 +172,16 @@ describe('statusFields with usage', () => {
     const usage = { inputTokens: 100, outputTokens: 50 };
     expect(statusFields({ startedAt: 0, tokens: 150, usage }, 0, 'x')).toEqual(['0s', '150 tokens', 'x']);
   });
+
+  it('puts a local rate before the activity', () => {
+    const usage = { inputTokens: 100, outputTokens: 50 };
+    expect(statusFields({ startedAt: 0, tokens: 150, usage }, 0, 'x', false, '24.0 tok/s')).toEqual([
+      '0s',
+      '150 tokens',
+      '24.0 tok/s',
+      'x',
+    ]);
+  });
 });
 
 describe('describeActivity', () => {

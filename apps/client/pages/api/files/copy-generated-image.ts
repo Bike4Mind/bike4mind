@@ -25,6 +25,7 @@ import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/e
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { userCanAccessGeneratedImage } from '@bike4mind/server-utils/utils/generatedImageAccess';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
+import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';
 import { z } from 'zod';
 import { requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 
@@ -73,6 +74,8 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
       // spreadsheetml) map to ".xlsx" instead of a bogus ".sheet".
       const extension = extensionFromMimeType(contentType) || 'png';
       const finalFileName = fileName || `image_${Date.now()}.${extension}`;
+
+      await consumeFileUploadBudget(req, 1);
 
       const result = await withTransaction(async () => {
         return fabFilesService.createFabFile(

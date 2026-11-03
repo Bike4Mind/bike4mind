@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { MAX_TOOL_CALLS_CEILING } from '../constants/llmLimits';
 import { DATA_LAKE_GROUNDING_MODES } from '../constants/dataLakes';
-import { SESSION_ORIGIN_CHANNELS } from '../types/entities/SessionTypes';
+import { CHAT_HISTORY_ITEM_TYPES, QUEST_ERROR_CODES, SESSION_ORIGIN_CHANNELS } from '../types/entities/SessionTypes';
 import { PaginationQuerySchema, paginatedResponseSchema } from './pagination';
 
 // Shared by the request and response schemas below - kept to one definition so the two
@@ -255,3 +255,51 @@ export const CreateSessionRequestSchema = z.object({
 });
 
 export type CreateSessionRequest = z.infer<typeof CreateSessionRequestSchema>;
+
+/** Query for GET /api/v1/sessions/{id}/quests: the pagination convention, nothing more. */
+export const ListSessionQuestsQuerySchema = PaginationQuerySchema;
+
+export type ListSessionQuestsQuery = z.infer<typeof ListSessionQuestsQuerySchema>;
+
+/** An approval a tool is waiting on before it runs (confirm or cancel in the product UI). */
+export const SessionQuestPendingActionSchema = z.object({
+  tool: z.string().describe('The tool awaiting approval.'),
+  params: z.record(z.string(), z.unknown()).describe('The arguments the tool would run with.'),
+  ts: z.number().describe('When the approval was requested, in Unix milliseconds. It lapses after 15 minutes.'),
+});
+
+/**
+ * One turn of a session's conversation. A deliberately small projection of the stored quest: the
+ * fields needed to render a chat history. Poll `GET /api/v1/quests/{id}` for a turn's files and tool output.
+ */
+export const SessionQuestSchema = z.object({
+  id: z.string(),
+  prompt: z.string().nullable().describe('What the user sent. Null for a turn that carries no prompt.'),
+  reply: z
+    .string()
+    .nullable()
+    .describe('The visible answer, as `GET /api/v1/quests/{id}` reports it. Null while there is none yet.'),
+  status: z
+    .enum(['pending', 'running', 'done', 'stopped'])
+    .optional()
+    .describe('`done` and `stopped` are terminal. Absent on turns written before status tracking.'),
+  type: z
+    .enum(CHAT_HISTORY_ITEM_TYPES)
+    .optional()
+    .describe('`error` marks a failed turn; `reply` then holds the failure text.'),
+  errorCode: z
+    .enum(QUEST_ERROR_CODES)
+    .optional()
+    .describe('Machine-readable failure class, present only on `type: "error"` turns that have one.'),
+  createdAt: z.date().describe('When the turn started; the sort key of the listing.'),
+  creditsUsed: z.number().optional().describe('Credits billed for the turn. Absent until it is billed.'),
+  pendingAction: SessionQuestPendingActionSchema.optional().describe(
+    'Set while a tool awaits approval on this turn. Only the session owner is shown it; a session shared with you never carries it.'
+  ),
+});
+
+export type SessionQuest = z.infer<typeof SessionQuestSchema>;
+
+export const ListSessionQuestsResponseSchema = paginatedResponseSchema(SessionQuestSchema);
+
+export type ListSessionQuestsResponse = z.infer<typeof ListSessionQuestsResponseSchema>;
