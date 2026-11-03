@@ -25,7 +25,16 @@ const row = (day: string, patch: Partial<OverviewDailyRow> = {}): OverviewDailyR
   mau: 40,
   signups: { legit: 2, suspected: 1, unclassified: 0, bySignal: { domainBurst: 1 } },
   requestsBySource: { web: 5, cli: 1, system: 9 },
-  internal: { dau: 2, wau: 3, mau: 4, requestsBySource: { web: 1, desktop: 2 } },
+  // One internal user was external earlier in the window, so the union is one less than the sum.
+  internal: {
+    dau: 2,
+    wau: 3,
+    mau: 4,
+    allWau: 22,
+    allMau: 43,
+    windowComplete: true,
+    requestsBySource: { web: 1, desktop: 2 },
+  },
   computedAt: new Date('2026-06-15T04:00:00.000Z'),
   ...patch,
 });
@@ -36,7 +45,7 @@ const live: LiveDay = {
   mau: 45,
   signups: { legit: 0, suspected: 0, unclassified: 4, bySignal: {} },
   requestsBySource: { web: 2 },
-  internal: { dau: 1, wau: 3, mau: 5, requestsBySource: { cli: 1 } },
+  internal: { dau: 1, wau: 3, mau: 5, allWau: 27, allMau: 49, windowComplete: true, requestsBySource: { cli: 1 } },
 };
 
 const rowsFor = (from: string, to: string, patch?: (day: string) => Partial<OverviewDailyRow>) =>
@@ -246,13 +255,13 @@ describe('buildOverview', () => {
     expect(overview.stats.newSignups.value).toBe(12);
   });
 
-  it('sums both sides in all mode and merges their surfaces', () => {
+  it('sums DAU in all mode, takes WAU and MAU from the stored union and merges surfaces', () => {
     const overview = build(query({ accounts: 'all', compare: 'off' }), rowsFor('2026-06-09', '2026-06-14'));
-    expect(overview.activeUsers.days[0]).toMatchObject({ dau: 12, wau: 23, mau: 44 });
-    expect(overview.activeUsers.days.at(-1)).toMatchObject({ dau: 4, wau: 28, mau: 50 });
+    expect(overview.activeUsers.days[0]).toMatchObject({ dau: 12, wau: 22, mau: 43 });
+    expect(overview.activeUsers.days.at(-1)).toMatchObject({ dau: 4, wau: 27, mau: 49 });
     expect(overview.activeUsers.bySource[0].counts).toEqual({ web: 6, cli: 1, desktop: 2 });
     expect(overview.activeUsers.bySource.at(-1)?.counts).toEqual({ web: 2, cli: 1 });
-    expect(overview.stats.mau.value).toBe(44);
+    expect(overview.stats.mau.value).toBe(43);
   });
 
   it('returns both sides of every day for the hover, whatever the selection', () => {
@@ -273,10 +282,12 @@ describe('buildOverview', () => {
     const rows = rowsFor('2026-06-09', '2026-06-14', day => (day === '2026-06-11' ? { internal: undefined } : {}));
     const external = build(query({ compare: 'off' }), rows);
     expect(external.missingDays).toEqual([]);
+    expect(external.internalMissingDays).toEqual([]);
     expect(external.activeUsers.days.find(day => day.day === '2026-06-11')).toMatchObject({ dau: 10, internal: null });
     for (const accounts of ['internal', 'all'] as const) {
       const overview = build(query({ accounts, compare: 'off' }), rows);
-      expect(overview.missingDays).toEqual(['2026-06-11']);
+      expect(overview.missingDays).toEqual([]);
+      expect(overview.internalMissingDays).toEqual(['2026-06-11']);
       expect(overview.activeUsers.days.find(day => day.day === '2026-06-11')).toMatchObject({
         dau: null,
         mau: null,
@@ -286,6 +297,28 @@ describe('buildOverview', () => {
       expect(overview.activeUsers.bySource.find(day => day.day === '2026-06-11')?.counts).toBeNull();
       expect(overview.signups.buckets.find(b => b.start === '2026-06-11')?.legit).toBe(2);
     }
+  });
+
+  it('treats internal counts over an incomplete window as a gap, today included', () => {
+    const rows = rowsFor('2026-06-09', '2026-06-14', day =>
+      day === '2026-06-13' ? { internal: { ...row(day).internal!, windowComplete: false } } : {}
+    );
+    const liveDay: LiveDay = { ...live, internal: { ...live.internal!, windowComplete: false } };
+    const overview = build(query({ accounts: 'internal', compare: 'off' }), rows, liveDay);
+    expect(overview.internalMissingDays).toEqual(['2026-06-13']);
+    expect(overview.activeUsers.days.find(day => day.day === '2026-06-13')).toMatchObject({
+      dau: null,
+      internal: null,
+    });
+    expect(overview.activeUsers.days.at(-1)).toMatchObject({ partial: true, dau: null, internal: null });
+    expect(overview.activeUsers.days.at(-1)?.external).toEqual({ dau: 3, wau: 25, mau: 45 });
+  });
+
+  it('keeps a day with no rollup row in missingDays only, whatever the selection', () => {
+    const rows = rowsFor('2026-06-09', '2026-06-14').filter(r => r.day !== '2026-06-10');
+    const overview = build(query({ accounts: 'all', compare: 'off' }), rows);
+    expect(overview.missingDays).toEqual(['2026-06-10']);
+    expect(overview.internalMissingDays).toEqual([]);
   });
 
   it('reports the newest computedAt and flags it stale after 30 hours', () => {

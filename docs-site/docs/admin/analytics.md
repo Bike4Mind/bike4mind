@@ -24,7 +24,7 @@ All days are UTC days, and every chart says so. By default, counts exclude inter
 
 The toolbar is kept in the page URL (`range`, `start`, `end`, `compare`, `signups`, `accounts`), so a copied link opens the same view.
 
-**Accounts** chooses whose activity the active-user tiles and the Active users section count. **Internal only** counts just the internal accounts the default view leaves out, and **All** counts everyone. Signups always exclude internal accounts, whichever option is selected.
+**Accounts** chooses whose activity the active-user tiles and the Active users section count. **Internal only** counts just the internal accounts the default view leaves out, and **All** counts everyone. A user whose account changed between internal and external during a week or month is counted once in **All**'s weekly and monthly numbers. Signups always exclude internal accounts, whichever option is selected.
 
 **Last updated** shows when the nightly rollup last ran. A **Stale** chip appears when it is more than 30 hours old.
 
@@ -62,7 +62,7 @@ Each chart has a **View as table** button that shows the same numbers as a table
 
 ## Gaps, empty ranges and errors
 
-- **Missing days**: if the nightly rollup did not run for some days, a banner says how many. Those days are drawn as gaps, never as zero. Select **Show missing days** to list them. With **Accounts** set to Internal only or All, days rolled up before internal counts were recorded also count as missing until the rollup is run again for them.
+- **Missing days**: if the nightly rollup did not run for some days, a banner says how many. Those days are drawn as gaps, never as zero. Select **Show missing days** to list them. With **Accounts** set to Internal only or All, a second line lists days whose internal counts are missing or incomplete: days rolled up before internal counts were recorded, and days whose 28-day window includes one. They show as gaps, today included, until the rollup is run again for them.
 - **No activity**: a section with nothing to show offers **Show last 90 days**.
 - **Errors**: a section that fails to load shows **Try again**.
 

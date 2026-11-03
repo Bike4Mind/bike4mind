@@ -92,8 +92,13 @@ export type AnalyticsOverview = {
   lastUpdated: string | null;
   /** lastUpdated is older than ANALYTICS_STALE_AFTER_MS, or there is no rollup at all. */
   stale: boolean;
-  /** Complete days in the range with no rollup row, or no internal counts when the selection needs them. */
+  /** Complete days in the range with no rollup row. */
   missingDays: string[];
+  /**
+   * Internal or all only: complete days with a rollup row but no usable internal counts (rolled up before
+   * they were recorded, or within 28 days of such a row). Never overlaps missingDays.
+   */
+  internalMissingDays: string[];
   stats: {
     mau: AnalyticsStat;
     avgDau: AnalyticsStat;

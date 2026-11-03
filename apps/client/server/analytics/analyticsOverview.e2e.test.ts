@@ -118,6 +118,12 @@ describe('getAnalyticsOverview', () => {
       wau: nightly?.internal?.wau,
       mau: nightly?.internal?.mau,
     });
+    const all = await getAnalyticsOverview({ range: '28d', compare: 'prev', signups: 'all', accounts: 'all' }, NOW);
+    expect(all.activeUsers.days.at(-1)).toMatchObject({
+      dau: (nightly?.dau ?? 0) + (nightly?.internal?.dau ?? 0),
+      wau: nightly?.internal?.allWau,
+      mau: nightly?.internal?.allMau,
+    });
     const liveSignups = overview.signups.buckets.at(-1);
     expect({
       legit: liveSignups?.legit,

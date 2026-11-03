@@ -49,6 +49,7 @@ const overview = (patch: Partial<AnalyticsOverview> = {}): AnalyticsOverview => 
   lastUpdated: '2026-06-15T04:10:00.000Z',
   stale: false,
   missingDays: [],
+  internalMissingDays: [],
   stats: {
     mau: { value: 112, previous: 100 },
     avgDau: { value: 20, previous: 25 },
@@ -206,15 +207,22 @@ describe('AnalyticsTab', () => {
     await waitFor(() => expect(router.state.location.search.accounts).toBeUndefined());
   });
 
-  it('says in the footer and the missing banner which accounts are counted', async () => {
-    mocks.get.mockResolvedValue({ data: overview({ accounts: 'internal', missingDays: ['2026-06-01'] }) });
+  it('says in the footer which accounts are counted and tells missing rollups from missing internal counts', async () => {
+    mocks.get.mockResolvedValue({
+      data: overview({ accounts: 'internal', missingDays: ['2026-06-03'], internalMissingDays: ['2026-06-01'] }),
+    });
     await renderPage('/admin?tab=analytics&accounts=internal');
     expect(await screen.findByTestId('analytics-footer')).toHaveTextContent(
       'Active users count only staff, system and test accounts; signups always exclude them.'
     );
-    expect(await screen.findByTestId('analytics-missing-banner')).toHaveTextContent(
-      'Internal counts are missing for 1 day; those days show as gaps.'
+    expect(await screen.findByTestId('analytics-missing-rollup')).toHaveTextContent(
+      'Rollup is missing for 1 day; those days show as gaps.'
     );
+    expect(screen.getByTestId('analytics-missing-internal')).toHaveTextContent(
+      'Internal counts are missing or incomplete for 1 day; those days show as gaps until the rollup is re-run for them.'
+    );
+    fireEvent.click(screen.getByTestId('analytics-missing-toggle-btn'));
+    expect(screen.getByTestId('analytics-missing-days')).toHaveTextContent('2026-06-01, 2026-06-03');
   });
 
   it('seeds a custom range from the range on screen', async () => {

@@ -145,6 +145,9 @@ describe('rollupDay', () => {
       dau: directInternal.length,
       wau: 4,
       mau: 4,
+      allWau: 9,
+      allMau: 9,
+      windowComplete: true,
       userIds: [...internalIds].sort(),
       requestsBySource: { web: 4 },
     });
@@ -170,6 +173,37 @@ describe('rollupDay', () => {
     expect(await AnalyticsDaily.findOne({ day: DAY }).lean()).toMatchObject({ dau: 0, wau: 0, mau: 0 });
   });
 
+  it('counts a user whose flags changed inside the window once in the all-accounts WAU and MAU', async () => {
+    await seedEvent(users.b, '2026-05-30T10:00:00Z');
+    await rollupDay('2026-05-30', { now: NOW });
+    await usersCol().updateOne({ _id: users.b }, { $set: { isAdmin: true } });
+    await seedEvent(users.b, `${DAY}T10:00:00Z`);
+    await seedEvent(users.a, `${DAY}T11:00:00Z`);
+    await rollupDay(DAY, { now: NOW });
+    const daily = await AnalyticsDaily.findOne({ day: DAY }).lean();
+    expect(daily).toMatchObject({ dau: 1, wau: 2, mau: 2 });
+    expect(daily?.internal).toMatchObject({ dau: 1, wau: 1, mau: 1, allWau: 2, allMau: 2 });
+  });
+
+  it('marks the internal window incomplete while a row in it predates internal counts', async () => {
+    await seedEvent(users.admin, '2026-05-30T10:00:00Z');
+    await seedEvent(users.staff, `${DAY}T10:00:00Z`);
+    await rollupDay('2026-05-30', { now: NOW });
+    await AnalyticsDaily.updateOne({ day: '2026-05-30' }, { $unset: { internal: 1 } });
+    await rollupDay(DAY, { now: NOW });
+    expect((await AnalyticsDaily.findOne({ day: DAY }).lean())?.internal).toMatchObject({
+      wau: 1,
+      windowComplete: false,
+    });
+
+    await rollupDay('2026-05-30', { now: NOW });
+    expect((await AnalyticsDaily.findOne({ day: DAY }).lean())?.internal).toMatchObject({
+      wau: 2,
+      allWau: 2,
+      windowComplete: true,
+    });
+  });
+
   it('leaves a later row without internal counts alone when refreshing its windows', async () => {
     await seedEvent(users.a, `${DAY}T10:00:00Z`);
     await rollupDay(DAY, { now: NOW });
@@ -181,7 +215,10 @@ describe('rollupDay', () => {
 
   it('writes a zero row for an empty day', async () => {
     await rollupDay(DAY, { now: NOW });
-    expect(await AnalyticsDaily.findOne({ day: DAY }).lean()).toMatchObject({ dau: 0, wau: 0, mau: 0 });
+    const daily = await AnalyticsDaily.findOne({ day: DAY }).lean();
+    expect(daily).toMatchObject({ dau: 0, wau: 0, mau: 0 });
+    // An empty map must survive the write: readers spread it without a fallback.
+    expect(daily?.internal).toMatchObject({ dau: 0, userIds: [], requestsBySource: {} });
   });
 
   it('computes WAU and MAU from user-day rows ending on the day', async () => {

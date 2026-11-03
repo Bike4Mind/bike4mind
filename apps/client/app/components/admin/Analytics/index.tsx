@@ -174,6 +174,8 @@ const AnalyticsTab = () => {
     onShowDefaultRange: showDefaultRange,
   };
   const missing = data?.missingDays ?? [];
+  const internalMissing = data?.internalMissingDays ?? [];
+  const dayCount = (count: number) => `${count} ${count === 1 ? 'day' : 'days'}`;
 
   return (
     <Stack gap={2.5} sx={{ p: { xs: 2, md: 4 }, minWidth: 0 }} data-testid="analytics-page">
@@ -267,7 +269,7 @@ const AnalyticsTab = () => {
         </Typography>
       )}
 
-      {missing.length > 0 && (
+      {(missing.length > 0 || internalMissing.length > 0) && (
         <Alert
           color="warning"
           variant="soft"
@@ -285,14 +287,19 @@ const AnalyticsTab = () => {
           }
         >
           <Box>
-            <Typography level="body-sm">
-              {`${data?.accounts === 'external' ? 'Rollup is' : 'Internal counts are'} missing for ${missing.length} ${
-                missing.length === 1 ? 'day' : 'days'
-              }; those days show as gaps.`}
-            </Typography>
+            {missing.length > 0 && (
+              <Typography level="body-sm" data-testid="analytics-missing-rollup">
+                {`Rollup is missing for ${dayCount(missing.length)}; those days show as gaps.`}
+              </Typography>
+            )}
+            {internalMissing.length > 0 && (
+              <Typography level="body-sm" data-testid="analytics-missing-internal">
+                {`Internal counts are missing or incomplete for ${dayCount(internalMissing.length)}; those days show as gaps until the rollup is re-run for them.`}
+              </Typography>
+            )}
             {showMissing && (
               <Typography level="body-xs" sx={{ mt: 0.5 }} data-testid="analytics-missing-days">
-                {missing.join(', ')}
+                {[...missing, ...internalMissing].sort().join(', ')}
               </Typography>
             )}
           </Box>

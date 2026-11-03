@@ -141,21 +141,24 @@ async function resolveSuspected(entries: [string, string | undefined][], options
 }
 
 type InternalDayIds = { day: string; userIds: readonly string[] };
+type InternalWindow = { week: Set<string>; month: Set<string>; complete: boolean };
 
 /**
- * Internal WAU/MAU ending on `day`: the union of the internal ids stored on the daily rows in each window.
+ * Internal ids active in the WAU and MAU windows ending on `day`, from the ids stored on the daily rows.
  * `current` stands in for its day's row, which the caller has not written yet (or, for today, never writes).
+ * `complete` is false when a row in the window predates internal counts, so the window undercounts.
  */
-export async function internalWindowCounts(
+export async function internalWindowIds(
   day: string,
   current: InternalDayIds,
   { maxTimeMS = QUERY_DEADLINE_MS }: RollupOptions = {}
-): Promise<[number, number]> {
+): Promise<InternalWindow> {
   const monthStart = shiftDay(day, -(MAU_WINDOW_DAYS - 1));
   const weekStart = shiftDay(day, -(WAU_WINDOW_DAYS - 1));
   const rows = await AnalyticsDaily.find({ day: { $gte: monthStart, $lte: day } }, { day: 1, 'internal.userIds': 1 })
     .maxTimeMS(maxTimeMS)
     .lean<{ day: string; internal?: Pick<IAnalyticsDailyInternal, 'userIds'> }[]>();
+  const complete = rows.every(row => row.day === current.day || row.internal);
   const idsByDay = new Map<string, readonly string[]>(rows.map(row => [row.day, row.internal?.userIds ?? []]));
   if (current.day >= monthStart && current.day <= day) idsByDay.set(current.day, current.userIds);
   const week = new Set<string>();
@@ -166,11 +169,36 @@ export async function internalWindowCounts(
       if (rowDay >= weekStart) week.add(id);
     }
   }
-  return [week.size, month.size];
+  return { week, month, complete };
+}
+
+export const unionSize = (...sets: Iterable<string>[]) => new Set(sets.flatMap(ids => [...ids])).size;
+
+/**
+ * WAU/MAU ending on `day` for both sides, and their exact union. A user whose flags changed inside the
+ * window sits on both sides (each day is classified when it is rolled up), so "all" is the union, not the sum.
+ */
+async function windowCounts(day: string, current: InternalDayIds) {
+  const [weekIds, monthIds, internal] = await Promise.all([
+    analyticsUserDayRepository.distinctUserIds(shiftDay(day, -(WAU_WINDOW_DAYS - 1)), day),
+    analyticsUserDayRepository.distinctUserIds(shiftDay(day, -(MAU_WINDOW_DAYS - 1)), day),
+    internalWindowIds(day, current),
+  ]);
+  return {
+    wau: weekIds.length,
+    mau: monthIds.length,
+    internal: {
+      wau: internal.week.size,
+      mau: internal.month.size,
+      allWau: unionSize(weekIds, internal.week),
+      allMau: unionSize(monthIds, internal.month),
+      windowComplete: internal.complete,
+    },
+  };
 }
 
 /** Recomputes WAU/MAU for rolled-up days after `day`, whose windows include it. */
-async function refreshLaterWindows(day: string, internal: InternalDayIds) {
+async function refreshLaterWindows(day: string, current: InternalDayIds) {
   const later = await AnalyticsDaily.find(
     { day: { $gt: day, $lte: shiftDay(day, MAU_WINDOW_DAYS - 1) } },
     { day: 1, 'internal.dau': 1 }
@@ -178,21 +206,15 @@ async function refreshLaterWindows(day: string, internal: InternalDayIds) {
     .maxTimeMS(QUERY_DEADLINE_MS)
     .lean<{ day: string; internal?: Pick<IAnalyticsDailyInternal, 'dau'> }[]>();
   for (const { day: laterDay, internal: laterInternal } of later) {
-    const [wau, mau] = await windowCounts(laterDay);
-    const update: Record<string, number> = { wau, mau };
+    const { wau, mau, internal } = await windowCounts(laterDay, current);
+    const update: Record<string, number | boolean> = { wau, mau };
     // Rows from before internal counts were recorded stay without them until they are rolled up again.
     if (laterInternal) {
-      [update['internal.wau'], update['internal.mau']] = await internalWindowCounts(laterDay, internal);
+      for (const [key, value] of Object.entries(internal)) update[`internal.${key}`] = value;
     }
     await AnalyticsDaily.updateOne({ day: laterDay }, { $set: update }).maxTimeMS(QUERY_DEADLINE_MS);
   }
 }
-
-const windowCounts = (day: string) =>
-  Promise.all([
-    analyticsUserDayRepository.countDistinctUsers(shiftDay(day, -(WAU_WINDOW_DAYS - 1)), day),
-    analyticsUserDayRepository.countDistinctUsers(shiftDay(day, -(MAU_WINDOW_DAYS - 1)), day),
-  ]);
 
 type EventGroup = {
   _id: {
@@ -346,9 +368,8 @@ export async function rollupDay(day: string, options: RollupOptions = {}) {
   }
 
   const signups = await evaluateSignupDay(day, options);
-  const [wau, mau] = await windowCounts(day);
   const internalIds = { day, userIds: internal.userIds };
-  const [internalWau, internalMau] = await internalWindowCounts(day, internalIds);
+  const { wau, mau, internal: internalWindows } = await windowCounts(day, internalIds);
   // The daily row is the backfill completion marker; leave it absent until all dependent windows refresh.
   await refreshLaterWindows(day, internalIds);
   await analyticsDailyRepository.upsertDay(day, {
@@ -362,8 +383,7 @@ export async function rollupDay(day: string, options: RollupOptions = {}) {
     creditsConsumed,
     internal: {
       dau: internal.userIds.length,
-      wau: internalWau,
-      mau: internalMau,
+      ...internalWindows,
       userIds: internal.userIds,
       requestsBySource: toRecord(internal.bySource),
     },

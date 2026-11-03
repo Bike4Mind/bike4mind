@@ -22,9 +22,10 @@ import {
   classifyCohort,
   collectDayUsage,
   formatDay,
-  internalWindowCounts,
+  internalWindowIds,
   MAU_WINDOW_DAYS,
   shiftDay,
+  unionSize,
   WAU_WINDOW_DAYS,
 } from './analyticsRollup';
 
@@ -134,20 +135,24 @@ const mergeCounts = (a: Record<string, number>, b: Record<string, number>) => {
   return merged;
 };
 
+/** Internal counts that can be trusted: recorded, over a window that has no row from before they were. */
+const usableInternal = (values: LiveDay | undefined) =>
+  values?.internal?.windowComplete ? values.internal : undefined;
+
 /**
- * The active-user values of a day for the selected accounts. The two sides are disjoint sets of users
- * on every row, so "all" is their sum. Undefined when the side it needs was never recorded.
+ * The active-user values of a day for the selected accounts. A day's two sides are disjoint, so "all"
+ * DAU is their sum; WAU/MAU use the stored union. Undefined when the side it needs is not usable.
  */
 function activeValuesFor(values: LiveDay | undefined, accounts: AnalyticsAccounts): ActiveValues | undefined {
   if (!values) return undefined;
   if (accounts === 'external') return { ...counts(values), requestsBySource: values.requestsBySource };
-  const { internal } = values;
+  const internal = usableInternal(values);
   if (!internal) return undefined;
   if (accounts === 'internal') return { ...counts(internal), requestsBySource: internal.requestsBySource };
   return {
     dau: values.dau + internal.dau,
-    wau: values.wau + internal.wau,
-    mau: values.mau + internal.mau,
+    wau: internal.allWau,
+    mau: internal.allMau,
     requestsBySource: mergeCounts(values.requestsBySource, internal.requestsBySource),
   };
 }
@@ -191,6 +196,7 @@ export function buildOverview({
   const days: ActiveUsersDay[] = rangeDays.map(day => {
     const values = valuesFor(day);
     const active = activeAt(day);
+    const internal = usableInternal(values);
     return {
       day,
       dau: active?.dau ?? null,
@@ -202,7 +208,7 @@ export function buildOverview({
         ? { previousMau: day === window.partialDay ? null : (rolledUpActive(shiftBack(day))?.mau ?? null) }
         : {}),
       external: values ? counts(values) : null,
-      internal: values?.internal ? counts(values.internal) : null,
+      internal: internal ? counts(internal) : null,
     };
   });
 
@@ -279,7 +285,9 @@ export function buildOverview({
     accounts,
     lastUpdated: lastUpdated?.toISOString() ?? null,
     stale: !lastUpdated || now.getTime() - lastUpdated.getTime() > ANALYTICS_STALE_AFTER_MS,
-    missingDays: completeDays.filter(day => !rolledUpActive(day)),
+    missingDays: completeDays.filter(day => !byDay.has(day)),
+    internalMissingDays:
+      accounts === 'external' ? [] : completeDays.filter(day => byDay.has(day) && !usableInternal(byDay.get(day))),
     stats: {
       mau,
       avgDau,
@@ -321,7 +329,7 @@ export async function loadLiveDay(today: string, now: Date): Promise<LiveDay> {
     distinctUsersBefore(today, MAU_WINDOW_DAYS),
   ]);
   const todayIds = [...usage.perUser.keys()];
-  const [internalWau, internalMau] = await internalWindowCounts(
+  const internal = await internalWindowIds(
     today,
     { day: today, userIds: usage.internal.userIds },
     { maxTimeMS: LIVE_QUERY_DEADLINE_MS }
@@ -334,8 +342,11 @@ export async function loadLiveDay(today: string, now: Date): Promise<LiveDay> {
     requestsBySource: Object.fromEntries(usage.bySource),
     internal: {
       dau: usage.internal.userIds.length,
-      wau: internalWau,
-      mau: internalMau,
+      wau: internal.week.size,
+      mau: internal.month.size,
+      allWau: unionSize(weekIds, todayIds, internal.week),
+      allMau: unionSize(monthIds, todayIds, internal.month),
+      windowComplete: internal.complete,
       requestsBySource: Object.fromEntries(usage.internal.bySource),
     },
   };
@@ -350,7 +361,7 @@ export async function getAnalyticsOverview(
   const [rows, live] = await Promise.all([
     AnalyticsDaily.find({ day: { $gte: earliest, $lte: window.to } })
       .select(
-        'day dau wau mau signups requestsBySource internal.dau internal.wau internal.mau internal.requestsBySource computedAt'
+        'day dau wau mau signups requestsBySource internal.dau internal.wau internal.mau internal.allWau internal.allMau internal.windowComplete internal.requestsBySource computedAt'
       )
       .maxTimeMS(QUERY_DEADLINE_MS)
       .lean<OverviewDailyRow[]>(),

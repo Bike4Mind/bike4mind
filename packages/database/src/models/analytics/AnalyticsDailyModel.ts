@@ -18,6 +18,11 @@ export interface IAnalyticsDailyInternal {
   dau: number;
   wau: number;
   mau: number;
+  /** Distinct users on either side in the window; less than wau + internal wau when a user's flags changed in it. */
+  allWau: number;
+  allMau: number;
+  /** False while a row in the MAU window predates internal counts, so the window undercounts. */
+  windowComplete: boolean;
   userIds: string[];
   requestsBySource: Record<string, number>;
 }
@@ -72,10 +77,13 @@ const AnalyticsDailySchema = new Schema<IAnalyticsDailyDocument>(
           dau: { type: Number, required: true, default: 0 },
           wau: { type: Number, required: true, default: 0 },
           mau: { type: Number, required: true, default: 0 },
+          allWau: { type: Number, required: true, default: 0 },
+          allMau: { type: Number, required: true, default: 0 },
+          windowComplete: { type: Boolean, required: true, default: false },
           userIds: { type: [String], default: [] },
           requestsBySource: { type: Schema.Types.Mixed, default: {} },
         },
-        { _id: false }
+        { _id: false, minimize: false }
       ),
       required: false,
     },
