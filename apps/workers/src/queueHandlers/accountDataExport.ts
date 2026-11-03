@@ -1,7 +1,7 @@
 import { createWriteStream, promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
-import { Readable } from 'stream';
+import { Readable, Transform } from 'stream';
 import archiver from 'archiver';
 import { z } from 'zod';
 import {
@@ -189,10 +189,17 @@ async function writeFiles(
         if (!(body instanceof Readable)) throw new Error('Storage returned a non-stream body');
         const zipPath = names.name('files', file.fileName, file.id);
         let streamed = 0;
-        body.on('data', (chunk: Buffer) => {
-          streamed += chunk.length;
-        });
-        await appendEntry(archive, body, zipPath, true);
+        // A Transform, not a 'data' listener: that would start the flow before archiver pipes the entry.
+        const counted = body.pipe(
+          new Transform({
+            transform(chunk: Buffer, _encoding, callback) {
+              streamed += chunk.length;
+              callback(null, chunk);
+            },
+          })
+        );
+        body.once('error', error => counted.destroy(error));
+        await appendEntry(archive, counted, zipPath, true);
         entry.path = zipPath;
         copiedBytes += file.fileSize ?? streamed;
       } catch (error) {
