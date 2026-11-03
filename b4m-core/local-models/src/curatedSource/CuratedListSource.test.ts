@@ -134,24 +134,24 @@ describe('CuratedListSource', () => {
       await s.checkNow();
       await s.checkIfDue();
       expect(s.available).toBe(false);
-      expect(s.view()).toMatchObject({ origin: 'bundled', sequence: 1, check: 'off' });
+      expect(s.view()).toMatchObject({ origin: 'bundled', sequence: 2, check: 'off' });
     }
     expect(server.requests).toEqual([]);
   });
 
   it('does not warn when the list served at the bundled sequence is the bundled content in other formatting', async () => {
     const served = `${JSON.stringify(JSON.parse(BUNDLED_CURATED_TEXT), null, 4)}\n`;
-    server.publish(1, served, sigText(served, [signing], 1));
+    server.publish(2, served, sigText(served, [signing], 2));
     const s = source({ bundledText: JSON.stringify(JSON.parse(BUNDLED_CURATED_TEXT)) });
     await s.checkNow();
-    expect(s.view()).toMatchObject({ origin: 'bundled', sequence: 1, check: 'up-to-date' });
+    expect(s.view()).toMatchObject({ origin: 'bundled', sequence: 2, check: 'up-to-date' });
     expect(logs.some(line => /differs from the current list/.test(line))).toBe(false);
 
-    const other = listText(1, list => (list.updatedAt = '2026-10-29T00:00:00Z'));
-    server.publish(1, other, sigText(other, [signing], 1));
+    const other = listText(2, list => (list.updatedAt = '2026-10-29T00:00:00Z'));
+    server.publish(2, other, sigText(other, [signing], 2));
     clock += 1000;
     await s.checkNow();
-    logged(/warning: curated list 1 differs from the current list with that sequence; kept it/);
+    logged(/warning: curated list 2 differs from the current list with that sequence; kept it/);
   });
 
   it('accepts a newer signed list, caches it, and shows it again after a restart without fetching', async () => {
@@ -194,7 +194,7 @@ describe('CuratedListSource', () => {
     const s = source();
     await s.checkNow();
 
-    expect(s.view()).toMatchObject({ origin: 'bundled', sequence: 1, check: 'failed' });
+    expect(s.view()).toMatchObject({ origin: 'bundled', sequence: 2, check: 'failed' });
     expect(server.requests).toEqual([`${LATEST}.sig`, LATEST, `${URL_BASE}4.json.sig`, `${URL_BASE}4.json`]);
     logged(/rejected the curated list: (bad-signature|unknown-key)/);
   });
@@ -227,7 +227,7 @@ describe('CuratedListSource', () => {
     server.publish(3, manifest, sig);
     const s = source();
     await s.checkNow();
-    expect(s.view()).toMatchObject({ origin: 'bundled', sequence: 1, check: 'failed' });
+    expect(s.view()).toMatchObject({ origin: 'bundled', sequence: 2, check: 'failed' });
     logged(/rejected the curated list: bad-signature/);
   });
 
@@ -261,18 +261,18 @@ describe('CuratedListSource', () => {
   });
 
   it('reports up to date for the old .sig beside the new list, and failed when the hinted pair is missing', async () => {
-    const two = listText(2);
-    server.publish(2, two, sigText(two, [signing], 2));
+    const three = listText(3);
+    server.publish(3, three, sigText(three, [signing], 3));
     const s = source();
     await s.checkNow();
-    server.files.set(LATEST, listText(3));
+    server.files.set(LATEST, listText(4));
     await s.checkNow();
-    expect(s.view()).toMatchObject({ sequence: 2, check: 'up-to-date' });
+    expect(s.view()).toMatchObject({ sequence: 3, check: 'up-to-date' });
 
     const five = listText(5);
     server.files.set(`${LATEST}.sig`, sigText(five, [signing], 5));
     await s.checkNow();
-    expect(s.view()).toMatchObject({ sequence: 2, check: 'failed' });
+    expect(s.view()).toMatchObject({ sequence: 3, check: 'failed' });
     logged(/HTTP 403 for \/model-hub\/curated-v2\/5\.json/);
   });
 
@@ -322,23 +322,23 @@ describe('CuratedListSource', () => {
   });
 
   it('refuses a rollback below the floor after the cached list is lost, and accepts the floor list again', async () => {
-    const three = listText(3);
-    server.publish(3, three, sigText(three, [signing], 3));
+    const four = listText(4);
+    server.publish(4, four, sigText(four, [signing], 4));
     await source().checkNow();
     await rm(join(dir, CuratedStore.sourceKey(LATEST), 'pair.json'));
 
     const restarted = source();
     await restarted.loaded();
-    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 1 });
-    const two = listText(2);
-    server.publish(2, two, sigText(two, [signing], 2));
-    await restarted.checkNow();
-    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 1, check: 'up-to-date' });
-    logged(/curated list 2 is older than list 3, accepted before; kept the current list/);
-
+    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 2 });
+    const three = listText(3);
     server.publish(3, three, sigText(three, [signing], 3));
     await restarted.checkNow();
-    expect(restarted.view()).toMatchObject({ origin: 'updated', sequence: 3, check: 'updated' });
+    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 2, check: 'up-to-date' });
+    logged(/curated list 3 is older than list 4, accepted before; kept the current list/);
+
+    server.publish(4, four, sigText(four, [signing], 4));
+    await restarted.checkNow();
+    expect(restarted.view()).toMatchObject({ origin: 'updated', sequence: 4, check: 'updated' });
   });
 
   it('saves the floor before the copy, so a crash between the two cannot lose it', async () => {
@@ -367,7 +367,7 @@ describe('CuratedListSource', () => {
 
     const restarted = source();
     await restarted.loaded();
-    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 1, checkedAt: null });
+    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 2, checkedAt: null });
     await restarted.checkIfDue();
     expect(restarted.view()).toMatchObject({ origin: 'updated', sequence: 3, check: 'updated' });
   });
@@ -518,12 +518,12 @@ describe('CuratedListSource', () => {
     const restarted = source({ keys });
     await restarted.loaded();
     expect(restarted.settings().available).toBe(true);
-    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 1, checkedAt: null });
+    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 2, checkedAt: null });
     logged(/both copies of revoked-keys.json are damaged and no recovery-signed cached list can rebuild them/);
     const five = listText(5);
     server.publish(5, five, sigText(five, [second], 5));
     await restarted.checkIfDue();
-    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 1, check: 'failed' });
+    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 2, check: 'failed' });
     expect(await readFile(join(dir, 'revoked-keys.json'), 'utf8')).toBe('{"not":"a list"}');
     logged(/only a recovery-signed list can rebuild the damaged revoked-keys.json/);
 
@@ -547,7 +547,7 @@ describe('CuratedListSource', () => {
 
     const restarted = source();
     await restarted.loaded();
-    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 1, checkedAt: null });
+    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 2, checkedAt: null });
     expect(await readFile(join(dir, 'revoked-keys.json'), 'utf8')).toBe('{"not":"a list"}');
     const four = listText(4);
     server.publish(4, four, sigText(four, [signing], 4));
@@ -572,7 +572,7 @@ describe('CuratedListSource', () => {
     const four = listText(4);
     server.publish(4, four, sigText(four, [signing], 4));
     await restarted.checkNow();
-    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 1, check: 'failed' });
+    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 2, check: 'failed' });
     logged(/only a recovery-signed list can rebuild the damaged revoked-keys.json/);
   });
 
@@ -586,7 +586,7 @@ describe('CuratedListSource', () => {
 
     const restarted = source();
     await restarted.loaded();
-    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 1, checkedAt: null });
+    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 2, checkedAt: null });
     await restarted.checkIfDue();
     expect(restarted.view()).toMatchObject({ origin: 'bundled', check: 'failed' });
     expect(server.requests).toEqual([]);
@@ -707,7 +707,7 @@ describe('CuratedListSource', () => {
     await writeFile(join(sourceDir, pair, 'curated-v2.json'), three.replace(NOTE, 'Tampered.'));
     const corrupt = source();
     await corrupt.loaded();
-    expect(corrupt.view()).toMatchObject({ origin: 'bundled', sequence: 1 });
+    expect(corrupt.view()).toMatchObject({ origin: 'bundled', sequence: 2 });
     await expect(readFile(join(sourceDir, 'pair.json'))).rejects.toThrow();
     await expect(readFile(join(sourceDir, pair, 'curated-v2.json'))).rejects.toThrow();
     logged(/ignored the cached curated list/);
@@ -793,7 +793,7 @@ describe('CuratedListSource', () => {
     const older = source();
     await older.loaded();
     await older.checkIfDue();
-    expect(older.view()).toMatchObject({ origin: 'bundled', sequence: 1 });
+    expect(older.view()).toMatchObject({ origin: 'bundled', sequence: 2 });
     logged(/ignored the cached curated list: unknown-key/);
     await expect(readFile(join(sourceDir, 'pair.json'))).resolves.toBeTruthy();
 

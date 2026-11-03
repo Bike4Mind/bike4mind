@@ -17,6 +17,7 @@ import {
   Code,
   Coins,
   CreditCard,
+  Crosshair,
   Database,
   FileText,
   Fingerprint,
@@ -140,6 +141,7 @@ export enum AdminTab {
   HeldSignupGrants = 70,
   PreferenceArena = 71,
   Revenue = 72,
+  ShadowDetections = 73,
 }
 
 /**
@@ -210,6 +212,12 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         tab: AdminTab.SignupRiskReview,
         label: 'Risk review',
         testid: 'admin-signup-risk-review-btn',
+      },
+      {
+        Icon: Crosshair,
+        tab: AdminTab.ShadowDetections,
+        label: 'Detections',
+        testid: 'admin-shadow-detections-btn',
       },
       { Icon: HandCoins, tab: AdminTab.HeldSignupGrants, label: 'Held signup grants' },
       { Icon: ArrowRightLeft, tab: AdminTab.Migrate, label: 'Migration', gate: 'userMigration' },

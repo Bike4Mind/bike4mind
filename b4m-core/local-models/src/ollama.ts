@@ -172,7 +172,7 @@ function contextLengthOf(modelInfo: Record<string, unknown> | null | undefined):
 }
 
 /** Blob paths in Ollama's generated Modelfile header, before any multiline template or license text. */
-function modelBlobsOf(
+export function modelBlobsOf(
   modelfile: string | null | undefined
 ): Pick<ModelContents, 'modelBlob' | 'projectorBlobs' | 'draftBlobs' | 'adapterBlobs' | 'storeDir'> {
   const models: (string | null)[] = [];

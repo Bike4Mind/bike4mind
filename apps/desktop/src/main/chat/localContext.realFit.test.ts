@@ -53,6 +53,29 @@ describe('local context sizing with the real fit estimate', () => {
     expect(loadsInMemory(eightB(discreteMachine(12, 32)), 40960)).toBe(true);
   });
 
+  it('reads a plan past the GPU part of a 16 GB Mac as loading with layers in system RAM, not resident', () => {
+    expect(fitsInMemory(eightB(unifiedMachine(16)), 40960)).toBe(false);
+    expect(loadsInMemory(eightB(unifiedMachine(16)), 40960)).toBe(true);
+  });
+
+  it('grows past the resident sizes on a 16 GB Mac and says replies will be slower', () => {
+    expect(grownContext(eightB(unifiedMachine(16)), 20_000, undefined, undefined, 16384)).toEqual({
+      tokens: 28672,
+      slower: false,
+    });
+    expect(grownContext(eightB(unifiedMachine(16)), 36_000, undefined, undefined, 16384)).toEqual({
+      tokens: 40960,
+      slower: true,
+    });
+  });
+
+  it('splits the projector out of the listed size so its compute buffer is counted', () => {
+    const plain = eightB(unifiedMachine(16));
+    const vision = { ...plain, projectorBytes: 2_000_000_000 };
+    expect(fitsInMemory(plain, 28672)).toBe(true);
+    expect(fitsInMemory(vision, 28672)).toBe(false);
+  });
+
   it.each([8, 12])('starts at the largest candidate that stays on a %i GiB GPU, else at 16K', vram => {
     const footprint = eightB(discreteMachine(vram, 32));
     const picked = auto(footprint);

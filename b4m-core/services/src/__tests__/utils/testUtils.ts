@@ -274,6 +274,7 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     setRiskScore: vi.fn(),
     findRiskScoringCandidateIds: vi.fn().mockResolvedValue([]),
     findPendingRiskReviews: vi.fn().mockResolvedValue([]),
+    countPendingRiskReviews: vi.fn().mockResolvedValue(0),
     setRiskReviewState: vi.fn(),
     claimRiskEvidenceRefresh: vi.fn().mockResolvedValue(true),
     releaseRiskEvidenceRefresh: vi.fn(),
