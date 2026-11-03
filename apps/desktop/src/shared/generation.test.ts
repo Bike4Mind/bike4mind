@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeGeneration, requestGeneration, type ModelControls } from './generation';
+import { normalizeGeneration, parseGenerationInput, requestGeneration, type ModelControls } from './generation';
 
 describe('normalizeGeneration', () => {
   it('keeps the known fields that hold finite numbers', () => {
@@ -13,6 +13,38 @@ describe('normalizeGeneration', () => {
     for (const raw of [undefined, null, 'hot', [0.4], {}, { topP: Infinity }]) {
       expect(normalizeGeneration(raw)).toBeUndefined();
     }
+  });
+
+  it('drops a stored value no model takes', () => {
+    expect(normalizeGeneration({ temperature: 9, topK: 20.5, maxOutputTokens: 1e12, minP: 0.05 })).toEqual({
+      minP: 0.05,
+    });
+  });
+});
+
+describe('parseGenerationInput', () => {
+  it('takes a set within bounds, and an empty set that clears every override', () => {
+    expect(parseGenerationInput({ temperature: 0, topK: 40, maxOutputTokens: 4096, seed: 7 })).toEqual({
+      temperature: 0,
+      topK: 40,
+      maxOutputTokens: 4096,
+    });
+    expect(parseGenerationInput({})).toEqual({});
+  });
+
+  it.each([
+    null,
+    'hot',
+    [0.4],
+    { temperature: '0.4' },
+    { temperature: 2.5 },
+    { topP: -0.1 },
+    { topK: 20.5 },
+    { maxOutputTokens: 1e12 },
+    { thinkingBudgetTokens: 512 },
+    { temperature: 0.4, repeatPenalty: Number.NaN },
+  ])('rejects the whole set for %j', raw => {
+    expect(parseGenerationInput(raw)).toBeNull();
   });
 });
 

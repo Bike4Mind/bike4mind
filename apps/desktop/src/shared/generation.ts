@@ -99,19 +99,59 @@ function isFiniteNumber(value: unknown): value is number {
 }
 
 /**
- * The known fields of an untrusted value (a stored session, an IPC argument) that hold finite
- * numbers, or undefined when none do. Ranges are not checked here: they depend on the model,
- * which can change after the value is stored; see requestGeneration.
+ * The widest range each field takes on any model; a model's own control narrows it, and each
+ * turn clamps to that (see requestGeneration). Must cover every range in main/chat/modelControls.
  */
+export const GENERATION_BOUNDS: Readonly<Record<GenerationField, { min: number; max: number }>> = {
+  temperature: { min: 0, max: 2 },
+  topP: { min: 0, max: 1 },
+  topK: { min: 0, max: 200 },
+  minP: { min: 0, max: 1 },
+  repeatPenalty: { min: 0.5, max: 2 },
+  maxOutputTokens: { min: 1, max: 2_000_000 },
+  thinkingBudgetTokens: { min: 1024, max: 32_000 },
+};
+
+function withinBounds(field: GenerationField, value: unknown): value is number {
+  const bounds = GENERATION_BOUNDS[field];
+  return (
+    isFiniteNumber(value) &&
+    value >= bounds.min &&
+    value <= bounds.max &&
+    (!INTEGER_FIELDS.has(field) || Number.isInteger(value))
+  );
+}
+
+function isRecord(raw: unknown): raw is Record<string, unknown> {
+  return !!raw && typeof raw === 'object' && !Array.isArray(raw);
+}
+
+/** The known in-bounds fields of a stored session's value, or undefined when none are. */
 export function normalizeGeneration(raw: unknown): GenerationSettings | undefined {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
-  const source = raw as Record<string, unknown>;
+  if (!isRecord(raw)) return undefined;
   const settings: GenerationSettings = {};
   for (const field of GENERATION_FIELDS) {
-    const value = source[field];
-    if (isFiniteNumber(value)) settings[field] = value;
+    const value = raw[field];
+    if (withinBounds(field, value)) settings[field] = value;
   }
   return Object.keys(settings).length > 0 ? settings : undefined;
+}
+
+/**
+ * A replacement set from the renderer, or null when it is not one: any known field out of bounds
+ * or not a number rejects the whole set, so a malformed call never clears what is stored. `{}`
+ * is a valid set that clears every override.
+ */
+export function parseGenerationInput(raw: unknown): GenerationSettings | null {
+  if (!isRecord(raw)) return null;
+  const settings: GenerationSettings = {};
+  for (const field of GENERATION_FIELDS) {
+    const value = raw[field];
+    if (value === undefined) continue;
+    if (!withinBounds(field, value)) return null;
+    settings[field] = value;
+  }
+  return settings;
 }
 
 function sentValue(field: GenerationField, value: unknown, control: NumericControl | undefined): number | undefined {
