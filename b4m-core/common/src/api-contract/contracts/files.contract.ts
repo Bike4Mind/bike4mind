@@ -279,7 +279,11 @@ export const chunkFileContract = defineEndpoint({
       description: 'Request body failed validation, including a `chunk_size` out of range.',
       schema: ApiErrorSchema,
     },
-    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+    429: {
+      description:
+        'Per-user rate limit exceeded, or the hourly file allowance shared with uploads is spent: a re-chunk costs one file.',
+      schema: ApiErrorSchema,
+    },
   },
   codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: CHUNK_EXAMPLE },
 });
