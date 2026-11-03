@@ -303,3 +303,47 @@ describe('previewDataLakeSlug', () => {
     await expect(previewDataLakeSlug(dbWith([]) as never, 'MiXeD Case')).resolves.toBe('mixed-case');
   });
 });
+
+describe('createDataLake maps a unique-index rejection of the insert (#5701)', () => {
+  const duplicateKey = (keyPattern: Record<string, unknown>) =>
+    Object.assign(new Error('E11000 duplicate key error collection: db.datalakes'), { code: 11000, keyPattern });
+
+  const makeDb = (createError: unknown) => ({
+    dataLakes: {
+      find: vi.fn(async () => []), // every pre-check passes
+      create: vi.fn(async () => {
+        throw createError;
+      }),
+    },
+    dataLakeAccessGrants: { upsertGrant: vi.fn() },
+  });
+
+  const params = { name: 'Test', slug: 'test', fileTagPrefix: 'ts:' } as Parameters<typeof createDataLake>[1];
+
+  it.each([
+    ['the legacy global slug_1 index', { slug: 1 }],
+    ['the per-scope { organizationId, slug } index', { organizationId: 1, slug: 1 }],
+    ['the datalakeTag index', { datalakeTag: 1 }],
+  ])('answers 409 rather than 500 when %s rejects the slug', async (_label, keyPattern) => {
+    const logger = { warn: vi.fn() };
+    const create = createDataLake('creator', params, { db: makeDb(duplicateKey(keyPattern)), logger } as never, 'org1');
+    await expect(create).rejects.toMatchObject({ name: 'ConflictError', statusCode: 409 });
+    await expect(create).rejects.toThrow(/"test" is already taken/);
+    expect(logger.warn).toHaveBeenCalledWith(expect.any(String), { slug: 'test', keyPattern });
+  });
+
+  it('keeps answering a same-creator prefix race with the prefix error', async () => {
+    const db = makeDb(duplicateKey({ createdByUserId: 1, fileTagPrefix: 1 }));
+    await expect(createDataLake('creator', params, { db } as never)).rejects.toMatchObject({
+      name: 'BadRequestError',
+      additionalInfo: { code: 'TAG_PREFIX_UNAVAILABLE' },
+    });
+  });
+
+  it('rethrows a duplicate-key error on an index it does not recognise, and any other error, unchanged', async () => {
+    const unknownIndex = duplicateKey({ somethingElse: 1 });
+    await expect(createDataLake('creator', params, { db: makeDb(unknownIndex) } as never)).rejects.toBe(unknownIndex);
+    const other = new Error('connection reset');
+    await expect(createDataLake('creator', params, { db: makeDb(other) } as never)).rejects.toBe(other);
+  });
+});
