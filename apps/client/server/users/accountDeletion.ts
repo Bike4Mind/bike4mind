@@ -40,7 +40,7 @@ export type OwnedOrganization = { id: string; name: string };
 
 /** The organizations the user is billing owner of; each must be transferred or deleted first. */
 export async function findOwnedOrganizations(userId: string): Promise<OwnedOrganization[]> {
-  const orgs = await organizationRepository.find({ userId, deletedAt: null });
+  const orgs = await organizationRepository.find({ userId, deletedAt: null, personal: { $ne: true } });
   return orgs.map(org => ({ id: String(org.id), name: org.name }));
 }
 
