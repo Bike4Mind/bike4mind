@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,8 +12,10 @@ import {
   parseWslPath,
   toLinuxArgument,
   toWindowsPath,
+  type UserEnvironmentProbe,
   withWslEnv,
   wslCommand,
+  wslEnvNames,
   wslLocation,
   wslUncPath,
   wslUserEnvironment,
@@ -128,18 +131,61 @@ describe('the user environment probe', () => {
     expect(found?.path.split(':').length).toBeGreaterThan(0);
   });
 
-  it('asks again after a failure instead of keeping it', async () => {
-    let clock = 0;
-    const distro = `b4m-missing-${Date.now()}`;
+  it('answers null when wsl.exe cannot be started', async () => {
     vi.stubEnv('PATH', '');
     try {
-      expect(await wslUserEnvironment(distro, () => clock)).toBeNull();
-      const again = wslUserEnvironment(distro, () => clock);
-      expect(again).toBe(wslUserEnvironment(distro, () => clock));
-      clock += 60_000;
-      expect(wslUserEnvironment(distro, () => clock)).not.toBe(again);
+      expect(await wslUserEnvironment(`b4m-missing-${randomUUID()}`)).toBeNull();
     } finally {
       vi.unstubAllEnvs();
+    }
+  });
+
+  const FOUND = { path: '/usr/bin', home: '/home/me' };
+
+  it('asks again 30 s after a failure, 10 minutes after a timeout, and never after a success', async () => {
+    let clock = 0;
+    const results: UserEnvironmentProbe[] = [
+      { found: null, timedOut: false },
+      { found: null, timedOut: true },
+      { found: FOUND, timedOut: false },
+    ];
+    const probe = vi.fn(async () => results.shift() as UserEnvironmentProbe);
+    const distro = `b4m-${randomUUID()}`;
+    const ask = () => wslUserEnvironment(distro, () => clock, probe);
+
+    expect(await ask()).toBeNull();
+    clock += 29_000;
+    expect(await ask()).toBeNull();
+    expect(probe).toHaveBeenCalledTimes(1);
+    clock += 2_000;
+    expect(await ask()).toBeNull();
+    expect(probe).toHaveBeenCalledTimes(2);
+    clock += 5 * 60_000;
+    expect(await ask()).toBeNull();
+    expect(probe).toHaveBeenCalledTimes(2);
+    clock += 6 * 60_000;
+    expect(await ask()).toEqual(FOUND);
+    clock += 24 * 60 * 60_000;
+    expect(await ask()).toEqual(FOUND);
+    expect(probe).toHaveBeenCalledTimes(3);
+  });
+
+  it('lets a caller that joins a running probe go on without it after 2 s', async () => {
+    vi.useFakeTimers();
+    try {
+      let finish: (probe: UserEnvironmentProbe) => void = () => undefined;
+      const probe = vi.fn(() => new Promise<UserEnvironmentProbe>(resolve => (finish = resolve)));
+      const distro = `b4m-${randomUUID()}`;
+      const started = wslUserEnvironment(distro, Date.now, probe);
+      const joined = wslUserEnvironment(distro, Date.now, probe);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(await joined).toBeNull();
+      finish({ found: FOUND, timedOut: false });
+      expect(await started).toEqual(FOUND);
+      expect(await wslUserEnvironment(distro, Date.now, probe)).toEqual(FOUND);
+      expect(probe).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });
@@ -152,6 +198,8 @@ describe.runIf(process.platform === 'linux')('REALPATH_SCRIPT', () => {
     mkdirSync(join(root, 'outside'));
     symlinkSync(join(root, 'outside'), join(root, 'project', 'docs'));
     symlinkSync('../..', join(root, 'project', 'src', 'up'));
+    mkdirSync(join(root, 'project\n'));
+    symlinkSync('../project\n', join(root, 'project', 'sibling'));
   });
   afterAll(() => rmSync(root, { recursive: true, force: true }));
 
@@ -175,12 +223,29 @@ describe.runIf(process.platform === 'linux')('REALPATH_SCRIPT', () => {
       `${root}/project/src/file`,
     ]);
   });
+
+  it('keeps a trailing newline in the answer, so a sibling folder named like the project is not the project', () => {
+    expect(answers([`${root}/project/sibling/x`, `${root}/project/src`])).toEqual([
+      `${root}/project\n/x`,
+      `${root}/project/src`,
+    ]);
+    expect(answers([`${root}/project/sibling`])).toEqual([`${root}/project\n`]);
+  });
 });
 
-describe('withWslEnv', () => {
+describe('WSLENV', () => {
   it('appends names once, keeping what WSLENV already lists', () => {
     expect(withWslEnv({ WSLENV: 'USERPROFILE/p' }, ['A', 'B']).WSLENV).toBe('USERPROFILE/p:A:B');
     expect(withWslEnv({ WSLENV: 'A/u' }, ['A']).WSLENV).toBe('A/u');
     expect(withWslEnv({}, ['A']).WSLENV).toBe('A');
+  });
+
+  it('drops the w flag from a listed name that must reach Linux, and leaves other entries alone', () => {
+    expect(withWslEnv({ WSLENV: 'A/w:B/pw:C/w' }, ['A', 'B']).WSLENV).toBe('A:B/p:C/w');
+  });
+
+  it('lists only the names that cross into Linux', () => {
+    expect(wslEnvNames({ WSLENV: 'A:B/p:C/w:D/pw:E/u::' })).toEqual(['A', 'B', 'E']);
+    expect(wslEnvNames({})).toEqual([]);
   });
 });

@@ -1,16 +1,28 @@
 import { spawnSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { COMMAND_ENV, WINDOWS_COMMAND_ARGS, commandEnv, launchCommand } from './commandLaunch';
 import { COMMAND_TAG_ENV } from './commandTree';
 
 vi.mock('./gitBash', () => ({ resolveGitBash: async () => 'C:\\Program Files\\Git\\bin\\bash.exe' }));
 vi.mock('./userPath', () => ({ resolveUserPath: async () => 'C:\\Tools' }));
-// The distro's user environment probe.
-vi.mock('node:child_process', async importOriginal => ({
-  ...(await importOriginal<typeof import('node:child_process')>()),
-  execFile: (_file: string, _args: string[], _options: unknown, callback: (e: Error | null, out: string) => void) =>
-    callback(null, '__B4M_ENV__/home/me/.nvm/bin:/usr/bin__B4M_ENV__/home/me__B4M_ENV__'),
-}));
+vi.mock('node:child_process', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    // The distro's user environment probe.
+    spawn: (file: string, args: string[], options: object) => {
+      if (!args.includes('b4m-env')) return actual.spawn(file, args, options);
+      const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), kill: () => true });
+      setTimeout(() => {
+        child.stdout.end('__B4M_ENV__/home/me/.nvm/bin:/usr/bin__B4M_ENV__/home/me__B4M_ENV__');
+        child.emit('close', 0);
+      }, 0);
+      return child;
+    },
+  };
+});
 
 const platform = Object.getOwnPropertyDescriptor(process, 'platform');
 const onWindows = () => Object.defineProperty(process, 'platform', { value: 'win32' });

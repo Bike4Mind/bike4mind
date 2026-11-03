@@ -125,6 +125,11 @@ describe('hostGitArgs', () => {
       const deferred = await hostNetworkGitArgs(['fetch'], wsl, read, crossing, 'win32');
       expect(deferred.some(a => a.startsWith('core.sshCommand='))).toBe(false);
       expect(deferred).toContain('core.askPass=C:\\ask.exe');
+
+      const outbound = { ...hostOnly, WSLENV: 'GIT_SSH_COMMAND/w:GIT_ASKPASS/pw' };
+      const ignored = await hostNetworkGitArgs(['fetch'], wsl, read, outbound, 'win32');
+      expect(ignored).toContain('core.sshCommand=ssh');
+      expect(ignored).toContain('core.askPass=');
     });
 
     describe('git in a WSL folder', () => {

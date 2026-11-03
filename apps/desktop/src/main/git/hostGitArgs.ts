@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { hostProgram } from '../chat/tools/userPath';
-import { toLinuxArgument, wslCommand, wslCommandEnv, wslLocation } from '../wsl/wslPath';
+import { toLinuxArgument, wslCommand, wslCommandEnv, wslEnvNames, wslLocation } from '../wsl/wslPath';
 const EMPTY_HOOKS_PATH = process.platform === 'win32' ? 'NUL' : '/dev/null';
 
 function configArgs(emptyHooksPath: string): string[] {
@@ -54,10 +54,13 @@ export async function gitCommandEnv(
   return location ? wslCommandEnv(process.env, location.distro) : undefined;
 }
 
-/** Of `env`, only what wsl.exe passes into Linux: the variables WSLENV names. */
+/** Of `env`, only what wsl.exe passes into Linux: the variables WSLENV names for that direction. */
 export function crossingEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const names = (env.WSLENV ?? '').split(':').map(entry => entry.split('/')[0]);
-  return Object.fromEntries(names.filter(name => name && env[name] !== undefined).map(name => [name, env[name]]));
+  return Object.fromEntries(
+    wslEnvNames(env)
+      .filter(name => env[name] !== undefined)
+      .map(name => [name, env[name]])
+  );
 }
 
 export type ConfigEntry = { scope: string; key: string; value: string };

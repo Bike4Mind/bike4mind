@@ -7,20 +7,20 @@ let exitCode = 127;
 
 vi.mock('node:child_process', async importOriginal => ({
   ...(await importOriginal<typeof import('node:child_process')>()),
-  // The user environment probe: a distro that answers with its login PATH.
-  execFile: (_file: string, _args: string[], _options: unknown, callback: (e: Error | null, out: string) => void) =>
-    callback(null, '__B4M_ENV__/home/me/.cargo/bin:/usr/bin__B4M_ENV__/home/me__B4M_ENV__'),
   spawn: (file: string, args: string[], options: { env: NodeJS.ProcessEnv }) => {
-    spawned.push({ file, args, env: options.env });
+    // The user environment probe: a distro that answers with its login PATH.
+    const probe = args.includes('b4m-env');
+    if (!probe) spawned.push({ file, args, env: options.env });
     const child = Object.assign(new EventEmitter(), {
       stdout: new PassThrough(),
       stderr: new PassThrough(),
       kill: () => true,
     });
     setTimeout(() => {
+      if (probe) child.stdout.write('__B4M_ENV__/home/me/.cargo/bin:/usr/bin__B4M_ENV__/home/me__B4M_ENV__');
       child.stdout.end();
       child.stderr.end();
-      child.emit('close', exitCode);
+      child.emit('close', probe ? 0 : exitCode);
     }, 0);
     return child;
   },
