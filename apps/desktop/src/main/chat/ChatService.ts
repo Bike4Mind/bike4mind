@@ -4257,9 +4257,13 @@ export class ChatService {
         return true;
       },
 
-      describeSession: async ref => {
-        const found = await resolveAnywhere(ref);
-        return found.ok ? visibleTitle(found.session) : null;
+      describeSession: async (ref, options) => {
+        if (options?.scope === 'all') {
+          const found = await resolveAnywhere(ref);
+          return found.ok ? visibleTitle(found.session) : null;
+        }
+        const found = await addressable(ref);
+        return found ? visibleTitle(found) : null;
       },
 
       sendTo: async (ref, message, { notify }) => {

@@ -385,7 +385,7 @@ export const sessionSend: ToolDefinition = {
   async approval(input, context) {
     const sessionId = requireString(input, 'session_id');
     const message = requireString(input, 'message');
-    const name = (await requireHost(context).describeSession(sessionId)) ?? sessionId;
+    const name = (await requireHost(context).describeSession(sessionId, { scope: 'all' })) ?? sessionId;
     return {
       detail: [`Send this to "${name}", and let it run?`, '', message].join('\n'),
       // Only 'ask' reaches this card, but the key still has to be exact there: approving one

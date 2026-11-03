@@ -560,8 +560,11 @@ export interface HostContext {
   setArchived(sessionId: string, archived: boolean): Promise<HostSessionView | null>;
   /** Irreversible. False when the id names nothing this session may address. */
   deleteSession(sessionId: string): Promise<boolean>;
-  /** How a session is described in an approval prompt, so the user reads a title not a uuid. */
-  describeSession(ref: string): Promise<string | null>;
+  /**
+   * How a session is described in an approval prompt, so the user reads a title not a uuid. Scope
+   * 'project' (default) matches what archive/delete can act on; 'all' matches what sendTo reaches.
+   */
+  describeSession(ref: string, options?: { scope: 'project' | 'all' }): Promise<string | null>;
   /**
    * Deliver `message` to an existing session - any of this account's, addressed as readSession
    * is - and let it run as a turn there. A delivery that could widen what the sender reaches is
