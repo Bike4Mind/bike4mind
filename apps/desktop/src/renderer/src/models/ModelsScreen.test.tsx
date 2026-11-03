@@ -25,6 +25,7 @@ import {
 } from '@shared/models';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
+import { installedCache } from './installedCache';
 import type { ModelsInUse } from './InstalledTab';
 import { ModelsScreen } from './ModelsScreen';
 import type { ChatWith } from './modelTarget';
@@ -332,6 +333,7 @@ beforeEach(() => {
   };
   for (const fn of Object.values(calls)) fn.mockReset();
   window.localStorage.clear();
+  installedCache.clear();
   calls.getHfToken.mockImplementation(async () => bridge.token);
   calls.pull.mockResolvedValue({ ok: true, ref: `hf.co/${REPO}:Q4_K_M` });
   calls.resumePull.mockResolvedValue({ ok: true, ref: `hf.co/${REPO}:Q4_K_M` });
@@ -1946,6 +1948,78 @@ describe('ModelsScreen servers', () => {
 
     await pickServer('local');
     expect(q('models-runtime-status')?.dataset.state).toBe('running');
+  });
+
+  describe('last known list', () => {
+    const llama = { ...qwen, name: 'llama3.2:3b' };
+    const rowNames = () => all('models-installed-row').map(row => row.textContent ?? '');
+
+    async function visitGpuThenLeave() {
+      await mount();
+      await pickServer('gpu');
+      expect(all('models-installed-row')).toHaveLength(1);
+      await pickServer('local');
+    }
+
+    it('shows the last list at once while it refreshes, then replaces it', async () => {
+      await visitGpuThenLeave();
+      bridge.remote.gpu.installed = { ok: true, models: [llama, qwen] };
+      let release = () => {};
+      bridge.installedGate = new Promise(resolve => (release = resolve));
+      await click(q('models-server-select'));
+      act(() => q('models-server-option-gpu')?.click());
+
+      expect(rowNames()).toHaveLength(1);
+      expect(rowNames()[0]).toContain('qwen2.5:0.5b');
+      expect(q('models-installed-refreshing')).not.toBeNull();
+      expect(q('models-installed-remove-btn')).toBeNull();
+
+      await act(async () => release());
+      await flush();
+      expect(rowNames()).toHaveLength(2);
+      expect(q('models-installed-refreshing')).toBeNull();
+      expect(q('models-installed-remove-btn')).not.toBeNull();
+    });
+
+    it('keeps the last list with the reason when the server is down', async () => {
+      await visitGpuThenLeave();
+      bridge.remote.gpu.status = remoteStatus(GPU_BOX, {
+        reachable: false,
+        version: null,
+        error: 'Could not reach gpu box: connection refused',
+      });
+      await pickServer('gpu');
+
+      expect(q('models-installed-runtime-down')).toBeNull();
+      expect(rowNames()).toHaveLength(1);
+      expect(q('models-installed-stale')?.textContent).toContain('Could not reach gpu box: connection refused');
+      expect(q('models-installed-stale')?.textContent).toContain('Showing the list from');
+    });
+
+    it('keeps the last list with the reason when listing fails', async () => {
+      await visitGpuThenLeave();
+      bridge.remote.gpu.installed = { ok: false, error: { kind: 'failed', message: 'Listing timed out.' } };
+      await pickServer('gpu');
+
+      expect(q('models-installed-error')).toBeNull();
+      expect(rowNames()).toHaveLength(1);
+      expect(q('models-installed-stale')?.textContent).toContain('Listing timed out.');
+    });
+
+    it('forgets the list when the server is saved at another address', async () => {
+      await visitGpuThenLeave();
+      const moved = { ...GPU_BOX, address: 'http://192.168.1.50:11434' };
+      bridge.servers = [THIS_COMPUTER, moved, SHARED_BOX];
+      act(() => pushServers(bridge.servers));
+      await flush();
+      bridge.installedGate = new Promise(() => {});
+      await click(q('models-server-select'));
+      act(() => q('models-server-option-gpu')?.click());
+      await flush();
+
+      expect(rowNames()).toHaveLength(0);
+      expect(q('models-installed-refreshing')).toBeNull();
+    });
   });
 
   it('shows a pull to a server as paused with Resume, and asks to keep the app open while it runs', async () => {

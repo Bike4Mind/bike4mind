@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { InstalledModelsResult, ModelPull, ModelRuntimeStatus } from '@shared/models';
 import type { ModelServerView } from '@shared/modelServers';
+import { installedCache, type LastInstalled } from './installedCache';
 
 export interface ModelHubState {
   status: ModelRuntimeStatus | null;
   installed: InstalledModelsResult | null;
   pulls: ModelPull[];
+  /** This server's last successful listing in this run, shown while `installed` is pending or failed. */
+  lastInstalled: LastInstalled | null;
   refresh: () => Promise<void>;
 }
 
@@ -15,9 +18,20 @@ export const DOWN_RECHECK_MS = 5_000;
  * Runtime health and installed models of one server, and every pull; pulls live in main, so they survive
  * leaving the screen or switching servers.
  */
-export function useModelHub(serverId: string): ModelHubState {
+export function useModelHub(serverId: string, identity: string | null = null): ModelHubState {
   const [status, setStatus] = useState<ModelRuntimeStatus | null>(null);
-  const [installed, setInstalled] = useState<InstalledModelsResult | null>(null);
+  const [installed, setInstalledState] = useState<InstalledModelsResult | null>(null);
+  const shownServer = useRef({ serverId, identity });
+  shownServer.current = { serverId, identity };
+  const setInstalled = useCallback(
+    (next: InstalledModelsResult | null) => {
+      const shown = shownServer.current;
+      if (next?.ok && shown.serverId === serverId && shown.identity !== null)
+        installedCache.set(serverId, shown.identity, next.models, Date.now());
+      setInstalledState(next);
+    },
+    [serverId]
+  );
   const [pulls, setPulls] = useState<ModelPull[]>([]);
   // Only the latest request of each kind may set state; an older one resolving later is dropped.
   const statusSeq = useRef(0);
@@ -41,13 +55,13 @@ export function useModelHub(serverId: string): ModelHubState {
           error: { kind: 'runtime-unavailable', message: nextStatus.error ?? 'Ollama is not running.' },
         };
     if (mineInstalled === installedSeq.current) setInstalled(nextInstalled);
-  }, [serverId, showStatus]);
+  }, [serverId, showStatus, setInstalled]);
 
   const reloadInstalled = useCallback(async () => {
     const mine = ++installedSeq.current;
     const next = await window.b4m.models.listInstalled(serverId);
     if (mine === installedSeq.current) setInstalled(next);
-  }, [serverId]);
+  }, [serverId, setInstalled]);
 
   const failedKeys = useRef(new Set<string>());
   const takePulls = useCallback(
@@ -83,7 +97,7 @@ export function useModelHub(serverId: string): ModelHubState {
       offPulls();
       offInstalled();
     };
-  }, [serverId, refresh, reloadInstalled, takePulls, showStatus]);
+  }, [serverId, refresh, reloadInstalled, takePulls, showStatus, setInstalled]);
 
   // A check that missed a busy daemon reads as down, and nothing else would check again until a click.
   useEffect(() => {
@@ -92,7 +106,7 @@ export function useModelHub(serverId: string): ModelHubState {
     return () => clearTimeout(timer);
   }, [status, refresh]);
 
-  return { status, installed, pulls, refresh };
+  return { status, installed, pulls, lastInstalled: installedCache.get(serverId, identity), refresh };
 }
 
 /** The saved model servers, "This computer" first, kept current as Settings changes them. */
@@ -100,8 +114,13 @@ export function useModelServers(): ModelServerView[] | null {
   const [servers, setServers] = useState<ModelServerView[] | null>(null);
   useEffect(() => {
     let live = true;
-    void window.b4m.modelServers.list().then(next => live && setServers(next));
-    const off = window.b4m.modelServers.onChanged(next => live && setServers(next));
+    const take = (next: ModelServerView[]) => {
+      if (!live) return;
+      installedCache.retain(next);
+      setServers(next);
+    };
+    void window.b4m.modelServers.list().then(take);
+    const off = window.b4m.modelServers.onChanged(take);
     return () => {
       live = false;
       off();
