@@ -92,17 +92,30 @@ const handler = baseApi().delete(
           const cancellation = await cancelAccountSubscriptions({ userId: id, reason: 'account_deleted' }, req.logger);
           const canceledEntry = subscriptionCancellationAudit(cancellation, 'account_deleted');
           // The delete and its audit entry commit together; cascades and notifications run after.
-          const result = await withTransaction(async () => {
-            const deleted = await userRepository.delete(id);
-            await recordAdminActionFromRequest(req, {
-              action: 'user.deleted',
-              target: deletedUserTarget(id, target),
-              summary: canceledEntry ? `deleted the user; ${canceledEntry.summary}` : 'deleted the user',
-              reason,
-              ...(canceledEntry && { details: canceledEntry.details }),
+          let result: Awaited<ReturnType<typeof userRepository.delete>>;
+          try {
+            result = await withTransaction(async () => {
+              const deleted = await userRepository.delete(id);
+              await recordAdminActionFromRequest(req, {
+                action: 'user.deleted',
+                target: deletedUserTarget(id, target),
+                summary: canceledEntry ? `deleted the user; ${canceledEntry.summary}` : 'deleted the user',
+                reason,
+                ...(canceledEntry && { details: canceledEntry.details }),
+              });
+              return deleted;
             });
-            return deleted;
-          });
+          } catch (error) {
+            // The cancel already happened and cannot roll back, so record it on its own (best-effort).
+            if (canceledEntry) {
+              await recordAdminActionFromRequest(req, {
+                ...canceledEntry,
+                target: deletedUserTarget(id, target),
+                reason,
+              });
+            }
+            throw error;
+          }
           deleteCommitted = true;
           return result;
         },

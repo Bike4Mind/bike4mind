@@ -376,6 +376,29 @@ describe('DELETE /api/users/[id]/delete', () => {
       expect(mockPurge).toHaveBeenCalled();
     });
 
+    it('records the cancel on its own entry when the delete transaction fails after it', async () => {
+      mockCancelSubscriptions.mockResolvedValue({ canceled: ['sub_a'], failed: [] });
+      mockRepoDelete.mockRejectedValue(new Error('delete failed'));
+      mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
+        await db.users.delete('u1');
+        return { id: 'u1' };
+      });
+
+      const { call } = await run();
+
+      await expect(call).rejects.toThrow('delete failed');
+      expect(mockRecord).toHaveBeenCalledTimes(1);
+      expect(mockRecord).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: 'user.subscriptions.canceled',
+          target: expect.objectContaining({ kind: 'user', id: 'u1' }),
+          details: { canceledSubscriptions: ['sub_a'], failedSubscriptions: [] },
+        })
+      );
+      expect(mockPurge).not.toHaveBeenCalled();
+    });
+
     it('cancels nothing when the delete is refused', async () => {
       const { call } = await run({ user: { id: 'u1', isAdmin: true }, id: 'u1' });
       await expect(call).rejects.toThrow(ForbiddenError);
