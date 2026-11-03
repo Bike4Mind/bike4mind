@@ -35,6 +35,13 @@ export const signupProtection: SignupProtection = {
       }
     },
   },
+  async notifyConfig(alert) {
+    const message = `Signup grant drip cap (${alert.setting}) is unset; paying from the default of ${alert.fallback.toLocaleString('en-US')} credits. Set it in Admin Settings.`;
+    Logger.globalInstance.error(message);
+    // Rejecting on an undelivered post keeps the caller from marking the day alerted.
+    const outcome = await postMessageToSlackWithOutcome(message, 'SlackLiveopsWebhookUrl', { timeoutMs: 3000 });
+    if (outcome === 'failed') throw new Error('Signup grant config alert was not delivered');
+  },
   async notifyHold(review) {
     try {
       const reviewPath = '/admin?tab=signup-domain-holds';

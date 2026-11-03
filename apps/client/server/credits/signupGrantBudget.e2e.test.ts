@@ -34,8 +34,9 @@ const config: Record<string, string> = {
 };
 const adminSettings = {
   findBySettingName: async (key: string) => (key in config ? { settingValue: config[key] } : null),
-  findBySettingNames: async () => [],
-} as unknown as Parameters<typeof newSignupGrant>[0] & { findBySettingNames: () => Promise<[]> };
+  findBySettingNames: async (keys: string[]) =>
+    keys.filter(key => key in config).map(key => ({ settingName: key, settingValue: config[key] })),
+} as unknown as Parameters<typeof newSignupGrant>[0] & { findBySettingNames: (keys: string[]) => Promise<unknown[]> };
 let clock = new Date();
 const notify = vi.fn<(alert: SignupGrantBudgetAlert) => Promise<void>>().mockResolvedValue();
 const signupProtection: SignupProtection = {
