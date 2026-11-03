@@ -1,5 +1,7 @@
 /** @vitest-environment node */
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { resolveExternalWafAssociation, resolveWafLabelForwarding, resolveWafLogDestination } from '../wafAssociation';
 
 describe('resolveExternalWafAssociation', () => {
@@ -260,6 +262,13 @@ describe('WAF label forwarding wiring', () => {
     expect((await loadWaf('pr5655')).wafLabelForwarding).toBe(true);
     vi.stubEnv('WAF_LABEL_FORWARDING', 'true');
     expect((await loadWaf('pr5655', 'false')).wafLabelForwarding).toBe(false);
+  });
+
+  it('passes WAF_LABEL_FORWARDING to the server function only from wafLabelForwarding', () => {
+    // infra/web.ts only loads inside `sst`, so this reads the source as text.
+    const web = readFileSync(join(__dirname, '..', 'web.ts'), 'utf8');
+    expect(web).toMatch(/\.\.\.\(wafLabelForwarding \? \{ WAF_LABEL_FORWARDING: 'true' \} : \{\}\)/);
+    expect(web.match(/WAF_LABEL_FORWARDING/g)).toHaveLength(1);
   });
 });
 

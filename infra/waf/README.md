@@ -34,12 +34,17 @@ policy's label-forward rules insert, under the same header names. Every
 deployer-driven tier (preview, staging, production) attaches an external ACL,
 so these fields stay null there until its operator turns forwarding on. The
 stage-owned ACL, which always forwards, is only the local and ad hoc
-`sst deploy` case.
+`sst deploy` case. The same headers feed checkout payment-risk signals too:
+`readNetworkMeta` runs on the payment and subscription routes, where
+`wafAnonIp` sets `PaymentAttempt.hostingNetwork` and its payment-risk alert,
+and both fields reach the risk-evidence `wafSignals` and the signup classifier.
 
 Set `WAF_LABEL_FORWARDING=true` in a tier's deploy environment only after its
-external ACL carries, in one change made in the ACL's own repository, both the
-label-forward rules and an equivalent of the sample policy's forged-header block
-rule. The app trusts these headers at face value once the flag is set, so the
+external ACL carries, in one change made in the ACL's own repository, the
+label-forward rules, an equivalent of the sample policy's forged-header block
+rule, and the `AWSManagedRulesAnonymousIpList` and Bot Control managed groups
+at a lower priority than the forward rules. Those groups emit the labels the
+forward rules match; without them every request reads as a false "clean". The app trusts these headers at face value once the flag is set, so the
 ACL must be the only thing able to set them. Until then leave the flag unset,
 so an unchecked signup records null rather than a false "clean".
 
