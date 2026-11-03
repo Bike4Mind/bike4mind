@@ -7173,7 +7173,7 @@ function sentRounds(message: ChatMessage): CompletionMessage[] | undefined {
   return out;
 }
 
-/** Stored rounds from a run's raw ones, `text` being each round's prose with its artifact markup already handled. */
+/** Stored rounds from a run's raw ones; `text` is whatever prose the caller stores, artifact markup included or not. */
 function storedRounds(runs: { round: RawRound; text: string }[], model: string): ChatReplyRound[] {
   return (
     runs
