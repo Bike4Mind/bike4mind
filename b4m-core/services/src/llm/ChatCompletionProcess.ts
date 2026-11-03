@@ -1033,9 +1033,9 @@ export function warnOnSettlementDebt(
 
 /** One model's share of a turn's usage, priced against the turn's credit reservation. */
 export interface ReservationUsage {
-  /** The model that ran, which prices the usage. */
+  /** The model that ran, which prices the usage's cost. */
   modelInfo: ModelInfo;
-  /** The requested model its ledger row names, when known per usage (Research mode); else ledgerModel() maps it. */
+  /** The requested model its ledger row names and its credits are priced on, when known per usage (Research mode); else ledgerModel() maps it. */
   ledgerModelInfo?: ModelInfo;
   /** Uncached input; cache reads and writes are counted separately, as the provider reports them. */
   inputTokens: number;
@@ -4759,6 +4759,9 @@ export class ChatCompletionProcess {
         );
       }
 
+      // Credits are priced on the requested model; token sizing stays on the one that runs.
+      const chargedModelInfo = this.ledgerModel(modelInfo);
+
       // Restricted-tier daily token cap; refused like an empty balance.
       if (
         shadowSettings &&
@@ -4767,7 +4770,7 @@ export class ChatCompletionProcess {
         throw new InsufficientCreditsError(
           buildInsufficientCreditsMessage({
             available: 0,
-            required: usdToCredits(getTextModelCost(modelInfo, inputTokens, safeMaxTokens)) || 1,
+            required: usdToCredits(getTextModelCost(chargedModelInfo, inputTokens, safeMaxTokens)) || 1,
             organizationName: organization?.name,
           }),
           'insufficient_credits'
@@ -4816,7 +4819,7 @@ export class ChatCompletionProcess {
         const usdCost = researchCosts
           ? researchCosts.reduce((sum, cost) => sum + cost.hold, 0)
           : primaryTurnReservationUsd(
-              modelInfo,
+              chargedModelInfo,
               inputTokens,
               reservationOutputTokens(
                 sentMaxTokens,
@@ -4849,7 +4852,7 @@ export class ChatCompletionProcess {
           const capCheckCredits = usdToCredits(
             researchCosts
               ? researchCosts.reduce((sum, cost) => sum + cost.ceiling, 0)
-              : getTextModelCost(modelInfo, inputTokens, sentMaxTokens)
+              : getTextModelCost(chargedModelInfo, inputTokens, sentMaxTokens)
           );
           if (isMemberCreditCapExceeded(organization, this.user.id, capCheckCredits)) {
             throw new InsufficientCreditsError(
@@ -6670,31 +6673,34 @@ export class ChatCompletionProcess {
                 actualTokenUsage.cacheWrite1hInputTokens,
                 cacheTtlForSettlement
               );
-        const estimatedCost = hasProviderUsage
-          ? actualTokenUsage.turnUsage?.length
-            ? getTurnsCost(currentModel, actualTokenUsage.turnUsage)
+        const turnCostOn = (pricedModel: ModelInfo): number =>
+          hasProviderUsage
+            ? actualTokenUsage.turnUsage?.length
+              ? getTurnsCost(pricedModel, actualTokenUsage.turnUsage)
+              : getTextModelCost(
+                  pricedModel,
+                  settledInputTokens,
+                  settledOutputTokens,
+                  cacheReadInputTokens,
+                  cacheCreationInputTokens,
+                  settledInputTokens + cacheReadInputTokens + cacheCreationInputTokens,
+                  cacheWrite1hInputTokens
+                )
             : getTextModelCost(
-                currentModel,
-                settledInputTokens,
-                settledOutputTokens,
+                pricedModel,
+                localInputTokens - cacheReadInputTokens,
+                outputTokens,
                 cacheReadInputTokens,
-                cacheCreationInputTokens,
-                settledInputTokens + cacheReadInputTokens + cacheCreationInputTokens,
-                cacheWrite1hInputTokens
-              )
-          : getTextModelCost(
-              currentModel,
-              localInputTokens - cacheReadInputTokens,
-              outputTokens,
-              cacheReadInputTokens,
-              0,
-              // The local estimate is one whole prompt; the cache discount above must not lower its tier.
-              localInputTokens
-            );
+                0,
+                // The local estimate is one whole prompt; the cache discount above must not lower its tier.
+                localInputTokens
+              );
+        const estimatedCost = turnCostOn(currentModel);
+        const chargedCost = turnCostOn(this.ledgerModel(currentModel));
         // Single stochastic settlement draw, shared by the quest meta, the
         // usage event, and the ledger deduction below so they can never
         // disagree about what was charged.
-        const textCreditsUsed = usdToCreditsStochastic(estimatedCost);
+        const textCreditsUsed = usdToCreditsStochastic(chargedCost);
         unrecordedShadowUsage = undefined;
         await recordShadowTokenUsage(
           this.user,
@@ -7755,16 +7761,20 @@ export class ChatCompletionProcess {
     const ownerType = this.reservedCreditsOwnerType;
     const organization = basis?.organization ?? null;
     const priced = usages.map(usage => {
-      const costUsd = getTextModelCost(
-        usage.modelInfo,
-        usage.inputTokens,
-        usage.outputTokens,
-        usage.cacheReadInputTokens ?? 0,
-        usage.cacheCreationInputTokens ?? 0,
-        undefined,
-        usage.cacheWrite1hInputTokens ?? 0
-      );
-      return { ...usage, costUsd, credits: usdToCreditsStochastic(costUsd) };
+      const costOn = (pricedModel: ModelInfo): number =>
+        getTextModelCost(
+          pricedModel,
+          usage.inputTokens,
+          usage.outputTokens,
+          usage.cacheReadInputTokens ?? 0,
+          usage.cacheCreationInputTokens ?? 0,
+          undefined,
+          usage.cacheWrite1hInputTokens ?? 0
+        );
+      const costUsd = costOn(usage.modelInfo);
+      const ledgerModelInfo = usage.ledgerModelInfo ?? this.ledgerModel(usage.modelInfo);
+      const chargedUsd = costOn(ledgerModelInfo);
+      return { ...usage, ledgerModelInfo, costUsd, credits: usdToCreditsStochastic(chargedUsd) };
     });
     const totalCredits = priced.reduce((sum, usage) => sum + usage.credits, 0) + toolCredits;
     const { delta, writtenOffCredits } = computeHolderSettlement(
@@ -7802,7 +7812,7 @@ export class ChatCompletionProcess {
         userId: this.user.id,
         accountCreatedAt: this.user.createdAt,
       });
-      const usageLedgerModel = usage.ledgerModelInfo ?? this.ledgerModel(usage.modelInfo);
+      const usageLedgerModel = usage.ledgerModelInfo;
       this.db.usageEvents
         ?.record({
           requestId: quest.id,
