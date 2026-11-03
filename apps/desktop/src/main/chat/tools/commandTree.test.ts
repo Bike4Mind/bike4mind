@@ -1,6 +1,9 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { afterEach, describe, expect, it } from 'vitest';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { COMMAND_TAG_ENV, WINDOWS_TREE_SCRIPT, commandExit, signalCommandTree, windowsArgs } from './commandTree';
 
 describe('commandExit', () => {
@@ -29,7 +32,7 @@ describe('commandExit', () => {
     expect(commandExit(null, 'SIGTERM', undefined, 'darwin')).toEqual({ code: null, signal: 'SIGTERM' });
   });
 
-  it('reports SIGKILL for a Windows command this side killed, whatever exit code it left', async () => {
+  it.runIf(process.platform !== 'win32')('reports SIGKILL for a Windows command this side killed', async () => {
     const platform = Object.getOwnPropertyDescriptor(process, 'platform');
     const child = spawn('sleep', ['30'], { stdio: 'ignore' });
     const exited = new Promise(resolve => child.on('exit', resolve));
@@ -95,5 +98,39 @@ describe.runIf(process.platform === 'linux')('WINDOWS_TREE_SCRIPT', () => {
     expect(untagged.child.exitCode).toBeNull();
     expect(untagged.child.signalCode).toBeNull();
     expect(elsewhere.child.signalCode).toBeNull();
+  });
+});
+
+// Linux has no /proc/<pid>/winpid, so this runs the script against a stand-in for the MSYS /proc.
+describe.runIf(process.platform !== 'win32')('WINDOWS_TREE_SCRIPT given taskkill', () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'b4m-tree-'));
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const fakeProcess = async (pid: number, env: string[], winpid: number): Promise<void> => {
+    await mkdir(join(root, 'proc', String(pid)), { recursive: true });
+    await writeFile(join(root, 'proc', String(pid), 'environ'), env.map(entry => `${entry}\0`).join(''));
+    await writeFile(join(root, 'proc', String(pid), 'winpid'), `${winpid}\n`);
+  };
+
+  it('force-ends the Windows tree of each tagged process by its winpid', async () => {
+    const [one, two] = [randomUUID(), randomUUID()];
+    await fakeProcess(100, ['PATH=/usr/bin', `${COMMAND_TAG_ENV}=${one}`], 4100);
+    await fakeProcess(200, ['PATH=/usr/bin'], 4200);
+    await fakeProcess(300, [`X_${COMMAND_TAG_ENV}=${one}`, `${COMMAND_TAG_ENV}=${randomUUID()}`], 4300);
+    await fakeProcess(400, [`${COMMAND_TAG_ENV}=${two}`], 4400);
+    const log = join(root, 'taskkill.log');
+    const taskkill = join(root, 'taskkill');
+    await writeFile(taskkill, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\n`, { mode: 0o755 });
+
+    const script = WINDOWS_TREE_SCRIPT.replaceAll('/proc/', `${root}/proc/`);
+    const run = spawnSync('bash', ['-c', script, 'b4m-signal', taskkill, 'KILL', one, two], { encoding: 'utf8' });
+
+    expect(run.status).toBe(0);
+    expect(await readFile(log, 'utf8')).toBe('//F //T //PID 4100\n//F //T //PID 4400\n');
   });
 });

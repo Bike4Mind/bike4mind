@@ -120,7 +120,8 @@ export class BackgroundProcessLimit extends Error {
  *
  * Three independent mechanisms enforce that guarantee, because each covers a hole in the others:
  *
- *  1. `shutdown()` on quit - SIGTERM the groups, wait, then SIGKILL. The polite path.
+ *  1. `shutdown()` on quit - SIGTERM the groups, wait, then SIGKILL. The polite path; on Windows
+ *     the first signal already force-ends each tagged tree.
  *  2. `shutdownSync()` on `will-quit` - a synchronous SIGKILL sweep, because that handler cannot
  *     await and a quit that races the grace period must not leave anything behind.
  *  3. The in-child watchdog (see backgroundScript.ts) - the only one that survives main being
@@ -132,7 +133,8 @@ export class BackgroundProcessLimit extends Error {
  * stale handle the model could call `bash_output` on is worse than no handle at all.
  *
  * Signals go to the process GROUP (`-pgid`), never the bare pid: signalling the shell alone
- * would leave whatever it spawned running.
+ * would leave whatever it spawned running. Windows has no groups to signal; there every signal
+ * force-ends the command's tagged process tree (see commandTree.ts).
  */
 export class BackgroundProcessRegistry {
   private readonly processes = new Map<string, Tracked>();
@@ -371,7 +373,10 @@ export class BackgroundProcessRegistry {
     return tracked.buffer.tail(maxChars);
   }
 
-  /** SIGTERM the group, SIGKILL after a grace period. Resolves once it is actually gone. */
+  /**
+   * SIGTERM the group, SIGKILL after a grace period; on Windows the tagged tree is force-ended at
+   * once. Resolves once it is actually gone.
+   */
   async kill(id: string, sessionId: string): Promise<BackgroundProcessInfo | null> {
     const tracked = this.processes.get(id);
     if (!tracked || tracked.info.sessionId !== sessionId) return null;
@@ -520,9 +525,8 @@ export class BackgroundProcessRegistry {
     this.flushEmit(tracked);
 
     // The leader exiting does not empty its group: `npm run dev &` inside the command leaves
-    // the server behind with the watchdog already dismissed. Sweep the group either way. No
-    // KILL follows this one, so on Windows, where a stop is always forced, it is sent as KILL.
-    this.signalGroup(tracked, process.platform === 'win32' ? 'SIGKILL' : 'SIGTERM');
+    // the server behind with the watchdog already dismissed. Sweep the group either way.
+    this.signalGroup(tracked, 'SIGTERM');
     if (tracked.killTimer) clearTimeout(tracked.killTimer);
     tracked.pgid = null;
 
