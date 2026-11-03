@@ -40,6 +40,19 @@ describe('findOnPath', () => {
     expect(await findOnPath('gh', '.;bin', 'win32', isExecutable)).toBeNull();
   });
 
+  it('counts a Windows PATH folder only with a drive or UNC prefix', async () => {
+    const { findOnPath } = await import('./userPath');
+    const checked: string[] = [];
+    const isExecutable = async (file: string) => {
+      checked.push(file);
+      return false;
+    };
+
+    await findOnPath('gh', '\\Tools;/usr/bin;C:tools;C:\\bin;D:/bin;\\\\server\\share\\bin', 'win32', isExecutable);
+
+    expect(checked).toEqual(['C:\\bin\\gh.exe', 'D:\\bin\\gh.exe', '\\\\server\\share\\bin\\gh.exe']);
+  });
+
   it.skipIf(process.platform === 'win32')('skips relative and non-executable entries on POSIX', async () => {
     const { findOnPath } = await import('./userPath');
     const directory = await mkdtemp(join(tmpdir(), 'b4m-on-path-'));

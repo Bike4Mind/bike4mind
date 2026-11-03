@@ -63,9 +63,12 @@ async function isExecutableFile(file: string, platform: NodeJS.Platform): Promis
   }
 }
 
+const WINDOWS_ROOTED = /^(?:[a-z]:[\\/]|[\\/]{2}[^\\/])/i;
+
 /**
  * The absolute path of `name` in the first absolute PATH directory that has it, `<name>.exe` on
- * Windows. Relative entries are skipped, so nothing resolves from the working directory.
+ * Windows. Relative entries are skipped, so nothing resolves from the working directory; on Windows
+ * an entry counts only with a drive or UNC prefix, since `\dir` follows the current drive.
  */
 export async function findOnPath(
   name: string,
@@ -73,12 +76,12 @@ export async function findOnPath(
   platform: NodeJS.Platform = process.platform,
   isExecutable: (file: string) => Promise<boolean> = file => isExecutableFile(file, platform)
 ): Promise<string | null> {
-  const paths = platform === 'win32' ? win32 : posix;
-  const file = platform === 'win32' ? `${name}.exe` : name;
-  for (const entry of path.split(platform === 'win32' ? ';' : ':')) {
+  const windows = platform === 'win32';
+  const file = windows ? `${name}.exe` : name;
+  for (const entry of path.split(windows ? ';' : ':')) {
     const directory = entry.trim().replace(/^"(.*)"$/, '$1');
-    if (!paths.isAbsolute(directory)) continue;
-    const candidate = paths.join(directory, file);
+    if (windows ? !WINDOWS_ROOTED.test(directory) : !posix.isAbsolute(directory)) continue;
+    const candidate = (windows ? win32 : posix).join(directory, file);
     if (await isExecutable(candidate)) return candidate;
   }
   return null;
