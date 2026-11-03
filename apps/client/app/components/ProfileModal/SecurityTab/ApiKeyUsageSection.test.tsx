@@ -2,8 +2,9 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { getThemeConfig } from '@client/app/utils/themes';
 import { securityPaletteLight, securityPaletteDark } from '@client/app/theme/securityTheme';
-import ApiKeyStatusTab from './ApiKeyStatusTab';
+import ApiKeyUsageSection from './ApiKeyUsageSection';
 
 const h = vi.hoisted(() => ({
   keys: [] as Record<string, unknown>[],
@@ -17,12 +18,14 @@ vi.mock('@client/app/hooks/data/admin', () => ({
   },
 }));
 
-// The tab reads theme.palette.security.* but getThemeConfig() does not carry
-// those custom tokens, so the wrapper needs the security palette explicitly.
+// The section reads both the app tokens (getThemeConfig) and theme.palette.security.*, which
+// getThemeConfig does not carry.
+const base = getThemeConfig();
 const testTheme = extendTheme({
+  ...base,
   colorSchemes: {
-    light: { palette: { ...securityPaletteLight } },
-    dark: { palette: { ...securityPaletteDark } },
+    light: { palette: { ...base.colorSchemes?.light?.palette, ...securityPaletteLight } },
+    dark: { palette: { ...base.colorSchemes?.dark?.palette, ...securityPaletteDark } },
   },
 });
 
@@ -59,12 +62,12 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('ApiKeyStatusTab', () => {
+describe('ApiKeyUsageSection', () => {
   it('renders minute and day counters with their reset times', () => {
     h.keys = [KEY];
     render(
       <Wrapper>
-        <ApiKeyStatusTab />
+        <ApiKeyUsageSection />
       </Wrapper>
     );
 
@@ -81,7 +84,7 @@ describe('ApiKeyStatusTab', () => {
     h.keys = [KEY];
     render(
       <Wrapper>
-        <ApiKeyStatusTab />
+        <ApiKeyUsageSection />
       </Wrapper>
     );
 
@@ -94,7 +97,7 @@ describe('ApiKeyStatusTab', () => {
     h.keys = [{ ...KEY, liveUsage: { ...KEY.liveUsage, minute: 0 } }];
     render(
       <Wrapper>
-        <ApiKeyStatusTab />
+        <ApiKeyUsageSection />
       </Wrapper>
     );
 
@@ -117,7 +120,7 @@ describe('ApiKeyStatusTab', () => {
     ];
     render(
       <Wrapper>
-        <ApiKeyStatusTab />
+        <ApiKeyUsageSection />
       </Wrapper>
     );
 
@@ -132,7 +135,7 @@ describe('ApiKeyStatusTab', () => {
     h.keys = [{ ...KEY, liveUsage: { ...KEY.liveUsage, minute: 0, day: 0 } }];
     render(
       <Wrapper>
-        <ApiKeyStatusTab />
+        <ApiKeyUsageSection />
       </Wrapper>
     );
 

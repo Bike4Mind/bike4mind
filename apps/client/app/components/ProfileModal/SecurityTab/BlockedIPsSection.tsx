@@ -10,6 +10,7 @@ import {
   IP_BLOCK_SCOPE_LABELS,
   UnblockIpDialog,
 } from '@client/app/components/admin/BlockedIPs/IpBlockDialogs';
+import SectionContainer from '@client/app/components/ProfileModal/SectionContainer';
 
 const blockedBy = (item: BlockedIPItem): string =>
   item.blockedByName ?? (item.source === 'auto' ? 'Automatic (failed sign-ins)' : '-');
@@ -77,7 +78,7 @@ const BlockedIPRow: React.FC<{ item: BlockedIPItem; index: number; onUnblock: ()
   );
 };
 
-const BlockedIPsTab: React.FC = () => {
+const BlockedIPsSection: React.FC = () => {
   const theme = useTheme();
   const blockedIPs = useGetBlockedIPs();
   const [blockOpen, setBlockOpen] = useState(false);
@@ -86,69 +87,56 @@ const BlockedIPsTab: React.FC = () => {
   const items = blockedIPs.data ?? [];
 
   return (
-    <Box data-testid="blocked-ips-tab" sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      {/* Header */}
-      <Sheet variant="outlined" sx={{ borderRadius: 'md', p: 2 }}>
-        <Stack direction="row" alignItems="center" gap={1.5}>
-          <BlockIcon sx={{ color: theme.palette.security[items.length > 0 ? 'high' : 'good'].plainColor }} />
-          <Typography level="title-md">Blocked IP Addresses</Typography>
-          <Chip
-            size="sm"
-            variant="soft"
-            data-testid="blocked-ips-tab-count"
-            sx={{
-              backgroundColor:
-                items.length > 0 ? theme.palette.security.high.softBg : theme.palette.security.good.softBg,
-              color: items.length > 0 ? theme.palette.security.high.softColor : theme.palette.security.good.softColor,
-            }}
-          >
-            {items.length} blocked
-          </Chip>
-          <Button
-            size="sm"
-            sx={{ ml: 'auto' }}
-            onClick={() => setBlockOpen(true)}
-            data-testid="blocked-ips-tab-block-btn"
-          >
+    <Box data-testid="blocked-ips-section">
+      <SectionContainer
+        title={
+          <Stack direction="row" alignItems="center" gap={1}>
+            <BlockIcon sx={{ color: theme.palette.security[items.length > 0 ? 'high' : 'good'].plainColor }} />
+            <Typography level="title-md">Blocked IP addresses</Typography>
+            <Chip
+              size="sm"
+              variant="soft"
+              data-testid="blocked-ips-section-count"
+              sx={{
+                backgroundColor:
+                  items.length > 0 ? theme.palette.security.high.softBg : theme.palette.security.good.softBg,
+                color: items.length > 0 ? theme.palette.security.high.softColor : theme.palette.security.good.softColor,
+              }}
+            >
+              {items.length} blocked
+            </Chip>
+          </Stack>
+        }
+        action={
+          <Button size="sm" onClick={() => setBlockOpen(true)} data-testid="blocked-ips-section-block-btn">
             Block IP
           </Button>
-        </Stack>
-        <Typography level="body-xs" sx={{ color: theme.palette.text.secondary, mt: 0.5 }}>
-          Sign-in lockouts and admin blocks of an address or range. A block of sign-in, signup, checkout and AI also
-          stops new accounts, purchases and AI usage from that network.
-        </Typography>
-      </Sheet>
-
-      {/* List */}
-      {blockedIPs.isLoading ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-          <CircularProgress size="sm" />
-        </Box>
-      ) : items.length === 0 ? (
-        <Sheet
-          variant="soft"
-          sx={{
-            borderRadius: 'md',
-            p: 4,
-            textAlign: 'center',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: 1,
-          }}
-        >
-          <CheckCircle sx={{ color: theme.palette.security.good.plainColor, fontSize: 32 }} />
-          <Typography level="body-sm" sx={{ color: theme.palette.text.tertiary }}>
-            No IPs are currently blocked
+        }
+        subtitle="System-wide sign-in lockouts and admin blocks of an address or range, visible to administrators only. A block of sign-in, signup, checkout and AI also stops new accounts, purchases and AI usage from that network."
+      >
+        {blockedIPs.isLoading ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
+            <CircularProgress size="sm" />
+          </Box>
+        ) : blockedIPs.isError ? (
+          <Typography level="body-sm" color="danger" role="alert">
+            Could not load blocked IP addresses.
           </Typography>
-        </Sheet>
-      ) : (
-        <Box data-testid="blocked-ips-tab-list" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-          {items.map((item, index) => (
-            <BlockedIPRow key={item._id} item={item} index={index} onUnblock={() => setUnblocking(item)} />
-          ))}
-        </Box>
-      )}
+        ) : items.length === 0 ? (
+          <Stack direction="row" alignItems="center" gap={1}>
+            <CheckCircle fontSize="small" sx={{ color: theme.palette.security.good.plainColor }} />
+            <Typography level="body-sm" sx={{ color: theme.palette.text.tertiary }}>
+              No IPs are currently blocked
+            </Typography>
+          </Stack>
+        ) : (
+          <Box data-testid="blocked-ips-section-list" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+            {items.map((item, index) => (
+              <BlockedIPRow key={item._id} item={item} index={index} onUnblock={() => setUnblocking(item)} />
+            ))}
+          </Box>
+        )}
+      </SectionContainer>
 
       {blockOpen && <BlockIpDialog onClose={() => setBlockOpen(false)} />}
       <UnblockIpDialog block={unblocking} onClose={() => setUnblocking(null)} />
@@ -156,4 +144,4 @@ const BlockedIPsTab: React.FC = () => {
   );
 };
 
-export default BlockedIPsTab;
+export default BlockedIPsSection;
