@@ -223,9 +223,10 @@ const REPLY_COST_CLASS = 'b4m-reply-cost';
  * thread above - is a render per mouse move across a transcript that can be hundreds of turns
  * long. The parent's `:hover` does the same job for nothing; see AssistantTurn.
  *
- * Nothing at all when the server reported no credits. Absent is not zero - a turn that failed,
- * and every reply stored before this was captured, would otherwise claim to have been free.
- * A self-hosted model's reply shows its generation speed in the same place instead.
+ * Credits show only when the server reported them. Absent is not zero - a turn that failed,
+ * and every reply stored before credits were captured, would otherwise claim to have been free.
+ * A self-hosted reply shows its generation speed in the same place. Nothing at all when neither
+ * is there.
  */
 function ReplyCost({ usage }: { usage?: ChatUsage }) {
   const showDollars = useShowDollarCosts();
