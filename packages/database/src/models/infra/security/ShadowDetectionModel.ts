@@ -266,8 +266,8 @@ class ShadowDetectionRepository {
   /**
    * Account deletion: removes the user from every detection that names them. A detection left with no
    * accounts is deleted; a campaign group is pruned with withoutCampaignMember (summary and signals
-   * rebuilt, revision bumped so an open grading dialog conflicts) or deleted when no triangle of direct
-   * members remains, or when its stored group no longer parses. Returns how many records were deleted.
+   * rebuilt, revision bumped so an open grading dialog conflicts) or deleted when fewer than three
+   * direct members remain, or when its stored group no longer parses. Returns how many records were deleted.
    */
   async removeUser(userId: string): Promise<number> {
     const touched = await ShadowDetectionModel.find({ userIds: userId }).lean<LeanShadowDetection[]>();

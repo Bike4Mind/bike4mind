@@ -93,7 +93,7 @@ describe('withoutCampaignMember', () => {
     expect(pruned?.members.find(member => member.userId === id(2))?.linkCount).toBe(3);
   });
 
-  it('returns null once no triangle of direct members is left', () => {
+  it('returns null once fewer than three direct members are left', () => {
     const pruned = withoutCampaignMember(group(), id(1));
 
     expect(pruned && withoutCampaignMember(pruned, id(2))).toBeNull();

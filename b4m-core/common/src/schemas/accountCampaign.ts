@@ -171,7 +171,7 @@ export function accountCampaignSignals(group: AccountCampaignGroup): ShadowDetec
 }
 
 /**
- * The group as it stands once an account is deleted, or null when no triangle of direct members is
+ * The group as it stands once an account is deleted, or null when fewer than three direct members are
  * left. A transitive member whose every stored link ran through the deleted account goes with it, and a
  * shared value held by fewer than two remaining members stops being evidence. Counts the stored lists
  * cannot recompute (ignored memberCount, unknown) are capped at the remaining member count.
