@@ -179,7 +179,7 @@ describe('native client OAuth PKCE flow', () => {
   });
 
   it('accepts the https universal-link redirect and mints an ios-labelled session with the device name', async () => {
-    const { status, json } = await exchange({ deviceName: 'Nao iPhone' });
+    const { status, json } = await exchange({ deviceName: 'Primary Phone' });
 
     expect(status).toBe(200);
     expect(json.refresh_token).toEqual(expect.any(String));
@@ -188,7 +188,7 @@ describe('native client OAuth PKCE flow', () => {
       userId: 'user-1',
       createdVia: 'ios',
       clientId: CLIENT_ID,
-      device: { displayName: 'Nao iPhone', userAgent: 'B4MNative/1.0' },
+      device: { displayName: 'Primary Phone', userAgent: 'B4MNative/1.0' },
     });
   });
 
@@ -258,7 +258,7 @@ describe('native client OAuth PKCE flow', () => {
   });
 
   it('POST /api/auth/refreshToken still rotates via body transport and returns the new refresh token in the body', async () => {
-    const { json: issued } = await exchange({ deviceName: 'Nao iPhone' });
+    const { json: issued } = await exchange({ deviceName: 'Primary Phone' });
 
     const first = await invoke(refreshHandler, { body: { refresh_token: issued.refresh_token } });
     expect(first.status).toBe(200);
@@ -269,11 +269,11 @@ describe('native client OAuth PKCE flow', () => {
     const second = await invoke(refreshHandler, { body: { refresh_token: first.json.refreshToken } });
     expect(second.status).toBe(200);
     expect(second.json.refreshToken).not.toBe(first.json.refreshToken);
-    expect(onlySession().device.displayName).toBe('Nao iPhone');
+    expect(onlySession().device.displayName).toBe('Primary Phone');
   });
 
   it('GET /api/users/me/sessions lists the device display name', async () => {
-    await exchange({ deviceName: 'Nao iPhone' });
+    await exchange({ deviceName: 'Primary Phone' });
     const sid = onlySession().sid as string;
 
     const { status, json } = await invoke((sessionsHandler as unknown as { getFn: unknown }).getFn, {
@@ -286,7 +286,7 @@ describe('native client OAuth PKCE flow', () => {
       expect.objectContaining({
         sid,
         createdVia: 'ios',
-        device: expect.objectContaining({ displayName: 'Nao iPhone' }),
+        device: expect.objectContaining({ displayName: 'Primary Phone' }),
       }),
     ]);
   });
