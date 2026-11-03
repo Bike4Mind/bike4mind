@@ -117,14 +117,18 @@ describe('GenerationSettingsPicker', () => {
     });
   }
 
-  async function type(field: string, text: string) {
+  async function fill(field: string, text: string) {
     const target = input(field);
     const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
     await act(async () => {
       setValue?.call(target, text);
       target.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    await key(target, 'Enter');
+  }
+
+  async function type(field: string, text: string) {
+    await fill(field, text);
+    await key(input(field), 'Enter');
   }
 
   async function blur(field: string) {
@@ -176,7 +180,7 @@ describe('GenerationSettingsPicker', () => {
     expect(byTestId('generation-settings-temperature-reset-btn')).toBeNull();
     expect(byTestId('generation-settings-reset-all-btn')).toBeNull();
     expect(note('thinkingBudgetTokens')).toBe('Model default: 16,000.');
-    expect(input('maxOutputTokens').placeholder).toBe('64,000');
+    expect(input('maxOutputTokens').placeholder).toBe('64000');
     expect(note('maxOutputTokens')).toBe('Model default: 64,000. Thinking counts toward it.');
   });
 
@@ -205,7 +209,29 @@ describe('GenerationSettingsPicker', () => {
     expect(onChange).toHaveBeenLastCalledWith({ topP: 0.9, topK: 30 });
   });
 
-  it('counts the overrides the next turn sends, and resets one or all of them', async () => {
+  it('puts the saved value back in a field whose save failed', async () => {
+    onChange.mockResolvedValueOnce(false);
+    await render(LOCAL, { temperature: 0.3 });
+    await open();
+    await type('temperature', '0.5');
+    await act(async () => {});
+    expect(input('temperature').value).toBe('0.3');
+  });
+
+  it('saves a typed value on blur, and once for Enter then blur', async () => {
+    await render(LOCAL);
+    await open();
+    await fill('temperature', '0.5');
+    await blur('temperature');
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenLastCalledWith({ temperature: 0.5 });
+
+    await type('topK', '30');
+    await blur('topK');
+    expect(onChange).toHaveBeenCalledTimes(2);
+  });
+
+  it('counts the overrides the next turn sends, and resets one or all of the shown ones', async () => {
     const stored = { temperature: 0.3, topK: 12, thinkingBudgetTokens: 4096 };
     await render(LOCAL, stored);
     expect(byTestId('generation-settings-btn')?.textContent).toBe('Params: 2 set');
@@ -216,7 +242,35 @@ describe('GenerationSettingsPicker', () => {
     expect(onChange).toHaveBeenLastCalledWith({ temperature: 0.3, thinkingBudgetTokens: 4096 });
 
     await act(async () => byTestId('generation-settings-reset-all-btn')?.click());
-    expect(onChange).toHaveBeenLastCalledWith({});
+    expect(onChange).toHaveBeenLastCalledWith({ thinkingBudgetTokens: 4096 });
+  });
+
+  it('keeps a locked field override through Reset all', async () => {
+    await render(CLAUDE, { temperature: 0.2, maxOutputTokens: 30_000 });
+    await open();
+    await act(async () => byTestId('generation-settings-reset-all-btn')?.click());
+    expect(onChange).toHaveBeenLastCalledWith({ temperature: 0.2 });
+  });
+
+  it('does not count a default the turn sends as an override', async () => {
+    const capped: ChatModelOption = {
+      ...CLAUDE,
+      controls: {
+        ...CLAUDE.controls,
+        thinkingBudgetTokens: {
+          min: 1024,
+          max: 11_000,
+          step: 1024,
+          default: 11_000,
+          sendsDefault: true,
+          scope: 'request',
+        },
+      },
+    };
+    await render(capped);
+    expect(byTestId('generation-settings-btn')?.textContent).toBe('Params: Default');
+    await open();
+    expect(input('thinkingBudgetTokens').value).toBe('11000');
   });
 
   it('shows what the next turn sends for a stored value this model adjusts', async () => {
@@ -270,6 +324,9 @@ describe('GenerationSettingsPicker', () => {
       const dialog = document.querySelector('[role="dialog"]');
       const title = document.getElementById(dialog?.getAttribute('aria-labelledby') ?? '');
       expect(title?.textContent).toBe('Params');
+      const intro = document.getElementById(dialog?.getAttribute('aria-describedby') ?? '');
+      expect(intro?.textContent).toBe('For this chat only. A blank field uses the model default.');
+      expect(dialog?.getAttribute('aria-modal')).toBe('true');
       expect(button?.getAttribute('aria-expanded')).toBe('true');
       expect(document.activeElement).toBe(input('maxOutputTokens'));
       for (const field of ['temperature', 'maxOutputTokens']) {
@@ -294,6 +351,19 @@ describe('GenerationSettingsPicker', () => {
       await key(temperature, 'Escape');
       expect(document.querySelector('[role="dialog"]')).toBeNull();
       expect(document.activeElement).toBe(byTestId('generation-settings-btn'));
+    });
+
+    it('drops a typed value on Escape, even when the field blurs before the dialog closes', async () => {
+      await render(LOCAL);
+      await open();
+      await fill('temperature', '0.5');
+      const temperature = input('temperature');
+      const blurAfterReact = () => temperature.blur();
+      document.body.addEventListener('keydown', blurAfterReact);
+      await key(temperature, 'Escape');
+      document.body.removeEventListener('keydown', blurAfterReact);
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+      expect(onChange).not.toHaveBeenCalled();
     });
 
     it('lets a locked field take focus so its reason can be read', async () => {
