@@ -87,6 +87,7 @@ vi.mock('@bike4mind/services', async orig => ({
     // The real block-state rules, so a snapshot missing any block field is caught.
     entersBlockedState: (await orig<typeof import('@bike4mind/services')>()).userService.entersBlockedState,
     accountBlockReasons: (await orig<typeof import('@bike4mind/services')>()).userService.accountBlockReasons,
+    entersSuspension: (await orig<typeof import('@bike4mind/services')>()).userService.entersSuspension,
     adminUpdateUser: (...a: unknown[]) => mockAdminUpdateUser(...a),
     setThrottleTier: (...a: unknown[]) => mockSetThrottleTier(...a),
     updateUser: (...a: unknown[]) => mockUpdateUser(...a),

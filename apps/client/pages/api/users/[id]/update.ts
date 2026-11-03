@@ -194,15 +194,6 @@ function adminEditSessionEndReason(
   return undefined;
 }
 
-/**
- * True when the edit newly bans or suspends the account. A dispute flag alone does not count: it is
- * a reversible payment hold (a won dispute clears it), and the dispute webhook cancels nothing either.
- */
-function entersSuspension(previous: AccountStateSnapshot, next: AccountStateSnapshot): boolean {
-  const before = userService.accountBlockReasons(previous);
-  return userService.accountBlockReasons(next).some(reason => reason !== 'disputePending' && !before.includes(reason));
-}
-
 const handler = baseApi().put(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
     const { id: userId } = idParamSchema.parse(req.query);
@@ -405,7 +396,7 @@ const handler = baseApi().put(
 
       // A banned or suspended account must not renew. Stripe failures are logged and audited, never
       // undo the block.
-      if (blockSnapshot && blockUpdated && entersSuspension(blockSnapshot, blockUpdated)) {
+      if (blockSnapshot && blockUpdated && userService.entersSuspension(blockSnapshot, blockUpdated)) {
         const cancellation = await cancelAccountSubscriptions({ userId, reason: 'suspended' }, req.logger);
         const cancellationEntry = subscriptionCancellationAudit(cancellation, 'suspended');
         if (cancellationEntry) {
