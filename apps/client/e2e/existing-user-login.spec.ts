@@ -86,11 +86,17 @@ test.describe('Existing user sign-in', () => {
       await basePage.dismissModals();
       await expectSignedIn(page);
     });
+
+    await test.step('signing out again leaves the standing account no live session', async () => {
+      await navigationPage.logout();
+      await loginPage.expectLoginPage();
+    });
   });
 
   test('a browser holding only the pre-rename bare refresh cookie lands on sign-in and signs in', async ({
     basePage,
     loginPage,
+    navigationPage,
     page,
     request,
   }) => {
@@ -101,38 +107,44 @@ test.describe('Existing user sign-in', () => {
     // A real, unrevoked session parked under the old cookie name, as a browser that last visited
     // before the rename would still hold it. The refresh route no longer reads that name.
     const parked = await apiLoginViaOtc(request, EXISTING_USER_EMAIL);
-    await basePage.clearAllStorage();
-    await page.context().clearCookies();
-    await page.context().addCookies([
-      {
-        name: BARE_REFRESH_COOKIE,
-        value: parked.refreshToken,
-        domain: apiUrl.hostname,
-        path: BARE_REFRESH_COOKIE_PATH,
-        httpOnly: true,
-        secure: true,
-        sameSite: 'Strict',
-      },
-    ]);
+    try {
+      await basePage.clearAllStorage();
+      await page.context().clearCookies();
+      await page.context().addCookies([
+        {
+          name: BARE_REFRESH_COOKIE,
+          value: parked.refreshToken,
+          domain: apiUrl.hostname,
+          path: BARE_REFRESH_COOKIE_PATH,
+          httpOnly: true,
+          secure: true,
+          sameSite: 'Strict',
+        },
+      ]);
 
-    await page.goto('/new');
-    // Lands on the sign-in form, not a blank screen, an error page or a redirect loop.
-    await loginPage.expectLoginPage();
-    await expect(page.getByTestId('login-email-input')).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
+      await page.goto('/new');
+      // Lands on the sign-in form, not a blank screen, an error page or a redirect loop.
+      await loginPage.expectLoginPage();
+      await expect(page.getByTestId('login-email-input')).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
 
-    const body = await signInThroughForm(page, loginPage, request);
-    expect(body.email).toBe(EXISTING_USER_EMAIL);
-    await basePage.dismissModals();
-    await expectSignedIn(page);
+      const body = await signInThroughForm(page, loginPage, request);
+      expect(body.email).toBe(EXISTING_USER_EMAIL);
+      await basePage.dismissModals();
+      await expectSignedIn(page);
 
-    // Every session write also expires the bare name, so the stale copy is gone after sign-in.
-    const stale = (await page.context().cookies()).filter(
-      cookie => cookie.name === BARE_REFRESH_COOKIE && cookie.path === BARE_REFRESH_COOKIE_PATH
-    );
-    expect(stale).toEqual([]);
+      // Every session write also expires the bare name, so the stale copy is gone after sign-in.
+      const stale = (await page.context().cookies()).filter(
+        cookie => cookie.name === BARE_REFRESH_COOKIE && cookie.path === BARE_REFRESH_COOKIE_PATH
+      );
+      expect(stale).toEqual([]);
 
-    // Revoke only the parked session (per-device logout), so the shared account keeps no orphan.
-    const logout = await request.get('/api/logout', { headers: { Authorization: `Bearer ${parked.accessToken}` } });
-    expect(logout.status()).toBe(200);
+      await navigationPage.logout();
+      await loginPage.expectLoginPage();
+    } finally {
+      // Revoke the parked session (per-device logout) even when an assertion above failed, so the
+      // standing account keeps no orphan. Soft, so a failed revoke never masks the original error.
+      const logout = await request.get('/api/logout', { headers: { Authorization: `Bearer ${parked.accessToken}` } });
+      expect.soft(logout.status(), 'revoke the parked session').toBe(200);
+    }
   });
 });
