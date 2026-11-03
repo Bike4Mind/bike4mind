@@ -2516,15 +2516,16 @@ export class ChatService {
   }
 
   /**
-   * The last local list when it still has `model`, so a turn costs Ollama no discovery; otherwise one forced
-   * read. A model removed outside the app since that list fails its turn, which forgets the list. A row marked
-   * unavailable was listed while its server was down or still listing, without the model's capabilities.
+   * The last local list while its row for `model` is ready; otherwise one forced read, which for a turn waits out a
+   * slow server's listing. A row listed while its server was down or still listing has none of the model's settings.
    */
-  private async localModelsFor(model: string): Promise<ChatModelOption[]> {
+  private async localModelsFor(model: string, turn = false): Promise<ChatModelOption[]> {
     const last = this.deps.models?.lastLocal?.();
     const cached = findModelOption(last ?? undefined, model);
     if (last && cached && cached.unavailable === undefined) return last;
-    return (await this.deps.models?.listLocal?.(true)) ?? [];
+    const models = this.deps.models;
+    const listed = turn ? models?.listLocal?.(true, { untilListed: true }) : models?.listLocal?.(true);
+    return (await listed) ?? [];
   }
 
   /** Saves the model a send would use, so the picker shows it before the user sends. Null when nothing changed. */
@@ -2687,10 +2688,14 @@ export class ChatService {
       let mcpServers = (await this.deps.mcp?.state())?.servers ?? [];
       const catalog =
         localTurn && this.deps.models?.listLocal
-          ? { models: await this.localModelsFor(session.model) }
+          ? { models: await this.localModelsFor(session.model, true) }
           : await this.deps.models?.list();
       const cacheable = supportsPromptCache(catalog?.models ?? [], session.model);
       const modelOption = findModelOption(catalog?.models, session.model);
+      if (localTurn && modelOption?.unavailable !== undefined) {
+        const reason = modelOption.unavailable.replace(/\.$/, '');
+        throw new Error(`${reason}. Pick another model, or check the server under Settings, Model servers.`);
+      }
       const maxTokens = modelOption?.maxOutputTokens;
       const thinkingToggle =
         modelOption?.thinkingToggle ??

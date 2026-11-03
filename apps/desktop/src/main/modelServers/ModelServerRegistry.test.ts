@@ -669,19 +669,76 @@ describe('ModelServerRegistry', () => {
       expect(tagCalls(fake, SLOW)).toBe(listedBefore + 2);
     });
 
-    it.each([
-      ['removed', (servers: ModelServerRegistry, id: string) => servers.remove(id)],
-      ['renamed', (servers: ModelServerRegistry, id: string) => servers.update(id, { name: 'renamed' })],
-    ])('changes nothing when the server is %s before its abandoned listing lands', async (_label, change) => {
+    it('changes nothing when the server is removed before its abandoned listing lands', async () => {
       const { servers, listedLate, slowId, release } = await slowAndFast();
       await listPastTheWait(servers);
-      await change(servers, slowId);
+      await servers.remove(slowId);
       release();
       await settle();
       await settle();
       expect(listedLate).not.toHaveBeenCalled();
-      const view = (await servers.views()).find(server => server.id === slowId);
-      if (view) expect(view.models).toEqual(['qwen2.5:0.5b']);
+    });
+
+    it('has the picker list a server renamed while its listing was pending, once that listing lands', async () => {
+      const { servers, listedLate, slowId, release } = await slowAndFast();
+      await listPastTheWait(servers);
+      await servers.update(slowId, { name: 'renamed' });
+      release();
+      await settle();
+      await settle();
+      expect(listedLate).toHaveBeenCalledWith(slowId);
+      const renamed = (await servers.models()).filter(model => model.server?.id === slowId);
+      expect(renamed.map(model => model.name).sort()).toEqual(['llama3.2:3b', 'qwen2.5:0.5b']);
+      expect(renamed.every(model => model.unavailable === undefined && model.server?.name === 'renamed')).toBe(true);
+    });
+
+    it('lists a server again once its tools changed, instead of serving the listing it kept', async () => {
+      let listGate = Promise.resolve();
+      let listings = 0;
+      const fetchFor = (): FetchLike => async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        if (path === '/v1/models') {
+          listings += 1;
+          await listGate;
+          return json({ data: [{ id: 'm', owned_by: 'llamacpp' }] });
+        }
+        if (path !== '/v1/chat/completions') return json({ error: 'not found' }, 404);
+        if ((JSON.parse(String(init?.body)) as { tools?: unknown }).tools)
+          return new Response('{"error":{"message":"tools param requires --jinja flag"}}', { status: 500 });
+        const reply = { choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] };
+        return new Response(`data: ${JSON.stringify(reply)}\n\ndata: [DONE]\n\n`, {
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      };
+      const { registry: servers } = registry({ fetchFor } as unknown as ReturnType<typeof fakeOllama>);
+      await servers.add({
+        address: 'http://192.168.1.20:8080',
+        credential: none,
+        name: 'llama',
+        kind: 'openai-compatible',
+        access: 'chat',
+      });
+      const id = (await servers.views())[1].id;
+      let release = () => {};
+      listGate = new Promise(resolve => (release = resolve));
+      await listPastTheWait(servers);
+      release();
+      await settle();
+      await settle();
+      const kept = listings;
+      expect((await servers.models())[0]).not.toHaveProperty('supportsTools');
+      expect(listings).toBe(kept);
+
+      await servers.chatFor(`srv-${id}`)?.stream(
+        {
+          model: `local:srv-${id}:m`,
+          messages: [{ role: 'user', content: 'hi' }],
+          tools: [{ toolSchema: { name: 'read_file', parameters: { type: 'object' } } }],
+        },
+        () => undefined
+      );
+      expect((await servers.models())[0].supportsTools).toBe(false);
+      expect(listings).toBe(kept + 1);
     });
 
     it.each([

@@ -1,6 +1,7 @@
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { supportsOneHourPromptCache, type VideoModel } from '@bike4mind/common';
 import type { ChatModelCatalog, ChatModelOption } from '@shared/chat';
+import type { ModelListOptions } from '../modelServers/ModelServerRegistry';
 import { parseVideoModels } from './media/videoModels';
 import { supportsReasoningEffort } from './reasoningEffort';
 import { currentLocalContext, OllamaLocal } from './OllamaLocal';
@@ -86,7 +87,7 @@ export class ModelCatalog {
 
   constructor(
     private readonly deps: ModelCatalogDeps,
-    private readonly local: Pick<OllamaLocal, 'models'> = new OllamaLocal()
+    private readonly local: { models(options?: ModelListOptions): Promise<ChatModelOption[]> } = new OllamaLocal()
   ) {}
 
   /** Cached models for the current environment, without a round trip. Null when nothing is cached. */
@@ -155,12 +156,12 @@ export class ModelCatalog {
   }
 
   /** Device discovery never depends on the configured server or account. */
-  async listLocal(force = false): Promise<ChatModelOption[]> {
+  async listLocal(force = false, options?: ModelListOptions): Promise<ChatModelOption[]> {
     if (!force && this.localCache && Date.now() < this.localCache.expiresAt) {
       return withCurrentContexts(this.localCache.models);
     }
     const started = ++this.localReads;
-    const models = await this.local.models();
+    const models = await this.local.models(options);
     if (started > this.localWritten) {
       this.localWritten = started;
       this.localCache = { models, expiresAt: Date.now() + 5_000 };

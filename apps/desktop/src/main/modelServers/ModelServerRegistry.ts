@@ -109,6 +109,11 @@ interface Entry {
 
 type Listing = { ok: true; models: ChatModelOption[] } | { ok: false; error: unknown };
 
+export interface ModelListOptions {
+  /** Waits for each server's listing to finish, as a turn does; the picker's read lists a slow server as pending. */
+  untilListed?: boolean;
+}
+
 interface Slot {
   seq: number;
   promise: Promise<Listing>;
@@ -405,7 +410,7 @@ export class ModelServerRegistry {
   }
 
   /** Every saved server's chat models. A server that does not answer, or not in time, lists its last models, disabled. */
-  async models(): Promise<ChatModelOption[]> {
+  async models(options: ModelListOptions = {}): Promise<ChatModelOption[]> {
     await this.load();
     const lists = await Promise.all(
       [...this.entries.values()].map(async entry => {
@@ -432,7 +437,8 @@ export class ModelServerRegistry {
           // undefined: still listing when the wait ran out, or already reported as still listing.
           let result: Listing | undefined = fresh ? { ok: true, models: fresh } : undefined;
           if (slot) slot.picker = true;
-          if (slot && !slot.reported) result = await within(slot.promise, PICKER_LIST_WAIT_MS, undefined);
+          if (slot && options.untilListed) result = await slot.promise;
+          else if (slot && !slot.reported) result = await within(slot.promise, PICKER_LIST_WAIT_MS, undefined);
           if (!this.current(entry)) return [];
           if (result?.ok) {
             if (entry.health.state === 'unknown') void this.check(entry.record.id);
@@ -473,6 +479,14 @@ export class ModelServerRegistry {
     entry.floor = entry.listSeq + 1;
   }
 
+  /** Rows listed before a server's tool support changed carry the old `supportsTools`. */
+  private toolsChanged(id: string): void {
+    const entry = this.entries.get(id);
+    if (entry) entry.kept = undefined;
+    this.deps.edited?.();
+    this.emit();
+  }
+
   /** False once update() or remove() replaced this entry; its late results then change nothing. */
   private current(entry: Entry): boolean {
     return this.entries.get(entry.record.id) === entry;
@@ -502,7 +516,12 @@ export class ModelServerRegistry {
   /** Applies a finished listing once, whoever waits on it, and announces it when a caller was given pending rows. */
   private async settle(entry: Entry, slot: Slot, result: Listing): Promise<Listing> {
     try {
-      if (!this.current(entry)) return { ok: false, error: new Error(`${entry.record.name} was changed.`) };
+      if (!this.current(entry)) {
+        // Saved again while a picker read waited on or showed this listing: the picker lists the saved server again.
+        const saved = this.entries.get(entry.record.id);
+        if (saved && slot.picker) this.announce(saved, true);
+        return { ok: false, error: new Error(`${entry.record.name} was changed.`) };
+      }
       if (slot.seq < entry.floor) return result;
       if (result.ok) {
         const names = result.models.map(model => model.name);
@@ -792,10 +811,7 @@ export class ModelServerRegistry {
             fetch,
             hasCredentials,
             redact: redactServerResponse,
-            toolsChanged: () => {
-              this.deps.edited?.();
-              this.emit();
-            },
+            toolsChanged: () => this.toolsChanged(record.id),
           });
     const runtime: LocalRuntime =
       record.kind === 'ollama'
