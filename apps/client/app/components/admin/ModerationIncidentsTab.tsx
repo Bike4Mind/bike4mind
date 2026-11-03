@@ -77,12 +77,12 @@ export const ModerationIncidentsTab: React.FC = () => {
     >
       <AdminPageHeader
         title="Moderation review"
-        count={queue.data ? rows.length : undefined}
+        count={queue.data && !queue.data.truncated ? rows.length : undefined}
         description="Image moderation incidents waiting for a verdict, oldest first. Opening one records a view in the audit log."
       />
       {queue.data?.truncated && (
         <Alert color="warning" data-testid="moderation-incidents-truncated">
-          Showing the oldest {rows.length.toLocaleString()}. Decide these to see the rest.
+          Showing the oldest {rows.length.toLocaleString()}; more are waiting. Decide these to see the rest.
         </Alert>
       )}
       <DataTable

@@ -81,7 +81,10 @@ describe('ModerationIncidentsTab', () => {
   it('warns when the queue came back at its cap', () => {
     m.queue.mockReturnValue(ready(rows, true));
     renderTab();
-    expect(screen.getByTestId('moderation-incidents-truncated').textContent).toContain('Showing the oldest 2');
+    expect(screen.getByTestId('moderation-incidents-truncated').textContent).toContain(
+      'Showing the oldest 2; more are waiting'
+    );
+    expect(screen.getByTestId('admin-page-header').textContent).not.toContain('(2)');
   });
 
   it('shows an empty state when nothing waits', () => {
