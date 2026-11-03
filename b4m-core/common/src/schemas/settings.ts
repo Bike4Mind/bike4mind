@@ -366,6 +366,13 @@ export const SettingKeySchema = z.enum([
   'ReferralHoldDays',
   'ReferralInvitesPerUser',
   'ReferralAlertRewardsPerDay',
+  'BedrockNewsPuzzleCredits5',
+  'BedrockNewsPuzzleCredits6',
+  'BedrockNewsPuzzleCredits7',
+  'BedrockNewsPuzzleHardMultiplier',
+  'BedrockNewsFirstSolveCredits',
+  'BedrockNewsPuzzleDailyCap',
+  'BedrockNewsRewardsDailyBudget',
   'registrationLink',
   'FeedbackReceiveEmail',
   'FeedbackReceiveEmailNonProd',
@@ -486,6 +493,7 @@ export const SettingKeySchema = z.enum([
   'signupNetworkAlertMaxPerIp',
   'signupNetworkAlertMaxPerHostingAsn',
   'signupNetworkAlertMaxPerAsn',
+  'shadowDetectionRecordingEnabled',
   'paymentRiskAutoRefundEnabled',
   'paymentRiskAutoRefundMinUnspentPercent',
   'paymentRiskCheckoutMaxBlockedAttempts',
@@ -709,6 +717,8 @@ export const SettingKeySchema = z.enum([
   'apiRateLimitCreditsPerMin',
   'apiRateLimitDefaultWritePerMin',
   'apiRateLimitDefaultWriteMode',
+  'fileUploadLimitFreePerHour',
+  'fileUploadLimitPaidPerHour',
   'apiKeyAccess',
   'shadowTierModelAllowlist',
   'shadowTierRequestsPerMin',
@@ -1136,6 +1146,13 @@ function makeStringSetting(
 export const DEFAULT_WRITE_RATE_LIMIT_MODES = ['off', 'log', 'enforce'] as const;
 export type DefaultWriteRateLimitMode = (typeof DEFAULT_WRITE_RATE_LIMIT_MODES)[number];
 export const DEFAULT_WRITE_RATE_LIMIT_PER_MIN = 120;
+
+/**
+ * Default hourly file-upload allowances. The free one is also the floor that
+ * apps/client/server/files/fileUploadBudget.ts applies when the setting cannot be read.
+ */
+export const FILE_UPLOAD_LIMIT_FREE_PER_HOUR = 300;
+export const FILE_UPLOAD_LIMIT_PAID_PER_HOUR = 3000;
 
 /**
  * Data-lake semantic-search scan budgets. Declared here so the admin-settings default and the
@@ -2307,6 +2324,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'signupNetworkAlertMaxPerIp', order: 42 },
       { key: 'signupNetworkAlertMaxPerHostingAsn', order: 43 },
       { key: 'signupNetworkAlertMaxPerAsn', order: 44 },
+      { key: 'shadowDetectionRecordingEnabled', order: 44.5 },
       { key: 'paymentRiskAutoRefundEnabled', order: 45 },
       { key: 'paymentRiskAutoRefundMinUnspentPercent', order: 46 },
       { key: 'paymentRiskCheckoutMaxBlockedAttempts', order: 47 },
@@ -2424,7 +2442,9 @@ export const API_SERVICE_GROUPS = {
       { key: 'apiRateLimitCreditsPerMin', order: 4 },
       { key: 'apiRateLimitDefaultWritePerMin', order: 5 },
       { key: 'apiRateLimitDefaultWriteMode', order: 6 },
-      { key: 'apiKeyAccess', order: 7 },
+      { key: 'fileUploadLimitFreePerHour', order: 7 },
+      { key: 'fileUploadLimitPaidPerHour', order: 8 },
+      { key: 'apiKeyAccess', order: 9 },
     ],
   },
   API_KEY_TRUST: {
@@ -3468,6 +3488,33 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 6,
   }),
+  // Both read by apps/client/server/files/fileUploadBudget.ts.
+  fileUploadLimitFreePerHour: makeNumberSetting({
+    key: 'fileUploadLimitFreePerHour',
+    name: 'File Upload Limit - Free (files/hour)',
+    defaultValue: FILE_UPLOAD_LIMIT_FREE_PER_HOUR,
+    min: 0,
+    max: 1000000,
+    int: true,
+    description:
+      'Max files a Free-tier user may start uploading per hour, counted per file on these upload routes: single and batch presign, direct upload, URL import, generated-image copy, re-chunk, reprocess and the public API. Admin-restricted users get this limit too. Set to 0 to block uploads for these users.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.RATE_LIMITING.id,
+    order: 7,
+  }),
+  fileUploadLimitPaidPerHour: makeNumberSetting({
+    key: 'fileUploadLimitPaidPerHour',
+    name: 'File Upload Limit - Basic and Pro (files/hour)',
+    defaultValue: FILE_UPLOAD_LIMIT_PAID_PER_HOUR,
+    min: 0,
+    max: 1000000,
+    int: true,
+    description:
+      'Max files a Basic or Pro subscriber may start uploading per hour, counted per file on the same upload routes as the Free limit. Admins and developer-tagged users are not limited. Set to 0 to block uploads for these users.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.RATE_LIMITING.id,
+    order: 8,
+  }),
   // Enforced at mint AND on every key-authenticated request (apiKeyAccessGate.ts), so
   // tightening it also cuts off keys that already exist.
   apiKeyAccess: makeStringSetting({
@@ -3481,7 +3528,7 @@ export const settingsMap = {
     options: ['all', 'paid', 'disabled'],
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
-    order: 7,
+    order: 9,
   }),
   // Auto-block of IPs with repeated failed OAuth sign-ins, plus per-IP limits on the OAuth routes.
   oauthAbuseAutoBlockEnabled: makeBooleanSetting({
@@ -3675,6 +3722,79 @@ export const settingsMap = {
     min: 1,
     max: 1_000_000,
     description: 'Alert admins when more than this many referral rewards are created within 24 hours.',
+    category: 'Referrals',
+  }),
+  BedrockNewsPuzzleCredits5: makeNumberSetting({
+    key: 'BedrockNewsPuzzleCredits5',
+    name: 'BedrockNews Headword: 5-Letter Credits',
+    defaultValue: 40,
+    int: true,
+    min: 0,
+    max: 100_000_000,
+    description:
+      'Credits a BedrockNews Headword player earns for solving the 5-letter word. 0 pays nothing for that rung.',
+    category: 'Referrals',
+  }),
+  BedrockNewsPuzzleCredits6: makeNumberSetting({
+    key: 'BedrockNewsPuzzleCredits6',
+    name: 'BedrockNews Headword: 6-Letter Credits',
+    defaultValue: 60,
+    int: true,
+    min: 0,
+    max: 100_000_000,
+    description:
+      'Credits a BedrockNews Headword player earns for solving the 6-letter word. 0 pays nothing for that rung.',
+    category: 'Referrals',
+  }),
+  BedrockNewsPuzzleCredits7: makeNumberSetting({
+    key: 'BedrockNewsPuzzleCredits7',
+    name: 'BedrockNews Headword: 7-Letter Credits',
+    defaultValue: 100,
+    int: true,
+    min: 0,
+    max: 100_000_000,
+    description:
+      'Credits a BedrockNews Headword player earns for solving the 7-letter word. 0 pays nothing for that rung.',
+    category: 'Referrals',
+  }),
+  BedrockNewsPuzzleHardMultiplier: makeNumberSetting({
+    key: 'BedrockNewsPuzzleHardMultiplier',
+    name: 'BedrockNews Headword: Hard Mode Multiplier',
+    defaultValue: 1.5,
+    min: 1,
+    max: 5,
+    description: 'Multiplier applied to a Headword rung solved in hard mode.',
+    category: 'Referrals',
+  }),
+  BedrockNewsFirstSolveCredits: makeNumberSetting({
+    key: 'BedrockNewsFirstSolveCredits',
+    name: 'BedrockNews Headword: First Solve Bonus',
+    defaultValue: 500,
+    int: true,
+    min: 0,
+    max: 100_000_000,
+    description:
+      'One-time credits when a BedrockNews player claims their first solved Headword rung. 0 turns the bonus off.',
+    category: 'Referrals',
+  }),
+  BedrockNewsPuzzleDailyCap: makeNumberSetting({
+    key: 'BedrockNewsPuzzleDailyCap',
+    name: 'BedrockNews Headword: Daily Cap Per User',
+    defaultValue: 300,
+    int: true,
+    min: 0,
+    max: 100_000_000,
+    description: 'Most credits one Bike4Mind user can earn from Headword per puzzle day, bonus excluded.',
+    category: 'Referrals',
+  }),
+  BedrockNewsRewardsDailyBudget: makeNumberSetting({
+    key: 'BedrockNewsRewardsDailyBudget',
+    name: 'BedrockNews Headword: Daily Budget',
+    defaultValue: 200000,
+    int: true,
+    min: 0,
+    max: 100_000_000,
+    description: 'Most Headword credits paid to all users in any rolling 24 hours. 0 stops all payouts.',
     category: 'Referrals',
   }),
   EnableReferralToEmail: makeBooleanSetting({
@@ -5279,6 +5399,15 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
       'Alert when more self-serve accounts than this signed up from one network (ASN) within the window, hosting or not. Consumer ISPs are busy networks, so keep this well above normal traffic. 0 turns the check off.',
+  }),
+  shadowDetectionRecordingEnabled: makeBooleanSetting({
+    key: 'shadowDetectionRecordingEnabled',
+    name: 'Record Shadow Detections',
+    defaultValue: true,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Record what the abuse detectors (such as the signup network burst alerts) would have done to an account, for admin review on the Detections page. Recording never acts: no access, credits or API keys change.',
   }),
   paymentRiskAutoRefundEnabled: makeBooleanSetting({
     key: 'paymentRiskAutoRefundEnabled',
