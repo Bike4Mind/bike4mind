@@ -18,8 +18,9 @@ export interface ToolExecutionContext {
   };
   /**
    * Host-supplied implementations for server tools whose code lives in the app tier (today:
-   * `decide`, whose credit hold and provider retry are the decisions runner's). Each entry point
-   * builds them, so a missing one fails that tool rather than running it un-billed.
+   * `decide`, whose credit hold and provider retry are the decisions runner's, and the paid
+   * `web_search` / `web_fetch`, billed per call). Each entry point builds them, so a missing one
+   * fails that tool rather than running it un-billed.
    */
   executors?: ServerToolExecutors;
 }
@@ -59,6 +60,15 @@ export function validateToolRequest(
   return { valid: true, data: { toolName: body.toolName, input: body.input } };
 }
 
+/**
+ * HTTP status for an executed tool: 200, a 422 for a billed tool the caller cannot afford (the status
+ * every credit refusal uses, with `errorCode: insufficient_credits` in the body), else 500.
+ */
+export function toolResultStatus(result: { success: boolean; errorCode?: string }): 200 | 422 | 500 {
+  if (result.success) return 200;
+  return result.errorCode === 'insufficient_credits' ? 422 : 500;
+}
+
 /** Executes a tool and logs results; single source of truth for execution and audit logging. */
 export async function executeToolWithLogging(request: ToolExecutionInput, context: ToolExecutionContext) {
   const { toolName, input } = request;
@@ -66,10 +76,6 @@ export async function executeToolWithLogging(request: ToolExecutionInput, contex
 
   logger.info(`Executing tool ${toolName} for user ${userEmail || userId}`);
 
-  // Execute tool using shared service. imageUrlSigningSecret is deliberately left unset: this
-  // endpoint returns web_search's raw formatted text straight to a CLI/API caller with no card
-  // renderer, so a real secret would only make it pay for an image search whose b4m_cards fence
-  // prints as raw JSON to the caller. Omitting it makes performWebSearch degrade to plain prose.
   const result = await cliTools.executeServerTool(
     {
       toolName: toolName as any,
@@ -82,7 +88,6 @@ export async function executeToolWithLogging(request: ToolExecutionInput, contex
         apiKeys: apiKeyRepository,
       },
     },
-    undefined,
     executors
   );
 

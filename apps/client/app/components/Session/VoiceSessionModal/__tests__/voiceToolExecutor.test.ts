@@ -58,6 +58,25 @@ describe('executeVoiceTool error reporting', () => {
     await expect(executeVoiceTool('web_search', { query: 'x' })).resolves.toEqual({ success: false, error: message });
   });
 
+  it.each(['web_search', 'web_fetch'])(
+    'tells the model %s did not run when the account is out of credits',
+    async tool => {
+      const response = {
+        status: 422,
+        data: { error: 'You do not have enough credits for web search.', errorCode: 'insufficient_credits' },
+      } as AxiosResponse;
+      postMock.mockRejectedValue(
+        new AxiosError('Request failed with status code 422', 'ERR_BAD_REQUEST', undefined, {}, response)
+      );
+
+      const result = await executeVoiceTool(tool, { query: 'x', url: 'https://example.com' });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/not run because the account is out of credits/);
+      expect(result.error).toContain('You do not have enough credits for web search.');
+    }
+  );
+
   it('keeps the plain error message for other failures', async () => {
     postMock.mockRejectedValue(new Error('boom'));
 

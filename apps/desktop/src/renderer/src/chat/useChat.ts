@@ -52,6 +52,10 @@ export interface SessionsController {
   rename: (session: ChatSessionSummary, title: string) => Promise<void>;
   renameError: string | null;
   clearRenameError: () => void;
+  /** Save a conversation to a file the user picks; a failure sets `exportError`. */
+  exportSession: (session: ChatSessionSummary) => Promise<void>;
+  exportError: string | null;
+  clearExportError: () => void;
   /** Apply a summary main just returned, so the sidebar reorders without a full reload. */
   apply: (summary: ChatSessionSummary) => void;
 }
@@ -71,6 +75,7 @@ export function useSessions(): SessionsController {
   const [creatingCode, setCreatingCode] = useState(false);
   const [codeError, setCodeError] = useState<string | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const latestReload = useRef(0);
   const localEdits = useRef(0);
@@ -208,6 +213,16 @@ export function useSessions(): SessionsController {
 
   const clearCodeError = useCallback(() => setCodeError(null), []);
   const clearRenameError = useCallback(() => setRenameError(null), []);
+  const clearExportError = useCallback(() => setExportError(null), []);
+
+  const exportSession = useCallback(async (session: ChatSessionSummary) => {
+    setExportError(null);
+    try {
+      await window.b4m.chat.exportSession(session.id);
+    } catch {
+      setExportError(`Could not download "${session.title}".`);
+    }
+  }, []);
 
   return {
     sessions,
@@ -224,6 +239,9 @@ export function useSessions(): SessionsController {
     rename,
     renameError,
     clearRenameError,
+    exportSession,
+    exportError,
+    clearExportError,
     apply,
   };
 }

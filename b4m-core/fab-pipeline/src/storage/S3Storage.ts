@@ -238,6 +238,7 @@ export class S3Storage extends BaseStorage {
       ContentLength,
       ResponseContentType,
       ResponseContentDisposition,
+      ResponseCacheControl,
       signingDate,
     }: {
       expiresIn?: number;
@@ -255,6 +256,8 @@ export class S3Storage extends BaseStorage {
        */
       ResponseContentType?: string;
       ResponseContentDisposition?: string;
+      /** GET only: the Cache-Control S3 answers with, e.g. 'no-store' to keep the bytes off disk. */
+      ResponseCacheControl?: string;
       /**
        * Sign as of this instant instead of now; the link is valid from it for `expiresIn` seconds.
        * Repeated calls with the same value (and credentials) return the identical URL, so a browser
@@ -280,6 +283,7 @@ export class S3Storage extends BaseStorage {
             Key: path,
             ResponseContentType,
             ResponseContentDisposition,
+            ResponseCacheControl,
           }),
       {
         expiresIn: await this.clampToCredentialLifetime(client, expiresIn, signingDate),

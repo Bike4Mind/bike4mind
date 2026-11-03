@@ -28,6 +28,7 @@ import {
   HandCoins,
   Handshake,
   Hash,
+  ImageOff,
   HeartPulse,
   Inbox,
   Key,
@@ -142,6 +143,7 @@ export enum AdminTab {
   PreferenceArena = 71,
   Revenue = 72,
   ShadowDetections = 73,
+  ModerationIncidents = 74,
 }
 
 /**
@@ -250,6 +252,12 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     items: [
       { Icon: ShieldCheck, tab: AdminTab.SecurityDashboard, label: 'Security', testid: 'admin-security-dashboard-btn' },
       { Icon: ShieldAlert, tab: AdminTab.SecOpsTriage, label: 'SecOps triage', testid: 'admin-secops-triage-btn' },
+      {
+        Icon: ImageOff,
+        tab: AdminTab.ModerationIncidents,
+        label: 'Moderation review',
+        testid: 'admin-moderation-incidents-btn',
+      },
       { Icon: ScrollText, tab: AdminTab.AuditLog, label: 'Audit log', testid: 'admin-audit-log-btn' },
       { Icon: Fingerprint, tab: AdminTab.IdentityProviders, label: 'Identity providers' },
       { Icon: KeyRound, tab: AdminTab.OAuthClients, label: 'OAuth clients', testid: 'admin-oauth-clients-btn' },

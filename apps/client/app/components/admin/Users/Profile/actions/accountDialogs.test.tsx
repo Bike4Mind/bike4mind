@@ -462,7 +462,7 @@ describe('account dialogs', () => {
       fireEvent.click(screen.getByTestId('login-as-dialog-setup-mfa-btn'));
 
       expect(onClose).toHaveBeenCalled();
-      expect(mocks.navigate).toHaveBeenCalledWith({ to: '/profile', search: { tab: 'settings', section: 'security' } });
+      expect(mocks.navigate).toHaveBeenCalledWith({ to: '/profile', search: { tab: 'security' } });
     });
   });
 

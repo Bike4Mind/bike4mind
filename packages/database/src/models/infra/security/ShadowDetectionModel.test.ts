@@ -15,6 +15,7 @@ const detection = (overrides: Partial<RecordShadowDetectionInput> = {}): RecordS
   network: { ip: '203.0.113.7', asn: 64500, asnOrg: 'Example Cloud', country: 'US', hosting: true },
   signals: [{ key: 'ipSignups', label: 'Signups from this IP', observed: 3, threshold: 1 }],
   windowMinutes: 180,
+  group: null,
   detectedAt: new Date('2026-10-01T00:00:00Z'),
   ...overrides,
 });

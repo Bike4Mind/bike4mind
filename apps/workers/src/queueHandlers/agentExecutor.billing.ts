@@ -14,7 +14,14 @@
  * the caller across iterations (mirrors the in-place-mutation contract the call
  * site relies on).
  */
-import { buildUsagePriceStamp, getTurnsCost, reservationOutputTokens, usdToCredits, type ModelInfo, type TurnUsage } from '@bike4mind/common';
+import {
+  buildUsagePriceStamp,
+  getTurnsCost,
+  reservationOutputTokens,
+  usdToCredits,
+  type ModelInfo,
+  type TurnUsage,
+} from '@bike4mind/common';
 import type { IIterationBilling } from '@bike4mind/database';
 import type { UsageEventStatus, UsagePriceStamp } from '@bike4mind/common';
 import { buildEarlyStopStamp } from '@bike4mind/services/llm';
@@ -257,6 +264,8 @@ export type BillIterationParams = {
   checkpoint: BillingCheckpoint;
   counters: BillingCounters;
   modelInfo: ModelInfo;
+  /** Model whose price the credits charge; defaults to `modelInfo`. Cost fields stay on `modelInfo`. */
+  chargedModelInfo?: ModelInfo;
   model: string;
   startTime: number;
   /**
@@ -508,7 +517,9 @@ export async function billIteration(params: BillIterationParams): Promise<void> 
   // expectation across iterations), so only skip the ledger deduction - the usage
   // event below still records the COGS delta, otherwise margin reporting would
   // silently under-count cost.
-  const credits = effects.usdToCredits(costDelta);
+  const credits = effects.usdToCredits(
+    params.chargedModelInfo ? getTurnsCost(params.chargedModelInfo, turns) + toolUsage.costUsd : costDelta
+  );
   if (credits > 0) {
     await effects.deductCredits({
       inputTokens: chargedInputTokens,

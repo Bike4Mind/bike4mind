@@ -440,6 +440,7 @@ When you get the tool result back, summarize it conversationally for voice.`;
       userId: req.user.id,
       sessionId: session.id,
       priorStartedAt: priorHoldStartedAt,
+      apiKeyId: req.apiKeyInfo?.keyId,
       reservedCredits: enforceCredits ? reservedCredits : null,
       startedAt: new Date(),
       // Billed per response against this hold (server/websocket/voiceSessionEnded.ts).

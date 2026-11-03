@@ -5,6 +5,8 @@ interface ToolResult {
   success: boolean;
   content?: unknown;
   error?: string;
+  /** Billing classifier on a failure, e.g. `insufficient_credits`. */
+  errorCode?: string;
 }
 
 /**
@@ -85,6 +87,7 @@ export class WebSocketToolExecutor {
             success: message.success as boolean,
             content: message.content,
             error: message.error as string | undefined,
+            errorCode: message.errorCode as string | undefined,
           });
         }
       });

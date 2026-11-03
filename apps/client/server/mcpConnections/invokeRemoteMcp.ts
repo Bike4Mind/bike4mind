@@ -6,6 +6,7 @@ import {
   MCP_CONNECTION_LIMITS,
   NotFoundError,
   TooManyRequestsError,
+  getMcpPresetHost,
   mcpApiKeyHeaderNameProblem,
   type IMcpConnectionDocument,
   type IMcpConnectionTool,
@@ -433,6 +434,7 @@ export async function invokeRemoteMcp(
   const verdict = evaluateConnectionPolicy(context, {
     urlHost: connection.urlHost,
     authKind: connection.auth.kind,
+    presetRemoteHost: getMcpPresetHost(connection.presetId),
     url: connection.displayUrl,
   });
   if (!verdict.allowed) {

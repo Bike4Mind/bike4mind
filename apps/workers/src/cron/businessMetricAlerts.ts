@@ -8,6 +8,7 @@ import {
 import { getSettingsMap, getSettingsValue, postMessageToSlack } from '@bike4mind/utils';
 import { Resource } from 'sst';
 import { z } from 'zod';
+import { appUrlFromEnv, stageLabel } from '../events/alarmSlackMessage';
 import { collectBusinessMetrics } from './businessMetrics/collect';
 import { deliverAnomalies, subscriberMetric } from './businessMetrics/deliver';
 
@@ -41,8 +42,14 @@ export async function handler(event: unknown) {
   const result = await collectBusinessMetrics(window);
   const subscribers = await subscriberMetric(window, result.subscribers);
   const metrics = [...result.metrics, subscribers];
-  const anomalies = anomalyAlerts(metrics, window, thresholds);
-  const delivered = await deliverAnomalies(window, anomalies, message => postMessageToSlack(webhook, message));
+  const anomalies = anomalyAlerts(metrics, thresholds);
+  const delivered = await deliverAnomalies(
+    window,
+    anomalies,
+    message => postMessageToSlack(webhook, message),
+    undefined,
+    { appUrl: appUrlFromEnv(), stage: stageLabel(Resource.App.stage) }
+  );
   console.info(
     JSON.stringify({
       report: 'business-metric-alerts',

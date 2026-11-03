@@ -340,4 +340,20 @@ describe('IncidentView', () => {
     expect(screen.getByTestId('security-incident-queues-card-skeleton')).toBeInTheDocument();
     expect(screen.getByTestId('security-incident-signup-chart-skeleton')).toBeInTheDocument();
   });
+
+  it('shows an updating bar over existing data while a refetch is in flight', () => {
+    mocks.signals.mockReturnValue(query(signalsData(), { isFetching: true, refetch: mocks.refetchSignals }));
+    renderView();
+    expect(screen.getByTestId('security-incident-updating')).toHaveTextContent('Updating');
+    expect(screen.queryByTestId('security-incident-tile-skeleton')).not.toBeInTheDocument();
+  });
+
+  it('shows skeletons, not the updating bar, on first load', () => {
+    mocks.signals.mockReturnValue(query(undefined, { isFetching: true }));
+    mocks.state.mockReturnValue(query(undefined, { isFetching: true }));
+    renderView();
+    expect(screen.getAllByTestId('security-incident-tile-skeleton').length).toBeGreaterThan(0);
+    expect(screen.getByTestId('security-incident-defenses-card-skeleton')).toBeInTheDocument();
+    expect(screen.queryByTestId('security-incident-updating')).not.toBeInTheDocument();
+  });
 });
