@@ -12,7 +12,13 @@ vi.mock('node:http2', () => {
   return { default: { connect: h.connect, constants }, connect: h.connect, constants };
 });
 
-import { APNS_HOSTS, createHttp2ApnsTransport, createProviderToken, readApnsConfig } from './sendPush.apns';
+import {
+  APNS_HOSTS,
+  apnsSigningKeyError,
+  createHttp2ApnsTransport,
+  createProviderToken,
+  readApnsConfig,
+} from './sendPush.apns';
 
 const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
 const KEY_PEM = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
@@ -49,20 +55,64 @@ function fakeSession(host: string) {
 }
 
 describe('readApnsConfig', () => {
+  const FULL = { APNS_KEY_ID: 'k', APNS_TEAM_ID: 't', APNS_KEY: 'p', APNS_TOPIC: 'x' };
+
   it('is null unless all four values are set', () => {
-    expect(readApnsConfig({})).toBeNull();
-    expect(readApnsConfig({ APNS_KEY_ID: 'k', APNS_TEAM_ID: 't', APNS_KEY: 'p' })).toBeNull();
-    expect(readApnsConfig({ APNS_KEY_ID: 'k', APNS_TEAM_ID: 't', APNS_KEY: ' ', APNS_TOPIC: 'x' })).toBeNull();
+    expect(readApnsConfig({}, {})).toBeNull();
+    expect(readApnsConfig({ APNS_KEY_ID: 'k', APNS_TEAM_ID: 't', APNS_KEY: 'p' }, {})).toBeNull();
+    expect(readApnsConfig({ ...FULL, APNS_KEY: ' ' }, {})).toBeNull();
+  });
+
+  it("treats the secrets' 'not-configured' placeholder as unset", () => {
+    expect(readApnsConfig({ ...FULL, APNS_TOPIC: 'not-configured' }, {})).toBeNull();
+    expect(
+      readApnsConfig(
+        {
+          APNS_KEY_ID: 'not-configured',
+          APNS_TEAM_ID: 'not-configured',
+          APNS_KEY: 'not-configured',
+          APNS_TOPIC: 'not-configured',
+        },
+        {}
+      )
+    ).toBeNull();
+  });
+
+  it('prefers the linked secret and falls back to plain env per value (self-host)', () => {
+    expect(readApnsConfig({}, FULL)).toEqual({ keyId: 'k', teamId: 't', key: 'p', topic: 'x' });
+    expect(readApnsConfig({ ...FULL, APNS_TOPIC: 'not-configured' }, { APNS_TOPIC: 'env.topic' })?.topic).toBe(
+      'env.topic'
+    );
+    expect(readApnsConfig({ ...FULL, APNS_TOPIC: 'secret.topic' }, { APNS_TOPIC: 'env.topic' })?.topic).toBe(
+      'secret.topic'
+    );
   });
 
   it('restores newlines in a single-line PEM', () => {
-    const config = readApnsConfig({
-      APNS_KEY_ID: 'k',
-      APNS_TEAM_ID: 't',
-      APNS_KEY: '-----BEGIN PRIVATE KEY-----\\nabc\\n-----END PRIVATE KEY-----',
-      APNS_TOPIC: 'com.example.client',
-    });
+    const config = readApnsConfig(
+      {
+        APNS_KEY_ID: 'k',
+        APNS_TEAM_ID: 't',
+        APNS_KEY: '-----BEGIN PRIVATE KEY-----\\nabc\\n-----END PRIVATE KEY-----',
+        APNS_TOPIC: 'com.example.client',
+      },
+      {}
+    );
     expect(config?.key).toBe('-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----');
+  });
+});
+
+describe('apnsSigningKeyError', () => {
+  it('accepts a PKCS#8 P-256 key', () => {
+    expect(apnsSigningKeyError(KEY_PEM)).toBeNull();
+  });
+
+  it('reports a malformed PEM or a non-EC key instead of throwing', () => {
+    expect(apnsSigningKeyError('-----BEGIN PRIVATE KEY-----\nnot-a-key\n-----END PRIVATE KEY-----')).toEqual(
+      expect.any(String)
+    );
+    const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' });
+    expect(apnsSigningKeyError(rsa.toString())).toMatch(/expected an EC/);
   });
 });
 

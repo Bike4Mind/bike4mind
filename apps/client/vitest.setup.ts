@@ -75,6 +75,11 @@ vi.mock('sst', () => ({
     GITHUB_LAKE_APP_PRIVATE_KEY: { value: 'test-github-lake-app-private-key' },
     GITHUB_LAKE_APP_SLUG: { value: 'test-lake-app' },
     GITHUB_LAKE_APP_WEBHOOK_SECRET: { value: 'test-github-lake-app-webhook-secret' },
+    // Push stays off unless a suite opts in (APNS_* env, or a mocked pushDelivery module).
+    APNS_KEY_ID: { value: 'not-configured' },
+    APNS_TEAM_ID: { value: 'not-configured' },
+    APNS_KEY: { value: 'not-configured' },
+    APNS_TOPIC: { value: 'not-configured' },
     githubLakeIngestQueue: { url: 'https://sqs.test/githubLakeIngestQueue' },
     githubLakeRevokeQueue: { url: 'https://sqs.test/githubLakeRevokeQueue' },
     GITHUB_MCP_CLIENT_ID: { value: 'test-github-mcp-client-id' },

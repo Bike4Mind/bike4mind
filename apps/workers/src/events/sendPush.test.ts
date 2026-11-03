@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { generateKeyPairSync } from 'node:crypto';
 import type { EventBridgeEvent } from 'aws-lambda';
 import type { PushNotificationEvent } from '@bike4mind/common';
 
@@ -39,7 +40,7 @@ vi.mock('@bike4mind/database', () => ({
 import { deliverPush, handler, loadPushRecipient, REDACTED_PUSH_COPY, type SendPushDeps } from './sendPush';
 import type { ApnsRequest, ApnsResponse } from './sendPush.apns';
 
-const logger = { info: vi.fn(), warn: vi.fn() };
+const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
 const EVENT: PushNotificationEvent = {
   userId: '507f1f77bcf86cd799439011',
@@ -165,6 +166,44 @@ describe('deliverPush', () => {
     }
   );
 
+  it('does not prune on DeviceTokenNotForTopic: it is a wrong APNS_TOPIC, reported once at error', async () => {
+    const { deps, removed } = makeDeps(
+      [
+        { token: 'tok-a', environment: 'production' },
+        { token: 'tok-b', environment: 'production' },
+      ],
+      { respond: () => ({ status: 400, reason: 'DeviceTokenNotForTopic' }) }
+    );
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toEqual({
+      status: 'sent',
+      delivered: 0,
+      pruned: 0,
+      failed: 2,
+    });
+    expect(removed).toEqual([]);
+    expect(deps.tokens.removeByToken).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining('server configuration'),
+      expect.objectContaining({ reason: 'DeviceTokenNotForTopic', likelyCause: expect.stringContaining('APNS_TOPIC') })
+    );
+  });
+
+  it.each([
+    [{ status: 403, reason: 'InvalidProviderToken' }, 'APNS_KEY_ID'],
+    [{ status: 403, reason: 'ExpiredProviderToken' }, 'clock'],
+    [{ status: 403, reason: 'SomeFutureAuthReason' }, 'provider credentials'],
+  ])('treats a 403 (%o) as a config error: error log, no retry, no prune', async (response, cause) => {
+    const { deps } = makeDeps([{ token: 'tok-a', environment: 'production' }], { respond: () => response });
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toMatchObject({ delivered: 0, pruned: 0, failed: 1 });
+    expect(deps.tokens.removeByToken).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledExactlyOnceWith(
+      expect.any(String),
+      expect.objectContaining({ status: 403, likelyCause: expect.stringContaining(cause) })
+    );
+  });
+
   it('replaces title and body with category-generic copy when the organization redacts', async () => {
     const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }], {
       loadRecipient: vi.fn(async () => ({ preferences: undefined, redactContent: true })),
@@ -251,6 +290,9 @@ describe('loadPushRecipient', () => {
 });
 
 describe('handler', () => {
+  const VALID_KEY_PEM = generateKeyPairSync('ec', { namedCurve: 'P-256' })
+    .privateKey.export({ type: 'pkcs8', format: 'pem' })
+    .toString();
   const APNS_ENV = ['APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY', 'APNS_TOPIC'] as const;
   const saved: Partial<Record<(typeof APNS_ENV)[number], string>> = {};
 
@@ -279,11 +321,36 @@ describe('handler', () => {
     expect(h.findByUser).not.toHaveBeenCalled();
   });
 
+  it("treats the secrets' 'not-configured' placeholder as unset", async () => {
+    Object.assign(process.env, {
+      APNS_KEY_ID: 'not-configured',
+      APNS_TEAM_ID: 'not-configured',
+      APNS_KEY: 'not-configured',
+      APNS_TOPIC: 'not-configured',
+    });
+
+    await expect(handler(bridgeEvent)).resolves.toBeUndefined();
+    expect(h.withEventContextInner).not.toHaveBeenCalled();
+  });
+
+  it('consumes the event without retrying or reading the database when APNS_KEY is not a usable PEM', async () => {
+    Object.assign(process.env, {
+      APNS_KEY_ID: 'K',
+      APNS_TEAM_ID: 'T',
+      APNS_KEY: '-----BEGIN PRIVATE KEY-----\\nnot-a-key\\n-----END PRIVATE KEY-----',
+      APNS_TOPIC: 'com.example.client',
+    });
+
+    await expect(handler(bridgeEvent)).resolves.toBeUndefined();
+    expect(h.withEventContextInner).not.toHaveBeenCalled();
+    expect(h.findByUser).not.toHaveBeenCalled();
+  });
+
   it('delivers through the configured path when every APNS_* value is set', async () => {
     Object.assign(process.env, {
       APNS_KEY_ID: 'K',
       APNS_TEAM_ID: 'T',
-      APNS_KEY: 'unused',
+      APNS_KEY: VALID_KEY_PEM,
       APNS_TOPIC: 'com.example.client',
     });
     h.findByUser.mockResolvedValue([]);

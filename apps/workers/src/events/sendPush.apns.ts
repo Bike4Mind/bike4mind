@@ -1,6 +1,7 @@
 import http2 from 'node:http2';
 import { createPrivateKey, sign } from 'node:crypto';
 import type { PushTokenEnvironment } from '@bike4mind/database';
+import { readApnsCredentials, type ApnsCredentials } from '@bike4mind/server-utils/utils/pushDelivery';
 
 /**
  * Minimal APNs provider client: HTTP/2 to Apple's gateway with token (.p8) auth. Built on node:http2 and
@@ -8,14 +9,8 @@ import type { PushTokenEnvironment } from '@bike4mind/database';
  * the whole protocol surface used here is one POST per device token.
  */
 
-export type ApnsConfig = {
-  keyId: string;
-  teamId: string;
-  /** PKCS#8 PEM of the .p8 signing key. */
-  key: string;
-  /** The client's bundle id, sent as apns-topic. */
-  topic: string;
-};
+/** Credentials resolved by readApnsCredentials (packages/server-utils/src/utils/pushDelivery.ts). */
+export type ApnsConfig = ApnsCredentials;
 
 export const APNS_HOSTS: Record<PushTokenEnvironment, string> = {
   production: 'https://api.push.apple.com',
@@ -23,16 +18,24 @@ export const APNS_HOSTS: Record<PushTokenEnvironment, string> = {
 };
 
 /**
- * Null unless all four APNS_* values are set: an unconfigured deployment (preview, self-host) no-ops.
- * APNS_KEY may arrive with literal `\n` escapes when set through a single-line env value.
+ * Null unless all four APNS_* values are set (secret, else env; 'not-configured' counts as unset):
+ * an unconfigured deployment (preview, self-host without push) no-ops.
  */
-export function readApnsConfig(env: NodeJS.ProcessEnv = process.env): ApnsConfig | null {
-  const keyId = env.APNS_KEY_ID?.trim();
-  const teamId = env.APNS_TEAM_ID?.trim();
-  const key = env.APNS_KEY?.trim().replace(/\\n/g, '\n');
-  const topic = env.APNS_TOPIC?.trim();
-  if (!keyId || !teamId || !key || !topic) return null;
-  return { keyId, teamId, key, topic };
+export const readApnsConfig = readApnsCredentials;
+
+/**
+ * The reason APNS_KEY cannot be used as an ES256 signing key, or null when it can. Checked once per
+ * invocation so a malformed PEM is reported as configuration, not retried per device as a transient
+ * request failure.
+ */
+export function apnsSigningKeyError(key: string): string | null {
+  try {
+    const parsed = createPrivateKey(key);
+    if (parsed.asymmetricKeyType !== 'ec') return `expected an EC (P-256) key, got ${parsed.asymmetricKeyType}`;
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
 }
 
 const base64url = (input: string | Buffer) => Buffer.from(input).toString('base64url');

@@ -43,7 +43,7 @@ const HANDLERS: Record<string, EventHandler> = {
   'session.context_summarize': sessionContextSummarizationHandler,
   'session.tag': sessionTaggingHandler,
   'notebook.curation.start': notebookCurationHandler,
-  // No-ops unless the APNS_* env is set on the worker (see sendPush's handler).
+  // No-ops unless all four APNS_* values are set (see readApnsCredentials in server-utils pushDelivery).
   'notification.push': sendPushHandler,
 };
 

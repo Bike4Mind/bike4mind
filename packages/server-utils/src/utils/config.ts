@@ -67,6 +67,11 @@ const Config = {
     'GITHUB_LAKE_APP_WEBHOOK_SECRET',
     () => Resource.GITHUB_LAKE_APP_WEBHOOK_SECRET.value
   ),
+  // APNs push delivery; resolved (and 'not-configured' rejected) by readApnsCredentials in ./pushDelivery.
+  APNS_KEY_ID: readOptionalSecret('APNS_KEY_ID', () => Resource.APNS_KEY_ID.value),
+  APNS_TEAM_ID: readOptionalSecret('APNS_TEAM_ID', () => Resource.APNS_TEAM_ID.value),
+  APNS_KEY: readOptionalSecret('APNS_KEY', () => Resource.APNS_KEY.value),
+  APNS_TOPIC: readOptionalSecret('APNS_TOPIC', () => Resource.APNS_TOPIC.value),
   STRIPE_WEBHOOK_SECRET: Resource.STRIPE_WEBHOOK_SECRET.value,
   STRIPE_SECRET_KEY: Resource.STRIPE_SECRET_KEY.value,
   STRIPE_PUBLISHABLE_KEY: Resource.STRIPE_PUBLISHABLE_KEY.value,

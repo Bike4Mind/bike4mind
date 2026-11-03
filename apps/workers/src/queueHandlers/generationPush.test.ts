@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@server/utils/eventBus', () => ({ NotificationEvents: { Push: { publish: vi.fn() } } }));
+const pushDelivery = vi.hoisted(() => ({ configured: true }));
+vi.mock('@bike4mind/server-utils/utils/pushDelivery', () => ({
+  isPushDeliveryConfigured: () => pushDelivery.configured,
+}));
 
 import { publishGenerationJobReadyPush, publishImageQuestReadyPush } from './generationPush';
 
@@ -25,7 +29,18 @@ function jobDeps(job: unknown) {
 }
 
 describe('publishGenerationJobReadyPush', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pushDelivery.configured = true;
+  });
+
+  it('reads nothing and publishes nothing while push delivery is unconfigured', async () => {
+    pushDelivery.configured = false;
+    const deps = jobDeps(videoJob);
+    await publishGenerationJobReadyPush('job-1', deps, logger);
+    expect(deps.findJob).not.toHaveBeenCalled();
+    expect(deps.publish).not.toHaveBeenCalled();
+  });
 
   it('publishes generation_ready for a succeeded video job, collapsed per job', async () => {
     const deps = jobDeps(videoJob);

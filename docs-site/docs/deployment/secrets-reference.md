@@ -255,6 +255,28 @@ Webhook URL: `https://app.yourdomain.com/api/stripe/webhook`
 
 ---
 
+## Push Notifications (Optional)
+
+APNs push delivery for first-party native clients, using token-based (`.p8`) authentication. Each secret defaults to `not-configured`; leave any one of them unset and push is off end to end (no events are published and the delivery handler no-ops).
+
+| Secret | Description |
+|--------|-------------|
+| `APNS_KEY_ID` | Key ID of the APNs authentication key |
+| `APNS_TEAM_ID` | Apple Developer team ID |
+| `APNS_KEY` | Contents of the `.p8` private key (PEM; newlines may be escaped as `\n`) |
+| `APNS_TOPIC` | Bundle ID of the native client, sent as `apns-topic` |
+
+```bash
+pnpm sst secret set APNS_KEY_ID <key-id> --stage <stage>
+pnpm sst secret set APNS_TEAM_ID <team-id> --stage <stage>
+pnpm sst secret set APNS_KEY "$(cat AuthKey_<key-id>.p8)" --stage <stage>
+pnpm sst secret set APNS_TOPIC <bundle-id> --stage <stage>
+```
+
+A wrong key, team, key ID or topic is logged at error level by the delivery handler as a server configuration error; registered device tokens are not deleted because of it.
+
+---
+
 ## Slack Integration (Optional)
 
 | Secret | Description |

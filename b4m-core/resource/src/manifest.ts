@@ -8,6 +8,11 @@ export const DEFAULT_MANIFEST = {
   // core boot secrets (JWT/session/encryption/Mongo) are hard-required.
   ANTHROPIC_ADMIN_API_KEY: { kind: 'secret', optional: true },
   ANTHROPIC_API_KEY: { kind: 'secret', optional: true },
+  // APNs push delivery for first-party native clients; any one unset disables push.
+  APNS_KEY: { kind: 'secret', optional: true },
+  APNS_KEY_ID: { kind: 'secret', optional: true },
+  APNS_TEAM_ID: { kind: 'secret', optional: true },
+  APNS_TOPIC: { kind: 'secret', optional: true },
   B4M_ANALYTICS_ENABLED: { kind: 'secret', optional: true },
   // Shared-secret bearer for the frontend -> ChatCompletion /process dispatch. Required:
   // chat dispatch fails closed (401) without it. Distinct from SECRET_ENCRYPTION_KEY.

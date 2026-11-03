@@ -1,10 +1,15 @@
 import { PushNotificationEventSchema, type PushNotificationEvent } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
+import { isPushDeliveryConfigured } from '@bike4mind/server-utils/utils/pushDelivery';
 import { NotificationEvents } from './eventBus';
+
+export { isPushDeliveryConfigured };
 
 /**
  * Publish-side helpers for `notification.push` (delivered by apps/workers/src/events/sendPush.ts).
  * Every publisher sits on a terminal seam of some other piece of work, so nothing here may throw.
+ * Each publisher also checks isPushDeliveryConfigured() before any lookup it makes for the event, so a
+ * deployment without APNs credentials spends no database read and no EventBridge call on push.
  */
 
 /**
@@ -21,11 +26,12 @@ export function appRootDeepLink(): string {
   return (process.env.APP_URL ?? '').replace(/\/+$/, '') || '/';
 }
 
-/** Validates and publishes; a failure is logged at warn and swallowed. */
+/** Validates and publishes; a failure is logged at warn and swallowed. A no-op while push is unconfigured. */
 export async function publishPushNotification(
   event: PushNotificationEvent,
   logger: Pick<Logger, 'warn'>
 ): Promise<void> {
+  if (!isPushDeliveryConfigured()) return;
   try {
     await NotificationEvents.Push.publish(PushNotificationEventSchema.parse(event));
   } catch (error) {

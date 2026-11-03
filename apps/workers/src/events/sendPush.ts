@@ -15,7 +15,7 @@ import { Logger } from '@bike4mind/observability';
 import { withEventContext } from '@workers/utils/eventContext';
 import { NotificationEvents } from '@server/utils/eventBus';
 import { truncateForPush } from '@server/utils/pushNotifications';
-import { createHttp2ApnsTransport, readApnsConfig, type ApnsTransport } from './sendPush.apns';
+import { apnsSigningKeyError, createHttp2ApnsTransport, readApnsConfig, type ApnsTransport } from './sendPush.apns';
 
 /**
  * `notification.push` consumer: delivers to the user's device tokens over APNs.
@@ -32,7 +32,29 @@ import { createHttp2ApnsTransport, readApnsConfig, type ApnsTransport } from './
  */
 
 /** Responses meaning the token will never work again; the row is deleted. */
-const PRUNE_REASONS = new Set(['Unregistered', 'BadDeviceToken', 'DeviceTokenNotForTopic']);
+const PRUNE_REASONS = new Set(['Unregistered', 'BadDeviceToken']);
+
+/**
+ * Rejections caused by this server's APNs configuration rather than by the device token, with the
+ * likely cause. They are logged at error, consumed (no retry: a redelivery would fail the same way)
+ * and never prune: DeviceTokenNotForTopic in particular means a wrong APNS_TOPIC, and deleting on it
+ * would wipe every registered token on one bad deploy.
+ */
+const CONFIG_ERROR_HINTS: Record<string, string> = {
+  DeviceTokenNotForTopic: 'APNS_TOPIC does not match the bundle id the device tokens were issued for',
+  TopicDisallowed: 'APNS_TOPIC is not allowed for this APNs key',
+  InvalidProviderToken: 'APNS_KEY_ID, APNS_TEAM_ID or APNS_KEY is wrong (Apple rejected the provider token)',
+  ExpiredProviderToken: 'the provider token was rejected as expired; check the server clock',
+  MissingProviderToken: 'no provider token was sent',
+};
+const PROVIDER_AUTH_HINT = 'APNs refused the provider credentials; check APNS_KEY_ID, APNS_TEAM_ID and APNS_KEY';
+
+function configErrorHint(response: { status: number; reason?: string }): string | undefined {
+  if (response.reason && CONFIG_ERROR_HINTS[response.reason]) return CONFIG_ERROR_HINTS[response.reason];
+  // Every 403 is an authentication failure of the provider, never a per-device condition.
+  if (response.status === 403) return PROVIDER_AUTH_HINT;
+  return undefined;
+}
 
 // APNs caps apns-collapse-id at 64 bytes; ids here are ASCII.
 const MAX_COLLAPSE_ID_LENGTH = 64;
@@ -75,7 +97,7 @@ export type PushDeliveryResult =
 export async function deliverPush(
   event: PushNotificationEvent,
   deps: SendPushDeps,
-  logger: Pick<Logger, 'info' | 'warn'>
+  logger: Pick<Logger, 'info' | 'warn' | 'error'>
 ): Promise<PushDeliveryResult> {
   const tokens = await deps.tokens.findByUser(event.userId, 'device');
   if (tokens.length === 0) {
@@ -105,6 +127,7 @@ export async function deliverPush(
   let pruned = 0;
   let failed = 0;
   let retryable = 0;
+  const configErrors = new Map<string, { status: number; hint: string }>();
   await Promise.all(
     tokens.map(async ({ token, environment }) => {
       try {
@@ -114,6 +137,11 @@ export async function deliverPush(
           return;
         }
         failed++;
+        const hint = configErrorHint(response);
+        if (hint) {
+          configErrors.set(response.reason ?? String(response.status), { status: response.status, hint });
+          return;
+        }
         if (response.status === 410 || (response.reason && PRUNE_REASONS.has(response.reason))) {
           if (await deps.tokens.removeByToken(token)) pruned++;
           return;
@@ -135,6 +163,15 @@ export async function deliverPush(
     })
   );
 
+  // One error per invocation, not per device: the cause is the deployment, and every token shares it.
+  for (const [reason, { status, hint }] of configErrors) {
+    logger.error('[Push] APNs rejected the server configuration; push delivery is not working', {
+      status,
+      reason,
+      likelyCause: hint,
+      category: event.category,
+    });
+  }
   logger.info('[Push] delivery finished', { category: event.category, delivered, pruned, failed });
   // Retry (and finally dead-letter) only when nothing landed and every failure may be transient. A
   // partial success is not retried: collapse-id would absorb the repeat, but APNs would still bill the
@@ -209,12 +246,22 @@ const handleWithContext = withEventContext(async (event, logger) => {
 });
 
 /**
- * Checked before withEventContext so an unconfigured deployment (preview, self-host) consumes the event
- * without opening a database connection.
+ * Checked before withEventContext so an unconfigured or misconfigured deployment (preview, self-host,
+ * a malformed APNS_KEY) consumes the event without opening a database connection.
  */
 export const handler = async (event: EventBridgeEvent<string, unknown>): Promise<void> => {
-  if (!readApnsConfig()) {
+  const config = readApnsConfig();
+  if (!config) {
     new Logger({ metadata: { handler: 'sendPush' } }).info('[Push] APNs is not configured; skipping');
+    return;
+  }
+  const keyError = apnsSigningKeyError(config.key);
+  if (keyError) {
+    // Consumed rather than thrown: a retry cannot fix a bad secret, and would only fill the DLQ.
+    new Logger({ metadata: { handler: 'sendPush' } }).error(
+      '[Push] APNS_KEY is not a usable .p8 signing key (server configuration error); push delivery is disabled',
+      { error: keyError }
+    );
     return;
   }
   await handleWithContext(event);

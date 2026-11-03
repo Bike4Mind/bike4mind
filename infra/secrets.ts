@@ -47,6 +47,14 @@ export const secrets = {
   // HMAC secret for the App's single webhook (pages/api/webhooks/github/lake.ts: pushes and
   // installation revokes); unset means deliveries are refused.
   GITHUB_LAKE_APP_WEBHOOK_SECRET: new sst.Secret('GITHUB_LAKE_APP_WEBHOOK_SECRET', 'not-configured'),
+  // APNs push delivery for first-party native clients (token auth). Any one left on 'not-configured'
+  // disables push end to end: publishers skip the event and the sendPush consumer no-ops
+  // (packages/server-utils/src/utils/pushDelivery.ts). APNS_KEY is the .p8 PEM, newlines kept or
+  // escaped as \n; APNS_TOPIC is the client's bundle id.
+  APNS_KEY_ID: new sst.Secret('APNS_KEY_ID', 'not-configured'),
+  APNS_TEAM_ID: new sst.Secret('APNS_TEAM_ID', 'not-configured'),
+  APNS_KEY: new sst.Secret('APNS_KEY', 'not-configured'),
+  APNS_TOPIC: new sst.Secret('APNS_TOPIC', 'not-configured'),
   STRIPE_SECRET_KEY: new sst.Secret('STRIPE_SECRET_KEY', 'not-configured'),
   STRIPE_PUBLISHABLE_KEY: new sst.Secret('STRIPE_PUBLISHABLE_KEY', 'not-configured'),
   STRIPE_WEBHOOK_SECRET: new sst.Secret('STRIPE_WEBHOOK_SECRET', 'not-configured'),

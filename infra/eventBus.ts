@@ -120,8 +120,9 @@ export const emailSendSubscription = eventBus.subscribe(
 emailEventsDeadLetter.allowRules([emailSendSubscription]);
 
 // Push notifications to first-party native clients (apps/workers/src/events/sendPush.ts).
-// The APNS_* values are deploy-time env config, never committed; with any of them unset the
-// handler consumes events as a no-op, so stages without push credentials need nothing here.
+// The APNS_* credentials are sst.Secrets (infra/secrets.ts, linked through allSecrets) defaulting to
+// 'not-configured'; with any of them unset the handler consumes events as a no-op, so stages without
+// push credentials need nothing here.
 const pushEventsDLQ = new sst.aws.Queue('pushEventsDLQ', {
   transform: {
     queue: {
@@ -143,10 +144,6 @@ export const notificationPushSubscription = eventBus.subscribe(
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
-      APNS_KEY_ID: process.env.APNS_KEY_ID || '',
-      APNS_TEAM_ID: process.env.APNS_TEAM_ID || '',
-      APNS_KEY: process.env.APNS_KEY || '',
-      APNS_TOPIC: process.env.APNS_TOPIC || '',
     },
     permissions: [pushEventsDeadLetter.sendPermission],
     transform: pushEventsDeadLetter.functionTarget,

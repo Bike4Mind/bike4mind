@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@server/utils/eventBus', () => ({ NotificationEvents: { Push: { publish: vi.fn() } } }));
+const pushDelivery = vi.hoisted(() => ({ configured: true }));
+vi.mock('@bike4mind/server-utils/utils/pushDelivery', () => ({
+  isPushDeliveryConfigured: () => pushDelivery.configured,
+}));
 
 import { publishChatCompletedPush } from './questProcessor.push';
 
@@ -25,7 +29,19 @@ function makeDeps({
 }
 
 describe('publishChatCompletedPush connection gating', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pushDelivery.configured = true;
+  });
+
+  it('reads nothing and publishes nothing while push delivery is unconfigured', async () => {
+    pushDelivery.configured = false;
+    const deps = makeDeps();
+    await publishChatCompletedPush(turn, deps, logger);
+    expect(deps.connections.findByUserId).not.toHaveBeenCalled();
+    expect(deps.findQuest).not.toHaveBeenCalled();
+    expect(deps.publish).not.toHaveBeenCalled();
+  });
 
   it('pushes the finished reply to a user with no live connection', async () => {
     const deps = makeDeps();

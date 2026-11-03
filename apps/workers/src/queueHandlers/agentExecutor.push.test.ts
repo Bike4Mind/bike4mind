@@ -1,4 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const pushDelivery = vi.hoisted(() => ({ configured: true }));
+vi.mock('@bike4mind/server-utils/utils/pushDelivery', () => ({
+  isPushDeliveryConfigured: () => pushDelivery.configured,
+}));
+
 import { publishAgentTerminalPush, withAgentTerminalPush, type AgentPushDeps } from './agentExecutor.push';
 
 const EXECUTION = {
@@ -19,7 +25,22 @@ function makeDeps(execution: Awaited<ReturnType<AgentPushDeps['findExecution']>>
 }
 
 describe('withAgentTerminalPush', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pushDelivery.configured = true;
+  });
+
+  it('returns the sender unwrapped while push delivery is unconfigured', async () => {
+    pushDelivery.configured = false;
+    const deps = makeDeps();
+    const raw = vi.fn(async () => undefined);
+    const sendWs = withAgentTerminalPush(raw, deps, logger);
+
+    expect(sendWs).toBe(raw);
+    await publishAgentTerminalPush({ executionId: 'exec-1', outcome: 'completed' }, deps, logger);
+    expect(deps.findExecution).not.toHaveBeenCalled();
+    expect(deps.publish).not.toHaveBeenCalled();
+  });
 
   it('publishes agent_completed after the completed frame is sent', async () => {
     const order: string[] = [];

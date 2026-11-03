@@ -1,6 +1,6 @@
 import type { IGenerationJobDocument, PushNotificationEvent } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { hasLiveConnection, truncateForPush } from '@server/utils/pushNotifications';
+import { hasLiveConnection, isPushDeliveryConfigured, truncateForPush } from '@server/utils/pushNotifications';
 
 /**
  * `generation_ready` pushes from the generation queue handlers (generationJob.ts, imageGeneration.ts,
@@ -32,6 +32,7 @@ export async function publishGenerationJobReadyPush(
   deps: GenerationJobPushDeps,
   logger: Pick<Logger, 'warn'>
 ): Promise<void> {
+  if (!isPushDeliveryConfigured()) return;
   try {
     const job = await deps.findJob(jobId);
     if (!job || job.state !== 'succeeded' || job.delivery) return;
@@ -75,6 +76,7 @@ export async function publishImageQuestReadyPush(
 ): Promise<void> {
   const { questId, userId, sessionId } = body;
   if (typeof questId !== 'string' || typeof userId !== 'string' || typeof sessionId !== 'string') return;
+  if (!isPushDeliveryConfigured()) return;
   try {
     if (await hasLiveConnection(userId, deps.connections, logger)) return;
     const quest = await deps.findQuest(questId);

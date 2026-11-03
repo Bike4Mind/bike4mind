@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({ publish: vi.fn() }));
 vi.mock('./eventBus', () => ({ NotificationEvents: { Push: { publish: h.publish } } }));
+const pushDelivery = vi.hoisted(() => ({ configured: true }));
+vi.mock('@bike4mind/server-utils/utils/pushDelivery', () => ({
+  isPushDeliveryConfigured: () => pushDelivery.configured,
+}));
 
 import { appRootDeepLink, publishPushNotification, sessionDeepLink, truncateForPush } from './pushNotifications';
 
@@ -34,7 +38,18 @@ describe('deep links', () => {
 });
 
 describe('publishPushNotification', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pushDelivery.configured = true;
+  });
+
+  it('publishes nothing while push delivery is unconfigured', async () => {
+    pushDelivery.configured = false;
+    const logger = { warn: vi.fn() };
+    await publishPushNotification(event, logger);
+    expect(h.publish).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
 
   it('publishes a valid event', async () => {
     await publishPushNotification(event, { warn: vi.fn() });

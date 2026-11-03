@@ -101,7 +101,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'event:infra/eventBus.ts:notification-push',
-    '0126404f0cab50beddd30816dd5d93377d03854d2ae839c6bb05a669947b1a0c',
+    '09098d1d0e2b2d936ed6f320b59a9f62491e538c5f54a8d14c70bf54943e99d6',
     {
       source: 'apps/workers/src/selfhost/eventDispatch.ts',
       symbol: 'event:notification.push',
@@ -1158,7 +1158,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    'b1f5941e735ef671ffa74b62754c802ca0d98f047c1b311c0e6cad1549d838dd',
+    'fd9b66ff59ecf1f9eeadfb25593c058e9c24d711e40ea0e1bc87ecaa8f2cae28',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gap('service:infra/searxng.ts:Searxng', '16fc0b23bc4d075e5c4e98cbb502ff6dfc37aac7fbf9bd4f7429cd4202b2f370'),

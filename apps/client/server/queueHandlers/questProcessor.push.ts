@@ -1,6 +1,6 @@
 import type { PushNotificationEvent } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { hasLiveConnection, truncateForPush } from '@server/utils/pushNotifications';
+import { hasLiveConnection, isPushDeliveryConfigured, truncateForPush } from '@server/utils/pushNotifications';
 
 export type ChatCompletedPushDeps = {
   connections: { findByUserId(userId: string): Promise<unknown[]> };
@@ -20,7 +20,7 @@ export async function publishChatCompletedPush(
   deps: ChatCompletedPushDeps,
   logger: Pick<Logger, 'warn'>
 ): Promise<void> {
-  if (turn.apiKeyId) return;
+  if (turn.apiKeyId || !isPushDeliveryConfigured()) return;
   try {
     if (await hasLiveConnection(turn.userId, deps.connections, logger)) return;
     const quest = await deps.findQuest(turn.questId);

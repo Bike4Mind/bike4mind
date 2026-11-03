@@ -1,6 +1,6 @@
 import type { PushNotificationEvent } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { truncateForPush } from '@server/utils/pushNotifications';
+import { isPushDeliveryConfigured, truncateForPush } from '@server/utils/pushNotifications';
 
 /**
  * Agent-run push notifications (`agent_completed` / `agent_failed`), published from the run's terminal
@@ -38,6 +38,7 @@ export async function publishAgentTerminalPush(
   logger: Pick<Logger, 'warn'>
 ): Promise<void> {
   if (args.outcome === 'failed' && args.reason === 'aborted') return;
+  if (!isPushDeliveryConfigured()) return;
   try {
     const execution = await deps.findExecution(args.executionId);
     if (!execution || execution.parentExecutionId || execution.spawnedByExecutionId || execution.dagNodeId) return;
@@ -67,8 +68,10 @@ export async function publishAgentTerminalPush(
  * Wraps a run's websocket sender: after a `completed` or `failed` frame is sent, the matching push is
  * published for the execution the frame names. The frame goes first and its own error handling is
  * unchanged; the push is awaited (a Lambda may freeze an unawaited promise) but cannot throw.
+ * With push unconfigured the sender is returned as-is.
  */
 export function withAgentTerminalPush(sendWs: SendWs, deps: AgentPushDeps, logger: Pick<Logger, 'warn'>): SendWs {
+  if (!isPushDeliveryConfigured()) return sendWs;
   return async (action, payload = {}) => {
     await sendWs(action, payload);
     if (action !== 'completed' && action !== 'failed') return;
