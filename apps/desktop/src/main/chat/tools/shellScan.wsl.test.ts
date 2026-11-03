@@ -174,14 +174,19 @@ describe('a script that names the home folder before the distro has said where i
     distroUser.current = { path: '/usr/bin', home: '/home/me' };
   });
 
-  it.each(['cat ~/notes.txt', 'cat $HOME/notes.txt', 'cat ~me/notes.txt', 'cd', 'cd ~ && ls', 'echo hi > ~/out.txt'])(
-    'gets no scan for %s, so it is asked about with nothing to remember',
-    async command => {
-      distroUser.current = null;
+  it.each([
+    'cat ~/notes.txt',
+    'cat $HOME/notes.txt',
+    'cat ~me/notes.txt',
+    'cd',
+    'cd ~ && ls',
+    'echo hi > ~/out.txt',
+    'grep --file=~/patterns x',
+  ])('gets no scan for %s, so it is asked about with nothing to remember', async command => {
+    distroUser.current = null;
 
-      expect(await scanShell(command, root, [root])).toBeNull();
-    }
-  );
+    expect(await scanShell(command, root, [root])).toBeNull();
+  });
 
   it('still scans a script that never names the home folder', async () => {
     distroUser.current = null;
