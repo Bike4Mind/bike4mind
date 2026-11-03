@@ -249,10 +249,12 @@ function SpecsFields({
   };
   const placeholder = (bytes: number | null | undefined) =>
     bytes ? String(Math.round((bytes / 1024 ** 3) * 10) / 10) : undefined;
-  // A model held in discrete GPU memory is rated against that memory's bandwidth, not the system RAM's.
+  // A model held in discrete GPU memory is rated against that memory's bandwidth, not the system RAM's. A GPU whose
+  // memory is unknown is not used, so its bandwidth is not asked for.
   const sharedMemory = server.local ? probed?.memoryKind === 'unified' : draft.unified;
   const gpuBandwidth =
-    !sharedMemory && (draft.gpu.trim() !== '' || (server.local && probed?.memoryKind === 'discrete'));
+    !sharedMemory &&
+    ((parsed(draft.gpu) ?? 0) > 0 || (server.local && probed?.memoryKind === 'discrete' && !!probed.gpuMemoryBytes));
   const field = (key: 'ram' | 'gpu' | 'bandwidth', label: string, testId: string, hint?: string) => (
     <FormControl size="sm" sx={{ flex: 1, minWidth: 130 }}>
       <FormLabel>{label}</FormLabel>

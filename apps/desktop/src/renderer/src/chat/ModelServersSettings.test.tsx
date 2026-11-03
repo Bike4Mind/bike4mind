@@ -373,6 +373,21 @@ describe('ModelServersSettings hardware', () => {
     expect(bandwidthLabel()).toBe(label);
   });
 
+  it('asks for the GPU memory bandwidth of this computer only once a discrete GPU has a known memory size', async () => {
+    probedHardware.mockResolvedValueOnce({
+      memoryKind: 'discrete',
+      totalMemoryBytes: 62 * 1024 ** 3,
+      gpuMemoryBytes: null,
+      gpuName: 'Test GPU',
+      confidence: 'low',
+    });
+    await show({ ...saved('ollama', 'manage'), id: 'local', name: 'This computer', local: true });
+    await click('model-servers-specs-btn');
+    expect(bandwidthLabel()).toBe('Memory bandwidth (GB/s)');
+    await type('model-servers-specs-gpu-input', '16');
+    expect(bandwidthLabel()).toBe('GPU memory bandwidth (GB/s)');
+  });
+
   it('asks for RAM before saving GPU memory for a saved server', async () => {
     await show(saved('ollama', 'manage'));
     await click('model-servers-specs-btn');
