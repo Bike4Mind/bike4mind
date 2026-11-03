@@ -28,7 +28,7 @@ const ModelName = 'WorkItem';
  */
 export const MAX_GRAPH_ITEMS = 2000;
 
-/** ponytail: candidate window for `findNextReadyForLoop`; a loop with more open tickets than this can starve the tail. */
+/** ponytail: candidate window for `listReadyForLoop`; a loop with more open tickets than this can starve the tail. */
 const LOOP_READY_CANDIDATES = 200;
 
 export interface IWorkItemModel extends Model<IWorkItem> {}
@@ -163,7 +163,7 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
   async releaseClaim(id: string): Promise<void> {
     await this.workItemModel.updateOne(
       { _id: id, status: 'in_progress' },
-      { $set: { status: 'open' }, $unset: { executionId: '' } }
+      { $set: { status: 'open' }, $unset: { executionId: '' }, $inc: { runCount: -1 } }
     );
   }
 
@@ -172,13 +172,14 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     return result?.toJSON() ?? null;
   }
 
-  async foldTicketRun(id: string, executionId: string, patch: WorkItemPatch): Promise<boolean> {
+  async foldTicketRun(id: string, executionId: string, patch: WorkItemPatch, uncount = false): Promise<boolean> {
     const { set, unset } = splitPatch(patch);
     const result = await this.workItemModel.updateOne(
       { _id: id, executionId, status: 'in_progress', deletedAt: null },
       {
         ...(Object.keys(set).length > 0 && { $set: set }),
         ...(Object.keys(unset).length > 0 && { $unset: unset }),
+        ...(uncount && { $inc: { runCount: -1 } }),
       }
     );
     return result.modifiedCount > 0;

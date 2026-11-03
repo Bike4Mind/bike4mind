@@ -169,7 +169,7 @@ export interface IWorkItemRepository extends IBaseRepository<IWorkItem> {
 
   setExecution(id: string, executionId: string): Promise<void>;
 
-  /** Undoes `claimForRun` when the run could not be started. */
+  /** Undoes `claimForRun` (its `runCount` increment too) when the run could not be started. */
   releaseClaim(id: string): Promise<void>;
 
   findByExecutionId(executionId: string): Promise<IWorkItem | null>;
@@ -177,8 +177,9 @@ export interface IWorkItemRepository extends IBaseRepository<IWorkItem> {
   /**
    * Applies a finished run's outcome, conditional on the ticket still being `in_progress` under that
    * run - so a run that set its own ticket's status is respected and a second fold is a no-op.
+   * `uncount` takes back the claim's `runCount` increment, for a run stopped by credits, not by the ticket.
    */
-  foldTicketRun(id: string, executionId: string, patch: WorkItemPatch): Promise<boolean>;
+  foldTicketRun(id: string, executionId: string, patch: WorkItemPatch, uncount?: boolean): Promise<boolean>;
 
   /** Moves a ticket blocked under `executionId` back to `in_progress`, for a run its owner resumed. */
   resumeBlockedRun(id: string, executionId: string): Promise<boolean>;

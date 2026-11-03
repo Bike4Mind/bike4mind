@@ -263,8 +263,9 @@ async function reconcileLoop(loop: ILoop, now: Date): Promise<void> {
   }
 
   if (execution?.failureReason === 'credit_cap') {
-    // Not the ticket's fault either, and not a failure: the next dispatch pauses or defers on the budgets.
-    if (ticket) await workItemRepository.foldTicketRun(ticket.id, executionId, { status: 'open' });
+    // Not the ticket's fault either, and not a failure. Not made due now: the interval and the pacing defer
+    // decide the next run, or a paced cap would turn into a one-iteration run every tick.
+    if (ticket) await workItemRepository.foldTicketRun(ticket.id, executionId, { status: 'open' }, true);
     const cap = Math.round((execution.creditCap ?? 0) * 100) / 100;
     await loopRepository.foldRun(loop.id, executionId, {
       $set: {
@@ -272,13 +273,12 @@ async function reconcileLoop(loop: ILoop, now: Date): Promise<void> {
         statusReason: `Last run stopped at its credit cap (${cap} credits)`,
       },
     });
-    if (ticket) await makeDueIfReady(loop, now);
     return;
   }
 
   if (execution?.failureReason === 'insufficient_credits') {
-    // Not the ticket's fault: it goes back to open, and the loop pauses.
-    if (ticket) await workItemRepository.foldTicketRun(ticket.id, executionId, { status: 'open' });
+    // Not the ticket's fault: it goes back to open (uncounted), and the loop pauses.
+    if (ticket) await workItemRepository.foldTicketRun(ticket.id, executionId, { status: 'open' }, true);
     const folded = await loopRepository.foldRun(loop.id, executionId, {
       $set: { lastRunAt: execution.completedAt ?? now },
     });

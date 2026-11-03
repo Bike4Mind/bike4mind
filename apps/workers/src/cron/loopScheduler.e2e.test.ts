@@ -495,6 +495,7 @@ describe('runLoopSchedulerTick - tickets', () => {
     const after = await ticketOf(ticket.id);
     expect(after.status).toBe('open');
     expect(after.executionId).toBeUndefined();
+    expect(after.runCount).toBe(0);
   });
 });
 
@@ -1098,14 +1099,16 @@ describe('runLoopSchedulerTick - safety and pacing', () => {
   it("returns a capped run's ticket to open without counting a failure, and says why on the loop", async () => {
     h.startAgentExecution.mockResolvedValue({ ok: false, reason: 'concurrent_limit' });
     const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
-    const ticket = await createTicket(loop.id, { status: 'in_progress', executionId: 'exec-0' });
+    const ticket = await createTicket(loop.id, { status: 'in_progress', executionId: 'exec-0', runCount: 1 });
     executions['exec-0'] = { status: 'failed', failureReason: 'credit_cap', creditCap: 12.5, error: { message: 'x' } };
 
     await runLoopSchedulerTick(NOW, logger);
 
-    expect(await ticketOf(ticket.id)).toMatchObject({ status: 'open' });
+    // Uncounted, and not made due now: the interval and pacing pick the next run.
+    expect(await ticketOf(ticket.id)).toMatchObject({ status: 'open', runCount: 0 });
     const after = await reload(loop.id);
     expect(after).toMatchObject({
+      nextRunAt: LATER,
       status: 'live',
       consecutiveFailures: 0,
       statusReason: 'Last run stopped at its credit cap (12.5 credits)',

@@ -203,7 +203,9 @@ describe('LoopRepository', () => {
     const backingOff = await create({ status: 'live', nextRunAt: far, idleStreak: 3 });
     const dueSooner = await create({ status: 'live', nextRunAt: now, idleStreak: 1 });
     const steady = await create({ status: 'live', nextRunAt: far });
-    for (const loop of [backingOff, dueSooner, steady]) await loopRepository.endBackoff(loop.id, soon);
+    const paused = await create({ status: 'paused', autoResume: 'budget', nextRunAt: far, idleStreak: 2 });
+    for (const loop of [backingOff, dueSooner, steady, paused]) await loopRepository.endBackoff(loop.id, soon);
+    expect(await loopRepository.findById(paused.id)).toMatchObject({ idleStreak: 2, nextRunAt: far });
     expect(await loopRepository.findById(backingOff.id)).toMatchObject({ idleStreak: 0, nextRunAt: soon });
     expect(await loopRepository.findById(dueSooner.id)).toMatchObject({ idleStreak: 0, nextRunAt: now });
     expect((await loopRepository.findById(steady.id))?.nextRunAt).toEqual(far);
@@ -245,8 +247,10 @@ describe('LoopRepository', () => {
     const live = await create({ status: 'live' });
     const owned = await create({ status: 'paused' });
     const theirs = await create({ status: 'live', userId: 'user-2' });
+    const running = await create({ status: 'live', activeExecutionId: 'exec-1' });
     const patch = { statusReason: 'r', autoResume: 'budget' as const, nextRunAt: at };
     expect(await loopRepository.pauseAllLiveForUser(USER, patch)).toBe(1);
+    expect((await loopRepository.findById(running.id))?.status).toBe('live');
     expect(await loopRepository.findById(live.id)).toMatchObject({ status: 'paused', ...patch });
     expect((await loopRepository.findById(owned.id))?.autoResume).toBeUndefined();
     expect((await loopRepository.findById(theirs.id))?.status).toBe('live');

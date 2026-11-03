@@ -123,6 +123,12 @@ describe('stopCappedIteration', () => {
     expect(deps.markFailed).not.toHaveBeenCalled();
   });
 
+  it('with no model price, runs until spend reaches the cap', async () => {
+    const deps = makeDeps();
+    await expect(stopCappedIteration({ ...capArgs(4, 5), modelInfo: undefined }, deps)).resolves.toBe(false);
+    await expect(stopCappedIteration({ ...capArgs(5, 5), modelInfo: undefined }, deps)).resolves.toBe(true);
+  });
+
   it('stops before an iteration that would cross the cap, as credit_cap', async () => {
     const deps = makeDeps();
     await expect(stopCappedIteration(capArgs(10, 10 + required() - 0.01), deps)).resolves.toBe(true);
@@ -213,7 +219,7 @@ describe('processExecution iteration-gate wiring', () => {
 
   it('checks the run credit cap before every iteration but the wake start, regardless of enforceCredits', () => {
     expect(loopSource).toContain(
-      'if (execution.creditCap != null && modelInfo && iterationIndex !== aggregationWakeStartIteration) {'
+      'if (execution.creditCap != null && iterationIndex !== aggregationWakeStartIteration) {'
     );
     expect(loopSource).toMatch(/const stopped = await stopCappedIteration\(/);
     expect(loopSource).toContain('creditCap: execution.creditCap,');

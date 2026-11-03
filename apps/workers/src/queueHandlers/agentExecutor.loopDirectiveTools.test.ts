@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { classifyToolPermission, LOOP_DIRECTIVE_TOOL_NAMES, LOOP_OVERSEER_TOOL_NAMES } from '@bike4mind/common';
 
-const loops = vi.hoisted(() => ({ findByIdAndUserId: vi.fn(), updateForUser: vi.fn(), endBackoff: vi.fn() }));
+const loops = vi.hoisted(() => ({
+  findByIdAndUserId: vi.fn(),
+  updateForUser: vi.fn(),
+  endBackoff: vi.fn().mockResolvedValue(undefined),
+}));
 const directives = vi.hoisted(() => ({
   create: vi.fn(),
   countByExecution: vi.fn(),

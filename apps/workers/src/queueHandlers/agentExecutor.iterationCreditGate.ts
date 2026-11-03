@@ -100,7 +100,9 @@ export async function stopUnfundedIteration(
   return true;
 }
 
-export interface IterationCapGateArgs extends Omit<IterationCreditGateArgs, 'readBalance'> {
+export interface IterationCapGateArgs extends Omit<IterationCreditGateArgs, 'readBalance' | 'modelInfo'> {
+  /** Unknown model: the next iteration is priced at 0, so the run stops once its spend reaches the cap. */
+  modelInfo: ModelInfo | null | undefined;
   /** The run's `creditCap`, set by the loop scheduler at dispatch. */
   creditCap: number;
   /** The run's live `totalCreditsUsed`, re-read so it includes the iteration that just settled. */
@@ -114,8 +116,8 @@ export interface IterationCapGateArgs extends Omit<IterationCreditGateArgs, 'rea
  */
 export async function stopCappedIteration(args: IterationCapGateArgs, deps: IterationCreditGateDeps): Promise<boolean> {
   const spent = await args.readSpent();
-  const next = nextIterationCredits(args.modelInfo, args.lastInputTokens);
-  if (spent + next <= args.creditCap) return false;
+  const next = args.modelInfo ? nextIterationCredits(args.modelInfo, args.lastInputTokens) : 0;
+  if (spent < args.creditCap && spent + next <= args.creditCap) return false;
 
   deps.logger.warn('[Credits] Next iteration could cross the run credit cap; stopping execution', {
     spent,

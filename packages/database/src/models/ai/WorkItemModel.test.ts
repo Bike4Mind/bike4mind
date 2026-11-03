@@ -472,11 +472,15 @@ describe('WorkItemRepository', () => {
       ]);
     });
 
-    it('claimForRun counts the runs that claimed a ticket', async () => {
+    it('claimForRun counts a run; releaseClaim and an uncounted fold take it back', async () => {
       const t = await ticket('Counted');
       expect((await workItemRepository.claimForRun(t.id, LOOP))?.runCount).toBe(1);
       await workItemRepository.releaseClaim(t.id);
-      expect((await workItemRepository.claimForRun(t.id, LOOP))?.runCount).toBe(2);
+      expect((await workItemRepository.claimForRun(t.id, LOOP))?.runCount).toBe(1);
+      await workItemRepository.setExecution(t.id, 'exec-1');
+      expect(await workItemRepository.foldTicketRun(t.id, 'exec-1', { status: 'open' }, true)).toBe(true);
+      expect((await workItemRepository.findById(t.id))?.runCount).toBe(0);
+      expect((await workItemRepository.claimForRun(t.id, LOOP))?.runCount).toBe(1);
     });
 
     it('countTouchedForLoop counts tickets updated in the window', async () => {

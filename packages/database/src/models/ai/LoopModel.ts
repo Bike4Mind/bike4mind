@@ -105,13 +105,16 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     if (result.matchedCount === 0) await this.releaseLease(id);
   }
 
-  /** Pauses every live loop of a user; conditional on `live`, so an owner pause is never overwritten. */
+  /**
+   * Pauses every live loop of a user; conditional on `live`, so an owner pause is never overwritten. A loop
+   * with a run in flight is left live (its fold would rewrite the pause); admission pauses it on its next claim.
+   */
   async pauseAllLiveForUser(
     userId: string,
     patch: { statusReason: string; autoResume: LoopAutoResume; nextRunAt: Date }
   ): Promise<number> {
     const result = await this.loopModel.updateMany(
-      { userId, status: 'live' },
+      { userId, status: 'live', activeExecutionId: { $exists: false } },
       { $set: { status: 'paused', ...patch }, $unset: { leaseUntil: '' } }
     );
     return result.modifiedCount;
@@ -146,9 +149,10 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     ]);
   }
 
-  /** Ends an idle back-off without making the loop due now: it next runs by `nextRunAt` at the latest. */
+  /** Ends a live loop's idle back-off without making it due now: it next runs by `nextRunAt` at the latest. */
   async endBackoff(id: string, nextRunAt: Date): Promise<void> {
-    await this.loopModel.updateOne({ _id: id, idleStreak: { $gt: 0 } }, [
+    // Conditional on 'live': a paused loop's nextRunAt is its auto-resume time.
+    await this.loopModel.updateOne({ _id: id, status: 'live', idleStreak: { $gt: 0 } }, [
       { $set: { idleStreak: 0, nextRunAt: { $min: ['$nextRunAt', nextRunAt] } } },
     ]);
   }

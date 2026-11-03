@@ -128,7 +128,7 @@ export interface ILoopRepository extends IBaseRepository<ILoop> {
   ): Promise<ILoop | null>;
   deleteForUser(id: string, userId: string): Promise<boolean>;
   /** Atomically leases one due `live` loop with no run in flight and not in `skipIds`, or returns null. */
-  claimDue(now: Date, leaseMs: number, skipIds?: string[]): Promise<ILoop | null>;
+  claimDue(now: Date, leaseMs: number, skipIds?: string[], skipUserIds?: string[]): Promise<ILoop | null>;
   releaseLease(id: string): Promise<void>;
   markDispatched(id: string, executionId: string, nextRunAt: Date): Promise<void>;
   listInFlight(): Promise<ILoop[]>;
@@ -142,7 +142,7 @@ export interface ILoopRepository extends IBaseRepository<ILoop> {
     executionId: string,
     update: { $set?: Record<string, unknown>; $inc?: Record<string, number>; $unset?: Record<string, ''> }
   ): Promise<boolean>;
-  /** Pulls a `live` loop's `nextRunAt` forward to `now`; used when one of its tickets becomes ready. */
+  /** Pulls a `live` loop's `nextRunAt` forward to `now` and ends its idle back-off; used when one of its tickets becomes ready. */
   makeDueNow(id: string, now: Date): Promise<void>;
   /** Moves a still-`live` loop to `error` once it has `maxFailures` failures in a row. */
   markErroredIfFailing(id: string, maxFailures: number): Promise<void>;

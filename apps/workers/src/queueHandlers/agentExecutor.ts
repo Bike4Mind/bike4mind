@@ -2946,7 +2946,7 @@ async function processExecution(
       }
 
       // A loop run's own spend ceiling (set by the loop scheduler), checked whether or not credits are enforced.
-      if (execution.creditCap != null && modelInfo && iterationIndex !== aggregationWakeStartIteration) {
+      if (execution.creditCap != null && iterationIndex !== aggregationWakeStartIteration) {
         const stopped = await stopCappedIteration(
           {
             executionId,
