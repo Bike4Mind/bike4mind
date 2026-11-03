@@ -15,6 +15,25 @@ const LINUX_PATH_ENV = 'B4M_DESKTOP_LINUX_PATH';
 
 const WSL_UNC = /^(?:[\\/]{2}[?.][\\/]UNC[\\/]|[\\/]{2})(wsl\.localhost|wsl\$)[\\/]+([^\\/]+)(?:[\\/]+(.*))?$/i;
 
+/** The characters a Linux name may hold and a Windows one may not. The share spells each as U+F000 plus its code. */
+// eslint-disable-next-line no-control-regex -- control characters are among them
+const NOT_IN_WINDOWS_NAMES = /[\x01-\x1f"*:<>?\\|]/g;
+const SHARE_SPELLED = /[\u{f001}-\u{f01f}\u{f022}\u{f02a}\u{f03a}\u{f03c}\u{f03e}\u{f03f}\u{f05c}\u{f07c}]/gu;
+
+/** One Linux file name as the WSL share lists it and opens it, so a `\` in it is never a Windows separator. */
+export function shareName(name: string): string {
+  return name.replace(NOT_IN_WINDOWS_NAMES, char => String.fromCharCode(0xf000 + char.charCodeAt(0)));
+}
+
+function linuxName(name: string): string {
+  return name.replace(SHARE_SPELLED, char => String.fromCharCode(char.charCodeAt(0) - 0xf000));
+}
+
+/** A relative path a Linux program printed, with `/` between names, spelled as the share spells it. */
+export function shareRelativePath(path: string): string {
+  return path.split('/').map(shareName).join('/');
+}
+
 /** Also reads the `\\?\UNC\...` and `\\.\UNC\...` spellings of the share. */
 export function parseWslPath(path: string): WslLocation | null {
   const match = WSL_UNC.exec(path);
@@ -23,7 +42,7 @@ export function parseWslPath(path: string): WslLocation | null {
   return {
     host: (match[1] as string).toLowerCase() === 'wsl$' ? 'wsl$' : 'wsl.localhost',
     distro: match[2] as string,
-    linuxPath: `/${segments.join('/')}`,
+    linuxPath: `/${segments.map(linuxName).join('/')}`,
   };
 }
 
@@ -33,7 +52,7 @@ export function wslLocation(directory: string, platform: NodeJS.Platform = proce
 }
 
 export function wslUncPath(location: Pick<WslLocation, 'host' | 'distro'>, linuxPath: string): string {
-  const rest = linuxPath.split('/').filter(Boolean).join('\\');
+  const rest = linuxPath.split('/').filter(Boolean).map(shareName).join('\\');
   return `\\\\${location.host}\\${location.distro}\\${rest}`;
 }
 

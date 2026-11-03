@@ -6,6 +6,7 @@ import { resolveWithinRoots } from './paths';
 import { recordRecentFile } from './recentFiles';
 import { ripgrepSearch, type RipgrepFile } from './ripgrep';
 import { listDistroFiles } from './wslFiles';
+import { shareRelativePath, wslLocation } from '../../wsl/wslPath';
 import { IMAGE_FORMAT_NAMES, showImage, sniffImageType } from './toolImages';
 import {
   capOutput,
@@ -157,6 +158,14 @@ async function trackedButIgnored(base: string): Promise<string[]> {
   }
 }
 
+/**
+ * For a path git or rg printed relative to `directory`: in a WSL folder they ran in the distro, so
+ * the path is respelled the way Windows opens it over the share. Elsewhere it is kept as printed.
+ */
+function hostSpelling(directory: string): (path: string) => string {
+  return wslLocation(directory) ? shareRelativePath : path => path;
+}
+
 interface FileListing {
   /** Relative to the base, sorted. */
   files: string[];
@@ -174,14 +183,15 @@ interface FileListing {
  */
 async function listFiles(base: string, context: ToolContext): Promise<FileListing> {
   const tracked = await gitListing(base);
-  if (tracked) return { files: tracked.sort(), complete: true };
+  if (tracked) return { files: tracked.map(hostSpelling(base)).sort(), complete: true };
 
   const inDistro = await listDistroFiles(base, IGNORED, MAX_WALKED_FILES, context.signal);
   if (inDistro) {
+    const files = inDistro.files.map(file => ({ ...file, path: shareRelativePath(file.path) }));
     return {
-      files: inDistro.files.map(file => file.path).sort(),
+      files: files.map(file => file.path).sort(),
       complete: inDistro.complete,
-      stats: new Map(inDistro.files.map(file => [file.path, { size: file.size, modified: file.modified }])),
+      stats: new Map(files.map(file => [file.path, { size: file.size, modified: file.modified }])),
     };
   }
 
@@ -603,6 +613,7 @@ export const grepSearch: ToolDefinition = {
     const directory = single ? dirname(base) : base;
 
     const tally = createTally(filesOnly, maxResults);
+    const spelled = hostSpelling(directory);
 
     const viaRipgrep =
       !single &&
@@ -616,8 +627,8 @@ export const grepSearch: ToolDefinition = {
         signal: context.signal,
         // Filtered here rather than with rg --glob, which would also override .gitignore.
         onFile: file =>
-          (include !== undefined && !matchesInclude(file.path, include)) ||
-          tally.add(file.path, file.matches, shown => renderRipgrepFile(file, shown, around, expression)),
+          (include !== undefined && !matchesInclude(spelled(file.path), include)) ||
+          tally.add(spelled(file.path), file.matches, shown => renderRipgrepFile(file, shown, around, expression)),
       }));
 
     // rg lists files itself with no walk cap, so a search it ran leaves nothing unsearched.
@@ -625,7 +636,7 @@ export const grepSearch: ToolDefinition = {
     const ranRipgrep = viaRipgrep === 'done' || viaRipgrep === 'stopped' || viaRipgrep === 'timed-out';
     if (ranRipgrep && viaRipgrep === 'done') {
       // rg honours .gitignore even for a file git tracks; the JavaScript listing does not.
-      for (const file of await trackedButIgnored(directory)) {
+      for (const file of (await trackedButIgnored(directory)).map(spelled)) {
         if (tally.truncated || context.signal.aborted) break;
         if (include && !matchesInclude(file, include)) continue;
         const result = await scanFile(join(directory, file), expression);

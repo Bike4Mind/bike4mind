@@ -10,6 +10,8 @@ import {
   USER_ENV_SCRIPT,
   parseUserEnvironment,
   parseWslPath,
+  shareName,
+  shareRelativePath,
   toLinuxArgument,
   toWindowsPath,
   type UserEnvironmentProbe,
@@ -72,6 +74,32 @@ describe('mapping between Linux and Windows paths', () => {
     expect(toWindowsPath(location, '/home/me/repo/.git')).toBe('\\\\wsl$\\Ubuntu\\home\\me\\repo\\.git');
     expect(toWindowsPath(location, 'relative/path')).toBe('relative/path');
     expect(wslUncPath(location, '/')).toBe('\\\\wsl$\\Ubuntu\\');
+  });
+
+  // The spelling read off \\wsl.localhost and \\wsl$ from Windows for files the distro created.
+  it('spells a Linux name the way the share lists and opens it', () => {
+    expect(shareName('a\\b:c*d?e"f<g>h|i')).toBe(
+      'a\u{f05c}b\u{f03a}c\u{f02a}d\u{f03f}e\u{f022}f\u{f03c}g\u{f03e}h\u{f07c}i'
+    );
+    expect(shareName('t\tn\nc\u{1}u\u{1f}')).toBe('t\u{f009}n\u{f00a}c\u{f001}u\u{f01f}');
+    for (const kept of ['trail.', 'trail ', '...', 'del\u{7f}', 'lit\u{f05c}', 'caf\u{e9}.md']) {
+      expect(shareName(kept)).toBe(kept);
+    }
+    expect(shareRelativePath('src/a\\..\\b/x?.ts')).toBe('src/a\u{f05c}..\u{f05c}b/x\u{f03f}.ts');
+  });
+
+  it('keeps a backslash in a Linux name inside that name on the share', () => {
+    expect(wslUncPath(location, '/home/me/repo/a\\..\\..\\b')).toBe(
+      '\\\\wsl$\\Ubuntu\\home\\me\\repo\\a\u{f05c}..\u{f05c}..\u{f05c}b'
+    );
+    expect(toWindowsPath(location, '/home/me/x:y')).toBe('\\\\wsl$\\Ubuntu\\home\\me\\x\u{f03a}y');
+  });
+
+  it('reads a share path back to the Linux names it spells', () => {
+    const share = '\\\\wsl$\\Ubuntu\\home\\me\\repo\\a\u{f05c}b\\x\u{f03f}y';
+    expect(parseWslPath(share)?.linuxPath).toBe('/home/me/repo/a\\b/x?y');
+    expect(wslUncPath(location, parseWslPath(share)?.linuxPath ?? '')).toBe(share);
+    expect(toLinuxArgument(location, share)).toBe('/home/me/repo/a\\b/x?y');
   });
 
   it('maps a folder argument in the same distro, and nothing else', () => {
