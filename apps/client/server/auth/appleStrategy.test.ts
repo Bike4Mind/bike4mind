@@ -1,7 +1,8 @@
 import { generateKeyPairSync, type JsonWebKey } from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import { JwtRsaVerifier } from 'aws-jwt-verify';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import OAuth2Strategy from 'passport-oauth2';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { AuthStrategy } from '@bike4mind/common';
 
 const { authenticateSelfServeProfile } = vi.hoisted(() => ({ authenticateSelfServeProfile: vi.fn() }));
@@ -134,5 +135,45 @@ describe('registerAppleStrategy', () => {
     );
     expect(registered).toBe(true);
     expect(passportInstance.use).toHaveBeenCalledWith('apple', expect.anything());
+  });
+});
+
+describe('Apple client secret refresh', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('re-mints the ES256 client-secret JWT on authenticate once it nears expiry', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2030-01-01T00:00:00Z'));
+    const { privateKey: ec } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    const passportInstance = { use: vi.fn() };
+    registerAppleStrategy(
+      passportInstance,
+      {
+        clientId: CLIENT_ID,
+        teamId: 'TEAM',
+        keyId: 'KEY',
+        privateKey: ec.export({ format: 'pem', type: 'pkcs8' }).toString(),
+      },
+      'https://app.example.com'
+    );
+    const strategy = passportInstance.use.mock.calls[0][1] as { _oauth2: { _clientSecret: string } };
+    const initial = strategy._oauth2._clientSecret;
+    expect(initial).not.toBe('replaced-per-request');
+
+    vi.spyOn(OAuth2Strategy.prototype, 'authenticate').mockImplementation(() => {});
+    (strategy as unknown as { authenticate: (req: unknown) => void }).authenticate({});
+    expect(strategy._oauth2._clientSecret).toBe(initial);
+
+    vi.setSystemTime(new Date('2030-01-01T00:56:00Z'));
+    (strategy as unknown as { authenticate: (req: unknown) => void }).authenticate({});
+
+    const refreshed = strategy._oauth2._clientSecret;
+    expect(refreshed).not.toBe(initial);
+    expect(refreshed).not.toBe('replaced-per-request');
+    expect(refreshed.split('.')).toHaveLength(3);
+    expect(jwt.decode(refreshed, { complete: true })?.header.alg).toBe('ES256');
   });
 });
