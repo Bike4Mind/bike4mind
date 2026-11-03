@@ -421,7 +421,8 @@ const WRAPPERS: ReadonlyMap<string, Wrapper> = new Map([
   [
     'xargs',
     {
-      values: 'EILPadns',
+      // `J`, `R` and `S` are macOS xargs; GNU refuses them.
+      values: 'EIJLPRSadns',
       glued: 'eil',
       long: ['arg-file', 'delimiter', 'max-args', 'max-chars', 'max-procs', 'process-slot-var'],
       flags: [
