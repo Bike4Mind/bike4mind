@@ -162,18 +162,23 @@ describe('the reply stats rail and its footer fallback', () => {
     const thread = [local, message('u2', { role: 'user', content: 'And 223?' }), { ...local, id: 'a2' }];
 
     render(thread, { statsRail: true });
-    // Thinking, total, share, thinking tokens, tokens, speed, prompt, first token, load, then the cost.
-    expect(getComputedStyle(replies()[0]!).minHeight).toBe(`${railReserve(10)}px`);
-    expect(getComputedStyle(replies()[1]!).minHeight).toBe(`${railReserve(10, true)}px`);
+    // Thinking, total, share, thinking tokens, tokens and speed, then the cost; the server timings are off by default.
+    expect(getComputedStyle(replies()[0]!).minHeight).toBe(`${railReserve(7)}px`);
+    expect(getComputedStyle(replies()[1]!).minHeight).toBe(`${railReserve(7, true)}px`);
+
+    act(() => setReplyStatShown('load', true));
+    render(thread, { statsRail: true });
+    expect(getComputedStyle(replies()[0]!).minHeight).toBe(`${railReserve(8)}px`);
 
     render(thread, { statsRail: false });
-    expect(getComputedStyle(replies()[0]!).minHeight).not.toBe(`${railReserve(10)}px`);
-    expect(getComputedStyle(replies()[1]!).minHeight).not.toBe(`${railReserve(10, true)}px`);
+    expect(getComputedStyle(replies()[0]!).minHeight).not.toBe(`${railReserve(8)}px`);
+    expect(getComputedStyle(replies()[1]!).minHeight).not.toBe(`${railReserve(8, true)}px`);
   });
 
   it('ticks the live reply off its own clock, leaving the total and speed to the status line', () => {
     vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
     vi.setSystemTime(20_000);
+    act(() => setReplyStatShown('firstToken', true));
     const turn: TurnProgress = {
       startedAt: 14_000,
       tokens: null,
@@ -212,6 +217,7 @@ describe('the reply stats rail and its footer fallback', () => {
     beforeEach(() => {
       vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
       vi.setSystemTime(at);
+      act(() => setReplyStatShown('firstToken', true));
     });
 
     it('adds the live figures to what the earlier runs stored, and their usage until this run reports', () => {

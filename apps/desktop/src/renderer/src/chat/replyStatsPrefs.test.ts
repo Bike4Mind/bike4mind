@@ -72,38 +72,47 @@ describe('railFitsBesideThread', () => {
 });
 
 describe('parseReplyStatsPrefs', () => {
-  it('starts with the rail on and every stat shown', () => {
+  const offByDefault = ['promptSpeed', 'firstToken', 'load', 'draft'];
+
+  it('starts with the rail on, and every stat shown but the server timings and the first token', () => {
     const prefs = parseReplyStatsPrefs(null, null, null);
     expect(prefs.rail).toBe(true);
-    expect(prefs.hidden.size).toBe(0);
+    expect([...prefs.hidden]).toEqual(offByDefault);
   });
 
   it('carries the old tok/s switch over as the speed stat unticked', () => {
-    expect([...parseReplyStatsPrefs(null, null, '0').hidden]).toEqual(['speed']);
-    expect(parseReplyStatsPrefs(null, null, '1').hidden.size).toBe(0);
-    expect(parseReplyStatsPrefs(null, '[]', '0').hidden.size).toBe(0);
+    expect([...parseReplyStatsPrefs(null, null, '0').hidden]).toEqual(['speed', ...offByDefault]);
+    expect([...parseReplyStatsPrefs(null, null, '1').hidden]).toEqual(offByDefault);
+    expect([...parseReplyStatsPrefs(null, '{}', '0').hidden]).toEqual(offByDefault);
   });
 
-  it('drops what it cannot read, and stats this build does not know', () => {
-    expect([...parseReplyStatsPrefs('0', '["load","later-stat",3]', null).hidden]).toEqual(['load']);
-    expect(parseReplyStatsPrefs('0', '{not json', null)).toEqual({ rail: false, hidden: new Set() });
+  it('takes a choice either way over the default, and drops what it cannot read or does not know', () => {
+    expect([...parseReplyStatsPrefs('0', '{"load":true,"total":false,"later":false,"speed":1}', null).hidden]).toEqual([
+      'total',
+      'promptSpeed',
+      'firstToken',
+      'draft',
+    ]);
+    expect(parseReplyStatsPrefs('0', '{not json', null)).toEqual({ rail: false, hidden: new Set(offByDefault) });
+    expect(parseReplyStatsPrefs(null, '["speed"]', null).hidden).toEqual(new Set(offByDefault));
   });
 });
 
 describe('the stored prefs', () => {
-  it('remember the rail and the unticked stats across a relaunch', () => {
+  it('remember the rail and each stat ticked or unticked across a relaunch', () => {
     setReplyStatsRail(false);
-    setReplyStatShown('load', false);
+    setReplyStatShown('total', false);
+    setReplyStatShown('firstToken', true);
     setReplyStatShown('thinking', false);
     setReplyStatShown('thinking', true);
     reloadReplyStatsPrefs();
 
-    const prefs = parseReplyStatsPrefs(
-      window.localStorage.getItem('b4m.chat.replyStats.rail'),
-      window.localStorage.getItem('b4m.chat.replyStats.hidden'),
-      null
-    );
-    expect(prefs).toEqual({ rail: false, hidden: new Set(['load']) });
+    const stored = window.localStorage.getItem('b4m.chat.replyStats.shown');
+    expect(JSON.parse(stored ?? 'null')).toEqual({ total: false, firstToken: true });
+    expect(parseReplyStatsPrefs(window.localStorage.getItem('b4m.chat.replyStats.rail'), stored, null)).toEqual({
+      rail: false,
+      hidden: new Set(['total', 'promptSpeed', 'load', 'draft']),
+    });
   });
 
   it('summarise both in one line', () => {
@@ -112,6 +121,9 @@ describe('the stored prefs', () => {
     );
     expect(replyStatsSummary({ rail: false, hidden: new Set(['load', 'speed']) })).toBe(
       '9 of 11 stats, under each reply on hover'
+    );
+    expect(replyStatsSummary(parseReplyStatsPrefs(null, null, null))).toBe(
+      '7 of 11 stats, beside the conversation when the window is wide enough'
     );
   });
 });
