@@ -143,6 +143,13 @@ vi.mock('@server/middlewares/defaultWriteRateLimit', () => ({
   defaultWriteRateLimit: (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 
+// The per-user upload allowance (fileUploadBudget.ts) resolves the caller's tier and a Mongo counter on
+// every upload door, so route suites that stub the database would hang on it. Pass through by default;
+// its own suite unmocks it.
+vi.mock('@server/files/fileUploadBudget', () => ({
+  consumeFileUploadBudget: async () => undefined,
+}));
+
 // The `app` surface of the IP-block gate (checkBlockedIP.ts, mounted on every authenticated write
 // by baseApi) reads the active `all` blocks from Mongo. Suites that drive the real baseApi chain
 // with connectDB stubbed would wait out Mongoose's 10s command buffer on each write, so that

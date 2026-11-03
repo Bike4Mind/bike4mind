@@ -9,7 +9,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 
 export type SecurityCheckStatus = 'pass' | 'warning' | 'fail' | 'disabled';
 
-export type SecurityCheckId = 'web' | 'code' | 'packages' | 'secrets' | 'cloud' | 'waf';
+export type SecurityCheckId = 'web' | 'cloud';
 
 export interface SecurityCheckSummary {
   id: SecurityCheckId;
@@ -38,7 +38,7 @@ export interface SecurityDashboardOverviewResponse {
 
 /**
  * Admin Security Dashboard Overview API.
- * Aggregates the latest scan snapshots (web/code/packages/secrets/cloud/waf) into a single overview.
+ * Aggregates the latest scan snapshots (web/cloud) into a single overview.
  */
 const handler = adminApi({
   adminPermissions: { GET: 'support:read' },
@@ -58,21 +58,9 @@ const handler = adminApi({
     return Math.ceil(remainingMs / (60 * 1000));
   };
 
-  // Prefer OWASP ZAP-backed scans when available, falling back to legacy 'web' data.
-  const webSnapshotOwasp = await securityDashboardSnapshotRepository.findLatestByStageAndScanType(stage, 'web-owasp');
-  const webSnapshot =
-    webSnapshotOwasp ?? (await securityDashboardSnapshotRepository.findLatestByStageAndScanType(stage, 'web')); // backwards compatibility
-
-  const codeSnapshot = await securityDashboardSnapshotRepository.findLatestByStageAndScanType(stage, 'code-semgrep');
-
-  const packagesSnapshot = await securityDashboardSnapshotRepository.findLatestByStageAndScanType(stage, 'packages');
-
-  const secretsSnapshot = await securityDashboardSnapshotRepository.findLatestByStageAndScanType(stage, 'secrets');
+  const webSnapshot = await securityDashboardSnapshotRepository.findLatestByStageAndScanType(stage, 'web-owasp');
 
   const cloudSnapshot = await securityDashboardSnapshotRepository.findLatestByStageAndScanType(stage, 'cloud');
-
-  // WAF is optional; if no snapshot exists yet, present it as disabled.
-  const wafSnapshot = await securityDashboardSnapshotRepository.findLatestByStageAndScanType(stage, 'waf');
 
   const makeCheckFromSnapshot = (
     id: SecurityCheckId,
@@ -83,18 +71,16 @@ const handler = adminApi({
       summary: string;
       findings?: Array<{ severity?: string | null | undefined }>;
       checkedAt: Date;
-    } | null,
-    options?: { enabledWhenMissing?: boolean; missingSummary?: string; missingStatus?: SecurityCheckStatus }
+    } | null
   ): SecurityCheckSummary => {
     if (!snapshot) {
-      const enabled = options?.enabledWhenMissing ?? true;
       return {
         id,
         label,
-        enabled,
-        status: options?.missingStatus ?? (enabled ? 'warning' : 'disabled'),
+        enabled: true,
+        status: 'warning',
         score: null,
-        summary: options?.missingSummary ?? (enabled ? 'No scan has been recorded yet for this stage.' : 'Disabled.'),
+        summary: 'No scan has been recorded yet for this stage.',
         severityCounts: { critical: 0, high: 0, medium: 0, low: 0 },
         lastCheckedAt: null,
       };
@@ -125,15 +111,7 @@ const handler = adminApi({
 
   const checks: SecurityCheckSummary[] = [
     makeCheckFromSnapshot('web', 'Website Security', webSnapshot),
-    makeCheckFromSnapshot('code', 'Code Analysis', codeSnapshot),
-    makeCheckFromSnapshot('packages', 'Packages', packagesSnapshot),
-    makeCheckFromSnapshot('secrets', 'Secrets Protection', secretsSnapshot),
     makeCheckFromSnapshot('cloud', 'Cloud Security', cloudSnapshot),
-    makeCheckFromSnapshot('waf', 'Firewall / WAF', wafSnapshot, {
-      enabledWhenMissing: false,
-      missingStatus: 'disabled',
-      missingSummary: 'Disabled for this stage.',
-    }),
   ];
 
   const enabledChecks = checks.filter(c => c.enabled && typeof c.score === 'number');

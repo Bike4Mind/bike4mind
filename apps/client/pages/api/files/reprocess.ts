@@ -6,6 +6,7 @@ import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { getFabFileById } from '@server/managers/fabFileManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';
 import { BadRequestError, NotFoundError, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
@@ -109,6 +110,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
     const fabFile = await resolveReprocessableFabFile(req, fabFileId, dataLakeId);
     if (!fabFile) throw new NotFoundError('FabFile not found');
     if (fabFile.isChunking) throw new BadRequestError('FabFile is currently being chunked');
+    await consumeFileUploadBudget(req, 1);
 
     // Shared with the bulk "Rebuild passages" wave so the two reset paths cannot drift on which
     // fields they clear - notably `error`, which this route previously left set: a file that chunked

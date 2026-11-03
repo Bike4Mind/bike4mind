@@ -259,3 +259,39 @@ describe('Organizations tab params', () => {
     }
   });
 });
+
+describe('Security tab params', () => {
+  const securitySearch = {
+    tab: 'security-dashboard',
+    securityView: 'scans',
+    securityScan: 'prowler',
+    securityRange: '7d',
+  };
+
+  it('registers the view, scan and range params on the security tab only', () => {
+    expect(ADMIN_TAB_PARAMS['security-dashboard']).toEqual(['securityView', 'securityScan', 'securityRange']);
+    const owners = Object.entries(ADMIN_TAB_PARAMS).filter(([, params]) =>
+      (params as readonly string[]).some(
+        param => param === 'securityView' || param === 'securityScan' || param === 'securityRange'
+      )
+    );
+    expect(owners.map(([slug]) => slug)).toEqual(['security-dashboard']);
+  });
+
+  it('coerces each param in validateSearch and drops invalid ones', () => {
+    expect(parseAdminSearch(securitySearch)).toMatchObject(securitySearch);
+    expect(parseAdminSearch({ securityView: 'overview', securityScan: 'code', securityRange: '30d' })).toMatchObject({
+      securityView: undefined,
+      securityScan: undefined,
+      securityRange: undefined,
+    });
+  });
+
+  it('keeps them on the security tab and drops them on a switch away', () => {
+    expect(adminSearchForTab(securitySearch, 'security-dashboard')).toMatchObject(securitySearch);
+    const switched = adminSearchForTab(securitySearch, 'users');
+    expect(switched.securityView).toBeUndefined();
+    expect(switched.securityScan).toBeUndefined();
+    expect(switched.securityRange).toBeUndefined();
+  });
+});
