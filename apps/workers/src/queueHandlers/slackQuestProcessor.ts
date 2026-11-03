@@ -20,7 +20,6 @@ import {
   projectRepository,
   organizationRepository,
   mcpServerRepository,
-  newAccountSpendCapAdapters,
   creditTransactionRepository,
   agentRepository,
   skillRepository,
@@ -39,6 +38,7 @@ import {
   lakeAccessEventRepository,
   scopedSettingsRepository,
 } from '@bike4mind/database';
+import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { NotFoundError, registerLambdaErrorHandlers } from '@bike4mind/utils';
@@ -121,7 +121,7 @@ export const getStaticOptions = () => {
       projects: projectRepository,
       organizations: organizationRepository,
       mcpServers: mcpServerRepository,
-      newAccountSpendCap: newAccountSpendCapAdapters,
+      newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
       creditTransactions: creditTransactionRepository,
       usageEvents: usageEventRepository,
       operationalBilling: operationalBillingAdapters,

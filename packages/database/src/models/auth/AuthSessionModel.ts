@@ -9,6 +9,7 @@ const AuthSessionDeviceSchema = new Schema(
     os: { type: String },
     ip: { type: String },
     location: { type: String },
+    displayName: { type: String },
   },
   { _id: false }
 );

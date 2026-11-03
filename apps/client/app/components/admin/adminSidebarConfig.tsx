@@ -161,6 +161,8 @@ export type SidebarItem = {
   tab: AdminTab;
   /** One line in a 248 px sidebar: keep it short ("Credits", not "Credit Analytics"). */
   label: string;
+  /** Former names the sidebar filter still matches, so a renamed page stays findable. */
+  aliases?: readonly string[];
   testid?: string;
   gate?: SidebarGate;
   badge?: SidebarBadge;
@@ -201,7 +203,14 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     items: [
       { Icon: Users, tab: AdminTab.Users, label: 'Users', testid: 'admin-users-tab-btn' },
       { Icon: Building2, tab: AdminTab.Organizations, label: 'Organizations', testid: 'admin-organizations-tab-btn' },
-      { Icon: Inbox, tab: AdminTab.Waitlist, label: 'Waitlist', badge: 'waitingSubscribers' },
+      {
+        Icon: Inbox,
+        tab: AdminTab.Waitlist,
+        label: 'Invite Center',
+        aliases: ['Waitlist'],
+        testid: 'admin-waitlist-tab-btn',
+        badge: 'waitingSubscribers',
+      },
       { Icon: Megaphone, tab: AdminTab.EmailMarketing, label: 'Email marketing' },
       { Icon: UsersRound, tab: AdminTab.Team, label: 'Team' },
       { Icon: UserPlus, tab: AdminTab.RegistrationInvites, label: 'Invites', testid: 'admin-invite-center-tab-btn' },
@@ -371,7 +380,9 @@ export const filterSidebarSections = (
       const items = section.items.filter(
         item =>
           (!item.gate || gates[item.gate]) &&
-          (needle === '' || sectionMatches || item.label.toLowerCase().includes(needle))
+          (needle === '' ||
+            sectionMatches ||
+            [item.label, ...(item.aliases ?? [])].some(name => name.toLowerCase().includes(needle)))
       );
       return { ...section, items };
     })
