@@ -68,12 +68,6 @@ const handler = baseApi({ auth: false }).post(
       initialCredits,
     } = req.body;
 
-    const parsedPermissions =
-      adminPermissions === undefined ? undefined : AdminPermissionsSchema.safeParse(adminPermissions);
-    if (parsedPermissions && !parsedPermissions.success) {
-      return res.status(400).json({ error: 'Invalid adminPermissions', details: parsedPermissions.error.issues });
-    }
-
     // Guard 3: Only allow creating users the cleanup sweep can find - by the E2E email
     // pattern, or, for an emailless account, by the E2E username suffix.
     const E2E_EMAIL_PATTERN = /-e2e@test\.com$/i;
@@ -82,6 +76,12 @@ const handler = baseApi({ auth: false }).post(
     }
     if (!email && !E2E_USERNAME_SUFFIX_PATTERN.test(username)) {
       return res.status(400).json({ error: 'Emailless test users must use the -e2e username suffix' });
+    }
+
+    const parsedPermissions =
+      adminPermissions === undefined ? undefined : AdminPermissionsSchema.safeParse(adminPermissions);
+    if (parsedPermissions && !parsedPermissions.success) {
+      return res.status(400).json({ error: 'Invalid adminPermissions', details: parsedPermissions.error.issues });
     }
 
     const newUser = await userService.createUser(
