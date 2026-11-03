@@ -375,6 +375,15 @@ describe('account dialogs', () => {
         })
       );
     });
+    it('previews an admin as internal either way, since analytics counts an admin as internal', () => {
+      renderDialog(
+        (user, close) => <InternalAccountDialog user={user} onClose={close} />,
+        buildProfile({ isInternal: true, isAdmin: true })
+      );
+
+      expect(screen.getByTestId('internal-account-dialog-preview-before')).toHaveTextContent('Internal');
+      expect(screen.getByTestId('internal-account-dialog-preview-after')).toHaveTextContent('Internal (admin)');
+    });
   });
 
   describe('ResetMfaDialog', () => {

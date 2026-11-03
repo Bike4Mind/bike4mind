@@ -268,7 +268,10 @@ export const InternalAccountDialog: React.FC<ProfileDialogProps> = ({ user, onCl
   const post = useAdminUserPost(user.id, 'The internal mark was not changed.');
   const showUndo = useUndoToast();
   const marking = !user.isInternal;
-  const label = (internal: boolean) => (internal ? 'Internal' : 'Customer');
+  const label = (internal: boolean) => {
+    if (internal) return 'Internal';
+    return user.isAdmin ? 'Internal (admin)' : 'Customer';
+  };
 
   const handleConfirm = async (reason: string) => {
     await post('internal', { isInternal: marking, reason });

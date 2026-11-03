@@ -23,6 +23,12 @@ const formatBytes = (bytes: number): string => {
   return `${Math.round(bytes / 1e3)} KB`;
 };
 
+/** As analytics counts it (server-utils analytics/lane.ts): an admin is internal whatever the flag says. */
+const analyticsMark = (user: Pick<AdminUserProfile, 'isAdmin' | 'isInternal'>): string => {
+  if (user.isInternal) return 'Internal account';
+  return user.isAdmin ? 'Internal account (admin)' : 'Customer';
+};
+
 const AccountCard: React.FC<{ user: AdminUserProfile; onAction: (action: ProfileAction) => void }> = ({
   user,
   onAction,
@@ -83,7 +89,7 @@ const AccountCard: React.FC<{ user: AdminUserProfile; onAction: (action: Profile
       </Fact>
       <Fact label="Analytics" data-testid="user-profile-fact-internal">
         <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
-          {user.isInternal ? 'Internal account' : 'Customer'}
+          {analyticsMark(user)}
           <RowAction onClick={() => onAction('internalAccount')} data-testid="user-profile-internal-btn">
             Change
           </RowAction>

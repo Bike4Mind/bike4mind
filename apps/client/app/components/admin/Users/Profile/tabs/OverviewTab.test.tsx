@@ -59,17 +59,13 @@ beforeEach(() => {
 
 describe('OverviewTab internal account row', () => {
   it.each([
-    [false, 'Customer'],
-    [true, 'Internal account'],
-  ])('shows isInternal %s as %s and opens the internal-account action', (isInternal, text) => {
+    [{ isInternal: false }, 'Customer'],
+    [{ isInternal: true }, 'Internal account'],
+    [{ isInternal: false, isAdmin: true }, 'Internal account (admin)'],
+  ])('shows %o as %s and opens the internal-account action', (flags, text) => {
     const onAction = vi.fn();
     render(
-      <OverviewTab
-        user={buildProfile({ isInternal })}
-        onAction={onAction}
-        onViewActivity={vi.fn()}
-        onViewCredits={vi.fn()}
-      />,
+      <OverviewTab user={buildProfile(flags)} onAction={onAction} onViewActivity={vi.fn()} onViewCredits={vi.fn()} />,
       { wrapper: ProfileTestWrapper }
     );
 
