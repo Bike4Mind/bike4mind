@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 // Generate one image through the Bike4Mind image API using the signed-in CLI account (`b4m login`).
 // Usage: node gen.mjs --name <id> --out <file.png> --model <model> --size <WxH> [--background transparent|opaque|auto]
-//          --prompt-file <txt> [--api-url <origin>]
+//          --prompt-file <txt> [--api-url <origin>] [--api-key-file <file>]
 // The API origin comes from --api-url, else B4M_API_URL, else the CLI config's custom URL.
 // Auth is read at runtime from ~/.bike4mind/config.json (never printed) and never written: refreshing
 // here would rotate the CLI's tokens behind its back, so an expired token means signing in again.
+// With --api-key-file (or B4M_API_KEY_FILE), an API key read from that file is sent instead; the key needs
+// the image-generation scope.
 // Records {name: {model, size, background, prompt, date}} in generations.json next to --out; keep that
 // ledger out of the repo, it is a local scratch record.
 import fs from 'node:fs';
@@ -24,23 +26,28 @@ function parseArgs(argv) {
   return args;
 }
 
-async function getAccessToken(apiUrl) {
-  const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+async function getAuth(apiUrl, apiKeyFile) {
+  const config = fs.existsSync(CONFIG_PATH) ? JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) : {};
   const baseUrl = apiUrl ?? process.env.B4M_API_URL ?? config.apiConfig?.customUrl;
   if (!baseUrl) throw new Error('no API origin: pass --api-url or set B4M_API_URL');
+  if (apiKeyFile) {
+    const apiKey = fs.readFileSync(apiKeyFile, 'utf8').trim();
+    if (!apiKey) throw new Error(`empty API key file: ${apiKeyFile}`);
+    return { baseUrl, headers: { 'x-api-key': apiKey } };
+  }
   const auth = config.auth;
   if (!auth?.accessToken) throw new Error('not logged in: run `b4m login`');
   // Negated so a missing or unparseable expiry counts as expired; a minute of slack for a token about to lapse.
   if (!(new Date(auth.expiresAt).getTime() - 60_000 > Date.now())) {
     throw new Error('token expired: run `b4m login` and retry');
   }
-  return { baseUrl, token: auth.accessToken };
+  return { baseUrl, headers: { authorization: `Bearer ${auth.accessToken}` } };
 }
 
-async function api(baseUrl, token, method, route, body) {
+async function api({ baseUrl, headers }, method, route, body) {
   const response = await fetch(`${baseUrl}${route}`, {
     method,
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    headers: { ...headers, 'content-type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await response.text();
@@ -51,7 +58,7 @@ async function api(baseUrl, token, method, route, body) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const prompt = fs.readFileSync(args['prompt-file'], 'utf8').trim();
-  const { baseUrl, token } = await getAccessToken(args['api-url']);
+  const auth = await getAuth(args['api-url'], args['api-key-file'] ?? process.env.B4M_API_KEY_FILE);
 
   const body = {
     prompt,
@@ -62,14 +69,14 @@ async function main() {
     ...(args.background ? { background: args.background } : {}),
     ...(args.quality ? { quality: args.quality } : {}),
   };
-  const ack = await api(baseUrl, token, 'POST', '/api/v1/image-generations', body);
+  const ack = await api(auth, 'POST', '/api/v1/image-generations', body);
   const questId = ack.quest.id;
   console.log(`queued ${args.name}`);
 
   const deadline = Date.now() + POLL_TIMEOUT_MS;
   let quest;
   for (;;) {
-    quest = await api(baseUrl, token, 'GET', `/api/v1/quests/${questId}`);
+    quest = await api(auth, 'GET', `/api/v1/quests/${questId}`);
     const settled = quest.status === 'done' || quest.status === 'stopped' || quest.type === 'error';
     if (settled && (quest.type === 'error' || (quest.images ?? []).length > 0 || quest.status !== 'running')) break;
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${args.name}`);

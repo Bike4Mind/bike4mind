@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 // Turn the raw generations into the final assets.
 // Usage: node process.mjs --raw <dir> [--out <dir>] [--canvas 256] [--rows 4] [--cols 5] [--alpha 128]
+//          [--sheet sheet-all] [--prefix char-{row}] [--poses work,call,rest,ko,idle] [--scale <n>] [--no-backdrop]
 //   <raw>/sheet-all.png -> char-{row}-{pose}.png (rows = characters, cols = poses), one shared scale,
 //     feet at bottom center, alpha binarized (no soft halo), nearest-neighbor resize, palette PNG.
 //   <raw>/backdrop.png  -> backdrop.png (1280x720, nearest, palette-quantized).
 // --out defaults to the app's asset folder (src/renderer/src/assets/orchestrator/tavern).
+// A one-character sheet (e.g. the Innkeeper) uses --sheet/--prefix/--poses/--no-backdrop, and --scale to fix the
+// raw-to-sprite factor so it matches the existing sprites instead of fitting its own widest cell to the canvas.
 // If a sheet has an opaque flat background instead of alpha, pixels near --key (default ff00ff) are keyed out.
 // sharp is not a desktop dependency, so it is borrowed from the CLI workspace package that already has it.
 import fs from 'node:fs';
@@ -14,20 +17,26 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const sharp = createRequire(path.resolve(HERE, '../../../../packages/cli/package.json'))('sharp');
-const POSES = ['work', 'call', 'rest', 'ko', 'idle'];
 
 const argv = process.argv.slice(2);
 const opt = (name, fallback) => {
   const index = argv.indexOf(`--${name}`);
   return index >= 0 ? argv[index + 1] : fallback;
 };
+const POSES = opt('poses', 'work,call,rest,ko,idle').split(',');
+const SHEET = opt('sheet', 'sheet-all');
+const PREFIX = opt('prefix', 'char-{row}');
+const FIXED_SCALE = opt('scale') === undefined ? undefined : Number(opt('scale'));
+const WITH_BACKDROP = !argv.includes('--no-backdrop');
 const CANVAS = Number(opt('canvas', 256));
 const ROWS = Number(opt('rows', 4));
-const COLS = Number(opt('cols', 5));
+const COLS = Number(opt('cols', POSES.length));
 const ALPHA_THRESHOLD = Number(opt('alpha', 128));
 const KEY = opt('key', 'ff00ff');
 const RAW_DIR = opt('raw');
-if (!RAW_DIR) throw new Error('missing --raw <dir> (the folder holding sheet-all.png and backdrop.png)');
+if (!RAW_DIR) throw new Error('missing --raw <dir> (the folder holding the sheet and backdrop.png)');
+if (POSES.length !== COLS) throw new Error(`--poses names ${POSES.length} poses for ${COLS} columns`);
+if (FIXED_SCALE !== undefined && !(FIXED_SCALE > 0)) throw new Error('--scale must be a positive number');
 const OUT_DIR = path.resolve(opt('out', path.join(HERE, '../../src/renderer/src/assets/orchestrator/tavern')));
 const PADDING = 4;
 
@@ -104,7 +113,7 @@ async function sliceSheet(file) {
   }
 
   const largest = Math.max(...boxes.flat().map(b => Math.max(b.width, b.height)));
-  const scale = (CANVAS - PADDING * 2) / largest;
+  const scale = FIXED_SCALE ?? (CANVAS - PADDING * 2) / largest;
   const binarized = await sharp(data, { raw: { width, height, channels: 4 } })
     .png()
     .toBuffer();
@@ -113,8 +122,11 @@ async function sliceSheet(file) {
     for (const [col, box] of rowBoxes.entries()) {
       const w = Math.max(1, Math.round(box.width * scale));
       const h = Math.max(1, Math.round(box.height * scale));
+      if (w > CANVAS - PADDING * 2 || h > CANVAS - PADDING * 2) {
+        throw new Error(`row ${row + 1} column ${col + 1} is ${w}x${h} at scale ${scale}; lower --scale`);
+      }
       const sprite = await sharp(binarized).extract(box).resize(w, h, { kernel: 'nearest' }).png().toBuffer();
-      const out = path.join(OUT_DIR, `char-${row + 1}-${POSES[col]}.png`);
+      const out = path.join(OUT_DIR, `${PREFIX.replace('{row}', String(row + 1))}-${POSES[col]}.png`);
       await sharp({
         create: { width: CANVAS, height: CANVAS, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
       })
@@ -133,6 +145,8 @@ async function backdrop() {
     .toFile(path.join(OUT_DIR, 'backdrop.png'));
 }
 
-await sliceSheet(path.join(RAW_DIR, 'sheet-all.png'));
-await backdrop();
-if (!fs.existsSync(path.join(OUT_DIR, 'backdrop.png'))) throw new Error('backdrop not written');
+await sliceSheet(path.join(RAW_DIR, `${SHEET}.png`));
+if (WITH_BACKDROP) {
+  await backdrop();
+  if (!fs.existsSync(path.join(OUT_DIR, 'backdrop.png'))) throw new Error('backdrop not written');
+}
