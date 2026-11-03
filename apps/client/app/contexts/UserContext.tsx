@@ -72,6 +72,8 @@ export interface UserContextProps {
   isDeveloper: boolean;
   isCustomer: boolean;
   setCurrentUser: (value: IUserDocument | null) => void;
+  /** Bumped by each `fresh` refresh so UI keyed on it re-requests an image whose first load failed. */
+  avatarVersion: number;
   refreshUser: (options?: { fresh?: boolean }) => Promise<void>;
 }
 
@@ -246,6 +248,7 @@ export const useUser = create<UserContextProps>()(
       isModerated: false,
       isDeveloper: false,
       isCustomer: false,
+      avatarVersion: 0,
       setCurrentUser: (currentUser: IUserDocument | null) => {
         set({
           currentUser,
@@ -268,7 +271,9 @@ export const useUser = create<UserContextProps>()(
           if (!options?.fresh) return refreshUserInFlight;
           // A post-mutation refresh must start after any pre-mutation read settles.
           await refreshUserInFlight;
-          return get().refreshUser();
+          await get().refreshUser();
+          set(state => ({ avatarVersion: state.avatarVersion + 1 }));
+          return;
         }
         refreshUserInFlight = (async () => {
           try {
@@ -285,6 +290,7 @@ export const useUser = create<UserContextProps>()(
               isModerated: !!response.data.user?.isModerated,
               isDeveloper: userIsDeveloper(response.data.user),
               isCustomer: userIsCustomer(response.data.user),
+              ...(options?.fresh ? { avatarVersion: get().avatarVersion + 1 } : {}),
             });
           } catch (error) {
             console.error('Error refreshing user:', error);

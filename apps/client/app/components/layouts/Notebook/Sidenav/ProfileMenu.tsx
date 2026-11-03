@@ -258,6 +258,7 @@ const ProfileMenu = () => {
 
   const currentUser = useUser(s => s.currentUser);
   const isAdmin = useUser(s => s.isAdmin);
+  const avatarVersion = useUser(s => s.avatarVersion);
   const { accounts, selectedAccount, setSelectedAccount, showAccountType } = useAccounts();
 
   const { isFeatureEnabled } = useFeatureEnabled();
@@ -842,6 +843,9 @@ const ProfileMenu = () => {
         <Avatar
           size="md"
           data-testid="profile-menu-avatar"
+          // The new key can reach the store before the S3 upload lands, so the first image
+          // load 403s and Avatar sticks on the initial; remounting after the upload retries it.
+          key={avatarVersion}
           // photoUrl is a storage key, not a URL: used as-is it resolves against the current route.
           src={currentUser?.photoUrl ? getAppFileUrl({ key: currentUser.photoUrl }) : undefined}
           sx={{ '--Avatar-size': '36px', width: '36px', height: '36px', borderRadius: '8px' }}

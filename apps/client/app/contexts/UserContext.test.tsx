@@ -364,6 +364,27 @@ describe('refreshUser single-flight guard', () => {
     }
   );
 
+  it.each([
+    ['no read in flight', false],
+    ['an older read in flight', true],
+  ])('bumps avatarVersion after a fresh refresh with %s, not after a plain one', async (_label, olderInFlight) => {
+    const before = useUser.getState().avatarVersion;
+    const older = Promise.withResolvers<unknown>();
+    if (olderInFlight) mockGet.mockReturnValueOnce(older.promise);
+    mockGet.mockResolvedValue({ data: { user: fakeUser() } });
+    const { refreshUser } = useUser.getState();
+
+    const olderRefresh = olderInFlight ? refreshUser() : Promise.resolve();
+    const fresh = refreshUser({ fresh: true });
+    older.resolve({ data: { user: fakeUser() } });
+    await Promise.all([olderRefresh, fresh]);
+    const afterFresh = useUser.getState().avatarVersion;
+    expect(afterFresh).toBeGreaterThan(before);
+
+    await refreshUser();
+    expect(useUser.getState().avatarVersion).toBe(afterFresh);
+  });
+
   it("writes the identify response's photoUrl into currentUser", async () => {
     mockGet.mockResolvedValueOnce({ data: { user: fakeUser({ photoUrl: 'uploads/avatar-1.png' }) } });
 
