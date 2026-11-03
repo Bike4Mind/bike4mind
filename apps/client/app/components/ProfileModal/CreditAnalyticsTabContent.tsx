@@ -48,6 +48,9 @@ const UsageDashboard = dynamic(
   { ssr: false }
 );
 
+// Must match REFERRAL_REWARD_REASON in server/referrals/firstAnswerReward.ts, which this client cannot import.
+const REFERRAL_REWARD_REASON = 'referral_reward';
+
 const TIME_PERIODS = {
   WEEK: '7d',
   MONTH: '30d',
@@ -107,7 +110,12 @@ const CreditAnalyticsTabContent: React.FC = () => {
     // add to daily data processing, and add a tooltip label in getTooltipLabel().
     const purchaseTransactions = sortedTransactions.filter(t => t.type === 'purchase');
     const subscriptionTransactions = sortedTransactions.filter(t => t.type === 'subscription');
-    const genericAddTransactions = sortedTransactions.filter(t => t.type === 'generic_add');
+    const referralRewardTransactions = sortedTransactions.filter(
+      t => t.type === 'generic_add' && t.reason === REFERRAL_REWARD_REASON
+    );
+    const genericAddTransactions = sortedTransactions.filter(
+      t => t.type === 'generic_add' && t.reason !== REFERRAL_REWARD_REASON
+    );
     const genericDeductTransactions = sortedTransactions.filter(t => t.type === 'generic_deduct');
     const textUsageTransactions = sortedTransactions.filter(t => t.type === 'text_generation_usage');
     const completionApiUsageTransactions = sortedTransactions.filter(t => t.type === 'completion_api_usage');
@@ -156,6 +164,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     const purchaseDailyData = new Map<string, { x: string; y: number }>();
     const subscriptionDailyData = new Map<string, { x: string; y: number }>();
     const genericAddDailyData = new Map<string, { x: string; y: number }>();
+    const referralRewardDailyData = new Map<string, { x: string; y: number }>();
     const genericDeductDailyData = new Map<string, { x: string; y: number }>();
     const textUsageDailyData = new Map<string, { x: string; y: number }>();
     const completionApiUsageDailyData = new Map<string, { x: string; y: number }>();
@@ -192,6 +201,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     processTransactionType(purchaseTransactions, purchaseDailyData);
     processTransactionType(subscriptionTransactions, subscriptionDailyData);
     processTransactionType(genericAddTransactions, genericAddDailyData);
+    processTransactionType(referralRewardTransactions, referralRewardDailyData);
     processTransactionType(genericDeductTransactions, genericDeductDailyData);
     processTransactionType(textUsageTransactions, textUsageDailyData);
     processTransactionType(completionApiUsageTransactions, completionApiUsageDailyData);
@@ -249,6 +259,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
         purchaseDailyData,
         subscriptionDailyData,
         genericAddDailyData,
+        referralRewardDailyData,
         genericDeductDailyData,
         textUsageDailyData,
         completionApiUsageDailyData,
@@ -280,6 +291,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     const purchaseDataPoints = sortDataPoints(purchaseDailyData);
     const subscriptionDataPoints = sortDataPoints(subscriptionDailyData);
     const genericAddDataPoints = sortDataPoints(genericAddDailyData);
+    const referralRewardDataPoints = sortDataPoints(referralRewardDailyData);
     const genericDeductDataPoints = sortDataPoints(genericDeductDailyData);
     const textUsageDataPoints = sortDataPoints(textUsageDailyData);
     const completionApiUsageDataPoints = sortDataPoints(completionApiUsageDailyData);
@@ -307,6 +319,13 @@ const CreditAnalyticsTabContent: React.FC = () => {
           color: theme.palette.success[500],
         },
       ];
+      if (referralRewardDataPoints.some(p => p.y > 0)) {
+        dataToReturn.push({
+          id: 'referral_rewards',
+          data: referralRewardDataPoints,
+          color: theme.palette.warning[500],
+        });
+      }
     } else if (viewMode === 'usage') {
       dataToReturn = [
         {
@@ -341,6 +360,14 @@ const CreditAnalyticsTabContent: React.FC = () => {
           id: 'generic_add',
           data: genericAddDataPoints,
           color: theme.palette.success[300],
+        });
+      }
+
+      if (referralRewardDataPoints.some(p => p.y > 0)) {
+        lines.push({
+          id: 'referral_rewards',
+          data: referralRewardDataPoints,
+          color: theme.palette.warning[500],
         });
       }
 
@@ -935,6 +962,8 @@ const CreditAnalyticsTabContent: React.FC = () => {
                       return 'Subscriptions';
                     case 'generic_add':
                       return 'Generic Credits Added';
+                    case 'referral_rewards':
+                      return 'Referral rewards';
                     case 'generic_deduct':
                       return 'Generic Credits Deducted';
                     case 'text_usage':
