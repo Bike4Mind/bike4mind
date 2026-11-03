@@ -568,6 +568,14 @@ export function ChatShell({
   };
   useNeedsYouAlerts(sessions, statuses, openNotice);
   const clearNoticeFocus = useCallback(() => setNoticeFocus(null), []);
+  const pickExampleQuest = useCallback(
+    (prompt: string) => {
+      // The composer lives in the dock, so a collapsed dock would hide the prompt it was handed.
+      setDockOpen(true);
+      fillComposer(prompt);
+    },
+    [setDockOpen, fillComposer]
+  );
   const changeOrchestratorView = useCallback(
     (view: OrchestratorViewId) => {
       setIntroPhase('off');
@@ -1246,6 +1254,7 @@ export function ChatShell({
                   onReadReport={readParentReport}
                   focusAgent={noticeFocus?.rootId === activeId ? noticeFocus.agentId : null}
                   onFocusAgentConsumed={clearNoticeFocus}
+                  onExampleQuest={pickExampleQuest}
                   delegate={
                     orchestrateCapable ? { on: delegating, onChange: on => void setOrchestrate(on) } : undefined
                   }

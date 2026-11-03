@@ -368,9 +368,11 @@ describe('orchestrate mode in the chat shell', () => {
 
     await act(async () => el('chat-surface-toggle-orchestrate').click());
     expect(setSessionOrchestrate).toHaveBeenCalledWith(CODE.id, true);
-    expect(el('orchestrator-empty-state').textContent).toBe(
-      'No agents yet. Describe the work and it will be split across agents.'
-    );
+    expect(el('orchestrator-empty-state').textContent).toContain('Describe the work');
+    act(() => el('orchestrator-example-quest-1').click());
+    const composer = el('chat-composer-input') as HTMLTextAreaElement;
+    expect(composer.value).toMatch(/^Audit this repository using several agents in parallel/);
+    expect(document.activeElement).toBe(composer);
     expect(el('orchestrator-dock').querySelector('[data-testid="chat-thread-empty-host"]')).not.toBeNull();
     const delegate = () => el('orchestrator-delegate-switch').querySelector('input');
     expect(delegate()?.checked).toBe(true);

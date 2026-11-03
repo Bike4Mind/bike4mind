@@ -7,6 +7,7 @@ import { keyframes } from '@mui/system';
 import { useEffect, useMemo, type ReactNode, useState } from 'react';
 import { AgentPeekDrawer } from './AgentPeekDrawer';
 import { playChime } from './chime';
+import { ExampleQuestButtons } from './exampleQuests';
 import { useFinale } from './finale';
 import { FinaleBanner } from './FinaleBanner';
 import { ORCHESTRATOR_VIEWS, type OrchestratorViewId } from './orchestratorPrefs';
@@ -45,6 +46,8 @@ export interface OrchestratorStageProps {
   /** An agent to open in the peek drawer (a clicked needs-you notice); reported back once opened. */
   focusAgent?: string | null;
   onFocusAgentConsumed?(): void;
+  /** An example quest picked on the empty stage: put its prompt in the composer. */
+  onExampleQuest?(prompt: string): void;
   view: OrchestratorViewId;
   onViewChange(view: OrchestratorViewId): void;
   actions: AgentActions;
@@ -74,6 +77,7 @@ export function OrchestratorStage({
   onReadReport,
   focusAgent = null,
   onFocusAgentConsumed,
+  onExampleQuest,
   view,
   onViewChange,
   actions,
@@ -201,14 +205,10 @@ export function OrchestratorStage({
             />
           )}
           {agents.length === 0 ? (
-            <Box
-              data-testid="orchestrator-empty-state"
-              sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', p: 3 }}
-            >
-              <Typography level="body-sm" textColor="text.tertiary" textAlign="center">
-                No agents yet. Describe the work and it will be split across agents.
-              </Typography>
-            </Box>
+            <EmptyStage
+              tavern={view === 'tavern' && renderView ? renderView(view, viewProps) : null}
+              onExampleQuest={onExampleQuest}
+            />
           ) : renderView ? (
             renderView(view, viewProps)
           ) : (
@@ -225,6 +225,46 @@ export function OrchestratorStage({
           />
         )}
       </Box>
+    </Box>
+  );
+}
+
+/** With no agents yet: the Tavern still opens with the Innkeeper at the bar; Board and Table show a line. */
+function EmptyStage({ tavern, onExampleQuest }: { tavern: ReactNode; onExampleQuest?(prompt: string): void }) {
+  const quests = onExampleQuest && <ExampleQuestButtons onPick={onExampleQuest} />;
+  if (tavern) {
+    return (
+      <Box
+        data-testid="orchestrator-empty-state"
+        sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}
+      >
+        {tavern}
+        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.25, p: 2 }}>
+          <Typography level="body-sm" textColor="text.secondary" textAlign="center">
+            No quests yet. Describe the work and the Innkeeper will split it across agents.
+          </Typography>
+          {quests}
+        </Box>
+      </Box>
+    );
+  }
+  return (
+    <Box
+      data-testid="orchestrator-empty-state"
+      sx={{
+        flex: 1,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 1.5,
+        p: 3,
+      }}
+    >
+      <Typography level="body-sm" textColor="text.tertiary" textAlign="center">
+        No agents yet. Describe the work and it will be split across agents.
+      </Typography>
+      {quests}
     </Box>
   );
 }

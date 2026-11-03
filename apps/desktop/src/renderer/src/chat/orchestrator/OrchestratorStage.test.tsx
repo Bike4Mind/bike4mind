@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { act, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { OrchestratorStage } from './OrchestratorStage';
+import { OrchestratorStage, type OrchestratorViewProps } from './OrchestratorStage';
+import { EXAMPLE_QUESTS } from './exampleQuests';
 import type { AgentView } from './roster';
+import { TavernView } from './tavern/TavernView';
 import { agentFixture, createThemedMount, el, query, typeInto } from './testUtils';
 
 const FIXTURE = [
@@ -53,7 +55,7 @@ afterEach(() => {
 describe('OrchestratorStage', () => {
   it('shows an empty state instead of a view while there are no agents', async () => {
     await renderStage([]);
-    expect(el('orchestrator-empty-state').textContent).toBe(
+    expect(el('orchestrator-empty-state').textContent).toContain(
       'No agents yet. Describe the work and it will be split across agents.'
     );
     expect(query('orchestrator-table')).toBeNull();
@@ -61,6 +63,54 @@ describe('OrchestratorStage', () => {
     await renderStage([agentFixture('w', 'working')]);
     expect(query('orchestrator-empty-state')).toBeNull();
     expect(query('orchestrator-table-row-w')).not.toBeNull();
+  });
+
+  describe('example quests', () => {
+    const onExampleQuest = vi.fn();
+    const renderEmpty = (view: 'tavern' | 'board' | 'table') =>
+      themed.render(
+        <OrchestratorStage
+          agents={[]}
+          view={view}
+          onViewChange={onViewChange}
+          actions={actions}
+          introPlaying={false}
+          renderView={(id, props: OrchestratorViewProps) =>
+            id === 'tavern' ? <TavernView {...props} /> : <div data-testid={`fake-${id}`} />
+          }
+          onExampleQuest={onExampleQuest}
+        />
+      );
+
+    it('welcomes an empty tavern with the Innkeeper idle behind the bar', async () => {
+      await renderEmpty('tavern');
+      const empty = el('orchestrator-empty-state');
+      expect(empty.querySelector('[data-testid="orchestrator-tavern"]')).not.toBeNull();
+      expect(el('orchestrator-tavern-innkeeper').getAttribute('data-pose')).toBe('idle');
+      expect(empty.textContent).toContain(
+        'No quests yet. Describe the work and the Innkeeper will split it across agents.'
+      );
+    });
+
+    it.each(['tavern', 'board', 'table'] as const)('offers three example quests in the %s view', async view => {
+      await renderEmpty(view);
+      expect(query(`fake-${view}`)).toBeNull();
+      expect(EXAMPLE_QUESTS.map((_quest, index) => el(`orchestrator-example-quest-${index + 1}`).textContent)).toEqual([
+        'Audit this repo',
+        'Write missing tests',
+        'Compare approaches',
+      ]);
+      act(() => el('orchestrator-example-quest-2').click());
+      expect(onExampleQuest).toHaveBeenLastCalledWith(EXAMPLE_QUESTS[1].prompt);
+    });
+
+    it('keeps the plain empty line in the board and table views', async () => {
+      await renderEmpty('board');
+      expect(el('orchestrator-empty-state').textContent).toContain(
+        'No agents yet. Describe the work and it will be split across agents.'
+      );
+      expect(query('orchestrator-tavern')).toBeNull();
+    });
   });
 
   it('reflects and sets the delegate switch, and leaves it out when not offered', async () => {
