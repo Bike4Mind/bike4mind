@@ -102,7 +102,8 @@ const handler = baseApi({ auth: false, maxBodySize: 1024 })
     if (!unrecorded) {
       // A later page load of a recorded visit: its page is one of the visit's pages, and the page
       // beacon counts it as sent (pageBeacon.ts), so it must be recorded here. Only a consented
-      // body carries a path; one still flagged as awaiting consent never counts.
+      // body carries a path; the awaiting-consent check only guards against hand-made bodies that
+      // send both.
       if (landing.landingPath !== undefined && !isAwaitingConsent(req.body)) {
         void emitPageViewEvent({ sessionId: visitId, path: landing.landingPath }).catch(() => {});
       }
