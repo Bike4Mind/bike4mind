@@ -29,8 +29,8 @@ let root: Root;
 let host: HTMLElement;
 let conversation: ConversationController;
 
-function Harness() {
-  conversation = useConversation('s1', () => {});
+function Harness({ id = 's1' }: { id?: string }) {
+  conversation = useConversation(id, () => {});
   return null;
 }
 
@@ -69,5 +69,73 @@ describe('a conversation generation settings', () => {
 
     await act(async () => conversation.setGeneration({}));
     expect(conversation.session?.generation).toBeUndefined();
+  });
+
+  it('says so when main does not save them, and keeps what was shown', async () => {
+    await act(async () => root.render(<Harness />));
+    setSessionGeneration.mockRejectedValueOnce(new Error('disk full'));
+    let saved: boolean | undefined;
+    await act(async () => {
+      saved = await conversation.setGeneration({ topK: 20 });
+    });
+    expect(saved).toBe(false);
+    expect(conversation.notice).toBe("Could not save this chat's params. disk full");
+    expect(conversation.session?.generation).toEqual({ temperature: 0.4 });
+
+    setSessionGeneration.mockResolvedValueOnce(null as unknown as ChatSessionSummary);
+    await act(async () => {
+      saved = await conversation.setGeneration({ topK: 30 });
+    });
+    expect(saved).toBe(false);
+    expect(conversation.notice).toBe("Could not save this chat's params. The conversation could not be found.");
+    expect(conversation.session?.generation).toEqual({ temperature: 0.4 });
+  });
+
+  it('applies only the latest of two saves, whichever answers last', async () => {
+    await act(async () => root.render(<Harness />));
+    let answerFirst: (summary: ChatSessionSummary) => void = () => {};
+    const { messages: _messages, generation: _generation, ...meta } = session;
+    setSessionGeneration.mockImplementationOnce(
+      () => new Promise<ChatSessionSummary>(resolve => (answerFirst = resolve))
+    );
+    let first: Promise<boolean> | undefined;
+    await act(async () => {
+      first = conversation.setGeneration({ topK: 20 });
+    });
+    await act(async () => conversation.setGeneration({ topK: 30 }));
+    await act(async () => {
+      answerFirst({ ...meta, generation: { topK: 20 }, messageCount: 0 });
+      await first;
+    });
+    expect(conversation.session?.generation).toEqual({ topK: 30 });
+  });
+
+  it('does not put a save that lands after a switch on the conversation now open', async () => {
+    const other: ChatSession = { ...session, id: 's2', generation: { topP: 0.5 } };
+    window.b4m.chat.getSession = async (id: string) => (id === 's2' ? other : session);
+    await act(async () => root.render(<Harness />));
+    let answer: (summary: ChatSessionSummary) => void = () => {};
+    setSessionGeneration.mockImplementationOnce(() => new Promise<ChatSessionSummary>(resolve => (answer = resolve)));
+    let save: Promise<boolean> | undefined;
+    await act(async () => {
+      save = conversation.setGeneration({ topK: 20 });
+    });
+    await act(async () => root.render(<Harness id="s2" />));
+    const { messages: _messages, generation: _generation, ...meta } = session;
+    await act(async () => {
+      answer({ ...meta, generation: { topK: 20 }, messageCount: 0 });
+      await save;
+    });
+    expect(conversation.session?.id).toBe('s2');
+    expect(conversation.session?.generation).toEqual({ topP: 0.5 });
+  });
+
+  it('saves nothing before the conversation has loaded', async () => {
+    let finish: (value: ChatSession) => void = () => {};
+    window.b4m.chat.getSession = () => new Promise<ChatSession>(resolve => (finish = resolve));
+    await act(async () => root.render(<Harness />));
+    expect(await conversation.setGeneration({ topK: 20 })).toBe(false);
+    expect(setSessionGeneration).not.toHaveBeenCalled();
+    await act(async () => finish(session));
   });
 });

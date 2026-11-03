@@ -1604,7 +1604,7 @@ export function ChatShell({
                   model={modelOption}
                   generation={conversation.session?.generation}
                   disabled={!activeId}
-                  onChange={generation => void conversation.setGeneration(generation)}
+                  onChange={conversation.setGeneration}
                 />
                 <PromptCacheTtlPicker
                   model={modelOption}

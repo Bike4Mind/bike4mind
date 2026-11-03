@@ -504,8 +504,11 @@ export interface ConversationController {
   setReasoningEffort: (effort: ReasoningEffortSetting) => Promise<void>;
   /** How long the server keeps this conversation's prompt cache. Sent only on a model that takes the hour. */
   setPromptCacheTtl: (ttl: PromptCacheTtl) => Promise<void>;
-  /** Replace this conversation's sampling and output overrides; `{}` returns every one to the model default. */
-  setGeneration: (generation: GenerationSettings) => Promise<void>;
+  /**
+   * Replace this conversation's sampling and output overrides; `{}` returns every one to the model
+   * default. False, with a notice, when they were not saved.
+   */
+  setGeneration: (generation: GenerationSettings) => Promise<boolean>;
   /**
    * Set how much this conversation may do without asking. Driven by the composer pill, from a
    * click, and from nothing else: this is the only path to the mode in the renderer.
@@ -585,6 +588,8 @@ export function useConversation(
   const transcriptVersion = useRef(0);
   const workspaceVersion = useRef(0);
   const historyVersion = useRef(0);
+  // Each params save replaces the whole set, so only the latest answer may land.
+  const generationVersion = useRef(0);
 
   useEffect(() => {
     setSendError(null);
@@ -1208,14 +1213,22 @@ export function useConversation(
   );
 
   const setGeneration = useCallback(
-    async (generation: GenerationSettings) => {
-      if (!sessionId) return;
-      const updated = await window.b4m.chat.setSessionGeneration(sessionId, generation);
-      if (!updated) return;
-      setSession(current => (current ? { ...current, generation: updated.generation } : current));
-      onSummaryChanged(updated);
+    async (generation: GenerationSettings): Promise<boolean> => {
+      if (!sessionId || session?.id !== sessionId) return false;
+      const version = ++generationVersion.current;
+      try {
+        const updated = await window.b4m.chat.setSessionGeneration(sessionId, generation);
+        if (!updated) throw new Error('The conversation could not be found.');
+        if (version !== generationVersion.current) return true;
+        setSession(current => (current?.id === sessionId ? { ...current, generation: updated.generation } : current));
+        onSummaryChanged(updated);
+        return true;
+      } catch (error) {
+        setNotice(`Could not save this chat's params. ${error instanceof Error ? error.message : String(error)}`);
+        return false;
+      }
     },
-    [sessionId, onSummaryChanged]
+    [sessionId, session?.id, onSummaryChanged]
   );
 
   const setApprovalMode = useCallback(
