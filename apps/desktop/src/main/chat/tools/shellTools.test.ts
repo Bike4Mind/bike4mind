@@ -501,6 +501,7 @@ describe('shellApproval when the session-script check cannot finish', () => {
       vi.spyOn(sessionScripts, 'sessionScriptRun').mockRejectedValue(new Error('unreadable'));
       const failed = await shellApproval('bash_execute', { command: './run.sh', cwd: root }, context);
       expect(failed.key).not.toBe(before.key);
+      expect(failed.allowOnce).toBe(true);
       vi.restoreAllMocks();
       const after = await shellApproval('bash_execute', { command: './run.sh', cwd: root }, context);
       expect(after.key).toBe(before.key);

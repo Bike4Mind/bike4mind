@@ -222,6 +222,7 @@ function ApprovalPrompt({
   // No undo behind it, so the card is red and offers no way to stop being asked. Answering
   // "always" would be a single click standing in for consent to a later, different deletion.
   const irreversible = call.approvalIrreversible === true;
+  const noAlways = irreversible || call.approvalOnceOnly === true;
   const choice = call.approvalChoice;
 
   return (
@@ -301,7 +302,7 @@ function ApprovalPrompt({
                     ? 'Generate it'
                     : 'Allow once'}
             </Button>
-            {!irreversible && (
+            {!noAlways && (
               <Button
                 size="sm"
                 variant="soft"
@@ -312,7 +313,7 @@ function ApprovalPrompt({
                 Allow in this chat
               </Button>
             )}
-            {!irreversible && call.approvalRules && call.approvalRules.length > 0 && (
+            {!noAlways && call.approvalRules && call.approvalRules.length > 0 && (
               <Button
                 size="sm"
                 variant="soft"
@@ -340,7 +341,7 @@ function ApprovalPrompt({
                     : "Don't run"}
             </Button>
           </Stack>
-          {!irreversible && <AlwaysScopeLine call={call} />}
+          {!noAlways && <AlwaysScopeLine call={call} />}
         </>
       )}
     </Sheet>

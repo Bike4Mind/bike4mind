@@ -412,7 +412,24 @@ describe('ChatService running a script written in the same session', () => {
     await reply(id, [shell('bash run.sh')]);
     const first = await awaitCall('bash_execute', 'awaiting-approval');
     expect(first.approvalDetail).toContain('Could not check');
+    expect(first.approvalRules).toBeUndefined();
+    expect(first.approvalOnceOnly).toBe(true);
     approvals.resolve(first.approvalId!, { decision: 'always' });
+    await settled('bash_execute');
+
+    events.length = 0;
+    const next = streams.length;
+    streams[next - 1].write(toolTurn('again', 'bash_execute', { command: 'bash run.sh', cwd: root }));
+    streams[next - 1].write(frame('[DONE]'));
+    await awaitCall('bash_execute', 'awaiting-approval');
+  });
+
+  it('saves no rule when a failed script check is answered "always" everywhere', async () => {
+    vi.spyOn(sessionScripts, 'sessionScriptRun').mockRejectedValue(new Error('unreadable'));
+    const id = await session('auto');
+    await reply(id, [shell('bash run.sh')]);
+    const first = await awaitCall('bash_execute', 'awaiting-approval');
+    approvals.resolve(first.approvalId!, { decision: 'always', everywhere: true });
     await settled('bash_execute');
 
     events.length = 0;
