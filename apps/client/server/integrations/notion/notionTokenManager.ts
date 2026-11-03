@@ -17,6 +17,16 @@ export class NotionReconnectRequiredError extends Error {
   }
 }
 
+/**
+ * The user has no Notion connection (never connected, or unlinked). An expected state, not a fault.
+ */
+export class NotionNotConnectedError extends Error {
+  constructor(message = 'Notion is not connected. Please connect your Notion account.') {
+    super(message);
+    this.name = 'NotionNotConnectedError';
+  }
+}
+
 interface NotionTokenResult {
   accessToken: string;
   workspaceId: string;
@@ -65,15 +75,15 @@ export class NotionTokenManager {
 
   /**
    * Gets tokens with workspace metadata after confirming the token is still active.
-   * Returns null on error instead of throwing.
+   * Throws NotionNotConnectedError / NotionReconnectRequiredError for the expected states;
+   * returns null (logged at error) for real failures such as a token that will not decrypt.
    */
   static async getValidTokens(userId: string): Promise<NotionTokenResult | null> {
     try {
       const user = await userRepository.findByIdWithNotionToken(userId);
 
       if (!user || !user.notionConnect) {
-        console.error('Notion connection not found for user:', userId);
-        return null;
+        throw new NotionNotConnectedError();
       }
 
       const { notionConnect } = user;
@@ -120,7 +130,7 @@ export class NotionTokenManager {
         workspaceName: notionConnect.workspaceName,
       };
     } catch (error) {
-      if (error instanceof NotionReconnectRequiredError) {
+      if (error instanceof NotionReconnectRequiredError || error instanceof NotionNotConnectedError) {
         throw error;
       }
       console.error('Error in getValidTokens:', error);
