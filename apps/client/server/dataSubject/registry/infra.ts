@@ -1,5 +1,8 @@
 import type { DataHolderRegistry } from '../types';
 
+const AUDIT_LOG_REASON =
+  'Tamper-proof administrative audit record kept for security accountability (legitimate interest, GDPR Art. 6(1)(f))';
+
 export const infraHolders = {
   // `requestedBy` is the admin who ran the assessment (null for scheduled runs).
   AbuseAssessment: {
@@ -10,26 +13,22 @@ export const infraHolders = {
     kind: 'holder',
     references: [{ path: 'openBursts.actorUserId', matchBy: 'userId', action: 'pullFromArray' }],
   },
-  // Accountability log: the entry stays, the identity link goes. Free-text `summary`, `changes` and `details` are
-  // not scanned for the person.
+  // Append-only: the model rejects every update, so the entry cannot be anonymized in place. Free-text `summary`,
+  // `changes` and `details` are not scanned for the person.
   AdminAuditLog: {
     kind: 'holder',
     references: [
-      {
-        path: 'actor.userId',
-        matchBy: 'userId',
-        action: 'anonymize',
-        alsoRedact: ['actor.email', 'actor.name', 'context.ip', 'context.userAgent'],
-      },
-      { path: 'actor.impersonatedUserId', matchBy: 'userId', action: 'anonymize' },
+      { path: 'actor.userId', matchBy: 'userId', action: 'retain', reason: AUDIT_LOG_REASON },
+      { path: 'actor.impersonatedUserId', matchBy: 'userId', action: 'retain', reason: AUDIT_LOG_REASON },
       {
         path: 'target.id',
         matchBy: 'userId',
-        action: 'anonymize',
-        alsoRedact: ['target.displayName'],
+        action: 'retain',
+        reason: AUDIT_LOG_REASON,
         where: { 'target.kind': 'user' },
       },
     ],
+    secretPaths: ['related.impersonationSessionId'],
     unrelatedPaths: ['actor.email'],
   },
   // A reviewer's sign-off on an audit entry: the sign-off stays, the link to the reviewer goes.
