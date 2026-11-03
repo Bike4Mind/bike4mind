@@ -126,6 +126,38 @@ describe('per-conversation generation settings on a hosted model', () => {
     expect(compaction?.options).not.toHaveProperty('temperature');
   });
 
+  it('sends no override while the model list cannot be read, since no controls say what the model takes', async () => {
+    const bodies: Body[] = [];
+    const post = vi.fn().mockImplementation((_url: string, body: Body) => {
+      bodies.push(body);
+      const stream = new PassThrough();
+      stream.end(frame({ type: 'content', text: 'ok' }) + frame('[DONE]'));
+      return Promise.resolve({ data: stream, status: 200 });
+    });
+    const service = serviceFor(option, {
+      store: await storeFor('b4m-generation-offline-', model),
+      models: {
+        cached: () => null,
+        listLocal: async () => [],
+        list: async () => ({ models: [], error: 'The model list could not be loaded.' }),
+        lastKnownThinkingToggle: () => undefined,
+      } as unknown as ModelCatalog,
+      getApiClient: () =>
+        ({
+          get: vi.fn().mockResolvedValue({}),
+          getAxiosInstance: () => ({ post }),
+        }) as unknown as AuthenticatedApiClient,
+    });
+    const { id } = await service.createSession();
+    await service.renameSession(id, 'Named');
+    await service.setSessionGeneration(id, OVERRIDES);
+    await service.send(id, 'hello');
+    await vi.waitUntil(() => !service.isSessionBusy(id), { timeout: 3000, interval: 5 });
+    expect(bodies[0]?.options).not.toHaveProperty('temperature');
+    expect(bodies[0]?.options).not.toHaveProperty('thinking.budget_tokens');
+    expect(bodies[0]).not.toHaveProperty('max_tokens');
+  });
+
   it('sends nothing extra for an untouched conversation', async () => {
     const { service, bodies } = await hosted();
     const { id } = await service.createSession();

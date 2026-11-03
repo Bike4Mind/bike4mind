@@ -617,6 +617,21 @@ describe('ModelCatalog', () => {
     expect(changed).toHaveBeenCalledTimes(1);
   });
 
+  it('reads the effort levels once while a read is already on its way', async () => {
+    get.mockResolvedValue({ models: [wireModel({ id: ChatModels.GPT5, backend: 'openai' })] });
+    let land: (page: unknown) => void = () => {};
+    effortsPage.mockReturnValueOnce(new Promise(resolve => (land = resolve)));
+    await Promise.all([catalog.list(true), catalog.list(true)]);
+    await catalog.list(true);
+    expect(effortsPage).toHaveBeenCalledTimes(1);
+
+    land({ data: [], next_cursor: null });
+    await vi.waitFor(async () => {
+      await catalog.list(true);
+      expect(effortsPage).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it.each([
     ['fails', () => effortsPage.mockRejectedValue(new Error('not found'))],
     ['answers another shape', () => effortsPage.mockResolvedValue({ models: [] })],
