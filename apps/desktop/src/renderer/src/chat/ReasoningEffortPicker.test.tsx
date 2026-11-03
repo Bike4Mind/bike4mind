@@ -75,15 +75,16 @@ describe('ReasoningEffortPicker', () => {
     expect(markup(plain.id, [plain])).toBe('');
   });
 
-  it('shows a stored level the model does not list as Default, since nothing is sent for it', () => {
+  it('shows a stored level the model does not list as the nearest level it sends instead', () => {
     const listed: ChatModelOption = {
       id: 'gpt-5',
       name: 'GPT-5',
       supportsReasoningEffort: true,
-      controls: { effort: { levels: ['none', 'low', 'high', 'xhigh'], scope: 'request' } },
+      controls: { effort: { levels: ['low', 'medium', 'high'], scope: 'request' } },
     };
-    expect(markup('gpt-5', [listed], 'minimal')).toContain('Effort: Default');
-    expect(markup('gpt-5', [listed], 'xhigh')).toContain('Effort: Extra high');
+    expect(markup('gpt-5', [listed], 'minimal')).toContain('Effort: Low');
+    expect(markup('gpt-5', [listed], 'xhigh')).toContain('Effort: High');
+    expect(markup('gpt-5', [listed], 'default')).toContain('Effort: Default');
   });
 
   it('shows a stored Off on a local model with think levels as the lowest level it runs at', () => {

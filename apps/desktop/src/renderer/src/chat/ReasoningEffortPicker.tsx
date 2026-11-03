@@ -14,6 +14,7 @@ import {
   type ChatModelOption,
   type ReasoningEffortSetting,
 } from '@shared/chat';
+import { effortSent } from '@shared/generation';
 
 const LABELS: Record<ReasoningEffortSetting, string> = {
   default: 'Default',
@@ -39,17 +40,15 @@ const DESCRIPTIONS: Record<ReasoningEffortSetting, string> = {
 const UNLISTED_LEVELS: readonly ReasoningEffortSetting[] = ['minimal', 'low', 'medium', 'high'];
 
 /**
- * The setting the next request acts on, which is what the button shows: a stored level this
- * model does not list sends nothing. A template that cannot stop thinking runs Off at its lowest level.
+ * The setting the next request acts on, which is what the button shows: a stored level this model
+ * does not list runs at the nearest one it does (reasoningEffortFor in main sends the same), and a
+ * template that cannot stop thinking runs Off at its lowest level.
  */
 function shownEffort(
   effort: ReasoningEffortSetting,
-  levels: readonly ReasoningEffortSetting[],
-  toggle: boolean
+  levels: readonly ReasoningEffortSetting[]
 ): ReasoningEffortSetting {
-  if (effort === 'default' || levels.includes(effort)) return effort;
-  if (toggle && effort === THINKING_OFF_SETTING && levels.length > 0) return levels[0];
-  return 'default';
+  return effortSent(effort, levels) ?? 'default';
 }
 
 /** The two faces of a `thinkingToggle` model's switch, in menu order. */
@@ -182,7 +181,7 @@ export function ReasoningEffortPicker({
     );
   }
 
-  const shown = shownEffort(effort, levels, option?.thinkingToggle === true);
+  const shown = shownEffort(effort, levels);
   return (
     <Dropdown>
       <MenuButton

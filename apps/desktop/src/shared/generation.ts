@@ -6,7 +6,7 @@
  * a model's controls list.
  */
 
-import type { ReasoningEffortSetting } from './chat';
+import { REASONING_EFFORT_SETTINGS, type ReasoningEffortSetting } from './chat';
 
 /**
  * A conversation's overrides. An absent field sends nothing, so the model's own default applies.
@@ -72,6 +72,27 @@ export interface EffortControl {
 
 /** What a model and the backend serving it accept. An option that is not listed is not drawn or sent. */
 export type ModelControls = { [Field in GenerationField]?: NumericControl } & { effort?: EffortControl };
+
+/**
+ * The level a turn sends for a stored setting: the setting when `levels` lists it, else the listed
+ * level nearest it, the lower on a tie, so a level the model stops listing still moves effort the
+ * way it was set. Only a stored `none` maps to `none`, since that level turns thinking off.
+ */
+export function effortSent(
+  setting: ReasoningEffortSetting,
+  levels: readonly ReasoningEffortSetting[]
+): Exclude<ReasoningEffortSetting, 'default'> | undefined {
+  if (setting === 'default') return undefined;
+  if (levels.includes(setting)) return setting;
+  const rank = (level: ReasoningEffortSetting) => REASONING_EFFORT_SETTINGS.indexOf(level);
+  let nearest: Exclude<ReasoningEffortSetting, 'default'> | undefined;
+  for (const level of levels) {
+    if (level === 'default' || level === 'none') continue;
+    if (nearest === undefined || Math.abs(rank(level) - rank(setting)) < Math.abs(rank(nearest) - rank(setting)))
+      nearest = level;
+  }
+  return nearest;
+}
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
