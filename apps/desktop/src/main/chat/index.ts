@@ -518,6 +518,7 @@ export function registerChat(
       logger,
       getApiClient: () => auth.getApiClient(),
       getEnvironmentUrl: () => auth.getState().environment.url,
+      changed: () => send(IPC_CHANNELS.chatModelsChanged, null),
     },
     local
   );
