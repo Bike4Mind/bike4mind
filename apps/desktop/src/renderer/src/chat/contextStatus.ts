@@ -33,20 +33,52 @@ export function contextLine(tokens: number | null, limit: number | null): string
   return `${formatTokens(tokens)} / ${formatTokens(limit)} context (${formatOccupancy(percent, tokens)})`;
 }
 
-/** Null when there is nothing honest to say: no stamp, a runtime with no report, or a failed read. */
-export function cacheLine(status: CacheStatus | null, now: number): string | null {
+/** Epoch ms when the status turns cold on its own, or null when it never does or already is. */
+export function coldAt(status: CacheStatus | null, now: number): number | null {
   if (!status) return null;
+  const at =
+    status.kind === 'cloud' ? status.expiresAt : status.state.kind === 'loaded' ? status.state.expiresAt : null;
+  return at !== null && at > now && at - now <= KEEP_ALIVE_FOREVER_MS ? at : null;
+}
+
+/** True when the next message would pay to rebuild the cache: an expired prompt cache or an unloaded model. */
+export function isCacheCold(status: CacheStatus | null, now: number): boolean {
+  if (!status) return false;
+  if (status.kind === 'cloud') return status.expiresAt <= now;
+  const { state } = status;
+  if (state.kind === 'unloaded') return true;
+  return state.kind === 'loaded' && state.expiresAt !== null && state.expiresAt <= now;
+}
+
+/**
+ * Whether the ring shows its cold dot. A conversation with no earlier reply has nothing to be warm
+ * from, so a fresh chat never shows it even when its local model is not loaded.
+ */
+export function showColdDot(
+  status: CacheStatus | null,
+  now: number,
+  { streaming, hasReply }: { streaming: boolean; hasReply: boolean }
+): boolean {
+  return !streaming && hasReply && isCacheCold(status, now);
+}
+
+/** Null when there is nothing honest to say: no stamp, a runtime with no report, or a failed read. */
+export function cacheLine(status: CacheStatus | null, now: number, tokens: number | null = null): string | null {
+  if (!status) return null;
+  const reread = tokens === null ? '' : ` ${formatTokens(tokens)} tokens`;
   if (status.kind === 'cloud') {
     const remaining = status.expiresAt - now;
-    return remaining > 0 ? `Prompt cache warm, expires in ${formatElapsed(remaining)}` : 'Prompt cache expired';
+    if (remaining > 0) return `Prompt cache warm, expires in ${formatElapsed(remaining)}`;
+    return tokens === null ? 'Prompt cache expired' : `Prompt cache expired: the next message re-reads${reread}`;
   }
   const { state } = status;
-  if (state.kind === 'unloaded') return 'Model not loaded';
-  if (state.kind !== 'loaded') return null;
-  if (state.expiresAt === null) return 'Model loaded';
-  const remaining = state.expiresAt - now;
-  if (remaining > KEEP_ALIVE_FOREVER_MS) return 'Model loaded, no keep-alive limit';
-  return remaining > 0 ? `Model loaded, unloads in ${formatElapsed(remaining)}` : 'Model not loaded';
+  if (state.kind === 'loaded') {
+    if (state.expiresAt === null) return 'Model loaded';
+    const remaining = state.expiresAt - now;
+    if (remaining > KEEP_ALIVE_FOREVER_MS) return 'Model loaded, no keep-alive limit';
+    if (remaining > 0) return `Model loaded, unloads in ${formatElapsed(remaining)}`;
+  } else if (state.kind !== 'unloaded') return null;
+  return tokens === null ? 'Model not loaded' : `Model not loaded: the next reply loads it first and re-reads${reread}`;
 }
 
 export function contextTooltip(tokens: number | null, limit: number | null, cache: string | null): string {

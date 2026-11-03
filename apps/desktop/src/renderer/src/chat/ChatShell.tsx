@@ -480,6 +480,10 @@ export function ChatShell({
   const closePanelPopover = useCallback(() => setPanelPopoverOpen(false), []);
   useEffect(() => setPanelPopoverOpen(false), [activeId, panelDocked, screen]);
 
+  const hasReply = useMemo(
+    () => conversation.messages.some(message => message.role === 'assistant'),
+    [conversation.messages]
+  );
   const promptCache = useMemo(() => latestReply(conversation.messages)?.promptCache, [conversation.messages]);
   const composerUsage: ComposerUsage = useMemo(() => {
     const reply = latestReply(conversation.messages, turnOpen);
@@ -1232,6 +1236,7 @@ export function ChatShell({
                 modelId={conversation.session?.model ?? null}
                 promptCache={promptCache}
                 streaming={turnOpen}
+                hasReply={hasReply}
               />
             }
             placeholder={

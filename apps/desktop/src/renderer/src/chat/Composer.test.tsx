@@ -516,7 +516,14 @@ describe('the attach shortcut', () => {
 
 describe('the context ring slot', () => {
   const contextStatus = (
-    <ContextRing tokens={34_000} limit={262_000} modelId="claude-opus-5-5" promptCache={undefined} streaming={false} />
+    <ContextRing
+      tokens={34_000}
+      limit={262_000}
+      modelId="claude-opus-5-5"
+      promptCache={undefined}
+      streaming={false}
+      hasReply
+    />
   );
 
   it('draws the context ring left of the credits ring', () => {

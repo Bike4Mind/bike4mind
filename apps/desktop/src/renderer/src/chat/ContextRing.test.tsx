@@ -33,7 +33,14 @@ let visibility: DocumentVisibilityState = 'visible';
 const getLoadedState = vi.fn<(modelId: string) => Promise<LoadedModelState>>();
 
 type Props = Parameters<typeof ContextRing>[0];
-const BASE: Props = { tokens: 34_000, limit: 262_000, modelId: CLOUD, promptCache: STAMP, streaming: false };
+const BASE: Props = {
+  tokens: 34_000,
+  limit: 262_000,
+  modelId: CLOUD,
+  promptCache: STAMP,
+  streaming: false,
+  hasReply: true,
+};
 
 function draw(props: Partial<Props> = {}) {
   act(() =>
@@ -72,6 +79,7 @@ function hover() {
   act(() => vi.advanceTimersByTime(200));
 }
 
+const COLD_LOCAL = '34k / 262k context (13%)\nModel not loaded: the next reply loads it first and re-reads 34k tokens';
 const tooltip = () => query('composer-context-tooltip')?.textContent ?? null;
 
 function setVisibility(next: DocumentVisibilityState) {
@@ -116,7 +124,7 @@ describe('ContextRing', () => {
     act(() => vi.advanceTimersByTime(2000));
     expect(tooltip()).toBe('34k / 262k context (13%)\nPrompt cache warm, expires in 3m 57s');
     act(() => vi.advanceTimersByTime(240_000));
-    expect(tooltip()).toBe('34k / 262k context (13%)\nPrompt cache expired');
+    expect(tooltip()).toBe('34k / 262k context (13%)\nPrompt cache expired: the next message re-reads 34k tokens');
     expect(getLoadedState).not.toHaveBeenCalled();
   });
 
@@ -142,7 +150,7 @@ describe('ContextRing', () => {
     hover();
     await settle();
     expect(getLoadedState).toHaveBeenCalledTimes(3);
-    expect(tooltip()).toBe('34k / 262k context (13%)\nModel not loaded');
+    expect(tooltip()).toBe(COLD_LOCAL);
   });
 
   it('counts the keep-alive down while hovered', async () => {
@@ -237,7 +245,7 @@ describe('ContextRing', () => {
     await settle();
     first.resolve({ kind: 'loaded', expiresAt: NOW + 250_000 });
     await settle();
-    expect(tooltip()).toBe('34k / 262k context (13%)\nModel not loaded');
+    expect(tooltip()).toBe(COLD_LOCAL);
   });
 
   it('does not show the pre-turn state once a turn ends', async () => {
@@ -256,7 +264,7 @@ describe('ContextRing', () => {
 
     after.resolve({ kind: 'unloaded' });
     await settle();
-    expect(tooltip()).toBe('34k / 262k context (13%)\nModel not loaded');
+    expect(tooltip()).toBe(COLD_LOCAL);
   });
 
   it("never shows one local model's state for another", async () => {
@@ -282,6 +290,54 @@ describe('ContextRing', () => {
     expect(tooltip()).toBe('34k / 262k context (13%)');
     other.resolve({ kind: 'unloaded' });
     await settle();
-    expect(tooltip()).toBe('34k / 262k context (13%)\nModel not loaded');
+    expect(tooltip()).toBe(COLD_LOCAL);
+  });
+
+  it('shows no dot while a cloud cache is warm, and adds one when it expires with the tooltip closed', () => {
+    render();
+    expect(query('composer-context-cold')).toBeNull();
+    act(() => vi.advanceTimersByTime(239_000));
+    expect(query('composer-context-cold')).toBeNull();
+    act(() => vi.advanceTimersByTime(1000));
+    expect(query('composer-context-cold')).not.toBeNull();
+    expect(query('composer-context-ring')?.getAttribute('aria-label')).toBe(
+      '34k / 262k context (13%). Prompt cache expired: the next message re-reads 34k tokens'
+    );
+  });
+
+  it('shows the dot for an already expired cloud cache, but not mid-turn or without a prior reply', () => {
+    render({ promptCache: { ...STAMP, cachedAt: NOW - 600_000 } });
+    expect(query('composer-context-cold')).not.toBeNull();
+    draw({ promptCache: { ...STAMP, cachedAt: NOW - 600_000 }, streaming: true });
+    expect(query('composer-context-cold')).toBeNull();
+    draw({ promptCache: { ...STAMP, cachedAt: NOW - 600_000 }, hasReply: false });
+    expect(query('composer-context-cold')).toBeNull();
+  });
+
+  it('shows the dot for an unloaded local model, and not in a chat with no reply yet', async () => {
+    getLoadedState.mockResolvedValue({ kind: 'unloaded' });
+    render({ modelId: LOCAL, promptCache: undefined });
+    await settle();
+    expect(query('composer-context-cold')).not.toBeNull();
+    expect(query('composer-context-ring')?.getAttribute('aria-label')).toBe(
+      '34k / 262k context (13%). Model not loaded: the next reply loads it first and re-reads 34k tokens'
+    );
+    draw({ modelId: LOCAL, promptCache: undefined, hasReply: false });
+    expect(query('composer-context-cold')).toBeNull();
+  });
+
+  it('shows the dot when a loaded local model passes its keep-alive, with the tooltip closed', async () => {
+    getLoadedState.mockResolvedValue({ kind: 'loaded', expiresAt: NOW + 5000 });
+    render({ modelId: LOCAL, promptCache: undefined });
+    await settle();
+    expect(query('composer-context-cold')).toBeNull();
+    act(() => vi.advanceTimersByTime(5000));
+    expect(query('composer-context-cold')).not.toBeNull();
+  });
+
+  it('falls back to a plain cold line when the context size is unknown', () => {
+    render({ tokens: null, promptCache: { ...STAMP, cachedAt: NOW - 600_000 } });
+    hover();
+    expect(tooltip()).toBe('Context not measured yet\nPrompt cache expired');
   });
 });
