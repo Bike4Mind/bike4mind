@@ -209,10 +209,10 @@ The${APP_NAME ? ` ${APP_NAME}` : ''} Team`;
           <Input
             disabled={grantPackageId !== null}
             type="number"
-            value={startingCredits}
+            value={effectiveCredits}
             onChange={e => setStartingCredits(parseInt(e.target.value) || 0)}
             endDecorator="credits"
-            slotProps={{ input: { min: 0, step: 100 } }}
+            slotProps={{ input: { min: 0, step: 100, 'data-testid': 'waitlist-invite-credits-input' } }}
           />
         </FormControl>
 
@@ -221,10 +221,10 @@ The${APP_NAME ? ` ${APP_NAME}` : ''} Team`;
           <Input
             disabled={selectedPackage?.storageMb != null}
             type="number"
-            value={startingStorage}
+            value={effectiveStorage}
             onChange={e => setStartingStorage(parseInt(e.target.value) || 0)}
             endDecorator="MB"
-            slotProps={{ input: { min: 0, step: 100 } }}
+            slotProps={{ input: { min: 0, step: 100, 'data-testid': 'waitlist-invite-storage-input' } }}
           />
         </FormControl>
       </Box>

@@ -211,6 +211,7 @@ describe('PartnerSignupRulesTab grant package', () => {
     await userEvent.click(await screen.findByTestId('partner-rule-grant-package-select-option-pkg1'));
     expect(screen.getByTestId('partner-rule-grant-package-select-usage')).toHaveTextContent('cap hit 3 times');
     expect(screen.getByTestId('partner-rule-credits-input').querySelector('input')).toBeDisabled();
+    expect(screen.getByTestId('partner-rule-credits-input').querySelector('input')).toHaveValue(cappedPackage.credits);
     await userEvent.click(screen.getByTestId('partner-rule-save-btn'));
 
     await waitFor(() => expect(api.createPartnerSignupRule).toHaveBeenCalled());

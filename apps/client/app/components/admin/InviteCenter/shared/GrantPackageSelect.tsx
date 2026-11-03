@@ -25,6 +25,12 @@ export const useGrantPackageOptions = () =>
     },
   });
 
+/** The picked package's row, so a form can show the credits and storage it will grant. */
+export const useSelectedGrantPackage = (id: string | null) => {
+  const { data } = useGrantPackageOptions();
+  return id ? data?.data.find(pkg => pkg.id === id) : undefined;
+};
+
 type Props = {
   value: string | null;
   onChange: (id: string | null) => void;

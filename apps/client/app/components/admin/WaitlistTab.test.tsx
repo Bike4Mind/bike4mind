@@ -97,6 +97,8 @@ describe('WaitlistTab invite dialog', () => {
     await waitFor(() => expect(select).not.toBeDisabled());
     fireEvent.click(select);
     fireEvent.click(await screen.findByTestId('waitlist-invite-grant-package-select-option-pkg1'));
+    expect(screen.getByTestId('waitlist-invite-credits-input')).toHaveValue(750);
+    expect(screen.getByTestId('waitlist-invite-storage-input')).toHaveValue(2048);
     fireEvent.click(screen.getByTestId('waitlist-invite-dialog-reason-input-preset-0'));
     await waitFor(() => expect(confirm).toBeEnabled());
     fireEvent.click(confirm);

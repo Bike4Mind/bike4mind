@@ -18,7 +18,7 @@ import { createPortal } from 'react-dom';
 import { PREDEFINED_USER_TAGS } from '@bike4mind/common';
 import { useGetUserTags } from '@client/app/hooks/data/user';
 import { getTagColor } from '../../InviteCenter/shared/tagColors';
-import GrantPackageSelect from '../../InviteCenter/shared/GrantPackageSelect';
+import GrantPackageSelect, { useSelectedGrantPackage } from '../../InviteCenter/shared/GrantPackageSelect';
 import { useRegistrationInvitesStore } from '../store';
 import { CreateInviteFormData } from '../types';
 
@@ -35,6 +35,7 @@ export const CreateInviteModal: React.FC<CreateInviteModalProps> = ({ onSubmit, 
   const [startingCredits, setStartingCredits] = useState<string>('25000');
   const [grantPackageId, setGrantPackageId] = useState<string | null>(null);
   const [startingStorage, setStartingStorage] = useState<string>('1000');
+  const selectedPackage = useSelectedGrantPackage(grantPackageId);
 
   // Tag picker state
   const [tagInput, setTagInput] = useState('');
@@ -347,9 +348,9 @@ export const CreateInviteModal: React.FC<CreateInviteModalProps> = ({ onSubmit, 
                     <Input
                       disabled={grantPackageId !== null}
                       type="number"
-                      value={startingCredits}
+                      value={selectedPackage ? String(selectedPackage.credits) : startingCredits}
                       onChange={e => setStartingCredits(e.target.value)}
-                      slotProps={{ input: { min: 0 } }}
+                      slotProps={{ input: { min: 0, 'data-testid': 'create-invite-credits-input' } }}
                     />
                     <FormHelperText>
                       <Typography level="body-xs" sx={{ opacity: 0.7 }}>
@@ -362,11 +363,11 @@ export const CreateInviteModal: React.FC<CreateInviteModalProps> = ({ onSubmit, 
                   <FormControl>
                     <FormLabel>Starting Storage (MB)</FormLabel>
                     <Input
-                      disabled={grantPackageId !== null}
+                      disabled={selectedPackage?.storageMb != null}
                       type="number"
-                      value={startingStorage}
+                      value={selectedPackage?.storageMb != null ? String(selectedPackage.storageMb) : startingStorage}
                       onChange={e => setStartingStorage(e.target.value)}
-                      slotProps={{ input: { min: 0 } }}
+                      slotProps={{ input: { min: 0, 'data-testid': 'create-invite-storage-input' } }}
                     />
                     <FormHelperText>
                       <Typography level="body-xs" sx={{ opacity: 0.7 }}>

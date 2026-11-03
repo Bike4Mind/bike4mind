@@ -54,6 +54,7 @@ import type { GrantPackageRow } from '@client/app/utils/grantPackageAPICalls';
 import GrantPackageSelect, {
   grantPackageUsage,
   useGrantPackageOptions,
+  useSelectedGrantPackage,
 } from './InviteCenter/shared/GrantPackageSelect';
 
 // Options for the entitlements picker; spread to a mutable array for Joy Autocomplete.
@@ -134,6 +135,7 @@ export default function PartnerSignupRulesTab() {
   }
   const [formError, setFormError] = useState<string | null>(null);
   const { data: packageList } = useGrantPackageOptions();
+  const selectedPackage = useSelectedGrantPackage(form.grantPackageId);
   // Rule pending deletion (drives the confirm dialog); null when closed.
   const [deleteTarget, setDeleteTarget] = useState<IPartnerSignupRuleDocument | null>(null);
 
@@ -638,7 +640,7 @@ export default function PartnerSignupRulesTab() {
                 type="number"
                 slotProps={{ input: { min: 0 } }}
                 endDecorator={<Typography level="body-xs">credits</Typography>}
-                value={form.signupCredits}
+                value={selectedPackage ? String(selectedPackage.credits) : form.signupCredits}
                 onChange={e => setForm(f => ({ ...f, signupCredits: e.target.value }))}
                 disabled={form.grantPackageId !== null}
                 data-testid="partner-rule-credits-input"

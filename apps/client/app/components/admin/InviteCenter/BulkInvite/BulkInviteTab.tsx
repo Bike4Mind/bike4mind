@@ -26,7 +26,7 @@ import { APP_NAME } from '@client/config/general'; // brand externalized
 import { toast } from 'sonner';
 import CopyButton from '../shared/CopyButton';
 import { getTagColor } from '../shared/tagColors';
-import GrantPackageSelect from '../shared/GrantPackageSelect';
+import GrantPackageSelect, { useSelectedGrantPackage } from '../shared/GrantPackageSelect';
 
 // --- Types ---
 
@@ -516,6 +516,7 @@ const BulkInviteTab = ({ quickAction }: BulkInviteTabProps) => {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [sending, setSending] = useState(false);
   const [grantPackageId, setGrantPackageId] = useState<string | null>(null);
+  const selectedPackage = useSelectedGrantPackage(grantPackageId);
   const [showCsvPanel, setShowCsvPanel] = useState(false);
   const [results, setResults] = useState<ImportResult[] | null>(null);
   const [sendProgress, setSendProgress] = useState<{ completed: number; total: number } | null>(null);
@@ -852,20 +853,24 @@ const BulkInviteTab = ({ quickAction }: BulkInviteTabProps) => {
                   size="sm"
                   variant="plain"
                   placeholder="0"
-                  value={row.credits}
+                  value={selectedPackage ? String(selectedPackage.credits) : row.credits}
                   onChange={e => updateRow(row.id, 'credits', e.target.value)}
-                  disabled={isSent}
-                  slotProps={{ input: { type: 'number', min: 0, step: 1 } }}
+                  disabled={isSent || grantPackageId !== null}
+                  slotProps={{
+                    input: { type: 'number', min: 0, step: 1, 'data-testid': 'bulk-invite-row-credits-input' },
+                  }}
                   sx={{ fontSize: '0.8rem' }}
                 />
                 <Input
                   size="sm"
                   variant="plain"
                   placeholder="1000"
-                  value={row.storage}
+                  value={selectedPackage?.storageMb != null ? String(selectedPackage.storageMb) : row.storage}
                   onChange={e => updateRow(row.id, 'storage', e.target.value)}
-                  disabled={isSent}
-                  slotProps={{ input: { type: 'number', min: 0, step: 1 } }}
+                  disabled={isSent || selectedPackage?.storageMb != null}
+                  slotProps={{
+                    input: { type: 'number', min: 0, step: 1, 'data-testid': 'bulk-invite-row-storage-input' },
+                  }}
                   sx={{ fontSize: '0.8rem' }}
                 />
                 <TagsCell
