@@ -2,8 +2,8 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import type { ChatSession, ChatSessionSummary } from '@shared/chat';
-import type { ShareDirectoryResult } from '@shared/directoryRequest';
+import type { ChatSession, ChatSessionSummary, ChatStreamEvent } from '@shared/chat';
+import { REQUEST_DIRECTORY_TOOL_NAME, type ShareDirectoryResult } from '@shared/directoryRequest';
 import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { NO_SKILLS } from '@shared/skills';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -79,6 +79,9 @@ const deferred = <T,>() => {
 /** Session reads for these ids wait on the promise, so a test can order the load against a share. */
 const heldLoads = new Map<string, Promise<void>>();
 
+const streamListeners = new Set<(event: ChatStreamEvent) => void>();
+const emit = (event: ChatStreamEvent) => streamListeners.forEach(listener => listener(event));
+
 function stubBridge(sessions: ChatSessionSummary[]) {
   const stored = new Map(sessions.map(session => [session.id, session]));
   createSession.mockImplementation(async () => {
@@ -113,6 +116,10 @@ function stubBridge(sessions: ChatSessionSummary[]) {
           if (updated) stored.set(updated.id, updated);
           return updated;
         },
+        onStreamEvent: (listener: (event: ChatStreamEvent) => void) => {
+          streamListeners.add(listener);
+          return () => streamListeners.delete(listener);
+        },
       }),
       sidebar: quietBridge({ getSections: async () => EMPTY_SIDEBAR_SECTIONS }),
       getAppInfo: async () => ({ homeDirectory: '/home/test' }),
@@ -146,6 +153,7 @@ beforeEach(() => {
   for (const mock of [createSession, pickProjectDirectory, addContextDirectory, removeContextDirectory])
     mock.mockReset();
   heldLoads.clear();
+  streamListeners.clear();
 });
 
 afterEach(() => {
@@ -292,7 +300,7 @@ describe('Add folder in a Chat composer', () => {
     expect(chips()).toHaveLength(0);
   });
 
-  it('does not show a refusal that returns after the user moved to another chat', async () => {
+  it('shows a refusal that returns after the user moved to another chat only once its own chat is back', async () => {
     stubBridge([summary('alpha', 'chat', undefined, 'Alpha'), summary('beta', 'chat', undefined, 'Beta')]);
     await renderShell();
     await openSessionRow('Alpha');
@@ -303,6 +311,40 @@ describe('Add folder in a Chat composer', () => {
     await openSessionRow('Beta');
     await act(async () => share.resolve({ status: 'refused', error: 'The filesystem root cannot be shared.' }));
     expect(byTestId('chat-send-error')).toBeNull();
+    expect(byTestId('chat-add-folder-error')).toBeNull();
+
+    await openSessionRow('Alpha');
+    expect(byTestId('chat-add-folder-error')?.textContent).toBe(
+      'Desktop could not share the folder, so the folder was not added: The filesystem root cannot be shared.'
+    );
+  });
+
+  it('drops a /add-dir refusal for a chat the user left, without an unhandled rejection', async () => {
+    // The renderer's tsconfig has no Node types, but vitest runs this file under Node.
+    type RejectionHook = (event: 'unhandledRejection', listener: (reason: unknown) => void) => void;
+    const node = (globalThis as unknown as { process: { on: RejectionHook; off: RejectionHook } }).process;
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => void rejections.push(reason);
+    node.on('unhandledRejection', onRejection);
+    try {
+      stubBridge([summary('alpha', 'chat', undefined, 'Alpha'), summary('beta', 'chat', undefined, 'Beta')]);
+      await renderShell();
+      await openSessionRow('Alpha');
+
+      const share = deferred<ShareDirectoryResult>();
+      addContextDirectory.mockReturnValue(share.promise);
+      await typeCommand('/add-dir /nowhere');
+      await openSessionRow('Beta');
+      await act(async () => share.resolve({ status: 'refused', error: 'Not a folder.' }));
+      await act(() => new Promise(resolve => setTimeout(resolve, 0)));
+      expect(rejections).toEqual([]);
+
+      await openSessionRow('Alpha');
+      expect(byTestId('chat-send-error')).toBeNull();
+      expect(byTestId('chat-add-folder-error')).toBeNull();
+    } finally {
+      node.off('unhandledRejection', onRejection);
+    }
   });
 
   it('does not show "already shared" for a share that returns after the user moved to another chat', async () => {
@@ -560,6 +602,75 @@ describe('Add folder in a Chat composer', () => {
     expect(addContextDirectory).toHaveBeenCalledTimes(1);
   });
 
+  it("applies a share that landed during a chat's first read to that read only, then reads main on reopen", async () => {
+    const stored = stubBridge([]);
+    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    const firstRead = deferred<void>();
+    heldLoads.set('fresh', firstRead.promise);
+    await renderShell();
+
+    const share = deferred<ShareDirectoryResult>();
+    pickProjectDirectory.mockResolvedValue(NOTES);
+    addContextDirectory.mockReturnValue(share.promise);
+    await addFolderFromMenu();
+    await act(async () => share.resolve({ status: 'added', path: NOTES, session: summary('fresh', 'chat', [NOTES]) }));
+    await act(async () => firstRead.resolve());
+    await act(async () => undefined);
+    expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
+
+    const other = summary('other', 'chat', undefined, 'Other');
+    stored.set('other', other);
+    createSession.mockResolvedValueOnce({ session: other });
+    await act(async () => byTestId('chat-new-session-btn')?.click());
+    await act(async () => undefined);
+    // Another window takes the folder back while this one looks elsewhere.
+    stored.set('fresh', summary('fresh'));
+    await openSessionRow('New conversation');
+    expect(chips()).toHaveLength(0);
+  });
+
+  it('reads a chat from main on reopen, not from a share made while it was open', async () => {
+    const stored = stubBridge([
+      summary('alpha', 'chat', undefined, 'Alpha'),
+      summary('beta', 'chat', undefined, 'Beta'),
+    ]);
+    await renderShell();
+    await openSessionRow('Alpha');
+    addContextDirectory.mockResolvedValue({
+      status: 'added',
+      path: NOTES,
+      session: summary('alpha', 'chat', [NOTES], 'Alpha'),
+    });
+    await addFolderFromMenu();
+    expect(chips()).toHaveLength(1);
+
+    await openSessionRow('Beta');
+    stored.set('alpha', summary('alpha', 'chat', undefined, 'Alpha'));
+    await openSessionRow('Alpha');
+    expect(chips()).toHaveLength(0);
+  });
+
+  it('keeps a share that lands while a chat the user came back to is being read again', async () => {
+    stubBridge([summary('alpha', 'chat', undefined, 'Alpha'), summary('beta', 'chat', undefined, 'Beta')]);
+    await renderShell();
+    await openSessionRow('Alpha');
+    const share = deferred<ShareDirectoryResult>();
+    addContextDirectory.mockReturnValue(share.promise);
+    await addFolderFromMenu();
+
+    heldLoads.set('beta', new Promise(() => undefined));
+    await openSessionRow('Beta');
+    const reread = deferred<void>();
+    heldLoads.set('alpha', reread.promise);
+    await openSessionRow('Alpha');
+    await act(async () =>
+      share.resolve({ status: 'added', path: NOTES, session: summary('alpha', 'chat', [NOTES], 'Alpha') })
+    );
+    await act(async () => reread.resolve());
+    await act(async () => undefined);
+    expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
+  });
+
   it('does not make the Add folder chat take over a chat the user started while it was being created', async () => {
     const stored = stubBridge([]);
     createSession.mockImplementationOnce(() => new Promise(() => undefined));
@@ -584,6 +695,35 @@ describe('Add folder in a Chat composer', () => {
 
     expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('fresh', NOTES);
     expect(chips()).toHaveLength(0);
+  });
+
+  it("leaves the open chat's error up when Add folder shares into the chat it made in the background", async () => {
+    const stored = stubBridge([]);
+    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    const made = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => made.promise);
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValue(NOTES);
+    await addFolderFromMenu();
+
+    const other = summary('other', 'chat', undefined, 'Other');
+    stored.set('other', other);
+    createSession.mockResolvedValueOnce({ session: other });
+    await act(async () => byTestId('chat-new-session-btn')?.click());
+    await act(async () => undefined);
+    addContextDirectory.mockResolvedValueOnce({ status: 'refused', error: 'Not a folder.' });
+    await typeCommand('/add-dir /nowhere');
+    expect(byTestId('chat-send-error')?.textContent).toContain('Not a folder.');
+
+    addContextDirectory.mockResolvedValue({ status: 'added', path: NOTES, session: summary('fresh', 'chat', [NOTES]) });
+    const fresh = summary('fresh');
+    stored.set('fresh', fresh);
+    await act(async () => made.resolve({ session: fresh }));
+    await act(async () => undefined);
+
+    expect(addContextDirectory).toHaveBeenLastCalledWith('fresh', NOTES);
+    expect(byTestId('chat-send-error')?.textContent).toContain('Not a folder.');
   });
 
   it('shows no start-failure alert in a chat the user opened while the chat was being created', async () => {
@@ -624,7 +764,7 @@ describe('Add folder in a Chat composer', () => {
     expect(byTestId('chat-add-folder-error')).toBeNull();
   });
 
-  it('shows a main-side throw from the share in the open chat, saying the folder was not added', async () => {
+  it('shows a main-side throw from the share in the open chat, saying the folder was not added, until clicked', async () => {
     stubBridge([summary('blank-1')]);
     await renderShell();
     await act(async () => byTestId('chat-session-item')?.click());
@@ -639,6 +779,9 @@ describe('Add folder in a Chat composer', () => {
       'Desktop could not share the folder, so the folder was not added: share store offline'
     );
     expect(chips()).toHaveLength(0);
+
+    await act(async () => byTestId('chat-add-folder-error')?.click());
+    expect(byTestId('chat-add-folder-error')).toBeNull();
   });
 
   it('shows a throw from the share into a freshly made chat on that chat', async () => {
@@ -743,6 +886,35 @@ describe('Add folder in a Chat composer', () => {
       session: summary('blank-1', 'chat', [NOTES]),
     });
     await typeCommand(`/add-dir ${NOTES}`);
+    expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
+    expect(byTestId('chat-add-folder-error')).toBeNull();
+  });
+
+  it("drops a chat's share-failure alert once the model's folder request is granted there", async () => {
+    const stored = stubBridge([summary('blank-1')]);
+    await renderShell();
+    await act(async () => byTestId('chat-session-item')?.click());
+    await act(async () => undefined);
+
+    addContextDirectory.mockRejectedValueOnce(new Error('share store offline'));
+    await addFolderFromMenu();
+    expect(byTestId('chat-add-folder-error')).not.toBeNull();
+
+    stored.set('blank-1', summary('blank-1', 'chat', [NOTES]));
+    await act(async () =>
+      emit({
+        type: 'tool-end',
+        sessionId: 'blank-1',
+        messageId: 'reply-1',
+        call: {
+          id: 'call-1',
+          name: REQUEST_DIRECTORY_TOOL_NAME,
+          input: { outcome: { status: 'granted' } },
+          status: 'done',
+        },
+      })
+    );
+    await act(async () => undefined);
     expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
     expect(byTestId('chat-add-folder-error')).toBeNull();
   });
