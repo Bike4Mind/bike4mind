@@ -98,16 +98,23 @@ interface Entry {
   /** From the last listing, so a conversation saved on an alias still finds its model while the server is down. */
   aliasIds?: ReadonlyMap<string, string[]>;
   /** The listing in flight, shared by the picker and health checks. */
-  listing?: Promise<Listing>;
-  /** A listing that finished after the picker stopped waiting, served instead of a new listing while fresh. */
-  listed?: { models: ChatModelOption[]; at: number };
-  /** The listing a picker stopped waiting for; its result is kept and announced when it lands. */
-  reporting?: Promise<Listing>;
-  /** The last failed listing applied to health, so a failure two callers see is applied once. */
-  failed?: Listing;
+  slot?: Slot;
+  /** Sequence number of the last listing started. */
+  listSeq: number;
+  /** Listings numbered below this started before a pull or removal and change nothing when they land. */
+  floor: number;
+  /** A listing that finished after a caller was given pending rows, served instead of a new listing while fresh. */
+  kept?: { models: ChatModelOption[]; at: number };
 }
 
 type Listing = { ok: true; models: ChatModelOption[] } | { ok: false; error: unknown };
+
+interface Slot {
+  seq: number;
+  promise: Promise<Listing>;
+  /** A caller was given pending rows for this listing, so its result is kept and announced when it lands. */
+  reported: boolean;
+}
 
 export interface ModelServerRegistryDeps {
   store: ModelServerStore;
@@ -410,26 +417,25 @@ export class ModelServerRegistry {
           const check = (running ?? this.checkEntry(entry).then(() => this.emit())).catch(() => undefined);
           await within(check, PICKER_CHECK_WAIT_MS, undefined);
         }
+        if (!this.current(entry)) return [];
         let reason: string | null = null;
-        if (entry.health.state === 'online' || entry.health.state === 'unknown') {
-          const fresh = this.freshListing(entry);
-          const listing = fresh ? null : this.listEntry(entry);
-          // undefined: still listing when the wait ran out.
-          const result: Listing | undefined = listing
-            ? await within(listing, PICKER_LIST_WAIT_MS, undefined)
-            : { ok: true, models: fresh ?? [] };
+        if (listable(entry)) {
+          const fresh = this.freshKept(entry);
+          const slot = fresh ? null : this.listEntry(entry);
+          // undefined: still listing when the wait ran out, or already reported as still listing.
+          let result: Listing | undefined = fresh ? { ok: true, models: fresh } : undefined;
+          if (slot && !slot.reported) result = await within(slot.promise, PICKER_LIST_WAIT_MS, undefined);
           if (!this.current(entry)) return [];
           if (result?.ok) {
-            if (listing) this.keepLate(entry, listing, result);
             if (entry.health.state === 'unknown') void this.check(entry.record.id);
             return result.models.map(model => ({ ...model, server }));
           }
-          if (result === undefined && listing) {
-            this.reportLate(entry, listing);
+          // A check that found the server down during the wait decides the label.
+          if (result === undefined && listable(entry)) {
+            if (slot) slot.reported = true;
             reason = `${entry.record.name} is still listing its models`;
-          } else if (result) this.failOnce(entry, result);
+          }
         }
-        if (!this.current(entry)) return [];
         const pending = reason !== null;
         reason ??= unavailableReason(entry);
         const runtimeId = serverRuntimeId(entry.record.id);
@@ -454,10 +460,9 @@ export class ModelServerRegistry {
   private forget(id: string): void {
     const entry = this.entries.get(id);
     if (!entry) return;
-    entry.listed = undefined;
-    // A listing started before the change may hold the old names; let it finish without being kept.
-    entry.listing = undefined;
-    entry.reporting = undefined;
+    entry.kept = undefined;
+    entry.slot = undefined;
+    entry.floor = entry.listSeq + 1;
   }
 
   /** False once update() or remove() replaced this entry; its late results then change nothing. */
@@ -465,52 +470,59 @@ export class ModelServerRegistry {
     return this.entries.get(entry.record.id) === entry;
   }
 
-  private freshListing(entry: Entry): ChatModelOption[] | null {
-    const listed = entry.listed;
-    if (!listed) return null;
-    return Date.now() - Math.max(listed.at, this.lateNoticeAt) < LISTED_FRESH_MS ? listed.models : null;
+  private freshKept(entry: Entry): ChatModelOption[] | null {
+    const kept = entry.kept;
+    if (!kept) return null;
+    return Date.now() - Math.max(kept.at, this.lateNoticeAt) < LISTED_FRESH_MS ? kept.models : null;
   }
 
-  /** One listing per server at a time, shared by the picker and health checks; it never rejects. */
-  private listEntry(entry: Entry): Promise<Listing> {
-    if (entry.listing) return entry.listing;
-    entry.listed = undefined;
-    const listing: Promise<Listing> = entry.client
+  /** One listing per server at a time, shared by the picker and health checks; its promise never rejects. */
+  private listEntry(entry: Entry): Slot {
+    if (entry.slot) return entry.slot;
+    const slot = { seq: ++entry.listSeq, reported: false } as Slot;
+    slot.promise = entry.client
       .listModels()
       .then(
-        async (models): Promise<Listing> => {
-          if (!this.current(entry)) return { ok: false, error: new Error(`${entry.record.name} was changed.`) };
-          if (entry.listing !== listing) return { ok: true, models };
-          const names = models.map(model => model.name);
-          entry.record = { ...entry.record, models: names };
-          entry.aliasIds = aliasIdsOf(models);
-          await this.deps.store.setModels(entry.record.id, names).catch(() => undefined);
-          return { ok: true, models };
-        },
+        (models): Listing => ({ ok: true, models }),
         (error: unknown): Listing => ({ ok: false, error })
       )
-      .finally(() => {
-        if (entry.listing === listing) entry.listing = undefined;
-      });
-    entry.listing = listing;
-    return listing;
+      .then(result => this.settle(entry, slot, result));
+    entry.slot = slot;
+    return slot;
   }
 
-  /** Keeps a listing a picker gave up on, whoever received it, so the reload its notice causes is served from it. */
-  private keepLate(entry: Entry, listing: Promise<Listing>, result: Listing & { ok: true }): void {
-    if (entry.reporting !== listing || entry.listing || !this.current(entry)) return;
-    if (entry.listed?.models !== result.models) entry.listed = { models: result.models, at: Date.now() };
+  /** Applies a finished listing once, whoever waits on it, and announces it when a caller was given pending rows. */
+  private async settle(entry: Entry, slot: Slot, result: Listing): Promise<Listing> {
+    try {
+      if (!this.current(entry)) return { ok: false, error: new Error(`${entry.record.name} was changed.`) };
+      if (slot.seq < entry.floor) return result;
+      if (result.ok) {
+        const names = result.models.map(model => model.name);
+        entry.record = { ...entry.record, models: names };
+        entry.aliasIds = aliasIdsOf(result.models);
+        if (slot.reported) entry.kept = { models: result.models, at: Date.now() };
+      } else this.listingFailed(entry, result.error);
+      if (slot.reported) this.announce(entry, result.ok);
+      if (result.ok) await this.deps.store.setModels(entry.record.id, entry.record.models).catch(() => undefined);
+      return result;
+    } finally {
+      if (entry.slot === slot) entry.slot = undefined;
+    }
   }
 
-  private failOnce(entry: Entry, result: Listing & { ok: false }): void {
-    if (entry.failed === result || !this.current(entry)) return;
-    entry.failed = result;
-    this.listingFailed(entry, result.error);
+  private announce(entry: Entry, ok: boolean): void {
+    try {
+      // Settings and the Models screen show the new health; the picker reloads on listedLate.
+      if (!ok) this.emit();
+      this.lateNoticeAt = Date.now();
+      this.deps.listedLate?.(entry.record.id);
+    } catch (err) {
+      this.deps.logger.warn(`MODEL SERVERS: reporting a late listing failed: ${String(err)}`);
+    }
   }
 
   private listingFailed(entry: Entry, raw: unknown): void {
     const err = this.unwrapFailure(raw, entry);
-    entry.listed = undefined;
     entry.health = failureHealth(err, entry.record.name, entry.scope, this.platform) ?? {
       ...entry.health,
       state: 'unreachable',
@@ -521,32 +533,6 @@ export class ModelServerRegistry {
         this.platform
       ),
     };
-  }
-
-  /**
-   * After a listing the picker stopped waiting for finishes, keeps it and says so once, even when another caller
-   * received it in time: the picker still shows it pending. Deferred a turn so a waiting caller gets there first.
-   */
-  private reportLate(entry: Entry, listing: Promise<Listing>): void {
-    if (entry.reporting === listing) return;
-    entry.reporting = listing;
-    void listing.then(result =>
-      setTimeout(() => {
-        try {
-          if (entry.reporting !== listing || !this.current(entry)) return;
-          if (result.ok) this.keepLate(entry, listing, result);
-          else {
-            this.failOnce(entry, result);
-            // Settings and the Models screen show the new health; the picker reloads on listedLate.
-            this.emit();
-          }
-          this.lateNoticeAt = Date.now();
-          this.deps.listedLate?.(entry.record.id);
-        } catch (err) {
-          this.deps.logger.warn(`MODEL SERVERS: reporting a late listing failed: ${String(err)}`);
-        }
-      }, 0)
-    );
   }
 
   /** The chat client for a `srv-<id>` runtime id; null for any other id. */
@@ -725,9 +711,9 @@ export class ModelServerRegistry {
       checkedAt,
       error: null,
     });
-    entry.listed = undefined;
-    const listing = await this.listEntry(entry);
-    if (!listing.ok) {
+    // A fresh kept listing is what the picker serves; listing again would take its rows back to pending.
+    const listing = this.freshKept(entry) ? null : await this.listEntry(entry).promise;
+    if (listing && !listing.ok) {
       const err = listing.error;
       this.deps.logger.debug(
         `MODEL SERVERS: listing ${entry.record.id} failed: ${err instanceof Error ? err.name : 'unknown'}`
@@ -757,7 +743,6 @@ export class ModelServerRegistry {
 
   private setHealth(entry: Entry, health: ModelServerHealth): void {
     entry.health = health;
-    if (health.state !== 'online') entry.listed = undefined;
   }
 
   private build(record: ModelServerRecord, previous?: Entry): Entry {
@@ -811,6 +796,8 @@ export class ModelServerRegistry {
       health: previous && previous.record.kind === record.kind ? previous.health : { ...UNKNOWN_HEALTH },
       product,
       ...(previous?.aliasIds ? { aliasIds: previous.aliasIds } : {}),
+      listSeq: 0,
+      floor: 0,
     };
   }
 
@@ -926,6 +913,10 @@ function aliasIdsOf(listed: readonly ChatModelOption[]): Map<string, string[]> {
   return new Map(
     listed.flatMap((model): [string, string[]][] => (model.aliasIds?.length ? [[model.name, model.aliasIds]] : []))
   );
+}
+
+function listable(entry: Entry): boolean {
+  return entry.health.state === 'online' || entry.health.state === 'unknown';
 }
 
 function unavailableReason(entry: Entry): string {

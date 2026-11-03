@@ -549,17 +549,32 @@ describe('ModelServerRegistry', () => {
       expect(tagCalls(fake, SLOW)).toBe(listedBefore + 2);
     });
 
-    it('asks the server again after a health check lists it', async () => {
+    it('does not list again on a health check while the kept listing is fresh', async () => {
       const { fake, servers, slowId, listedBefore, release } = await slowAndFast();
       await listPastTheWait(servers);
       release();
       await settle();
-      await settle();
       await servers.check(slowId);
-      const afterCheck = tagCalls(fake, SLOW);
-      expect(afterCheck).toBeGreaterThan(listedBefore + 1);
-      await servers.models();
-      expect(tagCalls(fake, SLOW)).toBe(afterCheck + 1);
+      // The probe's own /api/tags only.
+      expect(tagCalls(fake, SLOW)).toBe(listedBefore + 2);
+      const slow = (await servers.models()).filter(model => model.server?.name === 'slow');
+      expect(tagCalls(fake, SLOW)).toBe(listedBefore + 2);
+      expect(slow).toHaveLength(2);
+      expect(slow.every(model => model.unavailable === undefined)).toBe(true);
+    });
+
+    it('asks the server again on a health check once the kept listing is stale', async () => {
+      const { fake, servers, slowId, listedBefore, release } = await slowAndFast();
+      await listPastTheWait(servers);
+      release();
+      await settle();
+      vi.useFakeTimers({ now: Date.now() + LISTED_FRESH_MS });
+      try {
+        await servers.check(slowId);
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(tagCalls(fake, SLOW)).toBe(listedBefore + 3);
     });
 
     it('shares a running listing between a health check and the picker', async () => {
@@ -650,14 +665,29 @@ describe('ModelServerRegistry', () => {
       expect(results.at(-1)?.every(model => model.unavailable === undefined)).toBe(true);
     });
 
-    it('still reports a late listing that another caller received in time', async () => {
+    /** models() under fake timers, resolved without letting any timer run. */
+    async function listWithoutWaiting(servers: ModelServerRegistry): Promise<ChatModelOption[] | null> {
+      vi.useFakeTimers();
+      try {
+        let listed: ChatModelOption[] | null = null;
+        void servers.models().then(result => {
+          listed = result;
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        return listed;
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+
+    it('answers at once with pending rows once a listing was reported, and announces it once', async () => {
       const { fake, servers, listedLate, slowId, listedBefore, release } = await slowAndFast();
       await listPastTheWait(servers);
-      const joined = servers.models();
+      const again = await listWithoutWaiting(servers);
+      expect(again?.filter(model => model.server?.name === 'slow')).toEqual([
+        expect.objectContaining({ name: 'qwen2.5:0.5b', pending: true }),
+      ]);
       release();
-      const slow = (await joined).filter(model => model.server?.name === 'slow');
-      expect(slow.map(model => model.name).sort()).toEqual(['llama3.2:3b', 'qwen2.5:0.5b']);
-      await settle();
       await settle();
       expect(listedLate).toHaveBeenCalledTimes(1);
       expect(listedLate).toHaveBeenCalledWith(slowId);
@@ -665,21 +695,88 @@ describe('ModelServerRegistry', () => {
       expect(tagCalls(fake, SLOW)).toBe(listedBefore + 1);
     });
 
-    it('applies a late failure once and reports it once when another caller also received it', async () => {
+    it('applies a late failure once, reports it once and labels the server down', async () => {
       const { servers, listedLate, changed, slowId, fail } = await slowAndFast();
       await listPastTheWait(servers);
-      const joined = servers.models();
-      fail();
-      expect((await joined).filter(model => model.server?.name === 'slow')).toEqual([
-        expect.objectContaining({ unavailable: expect.stringMatching(/slow is unreachable/) }),
-      ]);
       changed.mockClear();
+      fail();
       await settle();
+      const health = (await servers.views())[1].health;
+      expect(health.state).toBe('unreachable');
       await settle();
+      expect((await servers.views())[1].health).toBe(health);
       expect(listedLate).toHaveBeenCalledTimes(1);
       expect(listedLate).toHaveBeenCalledWith(slowId);
       expect(changed).toHaveBeenCalledTimes(1);
-      expect((await servers.views())[1].health.state).toBe('unreachable');
+      expect((await servers.models()).filter(model => model.server?.name === 'slow')).toEqual([
+        expect.objectContaining({ unavailable: expect.stringMatching(/slow is unreachable/) }),
+      ]);
+    });
+
+    it('labels the server down, not pending, when a check finds it down during the wait', async () => {
+      const { fake, servers, listedLate, slowId, release } = await slowAndFast();
+      vi.useFakeTimers();
+      try {
+        const listing = servers.models();
+        await vi.advanceTimersByTimeAsync(10);
+        fake.state.down.add(SLOW);
+        await servers.check(slowId);
+        await vi.advanceTimersByTimeAsync(PICKER_LIST_WAIT_MS);
+        const listed = await listing;
+        expect(listed.filter(model => model.server?.name === 'slow')).toEqual([
+          expect.objectContaining({ unavailable: expect.stringMatching(/slow is unreachable/) }),
+        ]);
+        expect(listed.some(model => model.pending)).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+      release();
+      await settle();
+      expect(listedLate).not.toHaveBeenCalled();
+    });
+
+    it('ignores a listing detached by a removal during the wait, even after the wait runs out', async () => {
+      const { fake, servers, listedLate, slowId, listedBefore, release } = await slowAndFast();
+      vi.useFakeTimers();
+      try {
+        const listing = servers.models();
+        await vi.advanceTimersByTimeAsync(1_000);
+        await servers
+          .hubServer(slowId)
+          ?.runtime.remove('qwen2.5:0.5b')
+          .catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(PICKER_LIST_WAIT_MS);
+        await listing;
+      } finally {
+        vi.useRealTimers();
+      }
+      release();
+      await settle();
+      expect(listedLate).not.toHaveBeenCalled();
+      expect((await servers.views())[1].models).toEqual(['qwen2.5:0.5b']);
+      await servers.models();
+      expect(tagCalls(fake, SLOW)).toBe(listedBefore + 2);
+    });
+
+    it('lets a detached listing finish without dropping the listing that replaced it', async () => {
+      const { fake, servers, slowId, listedBefore, release } = await slowAndFast();
+      const first = servers.models();
+      await vi.waitFor(() => expect(tagCalls(fake, SLOW)).toBe(listedBefore + 1));
+      await servers
+        .hubServer(slowId)
+        ?.runtime.remove('qwen2.5:0.5b')
+        .catch(() => undefined);
+      let releaseSecond: () => void = () => {};
+      fake.state.tagsGates.set(SLOW, new Promise<void>(resolve => (releaseSecond = resolve)));
+      const second = servers.models();
+      await vi.waitFor(() => expect(tagCalls(fake, SLOW)).toBe(listedBefore + 2));
+      release();
+      await first;
+      const third = servers.models();
+      await settle();
+      releaseSecond();
+      await Promise.all([second, third]);
+      expect(tagCalls(fake, SLOW)).toBe(listedBefore + 2);
     });
 
     it.each([
@@ -841,6 +938,20 @@ describe('ModelServerRegistry', () => {
   });
 
   describe('a server shown as down with a check running', () => {
+    it('does not list a server removed while the picker waits on its check', async () => {
+      const { fake, servers, release, checking } = await downServer();
+      const id = (await servers.views())[1].id;
+      const tags = () => fake.calls.filter(call => call.path === '/api/tags').length;
+      const before = tags();
+      const listing = servers.models();
+      await servers.remove(id);
+      release();
+      expect(await listing).toEqual([]);
+      await checking;
+      // The running check's probe and its listing; the picker starts none.
+      expect(tags()).toBe(before + 2);
+    });
+
     async function downServer() {
       const fake = fakeOllama();
       const { registry: servers } = registry(fake);
@@ -857,7 +968,7 @@ describe('ModelServerRegistry', () => {
       let release: () => void = () => {};
       fake.state.versionGate = new Promise(resolve => (release = resolve));
       const checking = servers.check();
-      return { servers, release, checking };
+      return { fake, servers, release, checking };
     }
 
     it('lists it as soon as that check finds it back', async () => {

@@ -72,7 +72,9 @@ export class ModelCatalog {
   private cache: { environmentUrl: string; models: ChatModelOption[]; expiresAt: number } | null = null;
 
   private localCache: { models: ChatModelOption[]; expiresAt: number } | null = null;
-  private localGeneration = 0;
+  /** Reads started, and the start number of the read last cached: a read never replaces one that started later. */
+  private localReads = 0;
+  private localWritten = 0;
 
   /** Separate from `cache` because the two views are read on different paths; see listImageModels. */
   private imageCache: { environmentUrl: string; models: string[]; expiresAt: number } | null = null;
@@ -154,10 +156,12 @@ export class ModelCatalog {
     if (!force && this.localCache && Date.now() < this.localCache.expiresAt) {
       return withCurrentContexts(this.localCache.models);
     }
-    const generation = this.localGeneration;
+    const started = ++this.localReads;
     const models = await this.local.models();
-    // A forgetLocal() during the read means a newer list is due; this one must not replace it.
-    if (generation === this.localGeneration) this.localCache = { models, expiresAt: Date.now() + 5_000 };
+    if (started > this.localWritten) {
+      this.localWritten = started;
+      this.localCache = { models, expiresAt: Date.now() + 5_000 };
+    }
     return withCurrentContexts(models);
   }
 
@@ -169,7 +173,6 @@ export class ModelCatalog {
   /** After the local context setting changes or a model turns out removed, so the next list reads Ollama again. */
   forgetLocal(): void {
     this.localCache = null;
-    this.localGeneration++;
   }
 
   private mergeLocal(hosted: ChatModelOption[], local = this.freshLocal()): ChatModelOption[] {

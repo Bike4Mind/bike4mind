@@ -208,6 +208,25 @@ describe('ModelCatalog', () => {
     expect(catalog.lastLocal()).toEqual([{ id: 'local:srv-a:qwen', name: 'qwen' }]);
   });
 
+  it('caches a local read that a forgetLocal interrupted when no later read started', async () => {
+    let finish: (models: unknown[]) => void = () => undefined;
+    const local = { models: vi.fn(() => new Promise<unknown[]>(resolve => (finish = resolve))) };
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => null,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      local as never
+    );
+    const read = catalog.listLocal();
+    catalog.forgetLocal();
+    finish([{ id: 'local:ollama:qwen', name: 'qwen' }]);
+    await read;
+    await catalog.listLocal();
+    expect(local.models).toHaveBeenCalledOnce();
+  });
+
   it('merges the local list it read, even when forgetLocal runs during the hosted read', async () => {
     let finishHosted: (value: unknown) => void = () => undefined;
     get.mockImplementation(() => new Promise(resolve => (finishHosted = resolve)));
