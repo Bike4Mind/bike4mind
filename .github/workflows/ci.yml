@@ -145,7 +145,7 @@ jobs:
   repo-guards:
     needs: changes
     if: needs.changes.outputs.deployable == 'true' && github.event_name != 'merge_group'
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: Repo Guards
     timeout-minutes: 10
     permissions:
@@ -249,7 +249,7 @@ jobs:
   # paths a pasted credential lands in. checkSecretScanJobWired.test.ts pins this.
   secret-scan:
     if: github.event_name != 'merge_group'
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: Secret Scan
     timeout-minutes: 10
     permissions:
@@ -307,7 +307,7 @@ jobs:
   # is skipped and the Restricted Terms workflow remains the authority for it.
   leak-shapes:
     if: github.event_name != 'merge_group'
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: Leak Shapes
     timeout-minutes: 10
     permissions:
@@ -413,7 +413,7 @@ jobs:
     # MEDIUM, not the 2-core tier: typed linting (b4m/no-raw-entity-response) holds the client
     # TypeScript program, so ESLint needs 3-4 GB of heap - past Node's RAM-derived default on a
     # 2-core runner. The heap is pinned in the root lint:* scripts, not inherited from the runner.
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_MEDIUM_QUEUE || vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     name: Lint
     timeout-minutes: 15
     permissions:
@@ -485,7 +485,7 @@ jobs:
   openapi:
     needs: changes
     if: needs.changes.outputs.deployable == 'true' && github.event_name != 'merge_group'
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: OpenAPI Spec
     timeout-minutes: 10
     permissions:
@@ -937,7 +937,7 @@ jobs:
     if: github.event_name != 'merge_group'
     # Standard runner: builds the CLI and runs the bundle-baseline harness — a
     # light, I/O-bound leg. Off the capped ubuntu-latest-m pool to free a slot.
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 15
     permissions:
       contents: read
