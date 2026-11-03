@@ -137,6 +137,12 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.signup_risk.approved': { category: 'access', severity: 'notice', write: 'strict' },
   'user.signup_risk.reopened': { category: 'access', severity: 'notice', write: 'strict' },
   'user.signup_risk.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  // Signup domain holds: one strict entry per decision, written in the same transaction as the status
+  // change. confirmed/released come from admins (apps/client/pages/api/admin/signup-domain-holds.ts);
+  // auto_confirmed from the triage job (apps/workers/src/cron/signupDomainHoldTriage.ts).
+  'signup_domain_hold.confirmed': { category: 'access', severity: 'notice', write: 'strict' },
+  'signup_domain_hold.released': { category: 'credits', severity: 'notice', write: 'strict' },
+  'signup_domain_hold.auto_confirmed': { category: 'access', severity: 'notice', write: 'strict' },
   // Users-list bulk actions (apps/client/pages/api/admin/users/bulk/*): one strict entry per changed
   // user, written in that user's transaction, plus a bestEffort summary per batch.
   'user.bulk.executed': { category: 'account', severity: 'notice', write: 'bestEffort' },

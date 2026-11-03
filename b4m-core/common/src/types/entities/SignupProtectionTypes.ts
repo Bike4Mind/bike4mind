@@ -1,6 +1,17 @@
 import { z } from 'zod';
 
 export type SignupObservation = { userId: string; email: string; domain: string; verifiedAt: Date };
+
+/** Hold reason for a domain found only on the aggregate disposable list (domainHoldReason in b4m-core/services). */
+export const DISPOSABLE_AGGREGATE_HOLD_REASON = 'disposable-aggregate';
+
+/**
+ * The automated policies that may decide a hold. They only ever confirm (keep credits held); a
+ * release always comes from an admin. See apps/workers/src/cron/signupDomainHoldTriage.ts.
+ */
+export const SIGNUP_DOMAIN_HOLD_AUTO_POLICIES = ['disposable-aggregate-rule'] as const;
+export type SignupDomainHoldAutoPolicy = (typeof SIGNUP_DOMAIN_HOLD_AUTO_POLICIES)[number];
+
 export const signupDomainReviewSchema = z.object({
   domain: z.string(),
   status: z.enum(['held_pending_review', 'blocked', 'released']),
@@ -9,6 +20,16 @@ export const signupDomainReviewSchema = z.object({
   cohortUserIds: z.array(z.string()),
   sampleEmails: z.array(z.string()),
   signupCount: z.number(),
+  /** The admin user id behind the last decision; absent while undecided or when a policy decided. */
+  reviewedBy: z.string().optional(),
+  reviewedAt: z.date().optional(),
+  /** Set when an automated policy made the last decision; the next admin decision clears it. */
+  autoDecision: z
+    .object({
+      policy: z.enum(SIGNUP_DOMAIN_HOLD_AUTO_POLICIES),
+      decidedAt: z.date(),
+    })
+    .optional(),
 });
 export type SignupDomainReview = z.infer<typeof signupDomainReviewSchema>;
 
