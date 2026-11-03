@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -31,7 +31,7 @@ import { useShowDollarCosts } from './costDisplay';
 import { describeReplyCost, formatCreditsSpent, type TurnProgress } from './statusLine';
 import { describeReplyStats, FOOTER_STATS, messageStats } from './replyStats';
 import { useReplyStatsPrefs } from './replyStatsPrefs';
-import { ReplyStatsRail, useRailSpacing } from './ReplyStatsRail';
+import { railGroupId, ReplyStatsRail, turnGridSx } from './ReplyStatsRail';
 import { clampWindow, extendWindow, initialWindow, WINDOW_STEP, type ThreadWindow } from './threadWindow';
 import { ToolCallList, type MoveCallToBackground, type RespondToApproval } from './ToolCallList';
 import { OrphanVideoJobs } from './VideoJobCard';
@@ -295,7 +295,7 @@ function ReplyCost({ message }: { message: ChatMessage }) {
  * offered while the reply is still being written.
  *
  * With the stats rail on, the reply's stats sit left of it and the cost moves there with them,
- * leaving Copy alone in the gap. The rail runs on beside what follows a short reply; see railSpacing.
+ * leaving Copy alone in the gap. The rail runs on beside what follows a short reply; see railRows.
  *
  * Memoized, as every turn is: a streaming reply re-renders the thread once a frame, and only the
  * last turn's props change on those frames.
@@ -309,8 +309,6 @@ const AssistantTurn = memo(function AssistantTurn({
   live = false,
   skipRounds = 0,
   rail = false,
-  railPush = 0,
-  liveTurn = null,
 }: {
   message: ChatMessage;
   onRespond: RespondToApproval;
@@ -324,12 +322,8 @@ const AssistantTurn = memo(function AssistantTurn({
   status?: ReactNode;
   /** Leading stored rounds not drawn yet, when the thread's window ends inside this reply. */
   skipRounds?: number;
-  /** Draw the stats rail beside the reply rather than the stats in its hover footer. */
+  /** MessageThread draws the stats rail beside the reply, so there is no hover footer. */
   rail?: boolean;
-  /** How far down to start the reply, in px, so its rail clears the one above; see railSpacing. */
-  railPush?: number;
-  /** The turn in flight, while this is the reply it is writing; the rail's live figures. */
-  liveTurn?: TurnProgress | null;
 }) {
   const toolCalls = message.toolCalls ?? [];
   const rounds = roundsOf(message);
@@ -342,13 +336,15 @@ const AssistantTurn = memo(function AssistantTurn({
     <Box
       sx={{
         minWidth: 0,
-        ...(railPush > 0 ? { pt: `${railPush}px` } : {}),
         position: 'relative',
         [`& .${REPLY_COST_CLASS}`]: { opacity: 0, pointerEvents: 'none', transition: 'opacity 120ms' },
         [`&:hover .${REPLY_COST_CLASS}`]: { opacity: 1, pointerEvents: 'auto' },
         ...revealCopyButtonSx,
       }}
       data-testid="chat-message-assistant"
+      data-reply
+      // The rail comes before the reply for the grid's placement; this reads it after the reply.
+      {...(rail ? { 'aria-owns': railGroupId(message.id) } : {})}
     >
       {/* The turn in the order it happened: each round's prose, then the tools that round went
           on to run, then the next round's prose. A reply that touched six files across ten
@@ -400,7 +396,7 @@ const AssistantTurn = memo(function AssistantTurn({
           than of the answer being written. */}
       {status && <Box sx={{ mt: 1 }}>{status}</Box>}
 
-      {rail ? <ReplyStatsRail message={message} turn={liveTurn} push={railPush} /> : <ReplyCost message={message} />}
+      {!rail && <ReplyCost message={message} />}
 
       {!live && message.content.trim().length > 0 && (
         <Box sx={{ position: 'absolute', top: '100%', left: 0 }}>
@@ -620,11 +616,7 @@ function EarlierMessages({ count, children }: { count: number; children: ReactNo
           <ChevronIcon open={open} />
         </Box>
       </Stack>
-      {open && (
-        <Stack spacing={3} sx={{ pt: 2 }}>
-          {children}
-        </Stack>
-      )}
+      {open && <Box sx={{ pt: 2, ...turnGridSx }}>{children}</Box>}
     </Box>
   );
 }
@@ -637,7 +629,27 @@ const PIN_THRESHOLD_PX = 48;
  */
 const REVEAL_MARGIN_PX = 1500;
 
-type RenderTurn = (message: ChatMessage, index: number, skipRounds: number) => ReactNode;
+/** `end` is where the list the turn is drawn in ends, for a rail that runs on past its reply. */
+type RenderTurn = (message: ChatMessage, index: number, skipRounds: number, end: number) => ReactNode;
+
+/** The messages MessageThread's turn() draws as an AssistantTurn; must stay in step with it. */
+function isReplyTurn(message: ChatMessage): boolean {
+  return !message.boundary && !message.automatic && !message.relay && !message.system && message.role !== 'user';
+}
+
+/**
+ * How many grid rows the rail of the reply at `index` runs down: its own and those of the turns
+ * after it in the same list, up to the next reply, whose own rail starts there. See turnGridSx.
+ */
+export function railRows(messages: readonly ChatMessage[], index: number, end: number): number {
+  let next = index + 1;
+  while (next < end) {
+    const message = messages[next];
+    if (!message || isReplyTurn(message)) break;
+    next++;
+  }
+  return next - index;
+}
 
 /**
  * messages[from..to), drawn from the end: the last WINDOW_STEP rounds on mount, and another
@@ -713,7 +725,7 @@ function WindowedTurns({
   return (
     <>
       {complete ? above : <div ref={sentinel} data-testid="chat-thread-older-sentinel" />}
-      {messages.slice(start, to).map((message, offset) => turn(message, start + offset, offset === 0 ? skip : 0))}
+      {messages.slice(start, to).map((message, offset) => turn(message, start + offset, offset === 0 ? skip : 0, to))}
     </>
   );
 }
@@ -780,31 +792,38 @@ export function MessageThread({
   const boundary = lastBoundaryIndex(messages);
   // By id: a queued prompt or a relayed message can land after the reply while it is still written.
   const liveReplyId = streaming ? (liveTurn?.messageId ?? last?.id) : undefined;
-  const railSpacing = useRailSpacing(column, bottom, statsRail && !empty);
 
   // One function for both sides of the divider, taking each message's index in the WHOLE thread,
   // so a turn drawn inside the disclosure is the same turn with the same Continue and status
   // rules rather than a second rendering path that can drift from this one.
-  const turn: RenderTurn = (message, index, skipRounds) => {
+  const turn: RenderTurn = (message, index, skipRounds, end) => {
     if (message.boundary) return <BoundaryRow key={message.id} message={message} />;
     if (message.automatic) return <AutomaticTurn key={message.id} message={message} />;
     if (message.relay) return <RelayTurn key={message.id} message={message} />;
     if (message.system) return <SystemTurn key={message.id} message={message} />;
     if (message.role === 'user') return <UserTurn key={message.id} message={message} sessionId={sessionId} />;
+    // One fragment whether or not the rail is drawn, so the reply keeps its state across the breakpoint.
     return (
-      <AssistantTurn
-        key={message.id}
-        message={message}
-        onRespond={onRespond}
-        {...(onMove ? { onMove } : {})}
-        // Only the last turn, and only while nothing is running: resuming writes back
-        // into its own message, so a Continue on an older one would edit history.
-        {...(index === messages.length - 1 && !streaming ? { onContinue } : {})}
-        {...(index === messages.length - 1 && streaming ? { status, live: true } : {})}
-        {...(message.id === liveReplyId ? { liveTurn } : {})}
-        {...(skipRounds > 0 ? { skipRounds } : {})}
-        {...(statsRail ? { rail: true, railPush: railSpacing.pushes.get(message.id) ?? 0 } : {})}
-      />
+      <Fragment key={message.id}>
+        {statsRail && (
+          <ReplyStatsRail
+            message={message}
+            {...(message.id === liveReplyId ? { turn: liveTurn } : {})}
+            span={railRows(messages, index, end)}
+          />
+        )}
+        <AssistantTurn
+          message={message}
+          onRespond={onRespond}
+          {...(onMove ? { onMove } : {})}
+          // Only the last turn, and only while nothing is running: resuming writes back
+          // into its own message, so a Continue on an older one would edit history.
+          {...(index === messages.length - 1 && !streaming ? { onContinue } : {})}
+          {...(index === messages.length - 1 && streaming ? { status, live: true } : {})}
+          {...(skipRounds > 0 ? { skipRounds } : {})}
+          {...(statsRail ? { rail: true } : {})}
+        />
+      </Fragment>
     );
   };
 
@@ -858,7 +877,7 @@ export function MessageThread({
     // Scrolling on the outer box, the column on the inner one: reversing the two would put the
     // scrollbar in the middle of the window rather than at the edge of the pane.
     <Box ref={host} onScroll={onScroll} sx={{ flex: 1, ...scrollingColumnHostSx }} data-testid="chat-thread">
-      <Stack ref={column} spacing={3} sx={{ ...contentColumnSx, py: 3 }}>
+      <Box ref={column} sx={{ ...contentColumnSx, py: 3, ...turnGridSx }}>
         <WindowedTurns
           messages={messages}
           from={Math.max(boundary, 0)}
@@ -882,12 +901,8 @@ export function MessageThread({
         {footer}
         {/* Stays the LAST child: the auto-scroll targets it, so anything below it would be
             scrolled past rather than brought into view. */}
-        <div
-          ref={bottom}
-          style={railSpacing.endSpace > 0 ? { height: railSpacing.endSpace } : undefined}
-          data-testid="chat-thread-end"
-        />
-      </Stack>
+        <div ref={bottom} />
+      </Box>
     </Box>
   );
 }
