@@ -441,6 +441,7 @@ export const SettingKeySchema = z.enum([
   'blockedEmailDomains',
   'apiKeyTrustGateEnabled',
   'apiKeyMinAccountAgeDays',
+  'apiKeyAccountAgeTrustsKeys',
   'requireThreeDSecureOnFirstPurchase',
   'threeDSecureNewAccountDays',
   'maxActiveKeysUntrusted',
@@ -2437,11 +2438,12 @@ export const API_SERVICE_GROUPS = {
     settings: [
       { key: 'apiKeyTrustGateEnabled', order: 1 },
       { key: 'apiKeyMinAccountAgeDays', order: 2 },
-      { key: 'maxActiveKeysUntrusted', order: 3 },
-      { key: 'apiKeyUntrustedRateLimitPerMin', order: 4 },
-      { key: 'apiKeyUntrustedRequestsPerDay', order: 5 },
-      { key: 'apiKeyUntrustedTokensPerMin', order: 6 },
-      { key: 'apiKeyUntrustedMaxConcurrent', order: 7 },
+      { key: 'apiKeyAccountAgeTrustsKeys', order: 3 },
+      { key: 'maxActiveKeysUntrusted', order: 4 },
+      { key: 'apiKeyUntrustedRateLimitPerMin', order: 5 },
+      { key: 'apiKeyUntrustedRequestsPerDay', order: 6 },
+      { key: 'apiKeyUntrustedTokensPerMin', order: 7 },
+      { key: 'apiKeyUntrustedMaxConcurrent', order: 8 },
     ],
   },
   FREE_TIER_MODELS: {
@@ -4050,7 +4052,8 @@ export const settingsMap = {
   }),
   // New-account trust gate for API keys and outbound actions (see assertOutboundActionAllowed). A trusted
   // account has a verified email AND one of: a purchase or active plan, an account older than
-  // apiKeyMinAccountAgeDays, or admin approval (user.apiKeyTrustApproved). See userApiKeyService/trust.ts.
+  // apiKeyMinAccountAgeDays, or admin approval (user.apiKeyTrustApproved). apiKeyAccountAgeTrustsKeys off
+  // drops the account-age path for API keys only. See userApiKeyService/trust.ts.
   apiKeyTrustGateEnabled: makeBooleanSetting({
     key: 'apiKeyTrustGateEnabled',
     name: 'API Key Trust Gate',
@@ -4075,6 +4078,17 @@ export const settingsMap = {
     order: 2,
     dependsOn: 'apiKeyTrustGateEnabled',
   }),
+  apiKeyAccountAgeTrustsKeys: makeBooleanSetting({
+    key: 'apiKeyAccountAgeTrustsKeys',
+    name: 'API Key Trust: Account Age Lifts Key Limits',
+    defaultValue: true,
+    description:
+      'On (default): an account older than the minimum age is trusted for API keys, so the untrusted key cap, rate limits and quotas stop applying to it. Off: only a purchase, an active plan or admin approval lifts them, at any account age. Account age still unlocks outbound actions either way.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
+    order: 3,
+    dependsOn: 'apiKeyTrustGateEnabled',
+  }),
   maxActiveKeysUntrusted: makeNumberSetting({
     key: 'maxActiveKeysUntrusted',
     name: 'API Key Trust: Max Active Keys (untrusted)',
@@ -4086,7 +4100,7 @@ export const settingsMap = {
       'Active personal API keys a verified but untrusted account may hold. 0 blocks untrusted accounts from minting entirely. Org-billed keys are not limited by this.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
-    order: 3,
+    order: 4,
     dependsOn: 'apiKeyTrustGateEnabled',
   }),
   apiKeyUntrustedRateLimitPerMin: makeNumberSetting({
@@ -4100,7 +4114,7 @@ export const settingsMap = {
       "Per-minute ceiling applied at request time to personal API keys whose owner is untrusted, including keys minted before the gate existed. A key's own lower limit still wins.",
     category: 'SecOps',
     group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
-    order: 4,
+    order: 5,
     dependsOn: 'apiKeyTrustGateEnabled',
   }),
   apiKeyUntrustedRequestsPerDay: makeNumberSetting({
@@ -4114,7 +4128,7 @@ export const settingsMap = {
       "Per-day request ceiling for each personal API key whose owner is untrusted, applied at request time and counted per key. A key's own lower limit still wins. 0 disables it.",
     category: 'SecOps',
     group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
-    order: 5,
+    order: 6,
     dependsOn: 'apiKeyTrustGateEnabled',
   }),
   apiKeyUntrustedTokensPerMin: makeNumberSetting({
@@ -4128,7 +4142,7 @@ export const settingsMap = {
       'Tokens per rolling minute for an untrusted account using its personal API keys. Counts every settled model call the account billed to itself in the last minute, from any surface (input, output and prompt-cache tokens, each counted once); usage billed to an organization is left out. A completion is admitted while the account is under the limit, and its tokens count against the requests that follow. 0 disables it.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
-    order: 6,
+    order: 7,
     dependsOn: 'apiKeyTrustGateEnabled',
   }),
   apiKeyUntrustedMaxConcurrent: makeNumberSetting({
@@ -4142,7 +4156,7 @@ export const settingsMap = {
       "Completions an untrusted account's personal API keys may have in flight at once, on the streaming completion routes and blocking chat turns. 0 disables it.",
     category: 'SecOps',
     group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
-    order: 7,
+    order: 8,
     dependsOn: 'apiKeyTrustGateEnabled',
   }),
   usagePatternSignalsEnabled: makeBooleanSetting({

@@ -38,10 +38,14 @@ const youngVerifiedUser = (overrides: Partial<ApiKeyTrustSubject> = {}): ApiKeyT
   ...overrides,
 });
 
-const assess = (user: ApiKeyTrustSubject, options: { settings?: ApiKeyTrustSettings; hasActivePlan?: boolean } = {}) =>
+const assess = (
+  user: ApiKeyTrustSubject,
+  options: { settings?: ApiKeyTrustSettings; hasActivePlan?: boolean; honorAccountAge?: boolean } = {}
+) =>
   assessApiKeyTrust(user, {
     settings: options.settings ?? SETTINGS,
     hasActivePlan: async () => options.hasActivePlan ?? false,
+    honorAccountAge: options.honorAccountAge,
     now: NOW,
   });
 
@@ -118,6 +122,33 @@ describe('assessApiKeyTrust', () => {
     });
   });
 
+  describe('with account age not counted', () => {
+    const oldFreeUser = () => youngVerifiedUser({ createdAt: new Date(NOW.getTime() - 365 * DAY_MS) });
+
+    it('keeps an old, free, unapproved account under the untrusted cap', async () => {
+      expect(await assess(oldFreeUser(), { honorAccountAge: false })).toEqual({
+        status: 'untrusted',
+        reason: 'paid_standing_required',
+        maxActiveKeys: 1,
+      });
+    });
+
+    it.each([
+      ['a past purchase', youngVerifiedUser({ lastCreditsPurchasedAt: new Date() }), false],
+      ['an active plan', youngVerifiedUser(), true],
+      ['admin approval', youngVerifiedUser({ apiKeyTrustApproved: true }), false],
+    ])('still trusts %s', async (_label, user, hasActivePlan) => {
+      expect(await assess(user, { hasActivePlan, honorAccountAge: false })).toEqual({ status: 'trusted' });
+    });
+
+    it('still refuses an unverified email first', async () => {
+      expect(await assess(youngVerifiedUser({ emailVerified: false }), { honorAccountAge: false })).toEqual({
+        status: 'untrusted',
+        reason: 'email_unverified',
+      });
+    });
+  });
+
   it('skips the plan lookup when a cheap field already settles trust', async () => {
     const hasActivePlan = vi.fn().mockResolvedValue(false);
     await assessApiKeyTrust(youngVerifiedUser({ apiKeyTrustApproved: true }), { settings: SETTINGS, hasActivePlan });
@@ -156,6 +187,17 @@ describe('describeApiKeyTrustRequirement', () => {
     });
     expect(message).toMatch(/^New accounts cannot create API keys yet\./);
   });
+
+  it('offers no waiting date when account age is not counted', () => {
+    const message = describeApiKeyTrustRequirement({
+      status: 'untrusted',
+      reason: 'paid_standing_required',
+      maxActiveKeys: 1,
+    });
+    expect(message).toBe(
+      'Free accounts may hold 1 active API key. To create more, purchase credits or a plan, or contact support.'
+    );
+  });
 });
 
 describe('untrustedOwnerMayMint', () => {
@@ -180,6 +222,12 @@ describe('untrustedOwnerMayMint', () => {
 
   it('refuses everything when the allowance is zero', () => {
     expect(untrustedOwnerMayMint(notYetTrusted(0), 0)).toBe(false);
+  });
+
+  it('applies the same allowance when paid standing is required', () => {
+    const paidStandingRequired = { status: 'untrusted', reason: 'paid_standing_required', maxActiveKeys: 1 } as const;
+    expect(untrustedOwnerMayMint(paidStandingRequired, 0)).toBe(true);
+    expect(untrustedOwnerMayMint(paidStandingRequired, 1)).toBe(false);
   });
 });
 
@@ -235,6 +283,23 @@ describe('createUserApiKey trust gate', () => {
       trustReason: 'not_yet_trusted',
       maxActiveKeys: 1,
       trustedAfter: '2026-10-29T00:00:00.000Z',
+    });
+  });
+
+  it('caps an account that needs paid standing at the untrusted allowance, with no waiting date', async () => {
+    const repo = makeRepo(vi.fn().mockResolvedValue('at_cap'));
+    const error = await mintError(
+      createUserApiKey(
+        'user-1',
+        params,
+        adapters(repo, { status: 'untrusted', reason: 'paid_standing_required', maxActiveKeys: 1 })
+      )
+    );
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(expect.anything(), 1, 'personal');
+    expect(error?.additionalInfo).toEqual({
+      errorCode: API_KEY_TRUST_REQUIRED_ERROR_CODE,
+      trustReason: 'paid_standing_required',
+      maxActiveKeys: 1,
     });
   });
 
