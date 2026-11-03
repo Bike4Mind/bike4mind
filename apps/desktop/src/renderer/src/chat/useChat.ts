@@ -331,8 +331,8 @@ export function useModelCatalog(local = false): ModelCatalogController {
     [local]
   );
 
+  // Models pulled outside Desktop (the CLI, Ollama itself) raise no event; coming back to the window is the cue.
   useEffect(() => {
-    if (!local) return;
     const check = async () => {
       if (document.hidden) return;
       const status = await window.b4m.models.getStatus().catch(() => null);
@@ -340,30 +340,20 @@ export function useModelCatalog(local = false): ModelCatalogController {
       const { empty, reachable } = seen.current;
       if (status.reachable !== reachable || (status.reachable && empty)) await load('local', true);
     };
-    const tick = () => void check();
-    const timer = setInterval(tick, LOCAL_STATUS_POLL_MS);
-    window.addEventListener('focus', tick);
-    document.addEventListener('visibilitychange', tick);
+    const onReturn = () => {
+      if (document.hidden) return;
+      if (Date.now() - lastLoadAt.current >= FOCUS_RELOAD_MIN_MS) void load('local', true);
+      else if (local) void check();
+    };
+    const timer = local ? setInterval(() => void check(), LOCAL_STATUS_POLL_MS) : undefined;
+    window.addEventListener('focus', onReturn);
+    document.addEventListener('visibilitychange', onReturn);
     return () => {
       clearInterval(timer);
-      window.removeEventListener('focus', tick);
-      document.removeEventListener('visibilitychange', tick);
+      window.removeEventListener('focus', onReturn);
+      document.removeEventListener('visibilitychange', onReturn);
     };
   }, [local, load]);
-
-  // Models pulled outside Desktop (the CLI, Ollama itself) raise no event; coming back to the window is the cue.
-  useEffect(() => {
-    const onFocus = () => {
-      if (document.hidden || Date.now() - lastLoadAt.current < FOCUS_RELOAD_MIN_MS) return;
-      void load('local', true);
-    };
-    window.addEventListener('focus', onFocus);
-    document.addEventListener('visibilitychange', onFocus);
-    return () => {
-      window.removeEventListener('focus', onFocus);
-      document.removeEventListener('visibilitychange', onFocus);
-    };
-  }, [load]);
 
   useEffect(() => {
     void load(false);
