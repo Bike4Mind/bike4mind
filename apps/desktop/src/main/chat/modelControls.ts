@@ -23,6 +23,8 @@ const OUTPUT_STEP = 256;
 /** The hosted API's own floor for a legacy thinking budget, and its default when none is sent. */
 const MIN_THINKING_BUDGET_TOKENS = 1024;
 const DEFAULT_THINKING_BUDGET_TOKENS = 16_000;
+/** The answer room the server adds above a legacy budget (THINKING_ANSWER_HEADROOM_TOKENS in llm-adapters thinkingParams.ts). */
+const THINKING_ANSWER_HEADROOM_TOKENS = 1000;
 /** For a hosted model with no stated output cap; the server clamps to the real one. */
 const MIN_HOSTED_OUTPUT_TOKENS = 1024;
 
@@ -169,22 +171,23 @@ export function hostedControls(
         ? [...FALLBACK_HOSTED_EFFORTS]
         : [];
   const temperature = hostedTemperature(model);
+  const cap = model.maxOutputTokens;
+  // The server raises max_tokens to the budget plus its headroom and never back to the cap, so a larger budget fails the turn.
+  const budgetMax = Math.min(MAX_THINKING_BUDGET_TOKENS, (cap ?? Infinity) - THINKING_ANSWER_HEADROOM_TOKENS);
+  const thinkingBudgetTokens =
+    budgeted && budgetMax > MIN_THINKING_BUDGET_TOKENS
+      ? control({ min: MIN_THINKING_BUDGET_TOKENS, max: budgetMax, step: 1024 }, DEFAULT_THINKING_BUDGET_TOKENS)
+      : undefined;
   // The server raises an adaptive Claude's max_tokens to this floor while it thinks, so less is never sent.
   const outputFloor =
     claude && model.canThink && thinksAdaptively(model) ? ADAPTIVE_THINKING_MAX_TOKENS_FLOOR : MIN_HOSTED_OUTPUT_TOKENS;
-  const cap = model.maxOutputTokens;
-  const maxOutputTokens = cap ? outputControl(Math.min(outputFloor, cap), cap, cap) : undefined;
+  const output = cap ? outputControl(Math.min(outputFloor, cap), cap, cap) : undefined;
+  const maxOutputTokens =
+    output && thinkingBudgetTokens ? { ...output, budgetHeadroom: THINKING_ANSWER_HEADROOM_TOKENS } : output;
   return {
     ...(temperature ? { temperature } : {}),
     ...(maxOutputTokens ? { maxOutputTokens } : {}),
-    ...(budgeted
-      ? {
-          thinkingBudgetTokens: control(
-            { min: MIN_THINKING_BUDGET_TOKENS, max: MAX_THINKING_BUDGET_TOKENS, step: 1024 },
-            DEFAULT_THINKING_BUDGET_TOKENS
-          ),
-        }
-      : {}),
+    ...(thinkingBudgetTokens ? { thinkingBudgetTokens } : {}),
     ...(levels.length > 0 ? { effort: { levels, scope: 'request' } } : {}),
   };
 }

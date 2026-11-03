@@ -54,6 +54,11 @@ export interface NumericControl {
   default?: number;
   /** Shown at `value` and not editable. Nothing is sent for a locked control. */
   locked?: { value: number; reason: string };
+  /**
+   * Max output on a model that thinks with a budget: the server raises max_tokens to the budget plus
+   * this many tokens, so the floor follows the budget the turn sends; see effectiveControls.
+   */
+  budgetHeadroom?: number;
   scope: ControlScope;
 }
 
@@ -86,6 +91,26 @@ export function normalizeGeneration(raw: unknown): GenerationSettings | undefine
   return Object.keys(settings).length > 0 ? settings : undefined;
 }
 
+function sentValue(field: GenerationField, value: unknown, control: NumericControl | undefined): number | undefined {
+  if (!isFiniteNumber(value) || !control || control.locked || control.scope !== 'request') return undefined;
+  const clamped = Math.min(control.max, Math.max(control.min, value));
+  return INTEGER_FIELDS.has(field) ? Math.round(clamped) : clamped;
+}
+
+/** The controls as they stand for these settings: a budget-thinking model's max output floor follows its budget. */
+export function effectiveControls(
+  controls: ModelControls | undefined,
+  settings: GenerationSettings | undefined
+): ModelControls | undefined {
+  const output = controls?.maxOutputTokens;
+  const budget = controls?.thinkingBudgetTokens;
+  if (!controls || !output?.budgetHeadroom || !budget) return controls;
+  const sentBudget =
+    sentValue('thinkingBudgetTokens', settings?.thinkingBudgetTokens, budget) ?? budget.default ?? budget.min;
+  const min = Math.min(output.max, Math.max(output.min, sentBudget + output.budgetHeadroom));
+  return { ...controls, maxOutputTokens: { ...output, min } };
+}
+
 /**
  * What one request for a model carries: only request-scope fields its controls list and do not
  * lock, clamped into range, integers where the backend wants one. Empty when nothing applies.
@@ -95,13 +120,11 @@ export function requestGeneration(
   controls: ModelControls | undefined
 ): GenerationSettings {
   const sent: GenerationSettings = {};
-  if (!settings || !controls) return sent;
+  const effective = effectiveControls(controls, settings);
+  if (!settings || !effective) return sent;
   for (const field of GENERATION_FIELDS) {
-    const value = settings[field];
-    const control = controls[field];
-    if (!isFiniteNumber(value) || !control || control.locked || control.scope !== 'request') continue;
-    const clamped = Math.min(control.max, Math.max(control.min, value));
-    sent[field] = INTEGER_FIELDS.has(field) ? Math.round(clamped) : clamped;
+    const value = sentValue(field, settings[field], effective[field]);
+    if (value !== undefined) sent[field] = value;
   }
   return sent;
 }
