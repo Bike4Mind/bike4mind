@@ -29,6 +29,7 @@ import ApprovedAppsSection from './ApprovedAppsSection';
 import DocxTemplateSection from './DocxTemplateSection';
 import PromptCacheDefaultCard from './PromptCacheDefaultCard';
 import { DeleteAllKnowledgeFilesConfirm, DeleteAllNotebooksConfirm } from './DeleteAllConfirmModals';
+import { DeleteAccountConfirm } from './DeleteAccountConfirmModal';
 import WorkspaceVisibilitySection from './WorkspaceVisibilitySection';
 import ExperimentalFeatureToggle from '../ExperimentalFeatureToggle';
 import MfaCard from './MfaCard';
@@ -93,6 +94,7 @@ const GeneralSettingsTab = () => {
   const downloadAllFiles = useDownload('/api/files/download', 'knowledges.zip');
   const [openDeleteAllSessionsModal, toggleDeleteAllSessionsModal] = useToggle();
   const [openDeleteAllFilesModal, toggleDeleteAllFilesModal] = useToggle();
+  const [openDeleteAccountModal, toggleDeleteAccountModal] = useToggle();
   const [openImportHistoryModal, toggleImportHistoryModal] = useToggle();
   const [openNotebookExportModal, toggleNotebookExportModal] = useToggle();
   const [openNotebookImportModal, toggleNotebookImportModal] = useToggle();
@@ -513,6 +515,15 @@ const GeneralSettingsTab = () => {
             >
               Delete all knowledge files
             </Button>
+            <Button
+              color="danger"
+              variant="solid"
+              startDecorator={<DeleteOutline />}
+              onClick={() => toggleDeleteAccountModal()}
+              data-testid="settings-delete-account-btn"
+            >
+              Delete account
+            </Button>
           </Box>
         </Box>
       </SectionContainer>
@@ -531,6 +542,7 @@ const GeneralSettingsTab = () => {
           pending={deleteAllFiles.isPending}
         />
       )}
+      {openDeleteAccountModal && <DeleteAccountConfirm onCancel={() => toggleDeleteAccountModal(false)} />}
       <UploadImportHistoryModal
         open={openImportHistoryModal}
         onClose={() => toggleImportHistoryModal(false)}
