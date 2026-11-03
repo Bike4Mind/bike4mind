@@ -1,6 +1,11 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
-import { SENSITIVE_SETTING_MASK } from '@bike4mind/common';
+import {
+  makeContributedStringSetting,
+  registerContributedSettings,
+  resetContributedSettings,
+  SENSITIVE_SETTING_MASK,
+} from '@bike4mind/common';
 import {
   configureSecretsAtRest,
   decryptAtRest,
@@ -12,6 +17,7 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/
 
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
+import { AdminSettings } from '@bike4mind/database';
 import migration from './20260921235955_encrypt-sensitive-admin-settings';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -91,5 +97,52 @@ describe('encrypt sensitive admin settings', () => {
     await adminsettings().insertOne({ settingName: 'tagLineMain', settingValue: 'Welcome aboard' });
     configureSecretsAtRest(undefined);
     await expect(migration.up()).resolves.toBeUndefined();
+  });
+
+  it('encrypts soft-deleted rows', async () => {
+    await adminsettings().insertOne({
+      settingName: 'SerperKey',
+      settingValue: 'serper-plaintext',
+      deletedAt: new Date(),
+    });
+    await migration.up();
+    expect(decryptAtRest((await valueOf('SerperKey')) as string)).toBe('serper-plaintext');
+  });
+
+  it('leaves a non-string value on a sensitive key untouched', async () => {
+    await adminsettings().insertOne({ settingName: 'SerperKey', settingValue: { x: 1 } });
+    await expect(migration.up()).resolves.toBeUndefined();
+    expect(await valueOf('SerperKey')).toEqual({ x: 1 });
+  });
+
+  it('does not overwrite a value saved between the read and the update', async () => {
+    await adminsettings().insertOne({ settingName: 'FirecrawlApiKey', settingValue: 'fc-plaintext' });
+    const saved = encryptSecret('fc-from-admin', KEY);
+    const realUpdateOne = AdminSettings.collection.updateOne.bind(AdminSettings.collection);
+    const spy = vi.spyOn(AdminSettings.collection, 'updateOne').mockImplementationOnce(async (...args) => {
+      await adminsettings().updateOne({ settingName: 'FirecrawlApiKey' }, { $set: { settingValue: saved } });
+      return realUpdateOne(...args);
+    });
+    await migration.up();
+    spy.mockRestore();
+    expect(await valueOf('FirecrawlApiKey')).toBe(saved);
+  });
+
+  describe('contributed settings', () => {
+    afterEach(() => resetContributedSettings());
+
+    it('encrypts a contributed sensitive setting', async () => {
+      registerContributedSettings([
+        makeContributedStringSetting({
+          key: 'contributedTestSecret',
+          name: 'Contributed test secret',
+          defaultValue: undefined,
+          isSensitive: true,
+        } as Parameters<typeof makeContributedStringSetting>[0]),
+      ]);
+      await adminsettings().insertOne({ settingName: 'contributedTestSecret', settingValue: 'contrib-plaintext' });
+      await migration.up();
+      expect(decryptAtRest((await valueOf('contributedTestSecret')) as string)).toBe('contrib-plaintext');
+    });
   });
 });
