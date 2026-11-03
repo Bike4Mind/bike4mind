@@ -83,7 +83,7 @@ describe('UploadDropdown - From device server refusal', () => {
       { error: 'File size exceeds maximum file size', errorCode: 'file_too_large' },
       'File size exceeds maximum file size',
     ],
-    [400, { message: 'File type .exe is not supported' }, 'File type .exe is not supported'],
+    [400, { name: 'BadRequestError', error: 'File type .exe is not supported' }, 'File type .exe is not supported'],
     [
       429,
       { error: 'Upload limit reached (20 files per hour). Try again in 12 minutes.' },
