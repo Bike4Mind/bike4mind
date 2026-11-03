@@ -10,7 +10,7 @@ interface RestrictedPageProps {
   /**
    * Admits the signed-in user only when this returns true. For gates that `requireAdmin` is too
    * coarse for, such as the admin console admitting delegated admins. No admin/developer bypass:
-   * the predicate decides alone. Pass a stable reference; it is an effect dependency.
+   * the predicate decides alone.
    */
   requireAccess?: (user: IUserDocument) => boolean;
   /** Grants when the user carries the tag (admins/developers bypass). */

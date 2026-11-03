@@ -1,5 +1,5 @@
 import { Suspense, useCallback, useEffect, useState, type ReactNode } from 'react';
-import { Outlet, useLocation, useNavigate } from '@tanstack/react-router';
+import { Outlet, useLocation, useNavigate, useRouterState } from '@tanstack/react-router';
 import { useShallow } from 'zustand/react/shallow';
 import MenuIcon from '@mui/icons-material/Menu';
 import { Box, Drawer, IconButton, Sheet, Typography } from '@mui/joy';
@@ -28,6 +28,14 @@ export const isAdminUserProfilePath = (pathname: string) => pathname.startsWith(
 
 /** Subscription detail pages (including the by-stripe resolver) belong to the Subscriptions tab. */
 export const isAdminSubscriptionDetailPath = (pathname: string) => pathname.startsWith('/admin/subscriptions/');
+
+/** The tab a detail page belongs to, or undefined off a detail page. */
+const detailPageTabFor = (pathname: string): AdminTab | undefined =>
+  isAdminUserProfilePath(pathname)
+    ? AdminTab.Users
+    : isAdminSubscriptionDetailPath(pathname)
+      ? AdminTab.Subscriptions
+      : undefined;
 
 type AdminLayoutProps = {
   children: ReactNode;
@@ -58,19 +66,23 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
   const { collapsed, toggleCollapsed } = useAdminSidebarCollapsed();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  const detailPageTab = isAdminUserProfilePath(pathname)
-    ? AdminTab.Users
-    : isAdminSubscriptionDetailPath(pathname)
-      ? AdminTab.Subscriptions
-      : undefined;
+  const detailPageTab = detailPageTabFor(pathname);
   const activeTab = detailPageTab ?? storedActiveTab;
 
-  const canOpenTab = useCallback((tab: AdminTab) => canOpenAdminTab(currentUser, tab), [currentUser]);
   // A detail page belongs to its tab, so a delegate who cannot open that tab cannot open the page.
-  const detailPageDenied = detailPageTab !== undefined && !canOpenTab(detailPageTab);
+  const canOpenTab = useCallback((tab: AdminTab) => canOpenAdminTab(currentUser, tab), [currentUser]);
+  const isDetailPageDenied = (path: string) => {
+    const tab = detailPageTabFor(path);
+    return tab !== undefined && !canOpenTab(tab);
+  };
+  // The outlet draws the matched route, which trails the location while the redirect commits, so
+  // check both: one render of a denied page would already fire its requests.
+  const renderedPathname = useRouterState({ select: state => state.matches.at(-1)?.pathname ?? '' });
+  const locationDenied = isDetailPageDenied(pathname);
+  const detailPageDenied = locationDenied || isDetailPageDenied(renderedPathname);
   useEffect(() => {
-    if (detailPageDenied) navigate({ to: ADMIN_CONSOLE_PATH, replace: true });
-  }, [detailPageDenied, navigate]);
+    if (locationDenied) navigate({ to: ADMIN_CONSOLE_PATH, replace: true });
+  }, [locationDenied, navigate]);
 
   const selectTab = (tab: AdminTab) => {
     setDrawerOpen(false);

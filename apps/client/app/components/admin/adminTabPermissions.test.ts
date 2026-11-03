@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { AdminTab } from './adminSidebarConfig';
-import { canEnterAdminConsole, canOpenAdminTab } from './adminTabPermissions';
+import { AdminTab, SIDEBAR_SECTIONS } from './adminSidebarConfig';
+import { canEnterAdminConsole, canOpenAdminTab, DELEGATED_ADMIN_TAB_PERMISSIONS } from './adminTabPermissions';
 
 const admin = { isAdmin: true };
 const delegate = (...adminPermissions: string[]) => ({ isAdmin: false, adminPermissions });
@@ -29,6 +29,17 @@ describe('canOpenAdminTab', () => {
     expect(canOpenAdminTab({ isAdmin: false }, AdminTab.Modals)).toBe(false);
     expect(canOpenAdminTab(null, AdminTab.Modals)).toBe(false);
   });
+});
+
+// Admission counts mapped tabs; the console then falls back to the first sidebar tab it can draw.
+// A mapped tab that is gated or off the sidebar would admit a delegate to a console with no tab.
+it('maps only ungated sidebar tabs', () => {
+  const ungatedSidebarTabs = SIDEBAR_SECTIONS.flatMap(section => section.items)
+    .filter(item => !item.gate)
+    .map(item => item.tab);
+  for (const tab of Object.keys(DELEGATED_ADMIN_TAB_PERMISSIONS).map(Number)) {
+    expect(ungatedSidebarTabs).toContain(tab);
+  }
 });
 
 describe('canEnterAdminConsole', () => {

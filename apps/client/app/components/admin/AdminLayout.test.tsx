@@ -16,6 +16,7 @@ import { AdminTab } from './adminSidebarConfig';
 import { useAdminModal } from './useAdminModal';
 
 const mockUseUser = vi.fn();
+const profileRendered = vi.fn();
 
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => mockUseUser() }));
 vi.mock('@client/app/utils/user', () => ({ userIsDeveloper: () => false }));
@@ -48,7 +49,10 @@ const renderAt = async (path: string) => {
   const profileRoute = createRoute({
     getParentRoute: () => layoutRoute,
     path: '/admin/users/$userId',
-    component: () => <div data-testid="profile-page">profile</div>,
+    component: () => {
+      profileRendered();
+      return <div data-testid="profile-page">profile</div>;
+    },
   });
   const newRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -129,7 +133,8 @@ describe('AdminLayoutRoute', () => {
       const router = await renderAt('/admin/users/0123456789abcdef01234567');
 
       await waitFor(() => expect(router.state.location.pathname).toBe('/admin'));
-      expect(screen.queryByTestId('profile-page')).toBeNull();
+      // Never rendered, not just gone after the redirect: a mounted profile fires admin requests.
+      expect(profileRendered).not.toHaveBeenCalled();
     });
   });
 
