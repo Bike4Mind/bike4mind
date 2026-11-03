@@ -62,7 +62,9 @@ describe('LocalUsageCard', () => {
     expect(html).toContain('2000 tok/s');
     expect(html).toContain('profile-local-load');
     expect(html).toContain('1.5s');
-    expect(html).toContain('mean of 2 loads');
+    expect(html).toContain('Avg load time');
+    expect(html).toContain('per timed Ollama reply');
+    expect(html).not.toContain('loads');
     expect(html).toContain('profile-local-draft');
     expect(html).toContain('75%');
   });

@@ -12,7 +12,7 @@ import type { UsageWindowId } from '@shared/usage';
 import { useAuthState } from '../auth/useAuthState';
 import { ArrowLeftIcon, ReloadIcon } from '../chat/icons';
 import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from '../chat/layout';
-import { LocalUsageCard } from '../profile/LocalUsageCard';
+import { LocalUsageSection } from '../profile/LocalUsageCard';
 import { ProfileScreen } from '../profile/ProfileScreen';
 import { UsageWindowToggle } from '../profile/UsageWindowToggle';
 import { useLocalUsage } from '../profile/useLocalUsage';
@@ -47,24 +47,38 @@ function SignInPrompt({ onBack }: { onBack?: () => void }) {
 /**
  * Signed out: the sign-in prompt, and below it the self-hosted model usage this device's own
  * conversations hold. Only the prompt, as before, until there is a local reply to show.
+ *
+ * Only a `device` answer is drawn. Some signed-out states still name an account, and chat then
+ * reads that account's folder, whose figures do not belong on a signed-out screen.
  */
-export function SignedOutProfile({ onBack }: { onBack: () => void }) {
+export function SignedOutProfile({ scopeKey, onBack }: { scopeKey: string; onBack: () => void }) {
   const [windowId, setWindowId] = useState<UsageWindowId>('last-24-hours');
   const [reload, setReload] = useState(0);
   const [hasLocal, setHasLocal] = useState(false);
-  const local = useLocalUsage(windowId, reload);
-  // Sticky, so switching windows does not drop the screen back to the bare prompt mid-read.
-  if (!hasLocal && local?.ok && local.usage.allTimeReplies > 0) setHasLocal(true);
+  const local = useLocalUsage(windowId, reload, scopeKey);
+  const shown = local && (!local.ok || local.usage.scope === 'device') ? local : null;
+  const usage = shown?.ok ? shown.usage : null;
+  // Sticky for this sign-in state (the route remounts this on a change), so a failed refresh
+  // keeps the page and shows its error rather than dropping back to the bare prompt.
+  if (!hasLocal && usage && usage.allTimeReplies > 0) setHasLocal(true);
 
-  if (!hasLocal) {
+  // Blank for the one local read, so the screen does not open on the prompt and then jump.
+  if (!local)
+    return <Box sx={{ minHeight: '100vh', bgcolor: 'background.body' }} data-testid="profile-local-loading" />;
+
+  if (!hasLocal && !(usage && usage.allTimeReplies > 0)) {
     return (
       <Centered>
         <SignInPrompt onBack={onBack} />
+        {shown && !shown.ok && (
+          <Typography level="body-sm" color="warning" data-testid="profile-local-error">
+            {shown.error}
+          </Typography>
+        )}
       </Centered>
     );
   }
 
-  const usage = local?.ok ? local.usage : null;
   return (
     <Stack sx={{ height: '100vh', bgcolor: 'background.body', ...columnStackSx }} data-testid="profile-screen">
       <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
@@ -103,10 +117,10 @@ export function SignedOutProfile({ onBack }: { onBack: () => void }) {
           <UsageWindowToggle value={windowId} onChange={setWindowId} />
           {usage && usage.totals.replies === 0 && (
             <Typography level="body-sm" textColor="text.tertiary" data-testid="profile-local-empty">
-              No self-hosted model replies in the {WINDOW_LABELS[windowId].toLowerCase()}.
+              No self-hosted model replies in the {WINDOW_LABELS[usage.window].toLowerCase()}.
             </Typography>
           )}
-          {usage && <LocalUsageCard usage={usage} />}
+          <LocalUsageSection result={shown} />
         </Box>
       </Box>
     </Stack>
@@ -138,7 +152,10 @@ export function Profile() {
     );
   }
 
-  if (state.status !== 'signed-in') return <SignedOutProfile onBack={back} />;
+  if (state.status !== 'signed-in') {
+    const scopeKey = `${state.status}\n${state.environment.url}\n${state.user?.id ?? ''}`;
+    return <SignedOutProfile key={scopeKey} scopeKey={scopeKey} onBack={back} />;
+  }
 
   return <ProfileScreen state={state} onClose={back} />;
 }

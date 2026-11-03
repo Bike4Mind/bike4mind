@@ -7,7 +7,8 @@ const OLLAMA = 'local:ollama:llama3.2';
 const SERVER = 'local:srv-box:qwen3';
 
 let next = 0;
-function reply(at: string, usage: ChatUsage, model?: string): ChatMessage {
+/** `model` null is a reply stored before replies were stamped. */
+function reply(at: string, usage: ChatUsage, model: string | null = OLLAMA): ChatMessage {
   return {
     id: `m${next++}`,
     role: 'assistant',
@@ -41,23 +42,41 @@ describe('sessionUsageBuckets', () => {
     expect(result[1]).toMatchObject({ replies: 1, outputTokens: 5 });
   });
 
-  it('prefers the reply model stamp and falls back to the session model', () => {
+  it('prefers the reply model stamp over the session model', () => {
     const result = buckets(
       [
         reply('2026-11-02T15:05:00.000Z', { outputTokens: 1 }, SERVER),
-        reply('2026-11-02T15:06:00.000Z', { outputTokens: 2 }),
         reply('2026-11-02T15:07:00.000Z', { outputTokens: 4 }, 'claude-sonnet-5'),
+      ],
+      OLLAMA
+    );
+    expect(result.map(bucket => [bucket.model, bucket.outputTokens])).toEqual([[SERVER, 1]]);
+  });
+
+  it('attributes an unstamped reply by its context snapshot, else by the session only when it has a rate', () => {
+    const at = '2026-11-02T15:05:00.000Z';
+    const snapshot = (model: string) => ({ model, inputTokens: 10, overhead: [] });
+    const result = buckets(
+      [
+        { ...reply(at, { outputTokens: 1 }, null), contextSnapshot: snapshot(SERVER) },
+        { ...reply(at, { outputTokens: 2 }, null), contextSnapshot: snapshot('claude-sonnet-5') },
+        reply(at, { outputTokens: 4, rate: { evalTokens: 4, evalMs: 100 } }, null),
+        reply(at, { outputTokens: 8 }, null),
+        {
+          ...reply(at, { outputTokens: 16, rate: { evalTokens: 16, evalMs: 100 } }, null),
+          promptCache: { cachedAt: Date.parse(at), ttl: '5m', model: 'claude-sonnet-5' },
+        },
       ],
       OLLAMA
     );
     expect(result.map(bucket => [bucket.model, bucket.outputTokens])).toEqual([
       [SERVER, 1],
-      [OLLAMA, 2],
+      [OLLAMA, 4],
     ]);
   });
 
-  it('skips hosted sessions, replies without usage and unreadable timestamps', () => {
-    expect(buckets([reply('2026-11-02T15:05:00.000Z', { outputTokens: 3 })], 'claude-sonnet-5')).toEqual([]);
+  it('skips hosted replies, replies without usage and unreadable timestamps', () => {
+    expect(buckets([reply('2026-11-02T15:05:00.000Z', { outputTokens: 3 }, 'claude-sonnet-5')])).toEqual([]);
     const noUsage: ChatMessage = { id: 'n', role: 'assistant', content: 'x', createdAt: '2026-11-02T15:05:00.000Z' };
     expect(buckets([noUsage, reply('not a date', { outputTokens: 3 })])).toEqual([]);
   });
@@ -99,7 +118,7 @@ describe('sessionUsageBuckets', () => {
 
 describe('localUsageWindow', () => {
   function bucket(model: string, at: string, figures: Partial<LocalUsageBucket>): LocalUsageBucket {
-    const [made] = sessionUsageBuckets({ model, messages: [reply(at, { outputTokens: 0 })] });
+    const [made] = sessionUsageBuckets({ model, messages: [reply(at, { outputTokens: 0 }, model)] });
     return { ...made, ...figures };
   }
 
@@ -187,5 +206,10 @@ describe('serverLabel', () => {
     expect(serverLabel('ollama', NAMES)).toBe('This computer');
     expect(serverLabel('srv-box', NAMES)).toBe('Studio box');
     expect(serverLabel('srv-gone', NAMES)).toBe('Removed server');
+  });
+
+  it('keeps the runtime id when the saved servers could not be read', () => {
+    expect(serverLabel('ollama', null)).toBe('This computer');
+    expect(serverLabel('srv-box', null)).toBe('srv-box');
   });
 });

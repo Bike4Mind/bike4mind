@@ -85,18 +85,32 @@ function replyFigures(message: ChatMessage): LocalUsageFigures {
 }
 
 /**
+ * The model a reply ran on, or null when that cannot be told.
+ *
+ * Replies stored before the per-reply stamp fall back to their context snapshot's model, and to
+ * the session's only when they carry a rate, which hosted replies never do. A prompt-cache stamp
+ * is hosted-only, so it settles an unstamped reply as hosted.
+ */
+function replyModel(message: ChatMessage, sessionModel: string): string | null {
+  if (typeof message.model === 'string') return message.model;
+  if (message.promptCache) return null;
+  const snapshot = message.contextSnapshot?.model;
+  if (typeof snapshot === 'string' && snapshot) return snapshot;
+  return message.usage?.rate ? sessionModel : null;
+}
+
+/**
  * A session's local replies, bucketed by model and UTC hour.
  *
  * Only `message.usage` is read: it is the whole reply's sum, and adding `rounds[].usage` as well
- * would count every request twice. A reply stored before replies carried their own model falls
- * back to the session's, which is wrong only for a session that switched models since.
+ * would count every request twice.
  */
 export function sessionUsageBuckets(session: Pick<ChatSession, 'model' | 'messages'>): LocalUsageBucket[] {
   const buckets = new Map<string, LocalUsageBucket>();
   for (const message of session.messages) {
     if (message?.role !== 'assistant' || !message.usage || typeof message.usage !== 'object') continue;
-    const model = typeof message.model === 'string' ? message.model : session.model;
-    if (!isLocalModel(model) || !parseLocalModelId(model)) continue;
+    const model = replyModel(message, session.model);
+    if (!model || !isLocalModel(model) || !parseLocalModelId(model)) continue;
     const at = Date.parse(message.createdAt);
     if (!Number.isFinite(at)) continue;
     const hour = Math.floor(at / HOUR_MS) * HOUR_MS;
@@ -122,11 +136,14 @@ export function isLocalUsageBucket(value: unknown): value is LocalUsageBucket {
   );
 }
 
-/** "This computer", a saved server's current name, or `REMOVED_SERVER_LABEL` once it is gone. */
-export function serverLabel(runtimeId: string, serverNames: ReadonlyMap<string, string>): string {
+/**
+ * "This computer", a saved server's current name, or `REMOVED_SERVER_LABEL` once it is gone.
+ * Null `serverNames` means the saved servers could not be read, so a server keeps its runtime id.
+ */
+export function serverLabel(runtimeId: string, serverNames: ReadonlyMap<string, string> | null): string {
   if (runtimeId === LOCAL_RUNTIME_ID) return LOCAL_SERVER_NAME;
   const serverId = serverIdOfRuntime(runtimeId);
-  if (serverId === null) return runtimeId;
+  if (serverId === null || !serverNames) return runtimeId;
   return serverNames.get(serverId) ?? REMOVED_SERVER_LABEL;
 }
 
@@ -173,8 +190,8 @@ export function localUsageWindow(
   buckets: Iterable<LocalUsageBucket>,
   window: UsageWindowId,
   now: number,
-  serverNames: ReadonlyMap<string, string>
-): Omit<LocalUsage, 'readAt'> {
+  serverNames: ReadonlyMap<string, string> | null
+): Omit<LocalUsage, 'readAt' | 'scope'> {
   const hourly = window === 'last-24-hours';
   const step = hourly ? HOUR_MS : DAY_MS;
   const first = hourly ? Math.floor(now / HOUR_MS) * HOUR_MS - 23 * HOUR_MS : utcDayStart(now - 30 * DAY_MS);

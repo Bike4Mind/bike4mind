@@ -26,8 +26,8 @@ afterEach(() => {
   container.remove();
 });
 
-async function render(result: LocalUsageResult) {
-  const getLocal = vi.fn(async () => result);
+async function render(result: LocalUsageResult | null) {
+  const getLocal = vi.fn(() => (result ? Promise.resolve(result) : new Promise<LocalUsageResult>(() => {})));
   (window as unknown as { b4m: unknown }).b4m = { usage: { getLocal } };
   container = document.createElement('div');
   document.body.append(container);
@@ -35,7 +35,7 @@ async function render(result: LocalUsageResult) {
   await act(async () =>
     root.render(
       <CssVarsProvider>
-        <SignedOutProfile onBack={() => {}} />
+        <SignedOutProfile scopeKey="signed-out" onBack={() => {}} />
       </CssVarsProvider>
     )
   );
@@ -72,9 +72,24 @@ describe('SignedOutProfile', () => {
     expect(has('profile-window-group')).toBe(true);
   });
 
-  it('keeps to the sign-in prompt when the local read fails', async () => {
+  it('keeps to the sign-in prompt, with the error, when the local read fails', async () => {
     const { has } = await render({ ok: false, error: 'Could not read local model usage.' });
     expect(has('profile-signed-out')).toBe(true);
+    expect(has('profile-local-error')).toBe(true);
     expect(has('profile-local-usage')).toBe(false);
+  });
+
+  it('draws neither layout until the local read answers, so it does not jump from one to the other', async () => {
+    const { has } = await render(null);
+    expect(has('profile-local-loading')).toBe(true);
+    expect(has('profile-signed-out')).toBe(false);
+  });
+
+  it('never shows figures counted from an account folder', async () => {
+    const usage = { ...localUsageFixture({ replies: 2, outputTokens: 50 }), scope: 'account' as const };
+    const { has } = await render({ ok: true, usage });
+    expect(has('profile-signed-out')).toBe(true);
+    expect(has('profile-local-usage')).toBe(false);
+    expect(has('profile-window-group')).toBe(false);
   });
 });

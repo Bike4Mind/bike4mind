@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatMessage } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { SessionStore } from './SessionStore';
+import { SessionStore, type LocalUsageScan } from './SessionStore';
 import { sessionScopeKey, type SessionScope } from './sessionScope';
 
 /** Session-file reads, counted and optionally slowed, so the tests can see what the index re-parses. */
@@ -50,11 +50,11 @@ async function writeSession(directory: string, id: string, messages: ChatMessage
   );
 }
 
-function outputOf(buckets: { outputTokens: number }[]): number {
-  return buckets.reduce((sum, bucket) => sum + bucket.outputTokens, 0);
+function outputOf(scan: LocalUsageScan): number {
+  return scan.buckets.reduce((sum, bucket) => sum + bucket.outputTokens, 0);
 }
 
-describe('SessionStore.localUsageBuckets', () => {
+describe('SessionStore.localUsage', () => {
   let root: string;
 
   beforeEach(async () => {
@@ -70,9 +70,9 @@ describe('SessionStore.localUsageBuckets', () => {
     for (let index = 0; index < sessions; index++) await writeSession(root, `s${index}`, [reply(10), reply(5)]);
     reads.delayMs = 5;
 
-    const buckets = await new SessionStore(root, 'hosted-model').localUsageBuckets();
+    const scan = await new SessionStore(root, 'hosted-model').localUsage();
 
-    expect(outputOf(buckets)).toBe(sessions * 15);
+    expect(outputOf(scan)).toBe(sessions * 15);
     expect(reads.paths).toHaveLength(sessions);
     expect(reads.peak).toBeGreaterThan(1);
     expect(reads.peak).toBeLessThanOrEqual(16);
@@ -83,18 +83,18 @@ describe('SessionStore.localUsageBuckets', () => {
   it('re-parses only the files that changed, across a relaunch too', async () => {
     for (let index = 0; index < 20; index++) await writeSession(root, `s${index}`, [reply(10)]);
     const store = new SessionStore(root, 'hosted-model');
-    await store.localUsageBuckets();
+    await store.localUsage();
     reads.paths = [];
 
-    expect(outputOf(await store.localUsageBuckets())).toBe(200);
+    expect(outputOf(await store.localUsage())).toBe(200);
     expect(reads.paths).toEqual([]);
 
     await writeSession(root, 's3', [reply(10), reply(7, '2026-11-02T16:00:00.000Z')]);
-    expect(outputOf(await store.localUsageBuckets())).toBe(207);
+    expect(outputOf(await store.localUsage())).toBe(207);
     expect(reads.paths.map(path => path.split(/[\\/]/).pop())).toEqual(['s3.json']);
 
     reads.paths = [];
-    expect(outputOf(await new SessionStore(root, 'hosted-model').localUsageBuckets())).toBe(207);
+    expect(outputOf(await new SessionStore(root, 'hosted-model').localUsage())).toBe(207);
     expect(reads.paths).toEqual([]);
   });
 
@@ -102,10 +102,10 @@ describe('SessionStore.localUsageBuckets', () => {
     await writeSession(root, 'keep', [reply(10)]);
     await writeSession(root, 'gone', [reply(5)]);
     const store = new SessionStore(root, 'hosted-model');
-    expect(outputOf(await store.localUsageBuckets())).toBe(15);
+    expect(outputOf(await store.localUsage())).toBe(15);
 
     await store.delete('gone');
-    expect(outputOf(await store.localUsageBuckets())).toBe(10);
+    expect(outputOf(await store.localUsage())).toBe(10);
     const index = JSON.parse(await readFile(join(root, '.local-usage-index'), 'utf8')) as { entries: object };
     expect(Object.keys(index.entries)).toEqual(['keep']);
   });
@@ -113,17 +113,17 @@ describe('SessionStore.localUsageBuckets', () => {
   it('rebuilds from the transcripts when the index is corrupt or from another version', async () => {
     await writeSession(root, 'a', [reply(10)]);
     await writeSession(root, 'b', [reply(5)]);
-    await new SessionStore(root, 'hosted-model').localUsageBuckets();
+    await new SessionStore(root, 'hosted-model').localUsage();
 
     await writeFile(join(root, '.local-usage-index'), '{not json', 'utf8');
     reads.paths = [];
-    expect(outputOf(await new SessionStore(root, 'hosted-model').localUsageBuckets())).toBe(15);
+    expect(outputOf(await new SessionStore(root, 'hosted-model').localUsage())).toBe(15);
     expect(reads.paths).toHaveLength(2);
 
     const index = JSON.parse(await readFile(join(root, '.local-usage-index'), 'utf8')) as Record<string, unknown>;
     await writeFile(join(root, '.local-usage-index'), JSON.stringify({ ...index, version: 999 }), 'utf8');
     reads.paths = [];
-    expect(outputOf(await new SessionStore(root, 'hosted-model').localUsageBuckets())).toBe(15);
+    expect(outputOf(await new SessionStore(root, 'hosted-model').localUsage())).toBe(15);
     expect(reads.paths).toHaveLength(2);
   });
 
@@ -131,13 +131,25 @@ describe('SessionStore.localUsageBuckets', () => {
     await writeSession(root, 'good', [reply(10)]);
     await writeFile(join(root, 'bad.json'), '{"messages": [', 'utf8');
     const store = new SessionStore(root, 'hosted-model');
-    expect(outputOf(await store.localUsageBuckets())).toBe(10);
+    expect(outputOf(await store.localUsage())).toBe(10);
 
     await writeSession(root, 'bad', [reply(4)]);
-    expect(outputOf(await store.localUsageBuckets())).toBe(14);
+    expect(outputOf(await store.localUsage())).toBe(14);
   });
 
-  it('counts only the current scope', async () => {
+  it('runs one scan per folder, so overlapping reads share it', async () => {
+    for (let index = 0; index < 10; index++) await writeSession(root, `s${index}`, [reply(10)]);
+    reads.delayMs = 5;
+    const store = new SessionStore(root, 'hosted-model');
+
+    const [first, second] = await Promise.all([store.localUsage(), store.localUsage()]);
+
+    expect(outputOf(first)).toBe(100);
+    expect(outputOf(second)).toBe(100);
+    expect(reads.paths).toHaveLength(10);
+  });
+
+  it('counts only the current scope, and says which kind it is', async () => {
     let current: SessionScope | null = {
       environmentUrl: 'b4m-device-local://offline',
       accountId: 'device',
@@ -148,15 +160,19 @@ describe('SessionStore.localUsageBuckets', () => {
     await writeSession(join(root, sessionScopeKey(account)), 'online', [reply(40)]);
     const store = new SessionStore(root, 'hosted-model', 'launch', () => current);
 
-    expect(outputOf(await store.localUsageBuckets())).toBe(3);
+    const device = await store.localUsage();
+    expect(device.scope).toBe('device');
+    expect(outputOf(device)).toBe(3);
     current = account;
-    expect(outputOf(await store.localUsageBuckets())).toBe(40);
+    const signedIn = await store.localUsage();
+    expect(signedIn.scope).toBe('account');
+    expect(outputOf(signedIn)).toBe(40);
     current = null;
-    expect(await store.localUsageBuckets()).toEqual([]);
+    expect(await store.localUsage()).toEqual({ scope: 'none', buckets: [] });
   });
 
   it('returns nothing for a directory that does not exist yet', async () => {
     await rm(root, { recursive: true, force: true });
-    expect(await new SessionStore(root, 'hosted-model').localUsageBuckets()).toEqual([]);
+    expect((await new SessionStore(root, 'hosted-model').localUsage()).buckets).toEqual([]);
   });
 });
