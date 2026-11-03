@@ -95,6 +95,8 @@ describe('ChatService reply stats', () => {
     return id;
   }
 
+  const thinkingPhases = () => events.filter(event => event.type === 'phase' && event.phase.kind === 'thinking').length;
+
   const settled = () =>
     vi.waitUntil(() => events.find(event => event.type === 'done' || event.type === 'error'), {
       timeout: 3000,
@@ -158,6 +160,7 @@ describe('ChatService reply stats', () => {
     expect(reply?.stats).toMatchObject({ reasoningTokens: 30 });
     expect(reply?.stats?.derived).toBeUndefined();
     expect(reply?.usage).toMatchObject({ reasoningTokens: 30 });
+    expect(thinkingPhases()).toBe(1);
   });
 
   it('estimates hosted thinking it never saw from the wait before the text, and says so', async () => {
@@ -261,6 +264,7 @@ describe('ChatService reply stats', () => {
     const reply = (await store.get(id))?.messages.find(message => message.role === 'assistant');
     expect(reply?.stats).toMatchObject({ reasoningTokens: 3, derived: ['reasoningTokens'] });
     expect(reply?.stats?.reasoningMs).toBeGreaterThanOrEqual(15);
+    expect(thinkingPhases()).toBe(1);
     expect(reply?.usage?.rate).toEqual({ evalTokens: 10, evalMs: 200, totalMs: 900, loadMs: 300 });
     expect(reply?.rounds?.[0].timing).toMatchObject({
       firstReasoningAt: expect.any(Number),
@@ -290,6 +294,8 @@ describe('ChatService reply stats', () => {
     expect(reply?.stats?.reasoningMs).toBeUndefined();
     expect(reply?.stats?.reasoningTokens).toBeUndefined();
     expect(reply?.stats?.derived).toBeUndefined();
+    // Nor live: a thinking phase would start the rail's thinking clock for a reply that stores none.
+    expect(thinkingPhases()).toBe(0);
   });
 
   it('times bare markers on a self-hosted model without counting them as thinking tokens', async () => {

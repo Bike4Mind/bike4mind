@@ -3144,7 +3144,9 @@ export class ChatService {
             if (split.text.trim()) timer.text();
             probe?.frame(split.text ? 'text' : split.reasoning ? 'reasoning' : marker ? 'marker' : 'text');
             if (split.text) setPhase(RESPONDING);
-            else if (split.reasoning || marker) setPhase(THINKING);
+            // Whitespace is the empty block of a model with thinking off. A hosted provider's bare
+            // markers stand for thinking it omitted; a self-hosted server streams all of its own.
+            else if (split.reasoning.trim() || (marker && !localTurn)) setPhase(THINKING);
             append(split);
           }
           if (event.toolStarted) {
