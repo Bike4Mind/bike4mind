@@ -1,4 +1,5 @@
 import { RECURRENT_KINDS, type HubRuntime, type KvCacheType, type ModelArch } from '../schemas/modelHub';
+import { estimateDecode, type DecodeEstimate } from './decode';
 
 /** Source of truth for the machine description; `@bike4mind/local-models` probes the same fields. */
 export interface HardwareProfile {
@@ -23,6 +24,8 @@ export interface HardwareProfile {
   confidence: 'high' | 'low';
   /** Apple: `recommendedMaxWorkingSetSize` from a llama-server load log, or a non-zero `iogpu.wired_limit_mb`. */
   gpuWorkingSetBytes?: number | null;
+  /** Entered for the machine; without it the decode estimate takes CHIP_BANDWIDTH's figure (decode.ts). */
+  memoryBandwidthBytesPerSec?: number | null;
 }
 
 export type FitMode = 'chat' | 'code' | 'embeddings';
@@ -89,6 +92,8 @@ export interface FitModel {
   draftBytes?: number;
   /** From the build's tensorStats; enables expert offload on llama-server. */
   expertBytesPerLayer?: number;
+  /** An MoE entry's active parameters over its total; sizes decode reads when tensor stats are absent. */
+  activeParamsFraction?: number;
 }
 
 export interface FitRuntime {
@@ -109,6 +114,8 @@ export interface FitRuntime {
   nCpuMoe?: 'auto' | number;
   /** Draft tokens per step when speculative decoding is on; recurrent models keep one state snapshot per token. */
   draftMax?: number;
+  /** The preset turns speculative decoding on, which scales the decode estimate. */
+  speculative?: boolean;
 }
 
 export interface FitInput {
@@ -148,6 +155,8 @@ export interface FitPlan {
   nCpuMoe: number;
   ubatch: number;
   memory: FitMemory;
+  /** Null without a known bandwidth or MoE active share, or when weights sit outside the memory it measures. */
+  decode: DecodeEstimate | null;
 }
 
 export interface FitResult extends FitPlan {
@@ -413,10 +422,12 @@ class Planner {
   private readonly fixedMoe: number | undefined;
   private readonly margin: number;
   private readonly ollamaEmbedding: boolean;
+  private readonly decode: DecodeEstimate | null;
 
   constructor(private readonly input: FitInput) {
     this.budgets = memoryBudgets(input.hardware);
     this.margin = fitMarginBytes(input.hardware);
+    this.decode = estimateDecode(input.model, input.hardware, input.runtime);
     this.kvs = kvCandidates(input.runtime, input.model.arch);
     this.ollamaEmbedding = input.runtime.kind === 'ollama' && input.mode === 'embeddings';
     // Ollama loads embedding models with one slot.
@@ -498,6 +509,8 @@ class Planner {
     let offloadedBytes = 0;
     if (placement === 'expert-offload') offloadedBytes = nCpuMoe * (model.expertBytesPerLayer ?? 0);
     if (placement === 'layer-offload') offloadedBytes = Math.max(0, totalBytes + this.margin - this.budgets.gpu);
+    // A CPU placement on a machine with a GPU would read RAM at a bandwidth the GPU's figure does not describe.
+    const resident = placement === 'gpu' || (placement === 'cpu' && hardware.memoryKind === 'cpu');
     return {
       context,
       kv,
@@ -517,6 +530,7 @@ class Planner {
         budgetBytes: this.budgets.gpu,
         ramPoolBytes: this.budgets.ramPool,
       },
+      decode: resident ? this.decode : null,
     };
   }
 
