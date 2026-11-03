@@ -453,6 +453,7 @@ export const IPC_CHANNELS = {
   terminalsChanged: 'terminal:changed',
   /** A session needs the user while the app is in the background; see @shared/attention. */
   attentionNotify: 'attention:notify',
+  attentionClaim: 'attention:claim',
   attentionSetBadge: 'attention:set-badge',
   /** main -> renderer push: the user clicked a notice. */
   attentionOpen: 'attention:open',
@@ -1155,6 +1156,11 @@ export interface DesktopApi {
   };
   /** OS notices for sessions that need the user while the app is not focused. */
   attention: {
+    /**
+     * Of `sessionIds`, the ones this window may announce. Every open window sees the same entry into
+     * needs-action, so main hands each entry to the first window that asks and the rest get nothing.
+     */
+    claim(sessionIds: string[]): Promise<string[]>;
     /** Main shows it only while no app window is focused, so the caller need not check. */
     notify(notice: AttentionNotice): Promise<void>;
     /** Sessions waiting on the user, as the macOS dock badge; 0 clears it. A no-op elsewhere. */

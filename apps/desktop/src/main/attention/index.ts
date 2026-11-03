@@ -4,16 +4,38 @@ import { IPC_CHANNELS } from '@shared/ipc';
 import { appWindows } from '../windows';
 
 /**
+ * Windows learn of a status change within milliseconds of each other. A second claim for a session
+ * inside this span is the same entry seen by another window; a later one is a new entry.
+ */
+const CLAIM_WINDOW_MS = 2000;
+
+/**
  * OS notices for sessions that need the user, and the dock badge counting them.
  *
  * The renderer decides WHEN a session newly needs the user (it holds the statuses, titles and
  * personas); main owns the OS surfaces and the focus check, so a notice never pops over the window
- * the user is already looking at.
+ * the user is already looking at. Because every window runs that logic, main also decides which
+ * window announces an entry (`attentionClaim`), so the chime and the notice happen once, not per window.
  */
 export function registerAttention(): void {
   // Held so a notice is not garbage-collected before it is clicked, and so a session's newer notice
   // replaces its older one rather than stacking.
   const live = new Map<string, Notification>();
+
+  const claimedAt = new Map<string, number>();
+
+  ipcMain.handle(IPC_CHANNELS.attentionClaim, (_event, sessionIds: unknown): string[] => {
+    if (!Array.isArray(sessionIds)) return [];
+    const now = Date.now();
+    for (const [sessionId, at] of claimedAt) if (now - at >= CLAIM_WINDOW_MS) claimedAt.delete(sessionId);
+    const won: string[] = [];
+    for (const sessionId of sessionIds) {
+      if (typeof sessionId !== 'string' || sessionId === '' || claimedAt.has(sessionId)) continue;
+      claimedAt.set(sessionId, now);
+      won.push(sessionId);
+    }
+    return won;
+  });
 
   ipcMain.handle(IPC_CHANNELS.attentionNotify, (_event, payload: unknown) => {
     const notice = parseAttentionNotice(payload);

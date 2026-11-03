@@ -30,13 +30,7 @@ export function useNeedsYouAlerts(
     const entered = previous.current ? enteredNeedsYou(previous.current, statuses) : [];
     previous.current = statuses;
     if (entered.length === 0) return;
-    playChime();
-    if (document.hasFocus()) return;
-    for (const sessionId of entered) {
-      notify(sessionId, latestSessions.current, statuses).catch((error: unknown) =>
-        console.warn(`Could not show the needs-you notice: ${String(error)}`)
-      );
-    }
+    void announce(entered, latestSessions.current, statuses);
   }, [statuses, loaded]);
 
   const count = needsYouCount(statuses, sessions);
@@ -45,6 +39,29 @@ export function useNeedsYouAlerts(
   }, [count]);
 
   useEffect(() => window.b4m.attention.onOpen(event => latestOnOpen.current(event)), []);
+}
+
+/** Chime and notify for the entries this window wins; another open window announces the rest. */
+async function announce(
+  entered: readonly string[],
+  sessions: readonly ChatSessionSummary[],
+  statuses: ReadonlyMap<string, ChatSessionStatus>
+): Promise<void> {
+  // A failed claim must not silence the alert: worst case two windows both announce.
+  const won = await window.b4m.attention.claim([...entered]).catch((error: unknown) => {
+    console.warn(`Could not claim the needs-you entry: ${String(error)}`);
+    return [...entered];
+  });
+  if (won.length === 0) return;
+  playChime();
+  if (document.hasFocus()) return;
+  await Promise.all(
+    won.map(sessionId =>
+      notify(sessionId, sessions, statuses).catch((error: unknown) =>
+        console.warn(`Could not show the needs-you notice: ${String(error)}`)
+      )
+    )
+  );
 }
 
 async function notify(

@@ -118,6 +118,27 @@ describe('attention notices', () => {
   });
 });
 
+describe('claiming an entry across windows', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('lets only the first window announce a session that several windows saw enter needs-action', () => {
+    expect(call(IPC_CHANNELS.attentionClaim, ['a', 'b'])).toEqual(['a', 'b']);
+    expect(call(IPC_CHANNELS.attentionClaim, ['a', 'c'])).toEqual(['c']);
+  });
+
+  it('lets a later, separate entry of the same session through', () => {
+    call(IPC_CHANNELS.attentionClaim, ['a']);
+    vi.advanceTimersByTime(5000);
+    expect(call(IPC_CHANNELS.attentionClaim, ['a'])).toEqual(['a']);
+  });
+
+  it('claims nothing for a malformed request', () => {
+    expect(call(IPC_CHANNELS.attentionClaim, 'a')).toEqual([]);
+    expect(call(IPC_CHANNELS.attentionClaim, ['a', 7, ''])).toEqual(['a']);
+  });
+});
+
 describe('the dock badge', () => {
   it('shows the count on macOS and clears it at zero', () => {
     call(IPC_CHANNELS.attentionSetBadge, 3);

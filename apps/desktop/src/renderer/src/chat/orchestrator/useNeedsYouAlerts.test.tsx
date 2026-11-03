@@ -29,6 +29,7 @@ let container: HTMLDivElement;
 let root: Root;
 let openListener: ((event: AttentionOpenEvent) => void) | null;
 const notify = vi.fn(async (_notice: AttentionNotice) => undefined);
+const claim = vi.fn(async (sessionIds: string[]) => sessionIds);
 const setBadgeCount = vi.fn(async (_count: number) => undefined);
 const onOpen = vi.fn();
 let focused = false;
@@ -63,6 +64,7 @@ beforeEach(() => {
     },
     attention: {
       notify,
+      claim,
       setBadgeCount,
       onOpen: (listener: (event: AttentionOpenEvent) => void) => {
         openListener = listener;
@@ -114,6 +116,15 @@ describe('useNeedsYouAlerts', () => {
     await render({ child: 'processing' });
     await render({ child: 'needs-action' });
     expect(notify).toHaveBeenCalledTimes(2);
+  });
+
+  it('stays silent for entries another window has already claimed', async () => {
+    claim.mockResolvedValueOnce([]);
+    await render({});
+    await render({ child: 'needs-action' });
+    expect(claim).toHaveBeenCalledWith(['child']);
+    expect(chime.playChime).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it('names the session itself when the parent is the one waiting', async () => {

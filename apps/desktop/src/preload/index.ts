@@ -457,6 +457,7 @@ const api: DesktopApi = {
   },
   attention: {
     notify: (notice: AttentionNotice) => ipcRenderer.invoke(IPC_CHANNELS.attentionNotify, notice),
+    claim: (sessionIds: string[]) => ipcRenderer.invoke(IPC_CHANNELS.attentionClaim, sessionIds),
     setBadgeCount: (count: number) => ipcRenderer.invoke(IPC_CHANNELS.attentionSetBadge, count),
     onOpen: listener => {
       const handler = (_event: unknown, event: AttentionOpenEvent) => listener(event);
