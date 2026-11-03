@@ -182,6 +182,12 @@ describe('ssh failures', () => {
     }
   });
 
+  it('leaves the passphrase advice off the changed host key message', () => {
+    const err = describeSshFailure('REMOTE HOST IDENTIFICATION HAS CHANGED!\n', 255, 'gpu', 'Desktop', 'win32');
+    expect(err.message).toContain('Windows terminal');
+    expect(err.message).not.toContain('passphrase');
+  });
+
   it('says a changed host key changed', () => {
     const err = describeSshFailure(
       '@@@@\nWARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!\nHost key verification failed.\n',

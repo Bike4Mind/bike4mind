@@ -99,7 +99,7 @@ describe('InstalledTab embedding-only rows', () => {
     );
     const note = row('qwen3-embedding:0.6b')?.querySelector('[data-testid="models-installed-embedding-note"]');
     expect(note?.textContent).toBe('Embedding model, not for chat');
-    expect(note?.getAttribute('aria-label')).toBe('Embedding model, not for chat');
+    expect(note?.getAttribute('role')).toBe('note');
     expect(within(row('qwen3-embedding:0.6b'), 'models-installed-use-btn')).toBeNull();
     expect(within(row('llama3'), 'models-installed-embedding-note')).toBeNull();
     expect(within(row('llama3'), 'models-installed-use-btn')).toBe('Use in chat');

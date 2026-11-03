@@ -194,7 +194,7 @@ export function describeSshFailure(
       : '';
   if (/REMOTE HOST IDENTIFICATION HAS CHANGED/i.test(stderr)) {
     return new SshRefusedError(
-      `The host key of ${destination} has changed since this computer last connected. Check why, then connect once from ${connectOnce} to trust the new key.${passphrase}`
+      `The host key of ${destination} has changed since this computer last connected. Check why, then connect once from ${connectOnce} to trust the new key.`
     );
   }
   if (/Host key verification failed|host key is known|No .* host key is known/i.test(stderr)) {

@@ -454,7 +454,8 @@ async function mount(
   inUse?: ModelsInUse,
   tab: 'curated' | 'installed' = 'installed',
   chatWith?: ChatWith,
-  chatError?: { message: string; onDismiss: () => void }
+  chatError?: { message: string; onDismiss: () => void },
+  onOpenServers: (() => void) | null = openModelServers
 ) {
   host = document.createElement('div');
   document.body.appendChild(host);
@@ -465,7 +466,7 @@ async function mount(
         <ModelsScreen
           onClose={() => {}}
           inUse={inUse}
-          onOpenModelServers={openModelServers}
+          onOpenModelServers={onOpenServers ?? undefined}
           chatWith={chatWith}
           chatError={chatError?.message}
           onDismissChatError={chatError?.onDismiss}
@@ -1333,6 +1334,12 @@ describe('ModelsScreen installed', () => {
     expect(hint).toContain('If Ollama runs in WSL, start it there.');
     expect(hint).toContain('127.0.0.1:11434');
     expect(hint).toContain('Point at a server');
+    act(() => root?.unmount());
+    root = null;
+    host?.remove();
+
+    await mount(undefined, 'curated', undefined, undefined, null);
+    expect(q('models-no-runtime-wsl-hint')).toBeNull();
   });
 
   it('checks again on its own while Ollama looks down, and lists its models once it answers', async () => {

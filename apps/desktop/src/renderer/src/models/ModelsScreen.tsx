@@ -63,10 +63,10 @@ function NoLocalRuntime({
         is, start it or give it a moment. This checks again every few seconds. To use models on another machine instead,
         point Desktop at its server.
       </Typography>
-      {isWindows && (
+      {isWindows && onOpenModelServers && (
         <Typography level="body-sm" sx={{ mt: 0.5 }} data-testid="models-no-runtime-wsl-hint">
-          If Ollama runs in WSL, start it there. Desktop checks {address} on Windows, so it sees a WSL Ollama only while
-          WSL forwards that port to Windows. If it does not, add the WSL Ollama with Point at a server.
+          If Ollama runs in WSL, start it there. Desktop looks for it at {address} on Windows, which works only when WSL
+          shares that address with Windows. If it does not, add it with Point at a server.
         </Typography>
       )}
       {status.error && (
