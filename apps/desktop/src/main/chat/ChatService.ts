@@ -2691,7 +2691,11 @@ export class ChatService {
       let mcpServers = (await this.deps.mcp?.state())?.servers ?? [];
       const catalog =
         localTurn && this.deps.models?.listLocal
-          ? { models: await unlessStopped(this.localModelsFor(session.model, true), controller.signal, []) }
+          ? {
+              models: controller.signal.aborted
+                ? []
+                : await unlessStopped(this.localModelsFor(session.model, true), controller.signal, []),
+            }
           : await this.deps.models?.list();
       const cacheable = supportsPromptCache(catalog?.models ?? [], session.model);
       const modelOption = findModelOption(catalog?.models, session.model);

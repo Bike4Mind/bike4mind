@@ -10,6 +10,7 @@ import { LocalModels } from '../modelServers/LocalModels';
 import { ModelServerRegistry, PICKER_LIST_WAIT_MS } from '../modelServers/ModelServerRegistry';
 import { ModelServerStore } from '../modelServers/ModelServerStore';
 import { ChatService } from './ChatService';
+import type { McpManager } from './mcp/McpManager';
 import type { SecretCipher, StoreFile } from './mcp/McpServerStore';
 import { MessageQueue } from './MessageQueue';
 import { ModelCatalog } from './ModelCatalog';
@@ -19,6 +20,8 @@ import type { AccessStore } from './tools/AccessStore';
 
 const ADDRESS = 'http://192.168.1.20:11434';
 const OTHER_ADDRESS = 'http://192.168.1.21:11434';
+// Saved credentials are refused over plain http to a private address, but not to loopback.
+const KEYED_ADDRESS = 'http://127.0.0.2:11434';
 const logger = { debug: () => undefined, warn: () => undefined };
 const cipher: SecretCipher = {
   isEncryptionAvailable: () => true,
@@ -47,9 +50,13 @@ function memoryFile(): StoreFile {
 
 /**
  * One saved Ollama server ("gpu"), or two with `other`, behind the registry and catalog, wired as registerChat
- * wires them, and a conversation on gpu's model.
+ * wires them, and a conversation on gpu's model. `credential` saves gpu with a bearer token; `connect` is what
+ * the turn's MCP servers take to connect.
  */
-async function fixture(options: { signedIn?: boolean; other?: boolean } = {}) {
+async function fixture(
+  options: { signedIn?: boolean; other?: boolean; credential?: boolean; connect?: () => Promise<void> } = {}
+) {
+  const address = options.credential ? KEYED_ADDRESS : ADDRESS;
   const failures = new Map<string, Error>();
   const unauthorized = new Set<string>();
   const listingGates = new Map<string, Promise<void>>();
@@ -95,7 +102,13 @@ async function fixture(options: { signedIn?: boolean; other?: boolean } = {}) {
     new LocalModels(computer as unknown as OllamaLocal, servers)
   );
   holder.catalog = catalog;
-  await servers.add({ address: ADDRESS, credential: { type: 'none' }, name: 'gpu', kind: 'ollama', access: 'chat' });
+  await servers.add({
+    address,
+    credential: options.credential ? { type: 'bearer', token: 'saved-token' } : { type: 'none' },
+    name: 'gpu',
+    kind: 'ollama',
+    access: 'chat',
+  });
   const id = (await servers.views())[1].id;
   if (options.other) {
     await servers.add({
@@ -122,6 +135,16 @@ async function fixture(options: { signedIn?: boolean; other?: boolean } = {}) {
     store: new SessionStore(directory, 'claude-hosted-default'),
     queue: new MessageQueue(() => undefined),
     models: catalog,
+    ...(options.connect
+      ? {
+          mcp: {
+            ensureConnected: options.connect,
+            tools: () => [],
+            state: async () => ({ servers: [], secretsPersisted: true }),
+            findTool: () => undefined,
+          } as unknown as McpManager,
+        }
+      : {}),
     modelMemory: { read: async () => null, record: vi.fn(async () => {}) },
     local: { stream } as unknown as OllamaLocal,
     access: { list: async () => [] } as unknown as AccessStore,
@@ -159,7 +182,7 @@ async function fixture(options: { signedIn?: boolean; other?: boolean } = {}) {
     /** Every request to gpu fails as refused, with no detail to show. */
     refuse: () => failures.set(ADDRESS, new ServerTransportError('')),
     /** gpu answers 401 to everything. */
-    wantCredentials: () => unauthorized.add(ADDRESS),
+    wantCredentials: () => unauthorized.add(address),
     holdComputer: (gate: Promise<void>) => (computerGate = gate),
     /** Holds a server's model listings until `gate` settles; a rejection fails them. */
     holdListing: (gate: Promise<void>, address = ADDRESS) => {
@@ -263,6 +286,20 @@ describe('a turn on a saved server whose health changed', () => {
     expect(harness.turnError()).toMatchObject({
       stopReason: SERVER_CREDENTIALS_STOP,
       message: expect.stringMatching(/^gpu asks for credentials\./),
+    });
+  });
+
+  it('ends with the credentials stop, saying the saved credential was rejected, when the server refuses it', async () => {
+    const harness = await fixture({ signedIn: true, credential: true });
+    harness.wantCredentials();
+    await harness.check();
+    harness.catalog.forgetLocal();
+
+    await harness.start();
+    expect(await harness.finish()).toBeUndefined();
+    expect(harness.turnError()).toMatchObject({
+      stopReason: SERVER_CREDENTIALS_STOP,
+      message: expect.stringMatching(/^gpu rejected the credentials Desktop sent\./),
     });
   });
 
@@ -372,6 +409,25 @@ describe('a turn on a saved server that is still listing', () => {
 
     expect(harness.turnDone()?.stopReason).toBe('aborted');
     expect(harness.turnError()).toBeUndefined();
+    expect(harness.turnRequest()).toBeUndefined();
+  });
+
+  it('asks the server for nothing when Stop came while the MCP servers were connecting', async () => {
+    const connecting = held();
+    const connect = vi.fn(() => connecting.gate);
+    const harness = await fixture({ signedIn: true, connect });
+    harness.catalog.forgetLocal();
+
+    const before = harness.listings();
+    await harness.start();
+    await vi.waitFor(() => expect(connect).toHaveBeenCalled());
+    harness.stop();
+    connecting.release();
+    await vi.waitUntil(() => !harness.busy(), { timeout: 1_000 });
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    expect(harness.listings()).toBe(before);
+    expect(harness.turnDone()?.stopReason).toBe('aborted');
     expect(harness.turnRequest()).toBeUndefined();
   });
 
