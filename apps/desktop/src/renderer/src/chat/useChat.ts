@@ -1021,16 +1021,17 @@ export function useConversation(
       if (!sessionId) return;
       const result = await window.b4m.chat.addContextDirectory(sessionId, path);
       if (result.status === 'cancelled') return;
+      const stillOpen = activeSessionId.current === sessionId;
       if (result.status === 'refused') {
-        setSendError(result.error);
+        if (stillOpen) setSendError(result.error);
         return;
       }
       if (result.status === 'already') {
-        setNotice(`${result.path} is already shared with this conversation.`);
+        if (stillOpen) setNotice(`${result.path} is already shared with this conversation.`);
         return;
       }
       applySummary(result.session);
-      if (confirm || result.warning) {
+      if (stillOpen && (confirm || result.warning)) {
         setNotice([`Shared ${result.path} with this conversation.`, result.warning].filter(Boolean).join(' '));
       }
     },

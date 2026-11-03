@@ -261,6 +261,179 @@ describe('Add folder in a Chat composer', () => {
     expect(chips()).toHaveLength(0);
   });
 
+  it('does not show a refusal that returns after the user moved to another chat', async () => {
+    stubBridge([summary('alpha', 'chat', undefined, 'Alpha'), summary('beta', 'chat', undefined, 'Beta')]);
+    await renderShell();
+    await openSessionRow('Alpha');
+
+    const share = deferred<ShareDirectoryResult>();
+    addContextDirectory.mockReturnValue(share.promise);
+    await addFolderFromMenu();
+    await openSessionRow('Beta');
+    await act(async () => share.resolve({ status: 'refused', error: 'The filesystem root cannot be shared.' }));
+    expect(byTestId('chat-send-error')).toBeNull();
+  });
+
+  it('does not show "already shared" for a share that returns after the user moved to another chat', async () => {
+    stubBridge([summary('alpha', 'chat', undefined, 'Alpha'), summary('beta', 'chat', undefined, 'Beta')]);
+    await renderShell();
+    await openSessionRow('Alpha');
+
+    const share = deferred<ShareDirectoryResult>();
+    addContextDirectory.mockReturnValue(share.promise);
+    await addFolderFromMenu();
+    await openSessionRow('Beta');
+    await act(async () => share.resolve({ status: 'already', path: NOTES }));
+    expect(byTestId('chat-notice')).toBeNull();
+  });
+
+  it('does not show the home-folder warning for a share that returns after the user moved to another chat', async () => {
+    stubBridge([summary('alpha', 'chat', undefined, 'Alpha'), summary('beta', 'chat', undefined, 'Beta')]);
+    await renderShell();
+    await openSessionRow('Alpha');
+
+    const share = deferred<ShareDirectoryResult>();
+    addContextDirectory.mockReturnValue(share.promise);
+    await addFolderFromMenu();
+    await openSessionRow('Beta');
+    await act(async () =>
+      share.resolve({
+        status: 'added',
+        path: NOTES,
+        warning: 'This is your home folder.',
+        session: summary('alpha', 'chat', [NOTES], 'Alpha'),
+      })
+    );
+    expect(byTestId('chat-notice')).toBeNull();
+    expect(chips()).toHaveLength(0);
+  });
+
+  it('shares into the chat the first-run seed opened while the picker was up, without making another', async () => {
+    const stored = stubBridge([]);
+    const seed = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => seed.promise);
+    await renderShell();
+
+    const picked = deferred<string | null>();
+    pickProjectDirectory.mockReturnValue(picked.promise);
+    addContextDirectory.mockResolvedValue({
+      status: 'added',
+      path: NOTES,
+      session: summary('seeded', 'chat', [NOTES]),
+    });
+    await addFolderFromMenu();
+
+    const seeded = summary('seeded');
+    stored.set('seeded', seeded);
+    await act(async () => seed.resolve({ session: seeded }));
+    await act(async () => undefined);
+    await act(async () => picked.resolve(NOTES));
+    await act(async () => undefined);
+
+    expect(createSession).toHaveBeenCalledTimes(1);
+    expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('seeded', NOTES);
+    expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
+    expect(byTestId('chat-add-folder-error')).toBeNull();
+  });
+
+  it('shows no alert over the seeded chat when the picker returns after the seed and a chat could not be made', async () => {
+    const stored = stubBridge([]);
+    const seed = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => seed.promise);
+    createSession.mockRejectedValue(new Error('disk full'));
+    await renderShell();
+
+    const picked = deferred<string | null>();
+    pickProjectDirectory.mockReturnValue(picked.promise);
+    addContextDirectory.mockResolvedValue({
+      status: 'added',
+      path: NOTES,
+      session: summary('seeded', 'chat', [NOTES]),
+    });
+    await addFolderFromMenu();
+
+    const seeded = summary('seeded');
+    stored.set('seeded', seeded);
+    await act(async () => seed.resolve({ session: seeded }));
+    await act(async () => undefined);
+    await act(async () => picked.resolve(NOTES));
+    await act(async () => undefined);
+
+    expect(byTestId('chat-add-folder-error')).toBeNull();
+    expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('seeded', NOTES);
+  });
+
+  it('words a picker failure and a chat-creation failure differently, without the IPC wrapper', async () => {
+    stubBridge([]);
+    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    await renderShell();
+
+    pickProjectDirectory.mockRejectedValueOnce(
+      new Error("Error invoking remote method 'chat:pickProjectDirectory': Error: dialog unavailable")
+    );
+    await addFolderFromMenu();
+    expect(byTestId('chat-add-folder-error')?.textContent).toBe(
+      'Desktop could not open the folder picker, so the folder was not added: dialog unavailable'
+    );
+
+    pickProjectDirectory.mockResolvedValueOnce(NOTES);
+    createSession.mockRejectedValueOnce(
+      new Error("Error invoking remote method 'chat:createSession': Error: disk full")
+    );
+    await addFolderFromMenu();
+    expect(byTestId('chat-add-folder-error')?.textContent).toBe(
+      'Desktop could not start a conversation, so the folder was not added: disk full'
+    );
+  });
+
+  it('clears the alert when a retry starts, even if the picker is then cancelled', async () => {
+    stubBridge([]);
+    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    createSession.mockRejectedValueOnce(new Error('disk full'));
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValueOnce(NOTES);
+    await addFolderFromMenu();
+    expect(byTestId('chat-add-folder-error')).not.toBeNull();
+
+    pickProjectDirectory.mockResolvedValueOnce(null);
+    await addFolderFromMenu();
+    expect(byTestId('chat-add-folder-error')).toBeNull();
+  });
+
+  it('clears the alert once a chat opens', async () => {
+    const stored = stubBridge([]);
+    const seed = deferred<{ session: ChatSessionSummary }>();
+    createSession.mockImplementationOnce(() => seed.promise);
+    createSession.mockRejectedValueOnce(new Error('disk full'));
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValueOnce(NOTES);
+    await addFolderFromMenu();
+    expect(byTestId('chat-add-folder-error')).not.toBeNull();
+
+    const seeded = summary('seeded');
+    stored.set('seeded', seeded);
+    await act(async () => seed.resolve({ session: seeded }));
+    await act(async () => undefined);
+    expect(byTestId('chat-add-folder-error')).toBeNull();
+  });
+
+  it('does not leave the Chat alert up in a Code pane with no sessions', async () => {
+    stubBridge([]);
+    createSession.mockImplementationOnce(() => new Promise(() => undefined));
+    createSession.mockRejectedValueOnce(new Error('disk full'));
+    await renderShell();
+
+    pickProjectDirectory.mockResolvedValueOnce(NOTES);
+    await addFolderFromMenu();
+    expect(byTestId('chat-add-folder-error')).not.toBeNull();
+
+    await act(async () => byTestId('mode-switch-code-btn')?.click());
+    await act(async () => undefined);
+    expect(byTestId('chat-add-folder-error')).toBeNull();
+  });
+
   it('with no conversation yet, ignores a second Add folder while the first is still under way', async () => {
     stubBridge([]);
     createSession.mockImplementationOnce(() => new Promise(() => undefined));

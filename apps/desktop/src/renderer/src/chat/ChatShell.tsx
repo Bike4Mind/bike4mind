@@ -653,6 +653,8 @@ export function ChatShell({
   const shareFolder = conversation.project.addContextDirectory;
   const [addFolderError, setAddFolderError] = useState<string | null>(null);
   const addingFolder = useRef(false);
+  const openChatId = useRef(activeId);
+  openChatId.current = activeId;
   const addFolder = useCallback(async () => {
     if (activeId) {
       await shareFolder();
@@ -661,29 +663,47 @@ export function ChatShell({
     if (addingFolder.current) return;
     addingFolder.current = true;
     setAddFolderError(null);
+    let picked = false;
     try {
       const path = await window.b4m.chat.pickProjectDirectory();
+      picked = true;
       if (!path) return;
+      // The first-run seed can land while the picker is open; share into that chat instead of making another.
+      const open = openChatId.current;
+      if (open) {
+        setFolderForNewChat({ sessionId: open, path });
+        return;
+      }
       markSessionStart('new');
       const created = await create();
       setFolderForNewChat({ sessionId: created, path });
       setActiveId(created);
     } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      const detail = reason.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '');
       setAddFolderError(
-        `Desktop could not start a conversation: ${error instanceof Error ? error.message : String(error)}`
+        picked
+          ? `Desktop could not start a conversation, so the folder was not added: ${detail}`
+          : `Desktop could not open the folder picker, so the folder was not added: ${detail}`
       );
     } finally {
       addingFolder.current = false;
     }
   }, [activeId, shareFolder, create, markSessionStart]);
+  // The alert is Chat-only and tied to the no-chat state, so a new chat or a mode switch retires it.
   useEffect(() => {
-    if (activeId) setAddFolderError(null);
-  }, [activeId]);
+    setAddFolderError(null);
+  }, [activeId, mode]);
   useEffect(() => {
-    if (!folderForNewChat || conversation.session?.id !== folderForNewChat.sessionId) return;
+    if (
+      !folderForNewChat ||
+      activeId !== folderForNewChat.sessionId ||
+      conversation.session?.id !== folderForNewChat.sessionId
+    )
+      return;
     setFolderForNewChat(null);
     void shareFolder(folderForNewChat.path);
-  }, [folderForNewChat, conversation.session?.id, shareFolder]);
+  }, [folderForNewChat, activeId, conversation.session?.id, shareFolder]);
 
   /** "Use in chat" on the Models screen: a new Chat conversation already on that model. */
   const [chatOnError, setChatOnError] = useState<string | null>(null);
