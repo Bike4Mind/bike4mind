@@ -72,7 +72,8 @@ export function toUserAcquisition(
  * A signup that follows a verified hop redeemed in this same visit also gets `verifiedTouch`: the
  * source product as its own server proved it (bindSignupHop, which says what "same visit" means).
  * Unlike the campaign touches it is never the browser's claim. The hop is claimed for this account
- * before the write, so it can be claimed by no other.
+ * before the write, so it can be claimed by no other. If that write then fails the claim stands:
+ * releasing it after an ambiguous write could let a second account take a hop the first one cites.
  *
  * Never throws: a signup must not fail on analytics. Resolves to what was decided.
  */

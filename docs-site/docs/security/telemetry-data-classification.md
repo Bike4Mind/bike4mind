@@ -233,12 +233,14 @@ session as the hop's redeem. Concretely, the signup request carries:
 
 The hop must also have been redeemed in the last 24 hours and never bound
 before. One hop binds at most one account, even when a browser signs up twice.
-This covers every self-service signup: OAuth callbacks and one-time-code
-verification. A SAML signup returns by a cross-site POST that carries no Lax
-cookie, so it is not bound. Accounts an admin creates never read the creator's
-cookies. A bound hop record has no expiry, because a payment may later cite it.
-The record names no account: the link lives on the account and is deleted with
-it.
+The bind runs on every self-service signup: the OAuth, Okta and SAML callbacks
+and one-time-code verification. A SAML signup is usually not bound, because its
+IdP returns by a cross-site POST, which carries no Lax cookie. Accounts an admin
+creates never read the creator's cookies. A bound hop record has no expiry,
+because a payment may later cite it. The record names no account. What links it
+to one is the account's verified touch, deleted with the account, and the
+`hopId` on that account's `signup_completed` event, kept for that event's
+retention.
 
 The token is a bearer value. It is never rendered into a page, the app never
 logs it, and the recorded landing path never includes it. It is in the URL of
