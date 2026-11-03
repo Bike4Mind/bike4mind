@@ -208,6 +208,33 @@ describe('ModelPicker server groups', () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
+  it('selects the first available match on Enter when a disabled row is listed above it', async () => {
+    const { onSelect } = mount([
+      { id: 'local:srv-def456:sonnet-local', name: 'Sonnet local', server: lab, unavailable: 'lab is unreachable' },
+      { id: 'claude-sonnet', name: 'Sonnet hosted' },
+      ...MODELS,
+    ]);
+
+    typeInto(filterBox(), 'sonnet');
+    expect(options()[0]?.dataset.unavailable).toBe('true');
+    await act(async () => key(filterBox(), 'Enter'));
+
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith('claude-sonnet');
+  });
+
+  it('selects nothing on Enter when only disabled rows match', async () => {
+    const { onSelect } = mount([
+      { id: 'local:srv-def456:llama3', name: 'llama3', server: lab, unavailable: 'lab is unreachable' },
+      ...MODELS,
+    ]);
+
+    typeInto(filterBox(), 'llama3');
+    await act(async () => key(filterBox(), 'Enter'));
+
+    expect(options()).toHaveLength(1);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['unreachable', 1],
     ['local-srv-def456', 0],

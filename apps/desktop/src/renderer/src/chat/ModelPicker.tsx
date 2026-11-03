@@ -127,10 +127,12 @@ export function rowDetails(models: readonly ChatModelOption[]): Map<string, stri
   );
 }
 
-/** The first model row of the menu the filter box sits in - the one the query narrowed to. */
+/** The first selectable model row of the menu the filter box sits in - the one the query narrowed to. */
 function topMatch(filterInput: HTMLElement): HTMLElement | null {
   return (
-    filterInput.closest('[role="menu"]')?.querySelector<HTMLElement>('[data-testid="model-picker-option"]') ?? null
+    filterInput
+      .closest('[role="menu"]')
+      ?.querySelector<HTMLElement>('[data-testid="model-picker-option"]:not([data-unavailable])') ?? null
   );
 }
 
