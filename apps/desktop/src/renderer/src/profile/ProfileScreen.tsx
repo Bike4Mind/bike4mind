@@ -14,10 +14,14 @@ import type { AccountUsage, UsageWindowId } from '@shared/usage';
 import { ArrowLeftIcon, ReloadIcon } from '../chat/icons';
 import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from '../chat/layout';
 import { FleetIntegrationCard } from './FleetIntegrationCard';
+import { LocalUsageCard } from './LocalUsageCard';
+import { Stat } from './Stat';
 import { UsageBarChart } from './UsageBarChart';
 import { UsageBreakdown } from './UsageBreakdown';
+import { UsageWindowToggle } from './UsageWindowToggle';
 import { useAccountProfile } from './useAccountProfile';
 import { useAccountUsage } from './useAccountUsage';
+import { useLocalUsage } from './useLocalUsage';
 import {
   WINDOW_DAYS,
   WINDOW_LABELS,
@@ -27,26 +31,6 @@ import {
   formatReadAt,
   runwayDays,
 } from './usageView';
-
-const WINDOWS: UsageWindowId[] = ['last-24-hours', 'last-30-days'];
-
-function Stat({ label, value, caption }: { label: string; value: string; caption?: string }) {
-  return (
-    <Stack sx={{ flex: 1, minWidth: 110 }}>
-      <Typography level="body-xs" textColor="text.tertiary" noWrap>
-        {label}
-      </Typography>
-      <Typography level="title-md" noWrap>
-        {value}
-      </Typography>
-      {caption && (
-        <Typography level="body-xs" textColor="text.tertiary" noWrap>
-          {caption}
-        </Typography>
-      )}
-    </Stack>
-  );
-}
 
 /** Two letters for the avatar. Falls back to one, then to nothing, rather than to a stray '?'. */
 function initials(name: string): string {
@@ -147,6 +131,7 @@ export function ProfileScreen({ state, onClose }: { state: AuthState; onClose: (
   const [reload, setReload] = useState(0);
   const { result, refresh } = useAccountUsage(windowId);
   const profile = useAccountProfile(reload);
+  const local = useLocalUsage(windowId, reload);
 
   const usage = result?.ok ? result.usage : null;
 
@@ -195,22 +180,7 @@ export function ProfileScreen({ state, onClose }: { state: AuthState; onClose: (
           <AccountSummary state={state} profile={profile} usage={usage} windowId={windowId} />
           <FleetIntegrationCard />
 
-          <Stack direction="row" spacing={1} sx={{ mb: 1.5 }} data-testid="profile-window-group">
-            {WINDOWS.map(id => (
-              <Button
-                key={id}
-                size="sm"
-                variant={id === windowId ? 'solid' : 'soft'}
-                color="neutral"
-                onClick={() => setWindowId(id)}
-                data-testid="profile-window-btn"
-                data-window={id}
-                aria-pressed={id === windowId}
-              >
-                {WINDOW_LABELS[id]}
-              </Button>
-            ))}
-          </Stack>
+          <UsageWindowToggle value={windowId} onChange={setWindowId} />
 
           {result === null ? (
             <Stack direction="row" spacing={1.5} alignItems="center" sx={{ py: 4 }} data-testid="profile-usage-loading">
@@ -236,6 +206,8 @@ export function ProfileScreen({ state, onClose }: { state: AuthState; onClose: (
           ) : (
             <UsageCharts usage={result.usage} />
           )}
+
+          {local?.ok && <LocalUsageCard usage={local.usage} />}
         </Box>
       </Box>
     </Stack>

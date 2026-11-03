@@ -1,0 +1,215 @@
+import { isLocalModel, parseLocalModelId, type ChatMessage, type ChatSession } from '@shared/chat';
+import { LOCAL_SERVER_NAME, serverIdOfRuntime } from '@shared/modelServers';
+import type { LocalUsage, LocalUsageBar, LocalUsageFigures, LocalUsageRow, UsageWindowId } from '@shared/usage';
+
+const HOUR_MS = 3_600_000;
+const DAY_MS = 86_400_000;
+const LOCAL_RUNTIME_ID = 'ollama';
+export const REMOVED_SERVER_LABEL = 'Removed server';
+
+/** One session's replies from one local model within one UTC hour. */
+export interface LocalUsageBucket extends LocalUsageFigures {
+  /** The full `local:<runtime>:<model>` id. */
+  model: string;
+  /** Start of the UTC hour, epoch ms. */
+  hour: number;
+}
+
+const FIGURE_KEYS = [
+  'replies',
+  'outputTokens',
+  'contextTokens',
+  'timedReplies',
+  'evalTokens',
+  'evalMs',
+  'estimatedReplies',
+  'estimatedEvalTokens',
+  'estimatedEvalMs',
+  'promptTokens',
+  'promptMs',
+  'loads',
+  'loadMs',
+  'draftTokens',
+  'draftAccepted',
+] as const satisfies readonly (keyof LocalUsageFigures)[];
+
+export function emptyFigures(): LocalUsageFigures {
+  return Object.fromEntries(FIGURE_KEYS.map(key => [key, 0])) as unknown as LocalUsageFigures;
+}
+
+function addFigures(into: LocalUsageFigures, from: LocalUsageFigures): void {
+  for (const key of FIGURE_KEYS) into[key] += from[key];
+}
+
+function amount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/** One reply's contribution. Session files are this app's own but older ones predate every field. */
+function replyFigures(message: ChatMessage): LocalUsageFigures {
+  const figures = emptyFigures();
+  const usage = message.usage;
+  figures.replies = 1;
+  figures.outputTokens = amount(usage?.outputTokens);
+  figures.contextTokens = amount(usage?.inputTokens);
+  const rate = usage?.rate;
+  const evalTokens = amount(rate?.evalTokens);
+  const evalMs = amount(rate?.evalMs);
+  if (!rate || evalTokens === 0 || evalMs === 0) return figures;
+  if (rate.estimated) {
+    figures.estimatedReplies = 1;
+    figures.estimatedEvalTokens = evalTokens;
+    figures.estimatedEvalMs = evalMs;
+    return figures;
+  }
+  figures.timedReplies = 1;
+  figures.evalTokens = evalTokens;
+  figures.evalMs = evalMs;
+  const promptTokens = amount(rate.promptTokens);
+  const promptMs = amount(rate.promptMs);
+  if (promptTokens > 0 && promptMs > 0) {
+    figures.promptTokens = promptTokens;
+    figures.promptMs = promptMs;
+  }
+  const loadMs = amount(rate.loadMs);
+  if (loadMs > 0) {
+    figures.loads = 1;
+    figures.loadMs = loadMs;
+  }
+  const draftTokens = amount(rate.draftTokens);
+  if (draftTokens > 0) {
+    figures.draftTokens = draftTokens;
+    figures.draftAccepted = Math.min(amount(rate.draftAccepted), draftTokens);
+  }
+  return figures;
+}
+
+/**
+ * A session's local replies, bucketed by model and UTC hour.
+ *
+ * Only `message.usage` is read: it is the whole reply's sum, and adding `rounds[].usage` as well
+ * would count every request twice. A reply stored before replies carried their own model falls
+ * back to the session's, which is wrong only for a session that switched models since.
+ */
+export function sessionUsageBuckets(session: Pick<ChatSession, 'model' | 'messages'>): LocalUsageBucket[] {
+  const buckets = new Map<string, LocalUsageBucket>();
+  for (const message of session.messages) {
+    if (message?.role !== 'assistant' || !message.usage || typeof message.usage !== 'object') continue;
+    const model = typeof message.model === 'string' ? message.model : session.model;
+    if (!isLocalModel(model) || !parseLocalModelId(model)) continue;
+    const at = Date.parse(message.createdAt);
+    if (!Number.isFinite(at)) continue;
+    const hour = Math.floor(at / HOUR_MS) * HOUR_MS;
+    const key = `${hour}\n${model}`;
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = { model, hour, ...emptyFigures() };
+      buckets.set(key, bucket);
+    }
+    addFigures(bucket, replyFigures(message));
+  }
+  return [...buckets.values()];
+}
+
+/** Whether a bucket read back from the index has every field this version writes. */
+export function isLocalUsageBucket(value: unknown): value is LocalUsageBucket {
+  if (!value || typeof value !== 'object') return false;
+  const bucket = value as Record<string, unknown>;
+  return (
+    typeof bucket.model === 'string' &&
+    Number.isFinite(bucket.hour) &&
+    FIGURE_KEYS.every(key => typeof bucket[key] === 'number' && Number.isFinite(bucket[key]))
+  );
+}
+
+/** "This computer", a saved server's current name, or `REMOVED_SERVER_LABEL` once it is gone. */
+export function serverLabel(runtimeId: string, serverNames: ReadonlyMap<string, string>): string {
+  if (runtimeId === LOCAL_RUNTIME_ID) return LOCAL_SERVER_NAME;
+  const serverId = serverIdOfRuntime(runtimeId);
+  if (serverId === null) return runtimeId;
+  return serverNames.get(serverId) ?? REMOVED_SERVER_LABEL;
+}
+
+function utcDayStart(at: number): number {
+  return Math.floor(at / DAY_MS) * DAY_MS;
+}
+
+interface RowTotals {
+  label: string;
+  figures: LocalUsageFigures;
+}
+
+function toRows(rows: Map<string, RowTotals>): LocalUsageRow[] {
+  return [...rows.entries()]
+    .map(([key, { label, figures }]) => ({
+      key,
+      label,
+      replies: figures.replies,
+      outputTokens: figures.outputTokens,
+      evalTokens: figures.evalTokens,
+      evalMs: figures.evalMs,
+      estimatedEvalTokens: figures.estimatedEvalTokens,
+      estimatedEvalMs: figures.estimatedEvalMs,
+    }))
+    .sort((a, b) => b.outputTokens - a.outputTokens || b.replies - a.replies || a.label.localeCompare(b.label));
+}
+
+function addToRow(rows: Map<string, RowTotals>, key: string, label: string, figures: LocalUsageFigures): void {
+  let row = rows.get(key);
+  if (!row) {
+    row = { label, figures: emptyFigures() };
+    rows.set(key, row);
+  }
+  addFigures(row.figures, figures);
+}
+
+/**
+ * One window of local usage out of the hour buckets.
+ *
+ * Bars are UTC hours and UTC days, the day bars spanning the same days + 1 as the credit chart's.
+ * Every total is summed from exactly the buckets the bars draw, so the headline matches the chart.
+ */
+export function localUsageWindow(
+  buckets: Iterable<LocalUsageBucket>,
+  window: UsageWindowId,
+  now: number,
+  serverNames: ReadonlyMap<string, string>
+): Omit<LocalUsage, 'readAt'> {
+  const hourly = window === 'last-24-hours';
+  const step = hourly ? HOUR_MS : DAY_MS;
+  const first = hourly ? Math.floor(now / HOUR_MS) * HOUR_MS - 23 * HOUR_MS : utcDayStart(now - 30 * DAY_MS);
+  const count = hourly ? 24 : (utcDayStart(now) - first) / DAY_MS + 1;
+  const bars: LocalUsageBar[] = Array.from({ length: count }, (_, index) => ({
+    startsAt: new Date(first + index * step).toISOString(),
+    replies: 0,
+    outputTokens: 0,
+  }));
+  const totals = emptyFigures();
+  const byModel = new Map<string, RowTotals>();
+  const byServer = new Map<string, RowTotals>();
+  let allTimeReplies = 0;
+
+  for (const bucket of buckets) {
+    allTimeReplies += bucket.replies;
+    const index = Math.floor((bucket.hour - first) / step);
+    if (index < 0 || index >= count) continue;
+    bars[index].replies += bucket.replies;
+    bars[index].outputTokens += bucket.outputTokens;
+    addFigures(totals, bucket);
+    const parsed = parseLocalModelId(bucket.model);
+    if (!parsed) continue;
+    addToRow(byModel, parsed.model, parsed.model, bucket);
+    const server = serverLabel(parsed.runtimeId, serverNames);
+    addToRow(byServer, server === REMOVED_SERVER_LABEL ? 'removed' : parsed.runtimeId, server, bucket);
+  }
+
+  return {
+    window,
+    granularity: hourly ? 'hour' : 'day',
+    bars,
+    totals,
+    byModel: toRows(byModel),
+    byServer: toRows(byServer),
+    allTimeReplies,
+  };
+}

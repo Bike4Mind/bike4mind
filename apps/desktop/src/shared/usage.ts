@@ -59,3 +59,65 @@ export interface AccountUsage {
  * totals are zero is a real answer: the account spent nothing in that window.
  */
 export type AccountUsageResult = { ok: true; usage: AccountUsage } | { ok: false; error: string };
+
+/**
+ * Sums over replies from self-hosted models, counted in main from the conversations stored on
+ * this device. Speeds stay as token and millisecond sums so a total's rate is tokens over time,
+ * never a mean of per-reply rates.
+ */
+export interface LocalUsageFigures {
+  replies: number;
+  outputTokens: number;
+  /** Summed `inputTokens`: the context each request carried, not the prompt tokens evaluated. */
+  contextTokens: number;
+  /** Replies the server timed. Estimated and untimed replies count for tokens only. */
+  timedReplies: number;
+  evalTokens: number;
+  evalMs: number;
+  /** Replies this app timed off the stream, kept apart from the server-timed ones. */
+  estimatedReplies: number;
+  estimatedEvalTokens: number;
+  estimatedEvalMs: number;
+  promptTokens: number;
+  promptMs: number;
+  /** Replies that reported a model load time, and that time summed. */
+  loads: number;
+  loadMs: number;
+  draftTokens: number;
+  draftAccepted: number;
+}
+
+export interface LocalUsageBar {
+  /** Bucket start, ISO 8601. */
+  startsAt: string;
+  replies: number;
+  outputTokens: number;
+}
+
+export interface LocalUsageRow {
+  key: string;
+  label: string;
+  detail?: string;
+  replies: number;
+  outputTokens: number;
+  evalTokens: number;
+  evalMs: number;
+  estimatedEvalTokens: number;
+  estimatedEvalMs: number;
+}
+
+export interface LocalUsage {
+  window: UsageWindowId;
+  granularity: UsageGranularity;
+  /** Ascending by time; UTC hours or UTC days. */
+  bars: LocalUsageBar[];
+  /** Summed over the same buckets as `bars`. */
+  totals: LocalUsageFigures;
+  byModel: LocalUsageRow[];
+  byServer: LocalUsageRow[];
+  /** Local replies in this scope across all time, so a screen can tell "none ever" from "none lately". */
+  allTimeReplies: number;
+  readAt: number;
+}
+
+export type LocalUsageResult = { ok: true; usage: LocalUsage } | { ok: false; error: string };

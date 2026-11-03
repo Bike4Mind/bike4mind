@@ -119,7 +119,7 @@ import type {
   ModelRuntimeStatus,
   LoadedModelState,
 } from './models';
-import type { AccountUsageResult, UsageWindowId } from './usage';
+import type { AccountUsageResult, LocalUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
 import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewDevice, SimulatorViewState } from './simulator';
 import type { LocalHistoryResult, LocalHistoryState } from './history';
@@ -147,6 +147,7 @@ export const IPC_CHANNELS = {
   accountGetCredits: 'account:get-credits',
   accountGetProfile: 'account:get-profile',
   usageGetHistory: 'usage:get-history',
+  usageGetLocal: 'usage:get-local',
   fleetGetState: 'fleet:get-state',
   fleetRefresh: 'fleet:refresh',
   fleetSetConsent: 'fleet:set-consent',
@@ -710,6 +711,11 @@ export interface DesktopApi {
      * the cache after a turn has just spent.
      */
     getHistory(window: UsageWindowId, force?: boolean): Promise<AccountUsageResult>;
+    /**
+     * Self-hosted model usage in the current conversation scope, signed in or not. Computed in
+     * main from the sessions stored on this device; nothing is requested from any server.
+     */
+    getLocal(window: UsageWindowId, force?: boolean): Promise<LocalUsageResult>;
   };
   fleet: {
     getState(): Promise<FleetState>;
