@@ -60,6 +60,22 @@ const isPayable = (user: RewardUser) =>
   accountBlockReasons(user).length === 0 &&
   user.moderation?.status !== 'suspend_pending';
 
+const rungAmount = (tierCredits: number, multiplier: number, hard: boolean) =>
+  Math.round(tierCredits * (hard ? multiplier : 1));
+
+export async function rungCredits(rungs: { tier: PuzzleTier; hard: boolean }[]): Promise<number> {
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: [...SETTING_NAMES], skipCache: true }
+  );
+  const setting = (key: RewardSettingKey) => getSettingsValue(key, settings, settingsMap[key].schema.parse(undefined));
+  const multiplier = setting('BedrockNewsPuzzleHardMultiplier');
+  return rungs.reduce(
+    (sum, { tier, hard }) => sum + rungAmount(setting(TIER_CREDITS_SETTING[tier]), multiplier, hard),
+    0
+  );
+}
+
 const LEDGER_ADAPTERS = {
   db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
   creditHolderMethods: userRepository,
@@ -119,7 +135,7 @@ export async function grantPuzzleReward({
   const setting = (key: RewardSettingKey) => getSettingsValue(key, settings, settingsMap[key].schema.parse(undefined));
   const tierCredits = setting(TIER_CREDITS_SETTING[tier]);
   const multiplier = setting('BedrockNewsPuzzleHardMultiplier');
-  const amount = Math.round(tierCredits * (hard ? multiplier : 1));
+  const amount = rungAmount(tierCredits, multiplier, hard);
   if (amount <= 0) {
     return { ok: true, granted: true, credits: 0, balance: user.currentCredits ?? 0, firstSolveCredits: 0 };
   }

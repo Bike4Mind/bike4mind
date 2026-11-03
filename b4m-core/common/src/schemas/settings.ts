@@ -373,6 +373,9 @@ export const SettingKeySchema = z.enum([
   'BedrockNewsFirstSolveCredits',
   'BedrockNewsPuzzleDailyCap',
   'BedrockNewsRewardsDailyBudget',
+  'BedrockNewsApiUrl',
+  'BedrockNewsAppUrl',
+  'BedrockNewsPartnerKey',
   'registrationLink',
   'FeedbackReceiveEmail',
   'FeedbackReceiveEmailNonProd',
@@ -3865,6 +3868,31 @@ export const settingsMap = {
     min: 0,
     max: 100_000_000,
     description: 'Most Headword credits paid to all users in any rolling 24 hours. 0 stops all payouts.',
+    category: 'Referrals',
+  }),
+  BedrockNewsApiUrl: makeStringSetting({
+    key: 'BedrockNewsApiUrl',
+    name: 'BedrockNews Headword: API URL',
+    defaultValue: '',
+    description:
+      'BedrockNews API base URL for Headword claim tickets, e.g. https://api.dev.vibeswire.com. Empty disables claiming.',
+    category: 'Referrals',
+  }),
+  BedrockNewsAppUrl: makeStringSetting({
+    key: 'BedrockNewsAppUrl',
+    name: 'BedrockNews Headword: Site URL',
+    defaultValue: '',
+    description: 'BedrockNews site URL players are sent back to after claiming, e.g. https://dev.bedrocknews.com.',
+    category: 'Referrals',
+    userReadable: true,
+  }),
+  BedrockNewsPartnerKey: makeStringSetting({
+    key: 'BedrockNewsPartnerKey',
+    name: 'BedrockNews Headword: Partner Key',
+    defaultValue: '',
+    description:
+      'Secret sent as X-Partner-Key when Bike4Mind calls the BedrockNews claim-ticket API. Empty disables claiming.',
+    isSensitive: true,
     category: 'Referrals',
   }),
   EnableReferralToEmail: makeBooleanSetting({

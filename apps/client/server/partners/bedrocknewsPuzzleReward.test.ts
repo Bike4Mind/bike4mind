@@ -28,6 +28,7 @@ import {
   BEDROCKNEWS_FIRST_SOLVE_REASON,
   BEDROCKNEWS_PUZZLE_REASON,
   grantPuzzleReward,
+  rungCredits,
 } from './bedrocknewsPuzzleReward';
 
 const USER_ID = 'a1b2c3d4e5f6a1b2c3d4e5f6';
@@ -344,5 +345,19 @@ describe('grantPuzzleReward', () => {
 
     expect(result).toEqual({ ok: true, granted: true, credits: 0, balance: 1000, firstSolveCredits: 0 });
     expect(mockAddCredits).not.toHaveBeenCalled();
+  });
+});
+
+describe('rungCredits', () => {
+  it('prices a plain 5 and a hard 6 at default settings', async () => {
+    mockGetSettingsMap.mockResolvedValue({});
+    await expect(rungCredits([{ tier: 5, hard: false }])).resolves.toBe(40);
+    await expect(rungCredits([{ tier: 6, hard: true }])).resolves.toBe(90);
+    await expect(
+      rungCredits([
+        { tier: 5, hard: false },
+        { tier: 6, hard: true },
+      ])
+    ).resolves.toBe(130);
   });
 });
