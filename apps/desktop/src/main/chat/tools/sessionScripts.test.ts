@@ -160,6 +160,17 @@ describe('sessionScriptRun', () => {
     expect(await runs(command.replace('ROOT', root))).toContain(name.replace('ROOT', root));
   });
 
+  it('finds a launcher path spelled relative to the directory a cd moved into', async () => {
+    const id = 'launcher-after-cd';
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'sub/npx'));
+    expect(await runs('cd sub && ./npx ls', id)).toContain('./npx');
+    expect(await runs('./npx ls', id)).toBeNull();
+  });
+
+  it('finds a path-spelled launcher behind another launcher', async () => {
+    expect(await runs('npx ./npx ls')).toContain('./npx');
+  });
+
   it('matches a written file in the home folder given as ~', async () => {
     const script = join(homedir(), 'b4m-session-scripts-nonexistent.sh');
     await recordSessionWrite(context, script);
