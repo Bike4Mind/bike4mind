@@ -43,7 +43,7 @@ describe('describeTokenRate', () => {
       [
         'Generation: 23.9 tok/s (478 tokens in 20.0s)',
         'Prompt: 800 tok/s (1.2k tokens in 1.5s)',
-        'Load: 2.3s',
+        'Load (total): 2.3s',
         'Draft acceptance: 49% (120 of 245)',
       ].join('\n')
     );

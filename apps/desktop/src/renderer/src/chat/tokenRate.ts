@@ -94,7 +94,7 @@ export function describeTokenRate(rate: ChatTokenRate | null | undefined, output
     lines.push(
       `Prompt: ${formatPerSecond(perSecond(rate.promptTokens, rate.promptMs))} (${formatTokens(rate.promptTokens)} tokens in ${formatSeconds(rate.promptMs)})`
     );
-  if (rate.loadMs !== undefined) lines.push(`Load: ${formatSeconds(rate.loadMs)}`);
+  if (rate.loadMs !== undefined) lines.push(`Load (total): ${formatSeconds(rate.loadMs)}`);
   if (rate.draftTokens !== undefined && rate.draftAccepted !== undefined && rate.draftTokens > 0)
     lines.push(
       `Draft acceptance: ${Math.round((rate.draftAccepted / rate.draftTokens) * 100)}% (${rate.draftAccepted} of ${rate.draftTokens})`

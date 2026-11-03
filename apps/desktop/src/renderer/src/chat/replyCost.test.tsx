@@ -86,7 +86,7 @@ describe('the cost on a reply', () => {
       expect(row?.textContent).toBe('24.0 tok/s');
       expect(row?.querySelector('[data-testid="chat-message-rate"]')).not.toBeNull();
       expect(row?.getAttribute('title')).toBe(
-        '300 new input, 48 output\nGeneration: 24.0 tok/s (48 tokens in 2.0s)\nLoad: 1.2s'
+        '300 new input, 48 output\nGeneration: 24.0 tok/s (48 tokens in 2.0s)\nLoad (total): 1.2s'
       );
     });
 
