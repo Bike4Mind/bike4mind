@@ -1,4 +1,11 @@
-import type { ILoop, IWorkItem, LoopUnsureFields, WorkItemPatch, WorkItemStatus } from '@bike4mind/common';
+import {
+  desktopStagesOf,
+  type ILoop,
+  type IWorkItem,
+  type LoopUnsureFields,
+  type WorkItemPatch,
+  type WorkItemStatus,
+} from '@bike4mind/common';
 import { loopRepository, workItemRepository, type IPendingGate } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLoopsEnabled } from './loopValidation';
@@ -100,10 +107,18 @@ export async function assertLoopTicketAccess(
   return loop;
 }
 
-/** Makes a live loop due now when it has a ticket ready to work, so a new ticket does not wait out the interval. */
+/**
+ * Makes a live loop due now when it has a ticket ready for a cloud run, so a new ticket does not wait out the
+ * interval. Desktop-stage tickets never make it due: the cloud run would not work them.
+ */
 export async function makeDueIfReady(loop: ILoop, now = new Date()): Promise<void> {
   if (loop.status !== 'live') return;
-  const ready = await workItemRepository.findNextReadyForLoop(loop.userId, loop.id, lastStageOf(loop));
+  const ready = await workItemRepository.findNextReadyForLoop(
+    loop.userId,
+    loop.id,
+    lastStageOf(loop),
+    desktopStagesOf(loop)
+  );
   if (ready) await loopRepository.makeDueNow(loop.id, now);
 }
 

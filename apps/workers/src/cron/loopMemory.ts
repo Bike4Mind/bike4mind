@@ -52,7 +52,12 @@ export interface LoopOversight {
 export function buildLoopQuery(
   goal: string,
   memory: ILoopMemory,
-  ticket?: { item: Pick<IWorkItem, 'id' | 'title' | 'description' | 'stage'>; stages: string[] },
+  ticket?: {
+    item: Pick<IWorkItem, 'id' | 'title' | 'description' | 'stage'>;
+    stages: string[];
+    /** The owner's instructions for the ticket's stage; trusted, so they sit with the goal, above `---`. */
+    instructions?: string;
+  },
   oversight?: LoopOversight
 ): string {
   const ticketBlock = ticket
@@ -101,6 +106,7 @@ export function buildLoopQuery(
       : [];
   return [
     goal,
+    ...(ticket?.instructions ? ['', `Instructions for the "${ticket.item.stage}" stage:`, ticket.instructions] : []),
     '',
     '---',
     'You are running as one scheduled run of a recurring loop. Nobody is watching this run live.',

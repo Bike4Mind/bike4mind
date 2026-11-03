@@ -15,6 +15,7 @@ import {
   LOOP_RATE_WINDOW_MS,
   nextRunAtFor,
   nextStatusPatch,
+  pruneStageConfig,
   validateLoopAgentId,
   validateLoopBudget,
   validateLoopGoal,
@@ -22,6 +23,7 @@ import {
   validateLoopModel,
   validateLoopName,
   validateLoopOversees,
+  validateLoopStageConfig,
   validateLoopStages,
   validateLoopTools,
 } from '@server/utils/loopValidation';
@@ -68,6 +70,13 @@ const handler = baseApi({ auth: 'jwtOnly' })
     if (body.intervalMinutes !== undefined) patch.intervalMinutes = validateLoopInterval(body.intervalMinutes);
     if (body.tools !== undefined) patch.tools = validateLoopTools(body.tools);
     if (body.stages !== undefined) patch.stages = validateLoopStages(body.stages);
+    const stages = (patch.stages as string[] | undefined) ?? existing.stages;
+    if (body.stageConfig !== undefined) {
+      const stageConfig = validateLoopStageConfig(body.stageConfig, stages);
+      patch.stageConfig = stageConfig?.length ? stageConfig : null;
+    } else if (patch.stages && existing.stageConfig) {
+      patch.stageConfig = pruneStageConfig(existing.stageConfig, stages);
+    }
     if (body.agentId !== undefined) patch.agentId = body.agentId === null ? null : validateLoopAgentId(body.agentId);
     if (body.budgetCreditsPerDay !== undefined) {
       patch.budgetCreditsPerDay =

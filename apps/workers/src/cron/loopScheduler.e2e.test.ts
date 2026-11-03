@@ -41,6 +41,8 @@ vi.mock('../queueHandlers/agentExecutor.billing', () => ({ nextIterationCredits:
 
 import { BUDGET_PAUSE_REASON, LOOP_LEASE_MS, MAX_CONSECUTIVE_FAILURES, runLoopSchedulerTick } from './loopScheduler';
 import { STALE_ACTIVE_MS } from '@server/utils/executionLimits';
+import { makeDueIfReady } from '@server/utils/loopTickets';
+import { buildLoopQuery } from './loopMemory';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -927,5 +929,117 @@ describe('runLoopSchedulerTick - budget and auto-resume', () => {
 
     expect((await reload(loop.id)).status).toBe('paused');
     expect(h.startAgentExecution).not.toHaveBeenCalled();
+  });
+});
+
+describe('runLoopSchedulerTick - stage config', () => {
+  const STAGES = ['todo', 'review', 'done'];
+  const createTicket = async (loopId: string, overrides: Record<string, unknown> = {}) =>
+    (
+      await WorkItem.create({
+        userId: 'user-1',
+        loopId,
+        title: 'Write the summary',
+        stage: 'todo',
+        status: 'open',
+        dependencies: [],
+        ...overrides,
+      })
+    ).toJSON();
+  const ticketOf = async (id: string) => (await WorkItem.findById(id))!.toJSON();
+  const LATER = new Date(NOW.getTime() + 60 * 60_000);
+
+  it('dispatches a loop without stageConfig with its own model, tools and an unchanged query', async () => {
+    const loop = await createLoop({ stages: STAGES });
+    const ticket = await createTicket(loop.id);
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    const input = h.startAgentExecution.mock.calls[0][0];
+    expect(input.model).toBe('claude-sonnet-5');
+    expect(input.enabledTools).toEqual(['web_search', 'mcp__srv__do_thing']);
+    expect(input.query).toBe(
+      buildLoopQuery(
+        loop.goal,
+        loop.memory,
+        { item: { ...ticket, stage: 'todo' }, stages: STAGES },
+        {
+          directives: [],
+          overseen: [],
+        }
+      )
+    );
+    expect(input.query).not.toContain('Instructions for the');
+  });
+
+  it("applies the ticket's stage model, tools and instructions, and the loop defaults elsewhere", async () => {
+    const stageConfig = [{ stage: 'review', model: 'm2', tools: ['web_search'], instructions: 'Review only' }];
+    const reviewing = await createLoop({ stages: STAGES, stageConfig });
+    await createTicket(reviewing.id, { stage: 'review' });
+    const todo = await createLoop({ stages: STAGES, stageConfig });
+    await createTicket(todo.id, { stage: 'todo' });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    const byLoop = Object.fromEntries(h.startAgentExecution.mock.calls.map(([input]) => [input.loopId, input]));
+    expect(byLoop[reviewing.id]).toMatchObject({ model: 'm2', enabledTools: ['web_search'] });
+    const query: string = byLoop[reviewing.id].query;
+    expect(query).toContain('Instructions for the "review" stage:\nReview only');
+    expect(query.indexOf('Review only')).toBeLessThan(query.indexOf('---'));
+    expect(byLoop[todo.id]).toMatchObject({
+      model: 'claude-sonnet-5',
+      enabledTools: ['web_search', 'mcp__srv__do_thing'],
+    });
+    expect(byLoop[todo.id].query).not.toContain('Instructions for the');
+  });
+
+  it('never claims a desktop-stage ticket: an older one is skipped for a newer cloud one', async () => {
+    const loop = await createLoop({ stages: STAGES, stageConfig: [{ stage: 'review', runner: 'desktop' }] });
+    const desktop = await createTicket(loop.id, { stage: 'review' });
+    const cloud = await createTicket(loop.id, { stage: 'todo' });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution.mock.calls[0][0].query).toContain(`Ticket id: ${cloud.id}`);
+    expect(await ticketOf(desktop.id)).toMatchObject({ status: 'open' });
+  });
+
+  it('runs a plain goal run when only desktop tickets are ready, without making the loop due for them', async () => {
+    const loop = await createLoop({ stages: STAGES, stageConfig: [{ stage: 'review', runner: 'desktop' }] });
+    const desktop = await createTicket(loop.id, { stage: 'review' });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution.mock.calls[0][0].query).not.toContain('Ticket id:');
+    expect(await ticketOf(desktop.id)).toMatchObject({ status: 'open' });
+
+    const live = await createLoop({
+      stages: STAGES,
+      stageConfig: [{ stage: 'review', runner: 'desktop' }],
+      nextRunAt: LATER,
+    });
+    await createTicket(live.id, { stage: 'review' });
+    await makeDueIfReady(live, NOW);
+    expect((await reload(live.id)).nextRunAt).toEqual(LATER);
+  });
+
+  it('leaves a ticket advanced into a desktop stage open there, unclaimed on the next tick', async () => {
+    const loop = await createLoop({
+      stages: STAGES,
+      stageConfig: [{ stage: 'review', runner: 'desktop' }],
+      activeExecutionId: 'exec-0',
+      nextRunAt: LATER,
+    });
+    const ticket = await createTicket(loop.id, { status: 'in_progress', executionId: 'exec-0' });
+    executions['exec-0'] = { status: 'completed', result: { answer: 'done' } };
+
+    await runLoopSchedulerTick(NOW, logger);
+    expect(await ticketOf(ticket.id)).toMatchObject({ stage: 'review', status: 'open' });
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
+    expect((await reload(loop.id)).nextRunAt).toEqual(LATER);
+
+    await runLoopSchedulerTick(LATER, logger);
+    expect(h.startAgentExecution.mock.calls[0][0].query).not.toContain('Ticket id:');
+    expect(await ticketOf(ticket.id)).toMatchObject({ stage: 'review', status: 'open' });
   });
 });

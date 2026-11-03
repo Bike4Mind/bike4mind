@@ -2,6 +2,8 @@ import { Context } from 'aws-lambda';
 import { randomUUID } from 'crypto';
 import {
   ACTIVE_AGENT_EXECUTION_STATUSES,
+  desktopStagesOf,
+  stageConfigOf,
   startOfUtcDay,
   type ILoop,
   type ILoopEvent,
@@ -376,9 +378,14 @@ async function pausedForBudget(loop: ILoop, now: Date, logger: Logger): Promise<
   return true;
 }
 
-/** Claims the loop's next ready ticket for this run; null means a plain goal run. */
+/** Claims the loop's next ready ticket for this run, never one in a desktop stage; null means a plain goal run. */
 async function claimNextTicket(loop: ILoop): Promise<IWorkItem | null> {
-  const next = await workItemRepository.findNextReadyForLoop(loop.userId, loop.id, lastStageOf(loop));
+  const next = await workItemRepository.findNextReadyForLoop(
+    loop.userId,
+    loop.id,
+    lastStageOf(loop),
+    desktopStagesOf(loop)
+  );
   return next && workItemRepository.claimForRun(next.id, loop.id);
 }
 
@@ -397,6 +404,8 @@ async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<voi
   try {
     if (await pausedForBudget(loop, now, logger)) return;
     ticket = await claimNextTicket(loop);
+    // The stage's settings apply only to a run working a ticket in it; a plain goal run uses the loop's.
+    const stage = ticket ? stageConfigOf(loop, ticket.stage) : {};
     const [directives, overseen] = await Promise.all([
       loopDirectiveRepository.listOpenForLoop(loop.userId, loop.id, LOOP_PROMPT_DIRECTIVES),
       Promise.all((loop.oversees ?? []).map(id => loopRepository.findByIdAndUserId(id, loop.userId))),
@@ -406,16 +415,18 @@ async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<voi
         userId: loop.userId,
         sessionId: loop.sessionId,
         questId: loop.sessionId,
-        query: buildLoopQuery(loop.goal, loop.memory, ticket ? { item: ticket, stages: loop.stages } : undefined, {
-          directives,
-          overseen: overseen.filter((watched): watched is ILoop => !!watched),
-        }),
-        model: loop.model,
+        query: buildLoopQuery(
+          loop.goal,
+          loop.memory,
+          ticket ? { item: ticket, stages: loop.stages, instructions: stage.instructions } : undefined,
+          { directives, overseen: overseen.filter((watched): watched is ILoop => !!watched) }
+        ),
+        model: stage.model ?? loop.model,
         connectionId: HEADLESS_CONNECTION_ID,
         apiKeyInfo: undefined,
         ...(loop.organizationId && { organizationId: loop.organizationId }),
         ...(loop.agentId && { agentId: loop.agentId }),
-        enabledTools: loop.tools,
+        enabledTools: stage.tools?.length ? stage.tools : loop.tools,
         loopId: loop.id,
       },
       logger

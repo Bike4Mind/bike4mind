@@ -5,7 +5,7 @@
 
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { adminSettingsRepository, loopRepository } from '@bike4mind/database';
-import type { ILoop, LoopStatus } from '@bike4mind/common';
+import { LOOP_STAGE_RUNNERS, type ILoop, type ILoopStageConfig, type LoopStatus } from '@bike4mind/common';
 
 export const LOOP_RATE_LIMIT = 60;
 export const LOOP_RATE_WINDOW_MS = 60 * 1000;
@@ -18,6 +18,7 @@ const ID_MAX = 200;
 const STAGES_MAX = 20;
 const STAGE_NAME_MAX = 60;
 const OVERSEES_MAX = 5;
+export const STAGE_INSTRUCTIONS_MAX = 4000;
 const INTERVAL_MIN = 5;
 /** One week. */
 const INTERVAL_MAX = 10_080;
@@ -62,6 +63,61 @@ export function validateLoopStages(value: unknown): string[] {
   if (stages.length < 2) throw new BadRequestError('stages must contain at least 2 distinct entries');
   return stages;
 }
+
+/**
+ * Per-stage config against the loop's `stages`; `null` clears it. Empty strings and empty tool lists count as
+ * unset, and entries left with nothing set, or for the last stage (closed, never worked), are dropped.
+ */
+export function validateLoopStageConfig(value: unknown, stages: readonly string[]): ILoopStageConfig[] | null {
+  if (value === null) return null;
+  if (!Array.isArray(value) || value.length > STAGES_MAX) {
+    throw new BadRequestError(`stageConfig must be an array of ${STAGES_MAX} entries or fewer`);
+  }
+  const seen = new Set<string>();
+  const result: ILoopStageConfig[] = [];
+  for (const raw of value as unknown[]) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new BadRequestError('each stageConfig entry must be an object');
+    }
+    const entry = raw as Record<string, unknown>;
+    if (typeof entry.stage !== 'string' || !stages.includes(entry.stage)) {
+      throw new BadRequestError(`stageConfig stage must be one of: ${stages.join(', ')}`);
+    }
+    if (seen.has(entry.stage)) throw new BadRequestError(`stageConfig has more than one entry for ${entry.stage}`);
+    seen.add(entry.stage);
+
+    const config: ILoopStageConfig = { stage: entry.stage };
+    const text = (field: string, max: number) => {
+      const v = entry[field];
+      return v === undefined || v === null || (typeof v === 'string' && !v.trim())
+        ? undefined
+        : validateString(field, v, max);
+    };
+    const instructions = text('instructions', STAGE_INSTRUCTIONS_MAX);
+    if (instructions) config.instructions = instructions;
+    const model = text('model', ID_MAX);
+    if (model) config.model = model;
+    if (entry.tools !== undefined && entry.tools !== null) {
+      const tools = validateStringList('tools', entry.tools, TOOLS_MAX, TOOL_NAME_MAX);
+      if (tools.length) config.tools = tools;
+    }
+    if (entry.runner !== undefined && entry.runner !== null) {
+      if (!LOOP_STAGE_RUNNERS.includes(entry.runner as ILoopStageConfig['runner'] & string)) {
+        throw new BadRequestError(`stageConfig runner must be one of: ${LOOP_STAGE_RUNNERS.join(', ')}`);
+      }
+      config.runner = entry.runner as ILoopStageConfig['runner'];
+    }
+    if (entry.stage !== stages[stages.length - 1] && Object.keys(config).length > 1) result.push(config);
+  }
+  return result;
+}
+
+/** Drops config for stages no longer in `stages` or now the last one, so a stage edit leaves no orphans. */
+export const pruneStageConfig = (
+  stageConfig: ILoopStageConfig[] | null | undefined,
+  stages: readonly string[]
+): ILoopStageConfig[] | null | undefined =>
+  stageConfig?.filter(entry => stages.includes(entry.stage) && entry.stage !== stages[stages.length - 1]);
 
 /**
  * The owner's other loops this loop oversees; `null` or `[]` clears it (returned as null). One message for a

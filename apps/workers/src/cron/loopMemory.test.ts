@@ -58,6 +58,17 @@ describe('buildLoopQuery', () => {
     expect(query.trimEnd().endsWith('```')).toBe(true);
   });
 
+  it("puts the ticket stage's instructions with the goal, above the separator, and nothing without them", () => {
+    const memory = { notes: '', nextAction: '' };
+    const item = { id: 't1', title: 'Fix it', description: '', stage: 'review' };
+    const stages = ['todo', 'review', 'done'];
+    const query = buildLoopQuery('Ship', memory, { item, stages, instructions: 'Review only' });
+    expect(query.startsWith('Ship\n\nInstructions for the "review" stage:\nReview only\n\n---\n')).toBe(true);
+    expect(buildLoopQuery('Ship', memory, { item, stages, instructions: undefined })).toBe(
+      buildLoopQuery('Ship', memory, { item, stages })
+    );
+  });
+
   it('quotes directives as data, marks an overruled one, and tells the run how to answer', () => {
     const query = buildLoopQuery('Always write tests', { notes: '', nextAction: '' }, undefined, {
       directives: [

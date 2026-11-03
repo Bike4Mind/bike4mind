@@ -697,3 +697,94 @@ describe('POST /api/loops/:id/events/:eventId/override', () => {
     });
   });
 });
+
+describe('stageConfig', () => {
+  const stages = ['todo', 'review', 'done'];
+  const patch = (body: Record<string, unknown>) => call('item', 'patch', { query: { id: OID }, body }).result;
+
+  it('stores it on create, dropping last-stage and empty entries and blank fields', async () => {
+    await call('collection', 'post', {
+      body: {
+        ...validBody,
+        stages,
+        stageConfig: [
+          { stage: 'review', model: 'm2', tools: ['web_search'], instructions: ' Review only ', runner: 'desktop' },
+          { stage: 'todo', model: '', tools: [], instructions: '  ' },
+          { stage: 'done', model: 'm3' },
+        ],
+      },
+    }).result;
+    expect(repo.create.mock.calls[0][0].stageConfig).toEqual([
+      { stage: 'review', model: 'm2', tools: ['web_search'], instructions: 'Review only', runner: 'desktop' },
+    ]);
+  });
+
+  it('validates against the default stages when none are sent', async () => {
+    await call('collection', 'post', { body: { ...validBody, stageConfig: [{ stage: 'doing', runner: 'cloud' }] } })
+      .result;
+    expect(repo.create.mock.calls[0][0].stageConfig).toEqual([{ stage: 'doing', runner: 'cloud' }]);
+  });
+
+  it.each([
+    [[{ stage: 'nope', model: 'm2' }], /stage must be one of: todo, review, done/],
+    [
+      [
+        { stage: 'review', model: 'm2' },
+        { stage: 'review', runner: 'cloud' },
+      ],
+      /more than one entry/,
+    ],
+    [[{ stage: 'review', runner: 'laptop' }], /runner/],
+    [[{ stage: 'review', instructions: 'x'.repeat(4001) }], /instructions/],
+    [[{ stage: 'review', tools: Array.from({ length: 51 }, (_, i) => `t${i}`) }], /tools/],
+    [{ stage: 'review' }, /stageConfig/],
+  ])('rejects an invalid stageConfig with a 400 (%#)', async (stageConfig, message) => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ stages }));
+    const result = patch({ stageConfig });
+    await expect(result).rejects.toMatchObject({ statusCode: 400 });
+    await expect(result).rejects.toThrow(message);
+    expect(repo.updateForUser).not.toHaveBeenCalled();
+  });
+
+  it('stores and returns it on PATCH; null or nothing left clears it', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ stages }));
+    const { res, result } = call('item', 'patch', {
+      query: { id: OID },
+      body: { stageConfig: [{ stage: 'review', runner: 'desktop' }] },
+    });
+    await result;
+    expect(res._getJSONData().stageConfig).toEqual([{ stage: 'review', runner: 'desktop' }]);
+
+    await patch({ stageConfig: null });
+    await patch({ stageConfig: [{ stage: 'done', runner: 'desktop' }] });
+    expect(repo.updateForUser.mock.calls.slice(1).map(c => c[2])).toEqual([
+      { stageConfig: null },
+      { stageConfig: null },
+    ]);
+  });
+
+  it('validates against the stages sent in the same PATCH', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ stages }));
+    await patch({ stages: ['todo', 'qa', 'done'], stageConfig: [{ stage: 'qa', model: 'm2' }] });
+    expect(repo.updateForUser.mock.calls[0][2].stageConfig).toEqual([{ stage: 'qa', model: 'm2' }]);
+    await expect(patch({ stages: ['todo', 'done'], stageConfig: [{ stage: 'review', model: 'm2' }] })).rejects.toThrow(
+      /stage must be one of/
+    );
+  });
+
+  it('drops the config of a removed stage, or one now last, when only stages change', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(
+      loop({
+        stages,
+        stageConfig: [
+          { stage: 'todo', model: 'm2' },
+          { stage: 'review', runner: 'desktop' },
+        ],
+      })
+    );
+    await patch({ stages: ['todo', 'doing', 'done'] });
+    expect(repo.updateForUser.mock.calls[0][2].stageConfig).toEqual([{ stage: 'todo', model: 'm2' }]);
+    await patch({ stages: ['review', 'todo'] });
+    expect(repo.updateForUser.mock.calls[1][2].stageConfig).toEqual([{ stage: 'review', runner: 'desktop' }]);
+  });
+});
