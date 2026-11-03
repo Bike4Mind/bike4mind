@@ -1,10 +1,11 @@
 import { blockedIPRepository, type IBlockedIPDocument } from '@bike4mind/database';
-import { ipBlockContains, type IpBlockSurface } from '@bike4mind/common';
+import { escapeSlackText, ipBlockContains, type IpBlockSurface } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { RequestHandler } from 'express';
 import { getClientIp, type ClientIpRequest } from '@bike4mind/server-utils/utils/ip';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
+import { alertFraudBlock } from '@server/billing/fraudBlockAlert';
 
 /** Shown for a failed-login lockout (scope `login`). */
 export const LOGIN_LOCKOUT_MESSAGE =
@@ -55,13 +56,14 @@ export type IpBlockRefusal = { message: string; scope: 'login' | 'all'; expiresA
  * (Lumina5/Security IpBlockCheckFailed) for an alarm to catch instead.
  */
 export async function ipBlockRefusal(
-  request: ClientIpRequest,
+  request: ClientIpRequest & { user?: { id: string } | null },
   surface: IpBlockSurface,
   logger?: Logger
 ): Promise<IpBlockRefusal | null> {
+  const ip = getClientIp(request);
   let block: IBlockedIPDocument | null;
   try {
-    block = await findIpBlock(getClientIp(request), surface);
+    block = await findIpBlock(ip, surface);
   } catch (error) {
     logger?.error('[IpBlock] blocked-IP check failed; allowing the request', {
       surface,
@@ -72,6 +74,15 @@ export async function ipBlockRefusal(
   }
   if (!block) return null;
   const scope = block.scope ?? 'login';
+  // A failed-login lockout is routine; only an admin's network block is a fraud block worth a post.
+  if (scope === 'all') {
+    await alertFraudBlock({
+      kind: 'ipBlocked',
+      userId: request.user?.id ?? null,
+      ip,
+      details: [`*IP:* \`${escapeSlackText(ip)}\` (${surface} surface)`],
+    });
+  }
   return {
     message: scope === 'all' ? NETWORK_BLOCKED_MESSAGE : LOGIN_LOCKOUT_MESSAGE,
     scope,

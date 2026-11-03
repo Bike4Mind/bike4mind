@@ -39,7 +39,10 @@ vi.mock('sst', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({ userRepository: {} }));
 vi.mock('@bike4mind/services', () => ({ userService: { createUser: h.createUser } }));
-vi.mock('@bike4mind/common', () => ({ PREDEFINED_USER_TAGS: ['seed-tag'], CURRENT_POLICY_VERSION: '2026-01' }));
+vi.mock('@bike4mind/common', async () => {
+  const { AdminPermissionsSchema } = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+  return { PREDEFINED_USER_TAGS: ['seed-tag'], CURRENT_POLICY_VERSION: '2026-01', AdminPermissionsSchema };
+});
 
 import handler from '../create-user';
 
@@ -149,6 +152,76 @@ describe('POST /api/test/create-user', () => {
     it('ignores a non-boolean "true"', async () => {
       expect(await trustFor({ apiKeyTrustApproved: 'true' })).toBe(false);
     });
+  });
+
+  describe('stage and secret guards', () => {
+    const privileged = { isAdmin: true, adminPermissions: ['settings:manage'] };
+
+    it('refuses with a 403 and creates nothing when E2E endpoints are disabled (production)', async () => {
+      h.isE2EEnabled.mockReturnValue(false);
+      const { res, status } = makeRes();
+      await handler(makeReq(privileged) as never, res);
+
+      expect(status).toHaveBeenCalledWith(403);
+      expect(h.createUser).not.toHaveBeenCalled();
+      expect(h.issueSessionForRequest).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a wrong secret', { value: 'right-secret' }, 'wrong-secret'],
+      ['the unset placeholder secret', { value: 'not-configured' }, 'not-configured'],
+      ['no configured secret', undefined, 'right-secret'],
+    ])('refuses with a 401 and creates nothing given %s', async (_label, configured, provided) => {
+      h.sstSecret = configured;
+      const { res, status } = makeRes();
+      await handler({ ...makeReq(privileged), headers: { 'x-e2e-cleanup-secret': provided } } as never, res);
+
+      expect(status).toHaveBeenCalledWith(401);
+      expect(h.createUser).not.toHaveBeenCalled();
+      expect(h.issueSessionForRequest).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('adminPermissions', () => {
+    it('passes a valid delegated-admin grant through to createUser without full isAdmin', async () => {
+      const { res, status } = makeRes();
+      await handler(makeReq({ adminPermissions: ['settings:manage'] }) as never, res);
+
+      expect(status).toHaveBeenCalledWith(201);
+      const params = h.createUser.mock.calls[0][0];
+      expect(params.adminPermissions).toEqual(['settings:manage']);
+      expect(params.isAdmin).toBe(false);
+    });
+
+    it('leaves adminPermissions unset when the body omits it', async () => {
+      const { res } = makeRes();
+      await handler(makeReq() as never, res);
+
+      expect(h.createUser.mock.calls[0][0].adminPermissions).toBeUndefined();
+    });
+
+    it.each([
+      ['an unknown permission', ['settings:manage', 'not-a-permission']],
+      ['a repeated permission', ['settings:manage', 'settings:manage']],
+      ['a non-array value', 'settings:manage'],
+      ['null', null],
+    ])('rejects %s with a 400 and creates nothing', async (_label, adminPermissions) => {
+      const { res, status } = makeRes();
+      await handler(makeReq({ adminPermissions }) as never, res);
+
+      expect(status).toHaveBeenCalledWith(400);
+      expect(h.createUser).not.toHaveBeenCalled();
+      expect(h.issueSessionForRequest).not.toHaveBeenCalled();
+    });
+  });
+
+  it('reports the email-pattern error, not the permissions error, when both are invalid', async () => {
+    const { res, status, json } = makeRes();
+    await handler(makeReq({ email: 'someone@example.com', adminPermissions: ['not-a-permission'] }) as never, res);
+
+    expect(status).toHaveBeenCalledWith(400);
+    expect(json).toHaveBeenCalledWith({ error: 'Test users must use the -e2e@test.com email pattern' });
+    expect(h.createUser).not.toHaveBeenCalled();
   });
 
   describe('includePredefinedTags', () => {

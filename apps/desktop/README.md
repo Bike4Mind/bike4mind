@@ -18,10 +18,11 @@ No Node.js, pnpm, or source checkout is required.
    and drag Bike4Mind into Applications.
 2. On Linux x64, download the `.AppImage`, mark it executable (`chmod +x <file>.AppImage`),
    and launch it. Some distributions require FUSE support to run AppImages.
-3. On Windows x64, download `setup.exe` and run it. The installer is not code signed yet,
-   so SmartScreen shows a warning on first run. In-app updates work on Windows. The local
-   tool layer (shell commands, file access, sandboxing) is built around a POSIX shell and
-   is not yet verified on Windows.
+3. On Windows, download `setup.exe` and run it. The one installer covers x64 and ARM64
+   Windows and installs the build native to the PC. It is not code signed yet,
+   so SmartScreen shows a warning on first run. In-app updates work on Windows. Shell commands
+   run in Git Bash, so Code projects need [Git for Windows](https://git-scm.com/download/win).
+   The rest of the local tool layer (file access, sandboxing) is not yet verified on Windows.
 
 New distribution releases require Developer ID signing and notarization. Legacy unsigned
 builds in the source repository do not gain an updater retroactively: install the first signed
@@ -179,7 +180,7 @@ gitignored.
 | -------------------- | ---------------------------------------------------------- |
 | `pnpm package`       | everything the host platform can build                     |
 | `pnpm package:mac`   | `dmg` and `zip`, both for arm64 and x64                    |
-| `pnpm package:win`   | `nsis` installer, x64                                      |
+| `pnpm package:win`   | one `nsis` installer holding both x64 and arm64            |
 | `pnpm package:linux` | `AppImage`, x64                                            |
 | `pnpm package:dir`   | an unpacked `.app`/directory, no installer - the fast loop |
 
@@ -217,7 +218,8 @@ dispatches on `main`. PR runs are isolated from the main release concurrency gro
 
 The workflow installs from the frozen lockfile, builds shared packages, runs desktop
 typechecks on macOS, Linux and Windows, runs the desktop unit tests on macOS and Linux (the
-suite assumes a POSIX shell), then packages Apple Silicon, Linux x64 and Windows x64.
+suite assumes a POSIX shell), then packages Apple Silicon, Linux x64 and Windows (one
+installer for x64 and arm64, built on an x64 runner).
 The three platform jobs run in parallel; Turbo also builds independent shared packages
 in parallel while respecting dependency order. Intel macOS release builds are temporarily
 paused; local x64 packaging remains available. Publication waits for all build jobs and
@@ -261,9 +263,10 @@ to avoid system prompts or accessing a real login keychain. It does not verify s
 credential persistence. This does
 not verify Gatekeeper approval on a fresh machine.
 
-The Windows job runs the NSIS installer silently into a temporary directory and runs the same
-startup checks against the installed app. `win-x64-smoke-results` contains the screenshot and
-logs. It does not verify SmartScreen behaviour or a real user profile.
+The Windows job checks that the installer embeds both the x64 and arm64 app archives, runs it
+silently into a temporary directory and runs the same startup checks against the installed app.
+The runner is x64, so only the x64 half is launched. `win-x64-smoke-results` contains the
+screenshot and logs. It does not verify SmartScreen behaviour or a real user profile.
 
 Installer versions follow SemVer, selected automatically by
 `scripts/desktop_release_version.py`. The first release uses the package version

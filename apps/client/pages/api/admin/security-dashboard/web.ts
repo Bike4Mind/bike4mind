@@ -21,19 +21,17 @@ const handler = adminApi({
 })
   .get(async (req: Request, res: Response) => {
     const stage = resolveStage();
-    const latestOwasp = await securityDashboardSnapshotRepository.findLatestByStageAndScanType(stage, 'web-owasp');
-    const latestLegacy =
-      latestOwasp ?? (await securityDashboardSnapshotRepository.findLatestByStageAndScanType(stage, 'web')); // backwards compatibility
+    const latest = await securityDashboardSnapshotRepository.findLatestByStageAndScanType(stage, 'web-owasp');
 
-    if (!latestLegacy) {
+    if (!latest) {
       return res.status(404).json({ error: 'No website security scan has been recorded yet for this stage.' });
     }
 
-    const { score, counts } = computeCategoryScoreAndCounts('web', latestLegacy.findings ?? []);
+    const { score, counts } = computeCategoryScoreAndCounts('web', latest.findings ?? []);
     const status = computeDeterministicStatus(counts, score);
 
     return res.status(200).json({
-      ...latestLegacy,
+      ...latest,
       score,
       status,
     });

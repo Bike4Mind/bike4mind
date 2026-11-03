@@ -4,6 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { BranchCheckout } from '@shared/chat';
 import { hostGitArgs, hostNetworkGitArgs } from '../../git/hostGitArgs';
+import { hostProgram } from '../tools/userPath';
 
 const execFileAsync = promisify(execFile);
 
@@ -55,7 +56,9 @@ function gitNetwork(directory: string, args: readonly string[]): Promise<string>
 
 async function runGit(directory: string, args: readonly string[], fullArgs: readonly string[]): Promise<string> {
   try {
-    const { stdout } = await execFileAsync('git', [...fullArgs], {
+    const file = await hostProgram('git');
+    if (!file) throw new Error('git is not installed');
+    const { stdout } = await execFileAsync(file, [...fullArgs], {
       cwd: directory,
       timeout: GIT_TIMEOUT_MS,
       maxBuffer: MAX_GIT_OUTPUT_BYTES,

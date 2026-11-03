@@ -26,6 +26,7 @@ import {
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { createFabFile } from '@server/managers/fabFileManager';
+import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { MAX_FILE_SIZE_DEFAULT_MB } from '@bike4mind/server-utils/utils/maxFileSizeDefault';
@@ -159,6 +160,9 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
     // if the key exists, so a scanned object cannot be overwritten.
     ...(provenance && { ContentType: provenance.contentType, IfNoneMatch: '*' }),
   });
+
+  // Spent after every admission gate above, so a refused upload costs nothing.
+  await consumeFileUploadBudget(req, 1);
 
   // Create File metadata, status will be set to `pending` by default
   const file = await createFabFile(

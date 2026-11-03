@@ -189,41 +189,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/admin/security-dashboard/code-semgrep-ingest.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/admin/security-dashboard/code.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/admin/security-dashboard/packages-ingest.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
-  "apps/client/pages/api/admin/security-dashboard/packages.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/admin/security-dashboard/secrets-ingest.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
-  "apps/client/pages/api/admin/security-dashboard/secrets.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/admin/security-dashboard/waf.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/admin/security-dashboard/web-owasp-ingest.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1

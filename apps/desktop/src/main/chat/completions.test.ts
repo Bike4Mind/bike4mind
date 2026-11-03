@@ -70,6 +70,30 @@ describe('streamCompletion', () => {
     expect(events.map(event => ('text' in event ? event.text : event.type))).toEqual(['meta', 'Hel', 'lo']);
   });
 
+  it('drops a generation rate from a hosted stream, keeping its usage and credits', async () => {
+    const stream = new PassThrough();
+    const { instance } = fakeAxios(stream);
+    const events: CompletionStreamEvent[] = [];
+
+    const done = streamCompletion(instance, '/c', REQUEST, event => events.push(event));
+
+    stream.write(
+      frame({
+        type: 'content',
+        stopReason: 'end_turn',
+        usage: { outputTokens: 12 },
+        credits: { used: 3 },
+        rate: { evalTokens: 12, evalMs: 500 },
+      })
+    );
+    stream.write(frame('[DONE]'));
+    await done;
+
+    expect(events).toEqual([
+      { type: 'content', stopReason: 'end_turn', usage: { outputTokens: 12 }, credits: { used: 3 } },
+    ]);
+  });
+
   it('reassembles a frame split across chunk boundaries', async () => {
     const stream = new PassThrough();
     const { instance } = fakeAxios(stream);

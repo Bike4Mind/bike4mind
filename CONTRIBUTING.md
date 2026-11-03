@@ -278,7 +278,6 @@ All of these are required and blocking:
 | **Run Tests** | Full test suite (sharded in CI) | `pnpm turbo:test` |
 | **Secret scan** | No credentials in the diff | gitleaks pre-commit hook |
 | **Lockfile Integrity** | No integrity-less tarballs, and no [overlay paths](#premium-overlays-and-the-tracked-lockfile), in `pnpm-lock.yaml` | `bash scripts/check-no-overlay-lockfile.sh` |
-| **Semgrep** | Static security analysis | — |
 | **CLA** | You've signed the CLA | one-time, via bot |
 
 Run typecheck, lint, and tests locally before pushing — it's dramatically faster than round-tripping through CI.

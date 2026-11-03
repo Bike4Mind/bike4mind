@@ -1,5 +1,12 @@
-import { archFromModelInfo, probeHardware, type HardwareProfile, type ModelArch } from '@bike4mind/local-models';
+import {
+  archFromModelInfo,
+  modelBlobsOf,
+  probeHardware,
+  type HardwareProfile,
+  type ModelArch,
+} from '@bike4mind/local-models';
 import type { LocalContextSetting } from '@shared/localContextSetting';
+import { installedProjectorBytes } from '../models/projectorBytes';
 import type { LocalModelFootprint } from './localContext';
 import type { LocalContextSizing, LocalModelFacts } from './OllamaLocal';
 
@@ -52,6 +59,10 @@ export interface LocalContextSizingDeps {
   hardware?: HardwareProbe;
   /** `/api/show` with verbose on: model_info with every per-layer array. */
   showVerbose?(model: string): Promise<{ model_info?: Record<string, unknown> | null; tensors?: unknown }>;
+  /** The projector part of a model's size from its `/api/show` Modelfile; 0 when none or unknown. */
+  projectorBytes?(modelfile: string): Promise<number>;
+  /** The curated list's projector sizes by digest, for a projector blob this computer cannot read. */
+  pinnedProjectors?(): ReadonlyMap<string, number>;
   now?(): number;
 }
 
@@ -97,6 +108,12 @@ interface ArchEntry {
   failures: number;
 }
 
+interface ProjectorEntry {
+  digest: string | undefined;
+  bytes: number;
+  pending?: Promise<number>;
+}
+
 /**
  * A model's shape from the `/api/show` OllamaLocal made (verbose only when per-layer arrays are missing),
  * kept per digest until Settings change. A failed verbose show is retried after a growing pause.
@@ -105,9 +122,26 @@ export function localContextSizing({
   setting,
   hardware = localHardware,
   showVerbose = verboseShow,
+  pinnedProjectors,
+  projectorBytes = modelfile =>
+    installedProjectorBytes(modelBlobsOf(modelfile), { pinned: pinnedProjectors?.(), onThisComputer: true }),
   now = Date.now,
 }: LocalContextSizingDeps): LocalContextSizing {
   const arches = new Map<string, ArchEntry>();
+  const projectors = new Map<string, ProjectorEntry>();
+
+  const projectorFor = (facts: LocalModelFacts): ProjectorEntry => {
+    const known = projectors.get(facts.name);
+    if (known && known.digest === facts.digest) return known;
+    if (facts.modelfile === undefined) return { digest: facts.digest, bytes: 0 };
+    const entry: ProjectorEntry = { digest: facts.digest, bytes: 0 };
+    entry.pending = projectorBytes(facts.modelfile).then(
+      bytes => (entry.bytes = bytes),
+      () => 0
+    );
+    projectors.set(facts.name, entry);
+    return entry;
+  };
 
   const entryFor = (facts: LocalModelFacts): ArchEntry => {
     const known = arches.get(facts.name);
@@ -138,9 +172,15 @@ export function localContextSizing({
     return entry;
   };
 
-  const footprintOf = (facts: LocalModelFacts, arch: ModelArch | null, machine: HardwareProfile | null) => ({
+  const footprintOf = (
+    facts: LocalModelFacts,
+    arch: ModelArch | null,
+    projector: number,
+    machine: HardwareProfile | null
+  ): LocalModelFootprint => ({
     arch,
     weightsBytes: facts.sizeBytes ?? null,
+    projectorBytes: projector,
     hardware: machine,
   });
 
@@ -148,15 +188,21 @@ export function localContextSizing({
     setting,
     async footprint(facts): Promise<LocalModelFootprint> {
       const entry = entryFor(facts);
-      const [arch, machine] = await Promise.all([entry.pending ?? entry.arch, hardware.profile()]);
-      return footprintOf(facts, arch, machine);
+      const projector = projectorFor(facts);
+      const [arch, bytes, machine] = await Promise.all([
+        entry.pending ?? entry.arch,
+        projector.pending ?? projector.bytes,
+        hardware.profile(),
+      ]);
+      return footprintOf(facts, arch, bytes, machine);
     },
     cachedFootprint(facts): LocalModelFootprint {
       void hardware.profile();
-      return footprintOf(facts, entryFor(facts).arch, hardware.known() ?? null);
+      return footprintOf(facts, entryFor(facts).arch, projectorFor(facts).bytes, hardware.known() ?? null);
     },
     forget() {
       arches.clear();
+      projectors.clear();
     },
   };
 }

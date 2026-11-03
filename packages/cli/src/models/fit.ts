@@ -6,6 +6,7 @@
 import {
   estimateFitFromSize,
   fitMarginBytes,
+  memoryBudgets,
   ollamaNumCtx,
   type HardwareProfile,
   type SizeFitLevel,
@@ -69,6 +70,8 @@ export function machineLabel({ hardware }: { hardware: HardwareProfile }): strin
   return hardware.memoryKind === 'discrete' ? `GPU of unknown memory, rated on the CPU, ${ram}` : `no GPU, ${ram}`;
 }
 
+const TIGHT_NOTE = 'Close other apps first, or this computer may slow down.';
+
 const contextLabel = (tokens: number) => (tokens >= 1024 ? `${Math.round(tokens / 1024)}K` : String(tokens));
 
 /**
@@ -82,26 +85,57 @@ export function rateDownload(sizeBytes: number, reading: MachineReading, trained
   return reading.hardware.confidence === 'low' ? { ...rated, gpuUnread: true } : rated;
 }
 
+/**
+ * A need past its limit and that limit as shown, with more decimals while they would read the same, then rounded
+ * apart to whole MB.
+ */
+function needAndLimit(needBytes: number, limitBytes: number): [string, string] {
+  const shown: [string, string] = [formatBytes(needBytes), formatBytes(limitBytes)];
+  for (let digits = 2; digits <= 3 && shown[0] === shown[1]; digits++) {
+    const fine = (bytes: number) => `${(bytes / 1e9).toFixed(digits)} GB`;
+    shown.splice(0, 2, fine(needBytes), fine(limitBytes));
+  }
+  if (shown[0] === shown[1]) return [`${Math.ceil(needBytes / 1e6)} MB`, `${Math.floor(limitBytes / 1e6)} MB`];
+  return shown;
+}
+
+// Worded as Desktop's fitFromSize (apps/desktop/src/main/models/fit.ts); keep the two in step.
 function rateOnHardware(sizeBytes: number, hardware: HardwareProfile, trainedContext: number | null): ModelFit {
   const known = trainedContext !== null && trainedContext > 0;
   const context = ollamaNumCtx(known ? trainedContext : Infinity);
   const fit = estimateFitFromSize(sizeBytes, hardware, context);
-  const need = `about ${formatBytes(fit.needBytes)} before context memory, at ${known ? '' : 'up to '}the ${contextLabel(context)} context the CLI requests`;
-  const budget = `the ${formatBytes(fit.budgetBytes)} a model can use ${fit.cpuOnly ? 'in RAM' : 'in GPU memory'} here`;
+  const margin = fitMarginBytes(hardware);
+  // What a model can use once the planner's headroom is kept free, on the GPU and with layers in system RAM too.
+  const usable = fit.budgetBytes - margin;
+  const machine = fit.budgetBytes + memoryBudgets(hardware).ramPool - margin;
+  const at = `before context memory, at ${known ? '' : 'up to '}the ${contextLabel(context)} context the CLI requests`;
+  const need = (shown: string) => `about ${shown} ${at}`;
+  const budget = `the ${formatBytes(usable)} a model can use ${fit.cpuOnly ? 'in RAM' : 'in GPU memory'} here`;
   const rough = 'Rough estimate from the file size';
-  const reserved = `with ${formatBytes(fitMarginBytes(hardware))} reserved headroom`;
-  if (fit.level === 'too-large')
-    return { verdict: fit.level, detail: `${rough}: ${need}; ${reserved}, this exceeds ${budget}.` };
-  if (fit.level === 'tight') {
-    return {
-      verdict: fit.level,
-      detail:
-        fit.offloadBytes > 0
-          ? `${rough}: ${need}; ${reserved}, this exceeds ${budget}, so part of it runs from system RAM and replies are slower.`
-          : `${rough}: ${need}, close to ${budget}.`,
-    };
+  if (fit.level === 'too-large') {
+    const overMachine = fit.needBytes > machine;
+    if (!overMachine && fit.offloadBytes <= sizeBytes)
+      return {
+        verdict: fit.level,
+        detail: `${rough}: ${need(formatBytes(fit.needBytes))}, too much of the ${formatBytes(machine)} this computer can hold for a model to leave room for that.`,
+      };
+    const [shown, limit] = needAndLimit(fit.needBytes, overMachine ? machine : usable);
+    const past = overMachine
+      ? `the ${limit} this computer can hold for a model`
+      : `the ${limit} of GPU memory a model can use here`;
+    return { verdict: fit.level, detail: `${rough}: ${need(shown)}, more than ${past}.` };
   }
-  return { verdict: fit.level, detail: `${rough}: ${need}, of ${budget}.` };
+  const about = `${rough}: ${need(formatBytes(fit.needBytes))}`;
+  if (fit.level === 'tight') {
+    const why =
+      fit.offloadBytes > sizeBytes / 2
+        ? `more than ${budget}, so most of it runs on the CPU from system RAM and replies will be slow`
+        : fit.offloadBytes > 0
+          ? `more than ${budget}, so part of it runs from system RAM and replies are slower`
+          : `close to ${budget}`;
+    return { verdict: fit.level, detail: `${about}, ${why}. ${TIGHT_NOTE}` };
+  }
+  return { verdict: fit.level, detail: `${about}, of ${budget}.` };
 }
 
 export function fitForHubBuild(build: HubGgufBuild, detail: HubModelDetail, reading: MachineReading): ModelFit {
