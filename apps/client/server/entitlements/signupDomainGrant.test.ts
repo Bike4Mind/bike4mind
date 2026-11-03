@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Logger } from '@bike4mind/observability';
 
-const { creditLotRepository, mockAddTagsToUser, mockClaimFreeCreditGrant } = vi.hoisted(() => ({
+const { creditLotRepository, mockAddTagsToUser, mockClaimFreeCreditGrant, grantPackages } = vi.hoisted(() => ({
+  grantPackages: { findById: vi.fn(), reserveRedemption: vi.fn(), releaseRedemption: vi.fn() },
   creditLotRepository: { id: 'lots' },
   mockAddTagsToUser: vi.fn(),
   mockClaimFreeCreditGrant: vi.fn(),
@@ -10,6 +11,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   creditLotRepository,
   creditTransactionRepository: {},
+  grantPackageRepository: grantPackages,
   organizationRepository: {},
   userRepository: {
     addTagsToUser: (...a: unknown[]) => mockAddTagsToUser(...a),
@@ -626,5 +628,82 @@ describe('applySignupDomainGrant', () => {
       expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('overlay-grant'), expect.any(Error));
       expect(mockPushInvalidation).toHaveBeenCalledWith('user-1', expect.anything());
     });
+  });
+});
+
+describe('applySignupDomainGrant - rule linked to a grant package', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockPartnerGrant.mockResolvedValue({
+      matched: true,
+      ruleId: 'rule-1',
+      domain: 'partner.example',
+      entitlements: new Set(['optihashi:pro']),
+      signupCredits: 1000,
+      grantPackageId: 'pkg-1',
+      organizationId: 'org-1',
+      tags: [],
+      subscription: { priceId: 'price_pro', durationMonths: 1 },
+    });
+    premiumPartnerSignupHooks.length = 0;
+    mockClaimFreeCreditGrant.mockResolvedValue(true);
+    mockGrantSubscription.mockResolvedValue({ status: 'granted', credits: 3000, currentCredits: 3000 });
+    mockAddCredits.mockResolvedValue({ currentCredits: 100 });
+    mockApplyPartnerRuleMembership.mockResolvedValue({ added: true, reason: 'added' });
+    grantPackages.findById.mockResolvedValue({ id: 'pkg-1', credits: 100, active: true });
+    grantPackages.releaseRedemption.mockResolvedValue(undefined);
+  });
+
+  it('grants the package credits instead of the rule amount', async () => {
+    grantPackages.reserveRedemption.mockResolvedValue({ outcome: 'reserved', release: vi.fn() });
+    const result = await run();
+    expect(result.creditsGranted).toBe(100);
+    expect(grantPackages.reserveRedemption).toHaveBeenCalledWith('pkg-1', 'user-1');
+    expect(mockAddCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 100 }), expect.anything());
+  });
+
+  it('withholds only the credits at the cap: membership, subscription and hooks still apply', async () => {
+    grantPackages.reserveRedemption.mockResolvedValue({ outcome: 'refused', reason: 'total_cap' });
+    const hook = vi.fn().mockResolvedValue(undefined);
+    premiumPartnerSignupHooks.push({ name: 'test-hook', run: hook });
+    const logger = makeLogger();
+    const result = await run(logger);
+    expect(result.creditsGranted).toBe(0);
+    expect(result.joinedOrganizationId).toBe('org-1');
+    expect(result.subscriptionGranted).toBe(true);
+    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(hook).toHaveBeenCalledTimes(1);
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('refused the redemption (total_cap)'));
+  });
+
+  it('grants again on a re-verify of the same account under the same stable transaction id', async () => {
+    grantPackages.reserveRedemption.mockResolvedValue({ outcome: 'already', release: vi.fn() });
+    const result = await run();
+    expect(result.creditsGranted).toBe(100);
+    expect(mockAddCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ transactionId: 'domain-grant-credits:user-1' }),
+      expect.anything()
+    );
+  });
+
+  it('releases the redemption when the credit grant fails', async () => {
+    grantPackages.reserveRedemption.mockResolvedValue({ outcome: 'reserved', release: vi.fn() });
+    mockAddCredits.mockRejectedValue(new Error('ledger down'));
+    const result = await run();
+    expect(result.creditsGranted).toBe(0);
+    expect(grantPackages.releaseRedemption).toHaveBeenCalledWith('pkg-1', 'user-1');
+    expect(result.joinedOrganizationId).toBe('org-1');
+  });
+
+  it('withholds the credits but keeps the membership when the package is inactive or missing', async () => {
+    grantPackages.findById.mockResolvedValue({ id: 'pkg-1', credits: 100, active: false });
+    const result = await run();
+    expect(result.creditsGranted).toBe(0);
+    expect(grantPackages.reserveRedemption).not.toHaveBeenCalled();
+    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(result.joinedOrganizationId).toBe('org-1');
+
+    grantPackages.findById.mockResolvedValue(null);
+    expect((await run()).creditsGranted).toBe(0);
   });
 });

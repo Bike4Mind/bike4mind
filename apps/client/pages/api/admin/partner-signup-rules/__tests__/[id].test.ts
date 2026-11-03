@@ -4,11 +4,12 @@ import { createMocks } from 'node-mocks-http';
 // Same middleware-strip pattern as index.test.ts: capture the handlers registered on the
 // baseApi chain so PUT/DELETE can be invoked directly. Everything referenced inside a
 // vi.mock factory must live in vi.hoisted (mocks are hoisted above const initialization).
-const { handlers, repo, invalidatePartnerRuleCache, audit } = vi.hoisted(() => ({
+const { handlers, repo, invalidatePartnerRuleCache, audit, findPackage } = vi.hoisted(() => ({
   handlers: {} as Record<string, (req: unknown, res: unknown) => unknown>,
   repo: { update: vi.fn(), findById: vi.fn(), delete: vi.fn() },
   invalidatePartnerRuleCache: vi.fn(),
   audit: vi.fn(),
+  findPackage: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
@@ -36,6 +37,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 vi.mock('@bike4mind/database', () => ({
   partnerSignupRuleRepository: repo,
+  grantPackageRepository: { findById: findPackage },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
 vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: audit }));
@@ -90,6 +92,26 @@ describe('/api/admin/partner-signup-rules/[id] — update (PUT)', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(repo.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'r1', enabled: false }));
     expect(invalidatePartnerRuleCache).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects linking an unknown grant package with a 400 and never writes', async () => {
+    findPackage.mockResolvedValue(null);
+    const { req, res } = makeReqRes('PUT', { body: { grantPackageId: 'pkg-missing' } });
+    await expect(handlers.put(req, res)).rejects.toThrow(/grant package pkg-missing not found/i);
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
+  it('links an existing grant package and unlinks it with null', async () => {
+    findPackage.mockResolvedValue({ id: 'pkg-1', credits: 100 });
+    const link = makeReqRes('PUT', { body: { grantPackageId: 'pkg-1' } });
+    await handlers.put(link.req, link.res);
+    expect(repo.update).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'r1', grantPackageId: 'pkg-1' }));
+
+    findPackage.mockClear();
+    const unlink = makeReqRes('PUT', { body: { grantPackageId: null } });
+    await handlers.put(unlink.req, unlink.res);
+    expect(repo.update).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'r1', grantPackageId: null }));
+    expect(findPackage).not.toHaveBeenCalled();
   });
 
   it('applies a valid entitlements update (200) and busts the cache', async () => {

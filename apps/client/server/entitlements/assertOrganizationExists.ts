@@ -1,4 +1,4 @@
-import { organizationRepository } from '@bike4mind/database';
+import { grantPackageRepository, organizationRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 /**
@@ -12,5 +12,14 @@ export async function assertOrganizationExists(organizationId: string | null | u
   const organization = await organizationRepository.findById(organizationId);
   if (!organization) {
     throw new BadRequestError(`Organization ${organizationId} not found`);
+  }
+}
+
+/** Same guard for a rule's grant package. A `null` id (unlinking the package) is always allowed. */
+export async function assertGrantPackageExists(grantPackageId: string | null | undefined): Promise<void> {
+  if (!grantPackageId) return;
+  const grantPackage = await grantPackageRepository.findById(grantPackageId);
+  if (!grantPackage) {
+    throw new BadRequestError(`Grant package ${grantPackageId} not found`);
   }
 }

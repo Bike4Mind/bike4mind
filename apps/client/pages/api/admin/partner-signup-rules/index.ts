@@ -8,7 +8,7 @@ import {
   assertKnownEntitlements,
   assertKnownSubscriptionPlan,
 } from '@server/entitlements/partnerRules';
-import { assertOrganizationExists } from '@server/entitlements/assertOrganizationExists';
+import { assertGrantPackageExists, assertOrganizationExists } from '@server/entitlements/assertOrganizationExists';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 
@@ -52,6 +52,7 @@ const handler = adminApi({
       }
       assertKnownEntitlements(data.entitlements);
       await assertOrganizationExists(data.organizationId);
+      await assertGrantPackageExists(data.grantPackageId);
       assertKnownSubscriptionPlan(data.subscription);
 
       // Fast, friendly duplicate check. This is a TOCTOU pre-check, not the guarantee - the

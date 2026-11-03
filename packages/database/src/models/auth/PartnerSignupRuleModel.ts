@@ -61,6 +61,7 @@ export const PartnerSignupRuleSchema = new Schema<IPartnerSignupRuleDocument, IP
     domain: { type: String, required: true, unique: true, set: normalizeSignupRuleDomain },
     entitlements: { type: [String], default: [] },
     signupCredits: { type: Number, default: 0 },
+    grantPackageId: { type: String, default: null },
     // Stored as a plain string id (like createdBy) so toJSON yields a string matching
     // IPartnerSignupRule.organizationId; existence is validated in the admin route, not here.
     organizationId: { type: String, default: null },

@@ -5,11 +5,12 @@ import { createMocks } from 'node-mocks-http';
 // invoked directly (same middleware-strip pattern as pages/api/email/__tests__/verify.test.ts).
 // Everything referenced inside a vi.mock factory must live in vi.hoisted (mocks are hoisted
 // above top-level const initialization).
-const { handlers, repo, invalidatePartnerRuleCache, audit } = vi.hoisted(() => ({
+const { handlers, repo, invalidatePartnerRuleCache, audit, findPackage } = vi.hoisted(() => ({
   handlers: {} as Record<string, (req: unknown, res: unknown) => unknown>,
   repo: { listRules: vi.fn(), findByDomain: vi.fn(), create: vi.fn() },
   invalidatePartnerRuleCache: vi.fn(),
   audit: vi.fn(),
+  findPackage: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
@@ -37,6 +38,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 vi.mock('@bike4mind/database', () => ({
   partnerSignupRuleRepository: repo,
+  grantPackageRepository: { findById: findPackage },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
 vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: audit }));
@@ -112,6 +114,27 @@ describe('/api/admin/partner-signup-rules — create (POST)', () => {
     repo.create.mockRejectedValueOnce(Object.assign(new Error('E11000 dup key'), { code: 11000 }));
     const { req, res } = makeReqRes('POST', { body: validRule });
     await expect(handlers.post(req, res)).rejects.toThrow(/already exists/i);
+  });
+
+  it('rejects an unknown grant package with a 400 and never writes', async () => {
+    findPackage.mockResolvedValue(null);
+    const { req, res } = makeReqRes('POST', { body: { ...validRule, grantPackageId: 'pkg-missing' } });
+    await expect(handlers.post(req, res)).rejects.toThrow(/grant package pkg-missing not found/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects an empty grant package id with a 400', async () => {
+    const { req, res } = makeReqRes('POST', { body: { ...validRule, grantPackageId: ' ' } });
+    await expect(handlers.post(req, res)).rejects.toThrow(/grant package id is required/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('creates a rule linked to an existing grant package', async () => {
+    findPackage.mockResolvedValue({ id: 'pkg-1', credits: 100 });
+    const { req, res } = makeReqRes('POST', { body: { ...validRule, grantPackageId: 'pkg-1' } });
+    await handlers.post(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ grantPackageId: 'pkg-1' }));
   });
 
   it('creates the rule (201), stamps createdBy, and busts the cache', async () => {

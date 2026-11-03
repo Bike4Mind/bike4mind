@@ -14,7 +14,7 @@ import {
   assertKnownEntitlements,
   assertKnownSubscriptionPlan,
 } from '@server/entitlements/partnerRules';
-import { assertOrganizationExists } from '@server/entitlements/assertOrganizationExists';
+import { assertGrantPackageExists, assertOrganizationExists } from '@server/entitlements/assertOrganizationExists';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 
@@ -57,6 +57,7 @@ const handler = adminApi({
       if (data.entitlements) assertKnownEntitlements(data.entitlements);
       // Present (and non-null) only when the update sets/changes the org association.
       if (data.organizationId) await assertOrganizationExists(data.organizationId);
+      await assertGrantPackageExists(data.grantPackageId);
       // Only a changed plan is checked, so an admin can still edit or disable a rule whose plan
       // was removed from the catalog after it was saved.
       // Also the "before" side of the audit diff. Read outside the transaction, so a concurrent PUT

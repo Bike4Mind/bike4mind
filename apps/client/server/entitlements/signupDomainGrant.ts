@@ -4,6 +4,7 @@ import {
   adminSettingsRepository,
   creditLotRepository,
   creditTransactionRepository,
+  grantPackageRepository,
   organizationRepository,
   userRepository,
 } from '@bike4mind/database';
@@ -72,6 +73,27 @@ const NO_GRANT: SignupDomainGrantResult = {
  * user already has any non-terminal individual subscription, and its deterministic row id makes a
  * repeat or concurrent grant a no-op.
  */
+/**
+ * Counts this signup against the rule's package caps. False when a cap refused it (logged, and the
+ * package records the cap hit for the admin); true with no package, or when this user already
+ * redeemed it, since the stable credit transactionId dedupes a re-verify.
+ */
+async function reservePackageRedemption(
+  grantPackageId: string | null,
+  userId: string,
+  trigger: SeatCeilingRaiseTrigger,
+  logger: Logger
+): Promise<boolean> {
+  if (!grantPackageId) return true;
+  const reservation = await grantPackageRepository.reserveRedemption(grantPackageId, userId);
+  if (reservation.outcome !== 'refused') return true;
+  logger.info(
+    `Domain-grant signup credits withheld for user ${userId} (${trigger}): grant package ${grantPackageId} ` +
+      `refused the redemption (${reservation.reason})`
+  );
+  return false;
+}
+
 export async function applySignupDomainGrant(params: {
   userId: string;
   email: string;
@@ -87,6 +109,7 @@ export async function applySignupDomainGrant(params: {
   let partnerRule: PartnerSignupRuleMatch | null;
   let partnerTags: string[];
   let partnerSubscription: PartnerRuleSubscription | null;
+  let grantPackageId: string | null = null;
   try {
     const partnerGrant = await partnerSignupGrantForEmail(email, true);
     if (partnerGrant.matched) {
@@ -99,6 +122,7 @@ export async function applySignupDomainGrant(params: {
       };
       partnerTags = partnerGrant.tags;
       partnerSubscription = partnerGrant.subscription;
+      grantPackageId = partnerGrant.grantPackageId;
     } else {
       domainGrantKeys = entitlementsForEmail(email, true);
       signupCredits = signupCreditsForKeys(domainGrantKeys);
@@ -114,6 +138,22 @@ export async function applySignupDomainGrant(params: {
   const result: SignupDomainGrantResult = { ...NO_GRANT, tagsApplied: [] };
   let coreStepFailed = false;
 
+  // A linked package replaces the rule's own credit amount; a missing or inactive package withholds
+  // the credits only, never the membership, tags or subscription.
+  if (grantPackageId) {
+    try {
+      const grantPackage = await grantPackageRepository.findById(grantPackageId);
+      signupCredits = grantPackage?.active ? grantPackage.credits : 0;
+      if (!grantPackage?.active) {
+        logger.info(`Domain-grant signup credits withheld for user ${userId} (${trigger}): package unavailable`);
+      }
+    } catch (packageError) {
+      logger.error(`Grant package ${grantPackageId} could not be read for user ${userId} (${trigger})`, packageError);
+      signupCredits = 0;
+      coreStepFailed = true;
+    }
+  }
+
   if (signupCredits > 0) {
     try {
       // Domain credits are not a second pot on top of the signup grant: one canonical inbox earns
@@ -124,6 +164,8 @@ export async function applySignupDomainGrant(params: {
           `Domain-grant signup credits withheld for user ${userId} (${trigger}): another account ` +
             `already holds the free-credit claim for this inbox`
         );
+      } else if (!(await reservePackageRedemption(grantPackageId, userId, trigger, logger))) {
+        // Cap reached: withheld on purpose, so not a failed core step.
       } else {
         const holder = await creditService.addCredits(
           {
@@ -150,6 +192,13 @@ export async function applySignupDomainGrant(params: {
           `idempotent transactionId domain-grant-credits:${userId} makes a retry safe`,
         grantError
       );
+      if (grantPackageId) {
+        await grantPackageRepository
+          .releaseRedemption(grantPackageId, userId)
+          .catch(releaseError =>
+            logger.error(`Grant package ${grantPackageId} redemption release failed for user ${userId}`, releaseError)
+          );
+      }
       coreStepFailed = true;
     }
   }
