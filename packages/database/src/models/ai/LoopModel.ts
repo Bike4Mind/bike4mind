@@ -152,15 +152,22 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
   async makeDueNow(id: string, now: Date): Promise<void> {
     // $min over a missing nextRunAt yields `now` (aggregation $min ignores missing values).
     await this.loopModel.updateOne({ _id: id, status: 'live' }, [
-      { $set: { nextRunAt: { $min: ['$nextRunAt', now] }, idleStreak: 0 } },
+      { $set: { nextRunAt: { $min: ['$nextRunAt', now] }, idleStreak: 0, idleResetAt: now } },
     ]);
   }
 
   /** Ends a live loop's idle back-off without making it due now: it next runs by `nextRunAt` at the latest. */
   async endBackoff(id: string, nextRunAt: Date): Promise<void> {
     // Conditional on 'live': a paused loop's nextRunAt is its auto-resume time.
-    await this.loopModel.updateOne({ _id: id, status: 'live', idleStreak: { $gt: 0 } }, [
-      { $set: { idleStreak: 0, nextRunAt: { $min: ['$nextRunAt', nextRunAt] } } },
+    // Stamped even when not backing off, so a run in flight is not folded as idle (see idleResetAt).
+    await this.loopModel.updateOne({ _id: id, status: 'live' }, [
+      {
+        $set: {
+          nextRunAt: { $cond: [{ $gt: ['$idleStreak', 0] }, { $min: ['$nextRunAt', nextRunAt] }, '$nextRunAt'] },
+          idleStreak: 0,
+          idleResetAt: '$$NOW',
+        },
+      },
     ]);
   }
 
@@ -245,6 +252,7 @@ export const LoopSchema = new Schema<ILoop, ILoopModel>(
     runCount: { type: Number, default: 0 },
     consecutiveFailures: { type: Number, default: 0 },
     idleStreak: { type: Number, default: 0 },
+    idleResetAt: { type: Date },
     oversees: { type: [String], default: undefined },
   },
   {

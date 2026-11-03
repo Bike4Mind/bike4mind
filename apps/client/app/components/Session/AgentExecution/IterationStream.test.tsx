@@ -245,6 +245,15 @@ describe('IterationStream — render', () => {
       expect(line).not.toHaveTextContent(/Failed:|raw message/);
     });
 
+    it("shows a new account's spend cap message as it is", () => {
+      const line = renderFailed({
+        failureReason: 'spend_cap',
+        errorMessage: 'New accounts can spend up to 10 credits',
+      });
+      expect(line).toHaveTextContent('New accounts can spend up to 10 credits');
+      expect(line).not.toHaveTextContent(/Failed:/);
+    });
+
     it('keeps "Failed: <reason> - <message>" for other reasons', () => {
       const line = renderFailed({ failureReason: 'error', errorMessage: 'boom' });
       expect(line).toHaveTextContent('Failed: error \u2014 boom');

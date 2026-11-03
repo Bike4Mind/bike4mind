@@ -1341,6 +1341,23 @@ describe('runLoopSchedulerTick - safety and pacing', () => {
     expect(after.activeExecutionId).toBeUndefined();
   });
 
+  it("returns a ticket stopped by a new account's spend cap to open without counting a failure", async () => {
+    h.startAgentExecution.mockResolvedValue({ ok: false, reason: 'concurrent_limit' });
+    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
+    const ticket = await createTicket(loop.id, { status: 'in_progress', executionId: 'exec-0', runCount: 1 });
+    executions['exec-0'] = { status: 'failed', failureReason: 'spend_cap', error: { message: 'x' } };
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(await ticketOf(ticket.id)).toMatchObject({ status: 'open', runCount: 0 });
+    expect(await reload(loop.id)).toMatchObject({
+      nextRunAt: LATER,
+      status: 'live',
+      consecutiveFailures: 0,
+      statusReason: "Last run stopped at the new account's spend cap",
+    });
+  });
+
   it('blocks a ticket that used up its runs and works the next one', async () => {
     const loop = await createLoop();
     const spent = await createTicket(loop.id, { title: 'Spent', runCount: 6 });
@@ -1387,6 +1404,21 @@ describe('runLoopSchedulerTick - safety and pacing', () => {
 
     await loopRepository.makeDueNow(loop.id, NOW);
     expect(await reload(loop.id)).toMatchObject({ idleStreak: 0, nextRunAt: NOW });
+  });
+
+  it('does not back off a run that a Run now, edit or directive landed during', async () => {
+    const memory = { notes: 'same', nextAction: '' };
+    const loop = await createLoop({ nextRunAt: NOW, memory, activeExecutionId: 'reset-mid-run', idleResetAt: NOW });
+    executions['reset-mid-run'] = {
+      status: 'completed',
+      result: { answer: 'same' },
+      createdAt: PAST,
+      completedAt: NOW,
+    };
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect((await reload(loop.id)).idleStreak).toBe(0);
   });
 
   it('does not back off a run that changed memory or touched a ticket', async () => {

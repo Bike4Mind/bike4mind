@@ -99,7 +99,9 @@ const handler = baseApi({ auth: 'jwtOnly' })
     ) {
       patch.nextRunAt = nextRunAtFor({ lastRunAt: existing.lastRunAt, intervalMinutes }, now);
     }
-    // An owner edit ends an idle back-off: the loop is back on its plain interval.
+    // An owner edit ends an idle back-off: the loop is back on its plain interval. The stamp keeps a run in
+    // flight from folding as idle and backing it off again.
+    if (existing.status === 'live') patch.idleResetAt = now;
     if (existing.idleStreak) {
       patch.idleStreak = 0;
       if (existing.status === 'live' && patch.nextRunAt === undefined) {
