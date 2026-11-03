@@ -86,6 +86,8 @@ describe('the Settings screen', () => {
   it('offers the reply stats rail and a checkbox per stat, in place of the old speed switch', () => {
     expect(html).toContain('data-testid="settings-reply-stats-rail-switch"');
     for (const id of REPLY_STATS) expect(html).toContain(`data-testid="settings-reply-stat-${id}-checkbox"`);
+    expect(html).toContain('Share of draft tokens accepted');
+    expect(html).toContain('Draft acceptance is reported by llama-server');
     expect(html).not.toContain('settings-token-rate-switch');
   });
 

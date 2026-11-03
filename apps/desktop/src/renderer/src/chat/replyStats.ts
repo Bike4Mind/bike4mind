@@ -14,6 +14,7 @@ export const REPLY_STATS = [
   'promptSpeed',
   'firstToken',
   'load',
+  'draft',
 ] as const;
 
 export type ReplyStatId = (typeof REPLY_STATS)[number];
@@ -58,6 +59,11 @@ export const REPLY_STAT_TEXT: Record<ReplyStatId, ReplyStatText> = {
   promptSpeed: { label: 'Prompt speed', setting: 'Prompt processing speed', inline: value => `${value} prompt` },
   firstToken: { label: 'First token', setting: 'Time to first token', inline: value => `${value} to first token` },
   load: { label: 'Load time', setting: 'Model load time', inline: value => `${value} load` },
+  draft: {
+    label: 'Draft accepted',
+    setting: 'Share of draft tokens accepted',
+    inline: value => `${value} of draft tokens accepted`,
+  },
 };
 
 /** One stat ready to draw. */
@@ -198,6 +204,14 @@ export function replyStats(source: ReplyStatsSource, { live = false }: { live?: 
     ),
     firstToken: stat('firstToken', stats?.firstTokenMs !== undefined ? formatDuration(stats.firstTokenMs) : null),
     load: stat('load', rate?.loadMs !== undefined ? formatDuration(rate.loadMs) : null),
+    draft: stat(
+      'draft',
+      rate?.draftTokens && rate.draftAccepted !== undefined
+        ? formatShare(Math.min(1, rate.draftAccepted / rate.draftTokens))
+        : null,
+      false,
+      rate?.draftTokens ? `${rate.draftAccepted} of ${rate.draftTokens} draft tokens` : undefined
+    ),
   };
   return REPLY_STATS.map(id => all[id]).filter((row): row is ReplyStat => row !== null);
 }

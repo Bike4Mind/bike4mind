@@ -80,7 +80,7 @@ describe('the stored prefs', () => {
       'All stats, beside the conversation when the window is wide enough'
     );
     expect(replyStatsSummary({ rail: false, hidden: new Set(['load', 'speed']) })).toBe(
-      '8 of 10 stats, under each reply on hover'
+      '9 of 11 stats, under each reply on hover'
     );
   });
 });
