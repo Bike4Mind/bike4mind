@@ -1351,7 +1351,9 @@ export function ChatShell({
                   disabled={!activeId}
                   onSelect={effort => void conversation.setReasoningEffort(effort)}
                 />
+                {/* One per chat: Mod+1-9 switches chats from inside the dialog, and its edits belong to the old one. */}
                 <GenerationSettingsPicker
+                  key={activeId ?? ''}
                   model={modelOption}
                   generation={conversation.session?.generation}
                   disabled={!activeId}
