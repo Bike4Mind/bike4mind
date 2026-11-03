@@ -268,6 +268,7 @@ import EnsurePushTokenIndexes from './20260921236960_ensure-pushtoken-indexes';
 import EnsureReferralSubscriptionRewardIndexes from './20260921237000_ensure-referral-subscription-reward-indexes';
 import EnsureRevenueSnapshotIndex from './20260921237100_ensure-revenue-snapshot-index';
 import EnsureSpendRollupIndexes from './20260921237200_ensure-spend-rollup-indexes';
+import EnsureStripeDisputeIndexes from './20260922000100_ensure-stripe-dispute-indexes';
 import QueueHeldSignupGrantsForRiskReview from './20260921237300_queue-held-signup-grants-for-risk-review';
 import SeedSignupGrantSchedule from './20260921237400_seed-signup-grant-schedule';
 import SeedSignupGrantPools from './20260921237500_seed-signup-grant-pools';
@@ -511,6 +512,7 @@ const coreMigrations: MigrationFile[] = [
   DropRetiredUnlockSettings,
   EnsureOverwatchUserDayInternalIndex,
   EnsureUserDeletionScheduledForIndex,
+  EnsureStripeDisputeIndexes,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

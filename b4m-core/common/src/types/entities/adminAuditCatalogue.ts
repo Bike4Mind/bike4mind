@@ -56,6 +56,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'billing.comp.changed': { category: 'credits', severity: 'notice', write: 'strict' },
   'billing.subscription.cancel_scheduled': { category: 'credits', severity: 'critical', write: 'strict' },
   'billing.subscription.resumed': { category: 'credits', severity: 'critical', write: 'strict' },
+  // bestEffort: the StripeDispute record holds the resolution; the Contain a lost dispute applies is audited per user.
+  'billing.dispute.resolved': { category: 'credits', severity: 'notice', write: 'bestEffort' },
 
   'user.role.admin_granted': { category: 'access', severity: 'critical', write: 'strict' },
   'user.role.admin_revoked': { category: 'access', severity: 'critical', write: 'strict' },

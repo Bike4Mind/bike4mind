@@ -59,6 +59,12 @@ export const ADMIN_REASON_PRESETS = {
   ipBlock: ['Card testing or payment fraud', 'Abuse / automated signups', 'Credential stuffing', 'Under investigation'],
   ipUnblock: ['Blocked in error', 'Legitimate users affected', 'Threat has ended'],
   signupRiskApproval: ['Verified legitimate user', 'Known customer or partner', 'False positive signal'],
+  stripeDisputeResolve: [
+    'Handled in Stripe',
+    'Organization billing contact resolved it',
+    'Duplicate of another dispute',
+  ],
+  stripeDisputeUndoContain: ['Customer verified as legitimate', 'Contained in error'],
   shadowDetectionVerdict: [
     'Reviewed account activity',
     'Matches a known abuse pattern',

@@ -31,6 +31,12 @@ const mocks = vi.hoisted(() => ({
   forfeitHeldUnlockForFraudWarning: vi.fn(),
   flagDisputePending: vi.fn(),
   retrieveCharge: vi.fn(),
+  updateUser: vi.fn(),
+  findOrgByStripeCustomerId: vi.fn(),
+  recordDisputeOpened: vi.fn(),
+  recordDisputeClosed: vi.fn(),
+  resolveLostUserDispute: vi.fn(),
+  resolveWonDispute: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -48,9 +54,23 @@ vi.mock('@bike4mind/database', () => ({
     findByPaymentIntentId: mocks.findByPaymentIntentId,
     updateTransactionStatus: mocks.updateTransactionStatus,
   },
-  organizationRepository: {},
+  organizationRepository: { findByStripeCustomerId: mocks.findOrgByStripeCustomerId },
   realtimeConnectionRepository: {},
-  userRepository: { findById: mocks.findUserById, findByStripeCustomerId: mocks.findUserByStripeCustomerId },
+  stripeDisputeRepository: { recordOpened: mocks.recordDisputeOpened, recordClosed: mocks.recordDisputeClosed },
+  userRepository: {
+    findById: mocks.findUserById,
+    findByStripeCustomerId: mocks.findUserByStripeCustomerId,
+    update: mocks.updateUser,
+  },
+}));
+vi.mock('@server/billing/stripeDisputes', () => ({
+  disputeFacts: (dispute: { id: string }, subject: string, subjectId: string | null) => ({
+    stripeDisputeId: dispute.id,
+    subject,
+    subjectId,
+  }),
+  resolveLostUserDispute: mocks.resolveLostUserDispute,
+  resolveWonDispute: mocks.resolveWonDispute,
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
 vi.mock('@bike4mind/services', () => ({
@@ -168,6 +188,8 @@ beforeEach(() => {
   mocks.findUserByStripeCustomerId.mockResolvedValue(null);
   mocks.findByPaymentIntentId.mockResolvedValue(null);
   mocks.flagDisputePending.mockResolvedValue({ deactivatedKeys: 0 });
+  mocks.findOrgByStripeCustomerId.mockResolvedValue(null);
+  mocks.recordDisputeClosed.mockImplementation(async (facts: object) => ({ ...facts, state: 'open' }));
 });
 
 describe('signup unlock forfeits', () => {
@@ -745,5 +767,138 @@ describe('charge.dispute.created - inviter reward', () => {
     const res = await deliver(dispute());
     expect(res._getStatusCode()).toBe(200);
     expect(reverseReward).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('charge.dispute.closed', () => {
+  // Stripe fixture: a closed dispute paid by customer cus_1.
+  const closed = (status: string) => ({
+    type: 'charge.dispute.closed',
+    data: {
+      object: {
+        id: 'dp_1',
+        status,
+        amount: 3000,
+        currency: 'usd',
+        reason: 'fraudulent',
+        created: 1_790_000_000,
+        payment_intent: 'pi_1',
+        charge: 'ch_1',
+      },
+    },
+  });
+  const contained = {
+    status: 'contained',
+    item: { contain: { suspended: true, creditDelta: -500, apiKeysRevoked: 2 } },
+  };
+
+  beforeEach(() => {
+    mocks.retrieveCharge.mockResolvedValue({ id: 'ch_1', customer: 'cus_1' });
+  });
+
+  it('resolves a lost user dispute with a Contain and keeps the dispute flag', async () => {
+    mocks.findByPaymentIntentId.mockResolvedValue({ id: 'tx_1', ownerId: 'user_1', credits: 50000 });
+    mocks.resolveLostUserDispute.mockResolvedValue(contained);
+
+    const res = await deliver(closed('lost'));
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.recordDisputeClosed).toHaveBeenCalledWith(
+      { stripeDisputeId: 'dp_1', subject: 'user', subjectId: 'user_1' },
+      expect.any(Date)
+    );
+    expect(mocks.resolveLostUserDispute).toHaveBeenCalledWith(
+      expect.objectContaining({ stripeDisputeId: 'dp_1', state: 'open' }),
+      owner,
+      logger
+    );
+    expect(mocks.updateUser).not.toHaveBeenCalled();
+    expect(mocks.postMessageToSlack).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(
+        'Dispute flag kept. Account contained: suspended, 500 credits removed, 2 API key(s) revoked.'
+      )
+    );
+  });
+
+  it('stays quiet when a redelivered close finds the dispute already resolved', async () => {
+    mocks.findByPaymentIntentId.mockResolvedValue({ id: 'tx_1', ownerId: 'user_1', credits: 50000 });
+    mocks.resolveLostUserDispute.mockResolvedValue({ status: 'already_resolved' });
+
+    await deliver(closed('lost'));
+
+    expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
+  });
+
+  it('queues a lost organization dispute for an admin without containing anyone', async () => {
+    mocks.findOrgByStripeCustomerId.mockResolvedValue({ id: 'org_1' });
+
+    await deliver(closed('lost'));
+
+    expect(mocks.recordDisputeClosed).toHaveBeenCalledWith(
+      { stripeDisputeId: 'dp_1', subject: 'organization', subjectId: 'org_1' },
+      expect.any(Date)
+    );
+    expect(mocks.resolveLostUserDispute).not.toHaveBeenCalled();
+    expect(mocks.postMessageToSlack).toHaveBeenCalledWith(expect.stringContaining('Resolve it in Admin > Disputes.'));
+  });
+
+  it('records a lost dispute with no matching account as unmatched', async () => {
+    await deliver(closed('lost'));
+
+    expect(mocks.recordDisputeClosed).toHaveBeenCalledWith(
+      { stripeDisputeId: 'dp_1', subject: 'unmatched', subjectId: null },
+      expect.any(Date)
+    );
+    expect(mocks.resolveLostUserDispute).not.toHaveBeenCalled();
+  });
+
+  it('clears the dispute flag only on a won dispute, and resolves its record', async () => {
+    mocks.findByPaymentIntentId.mockResolvedValue({ id: 'tx_1', ownerId: 'user_1', credits: 50000 });
+
+    await deliver(closed('won'));
+
+    expect(mocks.updateUser).toHaveBeenCalledExactlyOnceWith({ id: 'user_1', disputePending: false });
+    expect(mocks.resolveWonDispute).toHaveBeenCalledWith('dp_1', logger);
+    expect(mocks.resolveLostUserDispute).not.toHaveBeenCalled();
+  });
+
+  it('takes no action on any other closing status', async () => {
+    await deliver(closed('warning_closed'));
+
+    expect(mocks.recordDisputeClosed).not.toHaveBeenCalled();
+    expect(mocks.updateUser).not.toHaveBeenCalled();
+  });
+});
+
+describe('charge.dispute.created - dispute record', () => {
+  it('records a dispute with no matching account as unmatched', async () => {
+    mocks.retrieveCharge.mockResolvedValue({ id: 'ch_1', customer: 'cus_1' });
+
+    await deliver({
+      type: 'charge.dispute.created',
+      data: { object: { id: 'dp_1', charge: 'ch_1', amount: 3000, currency: 'usd', reason: 'fraudulent' } },
+    });
+
+    expect(mocks.recordDisputeOpened).toHaveBeenCalledExactlyOnceWith({
+      stripeDisputeId: 'dp_1',
+      subject: 'unmatched',
+      subjectId: null,
+    });
+  });
+
+  it('records an organization dispute for the admin queue', async () => {
+    mocks.retrieveCharge.mockResolvedValue({ id: 'ch_1', customer: 'cus_1' });
+    mocks.findOrgByStripeCustomerId.mockResolvedValue({ id: 'org_1' });
+
+    await deliver({
+      type: 'charge.dispute.created',
+      data: { object: { id: 'dp_1', charge: 'ch_1', amount: 3000, currency: 'usd', reason: 'fraudulent' } },
+    });
+
+    expect(mocks.recordDisputeOpened).toHaveBeenCalledExactlyOnceWith({
+      stripeDisputeId: 'dp_1',
+      subject: 'organization',
+      subjectId: 'org_1',
+    });
   });
 });

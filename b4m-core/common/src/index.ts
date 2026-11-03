@@ -117,6 +117,7 @@ export * from './schemas/riskEvidence';
 export * from './schemas/accountCampaign';
 export * from './schemas/shadowDetection';
 export * from './schemas/abuseAssessment';
+export * from './schemas/stripeDispute';
 export * from './utils/artifactHelpers';
 export * from './utils/creditTransactionDisplay';
 export * from './utils/teamPlanSettings';

@@ -2,6 +2,7 @@ import { CreditHolderType, type UserModerationStatus } from '@bike4mind/common';
 import {
   User,
   UserApiKey,
+  adminAuditLogRepository,
   cacheRepository,
   creditTransactionRepository,
   mongoose,
@@ -10,18 +11,18 @@ import {
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
-import { authSessionService, creditService, type adminAuditService } from '@bike4mind/services';
+import { adminAuditService, authSessionService, creditService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
 import { adminUsersPipeline } from '@server/admin/usersList/listAdminUsers';
 import { LIVE_API_KEY_STATUS } from '@server/admin/usersList/adminUsersQuery';
-import { loadCreditGrantPolicy, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { loadCreditGrantPolicy, recordAdminActionFromRequest, systemAuditActor } from '@server/utils/adminAudit';
 import {
   addBlockedEmailDomains,
   readBlockedEmailDomains,
   removeBlockedEmailDomains,
 } from '@server/admin/blockedEmailDomains';
 import { cancelAccountSubscriptions, subscriptionCancellationAudit } from '@server/billing/cancelAccountSubscriptions';
-import type { ExecuteDeps } from './execute';
+import type { ApplyDeps, ExecuteDeps } from './execute';
 import type { UsersBulkAuditEntry, UsersBulkDb } from './ports';
 import type { BulkUser, PreviewDeps, ResolveDeps } from './resolve';
 import type { UndoDeps } from './undo';
@@ -179,6 +180,40 @@ const runInTransaction =
   <T>(fn: () => Promise<T>) =>
     withTransaction(() => fn(), { logger });
 
+const endUserRealtimeConnections = (logger?: Logger) => (userId: string) =>
+  authSessionService.endRealtimeConnections(
+    { userId },
+    { db: { realtimeConnections: realtimeConnectionRepository }, logger }
+  );
+
+/**
+ * Deps for one user's steps run by the platform itself (no request, see applyActionToUser): entries
+ * carry a system actor named `actorName` and the given reason.
+ */
+export function usersBulkSystemApplyDeps(actorName: string, reason: string, logger?: Logger): ApplyDeps {
+  return {
+    db: usersBulkDb,
+    store: cacheRepository,
+    withTransaction: runInTransaction(logger),
+    audit: ({ action, user, summary, changes, details, related }) =>
+      adminAuditService.recordAdminAction(
+        {
+          action,
+          actor: systemAuditActor(actorName),
+          target: { kind: 'user', id: user.id, displayName: user.email ?? user.username ?? user.id },
+          summary,
+          reason,
+          context: { source: 'worker' },
+          changes,
+          details,
+          related,
+        },
+        { db: { adminAuditLog: adminAuditLogRepository }, logger }
+      ),
+    endRealtimeConnections: endUserRealtimeConnections(logger),
+  };
+}
+
 /** Execute deps whose audit entries carry the request's actor and the admin's reason. */
 export function usersBulkExecuteDeps(req: AuditRequest, reason: string, logger?: Logger): ExecuteDeps {
   return {
@@ -201,11 +236,7 @@ export function usersBulkExecuteDeps(req: AuditRequest, reason: string, logger?:
         domains,
         added => `blocked signups from ${added.join(', ')} in bulk contain batch ${batchId}`
       ),
-    endRealtimeConnections: userId =>
-      authSessionService.endRealtimeConnections(
-        { userId },
-        { db: { realtimeConnections: realtimeConnectionRepository }, logger }
-      ),
+    endRealtimeConnections: endUserRealtimeConnections(logger),
     cancelSubscriptions: async (user, action, batchId, deadline) => {
       const cancelReason = action === 'contain' ? 'contained' : 'suspended';
       const result = await cancelAccountSubscriptions(
@@ -228,12 +259,16 @@ export function usersBulkExecuteDeps(req: AuditRequest, reason: string, logger?:
   };
 }
 
-export function usersBulkUndoDeps(req: AuditRequest, logger?: Logger): UndoDeps {
+export function usersBulkUndoDeps(
+  req: AuditRequest,
+  logger?: Logger,
+  reason = 'Undo of a bulk action within its undo window'
+): UndoDeps {
   return {
     db: usersBulkDb,
     store: cacheRepository,
     withTransaction: runInTransaction(logger),
-    audit: auditFor(req, 'Undo of a bulk action within its undo window'),
+    audit: auditFor(req, reason),
     unblockEmailDomains: (domains, batchId) =>
       removeBlockedEmailDomains(
         req,

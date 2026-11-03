@@ -96,7 +96,7 @@ type UserOutcome =
   | { status: 'skipped'; canceledSubscriptions?: string[]; subscriptionCancelError?: string }
   | { status: 'failed'; userId: string; error: string };
 
-type ApplyContext = {
+export type ApplyContext = {
   action: AdminUsersBulkAction;
   actorId: string;
   reason: string;
@@ -104,6 +104,9 @@ type ApplyContext = {
   /** Epoch ms past which a user's Stripe cancel makes no more requests. */
   cancelDeadline: number;
 };
+
+/** What one user's steps need: the batch-level seams (resolve, domains, summary) are not used. */
+export type ApplyDeps = Pick<ExecuteDeps, 'db' | 'store' | 'withTransaction' | 'audit' | 'endRealtimeConnections'>;
 
 const isDoneEntry = (data: unknown): data is { state: 'done'; result: AdminUsersBulkResult } =>
   typeof data === 'object' &&
@@ -114,8 +117,8 @@ const isDoneEntry = (data: unknown): data is { state: 'done'; result: AdminUsers
 /** The steps for one user, inside its transaction. Returns null when nothing changed. */
 async function applySteps(
   userId: string,
-  { action, actorId, reason, batchId }: ApplyContext,
-  deps: ExecuteDeps
+  { action, actorId, reason, batchId }: Omit<ApplyContext, 'cancelDeadline'>,
+  deps: ApplyDeps
 ): Promise<UserUndoSnapshot | null> {
   const { db } = deps;
   const user = await db.findUser(userId);
@@ -239,6 +242,27 @@ async function cancelSubscriptionsOf(
     deps.logger?.error('Users bulk subscription cancel failed for user', { userId: user.id, error });
     return { subscriptionCancelError: errorMessage(error) };
   }
+}
+
+/**
+ * Applies an action to one user outside any batch, for a system action that keeps its own durable undo
+ * record instead of the batch's short-lived one. `onApplied` runs in the same transaction, so that
+ * record commits with the change or not at all. Returns null when the user needed no change; throws
+ * when the user's transaction fails. Its after-commit steps must stay in sync with applyToUser's.
+ */
+export async function applyActionToUser(
+  userId: string,
+  context: Omit<ApplyContext, 'cancelDeadline'>,
+  deps: ApplyDeps,
+  onApplied: (snapshot: UserUndoSnapshot) => Promise<void>
+): Promise<UserUndoSnapshot | null> {
+  const snapshot = await deps.withTransaction(async () => {
+    const applied = await applySteps(userId, context, deps);
+    if (applied) await onApplied(applied);
+    return applied;
+  });
+  if (snapshot && (snapshot.banned || snapshot.apiKeys)) await deps.endRealtimeConnections(userId);
+  return snapshot;
 }
 
 /** Replays a finished batch with the same idempotency key, or refuses one still running. */

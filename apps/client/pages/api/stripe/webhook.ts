@@ -6,6 +6,7 @@ import {
   organizationRepository,
   userRepository,
   realtimeConnectionRepository,
+  stripeDisputeRepository,
 } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { CreditHolderType, CreditPurchaseEvents, CreditPurchaseStatus, isPlaceholderValue } from '@bike4mind/common';
@@ -45,6 +46,7 @@ import { clawbackRefundCredits } from '@server/billing/refundClawback';
 import { reversePurchaseStanding } from '@server/billing/purchaseReversal';
 import { respondToEarlyFraudWarning } from '@server/billing/earlyFraudWarning';
 import { propagateAccountRisk } from '@server/billing/linkedAccounts';
+import { disputeFacts, resolveLostUserDispute, resolveWonDispute } from '@server/billing/stripeDisputes';
 import { notifyCanceledForNonPayment, notifyPaymentFailed } from '@server/billing/paymentFailureNotice';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { stripeMirrorFields } from '@bike4mind/server-utils/lib/subscriptions/stripeMirror';
@@ -557,8 +559,9 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
                 // Check if it belongs to an org (subscription dispute)
                 const org = await organizationRepository.findByStripeCustomerId(customerId);
                 if (org) {
+                  await stripeDisputeRepository.recordOpened(disputeFacts(dispute, 'organization', org.id));
                   await postMessageToSlack(
-                    `\u26A0\uFE0F *Stripe Dispute (Subscription/Org)* \u2014 dispute ${dispute.id}\n*Organization:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.Organization, ownerId: org.id })}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nNo automatic clawback for org subscription disputes. Admin action required.`
+                    `\u26A0\uFE0F *Stripe Dispute (Subscription/Org)* \u2014 dispute ${dispute.id}\n*Organization:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.Organization, ownerId: org.id })}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nNo automatic clawback for org subscription disputes. Resolve it in Admin > Disputes.`
                   );
                   req.logger.warn(`Dispute ${dispute.id} linked to org ${org.id}, manual review needed`);
                   break disputePayer;
@@ -581,6 +584,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
           });
           // Cancels a signup bonus still held for this payment to settle.
           await forfeitSignupUnlock(user.id, 'dispute', req.logger);
+          await stripeDisputeRepository.recordOpened(disputeFacts(dispute, 'user', user.id));
 
           await postMessageToSlack(
             `\u{1F6A8} *Stripe Dispute Created* \u2014 dispute ${dispute.id}\n*User:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.User, ownerId: user.id })}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nAccount flagged, credits clawback initiated${deactivatedKeys ? ', API keys deactivated' : ''}.${disputeRadarSuffix}`
@@ -592,8 +596,9 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
             req.logger
           );
         } else {
+          await stripeDisputeRepository.recordOpened(disputeFacts(dispute, 'unmatched', null));
           await postMessageToSlack(
-            `\u26A0\uFE0F *Stripe Dispute Created \u2014 No User Found* \u2014 dispute ${dispute.id}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nCould not identify user. Manual review required.${disputeRadarSuffix}`
+            `\u26A0\uFE0F *Stripe Dispute Created \u2014 No User Found* \u2014 dispute ${dispute.id}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nCould not identify user. Review it in Admin > Disputes.${disputeRadarSuffix}`
           );
           req.logger.warn(`Could not find user for dispute ${dispute.id}`);
         }
@@ -609,19 +614,19 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       const paymentIntentId =
         typeof dispute.payment_intent === 'string' ? dispute.payment_intent : dispute.payment_intent?.id;
 
-      // A lost dispute reverses the purchase; disputePending stays set for manual review.
+      // A lost dispute reverses the purchase's paid standing, besides the dispute handling below.
       if (dispute.status === 'lost' && paymentIntentId) {
         await reversePurchaseStanding({ paymentIntentId, reason: 'dispute_lost' }, req.logger);
       }
 
-      // Only act when the merchant wins - lost disputes stay flagged pending manual review
-      if (dispute.status !== 'won') {
+      if (dispute.status !== 'won' && dispute.status !== 'lost') {
         req.logger.debug(`Dispute ${dispute.id} closed with status ${dispute.status}, no action taken`);
         break;
       }
 
-      // Find the user via payment intent -> credit transaction, same lookup as charge.dispute.created
+      // Same lookup as charge.dispute.created: payment intent -> credit transaction, then charge -> customer.
       let user = null;
+      let orgId: string | null = null;
 
       if (paymentIntentId) {
         const originalTx = await creditTransactionRepository.findByPaymentIntentId(paymentIntentId);
@@ -637,21 +642,68 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
           const customerId = typeof charge.customer === 'string' ? charge.customer : charge.customer?.id;
           if (customerId) {
             user = await userRepository.findByStripeCustomerId(customerId);
+            if (!user) orgId = (await organizationRepository.findByStripeCustomerId(customerId))?.id ?? null;
           }
         }
       }
 
-      if (user) {
-        await userRepository.update({ id: user.id, disputePending: false });
+      const facts = user
+        ? disputeFacts(dispute, 'user', user.id)
+        : orgId
+          ? disputeFacts(dispute, 'organization', orgId)
+          : disputeFacts(dispute, 'unmatched', null);
+      const record = await stripeDisputeRepository.recordClosed(facts, new Date());
+      const amountLine = `*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}`;
 
-        await postMessageToSlack(
-          `\u2705 *Stripe Dispute Won* \u2014 dispute ${dispute.id}\n*User:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.User, ownerId: user.id })}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\nAccount dispute flag cleared.`
-        );
-        req.logger.info(`Cleared disputePending for user ${user.id} after winning dispute ${dispute.id}`);
-      } else {
-        req.logger.warn(`Could not find user for won dispute ${dispute.id}`);
+      if (dispute.status === 'won') {
+        // The only path that clears a dispute flag.
+        if (user) {
+          await userRepository.update({ id: user.id, disputePending: false });
+          await postMessageToSlack(
+            `\u2705 *Stripe Dispute Won* \u2014 dispute ${dispute.id}\n*User:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.User, ownerId: user.id })}\n${amountLine}\nAccount dispute flag cleared.`
+          );
+          req.logger.info(`Cleared disputePending for user ${user.id} after winning dispute ${dispute.id}`);
+        } else {
+          req.logger.warn(`Could not find user for won dispute ${dispute.id}`);
+        }
+        await resolveWonDispute(dispute.id, req.logger);
+        break;
       }
 
+      if (!user) {
+        // An organization's or an unmatched payment: no account to contain, so it waits for an admin.
+        if (record.state === 'open') {
+          await postMessageToSlack(
+            `\u26A0\uFE0F *Stripe Dispute Lost* \u2014 dispute ${dispute.id}\n${orgId ? `*Organization:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.Organization, ownerId: orgId })}` : '*No user or organization found*'}\n${amountLine}\nResolve it in Admin > Disputes.`
+          );
+        }
+        req.logger.warn(
+          `Lost dispute ${dispute.id} has no user (${orgId ? `org ${orgId}` : 'unmatched'}), queued for admin`
+        );
+        break;
+      }
+
+      const outcome = await resolveLostUserDispute(record, user, req.logger);
+      if (outcome.status === 'already_resolved') {
+        req.logger.info(`Lost dispute ${dispute.id} already resolved, no action taken`);
+        break;
+      }
+      const contain = outcome.item.contain;
+      const containLine = contain
+        ? `Account contained: ${[
+            contain.suspended && 'suspended',
+            contain.creditDelta !== 0 && `${Math.abs(contain.creditDelta)} credits removed`,
+            contain.apiKeysRevoked > 0 && `${contain.apiKeysRevoked} API key(s) revoked`,
+          ]
+            .filter(Boolean)
+            .join(', ')}. Undo from Admin > Disputes.`
+        : user.isAdmin
+          ? 'Admin account: not contained automatically. Review it by hand.'
+          : 'Account was already contained.';
+      await postMessageToSlack(
+        `\u{1F6A8} *Stripe Dispute Lost* \u2014 dispute ${dispute.id}\n*User:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.User, ownerId: user.id })}\n${amountLine}\nDispute flag kept. ${containLine}`
+      );
+      req.logger.info(`Resolved lost dispute ${dispute.id} for user ${user.id} (${outcome.status})`);
       break;
     }
 
