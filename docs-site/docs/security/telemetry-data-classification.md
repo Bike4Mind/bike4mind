@@ -251,6 +251,11 @@ host-owned, Stripe-reconciled paid conversions, and what weight a hop carries in
 that is a policy decision made outside this app. Minting, redeeming and lane
 stamping are treated as money-path code.
 
+Only this app records the two hop events. The Overwatch ingest route
+(`POST /api/overwatch/v1/events`) refuses `hop_minted` from every key and `hop`
+from every key but the host app's own, event by event, so no product can post a
+hop for itself.
+
 ### What a source site must do
 
 1. Point each link to this app at the source's own server endpoint, for example

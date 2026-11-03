@@ -6,6 +6,8 @@ import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { sendBatchToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { emitMetric, emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { HOST_PRODUCT_ID } from '@bike4mind/server-utils/analytics/emitActiveEvent';
+import { HOP_EVENT, HOP_MINTED_EVENT } from '@bike4mind/server-utils/lib/hopNames';
 import { z } from 'zod';
 
 const INGEST_NAMESPACE = 'Lumina5/OverwatchIngest';
@@ -16,6 +18,20 @@ const EventEnvelope = z.union([SingleEventEnvelope, BatchEventEnvelope]);
 
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 const FIVE_MINUTES_MS = 5 * 60 * 1000;
+
+/**
+ * Why this key may not send this event, or undefined when it may. The hop events are proof, not
+ * reports: `hop_minted` reaches the queue only from the mint route (hops.ts), never through here,
+ * and `hop` only from this app's own redeem, which posts under the host product's key. A product
+ * that could post either itself could claim a verified hop nobody minted or redeemed.
+ */
+function reservedEventError(event: string, keyProductId: string): string | undefined {
+  if (event === HOP_MINTED_EVENT) return `event '${HOP_MINTED_EVENT}' is recorded only by the hop mint route`;
+  if (event === HOP_EVENT && keyProductId !== HOST_PRODUCT_ID) {
+    return `event '${HOP_EVENT}' is recorded only by the host app's hop redeem`;
+  }
+  return undefined;
+}
 
 // `requiredScopes` must stay in sync with the in-handler scope check below. The
 // gate is what keeps an ingest key confined to the ingest routes, this one and
@@ -67,6 +83,12 @@ const handler = baseApi({
 
     if (parsed.data.productId !== productId) {
       results.push({ index: i, status: 'rejected', error: 'productId mismatch' });
+      continue;
+    }
+
+    const reserved = reservedEventError(parsed.data.event, productId);
+    if (reserved) {
+      results.push({ index: i, status: 'rejected', error: reserved });
       continue;
     }
 
