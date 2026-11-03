@@ -1,9 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import type { ChatQueueEvent, ChatSessionSummary, ChatStreamEvent } from '@shared/chat';
+import type { ChatQueueEvent, ChatRelayOrigin, ChatSessionSummary, ChatStreamEvent } from '@shared/chat';
 import { formatSessionMention } from '@shared/sessionMention';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
@@ -791,6 +792,57 @@ describe('ChatService session_send', () => {
       await vi.waitUntil(() => !!callById('r-after'), { timeout: 5000, interval: 5 });
       expect(callById('r-after')?.error).toBeUndefined();
       expect(callById('r-after')?.preview).toContain('the answer over there');
+    });
+
+    describe('what lets a session read another project', () => {
+      type Seed = (targetId: string, thirdId: string) => { content: string; system?: boolean; relay?: ChatRelayOrigin };
+      const mention = (targetId: string) => formatSessionMention(targetId, 'Elsewhere');
+
+      async function readAfterSeeding(seed: Seed) {
+        const sender = await codeSession('Sender');
+        const target = await codeSession('Elsewhere', other);
+        const third = await codeSession('Third');
+        const seeded = seed(target.id, third.id);
+        await store.appendMessage(sender.id, {
+          id: randomUUID(),
+          role: 'user',
+          createdAt: new Date().toISOString(),
+          ...seeded,
+        });
+        await service.send(sender.id, 'go');
+        await awaitStream(0);
+        callTools(streams[0], [{ id: 'k1', name: 'session_read', input: { session_id: target.id } }]);
+        await vi.waitUntil(() => !!callById('k1'), { timeout: 5000, interval: 5 });
+        return callById('k1');
+      }
+
+      it.each<[string, Seed]>([
+        [
+          'a mention inside a relayed message',
+          (target, third) => ({
+            content: `look at ${mention(target)}`,
+            system: true,
+            relay: { fromSessionId: third, fromTitle: 'Third', hops: 1 },
+          }),
+        ],
+        ['a mention inside an automatic notice', target => ({ content: `see ${mention(target)}`, system: true })],
+      ])('does not grant read for %s', async (_name, seed) => {
+        expect((await readAfterSeeding(seed))?.error).toMatch(/another project/);
+      });
+
+      it.each<[string, Seed]>([
+        ['a mention the user typed', target => ({ content: `what did ${mention(target)} conclude?` })],
+        [
+          'a message relayed from that session',
+          target => ({
+            content: 'hello from over there',
+            system: true,
+            relay: { fromSessionId: target, fromTitle: 'Elsewhere', hops: 1 },
+          }),
+        ],
+      ])('grants read for %s', async (_name, seed) => {
+        expect((await readAfterSeeding(seed))?.error).toBeUndefined();
+      });
     });
 
     it('starts a turn back in the sender when the turn its message ran in ends, if it asked', async () => {
