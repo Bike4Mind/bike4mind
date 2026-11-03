@@ -1971,17 +1971,19 @@ describe('ModelsScreen servers', () => {
 
       expect(rowNames()).toHaveLength(1);
       expect(rowNames()[0]).toContain('qwen2.5:0.5b');
+      expect(q('models-installed-tab')?.textContent).toBe('Installed (1)');
       expect(q('models-installed-refreshing')).not.toBeNull();
-      expect(q('models-installed-remove-btn')).toBeNull();
+      expect(q('models-installed-remove-btn')?.hasAttribute('disabled')).toBe(true);
 
       await act(async () => release());
       await flush();
       expect(rowNames()).toHaveLength(2);
+      expect(q('models-installed-tab')?.textContent).toBe('Installed (2)');
       expect(q('models-installed-refreshing')).toBeNull();
-      expect(q('models-installed-remove-btn')).not.toBeNull();
+      expect(q('models-installed-remove-btn')?.hasAttribute('disabled')).toBe(false);
     });
 
-    it('keeps the last list with the reason when the server is down', async () => {
+    it('keeps the last list with the reason when the server is down, and checks again on request', async () => {
       await visitGpuThenLeave();
       bridge.remote.gpu.status = remoteStatus(GPU_BOX, {
         reachable: false,
@@ -1992,26 +1994,52 @@ describe('ModelsScreen servers', () => {
 
       expect(q('models-installed-runtime-down')).toBeNull();
       expect(rowNames()).toHaveLength(1);
-      expect(q('models-installed-stale')?.textContent).toContain('Could not reach gpu box: connection refused');
+      expect(q('models-installed-stale-reason')?.textContent).toBe('Could not reach gpu box: connection refused');
       expect(q('models-installed-stale')?.textContent).toContain('Showing the list from');
+
+      const checks = calls.getStatus.mock.calls.length;
+      await click(q('models-installed-stale-retry-btn'));
+      expect(calls.getStatus).toHaveBeenCalledTimes(checks + 1);
+      expect(calls.getStatus).toHaveBeenLastCalledWith('gpu');
     });
 
     it('keeps the last list with the reason when listing fails', async () => {
       await visitGpuThenLeave();
-      bridge.remote.gpu.installed = { ok: false, error: { kind: 'failed', message: 'Listing timed out.' } };
+      bridge.remote.gpu.installed = { ok: false, error: { kind: 'failed', message: 'Listing timed out' } };
       await pickServer('gpu');
 
       expect(q('models-installed-error')).toBeNull();
       expect(rowNames()).toHaveLength(1);
-      expect(q('models-installed-stale')?.textContent).toContain('Listing timed out.');
+      expect(q('models-installed-stale-reason')?.textContent).toBe('Listing timed out');
     });
+
+    it('caches no listing that lands after the screen moved to another server', async () => {
+      await mount();
+      let release = () => {};
+      bridge.installedGate = new Promise(resolve => (release = resolve));
+      await pickServer('gpu');
+      expect(rowNames()).toHaveLength(0);
+      await pickServer('local');
+      await act(async () => release());
+      await flush();
+
+      bridge.installedGate = new Promise(() => {});
+      await click(q('models-server-select'));
+      act(() => q('models-server-option-gpu')?.click());
+      await flush();
+      expect(rowNames()).toHaveLength(0);
+      expect(q('models-installed-refreshing')).toBeNull();
+    });
+
+    async function moveGpu(address: string) {
+      bridge.servers = [THIS_COMPUTER, { ...GPU_BOX, address }, SHARED_BOX];
+      act(() => pushServers(bridge.servers));
+      await flush();
+    }
 
     it('forgets the list when the server is saved at another address', async () => {
       await visitGpuThenLeave();
-      const moved = { ...GPU_BOX, address: 'http://192.168.1.50:11434' };
-      bridge.servers = [THIS_COMPUTER, moved, SHARED_BOX];
-      act(() => pushServers(bridge.servers));
-      await flush();
+      await moveGpu('http://192.168.1.50:11434');
       bridge.installedGate = new Promise(() => {});
       await click(q('models-server-select'));
       act(() => q('models-server-option-gpu')?.click());
@@ -2019,6 +2047,29 @@ describe('ModelsScreen servers', () => {
 
       expect(rowNames()).toHaveLength(0);
       expect(q('models-installed-refreshing')).toBeNull();
+    });
+
+    it('does not bring the list back when the server returns to its old address', async () => {
+      await visitGpuThenLeave();
+      await moveGpu('http://192.168.1.50:11434');
+      await moveGpu(GPU_BOX.address);
+      bridge.installedGate = new Promise(() => {});
+      await click(q('models-server-select'));
+      act(() => q('models-server-option-gpu')?.click());
+      await flush();
+
+      expect(rowNames()).toHaveLength(0);
+    });
+
+    it('lists the shown server again when it is saved at another address', async () => {
+      await mount();
+      await pickServer('gpu');
+      const checks = calls.getStatus.mock.calls.length;
+      await moveGpu('http://192.168.1.50:11434');
+
+      expect(calls.getStatus).toHaveBeenCalledTimes(checks + 1);
+      expect(calls.getStatus).toHaveBeenLastCalledWith('gpu');
+      expect(rowNames()).toHaveLength(1);
     });
   });
 

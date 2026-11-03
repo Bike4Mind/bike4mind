@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { LocalModelEntry } from '@shared/models';
 import type { ModelServerView } from '@shared/modelServers';
-import { InstalledCache, serverIdentity } from './installedCache';
+import { InstalledCache, listedAtLabel, serverIdentity } from './installedCache';
 
 function model(name: string): LocalModelEntry {
   return {
@@ -36,6 +36,22 @@ function view(id: string, extra: Partial<ModelServerView> = {}): ModelServerView
     ...extra,
   };
 }
+
+describe('listedAtLabel', () => {
+  const noon = new Date(2026, 10, 2, 12, 0).getTime();
+
+  it('gives only the time for a listing from today', () => {
+    const at = new Date(2026, 10, 2, 9, 30).getTime();
+    expect(listedAtLabel(at, noon)).toBe(new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
+  });
+
+  it('adds the date for a listing from another day', () => {
+    const at = new Date(2026, 10, 1, 23, 50).getTime();
+    const label = listedAtLabel(at, noon);
+    expect(label).toContain(new Date(at).toLocaleDateString([], { month: 'short', day: 'numeric' }));
+    expect(label).toContain(new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
+  });
+});
 
 describe('InstalledCache', () => {
   const gpu = view('gpu');

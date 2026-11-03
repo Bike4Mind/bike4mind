@@ -5,6 +5,7 @@ import { CssVarsProvider } from '@mui/joy/styles';
 import type { ChatModelOption, ChatSession, ChatSessionSummary } from '@shared/chat';
 import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { installedCache } from '../models/installedCache';
 import type { ChatWith } from '../models/modelTarget';
 import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
@@ -124,6 +125,7 @@ function stubBridge() {
 }
 
 beforeEach(() => {
+  installedCache.clear();
   Element.prototype.scrollIntoView = () => undefined;
   vi.stubGlobal(
     'IntersectionObserver',

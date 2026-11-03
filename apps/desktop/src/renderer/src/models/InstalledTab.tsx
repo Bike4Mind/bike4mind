@@ -11,11 +11,12 @@ import Modal from '@mui/joy/Modal';
 import ModalDialog from '@mui/joy/ModalDialog';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
+import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import { formatBytes, type InstalledModelsResult, type LocalModelEntry, type ModelRuntimeStatus } from '@shared/models';
 import { TrashIcon } from '../chat/icons';
 import { FitBadge } from './FitBadge';
-import type { LastInstalled } from './installedCache';
+import { listedAtLabel, type LastInstalled } from './installedCache';
 import type { ChatOn, ModelTarget } from './modelTarget';
 
 /** A device-side model a chat points at: its Ollama name and the server it runs on. */
@@ -49,10 +50,6 @@ function inUseWarning(model: LocalModelEntry, serverId: string, inUse: ModelsInU
   return lines.length ? lines.join(' ') : null;
 }
 
-function listedTime(at: number): string {
-  return new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-}
-
 const CAPABILITY_LABELS: [keyof LocalModelEntry['capabilities'], string][] = [
   ['tools', 'Tools'],
   ['vision', 'Vision'],
@@ -69,10 +66,13 @@ function InstalledRow({
   model,
   onUse,
   onRemove,
+  removeBlocked,
 }: {
   model: LocalModelEntry;
   onUse: (() => void) | null;
   onRemove: (() => void) | null;
+  /** Why Remove is shown disabled; null when it is usable. */
+  removeBlocked: string | null;
 }) {
   return (
     <Sheet
@@ -134,7 +134,7 @@ function InstalledRow({
           Use in chat
         </Button>
       )}
-      {onRemove && (
+      {onRemove && !removeBlocked && (
         <Button
           size="sm"
           variant="plain"
@@ -145,6 +145,23 @@ function InstalledRow({
         >
           Remove
         </Button>
+      )}
+      {onRemove && removeBlocked && (
+        <Tooltip title={removeBlocked} size="sm" variant="soft">
+          {/* A disabled button fires no pointer events, so the tooltip hangs off this wrapper. */}
+          <Box component="span" sx={{ display: 'inline-flex' }}>
+            <Button
+              size="sm"
+              variant="plain"
+              color="danger"
+              startDecorator={<TrashIcon />}
+              disabled
+              data-testid="models-installed-remove-btn"
+            >
+              Remove
+            </Button>
+          </Box>
+        </Tooltip>
       )}
     </Sheet>
   );
@@ -259,16 +276,27 @@ export function InstalledTab({
           }
           endDecorator={
             lastProblem && (
-              <Button size="sm" variant="plain" color="warning" onClick={onRetry}>
+              <Button
+                size="sm"
+                variant="plain"
+                color="warning"
+                onClick={onRetry}
+                data-testid="models-installed-stale-retry-btn"
+              >
                 Check again
               </Button>
             )
           }
           data-testid={lastProblem ? 'models-installed-stale' : 'models-installed-refreshing'}
         >
-          {lastProblem
-            ? `${lastProblem} Showing the list from ${listedTime(last.listedAt)}.`
-            : `Refreshing. Showing the list from ${listedTime(last.listedAt)}.`}
+          <Stack>
+            <Typography level="body-sm" textColor="inherit" data-testid="models-installed-stale-reason">
+              {lastProblem ?? 'Refreshing'}
+            </Typography>
+            <Typography level="body-xs" textColor="inherit">
+              Showing the list from {listedAtLabel(last.listedAt)}.
+            </Typography>
+          </Stack>
         </Alert>
       )}
       {removeError && (
@@ -303,10 +331,9 @@ export function InstalledTab({
               model={model}
               onUse={chatOn?.(model.name) ?? null}
               onRemove={
-                canManage && !last
-                  ? () => setConfirming({ model, serverId: target.local ? undefined : target.id })
-                  : null
+                canManage ? () => setConfirming({ model, serverId: target.local ? undefined : target.id }) : null
               }
+              removeBlocked={last ? 'Available once the list refreshes' : null}
             />
           ))}
         </>

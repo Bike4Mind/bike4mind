@@ -7,6 +7,14 @@ export interface LastInstalled {
   listedAt: number;
 }
 
+/** The listing's time, with its date when it was not listed today. */
+export function listedAtLabel(at: number, now: number = Date.now()): string {
+  const listed = new Date(at);
+  const time = listed.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (listed.toDateString() === new Date(now).toDateString()) return time;
+  return `${listed.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`;
+}
+
 /** What a cached list belongs to: a server whose address or kind changed is another server. */
 export function serverIdentity(server: Pick<ModelServerView, 'transport' | 'address' | 'kind'>): string {
   return `${server.transport} ${server.kind} ${server.address}`;

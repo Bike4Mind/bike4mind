@@ -302,7 +302,8 @@ export function ModelsScreen({
     // Settings changed the server's access or kind: what main reports about it changes too.
     if (statusManagement && statusManagement !== target.management) void refresh();
   }, [statusManagement, target.management, refresh]);
-  const installedCount = status && hub.installed?.ok ? hub.installed.models.length : null;
+  const installedCount =
+    status && hub.installed?.ok ? hub.installed.models.length : (hub.lastInstalled?.models.length ?? null);
   const note = manageNote(target);
   const chatOn = (name: string) => chatWith?.(serverId, name) ?? null;
 

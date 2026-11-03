@@ -20,15 +20,19 @@ export const DOWN_RECHECK_MS = 5_000;
  */
 export function useModelHub(serverId: string, identity: string | null = null): ModelHubState {
   const [status, setStatus] = useState<ModelRuntimeStatus | null>(null);
-  const [installed, setInstalledState] = useState<InstalledModelsResult | null>(null);
-  const shownServer = useRef({ serverId, identity });
-  shownServer.current = { serverId, identity };
-  const setInstalled = useCallback(
-    (next: InstalledModelsResult | null) => {
-      const shown = shownServer.current;
-      if (next?.ok && shown.serverId === serverId && shown.identity !== null)
-        installedCache.set(serverId, shown.identity, next.models, Date.now());
-      setInstalledState(next);
+  const [installed, setInstalled] = useState<InstalledModelsResult | null>(null);
+  const viewing = useRef({ serverId, identity });
+  viewing.current = { serverId, identity };
+  /**
+   * Caches a listing only while the screen still shows the server, at the identity, it was started for. A null
+   * identity at the start means the server list had not loaded yet, so the identity at the end decides.
+   */
+  const keep = useCallback(
+    (next: InstalledModelsResult, startedWith: string | null) => {
+      const now = viewing.current;
+      if (!next.ok || now.serverId !== serverId || now.identity === null) return;
+      if (startedWith !== null && startedWith !== now.identity) return;
+      installedCache.set(serverId, now.identity, next.models, Date.now());
     },
     [serverId]
   );
@@ -45,6 +49,7 @@ export function useModelHub(serverId: string, identity: string | null = null): M
   const refresh = useCallback(async () => {
     const mine = ++statusSeq.current;
     const mineInstalled = ++installedSeq.current;
+    const startedWith = viewing.current.identity;
     const nextStatus = await window.b4m.models.getStatus(serverId);
     if (mine !== statusSeq.current) return;
     showStatus(nextStatus);
@@ -54,14 +59,19 @@ export function useModelHub(serverId: string, identity: string | null = null): M
           ok: false,
           error: { kind: 'runtime-unavailable', message: nextStatus.error ?? 'Ollama is not running.' },
         };
-    if (mineInstalled === installedSeq.current) setInstalled(nextInstalled);
-  }, [serverId, showStatus, setInstalled]);
+    if (mineInstalled !== installedSeq.current) return;
+    keep(nextInstalled, startedWith);
+    setInstalled(nextInstalled);
+  }, [serverId, showStatus, keep]);
 
   const reloadInstalled = useCallback(async () => {
     const mine = ++installedSeq.current;
+    const startedWith = viewing.current.identity;
     const next = await window.b4m.models.listInstalled(serverId);
-    if (mine === installedSeq.current) setInstalled(next);
-  }, [serverId, setInstalled]);
+    if (mine !== installedSeq.current) return;
+    keep(next, startedWith);
+    setInstalled(next);
+  }, [serverId, keep]);
 
   const failedKeys = useRef(new Set<string>());
   const takePulls = useCallback(
@@ -97,7 +107,19 @@ export function useModelHub(serverId: string, identity: string | null = null): M
       offPulls();
       offInstalled();
     };
-  }, [serverId, refresh, reloadInstalled, takePulls, showStatus, setInstalled]);
+  }, [serverId, refresh, reloadInstalled, takePulls, showStatus]);
+
+  // The shown server was saved at another address or kind, so what is listed belongs to the old one.
+  const listedFor = useRef({ serverId, identity });
+  useEffect(() => {
+    const before = listedFor.current;
+    listedFor.current = { serverId, identity };
+    if (before.serverId === serverId && before.identity !== null && identity !== null && before.identity !== identity) {
+      showStatus(null);
+      setInstalled(null);
+      void refresh();
+    }
+  }, [serverId, identity, refresh, showStatus]);
 
   // A check that missed a busy daemon reads as down, and nothing else would check again until a click.
   useEffect(() => {
