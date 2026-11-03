@@ -804,6 +804,8 @@ describe('Add folder in a Chat composer', () => {
 
     expect(addContextDirectory).toHaveBeenCalledExactlyOnceWith('seeded', NOTES);
     expect(deleteSession).toHaveBeenCalledExactlyOnceWith('made', false);
+    expect(byTestId('chat-add-folder-notice')).toBeNull();
+    expect(byTestId('chat-add-folder-error')).toBeNull();
     expect(document.querySelectorAll('[data-testid="chat-session-item"]')).toHaveLength(1);
     expect(chips().map(chip => chip.textContent)).toEqual([NOTES]);
   });
@@ -1021,6 +1023,17 @@ describe('Add folder in a Chat composer', () => {
         expect(byTestId('chat-add-folder-error')?.textContent).toMatch(
           /could not share the folder.*main refused\. Desktop could not remove the empty conversation it made\. Delete it from the sidebar\.$/
         );
+      });
+
+      it('joins the removal warning with a single space when the share failure already ends in a period', async () => {
+        const { share } = await landLateSeed();
+        await act(async () => share.reject(new Error('That conversation no longer exists.')));
+        await act(async () => undefined);
+
+        const text = byTestId('chat-add-folder-error')?.textContent ?? '';
+        expect(text).toContain('That conversation no longer exists. Desktop could not remove');
+        expect(text).not.toContain('..');
+        expect(text).not.toContain('. . ');
       });
 
       it('starts removing the made chat before the share resolves', async () => {
