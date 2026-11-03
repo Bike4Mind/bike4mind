@@ -30,6 +30,9 @@ describe('ORCHESTRATOR_GUIDANCE', () => {
     expect(text).toContain('you are coordinating agents');
     expect(text).toContain('session_spawn STARTS');
     expect(text).toContain('Do not do the delegated work yourself');
+    expect(text).toContain('Spawn early');
+    expect(text).toContain('do only a brief survey');
+    expect(text).toContain('leave the detailed reading to the agents');
     expect(text).toContain(`At most ${MAX_CONCURRENT_SPAWNED} agents run at once`);
     expect(text).toContain('session_list and session_read');
     expect(text).toContain("so I didn't start any agents.");
