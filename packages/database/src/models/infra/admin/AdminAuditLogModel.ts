@@ -6,10 +6,13 @@ import {
   type AuditEntry,
   type AuditLogCursor,
   type AuditLogFilters,
+  type AuditReviewQueueEntry,
+  type AuditReviewQueueQuery,
   type AuditSummary,
   type IAdminAuditLogRepository,
   type NewAdminAuditEntry,
 } from '@bike4mind/common';
+import { AdminAuditReviewModel, toAuditReview } from './AdminAuditReviewModel';
 
 /** The stored shape: everything on an AuditEntry except `id` (virtual from `_id`) and `source` (read-side tag). */
 export type AdminAuditLogRecord = Omit<AuditEntry, 'id' | 'source'>;
@@ -232,6 +235,11 @@ type SummaryFacets = {
   deniedAttempts: Array<{ count: number }>;
 };
 
+type ReviewQueueFacets = {
+  total: Array<{ count: number }>;
+  page: Array<StoredRecord & { reviews: Parameters<typeof toAuditReview>[0][] }>;
+};
+
 const facetCount = (match: FilterClause) => [{ $match: match }, { $count: 'count' }];
 const readCount = (facet: Array<{ count: number }> | undefined): number => facet?.[0]?.count ?? 0;
 
@@ -304,6 +312,55 @@ class AdminAuditLogRepository implements IAdminAuditLogRepository {
     const nextCursor =
       records.length > page.limit && last ? { occurredAt: last.occurredAt, id: last._id.toString() } : null;
     return { entries: pageRecords.map(toAuditEntry), nextCursor };
+  }
+
+  async listReviewQueue(
+    query: AuditReviewQueueQuery,
+    page: { limit: number; cursor?: AuditLogCursor }
+  ): Promise<{ entries: AuditReviewQueueEntry[]; nextCursor: AuditLogCursor | null; total: number }> {
+    const unreviewed = query.status === 'unreviewed';
+    if (!unreviewed && !query.from) throw new Error('from is required for the all review queue');
+
+    // Unreviewed has no date bound: an old entry nobody signed off is exactly what the queue is for.
+    const match: FilterClause = unreviewed
+      ? { severity: 'critical', 'actor.userId': { $ne: query.viewerUserId } }
+      : { severity: 'critical', occurredAt: { $gte: query.from } };
+
+    const [facets] = await this.auditLogModel
+      .aggregate<ReviewQueueFacets>([
+        { $match: match },
+        { $sort: { occurredAt: -1, _id: -1 } },
+        {
+          $lookup: {
+            from: AdminAuditReviewModel.collection.name,
+            localField: '_id',
+            foreignField: 'auditEntryId',
+            as: 'reviews',
+          },
+        },
+        ...(unreviewed ? [{ $match: { reviews: { $size: 0 } } }] : []),
+        {
+          $facet: {
+            total: [{ $count: 'count' }],
+            page: [
+              ...(page.cursor ? [{ $match: { $and: buildCursorClauses(page.cursor) } }] : []),
+              { $limit: page.limit + 1 },
+            ],
+          },
+        },
+      ])
+      .option({ maxTimeMS: LIST_QUERY_MAX_TIME_MS });
+
+    const rows = facets?.page ?? [];
+    const pageRows = rows.slice(0, page.limit);
+    const last = pageRows[pageRows.length - 1];
+    const nextCursor =
+      rows.length > page.limit && last ? { occurredAt: last.occurredAt, id: last._id.toString() } : null;
+    const entries = pageRows.map(({ reviews, ...record }): AuditReviewQueueEntry => {
+      const [review] = reviews;
+      return { ...toAuditEntry(record), review: review ? toAuditReview(review) : null };
+    });
+    return { entries, nextCursor, total: readCount(facets?.total) };
   }
 
   async findById(id: string): Promise<AuditEntry | null> {

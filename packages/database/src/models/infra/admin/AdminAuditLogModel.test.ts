@@ -3,6 +3,7 @@ import { Types } from 'mongoose';
 import type { NewAdminAuditEntry } from '@bike4mind/common';
 import { setupMongoTest } from '../../../__test__/utils';
 import { adminAuditLogRepository } from './AdminAuditLogModel';
+import { AdminAuditReviewModel, adminAuditReviewRepository } from './AdminAuditReviewModel';
 
 const USER_ID = new Types.ObjectId().toHexString();
 const ORG_ID = new Types.ObjectId().toHexString();
@@ -93,5 +94,124 @@ describe('AdminAuditLogRepository.listForSubscription', () => {
     });
     expect(second.entries.map(item => item.summary)).toEqual(['day 1']);
     expect(second.nextCursor).toBeNull();
+  });
+});
+
+describe('AdminAuditLogRepository.listReviewQueue', () => {
+  setupMongoTest();
+
+  const VIEWER = 'viewer-1';
+  const critical = (overrides: Partial<NewAdminAuditEntry>, occurredAt: Date) =>
+    entry({ severity: 'critical', ...overrides }, occurredAt);
+  const byOther = {
+    actor: { kind: 'user', scope: 'platform', userId: 'admin-2', name: 'Other', wasAdmin: true },
+  } as const;
+  const byViewer = {
+    actor: { kind: 'user', scope: 'platform', userId: VIEWER, name: 'Viewer', wasAdmin: true },
+  } as const;
+
+  it('unreviewed excludes reviewed, own and non-critical entries and includes old ones', async () => {
+    await AdminAuditReviewModel.createIndexes();
+    const old = await adminAuditLogRepository.append(
+      critical({ ...byOther, summary: 'old' }, new Date('2020-01-01T00:00:00Z'))
+    );
+    const recent = await adminAuditLogRepository.append(
+      critical({ ...byOther, summary: 'recent' }, new Date('2026-03-01T00:00:00Z'))
+    );
+    const reviewed = await adminAuditLogRepository.append(
+      critical({ ...byOther, summary: 'reviewed' }, new Date('2026-03-02T00:00:00Z'))
+    );
+    await adminAuditLogRepository.append(critical({ ...byViewer, summary: 'own' }, new Date('2026-03-03T00:00:00Z')));
+    await adminAuditLogRepository.append(
+      entry({ ...byOther, severity: 'notice', summary: 'notice' }, new Date('2026-03-04T00:00:00Z'))
+    );
+    await adminAuditLogRepository.append(
+      critical(
+        { actor: { kind: 'system', scope: 'platform', name: 'System', wasAdmin: false }, summary: 'system' },
+        new Date('2026-03-05T00:00:00Z')
+      )
+    );
+    await adminAuditReviewRepository.createMany([
+      { auditEntryId: reviewed.id, reviewer: { userId: VIEWER, name: 'Viewer' } },
+    ]);
+
+    const page = await adminAuditLogRepository.listReviewQueue(
+      { status: 'unreviewed', viewerUserId: VIEWER },
+      { limit: 10 }
+    );
+
+    expect(page.entries.map(item => item.summary)).toEqual(['system', 'recent', 'old']);
+    expect(page.entries.every(item => item.review === null)).toBe(true);
+    expect(page.total).toBe(3);
+    expect([old.id, recent.id]).toEqual(expect.arrayContaining([page.entries[1]?.id, page.entries[2]?.id]));
+  });
+
+  it('pages with a cursor and keeps total independent of it', async () => {
+    for (let day = 1; day <= 5; day += 1) {
+      await adminAuditLogRepository.append(
+        critical({ ...byOther, summary: `entry ${day}` }, new Date(`2026-03-0${day}T00:00:00Z`))
+      );
+    }
+
+    const first = await adminAuditLogRepository.listReviewQueue(
+      { status: 'unreviewed', viewerUserId: VIEWER },
+      { limit: 2 }
+    );
+    expect(first.entries.map(item => item.summary)).toEqual(['entry 5', 'entry 4']);
+    expect(first.nextCursor).not.toBeNull();
+    expect(first.total).toBe(5);
+
+    const second = await adminAuditLogRepository.listReviewQueue(
+      { status: 'unreviewed', viewerUserId: VIEWER },
+      { limit: 2, cursor: first.nextCursor ?? undefined }
+    );
+    expect(second.entries.map(item => item.summary)).toEqual(['entry 3', 'entry 2']);
+    expect(second.total).toBe(5);
+
+    const last = await adminAuditLogRepository.listReviewQueue(
+      { status: 'unreviewed', viewerUserId: VIEWER },
+      { limit: 2, cursor: second.nextCursor ?? undefined }
+    );
+    expect(last.entries.map(item => item.summary)).toEqual(['entry 1']);
+    expect(last.nextCursor).toBeNull();
+  });
+
+  it('all respects from, includes the viewer own entries and attaches the review', async () => {
+    await adminAuditLogRepository.append(
+      critical({ ...byOther, summary: 'too old' }, new Date('2026-01-01T00:00:00Z'))
+    );
+    const own = await adminAuditLogRepository.append(
+      critical({ ...byViewer, summary: 'own' }, new Date('2026-03-01T00:00:00Z'))
+    );
+    const reviewed = await adminAuditLogRepository.append(
+      critical({ ...byOther, summary: 'reviewed' }, new Date('2026-03-02T00:00:00Z'))
+    );
+    await adminAuditLogRepository.append(
+      entry({ ...byOther, severity: 'info', summary: 'info' }, new Date('2026-03-03T00:00:00Z'))
+    );
+    await adminAuditReviewRepository.createMany([
+      { auditEntryId: reviewed.id, reviewer: { userId: 'someone', name: 'Someone' }, note: 'ok' },
+    ]);
+
+    const page = await adminAuditLogRepository.listReviewQueue(
+      { status: 'all', from: new Date('2026-02-01T00:00:00Z'), viewerUserId: VIEWER },
+      { limit: 10 }
+    );
+
+    expect(page.entries.map(item => item.summary)).toEqual(['reviewed', 'own']);
+    expect(page.entries[0]?.review).toMatchObject({
+      auditEntryId: reviewed.id,
+      reviewer: { name: 'Someone' },
+      note: 'ok',
+    });
+    expect(page.entries[1]?.id).toBe(own.id);
+    expect(page.entries[1]?.review).toBeNull();
+    expect(page.total).toBe(2);
+  });
+
+  it('rejects status all without from', async () => {
+    await expect(
+      adminAuditLogRepository.listReviewQueue({ status: 'all', viewerUserId: VIEWER }, { limit: 10 })
+    ).rejects.toThrow('from is required');
   });
 });

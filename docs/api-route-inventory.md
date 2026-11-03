@@ -193,6 +193,8 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/audit-log/[id]` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/adminAuditLog.ts` |
 | `/api/admin/audit-log/alert-status` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/adminAuditLog.ts` |
 | `/api/admin/audit-log/export` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/adminAuditLog.ts` |
+| `/api/admin/audit-log/review-queue` | GET | jwt+key | `admin:*` | no | - | 0 |
+| `/api/admin/audit-log/reviews` | GET, POST, DELETE | jwt+key | `admin:*` | no | - | 0 |
 | `/api/admin/audit-log/summary` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/adminAuditLog.ts` |
 | `/api/admin/bulk-create-users` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/InviteCenter/BulkInvite/BulkInviteTab.tsx` |
 | `/api/admin/context-telemetry` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/useContextTelemetry.ts` |

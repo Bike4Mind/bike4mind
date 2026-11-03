@@ -3,11 +3,13 @@ import { Outlet, useLocation, useNavigate, useRouterState } from '@tanstack/reac
 import { useShallow } from 'zustand/react/shallow';
 import MenuIcon from '@mui/icons-material/Menu';
 import { Box, Drawer, IconButton, Sheet, Typography } from '@mui/joy';
+import { isFullAdmin } from '@bike4mind/common';
 import RestrictedPage from '@client/app/components/common/RestrictedPage';
 import { ProviderBundle } from '@client/app/contexts/ProviderBundle';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useLiveOpsTriageEnv } from '@client/app/hooks/data/admin';
 import { useGetWaitingSubscribersCount } from '@client/app/hooks/data/subscribers';
+import { useUnreviewedAuditCount } from '@client/app/hooks/data/adminAuditLog';
 import { HelpPanel } from '../help';
 import EnvironmentBanner from './AdminEnvironmentBanner';
 import { SidebarNav } from './AdminSidebarNav';
@@ -62,6 +64,7 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
   const isAdmin = !!currentUser?.isAdmin;
   const { data: liveOpsEnv } = useLiveOpsTriageEnv(isAdmin);
   const waitingSubscribers = useGetWaitingSubscribersCount({ enabled: isAdmin });
+  const unreviewedAudit = useUnreviewedAuditCount({ enabled: isFullAdmin(currentUser) });
   const newSubscriptions = useNewSubscriptionsDot(isAdmin);
   const { collapsed, toggleCollapsed } = useAdminSidebarCollapsed();
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -106,6 +109,7 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
     enableUserMigration,
     showLiveOpsTriageTab: liveOpsEnv?.showTab ?? false,
     waitingSubscribersCount: waitingSubscribers.data?.count,
+    unreviewedAuditCount: unreviewedAudit.data,
     // No dot on the tab the admin is looking at; a row started meanwhile lights it once they leave.
     newSubscriptions: newSubscriptions && activeTab !== AdminTab.Subscriptions,
     hiddenNotifications,

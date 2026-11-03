@@ -27,6 +27,7 @@ vi.mock('@client/app/contexts/ProviderBundle', () => ({
   ProviderBundle: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 vi.mock('@client/app/hooks/data/admin', () => ({ useLiveOpsTriageEnv: () => ({ data: { showTab: false } }) }));
+vi.mock('@client/app/hooks/data/adminAuditLog', () => ({ useUnreviewedAuditCount: () => ({ data: undefined }) }));
 vi.mock('@client/app/hooks/data/subscribers', () => ({ useGetWaitingSubscribersCount: () => ({ data: undefined }) }));
 vi.mock('./Subscriptions/subscriptionsLastSeen', () => ({ useNewSubscriptionsDot: () => false }));
 vi.mock('@client/app/hooks/useHelpKeyboardShortcut', () => ({ useHelpKeyboardShortcut: () => undefined }));

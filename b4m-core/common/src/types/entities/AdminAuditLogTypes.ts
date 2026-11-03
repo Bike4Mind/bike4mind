@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { AdminAuditCategory, AdminAuditSeverity } from './adminAuditCatalogue';
 import type { AuditLogCursor, AuditLogFilters, AuditSummary } from './adminAuditQuery';
+import type { ListAuditReviewQueue } from './adminAuditReview';
 
 export const AuditActorSchema = z.object({
   kind: z.enum(['user', 'apiKey', 'system', 'script']),
@@ -104,6 +105,8 @@ export interface IAdminAuditLogRepository {
     page: { limit: number; cursor?: AuditLogCursor }
   ): Promise<{ entries: AuditEntry[]; nextCursor: AuditLogCursor | null }>;
   findById(id: string): Promise<AuditEntry | null>;
+  /** Critical entries joined to their reviews: see adminAuditReview.ts. */
+  listReviewQueue: ListAuditReviewQueue;
   summarize(since: Date): Promise<Omit<AuditSummary, 'windowDays' | 'since'>>;
   /** Oldest first: entries strictly after `after` (or from the start) up to and including `until`. */
   listAscending(page: { after: AuditLogCursor | null; until: Date; limit: number }): Promise<AuditEntry[]>;
