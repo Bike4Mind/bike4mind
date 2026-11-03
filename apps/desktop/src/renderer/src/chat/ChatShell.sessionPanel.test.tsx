@@ -499,7 +499,7 @@ describe('the reply stats rail in the shell', () => {
 
     expect(find('chat-reply-stats-rail')).toBeNull();
     expect(get('chat-toggle-reply-stats-btn').getAttribute('aria-pressed')).toBe('false');
-    expect(get('chat-message-cost').textContent).toContain('120 tokens');
+    expect(get('chat-message-cost').textContent).toContain('4.0s total');
     expect(window.localStorage.getItem('b4m.chat.replyStats.rail')).toBe('0');
   });
 });

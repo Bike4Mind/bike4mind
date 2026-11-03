@@ -28,7 +28,7 @@ import { callsIn, roundsOf } from './replyRounds';
 import { skillChipColor, skillSourceLabel } from './skillMenu';
 import { useShowDollarCosts } from './costDisplay';
 import { describeReplyCost, formatCreditsSpent, type TurnProgress } from './statusLine';
-import { describeReplyStats, messageStats, REPLY_STAT_TEXT } from './replyStats';
+import { describeReplyStats, FOOTER_STATS, messageStats } from './replyStats';
 import { useReplyStatsPrefs } from './replyStatsPrefs';
 import { ReplyStatsRail, useRailReserve } from './ReplyStatsRail';
 import { clampWindow, extendWindow, initialWindow, WINDOW_STEP, type ThreadWindow } from './threadWindow';
@@ -228,26 +228,29 @@ const REPLY_COST_CLASS = 'b4m-reply-cost';
  * not zero - a turn that failed, and every reply stored before this was captured, would otherwise
  * claim to have been free.
  *
- * Where the stats rail is off or does not fit, the reply's stats are here instead: the ones ticked
- * in Settings on the line, cut short with an ellipsis rather than wrapped, and all of them in the title.
+ * Where the stats rail is off or does not fit, the reply's stats are here instead: speed, total and
+ * thinking time on the line where ticked in Settings, then the credits, and all of them in the title.
  */
 function ReplyCost({ message }: { message: ChatMessage }) {
   const showDollars = useShowDollarCosts();
   const { hidden } = useReplyStatsPrefs();
   const credits = formatCreditsSpent(message.usage);
   const rows = messageStats(message);
-  const shown = rows.filter(row => !hidden.has(row.id));
-  if (!credits && shown.length === 0) return null;
+  const named = FOOTER_STATS.flatMap(([id, name]) => {
+    const row = hidden.has(id) ? undefined : rows.find(candidate => candidate.id === id);
+    return row ? [{ id, text: name(row.value) }] : [];
+  });
+  if (!credits && named.length === 0) return null;
   const details = [describeReplyCost(message.usage, showDollars), describeReplyStats(rows)].filter(
     (line): line is string => line !== null
   );
   const parts = [
-    ...(credits ? [<span key="credits">{credits}</span>] : []),
-    ...shown.map(row => (
-      <span key={row.id} data-testid={`chat-message-stat-${row.id}`}>
-        {REPLY_STAT_TEXT[row.id].inline(row.value)}
+    ...named.map(({ id, text }) => (
+      <span key={id} data-testid={`chat-message-stat-${id}`}>
+        {text}
       </span>
     )),
+    ...(credits ? [<span key="credits">{credits}</span>] : []),
   ];
 
   return (

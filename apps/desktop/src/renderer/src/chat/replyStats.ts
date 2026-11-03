@@ -28,43 +28,31 @@ interface ReplyStatText {
   label: string;
   /** The Settings checklist's name for it. */
   setting: string;
-  /** The value named inline, for the one-line footer. */
-  inline: (value: string) => string;
 }
 
 export const REPLY_STAT_TEXT: Record<ReplyStatId, ReplyStatText> = {
-  thinking: { label: 'Thinking time', setting: 'Thinking time', inline: value => `${value} thinking` },
-  total: {
-    label: 'Total time',
-    setting: 'Total time, tools and approvals included',
-    inline: value => `${value} total`,
-  },
-  thinkingShare: {
-    label: 'Thinking share',
-    setting: "Share of the model's time spent thinking",
-    inline: value => `${value} of model time thinking`,
-  },
-  thinkingTokens: { label: 'Thinking tokens', setting: 'Thinking tokens', inline: value => `${value} thinking tokens` },
-  tokens: {
-    label: 'Total tokens',
-    setting: 'Total tokens generated, thinking included',
-    inline: value => `${value} tokens`,
-  },
-  speed: { label: 'Speed', setting: 'Tokens per second', inline: value => value },
-  cacheShare: {
-    label: 'Cache read',
-    setting: 'Share of the prompt read from cache',
-    inline: value => `${value} cached`,
-  },
-  promptSpeed: { label: 'Prompt speed', setting: 'Prompt processing speed', inline: value => `${value} prompt` },
-  firstToken: { label: 'First token', setting: 'Time to first token', inline: value => `${value} to first token` },
-  load: { label: 'Load time', setting: 'Model load time', inline: value => `${value} load` },
-  draft: {
-    label: 'Draft accepted',
-    setting: 'Share of draft tokens accepted',
-    inline: value => `${value} of draft tokens accepted`,
-  },
+  thinking: { label: 'Thinking time', setting: 'Thinking time' },
+  total: { label: 'Total time', setting: 'Total time, tools and approvals included' },
+  thinkingShare: { label: 'Thinking share', setting: "Share of the model's time spent thinking" },
+  thinkingTokens: { label: 'Thinking tokens', setting: 'Thinking tokens' },
+  tokens: { label: 'Total tokens', setting: 'Total tokens generated, thinking included' },
+  speed: { label: 'Speed', setting: 'Tokens per second' },
+  cacheShare: { label: 'Cache read', setting: 'Share of the prompt read from cache' },
+  promptSpeed: { label: 'Prompt speed', setting: 'Prompt processing speed' },
+  firstToken: { label: 'First token', setting: 'Time to first token' },
+  load: { label: 'Load time', setting: 'Model load time' },
+  draft: { label: 'Draft accepted', setting: 'Share of draft tokens accepted' },
 };
+
+/**
+ * The few stats the hover footer names, in its order and words; the rest are in its title. Each
+ * names its unit or its kind, so no two figures on the line can be read as the same thing.
+ */
+export const FOOTER_STATS: readonly (readonly [ReplyStatId, (value: string) => string])[] = [
+  ['speed', value => value],
+  ['total', value => `${value} total`],
+  ['thinking', value => `${value} thinking`],
+];
 
 /** One stat ready to draw. */
 export interface ReplyStat {
