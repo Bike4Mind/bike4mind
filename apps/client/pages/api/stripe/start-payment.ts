@@ -131,9 +131,8 @@ const handler = baseApi()
       undefined,
       req.logger
     );
-    // The webhook only sees Stripe's network, so where the buyer paid from is stamped here, and
-    // the visit they paid in with it: the purchase event reads it back by payment intent, so it
-    // is never put on the intent's metadata.
+    // The webhook only sees Stripe's network, so where the buyer paid from is stamped here, with
+    // the visit for the purchase event (see billingEventDetails.ts).
     await recordPaymentStart(
       {
         paymentIntentId: paymentIntent.id,

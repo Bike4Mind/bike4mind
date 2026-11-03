@@ -150,9 +150,7 @@ const handler = baseApi()
       },
     });
 
-    // The visit this checkout was opened in, for the subscription's first `purchase` event. Kept
-    // in core's own record under the session id, which the first invoice can be traced back to,
-    // and never put on the session itself. Never throws.
+    // For the subscription's first `purchase` event; see billingEventDetails.ts. Never throws.
     await recordCheckoutVisit({
       checkoutSessionId: session.id,
       userId: req.user.id,

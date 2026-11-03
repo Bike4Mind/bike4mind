@@ -197,8 +197,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       // Tell the host, and the product the buyer came through (from the touches stored at
       // signup), about the pack. Sent on a redelivery too: the eventId is keyed on the payment
       // intent, so the receiver keeps one event, and a first attempt that timed out gets another
-      // chance. Never throws, so it cannot fail a delivery whose credits already landed. The
-      // visit the pack was bought in comes from start-payment's own record, not the intent.
+      // chance. Never throws, so it cannot fail a delivery whose credits already landed.
       await emitPurchaseEvents({
         user,
         paymentId: intent.id,

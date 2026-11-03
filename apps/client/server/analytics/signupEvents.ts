@@ -170,11 +170,8 @@ export type BillingEvent =
  * sent verbatim, so it must never be a raw user id; use the pseudonym (see emitSignupForSourceProducts).
  * Synthetic users are skipped.
  *
- * `visitId` is the browser visit the event happened in, when the caller knows one (only a
- * purchase does; see emitPurchaseEvents). It goes on the host's copy alone, as its session id,
- * the way a signup's visit goes on `signup_completed` and not on the credited `signup`: the host
- * minted the visit and only the host's stream holds its `visit` event, so on a credited product's
- * copy the id would join nothing and would only hand that product a host browsing identifier.
+ * `visitId` goes on the host's copy alone, as its session id, like a signup's visit on
+ * `signup_completed`: only the host's stream holds the `visit` event it joins.
  *
  * Awaited by its callers but never throws and never rejects: a webhook must not fail, or be
  * retried, over analytics. Resolves to the products it ATTEMPTED, like the signup emit.
@@ -248,12 +245,8 @@ export async function emitBillingEvent(opts: {
  * also follows. The divisor follows the currency (minorUnitsPerMajor): a yen amount is already
  * whole yen, so dividing every currency by 100 would under-report it 100x.
  *
- * `visitId` is the browser visit the payment was started in, read back from core's own record of
- * the payment's start (billingEventDetails.ts), so the analytics consumer can place the purchase
- * in that visit. Only a purchase the buyer started in the browser names one: a credit pack, or
- * the invoice that opened a subscription through Checkout. A renewal, a seat change or any other
- * invoice Stripe raised on its own happened in no visit, so it names none whatever the caller
- * passes.
+ * `visitId` (see billingEventDetails.ts) is sent only for a credit pack or the invoice that opened
+ * a subscription; a renewal or seat change happened in no visit, so it names none.
  */
 export async function emitPurchaseEvents(opts: {
   user: PurchaseCreditUser | null | undefined;

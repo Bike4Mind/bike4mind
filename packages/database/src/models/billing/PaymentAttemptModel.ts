@@ -9,11 +9,8 @@ export type PaymentAttemptOutcome = 'started' | 'succeeded' | 'failed';
  * to pay and the final outcome. Holds no raw IP and no card details: the IP is a keyed HMAC
  * (hashSignupNetwork) and a card fingerprint is Stripe's opaque per-card id.
  *
- * It also keeps the browser visit a payment was started in, for the `purchase` analytics event,
- * here rather than on anything sent to Stripe. A subscription Checkout has no payment intent until
- * it is paid, so the visit it was opened in gets a row of its own, keyed on the Checkout session
- * (recordCheckoutStart); that row holds nothing else, and the risk checks find no card or network
- * on it.
+ * It also keeps the visit a payment started in for the `purchase` event (the client's
+ * billingEventDetails.ts); a subscription Checkout gets a visit-only row (recordCheckoutStart).
  */
 export interface IPaymentAttemptDocument extends Document {
   /** The Stripe payment intent id, or a Checkout session id (`cs_...`) on a recordCheckoutStart row. */
@@ -32,11 +29,7 @@ export interface IPaymentAttemptDocument extends Document {
   ipHash: string | null;
   /** Started from a datacenter ASN or a WAF anonymous-IP address; null when unknown. */
   hostingNetwork: boolean | null;
-  /**
-   * The browser visit the payment was started in (the client app's visit cookie, shape-checked by
-   * readVisitId), so the analytics consumer can place the purchase in its visit. Never sent to
-   * Stripe. Null when the starting request carried no visit, and on a row the webhook created.
-   */
+  /** The browser visit the payment started in (readVisitId); never sent to Stripe. Null if none. */
   visitId: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -130,10 +123,8 @@ class PaymentAttemptRepository {
   }
 
   /**
-   * Records the visit a subscription Checkout was opened in, keyed on the Checkout session id: the
-   * session is all the subscribe route has (its payment intent does not exist until the customer
-   * pays) and is what the first invoice can be traced back to. Holds no amount, card or network,
-   * so the risk checks, which read cards and networks, see nothing on it. Idempotent per session.
+   * Keyed on the Checkout session id, since the payment intent does not exist until the customer
+   * pays. Holds no amount, card or network, so the risk checks see nothing on it.
    */
   async recordCheckoutStart(input: { checkoutSessionId: string; userId: string; visitId: string }): Promise<void> {
     await PaymentAttemptModel.updateOne(

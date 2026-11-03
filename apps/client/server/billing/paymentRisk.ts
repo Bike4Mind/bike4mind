@@ -172,8 +172,7 @@ export function paymentNetworkOf(network: Pick<INetworkMeta, 'ip' | 'isDatacente
 
 /**
  * Called by start-payment; best-effort, so a failed write never blocks a purchase. `visitId` is
- * the browser visit the payment started in (readVisitId), kept for the `purchase` analytics event
- * to read back by payment intent, since the intent itself never carries it.
+ * read back by the `purchase` event (see billingEventDetails.ts).
  */
 export async function recordPaymentStart(
   input: {

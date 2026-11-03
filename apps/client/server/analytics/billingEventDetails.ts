@@ -91,10 +91,7 @@ export async function creditBuyerForEvents(customerId: string | undefined, metad
 // into core's own payment-attempt record, and read back here by a Stripe id. It is never put on
 // anything sent to Stripe. See emitPurchaseEvents for which purchases name one.
 
-/**
- * The visit a credit-pack payment intent was started in (start-payment records it through
- * recordPaymentStart). Undefined when none was recorded. Never throws.
- */
+/** The visit start-payment recorded for this credit-pack payment intent, if any. Never throws. */
 export async function purchaseVisitId(paymentIntentId: string): Promise<string | undefined> {
   try {
     return (await paymentAttemptRepository.findVisitId(paymentIntentId)) ?? undefined;
@@ -104,11 +101,7 @@ export async function purchaseVisitId(paymentIntentId: string): Promise<string |
   }
 }
 
-/**
- * Keep the visit a subscription Checkout was opened in, keyed on the Checkout session, for the
- * subscription's first invoice to find (subscriptionCheckoutVisitId). A request with no visit
- * writes nothing. Never throws: a checkout must not fail on analytics.
- */
+/** Keep a subscription Checkout's visit for subscriptionCheckoutVisitId. Never throws. */
 export async function recordCheckoutVisit(input: {
   checkoutSessionId: string;
   userId: string;
@@ -127,11 +120,8 @@ export async function recordCheckoutVisit(input: {
 }
 
 /**
- * The visit the Checkout that opened this subscription was started in. Stripe links a
- * subscription to its Checkout session only from the session's side, so the session is found by
- * listing on the subscription, then its visit is read from the row recordCheckoutVisit wrote.
- * Undefined for a subscription no Checkout opened (one created through the API) or a Checkout
- * opened with no visit. One Stripe read, so callers ask only for an opening invoice. Never throws.
+ * Stripe links a subscription to its Checkout session only from the session's side, hence the
+ * list call. One Stripe read, so callers ask only for an opening invoice. Never throws.
  */
 export async function subscriptionCheckoutVisitId(subscriptionId: string): Promise<string | undefined> {
   try {
