@@ -16,6 +16,8 @@ export interface VoidOpenInvoicesOptions {
   createdBefore?: number | null;
   /** Per Stripe request timeout (ms); the client default applies when unset. */
   timeoutMs?: number;
+  /** Per Stripe request retry cap; the client default applies when unset. */
+  maxNetworkRetries?: number;
 }
 
 /**
@@ -51,7 +53,13 @@ export async function voidOpenSubscriptionInvoices(
     limit: 100,
     ...(options.createdBefore ? { created: { lt: options.createdBefore } } : {}),
   };
-  const requestOptions = options.timeoutMs ? { timeout: options.timeoutMs } : undefined;
+  const requestOptions =
+    options.timeoutMs || options.maxNetworkRetries !== undefined
+      ? {
+          ...(options.timeoutMs ? { timeout: options.timeoutMs } : {}),
+          ...(options.maxNetworkRetries !== undefined ? { maxNetworkRetries: options.maxNetworkRetries } : {}),
+        }
+      : undefined;
   const open = await (requestOptions ? stripe.invoices.list(params, requestOptions) : stripe.invoices.list(params));
 
   const voided: string[] = [];

@@ -153,8 +153,8 @@ const USER_OWNER_FIELDS = 'name username email stripeCustomerId isBanned dispute
 
 type OwnerLookup = {
   owners: Map<string, AdminSubscriptionOwner>;
-  /** Whether each paying account read (user owners and org billing owners) is blocked. Absent: deleted. */
-  accountBlocked: Map<string, boolean>;
+  /** Whether each paying account read (user owners and org billing owners) is banned or suspended. Absent: deleted. */
+  accountSuspended: Map<string, boolean>;
 };
 
 async function ownersOf(docs: SubscriptionDoc[]): Promise<OwnerLookup> {
@@ -173,7 +173,7 @@ async function ownersOf(docs: SubscriptionDoc[]): Promise<OwnerLookup> {
       : [],
   ]);
 
-  const accountBlocked = new Map<string, boolean>();
+  const accountSuspended = new Map<string, boolean>();
   const userOwnerIds = new Set(userIds);
   const billingOwnerIds = organizations.flatMap(organization =>
     organization.userId && !userOwnerIds.has(String(organization.userId)) ? [String(organization.userId)] : []
@@ -185,7 +185,7 @@ async function ownersOf(docs: SubscriptionDoc[]): Promise<OwnerLookup> {
           .lean()
       : [];
   for (const account of [...users, ...billingOwners]) {
-    accountBlocked.set(String(account._id), userService.accountBlockReasons(account).length > 0);
+    accountSuspended.set(String(account._id), userService.suspensionReasons(account).length > 0);
   }
 
   const owners = new Map<string, AdminSubscriptionOwner>();
@@ -210,13 +210,13 @@ async function ownersOf(docs: SubscriptionDoc[]): Promise<OwnerLookup> {
       billingOwnerId: organization.userId ?? null,
     });
   }
-  return { owners, accountBlocked };
+  return { owners, accountSuspended };
 }
 
 function ownerAlertOf(
   doc: SubscriptionDoc,
   owner: AdminSubscriptionOwner | null,
-  accountBlocked: OwnerLookup['accountBlocked']
+  accountSuspended: OwnerLookup['accountSuspended']
 ): AdminSubscriptionOwnerAlert | null {
   if (doc.source === 'admin_grant' || TERMINAL_SUBSCRIPTION_STATUSES.has(doc.status as Stripe.Subscription.Status)) {
     return null;
@@ -224,7 +224,7 @@ function ownerAlertOf(
   if (!owner) return 'owner_deleted';
   const payingAccountId = owner.kind === 'User' ? owner.id : owner.billingOwnerId;
   if (!payingAccountId) return null;
-  const blocked = accountBlocked.get(String(payingAccountId));
+  const blocked = accountSuspended.get(String(payingAccountId));
   if (blocked === undefined) return 'owner_deleted';
   return blocked ? 'owner_blocked' : null;
 }
@@ -235,7 +235,7 @@ export async function toAdminSubscriptionRows(
   docs: SubscriptionDoc[],
   catalog: PlanCatalog
 ): Promise<AdminSubscriptionRow[]> {
-  const { owners, accountBlocked } = await ownersOf(docs);
+  const { owners, accountSuspended } = await ownersOf(docs);
   return docs.map(doc => {
     const owner = owners.get(`${doc.ownerType}:${doc.ownerId}`) ?? null;
     return {
@@ -244,7 +244,7 @@ export async function toAdminSubscriptionRows(
       ownerType: doc.ownerType,
       ownerId: doc.ownerId,
       owner,
-      ownerAlert: ownerAlertOf(doc, owner, accountBlocked),
+      ownerAlert: ownerAlertOf(doc, owner, accountSuspended),
       plan: planOf(doc.priceId, catalog),
       billedInterval: doc.source === 'admin_grant' ? null : billedIntervalOf(doc.interval, doc.intervalCount),
       status: doc.status,

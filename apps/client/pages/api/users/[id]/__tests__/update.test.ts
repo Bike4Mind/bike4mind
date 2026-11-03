@@ -87,6 +87,7 @@ vi.mock('@bike4mind/services', async orig => ({
     // The real block-state rules, so a snapshot missing any block field is caught.
     entersBlockedState: (await orig<typeof import('@bike4mind/services')>()).userService.entersBlockedState,
     accountBlockReasons: (await orig<typeof import('@bike4mind/services')>()).userService.accountBlockReasons,
+    entersSuspension: (await orig<typeof import('@bike4mind/services')>()).userService.entersSuspension,
     adminUpdateUser: (...a: unknown[]) => mockAdminUpdateUser(...a),
     setThrottleTier: (...a: unknown[]) => mockSetThrottleTier(...a),
     updateUser: (...a: unknown[]) => mockUpdateUser(...a),
@@ -834,8 +835,31 @@ describe('PUT /api/users/:id/update - ends sessions on credential and account-st
         },
       })
     );
-    // The ban itself still succeeds.
+    // The ban itself still succeeds, and the admin is told what Stripe did.
     expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().subscriptionCancellation).toEqual({
+      canceled: ['sub_a'],
+      failed: [{ customerId: 'cus_org', subscriptionId: 'sub_b', reason: 'stripe down' }],
+    });
+  });
+
+  it('omits subscriptionCancellation when the cancel found nothing, and when no cancel ran', async () => {
+    adminEdit(BEFORE, { ...BEFORE, isBanned: true });
+    const banned = run({
+      user: ADMIN,
+      userId: 'target',
+      body: { isBanned: true, statusChangeReason: 'Repeated abuse reports' },
+    });
+    await banned.promise;
+    expect(mockCancelAccountSubscriptions).toHaveBeenCalledTimes(1);
+    expect(banned.res._getJSONData().subscriptionCancellation).toBeUndefined();
+
+    mockCancelAccountSubscriptions.mockClear();
+    adminEdit(BEFORE, { ...BEFORE });
+    const edited = run({ user: ADMIN, userId: 'target', body: { name: 'x' } });
+    await edited.promise;
+    expect(mockCancelAccountSubscriptions).not.toHaveBeenCalled();
+    expect(edited.res._getJSONData().subscriptionCancellation).toBeUndefined();
   });
 
   it('cancels on a moderation suspension, but not on a dispute flag alone', async () => {
@@ -852,10 +876,26 @@ describe('PUT /api/users/:id/update - ends sessions on credential and account-st
     expect(mockCancelAccountSubscriptions).not.toHaveBeenCalled();
   });
 
-  it('cancels no subscriptions for an edit that does not block the account', async () => {
-    adminEdit(BEFORE, { ...BEFORE, email: 'new@example.com' });
-    await run({ user: ADMIN, userId: 'target', body: { email: 'new@example.com' } }).promise;
+  it('audits and reports the cancel of a moderation-only suspension sent without a status reason', async () => {
+    adminEdit(BEFORE, { ...BEFORE, moderation: { status: 'suspended' } });
+    mockCancelAccountSubscriptions.mockResolvedValue({ canceled: ['sub_a'], failed: [] });
+    const { res, promise } = run({ user: ADMIN, userId: 'target', body: { moderationStatus: 'suspended' } });
+    await promise;
 
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().subscriptionCancellation).toEqual({ canceled: ['sub_a'], failed: [] });
+    expect(mockRecord).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: 'user.subscriptions.canceled', reason: undefined })
+    );
+  });
+
+  it('cancels no subscriptions for an edit that does not block the account', async () => {
+    adminEdit(BEFORE, { ...BEFORE, name: 'x' });
+    const { res, promise } = run({ user: ADMIN, userId: 'target', body: { name: 'x' } });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
     expect(mockCancelAccountSubscriptions).not.toHaveBeenCalled();
     expect(mockRecord).not.toHaveBeenCalledWith(
       expect.anything(),

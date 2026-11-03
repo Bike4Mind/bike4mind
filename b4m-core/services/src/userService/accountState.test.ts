@@ -10,6 +10,8 @@ import {
   AI_ACCESS_PENDING_REVIEW_MESSAGE,
   AI_ACCESS_REVOKED_MESSAGE,
   entersBlockedState,
+  entersSuspension,
+  suspensionReasons,
   isAiAccessRevoked,
   type AccountStateFields,
 } from './accountState';
@@ -79,6 +81,34 @@ describe('entersBlockedState', () => {
     ],
   ])('is false on %s', (_label, previous, next) => {
     expect(entersBlockedState(previous, next)).toBe(false);
+  });
+});
+
+describe('suspensionReasons', () => {
+  it('omits the dispute hold', () => {
+    expect(suspensionReasons({ isBanned: true, disputePending: true })).toEqual(['banned']);
+    expect(suspensionReasons({ disputePending: true })).toEqual([]);
+  });
+});
+
+describe('entersSuspension', () => {
+  it.each([
+    ['ban', { isBanned: true }],
+    ['suspension', { moderation: { status: 'suspended' as const } }],
+  ])('is true when the account becomes %s', (_label, next) => {
+    expect(entersSuspension(clean, next)).toBe(true);
+  });
+
+  it('is true when a suspension lands on a disputed account', () => {
+    expect(entersSuspension({ disputePending: true }, { disputePending: true, isBanned: true })).toBe(true);
+  });
+
+  it.each([
+    ['a dispute flag alone', clean, { disputePending: true }],
+    ['re-banning a banned account', { isBanned: true }, { isBanned: true }],
+    ['unbanning', { isBanned: true }, { isBanned: false }],
+  ])('is false on %s', (_label, previous, next) => {
+    expect(entersSuspension(previous, next)).toBe(false);
   });
 });
 

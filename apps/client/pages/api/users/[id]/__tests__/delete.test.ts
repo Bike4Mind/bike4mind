@@ -376,6 +376,27 @@ describe('DELETE /api/users/[id]/delete', () => {
       expect(mockPurge).toHaveBeenCalled();
     });
 
+    it('returns what the cancel did only when it canceled or failed something', async () => {
+      mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
+        await db.users.delete('u1');
+        return { id: 'u1' };
+      });
+      const failed = { customerId: 'cus_org', subscriptionId: 'sub_b', reason: 'stripe down' };
+      mockCancelSubscriptions.mockResolvedValue({ canceled: ['sub_a'], failed: [failed] });
+
+      const withCancel = await run();
+      await withCancel.call;
+      expect(withCancel.res._getJSONData()).toMatchObject({
+        id: 'u1',
+        subscriptionCancellation: { canceled: ['sub_a'], failed: [failed] },
+      });
+
+      mockCancelSubscriptions.mockResolvedValue({ canceled: [], failed: [] });
+      const quiet = await run();
+      await quiet.call;
+      expect(quiet.res._getJSONData().subscriptionCancellation).toBeUndefined();
+    });
+
     it('records the cancel on its own entry when the delete transaction fails after it', async () => {
       mockCancelSubscriptions.mockResolvedValue({ canceled: ['sub_a'], failed: [] });
       mockRepoDelete.mockRejectedValue(new Error('delete failed'));

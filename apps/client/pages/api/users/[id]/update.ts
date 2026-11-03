@@ -25,7 +25,12 @@ import { getClientIp, truncateIp } from '@bike4mind/server-utils/utils/ip';
 import * as z from 'zod';
 import { requireStepUp } from '@server/auth/stepUp';
 import { propagateAccountRisk } from '@server/billing/linkedAccounts';
-import { cancelAccountSubscriptions, subscriptionCancellationAudit } from '@server/billing/cancelAccountSubscriptions';
+import {
+  cancelAccountSubscriptions,
+  subscriptionCancellationAudit,
+  subscriptionCancellationResponse,
+  type AccountSubscriptionCancellation,
+} from '@server/billing/cancelAccountSubscriptions';
 import {
   diffProfileFields,
   profileFieldsSent,
@@ -37,6 +42,7 @@ import {
   isSameUserId,
   isSelfOrImpersonator,
   parseAdminActionReason,
+  readAdminActionReason,
   recordAdminActionFromRequest,
 } from '@server/utils/adminAudit';
 
@@ -44,6 +50,12 @@ const idParamSchema = z.object({ id: z.string() });
 
 const updateUserResponseSchema = selfUserProfileResponseSchema.extend({
   ignoredFields: z.array(z.string()).optional(),
+  subscriptionCancellation: z
+    .object({
+      canceled: z.array(z.string()),
+      failed: z.array(z.object({ customerId: z.string(), subscriptionId: z.string().nullable(), reason: z.string() })),
+    })
+    .optional(),
 });
 
 /** Fields that change how the account signs in; see the credential gates in the handler. */
@@ -192,15 +204,6 @@ function adminEditSessionEndReason(
   if (passwordSet) return 'password_changed';
   if (after.email !== before.email) return 'email_changed';
   return undefined;
-}
-
-/**
- * True when the edit newly bans or suspends the account. A dispute flag alone does not count: it is
- * a reversible payment hold (a won dispute clears it), and the dispute webhook cancels nothing either.
- */
-function entersSuspension(previous: AccountStateSnapshot, next: AccountStateSnapshot): boolean {
-  const before = userService.accountBlockReasons(previous);
-  return userService.accountBlockReasons(next).some(reason => reason !== 'disputePending' && !before.includes(reason));
 }
 
 const handler = baseApi().put(
@@ -403,16 +406,19 @@ const handler = baseApi().put(
         );
       }
 
+      let cancellation: AccountSubscriptionCancellation | null = null;
       // A banned or suspended account must not renew. Stripe failures are logged and audited, never
       // undo the block.
-      if (blockSnapshot && blockUpdated && entersSuspension(blockSnapshot, blockUpdated)) {
-        const cancellation = await cancelAccountSubscriptions({ userId, reason: 'suspended' }, req.logger);
+      if (blockSnapshot && blockUpdated && userService.entersSuspension(blockSnapshot, blockUpdated)) {
+        cancellation = await cancelAccountSubscriptions({ userId, reason: 'suspended' }, req.logger);
         const cancellationEntry = subscriptionCancellationAudit(cancellation, 'suspended');
         if (cancellationEntry) {
           await recordAdminActionFromRequest(req, {
             ...cancellationEntry,
             target: auditTarget,
-            reason: statusChangeReason ?? parseAdminActionReason(body.statusChangeReason),
+            // A moderation-only suspension carries no status reason; this runs after the commit and
+            // the Stripe cancel, so it must not throw.
+            reason: statusChangeReason ?? readAdminActionReason(body.statusChangeReason),
           });
         }
       }
@@ -429,6 +435,8 @@ const handler = baseApi().put(
         await handleTelemetryConsentChange(userId, previousTelemetryLevel, incomingTelemetryLevel, req);
       }
 
+      const subscriptionCancellationBody = subscriptionCancellationResponse(cancellation);
+
       // Double-check we have the latest state
       const finalUser = await User.findById(userId);
       // Admin branch: symmetric with the admin view of GET /users/[id].
@@ -441,7 +449,13 @@ const handler = baseApi().put(
       return respond(
         res,
         updateUserResponseSchema.nullable(),
-        safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser
+        safeUser && (ignoredFields.length > 0 || subscriptionCancellationBody.subscriptionCancellation)
+          ? {
+              ...safeUser,
+              ...(ignoredFields.length > 0 && { ignoredFields }),
+              ...subscriptionCancellationBody,
+            }
+          : safeUser
       );
     } else {
       // Parse with the self-service schema -- excludes isAdmin, tags, email, etc.

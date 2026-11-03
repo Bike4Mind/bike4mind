@@ -3,6 +3,7 @@ import { Checkbox, Sheet, Typography } from '@mui/joy';
 import { ActionDialog, ADMIN_REASON_PRESETS, undoAdminReason, useUndoToast } from '../../../shared';
 import { formatCredits } from './creditAdjustment';
 import { useAdminUserUpdate } from './useAdminUserUpdate';
+import { warnSubscriptionCancelFailures } from './warnSubscriptionCancelFailures';
 import { BALANCE_REFRESH_FAILED, useRefreshedUser } from './useRefreshedUser';
 import type { ProfileDialogProps } from './profileActions';
 import { displayName } from '../userProfileModel';
@@ -22,12 +23,13 @@ export const SuspendDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onA
 
   const handleConfirm = async (reason: string) => {
     const removed = zeroCredits && balance > 0 ? balance : 0;
-    await update({
+    const response = await update({
       isBanned: true,
       statusChangeReason: reason,
       ...(removed > 0 && { currentCredits: 0, creditReason: reason }),
     });
     onClose();
+    warnSubscriptionCancelFailures(response);
     showUndo({
       // Undo lifts the ban only: Stripe cannot reinstate a subscription the suspend canceled.
       message: `${removed > 0 ? 'Account suspended, credits set to 0' : 'Account suspended'}. Undo does not restore canceled subscriptions.`,

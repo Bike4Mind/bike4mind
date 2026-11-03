@@ -332,6 +332,15 @@ describe('listAdminSubscriptions', () => {
       expect(alertOf(subscriptions, onGoneOrgOwner._id)).toBe('owner_deleted');
     });
 
+    it('does not flag an owner whose only block is a pending dispute', async () => {
+      const disputed = await seedUser('disputed', { disputePending: true });
+      const onDisputed = await seedSubscription(String(disputed._id));
+
+      const { subscriptions } = await listAdminSubscriptions(params, NOW);
+
+      expect(alertOf(subscriptions, onDisputed._id)).toBeNull();
+    });
+
     it('does not flag an ended subscription or an admin grant', async () => {
       const banned = await seedUser('banned', { isBanned: true });
       const ended = await seedSubscription(String(banned._id), { status: 'canceled', canceledAt: NOW });

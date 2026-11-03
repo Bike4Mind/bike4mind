@@ -19,6 +19,7 @@ import {
 } from '@client/app/utils/adminUsersBulk';
 import { usersBulkExecuteDeps, usersBulkUndoDeps } from './adapters';
 import { executeAdminUsersBulk, type ExecuteDeps } from './execute';
+import { SUBSCRIPTION_CANCEL_GRACE_MS } from './ports';
 import { SUPERSEDED_MESSAGE, undoAdminUsersBulk } from './undo';
 import { cohortHashOf, type BulkUser } from './resolve';
 
@@ -247,7 +248,10 @@ describe('users bulk actions on a real replica set', () => {
       canceledSubscriptions: 1,
       subscriptionCancelFailures: [{ userId: refused, error: 'stripe down' }],
     });
-    expect(cancelAccountSubscriptions).toHaveBeenCalledWith({ userId: paying, reason: 'suspended' }, expect.anything());
+    expect(cancelAccountSubscriptions).toHaveBeenCalledWith(
+      { userId: paying, reason: 'suspended', deadline: expect.any(Number) },
+      expect.anything()
+    );
     // The ban stands even where Stripe refused the cancel.
     expect(await userState(refused)).toMatchObject({ isBanned: true });
     const entries = await AdminAuditLogModel.find({ action: 'user.subscriptions.canceled' }).lean();
@@ -270,11 +274,28 @@ describe('users bulk actions on a real replica set', () => {
     const other = await seedUser();
 
     await run(adminId, request([banned], { type: 'contain' }, [banned]));
-    expect(cancelAccountSubscriptions).toHaveBeenCalledWith({ userId: banned, reason: 'contained' }, expect.anything());
+    expect(cancelAccountSubscriptions).toHaveBeenCalledWith(
+      { userId: banned, reason: 'contained', deadline: expect.any(Number) },
+      expect.anything()
+    );
 
     cancelAccountSubscriptions.mockClear();
     await run(adminId, request([other], { type: 'restrict' }, [other]));
     expect(cancelAccountSubscriptions).not.toHaveBeenCalled();
+  });
+
+  it('gives each cancel a deadline of the chunk budget plus the grace', async () => {
+    const adminId = await seedUser({ isAdmin: true });
+    const target = await seedUser();
+    cancelAccountSubscriptions.mockResolvedValue({ canceled: [], failed: [] });
+
+    const before = Date.now();
+    await run(adminId, request([target], { type: 'suspend' }, [target]), { budgetMs: 5_000 });
+    const after = Date.now();
+
+    const { deadline } = cancelAccountSubscriptions.mock.calls[0][0] as { deadline: number };
+    expect(deadline).toBeGreaterThanOrEqual(before + 5_000 + SUBSCRIPTION_CANCEL_GRACE_MS);
+    expect(deadline).toBeLessThanOrEqual(after + 5_000 + SUBSCRIPTION_CANCEL_GRACE_MS);
   });
 
   it('cancels for an already-suspended user with nothing else to change, reported though skipped', async () => {

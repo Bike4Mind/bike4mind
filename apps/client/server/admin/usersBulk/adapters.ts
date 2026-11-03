@@ -206,9 +206,12 @@ export function usersBulkExecuteDeps(req: AuditRequest, reason: string, logger?:
         { userId },
         { db: { realtimeConnections: realtimeConnectionRepository }, logger }
       ),
-    cancelSubscriptions: async (user, action, batchId) => {
+    cancelSubscriptions: async (user, action, batchId, deadline) => {
       const cancelReason = action === 'contain' ? 'contained' : 'suspended';
-      const result = await cancelAccountSubscriptions({ userId: user.id, reason: cancelReason }, logger ?? console);
+      const result = await cancelAccountSubscriptions(
+        { userId: user.id, reason: cancelReason, deadline },
+        logger ?? console
+      );
       const entry = subscriptionCancellationAudit(result, cancelReason);
       // Best-effort per the catalogue: the ban is committed, so a lost entry must not fail the user.
       if (entry) {

@@ -57,7 +57,10 @@ describe('cancelAccountSubscriptions', () => {
       { prorate: false, cancellation_details: { comment: expect.stringContaining('suspended') } },
       { timeout: expect.any(Number) }
     );
-    expect(mocks.subscriptionsList).toHaveBeenCalledWith(expect.anything(), { timeout: expect.any(Number) });
+    expect(mocks.subscriptionsList).toHaveBeenCalledWith(
+      { customer: 'cus_user', limit: 100 },
+      { timeout: expect.any(Number) }
+    );
     expect(mocks.voidOpenSubscriptionInvoices).toHaveBeenCalledWith('sub_org', { timeoutMs: expect.any(Number) });
     expect(logger.error).not.toHaveBeenCalled();
   });
@@ -102,6 +105,67 @@ describe('cancelAccountSubscriptions', () => {
     const result = await cancelAccountSubscriptions({ userId: 'user-1', reason: 'suspended' }, logger);
 
     expect(result).toEqual({ canceled: ['sub_a'], failed: [] });
+    expect(logger.info).toHaveBeenCalledWith('[Billing] could not void open invoices after canceling a subscription', {
+      subscriptionId: 'sub_a',
+      error: 'list failed',
+    });
+  });
+
+  it('logs the invoices voided after a cancel', async () => {
+    mocks.subscriptionsList.mockResolvedValue(subs(['sub_a', 'past_due']));
+    mocks.voidOpenSubscriptionInvoices.mockResolvedValue({ voided: ['in_1', 'in_2'], failed: ['in_3'] });
+
+    await cancelAccountSubscriptions({ userId: 'user-1', reason: 'suspended' }, logger);
+
+    expect(logger.info).toHaveBeenCalledWith('[Billing] voided open invoices after canceling a subscription', {
+      subscriptionId: 'sub_a',
+      voided: 2,
+      failed: 1,
+    });
+  });
+
+  it('makes no Stripe request past the deadline and reports every unit left', async () => {
+    mocks.findOrgs.mockResolvedValue([{ stripeCustomerId: 'cus_org' }]);
+
+    const result = await cancelAccountSubscriptions(
+      { userId: 'user-1', reason: 'suspended', deadline: Date.now() - 1 },
+      logger
+    );
+
+    expect(result).toEqual({
+      canceled: [],
+      failed: [
+        { customerId: 'cus_user', subscriptionId: null, reason: 'time budget exhausted' },
+        { customerId: 'cus_org', subscriptionId: null, reason: 'time budget exhausted' },
+      ],
+    });
+    expect(mocks.subscriptionsList).not.toHaveBeenCalled();
+    expect(mocks.subscriptionsCancel).not.toHaveBeenCalled();
+    expect(mocks.voidOpenSubscriptionInvoices).not.toHaveBeenCalled();
+  });
+
+  it('stops cancelling once the deadline passes mid-page, failing the rest without voiding', async () => {
+    mocks.subscriptionsList.mockResolvedValue(subs(['sub_a', 'active'], ['sub_b', 'active']));
+    const now = vi.spyOn(Date, 'now');
+    now.mockReturnValue(1_000);
+    mocks.subscriptionsCancel.mockImplementation(async () => {
+      now.mockReturnValue(5_000);
+      return {};
+    });
+
+    const result = await cancelAccountSubscriptions({ userId: 'user-1', reason: 'suspended', deadline: 3_000 }, logger);
+    now.mockRestore();
+
+    expect(result).toEqual({
+      canceled: ['sub_a'],
+      failed: [{ customerId: 'cus_user', subscriptionId: 'sub_b', reason: 'time budget exhausted' }],
+    });
+    expect(mocks.subscriptionsCancel).toHaveBeenCalledTimes(1);
+    expect(mocks.subscriptionsCancel).toHaveBeenCalledWith('sub_a', expect.anything(), {
+      timeout: 2_000,
+      maxNetworkRetries: 0,
+    });
+    expect(mocks.voidOpenSubscriptionInvoices).not.toHaveBeenCalled();
   });
 
   it('does nothing without Stripe or without a customer', async () => {

@@ -26,7 +26,12 @@ import { emitBillingEvent } from '@server/analytics/signupEvents';
 import { wholeDaysBetween } from '@server/analytics/billingEventDetails';
 import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
 import { resolveUserType } from '@server/analytics/resolveUserType';
-import { cancelAccountSubscriptions, subscriptionCancellationAudit } from '@server/billing/cancelAccountSubscriptions';
+import {
+  cancelAccountSubscriptions,
+  subscriptionCancellationAudit,
+  subscriptionCancellationResponse,
+  type AccountSubscriptionCancellation,
+} from '@server/billing/cancelAccountSubscriptions';
 
 const deletedUserTarget = (id: string, user: Pick<IUserDocument, 'name' | 'username' | 'email'> | null) => ({
   kind: 'user' as const,
@@ -79,6 +84,7 @@ const handler = baseApi().delete(
     let integrationGrants: UserIntegrationGrants | null = null;
     // The account as it stood before the delete, for account_deleted below.
     let deletedAccount: IUserDocument | null = null;
+    let subscriptionCancellation: AccountSubscriptionCancellation | null = null;
     const users: IUserRepository = Object.create(userRepository, {
       delete: {
         value: async (id: string) => {
@@ -90,6 +96,7 @@ const handler = baseApi().delete(
           // Before the delete: the Stripe customer ids live on the row. A deleted account must never
           // renew, but a Stripe failure must not block the delete, so it is reported in the entry below.
           const cancellation = await cancelAccountSubscriptions({ userId: id, reason: 'account_deleted' }, req.logger);
+          subscriptionCancellation = cancellation;
           const canceledEntry = subscriptionCancellationAudit(cancellation, 'account_deleted');
           // The delete and its audit entry commit together; cascades and notifications run after.
           let result: Awaited<ReturnType<typeof userRepository.delete>>;
@@ -171,7 +178,7 @@ const handler = baseApi().delete(
       }
     }
 
-    return res.json(toSafeUser(deletedUser));
+    return res.json({ ...toSafeUser(deletedUser), ...subscriptionCancellationResponse(subscriptionCancellation) });
   })
 );
 
