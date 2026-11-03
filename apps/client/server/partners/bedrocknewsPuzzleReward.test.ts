@@ -51,6 +51,12 @@ const givenSpend = ({ onDate = 0, last24h = 0 }: { onDate?: number; last24h?: nu
 const matches = () => mockAggregate.mock.calls.map(([pipeline]) => pipeline[0].$match as Record<string, unknown>);
 const capMatch = () => matches().find(match => 'metadata.puzzleDate' in match);
 const budgetMatch = () => matches().find(match => !('metadata.puzzleDate' in match));
+const writeFor = (reason: string) => mockAddCredits.mock.calls.find(([params]) => params.reason === reason)?.[0];
+const rungWrite = () => writeFor(BEDROCKNEWS_PUZZLE_REASON);
+const bonusWrite = () => writeFor(BEDROCKNEWS_FIRST_SOLVE_REASON);
+// Answers each ledger lookup by its transactionId; unlisted keys find no row.
+const givenRows = (rows: Record<string, unknown>) =>
+  mockFindOne.mockImplementation(({ transactionId }: { transactionId: string }) => lean(rows[transactionId] ?? null));
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -73,7 +79,7 @@ describe('grantPuzzleReward', () => {
     const result = await grantPuzzleReward({ ...INPUT, tier, hard });
 
     expect(result).toEqual({ ok: true, granted: true, credits: amount, balance: 1000, firstSolveCredits: 500 });
-    expect(mockAddCredits.mock.calls[0][0]).toEqual({
+    expect(rungWrite()).toEqual({
       ownerId: USER_ID,
       ownerType: 'User',
       type: 'generic_add',
@@ -84,6 +90,7 @@ describe('grantPuzzleReward', () => {
       metadata: { product: 'bedrocknews', game: 'headword', puzzleDate: DATE, tier, hard },
     });
     expect(mockAddCredits.mock.calls[0][1].db.creditLots).toBeDefined();
+    expect(mockAddCredits.mock.calls[1][1].db.creditLots).toBeDefined();
   });
 
   it('reads the seven settings uncached and falls back to their defaults when none is stored', async () => {
@@ -101,7 +108,7 @@ describe('grantPuzzleReward', () => {
       ],
       skipCache: true,
     });
-    expect(mockAddCredits.mock.calls[0][0].credits).toBe(40);
+    expect(rungWrite()?.credits).toBe(40);
   });
 
   it('uses the stored multiplier for hard mode only, rounding a fractional amount', async () => {
@@ -131,8 +138,19 @@ describe('grantPuzzleReward', () => {
       await expect(grantPuzzleReward(INPUT)).resolves.toMatchObject({ granted: false, credits: 40 });
     });
 
-    it('treats a concurrent duplicate as a replay: stored amount, no bonus attempt', async () => {
-      mockFindOne.mockReturnValueOnce(lean(null)).mockReturnValueOnce(lean({ credits: 40 }));
+    it('answers a paid rung even after the account was blocked, so the caller can still record it', async () => {
+      givenUser({ ...eligibleUser, isBanned: true });
+      mockFindOne.mockReturnValue(lean({ credits: 40 }));
+
+      await expect(grantPuzzleReward(INPUT)).resolves.toMatchObject({ ok: true, granted: false, credits: 40 });
+      expect(mockAddCredits).not.toHaveBeenCalled();
+    });
+
+    it('treats a concurrent duplicate as a replay: stored amount', async () => {
+      mockFindOne
+        .mockReturnValueOnce(lean(null))
+        .mockReturnValueOnce(lean({ _id: 'bonus' }))
+        .mockReturnValueOnce(lean({ credits: 40 }));
       mockAddCredits.mockResolvedValue({ creditTransactionId: undefined });
       mockFindById.mockReturnValueOnce(lean(eligibleUser)).mockReturnValueOnce(lean({ currentCredits: 1040 }));
 
@@ -148,7 +166,8 @@ describe('grantPuzzleReward', () => {
       const result = await grantPuzzleReward(INPUT);
 
       expect(mockAddCredits).toHaveBeenCalledTimes(2);
-      expect(mockAddCredits.mock.calls[1][0]).toMatchObject({
+      expect(mockFindOne).toHaveBeenCalledWith({ transactionId: FIRST_SOLVE_KEY });
+      expect(bonusWrite()).toMatchObject({
         ownerId: USER_ID,
         ownerType: 'User',
         type: 'generic_add',
@@ -159,7 +178,28 @@ describe('grantPuzzleReward', () => {
       expect(result).toMatchObject({ granted: true, credits: 40, firstSolveCredits: 500 });
     });
 
-    it('is not paid again on a later puzzle: the duplicate key answers firstSolveCredits 0', async () => {
+    // Bonus first: a rung write that fails after it leaves the rung unpaid, so the retry pays the rung.
+    it('is written before the rung', async () => {
+      await grantPuzzleReward(INPUT);
+
+      expect(mockAddCredits.mock.calls.map(([params]) => params.reason)).toEqual([
+        BEDROCKNEWS_FIRST_SOLVE_REASON,
+        BEDROCKNEWS_PUZZLE_REASON,
+      ]);
+    });
+
+    it('is neither written nor reserved against the budget once the player has it', async () => {
+      givenRows({ [FIRST_SOLVE_KEY]: { _id: 'bonus' } });
+      givenSpend({ last24h: 199_960 });
+
+      const result = await grantPuzzleReward({ ...INPUT, puzzleDate: '2026-11-03' });
+
+      expect(result).toMatchObject({ granted: true, credits: 40, firstSolveCredits: 0 });
+      expect(mockAddCredits).toHaveBeenCalledTimes(1);
+      expect(bonusWrite()).toBeUndefined();
+    });
+
+    it('answers firstSolveCredits 0 when a concurrent grant wrote the bonus first', async () => {
       mockAddCredits.mockImplementation(({ transactionId }: { transactionId: string }) =>
         Promise.resolve({ creditTransactionId: transactionId === FIRST_SOLVE_KEY ? undefined : 'tx1' })
       );
@@ -240,7 +280,7 @@ describe('grantPuzzleReward', () => {
       expect(match.createdAt.$gte.getTime()).toBeLessThanOrEqual(Date.now() - DAY_MS);
     });
 
-    // The check reserves room for the 500 first-solve bonus on top of the 40 rung.
+    // The check reserves room for the 500 first-solve bonus on top of the 40 rung while it is unpaid.
     it.each([
       [199_460, true],
       [199_461, false],
@@ -286,7 +326,7 @@ describe('grantPuzzleReward', () => {
       givenUser(user);
 
       await expect(grantPuzzleReward(INPUT)).resolves.toEqual({ ok: false, status: 403, code: 'USER_NOT_ELIGIBLE' });
-      expect(mockFindOne).not.toHaveBeenCalled();
+      expect(mockGetSettingsMap).not.toHaveBeenCalled();
       expect(mockAddCredits).not.toHaveBeenCalled();
     });
 

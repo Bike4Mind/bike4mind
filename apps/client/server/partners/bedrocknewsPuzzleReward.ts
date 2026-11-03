@@ -84,8 +84,9 @@ async function currentBalance(userId: string): Promise<number> {
 }
 
 /**
- * The ledger row's transactionId is the only idempotency gate. A replay is answered before the caps
- * so a cap the first payout already consumed cannot turn a retry into a refusal.
+ * The ledger row's transactionId is the only idempotency gate. A replay is answered before the
+ * eligibility check and the caps, so neither a later account block nor a cap the first payout already
+ * consumed can turn a retry of a paid rung into a refusal.
  */
 export async function grantPuzzleReward({
   userId,
@@ -97,7 +98,6 @@ export async function grantPuzzleReward({
     .select('emailVerified isSynthetic deletedAt isBanned disputePending moderation.status currentCredits')
     .lean<RewardUser>();
   if (!user) return { ok: false, status: 404, code: 'USER_NOT_FOUND' };
-  if (!isPayable(user)) return { ok: false, status: 403, code: 'USER_NOT_ELIGIBLE' };
 
   const transactionId = `bedrocknews-puzzle:${userId}:${puzzleDate}:${tier}`;
   const replayed = await CreditTransaction.findOne({ transactionId }).select('credits').lean<{ credits: number }>();
@@ -110,6 +110,7 @@ export async function grantPuzzleReward({
       firstSolveCredits: 0,
     };
   }
+  if (!isPayable(user)) return { ok: false, status: 403, code: 'USER_NOT_ELIGIBLE' };
 
   const settings = await getSettingsMap(
     { adminSettings: adminSettingsRepository },
@@ -134,14 +135,36 @@ export async function grantPuzzleReward({
     return { ok: false, status: 403, code: 'DAILY_CAP' };
   }
 
-  // The bonus counts toward the budget too; a new player's first grant may add it on top of the rung.
-  const bonus = setting('BedrockNewsFirstSolveCredits');
+  // The bonus counts toward the budget too, but only for a player who has not been paid it yet.
+  const firstSolveTransactionId = `bedrocknews-first-solve:${userId}`;
+  const bonusPaid = await CreditTransaction.findOne({ transactionId: firstSolveTransactionId }).select('_id').lean();
+  const bonus = bonusPaid ? 0 : setting('BedrockNewsFirstSolveCredits');
   const paidInWindow = await sumCredits({
     reason: { $in: [BEDROCKNEWS_PUZZLE_REASON, BEDROCKNEWS_FIRST_SOLVE_REASON] },
     createdAt: { $gte: new Date(Date.now() - DAY_MS) },
   });
   if (paidInWindow + amount + bonus > setting('BedrockNewsRewardsDailyBudget')) {
     return { ok: false, status: 403, code: 'BUDGET_EXHAUSTED' };
+  }
+
+  // The bonus is written before the rung: a failed rung write leaves the rung unpaid, so the caller's
+  // retry pays it, whereas a bonus written after a paid rung would be lost to the replay branch.
+  let firstSolveCredits = 0;
+  if (bonus > 0) {
+    const bonusWrite = await creditService.addCreditsWithLedgerRow(
+      {
+        ownerId: userId,
+        ownerType: CreditHolderType.User,
+        type: 'generic_add',
+        credits: bonus,
+        reason: BEDROCKNEWS_FIRST_SOLVE_REASON,
+        transactionId: firstSolveTransactionId,
+        description: 'Headword: first solved word bonus',
+        metadata: { product: 'bedrocknews', game: 'headword', puzzleDate, tier },
+      },
+      LEDGER_ADAPTERS
+    );
+    if (bonusWrite.creditTransactionId) firstSolveCredits = bonus;
   }
 
   const puzzleWrite = await creditService.addCreditsWithLedgerRow(
@@ -163,26 +186,8 @@ export async function grantPuzzleReward({
       granted: false,
       credits: await storedCredits(transactionId),
       balance: await currentBalance(userId),
-      firstSolveCredits: 0,
+      firstSolveCredits,
     };
-  }
-
-  let firstSolveCredits = 0;
-  if (bonus > 0) {
-    const bonusWrite = await creditService.addCreditsWithLedgerRow(
-      {
-        ownerId: userId,
-        ownerType: CreditHolderType.User,
-        type: 'generic_add',
-        credits: bonus,
-        reason: BEDROCKNEWS_FIRST_SOLVE_REASON,
-        transactionId: `bedrocknews-first-solve:${userId}`,
-        description: 'Headword: first solved word bonus',
-        metadata: { product: 'bedrocknews', game: 'headword', puzzleDate, tier },
-      },
-      LEDGER_ADAPTERS
-    );
-    if (bonusWrite.creditTransactionId) firstSolveCredits = bonus;
   }
 
   return { ok: true, granted: true, credits: amount, balance: await currentBalance(userId), firstSolveCredits };
