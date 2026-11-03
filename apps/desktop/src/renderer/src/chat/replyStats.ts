@@ -253,9 +253,11 @@ export function liveReplyStats(turn: TurnProgress, now: number, earlier?: ChatRe
   const open = turn.thinkingSince !== undefined ? Math.max(0, now - turn.thinkingSince) : 0;
   const thought = turn.thinkingMs !== undefined || turn.thinkingSince !== undefined;
   const reasoningMs = thought ? (earlier?.reasoningMs ?? 0) + (turn.thinkingMs ?? 0) + open : earlier?.reasoningMs;
+  const { firstTokenAt, requestAt } = turn;
+  // Never from the turn's start, which would count its setup as waiting on the model.
   const firstTokenMs =
     earlier?.firstTokenMs ??
-    (turn.firstTokenAt !== undefined ? Math.max(0, turn.firstTokenAt - (turn.requestAt ?? turn.startedAt)) : undefined);
+    (firstTokenAt !== undefined && typeof requestAt === 'number' ? Math.max(0, firstTokenAt - requestAt) : undefined);
   return {
     totalMs: 0,
     modelMs: 0,
