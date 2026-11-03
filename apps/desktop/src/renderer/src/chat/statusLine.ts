@@ -43,6 +43,12 @@ export interface TurnProgress {
    * Absent until the first event, which is what `startedAt` stands in for.
    */
   lastEventAt?: number;
+  /** Epoch ms the model's first output of any kind arrived, for the stats rail; see withPhase. */
+  firstTokenAt?: number;
+  /** Thinking time of the phases that have ended, in ms; see withPhase. */
+  thinkingMs?: number;
+  /** Epoch ms the phase in flight started thinking, while it still is. */
+  thinkingSince?: number;
 }
 
 /**

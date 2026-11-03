@@ -32,7 +32,8 @@ import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
 import type { ModelsInUse } from '../models/InstalledTab';
 import { ModelsScreen } from '../models/ModelsScreen';
 import { useModelServers } from '../models/useModelHub';
-import { GlobeIcon, PanelRightIcon, PhoneIcon, SearchIcon, TerminalIcon } from './icons';
+import { GlobeIcon, PanelRightIcon, PhoneIcon, SearchIcon, StatsIcon, TerminalIcon } from './icons';
+import { railFitsBesideThread, setReplyStatsRail, useReplyStatsPrefs } from './replyStatsPrefs';
 import { MessageThread } from './MessageThread';
 import { chatShellRootSx, columnStackSx, contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
@@ -562,6 +563,10 @@ export function ChatShell({
     !opening && !initialCodeSetup && conversation.session?.mode === 'code' ? conversation.session.project : undefined;
   const panelDocked = threadRegionWidth === null || panelFitsBesideThread(threadRegionWidth);
   const panelShown = !!panelProject && (panelDocked ? panelPrefs.open : panelPopoverOpen);
+  // Unmeasured reads as too narrow, the reverse of the panel: a rail drawn before the width is
+  // known could overhang the sidebar for a frame, where the footer it falls back to cannot.
+  const statsRailFits = threadRegionWidth !== null && railFitsBesideThread(threadRegionWidth);
+  const statsRailOn = useReplyStatsPrefs().rail;
   const bindingErrorHidden =
     !!panelProject && !!conversation.project.error && (!panelShown || panelPrefs.collapsed.has('environment'));
   const { toggleOpen: togglePanelOpen } = panelPrefs;
@@ -1238,6 +1243,28 @@ export function ChatShell({
                   </IconButton>
                 </Tooltip>
               )}
+              {/* Only while the rail fits: narrower, the stats are in each reply's hover footer
+                  whichever way this is set, so a button here would do nothing visible. */}
+              {statsRailFits && (
+                <Tooltip
+                  size="sm"
+                  variant="soft"
+                  placement="bottom-end"
+                  title={statsRailOn ? 'Hide reply stats' : 'Show reply stats'}
+                >
+                  <IconButton
+                    size="sm"
+                    variant={statsRailOn ? 'soft' : 'plain'}
+                    color="neutral"
+                    aria-pressed={statsRailOn}
+                    aria-label={statsRailOn ? 'Hide reply stats' : 'Show reply stats'}
+                    onClick={() => setReplyStatsRail(!statsRailOn)}
+                    data-testid="chat-toggle-reply-stats-btn"
+                  >
+                    <StatsIcon />
+                  </IconButton>
+                </Tooltip>
+              )}
             </Box>
           </Box>
 
@@ -1336,6 +1363,8 @@ export function ChatShell({
                           onMove={background.moveToBackground}
                           onContinue={() => void conversation.continueReply()}
                           status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
+                          statsRail={statsRailFits && statsRailOn}
+                          liveTurn={conversation.turn}
                           // At the foot of the thread rather than above the composer: a background command is
                           // something this conversation started, so it reads as the last thing that happened
                           // in it. It scrolls with the transcript, which is the trade - the panel is reached

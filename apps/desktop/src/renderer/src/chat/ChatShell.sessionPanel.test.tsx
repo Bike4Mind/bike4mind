@@ -14,6 +14,7 @@ import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
+import { reloadReplyStatsPrefs } from './replyStatsPrefs';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -457,5 +458,48 @@ describe('the shell layout', () => {
     ] as ChatMessage[];
     await open('bound');
     expect(get('chat-thread').contains(get('session-panel'))).toBe(false);
+  });
+});
+
+describe('the reply stats rail in the shell', () => {
+  const at = '2026-10-01T00:00:00.000Z';
+  const stats = { startedAt: 0, endedAt: 4000, totalMs: 4000, modelMs: 4000, streamMs: 3000, toolMs: 0 };
+
+  beforeEach(() => {
+    reloadReplyStatsPrefs();
+    transcript = [
+      { id: 'u1', role: 'user', content: 'A question', createdAt: at },
+      { id: 'a1', role: 'assistant', content: 'An answer', createdAt: at, stats, usage: { outputTokens: 120 } },
+    ] as ChatMessage[];
+  });
+
+  it('draws the rail and its header toggle while the rail fits, inside the scroller', async () => {
+    paneWidth(1600);
+    await open('chatting', 'chat');
+
+    expect(get('chat-toggle-reply-stats-btn').getAttribute('aria-pressed')).toBe('true');
+    expect(get('chat-thread').contains(get('chat-reply-stats-rail'))).toBe(true);
+    expect(find('chat-message-cost')).toBeNull();
+    expect(escapingAbsolutes()).toEqual([]);
+  });
+
+  it('drops both below the breakpoint, and the stats go back to the hover footer', async () => {
+    paneWidth(1159);
+    await open('chatting', 'chat');
+
+    expect(find('chat-toggle-reply-stats-btn')).toBeNull();
+    expect(find('chat-reply-stats-rail')).toBeNull();
+    expect(get('chat-message-cost').textContent).toContain('4.0s total');
+  });
+
+  it('turns the rail off from the header and remembers it', async () => {
+    paneWidth(1600);
+    await open('chatting', 'chat');
+    await act(async () => get('chat-toggle-reply-stats-btn').click());
+
+    expect(find('chat-reply-stats-rail')).toBeNull();
+    expect(get('chat-toggle-reply-stats-btn').getAttribute('aria-pressed')).toBe('false');
+    expect(get('chat-message-cost').textContent).toContain('120 tokens');
+    expect(window.localStorage.getItem('b4m.chat.replyStats.rail')).toBe('0');
   });
 });
