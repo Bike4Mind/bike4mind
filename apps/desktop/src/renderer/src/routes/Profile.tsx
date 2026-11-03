@@ -45,11 +45,8 @@ function SignInPrompt({ onBack }: { onBack?: () => void }) {
 }
 
 /**
- * Signed out: the sign-in prompt, and below it the self-hosted model usage this device's own
- * conversations hold. Only the prompt, as before, until there is a local reply to show.
- *
- * Only a `device` answer is drawn. Some signed-out states still name an account, and chat then
- * reads that account's folder, whose figures do not belong on a signed-out screen.
+ * Signed out: the sign-in prompt, and below it this device's self-hosted model usage once it has
+ * a local reply. Only a `device` answer is drawn; a named account's folder is not this screen's.
  */
 export function SignedOutProfile({ scopeKey, onBack }: { scopeKey: string; onBack: () => void }) {
   const [windowId, setWindowId] = useState<UsageWindowId>('last-24-hours');
@@ -58,18 +55,21 @@ export function SignedOutProfile({ scopeKey, onBack }: { scopeKey: string; onBac
   const local = useLocalUsage(windowId, reload, scopeKey);
   const shown = local && (!local.ok || local.usage.scope === 'device') ? local : null;
   const usage = shown?.ok ? shown.usage : null;
-  // Sticky for this sign-in state (the route remounts this on a change), so a failed refresh
-  // keeps the page and shows its error rather than dropping back to the bare prompt.
+  // Sticky for this sign-in state, so a failed refresh keeps the page and shows its error.
   if (!hasLocal && usage && usage.allTimeReplies > 0) setHasLocal(true);
-
-  // Blank for the one local read, so the screen does not open on the prompt and then jump.
-  if (!local)
-    return <Box sx={{ minHeight: '100vh', bgcolor: 'background.body' }} data-testid="profile-local-loading" />;
 
   if (!hasLocal && !(usage && usage.allTimeReplies > 0)) {
     return (
       <Centered>
         <SignInPrompt onBack={onBack} />
+        {!local && (
+          <Stack direction="row" spacing={1} alignItems="center" data-testid="profile-local-loading">
+            <CircularProgress size="sm" />
+            <Typography level="body-sm" textColor="text.tertiary">
+              Reading self-hosted model usage...
+            </Typography>
+          </Stack>
+        )}
         {shown && !shown.ok && (
           <Typography level="body-sm" color="warning" data-testid="profile-local-error">
             {shown.error}

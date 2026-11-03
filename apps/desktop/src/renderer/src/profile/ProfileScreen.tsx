@@ -131,7 +131,8 @@ export function ProfileScreen({ state, onClose }: { state: AuthState; onClose: (
   const [reload, setReload] = useState(0);
   const { result, refresh } = useAccountUsage(windowId);
   const profile = useAccountProfile(reload);
-  const local = useLocalUsage(windowId, reload, `${state.environment.url}\n${state.user?.id ?? ''}`);
+  const answer = useLocalUsage(windowId, reload, `${state.environment.url}\n${state.user?.id ?? ''}`);
+  const local = answer?.ok && answer.usage.scope !== 'account' ? null : answer;
 
   const usage = result?.ok ? result.usage : null;
 

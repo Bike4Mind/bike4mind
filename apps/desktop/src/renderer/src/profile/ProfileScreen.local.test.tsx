@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import type { AuthState } from '@shared/auth';
 import type { AccountUsageResult, LocalUsageResult } from '@shared/usage';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { localUsageFixture } from './localUsageFixture';
+import { localUsageFixture as scopedFixture } from './localUsageFixture';
 import { ProfileScreen } from './ProfileScreen';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -19,6 +19,8 @@ window.matchMedia ??= ((query: string) => ({
   removeEventListener: () => {},
   dispatchEvent: () => false,
 })) as typeof window.matchMedia;
+
+const localUsageFixture = (totals: Parameters<typeof scopedFixture>[0] = {}) => scopedFixture(totals, 'account');
 
 const STATE: AuthState = {
   status: 'signed-in',
@@ -98,6 +100,12 @@ describe('ProfileScreen local usage', () => {
     const thirty = container.querySelector<HTMLElement>('[data-window="last-30-days"]')!;
     await act(async () => thirty.click());
     expect(find('profile-local-usage')).not.toBeNull();
+  });
+
+  it('drops an answer that was not counted from the signed-in account', async () => {
+    const { find } = await render({ ok: true, usage: scopedFixture({ replies: 3 }, 'device') });
+    expect(find('profile-local-usage')).toBeNull();
+    expect(find('profile-local-error')).toBeNull();
   });
 
   it('says so when the local read fails', async () => {
