@@ -106,6 +106,9 @@ export async function apiCreateTestUser(
     // /accept-policies interstitial). Suppresses both the server-side stamp and the auto-accept
     // fallback below. Defaults to consented so ordinary setup isn't 403'd by the gate.
     acceptedPolicies?: boolean;
+    // Pass true for a user that must clear the new-account trust gate on outbound actions (e.g.
+    // sending invites). Defaults to untrusted, like a real signup.
+    apiKeyTrustApproved?: boolean;
     // Starting credit balance. Omit for the default effectively-unlimited grant; pass a small
     // value to mint a low-balance user for the credit-gate spec.
     initialCredits?: number;

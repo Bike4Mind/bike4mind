@@ -700,6 +700,40 @@ describe('registerUser', () => {
       expect(invited.signupGrant).toBeUndefined();
     });
 
+    it('gives a staged-off environment seeded with drip cap 0 the flat grant amount with nothing locked', async () => {
+      setAllowOpenRegistration('true');
+      const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
+      mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
+        const values: Record<string, string> = {
+          stagedSignupGrantEnabled: 'false',
+          defaultFreeCredits: '500',
+          signupGrantInitialCredits: '500',
+          signupGrantDailyCredits: '0',
+          signupGrantDripCap: '0',
+        };
+        return name in values ? { settingValue: values[name] } : readSetting(name);
+      });
+      const result = await registerUser(noInviteParams, mockAdapters);
+      expect(result.signupGrant).toMatchObject({ signupCredits: 500, unlockCredits: 0, creditsReleased: 0 });
+    });
+
+    it('snapshots the schedule keys over the old tranche and unlock keys', async () => {
+      setAllowOpenRegistration('true');
+      const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
+      mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
+        const values: Record<string, string> = {
+          stagedSignupGrantEnabled: 'true',
+          signupGrantCredits: '12',
+          verifiedUnlockCredits: '28',
+          signupGrantInitialCredits: '0',
+          signupGrantDripCap: '40',
+        };
+        return name in values ? { settingValue: values[name] } : readSetting(name);
+      });
+      const result = await registerUser(noInviteParams, mockAdapters);
+      expect(result.signupGrant).toMatchObject({ signupCredits: 0, unlockCredits: 40, creditsReleased: 0 });
+    });
+
     describe('invite-code grants under the staged signup grant', () => {
       const enableStaging = () => {
         const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
@@ -745,11 +779,44 @@ describe('registerUser', () => {
         expect(created().pendingCreditGrant).toBe(10);
       });
 
-      it('keeps the flat grant for a referral invite when staging is off', async () => {
+      it('stages a referral invite with the retired staged flag off, keeping its whole amount', async () => {
         mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite());
         await registerUser(baseParams, mockAdapters);
-        expect(created().signupGrant).toBeUndefined();
-        expect(created().pendingCreditGrant).toBe(10);
+        const grant = created().signupGrant;
+        expect(grant.signupCredits + grant.unlockCredits).toBe(10);
+        expect(created().pendingCreditGrant).toBeNull();
+      });
+
+      it('pays a referral invite above the initial credits whole where the migration seeded drip cap 0', async () => {
+        const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
+        mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
+          const values: Record<string, string> = {
+            stagedSignupGrantEnabled: 'false',
+            signupGrantInitialCredits: '4',
+            signupGrantDailyCredits: '0',
+            signupGrantDripCap: '0',
+            ReferralCreditsAmount: '10',
+          };
+          return name in values ? { settingValue: values[name] } : readSetting(name);
+        });
+        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite());
+        await registerUser(baseParams, mockAdapters);
+        expect(created().signupGrant).toMatchObject({ signupCredits: 10, unlockCredits: 0, creditsReleased: 0 });
+      });
+
+      it('keeps the referral split under a stored drip cap above 0', async () => {
+        const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
+        mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
+          const values: Record<string, string> = {
+            signupGrantInitialCredits: '4',
+            signupGrantDripCap: '9000',
+            ReferralCreditsAmount: '10',
+          };
+          return name in values ? { settingValue: values[name] } : readSetting(name);
+        });
+        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite());
+        await registerUser(baseParams, mockAdapters);
+        expect(created().signupGrant).toMatchObject({ signupCredits: 4, unlockCredits: 6, creditsReleased: 0 });
       });
     });
 
@@ -886,7 +953,9 @@ describe('registerViaOTC', () => {
   });
 
   it('defers the grant when the signup domain is held, through db.signupProtection', async () => {
-    mockAdapters.db.users.findById = vi.fn().mockResolvedValue({ id: 'newUserId', email: otcParams.email });
+    const persisted: Record<string, unknown> = { id: 'newUserId', email: otcParams.email };
+    mockAdapters.db.users.update = vi.fn().mockImplementation(async (patch: object) => Object.assign(persisted, patch));
+    mockAdapters.db.users.findById = vi.fn().mockImplementation(async () => ({ ...persisted }));
     mockAdapters.db.users.addTagsToUser = vi.fn();
     mockAdapters.db.adminSettings.findBySettingNames = vi.fn().mockResolvedValue([]);
     mockAdapters.db.signupProtection = {
@@ -952,15 +1021,16 @@ describe('registerViaOTC', () => {
   });
   describe('OAuth source tag', () => {
     const activeClient = { clientId: 'b4m_acme_app_0a1b2c3d', isActive: true };
-    const sourceTagsOf = () =>
-      (mockAdapters.db.users.update.mock.calls[0][0].tags as string[]).filter(t => t.startsWith('source:'));
+    const taggedUpdate = () =>
+      mockAdapters.db.users.update.mock.calls.map((call: [{ tags?: string[] }]) => call[0]).find(u => u.tags);
+    const sourceTagsOf = () => (taggedUpdate().tags as string[]).filter(t => t.startsWith('source:'));
 
     it('stamps source:<slug> for an active client and keeps it through the OTC tag rewrite', async () => {
       mockAdapters.db.oauthClients = { findByClientId: vi.fn().mockResolvedValue(activeClient) };
       await registerViaOTC({ ...otcParams, sourceClientId: activeClient.clientId }, mockAdapters);
       expect(mockAdapters.db.oauthClients.findByClientId).toHaveBeenCalledWith(activeClient.clientId);
       expect(sourceTagsOf()).toEqual(['source:acme_app']);
-      expect(mockAdapters.db.users.update.mock.calls[0][0].tags).toContain('Customer');
+      expect(taggedUpdate().tags).toContain('Customer');
     });
 
     it('stamps nothing for an inactive client', async () => {

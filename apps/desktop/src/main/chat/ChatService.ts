@@ -122,6 +122,7 @@ import {
   type WorkspaceOutcome,
 } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
+import type { PdfPromptText } from './pdfText';
 import type { AttachmentStore } from './AttachmentStore';
 import type { SidebarSectionStore } from './SidebarSectionStore';
 import { childOutcomeDisplay, classifyChildOutcome } from './childOutcome';
@@ -223,6 +224,8 @@ import {
   type ImageContext,
   type ScreenCapturer,
   type ScreenContext,
+  type SimulatorContext,
+  type SimulatorDriver,
   type ToolContext,
   type ToolDefinition,
   type ToolReporter,
@@ -492,6 +495,14 @@ export interface ChatServiceDeps {
   pullRequests?: Pick<PrMonitor, 'bindForAgent' | 'dismiss'>;
   /** Other apps' windows, for screen_capture. Absent in tests that do not exercise it; the tool is then not declared. */
   screen?: ScreenCapturer;
+  /**
+   * The iOS Simulator and the user's live view of it. Wired on macOS only, so on any other
+   * platform (and in tests that do not exercise it) the simulator tools are not declared.
+   */
+  simulator?: {
+    driver: SimulatorDriver;
+    view: { attach(udid: string): Promise<unknown>; detach(): void; attachedUdid(): string | undefined };
+  };
   /** Fits an image a tool shows the model. Absent in tests, where file_read then describes an image in text. */
   prepareImage?: ImageContext['prepare'];
   history?: LocalHistory;
@@ -915,7 +926,7 @@ export class ChatService {
     this.deps.sessionClosed?.(sessionId);
   }
 
-  listModels(force = false): Promise<ChatModelCatalog> {
+  listModels(force: boolean | 'local' = false): Promise<ChatModelCatalog> {
     return this.deps.models?.list(force) ?? Promise.resolve({ models: [] });
   }
 
@@ -2724,6 +2735,18 @@ export class ChatService {
             keepScreenshot: (bytes, caption) => this.keepScreenshot(sessionId, bytes, caption),
           }
         : undefined;
+      const simulatorDeps = this.deps.simulator;
+      const simulator: SimulatorContext | undefined = simulatorDeps
+        ? {
+            driver: simulatorDeps.driver,
+            keepScreenshot: (bytes, caption) => this.keepScreenshot(sessionId, bytes, caption),
+            attached: () => simulatorDeps.view.attachedUdid(),
+            attach: async udid => {
+              await simulatorDeps.view.attach(udid);
+            },
+            detach: () => simulatorDeps.view.detach(),
+          }
+        : undefined;
       const offerExplore = shouldOfferExplore(catalog?.models ?? [], session.model);
       const exploreFor = (granted: readonly string[]): ExploreContext | undefined =>
         api && !localTurn && granted.length > 0 && offerExplore
@@ -2770,6 +2793,7 @@ export class ChatService {
               explore: !!explore,
               browser: !!browser,
               screen: !!screen,
+              simulator: !!simulator,
               memory: !!memory,
               skills: !!skills,
               web: !!web,
@@ -2803,8 +2827,7 @@ export class ChatService {
       const contextBlock = this.projectContext.get(session.id, project?.workingDirectory, project?.directory);
       const skillsBlock = this.skillsPrompt?.get(session.id, skillRoot) ?? Promise.resolve('');
       if (!resume) await this.reportSuggestionOutcomes(session);
-      const readAttachment = (attachment: ChatAttachment) =>
-        this.deps.attachments?.read(session.id, attachment.id) ?? Promise.resolve(null);
+      const readAttachment = this.attachmentReader(session.id);
       const projectContext = await contextBlock;
       const skillsSection = await skillsBlock;
       let toolsSupported = modelOption?.supportsTools !== false && (!localTurn || !!modelOption);
@@ -2833,6 +2856,7 @@ export class ChatService {
           memory: !!memory,
           ask,
           screen: !!screen,
+          simulator: !!simulator,
         }),
       });
       const schemaFor = (name: string): ToolSchema | undefined =>
@@ -2906,7 +2930,8 @@ export class ChatService {
           toolsSupported && ask,
           session.model,
           toolsSupported && !!web,
-          toolsSupported && !!screen
+          toolsSupported && !!screen,
+          toolsSupported && !!simulator
         );
       wire.unshift(
         deferred ? buildDeferredSystemMessage(session.project, projectContext, skillsSection) : systemMessage()
@@ -3235,6 +3260,7 @@ export class ChatService {
                 explore,
                 browser,
                 screen,
+                simulator,
                 images,
                 memory,
                 skills,
@@ -3728,6 +3754,13 @@ export class ChatService {
     for (const entry of [...entries].reverse()) this.deps.queue?.restore(sessionId, entry);
   }
 
+  private attachmentReader(sessionId: string): AttachmentReader {
+    return {
+      bytes: attachment => this.deps.attachments?.read(sessionId, attachment.id) ?? Promise.resolve(null),
+      pdfText: attachment => this.deps.attachments?.readPdfText(sessionId, attachment.id) ?? Promise.resolve(null),
+    };
+  }
+
   /**
    * One arrival as the next request carries it: built by the same code a replay uses, so this
    * turn's wire and the next turn's rebuild agree. Text goes as a one-block array rather than a
@@ -3735,10 +3768,7 @@ export class ChatService {
    * already holds text (this round's screenshot turn) and drops it there.
    */
   private async arrivalWire(session: ChatSession, message: ChatMessage): Promise<CompletionMessage | null> {
-    const [turn] = await toCompletionMessages(
-      { ...session, messages: [message] },
-      (attachment: ChatAttachment) => this.deps.attachments?.read(session.id, attachment.id) ?? Promise.resolve(null)
-    );
+    const [turn] = await toCompletionMessages({ ...session, messages: [message] }, this.attachmentReader(session.id));
     if (!turn) return null;
     return typeof turn.content === 'string' ? { ...turn, content: [{ type: 'text', text: turn.content }] } : turn;
   }
@@ -3820,6 +3850,7 @@ export class ChatService {
       explore: ExploreContext | undefined;
       browser: BrowserContext | undefined;
       screen: ScreenContext | undefined;
+      simulator: SimulatorContext | undefined;
       images: ImageContext | undefined;
       memory: MemoryStore | undefined;
       skills: SkillContext | undefined;
@@ -3854,6 +3885,7 @@ export class ChatService {
       explore,
       browser,
       screen,
+      simulator,
       images,
       memory,
       skills,
@@ -4003,6 +4035,7 @@ export class ChatService {
           ...(explore ? { explore } : {}),
           ...(browser ? { browser } : {}),
           ...(screen ? { screen } : {}),
+          ...(simulator ? { simulator } : {}),
           ...(images ? { images } : {}),
           ...(memory ? { memory } : {}),
           ...(skills ? { skills } : {}),
@@ -6116,7 +6149,8 @@ export function buildSystemMessage(
   ask = false,
   modelId = '',
   web = false,
-  screen = false
+  screen = false,
+  simulator = false
 ): CompletionMessage {
   if (roots.length === 0) {
     return {
@@ -6127,6 +6161,7 @@ export function buildSystemMessage(
         // read nothing on disk can still open a page, and needs to be told how.
         ...(browser ? BROWSER_GUIDANCE : []),
         ...(screen ? SCREEN_GUIDANCE : []),
+        ...(simulator ? SIMULATOR_GUIDANCE : []),
         ...(web ? WEB_GUIDANCE : []),
         ...(media ? MEDIA_GUIDANCE : []),
         ...(host ? HOST_GUIDANCE : []),
@@ -6154,6 +6189,7 @@ export function buildSystemMessage(
       ...localToolLines(ask, projectContext ? 'below' : null, explore, patchEdits),
       ...(browser ? BROWSER_GUIDANCE : []),
       ...(screen ? SCREEN_GUIDANCE : []),
+      ...(simulator ? SIMULATOR_GUIDANCE : []),
       ...(web ? WEB_GUIDANCE : []),
       ...HONESTY_LINES,
       ...(media ? MEDIA_GUIDANCE : []),
@@ -6348,6 +6384,7 @@ export function buildToolStateText(state: {
   memory: boolean;
   ask: boolean;
   screen: boolean;
+  simulator?: boolean;
 }): string {
   const { roots, ask, mcpServers } = state;
   const mcp = mcpServers ? (ask ? 'manage' : 'read') : null;
@@ -6365,6 +6402,7 @@ export function buildToolStateText(state: {
         ]),
     ...(state.browser ? BROWSER_GUIDANCE : []),
     ...(state.screen ? SCREEN_GUIDANCE : []),
+    ...(state.simulator ? SIMULATOR_GUIDANCE : []),
     ...(state.media ? MEDIA_GUIDANCE : []),
     ...(state.host ? HOST_GUIDANCE : []),
     ...(state.memory ? MEMORY_GUIDANCE : []),
@@ -6468,6 +6506,16 @@ const SCREEN_GUIDANCE: readonly string[] = [
   'see. To check a desktop app - an Electron dev build you started with bash_background, say -',
   'wait for its window to open, then capture it by title instead of guessing how it looks. Each',
   'capture asks the user first. For web pages use the browser tools.',
+];
+
+const SIMULATOR_GUIDANCE: readonly string[] = [
+  'The simulator_* tools run and drive iOS apps in the iOS Simulator on this Mac. When the user',
+  'wants to see or try their iOS app, call simulator_view to open their live panel first, then',
+  'simulator_build (xcodebuild for a scheme) and simulator_launch with the .app it returns. Check',
+  'the app with simulator_screenshot rather than predicting it from the code: the image is in',
+  'points, so read tap coordinates straight off it for simulator_input. Each device asks the user',
+  'once. A failure that names a Fix (no Xcode, an unaccepted license, the wrong xcode-select, a',
+  'missing runtime or AXe) is for the user to run: tell them the exact fix and do not retry.',
 ];
 
 const WEB_GUIDANCE: readonly string[] = [
@@ -7057,7 +7105,7 @@ function parseArguments(raw: string | undefined): Record<string, unknown> {
  */
 async function toCompletionMessages(
   session: ChatSession,
-  readAttachment: ReadAttachment,
+  readAttachment: AttachmentReader,
   /** Deferred-tools turns only: tool-state reminders are rendered and each one's position is pushed here. */
   toolStateMarks?: ToolStateMark[],
   /** Deferred-tools turns only: the wire index of every assistant message a deferred turn sent. */
@@ -7310,8 +7358,11 @@ function automaticDisplay(automatic: ChatAutomaticOrigin): string {
     : `Auto-fix: ${automatic.summary}`;
 }
 
-/** Reads one attachment's stored bytes, or null when the file is gone. */
-type ReadAttachment = (attachment: ChatAttachment) => Promise<Buffer | null>;
+/** Reads one attachment's stored content; null when the file is gone or, for a PDF, unreadable. */
+interface AttachmentReader {
+  bytes(attachment: ChatAttachment): Promise<Buffer | null>;
+  pdfText(attachment: ChatAttachment): Promise<PdfPromptText | null>;
+}
 
 /**
  * A user turn that carried attachments, as provider-shaped content blocks.
@@ -7319,7 +7370,8 @@ type ReadAttachment = (attachment: ChatAttachment) => Promise<Buffer | null>;
  * Images go FIRST and as real image blocks: the point of this feature is that a screenshot
  * arrives as pixels rather than as a filename the model then invents contents for. Text files
  * are inlined into the single text block ahead of the user's own words, so the question they
- * are asking is the last thing the model reads.
+ * are asking is the last thing the model reads. A PDF goes the same way as its extracted text:
+ * not every model, and no local server, can read a document block.
  *
  * An attachment whose bytes have vanished is skipped rather than faked - a placeholder saying
  * "image.png" is exactly the filename-instead-of-image failure this exists to avoid.
@@ -7327,13 +7379,23 @@ type ReadAttachment = (attachment: ChatAttachment) => Promise<Buffer | null>;
 async function toAttachedContent(
   prompt: string,
   attachments: readonly ChatAttachment[],
-  readAttachment: ReadAttachment
+  readAttachment: AttachmentReader
 ): Promise<unknown[]> {
   const blocks: unknown[] = [];
   const sections: string[] = [];
 
   for (const attachment of attachments) {
-    const bytes = await readAttachment(attachment);
+    if (attachment.kind === 'pdf') {
+      const pdf = await readAttachment.pdfText(attachment);
+      if (pdf) {
+        sections.push(
+          textAttachmentBlock({ ...attachment, pages: pdf.pages, truncated: pdf.truncated || undefined }, pdf.text)
+        );
+      }
+      continue;
+    }
+
+    const bytes = await readAttachment.bytes(attachment);
     if (!bytes) continue;
 
     if (attachment.kind === 'image') {

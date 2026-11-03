@@ -77,7 +77,7 @@ export const TURNSTILE_OAUTH_TOKEN_PARAM = 'turnstileToken';
  * Providers whose sign-in is open to anyone and so run the challenge before the provider
  * redirect. Enterprise SSO (Okta, SAML) is configured per organisation and stays unchallenged.
  */
-export const TURNSTILE_OAUTH_PROVIDERS = ['google', 'github', 'facebook'] as const;
+export const TURNSTILE_OAUTH_PROVIDERS = ['google', 'github', 'facebook', 'apple'] as const;
 export type TurnstileOAuthProvider = (typeof TURNSTILE_OAUTH_PROVIDERS)[number];
 export const isTurnstileOAuthProvider = (provider: unknown): provider is TurnstileOAuthProvider =>
   typeof provider === 'string' && (TURNSTILE_OAUTH_PROVIDERS as readonly string[]).includes(provider);

@@ -52,6 +52,10 @@ export interface SessionsController {
   rename: (session: ChatSessionSummary, title: string) => Promise<void>;
   renameError: string | null;
   clearRenameError: () => void;
+  /** Save a conversation to a file the user picks; a failure sets `exportError`. */
+  exportSession: (session: ChatSessionSummary) => Promise<void>;
+  exportError: string | null;
+  clearExportError: () => void;
   /** Apply a summary main just returned, so the sidebar reorders without a full reload. */
   apply: (summary: ChatSessionSummary) => void;
 }
@@ -71,6 +75,7 @@ export function useSessions(): SessionsController {
   const [creatingCode, setCreatingCode] = useState(false);
   const [codeError, setCodeError] = useState<string | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const latestReload = useRef(0);
   const localEdits = useRef(0);
@@ -208,6 +213,16 @@ export function useSessions(): SessionsController {
 
   const clearCodeError = useCallback(() => setCodeError(null), []);
   const clearRenameError = useCallback(() => setRenameError(null), []);
+  const clearExportError = useCallback(() => setExportError(null), []);
+
+  const exportSession = useCallback(async (session: ChatSessionSummary) => {
+    setExportError(null);
+    try {
+      await window.b4m.chat.exportSession(session.id);
+    } catch {
+      setExportError(`Could not download "${session.title}".`);
+    }
+  }, []);
 
   return {
     sessions,
@@ -224,6 +239,9 @@ export function useSessions(): SessionsController {
     rename,
     renameError,
     clearRenameError,
+    exportSession,
+    exportError,
+    clearExportError,
     apply,
   };
 }
@@ -285,6 +303,9 @@ export interface ModelCatalogController {
 /** How often local mode checks that Ollama still answers (one cheap request) while the window is visible. */
 export const LOCAL_STATUS_POLL_MS = 5_000;
 
+/** The least time between catalog reloads that window focus may start. */
+export const FOCUS_RELOAD_MIN_MS = 30_000;
+
 /**
  * The models this server offers, refetched when the environment changes.
  *
@@ -295,6 +316,9 @@ export const LOCAL_STATUS_POLL_MS = 5_000;
  * `local` (signed out, device models only) also polls Ollama's status, because it starting,
  * stopping or gaining a model raises no event. The list is reread only when reachability changes
  * or while it is empty.
+ *
+ * Window focus also reloads it (at most once per `FOCUS_RELOAD_MIN_MS`), since a model pulled
+ * outside Desktop raises no event.
  */
 export function useModelCatalog(local = false): ModelCatalogController {
   const [models, setModels] = useState<ChatModelOption[]>([]);
@@ -302,44 +326,70 @@ export function useModelCatalog(local = false): ModelCatalogController {
   const [error, setError] = useState<string | null>(null);
   const [runtime, setRuntime] = useState<ModelRuntimeStatus | null>(null);
   const latestLoad = useRef(0);
+  const forcedLoad = useRef<Promise<void> | null>(null);
+  const lastLoadAt = useRef(0);
   const seen = useRef({ empty: true, reachable: null as boolean | null });
   seen.current = { empty: models.length === 0, reachable: runtime?.reachable ?? null };
 
-  const load = useCallback(
-    async (force: boolean, quiet = false) => {
+  const run = useCallback(
+    async (force: boolean | 'local', quiet: boolean) => {
       const mine = ++latestLoad.current;
+      lastLoadAt.current = Date.now();
       if (!quiet) setLoading(true);
-      const [catalog, status] = await Promise.all([
-        window.b4m.chat.listModels(force),
-        local ? window.b4m.models.getStatus().catch(() => null) : null,
-      ]);
-      // A slower, older response must not overwrite a newer one.
-      if (mine !== latestLoad.current) return;
-      setModels(catalog.models);
-      setError(catalog.error ?? null);
-      setRuntime(status);
-      setLoading(false);
+      try {
+        const [catalog, status] = await Promise.all([
+          window.b4m.chat.listModels(force),
+          local ? window.b4m.models.getStatus().catch(() => null) : null,
+        ]);
+        // A slower, older response must not overwrite a newer one.
+        if (mine !== latestLoad.current) return;
+        setModels(catalog.models);
+        setError(catalog.error ?? null);
+        setRuntime(status);
+        setLoading(false);
+      } catch (err) {
+        if (mine !== latestLoad.current) return;
+        setError(err instanceof Error ? err.message : 'Could not load the model list.');
+        setLoading(false);
+      }
     },
     [local]
   );
 
+  const load = useCallback(
+    (force: boolean | 'local', quiet = false): Promise<void> => {
+      const promise = run(force, quiet);
+      if (!force) return promise;
+      forcedLoad.current = promise;
+      void promise.then(() => {
+        if (forcedLoad.current === promise) forcedLoad.current = null;
+      });
+      return promise;
+    },
+    [run]
+  );
+
+  // Models pulled outside Desktop (the CLI, Ollama itself) raise no event; coming back to the window is the cue.
   useEffect(() => {
-    if (!local) return;
     const check = async () => {
       if (document.hidden) return;
       const status = await window.b4m.models.getStatus().catch(() => null);
       if (!status) return;
       const { empty, reachable } = seen.current;
-      if (status.reachable !== reachable || (status.reachable && empty)) await load(true, true);
+      if (status.reachable !== reachable || (status.reachable && empty)) await load('local', true);
     };
-    const tick = () => void check();
-    const timer = setInterval(tick, LOCAL_STATUS_POLL_MS);
-    window.addEventListener('focus', tick);
-    document.addEventListener('visibilitychange', tick);
+    const onReturn = () => {
+      if (document.hidden) return;
+      if (Date.now() - lastLoadAt.current >= FOCUS_RELOAD_MIN_MS) void load('local', true);
+      else if (local) void check();
+    };
+    const timer = local ? setInterval(() => void check(), LOCAL_STATUS_POLL_MS) : undefined;
+    window.addEventListener('focus', onReturn);
+    document.addEventListener('visibilitychange', onReturn);
     return () => {
       clearInterval(timer);
-      window.removeEventListener('focus', tick);
-      document.removeEventListener('visibilitychange', tick);
+      window.removeEventListener('focus', onReturn);
+      document.removeEventListener('visibilitychange', onReturn);
     };
   }, [local, load]);
 
@@ -360,7 +410,7 @@ export function useModelCatalog(local = false): ModelCatalogController {
   // A model pulled or removed on the Models screen changes the local half of the list.
   useEffect(() => window.b4m.models.onInstalledChanged(() => void load(true)), [load]);
 
-  const reload = useCallback(() => load(true), [load]);
+  const reload = useCallback(() => forcedLoad.current ?? load(true), [load]);
 
   return { models, loading, error, reload, runtime };
 }

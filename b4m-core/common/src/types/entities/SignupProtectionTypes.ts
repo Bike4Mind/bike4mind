@@ -1,6 +1,17 @@
 import { z } from 'zod';
 
 export type SignupObservation = { userId: string; email: string; domain: string; verifiedAt: Date };
+
+/** Hold reason for a domain found only on the aggregate disposable list (domainHoldReason in b4m-core/services). */
+export const DISPOSABLE_AGGREGATE_HOLD_REASON = 'disposable-aggregate';
+
+/**
+ * The automated policies that may decide a hold. They only ever confirm (keep credits held); a
+ * release always comes from an admin. See apps/workers/src/cron/signupDomainHoldTriage.ts.
+ */
+export const SIGNUP_DOMAIN_HOLD_AUTO_POLICIES = ['disposable-aggregate-rule'] as const;
+export type SignupDomainHoldAutoPolicy = (typeof SIGNUP_DOMAIN_HOLD_AUTO_POLICIES)[number];
+
 export const signupDomainReviewSchema = z.object({
   domain: z.string(),
   status: z.enum(['held_pending_review', 'blocked', 'released']),
@@ -9,11 +20,24 @@ export const signupDomainReviewSchema = z.object({
   cohortUserIds: z.array(z.string()),
   sampleEmails: z.array(z.string()),
   signupCount: z.number(),
+  /** The admin user id behind the last decision; absent while undecided or when a policy decided. */
+  reviewedBy: z.string().optional(),
+  reviewedAt: z.date().optional(),
+  /** Set when an automated policy made the last decision; the next admin decision clears it. */
+  autoDecision: z
+    .object({
+      policy: z.enum(SIGNUP_DOMAIN_HOLD_AUTO_POLICIES),
+      decidedAt: z.date(),
+    })
+    .optional(),
 });
 export type SignupDomainReview = z.infer<typeof signupDomainReviewSchema>;
 
 /** Refreshed disposable-domain lists; see apps/workers/src/cron/disposableDomainRefresh.ts for the URLs. */
-export type DisposableListSource = 'aggregate' | 'curated' | 'fakefilter';
+export type DisposableListSource = 'aggregate' | 'curated' | 'fakefilter' | 'tompec';
+/** What refused a signup email: a refreshed list, the admin blockedEmailDomains setting, or the bundled static list. */
+export type DisposableRefusalSource = DisposableListSource | 'admin' | 'static';
+export type DisposableRefusal = { domain: string; sources: DisposableRefusalSource[] };
 export type DisposableSourceStatus = {
   source: DisposableListSource;
   count: number;
@@ -81,6 +105,10 @@ export type SignupProtection = {
   repository: SignupProtectionRepository;
   mode?: 'observe' | 'enforce';
   notifyHold?: (review: SignupDomainReview) => Promise<void>;
+  /** Alerts operators that a required setting is unset and the drip is running on its fallback. */
+  notifyConfig?: (alert: { setting: 'signupGrantDripCap'; fallback: number }) => Promise<void>;
   /** Daily payout budget for free signup grants; absent means no budget is enforced. */
   grantBudget?: SignupGrantBudget;
+  /** Called on every disposable-email refusal so false positives surface per source. Must not throw. */
+  recordDisposableRefusal?: (refusal: DisposableRefusal) => Promise<void>;
 };

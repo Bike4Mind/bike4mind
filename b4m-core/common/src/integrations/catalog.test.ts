@@ -5,7 +5,11 @@ import {
   INTEGRATIONS,
   MODEL_PROVIDER_IDS,
   MODEL_PROVIDERS,
+  MCP_PRESET_IDS,
   PLANNED_INTEGRATION_IDS,
+  getMcpPresetHost,
+  getMcpPresetUrl,
+  isMcpPresetId,
   isPlannedIntegrationId,
 } from './catalog';
 import { INTEGRATION_CATEGORIES, INTEGRATION_LOGO_KEYS } from './types';
@@ -68,10 +72,44 @@ describe('integrations catalog invariants', () => {
   });
 
   it('lists the planned ids, and only those are requestable', () => {
-    expect(PLANNED_INTEGRATION_IDS.length).toBe(18);
+    expect(PLANNED_INTEGRATION_IDS.length).toBe(15);
     for (const id of PLANNED_INTEGRATION_IDS) expect(isPlannedIntegrationId(id)).toBe(true);
     expect(isPlannedIntegrationId('github')).toBe(false);
     expect(isPlannedIntegrationId('not-an-integration')).toBe(false);
     expect(isPlannedIntegrationId('__proto__')).toBe(false);
+    for (const id of ['linear', 'airtable', 'gitlab']) expect(isPlannedIntegrationId(id)).toBe(false);
+  });
+});
+
+describe('custom MCP connector presets', () => {
+  it('makes Linear, Airtable and GitLab beta API-key presets behind the custom connectors switch', () => {
+    expect([...MCP_PRESET_IDS].sort()).toEqual(['airtable', 'gitlab', 'linear']);
+    for (const id of MCP_PRESET_IDS) {
+      const entry = INTEGRATIONS.find(i => i.id === id)!;
+      expect(entry.stage).toBe('beta');
+      expect(entry.flag).toBe('EnableCustomMcpConnectors');
+      expect(entry.remoteMcp?.auth).toBe('api_key');
+      expect(entry.capabilities.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('pre-fills an https server URL per preset and resolves its host from the catalog', () => {
+    expect(getMcpPresetUrl('linear')).toBe('https://mcp.linear.app/mcp');
+    expect(getMcpPresetUrl('airtable')).toBe('https://mcp.airtable.com/mcp');
+    expect(getMcpPresetUrl('gitlab')).toBe('https://gitlab.com/api/v4/mcp');
+    expect(getMcpPresetHost('linear')).toBe('mcp.linear.app');
+    expect(getMcpPresetHost('airtable')).toBe('mcp.airtable.com');
+    expect(getMcpPresetHost('gitlab')).toBe('gitlab.com');
+    for (const id of MCP_PRESET_IDS) expect(new URL(getMcpPresetUrl(id)!).protocol).toBe('https:');
+  });
+
+  it('knows no preset for any other id, including prototype keys', () => {
+    for (const id of ['github', 'hubspot', 'not-an-integration', '__proto__', 'constructor', '']) {
+      expect(isMcpPresetId(id)).toBe(false);
+      expect(getMcpPresetHost(id)).toBeUndefined();
+      expect(getMcpPresetUrl(id)).toBeUndefined();
+    }
+    expect(isMcpPresetId(undefined)).toBe(false);
+    expect(getMcpPresetHost(undefined)).toBeUndefined();
   });
 });

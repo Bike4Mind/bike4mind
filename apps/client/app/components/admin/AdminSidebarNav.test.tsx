@@ -402,6 +402,12 @@ describe('filterSidebarSections', () => {
     expect(sections.map(section => section.key)).toEqual(['platform']);
   });
 
+  it('drops tabs the user may not open, and the sections they leave empty', () => {
+    const sections = filterSidebarSections(SIDEBAR_SECTIONS, allOpen, '', tab => tab === AdminTab.Modals);
+    expect(sections.map(section => section.key)).toEqual(['settings']);
+    expect(sections[0].items.map(item => item.tab)).toEqual([AdminTab.Modals]);
+  });
+
   it('matches an item by a former name', () => {
     const items = filterSidebarSections(SIDEBAR_SECTIONS, allOpen, 'waitlist').flatMap(section => section.items);
     expect(items.map(item => item.label)).toEqual(['Invite Center']);

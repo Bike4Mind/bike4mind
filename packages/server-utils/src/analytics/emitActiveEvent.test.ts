@@ -20,6 +20,7 @@ import {
   sanitizeReferrer,
   emitActiveEvent,
   emitVisitEvent,
+  emitPageViewEvent,
   emitProductEvent,
 } from './emitActiveEvent';
 import { pseudonymize } from './pseudonymize';
@@ -272,6 +273,38 @@ describe('emitVisitEvent', () => {
     const body = JSON.parse((mockFetch.mock.calls[0] as [string, RequestInit])[1].body as string) as {
       event: Record<string, unknown>;
     };
+    expect('referrer' in body.event).toBe(false);
+    expect('utm' in body.event).toBe(false);
+  });
+});
+
+describe('emitPageViewEvent', () => {
+  const mockFetch = vi.fn();
+
+  beforeEach(() => {
+    mockFetch.mockClear();
+    vi.stubGlobal('fetch', mockFetch);
+    mockFetch.mockResolvedValue({ status: 200 });
+  });
+
+  it('is a no-op when not configured (fail-open)', async () => {
+    await expect(emitPageViewEvent({ sessionId: 'visit-1', path: '/pricing' })).resolves.toBeUndefined();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('sends the page on its visit, anonymous like the visit itself, with the path and nothing else', async () => {
+    resetConfig();
+    await emitPageViewEvent({ sessionId: 'visit-1', path: '/notebooks' });
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const body = JSON.parse((mockFetch.mock.calls[0] as [string, RequestInit])[1].body as string) as {
+      event: Record<string, unknown>;
+    };
+    expect(body.event.event).toBe('page_view');
+    expect(body.event.productId).toBe('bike4mind');
+    expect(body.event.sessionId).toBe('visit-1');
+    expect(body.event.userId).toBe(OVERWATCH_ANONYMOUS_USER_ID);
+    expect(body.event.metadata).toEqual({ path: '/notebooks' });
     expect('referrer' in body.event).toBe(false);
     expect('utm' in body.event).toBe(false);
   });

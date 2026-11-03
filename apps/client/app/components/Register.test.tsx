@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   mutateAsync: vi.fn(),
   navigate: vi.fn(),
   allowOpenRegistration: true,
+  appleSignInEnabled: false,
   trackSignupConversion: vi.fn(),
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), dismiss: vi.fn() },
   mfa: { options: null as MfaHookOptions | null, begin: vi.fn() },
@@ -90,7 +91,10 @@ vi.mock('@client/app/hooks/useCommonStyles', () => ({
 vi.mock('@client/app/hooks/useGetLogo', () => ({ default: () => '/logo.png' }));
 vi.mock('@client/app/hooks/data/settings', () => ({
   useBrandingSettings: () => ({}),
-  usePublicConfig: () => ({ data: { allowOpenRegistration: mocks.allowOpenRegistration }, isLoading: false }),
+  usePublicConfig: () => ({
+    data: { allowOpenRegistration: mocks.allowOpenRegistration, appleSignInEnabled: mocks.appleSignInEnabled },
+    isLoading: false,
+  }),
 }));
 vi.mock('./common/MFAModal', () => ({ default: () => null }));
 vi.mock('next/image', () => ({ default: () => null }));
@@ -113,6 +117,7 @@ const renderRegister = () =>
 describe('Register', () => {
   beforeEach(() => {
     mocks.allowOpenRegistration = true;
+    mocks.appleSignInEnabled = false;
   });
 
   it.each([
@@ -125,6 +130,20 @@ describe('Register', () => {
     renderRegister();
     await user.click(screen.getByTestId(testId));
     expect(mocks.startOAuthSignIn).toHaveBeenCalledWith(startUrl);
+  });
+
+  it('hides the Apple sign-up button unless the deployment enables it', () => {
+    renderRegister();
+    expect(screen.queryByTestId('register-apple-btn')).toBeNull();
+  });
+
+  it('starts the Apple sign-up when the deployment enables it', async () => {
+    mocks.appleSignInEnabled = true;
+    mocks.startOAuthSignIn.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderRegister();
+    await user.click(screen.getByTestId('register-apple-btn'));
+    expect(mocks.startOAuthSignIn).toHaveBeenCalledWith('/api/auth/apple');
   });
 
   it('shows the challenge error and stays on the page when the sign-up cannot start', async () => {

@@ -114,6 +114,7 @@ export * from './schemas/releaseNotes';
 export * from './schemas/bulkAbuse';
 export * from './schemas/signupRiskReview';
 export * from './schemas/riskEvidence';
+export * from './schemas/accountCampaign';
 export * from './schemas/shadowDetection';
 export * from './utils/artifactHelpers';
 export * from './utils/creditTransactionDisplay';

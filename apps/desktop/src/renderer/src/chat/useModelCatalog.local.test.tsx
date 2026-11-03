@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import type { ChatModelCatalog, ChatModelOption } from '@shared/chat';
 import type { ModelRuntimeStatus } from '@shared/models';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { LOCAL_STATUS_POLL_MS, useModelCatalog, type ModelCatalogController } from './useChat';
+import { FOCUS_RELOAD_MIN_MS, LOCAL_STATUS_POLL_MS, useModelCatalog, type ModelCatalogController } from './useChat';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -19,7 +19,7 @@ const status = (reachable: boolean): ModelRuntimeStatus => ({
   management: 'allowed',
 });
 
-const listModels = vi.fn<(force?: boolean) => Promise<ChatModelCatalog>>();
+const listModels = vi.fn<(force?: boolean | 'local') => Promise<ChatModelCatalog>>();
 const getStatus = vi.fn<() => Promise<ModelRuntimeStatus>>();
 let authListeners: Array<(state: unknown) => void> = [];
 let installedListeners: Array<() => void> = [];
@@ -191,5 +191,102 @@ describe('useModelCatalog when a model finishes installing', () => {
     expect(installedListeners).toHaveLength(1);
     await act(async () => root.render(null));
     expect(installedListeners).toHaveLength(0);
+  });
+
+  it('reloads on focus once the last load is older than the throttle, and not before', async () => {
+    await mount(false);
+    listModels.mockClear();
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(listModels).not.toHaveBeenCalled();
+
+    await tick(FOCUS_RELOAD_MIN_MS);
+    listModels.mockResolvedValue({ models: [model] });
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(listModels).toHaveBeenCalledTimes(1);
+    expect(listModels).toHaveBeenCalledWith('local');
+    expect(catalog.models).toEqual([model]);
+  });
+
+  it('reloads when the window becomes visible once the last load is older than the throttle', async () => {
+    await mount(false);
+    await tick(FOCUS_RELOAD_MIN_MS);
+    listModels.mockClear();
+    listModels.mockResolvedValue({ models: [model] });
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(listModels).toHaveBeenCalledTimes(1);
+    expect(listModels).toHaveBeenCalledWith('local');
+    expect(catalog.models).toEqual([model]);
+  });
+
+  it('reloads once when focus and visibilitychange arrive together on one return', async () => {
+    await mount(false);
+    await tick(FOCUS_RELOAD_MIN_MS);
+    listModels.mockClear();
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(listModels).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not reload on focus while the window is hidden or after unmount', async () => {
+    await mount(false);
+    await tick(FOCUS_RELOAD_MIN_MS);
+    listModels.mockClear();
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(listModels).not.toHaveBeenCalled();
+
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+    await act(async () => root.render(null));
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(listModels).not.toHaveBeenCalled();
+  });
+
+  it('joins a forced load already in flight when reload is called', async () => {
+    await mount(false);
+    await tick(FOCUS_RELOAD_MIN_MS);
+    listModels.mockClear();
+    const pending = deferred<ChatModelCatalog>();
+    listModels.mockReturnValueOnce(pending.promise);
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    let reloaded: Promise<void> = Promise.resolve();
+    await act(async () => {
+      reloaded = catalog.reload();
+    });
+    expect(listModels).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      pending.resolve({ models: [model] });
+      await reloaded;
+    });
+    expect(catalog.models).toEqual([model]);
+
+    await act(async () => {
+      await catalog.reload();
+    });
+    expect(listModels).toHaveBeenCalledTimes(2);
+  });
+
+  it('settles loading and reports the error when the list cannot be read', async () => {
+    await mount(false);
+    listModels.mockRejectedValueOnce(new Error('ipc down'));
+    await act(async () => {
+      await catalog.reload();
+    });
+    expect(catalog.loading).toBe(false);
+    expect(catalog.error).toBe('ipc down');
   });
 });
