@@ -147,7 +147,7 @@ describe('young-account spend shadow detection recording', () => {
     expect(youngAccountSpendDedupeKey('user-a', nextWindow)).not.toBe(youngAccountSpendDedupeKey('user-a', window));
   });
 
-  it('releases the claim of a failed write so the next run retries it, and never throws', async () => {
+  it('releases the claim of a failed write so a retry of the same window records it, and never throws', async () => {
     mocks.record.mockRejectedValueOnce(new Error('write failed'));
     expect(await record()).toBe(1);
     expect(mocks.deleteByKey).toHaveBeenCalledExactlyOnceWith(youngAccountSpendDedupeKey('user-a', window));

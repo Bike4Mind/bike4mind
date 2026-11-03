@@ -19,9 +19,9 @@ const HOUR_MS = 60 * 60 * 1000;
 export const YOUNG_ACCOUNT_SPEND_POLICY_VERSION = 1;
 
 const DEDUPE_KEY_PREFIX = 'shadow-detection:young-account-spend';
-// Outlasts async retries and a DLQ redrive of the same window (SQS keeps a message at most 14 days).
-// The key names the window, so a long claim never hides a later one.
-const DEDUPE_TTL_MS = 14 * 24 * HOUR_MS;
+// Outlasts async retries and a replay from the DLQ, which keeps a message 14 days from enqueue (after
+// the retries, hence the extra hour). The key names the window, so a long claim never hides a later one.
+const DEDUPE_TTL_MS = (14 * 24 + 1) * HOUR_MS;
 
 type SpendWindow = { start: Date; end: Date };
 
@@ -29,8 +29,8 @@ export function youngAccountSpendDedupeKey(userId: string, window: SpendWindow):
   return `${DEDUPE_KEY_PREFIX}:${userId}:${window.end.toISOString()}`;
 }
 
-function formatCredits(credits: number): string {
-  return credits.toLocaleString('en-US');
+function formatCount(count: number, noun: string): string {
+  return `${count.toLocaleString('en-US')} ${noun}${count === 1 ? '' : 's'}`;
 }
 
 /** One detection for one listed spender: the account's own spend beside the fleet totals that tripped. */
@@ -49,8 +49,9 @@ export function buildYoungAccountSpendShadowDetection(input: {
     policyVersion: YOUNG_ACCOUNT_SPEND_POLICY_VERSION,
     wouldAction: 'contain',
     summary:
-      `${formatCredits(spender.creditsSpent)} credits in ${windowMinutes} minutes from a ${accountAgeHours}-hour-old ` +
-      `account (#${rank} of ${summary.accountCount} young accounts, ${formatCredits(summary.totalCredits)} credits in total)`,
+      `${formatCount(spender.creditsSpent, 'credit')} in ${windowMinutes} minutes from a ${accountAgeHours}-hour-old ` +
+      `account (#${rank} of ${formatCount(summary.accountCount, 'young account')}, ` +
+      `${formatCount(summary.totalCredits, 'credit')} in total)`,
     userIds: [spender.userId],
     network: null,
     signals: [
@@ -95,7 +96,8 @@ export function buildYoungAccountSpendShadowDetection(input: {
 
 /**
  * Records one detection per listed spender that wins its (account, window) claim, so a retried or
- * redriven run never records twice. A failed write releases its claim for the next run. Never
+ * redriven run never records twice. A failed write releases its claim, so a retry or replay of the same
+ * window records it; once the run succeeds, the error log is the only trace of the miss. Never
  * throws: the Slack alert and its failure handling stay exactly as they were. Returns how many
  * detections were written.
  */

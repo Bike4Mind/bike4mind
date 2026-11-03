@@ -19,9 +19,9 @@ vi.mock('@bike4mind/database', () => ({
   counterLogRepository: { findYoungAccountSpend: mocks.findYoungAccountSpend },
   adminSettingsRepository: {},
 }));
-vi.mock('@bike4mind/utils', () => ({
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   getSettingsMap: mocks.getSettingsMap,
-  getSettingsValue: (key: string, settings: Record<string, unknown>, fallback: unknown) => settings[key] ?? fallback,
 }));
 vi.mock('./youngAccountSpendShadowDetections', () => ({
   recordYoungAccountSpendShadowDetections: mocks.recordShadowDetections,
@@ -263,6 +263,7 @@ describe('young-account spend handler', () => {
       window: { start: new Date('2026-10-26T10:00:00Z'), end: new Date(event.time) },
       logger: expect.anything(),
     });
+    expect(mocks.log).toHaveBeenCalledWith('young-account-spend-shadow-detections', { recorded: 1, listed: 1 });
     expect(mocks.post).toHaveBeenCalledOnce();
   });
 
@@ -280,7 +281,8 @@ describe('young-account spend handler', () => {
   });
 
   it('skips recording, and still alerts, when shadow detection recording is switched off', async () => {
-    mocks.getSettingsMap.mockResolvedValue({ shadowDetectionRecordingEnabled: false });
+    // Stored admin settings are strings; the real setting parse must read 'false' as off.
+    mocks.getSettingsMap.mockResolvedValue({ shadowDetectionRecordingEnabled: 'false' });
     mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));
     expect(await handler(event)).toMatchObject({ status: 'alerted' });
     expect(mocks.recordShadowDetections).not.toHaveBeenCalled();

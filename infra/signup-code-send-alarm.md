@@ -85,6 +85,13 @@ accounts exceeds `YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS`. The message lists the top
 10 user ids by spend, the counts, and the window. It does not include emails.
 Each run logs `young-account-spend` with `windowStart`, `windowEnd` and the totals.
 
+A breached run also records one shadow detection per listed account (detector
+`youngAccountSpend`, would-action `contain`) for grading on the admin Detections
+page, before the Slack step, and logs `young-account-spend-shadow-detections` with
+the count. Recording never acts on an account and never fails the run. It is
+claimed per account and window, so a retry or replay of the same hour records
+nothing twice. The `shadowDetectionRecordingEnabled` admin setting turns it off.
+
 Both EventBridge delivery failures and exhausted Lambda retries (2, the default)
 reach a monitored 14-day DLQ. Each message is one failed hour, and its body is the
 original scheduled event. Messages queued before the target cleared SST's `{}`

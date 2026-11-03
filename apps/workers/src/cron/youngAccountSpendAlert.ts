@@ -120,7 +120,14 @@ export async function handler(event: unknown) {
   const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
   // Before the Slack step and never throws, so a delivery failure neither loses nor fails the record.
   if (getSettingsValue('shadowDetectionRecordingEnabled', settings, true)) {
-    await recordYoungAccountSpendShadowDetections({ summary, thresholds, window: { start, end }, logger });
+    const recorded = await recordYoungAccountSpendShadowDetections({
+      summary,
+      thresholds,
+      window: { start, end },
+      logger,
+    });
+    // 0 with listed spenders means every claim was taken, i.e. this window was already recorded.
+    logger.log('young-account-spend-shadow-detections', { recorded, listed: summary.topSpenders.length });
   }
   const webhookUrl = resolveSlackWebhookUrl('SlackLiveopsWebhookUrl', settings);
   if (!webhookUrl) {
