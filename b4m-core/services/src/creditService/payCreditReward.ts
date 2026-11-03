@@ -95,7 +95,12 @@ async function payNow(reward: HeldCreditRewardInput, adapters: PayCreditRewardAd
     }
     return { status: 'paid', creditTransactionId };
   } catch (error) {
-    await reservation.release();
+    // Outside a transaction a throw after the ledger insert leaves a committed row the draw must stay
+    // spent for; inside one the row rolls back and refundBudgetOnFailure hands the draw back.
+    const committed = await adapters.db.creditTransactions
+      .findOne({ transactionId: reward.transactionId })
+      .catch(() => null);
+    if (!committed) await reservation.release();
     throw error;
   }
 }

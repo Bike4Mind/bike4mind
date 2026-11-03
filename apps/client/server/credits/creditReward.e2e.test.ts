@@ -158,6 +158,23 @@ describe('payCreditReward', () => {
     expect(await signupGrantBudgetRepository.getSpent(trickleKey())).toBe(0);
   });
 
+  it('keeps the draw spent when the payout throws after its ledger row committed', async () => {
+    const user = await makeUser();
+    const creditHolderMethods = {
+      ...userRepository,
+      incrementCredits: async () => {
+        throw new Error('balance write failed');
+      },
+    } as unknown as typeof userRepository;
+    await expect(
+      creditService.payCreditReward(reward(user.id, 'projects'), { ...adapters, creditHolderMethods })
+    ).rejects.toThrow('balance write failed');
+    expect(await CreditTransaction.countDocuments({ transactionId: reward(user.id, 'projects').transactionId })).toBe(
+      1
+    );
+    expect(await signupGrantBudgetRepository.getSpent(trickleKey())).toBe(100);
+  });
+
   it('treats its own earlier draw as fresh when a transaction retries inside one refund scope', async () => {
     await userService.refundBudgetOnFailure(async () => {
       const first = await userService.reserveSignupGrantBudget(adapters, 'retry-tx', 100, { pool: 'trickle' });
