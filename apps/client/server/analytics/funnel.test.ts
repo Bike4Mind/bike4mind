@@ -291,6 +291,15 @@ describe('emitFunnelEvent', () => {
     expect(mockEmit.mock.calls[1][0].metadata).toEqual({ internal: true });
   });
 
+  it("drops a caller's lane marks from a customer's stage, so only the user record marks it", async () => {
+    await emitFunnelEvent({
+      user: { id: 'u1' },
+      event: 'signup_completed',
+      metadata: { method: 'otc', internal: true, lane: 'synthetic' },
+    });
+    expect(mockEmit.mock.calls[0][0].metadata).toEqual({ method: 'otc' });
+  });
+
   it("leaves a real user's stage unmarked, and sends no empty metadata", async () => {
     await emitFunnelEvent({ user: { id: 'u1', isSynthetic: false }, event: 'email_verified' });
     await emitFunnelEvent({

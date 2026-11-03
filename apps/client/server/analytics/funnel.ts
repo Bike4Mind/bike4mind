@@ -68,10 +68,12 @@ function laneFlagsToStore(lane: AccountLane): { isSynthetic?: true; isInternal?:
  * events carry the right mark either way. Never throws.
  */
 export async function recordAccountLane(user: NewAccount): Promise<AccountLane> {
-  const lane = await classifyAccount(user);
-  if (!lane.isSynthetic && !lane.isInternal) return lane;
+  let lane: AccountLane = { isSynthetic: false, isInternal: false };
   try {
-    await userRepository.update({ id: user.id, ...laneFlagsToStore(lane) });
+    lane = await classifyAccount(user);
+    if (lane.isSynthetic || lane.isInternal) {
+      await userRepository.update({ id: user.id, ...laneFlagsToStore(lane) });
+    }
   } catch (err) {
     console.warn('[b4m-analytics] account lane not persisted', err instanceof Error ? err.message : err);
   }
@@ -169,7 +171,9 @@ export async function emitFunnelEvent(opts: {
   visitId?: string;
 }): Promise<boolean> {
   const utm = opts.user.acquisition?.firstTouch;
-  const metadata = { ...opts.metadata, ...laneMetadata(opts.user) };
+  // Dropped, as emitBillingEvent drops them: only the user record marks a stage.
+  const { internal: _internal, lane: _lane, ...callerMetadata } = opts.metadata ?? {};
+  const metadata = { ...callerMetadata, ...laneMetadata(opts.user) };
   await emitProductEvent({
     productId: HOST_PRODUCT_ID,
     event: opts.event,
