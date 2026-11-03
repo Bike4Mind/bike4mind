@@ -130,6 +130,27 @@ describe('POST /api/test/create-user', () => {
     });
   });
 
+  describe('apiKeyTrustApproved', () => {
+    const trustFor = async (over: Record<string, unknown>) => {
+      const { res, status } = makeRes();
+      await handler(makeReq(over) as never, res);
+      expect(status).toHaveBeenCalledWith(201);
+      return h.createUser.mock.calls[0][0].record.apiKeyTrustApproved;
+    };
+
+    it('leaves the account untrusted by default, like a real signup', async () => {
+      expect(await trustFor({})).toBe(false);
+    });
+
+    it('admin-approves the account when passed true', async () => {
+      expect(await trustFor({ apiKeyTrustApproved: true })).toBe(true);
+    });
+
+    it('ignores a non-boolean "true"', async () => {
+      expect(await trustFor({ apiKeyTrustApproved: 'true' })).toBe(false);
+    });
+  });
+
   describe('includePredefinedTags', () => {
     const tagsFor = async (over: Record<string, unknown>) => {
       const { res, status } = makeRes();
