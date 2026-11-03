@@ -37,6 +37,7 @@ import { chatShellRootSx, columnStackSx, contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
 import { modelSwitchCredits } from './modelSwitchCost';
 import { ReasoningEffortPicker } from './ReasoningEffortPicker';
+import { GenerationSettingsPicker } from './GenerationSettingsPicker';
 import { PromptCacheTtlPicker } from './PromptCacheTtlPicker';
 import { CacheExpiryNote } from './CacheExpiryNote';
 import { ContextRing } from './ContextRing';
@@ -1349,6 +1350,12 @@ export function ChatShell({
                   effort={conversation.session?.reasoningEffort ?? 'default'}
                   disabled={!activeId}
                   onSelect={effort => void conversation.setReasoningEffort(effort)}
+                />
+                <GenerationSettingsPicker
+                  model={modelOption}
+                  generation={conversation.session?.generation}
+                  disabled={!activeId}
+                  onChange={generation => void conversation.setGeneration(generation)}
                 />
                 <PromptCacheTtlPicker
                   model={modelOption}

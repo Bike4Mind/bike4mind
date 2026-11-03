@@ -18,6 +18,7 @@ import type {
 } from '@shared/chat';
 import { normalizeSessionTitle } from '@shared/chat';
 import { isUntouchedImport } from './grouping';
+import type { GenerationSettings } from '@shared/generation';
 import type { CreatedSession } from '@shared/ipc';
 import type { ModelRuntimeStatus } from '@shared/models';
 import type { SidebarSectionsState } from '@shared/sidebarSections';
@@ -503,6 +504,8 @@ export interface ConversationController {
   setReasoningEffort: (effort: ReasoningEffortSetting) => Promise<void>;
   /** How long the server keeps this conversation's prompt cache. Sent only on a model that takes the hour. */
   setPromptCacheTtl: (ttl: PromptCacheTtl) => Promise<void>;
+  /** Replace this conversation's sampling and output overrides; `{}` returns every one to the model default. */
+  setGeneration: (generation: GenerationSettings) => Promise<void>;
   /**
    * Set how much this conversation may do without asking. Driven by the composer pill, from a
    * click, and from nothing else: this is the only path to the mode in the renderer.
@@ -1174,6 +1177,17 @@ export function useConversation(
     [sessionId, onSummaryChanged]
   );
 
+  const setGeneration = useCallback(
+    async (generation: GenerationSettings) => {
+      if (!sessionId) return;
+      const updated = await window.b4m.chat.setSessionGeneration(sessionId, generation);
+      if (!updated) return;
+      setSession(current => (current ? { ...current, generation: updated.generation } : current));
+      onSummaryChanged(updated);
+    },
+    [sessionId, onSummaryChanged]
+  );
+
   const setApprovalMode = useCallback(
     async (mode: ChatApprovalMode) => {
       if (!sessionId) return;
@@ -1347,6 +1361,7 @@ export function useConversation(
     settleLocalModel,
     setReasoningEffort,
     setPromptCacheTtl,
+    setGeneration,
     setApprovalMode,
     project,
     respondToApproval,
