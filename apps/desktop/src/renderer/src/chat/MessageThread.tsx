@@ -233,7 +233,7 @@ function ReplyCost({ usage }: { usage?: ChatUsage }) {
   const credits = formatCreditsSpent(usage);
   const rate = showRate ? formatTokenRate(usage?.rate) : null;
   if (!credits && !rate) return null;
-  const details = [describeReplyCost(usage, showDollars), rate ? describeTokenRate(usage?.rate) : null].filter(
+  const details = [describeReplyCost(usage, showDollars), rate ? describeTokenRate(usage?.rate, usage?.outputTokens) : null].filter(
     (line): line is string => line !== null
   );
 

@@ -118,7 +118,7 @@ export function TurnStatus({ turn, activity }: { turn: TurnProgress | null; acti
   // The one place a detail is ever built, and only while it is on screen.
   const detail = open && expandable ? activityDetail(live) : null;
   const rate = showRate ? formatTokenRate(turn.usage?.rate) : null;
-  const title = [describeSplit(turn.usage), rate ? describeTokenRate(turn.usage?.rate) : null].filter(
+  const title = [describeSplit(turn.usage), rate ? describeTokenRate(turn.usage?.rate, turn.usage?.outputTokens) : null].filter(
     (part): part is string => part !== null
   );
 
