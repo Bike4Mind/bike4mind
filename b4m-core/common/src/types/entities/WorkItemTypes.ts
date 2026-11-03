@@ -137,12 +137,14 @@ export interface IWorkItemRepository extends IBaseRepository<IWorkItem> {
   /**
    * Scoped update - returns null when the item is missing or owned by someone else. With `expectedStatus`
    * it only applies while the item still has that status, so a loop's fold landing mid-request is not overwritten.
+   * `guard` narrows that further to an exact `statusReason` and/or `loopId`.
    */
   updateForUser(
     id: string,
     userId: string,
     patch: WorkItemPatch,
-    expectedStatus?: WorkItemStatus
+    expectedStatus?: WorkItemStatus,
+    guard?: { statusReason?: string; loopId?: string }
   ): Promise<IWorkItem | null>;
 
   /** Soft delete. Returns false when nothing matched. */

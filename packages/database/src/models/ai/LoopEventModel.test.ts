@@ -145,6 +145,22 @@ describe('LoopEventRepository', () => {
       expect(await loopEventRepository.listResumedUnfolded(10)).toEqual([]);
     });
 
+    it('reopenAsked undoes only the resolution written at that time', async () => {
+      await loopEventRepository.recordUnsure(asked());
+      const event = await LoopEvent.findOne({});
+      const at = new Date(4000);
+      await loopEventRepository.resolveAsked(event!.id, USER, LOOP, { outcome: 'resumed', at, note: 'EU' });
+
+      await loopEventRepository.reopenAsked(event!.id, new Date(5000));
+      expect((await LoopEvent.findById(event!.id))!.resolution?.outcome).toBe('resumed');
+
+      await loopEventRepository.reopenAsked(event!.id, at);
+      const reopened = (await LoopEvent.findById(event!.id))!.toJSON();
+      expect(reopened.resolution).toBeUndefined();
+      expect(reopened.foldedAt).toBeUndefined();
+      expect(await loopEventRepository.resolveAsked(event!.id, USER, LOOP, { outcome: 'rejected', at })).not.toBeNull();
+    });
+
     it("listAnsweredForTicket returns the ticket's answered asks, newest first", async () => {
       const at = new Date(3000);
       for (const [executionId, note] of [

@@ -53,6 +53,7 @@ const loopEvents = vi.hoisted(() => ({
   deleteManyForLoop: vi.fn(),
   findById: vi.fn(),
   resolveAsked: vi.fn(),
+  reopenAsked: vi.fn(),
 }));
 const directives = vi.hoisted(() => ({
   listForLoop: vi.fn(),
@@ -746,7 +747,10 @@ describe('POST /api/loops/:id/events/:eventId/resolve', () => {
       OID,
       expect.objectContaining({ outcome: 'resumed', by: 'u1', note: 'EU' })
     );
-    expect(tickets.updateForUser).toHaveBeenCalledWith('t1', 'u1', { status: 'open', statusReason: null }, 'blocked');
+    expect(tickets.updateForUser).toHaveBeenCalledWith('t1', 'u1', { status: 'open', statusReason: null }, 'blocked', {
+      statusReason: 'Unsure: EU or US?',
+      loopId: OID,
+    });
     expect(repo.makeDueNow).toHaveBeenCalledWith(OID, expect.any(Date));
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ source: 'asked', resolution: { outcome: 'resumed', note: 'EU' } });
@@ -759,15 +763,42 @@ describe('POST /api/loops/:id/events/:eventId/resolve', () => {
       't1',
       'u1',
       { statusReason: 'Rejected by owner: not worth it' },
-      'blocked'
+      'blocked',
+      { statusReason: 'Unsure: EU or US?', loopId: OID }
     );
     await resolve({ outcome: 'rejected' }).result;
     expect(tickets.updateForUser).toHaveBeenLastCalledWith(
       't1',
       'u1',
       { statusReason: 'Rejected by owner' },
-      'blocked'
+      'blocked',
+      { statusReason: 'Unsure: EU or US?', loopId: OID }
     );
+    expect(repo.makeDueNow).not.toHaveBeenCalled();
+  });
+
+  it('leaves a ticket no longer parked on this question alone and does not wake the loop', async () => {
+    tickets.updateForUser.mockResolvedValue(null);
+    const { res, result } = resolve({ outcome: 'resumed', note: 'EU' });
+    await result;
+    expect(res._getStatusCode()).toBe(200);
+    expect(repo.makeDueNow).not.toHaveBeenCalled();
+  });
+
+  it('reopens the question when the ticket write fails, so the owner can answer again', async () => {
+    tickets.updateForUser.mockRejectedValue(new Error('db down'));
+    loopEvents.reopenAsked.mockRejectedValue(new Error('still down'));
+    await expect(resolve({ outcome: 'resumed', note: 'EU' }).result).rejects.toThrow('db down');
+    expect(loopEvents.reopenAsked).toHaveBeenCalledWith(EVENT, expect.any(Date));
+    expect(repo.makeDueNow).not.toHaveBeenCalled();
+  });
+
+  it('skips the ticket for a question with no ticket', async () => {
+    loopEvents.resolveAsked.mockImplementation(async (_id, _u, _l, resolution) =>
+      asked({ resolution, workItemId: undefined })
+    );
+    await resolve({ outcome: 'resumed', note: 'EU' }).result;
+    expect(tickets.updateForUser).not.toHaveBeenCalled();
   });
 
   it.each([

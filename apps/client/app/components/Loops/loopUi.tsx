@@ -1,5 +1,6 @@
 import { Box, Chip, Stack, Typography, type ColorPaletteProp } from '@mui/joy';
-import ReactMarkdown from 'react-markdown';
+import type { ComponentProps } from 'react';
+import ReactMarkdown, { type ExtraProps } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   loopStatusNeedsOwner,
@@ -82,18 +83,43 @@ export function LoopStatusChip({ loop }: { loop: Pick<ILoop, 'status' | 'statusR
 export const unavailableTools = (tools: readonly string[], availability: ToolAvailability | undefined) =>
   tools.filter(tool => isToolKeyMissing(tool as B4MLLMTools, availability));
 
-const markdownComponents = { ...createMarkdownComponents({ highlightText: node => node }), a: link };
+export const unavailableToolsMessage = (names: string[]) =>
+  `${names.join(', ')} ${names.length === 1 ? "isn't" : "aren't"} available on this server, so runs skip ${
+    names.length === 1 ? 'it' : 'them'
+  }.`;
+
+const MarkdownLink = link;
+const markdownComponents = {
+  ...createMarkdownComponents({ highlightText: node => node }),
+  a: link,
+  // Chat's paragraph carries the chat reply testid.
+  p: ({ node, ...props }: ComponentProps<'p'> & ExtraProps) => <p {...props} />,
+  // Model-written loop text can come from untrusted pages; a remote image would load on view, so link it instead.
+  img: ({ src, alt }: ComponentProps<'img'>) => {
+    const href = typeof src === 'string' ? src : undefined;
+    return <MarkdownLink href={href}>{alt || href}</MarkdownLink>;
+  },
+};
 
 /**
  * Model-written loop text (questions, directive threads, ticket reasons, memory) rendered with chat's markdown
  * components. No rehype-raw, so raw HTML in the text stays escaped.
  */
-export function LoopMarkdown({ children, testId }: { children: string; testId?: string }) {
+export function LoopMarkdown({
+  children,
+  testId,
+  level = 'body-sm',
+}: {
+  children: string;
+  testId?: string;
+  level?: 'body-sm' | 'body-xs';
+}) {
   return (
     <Box
       data-testid={testId}
       sx={{
-        typography: 'body-sm',
+        typography: level,
+        color: 'inherit',
         overflowWrap: 'anywhere',
         '& > :first-of-type': { mt: 0 },
         '& > :last-child': { mb: 0 },

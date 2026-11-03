@@ -81,7 +81,9 @@ function TicketCard({
       </Stack>
       {ticket.status === 'blocked' && ticket.statusReason && (
         <Typography level="body-xs" color="danger" component="div">
-          <LoopMarkdown testId="loop-ticket-blocked-reason">{ticket.statusReason}</LoopMarkdown>
+          <LoopMarkdown level="body-xs" testId="loop-ticket-blocked-reason">
+            {ticket.statusReason}
+          </LoopMarkdown>
         </Typography>
       )}
       <Select

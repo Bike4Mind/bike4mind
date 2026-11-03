@@ -290,7 +290,8 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
           const loop = await ownLoop(loopId);
 
           // Event first: if the ticket write then fails, the question is still in the Log and answerable,
-          // instead of a ticket blocked with nothing to resolve it from.
+          // instead of a ticket blocked with nothing to resolve it from. An answer landing in the ms between the
+          // two writes leaves the ticket parked under a resolved event; the owner then moves it by hand.
           await loopEventRepository.recordUnsure({
             source: 'asked',
             loopId,
@@ -303,7 +304,8 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
           });
           const patch = ticketMovePatch(loop, existing, { status: 'blocked', reason: unsureReason(question) });
           const updated = await workItemRepository.updateForUser(existing.id, userId, patch, existing.status);
-          if (!updated) throw new ConflictError('ticket changed while saving; list it again and retry');
+          // Not an error: the question is already recorded, and a retry would ask it twice.
+          if (!updated) return 'Question recorded for the owner. The ticket changed meanwhile, so it was not parked.';
           await makeDueIfReady(loop);
           return summarize(updated);
         }),

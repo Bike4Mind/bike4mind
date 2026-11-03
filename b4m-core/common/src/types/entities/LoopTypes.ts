@@ -225,6 +225,8 @@ export interface ILoopEventRepository extends IBaseRepository<ILoopEvent> {
     loopId: string,
     resolution: NonNullable<ILoopEvent['resolution']>
   ): Promise<ILoopEvent | null>;
+  /** Undoes a `resolveAsked` written at `at` (when its ticket write failed), so the owner can answer again. */
+  reopenAsked(id: string, at: Date): Promise<void>;
   /** A ticket's resumed `asked` events that carry the owner's answer, newest first. */
   listAnsweredForTicket(userId: string, workItemId: string, limit: number): Promise<ILoopEvent[]>;
   deleteManyForLoop(userId: string, loopId: string): Promise<number>;

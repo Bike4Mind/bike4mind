@@ -23,7 +23,7 @@ import { getToolDisplayName } from '@client/app/utils/toolMapping';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
 import { useGetAgents } from '@client/app/hooks/data/agents';
 import { useConfig } from '@client/app/hooks/data/settings';
-import { unavailableTools } from '@client/app/components/Loops/loopUi';
+import { unavailableTools, unavailableToolsMessage } from '@client/app/components/Loops/loopUi';
 import { useCreateLoop, useLoops, useUpdateLoop, type LoopFormPayload } from '@client/app/hooks/data/loops';
 
 // Limits mirror apps/client/server/utils/loopValidation.ts; keep in sync.
@@ -281,8 +281,7 @@ export default function LoopFormModal({ open, onClose, loop }: LoopFormModalProp
               </FormHelperText>
             ) : (
               <FormHelperText sx={{ color: 'warning.plainColor' }} data-testid="loop-form-tools-unavailable-warning">
-                {pickedMissing.join(', ')} {pickedMissing.length === 1 ? "isn't" : "aren't"} available on this server,
-                so runs skip {pickedMissing.length === 1 ? 'it' : 'them'}.
+                {unavailableToolsMessage(pickedMissing)}
               </FormHelperText>
             )}
           </FormControl>

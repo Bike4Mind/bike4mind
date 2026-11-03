@@ -24,6 +24,8 @@ interface LoopEventLogProps {
   loops?: { id: string; name: string }[];
   onOverride?: OnOverrideDirective;
   onResolveUnsure?: OnResolveUnsure;
+  /** The unsure event whose answer is saving; its buttons are disabled meanwhile. */
+  resolvingUnsureId?: string;
 }
 
 const DIRECTIVE_STATE: Record<LoopDirectiveState, { label: string; color: ColorPaletteProp }> = {
@@ -59,6 +61,7 @@ export default function LoopEventLog({
   loops,
   onOverride,
   onResolveUnsure,
+  resolvingUnsureId,
 }: LoopEventLogProps) {
   if (!data) return null;
   if (data.length === 0) {
@@ -74,7 +77,15 @@ export default function LoopEventLog({
       {data.map(event => {
         switch (event.kind) {
           case 'unsure':
-            return <UnsureRow key={event.id} event={event} onViewRun={onViewRun} onResolve={onResolveUnsure} />;
+            return (
+              <UnsureRow
+                key={event.id}
+                event={event}
+                onViewRun={onViewRun}
+                onResolve={onResolveUnsure}
+                resolving={resolvingUnsureId === event.id}
+              />
+            );
           case 'directive':
             return (
               <DirectiveRow
@@ -100,10 +111,12 @@ function UnsureRow({
   event,
   onViewRun,
   onResolve,
+  resolving = false,
 }: {
   event: ILoopUnsureRow;
   onViewRun: (executionId: string) => void;
   onResolve?: OnResolveUnsure;
+  resolving?: boolean;
 }) {
   const [answer, setAnswer] = useState('');
   const resolution = RESOLUTION[event.resolution?.outcome ?? 'open'];
@@ -147,7 +160,7 @@ function UnsureRow({
             <Stack direction="row" gap={1}>
               <Button
                 size="sm"
-                disabled={!answer.trim()}
+                disabled={resolving || !answer.trim()}
                 onClick={() => onResolve(event.id, 'resumed', answer.trim())}
                 data-testid="loop-log-unsure-resume-btn"
               >
@@ -157,6 +170,7 @@ function UnsureRow({
                 size="sm"
                 variant="outlined"
                 color="neutral"
+                disabled={resolving}
                 onClick={() => onResolve(event.id, 'rejected', answer.trim() || undefined)}
                 data-testid="loop-log-unsure-reject-btn"
               >

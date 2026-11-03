@@ -5,7 +5,7 @@ import { LOOP_DIRECTIVE_NOTE_MAX, type LoopGateOutcome } from '@bike4mind/common
 import { BadRequestError } from '@bike4mind/utils';
 import { ConflictError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { assertLoopsEnabled, LOOP_RATE_LIMIT, LOOP_RATE_WINDOW_MS } from '@server/utils/loopValidation';
-import { makeDueIfReady } from '@server/utils/loopTickets';
+import { makeDueIfReady, unsureReason, unsureRow } from '@server/utils/loopTickets';
 
 /**
  * The owner's answer to a question a loop run asked with `loop_ticket_unsure`. `resumed` (with the answer as
@@ -51,36 +51,27 @@ const handler = baseApi({ auth: 'jwtOnly' })
     if (!resolved) throw new ConflictError('Event changed while saving; reload and try again');
 
     if (resolved.workItemId) {
-      // Conditional on blocked, so a ticket the owner already moved by hand is left alone.
-      if (outcome === 'resumed') {
-        await workItemRepository.updateForUser(
-          resolved.workItemId,
-          userId,
-          { status: 'open', statusReason: null },
-          'blocked'
-        );
-        await makeDueIfReady(loop, now);
-      } else {
-        await workItemRepository.updateForUser(
-          resolved.workItemId,
-          userId,
-          { statusReason: `Rejected by owner${note ? `: ${note}` : ''}`.slice(0, 1000) },
-          'blocked'
-        );
+      // Only while the ticket is still parked on this question in this loop: one the owner moved by hand, or a
+      // later run blocked for another reason, is left alone.
+      const guard = { statusReason: unsureReason(resolved.reason), loopId: loop.id };
+      let reopened = false;
+      try {
+        const patch =
+          outcome === 'resumed'
+            ? { status: 'open' as const, statusReason: null }
+            : { statusReason: `Rejected by owner${note ? `: ${note}` : ''}`.slice(0, 1000) };
+        reopened =
+          !!(await workItemRepository.updateForUser(resolved.workItemId, userId, patch, 'blocked', guard)) &&
+          outcome === 'resumed';
+      } catch (error) {
+        // The ticket is still parked on the question, so reopen it for the owner to answer again.
+        await loopEventRepository.reopenAsked(resolved.id, now).catch(() => undefined);
+        throw error;
       }
+      if (reopened) await makeDueIfReady(loop, now);
     }
 
-    res.json({
-      id: resolved.id,
-      kind: resolved.kind,
-      source: resolved.source,
-      executionId: resolved.executionId,
-      workItemId: resolved.workItemId,
-      ticketTitle: resolved.ticketTitle,
-      reason: resolved.reason,
-      resolution: resolved.resolution,
-      createdAt: resolved.createdAt,
-    });
+    res.json(unsureRow(resolved));
   });
 
 export default handler;

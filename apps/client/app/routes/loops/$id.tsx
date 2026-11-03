@@ -28,6 +28,7 @@ import {
   LoopStatusChip,
   nextRunLabel,
   unavailableTools,
+  unavailableToolsMessage,
 } from '@client/app/components/Loops/loopUi';
 import {
   countNeedsYou,
@@ -110,8 +111,7 @@ export default function LoopDetailPage() {
         </Stack>
         {missingTools.length > 0 && (
           <Typography level="body-sm" color="warning" data-testid="loop-detail-unavailable-tools">
-            {missingTools.join(', ')} {missingTools.length === 1 ? "isn't" : "aren't"} available on this server, so runs
-            skip {missingTools.length === 1 ? 'it' : 'them'}.
+            {unavailableToolsMessage(missingTools)}
           </Typography>
         )}
         <LoopOversightLine loopId={loop.id} oversees={loop.oversees ?? []} loops={loops} />
@@ -141,6 +141,7 @@ export default function LoopDetailPage() {
                 onResolveUnsure={(eventId, outcome, note) =>
                   resolveUnsure.mutate({ loopId: loop.id, eventId, outcome, note })
                 }
+                resolvingUnsureId={resolveUnsure.isPending ? resolveUnsure.variables?.eventId : undefined}
               />
             </AccordionDetails>
           </Accordion>

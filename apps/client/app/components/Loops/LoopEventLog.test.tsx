@@ -20,10 +20,15 @@ const event = (overrides: Partial<ILoopUnsureRow> = {}): ILoopUnsureRow => ({
   ...overrides,
 });
 
-const renderLog = (data?: ILoopEventRow[], onViewRun = vi.fn(), onResolveUnsure?: Mock) =>
+const renderLog = (data?: ILoopEventRow[], onViewRun = vi.fn(), onResolveUnsure?: Mock, resolvingUnsureId?: string) =>
   render(
     <CssVarsProvider theme={appTheme}>
-      <LoopEventLog data={data} onViewRun={onViewRun} onResolveUnsure={onResolveUnsure} />
+      <LoopEventLog
+        data={data}
+        onViewRun={onViewRun}
+        onResolveUnsure={onResolveUnsure}
+        resolvingUnsureId={resolvingUnsureId}
+      />
     </CssVarsProvider>
   );
 
@@ -92,6 +97,13 @@ describe('LoopEventLog', () => {
       expect(onResolve).toHaveBeenLastCalledWith('e1', 'rejected', 'EU');
     });
 
+    it("disables that row's buttons while its answer is saving", () => {
+      renderLog([asked()], vi.fn(), vi.fn(), 'e1');
+      fireEvent.change(screen.getByTestId('loop-log-unsure-answer-input'), { target: { value: 'EU' } });
+      expect(screen.getByTestId('loop-log-unsure-resume-btn')).toBeDisabled();
+      expect(screen.getByTestId('loop-log-unsure-reject-btn')).toBeDisabled();
+    });
+
     it('rejects without an answer', () => {
       const onResolve = vi.fn();
       renderLog([asked()], vi.fn(), onResolve);
@@ -128,6 +140,14 @@ describe('LoopEventLog', () => {
     expect(link).toHaveAttribute('target', '_blank');
     expect(link.getAttribute('rel')).toContain('noopener');
     expect(reason.querySelector('script')).toBeNull();
+  });
+
+  it('renders a markdown image as a link instead of loading it', () => {
+    renderLog([event({ reason: '![leak](https://e.com/x.png)' })]);
+    const reason = screen.getByTestId('loop-log-unsure-reason');
+    expect(reason.querySelector('img')).toBeNull();
+    expect(reason.querySelector('a')).toHaveAttribute('href', 'https://e.com/x.png');
+    expect(reason).toHaveTextContent('leak');
   });
 });
 

@@ -626,7 +626,8 @@ describe('runLoopSchedulerTick - unsure', () => {
       stage: 'todo',
     });
 
-    // The owner answers: the resolve route reopens the ticket, and the next run is shown the answer.
+    // The owner answers: these three writes mirror the resolve route (apps/client, tested there), and the next
+    // run is shown the answer.
     const [asked] = await eventsOf(loop.id);
     await loopEventRepository.resolveAsked(asked.id, 'user-1', loop.id, { outcome: 'resumed', at: NOW, note: 'EU' });
     await workItemRepository.updateForUser(ticket.id, 'user-1', { status: 'open', statusReason: null }, 'blocked');

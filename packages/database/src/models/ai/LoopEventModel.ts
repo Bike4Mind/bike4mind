@@ -76,6 +76,14 @@ export class LoopEventRepository extends BaseRepository<ILoopEvent> implements I
     return doc ? doc.toJSON() : null;
   }
 
+  async reopenAsked(id: string, at: Date): Promise<void> {
+    if (!mongoose.isValidObjectId(id)) return;
+    await this.loopEventModel.updateOne(
+      { _id: id, source: 'asked', 'resolution.at': at },
+      { $unset: { resolution: 1, foldedAt: 1 } }
+    );
+  }
+
   async listAnsweredForTicket(userId: string, workItemId: string, limit: number): Promise<ILoopEvent[]> {
     const results = await this.loopEventModel
       .find({

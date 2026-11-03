@@ -223,6 +223,20 @@ describe('loop_ticket_unsure', () => {
     expect(result).toMatchObject({ status: 'blocked', statusReason: 'Unsure: EU or US?' });
   });
 
+  it('records the event before parking the ticket, and does not invite a retry when the park loses a race', async () => {
+    items.findByIdForUser.mockResolvedValue(ticket());
+    items.updateForUser.mockResolvedValueOnce(null);
+    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
+
+    const result = await run(tools, 'loop_ticket_unsure', { id: 't1', question: 'Q' });
+
+    expect(result).not.toMatch(/^Error/);
+    expect(result).toContain('not parked');
+    expect(events.recordUnsure.mock.invocationCallOrder[0]).toBeLessThan(
+      items.updateForUser.mock.invocationCallOrder[0]
+    );
+  });
+
   it("refuses an empty question, another loop's ticket and a closed ticket, writing nothing", async () => {
     const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
     items.findByIdForUser.mockResolvedValue(ticket());
