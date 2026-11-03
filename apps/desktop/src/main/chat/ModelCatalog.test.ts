@@ -251,6 +251,24 @@ describe('ModelCatalog', () => {
     expect(local.models).toHaveBeenCalledOnce();
   });
 
+  it('keeps the last local list for turns once expired, while the next list reads again', async () => {
+    const local = { models: vi.fn().mockResolvedValue([{ id: 'local:srv-a:qwen', name: 'qwen' }]) };
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => null,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      local as never
+    );
+    await catalog.listLocal();
+    catalog.expireLocal();
+    expect(catalog.lastLocal()?.map(model => model.id)).toEqual(['local:srv-a:qwen']);
+    expect(catalog.cached()).toBeNull();
+    await catalog.listLocal();
+    expect(local.models).toHaveBeenCalledTimes(2);
+  });
+
   it('merges the local list it read, even when forgetLocal runs during the hosted read', async () => {
     let finishHosted: (value: unknown) => void = () => undefined;
     get.mockImplementation(() => new Promise(resolve => (finishHosted = resolve)));

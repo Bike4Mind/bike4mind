@@ -2517,11 +2517,13 @@ export class ChatService {
 
   /**
    * The last local list when it still has `model`, so a turn costs Ollama no discovery; otherwise one forced
-   * read. A model removed outside the app since that list fails its turn, which forgets the list.
+   * read. A model removed outside the app since that list fails its turn, which forgets the list. A row marked
+   * unavailable was listed while its server was down or still listing, without the model's capabilities.
    */
   private async localModelsFor(model: string): Promise<ChatModelOption[]> {
     const last = this.deps.models?.lastLocal?.();
-    if (last && findModelOption(last, model)) return last;
+    const cached = findModelOption(last ?? undefined, model);
+    if (last && cached && cached.unavailable === undefined) return last;
     return (await this.deps.models?.listLocal?.(true)) ?? [];
   }
 

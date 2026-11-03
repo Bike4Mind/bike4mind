@@ -123,7 +123,7 @@ export interface ModelServerRegistryDeps {
   logger: { debug(message: string): void; warn(message: string): void };
   /** Called with the full list whenever a server or its health changes. */
   changed?(servers: ModelServerView[]): void;
-  /** A server was added, saved or removed, so a model list read before now is out of date. */
+  /** A server was added, saved or removed, or its tools changed, so a model list read before now is out of date. */
   edited?(): void;
   /** A server's model listing outlasted the picker's wait and has now finished, so the picker should list again. */
   listedLate?(serverId: string): void;
@@ -792,7 +792,10 @@ export class ModelServerRegistry {
             fetch,
             hasCredentials,
             redact: redactServerResponse,
-            toolsChanged: () => this.emit(),
+            toolsChanged: () => {
+              this.deps.edited?.();
+              this.emit();
+            },
           });
     const runtime: LocalRuntime =
       record.kind === 'ollama'

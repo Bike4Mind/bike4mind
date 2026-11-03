@@ -28,11 +28,11 @@ export function useModelHub(serverId: string, identity: string | null = null): M
    * identity at the start means the server list had not loaded yet, so the identity at the end decides.
    */
   const keep = useCallback(
-    (next: InstalledModelsResult, startedWith: string | null, dropsAt: number) => {
+    (next: InstalledModelsResult, startedWith: string | null, cutsAt: number) => {
       const now = viewing.current;
       if (!next.ok || now.serverId !== serverId || now.identity === null) return;
       if (startedWith !== null && startedWith !== now.identity) return;
-      if (installedCache.drops(serverId) !== dropsAt) return;
+      if (installedCache.cuts(serverId) !== cutsAt) return;
       installedCache.set(serverId, now.identity, next.models, Date.now());
     },
     [serverId]
@@ -51,7 +51,7 @@ export function useModelHub(serverId: string, identity: string | null = null): M
     const mine = ++statusSeq.current;
     const mineInstalled = ++installedSeq.current;
     const startedWith = viewing.current.identity;
-    const dropsAt = installedCache.drops(serverId);
+    const cutsAt = installedCache.cuts(serverId);
     const nextStatus = await window.b4m.models.getStatus(serverId);
     if (mine !== statusSeq.current) return;
     showStatus(nextStatus);
@@ -62,17 +62,17 @@ export function useModelHub(serverId: string, identity: string | null = null): M
           error: { kind: 'runtime-unavailable', message: nextStatus.error ?? 'Ollama is not running.' },
         };
     if (mineInstalled !== installedSeq.current) return;
-    keep(nextInstalled, startedWith, dropsAt);
+    keep(nextInstalled, startedWith, cutsAt);
     setInstalled(nextInstalled);
   }, [serverId, showStatus, keep]);
 
   const reloadInstalled = useCallback(async () => {
     const mine = ++installedSeq.current;
     const startedWith = viewing.current.identity;
-    const dropsAt = installedCache.drops(serverId);
+    const cutsAt = installedCache.cuts(serverId);
     const next = await window.b4m.models.listInstalled(serverId);
     if (mine !== installedSeq.current) return;
-    keep(next, startedWith, dropsAt);
+    keep(next, startedWith, cutsAt);
     setInstalled(next);
   }, [serverId, keep]);
 

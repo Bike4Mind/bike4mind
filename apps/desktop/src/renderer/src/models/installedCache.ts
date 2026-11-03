@@ -37,18 +37,25 @@ export class InstalledCache {
     this.#entries.set(serverId, { identity, models, listedAt });
   }
 
-  readonly #drops = new Map<string, number>();
+  readonly #cuts = new Map<string, number>();
+
+  /**
+   * Listings of the server started before now are not cached. A removal calls it before and after it runs, since a
+   * listing started in between may have been answered before the delete.
+   */
+  cutListings(serverId: string): void {
+    this.#cuts.set(serverId, this.cuts(serverId) + 1);
+  }
+
+  /** Counts cutListings calls for a server; a listing that started at another count is not cached. */
+  cuts(serverId: string): number {
+    return this.#cuts.get(serverId) ?? 0;
+  }
 
   /** A model removed through the app leaves that server's cached list too. */
   dropModel(serverId: string, name: string): void {
-    this.#drops.set(serverId, this.drops(serverId) + 1);
     const entry = this.#entries.get(serverId);
     if (entry) this.#entries.set(serverId, { ...entry, models: entry.models.filter(model => model.name !== name) });
-  }
-
-  /** Counts dropModel calls for a server; a listing started before the latest one may still hold the model. */
-  drops(serverId: string): number {
-    return this.#drops.get(serverId) ?? 0;
   }
 
   /** Drops entries for servers no longer saved, or saved under the same id with another address or kind. */
@@ -61,7 +68,7 @@ export class InstalledCache {
 
   clear(): void {
     this.#entries.clear();
-    this.#drops.clear();
+    this.#cuts.clear();
   }
 }
 

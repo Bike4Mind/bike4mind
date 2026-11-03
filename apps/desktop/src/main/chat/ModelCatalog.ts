@@ -180,11 +180,11 @@ export class ModelCatalog {
   }
 
   /**
-   * After a server's health changed: the next list reads again, but a read in flight still caches its result,
-   * since a picker read can itself be what changed that health.
+   * After a server's health changed: the next list reads again while lastLocal keeps the rows, and a read in flight
+   * still caches its result, since a picker read can itself be what changed that health.
    */
   expireLocal(): void {
-    this.localCache = null;
+    if (this.localCache) this.localCache = { ...this.localCache, expiresAt: 0 };
   }
 
   private mergeLocal(hosted: ChatModelOption[], local = this.freshLocal()): ChatModelOption[] {

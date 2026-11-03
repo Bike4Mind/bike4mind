@@ -12,6 +12,7 @@ import {
   type ServerEndpoint,
   type SshEndpoint,
 } from '@bike4mind/local-models/servers';
+import { ModelCatalog } from '../chat/ModelCatalog';
 import type { OllamaLocal } from '../chat/OllamaLocal';
 import { LocalModels } from './LocalModels';
 
@@ -393,6 +394,61 @@ describe('ModelServerRegistry', () => {
     expect(edited).toHaveBeenCalledTimes(2);
     await servers.remove(id);
     expect(edited).toHaveBeenCalledTimes(3);
+  });
+
+  it('caches no model list read during which a server turned its tools back on', async () => {
+    let refuseTools = true;
+    const fetchFor = (): FetchLike => async input => {
+      const path = new URL(String(input)).pathname;
+      if (path === '/v1/models') return json({ data: [{ id: 'm', owned_by: 'vllm' }] });
+      if (path === '/v1/chat/completions')
+        return refuseTools ? json({ error: '"auto" tool choice requires --enable-auto-tool-choice' }, 400) : json({});
+      return json({ error: 'not found' }, 404);
+    };
+    const holder: { catalog?: ModelCatalog } = {};
+    const servers = new ModelServerRegistry({
+      store: new ModelServerStore(cipher, memoryFile(), { debug: () => undefined, warn: () => undefined }),
+      logger: { debug: () => undefined, warn: () => undefined },
+      changed: () => holder.catalog?.expireLocal(),
+      edited: () => holder.catalog?.forgetLocal(),
+      fetchFor,
+      localFetch: async () => json({ version: '0.12.0' }),
+    });
+    let computerGate = Promise.resolve();
+    const computer = { models: async () => computerGate.then(() => []) };
+    const catalog = new ModelCatalog(
+      {
+        logger: { debug: () => undefined, warn: () => undefined },
+        getApiClient: () => null,
+        getEnvironmentUrl: () => '',
+      },
+      new LocalModels(computer as unknown as OllamaLocal, servers)
+    );
+    holder.catalog = catalog;
+    await servers.add({
+      address: 'http://192.168.1.20:8000',
+      credential: none,
+      name: 'gpu vllm',
+      kind: 'openai-compatible',
+      access: 'chat',
+    });
+    const view = async () => (await servers.views())[1];
+    await vi.waitFor(async () => expect((await view()).toolsHint).toMatch(/without tool calling/));
+    const serverRows = vi.spyOn(servers, 'models');
+
+    let release = () => {};
+    computerGate = new Promise(resolve => (release = resolve));
+    const read = catalog.listLocal(true);
+    await vi.waitFor(() => expect(serverRows).toHaveBeenCalled());
+    expect((await serverRows.mock.results[0].value)[0].supportsTools).toBe(false);
+    refuseTools = false;
+    await servers.check((await view()).id);
+    await vi.waitFor(async () => expect((await view()).toolsHint).toBeUndefined());
+    release();
+    await read;
+
+    expect(catalog.lastLocal()).toBeNull();
+    expect((await catalog.listLocal())[0]).not.toHaveProperty('supportsTools');
   });
 
   it('keys models by server so two servers can offer the same model', async () => {

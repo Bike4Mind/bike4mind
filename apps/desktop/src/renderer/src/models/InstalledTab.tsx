@@ -215,9 +215,12 @@ export function InstalledTab({
   }, [canManage]);
 
   const remove = async (model: LocalModelEntry, serverId: string | undefined) => {
+    const cacheId = serverId ?? LOCAL_SERVER_ID;
     setRemoving(true);
+    installedCache.cutListings(cacheId);
     const result = await window.b4m.models.remove(model.name, serverId);
-    if (result.ok) installedCache.dropModel(serverId ?? LOCAL_SERVER_ID, model.name);
+    installedCache.cutListings(cacheId);
+    if (result.ok) installedCache.dropModel(cacheId, model.name);
     setRemoving(false);
     setConfirming(null);
     setRemoveError(result.ok ? null : result.error.message);
