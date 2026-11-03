@@ -28,9 +28,9 @@ vi.mock('@client/app/hooks/useGetLogo', () => ({ default: () => '/logo.png' }));
 const mockPost = vi.fn();
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: (...args: unknown[]) => mockPost(...args) } }));
 
+let mockAppUrl: string | undefined;
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useSettingsFromServer: () => ({ isSuccess: true }),
-  useGetSettingsValue: () => 'https://news.example',
+  useGetSettingsValue: () => mockAppUrl,
 }));
 
 const mockLogout = vi.fn();
@@ -64,6 +64,7 @@ describe('BedrockNewsClaimPage', () => {
     vi.clearAllMocks();
     searchParams = { ticket: TICKET };
     mockAccessToken = 'tok';
+    mockAppUrl = 'https://news.example';
   });
 
   it('shows a spinner while the preview loads and posts the ticket in the body', async () => {
@@ -152,6 +153,16 @@ describe('BedrockNewsClaimPage', () => {
     expect(params.get('redirectTo')).toBe(`/partners/bedrocknews/claim?ticket=${TICKET}`);
   });
 
+  it('restores the claim URL and shows unavailable when sign-out fails', async () => {
+    mockPost.mockResolvedValue({ data: READY });
+    mockLogout.mockImplementation((_vars: unknown, options?: { onError?: () => void }) => options?.onError?.());
+    window.history.replaceState(null, '', `/partners/bedrocknews/claim?ticket=${TICKET}`);
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Use another account' }));
+    expect(await screen.findByText(/Couldn\u2019t reach BedrockNews/)).toBeInTheDocument();
+    expect(window.location.pathname + window.location.search).toBe(`/partners/bedrocknews/claim?ticket=${TICKET}`);
+  });
+
   it('sends a signed-out visitor to login with this page as redirectTo', async () => {
     mockAccessToken = null;
     window.history.replaceState(null, '', `/partners/bedrocknews/claim?ticket=${TICKET}`);
@@ -195,6 +206,68 @@ describe('BedrockNewsClaimPage', () => {
     renderPage();
     fireEvent.click(await screen.findByRole('button', { name: 'Add 150 credits' }));
     expect(await screen.findByText(/already being processed/)).toBeInTheDocument();
+  });
+
+  it.each(['in-progress', 'unavailable', 'budget-spent'])(
+    'offers Try again after a %s redeem and re-runs the preview',
+    async state => {
+      mockPost
+        .mockResolvedValueOnce({ data: READY })
+        .mockResolvedValueOnce({ data: { state } })
+        .mockResolvedValueOnce({ data: READY });
+      renderPage();
+      fireEvent.click(await screen.findByRole('button', { name: 'Add 150 credits' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+      expect(await screen.findByRole('button', { name: 'Add 150 credits' })).toBeInTheDocument();
+      expect(mockPost).toHaveBeenLastCalledWith('/api/partners/bedrocknews/claims/preview', { ticket: TICKET });
+      expect(mockPost).toHaveBeenCalledTimes(3);
+    }
+  );
+
+  it('does not offer Try again for a preview error', async () => {
+    mockPost.mockResolvedValue({ data: { state: 'unavailable' } });
+    renderPage();
+    expect(await screen.findByText(/Couldn\u2019t reach BedrockNews/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+  });
+
+  it('does not offer Try again after an expired redeem', async () => {
+    mockPost.mockResolvedValueOnce({ data: READY }).mockResolvedValueOnce({ data: { state: 'expired' } });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Add 150 credits' }));
+    expect(await screen.findByText(/This claim link expired/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+  });
+
+  it('redeems once when confirm is clicked twice before re-rendering', async () => {
+    mockPost.mockResolvedValueOnce({ data: READY }).mockReturnValueOnce(new Promise(() => {}));
+    renderPage();
+    const button = await screen.findByRole('button', { name: 'Add 150 credits' });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(mockPost.mock.calls.filter(([url]) => url === '/api/partners/bedrocknews/claims/redeem')).toHaveLength(1);
+  });
+
+  it.each([
+    ['done without a result', { state: 'done' }],
+    ['redeemed without a result', { state: 'redeemed' }],
+    ['ready without rungs', { state: 'ready', credits: 10, account: 'a@b.c' }],
+    ['an unknown state', { state: 'mystery' }],
+  ])('shows the unavailable copy for %s', async (_label, data) => {
+    mockPost.mockResolvedValue({ data });
+    renderPage();
+    expect(await screen.findByText(/Couldn\u2019t reach BedrockNews/)).toBeInTheDocument();
+  });
+
+  it.each([
+    ['unset', undefined],
+    ['not http(s)', 'javascript:alert(1)'],
+  ])('omits the back link when the app URL is %s', async (_label, url) => {
+    mockAppUrl = url;
+    mockPost.mockResolvedValue({ data: { state: 'expired' } });
+    renderPage();
+    expect(await screen.findByText(/This claim link expired/)).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Back to Headword' })).not.toBeInTheDocument();
   });
 
   it('treats a 400 from the server as the state it carries', async () => {
