@@ -183,6 +183,10 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
   }
 );
 
+// Server-owned lifetime grant budget. Kept outside the public organization shape;
+// no API accepts writes to it. Missing values are initialized from existing grants.
+OrganizationSchema.path('signupGrantUnlockCount', { type: Number, min: 0, select: false });
+
 OrganizationSchema.virtual('logo', {
   ref: 'AppFile',
   localField: 'logoFileId',
@@ -202,6 +206,7 @@ OrganizationSchema.plugin(softDeletePlugin);
 // data-lake request - Mongo index-unions an `$or` only when EVERY branch is index-supported, so
 // without both the org-admin resolution would plan a full `organizations` collscan.
 OrganizationSchema.index({ userId: 1 });
+OrganizationSchema.index({ stripeCustomerId: 1 }, { name: 'organization_stripeCustomerId' });
 // Backs findMembershipOrgIds' reverse lookup (users[] ACL by member) - previously every
 // membership question collscanned. The owner arm rides the existing { userId: 1 } index.
 OrganizationSchema.index({ 'users.userId': 1 });
@@ -286,6 +291,24 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
       { $inc: { currentCredits: amount } },
       { new: true }
     );
+  }
+
+  /** Same contract as UserRepository.decrementCreditsFloored, against the org pool. */
+  async decrementCreditsFloored(organizationId: string, credits: number): Promise<number> {
+    const available = { $max: [{ $ifNull: ['$currentCredits', 0] }, 0] };
+    const before = await this.organizationModel.findOneAndUpdate(
+      { _id: organizationId },
+      [
+        {
+          $set: {
+            currentCredits: { $subtract: [{ $ifNull: ['$currentCredits', 0] }, { $min: [credits, available] }] },
+          },
+        },
+      ],
+      { new: false, projection: { currentCredits: 1 } }
+    );
+    if (!before) return 0;
+    return Math.min(credits, Math.max(before.currentCredits ?? 0, 0));
   }
 
   /**

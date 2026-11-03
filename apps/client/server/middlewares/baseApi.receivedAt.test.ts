@@ -38,12 +38,16 @@ vi.mock('next-connect', () => ({
   },
 }));
 
+vi.mock('@server/middlewares/checkBlockedIP', () => ({
+  checkBlockedIP: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
 vi.mock('@bike4mind/database', () => ({
   connectDB: async () => {
     vi.setSystemTime(Date.now() + CONNECT_COST_MS);
   },
 }));
 vi.mock('@server/middlewares/logging', () => ({ logging: h.observe('logging') }));
+vi.mock('@server/middlewares/deployRevision', () => ({ deployRevision: h.observe('deployRevision') }));
 vi.mock('@server/auth/auth', () => ({ authMiddleware: [h.observe('authMiddleware')], auth: h.observe('auth') }));
 vi.mock('@server/middlewares/apiKeyAuth', () => ({ apiKeyAuth: () => h.observe('apiKeyAuth') }));
 vi.mock('@server/middlewares/apiKeyAnomalyDetection', () => ({ apiKeyAnomalyDetection: () => h.observe('anomaly') }));
@@ -51,6 +55,7 @@ vi.mock('@server/middlewares/apiKeyRateLimit', () => ({ apiKeyRateLimit: () => h
 vi.mock('@server/middlewares/oauthRouteGate', () => ({ oauthRouteGate: () => h.observe('oauthRouteGate') }));
 vi.mock('@server/analytics/analyticsMiddleware', () => ({ analyticsMiddleware: () => h.observe('analytics') }));
 vi.mock('@bike4mind/server-utils/services/gears/toolGearObserver', () => ({ registerToolGearObserver: () => {} }));
+vi.mock('@bike4mind/server-utils/lib/settings/registerContributedSettings', () => ({}));
 vi.mock('@server/middlewares/errorHandler', () => ({ default: () => {} }));
 vi.mock('@bike4mind/common', () => ({ ApiKeyScope: {}, MethodNotAllowedError: class extends Error {} }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
@@ -100,6 +105,7 @@ describe('baseApi stamps req.receivedAt on arrival', () => {
     await runRecordedChain(req);
 
     const observed = [
+      'deployRevision',
       'logging',
       'authMiddleware',
       'apiKeyAuth',
@@ -121,5 +127,30 @@ describe('baseApi stamps req.receivedAt on arrival', () => {
     await runRecordedChain(req);
 
     expect(req.receivedAt).toEqual(ARRIVAL);
+  });
+
+  it('has already stamped the deploy revision when the body-size guard answers 413', async () => {
+    baseApi({ auth: true });
+    const json = vi.fn();
+    const res = { status: vi.fn(() => ({ json })) };
+    const req = { headers: { 'content-length': String(Number.MAX_SAFE_INTEGER) } };
+
+    let rejectedBy = -1;
+    for (const [index, middleware] of h.useCalls.entries()) {
+      let advanced = false;
+      await middleware(req, res, () => {
+        advanced = true;
+      });
+      if (!advanced) {
+        rejectedBy = index;
+        break;
+      }
+    }
+
+    expect(res.status).toHaveBeenCalledWith(413);
+    expect(rejectedBy).toBeGreaterThan(-1);
+    // deployRevision (a recorder here) ran before the chain was cut short by the 413.
+    expect(h.seenAt).toHaveProperty('deployRevision');
+    expect(h.seenAt).toHaveProperty('logging');
   });
 });

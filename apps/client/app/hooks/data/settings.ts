@@ -6,7 +6,9 @@ import {
   ServerStatusEnum,
   SettingKey,
   settingsMap,
-  experimentalFeatureSettingKeys,
+  allSettingDefinitions,
+  getExperimentalFeatureSettingKeys,
+  resolveSettingDefinition,
   forcedRetrievalFloorAboveMeasured,
   forcedRetrievalFloorAboveMeasuredMessage,
   isBlankSettingValue,
@@ -27,6 +29,7 @@ import {
   SERVER_CONFIG_QUERY_KEY,
 } from './queryKeys';
 import { useAccessToken, useIsFullyAuthenticated } from '@client/app/hooks/useAccessToken';
+import { isMfaEnrollmentRequired } from '@client/app/utils/mfaEnrollmentInterceptor';
 
 export function useUpdateSettings() {
   const queryClient = useQueryClient();
@@ -85,12 +88,13 @@ export function useExperimentalFeatureSettings() {
     // Single source of truth: derived from the schema's EXPERIMENTAL group
     // in @bike4mind/common, so a new experimental flag added to `settingsMap` is
     // surfaced here automatically - no second hand-maintained allowlist to forget.
-    const allowedSettings = experimentalFeatureSettingKeys;
+    // A contributed flag reaches a non-admin only with `userReadable: true`; otherwise they get its default.
+    const allowedSettings = getExperimentalFeatureSettingKeys();
 
     // Merge database settings with defaults, converting to string for consistency
     return allowedSettings.map(settingName => {
       const dbSetting = allSettings?.find(s => s.settingName === settingName);
-      const defaultSetting = settingsMap[settingName];
+      const defaultSetting = resolveSettingDefinition(settingName);
 
       // Get raw value (from DB or default) and convert to string
       const rawValue = dbSetting?.settingValue ?? defaultSetting?.defaultValue;
@@ -176,7 +180,7 @@ export function useClearScopedSettingOverride() {
 }
 
 export function useGetSettingsValue(key: SettingKey) {
-  const settingConfigs = useMemo(() => Object.values(settingsMap), []);
+  const settingConfigs = useMemo(() => allSettingDefinitions(), []);
   const { data: settingsFromServer } = useSettingsFromServer();
 
   return useMemo(() => {
@@ -286,10 +290,11 @@ export function useConfig() {
     enabled: isFullyAuthenticated,
     // Override global retry: false - this query provides the WebSocket URL,
     // so transient failures should not permanently block the connection.
-    // Skip retries on 401 (unauthenticated) to avoid spurious console errors on login page.
+    // Skip retries on 401 (unauthenticated) to avoid spurious console errors on login page, and on
+    // an MFA-enrollment 403: it holds until the user enrolls, and MFAEnforcementWrapper takes over.
     retry: (failureCount, error) => {
       const status = (error as { response?: { status?: number } })?.response?.status;
-      if (status === 401) return false;
+      if (status === 401 || isMfaEnrollmentRequired(error)) return false;
       return failureCount < 3;
     },
   });

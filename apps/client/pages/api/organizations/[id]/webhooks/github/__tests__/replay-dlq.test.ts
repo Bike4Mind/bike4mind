@@ -35,7 +35,7 @@ vi.mock('@aws-sdk/client-sqs', () => ({
 }));
 vi.mock('sst', () => ({ Resource: {} }));
 // Only `verifyOrgOwner` is exported, so a route reverted to another org gate would fail loudly here.
-vi.mock('@server/utils/orgAccess', () => ({ verifyOrgOwner: h.verifyOrgOwner }));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgOwner: h.verifyOrgOwner }));
 
 await import('../replay-dlq');
 

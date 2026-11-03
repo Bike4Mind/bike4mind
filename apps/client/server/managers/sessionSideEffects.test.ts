@@ -38,7 +38,7 @@ vi.mock('@bike4mind/observability', () => ({
   Logger: { log: vi.fn(), info: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent }));
 
 vi.mock('sst', () => ({
   Resource: { websocket: { managementEndpoint: 'wss://mgmt' } },

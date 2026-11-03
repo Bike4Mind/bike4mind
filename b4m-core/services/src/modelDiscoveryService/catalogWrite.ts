@@ -8,6 +8,7 @@ import {
   ModelBackend,
   ModelRecordWrite,
   groupsTouchedByPatch,
+  isDiscoveryVerdict,
   lifecycleStatusRank,
   type FieldGroup,
   type ICatalogContributor,
@@ -78,6 +79,28 @@ export function isIntroducibleModelId(modelId: string): boolean {
   return !DATED_SNAPSHOT_ID.test(modelId);
 }
 
+/** "gpt-4.1" for "gpt-4.1-2025-04-14"; undefined for an id that is not a dated snapshot. */
+export const snapshotAliasOf = (modelId: string): string | undefined =>
+  DATED_SNAPSHOT_ID.test(modelId) ? modelId.replace(DATED_SNAPSHOT_ID, '') : undefined;
+
+/**
+ * The ids that are a dated snapshot's alias ("gpt-4.1" for a held "gpt-4.1-2025-04-14").
+ * Discovery must not introduce one: the read path matches rows to adapter literals by
+ * exact id, so the alias would list as a second "GPT-4.1" next to the snapshot. Aliases
+ * already in the catalog are retired through the queue instead (snapshotAliasSuggestions
+ * in lifecyclePlan.ts). The set is deliberately backend-blind: unlike that suggestion, which
+ * requires the alias and snapshot to share a backend, an introduction is refused whatever
+ * backend holds the snapshot.
+ */
+export function datedSnapshotAliases(heldModelIds: Iterable<string>): Set<string> {
+  const aliases = new Set<string>();
+  for (const id of heldModelIds) {
+    const alias = snapshotAliasOf(id);
+    if (alias) aliases.add(alias);
+  }
+  return aliases;
+}
+
 /** Provenance for a dispatch field the resolver derived rather than a feed reporting it. */
 export const DISPATCH_SEED_CONTRIBUTOR = 'seed';
 
@@ -122,6 +145,12 @@ export interface CatalogWriteInput {
    */
   providerSourceNames: ReadonlySet<string>;
   operatorOwnedModelIds: ReadonlySet<string>;
+  /**
+   * Every id the static adapter tables ship. A dated one makes its alias refused an
+   * introduction (datedSnapshotAliases), since the seed holds the snapshot and not the
+   * alias. An alias the tables ship themselves (gpt-5.4-mini) is curated and exempt.
+   */
+  staticModelIds?: ReadonlySet<string>;
   /** Models a seed row, operator row or adapter literal presents; discovery leaves those alone. */
   presentationOwnedElsewhere?: ReadonlySet<string>;
   credentials: DiscoveryCredentials;
@@ -174,6 +203,11 @@ export function planCatalogWrites(input: CatalogWriteInput): CatalogWritePlan {
   const diff: CatalogDiffEntry[] = [];
   const rows: IModelCatalogRowInput[] = [];
   const sightedModelIds = new Set<string>();
+  const aliasesOfHeldSnapshots = datedSnapshotAliases([
+    ...input.base.keys(),
+    ...input.operatorOwnedModelIds,
+    ...(input.staticModelIds ?? []),
+  ]);
 
   for (const candidate of candidates.values()) {
     // Only a provider listing is a sighting. litellm and models.dev keep retired
@@ -200,6 +234,15 @@ export function planCatalogWrites(input: CatalogWriteInput): CatalogWritePlan {
         source: candidate.sourceNames.join('+'),
         modelId: candidate.modelId,
         reason: 'id is a dated snapshot or a fine-tune, not a model to introduce',
+      });
+      continue;
+    }
+
+    if (!existing && aliasesOfHeldSnapshots.has(candidate.modelId) && !input.staticModelIds?.has(candidate.modelId)) {
+      dropped.push({
+        source: candidate.sourceNames.join('+'),
+        modelId: candidate.modelId,
+        reason: 'id is the alias of a dated snapshot the catalog already holds',
       });
       continue;
     }
@@ -381,6 +424,28 @@ function sourceDisabledReasonOf(contributed: ReadonlyMap<string, unknown>): stri
   if (contributed.get('autoDisabled') !== true) return undefined;
   const reason = contributed.get('autoDisabledReason');
   return typeof reason === 'string' && reason.length > 0 ? reason : 'disabled by its source';
+}
+
+/**
+ * The disable reason in force, when it is a provider's answer this run could not re-ask. A Bedrock
+ * availability call that fails arrives as null by contract, so such a run contributes nothing about
+ * availability; replacing the reason with promotion's verdict would erase a fact discovery only
+ * reported, and the read path would then reclaim the group as a placeholder of its own.
+ */
+function providerDisableInForce(
+  contributed: ReadonlyMap<string, unknown>,
+  base: Record<string, unknown>,
+  prior: readonly ICatalogContributor[] | undefined
+): string | undefined {
+  if (contributed.has('autoDisabled') || contributed.has('autoDisabledReason')) return undefined;
+  if (base.autoDisabled !== true) return undefined;
+  const reason = base.autoDisabledReason;
+  const supplier = prior?.find(entry => entry.group === 'availability')?.source;
+  // A legacy writer could restamp a provider disable with discovery's wording while keeping its
+  // supplier. The credit takes precedence; only uncredited rows rely on the wording.
+  if (supplier === DISCOVERY_CONTRIBUTOR) return undefined;
+  if (supplier) return typeof reason === 'string' && reason.length > 0 ? reason : 'disabled by its source';
+  return typeof reason === 'string' && reason.length > 0 && !isDiscoveryVerdict(reason) ? reason : undefined;
 }
 
 /**
@@ -611,6 +676,9 @@ function planOne(
   // uncorroborated docs kind first - so the status is a source's claim rather
   // than a parse artifact.
   if (decides && !LIFECYCLE_SUNSET_STATUSES.has(record.lifecycle?.status ?? '')) {
+    const sourceDisabledReason =
+      sourceDisabledReasonOf(contributed) ??
+      providerDisableInForce(contributed, base, input.priorContributors?.get(candidate.modelId));
     decision = evaluatePromotion({
       record,
       policy: input.policy,
@@ -621,7 +689,7 @@ function planOne(
         : candidate.pricesByKind.some(entry => entry.kind === 'aggregator')
           ? 'aggregator-quote'
           : 'none',
-      sourceDisabledReason: sourceDisabledReasonOf(contributed),
+      sourceDisabledReason,
     });
     // autoDisabledReason is omitted rather than set to undefined so a promotion
     // reads as a removed key in the diff instead of a key that is still there.
@@ -649,6 +717,15 @@ function planOne(
         };
     ownedGroups.add('lifecycle');
     ownedGroups.add('availability');
+    // The read path reads the `availability` credit as who disabled the model, so a verdict is
+    // credited to discovery only when this run decided the disable: the row was not disabled
+    // before, or this run cleared the source's own disable first (whose clearance would otherwise
+    // take the credit). A row already disabled that got no availability answer keeps its carried
+    // credit, whatever its wording: a pre-change writer restamped provider disables to verdicts.
+    const decidedThisRun = base.autoDisabled !== true || clearsSourceDisable;
+    if (record.autoDisabled === true && decidedThisRun && isDiscoveryVerdict(record.autoDisabledReason)) {
+      derivedGroups.add('availability');
+    }
   }
 
   if (ownedGroups.size === 0) return { unchanged: true };
@@ -656,7 +733,22 @@ function planOne(
   const owned = claimedGroups(record, ownedGroups, input.priorDiscoveryGroups?.get(candidate.modelId)).filter(
     group => !(presentationElsewhere && group === 'presentation')
   );
+  const priorContributors = input.priorContributors?.get(candidate.modelId);
+  const contributors = contributorsFor(candidate, contributed, owned, priorContributors, derivedGroups);
   const changedKeys = changedWithinGroups(base, record, owned);
+  // Availability provenance changes what the read path serves: a provider's disable stands,
+  // while discovery's own verdict yields to curation. A clearance followed by the same promotion
+  // refusal can leave every record field unchanged, so persist the changed credit as well.
+  const availabilitySource = (credits: readonly ICatalogContributor[] | undefined) =>
+    credits?.find(entry => entry.group === 'availability')?.source;
+  if (
+    existing &&
+    record.autoDisabled === true &&
+    availabilitySource(contributors) !== availabilitySource(priorContributors)
+  ) {
+    changedKeys.push('contributors');
+    changedKeys.sort();
+  }
   if (existing && changedKeys.length === 0) return { unchanged: true };
 
   const lifecycleStatus = record.lifecycle?.status ?? 'discovered';
@@ -677,13 +769,7 @@ function planOne(
     patch: record,
     ownedGroups: owned,
     effectiveFrom: input.runStartedAt,
-    contributors: contributorsFor(
-      candidate,
-      contributed,
-      owned,
-      input.priorContributors?.get(candidate.modelId),
-      derivedGroups
-    ),
+    contributors,
     note: `discovery:${candidate.sourceNames.join('+')}@${input.runStartedAt.toISOString()}`,
     runId: input.runId,
   };
@@ -912,14 +998,15 @@ function contributorsFor(
   // A group re-claimed but not re-observed keeps the provenance of the row it
   // supersedes; crediting discovery would erase which feed the data came from.
   const carried = new Map((prior ?? []).map(entry => [entry.group, entry.source] as const));
-  return owned.map(group => ({
-    group,
-    source: derived?.has(group)
-      ? DISCOVERY_CONTRIBUTOR
-      : (bySource.get(group) ??
-        carried.get(group) ??
-        (group === 'dispatch' ? DISPATCH_SEED_CONTRIBUTOR : DISCOVERY_CONTRIBUTOR)),
-  }));
+  return owned.flatMap(group => {
+    if (derived?.has(group)) return [{ group, source: DISCOVERY_CONTRIBUTOR }];
+    const source = bySource.get(group) ?? carried.get(group);
+    if (source) return [{ group, source }];
+    // An unknown `availability` supplier is left uncredited: the read path takes a discovery credit
+    // as proof discovery invented the disable, and without one it falls back to the reason's wording.
+    if (group === 'availability') return [];
+    return [{ group, source: group === 'dispatch' ? DISPATCH_SEED_CONTRIBUTOR : DISCOVERY_CONTRIBUTOR }];
+  });
 }
 
 /**

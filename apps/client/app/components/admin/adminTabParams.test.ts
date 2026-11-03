@@ -44,7 +44,7 @@ describe('Users tab params', () => {
   const usersSearch = {
     tab: 'users',
     page: 2,
-    limit: 20,
+    limit: 50,
     sort: 'name',
     order: 'asc',
     org: ['Acme'],
@@ -74,6 +74,15 @@ describe('Users tab params', () => {
     });
   });
 
+  it('keeps the default page when every view param is invalid, so the URL still describes a view', () => {
+    expect(parseAdminSearch({ tab: 'users', limit: 7, sort: 'bogus' })).toMatchObject({
+      page: 1,
+      limit: undefined,
+      sort: undefined,
+    });
+    expect(parseAdminSearch({ tab: 'users', userId: 'aaaaaaaaaaaaaaaaaaaaaaaa' }).page).toBeUndefined();
+  });
+
   it('never accepts the free-text search', () => {
     expect(parseAdminSearch({ search: 'someone@example.com' })).not.toHaveProperty('search');
   });
@@ -83,6 +92,34 @@ describe('Users tab params', () => {
 
     const switched = adminSearchForTab(usersSearch, 'admin-settings');
     for (const key of ['page', 'limit', 'sort', 'order', 'org', 'tags', 'userId'] as const) {
+      expect(switched[key], key).toBeUndefined();
+    }
+  });
+});
+
+describe('Users tab analytics drill-down params', () => {
+  const drillDown = {
+    tab: 'users',
+    page: 1,
+    createdFrom: '2026-10-01T00:00:00.000Z',
+    createdTo: '2026-11-01T00:00:00.000Z',
+    verdict: 'suspected',
+    funnelStep: 'firstAction',
+    activeFrom: '2026-10-03',
+    activeTo: '2026-10-03',
+  };
+
+  it('keeps each key through validateSearch and drops an invalid one', () => {
+    expect(parseAdminSearch(drillDown)).toMatchObject(drillDown);
+    expect(
+      parseAdminSearch({ tab: 'users', verdict: 'maybe', funnelStep: 'bought', activeFrom: '2026-13-01', activeTo: 7 })
+    ).toMatchObject({ verdict: undefined, funnelStep: undefined, activeFrom: undefined, activeTo: undefined });
+  });
+
+  it('keeps them on the users tab and drops them on a switch away', () => {
+    expect(adminSearchForTab(parseAdminSearch(drillDown), 'users')).toMatchObject(drillDown);
+    const switched = adminSearchForTab(parseAdminSearch(drillDown), 'admin-settings');
+    for (const key of ['verdict', 'funnelStep', 'activeFrom', 'activeTo'] as const) {
       expect(switched[key], key).toBeUndefined();
     }
   });
@@ -174,5 +211,103 @@ describe('Webhook Audit Logs and Model Logs tab params', () => {
     for (const key of Object.keys(search).filter(key => key !== 'tab')) {
       expect(switched[key as keyof typeof switched], key).toBeUndefined();
     }
+  });
+});
+
+describe('Organizations tab params', () => {
+  const organizationsSearch = {
+    tab: 'organizations',
+    orgsPage: 2,
+    orgsLimit: 20,
+    orgsSort: 'createdAt',
+    orgsOrder: 'desc',
+    orgsPersonal: false,
+    orgId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+  };
+
+  it('coerces each param in validateSearch and drops invalid ones', () => {
+    expect(
+      parseAdminSearch({ orgsPage: '2', orgsLimit: 7, orgsSort: 'credits', orgsPersonal: 'true', orgId: '../x' })
+    ).toMatchObject({
+      orgsPage: 2,
+      orgsLimit: undefined,
+      orgsSort: undefined,
+      orgsPersonal: true,
+      orgId: undefined,
+    });
+  });
+
+  it('keeps the default page when every view param is invalid, so the URL still describes a view', () => {
+    expect(parseAdminSearch({ tab: 'organizations', orgsSort: 'credits', orgsLimit: 7 })).toMatchObject({
+      orgsPage: 1,
+      orgsLimit: undefined,
+      orgsSort: undefined,
+    });
+    expect(parseAdminSearch({ tab: 'organizations', orgId: 'aaaaaaaaaaaaaaaaaaaaaaaa' }).orgsPage).toBeUndefined();
+  });
+
+  it('drops an invalid orgs view param on another tab instead of adding a default page', () => {
+    expect(parseAdminSearch({ tab: 'users', orgsSort: 'credits' }).orgsPage).toBeUndefined();
+  });
+
+  it('keeps them on the organizations tab and drops them on a switch away', () => {
+    expect(adminSearchForTab(organizationsSearch, 'organizations')).toMatchObject(organizationsSearch);
+
+    const switched = adminSearchForTab(organizationsSearch, 'users');
+    for (const key of Object.keys(organizationsSearch).filter(key => key !== 'tab')) {
+      expect(switched[key as keyof typeof switched], key).toBeUndefined();
+    }
+  });
+});
+
+describe('invite center section param', () => {
+  it('is parsed by parseAdminSearch', () => {
+    expect(parseAdminSearch({ tab: 'waitlist', inviteSection: 'pending' }).inviteSection).toBe('pending');
+  });
+
+  it('drops an unknown section in validateSearch', () => {
+    expect(parseAdminSearch({ tab: 'waitlist', inviteSection: 'nope' }).inviteSection).toBeUndefined();
+  });
+
+  it('is kept on the waitlist tab and dropped on a switch away', () => {
+    const previous = { tab: 'waitlist', inviteSection: 'pending' };
+    expect(adminSearchForTab(previous, 'waitlist')).toMatchObject({ tab: 'waitlist', inviteSection: 'pending' });
+    expect(adminSearchForTab(previous, 'users').inviteSection).toBeUndefined();
+  });
+});
+
+describe('Security tab params', () => {
+  const securitySearch = {
+    tab: 'security-dashboard',
+    securityView: 'scans',
+    securityScan: 'prowler',
+    securityRange: '7d',
+  };
+
+  it('registers the view, scan and range params on the security tab only', () => {
+    expect(ADMIN_TAB_PARAMS['security-dashboard']).toEqual(['securityView', 'securityScan', 'securityRange']);
+    const owners = Object.entries(ADMIN_TAB_PARAMS).filter(([, params]) =>
+      (params as readonly string[]).some(
+        param => param === 'securityView' || param === 'securityScan' || param === 'securityRange'
+      )
+    );
+    expect(owners.map(([slug]) => slug)).toEqual(['security-dashboard']);
+  });
+
+  it('coerces each param in validateSearch and drops invalid ones', () => {
+    expect(parseAdminSearch(securitySearch)).toMatchObject(securitySearch);
+    expect(parseAdminSearch({ securityView: 'overview', securityScan: 'code', securityRange: '30d' })).toMatchObject({
+      securityView: undefined,
+      securityScan: undefined,
+      securityRange: undefined,
+    });
+  });
+
+  it('keeps them on the security tab and drops them on a switch away', () => {
+    expect(adminSearchForTab(securitySearch, 'security-dashboard')).toMatchObject(securitySearch);
+    const switched = adminSearchForTab(securitySearch, 'users');
+    expect(switched.securityView).toBeUndefined();
+    expect(switched.securityScan).toBeUndefined();
+    expect(switched.securityRange).toBeUndefined();
   });
 });

@@ -69,6 +69,22 @@ describe('useModalsWithReleaseNotes', () => {
     });
   });
 
+  it("localizes a still image from the browsed origin and leaves the upstream's alone", async () => {
+    const image = {
+      landscape_url: 'https://other-domain.example.com/api/v1/whats-new/media/rn1/image-landscape',
+      portrait_url: 'https://upstream.example.com/api/v1/whats-new/media/rn1/image-portrait',
+    };
+    mockApiGet.mockImplementation(route(() => Promise.resolve({ data: { data: [{ ...note, image }] } })));
+
+    const { result } = renderHook(() => useModalsWithReleaseNotes(), { wrapper: createWrapper() });
+
+    await waitFor(() => expect(result.current.data).toHaveLength(2));
+    expect(result.current.data?.[1].stillImage).toEqual({
+      landscapeUrl: '/api/v1/whats-new/media/rn1/image-landscape',
+      portraitUrl: 'https://upstream.example.com/api/v1/whats-new/media/rn1/image-portrait',
+    });
+  });
+
   it('waits for the config before reading the feed', async () => {
     config.isLoading = true;
     mockApiGet.mockImplementation(route(() => Promise.resolve({ data: { data: [note] } })));

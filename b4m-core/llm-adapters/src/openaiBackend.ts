@@ -6,9 +6,8 @@ import {
   ModelBackend,
   PermissionDeniedError,
   FIXED_TEMPERATURE_MODELS,
-  REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS,
+  MIN_OUTPUT_TOKENS,
   RESPONSES_API_TOOL_MODELS,
-  REASONING_SUPPORTED_MODELS,
   SpeechToTextModels,
   type ModelInfo,
   type ReasoningEffort,
@@ -19,6 +18,7 @@ import { stripToolDependentMessages } from './toolPairingUtils';
 import { appendCacheInclusiveTurn, cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } from './reasoningTokens';
 import OpenAI from 'openai';
+import { providerFetchOptions } from './providerDispatcher';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources/chat/completions';
 import type {
   Response as OpenAIResponse,
@@ -50,6 +50,7 @@ import {
   stripUnstreamedToolResult,
 } from './toolStreamingHelper';
 import { DispatchModel } from './dispatchModel';
+import { openAIEffortIncompatibleWithTools, supportsOpenAIReasoningEffort } from './openaiReasoning';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import {
@@ -62,7 +63,8 @@ import {
   ARTIFACT_REMOVED_PLACEHOLDER,
 } from '@bike4mind/common';
 import { normalizeOpenAIFinishReason, normalizeOpenAIResponsesStopReason } from './stopReason';
-import { appendIdentityReminder, buildIdentityReminder } from './identityReminder';
+import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from './identityReminder';
+import { selectedWifTokenSource, subjectTokenSource } from './wifTokenSource';
 
 // Type for the reasoning_effort parameter that can be added to ChatCompletionCreateParams
 // OpenAI API expects reasoning_effort as a top-level string, not a nested object
@@ -117,27 +119,14 @@ const effortMap_GPT5_1_2 = {
 } as const;
 
 /**
- * Key-table value meaning "authenticate through OpenAI workload identity federation": the client is
+ * Trusted constructor sentinel meaning "authenticate through OpenAI workload identity federation": the client is
  * built from OPENAI_IDENTITY_PROVIDER_ID, OPENAI_SERVICE_ACCOUNT_ID and OPENAI_WIF_AUDIENCE, with
- * the subject token taken from the GitHub Actions OIDC endpoint (the job needs `id-token: write`).
+ * the subject token from the PROVIDER_WIF_TOKEN_SOURCE source (see wifTokenSource).
  */
-export const OPENAI_FEDERATED_KEY = 'federated';
+export const OPENAI_FEDERATED_KEY = Symbol('OPENAI_FEDERATED_KEY');
 
-/** A fresh GitHub Actions identity token for `audience`; the SDK calls this again on each exchange. */
-export async function githubActionsIdToken(audience: string): Promise<string> {
-  const url = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
-  const requestToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
-  if (!url || !requestToken) {
-    throw new Error('ACTIONS_ID_TOKEN_REQUEST_URL is not set; the job needs `id-token: write` permission');
-  }
-  const res = await fetch(`${url}&audience=${encodeURIComponent(audience)}`, {
-    headers: { Authorization: `Bearer ${requestToken}` },
-  });
-  if (!res.ok) throw new Error(`GitHub identity token request failed with status ${res.status}`);
-  const body = (await res.json()) as { value?: string };
-  if (!body.value) throw new Error('GitHub identity token response had no value');
-  return body.value;
-}
+// One client per config so its exchanged-token cache outlives the per-request backend.
+const federatedOpenAIClients = new Map<string, OpenAI>();
 
 function federatedOpenAIClient(): OpenAI {
   const identityProviderId = process.env.OPENAI_IDENTITY_PROVIDER_ID;
@@ -148,16 +137,28 @@ function federatedOpenAIClient(): OpenAI {
       'OPENAI_IDENTITY_PROVIDER_ID, OPENAI_SERVICE_ACCOUNT_ID and OPENAI_WIF_AUDIENCE are required for federated OpenAI auth'
     );
   }
-  // apiKey: null keeps an OPENAI_API_KEY in the environment from colliding with workloadIdentity.
-  return new OpenAI({
-    apiKey: null,
-    workloadIdentity: {
-      identityProviderId,
-      serviceAccountId,
-      provider: { tokenType: 'jwt', getToken: () => githubActionsIdToken(audience) },
-    },
-  });
+  const source = selectedWifTokenSource();
+  const cacheKey = JSON.stringify([identityProviderId, serviceAccountId, audience, source]);
+  let client = federatedOpenAIClients.get(cacheKey);
+  if (!client) {
+    const getSubjectToken = subjectTokenSource(source);
+    // apiKey: null keeps an OPENAI_API_KEY in the environment from colliding with workloadIdentity.
+    client = new OpenAI({
+      apiKey: null,
+      workloadIdentity: {
+        identityProviderId,
+        serviceAccountId,
+        provider: { tokenType: 'jwt', getToken: () => getSubjectToken(audience) },
+      },
+      fetchOptions: providerFetchOptions(),
+    });
+    federatedOpenAIClients.set(cacheKey, client);
+  }
+  return client;
 }
+
+/** Silently raises a tiny budget to OpenAI's minimum on purpose; an unset (or 0) budget stays unset. */
+const floorOutputBudget = (maxTokens?: number) => (maxTokens ? Math.max(maxTokens, MIN_OUTPUT_TOKENS) : undefined);
 
 /**
  * A Responses stream closed with no terminal event and no abort (upstream cut the connection).
@@ -181,8 +182,11 @@ export class OpenAIBackend implements ICompletionBackend {
   /** Catalog view of the model being completed; see DispatchModel. */
   private readonly _dispatch = new DispatchModel();
 
-  constructor(apiKey: string, logger?: Logger, endUserId?: string) {
-    this._api = apiKey === OPENAI_FEDERATED_KEY ? federatedOpenAIClient() : new OpenAI({ apiKey });
+  constructor(apiKey: string | typeof OPENAI_FEDERATED_KEY, logger?: Logger, endUserId?: string) {
+    this._api =
+      apiKey === OPENAI_FEDERATED_KEY
+        ? federatedOpenAIClient()
+        : new OpenAI({ apiKey, fetchOptions: providerFetchOptions() });
     this.logger = logger ?? new Logger();
     this._endUserId = endUserId;
   }
@@ -1147,7 +1151,7 @@ export class OpenAIBackend implements ICompletionBackend {
     };
 
     // Add parameters conditionally based on model type
-    const supportsReasoning = REASONING_SUPPORTED_MODELS.has(model);
+    const supportsReasoning = supportsOpenAIReasoningEffort(this._dispatch.for(model), model);
     // A reasoning model that is only known through the catalog is not in
     // FIXED_TEMPERATURE_MODELS, and OpenAI rejects any temperature but 1 on one.
     // Losing temperature control on a model that would have accepted it is
@@ -1165,7 +1169,7 @@ export class OpenAIBackend implements ICompletionBackend {
         ...(requiresFixedTemp && { temperature: 1.0 }),
         stream: true,
         stream_options: { include_usage: true },
-        ...(options.maxTokens && { max_completion_tokens: options.maxTokens }),
+        ...(options.maxTokens && { max_completion_tokens: floorOutputBudget(options.maxTokens) }),
       });
 
       // Only add reasoning_effort for models that support it (o1-preview/o1-mini do not).
@@ -1174,7 +1178,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // /v1/responses, dropping reasoning_effort keeps tool calling functional.
       const toolsPresent = !!options.tools?.length;
       const reasoningEffortIncompatibleWithTools =
-        toolsPresent && REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS.has(model);
+        toolsPresent && openAIEffortIncompatibleWithTools(this._dispatch.for(model), model);
 
       if (supportsReasoning && !reasoningEffortIncompatibleWithTools) {
         // Determine reasoning effort: explicit setting takes precedence over auto-classification
@@ -1199,10 +1203,10 @@ export class OpenAIBackend implements ICompletionBackend {
         }
       } else if (supportsReasoning && reasoningEffortIncompatibleWithTools) {
         // `supportsReasoning` is re-checked here so the log only fires for models
-        // where `reasoning_effort` would otherwise have been set. Today the set
-        // invariant (REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS is a subset of
-        // REASONING_SUPPORTED_MODELS) makes the two checks equivalent, but the
-        // explicit conjunction prevents a noisy log if that invariant ever drifts.
+        // where `reasoning_effort` would otherwise have been set. The id sets keep
+        // incompatible a subset of supported, but a catalog row can state
+        // effortIncompatibleWithTools on a model it never marked reasoning, so the
+        // explicit conjunction is load-bearing.
         this.logger.debug(
           `Skipping reasoning_effort for ${model}: function tools present, ` +
             `OpenAI rejects this combination on /v1/chat/completions (requires /v1/responses).`
@@ -1222,7 +1226,7 @@ export class OpenAIBackend implements ICompletionBackend {
         presence_penalty: options.presencePenalty,
         frequency_penalty: options.frequencyPenalty,
         stream: useStreaming,
-        max_tokens: options.maxTokens,
+        max_tokens: floorOutputBudget(options.maxTokens),
         ...(useStreaming && { stream_options: { include_usage: true } }),
       });
     }
@@ -2067,10 +2071,14 @@ export class OpenAIBackend implements ICompletionBackend {
     // The only synthesized text is the shared identity reminder, placed last to mirror the
     // Anthropic adapters. Bare-completion contract (API promptMode raw): synthesize
     // nothing, so the lead message is exactly the caller's own system text, or absent
-    // entirely. Must stay in sync with the same flag in anthropicBackend / bedrockBackend.
-    const mergedContent = options.omitIdentityReminder
+    // entirely. Also omitted while current_model_details is on the request (see
+    // shouldOmitIdentityReminder). Must stay in sync with anthropicBackend / bedrockBackend.
+    const mergedContent = shouldOmitIdentityReminder(options)
       ? callerSystem
-      : appendIdentityReminder(callerSystem, buildIdentityReminder(model, options.modelDisplayName));
+      : appendIdentityReminder(
+          callerSystem,
+          buildIdentityReminder(options.modelIdentityId ?? model, options.modelDisplayName)
+        );
 
     const systemMessage: OpenAI.ChatCompletionSystemMessageParam = {
       role: 'system',
@@ -2256,7 +2264,7 @@ export class OpenAIBackend implements ICompletionBackend {
             },
           }
         : {}),
-      ...(options.maxTokens ? { max_output_tokens: options.maxTokens } : {}),
+      ...(options.maxTokens ? { max_output_tokens: floorOutputBudget(options.maxTokens) } : {}),
       ...(mapToolChoiceForResponses(options.tool_choice) !== undefined
         ? { tool_choice: mapToolChoiceForResponses(options.tool_choice) }
         : {}),

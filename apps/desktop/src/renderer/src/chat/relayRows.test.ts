@@ -66,4 +66,9 @@ describe('automaticSummary', () => {
     };
     expect(automaticSummary({ automatic })).toBe('Started by auto-fix: 1 failing check on #611');
   });
+
+  it('says a background command finished rather than crediting auto-fix', () => {
+    const automatic = { kind: 'background-exit' as const, processIds: ['a1b2c3d4'], summary: '[a1b2c3d4] exited 0' };
+    expect(automaticSummary({ automatic })).toBe('Background command finished: [a1b2c3d4] exited 0');
+  });
 });

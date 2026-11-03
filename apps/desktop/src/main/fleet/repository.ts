@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process';
+import { hostProgram } from '../chat/tools/userPath';
+import { hostGitArgs } from '../git/hostGitArgs';
 import { isRepositoryPart } from './activityContract';
 
 export interface RepositoryName {
@@ -73,10 +75,17 @@ export function createRepositoryResolver(
   };
 }
 
-function gitOriginUrl(directory: string): Promise<string | null> {
+async function gitOriginUrl(directory: string): Promise<string | null> {
+  const git = await hostProgram('git');
+  if (!git) return null;
   return new Promise(resolve => {
-    execFile('git', ['-C', directory, 'config', '--get', 'remote.origin.url'], { timeout: 2000 }, (err, stdout) => {
-      resolve(err ? null : stdout.trim() || null);
-    });
+    execFile(
+      git,
+      hostGitArgs(['-C', directory, 'config', '--get', 'remote.origin.url']),
+      { timeout: 2000 },
+      (err, stdout) => {
+        resolve(err ? null : stdout.trim() || null);
+      }
+    );
   });
 }

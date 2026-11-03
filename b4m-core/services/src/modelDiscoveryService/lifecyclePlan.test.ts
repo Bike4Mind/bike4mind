@@ -1,5 +1,12 @@
-import { ModelBackend, successorCostDelta, type IModelDiscoveryState, type ModelRecord } from '@bike4mind/common';
-import type { ResolvedCatalogRecord } from '@bike4mind/llm-adapters';
+import {
+  ModelBackend,
+  successorCostDelta,
+  type IModelCatalogRow,
+  type IModelDiscoveryState,
+  type ModelInfo,
+  type ModelRecord,
+} from '@bike4mind/common';
+import { mergeCatalogWithDrops, type ResolvedCatalogRecord } from '@bike4mind/llm-adapters';
 import { describe, expect, it } from 'vitest';
 import { testCredentials, testRecord } from './__fixtures__/fakes';
 import { planCatalogWrites, type CatalogWritePlan } from './catalogWrite';
@@ -79,6 +86,77 @@ const aggregator = (name: string, records: DiscoveredModel[]): SourceContributio
 });
 
 describe('planLifecycleSignals', () => {
+  it.each([undefined, 'active'] as const)(
+    'queues aggregator dates with status %s without scheduling a hide',
+    status => {
+      const base = new Map([active('gpt-5')]);
+      const signals = planLifecycleSignals({
+        contributions: [
+          aggregator('litellm', [
+            {
+              modelId: 'gpt-5',
+              patch: { lifecycle: { status, deprecationDate: '2026-08-10' }, contextWindow: 200_000 },
+              lifecycleEvidence: 'typed',
+            },
+          ]),
+        ],
+        catalogModelIds: new Set(base.keys()),
+      });
+      expect(signals.contributions[0].records[0].patch).toEqual({ contextWindow: 200_000 });
+      const result = plan({
+        catalogPlan: catalogPlan(signals.contributions, base),
+        base,
+        aggregatorSunsets: signals.aggregatorSunsets,
+      });
+      expect(result.transitions).toEqual([]);
+      expect(result.rows.every(row => row.patch.lifecycle?.deprecationDate === undefined)).toBe(true);
+      expect(result.suggestions).toContainEqual(
+        expect.objectContaining({
+          modelId: 'gpt-5',
+          status: 'active',
+          deprecationDate: '2026-08-10',
+          source: 'litellm',
+        })
+      );
+    }
+  );
+
+  it('keeps a provider date-only announcement authoritative', () => {
+    const lifecycle = { deprecationDate: '2026-08-10' };
+    const signals = planLifecycleSignals({
+      contributions: [provider('openai', [{ modelId: 'gpt-5', patch: { lifecycle }, lifecycleEvidence: 'typed' }])],
+    });
+    expect(signals.contributions[0].records[0].patch.lifecycle).toEqual(lifecycle);
+  });
+
+  it('marks a date-only aggregator suggestion active when the held model has no lifecycle status', () => {
+    // With no held lifecycle, accept would default to 'deprecated' and hide the model now.
+    const result = plan({
+      base: new Map([active('gpt-5', { lifecycle: {} })]),
+      aggregatorSunsets: new Map([
+        ['gpt-5', { modelId: 'gpt-5', source: 'litellm', lifecycle: { deprecationDate: '2027-01-01' } }],
+      ]),
+    });
+    expect(result.suggestions).toEqual([
+      expect.objectContaining({ modelId: 'gpt-5', status: 'active', deprecationDate: '2027-01-01' }),
+    ]);
+  });
+
+  it('does not requeue aggregator dates the catalog already confirms', () => {
+    const base = new Map([
+      active('gpt-5', {
+        lifecycle: { status: 'active', deprecationDate: '2027-01-01', retirementDate: '2027-02-01' },
+      }),
+    ]);
+    const result = plan({
+      base,
+      aggregatorSunsets: new Map([
+        ['gpt-5', { modelId: 'gpt-5', source: 'litellm', lifecycle: { deprecationDate: '2027-01-01' } }],
+      ]),
+    });
+    expect(result.suggestions).toEqual([]);
+  });
+
   const deprecated = (evidence?: 'typed' | 'docs'): DiscoveredModel => ({
     modelId: 'gpt-5',
     patch: { lifecycle: { status: 'deprecated', deprecationDate: '2026-08-10', replacedBy: 'gpt-6' } },
@@ -348,6 +426,63 @@ describe('planLifecycle absence graduation', () => {
     expect(result.diff[0]).toMatchObject({ modelId: 'gpt-5', kind: 'updated', changedKeys: ['lifecycle'] });
   });
 
+  it('keeps the superseded row credits on the row it appends', () => {
+    const held = new Map<string, ResolvedCatalogRecord>([
+      [
+        'gpt-5',
+        {
+          modelId: 'gpt-5',
+          record: {
+            ...testRecord({ id: 'gpt-5', name: 'GPT-5' }),
+            lifecycle: { status: 'discovered' },
+            autoDisabled: true,
+            autoDisabledReason: 'not entitled in this AWS account',
+          },
+          ownedGroups: ['identity', 'lifecycle', 'availability'],
+        },
+      ],
+    ]);
+    const credits = [
+      { group: 'identity' as const, source: 'bedrock' },
+      { group: 'lifecycle' as const, source: 'bedrock' },
+      { group: 'availability' as const, source: 'bedrock' },
+    ];
+
+    const result = plan({
+      base: held,
+      priorDiscoveryGroups: new Map([['gpt-5', ['identity', 'lifecycle', 'availability'] as const]]),
+      priorContributors: new Map([['gpt-5', credits]]),
+      missed: ['gpt-5'],
+      statesBeforeRun: new Map([['gpt-5', state({ modelId: 'gpt-5', missCount: 2, firstMissAt: twoDaysAgo })]]),
+    });
+
+    expect(result.rows[0].contributors).toEqual(expect.arrayContaining(credits));
+
+    // Blanket-crediting discovery would let the read path reclaim the group as its own verdict and
+    // serve a model the provider declared uncallable.
+    const curated: ModelInfo = {
+      id: 'gpt-5' as ModelInfo['id'],
+      type: 'text',
+      name: 'GPT-5',
+      backend: ModelBackend.OpenAI,
+      contextWindow: 400_000,
+      max_tokens: 8_192,
+      pricing: {},
+      can_stream: true,
+      supportsTools: true,
+      supportsImageVariation: false,
+      rank: 1,
+      description: 'the curated description',
+    };
+    const { models } = mergeCatalogWithDrops([curated], result.rows as unknown as IModelCatalogRow[], {
+      apiKeys: null,
+      isSelfHost: false,
+      bedrockReachable: true,
+    });
+
+    expect(models[0]).toMatchObject({ disabled: true, disabledReason: 'not entitled in this AWS account' });
+  });
+
   it('folds the graduation into a catalog row the same run already planned', () => {
     // The reachable shape: an aggregator still lists a model the provider
     // dropped, so the same model has a catalog row AND an absence graduation.
@@ -603,6 +738,94 @@ describe('planLifecycle docs suggestions', () => {
 
     expect(result.transitions).toEqual([]);
     expect(result.suggestions[0]).toMatchObject({ modelId: 'gpt-5', status: 'legacy', source: 'anthropic' });
+  });
+});
+
+describe('planLifecycle snapshot-alias suggestions', () => {
+  const SNAPSHOT = 'gpt-4.1-2025-04-14';
+
+  const aliasRun = (resolvedInForce: Map<string, ResolvedCatalogRecord>, overrides: Partial<LifecyclePlanInput> = {}) =>
+    plan({ base: resolvedInForce, resolvedInForce, ...overrides });
+
+  it('queues the alias for retirement onto its snapshot, and writes nothing', () => {
+    const result = aliasRun(new Map([active('gpt-4.1'), active(SNAPSHOT)]), { autoRemap: 'apply' });
+
+    // Even under 'apply': a sunset catalog-only row leaves the merged list, so the
+    // status may only land together with the successor, i.e. through accept.
+    expect(result.transitions).toEqual([]);
+    expect(result.rows).toEqual([]);
+    expect(result.suggestions).toEqual([
+      expect.objectContaining({
+        modelId: 'gpt-4.1',
+        status: 'deprecated',
+        replacedBy: SNAPSHOT,
+        source: 'snapshot-alias',
+      }),
+    ]);
+  });
+
+  it('names the newest active snapshot when the alias has several', () => {
+    const result = aliasRun(
+      new Map([
+        active('gpt-4.1'),
+        active('gpt-4.1-2025-01-01'),
+        active(SNAPSHOT),
+        active('gpt-4.1-2026-01-01', { lifecycle: { status: 'deprecated' } }),
+      ])
+    );
+
+    expect(result.suggestions.map(suggestion => suggestion.replacedBy)).toEqual([SNAPSHOT]);
+  });
+
+  it('leaves an alias whose snapshot is itself sunset', () => {
+    const result = aliasRun(new Map([active('o3'), active('o3-2025-04-16', { lifecycle: { status: 'deprecated' } })]));
+
+    expect(result.suggestions).toEqual([]);
+  });
+
+  it('stops re-queueing once the alias is sunset', () => {
+    const result = aliasRun(
+      new Map([active('gpt-4.1', { lifecycle: { status: 'deprecated', replacedBy: SNAPSHOT } }), active(SNAPSHOT)])
+    );
+
+    expect(result.suggestions).toEqual([]);
+  });
+
+  it('leaves an alias the static adapter tables ship', () => {
+    const result = aliasRun(new Map([active('gpt-5.4-mini'), active('gpt-5.4-mini-2026-03-17')]), {
+      staticModelIds: new Set(['gpt-5.4-mini', 'gpt-5.4-mini-2026-03-17']),
+    });
+
+    expect(result.suggestions).toEqual([]);
+  });
+
+  it('leaves an alias served by another backend than the snapshot', () => {
+    const result = aliasRun(new Map([active('gpt-4.1', { backend: ModelBackend.Bedrock }), active(SNAPSHOT)]));
+
+    expect(result.suggestions).toEqual([]);
+  });
+
+  it('keeps a docs suggestion for the same alias ahead of its own', () => {
+    const resolvedInForce = new Map([active('gpt-4.1'), active(SNAPSHOT)]);
+    const signals = planLifecycleSignals({
+      contributions: [
+        provider('openai-docs', [
+          {
+            modelId: 'gpt-4.1',
+            patch: { lifecycle: { status: 'deprecated', retirementDate: '2027-01-01' } },
+            lifecycleEvidence: 'docs',
+          },
+        ]),
+      ],
+    });
+
+    const result = aliasRun(resolvedInForce, {
+      catalogPlan: catalogPlan(signals.contributions, resolvedInForce),
+      docs: signals.docs,
+    });
+
+    expect(result.suggestions).toHaveLength(1);
+    expect(result.suggestions[0]).toMatchObject({ modelId: 'gpt-4.1', source: 'openai-docs' });
   });
 });
 

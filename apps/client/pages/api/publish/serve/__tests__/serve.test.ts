@@ -49,7 +49,7 @@ vi.mock('@server/middlewares/optionalJwtAuth', () => ({
   optionalJwtAuth: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 // Rate limiter: pass-through so share-branch requests proceed. rateLimit itself is unit-tested.
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 
@@ -390,20 +390,24 @@ describe('GET /api/publish/serve - sandboxed bundle', () => {
     expect(mockDownload).not.toHaveBeenCalled(); // shell carries no secret, no storage read
   });
 
-  it('drops an oversized gated asset and reports it via header (no silent truncation)', async () => {
+  it('drops an oversized gated non-media asset and reports it via header (no silent truncation)', async () => {
     mockArtifactFindOne.mockReturnValue(
       bundle({
         visibility: 'private',
         ownerId: 'owner1',
         manifest: [
           { path: 'index.html', mimeType: 'text/html' },
-          { path: 'huge.png', mimeType: 'image/png' },
+          { path: 'huge.css', mimeType: 'text/css' },
         ],
       })
     );
     const huge = Buffer.alloc(3 * 1024 * 1024 + 1); // > PER_ASSET_MAX_BYTES
     mockDownload.mockImplementation((key: string) =>
-      Promise.resolve(key.endsWith('index.html') ? Buffer.from(`<html><body><img src="huge.png"></body></html>`) : huge)
+      Promise.resolve(
+        key.endsWith('index.html')
+          ? Buffer.from(`<html><head><link rel="stylesheet" href="huge.css"></head><body></body></html>`)
+          : huge
+      )
     );
 
     const { res, promise } = run(['u', 'scope123', 'my-slug'], { user: { id: 'owner1' } });
@@ -411,9 +415,9 @@ describe('GET /api/publish/serve - sandboxed bundle', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(res.getHeader('X-Publish-Dropped-Assets')).toBe('1');
-    expect(res.getHeader('X-Publish-Dropped-Asset-Names')).toContain('huge.png');
+    expect(res.getHeader('X-Publish-Dropped-Asset-Names')).toContain('huge.css');
     const data = res._getData() as string;
-    expect(data).not.toContain('data:image/png;base64,'); // huge asset was not inlined
+    expect(data).not.toContain('href=&quot;huge.css&quot;'); // link removed, not left to 404
   });
 
   it('admin views any gated bundle', async () => {
@@ -1727,6 +1731,14 @@ describe('GET /api/publish/serve - comment pin bridge', () => {
 });
 
 describe('GET /api/publish/serve - /a/<shareToken> no-sign-in links', () => {
+  it.each([':path*', 'x'.repeat(65)])('404s the malformed token %j without a database lookup', async token => {
+    mockArtifactFindOne.mockClear();
+    const { res, promise } = run(['a', token]);
+    await promise;
+    expect(res._getStatusCode()).toBe(404);
+    expect(mockArtifactFindOne).not.toHaveBeenCalled();
+  });
+
   it('serves a public bundle via token: same-origin srcdoc + <base> at /a, noindex + no-store', async () => {
     mockArtifactFindOne.mockReturnValue(bundle());
     mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
@@ -3819,6 +3831,38 @@ describe('GET /api/publish/serve - signed file delivery', () => {
     expect(res.getHeader('X-Publish-Dropped-Asset-Names')).toContain('media/clip.mp4');
   });
 
+  it('keeps a stylesheet listed after the images and sends the overflow images to signed URLs', async () => {
+    const images = Array.from({ length: 10 }, (_, i) => `slides/${i}.png`);
+    mockArtifactFindOne.mockReturnValue(
+      gated({
+        manifest: [
+          { path: 'index.html', mimeType: 'text/html' },
+          ...images.map(path => ({ path, mimeType: 'image/png' })),
+          { path: 'style.css', mimeType: 'text/css' },
+        ],
+      })
+    );
+    mockDownload.mockImplementation((key: string) => {
+      if (key.endsWith('index.html')) {
+        const imgs = images.map(path => `<img src="${path}">`).join('');
+        return Promise.resolve(
+          Buffer.from(`<html><head><link rel="stylesheet" href="style.css"></head><body>${imgs}</body></html>`)
+        );
+      }
+      if (key.endsWith('.css')) return Promise.resolve(Buffer.from('.slide{color:red}'.repeat(9000))); // ~150 KB
+      return Promise.resolve(Buffer.alloc(560 * 1024)); // six fill the budget, leaving no room for the CSS
+    });
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { cookie: await proofCookie(), fetchDest: 'document' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('X-Publish-Dropped-Assets')).toBeUndefined();
+    expect(res._getData() as string).toContain('.slide{color:red}');
+    const signedPngs = mockGetSignedUrl.mock.calls.filter(([key]) => String(key).endsWith('.png'));
+    expect(signedPngs.length).toBeGreaterThan(0);
+    expect(mockGetSignedUrl.mock.calls.some(([key]) => String(key).endsWith('.css'))).toBe(false);
+  });
+
   describe('a gated render where storage cannot sign for the browser', () => {
     beforeEach(() => {
       mockBrowserSigningOrigin.mockResolvedValue('');
@@ -3964,5 +4008,89 @@ describe('GET /api/publish/serve - buffered binary bodies', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res.getHeader('Content-Type')).toBe('application/octet-stream');
     expect(Buffer.compare(res._getData() as Buffer, bytes)).toBe(0);
+  });
+});
+
+describe('GET /api/publish/serve - owner-only thumbnails never reach a served page or its share meta', () => {
+  const THUMB_VERSION = 'd'.repeat(64);
+  const THUMB_KEY = `publish-thumbnails/pub1/${THUMB_VERSION}.webp`;
+  const withThumbnail = (over: Record<string, unknown> = {}) =>
+    bundle({ thumbnail: { key: THUMB_KEY, versionId: THUMB_VERSION, renderedAt: new Date() }, ...over });
+
+  const proofCookie = async () => {
+    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    return `b4m_pg_pub1=${signGateToken({ publicId: 'pub1' })}`;
+  };
+
+  const expectNoThumbnailReference = (res: ReturnType<typeof run>['res']) => {
+    const body = String(res._getData());
+    const headers = JSON.stringify(res._getHeaders());
+    for (const text of [body, headers]) {
+      expect(text).not.toContain('publish-thumbnails');
+      expect(text).not.toContain(THUMB_VERSION);
+      expect(text).not.toMatch(/og:image|twitter:image/);
+    }
+  };
+
+  const PASSPHRASE = { accessGate: { kind: 'passphrase' } };
+  const PRIVATE = { visibility: 'private' };
+  const OWNER = { user: { id: 'owner1' } };
+
+  it.each<[string, () => Promise<{ over?: Record<string, unknown>; opts: RunOpts }>]>([
+    ['a passphrase prompt to an anonymous viewer', async () => ({ over: PASSPHRASE, opts: {} })],
+    [
+      'a passphrase artifact unlocked by its proof',
+      async () => ({ over: PASSPHRASE, opts: { cookie: await proofCookie() } }),
+    ],
+    ['a passphrase artifact viewed by its owner', async () => ({ over: PASSPHRASE, opts: OWNER })],
+    ['a private artifact to an anonymous viewer', async () => ({ over: PRIVATE, opts: {} })],
+    ['a private artifact viewed by its owner', async () => ({ over: PRIVATE, opts: OWNER })],
+    ['a private artifact raw render for its owner', async () => ({ over: PRIVATE, opts: { ...OWNER, raw: true } })],
+    [
+      'an open-public share page (agent-readable meta)',
+      async () => ({ opts: { userAgent: 'Slackbot-LinkExpanding 1.0' } }),
+    ],
+    ['an open-public page on the isolated origin', async () => ({ opts: { uc: 'pub1' } })],
+  ])('%s', async (_label, scenario) => {
+    const { over, opts } = await scenario();
+    mockArtifactFindOne.mockReturnValue(withThumbnail(over));
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Body</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], opts);
+    await promise;
+
+    expectNoThumbnailReference(res);
+  });
+
+  it('checks a page whose share meta really rendered', async () => {
+    mockArtifactFindOne.mockReturnValue(withThumbnail());
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Body</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    expect(String(res._getData())).toContain('<meta property="og:title" content="My Artifact">');
+    expectNoThumbnailReference(res);
+  });
+
+  it('cannot reach the thumbnail object through a bundle path', async () => {
+    mockArtifactFindOne.mockReturnValue(withThumbnail());
+    mockDownload.mockResolvedValue(Buffer.from('webp'));
+
+    const { res, promise } = run([
+      'u',
+      'scope123',
+      'my-slug',
+      '..',
+      '..',
+      '..',
+      'publish-thumbnails',
+      'pub1',
+      `${THUMB_VERSION}.webp`,
+    ]);
+    await promise;
+
+    expect(res._getStatusCode()).not.toBe(200);
+    expect(mockDownload).not.toHaveBeenCalledWith(THUMB_KEY);
   });
 });

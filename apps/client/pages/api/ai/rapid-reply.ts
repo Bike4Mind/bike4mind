@@ -1,5 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { blockedAtZeroTierLimit } from '@server/middlewares/perUserRateLimit';
 import {
   adminSettingsRepository,
   apiKeyRepository,
@@ -13,9 +14,10 @@ import { StatusManager } from '@bike4mind/services/llm/StatusManager';
 import { ClientMessageSender, getSettingsByNames } from '@bike4mind/utils';
 import { buildApiKeyTable, getAvailableModels } from '@bike4mind/llm-adapters';
 import { resolveRapidModel } from '@server/rapidReply/resolveRapidModel';
-import { assertSessionAccess } from '@server/utils/sessionAccess';
+import { assertSessionAccess } from '@bike4mind/server-utils/utils/sessionAccess';
 import { ChatModels, NotFoundError } from '@bike4mind/common';
 import { Resource } from 'sst';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 // OptiHashi sessions get the instant ack even when RapidReply is globally off. When no DB
 // mapping is configured for the main model, fall back to a fast Haiku + this prompt so the
@@ -36,14 +38,16 @@ const OPTI_RAPID_SYSTEM_PROMPT =
  * This endpoint only saves to the database. The main quest processor
  * handles WebSocket notifications when it detects the rapid reply result.
  */
-const handler = baseApi()
+// SPA-only and not credit-metered, so it stays off the API-key surface.
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(
     rateLimit({
-      limit: process.env.NODE_ENV === 'development' ? 200 : 50,
+      limit: blockedAtZeroTierLimit(process.env.NODE_ENV === 'development' ? 200 : 50),
       windowMs: 60 * 1000,
     })
   )
   .post(async (req, res) => {
+    assertAiAccessAllowed(req.user);
     const startTime = Date.now();
     const { questId, sessionId, message, model: mainModel, processStartTime, isOpti: isOptiHint } = req.body;
     // Security: never trust a body-supplied userId - it drives API-key resolution, websocket

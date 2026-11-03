@@ -216,4 +216,20 @@ describe('artifactService - create', () => {
       parentArtifactId: undefined,
     });
   });
+
+  it('stores the reply identifier on the artifact row', async () => {
+    vi.mocked(mockContentRepo.create!).mockResolvedValueOnce({ _id: 'c1' } as never);
+    vi.mocked(mockVersionRepo.create!).mockResolvedValueOnce({ _id: 'v1' } as never);
+    vi.mocked(mockArtifactRepo.create!).mockResolvedValueOnce({ id: 'a1' } as never);
+
+    await create(
+      userId,
+      { type: 'react', title: 'T', content: 'x', sessionId: 's-1', identifier: 'todo_app' } as never,
+      adapters
+    );
+
+    expect(mockArtifactRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 's-1', identifier: 'todo_app' })
+    );
+  });
 });

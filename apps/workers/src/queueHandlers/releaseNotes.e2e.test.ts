@@ -17,7 +17,7 @@ const h = vi.hoisted(() => ({
   findWorkspace: vi.fn(),
 }));
 
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
 }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitModalGenerationMetrics: vi.fn() }));
@@ -25,6 +25,7 @@ vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: h.getSettingsByNames })
 vi.mock('./releaseNotes/generate', () => ({
   triageReleaseNotes: vi.fn(async () => ({
     notes: new Map([[1, 'note']]),
+    omitted: [],
     usage: { inputTokens: 0, outputTokens: 0 },
   })),
   writeReleaseNotes: h.writeReleaseNotes,

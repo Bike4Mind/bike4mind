@@ -5,7 +5,9 @@ import {
   IProjectRepository,
   IUserRepository,
   secureParameters,
+  UserShareGrant,
   BadRequestError,
+  ForbiddenError,
 } from '@bike4mind/common';
 import { z } from 'zod';
 import { canonicalId } from '../utils/objectIds';
@@ -60,7 +62,7 @@ export const removeFiles = async (
   }
 
   if (project.userId !== userId && files.some(f => f.userId !== userId)) {
-    throw new Error('You are not authorized to remove files from this project');
+    throw new ForbiddenError('You are not authorized to remove files from this project');
   }
 
   // Canonical on both sides here too: a stored id is lowercase, so an uppercase request id
@@ -89,12 +91,8 @@ export const removeFiles = async (
       }
     }
 
-    const nextUsers: typeof file.users = [];
-    for (const entry of file.users) {
-      if (entry.projectId !== project.id) {
-        nextUsers.push(entry);
-        continue;
-      }
+    const directGrants: UserShareGrant[] = [];
+    for (const entry of projectMemberEntries) {
       const email = granteeEmailsById.get(entry.userId);
       const directGrantPermissions = email
         ? Array.from(
@@ -110,12 +108,11 @@ export const removeFiles = async (
         // permission union pushShareable may have merged in from the project side -
         // otherwise a permission that came SOLELY from project membership (e.g. update,
         // when the direct invite only ever granted read+share) would outlive this revoke.
-        nextUsers.push({ ...entry, projectId: undefined, permissions: directGrantPermissions });
+        directGrants.push({ userId: entry.userId, permissions: directGrantPermissions });
       }
       // else: access came solely from this project - drop the entry entirely.
     }
-    file.users = nextUsers;
-    await db.fabFiles.update({ id: file.id, users: file.users });
+    await db.fabFiles.shareable.updateUserShares(file.id, { remove: { projectId: project.id }, add: directGrants });
   }
 
   await db.projects.update({ id: project.id, fileIds: project.fileIds, updatedAt: project.updatedAt });

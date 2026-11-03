@@ -39,7 +39,8 @@ async function run(
   await backend.complete(
     'qwen2.5-coder:3b',
     [{ role: 'user', content: 'go' } as any],
-    { stream: false, ...options } as any,
+    // These suites assert the wire message mapping; the identity line is covered separately.
+    { stream: false, omitIdentityReminder: true, ...options } as any,
     async (texts, info) => {
       texts.forEach(t => {
         if (t) out.push(t);
@@ -343,7 +344,7 @@ describe('OllamaBackend.getModelInfo capability mapping', () => {
     expect(info.can_think).toBe(true);
     expect(info.supportsVision).toBe(true);
     expect(info.supportsTools).toBe(true);
-    // The window is what we will actually allocate (see effectiveContextWindow), not the
+    // The window is what we will actually allocate (see ollamaNumCtx), not the
     // 262144 the model reports, so callers size history to what fits. Output is half of
     // that, which is what leaves room for the prompt.
     expect(info.contextWindow).toBe(32768);
@@ -383,6 +384,23 @@ describe('OllamaBackend.getModelInfo capability mapping', () => {
     expect(info.can_think).toBe(false);
     expect(info.supportsTools).toBe(true);
     expect(info.supportsVision).toBe(false);
+  });
+
+  it('tells a reported lack of tools apart from a failed /api/show', async () => {
+    const reported = backendWithCapabilities(['completion']);
+    await reported.getModelInfo();
+    expect(reported.toolSupportUnchecked('qwen3.5:2b-q4_K_M')).toBe(false);
+
+    const failed = new OllamaBackend('http://localhost:11434', silentLogger);
+    (failed as any)._api = {
+      list: vi.fn(async () => ({ models: [{ name: 'tiny:1b' }] })),
+      show: vi.fn(async () => {
+        throw new Error('fetch failed');
+      }),
+    };
+    const [info] = await failed.getModelInfo();
+    expect(info.supportsTools).toBe(false);
+    expect(failed.toolSupportUnchecked('tiny:1b')).toBe(true);
   });
 });
 
@@ -444,7 +462,15 @@ describe('OllamaBackend.buildMessages image handling', () => {
   // Drive a plain completion and return the message the api chat call received.
   async function sentMessage(content: unknown) {
     const { backend, chat } = makeBackend(answer);
-    await backend.complete('moondream', [{ role: 'user', content } as any], { stream: false } as any, async () => {});
+    await backend.complete(
+      'moondream',
+      [{ role: 'user', content } as any],
+      {
+        stream: false,
+        omitIdentityReminder: true,
+      } as any,
+      async () => {}
+    );
     return (chat.mock.calls[0][0] as { messages: Array<{ content: string; images?: string[] }> }).messages[0];
   }
 
@@ -495,7 +521,7 @@ describe('OllamaBackend.buildMessages replayed tool calls', () => {
     await backend.complete(
       'qwen3:8b',
       history,
-      { stream: false, executeTools: false, tools: [mathTool(async () => '4')] },
+      { stream: false, executeTools: false, tools: [mathTool(async () => '4')], omitIdentityReminder: true },
       async () => {}
     );
     const request = chat.mock.calls[0]?.[0];
@@ -982,5 +1008,35 @@ describe('OllamaBackend tool result recording', () => {
     expect(toolsUsed.length).toBe(2);
     expect(toolsUsed[0].id).not.toBe(toolsUsed[1].id);
     expect(toolsUsed.map(t => t.returnValue)).toEqual(['3', '7']);
+  });
+});
+
+describe('OllamaBackend with a custom fetch', () => {
+  it('sends requests through it and binds the abort signal', async () => {
+    const calls: { url: string; signal?: AbortSignal | null; dispatcher?: unknown }[] = [];
+    const custom = vi.fn(async (input: unknown, init?: RequestInit & { dispatcher?: unknown }) => {
+      calls.push({ url: String(input), signal: init?.signal, dispatcher: init?.dispatcher });
+      return new Response(
+        JSON.stringify({ model: 'm', message: { role: 'assistant', content: 'hi' }, done: true, done_reason: 'stop' }),
+        { headers: { 'content-type': 'application/json' } }
+      );
+    });
+    const backend = new OllamaBackend('http://gpu-box:11434', silentLogger, { fetch: custom as typeof fetch });
+    const controller = new AbortController();
+    let text = '';
+    await backend.complete(
+      'm',
+      [{ role: 'user', content: 'hi' }] as unknown as IMessage[],
+      { stream: false, abortSignal: controller.signal },
+      async parts => {
+        text += parts.filter(Boolean).join('');
+      }
+    );
+    expect(text).toContain('hi');
+    const chat = calls.find(call => call.url === 'http://gpu-box:11434/api/chat');
+    expect(chat).toBeDefined();
+    expect(calls.every(call => call.dispatcher === undefined)).toBe(true);
+    controller.abort();
+    expect(chat?.signal?.aborted).toBe(true);
   });
 });

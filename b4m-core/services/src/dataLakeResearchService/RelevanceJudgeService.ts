@@ -29,7 +29,7 @@ const JudgementSchema = z.object({
  * still has to be charged, or a run whose model consistently returns malformed JSON would loop
  * against a ceiling that never moves. Zero when the model reported no usage.
  */
-export type RelevanceJudgement =
+export type RelevanceJudgement = (
   | {
       outcome: 'judged';
       /** Clamped to 0..1 here, so a caller comparing against `minRelevance` never sees an out-of-range score. */
@@ -42,7 +42,13 @@ export type RelevanceJudgement =
       /** The underlying error's message, for the run card and logs. Never a stack. */
       error: string;
       costMicroUsd: number;
-    };
+    }
+) & {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+};
 
 /** The model used when a config names none, or names one this deployment no longer offers. */
 export const RELEVANCE_JUDGE_DEFAULT_MODEL: string = RESEARCH_RELEVANCE_MODEL_DEFAULT;
@@ -119,6 +125,8 @@ export class RelevanceJudgeService {
     let responseContent = '';
     let inputTokens = 0;
     let outputTokens = 0;
+    let cacheReadInputTokens = 0;
+    let cacheCreationInputTokens = 0;
     let modelInfo: ModelInfo | undefined;
 
     try {
@@ -140,6 +148,12 @@ export class RelevanceJudgeService {
           // deltas would over-count the spend this run charges against its ceiling.
           if (completionInfo?.inputTokens !== undefined) inputTokens = completionInfo.inputTokens;
           if (completionInfo?.outputTokens !== undefined) outputTokens = completionInfo.outputTokens;
+          if (completionInfo?.cacheReadInputTokens !== undefined) {
+            cacheReadInputTokens = completionInfo.cacheReadInputTokens;
+          }
+          if (completionInfo?.cacheCreationInputTokens !== undefined) {
+            cacheCreationInputTokens = completionInfo.cacheCreationInputTokens;
+          }
         }
       );
 
@@ -151,6 +165,10 @@ export class RelevanceJudgeService {
         relevance: Math.min(Math.max(parsed.relevance, 0), 1),
         rationale: parsed.rationale?.trim() || undefined,
         costMicroUsd: this.priceCall(modelInfo, inputTokens, outputTokens),
+        inputTokens,
+        outputTokens,
+        cacheReadInputTokens,
+        cacheCreationInputTokens,
       };
     } catch (error) {
       this.logger.updateMetadata({ responseContent });
@@ -159,6 +177,10 @@ export class RelevanceJudgeService {
         outcome: 'failed',
         error: error instanceof Error ? error.message : String(error),
         costMicroUsd: modelInfo ? this.priceCall(modelInfo, inputTokens, outputTokens) : 0,
+        inputTokens,
+        outputTokens,
+        cacheReadInputTokens,
+        cacheCreationInputTokens,
       };
     }
   }

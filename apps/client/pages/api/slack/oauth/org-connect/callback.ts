@@ -13,13 +13,17 @@ initializeSlackPackage();
  */
 
 import { Logger } from '@bike4mind/observability';
-import { orgSlackWorkspaceRepository } from '@bike4mind/database/infra';
-import { organizationRepository } from '@bike4mind/database/infra';
+import {
+  organizationRepository,
+  orgSlackWorkspaceRepository,
+  slackChannelConfigRepository,
+} from '@bike4mind/database/infra';
 import { baseApi } from '@server/middlewares/baseApi';
 import { getSystemSlackAppCredentials, verifyOrgSlackConnectStateToken } from '@bike4mind/slack';
-import { consumeStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { consumeStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
-import { encryptToken } from '@server/security/tokenEncryption';
+import { encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
+import { recordAdminActionForActor } from '@server/utils/adminAudit';
 import { randomUUID } from 'crypto';
 import type { Response } from 'express';
 
@@ -177,6 +181,32 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
 
     // Check if org already has a workspace connected
     const existingForOrg = await orgSlackWorkspaceRepository.findByOrganizationId(organizationId);
+
+    // API posting opt-ins are only ever this organization's own: drop any granted under another
+    // connection of this workspace, and all of a workspace this organization is moving away from.
+    const clearedChannelIds = await slackChannelConfigRepository.clearApiPostingBySlackTeamId(
+      slackTeamId,
+      organizationId
+    );
+    if (existingForOrg && existingForOrg.slackTeamId !== slackTeamId) {
+      clearedChannelIds.push(
+        ...(await slackChannelConfigRepository.clearApiPostingBySlackTeamId(existingForOrg.slackTeamId))
+      );
+    }
+    if (clearedChannelIds.length > 0) {
+      await recordAdminActionForActor(
+        req,
+        { kind: 'user', scope: 'organization', userId, name: userId, wasAdmin: false },
+        {
+          action: 'org.slack_channel_api_posting.updated',
+          target: { kind: 'organization', id: organizationId, displayName: org.name },
+          summary: `disabled Slack API posting for ${clearedChannelIds.length} channel(s) on workspace connect`,
+          changes: [{ field: 'apiPostEnabled', before: true, after: false }],
+          details: { slackTeamId, channelIds: clearedChannelIds },
+        }
+      );
+    }
+
     if (existingForOrg) {
       // Update existing record (reconnect scenario)
       await orgSlackWorkspaceRepository.update({

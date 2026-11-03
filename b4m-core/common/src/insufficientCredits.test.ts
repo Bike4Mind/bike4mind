@@ -1,39 +1,32 @@
 import { describe, it, expect } from 'vitest';
-import { insufficientCreditsError, getQuestErrorCode } from './insufficientCredits';
-import { UnprocessableEntityError, BadRequestError } from './errors';
+import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE } from './apiErrorCodes';
+import { TooManyRequestsError } from './errors';
+import { insufficientCreditsError, isTerminalCreditRefusal, spendCapExceededError } from './insufficientCredits';
 
-describe('insufficientCreditsError', () => {
-  it('is a 422 UnprocessableEntityError carrying the caller-supplied message', () => {
-    const err = insufficientCreditsError('You do not have enough credits.');
-    expect(err).toBeInstanceOf(UnprocessableEntityError);
-    expect(err.statusCode).toBe(422);
-    expect(err.message).toBe('You do not have enough credits.');
+describe('isTerminalCreditRefusal', () => {
+  it('is true for an insufficient_credits refusal', () => {
+    expect(isTerminalCreditRefusal(insufficientCreditsError('Not enough credits'))).toBe(true);
   });
 
-  it('tags the error with the insufficient_credits classifier', () => {
-    const err = insufficientCreditsError('out of credits');
-    expect(err.additionalInfo).toEqual({ errorCode: 'insufficient_credits' });
-  });
-});
-
-describe('getQuestErrorCode', () => {
-  it('round-trips the classifier off an insufficientCreditsError', () => {
-    expect(getQuestErrorCode(insufficientCreditsError('nope'))).toBe('insufficient_credits');
+  it('is true for the free-tier daily cap refusal', () => {
+    const error = new TooManyRequestsError('Daily free limit reached', {
+      errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+      retryAfter: 3600,
+    });
+    expect(isTerminalCreditRefusal(error)).toBe(true);
   });
 
-  it('returns undefined for an untagged UnprocessableEntityError (e.g. a compute failure)', () => {
-    expect(getQuestErrorCode(new UnprocessableEntityError('unrelated 422'))).toBeUndefined();
-  });
-
-  it('returns undefined for other error types', () => {
-    expect(getQuestErrorCode(new BadRequestError('bad'))).toBeUndefined();
-    expect(getQuestErrorCode(new Error('plain'))).toBeUndefined();
-  });
-
-  it('returns undefined for non-error values without throwing', () => {
-    expect(getQuestErrorCode(null)).toBeUndefined();
-    expect(getQuestErrorCode(undefined)).toBeUndefined();
-    expect(getQuestErrorCode('string')).toBeUndefined();
-    expect(getQuestErrorCode({ additionalInfo: { errorCode: 'not_a_real_code' } })).toBeUndefined();
+  it.each([
+    ['a spend cap refusal', spendCapExceededError('Key spend cap reached')],
+    [
+      'a rate limit with another error code',
+      new TooManyRequestsError('Slow down', { errorCode: 'token_rate_limit_exceeded' }),
+    ],
+    ['a plain Error', new Error('boom')],
+    ['null', null],
+    ['undefined', undefined],
+    ['a string', 'insufficient_credits'],
+  ])('is false for %s', (_label, error) => {
+    expect(isTerminalCreditRefusal(error)).toBe(false);
   });
 });

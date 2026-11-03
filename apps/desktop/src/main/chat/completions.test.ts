@@ -1,5 +1,18 @@
 import { PassThrough } from 'node:stream';
-import type { AxiosInstance } from 'axios';
+import {
+  AxiosError,
+  type AxiosAdapter,
+  type AxiosInstance,
+  type AxiosResponse,
+  type InternalAxiosRequestConfig,
+} from 'axios';
+import {
+  AuthenticatedApiClient,
+  SessionRevokedError,
+  type AuthTokens,
+  type RefreshingOAuthClient,
+  type TokenStore,
+} from '@bike4mind/client-auth';
 import { describe, expect, it, vi } from 'vitest';
 import { streamCompletion, supportsPromptCache, withCacheBreakpoints } from './completions';
 import type { CompletionStreamEvent } from './streamEvents';
@@ -33,6 +46,11 @@ describe('streamCompletion reasoning effort', () => {
   it('leaves the field off the payload when none is set', async () => {
     expect(await sentOptions(REQUEST)).not.toHaveProperty('reasoningEffort');
   });
+
+  it('sends a prompt cache lifetime under options only when one is set', async () => {
+    expect(await sentOptions({ ...REQUEST, cacheTtl: '1h' })).toMatchObject({ cacheTtl: '1h' });
+    expect(await sentOptions(REQUEST)).not.toHaveProperty('cacheTtl');
+  });
 });
 
 describe('streamCompletion', () => {
@@ -50,6 +68,30 @@ describe('streamCompletion', () => {
     await done;
 
     expect(events.map(event => ('text' in event ? event.text : event.type))).toEqual(['meta', 'Hel', 'lo']);
+  });
+
+  it('drops a generation rate from a hosted stream, keeping its usage and credits', async () => {
+    const stream = new PassThrough();
+    const { instance } = fakeAxios(stream);
+    const events: CompletionStreamEvent[] = [];
+
+    const done = streamCompletion(instance, '/c', REQUEST, event => events.push(event));
+
+    stream.write(
+      frame({
+        type: 'content',
+        stopReason: 'end_turn',
+        usage: { outputTokens: 12 },
+        credits: { used: 3 },
+        rate: { evalTokens: 12, evalMs: 500 },
+      })
+    );
+    stream.write(frame('[DONE]'));
+    await done;
+
+    expect(events).toEqual([
+      { type: 'content', stopReason: 'end_turn', usage: { outputTokens: 12 }, credits: { used: 3 } },
+    ]);
   });
 
   it('reassembles a frame split across chunk boundaries', async () => {
@@ -195,6 +237,17 @@ describe('streamCompletion', () => {
     expect(post.mock.calls[0][1]).toMatchObject({ max_tokens: 16_384 });
   });
 
+  it('sends the session id so the server ledger can tie the spend to the conversation', async () => {
+    const stream = new PassThrough();
+    const { instance, post } = fakeAxios(stream);
+
+    const done = streamCompletion(instance, '/c', { ...REQUEST, sessionId: 'session-1' }, () => {});
+    stream.write(frame('[DONE]'));
+    await done;
+
+    expect(post.mock.calls[0][1]).toMatchObject({ sessionId: 'session-1' });
+  });
+
   it('asks for readable reasoning only when told to', async () => {
     const stream = new PassThrough();
     const { instance, post } = fakeAxios(stream);
@@ -230,16 +283,137 @@ describe('streamCompletion', () => {
     expect(post.mock.calls[0][1].messages[0].content).toEqual(content);
   });
 
-  it('names an expired session on a 401 instead of leaking a bare status', async () => {
+  it('keeps the local-only turn marker off the wire', async () => {
+    const stream = new PassThrough();
+    const { instance, post } = fakeAxios(stream);
+
+    const done = streamCompletion(
+      instance,
+      '/c',
+      { model: 'm', messages: [{ role: 'user', content: 'Image from the call above.', continuesTurn: true }] },
+      () => {}
+    );
+    stream.write(frame('[DONE]'));
+    await done;
+
+    expect(post.mock.calls[0][1].messages).toEqual([{ role: 'user', content: 'Image from the call above.' }]);
+  });
+
+  it("describes a 403 as not allowed, with the server's words, rather than as an expired session", async () => {
     const post = vi.fn().mockRejectedValue(
       Object.assign(new Error('Request failed'), {
         isAxiosError: true,
-        response: { status: 401 },
+        response: { status: 403, data: JSON.stringify({ message: 'Model not enabled for this organization' }) },
       })
     );
     const instance = { post } as unknown as AxiosInstance;
 
-    await expect(streamCompletion(instance, '/c', REQUEST, () => {})).rejects.toThrow(/session may have expired/);
+    const err = await streamCompletion(instance, '/c', REQUEST, () => {}).catch((caught: Error) => caught);
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe('Model not enabled for this organization (status 403)');
+  });
+});
+
+describe('streamCompletion through the shared authenticated client', () => {
+  function unexpired(accessToken: string): AuthTokens {
+    return {
+      accessToken,
+      refreshToken: `refresh-${accessToken}`,
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+      userId: 'user-1',
+    };
+  }
+
+  /** The desktop's client settings over an in-memory store; `respond` plays the server. */
+  function client(respond: (config: InternalAxiosRequestConfig) => Promise<AxiosResponse>) {
+    let stored: AuthTokens | null = unexpired('access-0');
+    const tokenStore: TokenStore = {
+      getAuthTokens: async () => stored,
+      setAuthTokens: async next => {
+        stored = next;
+      },
+      clearAuthTokens: async () => {
+        stored = null;
+      },
+      isAuthenticated: async () => stored !== null,
+    };
+    const refreshToken = vi.fn(async () => ({
+      access_token: 'access-1',
+      refresh_token: 'refresh-1',
+      token_type: 'Bearer',
+      expires_in: 1800,
+    }));
+    const api = new AuthenticatedApiClient({
+      baseUrl: 'https://b4m.example.com',
+      tokenStore,
+      oauthClient: { refreshToken } as unknown as RefreshingOAuthClient,
+      logger: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      reauthMessages: { refreshFailed: 'refresh failed', stillUnauthorized: 'still unauthorized' },
+      refreshUnexpiredOn401: true,
+    });
+    const adapter = vi.fn(respond);
+    api.getAxiosInstance().defaults.adapter = adapter as unknown as AxiosAdapter;
+    return { axios: api.getAxiosInstance(), adapter, refreshToken };
+  }
+
+  function sseResponse(config: InternalAxiosRequestConfig, body: string): AxiosResponse {
+    const stream = new PassThrough();
+    stream.end(body);
+    return { data: stream, status: 200, statusText: 'OK', headers: {}, config } as AxiosResponse;
+  }
+
+  function unauthorized(config: InternalAxiosRequestConfig): AxiosError {
+    const body = new PassThrough();
+    body.end('{"error":"Unauthorized"}');
+    return new AxiosError('Request failed with status code 401', 'ERR_BAD_REQUEST', config, {}, {
+      data: body,
+      status: 401,
+      statusText: 'Unauthorized',
+      headers: {},
+      config,
+    } as AxiosResponse);
+  }
+
+  it('refreshes and retries a 401 that arrives before anything streamed', async () => {
+    const { axios, adapter, refreshToken } = client(async config => {
+      if (config.headers.Authorization !== 'Bearer access-1') throw unauthorized(config);
+      return sseResponse(config, frame({ type: 'content', text: 'hello' }) + frame('[DONE]'));
+    });
+    const events: CompletionStreamEvent[] = [];
+
+    await streamCompletion(axios, '/c', REQUEST, event => events.push(event));
+
+    expect(refreshToken).toHaveBeenCalledTimes(1);
+    expect(adapter).toHaveBeenCalledTimes(2);
+    expect(events).toEqual([{ type: 'content', text: 'hello' }]);
+  });
+
+  it('does not retry once the reply has started streaming', async () => {
+    const { axios, adapter, refreshToken } = client(async config =>
+      sseResponse(
+        config,
+        frame({ type: 'content', text: 'partial' }) + frame({ type: 'error', message: 'Unauthorized' })
+      )
+    );
+    const events: CompletionStreamEvent[] = [];
+
+    await expect(streamCompletion(axios, '/c', REQUEST, event => events.push(event))).rejects.toThrow('Unauthorized');
+
+    expect(events).toEqual([{ type: 'content', text: 'partial' }]);
+    expect(adapter).toHaveBeenCalledTimes(1);
+    expect(refreshToken).not.toHaveBeenCalled();
+  });
+
+  it("passes an unrecoverable session through as the client's own error, not a status line", async () => {
+    const { axios, adapter } = client(async config => {
+      throw unauthorized(config);
+    });
+
+    const err = await streamCompletion(axios, '/c', REQUEST, () => {}).catch((caught: unknown) => caught);
+
+    expect(err).toBeInstanceOf(SessionRevokedError);
+    expect(adapter).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -266,6 +440,19 @@ describe('withCacheBreakpoints', () => {
     const grown = [...history, { role: 'assistant' as const, content: 'two' }, { role: 'user' as const, content: 'x' }];
     const marked = withCacheBreakpoints(grown).flatMap((message, index) => (message.cache ? [index] : []));
     expect(marked).toEqual([0, 5]);
+  });
+
+  it('re-marks the previous rolling breakpoint only on the request right after a tool change', () => {
+    const change = {
+      role: 'system' as const,
+      content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'file_read' } }],
+    };
+    const ended = [history[0], history[1], change];
+    expect(withCacheBreakpoints(ended).flatMap((message, index) => (message.cache ? [index] : []))).toEqual([0, 1]);
+    const next = [...ended, { role: 'assistant' as const, content: 'a' }, { role: 'user' as const, content: 'b' }];
+    expect(withCacheBreakpoints(next).flatMap((message, index) => (message.cache ? [index] : []))).toEqual([0, 1, 4]);
+    const later = [...next, { role: 'assistant' as const, content: 'c' }, { role: 'user' as const, content: 'd' }];
+    expect(withCacheBreakpoints(later).flatMap((message, index) => (message.cache ? [index] : []))).toEqual([0, 6]);
   });
 
   it('never marks a message that ends on a reasoning block, and moves back to one that can carry it', () => {

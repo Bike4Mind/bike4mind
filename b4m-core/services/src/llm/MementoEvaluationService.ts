@@ -1,14 +1,21 @@
 import { BadRequestError, InternalServerError } from '@bike4mind/utils';
-import { getAvailableModels, getLlmByModel, type ApiKeyTable } from '@bike4mind/llm-adapters';
+import { getAvailableModels, getLlmByModel, type ApiKeyTable, type CompletionInfo } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
-import { ChatModels } from '@bike4mind/common';
+import { ChatModels, type ModelInfo } from '@bike4mind/common';
 
 const SingleMementoEvalSchema = z.object({
   importance: z.number().min(1).max(10), // 1-10 scale for personal info importance
   summary: z.string(),
   tags: z.array(z.string()).optional(),
 });
+
+export interface MementoEvaluationUsage {
+  modelInfo: ModelInfo;
+  completionInfo?: CompletionInfo;
+  /** Taken just before the provider call, for latency. */
+  startTime: number;
+}
 
 const MementoEvalResponseSchema = z.object({
   isPersonal: z.boolean(),
@@ -144,6 +151,7 @@ export class MementoEvaluationService {
     prompt,
     endUserId,
     factStyle = false,
+    onUsage,
   }: {
     apiKeyTable: ApiKeyTable;
     model?: ChatModels;
@@ -152,6 +160,8 @@ export class MementoEvaluationService {
     endUserId?: string;
     /** Opt into the V2 fact-style extraction prompt. Default false keeps main's prompt (V1 flag-off). */
     factStyle?: boolean;
+    /** Called once the provider call returns, whether or not its output parses. */
+    onUsage?: (usage: MementoEvaluationUsage) => void | Promise<void>;
   }): Promise<Array<z.infer<typeof SingleMementoEvalSchema>> | null> {
     let responseContent = '';
 
@@ -171,6 +181,8 @@ export class MementoEvaluationService {
 
       this.logger.debug('Prepared LLM prompt for evaluation', { promptLength: llmPrompt.length });
 
+      let completionInfo: CompletionInfo | undefined;
+      const startTime = Date.now();
       await llm.complete(
         model,
         [{ role: 'user', content: llmPrompt }],
@@ -178,11 +190,18 @@ export class MementoEvaluationService {
           temperature: 0.7,
           maxTokens: 800, // Increased to accommodate multiple mementos
         },
-        async texts => {
+        async (texts, info) => {
           responseContent += texts.join('');
+          if (info) completionInfo = info;
           this.logger.debug('Received streaming response chunk', { chunkLength: texts.join('').length });
         }
       );
+
+      try {
+        await onUsage?.({ modelInfo, completionInfo, startTime });
+      } catch (usageError) {
+        this.logger.warn('Failed to record memento evaluation usage', usageError);
+      }
 
       this.logger.debug('Raw LLM response received', { responseContent });
 

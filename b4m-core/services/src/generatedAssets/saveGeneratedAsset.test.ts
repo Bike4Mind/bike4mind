@@ -1,5 +1,7 @@
 import {
   FabFileSourceType,
+  GENERATED_ASSET_MAX_LINEAGE_ENTRIES,
+  GENERATED_ASSET_MAX_STORED_REQUEST_BYTES,
   GENERATED_ASSET_MAX_STORED_TEXT_CHARS as CAP,
   KnowledgeType,
   StorageLimitError,
@@ -12,7 +14,7 @@ const createFabFile = vi.hoisted(() => vi.fn());
 vi.mock('../fabFileService/create', () => ({ createFabFile }));
 
 const findOne = vi.fn();
-const logger = { info: vi.fn(), error: vi.fn() };
+const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 const deps = {
   db: { fabFiles: { create: vi.fn(), findOne }, adminSettings: {}, users: {}, dataLakes: {} },
   storage: { upload: vi.fn(), generateSignedUrl: vi.fn() },
@@ -74,6 +76,79 @@ describe('saveGeneratedAsset', () => {
       sourceMetadata: { sessionId: 's1', questId: 'q1', generation: { ...music, promptTruncated: false } },
     });
     expect(findOne).not.toHaveBeenCalled();
+  });
+
+  describe('lineage and request', () => {
+    const id = (n: number) => n.toString(16).padStart(24, '0');
+    const provenanceOf = () => createFabFile.mock.calls[0][2].provenance;
+
+    it('stores valid lineage', async () => {
+      const derivedFrom = [{ fileId: id(1), jobId: 'j1', role: 'first_frame' as const }];
+      await saveGeneratedAsset(params({ derivedFrom }), deps);
+      expect(provenanceOf().derivedFrom).toEqual(derivedFrom);
+    });
+
+    it('stores no lineage key when none is given', async () => {
+      await saveGeneratedAsset(params(), deps);
+      expect(provenanceOf()).not.toHaveProperty('derivedFrom');
+    });
+
+    it('drops invalid and uppercase ids without failing the save', async () => {
+      const result = await saveGeneratedAsset(
+        params({
+          derivedFrom: [
+            { fileId: 'A'.repeat(24), role: 'reference' },
+            { fileId: 'not-an-id', role: 'reference' },
+            { fileId: id(2), role: 'reference' },
+          ],
+        }),
+        deps
+      );
+      expect(result.saved).toBe(true);
+      expect(provenanceOf().derivedFrom).toEqual([{ fileId: id(2), role: 'reference' }]);
+      expect(logger.warn).toHaveBeenCalledTimes(2);
+    });
+
+    it('collapses duplicates by file and role but keeps distinct roles', async () => {
+      await saveGeneratedAsset(
+        params({
+          derivedFrom: [
+            { fileId: id(3), role: 'reference' },
+            { fileId: id(3), role: 'reference' },
+            { fileId: id(3), role: 'edit_source' },
+          ],
+        }),
+        deps
+      );
+      expect(provenanceOf().derivedFrom).toEqual([
+        { fileId: id(3), role: 'reference' },
+        { fileId: id(3), role: 'edit_source' },
+      ]);
+    });
+
+    it('caps the number of entries and warns', async () => {
+      const derivedFrom = Array.from({ length: GENERATED_ASSET_MAX_LINEAGE_ENTRIES + 4 }, (_, i) => ({
+        fileId: id(i + 1),
+        role: 'reference' as const,
+      }));
+      await saveGeneratedAsset(params({ derivedFrom }), deps);
+      expect(provenanceOf().derivedFrom).toHaveLength(GENERATED_ASSET_MAX_LINEAGE_ENTRIES);
+      expect(logger.warn).toHaveBeenCalled();
+    });
+
+    it('stores the generation request', async () => {
+      const request = { model: 'm', seed: 7 };
+      await saveGeneratedAsset(params({ generation: { ...music, request } }), deps);
+      expect(provenanceOf().sourceMetadata.generation.request).toEqual(request);
+    });
+
+    it('drops an oversized request without logging its content', async () => {
+      const request = { blob: 'secret-content-'.repeat(GENERATED_ASSET_MAX_STORED_REQUEST_BYTES) };
+      const result = await saveGeneratedAsset(params({ generation: { ...music, request } }), deps);
+      expect(result.saved).toBe(true);
+      expect(provenanceOf().sourceMetadata.generation).not.toHaveProperty('request');
+      expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('secret-content');
+    });
   });
 
   it('caps the stored prompt and lyrics', async () => {

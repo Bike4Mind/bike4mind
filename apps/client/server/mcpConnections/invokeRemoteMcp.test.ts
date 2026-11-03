@@ -76,7 +76,7 @@ vi.mock('@bike4mind/database', () => ({
   cacheRepository: { tryIncrementWithinLimitFixedWindow: tryIncrement },
 }));
 vi.mock('sst', () => ({ Resource: state.resource }));
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   decryptToken: (value: string | null | undefined) => (value ? value.replace(/^enc:/, '') : null),
 }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({

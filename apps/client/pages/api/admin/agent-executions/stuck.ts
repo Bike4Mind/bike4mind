@@ -1,6 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ensureAdmin, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import {
   agentExecutionRepository,
   ACTIVE_AGENT_EXECUTION_STATUSES,
@@ -40,9 +40,10 @@ export type StuckExecutionsResponse = {
  * older than `minutes`. Backed by {@link agentExecutionRepository.listStuck};
  * `awaiting_subagent` is deliberately excluded - see model docstring.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
-
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req, res) => {
   const parsed = QuerySchema.safeParse(req.query);
   if (!parsed.success) {
     throw new BadRequestError(parsed.error.issues[0]?.message || 'Invalid query parameters');

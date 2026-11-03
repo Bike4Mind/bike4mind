@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { copyFile, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { PERMISSION_LISTS, type PermissionRuleLists, type PermissionScope } from '@shared/permissions';
 import {
@@ -10,11 +10,12 @@ import {
   dialog,
   ipcMain,
   nativeImage,
+  net,
   safeStorage,
   shell,
   type WebContents,
 } from 'electron';
-import { ChatModels } from '@bike4mind/common';
+import { ChatModels, isPromptCacheTtl } from '@bike4mind/common';
 import type {
   ChatApprovalAnswer,
   ChatApprovalMode,
@@ -30,6 +31,7 @@ import type {
   UpdateProjectRequest,
 } from '@shared/chat';
 import type { CookieImportRequest } from '@shared/browserCookies';
+import type { CapabilitySubject } from '@shared/capabilities';
 import type {
   SkillMarketFilters,
   SkillMarketImportRequest,
@@ -57,22 +59,28 @@ import type { McpMutationResult, McpServerInput, McpServersState } from '@shared
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { ApprovalModePreference } from './ApprovalModePreference';
+import { PromptCacheTtlPreference } from './PromptCacheTtlPreference';
+import { LocalContextPreference } from './LocalContextPreference';
+import { registerLocalContextIpc } from './localContextIpc';
+import { localContextSizing, localHardware } from './localContextSizing';
 import { SidebarSectionStore } from './SidebarSectionStore';
 import { registerImageMenuIpc } from './imageMenuIpc';
 import { registerSessionCreateIpc } from './sessionCreateIpc';
 import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
 import { AttachmentStore } from './AttachmentStore';
 import { BrowserManager, NO_PAGE } from './browser/BrowserManager';
-import { IMAGE_BYTE_CAP, isImageMediaType } from './attachments';
+import { IMAGE_BYTE_CAP, IMAGE_MAX_EDGE, isImageMediaType } from './attachments';
 import { ArtifactLibrary } from './artifacts/ArtifactLibrary';
 import { SkillMarket } from './skills/SkillMarket';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { SharePublisher } from './artifacts/SharePublisher';
 import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
-import { ChatService, type ChatServiceDeps } from './ChatService';
+import { ChatService, sessionForRenderer, type ChatServiceDeps } from './ChatService';
+import { DeferredToolsSetting, parseDeferredToolsOverride } from './DeferredToolsSetting';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import { McpManager } from './mcp/McpManager';
-import { McpServerStore, type StoreFile } from './mcp/McpServerStore';
+import { McpServerStore } from './mcp/McpServerStore';
+import { privateFile } from '../privateFile';
 import { MediaApiClient } from './media/MediaApiClient';
 import { MediaStore } from './media/MediaStore';
 import { VideoJobScheduler } from './media/VideoJobScheduler';
@@ -83,7 +91,18 @@ import { ModelCatalog } from './ModelCatalog';
 import { ModelPreference } from './ModelPreference';
 import { SessionActivity } from './SessionActivity';
 import { SessionStore } from './SessionStore';
-import { sessionScopeFor, sessionScopeKey } from './sessionScope';
+import { LocalHistory } from './LocalHistory';
+import { registerHistoryIpc } from './historyIpc';
+import { captureHistoryPage } from './captureHistoryPage';
+import { forgetLocalContexts, OllamaLocal } from './OllamaLocal';
+import { registerModelServersIpc } from '../modelServers/ipc';
+import { LocalModels } from '../modelServers/LocalModels';
+import { ModelServerRegistry } from '../modelServers/ModelServerRegistry';
+import { ModelServerStore } from '../modelServers/ModelServerStore';
+import { withEnteredSpecs } from '../models/enteredHardware';
+import { machineView } from '../models/fit';
+import { LOCAL_SERVER_ID } from '@shared/modelServers';
+import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './sessionScope';
 import {
   branchCheckouts,
   currentBranch,
@@ -96,9 +115,16 @@ import { readWorkspaceChanges } from './project/workspaceChanges';
 import { accountSkillsProvider } from './skills/accountSkills';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
 import { ApprovalLog } from './permissions/ApprovalLog';
+import { formatApprovalSummary, readApprovalLog, summarizeApprovals } from './permissions/approvalSummary';
 import { ClaudeCodeSettings, MANAGED_SETTINGS_PATH } from './permissions/ClaudeCodeSettings';
 import { PermissionRuleStore } from './permissions/PermissionRuleStore';
 import { PermissionService } from './permissions/PermissionService';
+import { CapabilityLedger } from './capabilities/CapabilityLedger';
+import {
+  capabilityHandlers,
+  completeCapabilityMutation,
+  retireSessionApprovals,
+} from './capabilities/capabilityHandlers';
 import { SkillCatalog } from './skills/SkillCatalog';
 import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
@@ -109,6 +135,9 @@ import { folderToRemember } from './project/recentFolderToRecord';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './reasoningEffort';
 import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
+import { keepSessionWritesIn } from './tools/sessionScripts';
+import type { PreparedImage } from './tools/types';
+import { desktopScreenCapturer } from './screen/desktopScreen';
 import { devLog } from '../devlog/DevLogSink';
 import { registerPullRequests } from '../pr';
 import type { PrMonitor } from '../pr/PrMonitor';
@@ -119,6 +148,13 @@ import type { ClaudeImportService } from '../claudeImport/ClaudeImportService';
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
 /** Diagnosis only; see apps/desktop/docs/model-wait-findings.md. */
 const TURN_TIMING = process.env.B4M_DESKTOP_TURN_TIMING === '1';
+
+function sameSubject(left: CapabilitySubject, right: CapabilitySubject): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === 'desktop-user') return true;
+  if (left.kind === 'project' && right.kind === 'project') return left.directory === right.directory;
+  return left.kind === 'session' && right.kind === 'session' && left.sessionId === right.sessionId;
+}
 
 /**
  * The model a new conversation prefers until the user has picked one (see ModelPreference),
@@ -138,6 +174,12 @@ const PREFERRED_MODEL: string = ChatModels.CLAUDE_5_OPUS;
  * SessionStore - so this only reaches a conversation that has never been given one.
  */
 const REASONING_EFFORT = parseReasoningEffortSetting(process.env.B4M_DESKTOP_REASONING_EFFORT);
+
+/** Local overrides of the server's deferred tool loading setting; see parseDeferredToolsOverride. */
+const DEFERRED_TOOLS_OVERRIDE = parseDeferredToolsOverride(
+  process.env.B4M_DESKTOP_DEFERRED_TOOLS,
+  process.env.B4M_DESKTOP_DEFERRED_START_MAX_TOKENS
+);
 
 /** How much of a background process's output the panel asks for when it rejoins after a reload. */
 const PANEL_TAIL_CHARS = 20_000;
@@ -170,6 +212,35 @@ function shrinkImage(bytes: Buffer, mediaType: string, maxEdge: number): { bytes
   const asJpeg = resized.toJPEG(SHRUNK_JPEG_QUALITY);
   if (asJpeg.length === 0) return null;
   return { bytes: asJpeg, mediaType: 'image/jpeg' };
+}
+
+/**
+ * Fit an image a tool shows the model, as shrinkImage does an attachment. Unlike that one it
+ * reports the sizes for the tool's result, and passes through what already fits so a GIF the
+ * decoder reads keeps its frames.
+ */
+function prepareToolImage(bytes: Buffer, mediaType: string, maxBytes: number): PreparedImage | null {
+  const image = nativeImage.createFromBuffer(bytes);
+  if (image.isEmpty()) return null;
+
+  const { width: sourceWidth, height: sourceHeight } = image.getSize();
+  const oversized = Math.max(sourceWidth, sourceHeight) > IMAGE_MAX_EDGE;
+  if (!oversized && bytes.length <= maxBytes) {
+    return { bytes, mediaType, width: sourceWidth, height: sourceHeight, sourceWidth, sourceHeight };
+  }
+
+  const edge = sourceWidth >= sourceHeight ? { width: IMAGE_MAX_EDGE } : { height: IMAGE_MAX_EDGE };
+  const resized = oversized ? image.resize({ ...edge, quality: 'best' }) : image;
+  if (resized.isEmpty()) return null;
+  const sizes = { ...resized.getSize(), sourceWidth, sourceHeight };
+
+  const asPng = resized.toPNG();
+  if (asPng.length > 0 && asPng.length <= maxBytes) return { bytes: asPng, mediaType: 'image/png', ...sizes };
+  for (const quality of [SHRUNK_JPEG_QUALITY, 60]) {
+    const asJpeg = resized.toJPEG(quality);
+    if (asJpeg.length > 0 && asJpeg.length <= maxBytes) return { bytes: asJpeg, mediaType: 'image/jpeg', ...sizes };
+  }
+  return null;
 }
 
 /**
@@ -214,22 +285,12 @@ export interface RegisteredChat {
   claudeImport: ClaudeImportService;
   /** Spare checkouts, removed on the quit pass that can wait for git. */
   spareWorktrees: SpareWorktrees;
-}
-
-/**
- * The MCP config file, written the same way the auth vault is: mode 0600 and write-then-rename,
- * because a crash mid-write would otherwise leave a truncated list of servers.
- */
-function mcpStoreFile(path: string): StoreFile {
-  return {
-    read: () => readFile(path, 'utf8').catch(() => null),
-    write: async contents => {
-      await mkdir(dirname(path), { recursive: true });
-      const temporary = `${path}.tmp`;
-      await writeFile(temporary, contents, { encoding: 'utf8', mode: 0o600 });
-      await rename(temporary, path);
-    },
-  };
+  /** Saved model servers, which the Models screen also pulls to and removes from. */
+  modelServers: ModelServerRegistry;
+  /** The Settings choice of local model context, which the Models screen's fit badges also plan for. */
+  localContext: LocalContextPreference;
+  /** The capability ledger, which the Models screen records approved downloads in. */
+  capabilityLedger: CapabilityLedger;
 }
 
 /**
@@ -306,10 +367,18 @@ async function pickDirectory(sender: WebContents): Promise<string | null> {
 
 export function registerChat(
   auth: AuthService,
-  hooks: Pick<ChatServiceDeps, 'sessionClosed'> & { observeStream?(event: ChatStreamEvent): void } = {}
+  hooks: Pick<ChatServiceDeps, 'sessionClosed' | 'releaseSessionTerminals'> & {
+    observeStream?(event: ChatStreamEvent): void;
+    /** Revoking a model-pull grant in Settings stops that download; true once it no longer runs. */
+    cancelModelPull?(key: string): Promise<boolean>;
+    /** The curated list's projector sizes, so chat sizes a vision model the way the Models screen does. */
+    pinnedProjectors?(): ReadonlyMap<string, number>;
+  } = {}
 ): RegisteredChat {
   const logger = createMainLogger(VERBOSE);
   const userData = app.getPath('userData');
+  // App-wide like approval-mode.json: a record of decisions, kept after their conversations.
+  const approvalLog = new ApprovalLog(join(userData, 'approval-log.jsonl'), message => logger.warn(message));
   // Beside approval-mode.json and app-wide like it; see ModelPreference for why.
   const modelPreference = new ModelPreference(join(userData, 'model-preference.json'));
   // Unconditional, unlike everything else at this level: it is the one way to check which model
@@ -326,6 +395,15 @@ export function registerChat(
   // a scope folder on first use, and this records how the user likes to work rather than
   // anything belonging to one conversation or one account.
   const approvalModes = new ApprovalModePreference(join(userData, 'approval-mode.json'));
+  const deferredTools = new DeferredToolsSetting({
+    filePath: join(userData, 'deferred-tools.json'),
+    getApiClient: () => auth.getApiClient(),
+    getEnvironmentUrl: () => auth.getState().environment.url,
+    logger,
+    override: DEFERRED_TOOLS_OVERRIDE,
+  });
+  // Asked at launch so the first turn already has the server's answer.
+  void deferredTools.refresh();
   // Scoped to the backend and the account, not just to this machine: one install reaches
   // production and a local server, and can be signed in as a different person on each. The
   // provider is read per operation, so a switch takes effect on the next list with nothing
@@ -334,11 +412,14 @@ export function registerChat(
     join(userData, 'sessions'),
     PREFERRED_MODEL,
     randomUUID(),
-    () => sessionScopeFor(auth.getState()),
+    () => sessionScopeForChat(auth.getState()),
     approvalModes,
-    REASONING_EFFORT
+    REASONING_EFFORT,
+    new PromptCacheTtlPreference(join(userData, 'prompt-cache-ttl.json'))
   );
+  keepSessionWritesIn(store);
   const access = new AccessStore(join(userData, 'tool-access.json'));
+  const capabilityLedger = new CapabilityLedger(join(userData, 'capability-ledger.json'));
   // App-wide like approval-mode.json; see SidebarSectionStore.
   const sidebarSections = new SidebarSectionStore(join(userData, 'sidebar-sections.json'));
   const recentFolders = new RecentFolderStore(join(userData, 'recent-folders.json'));
@@ -360,6 +441,16 @@ export function registerChat(
     logger,
   });
   void permissions.start().catch(error => logger.warn(`PERMISSIONS: could not load rules: ${String(error)}`));
+  const capabilitiesReady = Promise.all([
+    access.list(),
+    projectTrust.list(),
+    new PermissionRuleStore(join(userData, 'permission-rules.json')).read(),
+  ])
+    .then(async ([roots, trustedProjects, stored]) => {
+      await retireSessionApprovals(capabilityLedger);
+      await capabilityLedger.migrate({ roots, trustedProjects, permissions: stored });
+    })
+    .catch(error => logger.warn(`CAPABILITIES: could not migrate grants: ${String(error)}`));
   const attachments = new AttachmentStore(join(userData, 'attachments'), logger, shrinkImage);
   const media = new MediaStore(join(userData, 'media'));
   registerMediaProtocol(media);
@@ -380,18 +471,64 @@ export function registerChat(
     writeClipboard: text => clipboard.writeText(text),
     logger,
   });
-  const models = new ModelCatalog({
-    logger,
-    getApiClient: () => auth.getApiClient(),
-    getEnvironmentUrl: () => auth.getState().environment.url,
+  const localContext = new LocalContextPreference(join(userData, 'local-context.json'));
+  void localHardware.profile();
+  const localSizing = localContextSizing({
+    setting: () => localContext.read(),
+    pinnedProjectors: () => hooks.pinnedProjectors?.() ?? new Map(),
   });
-
+  // safeStorage like the MCP secrets: a server's token or header value never goes to plain JSON.
+  const modelServers = new ModelServerRegistry({
+    store: new ModelServerStore(safeStorage, privateFile(join(userData, 'model-servers.json')), logger),
+    logger,
+    changed: servers => {
+      models.forgetLocal();
+      send(IPC_CHANNELS.modelServersChanged, servers);
+    },
+    localSpecsChanged: () => {
+      forgetLocalContexts();
+      localSizing.forget?.();
+      models.forgetLocal();
+    },
+  });
+  localHardware.setOverride(probed => withEnteredSpecs(probed, modelServers.specs(LOCAL_SERVER_ID)));
+  void modelServers.start().catch(error => logger.warn(`MODEL SERVERS: could not load: ${String(error)}`));
+  const local = new LocalModels(new OllamaLocal((url, init) => net.fetch(url, init), localSizing), modelServers);
+  const models = new ModelCatalog(
+    {
+      logger,
+      getApiClient: () => auth.getApiClient(),
+      getEnvironmentUrl: () => auth.getState().environment.url,
+    },
+    local
+  );
   const send = (channel: string, payload: unknown) => {
     logDownstream(channel, payload);
     for (const window of appWindows()) {
       window.webContents.send(channel, payload);
     }
   };
+
+  // History is an opt-in, rebuildable index: an unopenable file must not take chat down with it.
+  let history: LocalHistory | undefined;
+  try {
+    history = new LocalHistory(
+      join(userData, 'local-history.sqlite'),
+      () => {
+        const scope = sessionScopeForChat(auth.getState());
+        return scope ? sessionScopeKey(scope) : null;
+      },
+      () => {
+        try {
+          send(IPC_CHANNELS.chatHistoryChanged, undefined);
+        } catch (error) {
+          logger.warn(`CHAT: could not notify local history change: ${String(error)}`);
+        }
+      }
+    );
+  } catch (err) {
+    logger.warn(`CHAT: local history is unavailable: ${err instanceof Error ? err.message : err}`);
+  }
 
   // Built before the service so the service's tool results can bind a PR. It reaches the
   // service only through `chat`, which is first called long after both exist.
@@ -456,12 +593,14 @@ export function registerChat(
     output: (sessionId, processId, stream, text) =>
       broadcast({ type: 'background-output', sessionId, processId, stream, text }),
     status: (sessionId, process) => broadcast({ type: 'background-status', sessionId, process }),
+    // Only ever fires once a process has run, long after `service` below exists.
+    exited: (sessionId, processId) => service.backgroundExited(sessionId, processId),
   });
 
   // safeStorage for the same reason as the auth vault: an env variable holding an API key and a
   // header holding a bearer token are credentials, and neither goes to plain JSON in userData.
   const mcp = new McpManager(
-    new McpServerStore(safeStorage, mcpStoreFile(join(userData, 'mcp-servers.json')), logger),
+    new McpServerStore(safeStorage, privateFile(join(userData, 'mcp-servers.json')), logger),
     logger,
     (state: McpServersState) => send(IPC_CHANNELS.mcpServersChanged, state)
   );
@@ -470,7 +609,16 @@ export function registerChat(
 
   const browser = new BrowserManager(
     (sessionId, state) => send(IPC_CHANNELS.browserPageState, { sessionId, ...state }),
-    state => send(IPC_CHANNELS.browserCookiesChanged, state)
+    state => send(IPC_CHANNELS.browserCookiesChanged, state),
+    (sessionId, snapshot) =>
+      captureHistoryPage(sessionId, snapshot.model, {
+        history,
+        store,
+        scopeKey: () => {
+          const scope = sessionScopeForChat(auth.getState());
+          return scope ? sessionScopeKey(scope) : null;
+        },
+      })
   );
 
   const service = new ChatService({
@@ -484,8 +632,17 @@ export function registerChat(
     modelMemory: modelPreference,
     approvals,
     permissions,
-    // App-wide like approval-mode.json: a record of decisions, kept after their conversations.
-    approvalLog: new ApprovalLog(join(userData, 'approval-log.jsonl'), message => logger.warn(message)),
+    capabilities: {
+      grant: async input => {
+        await capabilitiesReady;
+        return capabilityLedger.grant(input);
+      },
+      revokeMatching: async match => {
+        await capabilitiesReady;
+        return capabilityLedger.revokeMatching(match);
+      },
+    },
+    approvalLog,
     background,
     foreground,
     dependencies: new DependencyInstaller(background),
@@ -496,13 +653,22 @@ export function registerChat(
     sidebarSections,
     mcp,
     browser,
+    pullRequests,
+    screen: desktopScreenCapturer(app.getName()),
+    prepareImage: prepareToolImage,
+    history,
+    local,
     artifacts,
     queue,
     skills,
     // userData holds the auth vault. Without this a user who shares their home folder would be
     // one `cat` away from the access token, which breaks the rule that tokens never leave the main process.
     protectedPaths: [userData],
+    get deferredTools() {
+      return deferredTools.current();
+    },
     getApiClient: () => auth.getApiClient(),
+    isDeviceLocal: () => sessionScopeForChat(auth.getState())?.local === true,
     getEnvironmentUrl: () => auth.getState().environment.url,
     emit: event => {
       broadcast(event);
@@ -514,10 +680,25 @@ export function registerChat(
     },
     summaryChanged: (summary: ChatSessionSummary) => send(IPC_CHANNELS.chatSessionSummary, summary),
     sessionClosed: hooks.sessionClosed,
+    releaseSessionTerminals: hooks.releaseSessionTerminals,
   });
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: boolean) => service.listModels(force));
+  registerModelServersIpc(ipcMain, modelServers, async () => {
+    const probed = await localHardware.probed();
+    return probed && machineView(probed);
+  });
   ipcMain.handle(IPC_CHANNELS.chatListSuggestionModels, () => service.listSuggestionModels());
+  registerLocalContextIpc(ipcMain, {
+    preference: localContext,
+    forget: () => {
+      forgetLocalContexts();
+      localSizing.forget?.();
+      models.forgetLocal();
+    },
+    fit: () => local.contextFit(),
+  });
+  ipcMain.handle(IPC_CHANNELS.chatListCreationTools, (_event, model: string) => service.listCreationTools(model));
   ipcMain.handle(IPC_CHANNELS.chatSetSessionArchived, (_event, sessionId: string, archived: boolean) =>
     service.setSessionArchived(sessionId, archived)
   );
@@ -567,12 +748,19 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatSetSessionModel, (_event, sessionId: string, model: string) =>
     service.setSessionModel(sessionId, model)
   );
+  ipcMain.handle(IPC_CHANNELS.chatSettleLocalModel, (_event, sessionId: string) =>
+    service.settleSessionModel(sessionId)
+  );
+  registerHistoryIpc(ipcMain, service, history);
   // Validated here rather than trusted, like the approval mode below: an unrecognised value
   // must not reach the store, where it would be sent verbatim on the next turn.
   ipcMain.handle(IPC_CHANNELS.chatSetSessionReasoningEffort, (_event, sessionId: string, effort: unknown) => {
     const setting = storedReasoningEffortSetting(effort);
     return setting ? service.setSessionReasoningEffort(sessionId, setting) : null;
   });
+  ipcMain.handle(IPC_CHANNELS.chatSetSessionPromptCacheTtl, (_event, sessionId: string, ttl: unknown) =>
+    isPromptCacheTtl(ttl) ? service.setSessionPromptCacheTtl(sessionId, ttl) : null
+  );
   ipcMain.handle(IPC_CHANNELS.chatSetSessionPinned, (_event, sessionId: string, pinned: boolean) =>
     service.setSessionPinned(sessionId, pinned)
   );
@@ -589,14 +777,90 @@ export function registerChat(
     const parsedScope = permissionScope(scope);
     const parsedLists = permissionLists(lists);
     if (!parsedScope || !parsedLists) return { ok: false, error: 'Not a permission rule list.' };
+    await capabilitiesReady;
     const result = await permissions.setRules(parsedScope, parsedLists);
-    // An allow typed here answers any card it now covers, in every session.
-    if (result.ok) void approvals.settleCovered();
-    return result;
+    if (!result.ok) return result;
+    return completeCapabilityMutation(
+      result,
+      async () => {
+        const subject =
+          parsedScope.kind === 'project'
+            ? ({ kind: 'project', directory: resolve(parsedScope.directory) } as const)
+            : ({ kind: 'desktop-user' } as const);
+        await capabilityLedger.revokeMatching(
+          grant =>
+            grant.capability === 'tool' &&
+            grant.scope.kind === 'permission-rule' &&
+            sameSubject(grant.subject, subject) &&
+            !parsedLists.allow.includes(grant.scope.value)
+        );
+        const active = (await capabilityLedger.state()).grants.filter(
+          grant => !grant.revokedAt && grant.scope.kind === 'permission-rule' && sameSubject(grant.subject, subject)
+        );
+        for (const rule of parsedLists.allow) {
+          if (active.some(grant => grant.scope.kind === 'permission-rule' && grant.scope.value === rule)) continue;
+          await capabilityLedger.grant({
+            subject,
+            capability: 'tool',
+            scope: { kind: 'permission-rule', value: rule },
+            source: 'permission-rule',
+          });
+        }
+      },
+      logger,
+      () => {
+        void approvals.settleCovered();
+      }
+    );
   });
   ipcMain.handle(IPC_CHANNELS.permissionsSetSharing, (_event, share: unknown) =>
     permissions.setShareClaudeCode(share === true)
   );
+  // Written only where the user picks in the save dialog: the digest never leaves the machine otherwise.
+  ipcMain.handle(IPC_CHANNELS.permissionsExportApprovalSummary, async event => {
+    const options = {
+      defaultPath: join(app.getPath('downloads'), `approval-summary-${new Date().toISOString().slice(0, 10)}.md`),
+      filters: [{ name: 'Markdown', extensions: ['md'] }],
+    };
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const picked = await (window ? dialog.showSaveDialog(window, options) : dialog.showSaveDialog(options));
+    if (picked.canceled || !picked.filePath) return false;
+    const entries = await readApprovalLog([approvalLog.rotatedPath, approvalLog.filePath]);
+    await writeFile(picked.filePath, formatApprovalSummary(summarizeApprovals(entries)), 'utf8');
+    return true;
+  });
+  const capabilityIpc = capabilityHandlers({
+    ledger: capabilityLedger,
+    ready: capabilitiesReady,
+    scopeKey: () => store.scopeKey(),
+    sessions: () => store.list(),
+    targets: {
+      approvals,
+      removeSessionDirectory: async (sessionId, directory) => {
+        const scopeKey = store.scopeKey();
+        const session = await store.get(sessionId);
+        const directories = [...(session?.grantedDirectories ?? []), ...(session?.project?.contextDirectories ?? [])];
+        if (scopeKey !== store.scopeKey() || !directories.includes(directory)) return false;
+        return (await service.removeContextDirectory(sessionId, directory, false, scopeKey)) !== null;
+      },
+      revokeRoot: async root => {
+        if (!(await access.list()).includes(root)) return false;
+        await access.revoke(root);
+        service.refreshAccessScopes();
+        return true;
+      },
+      untrustProject: async directory => {
+        if (!(await projectTrust.isTrusted(directory))) return false;
+        await skills.setTrusted(directory, false);
+        permissions.invalidate();
+        return true;
+      },
+      revokeAllow: (scope, rule) => permissions.revokeAllow(scope, rule),
+      cancelModelPull: key => hooks.cancelModelPull?.(key) ?? Promise.resolve(false),
+    },
+  });
+  ipcMain.handle(IPC_CHANNELS.capabilitiesGetState, () => capabilityIpc.getState());
+  ipcMain.handle(IPC_CHANNELS.capabilitiesRevoke, (_event, grantId: unknown) => capabilityIpc.revoke(grantId));
   ipcMain.handle(IPC_CHANNELS.chatGetSessionStatuses, () => service.sessionStatuses());
   const rememberFolder = (directory: string | null): void => {
     if (!directory) return;
@@ -680,7 +944,9 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatRemoveContextDirectory, (_event, sessionId: string, directory: string) =>
     service.removeContextDirectory(sessionId, directory)
   );
-  ipcMain.handle(IPC_CHANNELS.chatGetSession, (_event, sessionId: string) => service.getSession(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatGetSession, async (_event, sessionId: string) =>
+    sessionForRenderer(await service.getSession(sessionId))
+  );
   // Keyed by session rather than by a path from the renderer, so this only ever reads the folder
   // the session's own tools run in. A failure is logged, not shown: the bar is a passive readout,
   // and a repository git cannot read already says so on the branch chip beside it.
@@ -697,8 +963,45 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatRenameSession, (_event, sessionId: string, title: string) =>
     service.renameSession(sessionId, title)
   );
-  ipcMain.handle(IPC_CHANNELS.chatDeleteSession, async (_event, sessionId: string) => {
-    await service.deleteSession(sessionId);
+  ipcMain.handle(IPC_CHANNELS.chatInspectWorktreeRemoval, (_event, sessionId: unknown) => {
+    if (typeof sessionId !== 'string') throw new Error('Invalid conversation id');
+    return service.inspectSessionWorktreeRemoval(sessionId);
+  });
+  // Only a repository the user already has a conversation or recent folder for is ever touched.
+  const knownRepository = async (directory: string) => {
+    const recent = await recentFolders.list();
+    if (
+      !(await service.isKnownRepository(
+        directory,
+        recent.map(folder => folder.path)
+      ))
+    ) {
+      throw new Error('Unknown project directory');
+    }
+  };
+  ipcMain.handle(IPC_CHANNELS.chatListWorktrees, async (_event, directory: unknown) => {
+    if (typeof directory !== 'string') throw new Error('Invalid project directory');
+    await knownRepository(directory);
+    return service.listWorktrees(directory);
+  });
+  ipcMain.handle(IPC_CHANNELS.chatRemoveWorktrees, async (_event, directory: unknown, paths: unknown) => {
+    if (typeof directory !== 'string') throw new Error('Invalid project directory');
+    if (paths !== undefined && (!Array.isArray(paths) || !paths.every(path => typeof path === 'string'))) {
+      throw new Error('Invalid worktree list');
+    }
+    await knownRepository(directory);
+    return service.removeWorktrees(directory, paths);
+  });
+  ipcMain.handle(IPC_CHANNELS.chatRevealWorktree, async (_event, directory: unknown, path: unknown) => {
+    if (typeof directory !== 'string' || typeof path !== 'string') throw new Error('Invalid worktree');
+    await knownRepository(directory);
+    return service.revealWorktree(directory, path, listed => shell.showItemInFolder(listed));
+  });
+  ipcMain.handle(IPC_CHANNELS.chatDeleteSession, async (_event, sessionId: unknown, removeWorktree: unknown) => {
+    if (typeof sessionId !== 'string' || (removeWorktree !== undefined && typeof removeWorktree !== 'boolean')) {
+      throw new Error('Invalid delete request');
+    }
+    await service.deleteSession(sessionId, removeWorktree === true);
     await pullRequests.forget(sessionId);
   });
   registerSidebarIpc(ipcMain, sidebarSections, sessionId =>
@@ -911,11 +1214,57 @@ export function registerChat(
     const options = { properties: ['openDirectory' as const], defaultPath: pickerStart() };
     const picked = await (window ? dialog.showOpenDialog(window, options) : dialog.showOpenDialog(options));
     if (picked.canceled || picked.filePaths.length === 0) return { roots: await access.list() };
-    return { roots: await access.grant(picked.filePaths[0]) };
+    await capabilitiesReady;
+    const roots = await access.grant(picked.filePaths[0]);
+    service.refreshAccessScopes();
+    return completeCapabilityMutation(
+      { roots },
+      async () => {
+        const active = (await capabilityLedger.state()).grants.filter(
+          grant =>
+            !grant.revokedAt &&
+            grant.subject.kind === 'desktop-user' &&
+            grant.capability === 'files' &&
+            grant.scope.kind === 'path'
+        );
+        await capabilityLedger.revokeMatching(
+          grant =>
+            grant.subject.kind === 'desktop-user' &&
+            grant.capability === 'files' &&
+            grant.scope.kind === 'path' &&
+            !roots.includes(grant.scope.value)
+        );
+        for (const root of roots) {
+          if (active.some(grant => grant.scope.kind === 'path' && grant.scope.value === root)) continue;
+          await capabilityLedger.grant({
+            subject: { kind: 'desktop-user' },
+            capability: 'files',
+            scope: { kind: 'path', value: root },
+            source: 'folder-picker',
+          });
+        }
+      },
+      logger
+    );
   });
-  ipcMain.handle(IPC_CHANNELS.toolsRevokeAccess, async (_event, root: string) => ({
-    roots: await access.revoke(root),
-  }));
+  ipcMain.handle(IPC_CHANNELS.toolsRevokeAccess, async (_event, root: string) => {
+    await capabilitiesReady;
+    const roots = await access.revoke(root);
+    service.refreshAccessScopes();
+    return completeCapabilityMutation(
+      { roots },
+      async () => {
+        await capabilityLedger.revokeMatching(
+          grant =>
+            grant.subject.kind === 'desktop-user' &&
+            grant.capability === 'files' &&
+            grant.scope.kind === 'path' &&
+            grant.scope.value === resolve(root)
+        );
+      },
+      logger
+    );
+  });
 
   ipcMain.handle(IPC_CHANNELS.chatListVideoJobs, (_event, sessionId: string) => videoJobs.list(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatCancelVideoJob, (_event, sessionId: string, jobId: string) =>
@@ -972,7 +1321,18 @@ export function registerChat(
     logger,
   });
 
-  return { service, background, mcp, browser, pullRequests, claudeImport, spareWorktrees };
+  return {
+    service,
+    background,
+    mcp,
+    browser,
+    pullRequests,
+    claudeImport,
+    spareWorktrees,
+    modelServers,
+    localContext,
+    capabilityLedger,
+  };
 }
 
 export { ChatService } from './ChatService';

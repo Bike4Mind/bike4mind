@@ -1,7 +1,9 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { blockedAtZeroTierLimit } from '@server/middlewares/perUserRateLimit';
 import { ensureTavernAccess } from '@bike4mind/server-utils/utils/errors';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 const BARKEEP_SYSTEM_PROMPT = `You are Grimbold, the jovial bartender of The Gilded Flagon tavern.
 You speak in a warm, slightly rough medieval voice — think gruff but kind.
@@ -16,14 +18,16 @@ interface BarkeepChatRequest {
   history?: { role: 'user' | 'assistant'; content: string }[];
 }
 
-const handler = baseApi()
+// SPA-only and not credit-metered, so it stays off the API-key surface.
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(
     rateLimit({
-      limit: process.env.NODE_ENV === 'development' ? 50 : 20,
+      limit: blockedAtZeroTierLimit(process.env.NODE_ENV === 'development' ? 50 : 20),
       windowMs: 60 * 1000,
     })
   )
   .post(async (req: any, res) => {
+    assertAiAccessAllowed(req.user);
     ensureTavernAccess(req.user);
 
     const { userMessage, history = [] }: BarkeepChatRequest = req.body;

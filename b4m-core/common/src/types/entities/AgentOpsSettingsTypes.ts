@@ -53,7 +53,7 @@ export interface IAgentOpsSettingsRepository extends IBaseRepository<IAgentOpsSe
   /**
    * Add a new meta-prompt version
    */
-  addMetaPromptVersion(metaPrompt: string, description: string, createdBy: string): Promise<IAgentOpsSettingsDocument>;
+  addMetaPromptVersion(metaPrompt: string, createdBy: string, description?: string): Promise<IAgentOpsSettingsDocument>;
 
   /**
    * Activate a specific meta-prompt version

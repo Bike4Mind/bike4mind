@@ -101,6 +101,7 @@ apps/client/pages/api/admin/modal-tool.ts
 apps/client/pages/api/admin/modals/variants.ts
 apps/client/pages/api/admin/model-deprecation-status.ts
 apps/client/pages/api/admin/model-discovery.ts
+apps/client/pages/api/admin/model-hub/curated/versions.ts  # deliberately accepts ADMIN-scoped API keys: the curated publish script imports signed lists with one
 apps/client/pages/api/admin/model-logs.ts
 apps/client/pages/api/admin/model-metrics.ts
 apps/client/pages/api/admin/model-prices.ts
@@ -154,24 +155,16 @@ apps/client/pages/api/admin/release-notes/index.ts
 apps/client/pages/api/admin/retrieval-rate.ts
 apps/client/pages/api/admin/scoped-settings/effective.ts
 apps/client/pages/api/admin/scoped-settings/index.ts
-apps/client/pages/api/admin/security-dashboard/ai-assessment.ts
 apps/client/pages/api/admin/security-dashboard/attack-simulation-ingest.ts
 apps/client/pages/api/admin/security-dashboard/attack-simulation.ts
 apps/client/pages/api/admin/security-dashboard/cloud-prowler-ingest.ts
 apps/client/pages/api/admin/security-dashboard/cloud-prowler.ts
 apps/client/pages/api/admin/security-dashboard/cloud.ts
-apps/client/pages/api/admin/security-dashboard/code-semgrep-ingest.ts
-apps/client/pages/api/admin/security-dashboard/code.ts
 apps/client/pages/api/admin/security-dashboard/overview.ts
-apps/client/pages/api/admin/security-dashboard/packages-ingest.ts
-apps/client/pages/api/admin/security-dashboard/packages.ts
 apps/client/pages/api/admin/security-dashboard/run-attack-simulation.ts
-apps/client/pages/api/admin/security-dashboard/secrets-ingest.ts
-apps/client/pages/api/admin/security-dashboard/secrets.ts
 apps/client/pages/api/admin/security-dashboard/waf-blocked-requests.ts
 apps/client/pages/api/admin/security-dashboard/waf-logs-insights.ts
 apps/client/pages/api/admin/security-dashboard/waf-traffic.ts
-apps/client/pages/api/admin/security-dashboard/waf.ts
 apps/client/pages/api/admin/security-dashboard/web-owasp-ingest.ts
 apps/client/pages/api/admin/security-dashboard/web.ts
 apps/client/pages/api/admin/security-scan-schedule/[scanType].ts
@@ -234,18 +227,8 @@ apps/client/pages/api/admin/voice-agents/index.ts
 apps/client/pages/api/admin/webhook-logs/[deliveryId].ts
 apps/client/pages/api/admin/webhook-logs/index.ts
 apps/client/pages/api/admin/webhook-logs/stats.ts
-apps/client/pages/api/admin/whats-new-backfill.ts
-apps/client/pages/api/admin/whats-new-config.ts
-apps/client/pages/api/admin/whats-new-config/history.ts
-apps/client/pages/api/admin/whats-new-config/preview.ts
-apps/client/pages/api/admin/whats-new-config/restore.ts
-apps/client/pages/api/admin/whats-new-generation-status.ts
 apps/client/pages/api/admin/whats-new-highlights-config.ts
 apps/client/pages/api/admin/whats-new-highlights-preview.ts
-apps/client/pages/api/admin/whats-new/available.ts
-apps/client/pages/api/admin/whats-new/config.ts
-apps/client/pages/api/admin/whats-new/import.ts
-apps/client/pages/api/admin/whats-new/sync.ts
 apps/client/pages/api/agent-executions/[id]/index.ts
 apps/client/pages/api/agent-executions/index.ts
 apps/client/pages/api/agent-quest/manifest.ts
@@ -259,7 +242,6 @@ apps/client/pages/api/agents/[id]/missions.ts
 apps/client/pages/api/agents/[id]/transfer-credits.ts
 apps/client/pages/api/agents/create-from-context.ts
 apps/client/pages/api/agents/index.ts
-apps/client/pages/api/ai/barkeep-chat.ts
 apps/client/pages/api/ai/classify-intent.ts
 apps/client/pages/api/ai/context-dry-run.ts
 apps/client/pages/api/ai/edit-image.ts
@@ -267,11 +249,7 @@ apps/client/pages/api/ai/generate-image.ts
 apps/client/pages/api/ai/generate-video.ts
 apps/client/pages/api/ai/llm.ts
 apps/client/pages/api/ai/music.ts
-apps/client/pages/api/ai/optimize-input.ts
-apps/client/pages/api/ai/rapid-reply.ts
-apps/client/pages/api/ai/refineText.ts
 apps/client/pages/api/ai/sound-effects.ts
-apps/client/pages/api/ai/tavern-conversation.ts
 apps/client/pages/api/ai/test-realtime-voice.ts
 apps/client/pages/api/ai/transcribe/index.ts
 apps/client/pages/api/ai/transcribe/init.ts
@@ -403,8 +381,6 @@ apps/client/pages/api/data-lakes/transitional.ts
 apps/client/pages/api/deep-agent/agents/[agentId].ts
 apps/client/pages/api/deep-agent/agents/index.ts
 apps/client/pages/api/deep-agent/mission-counts.ts
-apps/client/pages/api/deep-agent/review.ts
-apps/client/pages/api/deep-agent/spin.ts
 apps/client/pages/api/documentation/docusaurus-meta.ts
 apps/client/pages/api/elabs/ready.ts
 apps/client/pages/api/elabs/voice/[id]/index.ts
@@ -546,6 +522,7 @@ apps/client/pages/api/modals/[id]/delete.ts
 apps/client/pages/api/modals/[id]/update.ts
 apps/client/pages/api/modals/create.ts
 apps/client/pages/api/modals/index.ts
+apps/client/pages/api/model-hub/curated/v2/[file].ts  # deliberately unauthenticated (auth: false): Desktop and the CLI fetch the signed curated list signed out; rate limited, read-only
 apps/client/pages/api/models.ts
 apps/client/pages/api/models/stats.ts
 apps/client/pages/api/notebooks/curate.ts
@@ -565,7 +542,6 @@ apps/client/pages/api/oauth/openid-configuration.ts
 apps/client/pages/api/oauth/refresh.ts
 apps/client/pages/api/oauth/token.ts
 apps/client/pages/api/oauth/userinfo.ts
-apps/client/pages/api/ollama/models.ts
 apps/client/pages/api/organizations/[id]/addUser.ts
 apps/client/pages/api/organizations/[id]/admins.ts
 apps/client/pages/api/organizations/[id]/feedback-report.ts
@@ -601,9 +577,11 @@ apps/client/pages/api/organizations/stats.ts
 apps/client/pages/api/organizations/subscriptions/subscribe.ts
 apps/client/pages/api/organizations/subscriptions/update-seats.ts
 apps/client/pages/api/organizations/users.ts
+apps/client/pages/api/otc/form-token.ts  # deliberately unauthenticated (auth: false): signed-out sign-in/register forms fetch it, like otc/send
 apps/client/pages/api/otc/send.ts
 apps/client/pages/api/otc/verify.ts
 apps/client/pages/api/overwatch/v1/events.ts
+apps/client/pages/api/partners/rewards/grant.ts  # confined, admin-provisioned partner scope (rewards:grant) kept out of the public OpenAPI; server-to-server only, session callers refused in the handler
 apps/client/pages/api/ping.ts
 apps/client/pages/api/projects/[id]/files.ts
 apps/client/pages/api/projects/[id]/index.ts
@@ -777,6 +755,7 @@ apps/client/pages/api/tools/web-fetch.ts
 apps/client/pages/api/tools/web-search.ts
 apps/client/pages/api/transforms/batch.ts
 apps/client/pages/api/transforms/batch/[id].ts
+apps/client/pages/api/turnstile/client-failure.ts  # deliberately unauthenticated (auth: false): reports a Turnstile failure from the signed-out sign-in page; rate limited, log-only
 apps/client/pages/api/usage/fleet-export.ts
 apps/client/pages/api/usage/index.ts
 apps/client/pages/api/user-api-keys/[id]/callback-secret.ts

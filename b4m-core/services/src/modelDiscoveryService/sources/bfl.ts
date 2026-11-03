@@ -20,9 +20,11 @@ export const BFL_OPENAPI_URL = 'https://api.bfl.ai/openapi.json';
  * It emits no `name`. BFL publishes only the endpoint slug, and the catalog's
  * FLUX names are curated ("FLUX Pro Ultra", "FLUX Pro (Legacy)") - overwriting
  * those with `flux-pro-1-1-ultra` would be a presentation regression dressed up
- * as discovery. The cost is stated: a FLUX endpoint the catalog has never held
- * is discovered and then DROPPED for a missing name, which surfaces in the run's
- * dropped records as an operator work item rather than as silence.
+ * as discovery. So an endpoint the adapter table has never curated is introduced
+ * under its slug and left auto-disabled for want of a trusted price, which
+ * surfaces it in the run's report as an operator work item rather than as
+ * silence. Curation in the adapter table, not discovery, is what makes a listed
+ * endpoint a product.
  */
 interface OpenApiSchema {
   properties?: Record<string, unknown>;
@@ -73,11 +75,14 @@ export function normalizeBflOpenApi(payload: unknown): DiscoveredModel[] {
       modelId: id,
       patch: compact<Partial<ModelRecord>>({
         id,
-        vendor: 'bfl',
+        // The catalog's own vendor spelling (inferVendor, @bike4mind/common), so discovery does
+        // not propose a rename of every seeded BFL model on every run.
+        vendor: 'black-forest-labs',
         backend: ModelBackend.BFL,
         type: 'image',
-        // Image models have no token context; 0 is the catalog's "not applicable".
-        contextWindow: 0,
+        // No contextWindow: there is no token context to report, and the 0 that means "not
+        // applicable" would still claim the `limits` group, burying the real budget a curated
+        // record carries. planCatalogWrites fills the 0 an introduction needs without claiming it.
         supportsImageVariation: IMAGE_INPUT_PROPERTIES.some(property => properties.includes(property)),
         supportsSafetyTolerance: properties.includes('safety_tolerance'),
       }),

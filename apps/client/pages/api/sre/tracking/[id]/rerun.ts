@@ -27,8 +27,9 @@
 
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { sreErrorTrackingRepository, cacheRepository, adminSettingsRepository } from '@bike4mind/database';
 import {
   SreAgentConfigSchema,
@@ -38,7 +39,7 @@ import {
   resolveFullConfig,
 } from '@bike4mind/common';
 import type { SreEventPayload, SreJobType } from '@bike4mind/common';
-import { GitHubService } from '@server/services/githubService';
+import { GitHubService } from '@bike4mind/server-utils/services/githubService';
 import {
   dispatchIssueToSre,
   parseIssueNumberFromUrl,
@@ -60,10 +61,8 @@ const DISPATCH_REASON_MESSAGES: Record<string, string> = {
   'already-dispatched': 'Fingerprint dispatched within the last hour (dedup cache). Try again later.',
 };
 
-const handler = baseApi().post(
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post(
   asyncHandler(async (req, res) => {
-    if (!req.user.isAdmin) throw new ForbiddenError('Permission denied');
-
     const { id } = req.query as Record<string, string>;
     if (typeof id !== 'string' || !isValidObjectId(id)) {
       throw new NotFoundError('Invalid tracking ID');
@@ -172,6 +171,15 @@ const handler = baseApi().post(
         ? 'Rerun dispatched — a new tracking doc will appear shortly'
         : (DISPATCH_REASON_MESSAGES[result.reason ?? ''] ?? 'Dispatch blocked');
 
+      await recordAdminActionFromRequest(req, {
+        action: 'ops.sre.tracking_rerun',
+        target: { kind: 'system', id, displayName: `SRE tracking ${fingerprint}` },
+        summary: result.dispatched
+          ? `reran SRE tracking ${fingerprint}`
+          : `rerun of SRE tracking ${fingerprint} blocked (${result.reason ?? 'unknown'})`,
+        details: { source, repoSlug, dispatched: result.dispatched, reason: result.reason ?? null },
+      });
+
       res.status(200).json({
         success: true,
         dispatched: result.dispatched,
@@ -203,6 +211,13 @@ const handler = baseApi().post(
       userId: req.user.id,
       trackingId: id,
       fingerprint,
+    });
+
+    await recordAdminActionFromRequest(req, {
+      action: 'ops.sre.tracking_rerun',
+      target: { kind: 'system', id, displayName: `SRE tracking ${fingerprint}` },
+      summary: `reran SRE tracking ${fingerprint}`,
+      details: { source, repoSlug, dispatched: true },
     });
 
     res.status(200).json({

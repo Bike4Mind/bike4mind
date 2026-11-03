@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
+  quotaAdmission: vi.fn(),
+  quotaRelease: vi.fn(),
   batchFindById: vi.fn(),
   lakeFindById: vi.fn(),
   setTaxonomyStatusIfActive: vi.fn(),
@@ -19,6 +21,8 @@ const h = vi.hoisted(() => ({
   assertRequestCanAfford: vi.fn(),
 }));
 
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: h.quotaAdmission }));
+
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
@@ -31,7 +35,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 // No-op rate limiter: the daily-cap policy itself isn't this test's concern.
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ isDevelopment: () => false }));
 vi.mock('@server/dataLakes/analyzeBatchTaxonomy', () => ({
   analyzeBatchTaxonomy: h.analyzeBatchTaxonomy,
@@ -88,6 +92,8 @@ const run = (batchId: string, res: unknown, body?: unknown, user?: { id: string;
 describe('POST /api/data-lakes/batches/[batchId]/reanalyze-taxonomy', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.quotaAdmission.mockResolvedValue({ release: h.quotaRelease });
+    h.quotaRelease.mockResolvedValue(undefined);
     h.tx.length = 0;
     h.claimBatchForAnalysis.mockImplementation(async () => (h.tx.push('claim'), { id: 'b1' }));
     h.batchFindById.mockResolvedValue({ id: 'b1', dataLakeId: 'lake1' });
@@ -100,6 +106,25 @@ describe('POST /api/data-lakes/batches/[batchId]/reanalyze-taxonomy', () => {
     h.toAccessContext.mockImplementation((req: { user: { id: string; isAdmin: boolean } }) =>
       Promise.resolve({ userId: req.user.id, isAdmin: req.user.isAdmin })
     );
+  });
+
+  it('refuses quota exhaustion before claiming or analyzing a batch', async () => {
+    h.quotaAdmission.mockRejectedValueOnce(Object.assign(new Error('token quota'), { statusCode: 429 }));
+    await expect(run('b1', makeRes().res)).rejects.toMatchObject({ statusCode: 429 });
+    expect(h.claimBatchForAnalysis).not.toHaveBeenCalled();
+    expect(h.analyzeBatchTaxonomy).not.toHaveBeenCalled();
+  });
+
+  it('holds a quota slot through inference and releases it after success', async () => {
+    h.analyzeBatchTaxonomy.mockImplementationOnce(async () => {
+      expect(h.quotaRelease).not.toHaveBeenCalled();
+      return { outcome: 'ready', batch: { id: 'b1' } };
+    });
+    await run('b1', makeRes().res);
+    expect(h.quotaAdmission).toHaveBeenCalledWith(expect.objectContaining({ user: { id: 'u1', isAdmin: false } }), {
+      holdSlot: true,
+    });
+    expect(h.quotaRelease).toHaveBeenCalledOnce();
   });
 
   it('refuses a caller who cannot afford the inference before claiming the batch', async () => {
@@ -194,6 +219,28 @@ describe('POST /api/data-lakes/batches/[batchId]/reanalyze-taxonomy', () => {
   });
 
   it('returns the updated batch document on success', async () => {
+    const { res, json } = makeRes();
+
+    await run('b1', res);
+
+    expect(json).toHaveBeenCalledWith({ id: 'b1', taxonomyStatus: 'ready' });
+  });
+
+  it('strips server-only and undeclared fields from the returned batch', async () => {
+    h.analyzeBatchTaxonomy.mockResolvedValue({
+      claimed: true,
+      outcome: 'ready',
+      batch: {
+        id: 'b1',
+        taxonomyStatus: 'ready',
+        taxonomyBilling: { organizationId: 'org1', apiKeyId: 'key1' },
+        uploaderManageRung: 'owner',
+        uploadHistoryRecordedAt: new Date(),
+        _id: 'raw-object-id',
+        __v: 7,
+        notInSchema: 'secret',
+      },
+    });
     const { res, json } = makeRes();
 
     await run('b1', res);

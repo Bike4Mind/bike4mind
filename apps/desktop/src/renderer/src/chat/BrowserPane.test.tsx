@@ -100,7 +100,13 @@ function mount() {
   act(() =>
     root?.render(
       <CssVarsProvider>
-        <BrowserPane sessionId="s1" suspended={false} conversation={conversation} />
+        <BrowserPane
+          sessionId="s1"
+          suspended={false}
+          conversation={conversation}
+          historyEnabled={null}
+          onHistory={() => undefined}
+        />
       </CssVarsProvider>
     )
   );
@@ -290,7 +296,13 @@ describe('the browser pane resize handle', () => {
       act(() =>
         root?.render(
           <CssVarsProvider>
-            <BrowserPane sessionId="s1" suspended={suspended} conversation={conversation} />
+            <BrowserPane
+              sessionId="s1"
+              suspended={suspended}
+              conversation={conversation}
+              historyEnabled={null}
+              onHistory={() => undefined}
+            />
           </CssVarsProvider>
         )
       );

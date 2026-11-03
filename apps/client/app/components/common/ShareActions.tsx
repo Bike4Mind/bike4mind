@@ -1,5 +1,6 @@
 import React from 'react';
 import { Box, Button, IconButton, Tooltip, Typography } from '@mui/joy';
+import { useTheme } from '@mui/joy/styles';
 import ShareIcon from '@mui/icons-material/Share';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import XIcon from '@mui/icons-material/X';
@@ -25,7 +26,17 @@ export interface ShareActionsProps {
  * native share. Ported from vibeswire (frontend/app/components/news/ShareActions.tsx)
  * and converted from @mui/material to @mui/joy + sonner per B4M conventions.
  */
+/** Label colour per brand and mode: a shade of the brand hue that clears 4.5:1 on the modal and panel
+ *  surfaces and on the outlined-button hover fill. The raw brand colours fail in one mode each (Bluesky
+ *  #0085FF on white, LinkedIn #0A66C2 and violet #7C3AED on black). Borders keep the raw brand colour. */
+const BRAND_TEXT = {
+  bluesky: { light: '#0066CC', dark: '#4DA3FF' },
+  linkedin: { light: '#0A66C2', dark: '#71B7FB' },
+  markdown: { light: '#7C3AED', dark: '#A78BFA' },
+} as const;
+
 export function ShareActions({ title, url, variant = 'full', markdown }: ShareActionsProps) {
+  const mode = useTheme().palette.mode;
   const handleCopyUrl = async () => {
     try {
       await navigator.clipboard.writeText(url);
@@ -102,7 +113,7 @@ export function ShareActions({ title, url, variant = 'full', markdown }: ShareAc
           size="sm"
           startDecorator={<CloudIcon />}
           onClick={handleShareToBluesky}
-          sx={{ ...buttonSx, borderColor: '#0085FF44', color: '#0085FF' }}
+          sx={{ ...buttonSx, borderColor: '#0085FF44', color: BRAND_TEXT.bluesky[mode] }}
           data-testid="share-actions-bluesky"
         >
           Bluesky
@@ -123,7 +134,7 @@ export function ShareActions({ title, url, variant = 'full', markdown }: ShareAc
           size="sm"
           startDecorator={<LinkedInIcon />}
           onClick={handleShareToLinkedIn}
-          sx={{ ...buttonSx, borderColor: '#0A66C244', color: '#0A66C2' }}
+          sx={{ ...buttonSx, borderColor: '#0A66C244', color: BRAND_TEXT.linkedin[mode] }}
           data-testid="share-actions-linkedin"
         >
           LinkedIn
@@ -146,7 +157,7 @@ export function ShareActions({ title, url, variant = 'full', markdown }: ShareAc
               size="sm"
               startDecorator={<DescriptionIcon />}
               onClick={handleCopyMarkdown}
-              sx={{ ...buttonSx, borderColor: '#7C3AED44', color: '#7C3AED' }}
+              sx={{ ...buttonSx, borderColor: '#7C3AED44', color: BRAND_TEXT.markdown[mode] }}
               data-testid="share-actions-copy-markdown"
             >
               Copy Markdown

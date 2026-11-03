@@ -13,15 +13,15 @@ import { getSettingsByNames } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { liveopsTriageConfigRepository, apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, NotFoundError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
-import { GitHubService } from '@server/services/githubService';
+import { GitHubService } from '@bike4mind/server-utils/services/githubService';
 import { SlackClient } from '@bike4mind/slack';
 import { apiKeyService } from '@bike4mind/services';
 import { sanitizeErrorMessage, REQUIRED_GITHUB_LABELS } from '@server/services/liveopsTriageService';
 import { JiraIssueTracker } from '@server/services/issueTrackers/jiraIssueTracker';
-import { resolveJiraConfig, resolveSlackBotToken } from '@server/services/liveopsConnectionResolver';
+import { resolveJiraConfig, resolveSlackBotToken } from '@bike4mind/server-utils/services/liveopsConnectionResolver';
 
 const logger = new Logger({ metadata: { service: 'liveops-config-health' } });
 
@@ -39,12 +39,11 @@ interface HealthCheckResult {
   timestamp: string;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
+const handler = adminApi({
+  adminPermissions: { GET: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req, res) => {
   try {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { id } = req.query;
 
     if (!id || typeof id !== 'string') {

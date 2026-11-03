@@ -400,6 +400,87 @@ class CacheRepository extends BaseRepository<ICacheDocument> implements ICacheRe
     const result = await this.model.deleteOne({ key, [`result.${ownerField}`]: ownerValue });
     return (result.deletedCount ?? 0) > 0;
   }
+
+  /**
+   * Leases live in `result.holders` as `{ id, expiresAt }`. One pipeline update prunes lapsed leases,
+   * admits the holder only while fewer than `limit` remain, and stretches the row's own `expiresAt` to
+   * the latest lease so the TTL index drops an idle semaphore. Atomic per key, so concurrent callers
+   * on different instances cannot overshoot the limit.
+   */
+  async tryAcquireLease(key: string, holderId: string, limit: number, leaseMs: number): Promise<boolean> {
+    const now = new Date();
+    const lease = { id: holderId, expiresAt: new Date(now.getTime() + leaseMs) };
+    const pipeline = [
+      {
+        $set: {
+          _live: {
+            $filter: { input: { $ifNull: ['$result.holders', []] }, cond: { $gt: ['$$this.expiresAt', now] } },
+          },
+        },
+      },
+      {
+        $set: {
+          result: {
+            holders: {
+              $cond: [{ $lt: [{ $size: '$_live' }, limit] }, { $concatArrays: ['$_live', [lease]] }, '$_live'],
+            },
+          },
+        },
+      },
+      { $set: { expiresAt: { $ifNull: [{ $max: '$result.holders.expiresAt' }, now] } } },
+      { $unset: '_live' },
+    ];
+    const attempt = async () => {
+      const doc = await this.model.collection.findOneAndUpdate({ key }, pipeline, {
+        upsert: true,
+        returnDocument: 'after',
+        projection: { 'result.holders.id': 1 },
+      });
+      const holders = (doc?.result as { holders?: { id: string }[] } | undefined)?.holders ?? [];
+      return holders.some(holder => holder.id === holderId);
+    };
+    try {
+      return await attempt();
+    } catch (err) {
+      // Two first-ever acquires raced on the upsert; the loser's retry now finds the row.
+      if ((err as { code?: number }).code !== 11000) throw err;
+      return attempt();
+    }
+  }
+
+  /** Extends a live holder in place; a released or lapsed holder must never be resurrected. */
+  async renewLease(key: string, holderId: string, leaseMs: number): Promise<boolean> {
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + leaseMs);
+    const result = await this.model.collection.updateOne(
+      { key, 'result.holders': { $elemMatch: { id: holderId, expiresAt: { $gt: now } } } },
+      [
+        {
+          $set: {
+            'result.holders': {
+              $map: {
+                input: '$result.holders',
+                as: 'holder',
+                in: {
+                  $cond: [
+                    { $eq: ['$$holder.id', holderId] },
+                    { $mergeObjects: ['$$holder', { expiresAt: { $max: ['$$holder.expiresAt', expiresAt] } }] },
+                    '$$holder',
+                  ],
+                },
+              },
+            },
+          },
+        },
+        { $set: { expiresAt: { $max: '$result.holders.expiresAt' } } },
+      ]
+    );
+    return result.matchedCount > 0;
+  }
+
+  async releaseLease(key: string, holderId: string): Promise<void> {
+    await this.model.updateOne({ key }, { $pull: { 'result.holders': { id: holderId } } });
+  }
 }
 
 const CacheSchema = new mongoose.Schema<ICacheDocument>({

@@ -33,7 +33,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
 
 // FeedbackModel/FeedbackTextModel are reached through stitchRoutedComments, which the route calls
 // to stitch routed comments back onto the events. Omitting them here does not fail loudly:

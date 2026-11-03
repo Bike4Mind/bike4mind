@@ -15,8 +15,8 @@ const CLIENT_APP_ROOT = path.resolve(__dirname, '../../../../apps/client/app');
 
 /**
  * The three shapes a help slug is hard-coded in. `helpId={expr}` is skipped by
- * construction: the only three indirection sites (`ExperimentalFeatureToggle.tsx`,
- * `SectionContainer.tsx`, `DestructiveActionHelp.tsx`) forward a `helpId?: string`
+ * construction: the only two indirection sites (`ExperimentalFeatureToggle.tsx`,
+ * `SectionContainer.tsx`) forward a `helpId?: string`
  * prop, and every caller passes a literal that these patterns catch at the call site.
  *
  * Test files are swept too, deliberately - a fixture slug is as capable of going stale

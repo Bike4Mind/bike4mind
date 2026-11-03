@@ -17,7 +17,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 import { invalidatePartnerRuleCache } from '@server/entitlements/partnerRules';
-import { signupCreditsForEmail } from '@client/lib/entitlements/registry';
+import { signupCreditsForEmail } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { isPartnerDomainSignupAllowed } from './partnerSignupBypass';
 
 const ENABLED_RULE = { id: 'rule-1', domain: 'partner.example', entitlements: [], signupCredits: 0 };

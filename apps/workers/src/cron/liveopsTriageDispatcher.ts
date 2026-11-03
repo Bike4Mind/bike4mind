@@ -34,14 +34,22 @@ function isAllowedEnvironment(): boolean {
   return allowedStages.includes(stage);
 }
 
+/** IS_SOURCE_DEPLOYMENT identifies main/source deployments; sst's Resource proxy throws when it is unlinked. */
+function isSourceDeployment(): boolean {
+  try {
+    const resource = Resource as unknown as Record<string, { value?: string } | undefined>;
+    return resource.IS_SOURCE_DEPLOYMENT?.value === 'true';
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Check if this is a fork environment.
  *
- * Fork detection uses the ENABLE_WHATS_NEW_DISTRIBUTION env var pattern.
- * Main production has ENABLE_WHATS_NEW_DISTRIBUTION=true set.
- * Fork production deployments do NOT have this set.
+ * Main production sets IS_SOURCE_DEPLOYMENT=true; fork production deployments do not.
  */
-function isForkEnvironment(): boolean {
+export function isForkEnvironment(): boolean {
   const stage = Resource.App.stage;
 
   // Only relevant for production stage - other stages (dev, staging, pr-*) are never forks
@@ -49,8 +57,7 @@ function isForkEnvironment(): boolean {
     return false;
   }
 
-  const isSourceEnvironment = process.env.ENABLE_WHATS_NEW_DISTRIBUTION === 'true';
-  return !isSourceEnvironment;
+  return !isSourceDeployment();
 }
 
 export async function handler() {

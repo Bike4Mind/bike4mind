@@ -1,3 +1,8 @@
+vi.mock('../../helpers/modelAdmission', () => ({
+  createToolModelAdmission: vi.fn(async () => ({ assert: vi.fn(async (_modelId: string) => {}) })),
+}));
+import { createToolModelAdmission } from '../../helpers/modelAdmission';
+
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
 import { ImageModels, IMAGES_PER_EDIT_REQUEST, type GenerateImageToolCall } from '@bike4mind/common';
@@ -179,7 +184,11 @@ describe('getImageFromFileId serveability guard (sibling of the upload/edit agen
 
     const resolved = await getImageFromFileId(VALID_FILE_ID, context);
 
-    expect(resolved).toEqual({ url: 'https://signed.example/image.png', trustConfiguredStorageOrigin: true });
+    expect(resolved).toEqual({
+      url: 'https://signed.example/image.png',
+      fabFileId: expect.any(String),
+      trustConfiguredStorageOrigin: true,
+    });
     expect(context.storage.getSignedUrl).toHaveBeenCalledWith('clean.png');
   });
 
@@ -194,6 +203,7 @@ describe('getImageFromFileId serveability guard (sibling of the upload/edit agen
 
     expect(resolved).toEqual({
       url: 'https://external.example/already-hosted.png',
+      fabFileId: expect.any(String),
       trustConfiguredStorageOrigin: false,
     });
     expect(context.storage.getSignedUrl).not.toHaveBeenCalled();
@@ -424,6 +434,7 @@ describe('imageEditTool - credit gate names the rendered model', () => {
           modelId: ImageModels.FLUX_PRO_FILL,
           prompt: 'make it warmer',
           jobId: expect.any(String),
+          request: expect.objectContaining({ model: ImageModels.FLUX_PRO_FILL, prompt: 'make it warmer' }),
         },
       })
     );
@@ -754,7 +765,116 @@ describe('imageEditTool - OpenAI content-policy refusal logging', () => {
     const { toolFn } = imageEditTool.implementation(context, {} as GenerateImageToolCall);
     await toolFn({ image: PNG_DATA_URL, prompt: 'make it blue' });
 
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('blocked by content policy'), { requestId: 'req-1' });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('OpenAI image'), {
+      kind: 'moderation_blocked',
+      provider: 'openai',
+      requestId: 'req-1',
+    });
     expect(error).not.toHaveBeenCalled();
+  });
+});
+
+describe('imageEditTool - generation lineage', () => {
+  const SOURCE_FILE_ID = 'c'.repeat(24);
+  const MASK_FILE_ID = 'd'.repeat(24);
+
+  beforeEach(() => {
+    // A self-host storage origin keeps the signed-URL downloads on the axios mock, off real DNS.
+    process.env.AWS_ENDPOINT_URL_S3 = 'http://minio:9000';
+    mockAxiosGet.mockReset().mockResolvedValue({ status: 200, headers: {}, data: Buffer.from('png-bytes') });
+    mockCheckImage.mockReset().mockResolvedValue(undefined);
+    mockSaveFromTool.mockReset();
+    mockBflEditSpy.mockReset().mockResolvedValue({ type: 'success', dataUrl: PNG_DATA_URL });
+  });
+
+  afterEach(() => {
+    delete process.env.AWS_ENDPOINT_URL_S3;
+  });
+
+  function contextWithFabFiles(): ToolContext {
+    const context = createFakeContextWithFabFile(null);
+    const fabfiles = (context.db as unknown as { fabfiles: { findAccessibleInIds: ReturnType<typeof vi.fn> } })
+      .fabfiles;
+    fabfiles.findAccessibleInIds.mockImplementation(async (ids: string[]) =>
+      ids.map(id => ({ id, mimeType: 'image/png', moderationStatus: 'clean', filePath: `${id}.png` }))
+    );
+    context.storage.getSignedUrl = vi.fn().mockResolvedValue('http://minio:9000/bucket/file.png?X-Amz-Signature=abc');
+    return context;
+  }
+
+  function editWith(context: ToolContext, input: { image: string; mask?: string }) {
+    context.onStart = vi.fn();
+    const { toolFn } = imageEditTool.implementation(context, {
+      model: ImageModels.FLUX_PRO_1_1,
+    } as GenerateImageToolCall);
+    return toolFn({ ...input, prompt: 'make it warmer' });
+  }
+
+  it('records the source file as edit_source and a file mask as mask', async () => {
+    const context = contextWithFabFiles();
+
+    await editWith(context, { image: SOURCE_FILE_ID, mask: MASK_FILE_ID });
+
+    expect(mockSaveFromTool).toHaveBeenCalledWith(
+      context,
+      expect.objectContaining({
+        derivedFrom: [
+          { fileId: SOURCE_FILE_ID, role: 'edit_source' },
+          { fileId: MASK_FILE_ID, role: 'mask' },
+        ],
+      })
+    );
+  });
+
+  it('records only edit_source when the mask is not a file', async () => {
+    const context = contextWithFabFiles();
+
+    await editWith(context, { image: SOURCE_FILE_ID, mask: PNG_DATA_URL });
+
+    expect(mockSaveFromTool).toHaveBeenCalledWith(
+      context,
+      expect.objectContaining({ derivedFrom: [{ fileId: SOURCE_FILE_ID, role: 'edit_source' }] })
+    );
+  });
+
+  it('records no lineage for URL inputs', async () => {
+    const context = createFakeContext();
+
+    await editWith(context, { image: PNG_DATA_URL, mask: PNG_DATA_URL });
+
+    expect(mockSaveFromTool).toHaveBeenCalledTimes(1);
+    expect(mockSaveFromTool.mock.calls[0][1]).not.toHaveProperty('derivedFrom');
+  });
+
+  it('records no lineage for generated-image key inputs', async () => {
+    const context = createFakeContextWithGeneratedImageOwner('u1');
+    context.imageGenerateStorage.getSignedUrl = vi
+      .fn()
+      .mockResolvedValue(`http://minio:9000/bucket/${GENERATED_KEY}?X-Amz-Signature=abc`);
+
+    await editWith(context, { image: GENERATED_KEY, mask: GENERATED_KEY });
+
+    expect(mockSaveFromTool).toHaveBeenCalledTimes(1);
+    expect(mockSaveFromTool.mock.calls[0][1]).not.toHaveProperty('derivedFrom');
+  });
+});
+
+describe('imageEdit model admission', () => {
+  it('refuses before provider execution and admits the resolved transparent-image model', async () => {
+    const refusal = new Error('paid plan required');
+    const assertAdmission = vi.fn(async (_modelId: string) => {
+      throw refusal;
+    });
+    vi.mocked(createToolModelAdmission).mockResolvedValueOnce({ assert: assertAdmission, admits: async () => false });
+    const context = createFakeContext();
+    const { toolFn } = imageEditTool.implementation(context, {
+      model: ImageModels.GPT_IMAGE_2,
+      editModel: ImageModels.GPT_IMAGE_2,
+    });
+    await expect(
+      toolFn({ prompt: 'transparent image', background: 'transparent', image: 'data:image/png;base64,AAAA' })
+    ).rejects.toBe(refusal);
+    expect(createToolModelAdmission).toHaveBeenLastCalledWith(context);
+    expect(assertAdmission).toHaveBeenCalledWith(ImageModels.GPT_IMAGE_1_5);
   });
 });

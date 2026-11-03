@@ -12,14 +12,15 @@
  */
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { adminSettingsRepository, sreErrorTrackingRepository, cacheRepository } from '@bike4mind/database';
 import { classifyForScan } from '@bike4mind/database/infra';
 import { SreAgentConfigSchema, resolveFullConfig } from '@bike4mind/common';
-import { GitHubService } from '@server/services/githubService';
+import { GitHubService } from '@bike4mind/server-utils/services/githubService';
 import {
   matchesLabelFilter,
   dispatchIssueToSre,
@@ -75,13 +76,11 @@ const GITHUB_PAGE_SIZE = 100;
 // 50s < 60s Lambda timeout - ensures the finally block has time to run before SIGKILL
 const SCAN_MUTEX_TTL_MS = 50_000;
 
-const handler = baseApi()
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } })
   .use(csrfProtection())
   .use(rateLimit({ limit: 3, windowMs: 60_000 }))
   .post(
     asyncHandler(async (req, res) => {
-      if (!req.user.isAdmin) throw new ForbiddenError('Permission denied');
-
       const { repoSlug } = ScanRequestSchema.parse(req.body);
       const startTime = Date.now();
       const logger = new Logger({ metadata: { component: 'sre-scan', userId: req.user.id } });
@@ -230,6 +229,13 @@ const handler = baseApi()
           scanned: issues.length,
           dispatched,
           durationMs,
+        });
+
+        await recordAdminActionFromRequest(req, {
+          action: 'ops.sre.scan_triggered',
+          target: { kind: 'system', id: 'sre-scan', displayName: 'SRE issue scan' },
+          summary: `scanned ${repoSlug} for SRE issues, dispatched ${dispatched}`,
+          details: { repoSlug, scanned: issues.length, dispatched, capReached },
         });
 
         res.status(200).json({

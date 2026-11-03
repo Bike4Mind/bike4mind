@@ -36,7 +36,7 @@ const ELISION = '\n\n[... earlier middle of this conversation omitted for length
  * were touched" is a question the call names answer, and the results are the bulk that makes a
  * conversation need compacting in the first place.
  */
-export function renderForSummary(messages: readonly ChatMessage[]): string {
+export function renderForSummary(messages: readonly ChatMessage[], maxChars = TRANSCRIPT_CHARS): string {
   const blocks: string[] = [];
 
   for (const message of messages) {
@@ -49,7 +49,7 @@ export function renderForSummary(messages: readonly ChatMessage[]): string {
     blocks.push(lines.join('\n'));
   }
 
-  return elide(blocks.join('\n\n'));
+  return elide(blocks.join('\n\n'), Math.min(maxChars, TRANSCRIPT_CHARS));
 }
 
 function excerpt(text: string): string {
@@ -68,10 +68,10 @@ function describeInput(input: Record<string, unknown>): string {
   return parts.join(' ');
 }
 
-function elide(text: string): string {
-  if (text.length <= TRANSCRIPT_CHARS) return text;
-  const head = Math.floor(TRANSCRIPT_CHARS * HEAD_SHARE);
-  return text.slice(0, head) + ELISION + text.slice(text.length - (TRANSCRIPT_CHARS - head));
+function elide(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const head = Math.floor(maxChars * HEAD_SHARE);
+  return text.slice(0, head) + ELISION + text.slice(text.length - (maxChars - head));
 }
 
 /**

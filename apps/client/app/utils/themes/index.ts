@@ -1,3 +1,4 @@
+import type { AdminPalette } from './admin';
 import type { PaletteRange } from '@mui/joy/styles';
 
 declare module '@mui/joy/styles' {
@@ -29,6 +30,7 @@ declare module '@mui/joy/styles' {
     navLinks: true;
   }
   interface Palette {
+    admin: AdminPalette;
     // @deprecated There is no associated color for this.
     secondary: PaletteRange;
     /**

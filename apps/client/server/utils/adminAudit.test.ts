@@ -13,11 +13,15 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: { findById: h.findById } }));
 
 import {
+  ADMIN_ACTION_REASON_MISSING_MESSAGE,
   denySelfAdminAction,
+  parseAdminActionReason,
   recordAdminActionFromRequest,
   systemAuditActor,
+  userAuditTarget,
   type RecordAdminActionFromRequestInput,
 } from './adminAudit';
+import { ADMIN_REASON_PRESETS, composeAdminReason } from '@client/app/components/admin/shared/adminReason';
 
 type RequestOverrides = {
   user?: Record<string, unknown>;
@@ -199,6 +203,31 @@ describe('recordAdminActionFromRequest', () => {
   });
 });
 
+describe('parseAdminActionReason', () => {
+  it('points at a reload when no reason key was sent', () => {
+    expect(() => parseAdminActionReason(undefined)).toThrow(ADMIN_ACTION_REASON_MISSING_MESSAGE);
+    expect(ADMIN_ACTION_REASON_MISSING_MESSAGE).toMatch(/reload/i);
+  });
+
+  it('keeps the field-level message for an explicitly sent null', () => {
+    expect(() => parseAdminActionReason(null)).toThrow('A reason is required');
+  });
+
+  it.each(['', '   ', 'abc'])('keeps the field-level message when a reason was sent but is unusable (%j)', value => {
+    expect(() => parseAdminActionReason(value)).toThrow('A reason of at least 5 characters is required');
+  });
+
+  it('returns a trimmed valid reason', () => {
+    expect(parseAdminActionReason('  Reproducing a ticket  ')).toBe('Reproducing a ticket');
+  });
+
+  // ReasonPicker sends a preset on its own as the whole reason, so the audit entry must keep it verbatim.
+  it.each(Object.values(ADMIN_REASON_PRESETS).flat())('accepts the ReasonPicker preset %j unchanged', preset => {
+    expect(parseAdminActionReason(preset)).toBe(preset);
+    expect(parseAdminActionReason(composeAdminReason({ preset, note: ' ticket 42 ' }))).toBe(`${preset}: ticket 42`);
+  });
+});
+
 describe('systemAuditActor', () => {
   it('builds a platform system actor', () => {
     expect(systemAuditActor('cron')).toEqual({ kind: 'system', scope: 'platform', name: 'cron', wasAdmin: false });
@@ -223,5 +252,18 @@ describe('denySelfAdminAction', () => {
     await expect(denySelfAdminAction(buildRequest(), { ...denied, message: 'Use settings.' })).rejects.toThrow(
       'Use settings.'
     );
+  });
+});
+
+describe('userAuditTarget', () => {
+  beforeEach(() => h.findById.mockReset());
+
+  it('labels the target with the email, then the username, then the id', async () => {
+    h.findById.mockResolvedValueOnce({ email: 'a@example.com', username: 'a' });
+    expect(await userAuditTarget('u1')).toEqual({ kind: 'user', id: 'u1', displayName: 'a@example.com' });
+    h.findById.mockResolvedValueOnce({ username: 'a' });
+    expect((await userAuditTarget('u1')).displayName).toBe('a');
+    h.findById.mockResolvedValueOnce(null);
+    expect((await userAuditTarget('u1')).displayName).toBe('u1');
   });
 });

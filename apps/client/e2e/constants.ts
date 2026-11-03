@@ -24,6 +24,14 @@ export const NOTEBOOK_EXPORT_IMPORTER_KEY = 'notebookExportBytesImporter';
  */
 export const SKILLS_MEMBER_KEY = 'skillsMember';
 
+/**
+ * Spec-user keys for the extra accounts the teams suite needs: no project authenticates as them, the
+ * spec opens isolated pages for them via openPageAs. teams.setup.ts creates them.
+ */
+export const TEAMS_MEMBER_KEY = 'teamsMember';
+export const TEAMS_MANAGER_KEY = 'teamsManager';
+export const TEAMS_INVITEE_KEY = 'teamsInvitee';
+
 /** Centralized timeout constants for E2E tests (in milliseconds). */
 export const TIMEOUTS = {
   /** Short UI transitions and state settling */

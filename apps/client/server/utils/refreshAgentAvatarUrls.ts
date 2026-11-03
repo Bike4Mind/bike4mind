@@ -1,5 +1,6 @@
 import { fabFileRepository } from '@bike4mind/database';
 import { IAgent, isImageServeable } from '@bike4mind/common';
+import { fabFilesService } from '@bike4mind/services';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 /**
@@ -58,7 +59,7 @@ export const refreshAgentAvatarUrls = async (agents: IAgent[], viewerId: string)
               // Persist the fresh URL only on the owner's own record - a shared-agent viewer
               // must not mutate a FabFile owned by someone else.
               if (fabFile.userId === viewerId) {
-                const newExpireAt = new Date(now.getTime() + 3600 * 1000);
+                const newExpireAt = fabFilesService.signedUrlExpiresAt(newSignedUrl, 3600);
                 await fabFileRepository.update({
                   id: fabFile.id,
                   fileUrl: newSignedUrl,

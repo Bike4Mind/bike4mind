@@ -11,6 +11,8 @@ const cliSkills = resolve(__dirname, '../../packages/cli/src/skills/index.ts');
 // See the shim's own header: @bike4mind/common's barrel statically imports node:crypto,
 // which a sandboxed renderer cannot resolve.
 const nodeCryptoShim = resolve(__dirname, 'src/renderer/src/shims/nodeCrypto.ts');
+// Used when no B4M_DEFAULT_API_URL is supplied; a fork overrides it by setting that variable.
+const PRODUCTION_API_URL = 'https://app.bike4mind.com';
 
 /**
  * Puts the tree-sitter wasm binaries beside the main bundle, in `wasm/`. The shell parser reads
@@ -35,14 +37,41 @@ function copyTreeSitterWasm(): Plugin {
  * shell environment first - that is how CI injects them for the CLI today, and how a
  * packaging run injects them here - then a gitignored `.env`/`.env.local` in this
  * directory, which only exists so a local packaging run is one command rather than a long
- * prefix. Absent both, the value is empty and the feature it gates is off.
+ * prefix. Absent both, the value is empty.
+ *
+ * An empty shell value counts as unset for the backend, because CI passes an unset repository
+ * variable through as ''. It does not for the others: an explicit '' is how the ad-hoc macOS
+ * build in desktop-release.yml switches updates off.
  */
-function baked(mode: string, name: 'B4M_DEFAULT_API_URL' | 'B4M_UPDATE_FEED_URL'): string {
-  return process.env[name] ?? loadEnv(mode, __dirname, 'B4M_')[name] ?? '';
+function baked(mode: string, name: 'B4M_DEFAULT_API_URL' | 'B4M_UPDATE_FEED_URL' | 'B4M_CURATED_MANIFEST_URL'): string {
+  const shell = process.env[name];
+  if (shell !== undefined && (shell !== '' || name !== 'B4M_DEFAULT_API_URL')) return shell;
+  // loadEnv lets a prefixed shell value override the file's even when that value is empty.
+  delete process.env[name];
+  try {
+    return loadEnv(mode, __dirname, 'B4M_')[name] ?? '';
+  } finally {
+    if (shell !== undefined) process.env[name] = shell;
+  }
+}
+
+/**
+ * Writes `curated-build.json` beside the main bundle with the curated values this build baked in, so
+ * packages/scripts `curated:check-build` can fail a release that trusts the test keys or bakes a non-https URL.
+ */
+function curatedBuildInfo(info: { devKeys: boolean; manifestUrl: string }): Plugin {
+  return {
+    name: 'curated-build-info',
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: 'curated-build.json', source: `${JSON.stringify(info)}\n` });
+    },
+  };
 }
 
 export default defineConfig(({ mode }) => {
   const nodeEnv = mode === 'development' ? 'development' : 'production';
+  const curatedUrl = baked(mode, 'B4M_CURATED_MANIFEST_URL');
+  const curatedDevKeys = process.env.B4M_CURATED_DEV_KEYS === '1';
 
   return {
     main: {
@@ -50,14 +79,20 @@ export default defineConfig(({ mode }) => {
       // The brand's default backend, baked in at build time exactly as the CLI bakes it via
       // tsdown. A packaged app inherits no shell environment, so reading it at runtime would
       // always be empty; substituting only this one expression leaves every other
-      // `process.env` lookup in main working normally. Empty for an unbranded fork, which
-      // then has no hosted option in the environment picker.
+      // `process.env` lookup in main working normally.
       // The release feed is baked in the same way and for the same reasons, plus one more:
       // this repo is public, and a feed url is a host or a bucket behind one. Empty for a fork,
       // which then builds an app with updates switched off rather than one pointed at ours.
+      // The signed curated models list is baked the same way; empty means the bundled list only. The test keys
+      // need B4M_CURATED_DEV_KEYS=1 in the shell (never `.env`); see curatedBuildInfo for the release gate.
       define: {
-        'process.env.B4M_DEFAULT_API_URL': JSON.stringify(baked(mode, 'B4M_DEFAULT_API_URL')),
+        // Not in development: an empty default there lets a source run fall back to Local Dev.
+        'process.env.B4M_DEFAULT_API_URL': JSON.stringify(
+          baked(mode, 'B4M_DEFAULT_API_URL') || (mode === 'development' ? '' : PRODUCTION_API_URL)
+        ),
         'process.env.B4M_UPDATE_FEED_URL': JSON.stringify(baked(mode, 'B4M_UPDATE_FEED_URL')),
+        'process.env.B4M_CURATED_MANIFEST_URL': JSON.stringify(curatedUrl),
+        __B4M_CURATED_DEV_KEYS__: JSON.stringify(curatedDevKeys),
       },
       // `@bike4mind/utils` is bundled rather than left external, and only main does this.
       // Main uses one subpath of it, `/artifactParser` - 20 kB that imports nothing but
@@ -70,6 +105,7 @@ export default defineConfig(({ mode }) => {
       plugins: [
         externalizeDepsPlugin({ exclude: ['@bike4mind/utils', '@bike4mind/observability'] }),
         copyTreeSitterWasm(),
+        curatedBuildInfo({ devKeys: curatedDevKeys, manifestUrl: curatedUrl }),
       ],
     },
     preload: {

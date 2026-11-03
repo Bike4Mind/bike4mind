@@ -120,6 +120,9 @@ const ArtifactSchema = new Schema(
       type: String,
       index: true,
     },
+    identifier: {
+      type: String,
+    },
 
     // Status
     status: {
@@ -177,6 +180,9 @@ ArtifactSchema.index({ projectId: 1, status: 1 }); // Project artifacts by statu
 ArtifactSchema.index({ organizationId: 1, visibility: 1 }); // Org artifacts by visibility
 ArtifactSchema.index({ type: 1, status: 1, visibility: 1 }); // Public artifacts by type
 ArtifactSchema.index({ sessionId: 1, createdAt: -1 }); // Session artifacts chronologically
+// The row a re-emitted `<artifact identifier=...>` versions. Pre-built by
+// 20260921235979_ensure-artifact-session-identifier-index, same reason as the keyset index below.
+ArtifactSchema.index({ sessionId: 1, identifier: 1 });
 ArtifactSchema.index({ tags: 1, status: 1 }); // Tag-based discovery
 ArtifactSchema.index({ createdAt: -1, status: 1 }); // Recent artifacts
 ArtifactSchema.index({ updatedAt: -1, status: 1 }); // Recently updated
@@ -190,8 +196,8 @@ ArtifactSchema.index({ deletedAt: 1 }); // Soft delete queries
 ArtifactSchema.index({ sourceQuestId: 1 });
 // Public v1 artifact list (listOwnedBeforeId): equality on owner and live, then the _id keyset
 // (scanned in reverse for newest first).
-// Pre-built by 20260921235993_ensure-artifact-owned-keyset-index rather than left to autoIndex: prod
-// runs DocumentDB, where the build takes a foreground lock on a cold Lambda boot.
+// Pre-built by 20260921235993_ensure-artifact-owned-keyset-index rather than left to autoIndex: the
+// build is fire-and-forget and would start on a cold Lambda boot, on a user request.
 ArtifactSchema.index({ userId: 1, deletedAt: 1, _id: 1 });
 
 // Text search index for title and description
@@ -254,15 +260,12 @@ ArtifactSchema.methods.restore = function () {
   return this.save();
 };
 
-export const Artifact =
+export const Artifact: Model<IArtifactDocument> =
   (mongoose.models.Artifact as mongoose.Model<IArtifactDocument>) ||
   model<IArtifactDocument>('Artifact', ArtifactSchema);
 
 // Repository implementation
 export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
-  // Add shareable property required by interface
-  public shareable: any = {}; // Placeholder for IShareableStaticMethods
-
   constructor(model: Model<IArtifactDocument>) {
     super(model);
   }

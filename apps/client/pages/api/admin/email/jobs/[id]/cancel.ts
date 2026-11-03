@@ -1,13 +1,13 @@
 import { emailJobRepository, emailSendAttemptRepository } from '@bike4mind/database';
 import { ApiKeyScope, EmailJobOverallStatus, EmailJobStatus } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(async (req, res) => {
   const { id } = req.query as { id: string };
   const { recipientIds } = req.body as { recipientIds?: string[] };
 
@@ -44,6 +44,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       cancelledCount: (job.cancelledCount || 0) + cancelledCount,
     });
   }
+
+  await recordAdminActionFromRequest(req, {
+    action: 'email.job.cancelled',
+    target: { kind: 'settings', id, displayName: job.name },
+    summary: `cancelled ${cancelledCount} pending email(s) for job ${job.name}`,
+    details: { cancelledCount, recipientCount: recipientIds?.length ?? null, wholeJob: !recipientIds },
+  });
 
   return res.json({
     success: true,

@@ -71,7 +71,17 @@ export function resolveFieldLimits(
   }: FieldLimitOptions
 ): Record<string, boolean> | undefined {
   if (collectionName === 'users') {
-    return { password: false, stripeCustomerId: false, resetPasswordToken: false };
+    // Keep admin-only fields in sync with USER_SECRET_FIELDS (toSafeUser.ts), which covers REST only.
+    return {
+      password: false,
+      stripeCustomerId: false,
+      resetPasswordToken: false,
+      signupGrantAssessment: false,
+      riskScore: false,
+      riskEvidence: false,
+      throttle: false,
+      riskSignals: false,
+    };
   }
   if (collectionName === questCollectionName) {
     const excluded = [...(isQuestOwner ? [] : OWNER_ONLY_PROMPT_META_PROJECTION_PATHS), ...QUEST_SERVER_ONLY_FIELDS];

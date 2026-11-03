@@ -1,5 +1,6 @@
 import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
 import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES } from './constants';
+import { ecsResourceSecrets, ecsSecretsVersion } from './ecsSecrets';
 import { allSecrets, secrets } from './secrets';
 import { cluster, lambdaVpc } from './vpc';
 import { websocketApi } from './websocket';
@@ -30,9 +31,12 @@ if (isCI && !fanoutImage) {
   );
 }
 
+const fanoutSecrets = $dev ? undefined : ecsResourceSecrets('subscriberFanoutV2', { MONGODB_URI: secrets.MONGODB_URI });
+
 export const subscriberFanout = new sst.aws.Service('subscriberFanoutV2', {
   cluster,
-  link: [secrets.MONGODB_URI, websocketApi],
+  link: $dev ? [secrets.MONGODB_URI, websocketApi] : [websocketApi],
+  ssm: fanoutSecrets?.ssm,
   image: fanoutImage,
   cpu: '0.25 vCPU',
   memory: PRODUCTION_STAGES.includes($app.stage) ? '2 GB' : '0.5 GB',
@@ -47,6 +51,7 @@ export const subscriberFanout = new sst.aws.Service('subscriberFanoutV2', {
   },
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
+    ...(fanoutSecrets ? { ECS_SECRETS_VERSION: ecsSecretsVersion(fanoutSecrets) } : {}),
   },
 });
 

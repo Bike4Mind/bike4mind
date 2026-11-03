@@ -4,6 +4,8 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { createModalVideoSchema } from '@bike4mind/common';
+import { modalAuditTitle } from '@client/server/tools/modalOperations';
+import { recordModalChanges } from '@client/server/tools/recordModalChanges';
 import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
 import { cacheExternalImage, cacheExternalImages } from '@server/utils/cacheExternalImage';
 
@@ -68,6 +70,11 @@ const handler = baseApi().post(
     const newModal = new ModalModel(newModalData);
 
     await newModal.save();
+    await recordModalChanges(
+      req,
+      [{ kind: 'created', id: String(newModal._id), title: modalAuditTitle(newModal) }],
+      'admin-modals'
+    );
     return res.status(201).send(newModal);
   })
 );

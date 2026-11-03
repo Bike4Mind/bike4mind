@@ -11,6 +11,7 @@ import {
 } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
+import Button from '@mui/joy/Button';
 import CircularProgress from '@mui/joy/CircularProgress';
 import IconButton from '@mui/joy/IconButton';
 import Stack from '@mui/joy/Stack';
@@ -72,6 +73,7 @@ export function Composer({
   streaming,
   attachments,
   blockedReason,
+  blockedAction,
   notReady,
   usage,
   placeholder = 'Send a message...',
@@ -85,6 +87,8 @@ export function Composer({
   onSendQueuedNow,
   returned,
   onReturnedConsumed,
+  fill,
+  onFillConsumed,
   footer,
   leading,
   skills,
@@ -104,6 +108,8 @@ export function Composer({
    * alternative is a request that is refused for reasons the user never sees.
    */
   blockedReason?: string | null;
+  /** A button beside `blockedReason` that fixes it. */
+  blockedAction?: { label: string; onClick: () => void } | null;
   /**
    * A word for the idle indicator naming a state that is not ready to send - "No folder" for a
    * Code session with no project. It blocks Send and draws NO banner: the control that answers
@@ -151,6 +157,12 @@ export function Composer({
    */
   returned?: { id: number; messages: ChatQueuedMessage[] } | null;
   onReturnedConsumed?: () => void;
+  /**
+   * Text to put in the box in place of the draft, focused with the caret at its end - a blank
+   * chat's suggestion. Taken once per id, like `returned`, so picking the same card twice works.
+   */
+  fill?: { id: number; text: string } | null;
+  onFillConsumed?: () => void;
   /** Controls that belong to the next turn rather than to the app - the model picker. */
   footer?: ReactNode;
   /**
@@ -262,6 +274,23 @@ export function Composer({
     setText(current => mergeIntoDraft(current, returned.messages));
     onReturnedConsumed?.();
   }, [returned, onReturnedConsumed]);
+
+  const consumedFill = useRef<number | null>(null);
+  const [caretRequest, setCaretRequest] = useState(0);
+  useEffect(() => {
+    if (!fill || consumedFill.current === fill.id) return;
+    consumedFill.current = fill.id;
+    setText(fill.text);
+    setCaretRequest(request => request + 1);
+    onFillConsumed?.();
+  }, [fill, onFillConsumed]);
+  // After the commit that put the text in, so the caret lands past it and not at its old length.
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!caretRequest || !el) return;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, [caretRequest]);
 
   /**
    * The `/` menu.
@@ -473,7 +502,25 @@ export function Composer({
 
       {blockedReason && (
         <Box sx={{ ...contentColumnSx, mt: 1 }}>
-          <Alert size="sm" color="warning" variant="soft" data-testid="composer-blocked-reason">
+          <Alert
+            size="sm"
+            color="warning"
+            variant="soft"
+            data-testid="composer-blocked-reason"
+            endDecorator={
+              blockedAction && (
+                <Button
+                  size="sm"
+                  variant="soft"
+                  color="warning"
+                  onClick={blockedAction.onClick}
+                  data-testid="composer-blocked-action-btn"
+                >
+                  {blockedAction.label}
+                </Button>
+              )
+            }
+          >
             {blockedReason}
           </Alert>
         </Box>
@@ -612,8 +659,9 @@ export function Composer({
         />
       </Box>
 
-      {/* Attach on the left, what answers the turn on the right - the shape Claude Code uses. */}
-      <Stack direction="row" alignItems="center" sx={{ ...contentColumnSx, py: 1, gap: 1 }}>
+      {/* Attach on the left, what answers the turn on the right - the shape Claude Code uses.
+          The window's last row, so a wider gap below than above. */}
+      <Stack direction="row" alignItems="center" sx={{ ...contentColumnSx, pt: 1, pb: 2, gap: 1 }}>
         {/* No correction of its own: its box goes on the content edge like every other control
             in the column, and the '+' rides inside it. Pulling the box left so the glyph alone
             sat on the line is what used to send its hover surface outside the column. */}

@@ -3,6 +3,7 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import {
   IUserDocument,
   ApiKeyScope,
+  ApiKeyScopeValue,
   CreditHolderType,
   type ApiKeyBillingOwnerType,
   type CompletionSource,
@@ -12,11 +13,18 @@ import { User, userApiKeyRepository, cacheRepository } from '@bike4mind/database
 import { userApiKeyService, cacheService, isTokenVersionCurrent, isTokenTypeAcceptable } from '@bike4mind/services';
 import { extractApiKeyFromHeaders, checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { hasAcceptedPolicy } from '@bike4mind/server-utils/auth/consentGate';
-import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
-import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@server/auth/mfaEnforcement';
+import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
+import {
+  API_KEY_ACCESS_DENIED_MESSAGE,
+  assertCliSessionAllowed,
+  isApiKeyAccessAllowed,
+} from '@server/utils/apiKeyAccessGate';
+import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
+import { resolveUntrustedKeyLimits } from '@server/utils/apiKeyTrust';
 import { z } from 'zod';
+import { Logger } from '@bike4mind/observability';
 
 /** `additionalInfo` of a rate-limit TooManyRequestsError; transports turn it into response headers. */
 export type RateLimitErrorInfo = {
@@ -34,7 +42,7 @@ export interface VerifiedUser {
 export interface ApiKeyInfo {
   keyId: string;
   userId: string;
-  scopes: ApiKeyScope[];
+  scopes: ApiKeyScopeValue[];
   rateLimit: {
     requestsPerMinute: number;
     requestsPerDay: number;
@@ -55,13 +63,20 @@ export interface ApiKeyInfo {
   spendCap?: number;
   /** Cumulative settled spend in credits at validation time; embed keys only. */
   currentSpend?: number;
+  /** The owner's API key trust standing as judged at verification (see apiKeyTrust.ts). */
+  ownerUntrusted?: boolean;
+  /** The admin who provisioned the key for its owner; exempts it from the paid-only switch. */
+  createdByUserId?: string;
 }
 
 /**
  * Verify JWT token from Authorization header
  * @throws Error if token is invalid or expired
  */
-export async function verifyJwtToken(token: string | undefined): Promise<VerifiedUser> {
+export async function verifyJwtToken(
+  token: string | undefined,
+  options: { requireApiAccess?: boolean } = {}
+): Promise<VerifiedUser> {
   if (!token) {
     throw new Error('No authorization token provided');
   }
@@ -70,6 +85,7 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
     // Pin HS256 to match the REST strategy / verifyRefreshToken (no algorithm-confusion surface).
     const decoded = jwt.verify(token, Config.JWT_SECRET, { algorithms: ['HS256'] }) as {
       id: string;
+      sid?: string;
       tokenVersion?: number;
       mfaPending?: boolean;
       typ?: string;
@@ -82,6 +98,9 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
     // gate does not cover this path, so default-deny the OAuth kind here explicitly.
     if (decoded.kind === 'oauth') {
       throw new Error('OAuth access tokens are not accepted on this endpoint');
+    }
+    if (decoded.impersonatedBy) {
+      throw new ForbiddenError('Impersonated sessions cannot use CLI or completion credentials.');
     }
 
     // Reject a first-factor-only token: the mfaPending access token (issued pre-2FA, before the
@@ -137,6 +156,14 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
       throw new ForbiddenError(`${MFA_ENROLLMENT_REQUIRED_MESSAGE} Set it up in the web app to continue.`);
     }
 
+    // Shared web surfaces identify device sessions from trusted server metadata;
+    // dedicated CLI/API surfaces apply the policy to every JWT.
+    try {
+      await assertCliSessionAllowed(user, decoded.sid, options);
+    } catch (error) {
+      throw toApiKeyAuthError(error);
+    }
+
     return {
       id: user.id,
       email: user.email,
@@ -157,7 +184,7 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
 export interface VerifyApiKeyOptions {
   /** At least one of these scopes must be present on the key. Defaults to
    *  AI_GENERATE / AI_CHAT to preserve the legacy completions behavior. */
-  requiredScopes?: ApiKeyScope[];
+  requiredScopes?: ApiKeyScopeValue[];
 }
 
 /**
@@ -178,7 +205,7 @@ const DEFAULT_COMPLETION_SCOPES: ApiKeyScope[] = [ApiKeyScope.AI_GENERATE, ApiKe
 function toApiKeyInfo(v: {
   keyId?: string;
   userId?: string;
-  scopes?: ApiKeyScope[];
+  scopes?: ApiKeyScopeValue[];
   rateLimit?: { requestsPerMinute: number; requestsPerDay: number };
   billingOwnerType?: ApiKeyBillingOwnerType;
   organizationId?: string;
@@ -188,6 +215,7 @@ function toApiKeyInfo(v: {
   branding?: IEmbedBranding;
   spendCap?: number;
   currentSpend?: number;
+  createdByUserId?: string;
 }): ApiKeyInfo {
   return {
     keyId: v.keyId!,
@@ -202,6 +230,7 @@ function toApiKeyInfo(v: {
     branding: v.branding,
     spendCap: v.spendCap,
     currentSpend: v.currentSpend,
+    createdByUserId: v.createdByUserId,
   };
 }
 
@@ -224,12 +253,26 @@ function toApiKeyInfo(v: {
  * suspension lands *after* the key exists and must take effect on the surfaces
  * that spend money.
  */
-async function assertOwnerAccountUsable(userId: string): Promise<void> {
-  const user = await User.findById(userId);
+async function assertOwnerAccountUsable(info: ApiKeyInfo) {
+  const user = await User.findById(info.userId);
   if (!user) {
     throw new UnauthorizedError('User not found or banned');
   }
   assertAccountStateUsable(user);
+  // The admin paid-only switch, mirroring apiKeyAuth so every key surface shares it.
+  const accessAllowed = await isApiKeyAccessAllowed(user, {
+    billingOwnerType: info.billingOwnerType,
+    organizationId: info.organizationId,
+    createdByUserId: info.createdByUserId,
+  });
+  if (!accessAllowed) {
+    Logger.globalInstance.warn('API key rejected: apiKeyAccess setting denies this owner', {
+      keyId: info.keyId,
+      userId: info.userId,
+    });
+    throw new ForbiddenError(API_KEY_ACCESS_DENIED_MESSAGE);
+  }
+  return user;
 }
 
 /**
@@ -269,9 +312,11 @@ export async function verifyApiKey(
       });
     }
 
-    await assertOwnerAccountUsable(validation.userId);
-
-    return toApiKeyInfo(validation);
+    const info = toApiKeyInfo(validation);
+    const owner = await assertOwnerAccountUsable(info);
+    // Apply the trust ceiling only after the access policy has accepted the owner; same ceiling apiKeyAuth applies.
+    const { rateLimit, ownerUntrusted } = await resolveUntrustedKeyLimits(owner, info);
+    return { ...info, rateLimit, ownerUntrusted };
   } catch (error) {
     throw toApiKeyAuthError(error);
   }
@@ -346,7 +391,7 @@ export async function verifyEmbedKeyById(keyId: string): Promise<ApiKeyInfo> {
 
     const info = toApiKeyInfo(validation);
     assertEmbedCredential(info);
-    await assertOwnerAccountUsable(info.userId);
+    await assertOwnerAccountUsable(info);
     return info;
   } catch (error) {
     throw toApiKeyAuthError(error);

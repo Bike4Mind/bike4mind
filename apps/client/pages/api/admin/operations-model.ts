@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { AdminSettings, withTransaction } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { ApiKeyScope, SpeechToTextModels } from '@bike4mind/common';

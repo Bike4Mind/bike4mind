@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * could no longer match, logging a bogus "model not found" error and a zero-credit
  * analytics event for a request that was billed correctly.
  */
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/services', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/services')>()),
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) },
@@ -27,7 +27,9 @@ vi.mock('@bike4mind/common', async importOriginal => ({
   getTurnsCost: vi.fn(() => 2),
 }));
 
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
+import { apiKeyService } from '@bike4mind/services';
+import { buildApiKeyTable, getAvailableModels } from '@bike4mind/llm-adapters';
 import { AiEvents, CREDITS_PER_USD_COST, getTextModelCost, getTurnsCost } from '@bike4mind/common';
 import { logCompletionAnalytics } from './logCompletionAnalytics';
 
@@ -83,6 +85,17 @@ describe('logCompletionAnalytics - OpenAI bare model alias resolution', () => {
     expect(logger.error).toHaveBeenCalledWith('[COMPLETION_ANALYTICS] Model not found for credits calculation:', {
       model: 'not-a-real-model',
     });
+  });
+});
+
+describe('logCompletionAnalytics - model list lookup', () => {
+  it('passes the backend-keyed table executeCompletion uses, so the shared model-list cache entry is reused', async () => {
+    const effective = { openai: 'sk-test', imageGen: 'http://image.local' };
+    vi.mocked(apiKeyService.getEffectiveLLMApiKeys).mockResolvedValueOnce(effective as never);
+
+    await logCompletionAnalytics({ ...baseParams, body: { model: 'gpt-4.1', messages: [] } as any });
+
+    expect(getAvailableModels).toHaveBeenCalledWith(buildApiKeyTable(effective));
   });
 });
 

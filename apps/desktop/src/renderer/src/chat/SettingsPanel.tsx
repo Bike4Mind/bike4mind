@@ -18,6 +18,14 @@ import { updateAttention, updateSummary } from '@shared/update';
 import { EnvironmentPicker } from '../auth/EnvironmentPicker';
 import type { ClaudeImportState } from '@shared/claudeImport';
 import { ClaudeImportSettings, claudeImportSummary, useClaudeImport } from './ClaudeImportSettings';
+import type { LocalContextFit, LocalContextSetting } from '@shared/localContextSetting';
+import { LocalContextSettings, localContextSummary, useLocalContextSetting } from './LocalContextSettings';
+import { LocalHistorySettings } from './LocalHistorySettings';
+import type { ModelServerView } from '@shared/modelServers';
+import { ModelServersSettings, modelServersSummary, useModelServers } from './ModelServersSettings';
+import { WorktreesSettings } from './WorktreesSettings';
+import type { CuratedListSettings as CuratedListSettingsState } from '@shared/models';
+import { CuratedListSettings, curatedListSummary, useCuratedListSettings } from './CuratedListSettings';
 import { EntrySection, entryAttentionChip, type ConfigEntry } from './ConfigEntry';
 import {
   ArrowLeftIcon,
@@ -25,13 +33,17 @@ import {
   ContrastIcon,
   DownloadIcon,
   FolderIcon,
+  ModelsIcon,
   ServerIcon,
   ShieldIcon,
   SlidersIcon,
   SparkIcon,
+  SubSessionsIcon,
 } from './icons';
+import { nestedSessionsSummary, useNestedSessions } from './nestedSessions';
 import { columnStackSx, contentColumnSx, thinScrollbarSx } from './layout';
 import { useCostDisplayPreference } from './costDisplay';
+import { tokenRateSummary, useTokenRateSetting } from './tokenRate';
 import { PermissionsSettings, permissionsSummary, usePermissions } from './PermissionsSettings';
 import { promptSuggestionsSummary, usePromptSuggestionModel, usePromptSuggestions } from './promptSuggestions';
 import { SuggestionModelPicker } from './SuggestionModelPicker';
@@ -123,6 +135,32 @@ function worktreeEntry(enabled: boolean, toggle: () => void): ConfigEntry {
   };
 }
 
+function nestedSessionsEntry(enabled: boolean, toggle: () => void): ConfigEntry {
+  return {
+    id: 'nested-sessions',
+    icon: <SubSessionsIcon />,
+    label: 'Nest sub-sessions',
+    summary: nestedSessionsSummary(enabled),
+    control: (
+      <Stack spacing={1.25}>
+        <Typography level="body-xs" textColor="text.tertiary">
+          Draw sessions an agent spawns as a branch under the session that started it, folded or open. Off lists every
+          session on its own row.
+        </Typography>
+        <Switch
+          size="sm"
+          checked={enabled}
+          onChange={toggle}
+          sx={{ alignSelf: 'flex-start' }}
+          slotProps={{
+            input: { 'aria-label': 'Nest sub-sessions', 'data-testid': 'settings-nested-sessions-switch' },
+          }}
+        />
+      </Stack>
+    ),
+  };
+}
+
 function dollarCostsEntry(enabled: boolean, setEnabled: (enabled: boolean) => void): ConfigEntry {
   return {
     id: 'dollar-costs',
@@ -137,6 +175,85 @@ function dollarCostsEntry(enabled: boolean, setEnabled: (enabled: boolean) => vo
         slotProps={{ input: { 'aria-label': 'Show dollar costs', 'data-testid': 'settings-dollar-costs-switch' } }}
       />
     ),
+  };
+}
+
+function tokenRateEntry(enabled: boolean, toggle: () => void): ConfigEntry {
+  return {
+    id: 'token-rate',
+    icon: <ModelsIcon />,
+    label: 'Self-hosted model speed',
+    summary: tokenRateSummary(enabled),
+    control: (
+      <Stack spacing={1.25}>
+        <Typography level="body-xs" textColor="text.tertiary">
+          Show tokens per second where hosted models show credits. Hover it for prompt speed, load time and draft
+          acceptance when the server reports them; a figure starting with ~ was timed by this app.
+        </Typography>
+        <Switch
+          size="sm"
+          checked={enabled}
+          onChange={toggle}
+          sx={{ alignSelf: 'flex-start' }}
+          slotProps={{
+            input: { 'aria-label': 'Self-hosted model speed', 'data-testid': 'settings-token-rate-switch' },
+          }}
+        />
+      </Stack>
+    ),
+  };
+}
+
+function localContextEntry(
+  setting: LocalContextSetting | null,
+  onChange: (setting: LocalContextSetting) => void,
+  error: string | null,
+  fit: LocalContextFit | undefined
+): ConfigEntry {
+  return {
+    id: 'local-context',
+    icon: <SlidersIcon />,
+    label: 'Local model context',
+    summary: localContextSummary(setting),
+    control: <LocalContextSettings setting={setting} onChange={onChange} error={error} fit={fit} />,
+  };
+}
+
+function curatedListEntry(
+  settings: CuratedListSettingsState | null,
+  onEnabled: (enabled: boolean) => void,
+  error: string | null,
+  onRetry: () => void,
+  saving: boolean
+): ConfigEntry {
+  return {
+    id: 'curated-list',
+    icon: <DownloadIcon />,
+    label: 'Curated models list',
+    summary: !settings && error ? error : curatedListSummary(settings),
+    control: (
+      <CuratedListSettings settings={settings} onEnabled={onEnabled} error={error} onRetry={onRetry} saving={saving} />
+    ),
+  };
+}
+
+function localHistoryEntry(): ConfigEntry {
+  return {
+    id: 'local-history',
+    icon: <FolderIcon />,
+    label: 'Local history',
+    summary: 'Opted-in conversations and pages stay on this device and remain searchable offline.',
+    control: <LocalHistorySettings />,
+  };
+}
+
+function worktreesEntry(): ConfigEntry {
+  return {
+    id: 'worktrees',
+    icon: <BranchIcon />,
+    label: 'Worktrees',
+    summary: 'Worktrees the app made for your projects, and the ones no conversation uses any more.',
+    control: <WorktreesSettings />,
   };
 }
 
@@ -171,7 +288,7 @@ function claudeImportEntry(
 }
 
 /**
- * Which backend every conversation talks to.
+ * Which backend hosted conversations talk to.
  *
  * It used to live in the account menu, which is where a user looks for who they are rather than
  * for what the app is wired to. The signed-out card keeps its own copy of this picker - someone
@@ -190,7 +307,7 @@ function serverEntry(state: AuthState): ConfigEntry {
             where the agent runs; this app's agent is the Electron main process and has
             nowhere else to go. */}
         <Typography level="body-xs" textColor="text.tertiary">
-          Every conversation in this app talks to one server.
+          Hosted conversations use this server. Local models run on this device.
         </Typography>
         <EnvironmentPicker state={state} />
       </Stack>
@@ -211,8 +328,25 @@ function updatesEntry(controller: AppUpdateController): ConfigEntry {
   };
 }
 
+function modelServersEntry(
+  servers: ModelServerView[] | null,
+  setServers: (servers: ModelServerView[]) => void,
+  loadError: string | null
+): ConfigEntry {
+  // One word: the side nav shows it beside the section label.
+  const attention = servers?.some(server => server.health.state === 'credentials') ? 'Credentials' : undefined;
+  return {
+    id: 'model-servers',
+    icon: <ServerIcon />,
+    label: 'Model servers',
+    summary: modelServersSummary(servers),
+    ...(attention ? { attention } : {}),
+    control: <ModelServersSettings servers={servers} onServers={setServers} loadError={loadError} />,
+  };
+}
+
 /** The pages of Settings, in the order the side nav lists them. */
-export const SETTINGS_SECTIONS = ['general', 'permissions', 'import'] as const;
+export const SETTINGS_SECTIONS = ['general', 'servers', 'permissions', 'import', 'worktrees'] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 export function isSettingsSection(value: unknown): value is SettingsSection {
@@ -224,14 +358,18 @@ const SETTINGS_NAV_WIDTH = 200;
 
 const SECTION_LABEL: Record<SettingsSection, string> = {
   general: 'General',
+  servers: 'Model servers',
   permissions: 'Permissions',
   import: 'Import',
+  worktrees: 'Worktrees',
 };
 
 const SECTION_ICON: Record<SettingsSection, ReactNode> = {
   general: <SlidersIcon />,
+  servers: <ServerIcon />,
   permissions: <ShieldIcon />,
   import: <FolderIcon />,
+  worktrees: <BranchIcon />,
 };
 
 /**
@@ -246,6 +384,7 @@ const SECTION_ICON: Record<SettingsSection, ReactNode> = {
 function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, ConfigEntry[]> {
   const showDollarCosts = useCostDisplayPreference(state => state.showDollarCosts);
   const setShowDollarCosts = useCostDisplayPreference(state => state.setShowDollarCosts);
+  const [showTokenRate, toggleTokenRate] = useTokenRateSetting();
   const update = useAppUpdate();
   const { mode, setMode } = useColorScheme();
   const theme = useTheme();
@@ -254,18 +393,35 @@ function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, Con
   const [permissions, setPermissions, permissionsError, retryPermissions] = usePermissions();
   const [claudeImport, setClaudeImport, importError, retryImport] = useClaudeImport();
   const [worktreeDefault, toggleWorktreeDefault] = useWorktreeByDefault();
+  const [nestedSessions, toggleNestedSessions] = useNestedSessions();
+  const [localContext, setLocalContext, localContextError, localContextFit] = useLocalContextSetting();
+  const [modelServers, setModelServers, modelServersError] = useModelServers();
+  const curatedList = useCuratedListSettings();
 
   return {
     general: [
       appearanceEntry(mode, setMode, theme.palette.mode),
       suggestionsEntry(suggestions, toggleSuggestions, suggestionModel),
       worktreeEntry(worktreeDefault, toggleWorktreeDefault),
+      nestedSessionsEntry(nestedSessions, toggleNestedSessions),
+      localContextEntry(localContext, next => void setLocalContext(next), localContextError, localContextFit),
+      tokenRateEntry(showTokenRate, toggleTokenRate),
+      curatedListEntry(
+        curatedList.settings,
+        enabled => void curatedList.setEnabled(enabled),
+        curatedList.error,
+        () => void curatedList.reload(),
+        curatedList.saving
+      ),
+      localHistoryEntry(),
       ...(import.meta.env.DEV ? [dollarCostsEntry(showDollarCosts, setShowDollarCosts)] : []),
       ...(auth ? [serverEntry(auth)] : []),
       updatesEntry(update),
     ],
+    servers: [modelServersEntry(modelServers, setModelServers, modelServersError)],
     permissions: [permissionsEntry(permissions, setPermissions, permissionsError, retryPermissions)],
     import: [claudeImportEntry(claudeImport, setClaudeImport, importError, retryImport)],
+    worktrees: [worktreesEntry()],
   };
 }
 

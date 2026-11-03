@@ -6,6 +6,7 @@ import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import qs from 'qs';
 
 interface IQuery {
@@ -84,6 +85,12 @@ const handler = baseApi()
       const category = await ResearchLinkCategory.create({
         name,
         description,
+      });
+
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.business_link_category.created',
+        target: { kind: 'settings', id: String(category._id), displayName: name },
+        summary: `created business link category ${name}`,
       });
 
       return res.status(201).json(category);

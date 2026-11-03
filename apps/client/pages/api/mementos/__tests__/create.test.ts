@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
+import { z } from 'zod';
 import { MEMENTO_EMBEDDING_ID } from '@bike4mind/common';
 
 const { mementoCreateMock, findByUserIdMock, getEffectiveLLMApiKeysMock, generateEmbeddingMock } = vi.hoisted(() => ({
@@ -62,6 +63,50 @@ const makeReq = () =>
       tags: ['pref'],
     },
   }) as unknown as Request;
+
+describe('POST /api/mementos/create client errors', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    findByUserIdMock.mockResolvedValue([]);
+    getEffectiveLLMApiKeysMock.mockResolvedValue({});
+    generateEmbeddingMock.mockResolvedValue(null);
+  });
+
+  it('answers 400 naming the failing path when the model rejects the memento', async () => {
+    mementoCreateMock.mockRejectedValue(
+      Object.assign(new Error("Memento validation failed: fullContent: Path 'fullContent' is required."), {
+        name: 'ValidationError',
+        errors: { fullContent: {} },
+      })
+    );
+    const req = makeReq();
+    const res = makeRes();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toStrictEqual({ error: 'Invalid memento: fullContent' });
+    expect(req.logger.error).not.toHaveBeenCalled();
+  });
+
+  it('rethrows a ZodError so the shared error handler answers it', async () => {
+    const zodError = z.string().safeParse(1).error;
+    mementoCreateMock.mockRejectedValue(zodError);
+
+    await expect(handler(makeReq(), makeRes())).rejects.toBe(zodError);
+  });
+
+  it('still answers 500 and logs at error level for an unexpected failure', async () => {
+    mementoCreateMock.mockRejectedValue(new Error('db down'));
+    const req = makeReq();
+    const res = makeRes();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(500);
+    expect(req.logger.error).toHaveBeenCalled();
+  });
+});
 
 describe('POST /api/mementos/create embedding', () => {
   beforeEach(() => {

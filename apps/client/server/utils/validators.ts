@@ -56,6 +56,17 @@ export function isLocalAppUrl(appUrl: string | undefined = process.env.APP_URL):
 }
 
 /**
+ * The origin browsers reach this app on: APP_URL, except on a localhost APP_URL where the request
+ * host wins so the port matches. Shared by serverConfigPublic's apiUrl and the Claude marketplace
+ * feed's zip URLs, which must agree on an origin.
+ */
+export function publicAppUrl(req: { headers: Record<string, string | string[] | undefined> }): string {
+  return isLocalAppUrl()
+    ? `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host || 'localhost:3000'}`
+    : process.env.APP_URL || '';
+}
+
+/**
  * Validates APP_URL environment variable.
  * Must be set and be a valid URL (HTTPS in production, HTTP allowed for localhost).
  *

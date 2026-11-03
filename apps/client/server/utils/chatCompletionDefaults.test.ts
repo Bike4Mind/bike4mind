@@ -79,7 +79,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 // generated table through untouched, and a placeholder `{}` would otherwise pass a deep check.
 const workspaceDeniedToolsSentinel = vi.hoisted(() => ({ 'sentinel-surface': ['sentinel_tool'] }));
 
-vi.mock('@server/premium-generated/premiumWorkspaceDeniedTools.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumWorkspaceDeniedTools.generated', () => ({
   premiumWorkspaceDeniedTools: workspaceDeniedToolsSentinel,
 }));
 
@@ -358,6 +358,13 @@ describe('getDefaultChatCompletionOptions', () => {
     vi.resetModules();
     runDecisionToolMock.mockReset();
   });
+
+  it('wires the shared operational billing adapter into tool execution', async () => {
+    const { getDefaultChatCompletionOptions } = await import('./chatCompletionDefaults');
+    const { operationalBillingAdapters } = await import('@server/billing/operationalBilling');
+
+    expect(getDefaultChatCompletionOptions().db.operationalBilling).toBe(operationalBillingAdapters);
+  }, 20000);
 
   it('forwards the trusted key and active workspace into the decision host', async () => {
     const { getDefaultChatCompletionOptions } = await import('./chatCompletionDefaults');

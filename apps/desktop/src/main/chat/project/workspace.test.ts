@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PhaseTimer } from '../PhaseTimer';
 import * as projectGit from './git';
 import {
+  branchExists,
   containerDirectory,
   currentBranch,
   fetchRemoteFor,
@@ -384,17 +385,17 @@ describe('resolveWorkspace choosing what to fork from', () => {
     );
   });
 
-  it('keeps local commits the remote has not seen', async () => {
+  it('forks from upstream main without changing unpushed local main commits', async () => {
     const { repo } = await clonedRepository();
+    const upstream = (await git(repo, ['rev-parse', 'origin/main'])).trim();
     await writeFile(join(repo, 'unpushed.txt'), 'mine\n', 'utf8');
     await git(repo, ['add', '.']);
     await git(repo, ['commit', '--quiet', '-m', 'unpushed']);
 
     const resolved = await resolveWorkspace(repo, { base: 'main' });
 
-    expect((await git(resolved.workingDirectory, ['rev-parse', 'HEAD'])).trim()).toBe(
-      (await git(repo, ['rev-parse', 'main'])).trim()
-    );
+    expect((await git(resolved.workingDirectory, ['rev-parse', 'HEAD'])).trim()).toBe(upstream);
+    expect((await git(repo, ['rev-parse', 'main'])).trim()).not.toBe(upstream);
   });
 
   async function commitOn(repo: string, file: string): Promise<string> {
@@ -405,6 +406,67 @@ describe('resolveWorkspace choosing what to fork from', () => {
   }
 
   const headOf = async (directory: string) => (await git(directory, ['rev-parse', 'HEAD'])).trim();
+
+  it('forks from upstream when local main has diverged, leaving local main intact', async () => {
+    const { repo, origin } = await clonedRepository();
+    const initial = await headOf(repo);
+    const upstream = await commitOn(repo, 'upstream.txt');
+    await git(repo, ['push', '--quiet', 'origin', 'main']);
+    await git(repo, ['reset', '--quiet', '--hard', initial]);
+    const local = await commitOn(repo, 'local.txt');
+    await git(repo, ['update-ref', '-d', 'refs/remotes/origin/main']);
+
+    const resolved = await resolveWorkspace(repo, { base: 'main', branch: 'agent/clean' });
+
+    expect(await headOf(resolved.workingDirectory)).toBe(upstream);
+    expect(await headOf(repo)).toBe(local);
+    expect((await git(origin, ['rev-parse', 'main'])).trim()).toBe(upstream);
+  });
+
+  it.each(['main', 'origin/main', ''])('refuses a stale %s base when upstream fetch fails', async base => {
+    const { repo } = await clonedRepository();
+    const local = await commitOn(repo, 'local.txt');
+    await git(repo, ['remote', 'set-url', 'origin', join(repo, 'offline')]);
+    await fetchRemoteFor(repo, 'origin/main');
+
+    await expect(resolveWorkspace(repo, { base, branch: 'agent/refused' })).rejects.toThrow(
+      /Could not update origin\/main.*pick another base branch/s
+    );
+
+    expect(await headOf(repo)).toBe(local);
+    expect(await branchExists(repo, 'agent/refused')).toBe(false);
+  });
+
+  it('uses local main when the repository has no origin', async () => {
+    const { repo } = await clonedRepository();
+    await git(repo, ['remote', 'remove', 'origin']);
+    const local = await commitOn(repo, 'local.txt');
+
+    const resolved = await resolveWorkspace(repo, { base: 'main' });
+
+    expect(await headOf(resolved.workingDirectory)).toBe(local);
+  });
+
+  it('does not default to local main when its tracking ref is missing and origin is offline', async () => {
+    const { repo } = await clonedRepository();
+    await git(repo, ['update-ref', '-d', 'refs/remotes/origin/main']);
+    await git(repo, ['remote', 'set-url', 'origin', join(repo, 'offline')]);
+
+    await expect(resolveWorkspace(repo, { branch: 'agent/refused' })).rejects.toThrow(/Could not update origin\/main/);
+
+    expect(await branchExists(repo, 'agent/refused')).toBe(false);
+  });
+
+  it('keeps an explicit feature base usable while origin is offline', async () => {
+    const { repo } = await clonedRepository();
+    await git(repo, ['switch', '--quiet', '-c', 'feat/local']);
+    const local = await commitOn(repo, 'feature.txt');
+    await git(repo, ['remote', 'set-url', 'origin', join(repo, 'offline')]);
+
+    const resolved = await resolveWorkspace(repo, { base: 'feat/local', branch: 'agent/feature' });
+
+    expect(await headOf(resolved.workingDirectory)).toBe(local);
+  });
 
   // A spawned session names its branch AND its base: the branch the user approved, cut from the
   // branch its parent is on.
@@ -523,8 +585,8 @@ describe('SpareWorktrees', () => {
   async function spareReady(main: string, container: string): Promise<void> {
     await vi.waitUntil(
       async () => {
-        if (!(await listWorktrees(main)).some(entry => entry.path === spareAt(container))) return false;
         try {
+          if (!(await listWorktrees(main)).some(entry => entry.path === spareAt(container))) return false;
           const directory = (await git(spareAt(container), ['rev-parse', '--absolute-git-dir'])).trim();
           return (await readFile(join(directory, 'b4m-spare'), 'utf8')).startsWith('bike4mind-spare:');
         } catch {
@@ -639,6 +701,7 @@ describe('SpareWorktrees', () => {
     try {
       await resolveWorkspace(main, { base: 'main', branch: 'b4m/first', spares });
       await spareReady(main, container);
+      const upstream = (await git(main, ['rev-parse', 'origin/main'])).trim();
       await writeFile(join(main, 'later.txt'), 'later\n', 'utf8');
       await git(main, ['add', 'later.txt']);
       await git(main, ['commit', '--quiet', '-m', 'later']);
@@ -650,8 +713,9 @@ describe('SpareWorktrees', () => {
       expect(timer.summary()).toContain('spareSwitch=');
       expect(second.workingDirectory).toBe(join(appWorktreeRoot(container), 'b4m+second'));
       expect((await git(second.workingDirectory, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()).toBe('b4m/second');
-      expect((await git(second.workingDirectory, ['rev-parse', 'HEAD'])).trim()).toBe(tip);
-      expect((await stat(join(second.workingDirectory, 'later.txt'))).isFile()).toBe(true);
+      expect((await git(second.workingDirectory, ['rev-parse', 'HEAD'])).trim()).toBe(upstream);
+      expect((await git(main, ['rev-parse', 'HEAD'])).trim()).toBe(tip);
+      await expect(stat(join(second.workingDirectory, 'later.txt'))).rejects.toThrow();
       // Taken, then made again for the session after this one.
       await spareReady(main, container);
     } finally {

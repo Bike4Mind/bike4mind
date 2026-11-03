@@ -6,13 +6,14 @@ import { GetEffectiveApiKeyAdapters, getFirecrawlConfig } from '../../../../apiK
 import { CitableSource, UnprocessableEntityError } from '@bike4mind/common';
 import { FirecrawlError } from '@mendable/firecrawl-js';
 import { createFirecrawlApp, type FirecrawlClient, type FirecrawlScrapeParams } from './firecrawlApp';
-import { plainFetchScrape } from './plainFetch';
-import { UnsafeScrapeTargetError } from './errors';
-import { resolveAndVetUrl, unsafeFetchUrlReason } from './ssrfGuard';
+import { NoExtractableContentError, plainFetchScrape } from './plainFetch';
+import { refuseFetch, resolveAndVetUrl, unsafeFetchUrlReason } from './ssrfGuard';
 
 // Re-exported so external construction sites (e.g. apps/workers researchEngineQueue)
 // can use the interop-safe constructor instead of the raw default import.
 export { createFirecrawlApp } from './firecrawlApp';
+export { RefusedFetchTargetError } from './errors';
+export { NoExtractableContentError } from './plainFetch';
 
 interface WebFetchParams {
   url: string;
@@ -38,6 +39,10 @@ interface WebFetchResult {
   durationMs: number;
   /** When set, the origin advertises an llms.txt/llms-full.txt worth suggesting for long-form content. */
   llmsTxtUrl?: string;
+  /** Hosted URL of a first-screen (viewport, not full-page) screenshot, exactly as Firecrawl returned
+   *  it. Only set when the caller asked for one and Firecrawl produced one; never on the PDF or
+   *  plain-fetch paths, so callers must treat absence as "use the text". */
+  screenshot?: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -169,6 +174,12 @@ type FirecrawlFetchOptions = {
   onlyMainContent?: boolean;
   /** Fetch live and ask Firecrawl not to cache the result (maxAge 0, storeInCache false). */
   fresh?: boolean;
+  /** Also ask Firecrawl for a first-screen (viewport) screenshot, returned as WebFetchResult.screenshot.
+   *  Firecrawl-only: PDFs and the keyless plain-fetch fallback get none, and a scrape that comes back
+   *  without one simply has no `screenshot` field. */
+  screenshot?: boolean;
+  /** Render as a phone, so the screenshot is the mobile one. Only sent together with `screenshot`. */
+  mobile?: boolean;
 };
 
 /**
@@ -222,13 +233,9 @@ export async function firecrawlFetch(
   // Checked before choosing a backend: a self-hosted Firecrawl (`apiUrl`) fetches from inside our
   // network, so handing it a private address is the same SSRF as fetching it ourselves. Same
   // handling as the guard inside the Firecrawl wrapper: a private or protocol refusal is permanent
-  // (`UnsafeScrapeTargetError`), a DNS hiccup is a plain Error so a retry wrapper still retries it.
+  // (`UnsafeScrapeTargetError`), a DNS hiccup is retryable (see refuseFetch).
   const vetted = await resolveAndVetUrl(new URL(url));
-  if (!vetted.safe) {
-    const message = `Refusing to fetch ${url}: ${vetted.reason}`;
-    if (vetted.retryable) throw new Error(message);
-    throw new UnsafeScrapeTargetError(message);
-  }
+  if (!vetted.safe) throw refuseFetch(url, vetted);
 
   // Use longer timeout for PDF URLs - large PDFs need more server-side processing time.
   // Callers with shorter Lambda lifetimes can cap via maxTimeoutMs.
@@ -252,12 +259,16 @@ export async function firecrawlFetch(
     `📥 WebFetch Tool: Scraping URL with Firecrawl${isPdf ? ' (PDF mode, extended timeout)' : ''}...`
   );
 
+  // PDFs get no screenshot: Firecrawl parses them directly, there is no page to render.
+  const wantScreenshot = !!options?.screenshot && !isPdf;
+
   // PDF URLs skip the JS wait action - Firecrawl parses them directly
-  const baseParams = {
-    formats: ['markdown' as const],
+  const baseParams: FirecrawlScrapeParams = {
+    formats: wantScreenshot ? ['markdown', 'screenshot'] : ['markdown'],
     timeout: timeoutMs,
     ...(options?.onlyMainContent !== undefined && { onlyMainContent: options.onlyMainContent }),
     ...(options?.fresh && { maxAge: 0, storeInCache: false }),
+    ...(wantScreenshot && options?.mobile && { mobile: true }),
   };
 
   const startedAt = Date.now();
@@ -279,11 +290,17 @@ export async function firecrawlFetch(
   }
 
   if (!('markdown' in result) || !result.markdown) {
-    Logger.globalInstance.error('❌ WebFetch Tool: No markdown content returned');
-    throw new Error('No content could be extracted from the URL');
+    throw new NoExtractableContentError();
   }
 
-  return buildWebFetchResult(result.markdown, result.metadata?.title, url, options?.offset, durationMs);
+  return buildWebFetchResult(
+    result.markdown,
+    result.metadata?.title,
+    url,
+    options?.offset,
+    durationMs,
+    wantScreenshot ? result.screenshot : undefined
+  );
 }
 
 /**
@@ -302,7 +319,8 @@ async function buildWebFetchResult(
   title: string | undefined,
   url: string,
   rawOffset: number | undefined,
-  durationMs: number
+  durationMs: number,
+  screenshot?: string
 ): Promise<WebFetchResult> {
   // Coerce a non-finite offset (e.g. a model passing offset:"abc" on the unvalidated tool/CLI
   // paths) to 0 rather than letting slice(NaN, NaN) return a silent empty string.
@@ -338,6 +356,7 @@ async function buildWebFetchResult(
     cap: WEB_FETCH_CONTENT_CAP,
     durationMs,
     llmsTxtUrl,
+    ...(screenshot && { screenshot }),
   };
 }
 
@@ -377,10 +396,15 @@ const WEB_FETCH_UNREACHABLE_MSG =
   'The page could not be reached \u2014 the server may be down, unreachable, or blocking automated access. ' +
   'Try using web_search to find the information instead.';
 
+const WEB_FETCH_NO_CONTENT_MSG =
+  'No readable content could be extracted from this page \u2014 it may be empty, need a login, or render ' +
+  'its text in a way the scraper cannot read. Try web_search, or ask the user for another URL.';
+
 const WEB_FETCH_FAILURE_MESSAGES = new Set([
   ...Object.values(FIRECRAWL_FAILURE_MESSAGES).map(m => m.userMessage),
   WEB_FETCH_PDF_TOO_LARGE_MSG,
   WEB_FETCH_UNREACHABLE_MSG,
+  WEB_FETCH_NO_CONTENT_MSG,
 ]);
 
 /** Scores the failures web_fetch reports as text; a fetched page is left to the default score. */
@@ -457,6 +481,12 @@ export const webFetchTool: ToolDefinition = {
           });
           await context.statusUpdate({}, `WebFetch: ${statusLabel}`);
           return userMessage;
+        }
+
+        if (error instanceof NoExtractableContentError) {
+          context.logger.warn('WebFetch no extractable content', { url: params.url });
+          await context.statusUpdate({}, 'WebFetch: no readable content');
+          return WEB_FETCH_NO_CONTENT_MSG;
         }
 
         // Firecrawl 500 with PDF page-count timeout hint - the PDF is too large to process

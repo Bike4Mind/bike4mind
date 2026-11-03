@@ -1,5 +1,5 @@
 import { dataLakeBatchRepository } from '@bike4mind/database';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { analyzeBatchTaxonomy } from '@server/dataLakes/analyzeBatchTaxonomy';
 import { z, ZodError } from 'zod';
 

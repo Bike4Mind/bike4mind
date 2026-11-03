@@ -1,8 +1,35 @@
 import { Logger } from '@bike4mind/observability';
 import { AIImageService, ImageEditOptions, ImageEditResponse } from './AIImageService';
 import axios from 'axios';
-import { ImageModels, BFL_SAFETY_TOLERANCE, isBflUltraImageModel, toNonWebpOutputFormat } from '@bike4mind/common';
+import {
+  ImageModels,
+  BFL_SAFETY_TOLERANCE,
+  type BFLImageModel,
+  isBflUltraImageModel,
+  isFlux2ImageModel,
+  getMaxReferenceImages,
+  supportsPromptUpsampling,
+  toNonWebpOutputFormat,
+} from '@bike4mind/common';
 import { redactErrorForLog } from './redactErrorForLog';
+import {
+  ExpectedImageGenerationError,
+  ImageModerationBlockedError,
+  ImageProviderUnavailableError,
+} from './imageGenerationErrors';
+
+/** Transient network failures reaching BFL: no response, so nothing about the request itself was wrong. */
+const UNREACHABLE_NETWORK_CODES = new Set([
+  'ETIMEDOUT',
+  'ECONNABORTED',
+  'ECONNRESET',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
+  'EAI_AGAIN',
+]);
+
+/** BFL statuses meaning its moderation refused the prompt (Request) or the rendered image (Content). */
+const MODERATED_STATUSES = new Set(['Request Moderated', 'Content Moderated']);
 
 export class BFLImageService extends AIImageService {
   private baseUrl = 'https://api.bfl.ai/v1';
@@ -49,11 +76,12 @@ export class BFLImageService extends AIImageService {
       height = 768,
       aspect_ratio = '16:9',
       image_prompt,
+      reference_images = [],
       ...modelSpecificOptions
     }: {
       n?: number;
       user?: string;
-      model?: ImageModels.FLUX_PRO | ImageModels.FLUX_PRO_1_1 | ImageModels.FLUX_PRO_ULTRA;
+      model?: BFLImageModel;
       safety_tolerance?: number;
       prompt_upsampling?: boolean;
       seed?: number | null;
@@ -62,10 +90,28 @@ export class BFLImageService extends AIImageService {
       height?: number;
       aspect_ratio?: string;
       image_prompt?: string;
+      reference_images?: string[];
       [key: string]: unknown;
     }
   ): Promise<string[]> {
     try {
+      const referenceImages = [...new Set([...(image_prompt ? [image_prompt] : []), ...reference_images])];
+      if (reference_images.length && !isFlux2ImageModel(model)) {
+        throw new Error(`Model ${model} does not support multiple reference images`);
+      }
+      if (isFlux2ImageModel(model) && referenceImages.length > getMaxReferenceImages(model)) {
+        throw new Error(`Model ${model} accepts at most ${getMaxReferenceImages(model)} reference images`);
+      }
+      const referenceFields = isFlux2ImageModel(model)
+        ? Object.fromEntries(
+            referenceImages.map((image, index) => [index === 0 ? 'input_image' : `input_image_${index + 1}`, image])
+          )
+        : { image_prompt };
+      const promptUpsamplingFields = !supportsPromptUpsampling(model)
+        ? {}
+        : isFlux2ImageModel(model) && model !== ImageModels.FLUX_2_FLEX
+          ? { disable_pup: !prompt_upsampling }
+          : { prompt_upsampling };
       // Generate n images in parallel
       const urls = await Promise.all(
         Array.from({ length: n }).map(async () => {
@@ -74,7 +120,6 @@ export class BFLImageService extends AIImageService {
             prompt: string;
             image_prompt?: string;
             safety_tolerance: number;
-            prompt_upsampling: boolean;
             seed: number | null;
             output_format: string;
             user: string;
@@ -85,11 +130,11 @@ export class BFLImageService extends AIImageService {
           } = {
             prompt,
             safety_tolerance: this.clampSafetyTolerance(safety_tolerance),
-            prompt_upsampling,
             seed,
-            image_prompt,
             output_format: output_format || 'jpeg',
             ...modelSpecificOptions,
+            ...referenceFields,
+            ...promptUpsamplingFields,
             user,
           };
 
@@ -111,16 +156,20 @@ export class BFLImageService extends AIImageService {
 
           const cleanedBody = this.stripNullFields(requestBody);
           // .log(), not .debug(), so the actual outbound payload is visible at the default log
-          // level. prompt is truncated and image_prompt redacted, matching every other prompt log
+          // level. prompt is truncated and the reference image redacted, matching every other prompt log
           // on this path (route: promptPreview.substring(0,100); GeminiImageService: same) -
           // logging full user prompts at the default level is a different posture than diagnosing
           // params, which is all this needed.
           const safeRequestBody = {
             ...cleanedBody,
             prompt: prompt.length > 100 ? `${prompt.slice(0, 100)}...` : prompt,
-            ...(cleanedBody.image_prompt
-              ? { image_prompt: `[BASE64_DATA_${(cleanedBody.image_prompt as string).length}_CHARS]` }
-              : {}),
+            ...Object.fromEntries(
+              Object.entries(cleanedBody)
+                .filter(
+                  ([key, value]) => /^(?:image_prompt|input_image(?:_\d+)?)$/.test(key) && typeof value === 'string'
+                )
+                .map(([key, value]) => [key, `[BASE64_DATA_${String(value).length}_CHARS]`])
+            ),
           };
           Logger.globalInstance.log('BFL Image generation request body:', safeRequestBody);
 
@@ -161,16 +210,7 @@ export class BFLImageService extends AIImageService {
       });
       return urls;
     } catch (error) {
-      Logger.globalInstance.error('[DEBUG] Error in BFL image generation:', redactErrorForLog(error));
-      if (axios.isAxiosError(error)) {
-        Logger.globalInstance.error('[DEBUG] Axios error details:', {
-          status: error.response?.status,
-          data: JSON.stringify(error.response?.data, null, 2),
-          endpoint: `${this.baseUrl}/${model}`,
-        });
-      }
-
-      throw error instanceof Error ? error : new Error('BFL image generation error: Unknown error');
+      throw this.toReportableError(error, 'image generation', `${this.baseUrl}/${model}`);
     }
   }
 
@@ -246,16 +286,7 @@ export class BFLImageService extends AIImageService {
 
       return { type: 'success' as const, dataUrl: imageUrl };
     } catch (error) {
-      Logger.globalInstance.error('[DEBUG] Error in BFL image generation:', redactErrorForLog(error));
-      if (axios.isAxiosError(error)) {
-        Logger.globalInstance.error('[DEBUG] Axios error details:', {
-          status: error.response?.status,
-          data: JSON.stringify(error.response?.data, null, 2),
-          endpoint: `${this.baseUrl}/${model}`,
-        });
-      }
-
-      throw error instanceof Error ? error : new Error('BFL image generation error: Unknown error');
+      throw this.toReportableError(error, 'image editing', `${this.baseUrl}/${model}`);
     } finally {
       // Delete mask file
     }
@@ -334,69 +365,48 @@ export class BFLImageService extends AIImageService {
       Logger.globalInstance.debug(`[DEBUG] Making request to BFL endpoint: ${endpoint}`);
 
       // Submit transformation request
-      try {
-        const submitResponse = await axios.post(endpoint, cleanedBody, {
-          headers: {
-            accept: 'application/json',
-            'x-key': this.apiKey,
-            'Content-Type': 'application/json',
-          },
-        });
+      const submitResponse = await axios.post(endpoint, cleanedBody, {
+        headers: {
+          accept: 'application/json',
+          'x-key': this.apiKey,
+          'Content-Type': 'application/json',
+        },
+      });
 
-        Logger.globalInstance.debug(`[DEBUG] ✅ BFL API request successful:`, {
-          status: submitResponse.status,
-          statusText: submitResponse.statusText,
-          responseDataKeys: Object.keys(submitResponse.data || {}),
-          responseData: submitResponse.data,
-        });
+      Logger.globalInstance.debug(`[DEBUG] BFL API request successful:`, {
+        status: submitResponse.status,
+        statusText: submitResponse.statusText,
+        responseDataKeys: Object.keys(submitResponse.data || {}),
+        responseData: submitResponse.data,
+      });
 
-        const requestId = submitResponse.data.id;
-        const pollingUrl = submitResponse.data.polling_url;
-        if (!requestId) {
-          Logger.globalInstance.error(`[DEBUG] ❌ No request ID in response:`, submitResponse.data);
-          throw new Error('BFL API did not return a request ID');
-        }
-
-        Logger.globalInstance.debug('[DEBUG] ✅ BFL Kontext transformation request submitted:', {
-          requestId,
-          pollingUrl,
-          endpoint,
-          model,
-          responseStatus: submitResponse.status,
-        });
-
-        // Poll for result using the polling_url from BFL
-        Logger.globalInstance.debug(`[DEBUG] Starting polling for request ID: ${requestId}`);
-        const imageUrl = await this.pollForResult(requestId, pollingUrl);
-        Logger.globalInstance.debug('[DEBUG] ✅ Received BFL Kontext image URL:', {
-          url: imageUrl.substring(0, 100) + '...',
-          requestId,
-          model,
-        });
-
-        return imageUrl;
-      } catch (apiError) {
-        Logger.globalInstance.error(`[DEBUG] ❌ BFL API request failed:`, {
-          endpoint,
-          error: redactErrorForLog(apiError),
-          errorMessage: apiError instanceof Error ? apiError.message : 'Unknown error',
-          isAxiosError: axios.isAxiosError(apiError),
-          responseStatus: axios.isAxiosError(apiError) ? apiError.response?.status : undefined,
-          responseData: axios.isAxiosError(apiError) ? apiError.response?.data : undefined,
-        });
-        throw apiError;
+      const requestId = submitResponse.data.id;
+      const pollingUrl = submitResponse.data.polling_url;
+      if (!requestId) {
+        Logger.globalInstance.error(`[DEBUG] No request ID in response:`, submitResponse.data);
+        throw new Error('BFL API did not return a request ID');
       }
+
+      Logger.globalInstance.debug('[DEBUG] BFL Kontext transformation request submitted:', {
+        requestId,
+        pollingUrl,
+        endpoint,
+        model,
+        responseStatus: submitResponse.status,
+      });
+
+      // Poll for result using the polling_url from BFL
+      Logger.globalInstance.debug(`[DEBUG] Starting polling for request ID: ${requestId}`);
+      const imageUrl = await this.pollForResult(requestId, pollingUrl);
+      Logger.globalInstance.debug('[DEBUG] Received BFL Kontext image URL:', {
+        url: imageUrl.substring(0, 100) + '...',
+        requestId,
+        model,
+      });
+
+      return imageUrl;
     } catch (error) {
-      Logger.globalInstance.error('[DEBUG] Error in BFL Kontext transformation:', redactErrorForLog(error));
-      if (axios.isAxiosError(error)) {
-        Logger.globalInstance.error('[DEBUG] Axios error details:', {
-          status: error.response?.status,
-          data: JSON.stringify(error.response?.data, null, 2),
-          endpoint: `${this.baseUrl}/${model}`,
-        });
-      }
-
-      throw error instanceof Error ? error : new Error('BFL Kontext transformation error: Unknown error');
+      throw this.toReportableError(error, 'Kontext transformation', `${this.baseUrl}/${model}`);
     }
   }
 
@@ -424,6 +434,7 @@ export class BFLImageService extends AIImageService {
       baseInterval: interval,
     });
 
+    let lastStatus: unknown;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
         Logger.globalInstance.debug(
@@ -445,6 +456,7 @@ export class BFLImageService extends AIImageService {
         });
 
         const { status, result } = pollResponse.data;
+        lastStatus = status;
         Logger.globalInstance.debug(`[DEBUG] Poll status analysis:`, {
           requestId,
           status,
@@ -465,26 +477,19 @@ export class BFLImageService extends AIImageService {
           return result.sample;
         }
 
-        if (status === 'Request Moderated') {
-          const errorMsg =
-            'Your image request was flagged by content moderation. Please try adjusting your prompt to be less explicit or controversial.';
-          Logger.globalInstance.error(`[DEBUG] ❌ Request moderated:`, {
+        if (MODERATED_STATUSES.has(status)) {
+          throw new ImageModerationBlockedError(
+            'Your image request was flagged by content moderation. Please try adjusting your prompt to be less explicit or controversial.',
             requestId,
-            status,
-            attempt: attempt + 1,
-          });
-          throw new Error(errorMsg);
+            'bfl',
+            status
+          );
         }
 
-        if (status === 'Failed') {
-          const errorMsg = `BFL image generation failed: ${result?.error || 'Unknown error'}`;
-          Logger.globalInstance.error(`[DEBUG] ❌ Generation failed:`, {
-            requestId,
-            status,
-            error: result?.error,
-            attempt: attempt + 1,
-          });
-          throw new Error(errorMsg);
+        // BFL reports a failed task as `Error`; `Failed` is kept for older responses.
+        if (status === 'Error' || status === 'Failed') {
+          // Reported once, by the caller's toReportableError.
+          throw new Error(`BFL image generation failed: ${result?.error || 'Unknown error'}`);
         }
 
         const waitTime = this.getBackoffInterval(attempt, interval);
@@ -494,46 +499,58 @@ export class BFLImageService extends AIImageService {
         // Wait before next attempt with stepped backoff
         await new Promise(resolve => setTimeout(resolve, waitTime));
       } catch (pollError) {
-        Logger.globalInstance.error(`[DEBUG] ❌ Error during polling attempt ${attempt + 1}:`, {
-          requestId,
-          attempt: attempt + 1,
-          error: redactErrorForLog(pollError),
-          errorMessage: pollError instanceof Error ? pollError.message : 'Unknown polling error',
-        });
+        // Our own outcome errors from the status checks above: already classified, not a polling failure.
+        if (!axios.isAxiosError(pollError)) {
+          throw pollError;
+        }
 
-        if (axios.isAxiosError(pollError)) {
-          Logger.globalInstance.error('[DEBUG] Axios polling error details:', {
-            status: pollError.response?.status,
-            statusText: pollError.response?.statusText,
-            data: pollError.response?.data,
-            endpoint: effectivePollingUrl,
+        // 5xx and 429 are retryable; anything else aborts the poll and is reported once by the caller.
+        const status = pollError.response?.status;
+        if (status !== undefined && (status >= 500 || status === 429)) {
+          Logger.globalInstance.warn(`[BFL] Retryable polling error (${status}), continuing to poll`, {
             requestId,
             attempt: attempt + 1,
           });
+          continue;
         }
 
-        // If it's a network error or 5xx, continue trying
-        if (axios.isAxiosError(pollError) && pollError.response) {
-          const status = pollError.response.status;
-          if (status >= 500 || status === 429) {
-            Logger.globalInstance.debug(`[DEBUG] ⚠️ Retryable error (${status}), continuing to poll...`);
-            continue;
-          }
-        }
-
-        Logger.globalInstance.error(`[DEBUG] ❌ Non-retryable polling error, aborting`);
         throw pollError;
       }
     }
 
-    const elapsedSeconds = Math.round((Date.now() - startTime) / 1000);
-    Logger.globalInstance.error(`[DEBUG] ❌ Polling timeout:`, {
-      requestId,
-      maxAttempts,
-      totalTime: `${elapsedSeconds}s`,
-    });
-    throw new Error(
-      'Image generation is taking longer than usual and your request could not be completed. Please try again in a few minutes.'
+    // Running out of attempts while BFL still says Pending is a slow provider. Any other status
+    // (e.g. `Task not found`, or one added later) means polling itself is broken, which must page.
+    if (lastStatus !== 'Pending') {
+      throw new Error(`BFL polling ended on unexpected status: ${String(lastStatus)}`);
+    }
+    throw new ImageProviderUnavailableError(
+      'Image generation is taking longer than usual and your request could not be completed. Please try again in a few minutes.',
+      {
+        provider: 'bfl',
+        reason: 'polling_timeout',
+        requestId,
+        maxAttempts,
+        elapsedSeconds: Math.round((Date.now() - startTime) / 1000),
+      }
     );
+  }
+
+  /**
+   * Classify a failed BFL call. Expected failures (moderation, polling timeout, an unreachable network)
+   * come back unlogged for the caller to report at warn; anything else is logged here at error first.
+   */
+  private toReportableError(error: unknown, operation: string, endpoint: string): Error {
+    if (error instanceof ExpectedImageGenerationError) {
+      return error;
+    }
+    if (axios.isAxiosError(error) && !error.response && error.code && UNREACHABLE_NETWORK_CODES.has(error.code)) {
+      return new ImageProviderUnavailableError(
+        'The image provider could not be reached. Please try again in a few minutes.',
+        { provider: 'bfl', reason: error.code, endpoint }
+      );
+    }
+
+    Logger.globalInstance.error(`[BFL] ${operation} failed:`, { endpoint, error: redactErrorForLog(error) });
+    return error instanceof Error ? error : new Error(`BFL ${operation} error: Unknown error`);
   }
 }

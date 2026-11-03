@@ -19,7 +19,7 @@ Tool calling allows the AI model to request execution of external functions when
 2. Model decides if/when to call tools
 3. API returns tool_use event with tool calls
 4. Client executes tools locally
-5. Client sends tool results in next request
+5. Client echoes the assistant turn and sends tool results in the next request
 6. Model processes results and responds
 7. Repeat until model finishes (no more tool calls)
 ```
@@ -169,27 +169,25 @@ const tools = [
 const response = await fetch('https://app.bike4mind.com/api/ai/v1/completions', {
   method: 'POST',
   headers: {
-    'X-API-Key': apiKey,
+    'Authorization': `Bearer ${apiKey}`,
     'Content-Type': 'application/json',
   },
   body: JSON.stringify({
-    model: 'claude-3-5-sonnet',
+    model: 'claude-sonnet-5',
     messages: [
       {
         role: 'user',
         content: 'What is the weather in San Francisco?'
       }
     ],
-    options: {
-      tools: tools  // Include tools in request
-    }
+    tools: tools  // Include tools in request
   })
 });
 ```
 
 ### Step 2: Receive Tool Use Event
 
-The model decides to use the weather tool:
+The model decides to use the weather tool. Retain the parsed event as `toolUseEvent`, including any `thinking` array the server supplies:
 
 ```json
 {
@@ -235,20 +233,25 @@ function executeToolLocally(toolName, toolArguments) {
 }
 
 // Execute the tool
-const toolResult = executeToolLocally('get_weather', { location: 'San Francisco' });
+const toolResult = executeToolLocally('get_weather', '{"location":"San Francisco"}');
 ```
 
 ### Step 4: Send Tool Result Back
 
+Echo the assistant's complete turn before adding tool results. If the `tool_use` event carries a `thinking` array, prepend those blocks **verbatim**, including their signatures, to the assistant content below. Do not reconstruct or drop signed thinking blocks: Anthropic requires them when continuing a thinking turn with tool results.
+
 ```javascript
+// toolUseEvent is the parsed event received in Step 2.
+const toolCall = toolUseEvent.tools[0];
+
 const followUpResponse = await fetch('https://app.bike4mind.com/api/ai/v1/completions', {
   method: 'POST',
   headers: {
-    'X-API-Key': apiKey,
+    'Authorization': `Bearer ${apiKey}`,
     'Content-Type': 'application/json',
   },
   body: JSON.stringify({
-    model: 'claude-3-5-sonnet',
+    model: 'claude-sonnet-5',
     messages: [
       {
         role: 'user',
@@ -257,13 +260,14 @@ const followUpResponse = await fetch('https://app.bike4mind.com/api/ai/v1/comple
       {
         role: 'assistant',
         content: [
+          ...(toolUseEvent.thinking ?? []),
           {
             type: 'text',
             text: "I'll check the weather for you."
           },
           {
             type: 'tool_use',
-            id: 'toolu_01ABC123',  // Use the ID from the tool_use response
+            id: toolCall.id,  // Use the ID from the tool_use response
             name: 'get_weather',
             input: { location: 'San Francisco' }
           }
@@ -274,15 +278,13 @@ const followUpResponse = await fetch('https://app.bike4mind.com/api/ai/v1/comple
         content: [
           {
             type: 'tool_result',
-            tool_use_id: 'toolu_01ABC123',  // Must match the tool_use id
+            tool_use_id: toolCall.id,  // Must match the tool_use id
             content: JSON.stringify(toolResult)
           }
         ]
       }
     ],
-    options: {
-      tools: tools  // Include same tools array
-    }
+    tools: tools  // Include same tools array
   })
 });
 ```
@@ -485,13 +487,13 @@ Always include the tools array in follow-up requests so the model has consistent
 
 ```javascript
 // Initial request
-{ options: { tools: [...] } }
+{ tools: [...] }
 
 // Follow-up with tool results
-{ options: { tools: [...] } }  // Same tools array
+{ tools: [...] }  // Same tools array
 
 // Final request
-{ options: { tools: [...] } }  // Same tools array
+{ tools: [...] }  // Same tools array
 ```
 
 ### 7. Limit Tool Execution Time
@@ -748,7 +750,7 @@ describe('Weather Tool', () => {
 
 ## Next Steps
 
-- **[Extended Thinking](/api/completions/extended-thinking)** - Use reasoning with tool calls
-- **[Code Examples](/api/completions/examples/javascript)** - See complete tool implementations
-- **[Error Handling](/api/completions/errors)** - Handle tool errors
-- **[Best Practices](/api/completions/best-practices)** - Production tool patterns
+- **[Extended Thinking](./extended-thinking.md)** - Use reasoning with tool calls
+- **[Code Examples](./examples/javascript.md)** - See complete tool implementations
+- **[Error Handling](./errors.md)** - Handle tool errors
+- **[Best Practices](./best-practices.md)** - Production tool patterns

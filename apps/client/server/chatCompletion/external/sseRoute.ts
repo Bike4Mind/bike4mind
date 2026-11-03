@@ -1,4 +1,6 @@
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
+import { checkFreeTierDailySpendCap } from '@server/billing/freeTierDailyCapGate';
+import { actorScopeForKey } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import express, { type Request, type Response, type Express, type NextFunction } from 'express';
 import {
   CompletionRequestSchema,
@@ -29,6 +31,7 @@ import { Logger } from '@bike4mind/observability';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
 import { resolveQuestErrorCode } from '@bike4mind/services/llm';
 import { getHttpStatus, isSafetyRefusalError } from '@bike4mind/utils';
+import { isOutputBudgetExhaustedError } from '@bike4mind/llm-adapters';
 import {
   connectDB,
   mongoose,
@@ -39,12 +42,13 @@ import {
   userApiKeyRepository,
   usageEventRepository,
   organizationRepository,
+  cacheRepository,
 } from '@bike4mind/database';
 import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@server/cli/auth';
 import { resolveContractAuth } from '@server/cli/resolveContractAuth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { flattenHeaders } from '@server/utils/flattenHeaders';
+import { flattenHeaders } from '@bike4mind/server-utils/utils/flattenHeaders';
 import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
 import { createMethodGuard } from '@bike4mind/server-utils/utils/allowedMethods';
 import { buildErrorBody, httpErrorToResponse } from '@server/middlewares/errorHandler';
@@ -53,6 +57,13 @@ import { fromZodError } from 'zod-validation-error';
 import { z } from 'zod';
 import { COMPLETION_TIMING_ENABLED, classifyChunk, createCompletionTiming } from './completionTiming';
 import { getUserEntitlements } from '@server/entitlements';
+import {
+  admitApiKeyCompletion,
+  NO_COMPLETION_QUOTA,
+  type CompletionQuotaGrant,
+} from '@server/utils/untrustedCompletionQuota';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
+import { logApiKeyUsageOnResponse } from './apiKeyUsageLog';
 
 /**
  * Public CLI/3rd-party completions endpoint (`/api/ai/v1/completions`), served by the always-on
@@ -90,6 +101,8 @@ const OPERATOR_SIDE_4XX_PATTERNS = [
   /api key (?:not valid|is invalid|has expired|is missing)/i,
   /invalid api key/i,
   /credit balance/i,
+  // Anthropic's org spend cap; keep in sync with isProviderSpendLimitError (@bike4mind/utils).
+  /reached your specified api usage limits/i,
 ];
 
 function isUpstreamCallerError(error: unknown): error is Error {
@@ -123,14 +136,21 @@ function toJsonError(
 }
 
 /** A failure after onReady: a typed in-band frame that never carries the raw upstream body. */
-function toStreamErrorFrame(error: unknown, requestId: string): SSEErrorEvent {
+function toStreamErrorFrame(error: unknown, requestId: string, callerSetMaxTokens: boolean): SSEErrorEvent {
   const questCode = resolveQuestErrorCode(error);
   let frameError: unknown = error;
   let code: CompletionSseErrorCode | undefined = questCode;
   if (!questCode) {
     const status = error instanceof Error ? getHttpStatus(error) : undefined;
-    // A refusal is deterministic: retrying the same prompt gets the same answer, unlike provider_error.
-    if (error instanceof Error && isSafetyRefusalError(error)) {
+    // Retrying the same budget fails the same way, unlike provider_error. Only a budget the caller
+    // chose gets its own code; a server-chosen one is not theirs to raise.
+    if (callerSetMaxTokens && isOutputBudgetExhaustedError(error)) {
+      frameError = new Error(
+        'The model used your whole max_tokens budget reasoning before it could answer. Raise max_tokens, or omit it to use the model default.'
+      );
+      code = 'output_budget_exhausted';
+    } else if (error instanceof Error && isSafetyRefusalError(error)) {
+      // A refusal is deterministic: retrying the same prompt gets the same answer, unlike provider_error.
       frameError = new Error('The model declined this request');
       code = 'content_blocked';
     } else if (isUpstreamCallerError(error)) {
@@ -235,6 +255,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
     let userId: string | undefined;
     let apiKeyInfo: ApiKeyInfo | undefined;
     let apiKeyInfoForCompletion: { keyId: string; keyName: string } | undefined;
+    let quota: CompletionQuotaGrant = NO_COMPLETION_QUOTA;
 
     try {
       // The service connects at boot in the background; a request can land first.
@@ -272,11 +293,30 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
 
       if (authResult.method === 'apiKey') {
         apiKeyInfo = authResult.apiKeyInfo;
+        // Register before admission so authenticated rejections count as requests too.
+        logApiKeyUsageOnResponse({
+          req,
+          res,
+          apiKey: apiKeyInfo,
+          endpoint: COMPLETIONS_ENDPOINT,
+          source,
+          startTime,
+          logger,
+          track,
+        });
         logger.info('[CLI_LLM] Authenticated via API key', { keyId: apiKeyInfo.keyId });
         await checkApiKeyRateLimitOrThrow(apiKeyInfo, {
           userId: apiKeyInfo.userId,
           endpoint: COMPLETIONS_ENDPOINT,
           method: req.method,
+        });
+        // The slot is freed in `finally`, once executeCompletion settles, not on disconnect: the
+        // provider call keeps running after the client goes.
+        quota = await admitApiKeyCompletion({
+          owner: apiKeyInfo.userId,
+          ownerUntrusted: apiKeyInfo.ownerUntrusted,
+          billingOwnerType: apiKeyInfo.billingOwnerType,
+          holdSlot: true,
         });
       } else {
         logger.info('[CLI_LLM] Authenticated via JWT', { userId });
@@ -306,9 +346,19 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       let finalCreditsUsed: number | undefined;
       let hasToolCalls = false;
 
+      // Daily spend cap before the credit hold; applies to all free-tier users regardless of auth method.
+      await checkFreeTierDailySpendCap({
+        userId,
+        userRepository,
+        billingOrganizationId: apiKeyInfo?.organizationId,
+        usageEventRepository,
+        logger,
+      });
+
       timing?.phase('completionStarted');
       await executeCompletion({
         getEntitlements: getUserEntitlements,
+        getThinkingVisibility: resolveThinkingVisibility,
         creditHolds: createCompletionCreditHolds(logger),
         userId,
         model: body.model,
@@ -325,14 +375,17 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           usageEvents: usageEventRepository,
           // Required to reserve/settle against an org pool for org-billed API keys.
           organizations: organizationRepository,
+          cache: cacheRepository,
         },
         apiKeyInfo: apiKeyInfoForCompletion,
+        scopeActor: actorScopeForKey(apiKeyInfo),
         // Org-billed API keys route spend to the org's shared pool (invariant:
         // organizationId is set iff the key's billingOwnerType is Organization).
         billingOrganizationId: apiKeyInfo?.organizationId,
         // Correlation id for the usage-event dual write (synthesized downstream if absent).
         requestId,
         source,
+        sessionId: body.sessionId,
         logger,
         onReady,
         onChunk: async (text, info) => {
@@ -376,7 +429,12 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       });
     } catch (error) {
       const jsonError = toJsonError(error, requestId);
-      const level = jsonError.status < 500 ? 'warn' : 'error';
+      // Budget exhaustion is expected, not an operator fault, whoever chose the budget (same policy as
+      // /api/chat); emitProcessingFailed already skips it via isOperatorFault. Only a positive
+      // max_tokens counts as the caller's: resolveOutputMaxTokens discards the rest.
+      const budgetExhausted = isOutputBudgetExhaustedError(error);
+      const callerSetMaxTokens = budgetExhausted && (body?.options?.maxTokens ?? 0) > 0;
+      const level = jsonError.status < 500 || budgetExhausted ? 'warn' : 'error';
       const upstreamStatus = error instanceof Error ? getHttpStatus(error) : undefined;
       logger[level]('[CLI_LLM] Handler error', { requestId, upstreamStatus, error: serializeError(error) });
       // Provider caller errors are not operator failures, including SDK errors that are not HTTPErrors.
@@ -384,7 +442,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
 
       try {
         if (res.headersSent) {
-          write(serializeSSEEvent(toStreamErrorFrame(error, requestId)));
+          write(serializeSSEEvent(toStreamErrorFrame(error, requestId, callerSetMaxTokens)));
           end();
           if (heartbeat) clearInterval(heartbeat);
         } else {
@@ -415,6 +473,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       }
     } finally {
       if (heartbeat) clearInterval(heartbeat);
+      await quota.release();
       if (timing) logger.info('[CLI_TIMING] completion phases', timing.summary());
     }
   });

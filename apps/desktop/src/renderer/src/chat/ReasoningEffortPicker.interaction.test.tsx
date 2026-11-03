@@ -87,6 +87,26 @@ describe('the local thinking switch', () => {
     expect(onSelect).toHaveBeenCalledTimes(2);
   });
 
+  it('shows Off as unavailable on a model that always thinks, and On even for a stored Off', async () => {
+    const alwaysOn: ChatModelOption = { ...MODELS[0], id: 'r1', thinkingAlwaysOn: true };
+    await act(async () =>
+      root.render(
+        <CssVarsProvider>
+          <ReasoningEffortPicker models={[alwaysOn]} modelId="r1" effort="minimal" onSelect={onSelect} />
+        </CssVarsProvider>
+      )
+    );
+    expect(button().textContent).toBe('Thinking: On');
+    await act(async () => button().click());
+    const off = [...document.querySelectorAll<HTMLElement>('[data-testid="effort-picker-option"]')].find(element =>
+      element.textContent?.startsWith('Off')
+    );
+    expect(off?.getAttribute('aria-disabled')).toBe('true');
+    expect(off?.textContent).toContain('This model always thinks.');
+    await act(async () => off?.click());
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
   it('cannot open the menu while the control is disabled', async () => {
     await act(async () => root.render(<Picker disabled />));
     expect(button().disabled).toBe(true);

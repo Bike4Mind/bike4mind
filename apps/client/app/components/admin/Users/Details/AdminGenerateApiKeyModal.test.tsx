@@ -3,7 +3,10 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ApiKeyScope } from '@bike4mind/common';
-import { GENERIC_MODAL_API_KEY_SCOPES, genericApiKeyScopesFor } from '@client/app/constants/apiKeyScopes';
+import {
+  GENERIC_MODAL_API_KEY_SCOPES,
+  genericApiKeyScopesFor,
+} from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import AdminGenerateApiKeyModal from './AdminGenerateApiKeyModal';
 
 const h = vi.hoisted(() => ({
@@ -25,6 +28,7 @@ vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => h.hasOptiAc
 vi.mock('@client/app/hooks/data/productScopeAccess', () => ({
   useOverwatchAccess: () => true,
   useHearthEnabled: () => true,
+  useApiKeyScopeEntitlements: () => ({ bypass: false, entitlements: new Set<string>() }),
 }));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
@@ -206,6 +210,8 @@ describe('AdminGenerateApiKeyModal - premium scopes', () => {
       hasOptiAccess: false,
       hasOverwatchAccess: true,
       hearthEnabled: true,
+      bypass: false,
+      entitlements: new Set(),
     }).length;
     expect(screen.getByTestId('admin-generate-key-scopes-count').textContent).toContain(
       `(${offered}/${offered} selected)`

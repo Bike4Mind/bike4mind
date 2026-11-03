@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { BadRequestError, ChatModels, ModelBackend, type CompletionTool, type IMessage } from '@bike4mind/common';
-import { prepareWireTools } from './cliCompletionsToolSearch';
+import { hasAssistantPrefill, prepareWireTools } from './cliCompletionsToolSearch';
 
 const DIRECT = { id: ChatModels.CLAUDE_5_5_OPUS, backend: ModelBackend.Anthropic };
 const BEDROCK = { id: ChatModels.CLAUDE_5_5_OPUS_BEDROCK, backend: ModelBackend.Bedrock };
@@ -256,14 +256,17 @@ describe('prepareWireTools tool changes', () => {
     expect(() => prepareWireTools(tools, messages, DIRECT)).not.toThrow();
   });
 
-  it('accepts a change after an assistant turn ending in a tool search result', () => {
-    const messages = [
-      { role: 'user', content: 'find' },
-      { role: 'assistant', content: [{ type: 'text', text: 'searching' }, serverResult] },
-      change('tool_addition', 'b'),
-    ] as IMessage[];
-    expect(() => prepareWireTools(tools, messages, DIRECT)).not.toThrow();
-  });
+  it.each([{ trailingBlocks: [] }, { trailingBlocks: [{ type: 'text', text: '  ' }] }])(
+    'accepts a change after a tool search result with trailing blocks $trailingBlocks',
+    ({ trailingBlocks }) => {
+      const messages = [
+        { role: 'user', content: 'find' },
+        { role: 'assistant', content: [{ type: 'text', text: 'searching' }, serverResult, ...trailingBlocks] },
+        change('tool_addition', 'b'),
+      ] as IMessage[];
+      expect(() => prepareWireTools(tools, messages, DIRECT)).not.toThrow();
+    }
+  );
 
   it('refuses a change after an assistant turn ending in another server tool result', () => {
     const messages = [
@@ -358,5 +361,61 @@ describe('prepareWireTools tool changes', () => {
         'unknown_tool_reference'
       );
     }
+  });
+});
+
+describe('hasAssistantPrefill', () => {
+  const serverUse = { type: 'server_tool_use', id: 'srvtoolu_1', name: 'tool_search_tool_regex', input: {} };
+  const serverResult = { type: 'tool_search_tool_result', tool_use_id: 'srvtoolu_1', content: [] };
+  const user: IMessage = { role: 'user', content: 'find a tool' };
+  const assistant = (content: IMessage['content']): IMessage => ({ role: 'assistant', content });
+
+  it.each<{ label: string; messages: IMessage[]; expected: boolean }>([
+    { label: 'empty conversation', messages: [], expected: false },
+    { label: 'system only', messages: [{ role: 'system', content: 'instructions' }], expected: false },
+    { label: 'user last', messages: [assistant('answer'), user], expected: false },
+    { label: 'text prefill', messages: [user, assistant('{')], expected: true },
+    { label: 'text block prefill', messages: [user, assistant([{ type: 'text', text: '{' }])], expected: true },
+    {
+      label: 'system after prefill',
+      messages: [user, assistant('{'), { role: 'system', content: 'brief' }],
+      expected: true,
+    },
+    {
+      label: 'blank user after prefill',
+      messages: [user, assistant('{'), { role: 'user', content: ' ' }],
+      expected: true,
+    },
+    { label: 'blank assistant', messages: [user, assistant('  ')], expected: false },
+    { label: 'empty blocks', messages: [user, assistant([])], expected: false },
+    { label: 'blank text blocks', messages: [user, assistant([{ type: 'text', text: ' ' }])], expected: false },
+    { label: 'server tool use', messages: [user, assistant([serverUse])], expected: false },
+    { label: 'server tool result', messages: [user, assistant([serverUse, serverResult])], expected: false },
+    {
+      label: 'blank text after server result',
+      messages: [user, assistant([serverResult, { type: 'text', text: ' ' }])],
+      expected: false,
+    },
+    {
+      label: 'text after server result',
+      messages: [user, assistant([serverResult, { type: 'text', text: 'Answer:' }])],
+      expected: true,
+    },
+    {
+      label: 'client tool call',
+      messages: [user, assistant([{ type: 'tool_use', id: 'toolu_1', name: 'a', input: {} }])],
+      expected: true,
+    },
+    {
+      label: 'tool change after server result',
+      messages: [
+        user,
+        assistant([serverResult]),
+        { role: 'system', content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'a' } }] },
+      ],
+      expected: false,
+    },
+  ])('$label', ({ messages, expected }) => {
+    expect(hasAssistantPrefill(messages)).toBe(expected);
   });
 });

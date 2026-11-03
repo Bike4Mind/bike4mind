@@ -1,5 +1,4 @@
 import type { ChatApprovalSystemReason, ChatToolApproval } from '@shared/chat';
-import { APPROVAL_MODE_OPTIONS } from './approvalModes';
 
 const CLOSED_REASON: Record<Exclude<ChatApprovalSystemReason, 'error'>, string> = {
   stopped: 'Not run - reply stopped before approval',
@@ -9,29 +8,25 @@ const CLOSED_REASON: Record<Exclude<ChatApprovalSystemReason, 'error'>, string> 
 };
 
 /**
- * The one line under a settled call saying who let it run or stopped it. A system close is
+ * The one line under a settled call that did not run as asked, or null for one that did: who or
+ * what let a call through is routine and would sit under nearly every call. A system close is
  * worded as "not run" rather than as a refusal, because nobody refused it.
  */
-export function describeApproval(approval: ChatToolApproval): string {
+export function describeApproval(approval: ChatToolApproval): string | null {
   const { decidedBy, outcome } = approval;
+  if (outcome === 'allowed') return null;
   switch (decidedBy.kind) {
-    case 'user': {
-      const option = decidedBy.option ? ` - ${decidedBy.option}` : '';
-      if (decidedBy.answer === 'deny') return 'Declined by you';
-      if (decidedBy.answer === 'redirect') return `Redirected by you${option}`;
-      if (decidedBy.answer === 'always') {
-        return `Approved by you - always${decidedBy.everywhere ? ', in every session' : ' in this chat'}${option}`;
-      }
-      return `Approved by you${option}`;
-    }
+    case 'user':
+      return decidedBy.answer === 'redirect'
+        ? `Redirected by you${decidedBy.option ? ` - ${decidedBy.option}` : ''}`
+        : 'Declined by you';
     case 'rule':
-      return `${outcome === 'allowed' ? 'Allowed' : 'Denied'} by rule ${decidedBy.rule}`;
+      return `Denied by rule ${decidedBy.rule}`;
     case 'chat-allowance':
-      return outcome === 'allowed' ? 'Allowed in this chat' : 'Denied in this chat';
-    case 'mode': {
-      const label = APPROVAL_MODE_OPTIONS.find(option => option.mode === decidedBy.mode)?.label ?? decidedBy.mode;
-      return `Auto-approved - ${label}`;
-    }
+      return 'Denied in this chat';
+    case 'mode':
+      // A mode decision is only ever recorded as allowed today.
+      return 'Denied by the approval mode';
     case 'system':
       return decidedBy.reason === 'error'
         ? `Blocked${decidedBy.detail ? ` - ${decidedBy.detail}` : ''}`

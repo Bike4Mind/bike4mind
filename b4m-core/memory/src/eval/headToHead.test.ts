@@ -39,7 +39,7 @@ const NOW = Date.parse('2026-07-12T00:00:00.000Z');
 const embeddings = fixture.vectors as Record<string, number[]>;
 
 /**
- * What production actually runs. MUST stay in sync with apps/client/server/memory/recallMementosV2.ts
+ * What production actually runs. MUST stay in sync with packages/server-utils/src/memory/recallMementosV2.ts
  * - an eval of parameters nobody ships is theatre. The floor is the one calibrated for this fixture's
  * model (text-embedding-3-small@512); see tuning.test.ts for the sweep it comes from.
  */

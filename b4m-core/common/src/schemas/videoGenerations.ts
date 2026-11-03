@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ModelIdSchema } from './modelId';
 import { BillingOrganizationIdSchema } from './billingOrganization';
 import type { ApiErrorCode } from '../apiErrorCodes';
 import { GENERATION_OUTPUT_AVAILABILITIES, type GenerationOutputAvailability } from '../generation/types';
@@ -52,6 +53,9 @@ export function toPublicVideoJobErrorCode(code: GenerationJobErrorCode): VideoJo
     case 'input_image_not_found':
     case 'cancelled':
       return code;
+    // Refused before submit, so the provider never ran and the hold is returned, as for a cancel.
+    case 'account_blocked':
+      return 'cancelled';
     default: {
       const unreachable: never = code;
       throw new Error(`Unmapped generation job error code: ${String(unreachable)}`);
@@ -69,7 +73,7 @@ export const VIDEO_PROMPT_MAX_LENGTH = 4000;
 // Strict so a caller migrating from the removed Sora body (e.g. `callbackUrl`, webhooks no longer exist) gets a 422
 // naming the key instead of a 202 and a webhook that never arrives.
 export const CreateVideoGenerationBodySchema = z.strictObject({
-  model: z.string().min(1).describe('A model id from GET /api/v1/video-models.'),
+  model: ModelIdSchema.describe('A model id from GET /api/v1/video-models.'),
   prompt: z.string().min(1).max(VIDEO_PROMPT_MAX_LENGTH),
   mode: z
     .enum(VIDEO_MODES)

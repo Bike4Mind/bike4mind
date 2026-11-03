@@ -1,8 +1,8 @@
 import { BadRequestError } from '@bike4mind/utils';
-import { ISubscription, SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { ISubscription, SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { baseApi } from '@server/middlewares/baseApi';
-import { verifyOrgMemberOrManager } from '@server/utils/orgAccess';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { verifyOrgMemberOrManager } from '@bike4mind/server-utils/utils/orgAccess';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 
 const handler = baseApi().get(async (req, res) => {
   const { ownerType, ownerId } = req.query;

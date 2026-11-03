@@ -1,3 +1,4 @@
+import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
 import {
   adminSettingsRepository,
   agentRepository,
@@ -25,7 +26,7 @@ import {
   getSettingsValue,
   usdToCredits,
 } from '@bike4mind/utils';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
 import { reserveVoiceHold, settlePriorVoiceHold } from '@bike4mind/server-utils/voice/settleVoiceHold';
 import {
@@ -38,6 +39,8 @@ import { VOICE_SESSION_ERROR, VOICE_SESSION_UNAVAILABLE_MESSAGE } from '@client/
 import axios from 'axios';
 import { z } from 'zod';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
 
 const CreateSessionBodySchema = z.object({
   sessionId: z.string().optional(),
@@ -63,6 +66,7 @@ function voiceUnavailableError(extra?: Record<string, unknown>) {
 }
 
 const handler = baseApi().post(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const { sessionId, isReconnect } = CreateSessionBodySchema.parse(req.body);
 
   const settings = await getSettingsMap(
@@ -114,6 +118,7 @@ const handler = baseApi().post(async (req, res) => {
   const reservedCredits = usdToCredits(REALTIME_VOICE_RESERVE_USD);
 
   const realtimeModel = 'gpt-realtime-1.5';
+  await (await createModelAdmission(req.user!)).assert(realtimeModel);
 
   const openaiApiKey = await apiKeyService.getEffectiveApiKey(
     req.user?.id,
@@ -441,6 +446,7 @@ When you get the tool result back, summarize it conversationally for voice.`;
       realtime: true,
       unaffordable: () =>
         new ForbiddenError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`),
+      newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
     });
     if (!opened) {
       throw new ConflictError('Another voice call on this session started at the same time; retry');

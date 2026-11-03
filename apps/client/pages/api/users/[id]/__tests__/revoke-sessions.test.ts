@@ -29,12 +29,16 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: (...a: unknown[]) => mockLogAuth(...a) }));
 vi.mock('@server/utils/adminAudit', () => ({
   recordAdminActionFromRequest: (...a: unknown[]) => mockRecord(...a),
+  parseAdminActionReason: (value: unknown) => {
+    if (typeof value !== 'string' || value.length < 3) throw new Error('A reason is required');
+    return value;
+  },
 }));
 
 import handler from '../revoke-sessions';
 
-const run = async () => {
-  const { req, res } = createMocks({ method: 'POST', query: { id: 'u1' } });
+const run = async (body?: Record<string, unknown>) => {
+  const { req, res } = createMocks({ method: 'POST', query: { id: 'u1' }, body });
   Object.assign(req, {
     user: { id: 'admin1', isAdmin: true },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -104,6 +108,21 @@ describe('POST /api/users/[id]/revoke-sessions', () => {
     const { res } = await run();
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ message: 'Sessions revoked', userId: 'u1', tokenVersion: 4 });
+  });
+
+  it('records the reason when one is sent and leaves it out when none is', async () => {
+    await run({ reason: 'Compromised: phishing report' });
+    expect(mockRecord).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ reason: 'Compromised: phishing report' })
+    );
+    await run();
+    expect(mockRecord).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ reason: undefined }));
+  });
+
+  it('rejects an invalid reason before revoking anything', async () => {
+    await expect(run({ reason: '' })).rejects.toThrow('A reason is required');
+    expect(mockRevoke).not.toHaveBeenCalled();
   });
 
   it('still answers 200 when the best-effort audit write resolves null', async () => {

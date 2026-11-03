@@ -30,6 +30,7 @@ interface ActivityRow {
   userId?: string;
   createdAt: Date;
   source?: string | null;
+  apiKeyId?: string | null;
 }
 
 interface AgentActivityRow {
@@ -60,6 +61,12 @@ type MessageCollectionOptions = {
   onAttempt: (attempt: MessageAttempt) => void;
 };
 
+type ActivityFilter = {
+  include?: (at: Date, source?: string | null) => boolean;
+  excludedApiKeyIds?: ReadonlySet<string>;
+  excludedSessionIds?: ReadonlySet<string>;
+};
+
 const OBJECT_ID_RE = /^[0-9a-f]{24}$/i;
 
 /**
@@ -76,8 +83,11 @@ export async function collectActivity(
   windowEnd = new Date(),
   apiSessionIds: ReadonlySet<string> = new Set(),
   userIds?: ReadonlySet<string>,
-  messageCollection?: MessageCollectionOptions
+  messageCollection?: MessageCollectionOptions,
+  filter: ActivityFilter = {}
 ) {
+  const includeActivity = filter.include ?? (() => true);
+  const excludedKey = (id?: string | null) => !!id && filter.excludedApiKeyIds?.has(id);
   const included = (userId: string | undefined): userId is string =>
     !!userId && (userIds === undefined || userIds.has(userId));
   const userDays: UserDayMap = new Map();
@@ -86,13 +96,14 @@ export async function collectActivity(
 
   const usageEvents = UsageEvent.find(
     { status: 'ok', createdAt: { $gte: windowStart, $lt: windowEnd } },
-    { userId: 1, createdAt: 1, source: 1, _id: 0 }
+    { userId: 1, createdAt: 1, source: 1, apiKeyId: 1, _id: 0 }
   )
     .read('secondaryPreferred')
     .lean<ActivityRow[]>()
     .cursor({ batchSize });
   for await (const event of usageEvents) {
-    if (!included(event.userId)) continue;
+    if (!included(event.userId) || excludedKey(event.apiKeyId) || !includeActivity(event.createdAt, event.source))
+      continue;
     recordActivity(isApiSource(event.source) ? apiUserDays : userDays, event.userId, event.createdAt);
     recordUsageSource(sourceCounts, event.userId, event.source);
   }
@@ -104,6 +115,7 @@ export async function collectActivity(
   // Read before the Quests so the Quests those runs wrote can be told apart below.
   const AgentExecution = mongoose.model('AgentExecution');
   const apiExecutionIds = new Set<string>();
+  const excludedExecutionIds = new Set<string>();
   const executions = AgentExecution.find(
     { createdAt: { $gte: windowStart, $lt: windowEnd } },
     { userId: 1, createdAt: 1, apiKeyId: 1 }
@@ -113,8 +125,13 @@ export async function collectActivity(
     .cursor({ batchSize });
   for await (const execution of executions) {
     if (!included(execution.userId)) continue;
+    if (excludedKey(execution.apiKeyId)) {
+      excludedExecutionIds.add(String(execution._id));
+      continue;
+    }
+    if (execution.apiKeyId) apiExecutionIds.add(String(execution._id));
+    if (!includeActivity(execution.createdAt)) continue;
     if (execution.apiKeyId) {
-      apiExecutionIds.add(String(execution._id));
       recordActivity(apiUserDays, execution.userId, execution.createdAt);
     } else {
       recordActivity(userDays, execution.userId, execution.createdAt);
@@ -139,8 +156,11 @@ export async function collectActivity(
     .lean<QuestActivityRow[]>()
     .cursor({ batchSize });
   for await (const quest of quests) {
+    if (quest.sessionId && filter.excludedSessionIds?.has(quest.sessionId)) continue;
+    if (quest.agentExecutionId && excludedExecutionIds.has(quest.agentExecutionId)) continue;
     const userId = quest.promptMeta?.session?.userId;
-    if (!included(userId) || !isOriginalQuest(quest._id, quest.timestamp)) continue;
+    if (!included(userId) || !isOriginalQuest(quest._id, quest.timestamp) || !includeActivity(quest.timestamp))
+      continue;
     const viaApi =
       (quest.sessionId !== undefined && apiSessionIds.has(quest.sessionId)) ||
       (quest.agentExecutionId !== undefined && apiExecutionIds.has(quest.agentExecutionId));

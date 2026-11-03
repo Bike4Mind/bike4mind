@@ -102,3 +102,107 @@ describe('formatCustomSlackMessage - DAU/WAU', () => {
     expect(message).toContain('...and 10 more in the top 20');
   });
 });
+
+describe('formatCustomSlackMessage - most active users leaderboard', () => {
+  const activity = (topUsers: UserActivityMetrics['topUsers']): UserActivityMetrics => ({
+    totalUniqueUsers: topUsers.length,
+    internalUsers: 0,
+    externalUsers: topUsers.length,
+    topUsers,
+    topModels: [],
+  });
+
+  it('renders spend, events, the new-account tag and a profile link', () => {
+    const message = formatCustomSlackMessage('App', {
+      metrics: {},
+      userActivity: activity([
+        { _id: 'u1', email: 'alice@example.com', interactions: 120, creditsSpent: 420, isNew: true },
+      ]),
+      appUrl: 'https://app.example',
+    });
+
+    expect(message).toContain(
+      '🏆 🔥 <https://app.example/admin?tab=users&userId=u1|alice@example.com> - 420 credits, 120 events 🆕'
+    );
+  });
+
+  it('escapes Slack control characters in the link label', () => {
+    const message = formatCustomSlackMessage('App', {
+      metrics: {},
+      userActivity: activity([{ _id: 'u1', email: 'a&b<c>@example.com', interactions: 1, creditsSpent: 1 }]),
+      appUrl: 'https://app.example',
+    });
+
+    expect(message).toContain('|a&amp;b&lt;c&gt;@example.com>');
+  });
+
+  it('omits the link when no app URL is configured', () => {
+    const message = formatCustomSlackMessage('App', {
+      metrics: {},
+      userActivity: activity([{ _id: 'u1', email: 'alice@example.com', interactions: 120, creditsSpent: 420 }]),
+    });
+
+    expect(message).toContain('🏆 🔥 alice@example.com - 420 credits, 120 events');
+    expect(message).not.toContain('<https://');
+  });
+
+  it('escapes Slack control characters when no app URL is configured', () => {
+    const message = formatCustomSlackMessage('App', {
+      metrics: {},
+      userActivity: activity([{ _id: 'u1', email: 'a&b<c>@example.com', interactions: 1, creditsSpent: 1 }]),
+    });
+
+    expect(message).toContain('a&amp;b&lt;c&gt;@example.com - 1 credits, 1 events');
+    expect(message).not.toContain('a&b<c>');
+  });
+
+  it('measures engagement by events, not credits', () => {
+    const message = formatCustomSlackMessage('App', {
+      metrics: {},
+      userActivity: activity([
+        { _id: 'u1', email: 'a@example.com', interactions: 10, creditsSpent: 5 },
+        { _id: 'u2', email: 'b@example.com', interactions: 1, creditsSpent: 5 },
+      ]),
+    });
+
+    // 1 of 10 events is the lowest tier, though both spent the same.
+    expect(message).toContain('🥈 ⭐ b@example.com - 5 credits, 1 events');
+  });
+
+  it('falls back to event counts for engagement when nobody spent', () => {
+    const message = formatCustomSlackMessage('App', {
+      metrics: {},
+      userActivity: activity([
+        { _id: 'u1', email: 'a@example.com', interactions: 10, creditsSpent: 0 },
+        { _id: 'u2', email: 'b@example.com', interactions: 1, creditsSpent: 0 },
+      ]),
+    });
+
+    // Proportional to events (10 of 10), not to credits (0 of 0).
+    expect(message).toContain('🏆 🔥 a@example.com - 0 credits, 10 events');
+  });
+
+  it('keeps the empty state', () => {
+    const message = formatCustomSlackMessage('App', { metrics: {}, userActivity: activity([]) });
+
+    expect(message).toContain('_No user activity recorded in the last 24 hours_');
+  });
+});
+
+describe('formatCustomSlackMessage - model names', () => {
+  it('escapes Slack control characters in model names', () => {
+    const message = formatCustomSlackMessage('App', {
+      metrics: {},
+      userActivity: {
+        totalUniqueUsers: 0,
+        internalUsers: 0,
+        externalUsers: 0,
+        topUsers: [],
+        topModels: [{ modelName: 'custom <!channel>', count: 3 }],
+      },
+    });
+
+    expect(message).toContain('custom &lt;!channel&gt;');
+    expect(message).not.toContain('<!channel>');
+  });
+});

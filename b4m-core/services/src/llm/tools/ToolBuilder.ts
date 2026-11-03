@@ -6,6 +6,7 @@ import {
   IUserDocument,
   IOrganizationDocument,
   IUsageEventInput,
+  IUsageEventRepository,
   UsageEventFeature,
   ModelInfo,
   materializePromptMetaSession,
@@ -14,7 +15,7 @@ import {
   usdToCreditsStochastic,
   type UsagePriceStamp,
 } from '@bike4mind/common';
-import type { SoundGenerationVendor, VoiceGenerationVendor } from '@bike4mind/common';
+import type { SoundGenerationVendor, ThinkingVisibility, VoiceGenerationVendor } from '@bike4mind/common';
 import { type ApiKeyTable, type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
@@ -43,21 +44,25 @@ import {
   extractAndSaveEntitiesFromUserMessage,
   getConversationContextSystemMessage,
 } from '../../conversationContextService';
-import { buildSharedTools } from '../sharedToolBuilder';
+import { buildSharedTools, type ToolBuilderDeps } from '../sharedToolBuilder';
 import { UNATTRIBUTED_TOOL_CHARGE } from '../settleToolCredits';
 import type { ToolAvailability } from '../toolAvailability';
 import type { SubagentTelemetryData } from './implementation/delegateToAgent';
 import type { IChatCompletionServiceOptions, QuestStartBodySchema } from '../ChatCompletionFeatures';
 import { usageEventStatusForFinish } from '../earlyStopStamp';
 import type { ModelAdmission } from '../modelAdmission';
+import { executedModelFields } from '../shadowTier';
 
 /** Usage-event input shared by both tool settlement sites. Analytics only, never billing. */
 export function buildToolUsageEvent(params: {
-  quest: IChatHistoryItemDocument;
-  user: IUserDocument;
-  organization?: IOrganizationDocument | null;
+  quest: Pick<IChatHistoryItemDocument, 'id' | 'sessionId'>;
+  user: Pick<IUserDocument, 'id'>;
+  organization?: Pick<IOrganizationDocument, 'id'> | null;
   provider: string;
   model: string;
+  /** The substitute that ran instead of `model` (executedModelFields); costUsd prices it. */
+  executedProvider?: string;
+  executedModel?: string;
   costUsd: number;
   creditsCharged: number;
   units?: number;
@@ -86,6 +91,7 @@ export function buildToolUsageEvent(params: {
     feature: params.feature ?? 'tool',
     provider: params.provider,
     model: params.model,
+    ...(params.executedModel ? { executedProvider: params.executedProvider, executedModel: params.executedModel } : {}),
     inputTokens: params.inputTokens ?? 0,
     outputTokens: params.outputTokens ?? 0,
     cachedInputTokens: params.cachedInputTokens ?? 0,
@@ -99,14 +105,21 @@ export function buildToolUsageEvent(params: {
   };
 }
 
-/** Fire-and-forget dual-write: a failed analytics record must never throw into billing. */
-export function recordToolUsageEvent(
-  db: IChatCompletionServiceOptions['db'],
+/**
+ * Dual-write that never rejects: a failed analytics record must never throw into billing. Callers
+ * may leave it unawaited; a Lambda that can freeze after returning awaits it.
+ */
+export async function recordToolUsageEvent(
+  db: { usageEvents?: Pick<IUsageEventRepository, 'record'> },
   logger: Logger,
   toolName: string,
   event: IUsageEventInput
-): void {
-  db.usageEvents?.record(event).catch(err => logger.warn(`[toolUsageEvent] failed for ${toolName}:`, err));
+): Promise<void> {
+  try {
+    await db.usageEvents?.record(event);
+  } catch (err) {
+    logger.warn(`[toolUsageEvent] failed for ${toolName}:`, err);
+  }
 }
 
 type SendStatusUpdate = (
@@ -128,6 +141,8 @@ export interface ToolBuilderConfig {
   db: IChatCompletionServiceOptions['db'];
   /** Caller's resolved entitlement keys, forwarded to the tool context (see ToolContext). */
   entitlementKeys?: string[];
+  /** Resolve current plan access lazily; failures must reach model admission. */
+  getEntitlements?: () => Promise<string[]>;
   /** How the turn was authenticated, forwarded to the tool context (see ToolContext.authOrigin). */
   authOrigin: ToolContext['authOrigin'];
   /** The authenticating API key, forwarded to the tool context (see ToolContext.apiKeyId). */
@@ -189,6 +204,8 @@ export interface ToolBuilderConfig {
   modelAdmission?: Pick<ModelAdmission, 'assert'>;
   /** The `decide` tool's execution seam, forwarded to the tool context (see ToolContext.decide). */
   decide?: ToolContext['decide'];
+  /** The model a delegation's charge is recorded under when `id` ran in place of it (restricted tier). */
+  toLedgerModel?: (id: string) => ModelInfo | undefined;
 }
 
 // Short spoken preambles for tools whose latency would otherwise leave the
@@ -439,6 +456,8 @@ export interface BuildToolsArgs {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   config: { [key in LlmTools]?: any };
   model?: string;
+  /** See `ToolContext.servingModel`. */
+  servingModel?: { current: ModelInfo };
   organization?: IOrganizationDocument | null;
   precomputed?: {
     adminSettingsEnforceCredits: boolean;
@@ -446,10 +465,14 @@ export interface BuildToolsArgs {
   };
   /** See `ToolBuilderDeps.subagentModels`. */
   subagentModels?: ModelInfo[];
+  /** See `ToolBuilderDeps.substituteIdentity`. */
+  substituteIdentity?: ToolBuilderDeps['substituteIdentity'];
   agentOnlyMcpServers?: string[];
   apiKeyTable?: ApiKeyTable;
   getAbortSignal?: () => AbortSignal | undefined;
   thinking?: { enabled: boolean; budget_tokens: number };
+  /** Reasoning visibility for the caller, applied by every subagent this run spawns. */
+  thinkingVisibility?: ThinkingVisibility;
   agentStore?: ServerAgentStore;
   externalTools?: Record<string, ToolDefinition>;
   toolAvailability?: ToolAvailability;
@@ -499,6 +522,8 @@ export interface BuildToolPromptArgs {
    */
   agentStore?: ServerAgentStore;
   extraContextMessages: ExtraContextMessage[];
+  /** Tools sent deferred this turn; their guidance is returned in `deferredGuidance` instead of `guidance`. */
+  deferGuidanceFor?: ReadonlySet<string>;
 }
 
 // The tools whose onToolStart records a gate estimate (gateImageCredits, gateAudioCredits).
@@ -513,7 +538,14 @@ const gatedToolInvocation = new AsyncLocalStorage<symbol>();
  * session's conversation entities and the agent roster (source `toolContext`), and must sit
  * behind that prefix - see PER_CALLER_AUTHORED_SOURCES in systemPromptSources.ts.
  */
-export type ToolPromptMessages = { guidance: IMessage | null; context: IMessage | null };
+export type ToolPromptMessages = {
+  guidance: IMessage | null;
+  context: IMessage | null;
+  /** Guidance for tools named in `deferGuidanceFor`, held out of `guidance` to ride with the tool's addition. */
+  deferredGuidance: DeferredToolGuidance[];
+};
+
+export type DeferredToolGuidance = { tool: string; text: string };
 
 export class ToolBuilder {
   constructor(private readonly deps: ToolBuilderConfig) {}
@@ -946,13 +978,16 @@ export class ToolBuilder {
     organization,
     precomputed,
     subagentModels,
+    substituteIdentity,
     agentOnlyMcpServers = [],
     apiKeyTable,
     getAbortSignal,
     thinking,
+    thinkingVisibility,
     agentStore,
     externalTools,
     toolAvailability,
+    servingModel,
   }: BuildToolsArgs): ICompletionOptionTools[] | undefined {
     const tools = buildSharedTools(
       {
@@ -961,6 +996,7 @@ export class ToolBuilder {
         logger: this.deps.logger,
         db: this.deps.db,
         entitlementKeys: this.deps.entitlementKeys,
+        getEntitlements: this.deps.getEntitlements,
         retrievalFilter: this.deps.retrievalFilter,
         inlinedAttachmentIds: this.deps.inlinedAttachmentIds,
         attachedFileIds: this.deps.attachedFileIds,
@@ -975,16 +1011,20 @@ export class ToolBuilder {
         authOrigin: this.deps.authOrigin,
         apiKeyId: this.deps.apiKeyId,
         decide: this.deps.decide,
+        toLedgerModel: this.deps.toLedgerModel ? id => this.deps.toLedgerModel?.(id)?.id ?? id : undefined,
         sessionRepository: this.deps.db.sessions,
         storage: this.deps.storage,
         imageGenerateStorage: this.deps.imageGenerateStorage,
         imageProcessorLambdaName: this.deps.imageProcessorLambdaName,
         llm,
         model,
+        servingModel,
         precomputed,
         subagentModels,
+        substituteIdentity,
         apiKeyTable,
         thinking,
+        thinkingVisibility,
         agentStore,
         modelAdmission: this.deps.modelAdmission,
       },
@@ -1148,7 +1188,8 @@ export class ToolBuilder {
               }
             : undefined,
         onSubagentCredits: (credits, meta) => {
-          this.reserveToolCredits('delegate_to_agent', credits, meta?.model);
+          const ledger = meta && this.deps.toLedgerModel?.(meta.model);
+          this.reserveToolCredits('delegate_to_agent', credits, ledger?.id ?? meta?.model);
           // No meta == model unresolvable; skip rather than fabricate a zero-cost event.
           if (meta) {
             recordToolUsageEvent(
@@ -1159,8 +1200,12 @@ export class ToolBuilder {
                 quest,
                 user: this.deps.user,
                 organization,
-                provider: meta.provider,
-                model: meta.model,
+                provider: ledger?.backend ?? meta.provider,
+                model: ledger?.id ?? meta.model,
+                ...executedModelFields(ledger ?? { id: meta.model, backend: meta.provider }, {
+                  id: meta.model,
+                  backend: meta.provider,
+                }),
                 costUsd: meta.usdCost,
                 creditsCharged: credits,
                 inputTokens: meta.inputTokens,
@@ -1231,9 +1276,15 @@ export class ToolBuilder {
     processStartTime,
     agentStore,
     extraContextMessages,
+    deferGuidanceFor,
   }: BuildToolPromptArgs): Promise<ToolPromptMessages> {
     const sections: string[] = [];
     const contextSections: string[] = [];
+    const deferredGuidance: DeferredToolGuidance[] = [];
+    const guidanceFor = (tool: string) => (text: string) => {
+      if (deferGuidanceFor?.has(tool)) deferredGuidance.push({ tool, text });
+      else sections.push(text);
+    };
 
     // 1. Tool prompt from DB (custom prompt attached to tool)
     if (toolPromptId) {
@@ -1255,7 +1306,7 @@ export class ToolBuilder {
 
     // 2. Blog publishing workflow instruction (if blog_draft tool is enabled)
     if (hasContentTransform) {
-      sections.push(`# MANDATORY BLOG WORKFLOW
+      guidanceFor('blog_draft')(`# MANDATORY BLOG WORKFLOW
 
 **CRITICAL RULE**: This workflow applies ONLY to BLOG posts - when the user explicitly asks to blog about something (e.g. "publish to my blog", "draft a blog post", "turn this into a blog post"). It does NOT apply to sharing or publishing an artifact/app/page to a public link - that is done with the artifact's own in-app Share action, NEVER with blog_draft. When (and only when) the user wants a blog post, you MUST use the blog_draft tool.
 
@@ -1285,7 +1336,7 @@ Otherwise: USE blog_draft TOOL FIRST!`);
 
     // 3. Chess engine workflow (if chess_engine tool is enabled)
     if (hasChessEngine) {
-      sections.push(`# MANDATORY CHESS WORKFLOW
+      guidanceFor('chess_engine')(`# MANDATORY CHESS WORKFLOW
 
 **CRITICAL**: You have the \`chess_engine\` tool. You MUST follow these rules for ALL chess interactions:
 
@@ -1337,7 +1388,7 @@ Both calls happen in the same response — do NOT ask the user to repeat their m
     // it deliberately omits the time of day, so the model must call the tool for
     // anything clock-level.
     if (hasCurrentDateTime) {
-      sections.push(
+      guidanceFor('current_datetime')(
         `# CURRENT TIME\n\n` +
           `For the current time of day, or to timestamp an action at the moment it executes, ` +
           `call the \`current_datetime\` tool \u2014 never guess or invent the time.`
@@ -1354,7 +1405,7 @@ Both calls happen in the same response — do NOT ask the user to repeat their m
     // date context tells the model what today is, but nothing otherwise tells it when its own
     // knowledge is too old to answer from.
     if (hasWebSearch && webSearchGuidance) {
-      sections.push(webSearchGuidance);
+      guidanceFor('web_search')(webSearchGuidance);
     }
 
     // 3d. Knowledge-base retrieval nudge. Same gate and same reason as 3c: the tool description
@@ -1367,7 +1418,7 @@ Both calls happen in the same response — do NOT ask the user to repeat their m
     // prompt each one is defending against) - prompt-level rather than a second gate here, because
     // the tool stays callable on those turns and the model needs to know when NOT to call it.
     if (hasKnowledgeBase && knowledgeBaseGuidance) {
-      sections.push(knowledgeBaseGuidance);
+      guidanceFor('search_knowledge_base')(knowledgeBaseGuidance);
     }
 
     // 4. MCP integration guidance (if MCP tools are available)
@@ -1466,6 +1517,6 @@ ${agentList}
 
     const toMessage = (parts: string[]): IMessage | null =>
       parts.length === 0 ? null : { role: 'system', content: parts.join('\n\n') };
-    return { guidance: toMessage(sections), context: toMessage(contextSections) };
+    return { guidance: toMessage(sections), context: toMessage(contextSections), deferredGuidance };
   }
 }

@@ -2,8 +2,8 @@ import { rapidReplyResultRepository } from '@bike4mind/database/ai';
 import { rapidReplyMappingRepository } from '@bike4mind/database/ai';
 import { rapidReplyPromptRepository } from '@bike4mind/database/ai';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 interface MetricsFilters {
   startDate?: string;
@@ -14,11 +14,10 @@ interface MetricsFilters {
   timeRange?: 'last24h' | 'last7d' | 'last30d' | 'last90d' | 'custom';
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req, res) => {
   console.log('📊 Rapid Reply metrics API called');
 
   const { startDate, endDate, mainModelId, rapidModelId, userId, timeRange = 'last30d' } = req.query as MetricsFilters;

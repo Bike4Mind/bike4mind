@@ -1,5 +1,6 @@
 import { DEFAULT_MUSIC_LENGTH_MS, DEFAULT_MUSIC_MODEL_ID, elevenLabsContentTypeForFormat } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
+import { parseRetryAfterMs, ProviderRateLimitError } from '../providerRateLimitError';
 import { GeneratedMusic, MusicGenerationOptions, MusicGenerator } from './types';
 
 const MUSIC_GENERATION_ENDPOINT = 'https://api.elevenlabs.io/v1/music';
@@ -79,6 +80,15 @@ export class ElevenLabsMusicGenerator implements MusicGenerator {
 
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
+      if (res.status === 429) {
+        // The plan's concurrency/rate cap, not a fault: warn only, the caller decides whether to retry.
+        this.logger.warn('ElevenLabs music generation rate-limited', { detail });
+        throw new ProviderRateLimitError(
+          'elevenlabs',
+          `ElevenLabs music generation rate-limited: ${detail}`,
+          parseRetryAfterMs(res.headers.get('retry-after'))
+        );
+      }
       this.logger.error('ElevenLabs music generation failed', { status: res.status, detail });
       throw new Error(`ElevenLabs music generation failed: ${res.status} ${detail}`);
     }

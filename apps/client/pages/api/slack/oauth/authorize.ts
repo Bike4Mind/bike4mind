@@ -3,7 +3,7 @@ initializeSlackPackage();
 
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
-import { issueStateNonce, clearStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { issueStateNonce, clearStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { createInstallProvider, getInstallUrlOptionsForWorkspace } from '@bike4mind/slack';
 
 /**

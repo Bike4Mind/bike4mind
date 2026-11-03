@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Logger } from '@bike4mind/observability';
-import { ISubscription, SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { ISubscription, SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 
 const mocks = vi.hoisted(() => ({
   findOrg: vi.fn(),
@@ -23,7 +23,7 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: mocks.emitMetric }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: mocks.publish } } }));
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     claimPaymentFailureNotice: mocks.claimFailure,
     releasePaymentFailureNotice: mocks.releaseFailure,

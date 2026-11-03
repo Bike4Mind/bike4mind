@@ -1,31 +1,17 @@
 import { Logger } from '@bike4mind/observability';
 import { createHash } from 'crypto';
 import OpenAI from 'openai';
-import { EmbeddingModelInfo, EmbeddingModelProvider, EmbeddingService } from '../EmbeddingService';
+import {
+  EmbeddingModelInfo,
+  EmbeddingModelProvider,
+  EmbeddingService,
+  embeddingModelInfoMap,
+} from '../EmbeddingService';
 import { EmbeddingAuthError } from '../EmbeddingErrors';
 import { recordEmbeddingRateLimitHeaders } from '../embeddingRateLimitReporter';
 import { OpenAIEmbeddingModel } from '@bike4mind/common';
 
-export const OPENAI_EMBEDDING_MODEL_MAP: Record<OpenAIEmbeddingModel, EmbeddingModelInfo<OpenAIEmbeddingModel>> = {
-  [OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL]: {
-    provider: EmbeddingModelProvider.OPENAI,
-    model: OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL,
-    contextWindow: 8192,
-    dimensions: [1536],
-  },
-  [OpenAIEmbeddingModel.TEXT_EMBEDDING_3_LARGE]: {
-    provider: EmbeddingModelProvider.OPENAI,
-    model: OpenAIEmbeddingModel.TEXT_EMBEDDING_3_LARGE,
-    contextWindow: 8192,
-    dimensions: [3072],
-  },
-  [OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002]: {
-    provider: EmbeddingModelProvider.OPENAI,
-    model: OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002,
-    contextWindow: 8192,
-    dimensions: [1536],
-  },
-};
+export const OPENAI_EMBEDDING_MODEL_MAP = embeddingModelInfoMap(Object.values(OpenAIEmbeddingModel));
 
 /**
  * Non-reversible stand-in for a credential, for use where two accounts have to be told apart in a

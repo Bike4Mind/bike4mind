@@ -4,6 +4,10 @@
  * module is faked here (its balance mechanics are covered in meterPlatformCompletion.test.ts).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => {} }),
+}));
 import { createMocks } from 'node-mocks-http';
 import { ChatModels, ForbiddenError, insufficientCreditsError } from '@bike4mind/common';
 

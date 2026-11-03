@@ -31,7 +31,7 @@ vi.mock('@server/middlewares/defineNextRoute', () => {
     },
   };
 });
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => {
     h.rateLimitOptions = options;
     return h.rateLimiter;
@@ -44,7 +44,7 @@ vi.mock('@client/app/premium-generated/premiumWorkspaceCopyEntitlements.generate
     return h.copyEntitlements;
   },
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@bike4mind/services', () => ({ sessionService: { cloneSession: h.cloneSession } }));
 vi.mock('@bike4mind/database', () => ({
   agentRepository: {},

@@ -93,7 +93,7 @@ describe('/api/auth/mfa/disable', () => {
     await disableHandler(req as any, res as any);
 
     expect(mockRevokeAllForUser).toHaveBeenCalledWith('user-1');
-    expect(mockClearCookie).toHaveBeenCalledWith(res);
+    expect(mockClearCookie).toHaveBeenCalledWith(res, 'user-1');
     expect(revokedEvents()).toHaveLength(1);
     expect(revokedEvents()[0][1]).toMatchObject({ userId: 'user-1', metadata: { revoked: 2, scope: 'all' } });
   });

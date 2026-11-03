@@ -11,13 +11,18 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
 
-vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ post: (handler: unknown) => handler }) }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@server/middlewares/baseApi', () => ({
+  baseApi: () => ({ post: (...handlers: unknown[]) => handlers[handlers.length - 1] }),
+}));
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', () => ({
   getLogoUrl: () => '',
   buildEmailLogoImg: () => '',
 }));
-vi.mock('@server/integrations/slack/slack', () => ({ postMessageToSlack: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: vi.fn() }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: async () => ({}),
@@ -81,6 +86,10 @@ it('two concurrent requests sharing the same auth snapshot cannot mint or send b
   });
   expect(await RegistrationInvite.countDocuments()).toBe(1);
   expect(EmailEvents.Send.publish).toHaveBeenCalledTimes(1);
+  const invite = await RegistrationInvite.findOne();
+  const delivery = vi.mocked(EmailEvents.Send.publish).mock.calls[0][0];
+  expect(delivery.to).toBe(invite!.email);
+  expect(delivery.body).toContain(`Invite code: <strong>${invite!.code}</strong>`);
   const after = await User.findById(user._id);
   expect(after!.numReferralsAvailable).toBe(0);
   expect(after!.regInvites.map(String)).toEqual([(await RegistrationInvite.findOne())!.id]);
@@ -111,7 +120,7 @@ it('refunds only a failed pre-invite lookup so that quota can be reserved again'
     email: 'sender@example.com',
     numReferralsAvailable: 2,
   });
-  vi.spyOn(registrationInviteRepository, 'findOne').mockRejectedValueOnce(new Error('lookup failed'));
+  vi.spyOn(registrationInviteRepository, 'find').mockRejectedValueOnce(new Error('lookup failed'));
   const call = request(String(user._id), ['failed@example.com', 'ok@example.com']);
   await call.run();
   expect(call.res._getJSONData()).toMatchObject({

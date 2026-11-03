@@ -25,13 +25,13 @@ import {
 } from '@server/integrations/github/webhookUtils';
 import { WebhookAuditLogger, extractWebhookMetadata } from '@server/integrations/github/WebhookAuditLogger';
 import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import {
   dispatchIssueToSre,
   syncSreIssueStateFromWebhook,
   SreIssuePayloadSchema,
 } from '@bike4mind/server-utils/integrations/github/sreWebhookDispatch';
-import { dispatchReviewToSreRevision } from '@server/integrations/github/sreRevisionDispatch';
+import { dispatchReviewToSreRevision } from '@bike4mind/server-utils/integrations/github/sreRevisionDispatch';
 import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
 import { randomUUID } from 'crypto';
 

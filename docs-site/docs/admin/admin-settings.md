@@ -7,7 +7,7 @@ tags: [admin, settings, configuration]
 
 # Admin Settings
 
-The Admin Settings tab provides a centralized interface for managing all platform configuration values. Settings are organized into category tabs, each containing service groups with related configuration fields. Changes take effect immediately upon saving individual setting values.
+The Admin Settings tab provides a centralized interface for managing all platform configuration values. Settings are organized into category tabs, each containing service groups with related configuration fields. Edits are staged across sections: use the SaveBar at the bottom to save all unsaved changes (Cmd/Ctrl+S) or Discard them. Leaving with unsaved changes prompts for confirmation. Failed changes remain staged for retry; uploads and command actions still run immediately.
 
 ## Interface Overview
 
@@ -80,12 +80,31 @@ Located in the AI category, the Operations Model setting allows administrators t
 - **Image Model** -- The model for image-related operations
 - **Speech Model** -- The model for speech-to-text operations
 
+### Operational Usage Billing
+
+In User Management, search for **Bill Operational Usage**. With **Enforce Credits** on,
+automatic naming, summaries, tagging, knowledge-base query embeddings and file indexing outside
+data lakes debit credits for free-tier users paying for themselves. A user is free tier when
+they have no credit purchase and no active plan, including a plan granted through an organization
+seat.
+
+**Bill Operational Usage** defaults to off. Turning it on also bills paying users and
+organization-funded usage. With **Enforce Credits** off, these operations do not debit credits.
+Data-lake ingestion and research retain their separate billing rules.
+
+If a balance falls while the toggle is off, check whether the user has a purchase or active plan
+and which account pays for the operation. Tool and knowledge-base usage settles after the call,
+so it can take a free-tier balance slightly below zero. File indexing outside data lakes reserves
+credits first; if there are insufficient credits, the file shows an indexing failure. Add credits
+before retrying the upload.
+
 ### Generation Models
 
 Located in the AI category, this card has one section per generation modality (Video and Music), with one switch per model in that modality's catalog. Each switch shows whether the server will accept generation jobs for that model:
 
 - A model that is on by default and has no admin override reads "Enabled by default". Once you flip a switch, your choice overrides the model's default in either direction
 - Models marked "Preview" are early-access provider models whose behavior or pricing may still change
+- Models marked "Retired" are no longer served by their provider. Their switch is locked off, and an override saved before the retirement does not turn them back on
 - Turning a model off makes new jobs for it be refused and removes it from the public model listings (`GET /api/v1/video-models`, `GET /api/v1/music-models`); a disabled video or music model also disappears from Studio
 - The in-chat music generation tool does not honour these switches yet; it always uses its built-in default music model
 - Models whose provider is not configured on the deployment (for example, the non-production test models on production) cannot generate regardless of the switch

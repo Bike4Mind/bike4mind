@@ -123,5 +123,6 @@ describe('POST /api/admin/users/[userId]/resend-email-change', () => {
     const { body } = h.publish.mock.calls[0][0] as { body: string };
     expect(body).toContain('Hello &lt;b&gt;x&lt;/b&gt;,');
     expect(body).toContain('<strong>a&amp;b@b.test</strong> to <strong>&quot;new&quot;@b.test</strong>');
+    expect(body).toContain('An administrator has resent your email change verification link.');
   });
 });

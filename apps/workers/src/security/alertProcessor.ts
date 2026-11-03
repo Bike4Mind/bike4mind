@@ -1,7 +1,7 @@
 import { authFailLogRepository, connectDB, userRepository } from '@bike4mind/database';
 import type { ISuspiciousPattern } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { contextToLogs } from '@server/utils/logger';
+import { contextToLogs } from '@bike4mind/server-utils/utils/logger';
 import { Context } from 'aws-lambda';
 import { Resource } from 'sst';
 import { EmailEvents } from '@server/utils/eventBus';

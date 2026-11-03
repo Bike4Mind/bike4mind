@@ -13,6 +13,8 @@ export interface ManageSharingPanelProps {
   shareUrl: string;
   /** Current visibility from the row - reactive, so the panel reflects row changes. */
   visibility: string;
+  /** Called after a gate change lands, so the row's access badge can follow it. */
+  onGateChange?: (gate: PublishAccessGateRead) => void;
 }
 
 /**
@@ -21,7 +23,7 @@ export interface ManageSharingPanelProps {
  * Seeds the gate + embed list from the live record on mount; the gate and
  * visibility together decide whether the embed editor is offered (open-public only).
  */
-export function ManageSharingPanel({ publicId, title, shareUrl, visibility }: ManageSharingPanelProps) {
+export function ManageSharingPanel({ publicId, title, shareUrl, visibility, onGateChange }: ManageSharingPanelProps) {
   const [loading, setLoading] = useState(true);
   const [gate, setGate] = useState<PublishAccessGateRead>(null);
   const [initialOrigins, setInitialOrigins] = useState<string[]>([]);
@@ -59,7 +61,15 @@ export function ManageSharingPanel({ publicId, title, shareUrl, visibility }: Ma
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }} data-testid="manage-sharing-panel">
       <ShareActions title={title} url={shareUrl} />
       <Divider />
-      <AccessGateEditor publicId={publicId} visibility={visibility} initialGate={gate} onGateChange={setGate} />
+      <AccessGateEditor
+        publicId={publicId}
+        visibility={visibility}
+        initialGate={gate}
+        onGateChange={next => {
+          setGate(next);
+          onGateChange?.(next);
+        }}
+      />
       {isOpenPublic && <Divider />}
       <DiscoverableToggle
         publicId={publicId}

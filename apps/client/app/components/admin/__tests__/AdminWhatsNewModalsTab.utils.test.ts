@@ -5,6 +5,7 @@ import {
   getModalPriorityStatus,
   getStatusChipColor,
   getStatusLabel,
+  shouldShowWeeklyHighlights,
 } from '../AdminWhatsNewModalsTab.utils';
 import type { IModalDocument } from '@bike4mind/common';
 
@@ -224,5 +225,25 @@ describe('AdminWhatsNewModalsTab.utils', () => {
     it('returns "Active" for active status', () => {
       expect(getStatusLabel('active')).toBe('Active');
     });
+  });
+});
+
+describe('shouldShowWeeklyHighlights', () => {
+  const env = (stage: string, isForkProduction = false) => ({ stage, isForkProduction });
+
+  it.each(['production', 'dev', 'pr6756'])('shows the card on the main stage %s', stage => {
+    expect(shouldShowWeeklyHighlights(env(stage))).toBe(true);
+  });
+
+  it.each(['staging', 'shared-dev', 'john'])('hides the card on the non-main stage %s', stage => {
+    expect(shouldShowWeeklyHighlights(env(stage))).toBe(false);
+  });
+
+  it('hides the card on a fork production deployment', () => {
+    expect(shouldShowWeeklyHighlights(env('production', true))).toBe(false);
+  });
+
+  it('hides the card until the environment descriptor resolves', () => {
+    expect(shouldShowWeeklyHighlights(undefined)).toBe(false);
   });
 });

@@ -264,6 +264,41 @@ describe('ImageGenerationModelSelectionModal — safety_tolerance hard cap', () 
   });
 });
 
+describe('ImageGenerationModelSelectionModal - FLUX.2 prompt enhancement', () => {
+  afterEach(() => {
+    mockImageModel = ImageModels.FLUX_PRO_1_1;
+  });
+
+  it.each([ImageModels.FLUX_2_KLEIN_4B, ImageModels.FLUX_2_KLEIN_9B, ImageModels.FLUX_2_KLEIN_9B_PREVIEW])(
+    'hides unsupported prompt enhancement but retains safety controls for %s',
+    model => {
+      mockImageModel = model;
+      const { queryByTestId, getByTestId } = render(
+        <TestWrapper>
+          <ImageGenerationModelSelectionModal open={true} onClose={vi.fn()} />
+        </TestWrapper>
+      );
+
+      expect(queryByTestId('prompt-upsampling-switch')).toBeNull();
+      expect(getByTestId('safety-tolerance-slider')).toBeInTheDocument();
+    }
+  );
+
+  it.each([ImageModels.FLUX_2_MAX, ImageModels.FLUX_2_PRO, ImageModels.FLUX_2_PRO_PREVIEW, ImageModels.FLUX_2_FLEX])(
+    'offers supported prompt enhancement for %s',
+    model => {
+      mockImageModel = model;
+      const { getByTestId } = render(
+        <TestWrapper>
+          <ImageGenerationModelSelectionModal open={true} onClose={vi.fn()} />
+        </TestWrapper>
+      );
+
+      expect(getByTestId('prompt-upsampling-switch')).toBeInTheDocument();
+    }
+  );
+});
+
 describe('ImageGenerationModelSelectionModal - settings the selected model ignores', () => {
   afterEach(() => {
     mockImageModel = ImageModels.FLUX_PRO_1_1;

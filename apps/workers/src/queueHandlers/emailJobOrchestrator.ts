@@ -7,7 +7,7 @@ import {
   subscriberRepository,
 } from '@bike4mind/database';
 import { EmailJobStatus, EmailJobOverallStatus, EmailSendStatus } from '@bike4mind/common';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { dedupeTestRecipients } from './emailTestRecipients';
 import { SQSClient, SendMessageBatchCommand } from '@aws-sdk/client-sqs';
 import { Resource } from 'sst';

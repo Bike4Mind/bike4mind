@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { IMcpServerDocument, IMcpServerResponse } from '@bike4mind/common';
 import { isAxiosError } from 'axios';
 import { useUser } from '@client/app/contexts/UserContext';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 
 // Types
 interface AtlassianConnectResponse {
@@ -23,8 +24,10 @@ export const mcpServerKeys = {
 
 // Hooks
 export const useMcpServers = () => {
+  const impersonating = useAccessToken(s => s.impersonating);
   return useQuery({
     queryKey: mcpServerKeys.list(),
+    enabled: !impersonating,
     queryFn: async (): Promise<IMcpServerResponse[]> => {
       const { data } = await api.get('/api/mcp-servers');
       return data;
@@ -35,13 +38,14 @@ export const useMcpServers = () => {
 };
 
 export const useMcpServer = (id: string) => {
+  const impersonating = useAccessToken(s => s.impersonating);
   return useQuery({
     queryKey: mcpServerKeys.detail(id),
     queryFn: async (): Promise<IMcpServerDocument> => {
       const { data } = await api.get(`/api/mcp-servers/${id}`);
       return data;
     },
-    enabled: !!id,
+    enabled: !!id && !impersonating,
   });
 };
 

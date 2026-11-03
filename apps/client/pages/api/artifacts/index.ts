@@ -1,4 +1,9 @@
-import { ArtifactTypeSchema, queryBool, readExperimentalFeaturePreference } from '@bike4mind/common';
+import {
+  ARTIFACTS_DISABLED_ERROR,
+  ArtifactTypeSchema,
+  queryBool,
+  readExperimentalFeaturePreference,
+} from '@bike4mind/common';
 import { artifactService } from '@bike4mind/services';
 import {
   adminSettingsRepository,
@@ -26,6 +31,8 @@ const ListArtifactsSchema = z.object({
   visibility: z.enum(['private', 'project', 'organization', 'public']).optional(),
   projectId: z.string().optional(),
   sessionId: z.string().optional(),
+  // A plain string: qs.parse turns `identifier[$ne]=x` into an object, which this rejects.
+  identifier: z.string().min(1).optional(),
   tags: z.array(z.string()).prefault([]),
   search: z.string().optional(),
 });
@@ -44,6 +51,7 @@ const CreateArtifactSchema = z.object({
   sourceQuestId: z.string().optional(),
   sessionId: z.string().optional(),
   parentArtifactId: z.string().optional(),
+  identifier: z.string().optional(),
   permissions: z
     .object({
       canRead: z.array(z.string()).prefault([]),
@@ -132,7 +140,7 @@ const handler = baseApi()
       validatedData.organizationId = await resolveActiveOrg(req as Request, validatedData.organizationId);
 
       if (isAiAuthoredCreate(validatedData.metadata) && !(await areUserArtifactsEnabled(user))) {
-        return res.status(403).json({ error: 'Artifacts are disabled for this user' });
+        return res.status(403).json({ error: ARTIFACTS_DISABLED_ERROR });
       }
 
       const result = await artifactService.create(userId, validatedData, {

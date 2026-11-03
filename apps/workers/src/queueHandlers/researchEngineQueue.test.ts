@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { insufficientCreditsError, ResearchTaskStatus } from '@bike4mind/common';
+import { insufficientCreditsError, ResearchTaskStatus, TooManyRequestsError } from '@bike4mind/common';
 
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
 }));
 
@@ -55,7 +55,7 @@ vi.mock('@bike4mind/services/llm/tools/implementation/webfetch/scrapeWithRetry',
 vi.mock('@bike4mind/auth/apiKeyService', () => ({ getFirecrawlConfig: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: vi.fn() }));
 vi.mock('@server/jobs/researchTasks', () => ({ researchTaskJobs: {} }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsTextModel: h.getOperationsTextModel },
 }));
 
@@ -150,6 +150,20 @@ describe('researchEngineQueue metering', () => {
         status: ResearchTaskStatus.FAILED,
         statusFailedMessage: 'Not enough credits',
       })
+    );
+  });
+
+  it('fails a discovered-links run on the free-tier daily cap without rethrowing', async () => {
+    const message = 'Daily free limit reached';
+    h.meter.mockRejectedValue(
+      new TooManyRequestsError(message, { errorCode: 'daily_free_limit_reached', retryAfter: 3600 })
+    );
+
+    await expect(dispatch(makeEvent('processDiscoveredLinks'), {} as never, logger as never)).resolves.toBeUndefined();
+
+    expect(h.complete).not.toHaveBeenCalled();
+    expect(h.taskUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'rt1', status: ResearchTaskStatus.FAILED, statusFailedMessage: message })
     );
   });
 });

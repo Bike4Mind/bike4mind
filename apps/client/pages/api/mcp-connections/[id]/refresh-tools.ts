@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { refreshUserConnectionTools } from '@server/mcpConnections/connectionService';
 import { assertCustomMcpEnabled } from '@server/mcpConnections/customMcpAccess';
 

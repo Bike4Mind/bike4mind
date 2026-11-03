@@ -1,5 +1,6 @@
 import {
   ApiKeyScope,
+  ApiKeyScopeValue,
   IOrganizationRepository,
   IRealtimeConnectionRepository,
   IUserApiKeyRepository,
@@ -24,8 +25,9 @@ interface RotateUserApiKeyAdapters {
   db: {
     userApiKeys: IUserApiKeyRepository;
     organizations: Pick<IOrganizationRepository, 'findIdsAdministeredBy'>;
-    // Optional only so existing overlay callers keep compiling; when omitted, sockets opened with
-    // the rotated-away secret stay up until the gateway's 2h cap. In-repo callers always pass it.
+    // When omitted, this function leaves sockets opened with the rotated-away secret alone. The admin
+    // rotate route omits it and ends them itself after its transaction commits; any other caller that
+    // omits it leaves them up until the gateway's 2h cap.
     realtimeConnections?: Pick<IRealtimeConnectionRepository, 'endConnections'>;
   };
   /**
@@ -33,7 +35,7 @@ interface RotateUserApiKeyAdapters {
    * Undefined for a browser/JWT caller, who is already the full account and gains
    * nothing from a rotation. See the no-escalation rule below.
    */
-  callerScopes?: ApiKeyScope[];
+  callerScopes?: ApiKeyScopeValue[];
 }
 
 export interface RotateUserApiKeyResult {

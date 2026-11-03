@@ -10,13 +10,15 @@ import {
   InsufficientCreditsPreflightError,
   type PreflightCreditHold,
 } from '@server/utils/creditPreflight';
-import { isCreditsEnforced } from '@server/billing/meterPlatformCompletion';
+import { createModelAdmission, isCreditsEnforced } from '@server/billing/meterPlatformCompletion';
 import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrgId';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 const TTS_MODEL = 'tts-1-hd';
 
 // Test real-time voice by creating a temporary session
 const handler = baseApi().post(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   console.log('[DEBUG] Test Realtime Voice API - Request received');
 
   const validatedBody = z
@@ -60,6 +62,7 @@ const handler = baseApi().post(async (req, res) => {
   // Same durable hold as pages/api/ai/tts.ts: reserve before the provider call, settle after it. Unlike
   // tts.ts the charge is skipped when enforceCredits is off, so a credits-off deployment moves no balance.
   const userId = req.user?.id;
+  await (await createModelAdmission(req.user!)).assert(TTS_MODEL);
   const billingOrganizationId = await resolveAudioBillingOrgId(req, undefined, 'user');
   let hold: PreflightCreditHold | undefined;
   if (userId && req.user && (await isCreditsEnforced())) {

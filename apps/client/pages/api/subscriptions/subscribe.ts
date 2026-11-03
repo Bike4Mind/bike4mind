@@ -1,15 +1,20 @@
 import { adminSettingsRepository, userRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
 import { subscriptionCheckoutSchema } from '@bike4mind/server-utils/lib/userSubscriptions/schemas';
-import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
+import { findSubscriptionPlan } from '@client/lib/userSubscriptions/constants';
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { refuseBlockedAccount } from '@server/middlewares/refuseBlockedAccount';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { USD_CHECKOUT_SESSION_PARAMS } from '@server/integrations/stripe/checkoutCurrency';
 import { appendSuccessParams, isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { checkoutAcquisitionMetadata } from '@server/analytics/acquisition';
+import { firstPurchaseCardOptions } from '@server/integrations/stripe/threeDSecure';
+import { backfillCustomerSignupMetadata, signupNetworkMetadata } from '@server/integrations/stripe/riskMetadata';
+import { readNetworkMeta } from '@server/auth/networkMeta';
+import { assertCheckoutAllowed } from '@server/billing/checkoutGate';
 import { Request } from 'express';
 import Stripe from 'stripe';
 import { z } from 'zod';
@@ -18,6 +23,7 @@ type RequestBody = z.infer<typeof subscriptionCheckoutSchema>;
 
 const handler = baseApi()
   .use(requireStripeWebhook())
+  .use(refuseBlockedAccount())
   .post<Request<unknown, RequestBody>>(async (req, res) => {
     const { priceId, callbackUrl, attributionConsent, surface } = subscriptionCheckoutSchema.parse(req.body);
 
@@ -35,7 +41,7 @@ const handler = baseApi()
     // comp-grants go through a different route and are intentionally unaffected.
     // Only configured plans are purchasable; any other Stripe price id is refused here
     // rather than relying on stripe.prices.retrieve below, which accepts any live price.
-    const requestedPlan = SUBSCRIPTION_PLANS.find(plan => plan.priceId === priceId);
+    const requestedPlan = findSubscriptionPlan(priceId);
     if (!requestedPlan) {
       throw new BadRequestError('Unknown plan');
     }
@@ -49,29 +55,43 @@ const handler = baseApi()
       }
     }
 
+    await assertCheckoutAllowed(req.user, readNetworkMeta(req), req.logger, 'subscription');
+
     const planSubscription = await subscriptionRepository.findUserSubscriptionByPriceId(priceId, req.user.id);
     if (planSubscription) {
       throw new BadRequestError('User is already subscribed to this plan');
     }
 
+    // Renewal charges carry none of the subscription's metadata, so the signup network rides on
+    // the Customer, where Radar reads it as `::customer:signup_is_datacenter::` (riskMetadata.ts).
     if (!req.user.stripeCustomerId) {
       const customer = await createCustomer({
         email: req.user.email!,
         name: req.user.name!,
         type: CustomerType.User,
+        metadata: signupNetworkMetadata(req.user),
       });
       req.user.stripeCustomerId = customer.id;
       await userRepository.update({ id: req.user.id, stripeCustomerId: customer.id });
     } else {
       // Recreate the customer if missing from Stripe (we recently switched Stripe accounts).
       try {
-        await stripe.customers.retrieve(req.user.stripeCustomerId);
+        const existing = await stripe.customers.retrieve(req.user.stripeCustomerId);
+        await backfillCustomerSignupMetadata(
+          {
+            customerId: req.user.stripeCustomerId,
+            user: req.user,
+            existingMetadata: existing.deleted ? null : existing.metadata,
+          },
+          req.logger
+        );
       } catch (error) {
         if (error instanceof Stripe.errors.StripeError && error.code === 'resource_missing') {
           const customer = await createCustomer({
             email: req.user.email!,
             name: req.user.name!,
             type: CustomerType.User,
+            metadata: signupNetworkMetadata(req.user),
           });
           req.user.stripeCustomerId = customer.id;
           await userRepository.update({ id: req.user.id, stripeCustomerId: customer.id });
@@ -91,10 +111,16 @@ const handler = baseApi()
       }
     }
 
+    const threeDSecureOptions = await firstPurchaseCardOptions(
+      { stripeCustomerId: req.user.stripeCustomerId, accountCreatedAt: req.user.createdAt },
+      req.logger
+    );
+
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       ...USD_CHECKOUT_SESSION_PARAMS,
       payment_method_types: ['card'],
+      ...threeDSecureOptions,
       line_items: [
         {
           price: priceId,

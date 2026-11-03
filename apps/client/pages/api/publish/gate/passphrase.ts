@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { getTrustedHeaderClientIp } from '@bike4mind/server-utils/utils/trustedClientIpHeaders';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import { PublishedArtifact, shareTokenFilter } from '@bike4mind/database';

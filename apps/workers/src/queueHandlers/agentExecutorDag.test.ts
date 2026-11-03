@@ -597,6 +597,28 @@ describe('makeDagDispatcher artifact opt-out inheritance', () => {
     expect(Object.keys(createMock.mock.calls[1][0] as Record<string, unknown>)).not.toContain('scopeDeniedTools');
   });
 
+  it('carries a withheld admin role onto the node row, and omits the key otherwise', async () => {
+    createMock.mockClear();
+    const make = (adminRoleWithheld?: boolean) =>
+      makeDagDispatcher({
+        connectionId: 'c1',
+        nodeDefaults: { ...nodeDefaultsBase, adminRoleWithheld },
+        logger: silentLogger,
+      });
+    const args = {
+      parentExecutionId: 'p1',
+      node,
+      thoroughness: 'quick' as const,
+      agentName: 'worker',
+      model: 'm1',
+      maxIterations: 3,
+    };
+    await make(true).createNode(args);
+    expect(createMock).toHaveBeenLastCalledWith(expect.objectContaining({ adminRoleWithheld: true }));
+    await make(undefined).createNode(args);
+    expect(Object.keys(createMock.mock.calls[1][0] as Record<string, unknown>)).not.toContain('adminRoleWithheld');
+  });
+
   it('copies the parent permission lists onto the node row', async () => {
     // A node cannot pause for approval, so its row is the only source its tool gate reads
     // (processSubagentDispatch). The row gets its own copy, never an alias of the parent's array.

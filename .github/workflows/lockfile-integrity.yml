@@ -21,6 +21,21 @@ name: Lockfile Integrity
 on:
   pull_request:
     branches: [main]
+    paths:
+      - 'package.json'
+      - '**/package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.npmrc'
+      - 'patches/**'
+      - 'scripts/check-no-overlay-lockfile.sh'
+      - 'scripts/check-pnpm-overrides.mjs'
+      - 'scripts/lib-pnpm-workspace.mjs'
+      - 'scripts/__tests__/check-pnpm-overrides*'
+      - '.github/scripts/repair-lockfile-integrity*'
+      - 'vitest.config.ts'
+      - 'vitest.shared.ts'
+      - '.github/workflows/lockfile-integrity.yml'
   # Also run on the merge queue so the check reports there if it later
   # becomes a required branch-protection check (see semantic-pr-title.yml
   # for why a required check must run on merge_group).
@@ -37,7 +52,7 @@ concurrency:
 jobs:
   check:
     if: github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     steps:
       - uses: actions/checkout@v6
 
@@ -55,13 +70,18 @@ jobs:
       - name: Check for premium overlay paths in pnpm-lock.yaml
         run: bash scripts/check-no-overlay-lockfile.sh
 
+      # `sst install` with an overlay mounted writes the secrets it contributes into the
+      # tracked sst-env.d.ts files, the same leak as the lockfile one above.
+      - name: Check sst-env.d.ts declares only core secrets
+        run: node scripts/check-sst-env-core-secrets.mjs
+
       - name: Run lockfile repair script tests
         run: bash .github/scripts/repair-lockfile-integrity.test.sh
 
   overrides:
     name: Overrides agree with declared ranges
     if: github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 15
     permissions:
       contents: read

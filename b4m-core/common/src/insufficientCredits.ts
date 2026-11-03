@@ -1,3 +1,4 @@
+import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE } from './apiErrorCodes';
 import { UnprocessableEntityError } from './errors';
 import { QUEST_ERROR_CODES, QuestErrorCode } from './types';
 
@@ -22,4 +23,14 @@ export function getQuestErrorCode(error: unknown): QuestErrorCode | undefined {
   return typeof code === 'string' && (QUEST_ERROR_CODES as readonly string[]).includes(code)
     ? (code as QuestErrorCode)
     : undefined;
+}
+
+/**
+ * A credit refusal raised before any provider call that a redelivery cannot clear: the owner must buy
+ * credits, or the free-tier daily cap (`daily_free_limit_reached`) must reset at UTC midnight. Background
+ * workers consume the message on these instead of rethrowing into retries, the DLQ and the error alert.
+ */
+export function isTerminalCreditRefusal(error: unknown): boolean {
+  const code = (error as { additionalInfo?: { errorCode?: unknown } } | null)?.additionalInfo?.errorCode;
+  return code === 'insufficient_credits' || code === DAILY_FREE_LIMIT_REACHED_ERROR_CODE;
 }

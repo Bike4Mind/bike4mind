@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   openEntry: vi.fn(),
   showSnackbar: vi.fn(),
   downloadAuditLogCsv: vi.fn(),
+  refetch: vi.fn(),
   filters: {} as Record<string, string>,
   entryId: null as string | null,
   entries: [] as unknown[],
@@ -35,6 +36,7 @@ vi.mock('@client/app/hooks/data/adminAuditLog', () => ({
     hasNextPage: false,
     isFetchingNextPage: false,
     fetchNextPage: vi.fn(),
+    refetch: mocks.refetch,
   }),
   useAuditEntry: (id: string | null, initial: unknown) => ({
     data: id && (!mocks.entryError || mocks.entryRefetchError) ? initial : undefined,
@@ -77,7 +79,7 @@ vi.mock('@client/app/contexts/SnackbarContext', () => ({ useSnackbar: () => ({ s
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useSearchOrganizations: () => ({ data: { data: [] }, isLoading: false }),
 }));
-vi.mock('@client/app/components/admin/Users/Details/UserSelector', () => ({
+vi.mock('@client/app/components/admin/shared/UserSelector', () => ({
   default: ({ label }: { label: string }) => <div data-testid={`mock-user-selector-${label}`} />,
 }));
 
@@ -160,6 +162,8 @@ describe('AuditLogPage', () => {
     render(<AuditLogPage />, { wrapper: TestWrapper });
     expect(screen.getByTestId('audit-table-error')).toBeTruthy();
     expect(screen.queryByTestId('audit-table-empty')).toBeNull();
+    fireEvent.click(within(screen.getByTestId('audit-table-error')).getByTestId('admin-error-retry-btn'));
+    expect(mocks.refetch).toHaveBeenCalledTimes(1);
   });
 
   it('shows an inline error when the summary query fails', () => {

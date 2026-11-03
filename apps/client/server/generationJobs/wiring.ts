@@ -1,3 +1,4 @@
+import { assertMediaModelAdmission } from '@server/billing/assertMediaModelAdmission';
 import { Resource } from 'sst';
 import { apiKeyService } from '@bike4mind/auth';
 import {
@@ -24,9 +25,11 @@ import {
   usageEventRepository,
   userRepository,
 } from '@bike4mind/database';
+import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
 import { Logger } from '@bike4mind/observability';
 import { modelDiscoveryService } from '@bike4mind/services';
 import { GenerationJobEngine } from '@bike4mind/services/generationJobs';
+import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import { createMusicJobHandler, type CreateMusicJobDeps, type MusicJobDeps } from '@bike4mind/services/musicJobs';
 import {
   callerOwnsGeneratedImage,
@@ -59,7 +62,7 @@ import {
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
-import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
+import { saveGeneratedAssetToFiles } from '@bike4mind/server-utils/utils/saveGeneratedAssetToFiles';
 import { deliverJobToSlack } from './slackJobDelivery';
 import { createSlackJobDeliveryDeps } from './slackJobDeliveryDeps';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
@@ -389,6 +392,7 @@ export const getVideoJobDeps = (): VideoJobDeps => {
       users: userRepository,
       organizations: organizationRepository,
       creditTransactions: creditTransactionRepository,
+      newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
     },
     enqueue: enqueueGenerationJob,
     recordUsage,
@@ -400,6 +404,7 @@ export const getVideoJobDeps = (): VideoJobDeps => {
 
 export const getCreateVideoJobDeps = (): CreateVideoJobDeps => ({
   ...getVideoJobDeps(),
+  assertModelAdmission: assertMediaModelAdmission,
   engine: getGenerationJobEngine(),
 });
 
@@ -416,6 +421,7 @@ export const getMusicJobDeps = (): MusicJobDeps => {
       users: userRepository,
       organizations: organizationRepository,
       creditTransactions: creditTransactionRepository,
+      newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
     },
     enqueue: enqueueGenerationJob,
     recordUsage: recordMusicUsage,
@@ -427,6 +433,7 @@ export const getMusicJobDeps = (): MusicJobDeps => {
 
 export const getCreateMusicJobDeps = (): CreateMusicJobDeps => ({
   ...getMusicJobDeps(),
+  assertModelAdmission: assertMediaModelAdmission,
   engine: getGenerationJobEngine(),
   checkStorageFor,
 });
@@ -441,6 +448,10 @@ export const getGenerationJobEngine = (): GenerationJobEngine => {
     now: () => new Date(),
     logger,
     leaseMs: LEASE_MS,
+    aiAccessDenial: async userId => {
+      const user = await userRepository.findById(userId);
+      return user ? aiAccessDeniedMessage(user) : 'User not found';
+    },
   });
   return generationJobEngine;
 };

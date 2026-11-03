@@ -98,6 +98,24 @@ describe('createAttachmentLakeAccess', () => {
     );
   });
 
+  it('reports a narrowed view as failed only when the caller requires a complete one', async () => {
+    resolveRetrievalLakeScopeForUser.mockResolvedValue({
+      lakes: [],
+      dataLakeTags: [],
+      dataLakeTagPrefixes: [],
+      lakeViewComplete: false,
+    });
+
+    await expect(
+      createAttachmentLakeAccess(USER, makeLogger() as never, { requireCompleteView: true })()
+    ).resolves.toEqual({ resolutionFailed: true });
+    await expect(createAttachmentLakeAccess(USER, makeLogger() as never)()).resolves.toEqual({
+      lakeMemberships: [MEMBERSHIP],
+      dataLakeTags: [],
+      dataLakeTagPrefixes: [],
+    });
+  });
+
   it('rejecting once does not poison later calls into an unhandled rejection', async () => {
     resolveRetrievalLakeScopeForUser.mockRejectedValue(new Error('lake read failed'));
     const thunk = createAttachmentLakeAccess(USER, makeLogger() as never);

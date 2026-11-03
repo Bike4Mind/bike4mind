@@ -30,12 +30,12 @@ vi.mock('@server/middlewares/requireStripeWebhook', () => ({
 // Real error classes: BadRequestError carries statusCode 400, so the rejection tests
 // assert the status the client receives, not only the message.
 import { BadRequestError, HttpStatus } from '@bike4mind/common';
-import { SubscriptionPlanInterval, UserSubscriptionTier } from '@client/lib/userSubscriptions/types';
+import { SubscriptionPlanInterval, UserSubscriptionTier } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 import Stripe from 'stripe';
 
 const mockFindChangeable = vi.fn();
 const mockFindActive = vi.fn();
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     findChangeableUserSubscription: (...args: unknown[]) => mockFindChangeable(...args),
     findActiveUserSubscriptions: (...args: unknown[]) => mockFindActive(...args),
@@ -66,6 +66,11 @@ const mockGetPlanByPriceId = vi.fn();
 vi.mock('@client/lib/userSubscriptions/utils', () => ({
   getSubscriptionPlanByPriceId: (...args: unknown[]) => mockGetPlanByPriceId(...args),
 }));
+
+// The gate's own rules are covered in server/billing/checkoutGate.test.ts; here only that the route calls it.
+const { mockAssertCheckoutAllowed } = vi.hoisted(() => ({ mockAssertCheckoutAllowed: vi.fn() }));
+vi.mock('@server/billing/checkoutGate', () => ({ assertCheckoutAllowed: mockAssertCheckoutAllowed }));
+vi.mock('@server/auth/networkMeta', () => ({ readNetworkMeta: () => ({ ip: '203.0.113.7' }) }));
 
 import handler from '../change';
 

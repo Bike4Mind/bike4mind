@@ -319,6 +319,20 @@ describe('buildSharedTools: the denylist also reaches parentTools, which the ret
     expect(names).toEqual(expect.arrayContaining(['dice_roll', 'atlassian__jira_search', 'slack__send_message']));
   });
 
+  it('keeps current_model_details out of parentTools: it is bound to the parent serving model', () => {
+    buildSharedTools(
+      { ...deps, agentStore, apiKeyTable: {} as ToolBuilderDeps['apiKeyTable'], model: 'm' },
+      callbacks,
+      { enabledTools: ['dice_roll', 'current_model_details'] }
+    );
+
+    const parentTools = (vi.mocked(createDelegateToAgentTool).mock.calls.at(-1)?.[0]?.parentTools ??
+      []) as ICompletionOptionTools[];
+    const names = parentTools.map(t => t.toolSchema.name);
+    expect(names).not.toContain('current_model_details');
+    expect(names).toContain('dice_roll');
+  });
+
   it('keeps a session-denied NATIVE tool out of parentTools even though the returned array still carries it', () => {
     // Native tools aren't checked against the denylist by the "filter to enabled tools" step
     // above (only `isToolOfferable` is) - the caller's own post-build pass is what strips a

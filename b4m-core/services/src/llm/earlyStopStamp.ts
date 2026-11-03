@@ -1,6 +1,6 @@
 import {
   DEGENERATE_FINISH_REASON,
-  REFUSAL_FINISH_REASON,
+  isProviderRefusalStopReason,
   TRUNCATED_FINISH_REASON,
   type UsageEventStatus,
 } from '@bike4mind/common';
@@ -54,7 +54,7 @@ export function buildEarlyStopStamp(finishReason: string | undefined | null): Ea
  * Spend tab's Refusal Rate.
  */
 export function usageEventStatusForFinish(finishReason: string | undefined | null): UsageEventStatus {
-  if (finishReason === REFUSAL_FINISH_REASON) return 'refusal';
+  if (isProviderRefusalStopReason(finishReason)) return 'refusal';
   return buildEarlyStopStamp(finishReason)?.usageEventStatus ?? 'ok';
 }
 

@@ -8,6 +8,19 @@ sidebar_position: 8
 
 Solutions to common issues and frequently asked questions.
 
+## Subscription access refused
+
+Hosted CLI and desktop cloud access require an active paid subscription by default. This includes
+browser device login, token refresh and existing sessions. Paid standalone plans and organization
+seats qualify; administrators and developer-tagged users are exempt. Self-hosted installations
+default to open access.
+
+If login or a command reports that it **requires an active paid subscription**, check your plan
+or ask your administrator to check **SecOps > API Rate Limiting > API Key Access**. Setting it to
+`all` opens access; `disabled` refuses access except for the exemptions. Changes apply within
+30 seconds. Logging in again does not bypass the policy. See
+[API authentication](../api/completions/authentication.md#subscription-access) for key-specific rules.
+
 ## Installation Issues
 
 ### "command not found: b4m"

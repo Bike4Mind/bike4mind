@@ -16,7 +16,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const ALLOWLIST = new Set([
   'b4m-core/fab-pipeline/src/storage/createS3Client.ts',
   'apps/client/server/tools/modalImageHandler.ts',
-  'apps/client/server/security/cloudScan.ts',
+  'packages/server-utils/src/security/cloudScan.ts',
   'apps/workers/src/emailIngestion/emailParser.ts',
   'apps/client/pages/api/files/presigned-url.ts',
   'apps/client/pages/api/app-files/serve/[...key].ts',

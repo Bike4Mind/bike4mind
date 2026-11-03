@@ -35,6 +35,9 @@ export default defineConfig({
     'src/llm/reranker/index.ts',
     'src/llm/intentClassifier.ts',
     'src/llm/modelAdmission.ts',
+    'src/llm/shadowTier.ts',
+    // Pure account-state predicates; route gates import them without the services barrel.
+    'src/userService/accountState.ts',
     'src/llm/refineText.ts',
     'src/llm/artifactGating.ts',
     'src/llm/agents/ServerAgentStore.ts',

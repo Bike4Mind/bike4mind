@@ -152,6 +152,25 @@ describe('toSafeUser', () => {
 });
 
 describe('redactUserSecretsForSelf', () => {
+  it('withholds private grant assessments from self and public views', () => {
+    const user = {
+      ...fullUser,
+      signupGrantAssessment: {
+        band: 'review',
+        credits: 0,
+        score: 8,
+        reasons: ['datacenter'],
+        missing: [],
+        policyVersion: 'private',
+        status: 'evaluated',
+      },
+    } as IUser;
+    expect(redactUserSecretsForSelf(user)).not.toHaveProperty('signupGrantAssessment');
+    expect(toSafeUser(user)).not.toHaveProperty('signupGrantAssessment');
+    expect(redactUserSecretsForSelf(user, { keepAdminOnly: ['signupGrantAssessment'] })).toHaveProperty(
+      'signupGrantAssessment'
+    );
+  });
   it('drops pure-secret fields entirely', () => {
     const self = redactUserSecretsForSelf(fullUser)!;
     // `authProviders` is NOT here: it moved to USER_SUBFIELD_REDACTED_FIELDS, since the
@@ -170,6 +189,20 @@ describe('redactUserSecretsForSelf', () => {
     ]) {
       expect(f in self).toBe(false);
     }
+  });
+
+  it('hides throttle and riskSignals from self views unless re-included via keepAdminOnly', () => {
+    const flagged = {
+      ...fullUser,
+      throttle: { tier: 'shadow', reason: 'r', source: 'admin', changedAt: new Date() },
+      riskSignals: [{ type: 'signup_honeypot', at: new Date() }],
+    } as unknown as IUser;
+    const self = redactUserSecretsForSelf(flagged)!;
+    expect('throttle' in self).toBe(false);
+    expect('riskSignals' in self).toBe(false);
+    const admin = redactUserSecretsForSelf(flagged, { keepAdminOnly: ['throttle', 'riskSignals'] })!;
+    expect(admin.throttle).toBeDefined();
+    expect(admin.riskSignals).toBeDefined();
   });
 
   it('keeps non-secret profile fields', () => {
@@ -272,6 +305,17 @@ describe('redactUserSecretsForSelf', () => {
     for (const f of USER_SUBFIELD_REDACTED_FIELDS) {
       expect(secrets.has(f)).toBe(true);
     }
+  });
+
+  // The signals and reasons say how the score is built, so the scored user must never see them.
+  it('never shows a user their own risk score, in any view', () => {
+    const scored = {
+      ...fullUser,
+      riskScore: { score: 70, signals: [], computedAt: new Date(), reviewState: 'pending' },
+    } as unknown as IUser;
+
+    expect('riskScore' in redactUserSecretsForSelf(scored)!).toBe(false);
+    expect('riskScore' in toSafeUser(scored, 'self')!).toBe(false);
   });
 
   it('drops every non-rebuilt USER_SECRET_FIELDS entry present on the input', () => {

@@ -24,10 +24,12 @@ import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { getCreateVideoJobDeps } from '@server/generationJobs/wiring';
 import { listOwnGenerationJobs } from '@server/generations/listOwnGenerationJobs';
 import { readIdempotencyKey } from '@server/generations/readIdempotencyKey';
+import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { mapperDeps } from '@server/generations/routeDeps';
 import { toPublicVideoGeneration } from '@server/videoGenerations/toPublicVideoGeneration';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 const CURSOR_SCOPE = 'v1.video-generations';
 
@@ -76,6 +78,7 @@ const toHttpError = (refusal: Extract<CreateVideoJobResult, { ok: false }>) =>
 const createRouter = nextRouteForContract(createVideoGenerationContract, {
   rateLimit: perUserRateLimit('POST /api/v1/video-generations'),
 }).post(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const idempotencyKey = readIdempotencyKey(req.headers['idempotency-key']);
   const request = toDomainRequest(req.validated);
   // 'studio' means any first-party session (the SPA), not only the Studio page; an API key is the public API.
@@ -86,9 +89,10 @@ const createRouter = nextRouteForContract(createVideoGenerationContract, {
   // createVideoJob refuses a keyless provider itself, after its idempotent replay lookup.
   const result = await createVideoJob(
     {
-      user: { id: req.user.id, organizationId },
+      user: { id: req.user.id, organizationId, adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo) },
       request,
       source,
+      apiKeyId: req.apiKeyInfo?.keyId,
       // The domain scopes keys per credit owner (the org for members): per user keeps members apart, and per
       // source keeps a studio retry from replaying an API job that reused the same key.
       ...(idempotencyKey && { idempotencyKey: `${source}:${req.user.id}:${idempotencyKey}` }),

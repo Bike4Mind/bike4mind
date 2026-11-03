@@ -5,15 +5,15 @@ import type { Request, Response, NextFunction } from 'express';
 vi.mock('@server/middlewares/apiKeyAuth', () => ({
   isApiKeyAuth: vi.fn(() => false),
 }));
-vi.mock('./emitActiveEvent', async importOriginal => {
-  const original = await importOriginal<typeof import('./emitActiveEvent')>();
+vi.mock('@bike4mind/server-utils/analytics/emitActiveEvent', async importOriginal => {
+  const original = await importOriginal<typeof import('@bike4mind/server-utils/analytics/emitActiveEvent')>();
   return {
     ...original,
     emitActiveEvent: vi.fn().mockResolvedValue(undefined),
     isAnalyticsConfigured: vi.fn(() => true),
   };
 });
-vi.mock('./pseudonymize', () => ({
+vi.mock('@bike4mind/server-utils/analytics/pseudonymize', () => ({
   pseudonymizeUserId: vi.fn((id: string) => `pseudo:${id}`),
 }));
 vi.mock('./resolveUserType', () => ({
@@ -22,7 +22,7 @@ vi.mock('./resolveUserType', () => ({
 
 import { OVERWATCH_UNKNOWN_SESSION_ID } from '@bike4mind/common';
 import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
-import { emitActiveEvent, isAnalyticsConfigured } from './emitActiveEvent';
+import { emitActiveEvent, isAnalyticsConfigured } from '@bike4mind/server-utils/analytics/emitActiveEvent';
 import { analyticsMiddleware, __resetAnalyticsThrottle } from './analyticsMiddleware';
 import { VISIT_COOKIE, mintVisitId } from './visitSession';
 
@@ -80,6 +80,33 @@ describe('analyticsMiddleware — gating', () => {
     mw(makeReq(), res, next);
     expect(emitActiveEvent).toHaveBeenCalledOnce();
     expect(next).toHaveBeenCalled();
+  });
+});
+
+describe('analyticsMiddleware - synthetic lane', () => {
+  it("marks a synthetic user's active event with the synthetic lane", () => {
+    const mw = analyticsMiddleware();
+    mw(
+      makeReq({
+        user: {
+          id: 'persona-1',
+          isSystem: false,
+          level: 'DemoUser',
+          subscribedUntil: null,
+          isSynthetic: true,
+        } as never,
+      }),
+      res,
+      next
+    );
+    expect(emitActiveEvent).toHaveBeenCalledWith(expect.objectContaining({ isSynthetic: true }));
+    expect(next).toHaveBeenCalled();
+  });
+
+  it('does not mark a user without the flag', () => {
+    const mw = analyticsMiddleware();
+    mw(makeReq(), res, next);
+    expect(emitActiveEvent).toHaveBeenCalledWith(expect.objectContaining({ isSynthetic: false }));
   });
 });
 

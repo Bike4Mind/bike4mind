@@ -61,6 +61,7 @@ export type MusicJobDeps = {
 };
 
 export type CreateMusicJobDeps = MusicJobDeps & {
+  assertModelAdmission(userId: string, modelId: string, adminRoleWithheld?: boolean): Promise<void>;
   engine: Pick<GenerationJobEngine, 'failBeforeStart'>;
   /** The refusal detail when the user's Files quota lacks room for `bytes` more (the song is saved there, as saveToFiles does); undefined when there is room. */
   checkStorageFor(userId: string, bytes: number): Promise<StorageLimitErrorInfo | undefined>;
@@ -70,10 +71,12 @@ export type CreateMusicJobDeps = MusicJobDeps & {
 export const MAX_MUSIC_BYTES_PER_SECOND = 40_000;
 
 export type CreateMusicJobInput = {
-  user: { id: string; organizationId: string | null };
+  user: { id: string; organizationId: string | null; adminRoleWithheld?: boolean };
   /** Untrusted: parsed and validated by createMusicJob. */
   request: unknown;
   source: GenerationJobSource;
+  /** The UserApiKey that authenticated the request, kept on the job for its settlement row. */
+  apiKeyId?: string;
   idempotencyKey?: string;
   /** The notebook and message the song belongs to, for in-chat producers. */
   sessionId?: string;

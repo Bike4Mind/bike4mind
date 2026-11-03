@@ -1,4 +1,4 @@
-import { appendFile, copyFile, mkdir, mkdtemp, readFile, stat, utimes, writeFile } from 'node:fs/promises';
+import { appendFile, copyFile, mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -63,6 +63,15 @@ async function indexed(path: string): Promise<IndexedTranscript> {
     sourceId: SOURCE_ID,
     sessionId: codeSessionId(SOURCE_ID),
   };
+}
+
+async function existingProject(root: string, transcriptPath: string) {
+  const repository = join(root, 'repository');
+  const worktree = join(repository, '.claude', 'worktrees', 'sample');
+  await mkdir(worktree, { recursive: true });
+  const transcript = await readFile(transcriptPath, 'utf8');
+  await writeFile(transcriptPath, transcript.replaceAll('/work/example-project', repository));
+  return { repository, worktree };
 }
 
 /** The fixture with its torn last line completed, plus the turns that came after. */
@@ -138,22 +147,45 @@ describe('Claude Code import', () => {
   });
 
   it('rebuilds a copy an older mapping made, even when the transcript has not changed', async () => {
-    const { transcriptPath, store, deps } = await setup();
+    const { root, transcriptPath, store, deps } = await setup();
+    const { repository, worktree } = await existingProject(root, transcriptPath);
     const exists = { ...deps, directoryExists: async () => true };
     const first = await importTranscript(await indexed(transcriptPath), undefined, exists);
     const old = { ...first, mapVersion: undefined };
     await store.putImported({
       ...(await store.get(codeSessionId(SOURCE_ID)))!,
-      project: { ...(await store.get(codeSessionId(SOURCE_ID)))!.project!, directory: WORKTREE, name: 'sample' },
+      project: { ...(await store.get(codeSessionId(SOURCE_ID)))!.project!, directory: worktree, name: 'sample' },
     });
 
     expect(needsImport(await indexed(transcriptPath), old)).toBe(true);
     const rebuilt = await importTranscript(await indexed(transcriptPath), old, exists);
     expect(rebuilt.mapVersion).toBe(CODE_MAP_VERSION);
     const session = (await store.get(codeSessionId(SOURCE_ID)))!;
-    expect(session.project?.directory).toBe('/work/example-project');
+    expect(session.project?.directory).toBe(repository);
     const ids = session.messages.map(message => message.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('keeps syncing a session after its worktree is removed', async () => {
+    const { root, transcriptPath, store, deps } = await setup();
+    const { repository, worktree } = await existingProject(root, transcriptPath);
+    const onDisk = {
+      ...deps,
+      directoryExists: async (path: string) => (await stat(path).catch(() => null))?.isDirectory() ?? false,
+    };
+    const first = await importTranscript(await indexed(transcriptPath), undefined, onDisk);
+    expect((await store.get(codeSessionId(SOURCE_ID)))!.project?.workingDirectory).toBe(worktree);
+
+    await rm(worktree, { recursive: true });
+    const old = { ...first, mapVersion: undefined };
+    const rebuilt = await importTranscript(await indexed(transcriptPath), old, onDisk);
+    expect(rebuilt.status).toBe('imported');
+    expect(needsImport(await indexed(transcriptPath), rebuilt)).toBe(false);
+    expect((await store.get(codeSessionId(SOURCE_ID)))!.project).toMatchObject({
+      directory: repository,
+      workspace: false,
+      workingDirectory: repository,
+    });
   });
 
   it('appends only what was added since the last read', async () => {
@@ -279,23 +311,24 @@ describe('Claude Code import', () => {
   });
 
   it('files the session under its repository, running in its own worktree while that is still there', async () => {
-    const { transcriptPath, store, deps } = await setup();
+    const { root, transcriptPath, store, deps } = await setup();
+    const { repository, worktree } = await existingProject(root, transcriptPath);
     await importTranscript(await indexed(transcriptPath), undefined, { ...deps, directoryExists: async () => true });
     expect((await store.get(codeSessionId(SOURCE_ID)))!.project).toEqual({
-      directory: '/work/example-project',
-      name: 'example-project',
+      directory: repository,
+      name: 'repository',
       branch: 'feature/sample',
       workspace: true,
       workspaceBranch: 'feature/sample',
-      workingDirectory: WORKTREE,
+      workingDirectory: worktree,
       contextDirectories: [],
     });
 
-    const repositoryOnly = async (path: string) => path === '/work/example-project';
-    expect(await projectFor(WORKTREE, 'feature/sample', repositoryOnly)).toMatchObject({
-      directory: '/work/example-project',
+    const repositoryOnly = async (path: string) => path === repository;
+    expect(await projectFor(worktree, 'feature/sample', repositoryOnly)).toMatchObject({
+      directory: repository,
       workspace: false,
-      workingDirectory: '/work/example-project',
+      workingDirectory: repository,
     });
   });
 
@@ -389,9 +422,13 @@ describe('Claude Code import', () => {
     await completeAndAppend(transcriptPath);
     const id = codeSessionId(SOURCE_ID);
     let resolveReached!: () => void;
-    const reached = new Promise<void>(resolve => { resolveReached = resolve; });
+    const reached = new Promise<void>(resolve => {
+      resolveReached = resolve;
+    });
     let releaseProject!: () => void;
-    const projectReady = new Promise<void>(resolve => { releaseProject = resolve; });
+    const projectReady = new Promise<void>(resolve => {
+      releaseProject = resolve;
+    });
     const running = importTranscript(await indexed(transcriptPath), first, {
       ...deps,
       directoryExists: async () => {
@@ -420,5 +457,4 @@ describe('Claude Code import', () => {
     };
     expect(needsImport(transcript, failed)).toBe(true);
   });
-
 });

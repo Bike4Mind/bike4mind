@@ -49,6 +49,11 @@ vi.mock('@bike4mind/database', () => ({
   SlackAuditEventType: {},
 }));
 
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
+  recordAdminActionForActor: vi.fn().mockResolvedValue(null),
+}));
+
 vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() } }));
 
 import rateLimitsHandler from '../rate-limits';

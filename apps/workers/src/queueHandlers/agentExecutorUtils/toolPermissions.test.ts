@@ -427,7 +427,10 @@ describe('resumeApprovedPauseAndGateConfidence', () => {
 
     expect(outcome).toEqual({ proceed: true });
     expect(callOrder).toEqual(['executeGatedToolCall', 'takeIterationConfidence']);
-    expect(deps.recordIterationConfidence).toHaveBeenCalledWith('exec_1', 0.9, { belowThreshold: false });
+    expect(deps.recordIterationConfidence).toHaveBeenCalledWith('exec_1', 0.9, {
+      belowThreshold: false,
+      recordTelemetry: true,
+    });
   });
 
   it('stops without reading confidence when the replay itself errors', async () => {
@@ -478,6 +481,33 @@ describe('resumeApprovedPauseAndGateConfidence', () => {
 
     expect(outcome).toEqual({ proceed: false });
     expect(deps.setPendingGate).toHaveBeenCalledWith('exec_3', expect.objectContaining({ confidence: 0.1 }));
+  });
+
+  it('forwards confidenceOverrides to the replay gate', async () => {
+    const approved = call('image_generation', { prompt: 'cat' });
+    // The scripted entry extends an existing low streak, so the replay pauses on it.
+    const deps = makeDeps({ recordIterationConfidence: vi.fn(async () => 2) });
+
+    const outcome = await resumeApprovedPauseAndGateConfidence(
+      {
+        executionId: 'exec_override',
+        iterationIndex: 2,
+        withheld: [approved],
+        approvedToolCallId: approved.id,
+        approvedTools: [],
+        deniedTools: [],
+        confidenceGateThreshold: 0.6,
+        confidenceOverrides: [0.9, 0.1],
+      },
+      deps
+    );
+
+    expect(outcome).toEqual({ proceed: false });
+    expect(deps.setPendingGate).toHaveBeenCalledWith('exec_override', expect.objectContaining({ confidence: 0.1 }));
+    expect(deps.recordIterationConfidence).toHaveBeenCalledWith('exec_override', 0.1, {
+      belowThreshold: true,
+      recordTelemetry: false,
+    });
   });
 
   it('stops the loop when the confidence gate aborts on a concurrent abort race', async () => {
@@ -555,7 +585,10 @@ describe('gateReplayConfidence', () => {
       deps
     );
     expect(outcome).toEqual({ status: 'proceed' });
-    expect(deps.recordIterationConfidence).toHaveBeenCalledWith('exec-1', 0.7, { belowThreshold: false });
+    expect(deps.recordIterationConfidence).toHaveBeenCalledWith('exec-1', 0.7, {
+      belowThreshold: false,
+      recordTelemetry: true,
+    });
     expect(deps.setPendingGate).not.toHaveBeenCalled();
   });
 
@@ -566,7 +599,10 @@ describe('gateReplayConfidence', () => {
       deps
     );
     expect(outcome).toEqual({ status: 'proceed' });
-    expect(deps.recordIterationConfidence).toHaveBeenCalledWith('exec-1', 0.1, { belowThreshold: true });
+    expect(deps.recordIterationConfidence).toHaveBeenCalledWith('exec-1', 0.1, {
+      belowThreshold: true,
+      recordTelemetry: true,
+    });
     expect(deps.setPendingGate).not.toHaveBeenCalled();
   });
 
@@ -597,7 +633,10 @@ describe('gateReplayConfidence', () => {
       deps
     );
     expect(outcome).toEqual({ status: 'proceed' });
-    expect(deps.recordIterationConfidence).toHaveBeenCalledWith('exec-1', 0.1, { belowThreshold: false });
+    expect(deps.recordIterationConfidence).toHaveBeenCalledWith('exec-1', 0.1, {
+      belowThreshold: false,
+      recordTelemetry: true,
+    });
     expect(deps.setPendingGate).not.toHaveBeenCalled();
   });
 
@@ -613,6 +652,84 @@ describe('gateReplayConfidence', () => {
     expect(outcome).toEqual({ status: 'aborted' });
     expect(deps.sendWs).toHaveBeenCalledWith('failed', { executionId: 'exec-1', reason: 'aborted' });
     expect(deps.recordGateEmitted).not.toHaveBeenCalled();
+  });
+
+  describe('scripted confidenceOverrides', () => {
+    it('advances the streak on a scripted low entry but does not pause on the first one', async () => {
+      const deps = makeDeps({ recordIterationConfidence: vi.fn(async () => 1) });
+      const outcome = await gateReplayConfidence(
+        {
+          executionId: 'exec-1',
+          iterationIndex: 1,
+          confidence: 0.9,
+          confidenceGateThreshold: 0.6,
+          confidenceOverrides: [0.2],
+        },
+        deps
+      );
+      expect(outcome).toEqual({ status: 'proceed' });
+      expect(deps.recordIterationConfidence).toHaveBeenCalledWith('exec-1', 0.2, {
+        belowThreshold: true,
+        recordTelemetry: false,
+      });
+    });
+
+    it('pauses when the entry for the replayed iteration extends a streak, keeping it out of telemetry', async () => {
+      const deps = makeDeps({ recordIterationConfidence: vi.fn(async () => 2) });
+      // iterationIndex 3 reads entry 2.
+      const outcome = await gateReplayConfidence(
+        {
+          executionId: 'exec-1',
+          iterationIndex: 3,
+          confidence: 0.9,
+          confidenceGateThreshold: 0.6,
+          confidenceOverrides: [0.9, 0.9, 0.2],
+        },
+        deps
+      );
+      expect(outcome).toEqual({ status: 'paused' });
+      expect(deps.setPendingGate).toHaveBeenCalledWith('exec-1', expect.objectContaining({ confidence: 0.2 }));
+      expect(deps.recordIterationConfidence).toHaveBeenCalledWith('exec-1', 0.2, {
+        belowThreshold: true,
+        recordTelemetry: false,
+      });
+      expect(deps.recordGateEmitted).not.toHaveBeenCalled();
+    });
+
+    it('keeps the real score, and its telemetry, past the end of the script', async () => {
+      const deps = makeDeps();
+      const outcome = await gateReplayConfidence(
+        {
+          executionId: 'exec-1',
+          iterationIndex: 3,
+          confidence: 0.7,
+          confidenceGateThreshold: 0.6,
+          confidenceOverrides: [0.1],
+        },
+        deps
+      );
+      expect(outcome).toEqual({ status: 'proceed' });
+      expect(deps.recordIterationConfidence).toHaveBeenCalledWith('exec-1', 0.7, {
+        belowThreshold: false,
+        recordTelemetry: true,
+      });
+    });
+
+    it('never gates a replay that produced no score', async () => {
+      const deps = makeDeps();
+      const outcome = await gateReplayConfidence(
+        {
+          executionId: 'exec-1',
+          iterationIndex: 1,
+          confidence: null,
+          confidenceGateThreshold: 0.6,
+          confidenceOverrides: [0.1],
+        },
+        deps
+      );
+      expect(outcome).toEqual({ status: 'proceed' });
+      expect(deps.setPendingGate).not.toHaveBeenCalled();
+    });
   });
 });
 

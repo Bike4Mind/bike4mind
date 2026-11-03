@@ -15,6 +15,8 @@ export interface SessionScope {
   /** The resolved endpoint, exactly as AuthState carries it. */
   environmentUrl: string;
   accountId: string;
+  /** Device-only conversations are separate from every authenticated backend. */
+  local?: true;
 }
 
 /**
@@ -80,6 +82,7 @@ function endpointSlug(url: string): string {
  * the path in its own characters.
  */
 export function sessionScopeKey(scope: SessionScope): string {
+  if (scope.local) return 'device-local';
   const endpoint = canonicalEndpoint(scope.environmentUrl);
   const digest = createHash('sha256').update(`${endpoint}\n${scope.accountId}`).digest('hex').slice(0, DIGEST_LENGTH);
   return assertScopeKey(`${endpointSlug(endpoint)}-${digest}`);
@@ -112,6 +115,14 @@ export function sessionScopeFor(state: AuthState | null | undefined): SessionSco
   const accountId = state?.user?.id ?? '';
   if (!environmentUrl || !accountId) return null;
   return { environmentUrl, accountId };
+}
+
+/** A signed-out user can use device-local models without claiming any account's sessions. */
+export function sessionScopeForChat(state: AuthState | null | undefined): SessionScope | null {
+  const authenticated = sessionScopeFor(state);
+  if (authenticated) return authenticated;
+  if (state?.status !== 'signed-out' && state?.status !== 'unconfigured') return null;
+  return { environmentUrl: 'b4m-device-local://offline', accountId: 'device', local: true };
 }
 
 /**

@@ -14,13 +14,18 @@ import {
   FabFile,
   Project,
   Memento,
-  QuestMasterPlan,
   applySharedShareableRules,
 } from '@bike4mind/database';
-import { InvitePermission, IUserDocument, Permission, hasDeveloperUserTag } from '@bike4mind/common';
+import {
+  InvitePermission,
+  IUserDocument,
+  Permission,
+  hasAdminPermission,
+  hasDeveloperUserTag,
+} from '@bike4mind/common';
 import { SecretRotation } from '@bike4mind/database/infra';
-import { Subscription } from '@server/models/Subscription';
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { Subscription } from '@bike4mind/server-utils/models/Subscription';
+import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 
 export type Ability = MongoAbility;
 function defineAbilitiesFor(user: IUserDocument | undefined) {
@@ -48,18 +53,20 @@ function defineAbilitiesFor(user: IUserDocument | undefined) {
       allow('update', AdminSettings);
       allow('delete', AdminSettings);
 
-      allow('create', ModalModel);
-      allow('update', ModalModel);
-      allow('delete', ModalModel);
-      allow('manage', ModalModel); // Full management permissions for modal tool
-      allow('manage', 'Modal'); // Allow the modal-tool API to check this permission
-
       allow('read', Organization);
       allow('update', Organization);
       allow('delete', Organization);
 
       allow('read', UserActivityCounter);
       allow('update', UserActivityCounter);
+    }
+
+    if (hasAdminPermission(user, 'settings:manage')) {
+      allow('create', ModalModel);
+      allow('update', ModalModel);
+      allow('delete', ModalModel);
+      allow('manage', ModalModel); // Full management permissions for modal tool
+      allow('manage', 'Modal'); // Allow the modal-tool API to check this permission
     }
 
     allow('read', UserActivityCounter, ownDocumentPermission);
@@ -89,16 +96,11 @@ function defineAbilitiesFor(user: IUserDocument | undefined) {
     allow('addUser', Organization, managerPermission);
     allow('removeUser', Organization, managerPermission);
     allow('export', Session, ownDocumentPermission);
+    // Own documents only: the knowledge-files export route zips exactly what this scopes, and
+    // widening it to the share arm would bundle other people's files into the caller's archive.
+    // No admin branch, matching the Session rule above. MUST STAY IN SYNC with the db-core copy.
+    allow('export', FabFile, ownDocumentPermission);
     allow('clone', Session, ownDocumentPermission);
-
-    // QuestMasterPlan read access follows read access to its associated Session (via notebookId)
-    allow(Permission.read, QuestMasterPlan, {
-      notebookId: {
-        $in: Session.find({
-          userId: user.id,
-        }).select('_id'),
-      },
-    });
 
     // Accept and refuse invites
     allow<MongoQuery>(InvitePermission.acceptOrRefuse, Invite, {

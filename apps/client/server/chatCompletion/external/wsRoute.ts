@@ -1,4 +1,6 @@
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
+import { checkFreeTierDailySpendCap } from '@server/billing/freeTierDailyCapGate';
+import { actorScopeForKey } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import express, { type Request, type Response, type Express } from 'express';
 import {
   CompletionRequestSchema,
@@ -23,6 +25,7 @@ import {
   userRepository,
   userApiKeyRepository,
   organizationRepository,
+  cacheRepository,
 } from '@bike4mind/database';
 import { Connection } from '@bike4mind/database/social';
 import {
@@ -34,14 +37,22 @@ import {
 } from '@server/cli/auth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { sendToConnection } from '@server/websocket/utils';
-import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@server/auth/apiKeyAuthFailure';
+import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';
+import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { cliCompletionErrorFields, sanitizeErrorMessage } from '@server/utils/errorSanitization';
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { Resource } from 'sst';
 import { z } from 'zod';
 import { getUserEntitlements } from '@server/entitlements';
+import { httpErrorToResponse } from '@server/middlewares/errorHandler';
+import {
+  admitApiKeyCompletion,
+  NO_COMPLETION_QUOTA,
+  type CompletionQuotaGrant,
+} from '@server/utils/untrustedCompletionQuota';
+import { logApiKeyUsageOnResponse } from './apiKeyUsageLog';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 
 /**
  * CLI completions with WebSocket response streaming (`/api/ai/v1/ws-completions`), served by
@@ -119,6 +130,16 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
         apiKeyInfo = await verifyApiKey(headers);
         userId = apiKeyInfo.userId;
         logger.info('[CLI_WS_HTTP] Authenticated via API key', { keyId: apiKeyInfo.keyId });
+        logApiKeyUsageOnResponse({
+          req,
+          res,
+          apiKey: apiKeyInfo,
+          endpoint: WS_COMPLETIONS_ENDPOINT,
+          source,
+          startTime,
+          logger,
+          track,
+        });
 
         await checkApiKeyRateLimitOrThrow(apiKeyInfo, {
           userId: apiKeyInfo.userId,
@@ -139,7 +160,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
         }
         const token = headers.authorization?.replace('Bearer ', '');
         try {
-          const user = await verifyJwtToken(token);
+          const user = await verifyJwtToken(token, { requireApiAccess: true });
           userId = user.id;
           logger.info('[CLI_WS_HTTP] Authenticated via JWT', { userId });
           await checkRateLimit(userId, source, { client: resolveRequestClient(headers) });
@@ -149,6 +170,11 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
           // 401 makes the CLI report an expired session and tell the user to sign in again, which
           // cannot help.
           // The message is server-authored guidance (sanitizeErrorMessage would blank it).
+          if (isAuthInfraFailure(authError)) {
+            setAuthInfraFailureHeaders(res, authError);
+            res.status(authError.statusCode).json({ error: authError.message });
+            return;
+          }
           if (authError instanceof ForbiddenError) {
             res.status(403).json({ error: authError.message });
             return;
@@ -166,7 +192,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
       return;
     }
 
-    const { requestId, model, messages, options } = body;
+    const { requestId, model, messages, options, sessionId } = body;
     logger.updateMetadata({ userId, model, requestId });
 
     // The CLI must already hold a WebSocket connection to receive the stream.
@@ -189,6 +215,28 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
         effectiveConnections.map(conn => sendToConnection(conn.connectionId, wsEndpoint, data as never))
       );
     };
+
+    // Last check before the 202, so every refusal is still an HTTP status the CLI can read.
+    let quota: CompletionQuotaGrant = NO_COMPLETION_QUOTA;
+    if (apiKeyInfo) {
+      try {
+        quota = await admitApiKeyCompletion({
+          owner: userId,
+          ownerUntrusted: apiKeyInfo.ownerUntrusted,
+          billingOwnerType: apiKeyInfo.billingOwnerType,
+          holdSlot: true,
+        });
+      } catch (error) {
+        if (!(error instanceof HTTPError)) {
+          logger.error('[CLI_WS_HTTP] Quota check failed', { error: sanitizeErrorMessage(error) });
+          res.status(500).json({ error: sanitizeErrorMessage(error) });
+          return;
+        }
+        const { status, headers, body: errorBody } = httpErrorToResponse(error, undefined);
+        res.status(status).set(headers).json(errorBody);
+        return;
+      }
+    }
 
     logger.info(`[CLI_WS_HTTP] Starting completion for user ${userId}, model: ${model}`);
     res.status(202).json({ success: true });
@@ -215,9 +263,19 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
             }
           }
 
+          // Daily spend cap before the credit hold; applies to all free-tier users regardless of auth method.
+          await checkFreeTierDailySpendCap({
+            userId,
+            userRepository,
+            billingOrganizationId: apiKeyInfo?.organizationId,
+            usageEventRepository,
+            logger,
+          });
+
           // Cast: Zod parses content/tools as unknown[], but executeCompletion expects typed arrays
           await executeCompletion({
             getEntitlements: getUserEntitlements,
+            getThinkingVisibility: resolveThinkingVisibility,
             creditHolds: createCompletionCreditHolds(logger),
             userId,
             model,
@@ -230,12 +288,15 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
               users: userRepository,
               usageEvents: usageEventRepository,
               organizations: organizationRepository,
+              cache: cacheRepository,
             },
             apiKeyInfo: apiKeyInfoForCompletion,
+            scopeActor: actorScopeForKey(apiKeyInfo),
             // Org-billed API keys settle to the org's shared pool.
             billingOrganizationId: apiKeyInfo?.organizationId,
             requestId,
             source,
+            sessionId,
             logger,
             onChunk: async (text, info) => {
               if (info?.inputTokens) finalInputTokens = info.inputTokens;
@@ -311,6 +372,8 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
             db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
             logger,
           }).catch(() => {}); // analytics failure must not mask the original error
+        } finally {
+          await quota.release();
         }
       })()
     );

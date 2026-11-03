@@ -13,6 +13,7 @@ import {
   type IFabFileDocument,
   type AttachScope,
 } from '@bike4mind/common';
+import type { ReactArtifactGroupRole } from '@client/app/utils/reactArtifactGroup';
 
 export type DefaultLayoutType =
   'horizontal' | 'vertical' | 'pip' | 'noAI' | 'hide' | 'floatingChat' | 'dockRight' | 'dockBottom';
@@ -41,7 +42,19 @@ export interface ArtifactData {
     | PythonArtifact;
   mimeType: string;
   id: string;
+  /**
+   * React only: the artifact's place in a multi-file app, from groupReactArtifacts over its reply.
+   * In memory only (see partialize): opening the card again re-derives it from the reply.
+   */
+  reactGroup?: ReactArtifactGroupRole;
 }
+
+/** The persisted copy of artifactData, without a React group's sibling sources. */
+const persistableArtifactData = (data: ArtifactData | undefined): ArtifactData | undefined => {
+  if (!data?.reactGroup) return data;
+  const { reactGroup, ...rest } = data;
+  return rest;
+};
 
 export interface PendingMessageFile {
   fabFile: IFabFileDocument;
@@ -62,6 +75,12 @@ export interface PendingMessageFile {
    * whichever notebook the user happens to be looking at.
    */
   uploadSessionId: string | null;
+  /** The attached file itself, previewed locally (see MessageFileThumbnails). */
+  localFile?: File;
+  /** The temp id minted when the upload started; survives the swap to the real FabFile id. */
+  clientId?: string;
+  /** Why an 'error' item failed, shown on its tile. */
+  errorMessage?: string;
 }
 
 /**
@@ -111,6 +130,7 @@ interface SessionLayoutControlState {
   floatingChatPosition: { x: number; y: number };
   floatingChatSize: { width: number; height: number };
   floatingChatMinimized: boolean;
+  floatingChatPillPosition: { x: number; y: number } | null;
   // Docked chat panel sizing (percentage)
   dockChatWidth: number; // Width % for dockRight mode (default 40)
   dockChatHeight: number; // Height % for dockBottom mode (default 40)
@@ -152,6 +172,7 @@ const useSessionLayout = create<SessionLayoutControlState>()(
       floatingChatPosition: { x: -1, y: -1 }, // -1 indicates "center on first use"
       floatingChatSize: { width: 450, height: 600 },
       floatingChatMinimized: false,
+      floatingChatPillPosition: null,
       dockChatWidth: 40,
       dockChatHeight: 40,
     }),
@@ -160,7 +181,7 @@ const useSessionLayout = create<SessionLayoutControlState>()(
       // Exclude recentArtifacts and pendingMessageFiles from persistence to prevent stale data
       partialize: state => ({
         layout: state.layout,
-        artifactData: state.artifactData, // Keep for backward compatibility
+        artifactData: persistableArtifactData(state.artifactData), // Keep for backward compatibility
         selectedArtifactId: state.selectedArtifactId,
         selectedArtifactVersions: state.selectedArtifactVersions,
         knowledgeViewerWidth: state.knowledgeViewerWidth,
@@ -168,6 +189,7 @@ const useSessionLayout = create<SessionLayoutControlState>()(
         // Floating chat window position/size persisted for cross-session memory
         floatingChatPosition: state.floatingChatPosition,
         floatingChatSize: state.floatingChatSize,
+        floatingChatPillPosition: state.floatingChatPillPosition,
         // floatingChatMinimized intentionally excluded - controlled at mount time
         // to avoid hydration race where persisted false overwrites auto-minimize on mobile
         // Docked chat panel sizing persisted for cross-session memory
@@ -276,6 +298,19 @@ export const setSessionLayout = (
     // If artifactData is provided or we're hiding the panel, update normally
     useSessionLayout.setState(newState);
   }
+};
+
+/**
+ * Writes a viewer's saved `content` into the open tab `id` (stored as `savedId` when the save
+ * re-created the artifact under a new id) and makes that tab the open artifact. Starts from the tab,
+ * not `artifactData`: that is only the artifact opened last, which opening another tab replaces and
+ * sending a message clears while the tabs stay open. No-op when `id` has no tab.
+ */
+export const saveOpenArtifactContent = (id: string, content: ArtifactData['content'], savedId: string = id) => {
+  const { layout, recentArtifacts } = useSessionLayout.getState();
+  const tab = recentArtifacts.find(a => a.id === id);
+  if (!tab) return;
+  setSessionLayout({ layout, artifactData: { ...tab, content, id: savedId } });
 };
 
 /**
@@ -398,6 +433,7 @@ export const patchPendingMessageFileModerationStatus = (
     return {
       ...item,
       status: moderationStatus === 'clean' ? 'complete' : 'blocked',
+      errorMessage: undefined,
       fabFile: {
         ...item.fabFile,
         moderationStatus,
@@ -407,6 +443,9 @@ export const patchPendingMessageFileModerationStatus = (
   });
 };
 
+export const MODERATION_TIMEOUT_MESSAGE =
+  "The safety check is taking longer than usual. We're still checking - it will attach once it clears, or you can remove it.";
+
 /**
  * Gives up on images whose moderation scan never reported back: `'scanning'` -> `'error'`,
  * so the composer is released and the user can remove the file. Never `'complete'` - an
@@ -415,7 +454,9 @@ export const patchPendingMessageFileModerationStatus = (
  */
 export const markModerationScanTimedOut = (files: PendingMessageFile[], fabFileIds: string[]): PendingMessageFile[] =>
   files.map(item =>
-    item.status === 'scanning' && fabFileIds.includes(item.fabFile.id) ? { ...item, status: 'error' } : item
+    item.status === 'scanning' && fabFileIds.includes(item.fabFile.id)
+      ? { ...item, status: 'error', errorMessage: MODERATION_TIMEOUT_MESSAGE }
+      : item
   );
 
 /**

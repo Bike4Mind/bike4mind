@@ -2,6 +2,23 @@ import { AIImageService, AIImageGenerationOptions, ImageEditOptions, ImageEditRe
 import OpenAI from 'openai';
 import { Logger } from '@bike4mind/observability';
 import { ImageModels } from '@bike4mind/common';
+import { ImageModerationBlockedError } from './imageGenerationErrors';
+
+/**
+ * xAI reports a moderation refusal as a plain 400 ("Generated image rejected by content moderation."),
+ * with no error code to match on.
+ */
+function buildXAIModerationBlockedError(error: unknown): ImageModerationBlockedError | null {
+  if (!(error instanceof OpenAI.APIError) || error.status !== 400 || !/moderation/i.test(error.message)) {
+    return null;
+  }
+  const requestId = (error as { requestID?: string }).requestID || 'unknown';
+  return new ImageModerationBlockedError(
+    'Your image request was rejected by xAI content moderation. Please try rephrasing your prompt or switch to a different image model.',
+    requestId,
+    'xai'
+  );
+}
 
 export class XAIImageService extends AIImageService {
   async generate(prompt: string, options: AIImageGenerationOptions): Promise<string[]> {
@@ -38,6 +55,11 @@ export class XAIImageService extends AIImageService {
       Logger.log(`XAI generated ${imageUrls.length} image(s) successfully`);
       return imageUrls;
     } catch (error) {
+      const moderationError = buildXAIModerationBlockedError(error);
+      if (moderationError) {
+        throw moderationError;
+      }
+
       Logger.error('XAI image generation failed:', error);
 
       if (error instanceof Error) {

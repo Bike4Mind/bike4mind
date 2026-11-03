@@ -1,8 +1,9 @@
 import { rapidReplyMappingRepository } from '@bike4mind/database/ai';
 import { rapidReplyAuditLogRepository } from '@bike4mind/database/ai';
 import { ApiKeyScope, RapidReplyResponseStylesCommon } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, NotFoundError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 
 // Every field is copied into an update payload, which casts before validators run. `enabled` is
@@ -24,12 +25,11 @@ const updateBodySchema = z.object({
   maxLatency: z.number().optional(),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', PUT: 'settings:manage', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { id } = req.query as { id: string };
 
     if (!id || typeof id !== 'string') {
@@ -45,10 +45,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     return res.json(mapping);
   })
   .put(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { id } = req.query as { id: string };
 
     if (!id || typeof id !== 'string') {
@@ -77,7 +73,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     }
 
     const updateData: any = {};
-    const changes: any = {};
+    const changes: Record<string, { before: unknown; after: unknown }> = {};
 
     // Track changes for audit log
     if (mainModelId !== undefined && mainModelId !== currentMapping.mainModelId) {
@@ -133,13 +129,23 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       });
     }
 
+    if (Object.keys(changes).length > 0) {
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.rapid_reply_mapping.updated',
+        target: { kind: 'settings', id, displayName: `Rapid reply mapping ${updatedMapping.mainModelId}` },
+        summary: `updated rapid reply mapping ${updatedMapping.mainModelId}`,
+        // systemPrompt is free text; its values are withheld with a marker so the drawer doesn't read it as cleared.
+        changes: Object.entries(changes).map(([field, change]) =>
+          field === 'systemPrompt'
+            ? { field, before: '[omitted]', after: '[omitted]' }
+            : { field, before: change.before, after: change.after }
+        ),
+      });
+    }
+
     return res.json(updatedMapping);
   })
   .delete(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { id } = req.query as { id: string };
 
     if (!id || typeof id !== 'string') {
@@ -169,6 +175,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       userEmail: req.user!.email || undefined,
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'],
+    });
+
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.rapid_reply_mapping.deleted',
+      target: { kind: 'settings', id, displayName: `Rapid reply mapping ${currentMapping.mainModelId}` },
+      summary: `deleted rapid reply mapping ${currentMapping.mainModelId}`,
+      details: { mainModelId: currentMapping.mainModelId, rapidModelId: currentMapping.rapidModelId },
     });
 
     return res.json({ success: true, message: 'Rapid reply mapping deleted successfully' });

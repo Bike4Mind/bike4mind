@@ -40,6 +40,7 @@ export function wrapToolWithPermission(tool: ICompletionOptionTools, deps: WrapT
   const { permissionManager, showPermissionPrompt, allowedDirectories } = deps;
   const originalFn = tool.toolFn;
   const toolName = tool.toolSchema.name;
+  const isMcpTool = tool._isMcpTool === true;
 
   return {
     ...tool,
@@ -93,7 +94,17 @@ export function wrapToolWithPermission(tool: ICompletionOptionTools, deps: WrapT
         execArgs = bindEditPlan(toolName, execArgs, effectiveArgs, editPlan);
 
         const command = commandTextOf(descriptor, args);
-        if (canRunWithoutPrompt({ toolName, forcePrompt, isSandboxed, command, interactionMode, permissionManager })) {
+        if (
+          canRunWithoutPrompt({
+            toolName,
+            isMcpTool,
+            forcePrompt,
+            isSandboxed,
+            command,
+            interactionMode,
+            permissionManager,
+          })
+        ) {
           return await run();
         }
 

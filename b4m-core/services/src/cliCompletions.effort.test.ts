@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 /** The effort the completions endpoint defaults for adaptive-thinking Claude models. */
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+vi.mock('./llm/modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./llm/modelAdmission')>()),
+  loadFreeTierAllowedModels: async () => undefined,
+}));
+
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
 vi.mock('./creditService', async importOriginal => ({
   ...(await importOriginal<typeof import('./creditService')>()),
@@ -43,9 +49,11 @@ import { executeCompletion } from './cliCompletions';
 
 const claude = (id: string, backend: 'anthropic' | 'bedrock', thinkingStyle?: 'adaptive') => ({
   id,
+  type: 'text' as const,
   backend,
   max_tokens: 128_000,
   can_think: true,
+  pricing: { 200_000: { input: 1 / 1_000_000, output: 1 / 1_000_000 } },
   ...(thinkingStyle ? { thinkingStyle } : {}),
 });
 
@@ -55,7 +63,14 @@ const FABLE = claude(ChatModels.CLAUDE_FABLE_5, 'anthropic', 'adaptive');
 // Adaptive, but it only thinks when asked, so an injected effort would switch thinking on.
 const ADAPTIVE_ON_REQUEST = claude(ChatModels.CLAUDE_4_7_OPUS, 'anthropic', 'adaptive');
 const LEGACY_THINKER = claude(ChatModels.CLAUDE_4_6_SONNET, 'anthropic');
-const OPENAI = { id: ChatModels.GPT5_4, backend: 'openai', max_tokens: 128_000, can_think: true };
+const OPENAI = {
+  id: ChatModels.GPT5_4,
+  type: 'text' as const,
+  backend: 'openai',
+  max_tokens: 128_000,
+  can_think: true,
+  pricing: { 200_000: { input: 1 / 1_000_000, output: 1 / 1_000_000 } },
+};
 
 function buildDb() {
   return {
@@ -96,6 +111,8 @@ describe('executeCompletion - default effort', () => {
     await run(model);
     expect(capturedOptions?.reasoningEffort).toBe('medium');
     expect(capturedOptions).not.toHaveProperty('thinking');
+    // A route default must not read as the caller's request (a json_schema would leave the forced tool).
+    expect(capturedOptions).not.toHaveProperty('explicitReasoning');
   });
 
   it('keeps medium alongside tools and streaming', async () => {
@@ -111,6 +128,7 @@ describe('executeCompletion - default effort', () => {
   ])('keeps an explicit high on %s', async (_label, model) => {
     await run(model, { reasoningEffort: 'high' });
     expect(capturedOptions?.reasoningEffort).toBe('high');
+    expect(capturedOptions?.explicitReasoning).toBe(true);
   });
 
   it.each([
@@ -133,12 +151,14 @@ describe('executeCompletion - default effort', () => {
     await run(model, { thinking: { enabled: false } });
     expect(capturedOptions).not.toHaveProperty('reasoningEffort');
     expect(capturedOptions).not.toHaveProperty('thinking');
+    expect(capturedOptions).not.toHaveProperty('explicitReasoning');
   });
 
   it('injects no effort when the caller enabled thinking, leaving the effort to the backend', async () => {
     await run(DIRECT, { thinking: { enabled: true } });
     expect(capturedOptions).not.toHaveProperty('reasoningEffort');
     expect(capturedOptions?.thinking).toEqual({ enabled: true, budget_tokens: 16000 });
+    expect(capturedOptions?.explicitReasoning).toBe(true);
   });
 
   it.each([

@@ -1,15 +1,15 @@
 import { rapidReplyPromptRepository } from '@bike4mind/database/ai';
 import { rapidReplyAuditLogRepository } from '@bike4mind/database/ai';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, NotFoundError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', PUT: 'settings:manage', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { id } = req.query as { id: string };
 
     if (!id || typeof id !== 'string') {
@@ -32,10 +32,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     });
   })
   .put(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { id } = req.query as { id: string };
 
     if (!id || typeof id !== 'string') {
@@ -63,10 +59,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
     let updatedPrompt;
     let auditAction: 'create' | 'update' = 'update';
+    let auditSummary = `updated rapid reply prompt ${currentPrompt.name}`;
+    let auditChangedFields: string[] = [];
+    const parentId = currentPrompt.parentId || currentPrompt.id;
+    const renamed = name !== undefined && name !== currentPrompt.name;
 
     if (createNewVersion && (content !== currentPrompt.content || name !== currentPrompt.name)) {
       // Create a new version instead of updating
-      const parentId = currentPrompt.parentId || currentPrompt.id;
       updatedPrompt = await rapidReplyPromptRepository.createVersion(parentId, {
         name: name || currentPrompt.name,
         description: description || currentPrompt.description,
@@ -79,6 +78,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         createdBy: req.user!.id,
       });
       auditAction = 'create';
+      auditSummary = `created new version of rapid reply prompt ${currentPrompt.name}`;
+      auditChangedFields = ['version'];
     } else {
       // Regular update
       const updateData: any = {};
@@ -109,11 +110,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         updateData.isActive = isActive;
         changes.isActive = { before: currentPrompt.isActive, after: isActive };
       }
-      if (parameters !== undefined) {
+      if (parameters !== undefined && JSON.stringify(parameters) !== JSON.stringify(currentPrompt.parameters)) {
         updateData.parameters = parameters;
         changes.parameters = { before: currentPrompt.parameters, after: parameters };
       }
-      if (variables !== undefined) {
+      if (variables !== undefined && JSON.stringify(variables) !== JSON.stringify(currentPrompt.variables)) {
         updateData.variables = variables;
         changes.variables = { before: currentPrompt.variables, after: variables };
       }
@@ -138,15 +139,31 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           metadata: createNewVersion ? { newVersion: true } : undefined,
         });
       }
+      auditChangedFields = Object.keys(changes);
+    }
+
+    // A new version is its own row; the parent's id keeps the whole version chain under one target.
+    if (auditAction === 'create' || auditChangedFields.length > 0) {
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.rapid_reply_prompt.updated',
+        target: { kind: 'settings', id: parentId, displayName: `Rapid reply prompt ${currentPrompt.name}` },
+        summary: auditSummary,
+        details: {
+          promptId: id,
+          changedFields: auditChangedFields,
+          newVersion: auditAction === 'create',
+          ...(auditAction === 'create' && {
+            newVersionId: updatedPrompt?.id,
+            contentChanged: content !== undefined && content !== currentPrompt.content,
+          }),
+          ...(renamed && { name: { before: currentPrompt.name, after: name } }),
+        },
+      });
     }
 
     return res.json(updatedPrompt);
   })
   .delete(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { id } = req.query as { id: string };
 
     if (!id || typeof id !== 'string') {
@@ -176,6 +193,17 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       userEmail: req.user!.email || undefined,
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'],
+    });
+
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.rapid_reply_prompt.deleted',
+      target: {
+        kind: 'settings',
+        id: currentPrompt.parentId || currentPrompt.id,
+        displayName: `Rapid reply prompt ${currentPrompt.name}`,
+      },
+      summary: `deleted rapid reply prompt ${currentPrompt.name}`,
+      details: { promptId: id, name: currentPrompt.name, wasActive: currentPrompt.isActive },
     });
 
     return res.json({ success: true, message: 'Rapid reply prompt deleted successfully' });

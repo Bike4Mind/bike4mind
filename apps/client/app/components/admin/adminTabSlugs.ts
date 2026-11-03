@@ -1,8 +1,15 @@
 import { ADMIN_AUDIT_LOG_TAB_SLUG, ADMIN_FEEDBACK_TAB_SLUG, ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
 import { AdminTab } from './adminSidebarConfig';
 import {
+  ADMIN_INTEGRATION_DEMAND_TAB_SLUG,
   ADMIN_MODEL_LOGS_TAB_SLUG,
+  ADMIN_ORGANIZATIONS_TAB_SLUG,
+  ADMIN_SECURITY_DASHBOARD_TAB_SLUG,
   ADMIN_SETTINGS_TAB_SLUG,
+  ADMIN_SHADOW_DETECTIONS_TAB_SLUG,
+  ADMIN_SIGNUP_RISK_REVIEW_TAB_SLUG,
+  ADMIN_SUBSCRIPTIONS_TAB_SLUG,
+  ADMIN_WAITLIST_TAB_SLUG,
   ADMIN_WEBHOOK_AUDIT_LOGS_TAB_SLUG,
 } from './adminTabParams';
 
@@ -28,9 +35,10 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.Documentation]: 'documentation',
   [AdminTab.WorldTime]: 'world-time',
   [AdminTab.Analysts]: 'analysts',
-  [AdminTab.Subscribers]: 'subscribers',
-  [AdminTab.Subscriptions]: 'subscriptions',
-  [AdminTab.Organizations]: 'organizations',
+  [AdminTab.Waitlist]: ADMIN_WAITLIST_TAB_SLUG,
+  [AdminTab.Subscriptions]: ADMIN_SUBSCRIPTIONS_TAB_SLUG,
+  [AdminTab.Revenue]: 'revenue',
+  [AdminTab.Organizations]: ADMIN_ORGANIZATIONS_TAB_SLUG,
   [AdminTab.CreditAnalytics]: 'credit-analytics',
   [AdminTab.SecretsRotation]: 'secrets-rotation',
   [AdminTab.BulkImport]: 'bulk-import',
@@ -42,7 +50,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.AgentOps]: 'agent-ops',
   [AdminTab.LLMDashboard]: 'llm-dashboard',
   [AdminTab.RapidReply]: 'rapid-reply',
-  [AdminTab.SecurityDashboard]: 'security-dashboard',
+  [AdminTab.SecurityDashboard]: ADMIN_SECURITY_DASHBOARD_TAB_SLUG,
   [AdminTab.EmailVerification]: 'email-verification',
   [AdminTab.Team]: 'team',
   [AdminTab.SystemHealth]: 'system-health',
@@ -71,6 +79,10 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.AgentExecutions]: 'agent-executions',
   [AdminTab.PublishedPages]: 'published-pages',
   [AdminTab.PartnerSignupRules]: 'partner-signup-rules',
+  [AdminTab.SignupDomainHolds]: 'signup-domain-holds',
+  [AdminTab.SignupRiskReview]: ADMIN_SIGNUP_RISK_REVIEW_TAB_SLUG,
+  [AdminTab.ShadowDetections]: ADMIN_SHADOW_DETECTIONS_TAB_SLUG,
+  [AdminTab.HeldSignupGrants]: 'held-signup-grants',
   [AdminTab.EmbedKeys]: 'embed-keys',
   [AdminTab.ModelLifecycle]: 'model-lifecycle',
   [AdminTab.PrReport]: 'pr-report',
@@ -79,7 +91,8 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.ReleaseNotes]: 'release-notes',
   [AdminTab.OAuthClients]: 'oauth-clients',
   [AdminTab.GrowthPricing]: 'growth-pricing',
-  [AdminTab.IntegrationDemand]: 'integration-demand',
+  [AdminTab.PreferenceArena]: 'preference-arena',
+  [AdminTab.IntegrationDemand]: ADMIN_INTEGRATION_DEMAND_TAB_SLUG,
   [AdminTab.AuditLog]: ADMIN_AUDIT_LOG_TAB_SLUG,
 };
 
@@ -88,9 +101,11 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
  * lookup would resolve `?tab=toString` to an inherited Object.prototype member instead of
  * undefined - which then passes the caller's `!== undefined` guard.
  */
-const SLUG_TO_ADMIN_TAB: ReadonlyMap<string, AdminTab> = new Map(
-  Object.entries(ADMIN_TAB_TO_SLUG).map(([tab, slug]) => [slug, Number(tab) as AdminTab])
-);
+const SLUG_TO_ADMIN_TAB: ReadonlyMap<string, AdminTab> = new Map([
+  ...Object.entries(ADMIN_TAB_TO_SLUG).map(([tab, slug]): [string, AdminTab] => [slug, Number(tab) as AdminTab]),
+  // Renamed slugs that shared links still carry; useAdminTabUrlSync rewrites the URL to the current slug.
+  ['subscribers', AdminTab.Waitlist],
+]);
 
 /** Resolves a `?tab=` slug, or undefined when it is absent or not a known tab. */
 export function adminTabFromSlug(slug: string | undefined): AdminTab | undefined {

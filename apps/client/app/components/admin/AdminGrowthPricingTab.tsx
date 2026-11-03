@@ -8,6 +8,7 @@ import {
   creditsToUsdAtFloor,
   formatUsdAmount,
   formatUsdPerCredit,
+  isEnforceCreditsLocked,
   MIN_PRICE_PER_CREDIT_USD,
   resolveTeamPlanSettings,
   SETTING_TABS,
@@ -16,6 +17,7 @@ import {
 } from '@bike4mind/common';
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
 import AdminSettingInputField from './AdminSettingInputField';
+import { CheckoutCatalogPanel } from './CheckoutCatalogPanel';
 import { AdminTab } from './adminSidebarConfig';
 import {
   ADMIN_SETTINGS_SEARCH_PARAM,
@@ -31,7 +33,7 @@ import { useCreditAnalysisStore } from './CreditAnalysis/store';
  * The growth and monetization knobs, grouped on one page so they can be tuned without hunting
  * through Admin Settings. Storage is the ordinary admin-settings collection. This tab is the only
  * editor for these keys (GROWTH_PRICING_ONLY_KEYS in AdminSettingsTab, whose Credits System group
- * links here), except ReferralCreditsAmount, which keeps a second editor under Referrals.
+ * links here).
  * docs/pricing-settings-inventory.md lists every key in this area; update it when a key moves.
  */
 export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
@@ -47,10 +49,40 @@ export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
     keys: ['allowOpenRegistration', 'defaultFreeCredits', 'ReferralCreditsAmount'],
   },
   {
+    id: 'referral-rewards',
+    title: 'Referral rewards for inviters',
+    description:
+      'What an inviter earns when an invited friend becomes active or subscribes, plus the hold, starting-invite and alert settings. The starting-invite count, first-answer reward, payment rewards (held for the hold period, then released) and alert are all active today; a reward amount of 0 turns that reward off.',
+    keys: [
+      'ReferralFirstAnswerCredits',
+      'ReferralFirstPaymentCredits',
+      'ReferralSecondPaymentCredits',
+      'ReferralHoldDays',
+      'ReferralInvitesPerUser',
+      'ReferralAlertRewardsPerDay',
+    ],
+  },
+  {
     id: 'credits',
     title: 'Credits and pricing',
     description: 'How usage is metered and what credits cost.',
     keys: ['enforceCredits', 'pricePerCredit', 'lowCreditsThreshold'],
+  },
+  {
+    id: 'preference-arena',
+    title: 'Preference arena',
+    description:
+      'Verified users compare two blind answers and earn promotional credits for accepted votes. A credits-per-vote of 0 keeps collecting votes with rewards off; low-quality raters are dropped without notice.',
+    keys: [
+      'preferenceArenaEnabled',
+      'preferenceArenaCreditsPerVote',
+      'preferenceArenaDailyVoteCap',
+      'preferenceArenaLifetimeCreditCap',
+      'preferenceArenaMinResponseMs',
+      'preferenceArenaGoldRatePercent',
+      'preferenceArenaMinGoldVotes',
+      'preferenceArenaMinGoldAccuracyPercent',
+    ],
   },
   {
     id: 'team',
@@ -62,7 +94,9 @@ export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
 
 /** The settings in the tier rate-limit group, read from the group tags so a new tier is picked up. */
 export const RATE_LIMIT_SETTING_KEYS = (Object.keys(settingsMap) as SettingKey[]).filter(
-  key => (settingsMap[key] as { group?: string }).group === API_SERVICE_GROUPS.RATE_LIMITING.id
+  key =>
+    (settingsMap[key] as { group?: string }).group === API_SERVICE_GROUPS.RATE_LIMITING.id &&
+    key.startsWith('apiRateLimit')
 );
 
 // Admin Settings search term that narrows the list to the rate-limit group; it matches on setting
@@ -116,6 +150,9 @@ export const describeDerivedValue = (key: SettingKey, value: unknown): string | 
   switch (key) {
     case 'defaultFreeCredits':
     case 'ReferralCreditsAmount':
+    case 'ReferralFirstAnswerCredits':
+    case 'ReferralFirstPaymentCredits':
+    case 'ReferralSecondPaymentCredits':
       if (!Number.isFinite(amount)) return null;
       return `${amount.toLocaleString('en-US')} credits = ${formatUsdAmount(creditsToUsdAtFloor(amount))} at the ${floor}`;
     case 'pricePerCredit':
@@ -158,6 +195,19 @@ const AdminGrowthPricingTab = () => {
     for (const row of data ?? []) map.set(row.settingName, row.settingValue);
     return map;
   }, [data]);
+
+  // No data after loading means the read failed; the catalog says so rather than showing defaults.
+  const teamPlan = useMemo(
+    () =>
+      data
+        ? resolveTeamPlanSettings({
+            teamPlanMinSeats: storedByKey.get('teamPlanMinSeats'),
+            teamPlanMaxSeats: storedByKey.get('teamPlanMaxSeats'),
+            teamPlanCreditsPerSeat: storedByKey.get('teamPlanCreditsPerSeat'),
+          })
+        : undefined,
+    [data, storedByKey]
+  );
 
   // Cross-field checks the per-setting schemas cannot express on their own.
   const warnings = useMemo(() => {
@@ -246,6 +296,11 @@ const AdminGrowthPricingTab = () => {
                       index={index}
                       setting={setting}
                       defaultValue={current}
+                      lockedNote={
+                        key === 'enforceCredits' && isEnforceCreditsLocked()
+                          ? 'Always on for hosted deployments'
+                          : undefined
+                      }
                     />
                   </div>
                 );
@@ -254,6 +309,8 @@ const AdminGrowthPricingTab = () => {
           </CardContent>
         </Card>
       ))}
+
+      <CheckoutCatalogPanel teamPlan={teamPlan} />
 
       {GROWTH_PRICING_LINKS.map(section => (
         <Card key={section.id} variant="outlined" data-testid={`admin-growth-pricing-section-${section.id}`}>

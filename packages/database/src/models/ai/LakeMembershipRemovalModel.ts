@@ -52,7 +52,7 @@ LakeMembershipRemovalSchema.index({ dataLakeId: 1, fabFileId: 1 }, { unique: tru
 // the sweeper's ~1-minute cycle leaves an expired row readable for a window after it expires.
 LakeMembershipRemovalSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
-export const LakeMembershipRemovalModel =
+export const LakeMembershipRemovalModel: mongoose.Model<ILakeMembershipRemovalDocument> =
   (mongoose.models['LakeMembershipRemoval'] as unknown as mongoose.Model<ILakeMembershipRemovalDocument>) ||
   mongoose.model<ILakeMembershipRemovalDocument>('LakeMembershipRemoval', LakeMembershipRemovalSchema);
 

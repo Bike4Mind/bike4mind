@@ -395,6 +395,12 @@ describe('buildMusicProviders', () => {
 describe('generation job billing settings', () => {
   beforeEach(() => {
     getSettingsMap.mockReset();
+    // A stored enforceCredits=false only reads as off on self-host; hosted always meters.
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it.each([

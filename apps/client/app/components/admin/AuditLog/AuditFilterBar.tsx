@@ -14,7 +14,7 @@ import { downloadAuditLogCsv } from '@client/app/hooks/data/adminAuditLog';
 import { useSearchOrganizations } from '@client/app/hooks/data/organizations';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { useSnackbar } from '@client/app/contexts/SnackbarContext';
-import UserSelector from '@client/app/components/admin/Users/Details/UserSelector';
+import UserSelector from '@client/app/components/admin/shared/UserSelector';
 
 const ANY = 'any';
 const ACTION_OPTIONS = Object.keys(ADMIN_AUDIT_CATALOGUE);

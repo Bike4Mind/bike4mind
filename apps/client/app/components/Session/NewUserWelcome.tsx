@@ -5,6 +5,7 @@ import { FirstRunEvents } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOwnSessions } from '@client/app/hooks/data/sessions';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
+import { useSignupGrantCredits } from '@client/app/hooks/useSignupGrantCredits';
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { useSelectedModelAnswerCost } from '@client/app/hooks/useSelectedModelAnswerCost';
 import { formatAnswersEstimate } from '@client/app/utils/creditEstimate';
@@ -13,9 +14,16 @@ import { useChatInput } from '@client/app/hooks/useChatInput';
 import { APP_NAME, getBrandName } from '@client/config/general';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
-import { STARTER_PROMPTS, shouldShowNewUserWelcome, welcomeCanStart, welcomeCreditsLine } from './newUserWelcomeModel';
+import {
+  STARTER_PROMPTS,
+  advertisedDripCredits,
+  shouldShowNewUserWelcome,
+  welcomeCanStart,
+  welcomeCreditsLine,
+} from './newUserWelcomeModel';
 import { isAwaitingEmailVerification } from '@client/app/utils/onboarding';
 import { claimFirstRunImpression } from '@client/app/utils/firstRunImpression';
+import SignupGrantStatus from '../subscription/SignupGrantStatus';
 
 const dismissKey = (userId: string) => `newUserWelcomeDismissed:${userId}`;
 
@@ -38,7 +46,14 @@ const NewUserWelcome = () => {
   const userId = currentUser?.id;
   const { data: sessions, isSuccess, isFetching } = useGetOwnSessions('');
   const enforceCredits = !!useGetSettingsValue('enforceCredits');
-  const defaultFreeCredits = Number(useGetSettingsValue('defaultFreeCredits')) || 0;
+  const defaultFreeCredits = useSignupGrantCredits();
+  const activityEnabled = useGetSettingsValue('signupGrantActivityEnabled');
+  const minActiveSeconds = useGetSettingsValue('signupGrantActivityMinActiveSeconds');
+  const dailyDripCredits = advertisedDripCredits({
+    enabled: activityEnabled,
+    dailyCredits: Number(useGetSettingsValue('signupGrantActivityDailyCredits')) || 0,
+    unlockCredits: currentUser?.signupGrant?.unlockCredits,
+  });
   const balance = useEffectiveCredits();
   const liveBalance = useEffectiveCredits({ live: true });
   const answerCost = useSelectedModelAnswerCost();
@@ -103,11 +118,19 @@ const NewUserWelcome = () => {
     enforceCredits,
     balance,
     awaitingVerification,
-    pendingGrant: currentUser?.pendingCreditGrant ?? defaultFreeCredits,
+    pendingGrant: currentUser?.signupGrant?.signupCredits ?? currentUser?.pendingCreditGrant ?? defaultFreeCredits,
+    pendingGrantIsMaximum: !!currentUser?.signupGrant,
+    dailyDripCredits,
+    minActiveSeconds,
   });
   // Same credits the line above quotes: the pending grant before verification, else the displayed balance.
-  const estimateCredits = awaitingVerification ? (currentUser?.pendingCreditGrant ?? defaultFreeCredits) : balance;
-  const answersEstimate = creditsLine ? formatAnswersEstimate(estimateCredits, answerCost) : null;
+  const estimateCredits = awaitingVerification
+    ? (currentUser?.signupGrant?.signupCredits ?? currentUser?.pendingCreditGrant ?? defaultFreeCredits)
+    : balance;
+  const answersEstimate =
+    creditsLine && !(awaitingVerification && currentUser?.signupGrant)
+      ? formatAnswersEstimate(estimateCredits, answerCost)
+      : null;
 
   return (
     <Sheet
@@ -145,6 +168,7 @@ const NewUserWelcome = () => {
           {creditsLine}
         </Typography>
       )}
+      <SignupGrantStatus />
       {answersEstimate && (
         <Typography level="body-sm" data-testid="new-user-welcome-answers-estimate" sx={{ color: 'text.secondary' }}>
           {answersEstimate}

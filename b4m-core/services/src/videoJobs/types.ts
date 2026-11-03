@@ -1,4 +1,5 @@
 import type {
+  GeneratedAssetLineageEntry,
   GeneratedAssetMetadata,
   GenerationJobDelivery,
   GenerationJobSource,
@@ -38,6 +39,7 @@ export type VideoJobDeps = {
     bytes: Buffer;
     contentType: string;
     generation: GeneratedAssetMetadata & { jobId: string };
+    derivedFrom?: GeneratedAssetLineageEntry[];
     /** A chat-made job's quest; the save links the file to its notebook, which scopes the grants that notebook mints. */
     questId?: string;
     signal: AbortSignal;
@@ -63,14 +65,17 @@ export type VideoJobDeps = {
 };
 
 export type CreateVideoJobDeps = VideoJobDeps & {
+  assertModelAdmission(userId: string, modelId: string, adminRoleWithheld?: boolean): Promise<void>;
   engine: Pick<GenerationJobEngine, 'failBeforeStart'>;
 };
 
 export type CreateVideoJobInput = {
-  user: { id: string; organizationId: string | null };
+  user: { id: string; organizationId: string | null; adminRoleWithheld?: boolean };
   /** Untrusted: parsed and validated by createVideoJob. */
   request: unknown;
   source: GenerationJobSource;
+  /** The UserApiKey that authenticated the request, kept on the job for its settlement row. */
+  apiKeyId?: string;
   idempotencyKey?: string;
   questId?: string;
   delivery?: GenerationJobDelivery;

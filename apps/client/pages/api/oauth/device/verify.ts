@@ -1,9 +1,14 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { cacheRepository, deviceAuthorizationRepository, DeviceAuthorizationModel } from '@bike4mind/database';
 import { z } from 'zod';
 import { LEGACY_DEVICE_CLIENT_ID, oauthClientDisplayName } from '@bike4mind/common';
 import { LIVE_PENDING_COUNTER_KEY } from '@server/utils/oauth/deviceAuthHelpers';
+import {
+  CLI_ACCESS_DENIED_MESSAGE,
+  SUBSCRIPTION_REQUIRED_ERROR,
+  isApiKeyAccessAllowed,
+} from '@server/utils/apiKeyAccessGate';
 
 const VerifyRequestSchema = z.object({
   user_code: z.string(),
@@ -23,7 +28,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const { user_code, action } = VerifyRequestSchema.parse(req.body);
     const userId = req.user?.id;
 
-    if (!userId) {
+    if (!userId || !req.user) {
       return res.status(401).json({
         error: 'unauthorized',
         error_description: 'Must be logged in',
@@ -44,6 +49,11 @@ const handler = baseApi({ auth: 'jwtOnly' })
         error: 'too_many_attempts',
         error_description: 'Too many verification attempts',
       });
+    }
+
+    // The admin paid-only switch: the device flow only serves the CLI and desktop app.
+    if (action === 'approve' && req.user && !(await isApiKeyAccessAllowed(req.user, undefined, req))) {
+      return res.status(403).json({ error: SUBSCRIPTION_REQUIRED_ERROR, error_description: CLI_ACCESS_DENIED_MESSAGE });
     }
 
     // direct model update: BaseRepository.update() strips userId to avoid path

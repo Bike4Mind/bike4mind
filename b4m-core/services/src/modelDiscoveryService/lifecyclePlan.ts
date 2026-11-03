@@ -3,6 +3,7 @@ import {
   ModelRecordWrite,
   normalizeAggregatorKey,
   type FieldGroup,
+  type ICatalogContributor,
   type IModelCatalogRowInput,
   type IModelDiscoveryState,
   type ModelRecord,
@@ -14,6 +15,7 @@ import {
   claimedGroups,
   describeSchemaIssues,
   relativeGap,
+  snapshotAliasOf,
   type CatalogWritePlan,
 } from './catalogWrite';
 import type { PerTokenRates } from './pricePlan';
@@ -54,6 +56,9 @@ export const HEURISTIC_SOURCE = 'heuristic';
 /** Suggestion `source` for everything the K-miss protocol raised, successor included. */
 export const ABSENCE_SOURCE = 'absence';
 
+/** Suggestion `source` for a catalog alias listed next to its own dated snapshot. */
+export const SNAPSHOT_ALIAS_SOURCE = 'snapshot-alias';
+
 /**
  * The end of the road. Three uses, all the same idea: a docs row may only
  * corroborate a typed signal into one of these, a model already in one is not
@@ -84,11 +89,11 @@ export interface LifecycleSignalsInput {
   catalogModelIds?: ReadonlySet<string>;
 }
 
-/** An aggregator's typed sunset of a held model that nothing corroborated this run. */
+/** An aggregator sunset or date-only announcement withheld for operator review. */
 export interface AggregatorSunsetSignal {
   modelId: string;
   source: string;
-  lifecycle: NonNullable<ModelRecord['lifecycle']>;
+  lifecycle: Partial<NonNullable<ModelRecord['lifecycle']>>;
 }
 
 export interface LifecycleSignals {
@@ -110,10 +115,11 @@ export interface LifecycleSignals {
    */
   providerUndated: Map<string, string[]>;
   /**
-   * Aggregator sunsets withheld from the overlay: one aggregator alone may not
+   * Aggregator dates and sunsets withheld from the overlay: one aggregator alone may not
    * deprecate a model the catalog already holds, because the field overlay lets
    * it win whenever the provider lists the model without a lifecycle. Only a
-   * provider sunset or both aggregators agreeing writes it; the rest are queue items.
+   * provider sunset or both aggregators agreeing writes a sunset status. Date-only
+   * announcements remain queue items, even when more than one aggregator repeats them.
    */
   aggregatorSunsets: Map<string, AggregatorSunsetSignal>;
 }
@@ -178,18 +184,16 @@ export function planLifecycleSignals({
       ) {
         providerUndated.set(record.modelId, [...(providerUndated.get(record.modelId) ?? []), contribution.name]);
       }
-      if (
-        typed &&
-        contribution.kind === 'aggregator' &&
-        lifecycle.status !== undefined &&
-        LIFECYCLE_SUNSET_STATUSES.has(lifecycle.status) &&
-        !aggregatorSunsetCorroborated(record.modelId)
-      ) {
+      const claimsSunsetStatus = lifecycle.status !== undefined && LIFECYCLE_SUNSET_STATUSES.has(lifecycle.status);
+      const dateOnlyClaim =
+        !claimsSunsetStatus && (lifecycle.deprecationDate !== undefined || lifecycle.retirementDate !== undefined);
+      const uncorroboratedSunset = claimsSunsetStatus && !aggregatorSunsetCorroborated(record.modelId);
+      if (typed && contribution.kind === 'aggregator' && (dateOnlyClaim || uncorroboratedSunset)) {
         if (!aggregatorSunsets.has(record.modelId)) {
           aggregatorSunsets.set(record.modelId, {
             modelId: record.modelId,
             source: contribution.name,
-            lifecycle: { ...lifecycle, status: lifecycle.status },
+            lifecycle: { ...lifecycle },
           });
         }
         return withoutLifecycle(record);
@@ -328,8 +332,16 @@ export interface LifecyclePlanInput {
    * Absent for a model whose only row is the seed, which keeps backing it.
    */
   priorDiscoveryGroups?: ReadonlyMap<string, readonly FieldGroup[]>;
+  /**
+   * Contributors on that same superseded row, per model, kept by the graduation row it replaces.
+   * Blanket-crediting `discovery` would tell the read path discovery invented a disable a provider
+   * declared; the `availability` credit is the one the read path interprets.
+   */
+  priorContributors?: ReadonlyMap<string, readonly ICatalogContributor[]>;
   autoRemap: DiscoveryAutoRemapPolicy;
   operatorOwnedModelIds: ReadonlySet<string>;
+  /** Every id the static adapter tables ship; an alias among them is curated, never a duplicate. */
+  staticModelIds?: ReadonlySet<string>;
   runStartedAt: Date;
   runId?: string;
 }
@@ -412,6 +424,11 @@ export function planLifecycle(plannerInput: LifecyclePlanInput): LifecyclePlan {
 
   for (const signal of docsSuggestions(input, sunsetting)) suggestions.push(signal);
   for (const signal of aggregatorSuggestions(input, sunsetting)) suggestions.push(signal);
+  // Last, so a provider's or aggregator's own word on a model keeps its one queue slot.
+  const suggested = new Set(suggestions.map(suggestion => suggestion.modelId));
+  for (const signal of snapshotAliasSuggestions(input, sunsetting)) {
+    if (!suggested.has(signal.modelId)) suggestions.push(signal);
+  }
 
   const rows = input.catalogPlan.rows.map(row => {
     const replacedBy = applied.get(row.modelId);
@@ -464,7 +481,15 @@ export function planLifecycle(plannerInput: LifecyclePlanInput): LifecyclePlan {
       patch: record,
       ownedGroups,
       effectiveFrom: input.runStartedAt,
-      contributors: ownedGroups.map(group => ({ group, source: DISCOVERY_CONTRIBUTOR })),
+      // The same rule the folded branch applies: a group the superseded row already carried keeps
+      // the source credited for it.
+      contributors: ownedGroups.map(
+        group =>
+          input.priorContributors?.get(entry.modelId)?.find(credit => credit.group === group) ?? {
+            group,
+            source: DISCOVERY_CONTRIBUTOR,
+          }
+      ),
       note: `${ABSENCE_NOTE_PREFIX}${input.runStartedAt.toISOString()}`,
       runId: input.runId,
     });
@@ -735,27 +760,81 @@ function docsSuggestions(input: PlanContext, sunsetting: ReadonlySet<string>): L
   return suggestions;
 }
 
-/** Lone-aggregator sunsets planLifecycleSignals withheld; same queue rules as docsSuggestions. */
+/** Aggregator claims withheld by planLifecycleSignals, including delayed picker hides. */
 function aggregatorSuggestions(input: PlanContext, sunsetting: ReadonlySet<string>): LifecycleSuggestion[] {
   const suggestions: LifecycleSuggestion[] = [];
   for (const signal of input.aggregatorSunsets?.values() ?? []) {
     if (sunsetting.has(signal.modelId)) continue;
     const existing = input.resolvedInForce.get(signal.modelId);
-    if (!existing || agreesWith(existing, signal.lifecycle)) continue;
+    if (!existing || matchesLifecycleClaim(existing, signal.lifecycle)) continue;
 
     suggestions.push({
       modelId: signal.modelId,
-      status: signal.lifecycle.status,
+      // A date-only claim must say 'active' outright: a model with no held
+      // lifecycle would otherwise default to 'deprecated' on accept, hiding it now.
+      status: signal.lifecycle.status ?? lifecycleOf(existing)?.status ?? 'active',
       deprecationDate: signal.lifecycle.deprecationDate,
       retirementDate: signal.lifecycle.retirementDate,
       replacedBy: signal.lifecycle.replacedBy,
       source: signal.source,
       detail:
-        `${signal.source} reports this model as ${signal.lifecycle.status}; ` +
-        'no provider and no second aggregator corroborates it, so one aggregator alone may not hide the model',
+        signal.lifecycle.status === undefined || !LIFECYCLE_SUNSET_STATUSES.has(signal.lifecycle.status)
+          ? `${signal.source} announces lifecycle dates without a sunset status; an aggregator date alone may not hide the model`
+          : `${signal.source} reports this model as ${signal.lifecycle.status}; ` +
+            'no provider and no second aggregator corroborates it, so one aggregator alone may not hide the model',
     });
   }
   return suggestions;
+}
+
+/**
+ * Catalog aliases listed next to their own dated snapshot ("gpt-4.1" beside
+ * "gpt-4.1-2025-04-14"), which read as the same model twice. Always a queue item,
+ * never a transition, whatever modelDiscoveryAutoRemap says: a sunset catalog-only
+ * row drops out of the merged list, so writing the status without the successor
+ * would fail every request pinned to the alias. Accepting writes both in one row.
+ *
+ * Only an active snapshot is a successor. One that is itself sunset (o3, o4-mini)
+ * would hand the pin to a hidden model, so that alias is left for an operator.
+ */
+function snapshotAliasSuggestions(input: PlanContext, sunsetting: ReadonlySet<string>): LifecycleSuggestion[] {
+  // The newest active snapshot per alias; YYYY-MM-DD compares as a string.
+  const snapshotOf = new Map<string, string>();
+  for (const [modelId, resolved] of input.resolvedInForce) {
+    const alias = snapshotAliasOf(modelId);
+    if (!alias || statusOf(resolved) !== 'active' || sunsetting.has(modelId)) continue;
+    const held = snapshotOf.get(alias);
+    if (!held || modelId > held) snapshotOf.set(alias, modelId);
+  }
+
+  const suggestions: LifecycleSuggestion[] = [];
+  for (const [alias, snapshot] of snapshotOf) {
+    const existing = input.resolvedInForce.get(alias);
+    if (!existing || statusOf(existing) !== 'active' || sunsetting.has(alias)) continue;
+    if (input.staticModelIds?.has(alias)) continue;
+    if (backendOf(existing) !== backendOf(input.resolvedInForce.get(snapshot))) continue;
+
+    suggestions.push({
+      modelId: alias,
+      status: 'deprecated',
+      replacedBy: snapshot,
+      source: SNAPSHOT_ALIAS_SOURCE,
+      detail:
+        `${alias} is the alias of ${snapshot}, which the catalog also lists, so the picker shows the model twice; ` +
+        `accepting hides ${alias} and moves requests pinned to it onto ${snapshot}`,
+    });
+  }
+  return suggestions;
+}
+
+function matchesLifecycleClaim(
+  resolved: ResolvedCatalogRecord,
+  lifecycle: AggregatorSunsetSignal['lifecycle']
+): boolean {
+  const held = lifecycleOf(resolved);
+  return (['status', 'deprecationDate', 'retirementDate'] as const).every(
+    field => lifecycle[field] === undefined || held?.[field] === lifecycle[field]
+  );
 }
 
 function describeRemap(remap: RemapDecision, modelId: string, autoRemap: DiscoveryAutoRemapPolicy): string {

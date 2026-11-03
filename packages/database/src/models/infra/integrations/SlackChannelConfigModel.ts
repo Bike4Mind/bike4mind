@@ -1,4 +1,5 @@
 import {
+  ISlackChannelApiPostingUpdate,
   ISlackChannelConfig,
   ISlackChannelConfigDocument,
   ISlackChannelConfigRepository,
@@ -21,6 +22,9 @@ const SlackChannelConfigSchema = new Schema<ISlackChannelConfigDocument>(
     configuredBy: { type: String, required: true },
     githubOwner: { type: String },
     githubRepo: { type: String },
+    apiPostEnabled: { type: Boolean, default: false },
+    apiPostAllowedKeyIds: { type: [String], default: undefined },
+    apiPostOrganizationId: { type: String },
   },
   {
     timestamps: true,
@@ -49,16 +53,40 @@ class SlackChannelConfigRepository
     return this.findOne({ channelId });
   }
 
+  /**
+   * The model-config write (Slack App Home). It never sets the API-posting fields. It may move a
+   * channel to another workspace (a shared channel configured from the other side) only while API
+   * posting is off: an opted-in channel stays with the granting workspace and the write returns null,
+   * so one side of a shared channel can never silently end the other side's opt-in.
+   */
   async upsertByChannelId(
     channelId: string,
     data: Partial<ISlackChannelConfig>
-  ): Promise<ISlackChannelConfigDocument & IMongoDocument> {
-    const result = await this.model.findOneAndUpdate(
-      { channelId },
-      { $set: { ...data, channelId } },
-      { upsert: true, new: true }
-    );
-    return result as ISlackChannelConfigDocument & IMongoDocument;
+  ): Promise<(ISlackChannelConfigDocument & IMongoDocument) | null> {
+    const { apiPostEnabled, apiPostAllowedKeyIds, apiPostOrganizationId, ...modelConfig } = data;
+    const { slackTeamId } = modelConfig;
+    if (slackTeamId) {
+      await this.model.updateOne(
+        { channelId, slackTeamId: { $ne: slackTeamId }, apiPostEnabled: { $ne: true } },
+        { $set: { apiPostEnabled: false, apiPostAllowedKeyIds: [] }, $unset: { apiPostOrganizationId: '' } }
+      );
+    }
+    // An opted-in config of another workspace misses the filter, and the upsert's insert then collides
+    // with the unique channelId index instead of re-homing it.
+    const filter = slackTeamId
+      ? { channelId, $or: [{ slackTeamId }, { apiPostEnabled: { $ne: true } }] }
+      : { channelId };
+    try {
+      const result = await this.model.findOneAndUpdate(
+        filter,
+        { $set: { ...modelConfig, channelId } },
+        { upsert: true, new: true }
+      );
+      return result as ISlackChannelConfigDocument & IMongoDocument;
+    } catch (error) {
+      if ((error as { code?: number }).code === 11000) return null;
+      throw error;
+    }
   }
 
   async findBySlackTeamId(slackTeamId: string): Promise<(ISlackChannelConfigDocument & IMongoDocument)[]> {
@@ -68,6 +96,82 @@ class SlackChannelConfigRepository
   async deleteByChannelId(channelId: string): Promise<boolean> {
     const result = await this.model.deleteOne({ channelId });
     return result.deletedCount > 0;
+  }
+
+  async removeModelConfigByChannelId(channelId: string, slackTeamId: string): Promise<boolean> {
+    const deleted = await this.model.deleteOne({ channelId, slackTeamId, apiPostEnabled: { $ne: true } });
+    if (deleted.deletedCount > 0) return true;
+    const cleared = await this.model.updateOne(
+      { channelId, slackTeamId, apiPostEnabled: true },
+      {
+        $unset: {
+          preferredModel: '',
+          preferredImageModel: '',
+          temperature: '',
+          maxTokens: '',
+          githubOwner: '',
+          githubRepo: '',
+        },
+      }
+    );
+    return cleared.matchedCount > 0;
+  }
+
+  async setApiPostingByChannelId(
+    channelId: string,
+    update: ISlackChannelApiPostingUpdate
+  ): Promise<(ISlackChannelConfigDocument & IMongoDocument) | null> {
+    const { slackTeamId, organizationId, apiPostEnabled, apiPostAllowedKeyIds, configuredBy } = update;
+    try {
+      // The filter pins slackTeamId, so a channel configured under another workspace misses it and the
+      // upsert's insert then collides with the unique channelId index instead of re-homing that config.
+      const result = await this.model.findOneAndUpdate(
+        { channelId, slackTeamId },
+        {
+          $set: { apiPostEnabled, apiPostAllowedKeyIds, apiPostOrganizationId: organizationId },
+          $setOnInsert: { channelId, slackTeamId, configuredBy },
+        },
+        { upsert: true, new: true }
+      );
+      return result as ISlackChannelConfigDocument & IMongoDocument;
+    } catch (error) {
+      if ((error as { code?: number }).code === 11000) return null;
+      throw error;
+    }
+  }
+
+  async findApiPostEnabledBySlackTeamId(
+    slackTeamId: string
+  ): Promise<(ISlackChannelConfigDocument & IMongoDocument)[]> {
+    return this.model.find({ slackTeamId, apiPostEnabled: true }).sort({ updatedAt: -1 });
+  }
+
+  async disableApiPostingByChannelId(channelId: string, slackTeamId: string) {
+    return this.model.findOneAndUpdate(
+      { channelId, slackTeamId, apiPostEnabled: true },
+      { $set: { apiPostEnabled: false, apiPostAllowedKeyIds: [] }, $unset: { apiPostOrganizationId: '' } },
+      { new: false }
+    );
+  }
+
+  async clearApiPostingBySlackTeamId(slackTeamId: string, keepOrganizationId?: string): Promise<string[]> {
+    const filter = {
+      slackTeamId,
+      apiPostEnabled: true,
+      ...(keepOrganizationId && { apiPostOrganizationId: { $ne: keepOrganizationId } }),
+    };
+    const candidates = await this.model.find(filter).select('channelId').lean();
+    // One guarded update per channel, so the returned (audited) ids are exactly the ones turned off
+    // here, even if an owner enables or disables a channel between the read and the writes.
+    const cleared: string[] = [];
+    for (const { channelId } of candidates) {
+      const result = await this.model.updateOne(
+        { ...filter, channelId },
+        { $set: { apiPostEnabled: false, apiPostAllowedKeyIds: [] }, $unset: { apiPostOrganizationId: '' } }
+      );
+      if (result.modifiedCount > 0) cleared.push(channelId);
+    }
+    return cleared;
   }
 }
 

@@ -14,7 +14,7 @@ import { WAFV2Client, GetLoggingConfigurationCommand } from '@aws-sdk/client-waf
 import { getWafBlockedRequests, getWafLogsInsightsOverview } from '../wafLogsInsights';
 import { WAF_MASKED_HEADER_VALUE } from '../wafHeaderRedaction';
 import { wafQueryCache } from '../wafQueryCache';
-import type { WafCustomRange } from '../wafSharedHelpers';
+import type { WafCustomRange } from '@bike4mind/server-utils/security/wafSharedHelpers';
 
 const cloudFrontMock = mockClient(CloudFrontClient);
 const cloudWatchLogsMock = mockClient(CloudWatchLogsClient);

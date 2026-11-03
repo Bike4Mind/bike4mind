@@ -1,6 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 import type { IUserDocument } from '@bike4mind/common';
-import { isMfaEnrollmentOwed } from '@server/auth/mfaEnforcement';
+import { isMfaEnrollmentOwed } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { logOAuthError } from '@server/auth/oauthErrorLog';
 import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
 
@@ -68,8 +68,8 @@ export function oauthRouteGate(policy?: OAuthRoutePolicy) {
  * enrollment gate - keep this in sync with oauthRouteGate above.
  */
 export function admitsOptionalAuthUser(user: unknown): user is Express.User {
-  const u = user as { mfaPending?: boolean; oauthGrant?: unknown } | null | undefined;
-  return !!u && !u.mfaPending && !u.oauthGrant;
+  const u = user as { mfaPending?: boolean; oauthGrant?: unknown; impersonatedBy?: string } | null | undefined;
+  return !!u && !u.mfaPending && !u.oauthGrant && !u.impersonatedBy;
 }
 
 /**

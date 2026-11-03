@@ -10,6 +10,7 @@
  * summaries.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { AiAccessStateFields } from '@bike4mind/services/userService/accountState';
 
 const {
   mockFilterCredits,
@@ -58,7 +59,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', () => ({
   projectService: { get: mockProjectGet, addSessions: mockAddSessions, listSessions: vi.fn() },
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: mockLogEvent }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: mockLogEvent }));
 vi.mock('@server/utils/eventBus', () => ({ SessionEvents: { Summarize: { publish: mockPublishSummarize } } }));
 // OPERATIONS_PER_SUMMARIZE_WITH_TAGGING is deliberately left unmocked (it lives in its own
 // module) so the `operationsPerSession: 2` assertion below pins the real constant.
@@ -80,11 +81,11 @@ const RESOLVED_SESSIONS = [
   { id: 'session-unpayable', userId: 'owner-broke' },
 ];
 
-const run = async (sessionIds: string[]) => {
+const run = async (sessionIds: string[], accessState: AiAccessStateFields = {}) => {
   const res = { json: vi.fn(), status: vi.fn().mockReturnThis() };
   await postHandler(
     {
-      user: { id: REQUESTER_ID },
+      user: { id: REQUESTER_ID, ...accessState },
       query: { id: PROJECT_ID },
       body: { sessionIds },
       ability: {},
@@ -162,4 +163,15 @@ describe('POST /api/projects/[id]/sessions credit pre-flight', () => {
     expect(mockPublishSummarize).not.toHaveBeenCalled();
     expect(res.json).toHaveBeenCalled();
   });
+
+  it.each([{ isModerated: true }, { riskScore: { reviewState: 'pending' as const } }])(
+    'attaches without generating summaries when AI access is held: %j',
+    async accessState => {
+      const res = await run(['session-payable'], accessState);
+      expect(mockFilterCredits).not.toHaveBeenCalled();
+      expect(mockPublishSummarize).not.toHaveBeenCalled();
+      expect(mockAddSessions).toHaveBeenCalledTimes(1);
+      expect(res.json).toHaveBeenCalled();
+    }
+  );
 });

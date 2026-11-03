@@ -287,31 +287,40 @@ describe('sessionRepository voice holds', () => {
 });
 
 describe('stale voice hold sweep index', () => {
-  it('serves the real findStaleVoiceHolds query from the partial open-hold index', async () => {
+  it('can serve the real findStaleVoiceHolds query from the partial open-hold index', async () => {
     await Session.init();
     for (let i = 0; i < 40; i++) {
       await seed(`idle-${i}`, null, null);
+      await seed(`unreserved-${i}`, null, minutesAgo(60 + i));
       await seed(`hold-${i}`, 100, minutesAgo(60 + i), i % 2 === 0 ? 0 : undefined);
     }
 
     // Capture the filter the repository actually sends (soft-delete plugin included), so the
     // assertion cannot drift from the query it is meant to pin.
     let filter: Record<string, unknown> | undefined;
+    let holdIds: string[] = [];
     mongoose.set('debug', (_collection: string, method: string, query: Record<string, unknown>) => {
       if (method === 'find') filter = query;
     });
     try {
-      await sessionRepository.findStaleVoiceHolds(minutesAgo(30), minutesAgo(30), 200);
+      const holds = await sessionRepository.findStaleVoiceHolds(minutesAgo(30), minutesAgo(30), 200);
+      holdIds = holds.map(hold => hold.id);
     } finally {
       mongoose.set('debug', false);
     }
     expect(filter).toBeDefined();
 
-    const explain = await Session.collection
+    // Small fixtures can favor another index; pin this one to verify its results and plan.
+    const indexedQuery = Session.collection
       .find(filter as Record<string, unknown>)
+      .hint('voiceSessionStartedAt_1_openVoiceHold')
       .sort({ voiceSessionStartedAt: 1 })
-      .limit(200)
-      .explain('queryPlanner');
+      .limit(200);
+    const indexedHolds = await indexedQuery.toArray();
+    expect(holdIds).toHaveLength(40);
+    expect(indexedHolds.map(hold => hold._id.toString())).toEqual(holdIds);
+
+    const explain = await indexedQuery.explain('queryPlanner');
     const indexNames: string[] = [];
     const walk = (stage: { indexName?: string; inputStage?: unknown; inputStages?: unknown[] } | undefined) => {
       if (!stage) return;

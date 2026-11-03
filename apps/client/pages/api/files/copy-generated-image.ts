@@ -5,6 +5,7 @@ import {
   SupportedFabFileMimeTypes,
   extensionFromMimeType,
   isImageServeable,
+  fabFileResponseSchema,
 } from '@bike4mind/common';
 import {
   FabFile,
@@ -16,14 +17,17 @@ import {
   scopedSettingsRepository,
 } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { respond } from '@server/utils/respond';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { userCanAccessGeneratedImage } from '@bike4mind/server-utils/utils/generatedImageAccess';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
+import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';
 import { z } from 'zod';
+import { requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 
 const copyGeneratedImageSchema = z.object({
   imageS3Key: z.string().describe('The S3 key of the image in the generatedImagesBucket'),
@@ -71,6 +75,8 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
       const extension = extensionFromMimeType(contentType) || 'png';
       const finalFileName = fileName || `image_${Date.now()}.${extension}`;
 
+      await consumeFileUploadBudget(req, 1);
+
       const result = await withTransaction(async () => {
         return fabFilesService.createFabFile(
           user.id,
@@ -91,7 +97,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
               // enforcement override would silently not apply on this door.
               scopedSettings: scopedSettingsRepository,
               fabFiles: FabFile,
-              users: User,
+              users: requesterScopedUsers(req, User),
               organizations: organizationRepository,
               dataLakes: dataLakeRepository,
             },
@@ -137,14 +143,14 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
           audience: 'browser',
         });
 
-        return res.json({
+        return respond(res, fabFileResponseSchema, {
           ...responseFile,
           fileUrl: presignedUrl,
           fileUrlExpireAt: new Date(Date.now() + 3600 * 1000),
         });
       }
 
-      return res.json(responseFile);
+      return respond(res, fabFileResponseSchema, responseFile);
     })
   );
 

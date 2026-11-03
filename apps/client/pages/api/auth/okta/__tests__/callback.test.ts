@@ -12,7 +12,9 @@ vi.mock('@server/middlewares/baseApi', () => {
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => (_req: any, _res: any, next: any) => next?.(),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_req: any, _res: any, next: any) => next?.() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: () => (_req: any, _res: any, next: any) => next?.(),
+}));
 
 // Database: only User + authFailLogRepository + authSessionRepository are touched by the handler.
 const mockFindOne = vi.fn();
@@ -63,7 +65,9 @@ vi.mock('@server/utils/auth/oauthSourceTag', () => ({
 
 // State token verification.
 const mockVerifyState = vi.fn();
-vi.mock('@server/auth/jwtStateStore', () => ({ verifyStateToken: (...a: any[]) => mockVerifyState(...a) }));
+vi.mock('@bike4mind/server-utils/auth/jwtStateStore', () => ({
+  verifyStateToken: (...a: any[]) => mockVerifyState(...a),
+}));
 
 // Remaining leaf collaborators. Mock the session helper directly (rather than @bike4mind/services)
 // so the test never pulls the real services barrel -- the callback mints via issueBrowserSession,
@@ -77,7 +81,7 @@ vi.mock('@server/auth/signInSecondFactor', () => ({
   resolveSecondFactor: (...a: any[]) => mockResolveSecondFactor(...a),
   logSignInSuccess: (...a: any[]) => mockLogSignInSuccess(...a),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/auth/requireNonSystemUser', () => ({ requireNonSystemUser: vi.fn() }));
 vi.mock('@server/utils/validators', () => ({
@@ -114,6 +118,15 @@ vi.mock('@server/utils/auth/oauthSignupGrants', () => ({
 vi.mock('@server/auth/emailVerifiedGrants', () => ({
   applyEmailVerifiedGrants: (...a: unknown[]) => mockApplyEmailVerifiedGrants(...a),
 }));
+const mockRecordSignupNetwork = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/auth/networkMeta', () => ({
+  recordSignupNetwork: (...a: unknown[]) => mockRecordSignupNetwork(...a),
+}));
+const mockRefreshSignupRiskScore = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
+vi.mock('@server/auth/signupRiskScore', () => ({
+  refreshSignupRiskScore: (...a: unknown[]) => mockRefreshSignupRiskScore(...a),
+}));
 vi.mock('@server/analytics/funnel', () => ({
   recordSignupAcquisition: (...a: unknown[]) => mockRecordSignupAcquisition(...a),
   emitSignupFunnelEvents: (...a: unknown[]) => mockEmitSignupFunnelEvents(...a),
@@ -124,6 +137,7 @@ vi.mock('@server/analytics/funnel', () => ({
 import { issueBrowserSession } from '@server/auth/issueSession';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
+import { Logger } from '@bike4mind/observability';
 import handler from '@pages/api/auth/okta/callback';
 
 const STATE = 'state-token';
@@ -730,6 +744,13 @@ describe('/api/auth/okta/callback - OAuth client source tag', () => {
       userInfo: { sub: 'okta-new', email: 'new@example.com', email_verified: true, name: 'New User' },
     });
     expect(mockStampSourceTag).toHaveBeenCalledWith('new-user', 'b4m_sat_0123abcd');
+    expect(mockRecordSignupNetwork).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'new-user', method: AuthStrategy.Okta })
+    );
+    expect(mockRefreshSignupRiskScore).toHaveBeenCalledWith('new-user', expect.anything());
+    expect(mockRecordSignupNetwork.mock.invocationCallOrder[0]).toBeLessThan(
+      mockRefreshSignupRiskScore.mock.invocationCallOrder[0]
+    );
   });
 
   it('never stamps an existing account that signs in through a client', async () => {
@@ -745,6 +766,8 @@ describe('/api/auth/okta/callback - OAuth client source tag', () => {
       userInfo: { sub: 'okta-sub-default', email: 'old@example.com', email_verified: true, name: 'Old User' },
     });
     expect(mockStampSourceTag).not.toHaveBeenCalled();
+    expect(mockRecordSignupNetwork).not.toHaveBeenCalled();
+    expect(mockRefreshSignupRiskScore).not.toHaveBeenCalled();
   });
 });
 
@@ -860,5 +883,34 @@ describe('/api/auth/okta/callback - second factor', () => {
       strategy: AuthStrategy.Okta,
       trustedDevice,
     });
+  });
+});
+
+describe('/api/auth/okta/callback - IdP error log level', () => {
+  function runWithIdpError(error: string) {
+    const { req, res } = createMocks({
+      method: 'GET',
+      query: { state: STATE, error, error_description: 'Reset password is not allowed at this time.' },
+      headers: { host: 'localhost:3000', 'user-agent': 'vitest' },
+      url: '/api/auth/okta/callback',
+    });
+    Object.assign(req, { logger: reqLogger });
+    return handler(req as any, res as any);
+  }
+
+  it('logs access_denied (the IdP refusing this user) at warn', async () => {
+    await runWithIdpError('access_denied');
+
+    expect(Logger.warn).toHaveBeenCalledWith('[Okta Callback] OAuth error from Okta:', {
+      error: 'access_denied',
+      errorDescription: 'Reset password is not allowed at this time.',
+    });
+    expect(Logger.error).not.toHaveBeenCalledWith('[Okta Callback] OAuth error from Okta:', expect.anything());
+  });
+
+  it('keeps any other IdP error at error', async () => {
+    await runWithIdpError('invalid_request');
+
+    expect(Logger.error).toHaveBeenCalledWith('[Okta Callback] OAuth error from Okta:', expect.anything());
   });
 });

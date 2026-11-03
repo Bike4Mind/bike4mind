@@ -2,6 +2,7 @@ import type { CustomCommand } from '@bike4mind/cli/skills';
 import type { VideoModel } from '@bike4mind/common';
 import type { BrowserSnapshot } from '@shared/browserPage';
 import type { McpServerState, McpServersState } from '@shared/mcp';
+import type { PrActionResult, PrBindOutcome } from '@shared/pullRequest';
 import type {
   ChatApprovalOption,
   ChatDiff,
@@ -208,6 +209,61 @@ export interface BrowserContext {
   usesImportedCookies(url: string): boolean;
 }
 
+/** An image fitted to what the model's provider accepts, and the size it was read at. */
+export interface PreparedImage {
+  bytes: Buffer;
+  mediaType: string;
+  width: number;
+  height: number;
+  sourceWidth: number;
+  sourceHeight: number;
+}
+
+/** How a tool shows the model an image through ToolReporter.image. */
+export interface ImageContext {
+  /**
+   * False when the turn's model is known not to read images. ChatService drops the image then
+   * anyway; this is so the tool can say so rather than tell the model to look at nothing.
+   */
+  vision: boolean;
+  /**
+   * Downscale to the long-edge limit and fit under `maxBytes`. Null for bytes the decoder cannot
+   * read, which nativeImage does not for GIF and WebP. Injected so only main/chat imports Electron.
+   */
+  prepare(bytes: Buffer, mediaType: string, maxBytes: number): PreparedImage | null;
+}
+
+/** A window or display, as screen_capture lists it. */
+export interface ScreenSource {
+  /** desktopCapturer's id, `window:<n>:<n>` or `screen:<n>:<n>`: stable for the window's lifetime. */
+  id: string;
+  kind: 'window' | 'screen';
+  /** A window's title, or a display's name. */
+  name: string;
+}
+
+export type ScreenAccess =
+  | { state: 'granted' }
+  /** macOS has not asked yet; the first capture raises its prompt. */
+  | { state: 'not-determined' }
+  /** `message` is what the model is told, with where the user can change it. */
+  | { state: 'denied' | 'unsupported'; message: string };
+
+/** The desktop's windows and displays: Electron's desktopCapturer in the app, a fake in tests. */
+export interface ScreenCapturer {
+  /** Read on every call, never cached: the user can grant it in System Settings at any time. */
+  access(): ScreenAccess;
+  list(): Promise<ScreenSource[]>;
+  /** A PNG at most `maxEdge` pixels on its long side; null when the source is gone or came back blank. */
+  capture(id: string, maxEdge: number): Promise<Buffer | null>;
+}
+
+export interface ScreenContext {
+  capturer: ScreenCapturer;
+  /** Keep a capture for the transcript, as BrowserContext.keepScreenshot does. */
+  keepScreenshot(bytes: Buffer, caption: string): Promise<ChatMedia | undefined>;
+}
+
 /**
  * Everything a tool may use. Narrow by default: no api client and no token, except for the
  * server-backed generation tools, which get exactly {@link MediaContext}, and the web tools,
@@ -263,6 +319,10 @@ export interface ToolContext {
   web?: WebContext;
   /** Absent outside a Code session; the browser tools are then not declared at all. */
   browser?: BrowserContext;
+  /** Absent in a build without desktopCapturer; screen_capture is then not declared at all. */
+  screen?: ScreenContext;
+  /** Absent outside the chat loop, where an image has nowhere to go; file_read then describes it in text. */
+  images?: ImageContext;
   /**
    * Where this project's memories live. Resolved from the project, never from the tool's
    * arguments: the model names a memory, and nothing it can say chooses the folder.
@@ -275,6 +335,8 @@ export interface ToolContext {
   skills?: SkillContext;
   /** The user's MCP servers. Absent in a build or test without them; the mcp_* tools then refuse. */
   mcp?: McpToolContext;
+  /** The calling session's PR binding. Absent in tests; set_session_pull_request then refuses. */
+  pullRequests?: PullRequestContext;
   /** Absent outside the chat loop; every tool treats it as optional. */
   report?: ToolReporter;
   /**
@@ -299,6 +361,12 @@ export interface McpToolContext {
   reconnect(id: string): Promise<McpServerState | null>;
   setEnabled(id: string, enabled: boolean): Promise<McpServersState>;
   removeServer(id: string): Promise<McpServersState>;
+}
+
+/** One session's PR binding, as set_session_pull_request may change it. See PrMonitor. */
+export interface PullRequestContext {
+  bind(target: string): Promise<PrBindOutcome>;
+  clear(): Promise<PrActionResult>;
 }
 
 /**
@@ -352,8 +420,8 @@ export type SpawnPlacement = { kind: 'local' } | { kind: 'worktree'; branch: str
  * A delivered message, and whether the target took it up straight away.
  *
  * `title` is what the caller's transcript row names, resolved here because the model only ever
- * had the id. `queued` is the honest half: the target was mid-reply, so the message is waiting
- * behind that turn rather than running now.
+ * had the id. `queued` is the honest half: the target was mid-reply, so the message waits for
+ * that turn's next round boundary, or its end, rather than running now.
  */
 export interface RelayAccepted {
   ok: true;

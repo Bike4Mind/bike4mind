@@ -1,12 +1,13 @@
 #!/usr/bin/env npx ts-node -r tsconfig-paths/register
+import { signupProtectionRepository } from '@bike4mind/database';
 
 /**
  * Grant the starting free credits to Google/GitHub signups that got none before OAuth signup
  * learned to grant them (see createOAuthUser.ts + verifyCallback.ts).
  *
- * Selection lives in oauthStartingGrantPlan.ts. An account qualifies only with a 0 balance, a
- * non-disposable email, no pending-grant tag and no credit ledger entry at all, so a re-run after
- * --execute selects nobody. Internal accounts are excluded by NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS
+ * Selection lives in oauthStartingGrantPlan.ts. An account qualifies only with a 0 balance, an
+ * email the signup gate allows (not disposable, not on an admin-blocked domain), no pending-grant
+ * tag and no credit ledger entry at all, so a re-run after --execute selects nobody. Internal accounts are excluded by NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS
  * (plus --exclude-email-domain) and the same test-email pattern as the external-users report.
  * The grant goes through userService.grantFreeCredits: same `verify-grant:<id>` transactionId as
  * the runtime paths, so it is recorded in the ledger and can never double-credit.
@@ -93,14 +94,8 @@ const findOAuthUsers = async (): Promise<StartingGrantUser[]> => {
 
 /** Settings read failures throw and abort the run, rather than withholding grants silently. */
 const findDisposableEmailUserIds = async (users: readonly StartingGrantUser[]): Promise<Set<string>> => {
-  const blocked = new Set<string>();
-  for (const user of users) {
-    if (!user.email) continue;
-    if (await userService.shouldBlockDisposableEmail(user.email, { adminSettings: adminSettingsRepository })) {
-      blocked.add(user.id);
-    }
-  }
-  return blocked;
+  const shouldBlock = await userService.createSignupEmailGate(adminSettingsRepository);
+  return new Set(users.filter(user => user.email && shouldBlock(user.email)).map(user => user.id));
 };
 
 /** Old ledger rows may carry only the deprecated `userId`, so both owner fields are checked. */
@@ -139,10 +134,15 @@ const grantAll = async (users: readonly StartingGrantUser[]): Promise<{ granted:
             creditTransactions: creditTransactionRepository,
             creditLots: creditLotRepository,
             users: userRepository,
+            signupProtection: { repository: signupProtectionRepository, mode: 'enforce' },
           },
           reason: GRANT_REASON,
         }
       );
+      if (result.withheld) {
+        console.log(`  deferred ${describeUser(user)} - pending domain review`);
+        continue;
+      }
       granted++;
       console.log(`  ok  ${describeUser(user)}  +${result.creditsGranted} credits`);
     } catch (error) {

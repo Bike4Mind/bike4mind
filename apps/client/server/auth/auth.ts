@@ -4,7 +4,7 @@ import passport from 'passport';
 import { AuthStrategy, type IUserDocument } from '@bike4mind/common';
 import ability from '@server/auth/ability';
 import { User } from '@bike4mind/database';
-import { verifyCallback } from '@server/utils/auth/verifyCallback';
+import { selfServeVerifyCallback, verifyCallback } from '@server/utils/auth/verifyCallback';
 import { Config } from '@bike4mind/server-utils/utils/config';
 
 import { Request, RequestHandler, Response } from 'express';
@@ -20,7 +20,7 @@ import nc from 'next-connect';
 import { Logger } from '@bike4mind/observability';
 import { jwtSecretOrKeyProvider } from './jwtSecretOrKeyProvider';
 import { verifyJwtPayload } from './verifyJwtPayload';
-import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from './mfaEnforcement';
+import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { githubOAuthStateStore, googleOAuthStateStore } from './passportOAuthStateStore';
 import { createGitHubStrategy } from './githubStrategy';
 import { isPolicyConsentRequired, type ConsentGateUser } from '@bike4mind/server-utils/auth/consentGate';
@@ -188,8 +188,9 @@ if (Config.GOOGLE_CLIENT_ID && Config.GOOGLE_CLIENT_ID !== 'not-configured') {
         clientSecret: Config.GOOGLE_CLIENT_SECRET,
         callbackURL: process.env.APP_URL + '/api/auth/google/callback',
         store: googleOAuthStateStore,
+        passReqToCallback: true,
       },
-      verifyCallback(AuthStrategy.Google)
+      selfServeVerifyCallback(AuthStrategy.Google)
     )
   );
 } else {
@@ -229,8 +230,9 @@ if (Config.GITHUB_CLIENT_ID && Config.GITHUB_CLIENT_ID !== 'not-configured') {
         // it, SSO logins resolve with email=null and fall into the
         // account-create path instead of matching the existing account by email.
         scope: ['user:email'],
+        passReqToCallback: true,
       },
-      verifyCallback(AuthStrategy.Github)
+      selfServeVerifyCallback(AuthStrategy.Github)
     )
   );
 } else {

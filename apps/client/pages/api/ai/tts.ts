@@ -1,12 +1,15 @@
+import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import {
   synthesizeSpeechContract,
   TTS_MAX_INPUT_CHARS,
+  TTS_DEFAULT_MODEL,
   VOICE_VENDOR_SUPPORTED_FORMATS,
   UnprocessableEntityError,
   DEFAULT_TTS_PROVIDER,
   shouldPersistGeneratedAudio,
   type ApiErrorCode,
+  type VoiceGenerationVendor,
 } from '@bike4mind/common';
 import { hasTtsProviderKey, TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
 import { synthesizeTts, upstreamStatus, isCredentialRejection } from '@server/utils/synthesizeTts';
@@ -18,8 +21,9 @@ import {
   InsufficientCreditsPreflightError,
   type PreflightCreditHold,
 } from '@server/utils/creditPreflight';
-import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
+import { saveGeneratedAssetToFiles } from '@bike4mind/server-utils/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 /**
  * Unified, multi-provider Text-to-Speech endpoint (#724).
@@ -39,6 +43,7 @@ import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
  * typed body.
  */
 const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const {
     text,
     provider,
@@ -80,6 +85,8 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
   // (resolveAudioBillingOrgId 403s any other target).
   const billingOrganizationId = await resolveAudioBillingOrgId(req, organization_id, 'user');
   const userId = req.user?.id;
+  const admission = await createModelAdmission(req.user!);
+  await admission.assert(model ?? TTS_DEFAULT_MODEL[vendor]);
   const candidateAvailability = await Promise.all(
     ttsCandidates(vendor, text.length).map(async candidate => ({
       vendor: candidate,
@@ -95,7 +102,15 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
           }))),
     }))
   );
-  const candidates = candidateAvailability.filter(candidate => candidate.available).map(candidate => candidate.vendor);
+  const candidates: VoiceGenerationVendor[] = [];
+  for (const candidate of candidateAvailability) {
+    if (
+      candidate.available &&
+      (candidate.vendor === vendor || (await admission.admits(TTS_DEFAULT_MODEL[candidate.vendor])))
+    ) {
+      candidates.push(candidate.vendor);
+    }
+  }
   let hold: PreflightCreditHold | undefined;
   if (userId && req.user) {
     try {
@@ -182,6 +197,16 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
                 // A voice names a voice of the requested provider, so it is meaningless once another stood in.
                 ...(voice && !fallbackFrom && { voice }),
                 ...(languageCode && { languageCode }),
+                request: {
+                  provider: vendor,
+                  text,
+                  ...(model !== undefined && { model }),
+                  ...(voice !== undefined && { voice }),
+                  ...(format !== undefined && { format }),
+                  ...(stability !== undefined && { stability }),
+                  ...(similarityBoost !== undefined && { similarityBoost }),
+                  ...(languageCode !== undefined && { languageCode }),
+                },
               },
             },
             req.logger

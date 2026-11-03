@@ -4,9 +4,9 @@ import { isE2EEnabled } from '@bike4mind/server-utils/utils/config';
 import { issueSessionForRequest } from '@server/auth/issueSession';
 import { userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
-import { PREDEFINED_USER_TAGS, CURRENT_POLICY_VERSION } from '@bike4mind/common';
+import { PREDEFINED_USER_TAGS, CURRENT_POLICY_VERSION, AdminPermissionsSchema } from '@bike4mind/common';
 import { E2E_USERNAME_SUFFIX_PATTERN } from '@server/utils/e2eCleanupScope';
-import { Resource } from 'sst';
+import { isValidE2eTestSecret } from '@server/auth/e2eTestSecret';
 import { Request } from 'express';
 
 interface CreateTestUserBody {
@@ -20,6 +20,9 @@ interface CreateTestUserBody {
   // Optional so an emailless account can be minted passwordless, like the OAuth shape it mimics.
   password?: string;
   isAdmin?: boolean;
+  // Delegated admin grants (e.g. ['settings:manage']) without full isAdmin. Unknown or repeated
+  // values are rejected with a 400.
+  adminPermissions?: string[];
   emailVerified?: boolean;
   tags?: string[];
   // PREDEFINED_USER_TAGS are prepended to `tags` by default. Pass exactly false to get only the
@@ -46,10 +49,8 @@ const handler = baseApi({ auth: false }).post(
       return res.status(403).json({ error: 'Test user creation is only available in development/preview' });
     }
 
-    // Guard 2: Require shared secret - read from SST secret (local/staging) or env var (preview deploys)
-    const secret = req.headers['x-e2e-cleanup-secret'];
-    const expectedSecret = Resource.E2E_CLEANUP_SECRET?.value || process.env.E2E_CLEANUP_SECRET;
-    if (!expectedSecret || expectedSecret === 'not-configured' || secret !== expectedSecret) {
+    // Guard 2: E2E secret header
+    if (!isValidE2eTestSecret(req.headers['x-e2e-cleanup-secret'])) {
       return res.status(401).json({ error: 'Invalid cleanup secret' });
     }
 
@@ -59,6 +60,7 @@ const handler = baseApi({ auth: false }).post(
       name,
       password,
       isAdmin,
+      adminPermissions,
       emailVerified,
       tags,
       includePredefinedTags,
@@ -76,6 +78,12 @@ const handler = baseApi({ auth: false }).post(
       return res.status(400).json({ error: 'Emailless test users must use the -e2e username suffix' });
     }
 
+    const parsedPermissions =
+      adminPermissions === undefined ? undefined : AdminPermissionsSchema.safeParse(adminPermissions);
+    if (parsedPermissions && !parsedPermissions.success) {
+      return res.status(400).json({ error: 'Invalid adminPermissions', details: parsedPermissions.error.issues });
+    }
+
     const newUser = await userService.createUser(
       {
         username,
@@ -91,10 +99,13 @@ const handler = baseApi({ auth: false }).post(
           ...((acceptedPolicies ?? true) ? { aupAcceptedVersion: CURRENT_POLICY_VERSION } : {}),
         },
         isAdmin: isAdmin ?? false,
+        adminPermissions: parsedPermissions?.data,
         // No address means nothing to have verified.
         emailVerified: email ? (emailVerified ?? true) : false,
         tags: [...(includePredefinedTags === false ? [] : PREDEFINED_USER_TAGS), ...(tags ?? [])],
         initialCredits: initialCredits ?? DEFAULT_E2E_INITIAL_CREDITS,
+        // Secret-gated and disabled in production: test tooling mints test-persona accounts here.
+        allowReservedUsername: true,
       },
       { db: { users: userRepository } }
     );

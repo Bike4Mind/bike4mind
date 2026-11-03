@@ -24,7 +24,8 @@ export const imageQuestPollResult = {
     '`"done"`: on success `images` holds the rendered images; a render that FAILED is `type: "error"` with ' +
     'the reason in `reply`, never a 4xx. That covers credit exhaustion (tagged `errorCode: ' +
     '"insufficient_credits"`, the same vocabulary as the synchronous 422s on the audio endpoints), a ' +
-    'provider error, and a reference image that is missing, not an image, or still in moderation. Check ' +
+    'provider error, a reference image that is missing, not an image, or still in moderation, and the ' +
+    'combined FLUX.2 input-image limit after attachments are resolved. Check ' +
     '`type` before reading `images`; `errorCode` is absent on unclassified failures, so its absence does ' +
     'not mean success.',
   example: {
@@ -55,8 +56,10 @@ export const generateImageContract = defineEndpoint({
     '`prompt_resolution: "literal"` to skip that step and have the prompt sent as written (apart ' +
     "from truncation to the model's prompt limit). " +
     '`referenceImageFabFileIds` passes up to 15 already-uploaded images as style anchors, after the input ' +
-    'image taken from `fabFileIds`. Only gpt-image models accept them: sending any with another model is ' +
-    'rejected with a 400 rather than ignored. Which `size` values a model accepts, and whether it honours ' +
+    'image taken from `fabFileIds`. GPT-image accepts 15 references; FLUX.2 accepts 8 total input images ' +
+    '(4 for Klein), including images attached through `fabFileIds`. Unsupported models and an oversized ' +
+    'reference list are rejected with a 400. The combined FLUX.2 input limit is checked when the render ' +
+    'resolves attachments; exceeding it fails the polled quest. Which `size` values a model accepts, and whether it honours ' +
     '`background`, `seed`, `quality`, `n` and reference images, is listed per model in the `image` block ' +
     'of `GET /api/v1/models`. Credits are checked when the render runs, so ' +
     'insufficient credits arrive on the polled quest rather than as a 422. ' +
@@ -79,7 +82,7 @@ export const generateImageContract = defineEndpoint({
     },
     400: {
       description:
-        `\`referenceImageFabFileIds\` is set for a non-gpt-image model, or the ${GENERATION_CALLBACK_REJECTED_DESCRIPTION} ` +
+        `\`referenceImageFabFileIds\` is set for an unsupported model or its distinct ids alone exceed the model's reference limit, or the ${GENERATION_CALLBACK_REJECTED_DESCRIPTION} ` +
         BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION,
       schema: ApiErrorSchema,
     },

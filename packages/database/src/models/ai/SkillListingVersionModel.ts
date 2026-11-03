@@ -18,6 +18,7 @@ const FindingSchema = new Schema(
     message: { type: String, required: true, maxlength: 500 },
     excerpt: { type: String, maxlength: 300 },
     source: { type: String, required: true, enum: ['rules', 'classifier'] },
+    file: { type: String, maxlength: 200 },
   },
   { _id: false }
 );
@@ -32,7 +33,17 @@ const SkillListingVersionSchema = new Schema<ISkillListingVersionDocument>(
       body: { type: String, required: true, maxlength: 50_000 },
       argumentHint: { type: String, maxlength: 200 },
       allowedTools: { type: [String], default: undefined },
+      claudeCodeAllowedTools: { type: [String], default: undefined },
       disableModelInvocation: { type: Boolean },
+      files: {
+        type: [
+          new Schema(
+            { path: { type: String, required: true }, content: { type: String, default: '' } },
+            { _id: false }
+          ),
+        ],
+        default: undefined,
+      },
     },
     contentHash: { type: String, required: true },
 

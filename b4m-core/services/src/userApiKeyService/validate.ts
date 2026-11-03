@@ -2,7 +2,7 @@ import { Logger } from '@bike4mind/observability';
 import {
   ApiKeyBillingOwnerType,
   ApiKeyStoredSecret,
-  ApiKeyScope,
+  ApiKeyScopeValue,
   ApiKeyStatus,
   IEmbedBranding,
   IUserApiKeyDocument,
@@ -22,7 +22,7 @@ export interface ValidationResult {
   isValid: boolean;
   userId?: string;
   keyId?: string;
-  scopes?: ApiKeyScope[];
+  scopes?: ApiKeyScopeValue[];
   rateLimit?: {
     requestsPerMinute: number;
     requestsPerDay: number;
@@ -47,6 +47,8 @@ export interface ValidationResult {
   spendCap?: number;
   /** Cumulative settled spend in credits (`usage.totalSpendCredits`) at validation time. */
   currentSpend?: number;
+  /** The admin who provisioned the key for its owner (admin generate-api-key route only). */
+  createdByUserId?: string;
   reason?: 'not_found' | 'invalid_hash' | 'expired' | 'disabled' | 'rate_limited';
 }
 
@@ -104,6 +106,7 @@ function finalizeApiKeyValidation(apiKey: IUserApiKeyDocument, db: ValidateUserA
     branding: apiKey.branding,
     spendCap: apiKey.spendCap,
     currentSpend: apiKey.usage?.totalSpendCredits,
+    createdByUserId: apiKey.metadata?.createdByUserId,
   };
 }
 

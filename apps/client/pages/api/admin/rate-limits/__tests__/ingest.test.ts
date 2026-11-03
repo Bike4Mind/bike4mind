@@ -11,7 +11,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
     post: (fn: (req: unknown, res: unknown) => unknown) => (req: unknown, res: unknown) => fn(req, res),
   }),
 }));
-vi.mock('@server/utils/mcpRateLimitSnapshots', () => ({ persistRateLimitEvents: h.persistRateLimitEvents }));
+vi.mock('@bike4mind/server-utils/utils/mcpRateLimitSnapshots', () => ({
+  persistRateLimitEvents: h.persistRateLimitEvents,
+}));
 vi.mock('sst', () => ({ Resource: { RATE_LIMIT_INGEST_TOKEN: { value: 'ingest-token' } } }));
 
 import handler from '../ingest';

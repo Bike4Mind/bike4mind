@@ -1,5 +1,5 @@
 /* eslint-disable react-hooks/rules-of-hooks */
-import { test as base, expect } from '@playwright/test';
+import { test as base, expect, type Browser, type Page } from '@playwright/test';
 import { TIMEOUTS } from './constants';
 import { ConsoleTracker } from './helpers/console-tracker';
 import { LoginPage } from './pages/LoginPage';
@@ -18,7 +18,10 @@ import { AdminPage } from './pages/AdminPage';
 import { TavernPage } from './pages/TavernPage';
 import { DataLakePage } from './pages/DataLakePage';
 import { SkillsPage } from './pages/SkillsPage';
+import { TeamsPage } from './pages/TeamsPage';
 import { getTestUsers } from './helpers/test-users';
+import { installWafBypass } from './helpers/waf-bypass';
+import { bypassTurnstile } from './helpers/turnstile';
 
 type VerifyAnswersOptions = {
   logic?: 'and' | 'or';
@@ -44,6 +47,7 @@ type TestFixtures = {
   tavernPage: TavernPage;
   dataLakePage: DataLakePage;
   skillsPage: SkillsPage;
+  teamsPage: TeamsPage;
   loginAsAdmin: () => Promise<void>;
   loginAsUser: (user: SpecAuth) => Promise<void>;
   /** Mutable per-test identity the page.goto override authenticates as; loginAs* rewrites `current`
@@ -74,6 +78,85 @@ function specAuthForProject(projectName: string): SpecAuth | null {
   }
 }
 
+/** Every seeded user id known at fixture time (core + spec users); empty before core setup runs. */
+function knownUserIds(): string[] {
+  try {
+    const { admin, manager, specUsers } = getTestUsers();
+    return [admin, manager, ...Object.values(specUsers)].filter(Boolean).map(u => u.userId);
+  } catch {
+    return [];
+  }
+}
+
+/** Fixture-page setup: modals stubbed, cookie consent pre-decided, in-app gotos authenticated as
+ *  `getAuth()` through /auth/success. */
+async function prepareAppPage(page: Page, getAuth: () => SpecAuth | null): Promise<void> {
+  // Suppress the What's New modal globally - return empty modals so it never renders.
+  // This eliminates flaky backdrop-interception failures without relying on timing hacks.
+  await page.route('**/api/modals**', route =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+  );
+
+  await bypassTurnstile(page);
+
+  // A fresh browser has no region cookie, so CookieConsentBanner asks, and its fixed bar
+  // intercepts clicks on the sidenav and menus. Seed a decision before any app script runs.
+  // The key must stay in sync with CONSENT_KEY in app/utils/consentRegion.ts. 'denied' keeps
+  // trackers off; a test that sets its own value first wins.
+  await page.addInitScript(() => {
+    try {
+      if (!localStorage.getItem('cookie_consent')) localStorage.setItem('cookie_consent', 'denied');
+    } catch {
+      // Opaque origins (about:blank) have no localStorage.
+    }
+  });
+
+  // The gears discovery modal opens ~5s after load for any user with an unused gear (every fresh
+  // e2e user), landing mid-test behind a click-blocking backdrop. Pre-dismiss it per known user.
+  // Key and shape must stay in sync with storageKey/DiscoveryState in lib/gears/discovery.ts.
+  // Users minted mid-test aren't known here; BasePage.dismissModals() covers them.
+  const authUserId = getAuth()?.userId;
+  const userIds = [...new Set([...knownUserIds(), ...(authUserId ? [authUserId] : [])])];
+  await page.addInitScript(ids => {
+    try {
+      for (const id of ids) {
+        const key = `gears_discovery_${id}`;
+        if (!localStorage.getItem(key)) {
+          localStorage.setItem(key, JSON.stringify({ lastShownAt: 0, dismissed: true, rotation: 0 }));
+        }
+      }
+    } catch {
+      // Opaque origins (about:blank) have no localStorage.
+    }
+  }, userIds);
+
+  // Authenticated projects: the access token is memory-only and dies on every full load, so a raw
+  // goto to a protected route cold-loads unauthenticated and the router guard bounces to /login.
+  // Route in-app navigations through /auth/success, which re-seeds the token via the client router
+  // without replaying the single-use refresh cookie (whose one shared token got the session
+  // revoked) or hitting the rate-limited OTC path. `getAuth` is read per call so a
+  // mid-test loginAs* switch is honored; unauthenticated projects (null) pass through.
+  const rawGoto = page.goto.bind(page);
+  page.goto = (url: string, options?: Parameters<typeof rawGoto>[1]) => {
+    const auth = getAuth();
+    const wrap = !!auth && url.startsWith('/') && !url.startsWith('/auth/success') && !url.startsWith('/login');
+    return rawGoto(wrap ? buildAuthSuccessUrl(url, auth) : url, options);
+  };
+}
+
+/** A page signed in as `auth` in a browser context of its own, so a second identity never shares
+ *  the fixture page's persisted session. */
+export async function openPageAs(
+  browser: Browser,
+  baseURL: string | undefined,
+  auth: SpecAuth
+): Promise<{ page: Page; close: () => Promise<void> }> {
+  const context = await browser.newContext({ baseURL });
+  const page = await context.newPage();
+  await prepareAppPage(page, () => auth);
+  return { page, close: () => context.close() };
+}
+
 export const test = base.extend<TestFixtures>({
   // eslint-disable-next-line no-empty-pattern -- no fixture deps; identity derives from the project.
   authState: async ({}, use, testInfo) => {
@@ -84,38 +167,9 @@ export const test = base.extend<TestFixtures>({
     await use({ current });
   },
 
-  // Suppress the What's New modal globally - return empty modals so it never renders.
-  // This eliminates flaky backdrop-interception failures without relying on timing hacks.
   page: async ({ page, authState }, use) => {
-    await page.route('**/api/modals**', route =>
-      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
-    );
-
-    // A fresh browser has no region cookie, so CookieConsentBanner asks, and its fixed bar
-    // intercepts clicks on the sidenav and menus. Seed a decision before any app script runs.
-    // The key must stay in sync with CONSENT_KEY in app/utils/consentRegion.ts. 'denied' keeps
-    // trackers off; a test that sets its own value first wins.
-    await page.addInitScript(() => {
-      try {
-        if (!localStorage.getItem('cookie_consent')) localStorage.setItem('cookie_consent', 'denied');
-      } catch {
-        // Opaque origins (about:blank) have no localStorage.
-      }
-    });
-
-    // Authenticated projects: the access token is memory-only and dies on every full load, so a raw
-    // goto to a protected route cold-loads unauthenticated and the router guard bounces to /login.
-    // Route in-app navigations through /auth/success, which re-seeds the token via the client router
-    // without replaying the single-use refresh cookie (whose one shared token got the session
-    // revoked) or hitting the rate-limited OTC path. `authState.current` is read per call so a
-    // mid-test loginAs* switch is honored; unauthenticated projects (current === null) pass through.
-    const rawGoto = page.goto.bind(page);
-    page.goto = (url: string, options?: Parameters<typeof rawGoto>[1]) => {
-      const auth = authState.current;
-      const wrap = !!auth && url.startsWith('/') && !url.startsWith('/auth/success') && !url.startsWith('/login');
-      return rawGoto(wrap ? buildAuthSuccessUrl(url, auth) : url, options);
-    };
-
+    await installWafBypass(page);
+    await prepareAppPage(page, () => authState.current);
     await use(page);
   },
 
@@ -182,6 +236,10 @@ export const test = base.extend<TestFixtures>({
 
   skillsPage: async ({ page }, use) => {
     await use(new SkillsPage(page));
+  },
+
+  teamsPage: async ({ page }, use) => {
+    await use(new TeamsPage(page));
   },
 
   loginAsAdmin: async ({ page, authState }, use) => {

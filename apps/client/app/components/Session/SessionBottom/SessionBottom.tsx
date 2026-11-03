@@ -24,6 +24,7 @@ import HighlanderFocus from '@client/app/components/HighlanderFocus';
 import VoiceDebugDrawer from '@client/app/components/Session/VoiceSessionModal/VoiceDebugDrawer';
 import { SessionBottomModals } from './SessionBottomModals';
 import { SessionFilePond } from './SessionFilePond';
+import { cancelComposerUpload } from './uploadComposerFile';
 import { SessionToolbar } from './SessionToolbar';
 import { useAdvancedAISettings } from '@client/app/components/Session/AdvancedAISettings';
 import { MessageFileThumbnails } from '@client/app/components/Session/MessageFileThumbnails';
@@ -67,6 +68,9 @@ import { noModelsPlaceholder, NoModelsPlaceholder, LowCreditsWarning } from '../
 import { ZeroCreditWarning } from '../ZeroCreditWarning';
 import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings';
 import { getComposerCreditUi } from './composerCreditUi';
+import { CacheExpiryNotice, ModelSwitchCostNotice } from './ModelSwitchCostNotice';
+import { usePromptCacheComposer } from './usePromptCacheComposer';
+import PromptCacheTtlChip from './PromptCacheTtlChip';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { useMcpServerSync } from './useMcpServerSync';
 import { useMessageDraft } from './useMessageDraft';
@@ -291,6 +295,11 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
     () => isChatCompletionActiveFor(chatCompletion, currentSessionId),
     [chatCompletion, currentSessionId]
   );
+  const promptCache = usePromptCacheComposer({
+    selectedModel: useMemo(() => modelInfo?.find(m => m.id === model), [modelInfo, model]),
+    contextUsage,
+    isGenerating: shouldShowStopButton,
+  });
 
   // Check if there are active file uploads or images still pending a content-moderation
   // scan - the Send button must stay disabled until the scan clears, otherwise
@@ -445,13 +454,13 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const canAttachFiles = enableFileAttachments;
 
   const handlePaste = useChatPaste({
+    attachScopeMode,
     currentSession,
     currentSessionId,
+    addToNotebookContext,
     chatHistory,
     chatInputValue,
     setChatInputValue,
-    setWorkBenchFiles,
-    setCurrentSession,
     queryClient,
     lexicalInputRef,
   });
@@ -627,6 +636,10 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           }}
         />
         {!creditUi.replaceComposer && <MemberCreditBudgetNote />}
+        {!creditUi.replaceComposer && <ModelSwitchCostNotice credits={promptCache.modelSwitchCredits} />}
+        {!creditUi.replaceComposer && (
+          <CacheExpiryNotice credits={promptCache.cacheExpiryCredits} expiresAt={promptCache.cacheExpiresAt} />
+        )}
       </Box>
       {/* Above the box rather than under it: the file viewer and other embedded chats leave no room
           below, and on phones the box sits on the keyboard. */}
@@ -653,6 +666,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
               inputOverLimit={isOverContextWindow}
               attachment={attachmentFit}
             />
+            {promptCache.ttlChip && <PromptCacheTtlChip {...promptCache.ttlChip} />}
             <CreditBalanceChip session={currentSession} />
           </>
         }
@@ -772,14 +786,22 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                         <MessageFileThumbnails
                           files={pendingMessageFiles}
                           onRemove={fileId => {
+                            const removed = pendingMessageFiles.find(item => item.fabFile.id === fileId);
                             setPendingMessageFiles(prev => prev.filter(item => item.fabFile.id !== fileId));
-                            setFiles(prevFiles => prevFiles.filter(f => f.serverId !== fileId));
+                            setFiles(prevFiles =>
+                              prevFiles.filter(f => f.serverId !== fileId && f.file !== removed?.localFile)
+                            );
+
+                            // Not on the server yet (or never will be): cancel, nothing to strip or delete.
+                            if (fileId.startsWith('temp-')) {
+                              cancelComposerUpload(fileId);
+                              return;
+                            }
 
                             // Strip knowledgeIds BEFORE the hard delete. If the delete succeeded and
                             // this failed, knowledgeIds would keep a dead id that every later hydration
                             // tries and fails to resolve. Keyed off the item's own frozen scope rather
                             // than the current control value, which the user may have changed since.
-                            const removed = pendingMessageFiles.find(item => item.fabFile.id === fileId);
                             const stripped =
                               removed?.scope === 'notebook'
                                 ? removeFromNotebookContext(currentSessionId, fileId).catch(() => {})

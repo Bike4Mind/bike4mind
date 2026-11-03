@@ -2,9 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ConflictError } from '@bike4mind/common';
 
-const { mockRecalculate, mockFindById } = vi.hoisted(() => ({
+const { mockRecalculate, mockFindById, mockRecordAdminAction } = vi.hoisted(() => ({
   mockRecalculate: vi.fn(),
   mockFindById: vi.fn(),
+  mockRecordAdminAction: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -22,6 +23,10 @@ vi.mock('@bike4mind/services', () => ({
   userService: { recalculateUserStorage: (...a: unknown[]) => mockRecalculate(...a) },
 }));
 
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: (...a: unknown[]) => mockRecordAdminAction(...a),
+}));
+
 import errorHandler from '@server/middlewares/errorHandler';
 import handler from '../recalculate-storage';
 
@@ -35,7 +40,34 @@ async function call(user: { id: string; isAdmin?: boolean }) {
 describe('POST /api/users/:id/recalculate-storage', () => {
   beforeEach(() => {
     mockRecalculate.mockReset().mockResolvedValue({ counter: 999, truth: 1000, drift: -1, repaired: true });
-    mockFindById.mockReset().mockResolvedValue({ storageLimit: 5000, currentStorageSize: 42 });
+    mockFindById.mockReset().mockResolvedValue({ storageLimit: 5000, currentStorageSize: 42, email: 't@example.com' });
+    mockRecordAdminAction.mockReset().mockResolvedValue(null);
+  });
+
+  it('records user.storage.recalculated against the target user with the corrected counter', async () => {
+    await call({ id: 'admin1', isAdmin: true });
+
+    expect(mockRecordAdminAction).toHaveBeenCalledTimes(1);
+    expect(mockRecordAdminAction).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.storage.recalculated',
+        target: { kind: 'user', id: 'target1', displayName: 't@example.com' },
+        changes: [{ field: 'currentStorageSize', before: 999, after: 1000 }],
+        details: { drift: -1, repaired: true },
+      })
+    );
+    expect(mockRecordAdminAction.mock.invocationCallOrder[0]).toBeGreaterThan(
+      mockRecalculate.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('records nothing for a non-admin or a failed recalculation', async () => {
+    await call({ id: 'u1', isAdmin: false });
+    mockRecalculate.mockRejectedValue(new ConflictError('storage counter kept changing'));
+    await expect(call({ id: 'admin1', isAdmin: true })).rejects.toThrow();
+
+    expect(mockRecordAdminAction).not.toHaveBeenCalled();
   });
 
   it('rejects a non-admin without touching the counter', async () => {

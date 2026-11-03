@@ -4,7 +4,7 @@ import {
   GENERIC_MODAL_API_KEY_SCOPES,
   DEDICATED_FLOW_SCOPES,
   genericApiKeyScopesFor,
-} from '@client/app/constants/apiKeyScopes';
+} from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { getApiReferenceContent, renderScopeTableRows } from './apiReferenceContent';
 
 const API_REFERENCE_CONTENT = getApiReferenceContent('https://b4m.test', GENERIC_MODAL_API_KEY_SCOPES);
@@ -58,7 +58,13 @@ describe('API reference scopes table', () => {
     expect(
       getApiReferenceContent(
         'https://b4m.test',
-        genericApiKeyScopesFor({ hasOptiAccess: false, hasOverwatchAccess: false, hearthEnabled: false })
+        genericApiKeyScopesFor({
+          hasOptiAccess: false,
+          hasOverwatchAccess: false,
+          hearthEnabled: false,
+          bypass: false,
+          entitlements: new Set(),
+        })
       )
     ).not.toContain('optihashi:');
   });

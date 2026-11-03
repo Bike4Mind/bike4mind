@@ -3,6 +3,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import type { AuditEntry } from '@bike4mind/common';
 import { AuditActorLabel } from './AuditActorLabel';
 import { AuditSeverityChip } from './AuditSeverityChip';
+import { auditTargetHref } from './auditTargetHref';
 import {
   ChangesTable,
   CollapsibleJson,
@@ -71,6 +72,11 @@ export const AuditEntryDrawer: React.FC<AuditEntryDrawerProps> = ({
           </DrawerSection>
 
           <DrawerSection title="Target">
+            {auditTargetHref(entry.target) && (
+              <Link href={auditTargetHref(entry.target)} data-testid="audit-drawer-target-link">
+                Open affected record
+              </Link>
+            )}
             <KeyValueRows
               rows={[
                 ['Name', entry.target.displayName],

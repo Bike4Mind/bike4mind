@@ -5,10 +5,11 @@
  */
 
 import { useMutation } from '@tanstack/react-query';
+import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
 import { useAdvancedSearch, SemanticSearchDebugInfo } from '@client/app/hooks/useAdvancedSearch';
 import { useShallow } from 'zustand/react/shallow';
-import { getInsufficientCreditsMessage } from '@client/app/utils/error';
+import { getInsufficientCreditsMessage, getServerErrorField } from '@client/app/utils/error';
 
 interface SemanticSearchRequest {
   query: string;
@@ -106,8 +107,13 @@ export const useSemanticSearch = () => {
       setIsSemanticSearching(false);
     },
     onError: error => {
+      // A 403 here means an administrator disabled AI features on the account; the server says so.
+      const forbiddenMessage =
+        isAxiosError(error) && error.response?.status === 403 ? getServerErrorField(error) : undefined;
       const errorMessage =
-        getInsufficientCreditsMessage(error) ?? (error instanceof Error ? error.message : 'Semantic search failed');
+        getInsufficientCreditsMessage(error) ??
+        forbiddenMessage ??
+        (error instanceof Error ? error.message : 'Semantic search failed');
       setSemanticSearchError(errorMessage);
       setIsSemanticSearching(false);
       setSemanticResults(null);

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import Stripe from 'stripe';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { creditTransactionRepository, organizationRepository, userRepository } from '@bike4mind/database';
 import { creditService, organizationService } from '@bike4mind/services';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
@@ -9,12 +9,12 @@ import {
   handleUserSubscriptionInvoice,
   resolveSeatChangeFromInvoice,
 } from './serverUtils';
-import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import type { Logger } from '@bike4mind/observability';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 
 // Vitest hoists these mocks above the imports.
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     findByStripeSubscriptionId: vi.fn(),
     // The org duplicate guard must not read active-only, or a past_due row is invisible to it
@@ -55,7 +55,7 @@ vi.mock('@bike4mind/services', () => ({
   organizationService: { create: vi.fn() },
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   sendToClient: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -94,17 +94,40 @@ const buildSubscription = (): Stripe.Subscription =>
   ({
     id: 'sub_stripe_xyz',
     status: 'active',
+    customer: 'cus_test',
+    currency: 'usd',
+    cancel_at_period_end: false,
+    cancel_at: null,
+    trial_end: null,
     items: {
       data: [
         {
           quantity: 4,
-          price: { id: 'price_org' },
+          price: {
+            id: 'price_org',
+            unit_amount: 1500,
+            currency: 'usd',
+            recurring: { interval: 'month', interval_count: 1 },
+          },
           current_period_start: 1700000000,
           current_period_end: 1702592000,
         },
       ],
     },
   }) as unknown as Stripe.Subscription;
+
+// The mirror fields buildSubscription projects to (stripeMirrorFields).
+const orgMirror = {
+  unitAmount: 1500,
+  currency: 'usd',
+  interval: 'month',
+  intervalCount: 1,
+  cancelAtPeriodEnd: false,
+  cancelAt: null,
+  trialEndsAt: null,
+  stripeCustomerId: 'cus_test',
+  lastSyncedAt: expect.any(Date),
+};
 
 describe('handleOrganizationSubscriptionInvoice — conversion flip', () => {
   beforeEach(() => {
@@ -153,6 +176,7 @@ describe('handleOrganizationSubscriptionInvoice — conversion flip', () => {
         priceId: 'price_org',
         status: 'active',
         quantity: 4,
+        ...orgMirror,
       })
     );
     expect(subscriptionRepository.create).not.toHaveBeenCalled();
@@ -212,6 +236,7 @@ describe('handleOrganizationSubscriptionInvoice — conversion flip', () => {
         subscriptionId: 'sub_stripe_xyz',
         source: SubscriptionSource.Stripe,
         quantity: 4,
+        ...orgMirror,
       })
     );
     expect(subscriptionRepository.update).not.toHaveBeenCalled();
@@ -604,10 +629,20 @@ describe('handleUserSubscriptionInvoice — plan lookup', () => {
     ({
       id: 'sub_user_xyz',
       status: 'active',
+      customer: 'cus_user',
+      currency: 'usd',
+      cancel_at_period_end: false,
+      cancel_at: null,
+      trial_end: 1700604800,
       items: {
         data: [
           {
-            price: { id: priceId },
+            price: {
+              id: priceId,
+              unit_amount: 2000,
+              currency: 'usd',
+              recurring: { interval: 'year', interval_count: 1 },
+            },
             current_period_start: 1700000000,
             current_period_end: 1702592000,
           },
@@ -730,6 +765,15 @@ describe('handleUserSubscriptionInvoice — plan lookup', () => {
         subscriptionId: 'sub_user_xyz',
         priceId: 'price_test_professional',
         source: SubscriptionSource.Stripe,
+        unitAmount: 2000,
+        currency: 'usd',
+        interval: 'year',
+        intervalCount: 1,
+        cancelAtPeriodEnd: false,
+        cancelAt: null,
+        trialEndsAt: new Date(1700604800 * 1000),
+        stripeCustomerId: 'cus_user',
+        lastSyncedAt: expect.any(Date),
       })
     );
     expect(creditService.addCredits).toHaveBeenCalledWith(

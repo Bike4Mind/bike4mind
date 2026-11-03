@@ -1,4 +1,9 @@
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
+import {
+  adminRoleWithheldFor,
+  ownerWithheldUsers,
+  withholdAdminRole,
+} from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import express, { type Request, type Response, type Express } from 'express';
 import {
   buildMetaEvent,
@@ -41,6 +46,7 @@ import {
   userRepository,
   usageEventRepository,
   organizationRepository,
+  cacheRepository,
   agentRepository,
   userApiKeyRepository,
   projectRepository,
@@ -54,14 +60,14 @@ import {
   embedConversationRepository,
 } from '@bike4mind/database';
 import { verifyEmbedApiKey, type ApiKeyInfo } from '@server/cli/auth';
-import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@server/auth/apiKeyAuthFailure';
+import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { extractBearer, resolveEmbedSessionToken } from '@server/embed/resolveEmbedSessionToken';
 import { reauthorizeIdentifiedSession } from '@server/embed/identifiedEmbedUser';
-import { isEmbedOriginAllowed } from '@server/embed/firstPartyOrigin';
+import { resolveEmbedOriginDecision } from '@server/embed/firstPartyOrigin';
 import { checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { checkEmbedSessionRateLimit } from '@server/utils/embedSessionRateLimit';
 import { embedCors } from '@server/middlewares/embedCors';
-import { flattenHeaders } from '@server/utils/flattenHeaders';
+import { flattenHeaders } from '@bike4mind/server-utils/utils/flattenHeaders';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { hydrateEmbedAgent } from './embedAgentHydration';
 import { resolveEmbedTools } from './embedToolResolver';
@@ -145,6 +151,12 @@ interface EmbedContext {
   oauthClientId?: string;
   /** The key's opt-in list of clients allowed to run identified sessions. */
   identifiedClientIds?: string[];
+  /** The key lacks the admin scope, so its owner acts without their admin role. */
+  adminRoleWithheld: boolean;
+}
+
+function embedOwnerUsers(ctx: EmbedContext): typeof userRepository {
+  return ctx.adminRoleWithheld ? ownerWithheldUsers(ctx.userId, userRepository) : userRepository;
 }
 
 function toContext(
@@ -161,6 +173,7 @@ function toContext(
     spendCap: info.spendCap,
     currentSpend: info.currentSpend,
     identifiedClientIds: info.identifiedClientIds,
+    adminRoleWithheld: adminRoleWithheldFor(info),
     ...(session && { sessionId: session.sessionId }),
     ...(session?.endUserId && { endUserId: session.endUserId, oauthClientId: session.oauthClientId }),
   };
@@ -256,12 +269,13 @@ async function buildEmbedServerTools(args: {
 
   const enabledTools = resolveEmbedTools(hydrated);
   if (enabledTools.length === 0) return undefined;
+  const ownerScopedUsers = embedOwnerUsers(ctx);
 
   // These reads are independent, so fetch them together (mirrors the
   // agent/org parallel fetch on the request path above).
   const [project, actor, toolAvailability] = await Promise.all([
     hydrated.projectId ? projectRepository.findById(hydrated.projectId) : Promise.resolve(null),
-    actorUser ? Promise.resolve(actorUser) : userRepository.findById(actorUserId),
+    actorUser ? Promise.resolve(actorUser) : ownerScopedUsers.findById(actorUserId),
     // Never rejects (see resolveToolAvailability's doc comment). Fail-closed here (unlike the
     // Tools picker UI's fail-open default): embed-widget end users have no way to add their own
     // key, so a tool this lookup couldn't confirm works should not reach the model.
@@ -307,7 +321,7 @@ async function buildEmbedServerTools(args: {
       apiKeys: apiKeyRepository,
       fabfiles: fabFileRepository,
       fabfilechunks: fabFileChunkRepository,
-      users: userRepository,
+      users: ownerScopedUsers,
       dataLakes: dataLakeRepository,
       dataLakeAccessGrants: dataLakeAccessGrantRepository,
       fallbackLakeSettings: fallbackLakeSettingsRepository,
@@ -429,15 +443,7 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       }
 
       // Origin gate (defense-in-depth for browsers; the credential is the boundary).
-      // A sandboxed iframe without allow-same-origin sends the literal `Origin: null`;
-      // treat that like an absent Origin (let the credential decide) rather than a
-      // hard 403 that would break a legitimate embed without stopping a real attacker
-      // (who can just omit the header anyway). Our own serving origin is implicitly
-      // permitted: the /embed/* widget page posts from the app host, which can never
-      // appear on an allow-list (see firstPartyOrigin.ts) - must stay in lockstep
-      // with the mint gate in pages/api/embed/session.ts.
-      const requestOrigin = headers.origin && headers.origin !== 'null' ? headers.origin : undefined;
-      if (requestOrigin && !isEmbedOriginAllowed(requestOrigin, ctx.allowedOrigins, headers.host)) {
+      if (!resolveEmbedOriginDecision(headers.origin, ctx.allowedOrigins, headers.host)) {
         return res.status(403).json({ error: 'forbidden', error_description: 'Origin not allowed for this embed key' });
       }
 
@@ -656,11 +662,14 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
             users: userRepository,
             usageEvents: usageEventRepository,
             organizations: organizationRepository,
+            cache: cacheRepository,
             // Per-key spend metering (spend-cap enforcement), org-paid turns only. NOT the
             // provider-LLM key repo above (apiKeys) - this one holds the embed UserApiKey docs.
             ...(ctx.endUserId ? {} : { userApiKeys: userApiKeyRepository }),
           },
           apiKeyInfo: { keyId: ctx.keyId, keyName: 'embed' },
+          // An identified end user acts under their own role; only the key owner's is withheld.
+          scopeActor: ctx.adminRoleWithheld && !ctx.endUserId ? withholdAdminRole : undefined,
           // Anonymous: bill the owner org's pool (ownerType: Organization). Identified:
           // omitted, so executeCompletion bills the acting user's own balance.
           ...(ctx.endUserId ? {} : { billingOrganizationId: ctx.organizationId }),

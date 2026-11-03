@@ -33,7 +33,7 @@ vi.mock('@bike4mind/common', async importOriginal => {
 });
 
 // Mock token encryption
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   decryptToken: vi.fn((token: string) => (token ? `decrypted-${token}` : null)),
   encryptEnvVariables: vi.fn((vars: Array<{ key: string; value: string }>) =>
     vars.map(v => ({ key: v.key, value: `encrypted-${v.value}` }))
@@ -47,7 +47,7 @@ const DEFAULT_MCP_TOOLS = [
   { name: 'notion_read_page', description: 'Read page content' },
 ];
 const mockInvokeMcpHandler = vi.fn();
-vi.mock('@server/utils/invokeMcpHandler', () => ({
+vi.mock('@bike4mind/server-utils/utils/invokeMcpHandler', () => ({
   invokeMcpHandler: (...args: unknown[]) => mockInvokeMcpHandler(...args),
 }));
 
@@ -56,7 +56,7 @@ const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
 import { NotionTokenManager, NotionReconnectRequiredError } from './notionTokenManager';
-import { encryptEnvVariables } from '@server/security/tokenEncryption';
+import { encryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 
 describe('NotionTokenManager', () => {
   beforeEach(() => {

@@ -1,4 +1,4 @@
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { runLakeResearch } from '@workers/dataLakes/runLakeResearch';
 import { z, ZodError } from 'zod';
 

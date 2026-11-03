@@ -1,4 +1,5 @@
 import type { FC } from 'react';
+import type { ReactArtifactGroupRole } from '@client/app/utils/reactArtifactGroup';
 
 /**
  * Raw parsed artifact before ID resolution or data transformation.
@@ -19,6 +20,8 @@ export type ArtifactPreviewProps = {
   artifact: ParsedArtifact;
   artifactId: string;
   index: number;
+  /** Set for a React artifact that is part of a multi-file app in its reply; other types ignore it. */
+  reactGroup?: ReactArtifactGroupRole;
 };
 
 /**

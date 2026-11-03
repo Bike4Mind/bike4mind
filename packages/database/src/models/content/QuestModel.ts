@@ -49,6 +49,10 @@ const CORRECTION_LINK_PROJECTION = {
   timestamp: 1,
 } as const;
 
+// The conversation fields a session's turn listing returns; shared by the page-numbered and keyset reads.
+const SESSION_PAGE_FIELDS =
+  'sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed attachmentNotices attachmentDelivery turnTiming suggestedChoices pinned';
+
 // PromptMetaSchema must cover every path in PromptMetaZodSchema (@bike4mind/common), minus a
 // short deliberate exclusion list. Mongoose runs strict, so an undeclared subpath is dropped in
 // silence on both save() and the findOneAndUpdate + $set path production actually uses.
@@ -322,7 +326,7 @@ const NarratedToolCallSchema = subSchema({
   toolNames: { type: [String], required: false, default: undefined },
 });
 
-export const PromptMetaSchema = new Schema<PromptMeta>(
+export const PromptMetaSchema: Schema<PromptMeta> = new Schema<PromptMeta>(
   {
     model: {
       name: { type: String, required: false },
@@ -382,6 +386,8 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
       // expensive component of a cold turn. Must stay declared alongside the Zod field or
       // strict mode strips it and the write rate becomes unmeasurable again.
       cacheCreationInputTokens: { type: Number, required: false },
+      cacheWrite1hInputTokens: { type: Number, required: false },
+      promptCacheTtl: { type: String, enum: ['5m', '1h'], required: false },
       estimatedCost: { type: Number, required: false },
       creditsUsed: { type: Number, required: false },
       settledBasis: { type: String, enum: ['provider', 'local'], required: false },
@@ -559,9 +565,14 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
   { _id: false }
 );
 
-export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
+export const ChatHistoryItemSchema: Schema<IChatHistoryItemDocument> = new Schema<IChatHistoryItemDocument>(
   {
     sessionId: { type: String, required: true },
+    signupActivity: {
+      type: new Schema({ userId: String, turnId: String, startedAt: Date }, { _id: false }),
+      default: undefined,
+      select: false,
+    },
     conversationItemId: { type: String, required: false },
     openaiMessageId: { type: String, required: false },
     claudeMessageId: { type: String, required: false },
@@ -1043,9 +1054,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     const { limit, page, sort = 'asc' } = options;
     const result = await this.model
       .find({ sessionId, deletedAt: null })
-      .select(
-        'sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed attachmentNotices attachmentDelivery turnTiming suggestedChoices pinned'
-      )
+      .select(SESSION_PAGE_FIELDS)
       .sort({ timestamp: sort, _id: sort })
       .skip(limit * (page - 1))
       .limit(limit + 1);
@@ -1056,6 +1065,31 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
       data: rows.map(d => ({ ...d.toJSON() }) as IChatHistoryItemDocument),
       hasMore,
     };
+  }
+
+  /**
+   * Keyset twin of findPageBySessionId, oldest first by (timestamp, _id): pass the last row of the
+   * previous page as `after` to continue strictly past it. Same filter and projection (plus the
+   * fields the public listing needs), so the two cannot disagree on which turns a session holds.
+   */
+  async findPageAfterBySessionId(
+    sessionId: string,
+    options: { limit: number; after?: { timestamp: Date; id: string } }
+  ): Promise<IChatHistoryItemDocument[]> {
+    const { limit, after } = options;
+    const filter: Record<string, unknown> = { sessionId, deletedAt: null };
+    if (after) {
+      filter.$or = [
+        { timestamp: { $gt: after.timestamp } },
+        { timestamp: after.timestamp, _id: { $gt: convertId(after.id) } },
+      ];
+    }
+    const rows = await this.model
+      .find(filter)
+      .select(`${SESSION_PAGE_FIELDS} createdAt pendingAction`)
+      .sort({ timestamp: 1, _id: 1 })
+      .limit(limit);
+    return rows.map(d => ({ ...d.toJSON() }) as IChatHistoryItemDocument);
   }
 
   async findAllBySessionIdAndLessThanOrEqualToTimestamp(sessionId: string, timestamp: Date) {
@@ -1675,6 +1709,16 @@ function initializeQuestModel() {
 
     // Index for findBySessionIdAndId operations
     ChatHistoryItemSchema.index({ sessionId: 1, _id: 1 }, { name: 'sessionId_id' });
+    // Built in production by migration 20260921235966_ensure-quest-signup-activity-index; keep the
+    // name and key in sync with it. Partial so the build and its entries cover only turns carrying
+    // provenance, not every quest; the activity aggregate's equality on userId implies the filter.
+    ChatHistoryItemSchema.index(
+      { 'signupActivity.userId': 1, status: 1, 'signupActivity.startedAt': 1 },
+      {
+        name: 'signupActivity_user_status_startedAt',
+        partialFilterExpression: { 'signupActivity.userId': { $exists: true } },
+      }
+    );
 
     // Index for status-based queries (used in cancellation watcher)
     ChatHistoryItemSchema.index({ _id: 1, status: 1 }, { name: 'id_status' });
@@ -1686,6 +1730,10 @@ function initializeQuestModel() {
 
     // Index for deletedAt and timestamp queries
     ChatHistoryItemSchema.index({ deletedAt: 1, timestamp: -1 }, { name: 'deletedAt_timestamp_desc' });
+
+    // Model Logs pages need an _id tie-break when timestamps match. Keep the full sort in the
+    // index so even the first page does not fetch and sort every log in the selected date range.
+    ChatHistoryItemSchema.index({ deletedAt: 1, timestamp: -1, _id: -1 }, { name: 'deletedAt_timestamp_id_desc' });
 
     // Index for finding messages without embeddings (for Zen Garden grooming)
     ChatHistoryItemSchema.index(
@@ -1736,13 +1784,13 @@ function initializeQuestModel() {
     // this the sweep collection-scans the largest collection every 5 minutes.
     // Dense on purpose: both fields exist on every quest. Pre-built by
     // 20260826000000_ensure-quest-status-updatedat-index rather than left to
-    // autoIndex, because prod runs DocumentDB where the build takes a foreground
-    // collection lock and would otherwise land on a request path.
+    // autoIndex, whose build is fire-and-forget (a failure is silent) and would
+    // otherwise start on whichever request path cold-boots onto quests first.
     ChatHistoryItemSchema.index({ status: 1, updatedAt: 1 }, { name: 'status_updatedAt' });
 
     // Serves findUndispatchedCallbacks (questTimeoutSweep backstop). Partial, so it holds only
     // the handful of quests whose callback is armed but not yet claimed. Pre-built by
-    // 20260921235900_ensure-quest-callback-pending-index for the same DocumentDB reason as above.
+    // 20260921235900_ensure-quest-callback-pending-index for the same reason as above.
     ChatHistoryItemSchema.index(
       { 'callback.state': 1, updatedAt: 1 },
       { name: 'callbackState_updatedAt', partialFilterExpression: { 'callback.state': 'pending' } }
@@ -1753,6 +1801,14 @@ function initializeQuestModel() {
     ChatHistoryItemSchema.index(
       { 'callback.state': 1, 'callback.dispatchedAt': 1 },
       { name: 'callbackState_dispatchedAt', partialFilterExpression: { 'callback.state': 'dispatched' } }
+    );
+
+    // Serves the telemetry opt-out delete (telemetryDeletion.ts) and the user/admin telemetry
+    // exports, which match a user's regenerated per-day hashes with $in. Sparse, so only quests
+    // that carry context telemetry are indexed. Pre-built by 20260921235969_ensure-advisor-indexes.
+    ChatHistoryItemSchema.index(
+      { 'promptMeta.contextTelemetry.anonymousSessionId.hash': 1 },
+      { name: 'contextTelemetry_anonymousSessionHash', sparse: true }
     );
   } catch (error) {
     // Plugin already applied, ignore error

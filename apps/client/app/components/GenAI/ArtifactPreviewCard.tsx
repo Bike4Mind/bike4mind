@@ -18,6 +18,8 @@ import { usePublishShare } from '@client/app/hooks/usePublishShare';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { buildArtifactPublishWiring } from '@client/app/utils/publishApi';
 import type { ArtifactType } from '@bike4mind/common';
+import type { ReactArtifactGroupRole } from '@client/app/utils/reactArtifactGroup';
+import { reactPublishFiles } from '@client/app/utils/reactArtifactPublish';
 
 // Shared by copy / save / open-in-viewer: 18px glyphs dimmed to 70%, brightening to full
 // on hover, over the same hover fill the sidebar items use (notebooklist.hoverBg) rather
@@ -42,6 +44,8 @@ export interface ArtifactPreviewCardProps {
   mimeType: string;
   /** Payload handed to the side-panel viewer. */
   artifactContent: ArtifactData['content'];
+  /** React only: the multi-file role handed to the side-panel viewer with the payload. */
+  reactGroup?: ReactArtifactGroupRole;
   /**
    * The string that changes on a live content edit (usually the artifact's raw content).
    * Drives useSelectedArtifactContentSync's change detection -- see that hook for why it
@@ -99,6 +103,7 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
   artifactType,
   mimeType,
   artifactContent,
+  reactGroup,
   contentKey,
   title,
   chipLabel,
@@ -192,7 +197,13 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
 
     setSessionLayout({
       layout: 'vertical',
-      artifactData: { type: artifactType, content: artifactContent, mimeType, id: artifactId } as ArtifactData,
+      artifactData: {
+        type: artifactType,
+        content: artifactContent,
+        mimeType,
+        id: artifactId,
+        ...(reactGroup && { reactGroup }),
+      } as ArtifactData,
       selectedArtifactId: artifactId,
     });
     // Open at the artifact's own latest version: clear any per-artifact selection so a
@@ -253,13 +264,14 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
         title,
         userId: String(shareUser.id),
         orgId: teamOrg?.id,
+        reactFiles: publishType === 'react' ? reactPublishFiles(reactGroup) : null,
       }),
     });
   };
 
   // Push live content changes to the Knowledge Base store. Guarded: a card that merely
   // mounts (scrolled back into view) must not overwrite the store with older content (#457).
-  useSelectedArtifactContentSync(artifactId, artifactType, contentKey, artifactContent);
+  useSelectedArtifactContentSync(artifactId, artifactType, contentKey, artifactContent, reactGroup);
 
   return (
     <Card

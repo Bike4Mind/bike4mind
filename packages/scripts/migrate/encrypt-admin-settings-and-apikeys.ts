@@ -29,7 +29,9 @@
  *
  * Coverage (rotation caveat): --reencrypt / --decrypt only touch `adminsettings` and
  *   `apikeys`. Other at-rest ciphertext stores - UserModel accessToken/refreshToken,
- *   OverwatchSocialConnectionModel, SRE per-repo secrets - are NOT covered here, so
+ *   OverwatchSocialConnectionModel, SRE per-repo secrets - are NOT covered here, nor are
+ *   contributed admin settings (definitions registered by extension packages at runtime;
+ *   SENSITIVE_SETTING_KEYS is built from the core settingsMap only), so
  *   SECRET_ENCRYPTION_KEY_PREVIOUS must remain configured after any rotation; dropping it
  *   silently blanks those uncovered stores on read.
  *

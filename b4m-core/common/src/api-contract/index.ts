@@ -23,8 +23,13 @@ export {
   listFilesContract,
   updateFileContract,
   deleteFileContract,
+  chunkFileContract,
+  searchFilesContract,
+  getFilesByIdsContract,
+  bulkDeleteFilesContract,
 } from './contracts/files.contract';
 export { createEmbeddingsContract } from './contracts/embeddings.contract';
+export { postSlackMessageContract } from './contracts/slackMessages.contract';
 export { createTextRefinementContract } from './contracts/textRefinement.contract';
 export { createDecisionContract, listDecisionModelsContract } from './contracts/decisions.contract';
 export { getQuestContract, listQuestFilesContract } from './contracts/quest.contract';
@@ -40,6 +45,8 @@ export {
 export { createTranscriptionUploadContract, createTranscriptionContract } from './contracts/transcription.contract';
 export { createSessionContract } from './contracts/sessionCreate.contract';
 export { listSessionsContract } from './contracts/sessionList.contract';
+export { listSessionQuestsContract } from './contracts/sessionQuests.contract';
+export { listCreditTransactionsContract } from './contracts/creditTransactions.contract';
 export { getWhatsNewMediaContract, listWhatsNewContract } from './contracts/whatsNew.contract';
 export {
   listDataLakesContract,
@@ -77,6 +84,28 @@ export {
   createAgentContract,
   updateAgentContract,
   deleteAgentContract,
+  generateAgentAvatarContract,
+  generateAgentDescriptionContract,
+  generateAgentSystemPromptContract,
+  enhanceAgentFieldContract,
 } from './contracts/agents.contract';
-export { getClaudeMarketplaceContract, getClaudePluginZipContract } from './contracts/skillMarket.contract';
+export {
+  getClaudeBundleZipContract,
+  getClaudeMarketplaceContract,
+  getClaudePluginZipContract,
+} from './contracts/skillMarket.contract';
+export {
+  listSkillMarketListingsContract,
+  getSkillMarketListingContract,
+  publishSkillMarketListingContract,
+  listMySkillMarketListingsContract,
+  withdrawSkillMarketListingContract,
+  submitSkillMarketListingVersionContract,
+  importSkillMarketListingContract,
+  rescanSkillMarketVersionContract,
+} from './contracts/skillMarketWrite.contract';
+export {
+  listSkillMarketReviewQueueContract,
+  reviewSkillMarketVersionContract,
+} from './contracts/skillMarketReview.contract';
 export { CONTRACTS } from './contracts';

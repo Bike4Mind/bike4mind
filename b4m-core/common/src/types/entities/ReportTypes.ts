@@ -1,16 +1,27 @@
 import { IMongoDocument } from './common';
 
+/**
+ * Format/metrics versions of the persisted DailyReport and WeeklyReport rows. Bump the one whose
+ * report text or metrics change: a stored row whose version is missing or lower is treated as
+ * absent and regenerated, so past reports pick up the fix.
+ */
+export const DAILY_ACTIVITY_REPORT_VERSION = 1;
+// 2: weekly reports count the full startDate..endDate week (CounterLogModel.ts `weeklyReportWindows`).
+export const WEEKLY_ACTIVITY_REPORT_VERSION = 2;
+
 export interface IWeeklyReport {
   startDate: string;
   endDate: string;
   report: string;
   aiInsights?: string | null;
+  reportVersion?: number;
 }
 
 export interface IDailyReport {
   date: string;
   report: string;
   aiInsights?: string | null;
+  reportVersion?: number;
 }
 
 export interface IWeeklyReportDocument extends IWeeklyReport, IMongoDocument {

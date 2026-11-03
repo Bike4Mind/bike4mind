@@ -4,16 +4,18 @@ import type { AgentResult } from '../../types';
 import type { Charter, DriveVector } from '../schemas';
 import { agentResultToActResult, applyAgentToolPolicy, createReActRunAct } from './reactAct';
 import type { ActContext } from './types';
-import { resolveToolbeltProfile, DEFAULT_TOOLBELT_ROLE } from './toolbelts';
+import { resolveToolbeltProfile, registerToolbelts, DEFAULT_TOOLBELT_ROLE, TOOLBELT_PROFILES } from './toolbelts';
 
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
 const {
   mockReplSessionCtor,
   mockMakeCodeExecuteTool,
   mockAgentRun,
+  mockAgentCtor,
   mockSessionDispose,
   mockRecordReplSandboxUnavailable,
 } = vi.hoisted(() => ({
+  mockAgentCtor: vi.fn(),
   // Captures the options the wake path asks for. Which executor it picks is the
   // security posture of the whole deep-agent runtime, so it has to be observable.
   mockReplSessionCtor: vi.fn(),
@@ -47,6 +49,9 @@ vi.mock('../../rlm/replSandboxMetrics', async importOriginal => ({
 vi.mock('../../ReActAgent', async importOriginal => ({
   ...(await importOriginal<typeof import('../../ReActAgent')>()),
   ReActAgent: class {
+    constructor(context: unknown) {
+      mockAgentCtor(context);
+    }
     on = vi.fn();
     run = mockAgentRun;
   },
@@ -127,6 +132,73 @@ describe('resolveToolbeltProfile', () => {
     // Default is a capable general web toolbelt (web-safe tools only).
     expect(profile.enabledToolNames).toContain('web_search');
     expect(profile.enabledToolNames).not.toContain('bash_execute');
+  });
+
+  it.each([0, -1])('rejects a nonpositive contributed token ceiling: %s', maxTotalTokens => {
+    const role = `invalid-token-budget-${maxTotalTokens}`;
+    expect(registerToolbelts([{ ...TOOLBELT_PROFILES[DEFAULT_TOOLBELT_ROLE], role, maxTotalTokens }])).toEqual({
+      taken: [],
+      invalid: 1,
+    });
+    expect(resolveToolbeltProfile(role).role).toBe(DEFAULT_TOOLBELT_ROLE);
+  });
+
+  it('keeps a snapshot of contributed toolbelt settings and tool names', () => {
+    const original = {
+      ...TOOLBELT_PROFILES[DEFAULT_TOOLBELT_ROLE],
+      role: 'snapshot-role',
+      enabledToolNames: ['web_search'],
+      maxIterations: 4,
+    };
+    registerToolbelts([original]);
+    original.role = 'changed-role';
+    original.enabledToolNames.push('bash_execute');
+    original.maxIterations = 999;
+
+    expect(resolveToolbeltProfile('snapshot-role')).toMatchObject({
+      role: 'snapshot-role',
+      enabledToolNames: ['web_search'],
+      maxIterations: 4,
+    });
+    expect(resolveToolbeltProfile('changed-role').role).toBe(DEFAULT_TOOLBELT_ROLE);
+  });
+
+  it('recognizes identical toolbelts independently of property order or unrelated metadata', () => {
+    const original = { ...TOOLBELT_PROFILES[DEFAULT_TOOLBELT_ROLE], role: 'ordered-registration' };
+    registerToolbelts([original]);
+    const reversed = Object.fromEntries(Object.entries(original).reverse()) as unknown as typeof original;
+    const cyclicMetadata: Record<string, unknown> = { bigint: 1n };
+    cyclicMetadata.self = cyclicMetadata;
+
+    expect(registerToolbelts([{ ...reversed, ...{ metadata: cyclicMetadata } }])).toEqual({ taken: [], invalid: 0 });
+  });
+
+  it('resolves a contributed role and drops one whose role is taken', () => {
+    const contributed = { ...TOOLBELT_PROFILES[DEFAULT_TOOLBELT_ROLE], role: 'contributed-role', maxIterations: 4 };
+    const clash = { ...TOOLBELT_PROFILES['paper-repro'], maxIterations: 1 };
+
+    expect(registerToolbelts([contributed, clash, { ...contributed, maxIterations: 9 }])).toEqual({
+      taken: ['paper-repro', 'contributed-role'],
+      invalid: 0,
+    });
+    // A re-evaluated host module registers an equal copy again; that is not a collision.
+    expect(registerToolbelts([{ ...contributed }])).toEqual({ taken: [], invalid: 0 });
+    expect(
+      registerToolbelts([
+        { ...contributed, role: '' },
+        { ...contributed, role: 'no-ceiling', maxIterations: undefined as never },
+        { ...contributed, role: 'zero-ceiling', maxIterations: 0 },
+        { ...contributed, role: 'bad-tool-name', enabledToolNames: [42] as never },
+        { ...contributed, role: 'no-token-cap', maxTotalTokens: Infinity },
+        { ...contributed, role: 'no-temperature', temperature: Number.NaN },
+        { ...contributed, role: 'string-code-execute', codeExecute: 'false' as unknown as boolean },
+        'not-a-profile' as never,
+      ])
+    ).toEqual({ taken: [], invalid: 8 });
+    expect(resolveToolbeltProfile('string-code-execute').role).toBe(DEFAULT_TOOLBELT_ROLE);
+    expect(resolveToolbeltProfile('contributed-role').maxIterations).toBe(4);
+    expect(resolveToolbeltProfile('paper-repro')).toBe(TOOLBELT_PROFILES['paper-repro']);
+    expect(resolveToolbeltProfile('paper-repro').enabledToolNames).toContain('wolfram_alpha');
   });
 });
 
@@ -256,6 +328,20 @@ describe('createReActRunAct sandbox wiring', () => {
   // Reference handles that the guest isolate's own disposal does not reclaim).
   // The wake runtime is long-lived, so a leak here accumulates per wake rather
   // than being cleaned up by process exit.
+  it("runs the act at the owner's thinking visibility", async () => {
+    const resolveThinkingVisibility = vi.fn(async () => 'none' as const);
+    await createReActRunAct({
+      llm: {} as never,
+      model: 'global.anthropic.claude-sonnet-4-6',
+      logger: logger as unknown as Logger,
+      buildTools: async () => [],
+      resolveThinkingVisibility,
+    })(actContext());
+
+    expect(resolveThinkingVisibility).toHaveBeenCalledWith(actContext().charter.identity.ownerUserId);
+    expect(mockAgentCtor).toHaveBeenCalledWith(expect.objectContaining({ thinkingVisibility: 'none' }));
+  });
+
   it('disposes the isolate when the wake completes', async () => {
     await runAct();
 

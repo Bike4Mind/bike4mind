@@ -131,6 +131,7 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   const didUnmount = useRef(false);
   const setLastJsonMessage = useLastJsonMessage(useShallow(s => s.setLastJsonMessage));
   const accessToken = useAccessToken(useCallback(state => state.accessToken, []));
+  const impersonating = useAccessToken(useCallback(state => state.impersonating, []));
   const queryClient = useQueryClient();
   // True once `onOpen` has fired for the CURRENT connect attempt; reset on each close.
   // Mirrors the same flag in the CLI's WebSocketConnectionManager.
@@ -194,7 +195,7 @@ export const WebsocketProvider = ({ children, url }: Props) => {
 
   // Only connect when we have both a valid URL and access token
   // URL validation guards against build-time env vars that were undefined
-  const shouldConnect = !forceDisconnected && !!accessToken && isValidWebsocketUrl(url);
+  const shouldConnect = !impersonating && !forceDisconnected && !!accessToken && isValidWebsocketUrl(url);
 
   // Mint a fresh single-use connect ticket per (re)connect and carry it in the
   // URL instead of the session JWT, so the long-lived credential never lands in

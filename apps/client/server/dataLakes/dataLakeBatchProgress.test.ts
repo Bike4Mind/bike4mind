@@ -42,7 +42,7 @@ vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordTaxonomyDailyCapExceeded: (...a: unknown[]) => h.recordTaxonomyDailyCapExceeded(...a),
 }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => h.sendToClient(...a) }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => h.sendToClient(...a) }));
 vi.mock('sst', () => ({
   Resource: {
     dataLakeTaxonomyQueue: { url: 'http://sqs.example/taxonomy' },

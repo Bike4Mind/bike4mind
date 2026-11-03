@@ -61,6 +61,19 @@ describe('purgeOwnerPublishedArtifacts', () => {
     expect(await PublishedArtifact.findOne({ deletedAt: null, ...shareTokenFilter('tok-1') })).toBeNull();
   });
 
+  it('drops the owner-only thumbnail record of every artifact it removes', async () => {
+    const thumbnail = { key: 'publish-thumbnails/x/y.webp', versionId: 'a'.repeat(64), renderedAt: new Date() };
+    const a = await makeArtifact('owner1', { thumbnail });
+    const kept = await makeArtifact('owner2', { thumbnail });
+
+    await purgeOwnerPublishedArtifacts('owner1', { deletedBy: 'admin1' });
+
+    expect((await PublishedArtifact.findOne({ publicId: a.publicId }).lean())?.thumbnail).toBeUndefined();
+    expect((await PublishedArtifact.findOne({ publicId: kept.publicId }).lean())?.thumbnail).toMatchObject({
+      key: thumbnail.key,
+    });
+  });
+
   it('cleans up annotations, open reports and view audits on those artifacts', async () => {
     const a = await makeArtifact('owner1');
     await seedChildren(a.publicId);

@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChatSession, ChatStreamEvent } from '@shared/chat';
+import type { ChatSession, ChatSessionSummary, ChatStreamEvent } from '@shared/chat';
 import { useConversation, type ConversationController } from './useChat';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -22,7 +22,9 @@ function imported(content: string): ChatSession {
   };
 }
 const changed = new Set<() => void>();
+const summaries = new Set<(summary: ChatSessionSummary) => void>();
 const streamed = new Set<(event: ChatStreamEvent) => void>();
+const setSessionHistory = vi.fn();
 const getSession = vi.fn<(id: string) => Promise<ChatSession | null>>();
 let root: Root;
 let host: HTMLElement;
@@ -49,14 +51,20 @@ function deferred<T>() {
 beforeEach(() => {
   changed.clear();
   streamed.clear();
+  summaries.clear();
   getSession.mockReset();
+  setSessionHistory.mockReset();
   getSession.mockResolvedValue(imported('old'));
   Object.assign(window, {
     b4m: {
       chat: {
         getSession,
+        setSessionHistory,
         getQueuedMessages: async () => [],
-        onSessionSummary: () => () => {},
+        onSessionSummary: (listener: (summary: ChatSessionSummary) => void) => {
+          summaries.add(listener);
+          return () => summaries.delete(listener);
+        },
         onQueueChanged: () => () => {},
         onStreamEvent: (listener: (event: ChatStreamEvent) => void) => {
           streamed.add(listener);
@@ -163,4 +171,85 @@ describe('open imported transcripts', () => {
     expect(host.textContent).toBe('old');
     expect(conversation.sendError).toContain('disk unavailable');
   });
+});
+
+it('reports a failed history toggle without an unhandled rejection', async () => {
+  await show();
+  setSessionHistory.mockRejectedValue(new Error('Index unavailable'));
+  await act(async () => {
+    await conversation.setHistory(true);
+  });
+  expect(conversation.notice).toContain('Index unavailable');
+  expect(conversation.session?.historyEnabled).not.toBe(true);
+});
+
+it('does not apply a history toggle response to a different conversation', async () => {
+  await show();
+  const pending = deferred<ChatSession>();
+  setSessionHistory.mockReturnValue(pending.promise);
+  let toggle!: Promise<void>;
+  await act(async () => {
+    toggle = conversation.setHistory(true);
+  });
+  getSession.mockResolvedValue({ ...imported('other'), id: 'other' });
+  await show('other');
+  await act(async () => {
+    pending.resolve({ ...imported('old'), historyEnabled: true });
+    await toggle;
+  });
+  expect(conversation.session?.id).toBe('other');
+  expect(conversation.session?.historyEnabled).not.toBe(true);
+});
+
+it('keeps newer consent pushed by another window when an older toggle response arrives', async () => {
+  await show();
+  const pending = deferred<ChatSession>();
+  setSessionHistory.mockReturnValue(pending.promise);
+  let toggle!: Promise<void>;
+  await act(async () => {
+    toggle = conversation.setHistory(true);
+  });
+  const { messages: _messages, ...summary } = imported('old');
+  await act(async () => {
+    for (const listener of summaries) listener({ ...summary, messageCount: 1, historyEnabled: false });
+    pending.resolve({ ...imported('old'), historyEnabled: true });
+    await toggle;
+  });
+  expect(conversation.session?.historyEnabled).toBe(false);
+});
+
+it('does not change consent using the previous conversation while the selected one loads', async () => {
+  await show();
+  const pending = deferred<ChatSession | null>();
+  getSession.mockReturnValue(pending.promise);
+  await show('other');
+  expect(conversation.session?.id).toBe('cc-import');
+  await act(async () => conversation.setHistory(true));
+  expect(setSessionHistory).not.toHaveBeenCalled();
+  await act(async () => pending.resolve({ ...imported('other'), id: 'other' }));
+});
+
+it('applies history consent updates pushed by another window', async () => {
+  await show();
+  const { messages: _messages, ...summary } = imported('old');
+  for (const enabled of [true, false]) {
+    await act(async () => {
+      for (const listener of summaries) listener({ ...summary, messageCount: 1, historyEnabled: enabled });
+    });
+    expect(conversation.session?.historyEnabled).toBe(enabled);
+  }
+});
+
+it('re-reads consent when another window changes it during the initial session load', async () => {
+  const pending = deferred<ChatSession | null>();
+  getSession.mockReturnValueOnce(pending.promise);
+  await show();
+  const { messages: _messages, ...summary } = imported('old');
+  getSession.mockResolvedValue({ ...imported('old'), historyEnabled: true });
+  await act(async () => {
+    for (const listener of summaries) listener({ ...summary, messageCount: 1, historyEnabled: true });
+    pending.resolve(imported('old'));
+  });
+  expect(getSession).toHaveBeenCalledTimes(2);
+  expect(conversation.session?.historyEnabled).toBe(true);
 });

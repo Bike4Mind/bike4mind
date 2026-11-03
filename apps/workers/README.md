@@ -35,4 +35,4 @@ pnpm --filter @bike4mind/workers test:integration  # real-Mongo *.e2e.test.ts su
 pnpm --filter @bike4mind/workers typecheck
 ```
 
-Tests reuse `apps/client/vitest.setup.ts`. CI runs the unit lane in the `misc` test shard and the integration lane in its own `workers-integration` leg.
+Tests reuse `apps/client/vitest.setup.ts`. CI runs the unit lane in the `cli-desktop-workers` test shard and the integration lane in the shared `workers-server-utils-integration` leg.

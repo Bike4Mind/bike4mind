@@ -100,20 +100,28 @@ export const loadCreditGrantPolicy = async (): Promise<adminAuditService.CreditG
 
 const writerAdapters = async (
   req: AuditRequest,
-  action: AdminAuditAction
+  action: AdminAuditAction,
+  preloadedPolicy?: () => Promise<adminAuditService.CreditGrantPolicy>
 ): Promise<adminAuditService.RecordAdminActionAdapters> => ({
   db: { adminAuditLog: adminAuditLogRepository },
-  creditGrantPolicy: ADMIN_AUDIT_CREDIT_GRANT_ACTIONS.includes(action) ? await loadCreditGrantPolicy() : undefined,
+  creditGrantPolicy: ADMIN_AUDIT_CREDIT_GRANT_ACTIONS.includes(action)
+    ? await (preloadedPolicy ?? loadCreditGrantPolicy)()
+    : undefined,
   logger: req.logger,
 });
 
+/**
+ * `options.creditGrantPolicy` lets a caller writing many entries (a bulk batch) read the AdminSettings
+ * thresholds once instead of once per entry.
+ */
 export const recordAdminActionFromRequest = async (
   req: AuditRequest,
-  { actorScope, ...input }: RecordAdminActionFromRequestInput
+  { actorScope, ...input }: RecordAdminActionFromRequestInput,
+  options: { creditGrantPolicy?: () => Promise<adminAuditService.CreditGrantPolicy> } = {}
 ): Promise<AuditEntry | null> =>
   adminAuditService.recordAdminAction(
     { ...input, actor: await resolveActor(req, actorScope ?? 'platform'), context: buildContext(req) },
-    await writerAdapters(req, input.action)
+    await writerAdapters(req, input.action, options.creditGrantPolicy)
   );
 
 /** For routes with no req.user (returnToAdmin authenticates by cookie): the caller names the actor. */
@@ -127,12 +135,24 @@ export const recordAdminActionForActor = async (
     await writerAdapters(req, input.action)
   );
 
+/**
+ * Shown when the request carries no `reason` key at all. A bundle new enough to send the key also
+ * renders the field, so an absent key means the tab predates the reason prompt - point at the reload
+ * instead of a validation error about a field the reader cannot see.
+ */
+export const ADMIN_ACTION_REASON_MISSING_MESSAGE =
+  'This page is running an outdated version of the app. Reload the page and try again.';
+
 /** Validates a reason-required admin action's reason; a missing or short reason is a 400. */
 export const parseAdminActionReason = (value: unknown): string => {
+  if (value === undefined) throw new BadRequestError(ADMIN_ACTION_REASON_MISSING_MESSAGE);
   const parsed = AdminActionReasonSchema.safeParse(value);
   if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message ?? 'A reason is required');
   return parsed.data;
 };
+
+export const definedKeys = (data: Record<string, unknown>): string[] =>
+  Object.keys(data).filter(key => data[key] !== undefined);
 
 // Ids compare case-insensitively: Mongo resolves an upper-case hex id to the same user.
 export const isSameUserId = (left: string, right: string) => left.toLowerCase() === right.toLowerCase();
@@ -173,3 +193,9 @@ export const systemAuditActor = (name: string): AuditActor => ({
   name,
   wasAdmin: false,
 });
+
+/** Audit target for the account an admin action is taken against. */
+export const userAuditTarget = async (userId: string) => {
+  const user = await userRepository.findById(userId);
+  return { kind: 'user' as const, id: userId, displayName: user?.email ?? user?.username ?? userId };
+};

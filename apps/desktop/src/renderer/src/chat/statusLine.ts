@@ -322,12 +322,19 @@ export function activityDetail(activity: TurnActivity): ActivityDetail | null {
 }
 
 /** The whole line, dot-separated, as one string - which is also how a test can read it. */
-export function statusFields(turn: TurnProgress, now: number, activity: string, showDollars = false): string[] {
+export function statusFields(
+  turn: TurnProgress,
+  now: number,
+  activity: string,
+  showDollars = false,
+  rate: string | null = null
+): string[] {
   const cost = formatCost(turn.usage, showDollars);
   return [
     formatElapsed(now - turn.startedAt),
     ...(turn.tokens === null ? [] : [`${formatTokens(turn.tokens)} tokens`]),
     ...(cost ? [cost] : []),
+    ...(rate ? [rate] : []),
     activity,
   ];
 }
@@ -340,6 +347,7 @@ export function statusFields(turn: TurnProgress, now: number, activity: string, 
  * A stand-in zero in any of them reads as a fact the server never stated.
  */
 export interface ComposerUsage {
+  contextSnapshot?: import('@shared/contextBreakdown').ContextSnapshot | null;
   contextTokens: number | null;
   contextLimit: number | null;
   modelWindow?: number | null;

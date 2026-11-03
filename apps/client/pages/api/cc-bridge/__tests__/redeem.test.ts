@@ -11,8 +11,22 @@ const refs = vi.hoisted(() => ({
   createKey: vi.fn(),
   apiKeyUpdateOne: vi.fn(),
   deviceDeleteOne: vi.fn(),
+  findUser: vi.fn(),
+  resolveTrust: vi.fn(),
 }));
 
+const isApiKeyAccessAllowedMock = vi.hoisted(() => vi.fn(async (_user: unknown, _billing?: unknown) => true));
+vi.mock('@server/utils/apiKeyAccessGate', async () => {
+  const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
+  const message = 'API keys require an active paid subscription';
+  return {
+    API_KEY_ACCESS_DENIED_MESSAGE: message,
+    isApiKeyAccessAllowed: isApiKeyAccessAllowedMock,
+    assertApiKeyAccessAllowed: async (user: unknown, billing?: unknown) => {
+      if (!(await isApiKeyAccessAllowedMock(user, billing))) throw new ForbiddenError(message);
+    },
+  };
+});
 vi.mock('@server/middlewares/baseApi', () => {
   const chain = {
     use: () => chain,
@@ -23,7 +37,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   };
   return { baseApi: () => chain };
 });
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (opts: { limit: number; windowMs: number }) => {
     refs.rateLimitOpts = opts;
     return () => undefined;
@@ -37,7 +51,9 @@ vi.mock('@bike4mind/database', () => ({
     findUnredeemedCandidatesByPrefix: refs.findCandidates,
     redeem: refs.redeemToken,
   },
+  userRepository: { findById: refs.findUser },
 }));
+vi.mock('@server/utils/apiKeyTrust', () => ({ resolveApiKeyTrust: refs.resolveTrust }));
 vi.mock('@bike4mind/database/auth', () => ({
   UserApiKey: { updateOne: refs.apiKeyUpdateOne },
   userApiKeyRepository: {},
@@ -79,6 +95,8 @@ describe('POST /api/cc-bridge/redeem', () => {
     refs.createKey.mockResolvedValue({ id: 'key-1', key: 'b4m_plain', keyPrefix: 'b4m_plai' });
     refs.createDevice.mockResolvedValue({ _id: 'dev-1', deviceLabel: 'laptop' });
     refs.redeemToken.mockResolvedValue({ _id: 'tok-1' });
+    refs.findUser.mockResolvedValue({ id: 'owner-1' });
+    refs.resolveTrust.mockResolvedValue({ assessment: { status: 'trusted' } });
   });
 
   it('is an unauthenticated route guarded by a per-IP rate limit', () => {
@@ -112,6 +130,26 @@ describe('POST /api/cc-bridge/redeem', () => {
       bridgeVersion: '1.2.3',
     });
     expect(refs.redeemToken).toHaveBeenCalledWith('tok-1', 'dev-1');
+  });
+
+  it('judges the token owner against the API key trust gate, like the dashboard', async () => {
+    const assessment = { status: 'untrusted', reason: 'email_unverified' };
+    refs.resolveTrust.mockResolvedValue({ assessment });
+
+    await redeem(validBody);
+
+    expect(refs.findUser).toHaveBeenCalledWith('owner-1');
+    expect(refs.resolveTrust).toHaveBeenCalledWith({ id: 'owner-1' });
+    expect(refs.createKey.mock.calls[0][2]).toMatchObject({ trust: assessment });
+  });
+
+  it('mints nothing when the token owner no longer exists', async () => {
+    refs.findUser.mockResolvedValue(null);
+
+    const res = await redeem(validBody);
+
+    expect(res._getStatusCode()).toBe(401);
+    expect(refs.createKey).not.toHaveBeenCalled();
   });
 
   it('is single-use: a second redeem finds no unredeemed candidate and mints nothing', async () => {
@@ -197,5 +235,28 @@ describe('POST /api/cc-bridge/redeem', () => {
     expect(res._getStatusCode()).toBe(400);
     expect(refs.findCandidates).not.toHaveBeenCalled();
     expect(refs.createKey).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/cc-bridge/redeem - paid-only access switch', () => {
+  beforeAll(async () => {
+    tokenHash = await bcrypt.hash(TOKEN, 4);
+  });
+
+  beforeEach(() => {
+    refs.findCandidates.mockResolvedValue([record()]);
+    refs.createKey.mockReset();
+    refs.findUser.mockReset().mockResolvedValue({ id: 'owner-1' });
+    refs.resolveTrust.mockReset().mockResolvedValue({ assessment: { status: 'trusted' } });
+    isApiKeyAccessAllowedMock.mockReset().mockResolvedValue(true);
+  });
+
+  it('403s and mints nothing when the setting denies the token owner', async () => {
+    isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+    const res = await redeem(validBody);
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData()).toEqual({ error: 'API keys require an active paid subscription' });
+    expect(refs.createKey).not.toHaveBeenCalled();
+    expect(refs.resolveTrust).not.toHaveBeenCalled();
   });
 });

@@ -48,10 +48,8 @@ const MAX_ENQUEUE_PER_RUN = 200;
 // of it without becoming a burst against SQS itself.
 const ENQUEUE_CONCURRENCY = 10;
 
-export async function handler() {
-  const stage = Resource.App.stage;
-  await connectDB(Config.MONGODB_URI.replace('%STAGE%', stage));
-
+/** The poll itself; the caller owns the DB connection (Lambda handler below, self-host worker). */
+export async function runDriveLakeResyncPoll() {
   const { featureOn, pollOn } = await readDriveLakePollFlags();
   if (!featureOn || !pollOn) {
     logger.info('[driveLakeResyncPoll] disabled; skipping', { featureOn, pollOn });
@@ -99,4 +97,9 @@ export async function handler() {
   // retries it - the count is the operator's signal, not a lost-work marker.
   logger.info('[driveLakeResyncPoll] sweep complete', { due: due.length, enqueued, failed, forcedFullWalks });
   return { statusCode: 200, body: JSON.stringify({ enqueued, failed, forcedFullWalks }) };
+}
+
+export async function handler() {
+  await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage));
+  return runDriveLakeResyncPoll();
 }

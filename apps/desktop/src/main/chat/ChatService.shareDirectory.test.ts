@@ -12,6 +12,7 @@ import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import type { WorkspaceResolution } from './project/workspace';
 import { ApprovalGate } from './tools/ApprovalGate';
+import { CapabilityLedger } from './capabilities/CapabilityLedger';
 
 // A worktree cut that holds until a test releases it; every other call is the real resolver.
 const cut = vi.hoisted(() => ({ hold: null as Promise<WorkspaceResolution> | null }));
@@ -36,7 +37,7 @@ function harness(
   store: SessionStore,
   streams: PassThrough[],
   events: ChatStreamEvent[],
-  deps: { protectedPaths?: readonly string[] } = {}
+  deps: { protectedPaths?: readonly string[]; capabilities?: CapabilityLedger; access?: AccessStore } = {}
 ) {
   const post = vi.fn().mockImplementation(() => {
     const stream = new PassThrough();
@@ -128,6 +129,88 @@ describe('ChatService.shareDirectory', () => {
     expect((await store.get(id))?.grantedDirectories).toBeUndefined();
   });
 
+  it('tracks session folder grants, removals and conversation deletion in the ledger', async () => {
+    h.service.dispose();
+    const capabilities = new CapabilityLedger(join(base, 'capabilities.json'));
+    h = harness(store, streams, events, { capabilities });
+    const { id } = await h.service.createSession();
+    await h.service.shareDirectory(id, outside);
+    let grants = (await capabilities.state()).grants;
+    expect(grants).toHaveLength(1);
+    expect(grants[0]).toMatchObject({
+      subject: { kind: 'session', sessionId: id, scopeKey: store.scopeKey() },
+      capability: 'files',
+      scope: { kind: 'path', value: outside },
+    });
+    await h.service.removeContextDirectory(id, outside);
+    expect((await capabilities.state()).grants[0].revokedAt).toEqual(expect.any(String));
+    await h.service.shareDirectory(id, outside);
+    await h.service.deleteSession(id);
+    grants = (await capabilities.state()).grants;
+    expect(grants).toHaveLength(2);
+    expect(grants.every(grant => grant.revokedAt !== undefined)).toBe(true);
+  });
+
+  it("keeps another account's grant intact when removing or deleting the current conversation", async () => {
+    h.service.dispose();
+    const capabilities = new CapabilityLedger(join(base, 'capabilities.json'));
+    h = harness(store, streams, events, { capabilities });
+    const { id } = await h.service.createSession();
+    await h.service.shareDirectory(id, outside);
+    const otherAccountGrant = await capabilities.grant({
+      subject: { kind: 'session', sessionId: id, scopeKey: 'another-account' },
+      capability: 'files',
+      scope: { kind: 'path', value: outside },
+      source: 'approval',
+    });
+    await h.service.removeContextDirectory(id, outside);
+    await h.service.deleteSession(id);
+    const { grants } = await capabilities.state();
+    expect(grants.find(grant => grant.id === otherAccountGrant.id)?.revokedAt).toBeUndefined();
+    expect(
+      grants.find(grant => grant.subject.kind === 'session' && grant.subject.scopeKey === store.scopeKey())?.revokedAt
+    ).toEqual(expect.any(String));
+  });
+
+  it('refuses a folder grant when the account changes while its directory is inspected', async () => {
+    h.service.dispose();
+    const capabilities = new CapabilityLedger(join(base, 'capabilities.json'));
+    h = harness(store, streams, events, { capabilities });
+    const { id } = await h.service.createSession();
+    const originalGet = store.get.bind(store);
+    let scopeKey = 'original-account';
+    let reads = 0;
+    const scope = vi.spyOn(store, 'scopeKey').mockImplementation(() => scopeKey);
+    const get = vi.spyOn(store, 'get').mockImplementation(async sessionId => {
+      const session = await originalGet(sessionId);
+      if (++reads === 2) scopeKey = 'another-account';
+      return session;
+    });
+    try {
+      await expect(h.service.shareDirectory(id, outside)).resolves.toMatchObject({ status: 'refused' });
+      expect((await originalGet(id))?.grantedDirectories).toBeUndefined();
+      expect((await capabilities.state()).grants).toEqual([]);
+    } finally {
+      get.mockRestore();
+      scope.mockRestore();
+    }
+  });
+
+  it('returns a successful folder removal even when its audit write fails', async () => {
+    h.service.dispose();
+    const capabilities = new CapabilityLedger(join(base, 'capabilities.json'));
+    h = harness(store, streams, events, { capabilities });
+    const { id } = await h.service.createSession();
+    await h.service.shareDirectory(id, outside);
+    const revokeMatching = vi.spyOn(capabilities, 'revokeMatching').mockRejectedValue(new Error('disk unavailable'));
+    try {
+      await expect(h.service.removeContextDirectory(id, outside)).resolves.toMatchObject({ id });
+      expect((await store.get(id))?.grantedDirectories ?? []).not.toContain(outside);
+    } finally {
+      revokeMatching.mockRestore();
+    }
+  });
+
   it('gives a Chat session a granted folder instead', async () => {
     const chat = await h.service.createSession();
 
@@ -190,6 +273,23 @@ describe('ChatService.shareDirectory', () => {
     expect((await awaitSettled('read-1')).preview).toContain('outside notes');
     await h.awaitRound(2);
     expect(h.lastToolResult(1)).toContain(`now shared: ${outside}`);
+  });
+
+  it('drops a revoked global folder while a reply is streaming', async () => {
+    h.service.dispose();
+    let globalRoots = [outside];
+    h = harness(store, streams, events, { access: { list: async () => globalRoots } as unknown as AccessStore });
+    const { id } = await h.service.createSession();
+    await h.service.send(id, 'read the notes');
+    await h.awaitRound(1);
+    globalRoots = [];
+    h.service.refreshAccessScopes();
+    streams[0].write(toolTurn('revoked-read', 'file_read', { path: join(outside, 'NOTES.md') }));
+    streams[0].write(frame('[DONE]'));
+    const denied = await awaitSettled('revoked-read');
+    expect(denied.status).toBe('denied');
+    expect(denied.error).toContain('shared folders changed');
+    expect(denied.preview).toBeUndefined();
   });
 
   it('drops a folder removed mid-turn before the next round runs its calls', async () => {

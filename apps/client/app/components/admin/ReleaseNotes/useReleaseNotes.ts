@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { ModalVideo, ReleaseNoteItem, ReleaseNotesConfig } from '@bike4mind/common';
+import type { ModalStillImage, ModalVideo, ReleaseNoteItem, ReleaseNotesConfig } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 
 export type ReleaseNoteState = 'scheduled' | 'published' | 'hidden';
@@ -13,6 +13,7 @@ export interface AdminReleaseNote {
   summary: string;
   items: ReleaseNoteItem[];
   video: ModalVideo | null;
+  image: ModalStillImage | null;
   state: ReleaseNoteState;
   publishAt: string;
   deployedAt: string;
@@ -21,7 +22,7 @@ export interface AdminReleaseNote {
   deniedTerm: string | null;
 }
 
-export type ReleaseNoteEdit = Partial<Pick<AdminReleaseNote, 'headline' | 'summary' | 'items' | 'video'>>;
+export type ReleaseNoteEdit = Partial<Pick<AdminReleaseNote, 'headline' | 'summary' | 'items' | 'video' | 'image'>>;
 
 interface ReleaseNotePage {
   data: AdminReleaseNote[];

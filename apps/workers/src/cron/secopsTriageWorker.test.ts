@@ -5,7 +5,7 @@ const mockEmitMetric = vi.fn();
 const mockServiceRun = vi.fn();
 const mockFindOne = vi.fn();
 
-vi.mock('@server/services/githubService', () => ({
+vi.mock('@bike4mind/server-utils/services/githubService', () => ({
   GitHubService: {
     forSystem: (...args: unknown[]) => mockForSystem(...args),
   },
@@ -21,7 +21,7 @@ vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitMetric: (...args: unknown[]) => mockEmitMetric(...args),
 }));
 
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   decryptToken: vi.fn(() => null),
 }));
 
@@ -63,7 +63,7 @@ vi.mock('sst', () => ({
 }));
 
 // Passthrough so we can invoke the inner handler directly with (event, context, logger)
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
 }));
 

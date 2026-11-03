@@ -137,7 +137,7 @@ export function SkillListingDetail({ listingRef, onBack }: { listingRef: SkillMa
   }
 
   const { listing, version, myImport, update } = detail;
-  const tools = version?.snapshot.allowedTools ?? [];
+  const tools = [...(version?.snapshot.allowedTools ?? []), ...(version?.snapshot.claudeCodeAllowedTools ?? [])];
   const summary = version?.honestSummary;
   const tier = version?.riskTier ?? listing.riskTier;
 

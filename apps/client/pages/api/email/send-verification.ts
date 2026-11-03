@@ -3,7 +3,7 @@ import { userRepository, withTransaction } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { userService } from '@bike4mind/services';
 import { EmailEvents } from '@server/utils/eventBus';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import {
   generateVerificationLink,
   getLogoUrl,

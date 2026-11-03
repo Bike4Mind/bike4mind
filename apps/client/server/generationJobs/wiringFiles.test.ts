@@ -27,7 +27,7 @@ vi.mock('@bike4mind/database', async importOriginal => {
     sessionRepository: { findAllByIds: mocks.findAllByIds },
   };
 });
-vi.mock('@server/utils/saveGeneratedAssetToFiles', () => ({
+vi.mock('@bike4mind/server-utils/utils/saveGeneratedAssetToFiles', () => ({
   saveGeneratedAssetToFiles: (...a: unknown[]) => mocks.saveGeneratedAssetToFiles(...a),
 }));
 

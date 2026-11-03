@@ -1,5 +1,6 @@
 // @vitest-environment node
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { makeContributedStringSetting, registerContributedSettings, resetContributedSettings } from '@bike4mind/common';
 import { adminAuditService } from '@bike4mind/services';
 
 const recordAdminActionFromRequest = vi.hoisted(() => vi.fn());
@@ -97,6 +98,34 @@ describe('recordAdminSettingChange', () => {
       },
     ]);
     expect(JSON.stringify(entry)).not.toContain('sk-');
+  });
+
+  describe('contributed settings', () => {
+    afterEach(() => resetContributedSettings());
+
+    it('redacts a registered sensitive contributed setting', async () => {
+      registerContributedSettings([
+        makeContributedStringSetting({
+          key: 'extensionToken',
+          name: 'Extension token',
+          description: 'A contributed secret',
+          defaultValue: undefined,
+          isSensitive: true,
+        }),
+      ]);
+
+      await recordAdminSettingChange(req, { settingName: 'extensionToken', before: 'tok-old', after: 'tok-new' });
+
+      const [, entry] = recordAdminActionFromRequest.mock.calls[0];
+      expect(entry.changes).toEqual([
+        {
+          field: 'extensionToken',
+          before: adminAuditService.REDACTED_PLACEHOLDER,
+          after: adminAuditService.REDACTED_PLACEHOLDER,
+        },
+      ]);
+      expect(JSON.stringify(entry)).not.toContain('tok-');
+    });
   });
 
   it('propagates a failing audit write', async () => {

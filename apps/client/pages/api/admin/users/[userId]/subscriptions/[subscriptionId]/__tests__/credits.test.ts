@@ -29,35 +29,79 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
 }));
 
 const mockUserFindById = vi.fn();
+const mockOrgFindById = vi.fn();
+let inTransaction = false;
+let insideTransactionAtAudit: boolean | undefined;
 vi.mock('@bike4mind/database', () => ({
-  organizationRepository: {},
+  organizationRepository: { findById: (...a: unknown[]) => mockOrgFindById(...a) },
   userRepository: { findById: (...a: unknown[]) => mockUserFindById(...a) },
-  withTransaction: (fn: (session: unknown) => Promise<unknown>) => fn(undefined),
+  withTransaction: async (fn: (session: unknown) => Promise<unknown>) => {
+    inTransaction = true;
+    try {
+      return await fn(undefined);
+    } finally {
+      inTransaction = false;
+    }
+  },
+}));
+
+const mockRecordAdminAction = vi.fn();
+vi.mock('@server/utils/adminAudit', async importOriginal => {
+  const actual = await importOriginal<typeof import('@server/utils/adminAudit')>();
+  const { ForbiddenError } = await import('@bike4mind/common');
+  return {
+    ...actual,
+    recordAdminActionFromRequest: (...a: unknown[]) => {
+      insideTransactionAtAudit = inTransaction;
+      return mockRecordAdminAction(...a);
+    },
+    denySelfAdminAction: async (req: unknown, { action, attempted, target }: Record<string, unknown>) => {
+      await mockRecordAdminAction(req, { action, target, details: { attemptedAction: attempted } });
+      throw new ForbiddenError('Admins cannot perform this action on their own account.');
+    },
+  };
+});
+vi.mock('@bike4mind/server-utils/services/teamPlanSettings', () => ({
+  getTeamPlanSettings: vi.fn(async () => ({ minSeats: 3, maxSeats: 8, creditsPerSeat: 1000 })),
 }));
 
 const mockFindByStripeSubId = vi.fn();
 const mockUpdateByStripeSubId = vi.fn();
-vi.mock('@server/models/Subscription', () => ({
+const mockClearCustomCredits = vi.fn();
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     findByStripeSubscriptionId: (...a: unknown[]) => mockFindByStripeSubId(...a),
     updateByStripeSubscriptionId: (...a: unknown[]) => mockUpdateByStripeSubId(...a),
+    clearCustomCreditsPerCycle: (...a: unknown[]) => mockClearCustomCredits(...a),
   },
 }));
 
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
+const mockSendToClient = vi.fn();
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
+  sendToClient: (...a: unknown[]) => mockSendToClient(...a),
+}));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
+import { ADMIN_ACTION_REASON_MISSING_MESSAGE } from '@server/utils/adminAudit';
 import handler from '../credits';
 
-function call(options: { isAdmin?: boolean; body?: object; userId?: string; subscriptionId?: string }) {
+function call(options: {
+  isAdmin?: boolean;
+  body?: object;
+  userId?: string;
+  subscriptionId?: string;
+  adminId?: string;
+  impersonatedBy?: string;
+}) {
   const { req, res } = createMocks({
     method: 'PUT',
     query: { userId: options.userId ?? 'u1', subscriptionId: options.subscriptionId ?? 'sub_123' },
-    body: options.body ?? { creditsPerCycle: 5000 },
+    body: options.body ?? { creditsPerCycle: 5000, reason: 'Billing correction' },
   });
-  (req as unknown as { user: { isAdmin: boolean; id: string } }).user = {
+  (req as unknown as { user: { isAdmin: boolean; id: string; impersonatedBy?: string } }).user = {
     isAdmin: options.isAdmin ?? true,
-    id: 'admin-1',
+    id: options.adminId ?? 'admin-1',
+    impersonatedBy: options.impersonatedBy,
   };
   (req as unknown as { logger: unknown }).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return { res, run: () => (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res) };
@@ -69,6 +113,8 @@ describe('PUT /api/admin/users/[userId]/subscriptions/[subscriptionId]/credits',
     mockUserFindById.mockResolvedValue({ id: 'u1' });
     mockFindByStripeSubId.mockResolvedValue({ id: 'sub-1', ownerType: 'User', ownerId: 'u1' });
     mockUpdateByStripeSubId.mockResolvedValue(undefined);
+    mockRecordAdminAction.mockResolvedValue(null);
+    insideTransactionAtAudit = undefined;
   });
 
   it('requires the ADMIN scope so an under-scoped admin-owned key is 403d by apiKeyAuth', () => {
@@ -85,10 +131,219 @@ describe('PUT /api/admin/users/[userId]/subscriptions/[subscriptionId]/credits',
     expect(mockUpdateByStripeSubId).not.toHaveBeenCalled();
   });
 
+  it('returns 400 and updates nothing when no reason is sent', async () => {
+    const { res, run } = call({ body: { creditsPerCycle: 5000 } });
+
+    await expect(run()).rejects.toMatchObject({ statusCode: 400, message: ADMIN_ACTION_REASON_MISSING_MESSAGE });
+
+    expect(mockUpdateByStripeSubId).not.toHaveBeenCalled();
+    expect(mockRecordAdminAction).not.toHaveBeenCalled();
+    expect(res._getData()).toBe('');
+  });
+
+  it('returns 400 and updates nothing for a too-short reason', async () => {
+    const { run } = call({ body: { creditsPerCycle: 5000, reason: 'abc' } });
+
+    await expect(run()).rejects.toMatchObject({ statusCode: 400 });
+
+    expect(mockUpdateByStripeSubId).not.toHaveBeenCalled();
+    expect(mockRecordAdminAction).not.toHaveBeenCalled();
+  });
+
+  describe('self-target guard', () => {
+    it('403s and records a denied entry when the admin owns the subscription', async () => {
+      await expect(call({ adminId: 'u1' }).run()).rejects.toMatchObject({ statusCode: 403 });
+      expect(mockUpdateByStripeSubId).not.toHaveBeenCalled();
+      expect(mockRecordAdminAction).toHaveBeenCalledTimes(1);
+      expect(mockRecordAdminAction).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: 'user.credits.denied',
+          details: { attemptedAction: 'user.credits.adjusted' },
+        })
+      );
+    });
+
+    it('403s when the admin is impersonating the owner', async () => {
+      await expect(call({ adminId: 'u1', impersonatedBy: 'admin-1' }).run()).rejects.toMatchObject({
+        statusCode: 403,
+      });
+      expect(mockUpdateByStripeSubId).not.toHaveBeenCalled();
+    });
+
+    it("403s when the admin is the organization's billing owner", async () => {
+      mockFindByStripeSubId.mockResolvedValue({
+        id: 'sub-1',
+        ownerType: 'Organization',
+        ownerId: 'org-1',
+        quantity: 3,
+      });
+      mockOrgFindById.mockResolvedValue({ id: 'org-1', name: 'Acme', userId: 'admin-1', users: [] });
+
+      await expect(call({}).run()).rejects.toMatchObject({ statusCode: 403 });
+      expect(mockUpdateByStripeSubId).not.toHaveBeenCalled();
+    });
+  });
+
   it('updates the credit rate for an individual subscription for an admin', async () => {
     const { res, run } = call({});
     await run();
     expect(mockUpdateByStripeSubId).toHaveBeenCalledWith('sub_123', { customCreditsPerCycle: 5000 });
     expect(res._getJSONData()).toMatchObject({ success: true, creditsPerCycle: 5000 });
+  });
+
+  describe('admin audit', () => {
+    it('records user.credits.adjusted with the signed rate change inside the transaction', async () => {
+      mockUserFindById.mockResolvedValue({ id: 'u1', email: 'u1@example.com' });
+      mockFindByStripeSubId.mockResolvedValue({
+        id: 'sub-1',
+        ownerType: 'User',
+        ownerId: 'u1',
+        priceId: 'price_unknown',
+        customCreditsPerCycle: 8000,
+      });
+
+      const { run } = call({});
+      await run();
+
+      expect(insideTransactionAtAudit).toBe(true);
+      expect(mockRecordAdminAction).toHaveBeenCalledTimes(1);
+      expect(mockRecordAdminAction).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: 'user.credits.adjusted',
+          target: { kind: 'user', id: 'u1', displayName: 'u1@example.com' },
+          changes: [{ field: 'customCreditsPerCycle', before: 8000, after: 5000 }],
+          details: expect.objectContaining({ credits: -3000, subscriptionId: 'sub_123' }),
+        })
+      );
+    });
+
+    it('derives a team rate change from the seat default and tags the organization', async () => {
+      mockFindByStripeSubId.mockResolvedValue({
+        id: 'sub-1',
+        ownerType: 'Organization',
+        ownerId: 'org-1',
+        quantity: 3,
+      });
+      mockOrgFindById.mockResolvedValue({ id: 'org-1', name: 'Acme', users: [] });
+
+      const { run } = call({});
+      await run();
+
+      expect(insideTransactionAtAudit).toBe(true);
+      expect(mockRecordAdminAction).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: 'user.credits.adjusted',
+          organizationId: 'org-1',
+          details: expect.objectContaining({ credits: 2000, previousCreditsPerCycle: 3000 }),
+        })
+      );
+    });
+
+    it('uses the existing custom team rate, not the seat default, as the previous rate', async () => {
+      mockFindByStripeSubId.mockResolvedValue({
+        id: 'sub-1',
+        ownerType: 'Organization',
+        ownerId: 'org-1',
+        quantity: 3,
+        customCreditsPerCycle: 7000,
+      });
+      mockOrgFindById.mockResolvedValue({ id: 'org-1', name: 'Acme', users: [] });
+
+      const { run } = call({});
+      await run();
+
+      expect(mockRecordAdminAction).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          organizationId: 'org-1',
+          changes: [{ field: 'customCreditsPerCycle', before: 7000, after: 5000 }],
+          details: expect.objectContaining({ credits: -2000, previousCreditsPerCycle: 7000 }),
+        })
+      );
+    });
+
+    describe('clearing the override (creditsPerCycle: null)', () => {
+      it('unsets the override and audits the move back to the plan default', async () => {
+        mockFindByStripeSubId.mockResolvedValue({
+          id: 'sub-1',
+          ownerType: 'User',
+          ownerId: 'u1',
+          priceId: 'price_unknown',
+          customCreditsPerCycle: 8000,
+        });
+
+        const { res, run } = call({ body: { creditsPerCycle: null, reason: 'Undo the edit' } });
+        await run();
+
+        expect(mockClearCustomCredits).toHaveBeenCalledWith('sub_123');
+        expect(mockUpdateByStripeSubId).not.toHaveBeenCalled();
+        expect(res._getJSONData()).toMatchObject({ success: true, creditsPerCycle: null });
+        expect(mockRecordAdminAction).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            summary: 'cleared the subscription credits override',
+            changes: [{ field: 'customCreditsPerCycle', before: 8000, after: null }],
+            details: expect.objectContaining({ credits: -8000, previousCreditsPerCycle: 8000, creditsPerCycle: 0 }),
+          })
+        );
+      });
+
+      it('400s and writes no audit entry when there is no override to clear', async () => {
+        mockFindByStripeSubId.mockResolvedValue({ id: 'sub-1', ownerType: 'User', ownerId: 'u1', priceId: 'p' });
+
+        await expect(call({ body: { creditsPerCycle: null, reason: 'Undo the edit' } }).run()).rejects.toMatchObject({
+          statusCode: 400,
+          message: 'This subscription has no credits override to clear.',
+        });
+        expect(mockClearCustomCredits).not.toHaveBeenCalled();
+        expect(mockRecordAdminAction).not.toHaveBeenCalled();
+      });
+
+      it('computes a team default from seats when clearing', async () => {
+        mockFindByStripeSubId.mockResolvedValue({
+          id: 'sub-1',
+          ownerType: 'Organization',
+          ownerId: 'org-1',
+          quantity: 3,
+          customCreditsPerCycle: 7000,
+        });
+        mockOrgFindById.mockResolvedValue({ id: 'org-1', name: 'Acme', users: [] });
+
+        const { run } = call({ body: { creditsPerCycle: null, reason: 'Undo the edit' } });
+        await run();
+
+        expect(mockClearCustomCredits).toHaveBeenCalledWith('sub_123');
+        expect(mockRecordAdminAction).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            organizationId: 'org-1',
+            details: expect.objectContaining({ credits: -4000, creditsPerCycle: 3000 }),
+          })
+        );
+      });
+    });
+
+    it('records the reason on the audit entry', async () => {
+      const { run } = call({ body: { creditsPerCycle: 5000, reason: 'Customer goodwill credit' } });
+      await run();
+
+      expect(mockRecordAdminAction).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ action: 'user.credits.adjusted', reason: 'Customer goodwill credit' })
+      );
+    });
+
+    it('fails the request without notifying when the audit write fails', async () => {
+      mockRecordAdminAction.mockRejectedValueOnce(new Error('audit down'));
+
+      const { res, run } = call({});
+      await expect(run()).rejects.toThrow('audit down');
+
+      expect(mockSendToClient).not.toHaveBeenCalled();
+      expect(res._getData()).toBe('');
+    });
   });
 });

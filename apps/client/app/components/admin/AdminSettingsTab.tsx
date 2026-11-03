@@ -1,8 +1,12 @@
-import { useSettingsFromServer } from '@client/app/hooks/data/settings';
+import { useConfig, useSettingsFromServer } from '@client/app/hooks/data/settings';
 import {
   isBlankSettingValue,
+  allSettingDefinitions,
+  resolveSettingDefinition,
   settingsMap,
+  stageHiddenSettingKeys,
   SETTING_TABS,
+  type SettingDefinition,
   API_SERVICE_GROUPS,
   Category,
   CATEGORY_ICONS,
@@ -23,18 +27,17 @@ import {
   TabList,
   Tab,
   TabPanel,
-  Card,
-  CardContent,
-  CardOverflow,
+  Box,
   Divider,
   SvgIcon,
   type SvgIconProps,
   Tooltip,
 } from '@mui/joy';
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState, type ComponentProps } from 'react';
 import AdminSettingInputField from './AdminSettingInputField';
 import AdminStringListSettingField from './AdminStringListSettingField';
 import { AdminOperationsModelSetting } from './AdminOperationsModelSetting';
+import { AdminTurnstileStatusNotice } from './AdminTurnstileStatusNotice';
 import { AdminGenerationModelsSetting } from './AdminGenerationModelsSetting';
 import { AdminRecommendedModelsSetting } from './AdminRecommendedModelsSetting';
 import { ScopedOverridesByScope } from './ScopedOverridesByScope';
@@ -43,6 +46,8 @@ import { useAdminModal } from './useAdminModal';
 
 import AdminLogoUpload from './AdminLogoUpload';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import { SettingsDraftProvider } from './SettingsDraftProvider';
+import { AdminPageHeader, SettingsSection } from './shared';
 
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import PsychologyIcon from '@mui/icons-material/Psychology';
@@ -80,11 +85,8 @@ import SpeedIcon from '@mui/icons-material/Speed';
 const HEADER_HEIGHT = '100px';
 
 // Minimal searchable shape - the subset of a real setting definition that search
-// inspects. Derived from settingsMap so it stays in sync if those fields change.
-type SearchableSetting = Pick<
-  (typeof settingsMap)[keyof typeof settingsMap],
-  'key' | 'name' | 'description' | 'isSensitive'
->;
+// inspects. Derived from the definition type so it stays in sync if those fields change.
+type SearchableSetting = Pick<SettingDefinition<string>, 'key' | 'name' | 'description' | 'isSensitive'>;
 
 // Wrapper mapping a MUI icon component into the plain section-header icon that
 // IconMap exposes. Kept as a thin indirection so IconMap and its completeness
@@ -144,11 +146,13 @@ export const IconMap: IconMapType = {
 export const resolveSettingsIcon = (icon: string | undefined): React.FC<{ sx?: SvgIconProps['sx'] }> =>
   (icon && IconMap[icon]) || IconMap.Settings;
 
-const settingConfigs = Object.values(settingsMap);
+type SettingConfig = SettingDefinition<string>;
+// The field components are typed against the core catalog. A contributed definition has the same
+// runtime shape, and the update route accepts its key once registered.
+type CoreSettingConfig = (typeof settingsMap)[keyof typeof settingsMap];
 
 // Edited only on the Growth and Pricing tab (GROWTH_PRICING_SECTIONS in AdminGrowthPricingTab); the
-// Credits System group links there instead. ReferralCreditsAmount is on that tab too but keeps its
-// Referrals editor here, so it is not listed.
+// Credits System group links there instead.
 export const GROWTH_PRICING_ONLY_KEYS: ReadonlySet<SettingKey> = new Set<SettingKey>([
   'allowOpenRegistration',
   'defaultFreeCredits',
@@ -159,16 +163,34 @@ export const GROWTH_PRICING_ONLY_KEYS: ReadonlySet<SettingKey> = new Set<Setting
   'teamPlanMinSeats',
   'teamPlanMaxSeats',
   'teamPlanCreditsPerSeat',
+  'ReferralCreditsAmount',
+  'ReferralFirstAnswerCredits',
+  'ReferralFirstPaymentCredits',
+  'ReferralSecondPaymentCredits',
+  'ReferralHoldDays',
+  'ReferralInvitesPerUser',
+  'ReferralAlertRewardsPerDay',
 ]);
 
 // Settings whose value is a list of plain strings get the one-entry-per-line editor.
-const STRING_LIST_SETTING_KEYS = new Set<string>(['ImageModerationReviewerEmails']);
+const STRING_LIST_SETTING_KEYS = new Set<string>([
+  'ImageModerationReviewerEmails',
+  'blockedEmailDomains',
+  'freeTierAllowedModels',
+]);
 
 const AdminSettingsTab: React.FC = () => {
   const { section, setSection, searchTerm, setSearchTerm } = useAdminSettingsSearchParams();
   const [allTabs, setAllTabs] = useState<boolean>(false);
   const settingsFromServer = useSettingsFromServer();
   const setAdminTab = useAdminModal(s => s.setActiveTab);
+  const serverConfig = useConfig();
+
+  // Until the server reports this stage's list, hide every stage-gated setting rather than flash it.
+  const hiddenSettingKeys = useMemo(() => {
+    const keys = serverConfig.data?.hiddenAdminSettingKeys;
+    return new Set<string>(Array.isArray(keys) ? keys : stageHiddenSettingKeys(true));
+  }, [serverConfig.data]);
 
   // Index server values by setting name once, so the hot search/filter paths
   // don't re-scan the whole list per setting on every keystroke.
@@ -223,12 +245,14 @@ const AdminSettingsTab: React.FC = () => {
   );
 
   const filteredSettings = useMemo(() => {
-    return settingConfigs.filter(settingConfig => {
-      const settingInfo = settingsMap[settingConfig.key];
+    return allSettingDefinitions().filter(settingConfig => {
+      const settingInfo = resolveSettingDefinition(settingConfig.key);
 
       if (!settingInfo) return false;
 
-      if (GROWTH_PRICING_ONLY_KEYS.has(settingConfig.key)) return false;
+      if (hiddenSettingKeys.has(settingConfig.key)) return false;
+
+      if ((GROWTH_PRICING_ONLY_KEYS as ReadonlySet<string>).has(settingConfig.key)) return false;
 
       // Hide settings that have dedicated custom UI in other admin tabs
       if (
@@ -241,10 +265,6 @@ const AdminSettingsTab: React.FC = () => {
           'recommendedModelIds',
           'RapidReplySettings',
           'SystemFiles',
-          // What's New settings are managed in the What's New Modals tab
-          'whatsNewAutomationEnabled',
-          'whatsNewConfig',
-          'whatsNewSyncConfig',
           // Release notes config is edited in the Release notes tab
           'releaseNotesConfig',
           // SRE Agent config has its own dedicated admin tab
@@ -268,7 +288,7 @@ const AdminSettingsTab: React.FC = () => {
       // Hide child settings when their parent setting is off
       if (settingInfo.dependsOn) {
         const parentValue = settingValueByName.get(settingInfo.dependsOn);
-        const parentDefault = settingsMap[settingInfo.dependsOn as keyof typeof settingsMap]?.defaultValue;
+        const parentDefault = resolveSettingDefinition(settingInfo.dependsOn)?.defaultValue;
         const isParentOn = parentValue !== undefined ? String(parentValue) === 'true' : parentDefault === true;
         if (!isParentOn) return false;
       }
@@ -287,7 +307,7 @@ const AdminSettingsTab: React.FC = () => {
 
       return true;
     });
-  }, [searchTerm, settingValueByName, allTabs, matchesSearch]);
+  }, [searchTerm, settingValueByName, allTabs, matchesSearch, hiddenSettingKeys]);
 
   // Total settings matching the current search across ALL tabs - so the count is
   // visible even when the active tab happens to show none of them.
@@ -298,12 +318,12 @@ const AdminSettingsTab: React.FC = () => {
     const tabGroups = Object.entries(SETTING_TABS).reduce(
       (acc, [tabId, tabInfo]) => {
         acc[tabId] = filteredSettings.filter(setting => {
-          const settingInfo = settingsMap[setting.key];
+          const settingInfo = resolveSettingDefinition(setting.key);
           return settingInfo?.category && tabInfo.categories.includes(settingInfo.category);
         });
         return acc;
       },
-      {} as Record<string, typeof settingConfigs>
+      {} as Record<string, SettingConfig[]>
     );
 
     // Then within each tab, group by category and group
@@ -311,7 +331,7 @@ const AdminSettingsTab: React.FC = () => {
       (tabAcc, [tabId, tabSettings]) => {
         const categorized = tabSettings.reduce(
           (categoryAcc, setting) => {
-            const settingInfo = settingsMap[setting.key];
+            const settingInfo = resolveSettingDefinition(setting.key);
             const category = settingInfo?.category ?? 'Uncategorized';
 
             if (!categoryAcc[category]) {
@@ -335,8 +355,8 @@ const AdminSettingsTab: React.FC = () => {
           {} as Record<
             Category,
             {
-              ungrouped: typeof settingConfigs;
-              groups: Record<string, typeof settingConfigs>;
+              ungrouped: SettingConfig[];
+              groups: Record<string, SettingConfig[]>;
             }
           >
         );
@@ -349,8 +369,8 @@ const AdminSettingsTab: React.FC = () => {
         Record<
           Category,
           {
-            ungrouped: typeof settingConfigs;
-            groups: Record<string, typeof settingConfigs>;
+            ungrouped: SettingConfig[];
+            groups: Record<string, SettingConfig[]>;
           }
         >
       >
@@ -373,7 +393,7 @@ const AdminSettingsTab: React.FC = () => {
     return grouped;
   }, [filteredSettings, logoMatchesSearch]);
 
-  const renderSettingGroup = (settings: typeof settingConfigs, groupName?: string, groupId?: string) => {
+  const renderSettingGroup = (settings: SettingConfig[], groupName?: string, groupId?: string) => {
     const groupInfo = groupId ? Object.values(API_SERVICE_GROUPS).find(g => g.id === groupId) : null;
     const IconComponent = resolveSettingsIcon(groupInfo?.icon);
 
@@ -382,19 +402,19 @@ const AdminSettingsTab: React.FC = () => {
     //   1. It has a dependsOn that points to another setting IN this group
     //   2. It is a boolean type
     const settingKeysInGroup = new Set(settings.map(s => s.key));
-    const inlineChildrenByParent = new Map<string, typeof settingConfigs>();
-    const topLevelSettings: typeof settingConfigs = [];
+    const inlineChildrenByParent = new Map<string, SettingConfig[]>();
+    const topLevelSettings: SettingConfig[] = [];
 
     for (const s of settings) {
-      const meta = settingsMap[s.key];
-      const dep = meta.dependsOn;
-      if (dep && settingKeysInGroup.has(dep) && meta.type === 'boolean') {
+      const meta = resolveSettingDefinition(s.key);
+      const dep = meta?.dependsOn;
+      if (dep && settingKeysInGroup.has(dep) && meta?.type === 'boolean') {
         // Resolve to a top-level parent: if dep is itself a child in this group
         // (its own dependsOn also points into the group), re-parent this grandchild
         // to the grandparent so the one-level subSettings render includes it.
         // Single-hop only - it resolves a grandchild (current max nesting), not a
         // 4+ level chain; a deeper chain would need a walk-to-root loop here.
-        const parentMeta = settingsMap[dep as keyof typeof settingsMap];
+        const parentMeta = resolveSettingDefinition(dep);
         const grandparentDep = parentMeta?.dependsOn;
         const resolvedParent = grandparentDep && settingKeysInGroup.has(grandparentDep) ? grandparentDep : dep;
         const children = inlineChildrenByParent.get(resolvedParent) ?? [];
@@ -406,9 +426,9 @@ const AdminSettingsTab: React.FC = () => {
     }
 
     return (
-      <Card key={groupId || 'ungrouped'} variant="outlined" sx={{ mb: 2 }}>
+      <SettingsSection key={groupId || 'ungrouped'}>
         {groupName && (
-          <CardOverflow>
+          <Box>
             <Stack
               direction={{ xs: 'column', sm: 'row' }}
               alignItems={{ xs: 'flex-start', sm: 'center' }}
@@ -429,9 +449,9 @@ const AdminSettingsTab: React.FC = () => {
               )}
             </Stack>
             <Divider inset="none" />
-          </CardOverflow>
+          </Box>
         )}
-        <CardContent>
+        <Box>
           <Stack spacing={1}>
             {topLevelSettings.map((setting, index) => {
               const children = inlineChildrenByParent.get(setting.key);
@@ -449,7 +469,7 @@ const AdminSettingsTab: React.FC = () => {
                   <AdminStringListSettingField
                     key={`${setting.key}-${JSON.stringify(storedValue)}`}
                     index={index}
-                    setting={setting}
+                    setting={setting as CoreSettingConfig}
                     storedValue={storedValue}
                   />
                 );
@@ -458,7 +478,7 @@ const AdminSettingsTab: React.FC = () => {
                 <AdminSettingInputField
                   key={`${setting.key}-${groupId || 'ungrouped'}-${setting.name}-${index}`}
                   index={index}
-                  setting={setting}
+                  setting={setting as CoreSettingConfig}
                   // clearDeletesRow: no stored row (or a blank one, which the resolver also reads as unset)
                   // means unset, NOT the declared default - pass null so the field renders its unset label.
                   defaultValue={
@@ -466,7 +486,7 @@ const AdminSettingsTab: React.FC = () => {
                       ? null
                       : (settingValueByName.get(setting.key) ?? setting.defaultValue)
                   }
-                  subSettings={subSettings}
+                  subSettings={subSettings as ComponentProps<typeof AdminSettingInputField>['subSettings']}
                 />
               );
             })}
@@ -489,14 +509,14 @@ const AdminSettingsTab: React.FC = () => {
               .
             </Typography>
           )}
-        </CardContent>
-      </Card>
+        </Box>
+      </SettingsSection>
     );
   };
 
   const renderCategory = (
     category: string,
-    data: { ungrouped: typeof settingConfigs; groups: Record<string, typeof settingConfigs> }
+    data: { ungrouped: SettingConfig[]; groups: Record<string, SettingConfig[]> }
   ) => {
     const { ungrouped, groups } = data;
     const CategoryIconComponent = resolveSettingsIcon(CATEGORY_ICONS[category as keyof typeof CATEGORY_ICONS]);
@@ -516,6 +536,10 @@ const AdminSettingsTab: React.FC = () => {
 
         {category === 'AI' && <AdminGenerationModelsSetting />}
 
+        {category === 'Users' && (
+          <AdminTurnstileStatusNotice enabled={String(settingValueByName.get('turnstileEnabled')) === 'true'} />
+        )}
+
         {/* The by-scope read of the override overlay. Category-scoped rather than group-scoped:
             seven of the nine scope-capable settings are AI, and the panel lists all nine wherever
             it renders. */}
@@ -529,7 +553,9 @@ const AdminSettingsTab: React.FC = () => {
         {Object.entries(groups).map(([groupId, groupSettings]) => {
           const groupInfo = Object.values(API_SERVICE_GROUPS).find(g => g.id === groupId);
           return renderSettingGroup(
-            groupSettings.sort((a, b) => (settingsMap[a.key].order || 0) - (settingsMap[b.key].order || 0)),
+            groupSettings.sort(
+              (a, b) => (resolveSettingDefinition(a.key)?.order || 0) - (resolveSettingDefinition(b.key)?.order || 0)
+            ),
             groupInfo?.name || groupId,
             groupId
           );
@@ -559,16 +585,23 @@ const AdminSettingsTab: React.FC = () => {
             }}
           >
             <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: { xs: 1, md: 0 } }}>
-              <Typography level="h4">Admin Settings</Typography>
+              <AdminPageHeader title="Settings" description="Edit configuration, then save or discard your changes." />
               <ContextHelpButton helpId="admin/admin-settings" tooltipText="Admin Settings Help" />
             </Stack>
             <FormControl sx={{ width: { xs: '100%', md: '40vw' } }}>
               <Input
-                placeholder="Search by name, description, or non-sensitive value"
+                placeholder="Search by name, description, or non-sensitive value (/)"
                 value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
                 fullWidth
-                slotProps={{ input: { 'data-testid': 'admin-settings-search-input' } }}
+                slotProps={{
+                  input: {
+                    'data-testid': 'admin-settings-search-input',
+                    'data-admin-search': true,
+                    'aria-label': 'Search settings',
+                    'aria-keyshortcuts': '/',
+                  },
+                }}
               />
             </FormControl>
             {searchTerm && (
@@ -685,4 +718,10 @@ const AdminSettingsTab: React.FC = () => {
 
 AdminSettingsTab.displayName = 'AdminSettingsTab';
 
-export default AdminSettingsTab;
+export default function AdminSettingsPage() {
+  return (
+    <SettingsDraftProvider>
+      <AdminSettingsTab />
+    </SettingsDraftProvider>
+  );
+}

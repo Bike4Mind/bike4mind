@@ -1,4 +1,4 @@
-import type { UserModerationStatus } from '@bike4mind/common';
+import type { ISignupRiskScore, UserModerationStatus } from '@bike4mind/common';
 
 /** The conditions that make an account unusable. The order below is precedence. */
 export type AccountBlockReason = 'banned' | 'disputePending' | 'suspended';
@@ -37,4 +37,61 @@ export function accountBlockReasons(user: AccountStateFields): AccountBlockReaso
 export function entersBlockedState(previous: AccountStateFields, next: AccountStateFields): boolean {
   const before = accountBlockReasons(previous);
   return accountBlockReasons(next).some(reason => !before.includes(reason));
+}
+
+export const AI_ACCESS_REVOKED_MESSAGE =
+  'AI features are disabled on your account by an administrator. Please contact support.';
+
+export const AI_ACCESS_PENDING_REVIEW_MESSAGE =
+  'AI features are temporarily unavailable while your account awaits review. You can still sign in and access your data. Please contact support to request a review.';
+
+export const ACCOUNT_BANNED_MESSAGE = 'This account has been suspended. Please contact support.';
+
+export const ACCOUNT_DISPUTE_PENDING_MESSAGE = 'Account suspended pending dispute resolution. Please contact support.';
+
+export const ACCOUNT_SUSPENDED_MESSAGE =
+  'Your account is suspended for repeated content-policy violations. Please contact support to appeal.';
+
+const BLOCK_REASON_MESSAGES: Record<AccountBlockReason, string> = {
+  banned: ACCOUNT_BANNED_MESSAGE,
+  disputePending: ACCOUNT_DISPUTE_PENDING_MESSAGE,
+  suspended: ACCOUNT_SUSPENDED_MESSAGE,
+};
+
+/**
+ * The user-facing refusal for a blocked account (ban, dispute pending, suspension), or null when it is not
+ * blocked. The one predicate for "this account may not spend or buy": the AI gate below builds on it, and the
+ * money-in routes refuse with it (apps/client/server/middlewares/refuseBlockedAccount.ts).
+ */
+export function accountBlockedMessage(user: AccountStateFields): string | null {
+  const [reason] = accountBlockReasons(user);
+  return reason ? BLOCK_REASON_MESSAGES[reason] : null;
+}
+
+export type AiAccessStateFields = AccountStateFields & {
+  isModerated?: boolean | null;
+  riskScore?: Pick<ISignupRiskScore, 'reviewState'> | null;
+};
+
+/**
+ * The AI and credit-spend gate, behind createModelAdmission, assertAiAccessAllowed, reserveRequestCredits and
+ * the worker handlers. A blocked account is refused here too, not only at sign-in: a queued job, a continuation
+ * or an agent run outlives the request that authenticated it, and its user is reloaded rather than re-authed.
+ * Review holds are separate from manual restrictions, so approval cannot undo an admin restriction.
+ */
+export function aiAccessDeniedMessage(user: AiAccessStateFields): string | null {
+  const blocked = accountBlockedMessage(user);
+  if (blocked) return blocked;
+  if (isAiAccessRevoked(user)) return AI_ACCESS_REVOKED_MESSAGE;
+  if (user.riskScore?.reviewState === 'pending') return AI_ACCESS_PENDING_REVIEW_MESSAGE;
+  return null;
+}
+
+/**
+ * True when the admin "Moderate" action has revoked the user's AI access. Unlike
+ * `accountBlockReasons`, this does not block sign-in or data access - only AI features. It is
+ * independent of `moderation.status`: escalation never writes `isModerated` (see `setModerationStatus`).
+ */
+export function isAiAccessRevoked(user: { isModerated?: boolean | null }): boolean {
+  return user.isModerated === true;
 }

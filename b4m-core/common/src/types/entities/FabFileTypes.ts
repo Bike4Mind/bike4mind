@@ -1,3 +1,4 @@
+import type { GeneratedAssetLineageEntry } from '../../generatedAsset';
 import { type ChunkStallReason } from '../../constants/chunking';
 import type { MembershipArm } from '../../constants/lakeMembershipHealth';
 import { IBaseRepository, type IMongoDocument } from '.';
@@ -546,6 +547,11 @@ export interface IFabFile {
    * body, or a caller could forge the audit trail this exists to provide.
    */
   sourceMetadata?: Record<string, unknown>;
+  /**
+   * For generated files: the FabFiles this one was made from, typed by role. Server-supplied only -
+   * never accepted from a request body - and only real FabFile ids.
+   */
+  derivedFrom?: GeneratedAssetLineageEntry[];
   /** Whether this file was automatically processed (vs manual upload) */
   automaticallyProcessed?: boolean;
   /** Metadata for data lake files */

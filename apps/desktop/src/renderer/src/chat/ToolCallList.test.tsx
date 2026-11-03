@@ -43,48 +43,74 @@ describe('ToolCallList', () => {
     const attribution = (html: string) =>
       [...html.matchAll(/data-testid="tool-call-approval-attribution"[^>]*>([^<]*)</g)].map(match => match[1]);
 
-    it('says who let a settled call run', () => {
-      const html = markup([
-        bash({
-          status: 'done',
-          approval: { outcome: 'allowed', decidedBy: { kind: 'user', answer: 'once' }, asked: true, decidedAt },
-        }),
-      ]);
-      expect(attribution(html)).toEqual(['Approved by you']);
-    });
-
     it.each([
-      [{ kind: 'mode', mode: 'auto' } as const, 'allowed' as const, 'Auto-approved - Approve for me'],
-      [{ kind: 'rule', rule: 'Bash(git commit:*)' } as const, 'allowed' as const, 'Allowed by rule Bash(git commit:*)'],
-      [{ kind: 'chat-allowance' } as const, 'allowed' as const, 'Allowed in this chat'],
-      [{ kind: 'user', answer: 'always' } as const, 'allowed' as const, 'Approved by you - always in this chat'],
-      [{ kind: 'user', answer: 'deny' } as const, 'denied' as const, 'Declined by you'],
-      [{ kind: 'system', reason: 'stopped' } as const, 'denied' as const, 'Not run - reply stopped before approval'],
-      [{ kind: 'system', reason: 'app-quit' } as const, 'denied' as const, 'Not run - app quit before approval'],
-      [
-        { kind: 'system', reason: 'error', detail: 'outside every folder' } as const,
-        'denied' as const,
-        'Blocked - outside every folder',
-      ],
-    ])('reads %o as "%s"', (decidedBy, outcome, text) => {
+      [{ kind: 'rule', rule: 'Bash(rm:*)' } as const, 'Denied by rule Bash(rm:*)'],
+      [{ kind: 'chat-allowance' } as const, 'Denied in this chat'],
+      [{ kind: 'mode', mode: 'auto' } as const, 'Denied by the approval mode'],
+      [{ kind: 'user', answer: 'deny' } as const, 'Declined by you'],
+      [{ kind: 'user', answer: 'redirect', option: 'Start a session' } as const, 'Redirected by you - Start a session'],
+      [{ kind: 'system', reason: 'stopped' } as const, 'Not run - reply stopped before approval'],
+      [{ kind: 'system', reason: 'app-quit' } as const, 'Not run - app quit before approval'],
+      [{ kind: 'system', reason: 'error', detail: 'outside every folder' } as const, 'Blocked - outside every folder'],
+    ])('reads %o as "%s"', (decidedBy, text) => {
       const html = markup([
-        bash({
-          status: outcome === 'allowed' ? 'done' : 'denied',
-          approval: { outcome, decidedBy, asked: false, decidedAt },
-        }),
+        bash({ status: 'denied', approval: { outcome: 'denied', decidedBy, asked: false, decidedAt } }),
       ]);
       expect(attribution(html)).toEqual([text]);
     });
 
-    it('says it once for a group answered the same way, and nothing for an ungated call', () => {
-      const auto = { outcome: 'allowed', decidedBy: { kind: 'mode', mode: 'auto' }, asked: false, decidedAt } as const;
+    it('reads a redirect recorded as done by its outcome, not its status', () => {
+      const decidedBy = { kind: 'user', answer: 'redirect', option: 'Start a session' } as const;
       const html = markup([
-        bash({ id: 'a', status: 'done', approval: auto }),
-        bash({ id: 'b', status: 'done', approval: auto }),
+        bash({ status: 'done', approval: { outcome: 'denied', decidedBy, asked: true, decidedAt } }),
+      ]);
+      expect(attribution(html)).toEqual(['Redirected by you - Start a session']);
+    });
+
+    it.each([
+      [{ kind: 'mode', mode: 'auto' } as const],
+      [{ kind: 'rule', rule: 'Bash(git commit:*)', source: 'Claude Code settings' } as const],
+      [{ kind: 'chat-allowance' } as const],
+      [{ kind: 'user', answer: 'once' } as const],
+      [{ kind: 'user', answer: 'always', everywhere: true } as const],
+    ])('draws nothing for a call %o let through', decidedBy => {
+      const html = markup([
+        bash({ status: 'done', approval: { outcome: 'allowed', decidedBy, asked: false, decidedAt } }),
+      ]);
+      expect(html).not.toContain('tool-call-approval-attribution');
+      expect(html).not.toContain('Claude Code settings');
+    });
+
+    it('says it once for a group stopped the same way, and nothing for an ungated call', () => {
+      const stopped = {
+        outcome: 'denied',
+        decidedBy: { kind: 'system', reason: 'stopped' },
+        asked: true,
+        decidedAt,
+      } as const;
+      const html = markup([
+        bash({ id: 'a', status: 'denied', approval: stopped }),
+        bash({ id: 'b', status: 'denied', approval: stopped }),
         bash({ id: 'c', status: 'done' }),
       ]);
-      expect(attribution(html)).toEqual(['Auto-approved - Approve for me']);
+      expect(attribution(html)).toEqual(['Not run - reply stopped before approval']);
       expect(attribution(markup([bash({ status: 'done' })]))).toEqual([]);
+    });
+
+    it('keeps only what did not run in a group that mixes it with allowed calls', () => {
+      const allowed = (decidedBy: NonNullable<ChatToolCall['approval']>['decidedBy']) =>
+        ({ outcome: 'allowed', decidedBy, asked: false, decidedAt }) as const;
+      const html = markup([
+        bash({ id: 'a', status: 'done', approval: allowed({ kind: 'mode', mode: 'auto' }) }),
+        bash({ id: 'b', status: 'done', approval: allowed({ kind: 'user', answer: 'once' }) }),
+        bash({ id: 'c', status: 'done', approval: allowed({ kind: 'chat-allowance' }) }),
+        bash({
+          id: 'd',
+          status: 'denied',
+          approval: { outcome: 'denied', decidedBy: { kind: 'user', answer: 'deny' }, asked: true, decidedAt },
+        }),
+      ]);
+      expect(attribution(html)).toEqual(['Declined by you']);
     });
   });
 

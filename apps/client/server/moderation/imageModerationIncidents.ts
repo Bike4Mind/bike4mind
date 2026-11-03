@@ -1,7 +1,7 @@
 import { adminSettingsRepository, imageModerationIncidentRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { getSettingsMap } from '@bike4mind/utils';
-import { withReviewerAlerts } from './incidentReviewAlerts';
+import { withReviewerAlerts } from '@bike4mind/server-utils/moderation/incidentReviewAlerts';
 
 /**
  * Origin for the admin link. APP_URL is set only on the web Lambda, so the queue, chat, agent and

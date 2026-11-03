@@ -2,7 +2,7 @@ import { StringDecoder } from 'node:string_decoder';
 import type { Readable } from 'node:stream';
 import { createParser } from 'eventsource-parser';
 import { isAxiosError, type AxiosInstance, type AxiosResponse } from 'axios';
-import type { ReasoningEffort } from '@bike4mind/common';
+import { isToolChangeMessage, type PromptCacheTtl, type ReasoningEffort } from '@bike4mind/common';
 import type { ChatModelOption, ChatRole } from '@shared/chat';
 import { devLog } from '../devlog/DevLogSink';
 import { CHAT_STREAM_TAG } from './devLogTag';
@@ -21,6 +21,11 @@ export interface CompletionMessage {
   content: string | unknown[];
   /** Asks the provider to cache the request up to and including this message. Anthropic only. */
   cache?: boolean;
+  /**
+   * A user message that belongs to the turn before it (tool screenshots), so local history
+   * trimming never starts a turn here. Never sent: streamCompletion and OllamaLocal drop it.
+   */
+  continuesTurn?: boolean;
 }
 
 /**
@@ -45,6 +50,19 @@ function canCarryBreakpoint(message: CompletionMessage): boolean {
 }
 
 /**
+ * The previous request's rolling breakpoint, when that request ended on a tool change: the API looks
+ * back only 20 blocks for an earlier entry, and one block per added tool can push it out of reach
+ * (measured live), so it is marked again and read exactly. -1 when there is none.
+ */
+function lookbackBreakpoint(messages: readonly CompletionMessage[], rolling: number): number {
+  let change = rolling - 1;
+  while (change > 0 && !isToolChangeMessage(messages[change])) change--;
+  if (change <= 0) return -1;
+  const replies = messages.slice(change + 1, rolling).filter(message => message.role === 'assistant').length;
+  return replies === 1 && canCarryBreakpoint(messages[change - 1]) ? change - 1 : -1;
+}
+
+/**
  * The messages as one request should send them: a copy of the system message and of the last
  * message that can carry a breakpoint, marked `cache: true`, the rest untouched. The first
  * breakpoint caches the tools and system prompt, which are stable across a whole turn; the
@@ -59,9 +77,15 @@ function canCarryBreakpoint(message: CompletionMessage): boolean {
  */
 export function withCacheBreakpoints(messages: readonly CompletionMessage[]): CompletionMessage[] {
   let rolling = messages.length - 1;
-  while (rolling >= 0 && !canCarryBreakpoint(messages[rolling])) rolling--;
+  // A tool change message takes no breakpoint: the provider puts it on the turn before it.
+  while (rolling >= 0 && (isToolChangeMessage(messages[rolling]) || !canCarryBreakpoint(messages[rolling]))) {
+    rolling--;
+  }
+  const lookback = lookbackBreakpoint(messages, rolling);
   return messages.map((message, index) =>
-    index === rolling || message.role === 'system' ? { ...message, cache: true } : message
+    index === rolling || index === lookback || (message.role === 'system' && !isToolChangeMessage(message))
+      ? { ...message, cache: true }
+      : message
   );
 }
 
@@ -79,12 +103,16 @@ export interface CompletionRequest {
   thinking?: boolean;
   /** Lowers or raises how long a reasoning model thinks before its first token. Absent sends nothing. */
   reasoningEffort?: ReasoningEffort;
+  /** Prompt-cache lifetime the server's breakpoints take. Absent sends nothing, which is '5m'. */
+  cacheTtl?: PromptCacheTtl;
   /**
-   * Which conversation this request belongs to, for the developer log only. NOT sent on the
-   * wire - the body below is built field by field - and absent for the requests that are not a
+   * Which conversation this request belongs to. Sent so the server's credit ledger can tie the
+   * spend to it, and tags the developer log. Absent for the requests that are not a
    * conversation's turn, such as naming a session.
    */
   sessionId?: string;
+  /** Set when the tools were left out because the model's fixed context cannot hold them: Desktop's prompt plus tools. */
+  toolPromptTokens?: number;
 }
 
 /**
@@ -112,8 +140,9 @@ export async function streamCompletion(
       endpoint,
       {
         model: request.model,
-        messages: request.messages,
+        messages: request.messages.map(({ continuesTurn: _continuesTurn, ...message }) => message),
         ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
+        ...(request.sessionId ? { sessionId: request.sessionId } : {}),
         // The tool loop on this endpoint belongs to the CALLER: the model emits tool_use and
         // this client executes it locally, then sends the result back as another turn.
         options: {
@@ -121,6 +150,7 @@ export async function streamCompletion(
           tools: request.tools ?? [],
           ...(request.thinking ? { thinking: { enabled: true } } : {}),
           ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
+          ...(request.cacheTtl ? { cacheTtl: request.cacheTtl } : {}),
         },
       },
       { responseType: 'stream', signal }
@@ -256,12 +286,17 @@ function readSseStream(
  * Turn a pre-stream failure into a message worth showing. The HTML case is not hypothetical:
  * a proxy or WAF sitting in front of the completions service answers with an error page, and
  * the raw axios message for that is just a status code.
+ *
+ * An expired session never reaches here as a 401: the shared client refreshes and retries it,
+ * and one it cannot recover arrives as its own SessionRevokedError, passed through untouched. A
+ * 401 that does arrive is one whose body says the credential was accepted, and a 403 is "not
+ * allowed", so neither is described as an expiry.
  */
 function toRequestError(error: unknown, body?: string): Error {
   if (isAxiosError(error)) {
     const status = error.response?.status;
-    if (status === 401 || status === 403) {
-      return new Error(`The server refused the request (${status}). Your session may have expired.`);
+    if (status === 403) {
+      return new Error(body ? `${body} (status 403)` : 'The server does not allow this request (403).');
     }
     if (status) {
       return new Error(body ? `${body} (status ${status})` : `The completion request failed with status ${status}.`);
@@ -283,7 +318,7 @@ function toRequestError(error: unknown, body?: string): Error {
 async function readErrorBody(error: unknown): Promise<string | undefined> {
   if (!isAxiosError(error)) return undefined;
   const data = error.response?.data;
-  if (typeof data === 'string') return data.slice(0, ERROR_BODY_LIMIT) || undefined;
+  if (typeof data === 'string') return messageOf(data.slice(0, ERROR_BODY_LIMIT).trim());
   if (!data || typeof (data as Readable).on !== 'function') return undefined;
 
   try {
@@ -294,26 +329,31 @@ async function readErrorBody(error: unknown): Promise<string | undefined> {
       size += chunk.length;
       if (size >= ERROR_BODY_LIMIT) break;
     }
-    const text = Buffer.concat(chunks).toString('utf8').slice(0, ERROR_BODY_LIMIT).trim();
-    if (!text) return undefined;
-    // The server wraps a provider failure in its own envelope; either shape may show up, and a
-    // body that parses as neither is returned as written rather than dropped.
-    try {
-      const parsed = JSON.parse(text) as { message?: unknown; error?: { message?: unknown } | string };
-      const message =
-        typeof parsed.message === 'string'
-          ? parsed.message
-          : typeof parsed.error === 'string'
-            ? parsed.error
-            : typeof parsed.error?.message === 'string'
-              ? parsed.error.message
-              : undefined;
-      return message ?? text;
-    } catch {
-      return text;
-    }
+    return messageOf(Buffer.concat(chunks).toString('utf8').slice(0, ERROR_BODY_LIMIT).trim());
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * The server wraps a provider failure in its own envelope; either shape may show up, and a body
+ * that parses as neither is returned as written rather than dropped.
+ */
+function messageOf(text: string): string | undefined {
+  if (!text) return undefined;
+  try {
+    const parsed = JSON.parse(text) as { message?: unknown; error?: { message?: unknown } | string };
+    const message =
+      typeof parsed.message === 'string'
+        ? parsed.message
+        : typeof parsed.error === 'string'
+          ? parsed.error
+          : typeof parsed.error?.message === 'string'
+            ? parsed.error.message
+            : undefined;
+    return message ?? text;
+  } catch {
+    return text;
   }
 }
 

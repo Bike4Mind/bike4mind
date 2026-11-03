@@ -29,7 +29,7 @@ const { mockFindById, mockFindRotation, mockSearchOwnSessions, mockCountOwnSessi
 
 // connectDB must not hit Mongo; User.findById feeds the JWT verify callback.
 // The enforceMFA enrollment gate (auth/mfaEnforcement.ts) is covered by its own tests; inert here.
-vi.mock('@server/auth/mfaEnforcement', async orig => ({
+vi.mock('@bike4mind/server-utils/auth/mfaEnforcement', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   isMfaEnrollmentOwed: async () => false,
 }));
@@ -71,7 +71,7 @@ vi.mock('@bike4mind/services', async orig => {
 });
 
 // Fire-and-forget writes: keep them off the DB / out of the output.
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/analytics/analyticsMiddleware', () => ({
   analyticsMiddleware: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));

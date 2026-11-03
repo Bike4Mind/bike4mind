@@ -60,57 +60,19 @@ export async function getCounterTotalsForLast24Hours(
   try {
     logger.info('Starting metrics calculation', { date, endDate });
 
-    // Weekly reports use a date range; daily reports a single date.
+    // Weekly reports pass the range as date (first day) .. endDate (last day); daily reports a
+    // single date. metricsByDate owns the UTC windows for both (CounterLogModel.ts).
     const isWeeklyReport = !!endDate;
-    const now = dayjs().utc();
-    const queryDate = dayjs.utc(endDate || date);
-    const isToday = queryDate.startOf('day').isSame(now.startOf('day'));
+    const reportEndDay = dayjs.utc(endDate || date).format('YYYY-MM-DD');
+    const reportStartDay = isWeeklyReport ? dayjs.utc(date).format('YYYY-MM-DD') : undefined;
 
-    let targetEndDate, targetStartDate;
-    if (isToday) {
-      // For today: use current time
-      targetEndDate = now;
-      targetStartDate = now.subtract(24, 'hours');
-    } else {
-      // For past dates: use UTC day boundaries
-      targetEndDate = queryDate.endOf('day');
-      targetStartDate = isWeeklyReport ? queryDate.startOf('day') : targetEndDate.subtract(24, 'hours');
-    }
-
-    // Time ranges - all should be relative to the target dates and in UTC
-    const weekStart = targetStartDate.toDate();
-    const weekEnd = targetEndDate.toDate();
-
-    // For weekly comparison, look at previous week
-    const previousWeekStart = targetStartDate.subtract(7, 'days').toDate();
-    const previousWeekEnd = targetEndDate.subtract(7, 'days').toDate();
-
-    // For monthly comparison, look at previous 30 days
-    const previousMonthStart = targetStartDate.subtract(30, 'days').toDate();
-    const previousMonthEnd = targetEndDate.subtract(30, 'days').toDate();
-
-    logger.info('Running aggregation pipeline', {
-      ranges: {
-        weekStart,
-        weekEnd,
-        previousWeekStart,
-        previousWeekEnd,
-        previousMonthStart,
-        previousMonthEnd,
-        isWeeklyReport,
-      },
-    });
+    logger.info('Running aggregation pipeline', { reportStartDay, reportEndDay, isWeeklyReport });
 
     // Single aggregation pipeline for all metrics
-    const result = await db.counterLogs
-      .metricsByDate(
-        targetEndDate.format('YYYY-MM-DD'),
-        isWeeklyReport ? targetStartDate.format('YYYY-MM-DD') : undefined
-      )
-      .catch(error => {
-        logger.error('Aggregation pipeline failed', { error });
-        throw error;
-      });
+    const result = await db.counterLogs.metricsByDate(reportEndDay, reportStartDay).catch(error => {
+      logger.error('Aggregation pipeline failed', { error });
+      throw error;
+    });
     logger.info('Aggregation pipeline result', { result });
 
     if (!result || !Array.isArray(result) || result.length === 0) {
@@ -178,6 +140,8 @@ export async function getCounterTotalsForLast24Hours(
           _id: user._id,
           email: user.email || user._id,
           interactions: user.interactions,
+          creditsSpent: user.creditsSpent || 0,
+          isNew: user.isNew || false,
           rankChange: user.rankChange || 'same',
           lastWeekRank: user.lastWeekRank || '>#20',
         })),

@@ -6,11 +6,12 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { resolveSecondFactor } from '@server/auth/signInSecondFactor';
 import { mfaService } from '@bike4mind/services';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { z } from 'zod';
 import { Resource } from 'sst';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+import { recordAdminActionForActor, systemAuditActor, toUserActor } from '@server/utils/adminAudit';
 
 const EmergencyLoginSchema = z.object({
   username: z.string().min(1).max(200),
@@ -23,6 +24,45 @@ type EmergencyLoginResponse = {
   userId: string;
   /** mfaPending access token: accepted only by the MFA routes. */
   accessToken: string;
+};
+
+type MatchedAccount = Parameters<typeof toUserActor>[0];
+
+type EmergencyLoginDenialReason = 'no_password' | 'invalid_password' | 'not_admin' | 'banned' | 'no_second_factor';
+
+// A denied attempt proves no user identity; only an accepted password is attributed to the account.
+const auditEmergencyLogin = (
+  req: Parameters<typeof recordAdminActionForActor>[0],
+  account: MatchedAccount,
+  outcome:
+    | { action: 'user.emergency_login.challenged' }
+    | { action: 'user.emergency_login.denied'; reason: EmergencyLoginDenialReason }
+) =>
+  recordAdminActionForActor(
+    req,
+    outcome.action === 'user.emergency_login.denied'
+      ? systemAuditActor('emergency-login')
+      : toUserActor(account, 'platform'),
+    {
+      action: outcome.action,
+      target: { kind: 'user', id: account.id, displayName: account.email ?? account.username },
+      summary:
+        outcome.action === 'user.emergency_login.challenged'
+          ? 'emergency login password accepted, second factor challenged'
+          : `emergency login denied (${outcome.reason})`,
+      details: outcome.action === 'user.emergency_login.denied' ? { reason: outcome.reason } : undefined,
+    }
+  );
+
+const denyEmergencyLogin = async (
+  req: Parameters<typeof recordAdminActionForActor>[0],
+  account: MatchedAccount,
+  reason: EmergencyLoginDenialReason
+): Promise<never> => {
+  if (account.isAdmin) {
+    await auditEmergencyLogin(req, account, { action: 'user.emergency_login.denied', reason });
+  }
+  throw new UnauthorizedError('Invalid credentials');
 };
 
 // Enforce shared BlockedIP list so IPs blocked via the normal auth path cannot bypass via this endpoint
@@ -55,23 +95,23 @@ const handler = baseApi({ auth: false })
 
       // Verify password
       if (!user.password) {
-        throw new UnauthorizedError('Invalid credentials');
+        return denyEmergencyLogin(req, user, 'no_password');
       }
 
       const isValidPassword = await bcrypt.compare(password, user.password);
 
       if (!isValidPassword) {
-        throw new UnauthorizedError('Invalid credentials');
+        return denyEmergencyLogin(req, user, 'invalid_password');
       }
 
       // Check if user is admin
       if (!user.isAdmin) {
-        throw new UnauthorizedError('Invalid credentials');
+        return denyEmergencyLogin(req, user, 'not_admin');
       }
 
       // Check if user is banned
       if (user.isBanned) {
-        throw new UnauthorizedError('Invalid credentials');
+        return denyEmergencyLogin(req, user, 'banned');
       }
 
       // Break-glass access still needs the account's own second factor: the password alone must
@@ -80,7 +120,7 @@ const handler = baseApi({ auth: false })
       // The response stays generic; the reason is in the log for the operator.
       if (!mfaService.userHasMFAConfigured(user)) {
         req.logger.warn('Emergency login refused: account has no second factor enrolled', { userId: user.id });
-        throw new UnauthorizedError('Invalid credentials');
+        return denyEmergencyLogin(req, user, 'no_second_factor');
       }
       // A remembered device never skips it here, so the outcome is always a challenge.
       const secondFactor = await resolveSecondFactor(req, user, {
@@ -106,6 +146,9 @@ const handler = baseApi({ auth: false })
         userId: user.id,
         accessToken: secondFactor.mfaToken,
       };
+
+      // Written before the pending token leaves the server: a failed audit write denies the login.
+      await auditEmergencyLogin(req, user, { action: 'user.emergency_login.challenged' });
 
       res.setHeader('X-Emergency-Access', 'true');
       res.setHeader('X-Access-Timestamp', new Date().toISOString());

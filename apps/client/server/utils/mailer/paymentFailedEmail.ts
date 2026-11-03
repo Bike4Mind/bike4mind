@@ -122,7 +122,7 @@ export const buildPaymentFailedEmail = (input: PaymentFailedEmailInput): EmailCo
           <p>Hello,</p>
           <p>We could not charge the renewal payment for ${plan}.</p>
           ${reason}
-          <p>Paid features are paused until the payment goes through. Updating your payment method restores them as soon as the charge succeeds.</p>
+          <p>Paid features are paused until the payment goes through. To restore them now, update your payment method if needed, then select Pay now on your billing page.</p>
           <div style="text-align: center;">
             <a href="${escapeHtml(input.billingUrl)}" class="cta-button">Update payment method</a>
           </div>

@@ -1,6 +1,6 @@
 import { Resource } from 'sst';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 
 /**
  * GET /api/chat-completion-status - connectivity probe for the always-on ChatCompletion service.

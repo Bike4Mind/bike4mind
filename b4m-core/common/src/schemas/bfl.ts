@@ -41,6 +41,13 @@ export const BFL_IMAGE_MODELS = [
   ImageModels.FLUX_PRO_FILL,
   ImageModels.FLUX_KONTEXT_PRO,
   ImageModels.FLUX_KONTEXT_MAX,
+  ImageModels.FLUX_2_MAX,
+  ImageModels.FLUX_2_PRO,
+  ImageModels.FLUX_2_PRO_PREVIEW,
+  ImageModels.FLUX_2_FLEX,
+  ImageModels.FLUX_2_KLEIN_9B,
+  ImageModels.FLUX_2_KLEIN_9B_PREVIEW,
+  ImageModels.FLUX_2_KLEIN_4B,
 ] as const;
 
 /**

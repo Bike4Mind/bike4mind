@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { KnowledgeType, createModalVideoSchema } from '@bike4mind/common';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { ApiKeyScope, KnowledgeType, createModalVideoSchema } from '@bike4mind/common';
 import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
 import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
 
@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   // The acting principal's org-admin set, as a test input rather than a Mongo read. The gates that
   // consume it are the real ones.
   administeredOrgIds: [] as string[],
+  consumeFileUploadBudget: vi.fn(async (_req: unknown, _fileCount: number) => undefined),
   baseApiOptions: undefined as unknown,
 }));
 
@@ -31,7 +32,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/utils/browserUploadUrl', () => ({ resolveBrowserUploadUrl: (_id: string, url: string) => url }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: h.signUrl }),
@@ -72,9 +73,13 @@ vi.mock('@bike4mind/utils', async importOriginal => {
   return { ...actual, getSettingsMap: vi.fn(async () => ({})) };
 });
 
+vi.mock('@server/files/fileUploadBudget', () => ({ consumeFileUploadBudget: h.consumeFileUploadBudget }));
+
 vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'test-fab-bucket' } } }));
 
 import handler from '../createFabFile';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 
 const LAKE = {
   id: 'lake-1',
@@ -127,6 +132,51 @@ const tagNamesOf = (callIndex = 0) => {
   const persisted = h.fabFileCreate.mock.calls[callIndex][0] as { tags?: { name: string }[] };
   return persisted.tags?.map(t => t.name).sort();
 };
+
+describe('POST /api/files/createFabFile - upload allowance', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.findByDatalakeTag.mockResolvedValue(LAKE);
+    h.lakeFind.mockResolvedValue([]);
+    h.userFindById.mockResolvedValue({ id: 'u1', storageLimit: 1000, currentStorageSize: 0 });
+    h.fabFileCreate.mockImplementation(async data => ({ id: 'f1', ...data }));
+  });
+
+  it('spends one unit of the allowance for the file', async () => {
+    await run(body(), makeRes().res);
+
+    expect(h.consumeFileUploadBudget).toHaveBeenCalledTimes(1);
+    expect(h.consumeFileUploadBudget.mock.calls[0][1]).toBe(1);
+  });
+
+  it('creates no file when the allowance refuses the upload', async () => {
+    h.consumeFileUploadBudget.mockRejectedValueOnce(new Error('Upload limit reached'));
+
+    await expect(run(body(), makeRes().res)).rejects.toThrow('Upload limit reached');
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+
+  it('does not spend the allowance on a request an earlier gate refuses', async () => {
+    h.lakeFind.mockResolvedValue([LAKE]);
+
+    await expect(
+      run(body({ tags: [{ name: 'acme:legal', strength: 1 }] }), makeRes().res, {
+        apiKeyInfo: { scopes: ['files:write'] },
+      })
+    ).rejects.toThrow(/datalake:write is required/);
+    expect(h.consumeFileUploadBudget).not.toHaveBeenCalled();
+  });
+
+  // Deliberate: the type, size and quota checks live inside fabFilesService.createFabFile, which runs
+  // in the route's transaction, and the allowance counter must not (see fileUploadBudget.ts).
+  it('spends the allowance before the service refuses an unsupported file type', async () => {
+    await expect(run(body({ fileName: 'a.exe', mimeType: 'application/x-msdownload' }), makeRes().res)).rejects.toThrow(
+      /is not supported/
+    );
+    expect(h.consumeFileUploadBudget).toHaveBeenCalledTimes(1);
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+});
 
 describe('POST /api/files/createFabFile - data-lake tags', () => {
   beforeEach(() => {
@@ -378,6 +428,61 @@ describe('POST /api/files/createFabFile - lake write authorization beyond the cr
   });
 });
 
+describe('POST /api/files/createFabFile - admin-owned API keys', () => {
+  const OTHER_LAKE = { ...LAKE, createdByUserId: 'someone-else', organizationId: 'org-1' };
+  const lakeTag = body({ tags: [{ name: 'datalake:orga:acme-2026', strength: 1 }] });
+  const keyCaller = (scopes: ApiKeyScope[]) => {
+    const user = { id: 'u2', isAdmin: true };
+    return {
+      user: scopes.includes(ApiKeyScope.ADMIN) ? user : withholdAdminRole(user),
+      apiKeyInfo: { keyId: 'k1', scopes },
+    };
+  };
+  const callAs = (overrides: Record<string, unknown>, res: unknown) =>
+    (handler as (req: unknown, res: unknown) => Promise<void>)(req(lakeTag, 'u2', overrides), res);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.findByDatalakeTag.mockResolvedValue(OTHER_LAKE);
+    h.lakeFind.mockResolvedValue([]);
+    h.userFindById.mockResolvedValue({ id: 'u2', isAdmin: true, storageLimit: 1000, currentStorageSize: 0 });
+    h.fabFileCreate.mockImplementation(async data => ({ id: 'f1', ...data }));
+  });
+
+  it('refuses a key without the admin scope', async () => {
+    const { res } = makeRes();
+
+    await expect(callAs(keyCaller([ApiKeyScope.WRITE_FILES, ApiKeyScope.DATALAKE_WRITE]), res)).rejects.toThrow(
+      /permission to change this data lake's files/
+    );
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses it in the service re-check as well', async () => {
+    vi.mocked(toAccessContext).mockResolvedValueOnce({
+      userId: 'u2',
+      isAdmin: true,
+      userTags: [],
+      entitlementKeys: [],
+      administeredOrgIds: [],
+    } as never);
+    const { res } = makeRes();
+
+    await expect(callAs(keyCaller([ApiKeyScope.WRITE_FILES, ApiKeyScope.DATALAKE_WRITE]), res)).rejects.toThrow(
+      /permission to change this data lake's files/
+    );
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+
+  it('admits a key holding the admin scope', async () => {
+    const { res } = makeRes();
+
+    await callAs(keyCaller([ApiKeyScope.ADMIN, ApiKeyScope.WRITE_FILES, ApiKeyScope.DATALAKE_WRITE]), res);
+
+    expect(h.fabFileCreate).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('POST /api/files/createFabFile - scope gate', () => {
   it('requires files:write, or release-notes:write for the narrowed form below, at the baseApi route gate', () => {
     expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write', 'release-notes:write'] });
@@ -385,8 +490,11 @@ describe('POST /api/files/createFabFile - scope gate', () => {
 });
 
 describe('POST /api/files/createFabFile - signing boundaries', () => {
+  // A browser URL distinct from the cached private one is only minted on split-endpoint deploys.
+  afterEach(() => vi.unstubAllEnvs());
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://public.test');
     h.findByDatalakeTag.mockResolvedValue(null);
     h.lakeFind.mockResolvedValue([]);
     h.userFindById.mockResolvedValue({ id: 'u1', storageLimit: 1000, currentStorageSize: 0 });
@@ -476,6 +584,15 @@ describe('POST /api/files/createFabFile - admin modal video', () => {
     expect(schema.safeParse({ landscapeUrl: sent.mediaUrl }).success).toBe(true);
   });
 
+  it('returns a mediaUrl for a settings:manage delegate, who may edit modals', async () => {
+    const { res, json } = makeRes();
+    await run(mp4(), res, { user: { id: 'u1', isAdmin: false, adminPermissions: ['settings:manage'] } });
+
+    const sent = json.mock.calls[0][0] as { mediaUrl: string; filePath: string };
+    expect(sent.filePath).toMatch(/^modals\//);
+    expect(sent.mediaUrl.endsWith(sent.filePath)).toBe(true);
+  });
+
   it('omits mediaUrl for a normal upload', async () => {
     const { res, json } = makeRes();
     await run(body(), res, asAdmin);
@@ -485,6 +602,11 @@ describe('POST /api/files/createFabFile - admin modal video', () => {
 
   it.each([
     ['a non-admin', mp4(), { user: { id: 'u1', isAdmin: false } }],
+    [
+      'a delegate without settings:manage',
+      mp4(),
+      { user: { id: 'u1', isAdmin: false, adminPermissions: ['support:read'] } },
+    ],
     ['an admin naming the prefix instead of the purpose', mp4({ purpose: undefined, prefix: 'modals' }), asAdmin],
     ['an admin claiming another video type', mp4({ mimeType: 'video/quicktime' }), asAdmin],
     ['an admin with a non-mp4 name', mp4({ fileName: 'demo.mov' }), asAdmin],
@@ -521,6 +643,12 @@ describe('POST /api/files/createFabFile - release-notes:write key', () => {
     const persisted = h.fabFileCreate.mock.calls[0][0] as { filePath: string };
     expect(persisted.filePath).toMatch(/^modals\/.+\.mp4$/);
     expect(json.mock.calls[0][0]).toHaveProperty('mediaUrl');
+  });
+
+  it("uploads What's New media for a key whose admin owner has the role withheld", async () => {
+    const { res } = makeRes();
+    await run(mp4(), res, { ...releaseKey, user: withholdAdminRole({ id: 'u1', isAdmin: true }) });
+    expect(h.fabFileCreate).toHaveBeenCalled();
   });
 
   it.each([

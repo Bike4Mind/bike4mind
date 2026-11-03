@@ -12,7 +12,7 @@
 import type { GatedToolCall } from '@bike4mind/agents';
 import { classifyToolPermission } from '@bike4mind/common';
 import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
-import { formatConfidenceGateReason, recordAndDecideConfidencePause } from './confidenceGate';
+import { confidenceOverrideFor, formatConfidenceGateReason, recordAndDecideConfidencePause } from './confidenceGate';
 
 export { classifyToolPermission, type ToolPermissionResult } from '@bike4mind/common';
 
@@ -209,6 +209,9 @@ export type ReplayConfidenceOutcome = { status: 'proceed' } | { status: 'paused'
  * `confidenceGateThreshold` of 0 (an unattended-loop profile override) always proceeds
  * too, since a real confidence score is never negative. Like the ordinary check, the
  * replay advances the persisted low-confidence streak and pauses only on a streak.
+ *
+ * `confidenceOverrides` replaces a non-null score, as in `evaluateConfidenceGate`; a
+ * scripted score advances the streak but is kept out of the telemetry counters.
  */
 export async function gateReplayConfidence(
   params: {
@@ -216,12 +219,13 @@ export async function gateReplayConfidence(
     iterationIndex: number;
     confidence: number | null;
     confidenceGateThreshold: number;
+    confidenceOverrides?: readonly number[];
   },
   deps: {
     recordIterationConfidence: (
       executionId: string,
       confidence: number,
-      options: { belowThreshold: boolean }
+      options: { belowThreshold: boolean; recordTelemetry: boolean }
     ) => Promise<number>;
     setPendingGate: (
       executionId: string,
@@ -232,13 +236,24 @@ export async function gateReplayConfidence(
     logger: { info: (msg: string, meta?: Record<string, unknown>) => void };
   }
 ): Promise<ReplayConfidenceOutcome> {
-  const { executionId, iterationIndex, confidence, confidenceGateThreshold } = params;
-  if (confidence === null) return { status: 'proceed' };
+  const { executionId, iterationIndex, confidenceGateThreshold } = params;
+  if (params.confidence === null) return { status: 'proceed' };
+
+  // `iterationIndex` is the checkpointed (1-indexed) iteration the replayed calls belong to.
+  const override = confidenceOverrideFor(params.confidenceOverrides, iterationIndex);
+  const confidence = override ?? params.confidence;
+  const isReal = override === undefined;
 
   // Telemetry parity with the ordinary per-iteration gate check: every evaluated
   // iteration is recorded, not just the ones that pause.
   const decision = await recordAndDecideConfidencePause(
-    { iteration: iterationIndex, confidence, belowThreshold: confidence < confidenceGateThreshold, pausable: true },
+    {
+      iteration: iterationIndex,
+      confidence,
+      belowThreshold: confidence < confidenceGateThreshold,
+      pausable: true,
+      overridden: !isReal,
+    },
     (c, options) => deps.recordIterationConfidence(executionId, c, options)
   );
   if (!decision.pause) return { status: 'proceed' };
@@ -259,7 +274,7 @@ export async function gateReplayConfidence(
     await deps.sendWs('failed', { executionId, reason: 'aborted' });
     return { status: 'aborted' };
   }
-  await deps.recordGateEmitted(executionId);
+  if (isReal) await deps.recordGateEmitted(executionId);
   await deps.sendWs('confidence_gate', { executionId, ...gatePayload });
   await deps.sendWs('progress', { executionId, status: 'paused' });
   return { status: 'paused' };
@@ -283,6 +298,7 @@ export async function resumeApprovedPauseAndGateConfidence<TCheckpoint>(
     approvedTools: string[];
     deniedTools: string[];
     confidenceGateThreshold: number;
+    confidenceOverrides?: readonly number[];
   },
   deps: {
     executeGatedToolCall: (call: { id: string; name: string; input: unknown }) => Promise<unknown>;
@@ -304,7 +320,7 @@ export async function resumeApprovedPauseAndGateConfidence<TCheckpoint>(
     recordIterationConfidence: (
       executionId: string,
       confidence: number,
-      options: { belowThreshold: boolean }
+      options: { belowThreshold: boolean; recordTelemetry: boolean }
     ) => Promise<number>;
     setPendingGate: (
       executionId: string,
@@ -333,6 +349,7 @@ export async function resumeApprovedPauseAndGateConfidence<TCheckpoint>(
       iterationIndex: params.iterationIndex,
       confidence: replayConfidence,
       confidenceGateThreshold: params.confidenceGateThreshold,
+      confidenceOverrides: params.confidenceOverrides,
     },
     deps
   );

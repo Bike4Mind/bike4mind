@@ -3,11 +3,12 @@ import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import { dataLakeRepository, dataLakeAccessGrantRepository, dataLakeProposalRepository } from '@bike4mind/database';
-import { DATA_LAKE_PROPOSAL_STATUSES } from '@bike4mind/common';
+import { DATA_LAKE_PROPOSAL_STATUSES, lakeProposalListResponseSchema } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { respond } from '@server/utils/respond';
 
 const ListQuery = z.object({
   status: z.enum(DATA_LAKE_PROPOSAL_STATUSES).optional(),
@@ -50,7 +51,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       limit: limit ?? DEFAULT_LIMIT,
     });
 
-    return res.json({ data: proposals });
+    return respond(res, lakeProposalListResponseSchema, { data: proposals });
   });
 
 export const config = {

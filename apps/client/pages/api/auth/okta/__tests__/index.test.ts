@@ -8,7 +8,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   const chain = { use: () => chain, get: (fn: Handler) => fn };
   return { baseApi: () => chain };
 });
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 vi.mock('@server/utils/validators', () => ({
   validateAppUrl: () => 'https://app.example.com',
   isLocalAppUrl: () => false,
@@ -20,12 +20,12 @@ vi.mock('@server/auth/oktaOidcClient', () => ({
   generatePkceParams: vi.fn().mockResolvedValue({ codeVerifier: 'verifier', codeChallenge: 'challenge' }),
   buildAuthorizationUrl: vi.fn().mockResolvedValue(new URL('https://okta.example.com/authorize')),
 }));
-vi.mock('@server/auth/oauthFlowCookie', () => ({
+vi.mock('@bike4mind/server-utils/auth/oauthFlowCookie', () => ({
   issueStateNonce: () => 'nonce-hash',
   setPkceVerifierCookie: vi.fn(),
 }));
 const mockCreateStateToken = vi.fn().mockReturnValue('state-token');
-vi.mock('@server/auth/jwtStateStore', () => ({
+vi.mock('@bike4mind/server-utils/auth/jwtStateStore', () => ({
   createStateToken: (...a: unknown[]) => mockCreateStateToken(...a),
 }));
 

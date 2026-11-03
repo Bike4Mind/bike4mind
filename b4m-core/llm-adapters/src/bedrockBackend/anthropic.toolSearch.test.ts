@@ -636,7 +636,7 @@ describe('AnthropicBedrockBackend usage on a tool search turn', () => {
     ]);
     const { last } = await run(backend, { tools: [] });
     expect(last).toMatchObject({ inputTokens: 500, outputTokens: 5, cacheReadInputTokens: 300 });
-    expect(last?.stopReason).toBeUndefined();
+    expect(last?.stopReason).toBe('end_turn');
   });
 });
 

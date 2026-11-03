@@ -59,7 +59,9 @@ describe('ChatService generation tools', () => {
       access: { list: async () => options.roots } as unknown as AccessStore,
       logger,
       // The image tool resolves its model through this, so it has to be real here.
-      models: new ModelCatalog({ logger, getApiClient, getEnvironmentUrl: () => 'http://localhost:3000' }),
+      models: new ModelCatalog({ logger, getApiClient, getEnvironmentUrl: () => 'http://localhost:3000' }, {
+        models: async () => [],
+      } as never),
       ...(options.media ? { media: new MediaStore(await mkdtemp(join(tmpdir(), 'b4m-media-files-'))) } : {}),
       getApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',

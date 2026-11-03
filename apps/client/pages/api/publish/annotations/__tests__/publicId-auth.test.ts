@@ -49,7 +49,7 @@ vi.mock('@server/middlewares/apiKeyAuth', () => ({
 
 // The enforceMFA half of the admission is covered in optionalAuth.test.ts. Only that check is made
 // inert here, so the real admitsOptionalAuthUser (and the shim that calls it) still runs below.
-vi.mock('@server/auth/mfaEnforcement', () => ({
+vi.mock('@bike4mind/server-utils/auth/mfaEnforcement', () => ({
   isMfaEnrollmentOwed: async () => false,
   MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
 }));

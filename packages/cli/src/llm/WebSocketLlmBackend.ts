@@ -8,6 +8,7 @@ import { parseStreamEvent, type StreamEvent } from './streamEvents';
 import { runCompletion } from './runCompletion';
 import { ModelCallError, networkErrorCodeOf } from './modelCallError';
 import { bridgeToAsyncIterable } from './streamBridge';
+import { replayableThinkingBlocks } from './replayableThinkingBlocks';
 import type { CompletionRequest, StreamTransport } from './streamTransport';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -203,11 +204,12 @@ export class WebSocketLlmBackend implements ICompletionBackend, StreamTransport 
     // array so the next complete() call sends the full conversation history.
     // Format as Anthropic-compatible tool_use / tool_result content blocks,
     // which the server-side backend will pass through to the LLM provider.
-    if (thinkingBlocks && thinkingBlocks.length > 0) {
+    const replayable = replayableThinkingBlocks(thinkingBlocks);
+    if (replayable.length > 0) {
       messages.push({
         role: 'assistant',
         content: [
-          ...(thinkingBlocks as Array<{ type: 'thinking'; thinking: string; signature: string }>),
+          ...replayable,
           {
             type: 'tool_use' as const,
             id: tool.id,

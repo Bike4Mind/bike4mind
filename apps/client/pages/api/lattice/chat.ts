@@ -1,3 +1,4 @@
+import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 /**
  * Lattice Chat API - Local Development Mode
  *
@@ -295,171 +296,173 @@ function formatModelStateForLLM(modelState: any): string {
 }
 
 const handler = baseApi({ auth: true }).post(
-  asyncHandler(async (req, res) => {
-    const user = req.user!;
-    const logger = new Logger({ metadata: { service: 'LatticeChat' } });
-    const {
-      message,
-      modelState,
-      conversationHistory = [],
-    } = req.body as {
-      message: string;
-      modelState?: any; // The full model object for context
-      conversationHistory?: Array<{ role: 'user' | 'assistant'; content: string }>;
-    };
+  asyncHandler(
+    withRequestCompletionQuota(async (req, res) => {
+      const user = req.user!;
+      const logger = new Logger({ metadata: { service: 'LatticeChat' } });
+      const {
+        message,
+        modelState,
+        conversationHistory = [],
+      } = req.body as {
+        message: string;
+        modelState?: any; // The full model object for context
+        conversationHistory?: Array<{ role: 'user' | 'assistant'; content: string }>;
+      };
 
-    if (!message || message.trim().length === 0) {
-      throw new BadRequestError('Message is required');
-    }
-
-    const dbAdapters = {
-      db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
-      getSettingsByNames,
-    };
-    let apiKeyTable;
-    try {
-      apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(user.id, dbAdapters, { logger });
-    } catch (error) {
-      logger.error('[Lattice Chat] Failed to get API keys:', error);
-      throw new BadRequestError('Failed to retrieve API keys. Check server logs.');
-    }
-
-    const availableModels = await getAvailableModels(apiKeyTable);
-    if (!availableModels || availableModels.length === 0) {
-      throw new BadRequestError('No LLM models available. Please configure API keys.');
-    }
-
-    // Prefer the newest Claude model that supports tool use, in priority order
-    const preferredModels = [ChatModels.CLAUDE_4_6_SONNET, ChatModels.CLAUDE_4_5_SONNET, ChatModels.CLAUDE_4_SONNET];
-
-    // Fall back to any tool-capable model, skipping ones the catalog has disabled or gated for this user.
-    const candidates = [
-      ...preferredModels.flatMap(id => availableModels.filter(m => m.id === id && m.supportsTools)),
-      ...availableModels.filter(m => m.supportsTools),
-    ];
-    if (candidates.length === 0) {
-      throw new BadRequestError('No LLM models with tool support available.');
-    }
-    const admission = await createModelAdmission(user, availableModels);
-    let modelInfo: ModelInfo | undefined;
-    for (const candidate of candidates) {
-      if (await admission.admits(candidate.id)) {
-        modelInfo = candidate;
-        break;
+      if (!message || message.trim().length === 0) {
+        throw new BadRequestError('Message is required');
       }
-    }
-    if (!modelInfo) {
-      throw new ForbiddenError(`Model "${candidates[0].id}" is not accessible and no fallback available`);
-    }
 
-    logger.info(`[Lattice Chat] Using model: ${modelInfo.id}`);
+      const dbAdapters = {
+        db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
+        getSettingsByNames,
+      };
+      let apiKeyTable;
+      try {
+        apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(user.id, dbAdapters, { logger });
+      } catch (error) {
+        logger.error('[Lattice Chat] Failed to get API keys:', error);
+        throw new BadRequestError('Failed to retrieve API keys. Check server logs.');
+      }
 
-    const llm = getLlmByModel(apiKeyTable, { modelInfo, logger, endUserId: user.id });
-    if (!llm) {
-      throw new BadRequestError(`Failed to initialize LLM backend for model: ${modelInfo.id}`);
-    }
+      const availableModels = await getAvailableModels(apiKeyTable);
+      if (!availableModels || availableModels.length === 0) {
+        throw new BadRequestError('No LLM models available. Please configure API keys.');
+      }
 
-    const modelContext = formatModelStateForLLM(modelState);
-    const systemPrompt = LATTICE_SYSTEM_PROMPT_BASE + modelContext;
+      // Prefer the newest Claude model that supports tool use, in priority order
+      const preferredModels = [ChatModels.CLAUDE_4_6_SONNET, ChatModels.CLAUDE_4_5_SONNET, ChatModels.CLAUDE_4_SONNET];
 
-    logger.info(
-      `[Lattice Chat] Model context: ${modelState ? `${modelState.data?.entities?.length || 0} entities` : 'none'}`
-    );
+      // Fall back to any tool-capable model, skipping ones the catalog has disabled or gated for this user.
+      const candidates = [
+        ...preferredModels.flatMap(id => availableModels.filter(m => m.id === id && m.supportsTools)),
+        ...availableModels.filter(m => m.supportsTools),
+      ];
+      if (candidates.length === 0) {
+        throw new BadRequestError('No LLM models with tool support available.');
+      }
+      const admission = await createModelAdmission(user, availableModels);
+      let modelInfo: ModelInfo | undefined;
+      for (const candidate of candidates) {
+        if (await admission.admits(candidate.id)) {
+          modelInfo = candidate;
+          break;
+        }
+      }
+      if (!modelInfo) {
+        throw new ForbiddenError(`Model "${candidates[0].id}" is not accessible and no fallback available`);
+      }
 
-    const messages: IMessage[] = [
-      { role: 'system', content: systemPrompt },
-      ...conversationHistory.map(msg => ({
-        role: msg.role as 'user' | 'assistant',
-        content: msg.content,
-      })),
-      {
-        role: 'user' as const,
-        content: message,
-      },
-    ];
+      logger.info(`[Lattice Chat] Using model: ${modelInfo.id}`);
 
-    const maxTokens = 4096;
-    const ceilingUsd = completionRequestCeilingUsd(modelInfo, messages, maxTokens, LATTICE_TOOLS);
-    const reservation = await reserveCompletionCredits(req, ceilingUsd, 'Lattice chat');
+      const llm = getLlmByModel(apiKeyTable, { modelInfo, logger, endUserId: user.id });
+      if (!llm) {
+        throw new BadRequestError(`Failed to initialize LLM backend for model: ${modelInfo.id}`);
+      }
 
-    let assistantMessage = '';
-    let lastCompletionInfo: CompletionInfo | undefined;
-    const usage: CompletionUsage = {};
-    const settleUsage = (usd: number) =>
-      settleCompletion(reservation, req, {
-        model: modelInfo.id,
-        provider: modelInfo.backend,
-        usd,
-        inputTokens: usage.inputTokens ?? 0,
-        outputTokens: usage.outputTokens ?? 0,
-      });
-    try {
-      await llm.complete(
-        modelInfo.id,
-        messages,
+      const modelContext = formatModelStateForLLM(modelState);
+      const systemPrompt = LATTICE_SYSTEM_PROMPT_BASE + modelContext;
+
+      logger.info(
+        `[Lattice Chat] Model context: ${modelState ? `${modelState.data?.entities?.length || 0} entities` : 'none'}`
+      );
+
+      const messages: IMessage[] = [
+        { role: 'system', content: systemPrompt },
+        ...conversationHistory.map(msg => ({
+          role: msg.role as 'user' | 'assistant',
+          content: msg.content,
+        })),
         {
-          maxTokens,
-          stream: true,
-          tools: LATTICE_TOOLS,
-          executeTools: false, // Return tool calls without executing - client will execute
+          role: 'user' as const,
+          content: message,
         },
-        async (textChunks, completionInfo) => {
-          for (const chunk of textChunks) {
-            if (chunk && typeof chunk === 'string') {
-              assistantMessage += chunk;
+      ];
+
+      const maxTokens = 4096;
+      const ceilingUsd = completionRequestCeilingUsd(modelInfo, messages, maxTokens, LATTICE_TOOLS);
+      const reservation = await reserveCompletionCredits(req, ceilingUsd, 'Lattice chat');
+
+      let assistantMessage = '';
+      let lastCompletionInfo: CompletionInfo | undefined;
+      const usage: CompletionUsage = {};
+      const settleUsage = (usd: number) =>
+        settleCompletion(reservation, req, {
+          model: modelInfo.id,
+          provider: modelInfo.backend,
+          usd,
+          inputTokens: usage.inputTokens ?? 0,
+          outputTokens: usage.outputTokens ?? 0,
+        });
+      try {
+        await llm.complete(
+          modelInfo.id,
+          messages,
+          {
+            maxTokens,
+            stream: true,
+            tools: LATTICE_TOOLS,
+            executeTools: false, // Return tool calls without executing - client will execute
+          },
+          async (textChunks, completionInfo) => {
+            for (const chunk of textChunks) {
+              if (chunk && typeof chunk === 'string') {
+                assistantMessage += chunk;
+              }
+            }
+            lastCompletionInfo = completionInfo;
+            latchUsage(usage, completionInfo);
+          }
+        );
+      } catch (error) {
+        logger.error('[Lattice Chat] LLM call failed:', error);
+        // A stream can report billable usage before a later provider failure.
+        if (hasReportedUsage(usage)) {
+          await settleUsage(completionUsd(modelInfo, usage));
+        } else {
+          await reservation.refund();
+        }
+        throw error;
+      }
+
+      // An adapter that reports no usage is charged the reservation ceiling rather than nothing.
+      const reported = hasReportedUsage(usage);
+      if (!reported) logger.warn(`[Lattice Chat] ${modelInfo.id} reported no usage; charging the reservation ceiling`);
+      await settleUsage(reported ? completionUsd(modelInfo, usage) : ceilingUsd);
+
+      const toolCalls: Array<{
+        id: string;
+        name: string;
+        input: Record<string, unknown>;
+      }> = [];
+
+      if (lastCompletionInfo?.toolsUsed) {
+        for (const tool of lastCompletionInfo.toolsUsed) {
+          if (tool.name && tool.arguments) {
+            try {
+              const input = JSON.parse(tool.arguments);
+              toolCalls.push({
+                id: `tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                name: tool.name,
+                input,
+              });
+            } catch (parseError) {
+              logger.warn(`[Lattice Chat] Failed to parse tool arguments for ${tool.name}:`, parseError);
             }
           }
-          lastCompletionInfo = completionInfo;
-          latchUsage(usage, completionInfo);
-        }
-      );
-    } catch (error) {
-      logger.error('[Lattice Chat] LLM call failed:', error);
-      // A stream can report billable usage before a later provider failure.
-      if (hasReportedUsage(usage)) {
-        await settleUsage(completionUsd(modelInfo, usage));
-      } else {
-        await reservation.refund();
-      }
-      throw error;
-    }
-
-    // An adapter that reports no usage is charged the reservation ceiling rather than nothing.
-    const reported = hasReportedUsage(usage);
-    if (!reported) logger.warn(`[Lattice Chat] ${modelInfo.id} reported no usage; charging the reservation ceiling`);
-    await settleUsage(reported ? completionUsd(modelInfo, usage) : ceilingUsd);
-
-    const toolCalls: Array<{
-      id: string;
-      name: string;
-      input: Record<string, unknown>;
-    }> = [];
-
-    if (lastCompletionInfo?.toolsUsed) {
-      for (const tool of lastCompletionInfo.toolsUsed) {
-        if (tool.name && tool.arguments) {
-          try {
-            const input = JSON.parse(tool.arguments);
-            toolCalls.push({
-              id: `tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-              name: tool.name,
-              input,
-            });
-          } catch (parseError) {
-            logger.warn(`[Lattice Chat] Failed to parse tool arguments for ${tool.name}:`, parseError);
-          }
         }
       }
-    }
 
-    return res.json({
-      success: true,
-      assistantMessage,
-      toolCalls,
-      stopReason: toolCalls.length > 0 ? 'tool_use' : 'end_turn',
-      model: modelInfo.id,
-    });
-  })
+      return res.json({
+        success: true,
+        assistantMessage,
+        toolCalls,
+        stopReason: toolCalls.length > 0 ? 'tool_use' : 'end_turn',
+        model: modelInfo.id,
+      });
+    })
+  )
 );
 
 export const config = {

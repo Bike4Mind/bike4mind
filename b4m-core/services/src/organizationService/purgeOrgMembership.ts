@@ -34,9 +34,8 @@ export interface PurgedOrgMembershipFields {
  * Strip an org's footprint from a member who is leaving or being removed. Shared by the two
  * single-member departure paths - `leave` (voluntary) and `revokeAccess` (involuntary) - so those
  * two cannot drift apart. Whole-org teardown does NOT route through here: `deleteOrganization`
- * ends every membership at once without calling this, so grants in a deleted org stay active. That
- * is deliberate for now (it is a soft delete, and hard-expiring rows on a restorable operation is
- * a separate, destructive decision) but it does mean this is not yet the only departure seam.
+ * ends every membership at once and lapses lake access through `lapseDissolvedOrganizationLakeAccess`
+ * instead, which must stay consistent with the lake step below.
  * What it does, for one departing member:
  *   - pull the org's live group ids from the member's `user.groups[]` (a real DB write),
  *   - end the member's data-lake access on this org's lakes, passing on ownership of any lake they

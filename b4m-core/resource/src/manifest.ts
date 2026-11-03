@@ -6,6 +6,7 @@ export const DEFAULT_MANIFEST = {
   // --- secret ---
   // Integration secrets are optional: unset disables that integration. Only the
   // core boot secrets (JWT/session/encryption/Mongo) are hard-required.
+  ANTHROPIC_ADMIN_API_KEY: { kind: 'secret', optional: true },
   ANTHROPIC_API_KEY: { kind: 'secret', optional: true },
   B4M_ANALYTICS_ENABLED: { kind: 'secret', optional: true },
   // Shared-secret bearer for the frontend -> ChatCompletion /process dispatch. Required:
@@ -39,6 +40,7 @@ export const DEFAULT_MANIFEST = {
   OKTA_CLIENT_ID: { kind: 'secret', optional: true },
   OKTA_CLIENT_SECRET: { kind: 'secret', optional: true },
   OKTA_USE_ORG_AUTH_SERVER: { kind: 'secret', optional: true },
+  OPENAI_ADMIN_API_KEY: { kind: 'secret', optional: true },
   OPENAI_API_KEY: { kind: 'secret', optional: true },
   OVERWATCH_INGEST_ENABLED: { kind: 'secret', optional: true }, // transient: removed after product extraction
   OVERWATCH_INGEST_KEY: { kind: 'secret', optional: true }, // transient: removed after product extraction
@@ -52,11 +54,8 @@ export const DEFAULT_MANIFEST = {
   QA_ALARM_SLACK_WEBHOOKS: { kind: 'secret', optional: true },
   RATE_LIMIT_INGEST_TOKEN: { kind: 'secret', optional: true },
   SECOPS_ATTACK_SIMULATION_INGEST_TOKEN: { kind: 'secret', optional: true },
-  SECOPS_CODE_INGEST_TOKEN: { kind: 'secret', optional: true },
-  SECOPS_PACKAGES_INGEST_TOKEN: { kind: 'secret', optional: true },
   SECOPS_PROWLER_INGEST_TOKEN: { kind: 'secret', optional: true },
   SECOPS_PROWLER_WORKFLOW_TOKEN: { kind: 'secret', optional: true },
-  SECOPS_SECRETS_INGEST_TOKEN: { kind: 'secret', optional: true },
   SECOPS_ZAP_DISPATCH_TOKEN: { kind: 'secret', optional: true },
   SECOPS_ZAP_INGEST_TOKEN: { kind: 'secret', optional: true },
   SECRET_ENCRYPTION_KEY: { kind: 'secret' },
@@ -65,13 +64,15 @@ export const DEFAULT_MANIFEST = {
   MEMORY_KEY_SECRET: { kind: 'secret', optional: true },
   SECRET_ENCRYPTION_KEY_PREVIOUS: { kind: 'secret', optional: true },
   SESSION_SECRET: { kind: 'secret' },
+  SLACK_ALARMS_WEBHOOK_URL: { kind: 'secret', optional: true },
+  SLACK_COST_ALARMS_WEBHOOK_URL: { kind: 'secret', optional: true },
   SLACK_ERROR_REPORTING_WEBHOOK_URL: { kind: 'secret', optional: true },
   SLACK_WEBHOOK_URL: { kind: 'secret', optional: true },
   STRIPE_PUBLISHABLE_KEY: { kind: 'secret', optional: true },
   STRIPE_SECRET_KEY: { kind: 'secret', optional: true },
   STRIPE_WEBHOOK_SECRET: { kind: 'secret', optional: true },
   SUPPORT_EMAIL: { kind: 'secret', optional: true },
-  WHATS_NEW_DISTRIBUTION_URL: { kind: 'secret', optional: true },
+  TURNSTILE_SECRET_KEY: { kind: 'secret', optional: true },
   XAI_API_KEY: { kind: 'secret', optional: true },
   // --- bucket ---
   appFilesBucket: { kind: 'bucket' },
@@ -136,6 +137,7 @@ export const DEFAULT_MANIFEST = {
   // an operator needs - with no URL configured the enqueue still fails into those catches and
   // says so, rather than accepting a message into a queue nothing is consuming yet.
   lakeMemoryQueue: { kind: 'queue', optional: true },
+  riskEvidenceQueue: { kind: 'queue', optional: true },
   // Reached from POST /api/data-lakes/:id/inconsistencies?detector=model. `optional` for the same
   // reason as lakeMemoryQueue above: it sits behind an off-by-default admin flag
   // (`EnableLakeModelInconsistencyDetection`), so a basic install never sets it, and with no URL

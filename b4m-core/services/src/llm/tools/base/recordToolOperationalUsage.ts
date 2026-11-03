@@ -1,7 +1,9 @@
 import { buildUsagePriceStamp, getTextModelCost, getTurnsCost } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordOperationalUsage } from '../../../billing';
+import { executedModelFields } from '../../shadowTier';
 import type { ToolContext } from './types';
+import { resolveToolBillingOrganization } from './resolveToolBillingOrganization';
 
 export type RecordToolOperationalUsageArgs = {
   /** Exact model id passed to the llm.complete call being measured. */
@@ -10,6 +12,8 @@ export type RecordToolOperationalUsageArgs = {
   completionInfo?: CompletionInfo;
   /** Set just before the llm.complete call so latency reflects the model call, not setup. */
   startTime: number;
+  /** Id to record instead of `model` when the tool ran a fixed model on a restricted-tier turn; wins over context.toLedgerModel. */
+  ledgerModel?: string;
 };
 
 /**
@@ -17,9 +21,10 @@ export type RecordToolOperationalUsageArgs = {
  * deep-research analysis, file edit, notebook generation). Resolves the owner + COGS
  * from the tool context and hands off to the shared recorder.
  *
- * Recorded-only by design: the narrowed tool db omits the billing repos, so this writes
- * analytics COGS but never debits credits (mirrors search_knowledge_base). Cost degrades
- * to 0 when the model isn't in the request's catalog, but the event is still written.
+ * Debits under the operational billing policy only on a host that wires
+ * `db.operationalBilling` and does not fold the spend itself via `onToolLlmUsage`; otherwise
+ * recorded only. Cost degrades to 0 when the model isn't in the request's catalog, but the
+ * event is still written.
  *
  * Best-effort: never throws, so a recording failure can't break the tool it measures.
  */
@@ -28,6 +33,7 @@ export async function recordToolOperationalUsage(
   args: RecordToolOperationalUsageArgs
 ): Promise<void> {
   const { model, completionInfo, startTime } = args;
+  const recordedModel = args.ledgerModel ?? context.toLedgerModel?.(model) ?? model;
 
   const inputTokens = completionInfo?.inputTokens ?? 0;
   const outputTokens = completionInfo?.outputTokens ?? 0;
@@ -43,10 +49,7 @@ export async function recordToolOperationalUsage(
   }
 
   try {
-    const organization =
-      context.user.organizationId && context.db.organizations
-        ? await context.db.organizations.findById(context.user.organizationId)
-        : null;
+    const organization = await resolveToolBillingOrganization(context);
 
     const modelInfo = context.availableModels?.find(m => m.id === model);
     // Cost needs the model's pricing map; if the id isn't in this request's catalog we
@@ -86,6 +89,7 @@ export async function recordToolOperationalUsage(
       costUsd,
     });
 
+    const recordedProvider = context.availableModels?.find(m => m.id === recordedModel)?.backend ?? 'unknown';
     await recordOperationalUsage(
       {
         requestId: context.sessionId ?? context.userId,
@@ -93,8 +97,12 @@ export async function recordToolOperationalUsage(
         organization,
         sessionId: context.sessionId,
         feature: 'operations',
-        provider: modelInfo?.backend ?? 'unknown',
-        model,
+        provider: recordedProvider,
+        model: recordedModel,
+        ...executedModelFields(
+          { id: recordedModel, backend: recordedProvider },
+          { id: model, backend: modelInfo?.backend ?? 'unknown' }
+        ),
         inputTokens,
         outputTokens,
         cachedInputTokens,
@@ -108,9 +116,19 @@ export async function recordToolOperationalUsage(
           : undefined,
         latencyMs: Date.now() - startTime,
         source: 'system',
+        apiKeyId: context.apiKeyId,
         finishReason: completionInfo?.stopReason,
       },
-      { db: { usageEvents: context.db.usageEvents, adminSettings: context.db.adminSettings }, logger: context.logger }
+      {
+        db: {
+          usageEvents: context.db.usageEvents,
+          adminSettings: context.db.adminSettings,
+          // A host that folds this spend through onToolLlmUsage already charges it.
+          ...(context.onToolLlmUsage ? {} : context.db.operationalBilling),
+        },
+        billingCheck: context.operationalBillingCheck,
+        logger: context.logger,
+      }
     );
   } catch (err) {
     context.logger.warn('[recordToolOperationalUsage] failed to record operational usage', err);

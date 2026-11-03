@@ -8,6 +8,8 @@ import { BillingOrganizationIdSchema } from './schemas/billingOrganization';
  */
 export const supportedSoundGenerationVendor = z.enum(['elevenlabs']);
 
+export const DEFAULT_SOUND_MODEL_ID = 'eleven_text_to_sound_v2';
+
 export type SoundGenerationVendor = z.infer<typeof supportedSoundGenerationVendor>;
 
 // Max prompt length (characters) for a sound-effects generation. ElevenLabs

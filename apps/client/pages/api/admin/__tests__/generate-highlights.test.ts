@@ -14,7 +14,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 
 const mockFindPublishedBetween = vi.fn();
 vi.mock('@bike4mind/database', () => ({
@@ -38,7 +38,7 @@ const mockAudit = vi.fn();
 vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: (...a: unknown[]) => mockAudit(...a) }));
 
 import handler from '../generate-highlights';
-import { HIGHLIGHTS_NOTE_LIMIT } from '@server/whatsNew/releaseNoteHighlights';
+import { HIGHLIGHTS_NOTE_LIMIT } from '@bike4mind/server-utils/whatsNew/releaseNoteHighlights';
 
 const logger = { warn: vi.fn(), log: vi.fn(), info: vi.fn(), error: vi.fn() };
 

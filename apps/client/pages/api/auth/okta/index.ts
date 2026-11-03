@@ -15,18 +15,20 @@
  * @see https://datatracker.ietf.org/doc/rfc7636/
  */
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { getOktaConfigWithFallback, generatePkceParams, buildAuthorizationUrl } from '@server/auth/oktaOidcClient';
 import { clientIdFromAuthorizeRedirect } from '@bike4mind/common';
-import { createStateToken } from '@server/auth/jwtStateStore';
-import { issueStateNonce, setPkceVerifierCookie } from '@server/auth/oauthFlowCookie';
+import { createStateToken } from '@bike4mind/server-utils/auth/jwtStateStore';
+import { issueStateNonce, setPkceVerifierCookie } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { OKTA_STATE_AUDIENCE, LOG_URL_TRUNCATE_LENGTH, OktaStateInput } from '@server/auth/oktaConstants';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { validateAppUrl } from '@server/utils/validators';
 import { Logger } from '@bike4mind/observability';
+import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { isLocalAppUrl } from '@server/utils/validators';
 
 const handler = baseApi({ auth: false })
+  .use(checkBlockedIP())
   .use(rateLimit({ limit: 10, windowMs: 60 * 1000 })) // 10 requests per minute
   .get(async (req, res) => {
     // Coerce to string-or-undefined: `?idp=a&idp=b` yields an array, which would

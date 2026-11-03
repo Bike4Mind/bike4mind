@@ -5,7 +5,7 @@ import { accessibleBy } from '@casl/mongoose';
 import ability from '@server/auth/ability';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { connectionHoldsScope } from '@server/websocket/connectionScope';
-import { withWebSocketContext } from '@server/websocket/utils';
+import { withWebSocketContext } from '@bike4mind/server-utils/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 
 export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async (event, context, logger) => {

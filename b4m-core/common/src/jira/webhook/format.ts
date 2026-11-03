@@ -5,6 +5,7 @@
  * with computed fields (like daysUntilExpiry).
  */
 
+import { escapeSlackText } from '../../utils/slackText';
 import {
   JiraWebhook,
   JiraWebhookListResponse,
@@ -105,10 +106,7 @@ export function extractAdfText(body: unknown, maxLength = 500): string {
  * when displaying untrusted data from Jira payloads in Slack messages.
  */
 export function escapeSlackMrkdwn(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
+  return escapeSlackText(text)
     .replace(/\*/g, '∗') // Replace with look-alike (full-width asterisk)
     .replace(/_/g, '＿') // Replace with look-alike (full-width low line)
     .replace(/~/g, '∼') // Replace with look-alike (tilde operator)

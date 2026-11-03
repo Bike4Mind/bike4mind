@@ -1,0 +1,71 @@
+import { spawnSync } from 'node:child_process';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { COMMAND_ENV, WINDOWS_COMMAND_ARGS, commandEnv, launchCommand } from './commandLaunch';
+import { COMMAND_TAG_ENV } from './commandTree';
+
+vi.mock('./gitBash', () => ({ resolveGitBash: async () => 'C:\\Program Files\\Git\\bin\\bash.exe' }));
+vi.mock('./userPath', () => ({ resolveUserPath: async () => 'C:\\Tools' }));
+
+const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+const onWindows = () => Object.defineProperty(process, 'platform', { value: 'win32' });
+
+describe('launchCommand on Windows', () => {
+  afterEach(() => {
+    if (platform) Object.defineProperty(process, 'platform', platform);
+  });
+
+  it('runs Git Bash with a fixed argv and the command in the environment', async () => {
+    onWindows();
+    const command = "printf '%s|' C:\\\\Users 'a\\\\b' *.json";
+    const launch = await launchCommand(command, [], []);
+
+    expect(launch.executable).toBe('C:\\Program Files\\Git\\bin\\bash.exe');
+    expect(launch.args).toEqual(['-c', 'export -n B4M_DESKTOP_COMMAND; eval "$B4M_DESKTOP_COMMAND"']);
+    expect(launch.args).toEqual(WINDOWS_COMMAND_ARGS);
+    expect(launch.args.join(' ')).not.toContain('Users');
+    expect(launch.env).toEqual({ [COMMAND_ENV]: command });
+  });
+
+  // The same bash semantics Git Bash has, run here.
+  it.runIf(process.platform !== 'win32')(
+    'runs the command as written, keeps it from child processes, and quotes it alone in a syntax error',
+    () => {
+      const run = (command: string) =>
+        spawnSync('bash', [...WINDOWS_COMMAND_ARGS], {
+          encoding: 'utf8',
+          env: { PATH: process.env.PATH, [COMMAND_ENV]: command },
+        });
+      expect(run("printf '%s|' 'a\\\\b' \"$((1 + 2))\"").stdout).toBe('a\\\\b|3|');
+      expect(run('bash -c \'echo "child=${B4M_DESKTOP_COMMAND:-unset}"\'').stdout).toBe('child=unset\n');
+      const failed = run('echo (');
+      // bash 5 (Git Bash) exits 2 on an eval syntax error; macOS's /bin/bash 3.2 exits 1.
+      expect(failed.status).not.toBe(0);
+      expect(failed.stderr).toContain('`echo (');
+      expect(failed.stderr).not.toContain('export');
+      expect(failed.stderr).not.toContain(COMMAND_ENV);
+    }
+  );
+
+  it('tags each command and passes the tag and the command to the child', async () => {
+    onWindows();
+    const first = await launchCommand('echo one', [], []);
+    const second = await launchCommand('echo two', [], []);
+    expect(first.processTag).toMatch(/^[0-9a-f-]{36}$/);
+    expect(second.processTag).not.toBe(first.processTag);
+
+    const env = await commandEnv(first, { B4M_DESKTOP_BACKGROUND: '1', [COMMAND_ENV]: 'stale' });
+    expect(env[COMMAND_TAG_ENV]).toBe(first.processTag);
+    expect(env[COMMAND_ENV]).toBe('echo one');
+    expect(env.B4M_DESKTOP_BACKGROUND).toBe('1');
+    expect(env.PATH).toBe('C:\\Tools');
+  });
+});
+
+describe('launchCommand on POSIX', () => {
+  it.skipIf(process.platform === 'win32')('passes the command to bash -c with no tag', async () => {
+    const launch = await launchCommand('echo hi', [], []);
+    expect(launch).toMatchObject({ executable: '/bin/bash', args: ['-c', 'echo hi'] });
+    expect(launch.processTag).toBeUndefined();
+    expect((await commandEnv(launch))[COMMAND_TAG_ENV]).toBeUndefined();
+  });
+});

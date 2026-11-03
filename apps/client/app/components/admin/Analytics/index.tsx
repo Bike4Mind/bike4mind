@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect } from 'react';
 import { Sheet, Stack, LinearProgress, Box, Grid, Tabs, TabList, Tab } from '@mui/joy';
 import DescriptionIcon from '@mui/icons-material/Description';
 import PeopleIcon from '@mui/icons-material/People';
@@ -12,11 +12,17 @@ import { useAnalyticsStore } from './store';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 
 const AnalyticsTab: React.FC = () => {
-  const { activeSubTab, setActiveSubTab } = useAnalyticsStore();
+  const { activeSubTab, setActiveSubTab, refreshDefaultDateFilters } = useAnalyticsStore();
 
-  const analyticsQuery = useAnalyticsData();
+  useEffect(() => {
+    refreshDefaultDateFilters();
+  }, [refreshDefaultDateFilters]);
 
-  const { isLoading, isFetching, refetch } = analyticsQuery;
+  const isUserActivity = activeSubTab === AnalyticsSubTab.UserActivity;
+  // The report tabs own their queries; the grid query only runs while its tab is showing.
+  const userActivityQuery = useAnalyticsData({ enabled: isUserActivity });
+
+  const { isLoading, isFetching, refetch } = userActivityQuery;
 
   const handleRefresh = useCallback(() => {
     refetch();
@@ -67,32 +73,26 @@ const AnalyticsTab: React.FC = () => {
 
         {/* Reserved height keeps the bar from shifting the content below it on every page turn. */}
         <Box data-testid="analytics-progress-slot" sx={{ width: '100%', height: 4, mx: '5px' }}>
-          {isFetching && <LinearProgress size={'sm'} sx={{ width: '100%' }} />}
+          {isUserActivity && isFetching && <LinearProgress size={'sm'} sx={{ width: '100%' }} />}
         </Box>
 
-        {!isLoading && (
-          <Grid xs={12} mt={0.5}>
-            <Sheet sx={{ width: '100%' }}>
-              {activeSubTab === AnalyticsSubTab.UserActivity && (
-                <UserActivityTab
-                  rows={analyticsQuery.data?.logs || []}
-                  total={analyticsQuery.data?.total || 0}
-                  isFetching={isFetching}
-                  error={analyticsQuery.error}
-                  onRefresh={handleRefresh}
-                />
-              )}
+        <Grid xs={12} mt={0.5}>
+          <Sheet sx={{ width: '100%' }}>
+            {isUserActivity && !isLoading && (
+              <UserActivityTab
+                rows={userActivityQuery.data?.logs || []}
+                total={userActivityQuery.data?.total || 0}
+                isFetching={isFetching}
+                error={userActivityQuery.error}
+                onRefresh={handleRefresh}
+              />
+            )}
 
-              {activeSubTab === AnalyticsSubTab.DailyReport && (
-                <DailyReportTab error={analyticsQuery.error} onRefresh={handleRefresh} />
-              )}
+            {activeSubTab === AnalyticsSubTab.DailyReport && <DailyReportTab />}
 
-              {activeSubTab === AnalyticsSubTab.WeeklyReport && (
-                <WeeklyReportTab error={analyticsQuery.error} onRefresh={handleRefresh} />
-              )}
-            </Sheet>
-          </Grid>
-        )}
+            {activeSubTab === AnalyticsSubTab.WeeklyReport && <WeeklyReportTab />}
+          </Sheet>
+        </Grid>
       </Grid>
     </Sheet>
   );

@@ -1,5 +1,6 @@
-import { elevenLabsContentTypeForFormat } from '@bike4mind/common';
+import { DEFAULT_SOUND_MODEL_ID, elevenLabsContentTypeForFormat } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
+import { parseRetryAfterMs, ProviderRateLimitError } from '../providerRateLimitError';
 import { GeneratedSound, SoundGenerationOptions, SoundGenerator } from './types';
 
 const SOUND_GENERATION_ENDPOINT = 'https://api.elevenlabs.io/v1/sound-generation';
@@ -61,6 +62,7 @@ export class ElevenLabsSoundGenerator implements SoundGenerator {
         'content-type': 'application/json',
       },
       body: JSON.stringify({
+        model_id: DEFAULT_SOUND_MODEL_ID,
         text,
         ...(options.durationSeconds !== undefined ? { duration_seconds: options.durationSeconds } : {}),
         ...(options.promptInfluence !== undefined ? { prompt_influence: options.promptInfluence } : {}),
@@ -70,6 +72,15 @@ export class ElevenLabsSoundGenerator implements SoundGenerator {
 
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
+      if (res.status === 429) {
+        // The plan's concurrency/rate cap, not a fault: warn only, the caller decides whether to retry.
+        this.logger.warn('ElevenLabs sound generation rate-limited', { detail });
+        throw new ProviderRateLimitError(
+          'elevenlabs',
+          `ElevenLabs sound generation rate-limited: ${detail}`,
+          parseRetryAfterMs(res.headers.get('retry-after'))
+        );
+      }
       this.logger.error('ElevenLabs sound generation failed', { status: res.status, detail });
       throw new Error(`ElevenLabs sound generation failed: ${res.status} ${detail}`);
     }

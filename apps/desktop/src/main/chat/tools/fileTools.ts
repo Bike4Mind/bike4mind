@@ -5,6 +5,7 @@ import { envReadPrompt, readsEnvFile } from './envFiles';
 import { resolveWithinRoots } from './paths';
 import { recordRecentFile } from './recentFiles';
 import { ripgrepSearch, type RipgrepFile } from './ripgrep';
+import { IMAGE_FORMAT_NAMES, showImage, sniffImageType } from './toolImages';
 import {
   capOutput,
   MAX_FILE_READ_OUTPUT_CHARS,
@@ -196,7 +197,8 @@ export const fileRead: ToolDefinition = {
       'a tab; those prefixes are not part of the file, so never copy them into an edit or a patch. When ' +
       'the output stops before the end of the file, it says the offset to continue from. Avoid ' +
       'repeated small slices (around 30 lines): when you need more context, read a larger window in ' +
-      'one call. ' +
+      'one call. PNG, JPEG, GIF and WebP files are shown to you as an image instead, downscaled to ' +
+      'fit: read a screenshot or a design file to look at it. ' +
       'Independent calls placed in one reply run in parallel, so batch them instead of issuing one per turn.',
     parameters: {
       type: 'object',
@@ -224,6 +226,14 @@ export const fileRead: ToolDefinition = {
     recordRecentFile(context, target);
 
     const buffer = await readFile(target);
+    const imageType = sniffImageType(buffer);
+    if (imageType) {
+      const about = `${target} is a ${IMAGE_FORMAT_NAMES[imageType]} image (${formatBytes(info.size)})`;
+      const shown = showImage(context, buffer, imageType);
+      if (!shown.ok) return `${about}. It was not shown: ${shown.reason}.`;
+      const pixels = shown.pixels ? `, ${shown.pixels}` : '';
+      return `${about}${pixels}. You see it below this result in this reply only; read it again to look at it later.`;
+    }
     if (isBinary(buffer)) return `${target} is a binary file (${formatBytes(info.size)}), so it is not shown as text.`;
 
     const lines = buffer.toString('utf8').split('\n');

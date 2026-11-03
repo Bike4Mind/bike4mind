@@ -10,6 +10,19 @@ import type { ModelRecord } from './types/entities/ModelCatalogTypes';
 export const DEFAULT_MAX_OUTPUT_TOKENS = 4096;
 
 /**
+ * max_tokens floor for adaptive reasoning models (Claude 4.7+/Opus 5). These
+ * models self-manage extended thinking *within* max_tokens, which is a ceiling
+ * (they stop at end_turn), not a target - so a larger floor costs nothing on
+ * short replies but keeps reasoning from consuming the whole budget and leaving
+ * no room for the visible answer. Both paths that size an adaptive model's output
+ * budget read it (llm-adapters thinkingParams.ts): buildThinkingParams (thinking
+ * explicitly enabled) and resolveOutputMaxTokens (the default when a caller names no
+ * budget; an explicit budget below it is honored and only logged, see
+ * belowReasoningFloor). The client's Max output tokens slider warns below it.
+ */
+export const ADAPTIVE_THINKING_MAX_TOKENS_FLOOR = 64_000;
+
+/**
  * Input headroom the chat path holds back on top of a request's reserved output.
  * safeInputWindow (ChatCompletionProcess) subtracts it, so a text entry whose output
  * reserve leaves less than this has no room for a prompt at all.
@@ -98,6 +111,17 @@ export type ToModelInfoIsTotal = Expect<
 >;
 
 /**
+ * Every reason discovery writes on its own refusal starts with this prefix, so a reader can tell a
+ * disable discovery invented from one a provider reported ("not entitled in this AWS account").
+ * The discovery service's promotion.ts builds its verdicts from it; the catalog merge reads it to
+ * decide whether an unpromoted row's disable is a placeholder curation may reclaim.
+ */
+export const DISCOVERY_VERDICT_PREFIX = 'discovered, ';
+
+export const isDiscoveryVerdict = (reason: unknown): reason is string =>
+  typeof reason === 'string' && reason.startsWith(DISCOVERY_VERDICT_PREFIX);
+
+/**
  * The record -> ModelInfo adapter: one place where every ModelInfo field a
  * catalog record does not carry gets its default. Each default degrades to the
  * visible, recoverable behavior rather than the silent or expensive one.
@@ -134,6 +158,12 @@ export function toModelInfo(record: RenderableModelRecord): ModelInfo {
     can_stream: record.canStream,
     can_think: record.reasoning?.supported ?? false,
     thinkingStyle: toThinkingStyle(record),
+    ...(record.reasoning?.supported === true && record.reasoning.style === 'openai-effort'
+      ? { openaiReasoningEffort: true as const }
+      : {}),
+    ...(record.reasoning?.effortIncompatibleWithTools !== undefined
+      ? { effortIncompatibleWithTools: record.reasoning.effortIncompatibleWithTools }
+      : {}),
     // The dispatch group rides through to the runtime unchanged: getLlmByModel
     // routes on adapterFamily and the request builders read dispatchProfile.
     // Absent stays absent - that is what keeps a seeded model on the adapter
@@ -165,7 +195,7 @@ export function toModelInfo(record: RenderableModelRecord): ModelInfo {
 /**
  * ModelInfo.thinkingStyle only describes the two Anthropic request shapes. Other
  * reasoning styles map to undefined rather than to a wrong shape; the backends
- * treat unset as their own default.
+ * treat unset as their own default. OpenAI's style rides on openaiReasoningEffort.
  */
 function toThinkingStyle(record: RenderableModelRecord): ModelInfo['thinkingStyle'] {
   switch (record.reasoning?.style) {
@@ -180,9 +210,10 @@ function toThinkingStyle(record: RenderableModelRecord): ModelInfo['thinkingStyl
 
 type ReasoningStyle = NonNullable<ModelRecord['reasoning']>['style'];
 
-function fromThinkingStyle(style: ModelInfo['thinkingStyle']): ReasoningStyle {
-  if (style === 'adaptive') return 'anthropic-adaptive';
-  if (style === 'legacy') return 'anthropic-legacy';
+function fromThinkingStyle(info: ModelInfo): ReasoningStyle {
+  if (info.thinkingStyle === 'adaptive') return 'anthropic-adaptive';
+  if (info.thinkingStyle === 'legacy') return 'anthropic-legacy';
+  if (info.openaiReasoningEffort === true) return 'openai-effort';
   return undefined;
 }
 
@@ -237,6 +268,7 @@ const VENDOR_BY_BACKEND: Record<ModelBackend, string> = {
   [ModelBackend.AWS]: 'amazon',
   [ModelBackend.VoyageAI]: 'voyageai',
   [ModelBackend.Ollama]: 'ollama',
+  [ModelBackend.OpenAICompatible]: 'local',
   [ModelBackend.LocalImage]: 'local',
   // Bedrock hosts other people's models; the id prefix below is the real answer.
   [ModelBackend.Bedrock]: 'amazon',
@@ -303,9 +335,18 @@ export function toModelRecord(info: ModelInfo): RenderableModelRecord {
     // `supported: false` would claim the reasoning group and turn every silent
     // model's can_think from undefined into an explicit false.
     reasoning:
-      info.can_think === undefined && info.thinkingStyle === undefined
+      info.can_think === undefined &&
+      info.thinkingStyle === undefined &&
+      info.openaiReasoningEffort === undefined &&
+      info.effortIncompatibleWithTools === undefined
         ? undefined
-        : { supported: info.can_think === true, style: fromThinkingStyle(info.thinkingStyle) },
+        : {
+            supported: info.can_think === true,
+            style: fromThinkingStyle(info),
+            ...(info.effortIncompatibleWithTools !== undefined
+              ? { effortIncompatibleWithTools: info.effortIncompatibleWithTools }
+              : {}),
+          },
     adapterFamily: info.adapterFamily,
     dispatchProfile: info.dispatchProfile,
     supportsVision: info.supportsVision,

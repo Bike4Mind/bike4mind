@@ -327,6 +327,14 @@ export const RESOLVABLE_SECRETS = {
     category: 'slack' as SystemSecretCategory,
     description: 'Slack webhook URL for error reporting',
   },
+  SLACK_ALARMS_WEBHOOK_URL: {
+    category: 'slack' as SystemSecretCategory,
+    description: 'Slack webhook URL for CloudWatch alarm notifications (falls back to error reporting)',
+  },
+  SLACK_COST_ALARMS_WEBHOOK_URL: {
+    category: 'slack' as SystemSecretCategory,
+    description: 'Slack webhook URL for cost and provider spend alarms (falls back to the alarms webhook)',
+  },
 
   // Financial Data
   FMP_API_KEY: {

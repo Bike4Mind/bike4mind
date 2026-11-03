@@ -1,4 +1,4 @@
-import { ApiKeyScope, IUserApiKeyRepository } from '@bike4mind/common';
+import { ApiKeyScopeValue, IUserApiKeyRepository } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { randomBytes } from 'crypto';
 import { z } from 'zod';
@@ -22,7 +22,7 @@ interface RotateCallbackSigningSecretAdapters {
     userApiKeys: IUserApiKeyRepository;
   };
   /** Scopes of the calling API key; undefined for a browser/JWT caller. See rotateUserApiKey. */
-  callerScopes?: ApiKeyScope[];
+  callerScopes?: ApiKeyScopeValue[];
 }
 
 export interface RotateCallbackSigningSecretResult {

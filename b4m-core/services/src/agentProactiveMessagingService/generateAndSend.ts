@@ -41,6 +41,7 @@ interface GenerateAndSendProactiveMessageAdapters {
   agent: IAgentDocument;
   session: ISessionDocument;
   user: IUserDocument;
+  getEntitlements: () => Promise<string[]>;
   logger: Logger;
   recentMessages?: IChatHistoryItem[];
   db: {
@@ -104,6 +105,7 @@ export async function generateAndSendProactiveMessage({
   agent,
   session,
   user,
+  getEntitlements,
   logger,
   recentMessages = [],
   db,
@@ -163,6 +165,7 @@ export async function generateAndSendProactiveMessage({
         },
         // The agent speaks first, on a schedule - no user request authenticated this turn.
         authOrigin: 'internal',
+        getEntitlements,
       },
       storage,
       imageGenerateStorage,

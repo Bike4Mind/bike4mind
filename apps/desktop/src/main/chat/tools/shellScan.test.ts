@@ -335,6 +335,33 @@ describe('scanShell', () => {
     });
   });
 
+  describe('commands that only read', () => {
+    it.each([
+      'git status --short | head -20',
+      'git -C ../main log -1 --format=%h && git --no-pager diff --stat',
+      'git branch --show-current; git worktree list; git remote -v',
+      "cat package.json | jq .name; sed -n '1,5p' README.md",
+      'timeout 5 git status',
+    ])('reads only: %s', async command => {
+      expect((await scan(command)).readOnly).toBe(true);
+    });
+
+    it.each([
+      'git checkout main',
+      'git branch -D old',
+      'git -c core.pager=less log',
+      'git diff --output=out.patch',
+      'git status > status.txt',
+      'mkdir build',
+      'echo x | tee notes.txt',
+      'timeout 5 mkdir build',
+      'export GIT_DIR=/x; git status',
+      'node -e 1',
+    ])('does not only read: %s', async command => {
+      expect((await scan(command)).readOnly).toBe(false);
+    });
+  });
+
   describe('commands contained to this computer and read-only GitHub calls', () => {
     it.each([
       'gh pr view 123 --json title,state',
@@ -353,6 +380,16 @@ describe('scanShell', () => {
       "rg -n 'TODO' src | sort | uniq -c",
       'find . -name "*.ts" -newer package.json | head',
       'ls -la && pwd',
+      "cd .cache/sv; for s in a b; do echo \"== $s\"; iconv -f latin1 -t utf-8 $s.html | tr -d '\\r' | grep -n x | sed -n '1,45p' | cut -c1-400; done",
+      'set -euo pipefail; ls',
+      'set +x; set -o errexit -o nounset; pwd',
+      'sleep 45; gh pr checks 123',
+      'timeout 8 cat notes.txt',
+      'timeout -s KILL 5s grep -r TODO src',
+      "sed -n '1,45p' notes.txt",
+      'sed -e 10q notes.txt',
+      "sed -n '$p' a.txt b.txt",
+      'iconv -f latin1 -t utf-8 page.html | head',
     ])('contains %s', async command => {
       expect((await scan(command)).contained).toBe(true);
     });
@@ -360,6 +397,7 @@ describe('scanShell', () => {
     it.each([
       ['a program off the list', 'pnpm test'],
       ['an interpreter', 'node build.js'],
+      ['a test run with a tuning variable, which runs project code', 'VITEST_MAX_WORKERS=25% pnpm exec vitest run x'],
       ['a wrapper that runs another program', 'xargs cat < files.txt'],
       ['a binary named like a listed one but not on PATH', './cat notes.txt'],
       ['an env assignment', 'GIT_PAGER=sh git log'],
@@ -409,10 +447,111 @@ describe('scanShell', () => {
       ['sort writing its output with an abbreviated option', 'sort --out=/Users/tester/.zshrc x.txt'],
       ['a function wrapping an outbound call', 'f() { cat a; }; f'],
       ['a mix where one part is not contained', 'git diff > /tmp/d && make'],
+      ['a loop rebinding an uppercase variable', 'for HOME in /tmp/x; do cat a; done'],
+      ['a loop rebinding a proxy variable', 'for http_proxy in x; do cat a; done'],
+      ['a loop whose body runs a program off the list', 'for s in a b; do node $s.js; done'],
+      ['a loop over a substitution that is not contained', 'for s in $(curl -s x); do echo $s; done'],
+      ['set storing positional arguments', 'set -- a b; echo $1'],
+      ['set with no arguments, which prints every variable', 'set'],
+      ['timeout wrapping a program off the list', 'timeout 8 npx vite'],
+      ['timeout with no duration', 'timeout cat notes.txt'],
+      ['sed editing in place', "sed -i '' 's/a/b/' notes.txt"],
+      ['sed with a substitution, whose e flag runs a program', "sed 's/x/date/e' notes.txt"],
+      ['sed running a command', "sed -n '1e date' notes.txt"],
+      ['sed writing a file', "sed -n 'w out.txt' notes.txt"],
+      ['sed reading its script from a file', 'sed -f script.sed notes.txt'],
+      ['sed with a script the shell expands', 'sed -n "1,$p" notes.txt'],
+      ['sed with two scripts', 'sed -e 1p -e 2p notes.txt'],
+      ['iconv writing a file', 'iconv -f latin1 -t utf-8 -o out.txt page.html'],
+      ['iconv writing a file longhand', 'iconv -f latin1 -t utf-8 --output=out.txt page.html'],
       ['an empty script', ''],
       ['a comment-only script', '# nothing to run'],
     ])('does not contain %s', async (_why, command) => {
       expect((await scan(command)).contained).toBe(false);
+    });
+  });
+
+  describe('a tuning variable in front of a local test, typecheck, lint or build run', () => {
+    it.each([
+      'VITEST_MAX_WORKERS=25% pnpm --filter @bike4mind/llm-adapters exec vitest run a.test.ts b.test.ts c.test.ts && VITEST_MAX_WORKERS=25% pnpm --filter @bike4mind/client exec vitest run --project node d.test.ts',
+      'VITEST_MAX_WORKERS=25% pnpm --filter @bike4mind/llm-adapters exec vitest run a.test.ts && pnpm --filter @bike4mind/llm-adapters typecheck && pnpm exec eslint --quiet a.ts b.ts',
+      'CI=1 pnpm test',
+      'CI=1 pnpm --filter @x/y typecheck',
+      'CI=1 pnpm turbo:typecheck && CI=1 pnpm lint:check',
+      'NODE_ENV=test FORCE_COLOR=0 pnpm exec vitest run',
+      'CI=1 npm run lint -- --fix',
+      'CI=1 yarn format:check',
+      'CI=1 npx tsc --noEmit -p tsconfig.json',
+      'TZ=UTC vitest run src/x.test.ts',
+      'CI=1 jest --ci',
+      'CI=1 turbo run test lint --filter=@x/y',
+      'NODE_ENV=test node scripts/check.js --flag',
+      'cd apps/desktop && CI=1 pnpm typecheck 2>&1 | tail -20',
+    ])('keeps %s coverable, but never contained', async command => {
+      const result = await scan(command);
+      expect(result.commands.every(entry => entry.coverable)).toBe(true);
+      expect(result.contained).toBe(false);
+    });
+
+    it.each([
+      ['an env var that loads code', 'NODE_OPTIONS=--require=./x.js pnpm test'],
+      ['an env var that preloads a library', 'LD_PRELOAD=/tmp/x.so pnpm test'],
+      ['an env var that inserts a macOS library', 'DYLD_INSERT_LIBRARIES=/tmp/x.dylib pnpm test'],
+      ['a proxy', 'HTTPS_PROXY=http://evil.example pnpm test'],
+      ['a lowercase proxy', 'https_proxy=http://evil.example pnpm test'],
+      ['a changed PATH', 'PATH=/tmp/evil pnpm test'],
+      ['a shell startup file', 'BASH_ENV=./x.sh pnpm test'],
+      ['a registry override', 'npm_config_registry=https://evil.example npm test'],
+      ['a remote cache override', 'TURBO_API=https://evil.example turbo run build'],
+      ['a server address', 'DATABASE_URL=postgres://evil.example/db pnpm test'],
+      ['a value computed from a file', 'CI="$(cat notes.txt)" pnpm test'],
+      ['a program off the list', 'CI=1 make test'],
+      ['an install', 'CI=1 pnpm add left-pad'],
+      ['a bare install', 'CI=1 pnpm install'],
+      ['a download-and-run', 'CI=1 pnpm dlx create-thing'],
+      ['npx of an unlisted package', 'CI=1 npx some-package'],
+      ['npx naming the package to fetch', 'CI=1 npx -p evil vitest'],
+      ['exec of an unlisted program', 'CI=1 pnpm exec curl https://evil.example'],
+      ['exec through a shell', "CI=1 pnpm exec -c 'curl https://evil.example'"],
+      ['npm exec of an unlisted program', 'CI=1 npm exec -- curl https://evil.example'],
+      ['a deploy script', 'CI=1 pnpm run deploy'],
+      ['a build script that also releases', 'CI=1 pnpm build:release'],
+      ['a publish', 'CI=1 pnpm publish'],
+      ['a package-manager option off the list', 'CI=1 pnpm --config.registry=https://evil.example test'],
+      ['a cloud profile', 'AWS_PROFILE=prod pnpm build'],
+      ['an S3 endpoint', 'AWS_ENDPOINT_URL_S3=http://evil.example pnpm test'],
+      ['a deploy stage', 'STAGE=prod pnpm build'],
+      ['vitest browser mode', 'CI=1 vitest --browser'],
+      ['a node test reporter module', 'CI=1 node --test-reporter=./x.js --test'],
+      ['a vitest API server', 'CI=1 vitest --api.host 0.0.0.0'],
+      ['the vitest UI', 'CI=1 vitest --ui'],
+      ['a vitest browser-mode API server', 'CI=1 vitest --browser.api.host=0.0.0.0'],
+      ['vitest init, which installs', 'CI=1 vitest init browser'],
+      ['eslint init, which installs', 'CI=1 eslint --init'],
+      ['a turbo remote cache', 'CI=1 turbo run build --api=https://evil.example'],
+      ['turbo login', 'CI=1 turbo login'],
+      ['a node script outside the folder', 'CI=1 node /tmp/x.js'],
+      ['a node script above the folder', 'CI=1 node ../outside.js'],
+      ['node with inline code', "CI=1 node -e 'require(1)'"],
+      ['node requiring a module first', 'CI=1 node --require ./x.js test.js'],
+      ['a computed argument', 'CI=1 pnpm exec vitest run "$(cat notes.txt)"'],
+      ['a toolchain run behind a wrapper', 'CI=1 timeout 60 pnpm test'],
+    ])('does not let a remembered prefix or rule cover %s', async (_why, command) => {
+      const result = await scan(command);
+      expect(result.commands.some(entry => !entry.coverable)).toBe(true);
+      expect(result.contained).toBe(false);
+    });
+
+    it('keeps the assignment in the words a rule matches, and out of the remembered prefix', async () => {
+      const [tuned] = (await scan('VITEST_MAX_WORKERS=25% pnpm --filter @x/y exec vitest run x')).commands;
+      expect(tuned).toEqual({
+        text: 'pnpm exec vitest run x',
+        always: 'pnpm exec vitest *',
+        coverable: true,
+        words: 'VITEST_MAX_WORKERS=25% pnpm --filter @x/y exec vitest run x',
+      });
+      const [steered] = (await scan('NODE_OPTIONS=--require=./x.js pnpm exec vitest run x')).commands;
+      expect(steered.words).toBe('NODE_OPTIONS=--require=./x.js pnpm exec vitest run x');
     });
   });
 

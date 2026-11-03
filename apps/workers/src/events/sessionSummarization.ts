@@ -13,7 +13,7 @@ import {
   organizationRepository,
   withTransaction,
 } from '@bike4mind/database';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import {
   AiEvents,
   ChatModelName,
@@ -26,9 +26,10 @@ import { BadRequestError, isStoppedBeforeReply } from '@bike4mind/utils';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
+import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 
 export const handler = withEventContext(async (event, logger) => {
   const body = SessionEvents.Summarize.schema.parse(event.properties);
@@ -83,6 +84,12 @@ export const handler = withEventContext(async (event, logger) => {
   const payer = payerId ? await User.findById(payerId) : (requester ?? user);
   if (!payer) {
     logger.warn(`Payer ${payerId} not found, skipping summarization for session ${sessionId}`);
+    return;
+  }
+
+  const accessDenial = aiAccessDeniedMessage(requester ?? user) ?? aiAccessDeniedMessage(payer);
+  if (accessDenial) {
+    logger.warn(`Skipping summarization for session ${sessionId}: ${accessDenial}`);
     return;
   }
 

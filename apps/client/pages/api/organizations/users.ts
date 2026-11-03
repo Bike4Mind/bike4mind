@@ -5,7 +5,7 @@ import { convertIds, Organization, User, UserActivityCounter, convertPipelineFor
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { mongoose } from '@bike4mind/database';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 import qs from 'qs';
 import { Pagination } from '@bike4mind/utils';
 

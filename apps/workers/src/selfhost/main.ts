@@ -17,7 +17,7 @@ import { dispatch as imageGenerationDispatch } from '@workers/queueHandlers/imag
 import { dispatch as imageEditDispatch } from '@workers/queueHandlers/imageEdit';
 import { dispatch as generationCallbackDispatch } from '@workers/queueHandlers/generationCallback';
 import { dispatch as generationJobDispatch } from '@workers/queueHandlers/generationJob';
-import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
+import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@bike4mind/server-utils/modelDiscovery/scheduledRun';
 import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscovery/startupLeg';
 import { runStuckBatchSweep } from '@workers/cron/dataLakeBatchReconcile';
 import { runResearchScheduleTick } from '@workers/cron/dataLakeResearchSchedule';
@@ -26,21 +26,28 @@ import { registerNotebookCurationQueue } from './notebookCurationQueue';
 import { registerQuestExportQueue } from './questExportQueue';
 import { registerTaskScheduler } from './taskScheduler';
 import { registerLakeMemoryQueue } from './lakeMemoryQueue';
+import { registerRiskEvidenceQueue } from './riskEvidenceQueue';
 import { registerDataLakeCleanupQueue } from './dataLakeCleanupQueue';
 import { registerTelemetryCleanup } from './telemetryCleanup';
+import { registerSignupIpRetention } from './signupIpRetention';
 import { registerApiKeyBaselineCalculation } from './apiKeyBaselineCalculation';
 import { registerLakeInconsistencySweep } from './lakeInconsistencySweep';
 import { registerCreditLotSweep } from './creditLotSweep';
 import { registerVoiceHoldSweep } from './voiceHoldSweep';
 import { registerCreditHoldSweep } from './creditHoldSweep';
+import { registerReferralRewardRelease } from './referralRewardRelease';
 import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
 import { registerQuestTimeoutSweep } from './questTimeoutSweep';
 import { registerGenerationJobSweep } from './generationJobSweep';
 import { registerSkillMarketReviewSla } from './skillMarketReviewSla';
 import { registerAdminAuditAlerts } from './adminAuditAlerts';
+import { registerOauthAbuseAutoBlock } from './oauthAbuseAutoBlock';
+import { registerSignupGrantHeldRelease } from './signupGrantHeldRelease';
 import { registerRealtimeConnectionSweep } from './realtimeConnectionSweep';
 import { registerIntegrationHealthCheck } from './integrationHealthCheck';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
+import { registerDriveLakeResyncPoll } from './driveLakeResyncPoll';
+import { registerStorageReconciliation } from './storageReconciliation';
 import { registerGitHubLakeReconcile } from './githubLakeReconcile';
 import { registerLakeConnectorOrphanReap } from './lakeConnectorOrphanReap';
 import { dispatchSelfHostEvent } from './eventDispatch';
@@ -111,17 +118,23 @@ async function main() {
   registerGenerationJobSweep(worker);
   registerSkillMarketReviewSla(worker);
   registerAdminAuditAlerts(worker);
+  registerOauthAbuseAutoBlock(worker);
+  registerSignupGrantHeldRelease(worker);
   registerRealtimeConnectionSweep(worker);
   registerIntegrationHealthCheck(worker, bootLogger);
   registerLakeHealthSweep(worker);
+  registerDriveLakeResyncPoll(worker);
+  registerStorageReconciliation(worker);
   registerGitHubLakeReconcile(worker);
   registerLakeConnectorOrphanReap(worker);
   registerTelemetryCleanup(worker);
+  registerSignupIpRetention(worker);
   registerApiKeyBaselineCalculation(worker);
   registerLakeInconsistencySweep(worker);
   registerCreditLotSweep(worker);
   registerVoiceHoldSweep(worker);
   registerCreditHoldSweep(worker);
+  registerReferralRewardRelease(worker);
 
   worker.registerQueueHandler('researchEngineQueue', Resource.researchEngineQueue.url, researchEngineDispatch, {
     visibilityTimeoutSec: RESEARCH_VISIBILITY_TIMEOUT_SEC,
@@ -209,6 +222,7 @@ async function main() {
   }
 
   registerLakeMemoryQueue(worker, Resource.lakeMemoryQueue?.url, bootLogger);
+  registerRiskEvidenceQueue(worker, Resource.riskEvidenceQueue?.url, bootLogger);
   registerDataLakeCleanupQueue(worker, Resource.dataLakeCleanupQueue?.url, bootLogger);
   await registerNotebookCurationQueue(worker, Resource.notebookCurationQueue?.url, bootLogger);
   await registerQuestExportQueue(worker, Resource.questExportQueue?.url, bootLogger);

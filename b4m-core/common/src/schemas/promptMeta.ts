@@ -1,7 +1,9 @@
 import { z } from 'zod';
+import type { MessageContentObject } from '../types/entities/MessageTypes';
 import { ContextTelemetrySchema, SystemPromptDetailSchema } from './contextTelemetry';
 import { PROMPT_META_MODEL_TYPES } from '../modelCatalog';
 import { REPLY_CHOICES_INVALID_REASONS } from '../utils/replyChoices';
+import { PROMPT_CACHE_TTLS } from '../promptCache';
 
 /**
  * A Date that also accepts its own JSON form. promptMeta makes a round trip through the client:
@@ -74,6 +76,10 @@ const PromptMetaTokenUsageSchema = z.object({
   // because a write is the single most expensive component of a cold turn, and without
   // it the cache-write rate can only be inferred from cacheReadInputTokens being absent.
   cacheCreationInputTokens: z.number().optional(),
+  // The part of cacheCreationInputTokens written with the 1-hour TTL, billed at 2x input.
+  cacheWrite1hInputTokens: z.number().optional(),
+  // TTL the turn's cache_control markers asked for; the composer's cache-expiry note reads it.
+  promptCacheTtl: z.enum(PROMPT_CACHE_TTLS).optional(),
   // Which basis priced estimatedCost/creditsUsed: provider-reported usage or
   // the local tokenizer estimate (fallback when the provider omits usage).
   settledBasis: z.enum(['provider', 'local']).optional(),
@@ -151,7 +157,7 @@ const PromptMetaContextSchema = z.object({
     .array(
       z.object({
         role: z.enum(['user', 'assistant', 'system', 'function', 'tool']),
-        content: z.union([z.string(), z.array(z.any())]),
+        content: z.union([z.string(), z.array(z.custom<MessageContentObject>())]),
         fabFileIds: z.array(z.string()).optional(),
       })
     )
@@ -237,7 +243,7 @@ export type ChatToolMode = z.infer<typeof ChatToolModeSchema>;
 
 const PromptMetaFunctionCallSchema = z.object({
   name: z.string().optional(),
-  parameters: z.record(z.string(), z.any()).optional(), // z.any() supports arrays, objects, and all JSON types
+  parameters: z.record(z.string(), z.any()).optional(), // any: PromptMetaInspector renders values as JSX children; unknown is not a ReactNode
   returnValue: z.string().optional(),
   executionTime: z.number().optional(),
   success: z.boolean().optional(),

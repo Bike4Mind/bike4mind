@@ -1,4 +1,5 @@
 import type { AuditLogFilters } from '@bike4mind/common';
+import { matchSavedView } from '../shared/matchSavedView';
 
 export type AuditSavedView = { key: string; label: string; filters: AuditLogFilters };
 
@@ -13,10 +14,5 @@ export const AUDIT_SAVED_VIEWS: ReadonlyArray<AuditSavedView> = [
 
 export const DENIED_FILTERS: AuditLogFilters = { verb: 'denied' };
 
-const sameFilters = (a: AuditLogFilters, b: AuditLogFilters): boolean => {
-  const keys = new Set([...Object.keys(a), ...Object.keys(b)]) as Set<keyof AuditLogFilters>;
-  return [...keys].every(key => a[key] === b[key]);
-};
-
 export const activeSavedViewKey = (filters: AuditLogFilters): string | null =>
-  AUDIT_SAVED_VIEWS.find(view => sameFilters(view.filters, filters))?.key ?? null;
+  matchSavedView(AUDIT_SAVED_VIEWS, filters, view => view.filters)?.key ?? null;

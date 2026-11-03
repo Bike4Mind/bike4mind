@@ -1,4 +1,4 @@
-import { RELEASE_NOTE_MEDIA_PATH, type ModalVideo } from '@bike4mind/common';
+import { RELEASE_NOTE_MEDIA_PATH, type ModalStillImage, type ModalVideo } from '@bike4mind/common';
 
 export type SlideVideoOrientation = 'landscape' | 'portrait';
 
@@ -25,6 +25,28 @@ export function videoUrlsOf(video: ModalVideo | null | undefined): string[] {
   return [video.landscapeUrl, video.landscapePosterUrl, video.portraitUrl, video.portraitPosterUrl].filter(
     (url): url is string => !!url
   );
+}
+
+export interface SlideStillSource {
+  src: string;
+  orientation: SlideVideoOrientation;
+}
+
+/** Same orientation preference and fallback as pickSlideVideo. */
+export function pickSlideStill(image: ModalStillImage | null | undefined, isMobile: boolean): SlideStillSource | null {
+  if (!image) return null;
+  const landscape: SlideStillSource | null = image.landscapeUrl
+    ? { src: image.landscapeUrl, orientation: 'landscape' }
+    : null;
+  const portrait: SlideStillSource | null = image.portraitUrl
+    ? { src: image.portraitUrl, orientation: 'portrait' }
+    : null;
+  return isMobile ? (portrait ?? landscape) : (landscape ?? portrait);
+}
+
+export function stillUrlsOf(image: ModalStillImage | null | undefined): string[] {
+  if (!image) return [];
+  return [image.landscapeUrl, image.portraitUrl].filter((url): url is string => !!url);
 }
 
 /**
@@ -58,11 +80,11 @@ export function isMediaRouteUrl(url: string, base = window.location.origin): boo
  * one being browsed, and the CSP only allows this origin. So a media route URL is made relative here,
  * except on the upstream feed's origin, which is genuinely another deployment.
  */
-export function localizeMediaRouteUrls(
-  video: ModalVideo,
+export function localizeMediaRouteUrls<T extends { [K in keyof T]: string | null | undefined }>(
+  media: T,
   upstreamOrigin: string,
   base = window.location.origin
-): ModalVideo {
+): T {
   const localize = (url: string | null | undefined) => {
     if (!url) return url;
     try {
@@ -73,12 +95,9 @@ export function localizeMediaRouteUrls(
       return url;
     }
   };
-  return {
-    landscapeUrl: localize(video.landscapeUrl),
-    landscapePosterUrl: localize(video.landscapePosterUrl),
-    portraitUrl: localize(video.portraitUrl),
-    portraitPosterUrl: localize(video.portraitPosterUrl),
-  };
+  const out = { ...media };
+  for (const key of Object.keys(media) as (keyof T)[]) out[key] = localize(media[key]) as T[keyof T];
+  return out;
 }
 
 /** A media route URL that bypasses any cached redirect, so the retry gets a newly signed target. */

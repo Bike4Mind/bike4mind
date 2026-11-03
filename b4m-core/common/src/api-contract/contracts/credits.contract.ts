@@ -35,7 +35,11 @@ export const getCreditBalanceContract = defineEndpoint({
       schema: CreditBalanceSchema,
       example: { balance: 31667 },
     },
-    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+    429: {
+      description: "Rate limit exceeded: the key's own limits, or this endpoint's per-key read limit.",
+      schema: ApiErrorSchema,
+      headers: { 'Retry-After': 'Seconds to wait before retrying.' },
+    },
   },
   codeSample: {
     authToken: 'b4m_live_<key>',

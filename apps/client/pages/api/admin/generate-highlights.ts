@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { randomUUID } from 'crypto';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { AdminSettings } from '@bike4mind/database';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
@@ -14,7 +14,7 @@ import {
   HIGHLIGHTS_NOTE_LIMIT,
   loadHighlightsReleaseNotes,
   parseHighlightsEndDate,
-} from '@server/whatsNew/releaseNoteHighlights';
+} from '@bike4mind/server-utils/whatsNew/releaseNoteHighlights';
 
 // Rate limiting - 1 request per minute to prevent abuse
 const GENERATE_RATE_LIMIT = 1;

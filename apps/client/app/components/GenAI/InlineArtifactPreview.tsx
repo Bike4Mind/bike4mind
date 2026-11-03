@@ -14,6 +14,8 @@ interface InlineArtifactPreviewProps {
   type: ArtifactType;
   maxHeight?: number;
   onError?: (error: string) => void;
+  /** React only: sibling files the artifact's relative imports resolve against. */
+  files?: Record<string, string>;
 }
 
 // Generate sanitized HTML. The inline preview renders into the same
@@ -110,7 +112,13 @@ const REACT_PREVIEW_MAX_HEIGHT = 640;
 // page is never cut short by it.
 const HTML_PREVIEW_MAX_HEIGHT = 2400;
 
-const InlineArtifactPreview: React.FC<InlineArtifactPreviewProps> = ({ artifact, type, maxHeight = 400, onError }) => {
+const InlineArtifactPreview: React.FC<InlineArtifactPreviewProps> = ({
+  artifact,
+  type,
+  maxHeight = 400,
+  onError,
+  files,
+}) => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -123,7 +131,7 @@ const InlineArtifactPreview: React.FC<InlineArtifactPreviewProps> = ({ artifact,
     src: reactSandboxSrc,
     isLoading: reactPreviewLoading,
     error: reactRuntimeError,
-  } = useReactArtifactSandbox(reactArtifact?.content ?? null, reactArtifact?.metadata?.dependencies ?? []);
+  } = useReactArtifactSandbox(reactArtifact?.content ?? null, reactArtifact?.metadata?.dependencies ?? [], files);
 
   // HTML artifacts use /api/artifact-sandbox + postMessage so the per-route
   // CSP (style-src https:) applies instead of the global app policy.

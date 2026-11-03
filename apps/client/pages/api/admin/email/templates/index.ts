@@ -1,14 +1,14 @@
 import { emailTemplateRepository } from '@bike4mind/database';
 import { ApiKeyScope, EmailCategory } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const {
       page = '1',
       limit = '20',
@@ -31,10 +31,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     return res.json(result);
   })
   .post(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const {
       name,
       slug,
@@ -78,6 +74,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       variables,
       isActive,
       createdBy: req.user.id,
+    });
+
+    await recordAdminActionFromRequest(req, {
+      action: 'email.template.created',
+      target: { kind: 'settings', id: template.id, displayName: template.name },
+      summary: `created email template ${template.name}`,
+      details: { slug: template.slug, category: template.category, isActive: template.isActive },
     });
 
     return res.status(201).json(template);

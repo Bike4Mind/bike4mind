@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { deleteOrganization } from './delete';
-import { IOrganizationDocument, IUserDocument, WithId } from '@bike4mind/common';
+import {
+  IDataLakeAccessGrantDocument,
+  IDataLakeDocument,
+  IOrganizationDocument,
+  IUserDocument,
+  WithId,
+} from '@bike4mind/common';
 import * as getOrganization from './get';
 
 describe('organizationService - delete', () => {
@@ -32,9 +38,43 @@ describe('organizationService - delete', () => {
     },
   });
 
+  let lakes: IDataLakeDocument[];
+  let grants: IDataLakeAccessGrantDocument[];
+
+  const isActive = (grant: IDataLakeAccessGrantDocument, asOf?: Date) =>
+    !asOf || grant.expiresAt == null || new Date(grant.expiresAt) > asOf;
+
+  // In-memory grant store, so a second run sees the first run's writes the way a retry would.
+  const lakeAdapters = () => ({
+    dataLakes: {
+      findByOrganizationId: vi.fn(async (orgId: string) => lakes.filter(lake => lake.organizationId === orgId)),
+      update: vi.fn(async (input: { id: string }) => ({ id: input.id })),
+      touchIfStable: vi.fn().mockResolvedValue(true),
+    },
+    dataLakeAccessGrants: {
+      listByPrincipal: vi.fn(),
+      listActiveByLakes: vi.fn(async (ids: string[], opts?: { activeAsOf?: Date }) =>
+        grants
+          .filter(grant => ids.includes(grant.dataLakeId) && isActive(grant, opts?.activeAsOf))
+          .map(grant => ({ ...grant }))
+      ),
+      upsertGrant: vi.fn(async (input: IDataLakeAccessGrantDocument) => {
+        const key = (g: IDataLakeAccessGrantDocument) => `${g.dataLakeId}|${g.principalType}|${g.principalId}`;
+        const existing = grants.find(g => key(g) === key(input));
+        if (existing) Object.assign(existing, input);
+        else grants.push({ ...input });
+        return input;
+      }),
+    },
+    lakeConfigChangeEvents: { record: vi.fn().mockResolvedValue(undefined) },
+  });
+
   beforeEach(() => {
+    lakes = [];
+    grants = [];
     mockAdapters = {
       db: {
+        ...lakeAdapters(),
         organizations: createMockRepository(),
         groups: {
           findByOrganization: vi.fn().mockResolvedValue([]),
@@ -304,6 +344,187 @@ describe('organizationService - delete', () => {
       expect(mockAdapters.db.users.removeGroupsFromAllUsers).not.toHaveBeenCalled();
       expect(mockAdapters.db.groups.delete).not.toHaveBeenCalled();
       expect(mockAdapters.db.users.clearOrganizationPointer).not.toHaveBeenCalled();
+    });
+  });
+  describe('data-lake access lapse', () => {
+    const owner: Partial<IUserDocument> = { id: 'user1', isAdmin: false };
+    const lake = (id: string, organizationId: string, createdByUserId: string) =>
+      ({ id, organizationId, createdByUserId }) as IDataLakeDocument;
+    const grant = (
+      dataLakeId: string,
+      principalId: string,
+      role: IDataLakeAccessGrantDocument['role'],
+      principalType: IDataLakeAccessGrantDocument['principalType'] = 'user'
+    ) =>
+      ({
+        dataLakeId,
+        principalType,
+        principalId,
+        role,
+        grantedByUserId: 'granter',
+        expiresAt: null,
+      }) as IDataLakeAccessGrantDocument;
+    const find = (dataLakeId: string, principalId: string) =>
+      grants.find(g => g.dataLakeId === dataLakeId && g.principalId === principalId);
+
+    beforeEach(() => {
+      vi.spyOn(getOrganization, 'get').mockResolvedValue({
+        ...mockOrganization,
+        adminUserIds: ['manager1'],
+        users: [
+          { userId: 'user1', permissions: [] },
+          { userId: 'member1', permissions: [] },
+          { userId: 'manager1', permissions: [] },
+        ],
+      } as WithId<IOrganizationDocument>);
+      lakes = [lake('lakeA', 'org1', 'user1'), lake('lakeB', 'org1', 'member1'), lake('otherLake', 'org2', 'x')];
+      grants = [
+        grant('lakeA', 'member1', 'reader'),
+        grant('lakeA', 'manager1', 'curator'),
+        grant('lakeA', 'user1', 'curator'),
+        grant('lakeA', 'outsider', 'reader'),
+        grant('lakeA', 'org1', 'reader', 'organization'),
+        grant('lakeB', 'manager1', 'owner'),
+        grant('otherLake', 'member1', 'curator'),
+      ];
+    });
+
+    it("expires members' grants on the org's lakes and leaves everything else active", async () => {
+      await deleteOrganization(owner as IUserDocument, { id: 'org1' }, mockAdapters);
+
+      expect(find('lakeA', 'member1')?.expiresAt).toBeInstanceOf(Date);
+      expect(find('lakeA', 'manager1')?.expiresAt).toBeInstanceOf(Date);
+      expect(find('lakeB', 'manager1')?.expiresAt).toBeInstanceOf(Date);
+      // Billing owner, a non-member, the org-principal grant, and a grant on another org's lake.
+      expect(find('lakeA', 'user1')?.expiresAt).toBeNull();
+      expect(find('lakeA', 'outsider')?.expiresAt).toBeNull();
+      expect(find('lakeA', 'org1')?.expiresAt).toBeNull();
+      expect(find('otherLake', 'member1')?.expiresAt).toBeNull();
+    });
+
+    it('hands a lake to the billing owner when every other owner lapsed, so it does not fall back to its creator', async () => {
+      await deleteOrganization(owner as IUserDocument, { id: 'org1' }, mockAdapters);
+
+      // lakeB was created by member1 and owned by manager1; both lapse in the same delete.
+      expect(find('lakeB', 'user1')).toEqual(expect.objectContaining({ role: 'owner', expiresAt: null }));
+      expect(find('lakeA', 'user1')?.role).toBe('curator');
+    });
+
+    it('lapses before the org row is soft-deleted', async () => {
+      const callOrder: string[] = [];
+      mockAdapters.db.dataLakeAccessGrants.upsertGrant.mockImplementation(async () => {
+        callOrder.push('upsertGrant');
+      });
+      mockAdapters.db.organizations.delete.mockImplementation(async () => {
+        callOrder.push('organizations.delete');
+      });
+
+      await deleteOrganization(owner as IUserDocument, { id: 'org1' }, mockAdapters);
+
+      expect(callOrder.at(-1)).toBe('organizations.delete');
+      expect(callOrder).toContain('upsertGrant');
+    });
+
+    it("clears the members' org pointers only after the lapse", async () => {
+      const callOrder: string[] = [];
+      mockAdapters.db.dataLakeAccessGrants.upsertGrant.mockImplementation(async () => {
+        callOrder.push('upsertGrant');
+      });
+      mockAdapters.db.users.clearOrganizationPointer.mockImplementation(async () => {
+        callOrder.push('clearOrganizationPointer');
+      });
+
+      await deleteOrganization(owner as IUserDocument, { id: 'org1' }, mockAdapters);
+
+      expect(callOrder.indexOf('clearOrganizationPointer')).toBeGreaterThan(callOrder.lastIndexOf('upsertGrant'));
+    });
+
+    it("hands a roster creator's lake to the billing owner even though the creator held its seeded owner grant", async () => {
+      // createDataLake seeds the creator as owner; the hand-off must judge the post-lapse grants,
+      // or this expired grant would mark lakeB creator-owned and member1 would resolve as owner again.
+      // adminOnly sits in adminUserIds with no users[] row and must lapse like any member.
+      vi.spyOn(getOrganization, 'get').mockResolvedValue({
+        ...mockOrganization,
+        adminUserIds: ['manager1', 'adminOnly'],
+        users: [
+          { userId: 'user1', permissions: [] },
+          { userId: 'member1', permissions: [] },
+          { userId: 'manager1', permissions: [] },
+        ],
+      } as WithId<IOrganizationDocument>);
+      grants.push(grant('lakeB', 'member1', 'owner'), grant('lakeA', 'adminOnly', 'curator'));
+
+      await deleteOrganization(owner as IUserDocument, { id: 'org1' }, mockAdapters);
+
+      expect(find('lakeB', 'member1')?.expiresAt).toBeInstanceOf(Date);
+      expect(find('lakeB', 'user1')).toEqual(expect.objectContaining({ role: 'owner', expiresAt: null }));
+      expect(find('lakeA', 'adminOnly')?.expiresAt).toBeInstanceOf(Date);
+    });
+
+    it('hands a lake created by someone off the roster to the billing owner, without lapsing their grants', async () => {
+      lakes.push(lake('lakeC', 'org1', 'formerMember'));
+      grants.push(grant('lakeC', 'formerMember', 'curator'));
+
+      await deleteOrganization(owner as IUserDocument, { id: 'org1' }, mockAdapters);
+
+      expect(find('lakeC', 'user1')).toEqual(expect.objectContaining({ role: 'owner', expiresAt: null }));
+      expect(find('lakeC', 'formerMember')?.expiresAt).toBeNull();
+    });
+
+    it('leaves a lake alone when its off-roster creator still holds their seeded owner grant', async () => {
+      lakes.push(lake('lakeC', 'org1', 'formerMember'));
+      grants.push(grant('lakeC', 'formerMember', 'owner'));
+
+      await deleteOrganization(owner as IUserDocument, { id: 'org1' }, mockAdapters);
+
+      expect(find('lakeC', 'user1')).toBeUndefined();
+      expect(find('lakeC', 'formerMember')).toEqual(expect.objectContaining({ role: 'owner', expiresAt: null }));
+      // Only lakeB (roster creator, roster owner) is succeeded.
+      const successions = mockAdapters.db.lakeConfigChangeEvents.record.mock.calls.filter(
+        ([event]: [{ action: string }]) => event.action === 'membership-succession'
+      );
+      expect(successions).toHaveLength(1);
+    });
+
+    it("reads the org's grants once for both phases", async () => {
+      await deleteOrganization(owner as IUserDocument, { id: 'org1' }, mockAdapters);
+
+      expect(mockAdapters.db.dataLakeAccessGrants.listActiveByLakes).toHaveBeenCalledTimes(1);
+    });
+
+    it('is idempotent: a re-run writes and records nothing further', async () => {
+      await deleteOrganization(owner as IUserDocument, { id: 'org1' }, mockAdapters);
+      const snapshot = structuredClone(grants);
+      mockAdapters.db.dataLakeAccessGrants.upsertGrant.mockClear();
+      mockAdapters.db.lakeConfigChangeEvents.record.mockClear();
+
+      await deleteOrganization(owner as IUserDocument, { id: 'org1' }, mockAdapters);
+
+      expect(mockAdapters.db.dataLakeAccessGrants.upsertGrant).not.toHaveBeenCalled();
+      expect(mockAdapters.db.lakeConfigChangeEvents.record).not.toHaveBeenCalled();
+      expect(grants).toEqual(snapshot);
+    });
+
+    it('records one revoke-access audit event per lapsed grant, attributed to the deleting user', async () => {
+      await deleteOrganization(owner as IUserDocument, { id: 'org1' }, mockAdapters);
+
+      const actions = mockAdapters.db.lakeConfigChangeEvents.record.mock.calls.map(
+        ([event]: [{ action: string }]) => event.action
+      );
+      expect(actions.filter((a: string) => a === 'revoke-access')).toHaveLength(3);
+      expect(actions.filter((a: string) => a === 'membership-succession')).toHaveLength(1);
+    });
+
+    it('touches no grants when validation rejects the delete', async () => {
+      mockAdapters.validation = {
+        canDeleteOrganization: vi.fn().mockResolvedValue({ canDelete: false, reason: 'blocked' }),
+      };
+
+      await expect(deleteOrganization(owner as IUserDocument, { id: 'org1' }, mockAdapters)).rejects.toThrow(
+        'Organization deletion validation failed: blocked'
+      );
+
+      expect(mockAdapters.db.dataLakeAccessGrants.upsertGrant).not.toHaveBeenCalled();
     });
   });
 });

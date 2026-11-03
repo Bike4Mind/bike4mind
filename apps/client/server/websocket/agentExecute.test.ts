@@ -39,7 +39,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   withWebSocketContext: vi.fn(
     (handler: (event: unknown, context: unknown, logger: unknown) => Promise<unknown>) => handler
   ),
@@ -98,12 +98,12 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
   },
 }));
 
-import { ApiKeyScope, PROMPT_TEXT_MAX } from '@bike4mind/common';
+import { ApiKeyScope, PROMPT_TEXT_MAX, TooManyRequestsError } from '@bike4mind/common';
 import { verifyApiKey, verifyJwtToken, checkApiKeyRateLimitOrThrow, checkRateLimit } from '@server/cli/auth';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
-import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
+import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { func, handlePermissionResponse, handleGateResponse } from './agentExecute';
 
 const noopLogger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), updateMetadata: vi.fn() };
@@ -672,6 +672,31 @@ describe('start command credential threading', () => {
     expect(input.apiKeyInfo).toBe(key);
   });
 
+  it('relays quota error metadata to the websocket caller', async () => {
+    mockApiGwSend.mockClear();
+    vi.mocked(verifyApiKey).mockResolvedValueOnce({
+      keyId: 'key-1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      ownerUntrusted: true,
+    } as never);
+    vi.mocked(startAgentExecution).mockRejectedValueOnce(
+      new TooManyRequestsError('Token rate limit exceeded', { errorCode: 'token_rate_limit_exceeded', retryAfter: 7 })
+    );
+    await (func as (event: unknown, context: unknown, logger: unknown) => Promise<unknown>)(
+      startEvent('b4m_live_x'),
+      {},
+      noopLogger
+    );
+    const [sent] = mockApiGwSend.mock.calls[0];
+    expect(JSON.parse(sent.input.Data.toString())).toEqual({
+      action: 'agent_error',
+      message: 'Token rate limit exceeded',
+      errorCode: 'token_rate_limit_exceeded',
+      retryAfter: 7,
+    });
+  });
+
   it('reports a billing refusal as a message-only error frame', async () => {
     mockApiGwSend.mockClear();
     vi.mocked(verifyApiKey).mockRejectedValueOnce(new Error('not a key'));
@@ -901,6 +926,22 @@ describe('agent_execute API-key check outcome', () => {
     expect(sentFrames()).toEqual([{ action: 'agent_error', message: 'Authentication temporarily unavailable' }]);
     expectNoDriverLeak(sentFrames());
     expect(verifyJwtToken).not.toHaveBeenCalled();
+    expect(startAgentExecution).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['subscription refusal', new ForbiddenError('The CLI and desktop app require an active paid subscription')],
+    ['session lookup outage', databaseUnreachable()],
+  ])('relays the JWT %s without dispatching an execution', async (_label, error) => {
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(new UnauthorizedError('Invalid or expired API key'));
+    vi.mocked(verifyJwtToken).mockRejectedValueOnce(error);
+    await (func as unknown as (event: unknown, context: unknown, logger: unknown) => Promise<unknown>)(
+      event,
+      {},
+      noopLogger
+    );
+    expect(sentFrames()).toEqual([{ action: 'agent_error', message: error.message }]);
+    expectNoDriverLeak(sentFrames());
     expect(startAgentExecution).not.toHaveBeenCalled();
   });
 

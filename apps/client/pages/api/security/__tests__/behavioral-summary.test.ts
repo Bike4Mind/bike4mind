@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+const quotaAdmission = vi.hoisted(() => vi.fn().mockResolvedValue({ release: async () => {} }));
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: quotaAdmission }));
 import { createMocks } from 'node-mocks-http';
 
 /**
@@ -25,7 +28,9 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_req: any, _res: any, next: any) => next() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: () => (_req: any, _res: any, next: any) => next(),
+}));
 
 const repos = vi.hoisted(() => ({
   authFailLogRepository: {
@@ -44,7 +49,7 @@ vi.mock('@bike4mind/services', () => ({
   cacheService: { getCachedData: vi.fn(async (_key: string, factory: () => unknown) => factory()) },
 }));
 
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: {
     getOperationsModel: vi.fn().mockResolvedValue({ modelInfo: { id: 'test-model', backend: 'anthropic' } }),
   },
@@ -73,6 +78,17 @@ describe('GET /api/security/behavioral-summary - emailless callers', () => {
   beforeEach(() => {
     repos.authFailLogRepository.getUserFailedLogins.mockClear();
     llmComplete.fn.mockClear();
+  });
+
+  it('propagates quota refusal instead of returning a reassuring fallback summary', async () => {
+    const error = new Error('completion quota exhausted');
+    quotaAdmission.mockRejectedValueOnce(error);
+    const { req, res } = createMocks({ method: 'GET', query: {} });
+    Object.assign(req, { user: EMAILLESS_USER });
+    await expect(mockRefs.getHandler!(req, res)).rejects.toBe(error);
+    expect(repos.authFailLogRepository.getUserFailedLogins).not.toHaveBeenCalled();
+    expect(llmComplete.fn).not.toHaveBeenCalled();
+    expect(res._isEndCalled()).toBe(false);
   });
 
   it('serves an emailless but authenticated caller instead of 401', async () => {

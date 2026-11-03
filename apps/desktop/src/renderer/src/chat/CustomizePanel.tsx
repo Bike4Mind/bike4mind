@@ -517,7 +517,9 @@ export function CustomizeScreen({
       <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
         <Stack direction="row" alignItems="center" spacing={1} sx={{ ...contentColumnSx, py: 1.25 }}>
           <Stack sx={{ flex: 1, minWidth: 0 }}>
-            <Typography level="title-sm">Customize</Typography>
+            <Typography level="title-sm" component="h1">
+              Customize
+            </Typography>
             <Typography level="body-xs" textColor="text.tertiary">
               {CUSTOMIZE_INTRO}
             </Typography>
@@ -536,7 +538,7 @@ export function CustomizeScreen({
       </Box>
 
       <Tabs defaultValue={0} sx={{ flex: 1, minHeight: 0, bgcolor: 'transparent' }}>
-        <Box sx={{ borderBottom: '1px solid', borderColor: 'divider', py: 1 }}>
+        <Box sx={{ py: 1 }} data-testid="customize-tab-row">
           <TabList
             variant="plain"
             sx={{
@@ -549,6 +551,7 @@ export function CustomizeScreen({
           >
             <Tab data-testid="customize-skills-tab">Skills</Tab>
             <Tab data-testid="customize-mcp-tab">MCP</Tab>
+            <Tab data-testid="customize-plugins-tab">Plugins</Tab>
           </TabList>
         </Box>
         <TabPanel value={0} sx={{ p: 0, flex: 1, ...scrollingColumnHostSx }}>
@@ -560,6 +563,62 @@ export function CustomizeScreen({
           <Box sx={{ ...contentColumnSx, py: 2 }}>
             {entries.map(entry => (
               <EntrySection key={entry.id} entry={entry} />
+            ))}
+          </Box>
+        </TabPanel>
+        <TabPanel value={2} sx={{ p: 0, flex: 1, ...scrollingColumnHostSx }}>
+          <Box
+            data-testid="customize-plugins-grid"
+            sx={{
+              ...contentColumnSx,
+              py: 2,
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))',
+              gap: 2,
+            }}
+          >
+            {['DataLake', 'QuestMaster', 'Tavern', 'Studio'].map(name => (
+              <Sheet
+                key={name}
+                component="article"
+                aria-label={name}
+                data-testid="customize-plugin-card"
+                variant="outlined"
+                sx={{
+                  p: 2,
+                  borderRadius: 'md',
+                  borderStyle: 'dashed',
+                  bgcolor: 'background.level1',
+                  color: 'text.secondary',
+                  cursor: 'not-allowed',
+                }}
+              >
+                <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
+                  <Typography
+                    level="h3"
+                    component="h2"
+                    sx={{ fontSize: 'var(--joy-fontSize-md)', color: 'text.secondary' }}
+                  >
+                    {name}
+                  </Typography>
+                  <IconButton
+                    disabled
+                    size="sm"
+                    variant="outlined"
+                    color="neutral"
+                    aria-label={`Add ${name}`}
+                    data-testid="customize-plugin-add-btn"
+                  >
+                    +
+                  </IconButton>
+                </Stack>
+                <Typography level="body-sm" textColor="text.secondary" data-testid="customize-plugin-status">
+                  <Box component="span" aria-hidden="true" sx={{ mr: 0.75 }}>
+                    {'\uD83D\uDEA7'}
+                  </Box>
+                  Under construction
+                </Typography>
+              </Sheet>
             ))}
           </Box>
         </TabPanel>

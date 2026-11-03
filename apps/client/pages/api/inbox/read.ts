@@ -1,9 +1,9 @@
 import { z } from 'zod';
-import { User, inboxRepository } from '@bike4mind/database';
-import { sendToClient } from '@server/websocket/utils';
+import { inboxRepository } from '@bike4mind/database';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { IUserDocument } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { InboxEvents } from '@bike4mind/common';
 import { Resource } from 'sst';
 
@@ -20,9 +20,7 @@ const handler = baseApi().post(async (req, res) => {
     const validatedBody = inboxUpdateSchema.parse(req.body);
     const { ids } = validatedBody;
 
-    const user = await User.findById(userId);
-
-    const receiverIdForRead = user?.isAdmin ? undefined : userId;
+    const receiverIdForRead = req.user?.isAdmin ? undefined : userId;
 
     await inboxRepository.markAsRead(ids, receiverIdForRead);
 

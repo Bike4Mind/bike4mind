@@ -9,6 +9,9 @@ import {
   generatedAudioTooLargeSchema,
 } from './generatedAudio';
 
+// Conversational voice is configured remotely; this is its billing and admission identifier.
+export const CONVERSATIONAL_VOICE_MODEL_ID = 'elevenlabs';
+
 // Providers supported by the unified TTS API. Mirrors supportedImageGenerationVendor.
 export const supportedVoiceGenerationVendor = z.enum(['openai', 'elevenlabs']);
 

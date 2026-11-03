@@ -21,7 +21,7 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
 }));
 
 const mockPostMessageToSlack = vi.fn();
-vi.mock('@server/integrations/slack/slack', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   postMessageToSlack: (...args: unknown[]) => mockPostMessageToSlack(...args),
 }));
 
@@ -201,13 +201,23 @@ describe('creditPurchaseReconciliation cron', () => {
       expect(result.ungranted.map(p => p.reason)).toEqual(['balance_not_applied']);
     });
 
-    it('flags a row whose owner no longer exists', async () => {
+    // The grant cannot commit a row for a missing user, so a row with no owner was granted first.
+    it('does not alert on a granted row whose owner was deleted afterwards', async () => {
       mockFindUserById.mockResolvedValue(null);
 
       const result = await runCreditPurchaseReconciliation(undefined, NOW);
 
-      expect(result.ungranted.map(p => p.reason)).toEqual(['owner_missing']);
-      expect(mockPostMessageToSlack.mock.calls[0][0]).toContain('Owner missing');
+      expect(result.ungranted).toEqual([]);
+      expect(result.ownerDeleted).toBe(1);
+      expect(mockPostMessageToSlack).not.toHaveBeenCalled();
+      expect(mockLoggerError).not.toHaveBeenCalled();
+      expect(mockEmitMetric).toHaveBeenCalledWith(
+        'Lumina5/CreditPurchases',
+        'UngrantedPurchases',
+        0,
+        { Stage: 'test' },
+        'Count'
+      );
     });
 
     it('names the ledger owner rather than the intent metadata user, so credits reach the right account', async () => {

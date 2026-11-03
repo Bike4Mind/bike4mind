@@ -1,6 +1,7 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import type {
+  ISkillBundle,
   ISkillHonestSummary,
   ISkillListing,
   ISkillListingVersion,
@@ -65,11 +66,12 @@ export type SubmitResult = { listing: MarketListing; version: ISkillListingVersi
 
 const PAGE_SIZE = 24;
 
-export const useMarketMe = () =>
+export const useMarketMe = (opts?: { enabled?: boolean }) =>
   useQuery({
     queryKey: ['skill-market', 'me'],
     queryFn: async () => (await api.get<MarketMe>('/api/skills/market/me')).data,
     staleTime: 5 * 60 * 1000,
+    enabled: opts?.enabled,
   });
 
 export const useMarketListings = (filters: MarketFilters) =>
@@ -112,10 +114,11 @@ export const useListingDetail = (args: { id?: string; token?: string }) =>
     retry: false,
   });
 
-export const useMyListings = () =>
+export const useMyListings = (opts?: { enabled?: boolean }) =>
   useQuery({
     queryKey: ['skill-market', 'mine'],
     queryFn: async () => (await api.get<{ data: MyListing[] }>('/api/skills/market/mine')).data.data,
+    enabled: opts?.enabled,
   });
 
 export type ReviewQueueFilter = 'pending' | 'audit' | 'reports' | 'legacy';
@@ -316,4 +319,42 @@ export const useReviewVersion = () => {
 export const conflictInfo = (error: unknown): { code?: string; suggestedName?: string } | null => {
   const res = (error as { response?: { status?: number; data?: { code?: string; suggestedName?: string } } })?.response;
   return res?.status === 409 ? (res.data ?? {}) : null;
+};
+
+/** An org's Claude Code skill bundles (pages/api/skills/market/bundles) and the listings they may hold. */
+export type SkillBundlesView = {
+  bundles: ISkillBundle[];
+  listings: { id: string; name: string; pluginName: string }[];
+  canEdit: boolean;
+};
+
+export type SkillBundleInput = { name: string; description: string; listingIds: string[] };
+
+const bundlesKey = (orgId: string) => ['skill-market', 'bundles', orgId];
+
+export const useSkillBundles = (orgId: string) =>
+  useQuery({
+    queryKey: bundlesKey(orgId),
+    queryFn: async () => (await api.get<SkillBundlesView>('/api/skills/market/bundles', { params: { orgId } })).data,
+  });
+
+export const useSaveSkillBundle = (orgId: string) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, ...input }: SkillBundleInput & { id?: string }) =>
+      id
+        ? (await api.put<ISkillBundle>(`/api/skills/market/bundles/${id}`, input)).data
+        : (await api.post<ISkillBundle>('/api/skills/market/bundles', { ...input, organizationId: orgId })).data,
+    onSuccess: () => qc.invalidateQueries({ queryKey: bundlesKey(orgId) }),
+  });
+};
+
+export const useDeleteSkillBundle = (orgId: string) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      await api.delete(`/api/skills/market/bundles/${id}`);
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: bundlesKey(orgId) }),
+  });
 };

@@ -47,6 +47,10 @@ describe('describeReturn', () => {
     expect(describeReturn(event('failed'))).toMatch(/failed.*was not sent/i);
   });
 
+  it('names an expired session rather than a failed reply', () => {
+    expect(describeReturn(event('session-expired'))).toMatch(/session expired.*was not sent.*back in the composer/i);
+  });
+
   it('quotes the refusal when the turn itself was refused', () => {
     expect(describeReturn(event('refused', 1, 'Sign in to send a message.'))).toMatch(/Sign in to send a message\./);
   });

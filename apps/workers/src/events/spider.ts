@@ -9,7 +9,7 @@ import { SpiderEvents, SessionEvents, NotebookCurationEvents } from '@server/uti
 import { sessionRepository } from '@bike4mind/database/auth';
 import { Quest } from '@bike4mind/database/content';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { v4 as uuidv4 } from 'uuid';
 import { Resource } from 'sst';
 import { getSettingsByNames } from '@bike4mind/utils';

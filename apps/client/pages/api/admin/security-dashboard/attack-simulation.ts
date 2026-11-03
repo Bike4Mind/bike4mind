@@ -1,5 +1,4 @@
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { Resource } from 'sst';
 import { ApiKeyScope } from '@bike4mind/common';
 import {
@@ -15,11 +14,10 @@ export interface AttackSimulationGetResponse {
   findings: ISecurityFindingDocument[];
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Admin access required');
-  }
-
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req, res) => {
   const stage = Resource.App.stage;
 
   const [runs, findings] = await Promise.all([

@@ -70,6 +70,19 @@ export default function Bike4MindGuide() {
 
       <Card variant="outlined" sx={{ mb: 2 }}>
         <Typography level="h3" sx={{ m: 2 }}>
+          Sign-up and Sign-in Network Data
+        </Typography>
+        <List>
+          <ListItem> - When you sign up or sign in, we record the IP address and browser of the connection, and the network (ASN) and country it came from. We use this to detect abuse and protect accounts.</ListItem>
+          <ListItem> - The record of each sign-up and sign-in event is deleted after 90 days.</ListItem>
+          <ListItem> - The IP address saved with your account at sign-up is kept in full for 90 days. After that, a daily cleanup replaces it with a shortened prefix (the first three parts of an IPv4 address, or the first three groups of an IPv6 address), which identifies a network rather than a device. The rest of the sign-up record is kept for the life of your account.</ListItem>
+          <ListItem> - Your account also keeps the IP address and device details of your most recent sign-ins, and our security audit log keeps the IP address of each sign-in for 12 months.</ListItem>
+          <ListItem> - The sign-up record, sign-in events, and recent sign-in history are deleted when your account is deleted.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
           Your Rights
         </Typography>
         <CustomImage src="/images/privacy4.png" width={500} height={450} />

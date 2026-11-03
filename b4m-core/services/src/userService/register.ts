@@ -2,10 +2,12 @@ import {
   IAdminSettingsRepository,
   ICreditLotRepository,
   ICreditTransactionRepository,
+  newSignupGrant,
   IUserDocument,
   IUserRepository,
+  type SignupProtection,
 } from '@bike4mind/common';
-import { IRegInviteDocument, RegInviteStatusType, RepositoryUpdateOptions } from '@bike4mind/common';
+import { IRegInviteDocument, RegInviteSource, RegInviteStatusType, RepositoryUpdateOptions } from '@bike4mind/common';
 import { ISubscriberRepository } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { BadRequestError } from '@bike4mind/utils';
@@ -13,14 +15,17 @@ import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import {
   CURRENT_POLICY_VERSION,
+  DEFAULT_STORAGE_LIMIT_MB,
+  resolveUserStorageLimit,
   PENDING_FREE_CREDITS_TAG,
   settingsMap,
   USERNAME_RULES_MESSAGE,
   usernameSchema,
 } from '@bike4mind/common';
-import { releasePendingFreeCredits } from './freeCredits';
+import { type FreeCreditAdapters, releasePendingFreeCredits } from './freeCredits';
 import { shouldBlockDisposableEmail } from './disposableEmail';
 import { OAuthSourceClientLookup, resolveOAuthSourceTag } from './sourceTag';
+import { assertUsernameNotReserved } from './reservedUsername';
 
 // NOT parsed at runtime - derives the param type via z.infer only. The policy/age fields are
 // enforced by the manual `!== true` / version checks in registerUser below, not by this schema.
@@ -63,6 +68,7 @@ export type RegisterUserParameters = z.infer<typeof registerUserSchema>;
 interface RegisterUserAdapters {
   db: {
     users: IUserRepository;
+    signupProtection?: SignupProtection;
     adminSettings: IAdminSettingsRepository;
     registrationInvites: {
       findByCode: (code: string) => Promise<IRegInviteDocument | null>;
@@ -87,14 +93,17 @@ interface RegisterUserAdapters {
    * Used by OTC registration where email ownership is already verified.
    */
   skipInviteCheck?: boolean;
+  /** Forwarded to the staged signup grant's first assessment (see FreeCreditAdapters). */
+  collectRiskSignals?: FreeCreditAdapters['collectRiskSignals'];
+  emitRiskBand?: FreeCreditAdapters['emitRiskBand'];
+  signupMeta?: IUserDocument['signupMeta'];
 }
 
 export const registerUser = async (
   params: RegisterUserParameters,
-  { db, logger, skipInviteCheck }: RegisterUserAdapters
+  { db, logger, skipInviteCheck, signupMeta }: RegisterUserAdapters
 ) => {
-  const { email, name, inviteCode, password, metadata, acceptedPolicyVersion, ageAttestation, sourceClientId } =
-    params;
+  const { email, name, inviteCode, password, metadata, acceptedPolicyVersion, ageAttestation, sourceClientId } = params;
 
   // P0-B abuse gate: reject creation unless a current, versioned AUP/ToS acceptance
   // and an 18+ attestation are present. This is the server-side enforcement - the UI checkboxes
@@ -121,6 +130,9 @@ export const registerUser = async (
     throw new BadRequestError('Invalid email address');
   }
 
+  // The only caller, registerViaOTC, runs after the code proved the email.
+  await assertUsernameNotReserved(username, normalizedEmail, db.adminSettings);
+
   const existingUser = await db.users.findByUsernameOrEmail(username, email);
   if (existingUser) {
     const field = existingUser.username === username ? 'username' : 'email';
@@ -128,12 +140,17 @@ export const registerUser = async (
   }
 
   // anti-sybil: refuse throwaway inboxes at the chokepoint every credit-bearing
-  // registration flows through. The self-serve OAuth signup grant (verifyCallback.ts) applies
-  // the same shouldBlockDisposableEmail gate; Okta/SAML signup and admin user creation grant no
+  // registration flows through. Self-serve OAuth signup (verifyCallback.ts) refuses on the
+  // same shouldBlockDisposableEmail gate; Okta/SAML signup and admin user creation grant no
   // flat credits. Registration-only - OTC sign-in for existing accounts never reaches this
   // function, so grandfathered users on such domains are unaffected.
-  if (await shouldBlockDisposableEmail(normalizedEmail, { adminSettings: db.adminSettings })) {
-    throw new BadRequestError('Disposable email addresses are not allowed');
+  if (
+    await shouldBlockDisposableEmail(normalizedEmail, {
+      adminSettings: db.adminSettings,
+      signupProtection: db.signupProtection,
+    })
+  ) {
+    throw new BadRequestError('This email domain is not allowed');
   }
 
   let tags: string[] = [];
@@ -175,7 +192,7 @@ export const registerUser = async (
   let invite: IRegInviteDocument | null = null;
   let isUnlimitedInvite = false;
   let freeCredits = 0;
-  let effectiveStorage = 1000;
+  let storageLimitOverride: number | null = null;
 
   if (hasInviteCode) {
     invite = await db.registrationInvites.findByCode(normalizedInviteCode);
@@ -201,7 +218,7 @@ export const registerUser = async (
 
     // Check if this invite is associated with a subscriber for custom credits/storage
     let subscriberCredits = 0;
-    let subscriberStorage = 1000; // Default storage
+    let subscriberStorage = DEFAULT_STORAGE_LIMIT_MB; // Default storage
     let subscriberStorageFound = false;
 
     if (invite.email && db.subscribers) {
@@ -210,7 +227,7 @@ export const registerUser = async (
         if (subscriber && subscriber.inviteCode === normalizedInviteCode) {
           // Use subscriber-specific allocations if available
           subscriberCredits = subscriber.startingCredits || 0;
-          subscriberStorage = subscriber.startingStorage || 1000;
+          subscriberStorage = subscriber.startingStorage || DEFAULT_STORAGE_LIMIT_MB;
           subscriberStorageFound = true;
           logger.info(
             `Applying subscriber-specific allocations: ${subscriberCredits} credits, ${subscriberStorage}MB storage for ${email}`
@@ -235,7 +252,8 @@ export const registerUser = async (
           : (parseInt(referralCredits?.settingValue || '0', 10) ?? 0);
 
     // Priority: subscriber > invite code > default (1000)
-    effectiveStorage = subscriberStorageFound ? subscriberStorage : inviteStorage > 0 ? inviteStorage : 1000;
+    const signupStorage = subscriberStorageFound ? subscriberStorage : inviteStorage > 0 ? inviteStorage : null;
+    storageLimitOverride = signupStorage === DEFAULT_STORAGE_LIMIT_MB ? null : signupStorage;
   } else {
     // No invite code - only permitted when open registration is enabled or invite check is skipped
     // (e.g., OTC registration where email ownership is already verified).
@@ -249,7 +267,7 @@ export const registerUser = async (
     // burn the grant with no real inbox behind it. Defer the grant until the user verifies their
     // email (granted in /api/email/verify); mark the account as awaiting it. freeCredits stays 0.
     tags = [...new Set([...tags, PENDING_FREE_CREDITS_TAG])];
-    effectiveStorage = 1000;
+    storageLimitOverride = null;
     logger.info(`Open registration (no invite) for ${email}: free credits deferred until email verification`);
   }
 
@@ -268,6 +286,26 @@ export const registerUser = async (
       logger.warn(`Could not resolve OAuth source tag for client ${sourceClientId}: ${error}`);
     }
   }
+
+  // Open signups and refer-a-friend invitees trickle their grant; admin and unlimited codes keep the flat grant.
+  const isReferralInvite = Boolean(invite && !isUnlimitedInvite && invite.source === RegInviteSource.referral);
+  const referralGrant = !hasInviteCode
+    ? await newSignupGrant(db.adminSettings)
+    : isReferralInvite && freeCredits > 0
+      ? await newSignupGrant(db.adminSettings, freeCredits)
+      : undefined;
+
+  // Only an invite a user sent through the refer flow names an inviter. Admin bulk codes,
+  // admin-issued subscriber invites and unlimited codes have no sender to credit, and invites
+  // minted before `source` existed are deliberately not attributed.
+  const referredByUserId =
+    invite && !isUnlimitedInvite && invite.source === RegInviteSource.referral && invite.userId ? invite.userId : null;
+
+  const invitesPerUserSetting = await db.adminSettings.findBySettingName('ReferralInvitesPerUser');
+  const invitesPerUserParsed = settingsMap.ReferralInvitesPerUser.schema.safeParse(invitesPerUserSetting?.settingValue);
+  const numReferralsAvailable = invitesPerUserParsed.success
+    ? invitesPerUserParsed.data
+    : settingsMap.ReferralInvitesPerUser.schema.parse(undefined);
 
   const buildUser: Omit<IUserDocument, 'id'> = {
     username,
@@ -289,10 +327,14 @@ export const registerUser = async (
     // DEFAULT VALUES
     groups: [],
     isAdmin: false,
-    storageLimit: effectiveStorage, // Priority: subscriber > invite code > default (1000)
+    storageLimit: resolveUserStorageLimit({ storageLimitOverride }).limitMb,
+    storageLimitOverride,
+    planStorageLimit: null,
     currentStorageSize: 0,
     currentCredits: 0,
-    pendingCreditGrant: freeCredits > 0 ? freeCredits : null,
+    pendingCreditGrant: freeCredits > 0 && !referralGrant ? freeCredits : null,
+    ...(signupMeta ? { signupMeta } : {}),
+    ...(referralGrant ? { signupGrant: referralGrant } : {}),
     level: 'DemoUser',
     isBanned: false,
     isModerated: false,
@@ -330,7 +372,8 @@ export const registerUser = async (
     pendingEmailExpires: null,
     pendingEmailUsed: null,
     regInvites: [],
-    numReferralsAvailable: 3,
+    referredByUserId,
+    numReferralsAvailable,
     stripeCustomerId: null,
     organizationId: null,
     googleDrive: null,
@@ -405,22 +448,28 @@ export const registerViaOTC = async (
   const { db, logger } = adapters;
   const newUser = await registerUser(params, adapters);
 
+  if (newUser.signupGrant) {
+    await db.users.update({ id: newUser.id, emailVerified: true, emailVerifiedAt: new Date() });
+  }
+
   const taggedUser = { ...newUser, tags: [...new Set([...(newUser.tags ?? []), 'Customer'])] };
-  const hasPendingCredits = taggedUser.tags.includes(PENDING_FREE_CREDITS_TAG);
 
   let finalTags = taggedUser.tags;
   let pendingCreditGrant = newUser.pendingCreditGrant ?? null;
 
-  if (hasPendingCredits && db.creditTransactions) {
+  if (db.creditTransactions) {
     const release = await releasePendingFreeCredits(taggedUser, {
       db: {
         adminSettings: db.adminSettings,
         creditTransactions: db.creditTransactions,
         creditLots: db.creditLots,
         users: db.users,
+        signupProtection: db.signupProtection,
       },
       reason: 'OTC registration (email verified)',
       logger,
+      collectRiskSignals: adapters.collectRiskSignals,
+      emitRiskBand: adapters.emitRiskBand,
     });
     // On failure the patch is empty, so the pending tag and amount survive as the retry
     // breadcrumb while the user is still verified and let in.
@@ -443,6 +492,10 @@ export const registerViaOTC = async (
   // currentCredits is deliberately not written: addCredits already `$inc`ed it.
   await db.users.update({ id: newUser.id, ...verification });
 
+  if (newUser.signupGrant) {
+    const persisted = await db.users.findById(newUser.id);
+    if (persisted) return persisted;
+  }
   return { ...newUser, ...verification } as IUserDocument;
 };
 

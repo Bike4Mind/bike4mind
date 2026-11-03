@@ -23,12 +23,12 @@ import { scrapeWithRetry } from '@bike4mind/services/llm/tools/implementation/we
 import { taskScheduleRepository } from '@bike4mind/database';
 import { ResearchTaskStatus } from '@bike4mind/common';
 import { fileTagRepository } from '@bike4mind/database';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { Logger } from '@bike4mind/observability';
 import { researchTaskJobs } from '@server/utils/researchTasks';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { assertOwnerCanAfford, createCompletionMeter } from '@server/billing/meterPlatformCompletion';
-import { getQuestErrorCode, type IUserDocument } from '@bike4mind/common';
+import { isTerminalCreditRefusal, type IUserDocument } from '@bike4mind/common';
 
 /**
  * The operations text model with every completion reserved and settled against the task owner's
@@ -231,15 +231,15 @@ const processDiscoveredLinks = async (parameters: { id: string; userId: string }
       }
     );
   } catch (err) {
-    // Out of credits is not transient: fail the task instead of letting SQS redeliver it.
-    if (getQuestErrorCode(err) !== 'insufficient_credits') throw err;
+    // A credit refusal is not transient: fail the task instead of letting SQS redeliver it.
+    if (!isTerminalCreditRefusal(err)) throw err;
     await researchTaskRepository.update({
       id: researchTaskId,
       status: ResearchTaskStatus.FAILED,
       statusFailedMessage: (err as Error).message,
       statusFailedAt: new Date(),
     });
-    logger.warn(`Research task ${researchTaskId} failed: the owner is out of credits`);
+    logger.warn(`Research task ${researchTaskId} failed: ${(err as Error).message}`);
     return;
   }
 

@@ -1,4 +1,10 @@
-import { appFilesBucket, fabFileBucket, generatedImagesBucket, slackExportBucket } from './buckets';
+import {
+  appFilesBucket,
+  fabFileBucket,
+  generatedImagesBucket,
+  publishedArtifactsBucket,
+  slackExportBucket,
+} from './buckets';
 import {
   DEFAULT_LAMBDA_ENVIRONMENT,
   PRODUCTION_STAGES,
@@ -6,7 +12,16 @@ import {
   TEST_GENERATION_PROVIDER_ENVIRONMENT,
 } from './constants';
 import { imageProcessor } from './imageProcessor';
+import {
+  buildQueuePair,
+  contributedQueuePairOptions,
+  describeDroppedContributions,
+  partitionContributedQueues,
+  reservedQueueNames,
+  type ContributedQueueSpec,
+} from '@bike4mind/infra';
 import { allSecrets } from './secrets';
+import * as generatedInfraResources from './premium-generated/infraResources.generated';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { eventBus } from './bus';
@@ -54,6 +69,18 @@ const lakeMemoryQueue = new sst.aws.Queue('lakeMemoryQueue', {
   dlq: {
     queue: lakeMemoryQueueDLQ.arn,
     retry: 2,
+  },
+});
+
+// Account behavioral risk evidence. Fed by direct refresh sends (web/API function, the signupRiskSweep
+// cron) and by completion messages the app bus rule transforms from completion.completed events
+// (infra/eventBus.ts). Visibility timeout must exceed the 2-minute handler timeout below.
+const riskEvidenceQueueDLQ = new sst.aws.Queue('riskEvidenceQueueDLQ', {});
+const riskEvidenceQueue = new sst.aws.Queue('riskEvidenceQueue', {
+  visibilityTimeout: '3 minutes',
+  dlq: {
+    queue: riskEvidenceQueueDLQ.arn,
+    retry: 3,
   },
 });
 
@@ -759,6 +786,81 @@ const questExportQueueSubscription = questExportQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
+// Publish Thumbnail Queue
+// Owner-only thumbnails of published bundles: one message per artifact version, enqueued by publish
+// finalize, restore and AI revise (enqueuePublishThumbnail in packages/server-utils). Hosted only -
+// the self-host worker image ships no browser (see selfhostParityPolicy.ts and
+// manifestCoverage.test.ts).
+//
+// Two functions. The queue handler (orchestrator) has the database and the private bucket: it
+// loads the artifact, checks the version, builds the fully inlined document, stages it under
+// drafts/ and invokes the renderer, then stores and records the WebP it gets back. The renderer
+// runs the page in headless Chromium (@sparticuz/chromium) and has no application credentials or
+// permissions: no link, no secrets, no VPC, no environment of its own, only the logging role. It reads
+// the staged document through a short-lived presigned link and returns the image inline.
+// infra/__tests__/publishThumbnailRenderer.test.ts holds both sides of that split.
+// Each invocation also ends its own execution environment once its answer is delivered
+// (apps/workers/src/media/lambdaRuntimeExit.ts), so every render starts in a fresh runtime and
+// each REPORT line records that exit as Runtime.ExitError by design; the orchestrator still
+// receives an ordinary result.
+const publishThumbnailRenderer = new sst.aws.Function('PublishThumbnailRenderer', {
+  handler: 'apps/workers/src/media/publishThumbnailRenderer.handler',
+  runtime: 'nodejs24.x',
+  // Runtime start (every invocation) + document fetch (15 s) + browser extraction and launch + the
+  // 35 s render deadline + encode, close and the teardown check (up to 5 s).
+  timeout: '75 seconds',
+  // Chromium needs the headroom; @sparticuz/chromium documents ~1.6 GB as its floor.
+  memory: '2048 MB',
+  nodejs: {
+    // @sparticuz/chromium resolves its brotli-packed binary relative to its own package dir, so it
+    // cannot be bundled; playwright-core loads its protocol/driver files the same way. sharp is a
+    // native addon (sst externalizes it by default but only ships it when installed). install
+    // runs npm for the Lambda's linux platform, so the right prebuilds land in the zip.
+    install: ['@sparticuz/chromium', 'playwright-core', 'sharp'],
+    esbuild: {
+      external: ['@sparticuz/chromium', 'playwright-core', 'sharp'],
+    },
+  },
+  // @sparticuz/chromium ships only Open Sans, which has no arrows or symbols. Its fonts.conf already
+  // scans /var/task/fonts, so these fallback faces need no code; /var/task also outlives the
+  // per-render /tmp wipe (apps/workers/src/media/renderEnvironment.ts).
+  copyFiles: [{ from: 'apps/workers/src/media/fonts', to: 'fonts' }],
+});
+const publishThumbnailQueueDLQ = new sst.aws.Queue('publishThumbnailQueueDLQ', {});
+const publishThumbnailQueue = new sst.aws.Queue('publishThumbnailQueue', {
+  visibilityTimeout: '4 minutes', // > the 150-second handler timeout + margin
+  dlq: {
+    queue: publishThumbnailQueueDLQ.arn,
+    retry: 2,
+  },
+});
+const publishThumbnailQueueSubscription = publishThumbnailQueue.subscribe(
+  {
+    handler: 'apps/workers/src/queueHandlers/publishThumbnail.dispatch',
+    runtime: 'nodejs24.x',
+    // Document build + the renderer invoke (aborted client-side at 90 s) + the upload and record.
+    timeout: '150 seconds',
+    memory: '1024 MB',
+    vpc: lambdaVpc,
+    link: [...allSecrets, publishedArtifactsBucket],
+    permissions: [{ actions: ['lambda:InvokeFunction'], resources: [publishThumbnailRenderer.arn] }],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+      // Origin the blessed /static/lib scripts load from inside the render (renderSandboxedBundle).
+      APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
+      // Read by apps/workers/src/media/invokeThumbnailRenderer.ts.
+      PUBLISH_THUMBNAIL_RENDERER_FUNCTION: publishThumbnailRenderer.name,
+    },
+  },
+  {
+    ...SINGLE_RECORD_BATCH,
+    // Each render holds a 2 GB Chromium for up to a minute, and a backfill can enqueue the whole
+    // library at once; cap the fan-out without reserving account concurrency. The renderer is
+    // only ever invoked from here, so this caps it too.
+    transform: { eventSourceMapping: { scalingConfig: { maximumConcurrency: 5 } } },
+  }
+);
+
 // Data Lake Cleanup Queue
 // Background phase-2 hard-delete sweep for a soft-deleted lake, offloaded off the request path.
 // Links fabFileBucket because the sweep deletes each purged file's stored objects; no websocket.
@@ -826,6 +928,28 @@ const lakeMemoryQueueSubscription = lakeMemoryQueue.subscribe(
     },
   },
   SINGLE_RECORD_BATCH
+);
+
+// Risk evidence subscription. partialResponses: the handler reports per-record failures so one bad
+// message retries (and DLQs) alone. Links itself because it re-enqueues completion messages as debounced refresh requests.
+const riskEvidenceQueueSubscription = riskEvidenceQueue.subscribe(
+  {
+    handler: 'apps/workers/src/queueHandlers/riskEvidence.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '2 minutes',
+    vpc: lambdaVpc,
+    link: [...allSecrets, riskEvidenceQueue],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
+  },
+  { batch: { size: 10, partialResponses: true } }
 );
 
 // Model inconsistency detection subscription (#3057). 10 minutes, matching lake memory: the run makes
@@ -1157,7 +1281,7 @@ const tavernHeartbeatQueue = new sst.aws.Queue('tavernHeartbeatQueue', {
 
 // Deep Agent Wake Queue
 // One message → one wake cycle for one long-horizon agent (orient → act →
-// reflect → groom). See apps/client/server/deepAgent and
+// reflect → groom). See apps/workers/src/deepAgent/wakeHandler.ts and
 // docs/concepts/deep-agent-framework.md.
 const deepAgentWakeQueueDLQ = new sst.aws.Queue('deepAgentWakeQueueDLQ', {});
 const deepAgentWakeQueue = new sst.aws.Queue('deepAgentWakeQueue', {
@@ -1169,7 +1293,7 @@ const deepAgentWakeQueue = new sst.aws.Queue('deepAgentWakeQueue', {
 });
 const deepAgentWakeQueueSubscription = deepAgentWakeQueue.subscribe(
   {
-    handler: 'apps/client/server/deepAgent/wakeHandler.dispatch',
+    handler: 'apps/workers/src/deepAgent/wakeHandler.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -1548,6 +1672,14 @@ const bobRunQueueSubscription = bobRunQueue.subscribe(
       { actions: ['execute-api:ManageConnections'], resources: ['*'] },
       { actions: ['cloudwatch:PutMetricData'], resources: ['*'] },
     ],
+    nodejs: {
+      // playwright-core cannot be bundled, so external + install ships it. Pinned in apps/client to
+      // the remote Chromium's Playwright: a connect needs the same version on both ends.
+      install: ['playwright-core'],
+      esbuild: {
+        external: ['playwright-core'],
+      },
+    },
   },
   SINGLE_RECORD_BATCH
 );
@@ -1584,6 +1716,40 @@ const libreoncologyAudioRenderQueueSubscription = libreoncologyAudioRenderQueue.
   }
 );
 
+// Package-declared queue pairs. Core alarms the DLQ (dlqAlarms.ts) and links both URLs
+// (web.ts) but subscribes no consumer, and contributeInfra in sst.config.ts is not handed
+// these queues, so a pair has no consumer until that wiring exists. Without core names
+// nothing stops a pair from reusing a core logical name, so codegen without infra/ fails the
+// deploy here.
+const reservedContributedQueueNames = reservedQueueNames(generatedInfraResources);
+const { contributedInfraResources } = generatedInfraResources;
+if (reservedContributedQueueNames === null && contributedInfraResources.queues.length > 0) {
+  throw new Error(
+    '[infra] core resource names unknown (codegen ran without infra/); refusing to create contributed queues. ' +
+      'Re-run pnpm codegen with infra/ present.'
+  );
+}
+const contributedQueuePartition = partitionContributedQueues(
+  contributedInfraResources.queues,
+  reservedContributedQueueNames ?? { resourceNames: [], envNames: [], dlqLabels: [] }
+);
+for (const line of describeDroppedContributions('contributed queue', contributedQueuePartition)) {
+  console.warn(`[infra] ${line}`);
+}
+
+export const contributedQueues: Record<
+  string,
+  { spec: ContributedQueueSpec; queue: sst.aws.Queue; dlq: sst.aws.Queue }
+> = Object.fromEntries(
+  contributedQueuePartition.registered.map(spec => {
+    const pair = buildQueuePair<$util.Output<string>>(contributedQueuePairOptions(spec));
+    const dlq = new sst.aws.Queue(pair.dlqName, pair.dlqArgs);
+    // partitionContributedQueues only registers durations QueueArgs accepts, within the SQS 12-hour ceiling.
+    const queue = new sst.aws.Queue(pair.name, pair.queueArgs(dlq.arn) as sst.aws.QueueArgs);
+    return [spec.name, { spec, queue, dlq }];
+  })
+);
+
 export {
   // Queues
   fabFileChunkQueue,
@@ -1601,10 +1767,12 @@ export {
   githubWebhookQueue,
   webhookDeliveryQueue,
   questExportQueue,
+  publishThumbnailQueue,
   dataLakeCleanupQueue,
   dataLakeTaxonomyQueue,
   dataLakeResearchQueue,
   lakeMemoryQueue,
+  riskEvidenceQueue,
   lakeInconsistencyModelQueue,
   driveLakeIngestQueue,
   driveDisconnectPurgeQueue,
@@ -1637,10 +1805,12 @@ export {
   githubWebhookQueueDLQ,
   webhookDeliveryQueueDLQ,
   questExportQueueDLQ,
+  publishThumbnailQueueDLQ,
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueueDLQ,
   dataLakeResearchQueueDLQ,
   lakeMemoryQueueDLQ,
+  riskEvidenceQueueDLQ,
   lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueueDLQ,
   driveDisconnectPurgeQueueDLQ,
@@ -1675,10 +1845,13 @@ export {
   githubWebhookQueueSubscription,
   webhookDeliveryQueueSubscription,
   questExportQueueSubscription,
+  publishThumbnailQueueSubscription,
+  publishThumbnailRenderer,
   dataLakeCleanupQueueSubscription,
   dataLakeTaxonomyQueueSubscription,
   dataLakeResearchQueueSubscription,
   lakeMemoryQueueSubscription,
+  riskEvidenceQueueSubscription,
   lakeInconsistencyModelQueueSubscription,
   driveLakeIngestQueueSubscription,
   driveDisconnectPurgeQueueSubscription,

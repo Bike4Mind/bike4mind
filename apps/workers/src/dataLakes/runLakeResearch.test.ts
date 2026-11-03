@@ -125,6 +125,23 @@ describe('runLakeResearch', () => {
     expect(h.settleRun).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['banned', { isBanned: true }],
+    ['dispute-pending', { disputePending: true }],
+    ['suspended', { moderation: { status: 'suspended' } }],
+  ])('fails a run whose lake owner is %s before any search, judgment or charge', async (_label, state) => {
+    h.findUserById.mockResolvedValue({ id: 'owner-1', organizationId: null, ...state });
+
+    expect(await runLakeResearch('run-1', logger)).toEqual({ claimed: true });
+
+    expect(h.executeResearchRun).not.toHaveBeenCalled();
+    expect(h.recordOperationalUsage).not.toHaveBeenCalled();
+    expect(h.settleRun).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({ status: 'failed', spentMicroUsd: 0, error: expect.stringMatching(/owner account/) })
+    );
+  });
+
   it('settles a finished run with its stop reason, spend and totals', async () => {
     await runLakeResearch('run-1', logger);
 
@@ -299,6 +316,56 @@ describe('runLakeResearch', () => {
   });
 
   describe('judge-cost usage recording (the runs API reported spend the Spend tab never showed)', () => {
+    it.each(['complete', 'failure', 'free'] as const)('records every judgment token once after %s', async outcome => {
+      h.judge
+        .mockResolvedValueOnce({
+          outcome: 'judged',
+          relevance: 0.9,
+          inputTokens: 100,
+          outputTokens: 10,
+          cacheReadInputTokens: 20,
+          cacheCreationInputTokens: 5,
+        })
+        .mockResolvedValueOnce({
+          outcome: 'failed',
+          error: 'invalid JSON',
+          inputTokens: 40,
+          outputTokens: 4,
+          cacheReadInputTokens: 3,
+          cacheCreationInputTokens: 2,
+        });
+      h.executeResearchRun.mockImplementationOnce(
+        async (
+          _levers: unknown,
+          _runId: string,
+          ports: {
+            judge: (candidate: unknown) => Promise<unknown>;
+            onProgress: (cost: number, totals: unknown) => Promise<void>;
+          }
+        ) => {
+          const candidate = { title: 'T', url: 'https://example.com', snippet: 'S' };
+          await ports.judge(candidate);
+          await ports.judge(candidate);
+          const spentMicroUsd = outcome === 'free' ? 0 : 650;
+          await ports.onProgress(spentMicroUsd, emptyResearchRunTotals());
+          if (outcome === 'failure') throw new Error('run failed');
+          return { totals: emptyResearchRunTotals(), spentMicroUsd, stopReason: 'exhausted' };
+        }
+      );
+
+      const run = runLakeResearch('run-1', logger);
+      if (outcome === 'failure') await expect(run).rejects.toThrow('run failed');
+      else await run;
+
+      expect(h.recordOperationalUsage).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ inputTokens: 140, outputTokens: 14, cachedInputTokens: 23, cacheWriteTokens: 7 }),
+        expect.anything()
+      );
+      h.claimForExecution.mockResolvedValueOnce(null);
+      await runLakeResearch('run-1', logger);
+      expect(h.recordOperationalUsage).toHaveBeenCalledOnce();
+    });
+
     it('records one UsageEvent for the run, attributed to the lake and the resolved judge model', async () => {
       h.claimForExecution.mockResolvedValue(claimedRun({ levers: levers({ model: 'gpt-4.1-mini' }) }));
 
@@ -380,7 +447,10 @@ describe('runLakeResearch', () => {
     // `.catch(() => null)` on the creator lookup means a rejection and a null resolution must
     // behave identically from the caller's side - pinned so that equivalence cannot silently drift.
     it('logs and skips the ledger write when the creator lookup itself rejects', async () => {
-      h.findUserById.mockRejectedValue(new Error('connection reset'));
+      // The pre-execution account gate reads the owner first; it is the settlement read that rejects.
+      h.findUserById
+        .mockResolvedValueOnce({ id: 'owner-1', organizationId: null })
+        .mockRejectedValue(new Error('connection reset'));
 
       await runLakeResearch('run-1', logger);
 

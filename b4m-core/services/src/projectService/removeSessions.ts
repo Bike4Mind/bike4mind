@@ -4,6 +4,7 @@ import {
   IUserRepository,
   secureParameters,
   BadRequestError,
+  ForbiddenError,
 } from '@bike4mind/common';
 import { z } from 'zod';
 import { canonicalId } from '../utils/objectIds';
@@ -55,7 +56,7 @@ export const removeSessions = async (
     throw new BadRequestError('Some sessions are not accessible');
   }
   if (project.userId !== userId && sessions.some(s => s.userId !== userId)) {
-    throw new Error('You are not authorized to remove sessions from this project');
+    throw new ForbiddenError('You are not authorized to remove sessions from this project');
   }
 
   // Canonical on both sides here too: a stored id is lowercase, so an uppercase request id
@@ -66,8 +67,7 @@ export const removeSessions = async (
 
   // Revoke all project users access to the session
   for (const session of sessions) {
-    session.users = session.users.filter(u => u.projectId !== project.id);
-    await db.sessions.update({ id: session.id, users: session.users });
+    await db.sessions.shareable.updateUserShares(session.id, { remove: { projectId: project.id } });
   }
 
   await db.projects.update({ id: project.id, sessionIds: project.sessionIds, updatedAt: project.updatedAt });

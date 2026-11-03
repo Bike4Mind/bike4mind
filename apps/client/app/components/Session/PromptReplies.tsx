@@ -63,6 +63,7 @@ import {
 import { ArtifactElisionBanner } from './ArtifactElisionBanner';
 import { RetrievalCoverageBanner } from './RetrievalCoverageBanner';
 import { RetrievalFloorBanner } from './RetrievalFloorBanner';
+import { LowOutputBudgetBanner, useLowOutputBudget } from './LowOutputBudgetBanner';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { isAxiosError } from 'axios';
@@ -72,7 +73,8 @@ import {
   parseArtifactsWithFallback,
   shouldWarnElidedArtifact,
   validateMermaidSyntax,
-} from '@client/app/utils/artifactParser';
+} from '@bike4mind/server-utils/app/utils/artifactParser';
+import { groupReactArtifacts } from '@client/app/utils/reactArtifactGroup';
 import RechartsRenderer from '../Charts/RechartsRenderer';
 import ChessBoard from '../Chess/ChessBoard';
 import { useSessions } from '@client/app/contexts/SessionsContext';
@@ -81,7 +83,11 @@ import DeepResearchProgress from '../GenAI/DeepResearchProgress';
 import PromptEnhancementBanner from './PromptEnhancementBanner';
 import { extractCodeBlockTitle } from '@client/app/utils/codeBlockTitleExtractor';
 import CitableSources from './CitableSources';
-import { parseChartJSON, ChartParseError, getChartErrorMessage } from '@client/app/utils/chartJsonParser';
+import {
+  parseChartJSON,
+  ChartParseError,
+  getChartErrorMessage,
+} from '@bike4mind/server-utils/app/utils/chartJsonParser';
 import NavigationButtons from './NavigationButtons';
 import ReplyChoiceButtons from './ReplyChoiceButtons';
 import ReplyAccessories from './ReplyAccessories';
@@ -173,7 +179,8 @@ export const createCodeComponent = () => {
   const code = ({ node, className, children, ref, ...props }: ComponentProps<'code'> & ExtraProps) => {
     const match = /language-(\w+)/.exec(className || '');
     const language = match ? match[1] : 'text';
-    const codeContent = String(children).replace(/\n$/, '');
+    // An empty fence has no children at all.
+    const codeContent = String(children ?? '').replace(/\n$/, '');
     const lineCount = codeContent.split('\n').length;
     const inline =
       node?.position?.start.line === node?.position?.end.line &&
@@ -1385,15 +1392,17 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       }),
     [cleanReply, completed, promptMeta?.finishReason]
   );
+  // An empty reply sent with a budget below the model's default gets the actionable notice instead.
+  const lowOutputBudget = useLowOutputBudget(promptMeta?.model?.name, promptMeta?.model?.parameters?.maxTokens);
 
   const { artifacts, processedContent } = useMemo(() => {
     if (!cleanReply) return { artifacts: [], processedContent: '' };
 
     let preprocessedContent = cleanReply;
     if (isStreamingArtifact) {
-      const artifactIndex = preprocessedContent.indexOf('<artifact');
+      const artifactIndex = preprocessedContent.lastIndexOf('<artifact');
       if (artifactIndex !== -1) {
-        preprocessedContent = preprocessedContent.substring(0, artifactIndex).trim();
+        preprocessedContent = preprocessedContent.substring(0, artifactIndex).trimEnd();
       }
     } else if (isTruncatedArtifact) {
       preprocessedContent = repairTruncatedArtifact(preprocessedContent);
@@ -1430,6 +1439,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
   const chessArtifacts = useMemo(() => artifacts.filter(a => a.type === 'chess'), [artifacts]);
   const nonChessArtifacts = useMemo(() => artifacts.filter(a => a.type !== 'chess'), [artifacts]);
+  const reactArtifactGroups = useMemo(() => groupReactArtifacts(nonChessArtifacts), [nonChessArtifacts]);
 
   // Resolved ahead of render so an unparseable board yields null rather than an empty
   // artifact Stack (which would still contribute its margins as a phantom gap).
@@ -1583,7 +1593,8 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
       {/* Truncation that landed before any artifact tag was emitted. Without this the
           bubble renders blank (or stops mid-sentence) with no explanation at all. */}
-      {(truncationNotice === 'reply-empty' ||
+      {truncationNotice === 'reply-empty' && lowOutputBudget && <LowOutputBudgetBanner {...lowOutputBudget} />}
+      {((truncationNotice === 'reply-empty' && !lowOutputBudget) ||
         truncationNotice === 'reply-partial' ||
         truncationNotice === 'reply-degenerate') && (
         <Alert
@@ -1845,7 +1856,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                           // and nothing else: the banners, media grids and artifact
                           // chrome are siblings above, and must not inherit the
                           // reading typography or land in the `> *` measure rules.
-                          <div className="b4m-md">
+                          <div className="b4m-md" data-testid="ai-response-markdown">
                             <ReplyCompleteContext.Provider value={!!completed}>
                               <ReplyPlacesContext.Provider value={placesById}>
                                 <ReplyCitablesContext.Provider value={promptMeta?.citables ?? NO_CITABLES}>
@@ -1906,13 +1917,15 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       {(chessBoard || nonChessArtifacts.length > 0) && (
         <Stack spacing={2} sx={{ mt: 3, mb: 1 }}>
           {chessBoard}
-          {nonChessArtifacts.map((artifact, index) => (
+          {nonChessArtifacts.map(artifact => (
             <ArtifactRenderer
-              key={`${artifact.type}_${artifact.identifier}_${index}`}
+              key={`${artifact.type}_${artifact.identifier}_${artifact.startIndex}`}
               artifact={artifact}
-              index={index}
+              // The full parse's index, chess included, which is what persistence numbers ids by.
+              index={artifacts.indexOf(artifact)}
               messageId={messageId ?? 'unknown'}
               sessionId={currentSessionId ?? undefined}
+              reactGroup={reactArtifactGroups.get(artifact)}
             />
           ))}
         </Stack>

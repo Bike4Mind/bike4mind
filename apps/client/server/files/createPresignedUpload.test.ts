@@ -7,8 +7,10 @@ const h = vi.hoisted(() => ({
   findOrganization: vi.fn(),
   assertCanWriteDataLakeTags: vi.fn(),
   reconcileDataLakeFallbackTags: vi.fn(),
+  consumeFileUploadBudget: vi.fn(async (_req: unknown, _fileCount: number) => undefined),
 }));
 
+vi.mock('@server/files/fileUploadBudget', () => ({ consumeFileUploadBudget: h.consumeFileUploadBudget }));
 vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'test-bucket' } } }));
 vi.mock('@bike4mind/fab-pipeline', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -44,7 +46,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: vi.fn(async () => ({ userId: 'u1' })) }));
 vi.mock('@server/dataLakes/dataLakeScopes', () => ({ assertDataLakeTagWriteScope: vi.fn() }));
 vi.mock('@server/managers/fabFileManager', () => ({ createFabFile: h.createFabFile }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 
 import { createPresignedUpload } from './createPresignedUpload';
 
@@ -120,5 +122,42 @@ describe('createPresignedUpload - quota owner', () => {
     await createPresignedUpload(req, upload() as never);
 
     expect(h.findOrganization).not.toHaveBeenCalled();
+  });
+});
+
+describe('createPresignedUpload - upload allowance', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.createFabFile.mockResolvedValue({ id: 'f1' });
+    h.findOrganization.mockImplementation(async (id: string) => ({ id, currentStorageSize: 0 }));
+    h.reconcileDataLakeFallbackTags.mockImplementation(async (tags: unknown) => tags);
+    h.assertCanWriteDataLakeTags.mockResolvedValue([]);
+  });
+
+  it('spends one unit of the allowance for the upload', async () => {
+    await createPresignedUpload(req, upload() as never);
+
+    expect(h.consumeFileUploadBudget).toHaveBeenCalledTimes(1);
+    expect(h.consumeFileUploadBudget.mock.calls[0][1]).toBe(1);
+  });
+
+  it('creates no file and presigns nothing when the allowance refuses the upload', async () => {
+    h.consumeFileUploadBudget.mockRejectedValueOnce(new Error('Upload limit reached'));
+
+    await expect(createPresignedUpload(req, upload() as never)).rejects.toThrow('Upload limit reached');
+    expect(h.createFabFile).not.toHaveBeenCalled();
+    expect(getSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('does not spend the allowance on an upload an earlier gate refuses', async () => {
+    await expect(
+      createPresignedUpload(req, {
+        ...upload(),
+        fileName: 'malware.exe',
+        mimeType: 'application/x-msdownload',
+      } as never)
+    ).rejects.toThrow(/unsupported file type/);
+
+    expect(h.consumeFileUploadBudget).not.toHaveBeenCalled();
   });
 });

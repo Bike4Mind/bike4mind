@@ -188,6 +188,18 @@ export class EmailJobRepository extends BaseRepository<IEmailJobDocument> implem
   }
 
   /**
+   * Atomically move a DRAFT job to QUEUED.
+   * Returns the updated doc, or null if the job is missing or was already started.
+   */
+  async claimForStart(id: string, updates?: Partial<IEmailJob>): Promise<IEmailJobDocument | null> {
+    return this.model.findOneAndUpdate(
+      { _id: id, status: EmailJobStatus.DRAFT },
+      { $set: { status: EmailJobStatus.QUEUED, ...updates } },
+      { new: true }
+    );
+  }
+
+  /**
    * Find scheduled jobs that are due to be sent
    * Returns jobs with status SCHEDULED where scheduledAt <= now
    */

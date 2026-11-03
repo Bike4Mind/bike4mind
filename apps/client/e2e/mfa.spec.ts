@@ -109,7 +109,7 @@ test.describe('MFA', () => {
 
     await adminPage.clickLoginAs(targetName);
     // Proves the admin's mfa.totpEnabled was projected into currentUser (the select:false
-    // migration regression) - a non-enrolled admin would see login-as-mfa-required-modal instead.
+    // migration regression) - a non-enrolled admin gets a "set up two-factor" hint and no code input.
     await adminPage.expectLoginAsMfaModal();
     await adminPage.fillLoginAsMfa(generateTotp(adminSecret, adminEnrolledStep));
     await adminPage.fillLoginAsReason();

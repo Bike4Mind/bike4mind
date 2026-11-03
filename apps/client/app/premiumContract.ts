@@ -1,6 +1,10 @@
 import type { WorkspaceDeniedToolsTable, WorkspaceSessionSettingsTable } from '@bike4mind/common';
 import type { ComponentType } from 'react';
 
+// Moved to @bike4mind/common so server and workers code can name them without importing this
+// React-typed module. Re-exported here because overlays import them from this path.
+export type { PremiumApiKeyScope, PremiumEntitlementGrants } from '@bike4mind/common';
+
 /**
  * Core-owned contract for premium overlay contributions (Open Core).
  *
@@ -120,6 +124,13 @@ export interface PremiumNavDescriptor {
    * same visibility rule. Omitted -> the "More" flyout only. Use for a product's main launch point.
    */
   sidebar?: boolean;
+  /**
+   * A hook naming a short tag for the item's sidebar row (a few words at most: the tag never shrinks,
+   * so a long one squeezes the row's label), or null for none. SidenavNav draws it in the Gears row's
+   * Start here style and calls it once per render of the row, so it must follow the rules of hooks.
+   * Only the sidebar row shows it, not the "More" flyout.
+   */
+  useSidebarTag?: () => string | null;
 }
 
 /**
@@ -310,23 +321,6 @@ export type PremiumWorkspaceGrantDisplays = Readonly<Record<string, readonly Pre
  * the build.
  */
 export type PremiumToolDisplayLabels = Readonly<Record<string, string>>;
-
-/**
- * Entitlement registry rows an overlay adds (`b4mContributions.entitlementGrants`) to the built-in
- * rows in lib/entitlements/registry.ts, in new territory only: a row that changes a built-in tag,
- * implication or credit amount, or grants a key core already grants, is dropped. Literal data like
- * the labels above, so the client bundle never imports overlay code. Keys and tags arrive normalized
- * (lowercase); `base`, `datalake:` and `embed:` keys and `source:` tags are reserved. An implication
- * must start from a key a contribution grants, and signup credits sit on contributed staff keys. Two
- * overlays giving one id different values, or one key two granting tags, fail the build.
- */
-export interface PremiumEntitlementGrants {
-  readonly tagGrants?: readonly { readonly tag: string; readonly entitlements: readonly string[] }[];
-  readonly impliedEntitlements?: readonly { readonly ifHeld: string; readonly alsoGrant: readonly string[] }[];
-  readonly signupCredits?: readonly { readonly key: string; readonly credits: number }[];
-  /** Keys conferred on internal staff domains, on top of the built-in set. */
-  readonly internalStaffEntitlements?: readonly string[];
-}
 
 /** What core hands a reply accessory about the reply it sits under. */
 export interface PremiumReplyAccessoryProps {

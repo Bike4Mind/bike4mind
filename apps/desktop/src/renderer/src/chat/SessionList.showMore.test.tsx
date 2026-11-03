@@ -2,6 +2,8 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
+import type { LocalHistoryResult } from '@shared/history';
+import { LOCAL_HISTORY_CHANGED } from './localHistory';
 import type { ChatSessionMode, ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import { EMPTY_SIDEBAR_SECTIONS, type SidebarSectionsState } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -306,5 +308,117 @@ describe('SessionList user section cap', () => {
     click(query('sidebar-section-show-more-btn'));
     expect(all('chat-session-item', section)).toHaveLength(30);
     expect(query('sidebar-section-show-more-btn')).toBeNull();
+  });
+});
+
+describe('SessionList local history', () => {
+  const result: LocalHistoryResult = {
+    id: 'page-1',
+    kind: 'page',
+    sessionId: 's0',
+    title: 'Saved page',
+    snippet: '<mark>needle</mark> content',
+    capturedAt: '2026-10-01T00:00:00.000Z',
+  };
+  const searchHistory = vi.fn<(query: string) => Promise<LocalHistoryResult[]>>();
+  let historyChanged: () => void = () => {};
+  const unsubscribe = vi.fn();
+  beforeEach(() => {
+    vi.useFakeTimers();
+    searchHistory.mockReset();
+    unsubscribe.mockReset();
+    Object.assign(window, {
+      b4m: {
+        chat: {
+          searchHistory,
+          onHistoryChanged: (listener: () => void) => {
+            historyChanged = listener;
+            return unsubscribe;
+          },
+        },
+      },
+    });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  const search = async (text: string) => {
+    typeSearch(text);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120);
+    });
+  };
+
+  it('finds saved page content and opens its conversation', async () => {
+    searchHistory.mockResolvedValue([result]);
+    const onSelect = vi.fn();
+    render({ sessions: projectSessions(1), onSelect });
+    await search('needle');
+    expect(searchHistory).toHaveBeenCalledWith('needle');
+    expect(query('local-history-results')?.textContent).toContain('Page: Saved page');
+    expect(query('local-history-results')?.textContent).not.toContain('<mark>');
+    click(query('local-history-result'));
+    expect(onSelect).toHaveBeenCalledWith('s0');
+  });
+
+  it('hides previous matches immediately and ignores an overtaken search', async () => {
+    let resolvePending!: (results: LocalHistoryResult[]) => void;
+    const pending = new Promise<LocalHistoryResult[]>(resolve => {
+      resolvePending = resolve;
+    });
+    searchHistory.mockResolvedValueOnce([result]).mockReturnValueOnce(pending).mockResolvedValueOnce([]);
+    render({ sessions: projectSessions(1) });
+    await search('needle');
+    expect(query('local-history-result')).not.toBeNull();
+    typeSearch('second');
+    expect(query('local-history-result')).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120);
+    });
+    await search('third');
+    await act(async () => {
+      resolvePending([result]);
+    });
+    expect(query('local-history-result')).toBeNull();
+  });
+
+  it('refreshes after clear and session changes, and reports failed searches', async () => {
+    searchHistory
+      .mockResolvedValueOnce([result])
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error('Index unavailable'));
+    const sessions = projectSessions(1);
+    render({ sessions });
+    await search('needle');
+    await act(async () => {
+      window.dispatchEvent(new Event(LOCAL_HISTORY_CHANGED));
+    });
+    expect(query('local-history-result')).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120);
+    });
+    expect(searchHistory).toHaveBeenCalledTimes(2);
+    render({ sessions: [...sessions] });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120);
+    });
+    expect(query('local-history-error')?.textContent).toContain('Index unavailable');
+    typeSearch('');
+    expect(query('local-history-error')).toBeNull();
+    expect(query('local-history-result')).toBeNull();
+  });
+  it('refreshes an unchanged query when a newly captured page changes the index', async () => {
+    searchHistory.mockResolvedValueOnce([]).mockResolvedValueOnce([result]);
+    render({ sessions: projectSessions(1) });
+    await search('needle');
+    expect(query('local-history-result')).toBeNull();
+    act(() => historyChanged());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120);
+    });
+    expect(query('local-history-result')).not.toBeNull();
+    act(() => root?.unmount());
+    root = null;
+    expect(unsubscribe).toHaveBeenCalledOnce();
   });
 });

@@ -1,4 +1,4 @@
-import type { IMessage, TurnUsage } from '@bike4mind/common';
+import type { IMessage, ThinkingVisibility, TurnUsage } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { RepeatedCallGuardOptions } from './repeatedCallGuard';
@@ -119,6 +119,9 @@ export interface AgentContext {
   llm: ICompletionBackend;
   /** Model ID to use (e.g., 'claude-3-5-sonnet-20241022') */
   model: string;
+  /** Model the identity reminder names when `model` is a stand-in (see ICompletionOptions.modelIdentityId). */
+  modelIdentityId?: string;
+  modelDisplayName?: string;
   /** Available tools the agent can use */
   tools: ICompletionOptionTools[];
   /** Maximum number of reasoning iterations (default: 50) */
@@ -164,6 +167,14 @@ export interface AgentContext {
   toolChoice?: 'auto' | 'required' | { type: 'function'; function: { name: string } };
   /** Extended thinking configuration (Anthropic models) */
   thinking?: { enabled: boolean; budget_tokens: number };
+  /**
+   * How much of the model's reasoning reaches step content, text deltas and the final answer.
+   * Omitted means `raw`. Provider thinking blocks still ride the tool round trip either way.
+   */
+  thinkingVisibility?: ThinkingVisibility;
+  /** Catalog backend/adapter family of `model`; picks how reasoning is separated from the answer when it is withheld. */
+  modelBackend?: string;
+  modelAdapterFamily?: string;
   /**
    * Resolver invoked when the model calls a tool that isn't in `tools`.
    * Returning a tool schema causes the agent to push it into `tools` and
@@ -262,6 +273,9 @@ export interface AgentRunOptions {
    * Confidence gate callback. Called after each iteration with the average confidence
    * of tool results from that iteration. Return a decision to proceed, pause, or timed-gate.
    * If not provided, the agent always proceeds (original behavior).
+   *
+   * The average includes failed calls, so it is not the gate rule: deciding on it would
+   * diverge from `usableEvidenceConfidence`, which the web executor's gate uses instead.
    */
   confidenceGate?: (iterationConfidence: number, iterationIndex: number) => ConfidenceGateDecision;
   /**

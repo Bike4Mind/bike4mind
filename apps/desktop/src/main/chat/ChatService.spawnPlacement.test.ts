@@ -11,7 +11,7 @@ import {
   type ChatQueueEvent,
 } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ChatService } from './ChatService';
+import { ChatService, MAX_CONCURRENT_SPAWNED } from './ChatService';
 import { SessionStore } from './SessionStore';
 import { AttachmentStore } from './AttachmentStore';
 import { MessageQueue } from './MessageQueue';
@@ -612,7 +612,7 @@ describe('ChatService spawn placement', () => {
     streams[0].write(
       frame({
         type: 'tool_use',
-        tools: [0, 1, 2, 3].map(index => ({
+        tools: Array.from({ length: MAX_CONCURRENT_SPAWNED + 1 }, (_unused, index) => ({
           id: `call-${index}`,
           name: 'session_spawn',
           arguments: JSON.stringify({ prompt: `task ${index}`, title: `Cap ${index}` }),
@@ -624,7 +624,7 @@ describe('ChatService spawn placement', () => {
       () => {
         const latest = events.findLast(event => event.type === 'spawn-suggestions');
         const pending = latest?.type === 'spawn-suggestions' ? latest.suggestions : [];
-        return pending.length === 4 ? pending : undefined;
+        return pending.length === MAX_CONCURRENT_SPAWNED + 1 ? pending : undefined;
       },
       { timeout: 5000, interval: 5 }
     );
@@ -635,11 +635,11 @@ describe('ChatService spawn placement', () => {
       )
     );
 
-    expect(results.filter(result => result.ok)).toHaveLength(3);
+    expect(results.filter(result => result.ok)).toHaveLength(MAX_CONCURRENT_SPAWNED);
     expect(results.find(result => !result.ok)).toMatchObject({
       error: expect.stringMatching(/already running, which is the limit/),
     });
-    expect((await store.list()).filter(session => session.origin)).toHaveLength(3);
+    expect((await store.list()).filter(session => session.origin)).toHaveLength(MAX_CONCURRENT_SPAWNED);
     release();
   });
 

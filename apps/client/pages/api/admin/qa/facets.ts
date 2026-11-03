@@ -1,11 +1,12 @@
 import { ApiKeyScope, QA_SLUG_PATTERN } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { getQaFacets } from '@server/qa/reads';
 
 /** GET /api/admin/qa/facets?product= . Filter options for /status. */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req, res) => {
   const raw = req.query.product;
   const product = typeof raw === 'string' && QA_SLUG_PATTERN.test(raw) ? raw : undefined;
   return res.json(await getQaFacets(product));

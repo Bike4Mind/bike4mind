@@ -36,6 +36,15 @@ describe('releaseNoteToModal', () => {
     expect(slide.imageUrl).toBeNull();
     expect(slide.images).toBeNull();
     expect(slide.video).toBeNull();
+    expect(slide.stillImage).toBeNull();
+  });
+
+  it('passes the note image through to the slide as stillImage', () => {
+    const image = { landscape_url: 'https://d111.cloudfront.net/still.png', portrait_url: null };
+    expect(releaseNoteToModal(note({ image })).stillImage).toEqual({
+      landscapeUrl: 'https://d111.cloudfront.net/still.png',
+      portraitUrl: null,
+    });
   });
 
   it('passes the note video through to the slide', () => {

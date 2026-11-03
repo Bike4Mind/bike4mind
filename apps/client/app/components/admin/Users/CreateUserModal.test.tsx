@@ -54,3 +54,32 @@ describe('CreateUserModal - dismissed verification prompt', () => {
     expect(screen.getByText('create failed')).toBeTruthy();
   });
 });
+
+describe('CreateUserModal - storage limit', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    apiPost.mockResolvedValue({ data: {} });
+  });
+
+  it.each([
+    ['', 250],
+    ['0', 0],
+  ])('entering "%s" submits storageLimit %i', async (value, storageLimit) => {
+    useCreateUserModal.setState({ open: true });
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { mutations: { retry: false } } })}>
+          <CreateUserModal />
+        </QueryClientProvider>
+      </CssVarsProvider>
+    );
+    const input = screen.getByTestId('create-user-storage-input').querySelector('input')!;
+    fireEvent.change(input, { target: { value: '250' } });
+    fireEvent.change(input, { target: { value } });
+    fireEvent.submit(screen.getByTestId('create-user-submit-btn').closest('form')!);
+
+    await waitFor(() =>
+      expect(apiPost).toHaveBeenCalledWith('/api/admin/create-user', expect.objectContaining({ storageLimit }))
+    );
+  });
+});

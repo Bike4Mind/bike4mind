@@ -62,7 +62,13 @@ export function QueuedMessageList({
             noWrap
             sx={{ flexShrink: 0, alignSelf: 'flex-start', pt: 0.25, maxWidth: 160 }}
           >
-            {message.automatic ? 'Auto-fix' : message.relay ? `From ${message.relay.fromTitle}` : 'Queued'}
+            {message.automatic
+              ? message.automatic.kind === 'background-exit'
+                ? 'Background'
+                : 'Auto-fix'
+              : message.relay
+                ? `From ${message.relay.fromTitle}`
+                : 'Queued'}
           </Typography>
 
           <Typography

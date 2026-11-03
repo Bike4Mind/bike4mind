@@ -31,6 +31,9 @@ const OOXML_ZIP_MIMES = new Set<string>([
   SupportedFabFileMimeTypes.PPTX,
 ]);
 
+/** A legacy `.xls` is an OLE compound file, so its bytes sniff as the generic CFB container. */
+const CFB_MIME = 'application/x-cfb';
+
 /** Moderation status as stored on FabFile - see `IFabFileDocument.moderationStatus`. */
 export type ModerationStatus = 'pending' | 'scanning' | 'clean' | 'blocked' | undefined;
 
@@ -156,9 +159,11 @@ export async function moderateUploadedFile(args: ModerateUploadedFileArgs): Prom
   // that case since we have no independent signal to correct it with.
   const sniffSource = await downloadPartialBytes(SNIFF_BYTES);
   const sniffed = await fileTypeFromBuffer(sniffSource);
-  // Don't let a partial-buffer `application/zip` sniff clobber a declared OOXML subtype.
-  const sniffedMime =
-    sniffed?.mime === 'application/zip' && OOXML_ZIP_MIMES.has(mimeType ?? '') ? mimeType : sniffed?.mime;
+  // Don't let a generic container sniff clobber a declared subtype that lives in that container.
+  const isDeclaredContainer =
+    (sniffed?.mime === 'application/zip' && OOXML_ZIP_MIMES.has(mimeType ?? '')) ||
+    (sniffed?.mime === CFB_MIME && mimeType === SupportedFabFileMimeTypes.XLS);
+  const sniffedMime = isDeclaredContainer ? mimeType : sniffed?.mime;
   const effectiveMimeType = sniffedMime ?? mimeType;
   const correctedMimeType = sniffedMime && sniffedMime !== mimeType ? sniffedMime : undefined;
 

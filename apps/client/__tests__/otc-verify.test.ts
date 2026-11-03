@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
 import bcrypt from 'bcryptjs';
 
 // Mock all external dependencies before importing the route handler.
@@ -69,6 +69,18 @@ vi.mock('@server/subscriptions/grantIndividualAdminSubscription', () => ({
   grantIndividualAdminSubscription: vi.fn(),
 }));
 
+vi.mock('@server/auth/networkMeta', () => ({
+  recordSignupNetwork: vi.fn(),
+  recordLoginEvent: vi.fn(),
+  readNetworkMeta: vi.fn(() => ({})),
+}));
+// The per-network signup caps are covered in signupNetworkLimits.test.ts and pages/api/otc/__tests__/verify.test.ts.
+vi.mock('@server/auth/signupNetworkLimits', () => ({
+  assertSignupNetworkWithinLimits: vi.fn().mockResolvedValue(undefined),
+  createSignupRiskCollector: vi.fn(() => vi.fn()),
+}));
+vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
+vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   cacheRepository: {
     tryIncrementWithinLimitFixedWindow: vi.fn(async () => ({ success: true, count: 1, expiresAt: new Date() })),
@@ -126,7 +138,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { JWT_SECRET: 'test-secret' },
   isE2EEnabled: () => false,
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 const mockEmitSignup = vi.fn().mockResolvedValue([]);
 vi.mock('@server/analytics/signupEvents', () => ({
   emitSignupForSourceProducts: (...a: unknown[]) => mockEmitSignup(...a),
@@ -167,7 +179,7 @@ describe('/api/otc/verify — enumeration resistance', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     mockJwtSign.mockReturnValue('reissued-token');
-    mockValidateAndRotateNonce.mockResolvedValue('$2a$hash');
+    mockValidateAndRotateNonce.mockResolvedValue({ otcHash: '$2a$hash', riskSignals: [] });
     mockUserHasMFA.mockReturnValue(false);
     mockCountPasskeys.mockResolvedValue(0);
     sentCookies = [];
@@ -246,7 +258,7 @@ describe('/api/otc/verify — enumeration resistance', () => {
 
   it('verify checks the code against the server-side record', async () => {
     mockJwtVerify.mockReturnValue(validToken({ otcHash: 'token-hash' }));
-    mockValidateAndRotateNonce.mockResolvedValue('server-hash');
+    mockValidateAndRotateNonce.mockResolvedValue({ otcHash: 'server-hash', riskSignals: [] });
     mockVerifyPendingOTC.mockResolvedValue(false);
 
     await handler(makeReq({ email: 'user@example.com', code: '00000000', pendingToken: 'tok' }), mockRes);
@@ -268,17 +280,18 @@ describe('/api/otc/verify — enumeration resistance', () => {
     expect(mockFindByEmail).not.toHaveBeenCalled();
   });
 
-  describe('re-issued pending tokens keep the same payload shape', () => {
+  describe.each([true, null, undefined])('reissued token payload shape (%s)', challengeVerified => {
     const signedPayloads = () => mockJwtSign.mock.calls.map(([payload]) => payload as Record<string, unknown>);
     const expectPayloadShape = () => {
       expect(signedPayloads().length).toBeGreaterThan(0);
       for (const payload of signedPayloads()) {
-        expect(Object.keys(payload).sort()).toEqual(['attempts', 'email', 'jti']);
+        expect(Object.keys(payload).sort()).toEqual(['attempts', 'challengeVerified', 'email', 'jti']);
+        expect(payload.challengeVerified).toBe(challengeVerified === true ? true : null);
       }
     };
 
     beforeEach(() => {
-      mockJwtVerify.mockReturnValue(validToken({ otcHash: 'token-hash' }));
+      mockJwtVerify.mockReturnValue(validToken({ otcHash: 'token-hash', challengeVerified }));
       mockFindByEmail.mockResolvedValue(null);
     });
 
@@ -389,7 +402,7 @@ describe('/api/otc/verify — enumeration resistance', () => {
 
     it('signs in with a 6-digit code that matches a live token', async () => {
       mockJwtVerify.mockReturnValue(validToken());
-      mockValidateAndRotateNonce.mockResolvedValue(await bcrypt.hash('012345', 4));
+      mockValidateAndRotateNonce.mockResolvedValue({ otcHash: await bcrypt.hash('012345', 4), riskSignals: [] });
 
       await handler(makeReq({ email: 'user@example.com', code: '012345', pendingToken: 'tok' }), mockRes);
 
@@ -399,7 +412,7 @@ describe('/api/otc/verify — enumeration resistance', () => {
 
     it('rejects a 6-digit code against an 8-digit token as a wrong guess', async () => {
       mockJwtVerify.mockReturnValue(validToken());
-      mockValidateAndRotateNonce.mockResolvedValue(await bcrypt.hash('01234567', 4));
+      mockValidateAndRotateNonce.mockResolvedValue({ otcHash: await bcrypt.hash('01234567', 4), riskSignals: [] });
 
       await handler(makeReq({ email: 'user@example.com', code: '012345', pendingToken: 'tok' }), mockRes);
 
@@ -508,10 +521,13 @@ describe('/api/otc/verify — enumeration resistance', () => {
     mockJwtVerify.mockReturnValue(validToken());
     mockVerifyPendingOTC.mockResolvedValue(true);
     mockUserHasMFA.mockReturnValue(false);
-    // enforceMFA = true for this call only - vi.clearAllMocks() clears calls, not
-    // implementations, so a non-Once override here would leak into every later test.
+    // enforceMFA = true for this call only. Keyed on the setting name because the OTC limit
+    // settings are read first; vi.clearAllMocks() keeps implementations, so restore it after.
     const { getSettingsValue } = await import('@bike4mind/utils');
-    vi.mocked(getSettingsValue).mockReturnValueOnce(true);
+    vi.mocked(getSettingsValue).mockImplementation(key => key === 'enforceMFA');
+    onTestFinished(() => {
+      vi.mocked(getSettingsValue).mockReturnValue(false);
+    });
     mockJwtSign.mockReturnValue('mfa-setup-access-token');
     mockFindByEmail.mockResolvedValue({
       id: 'u2',
@@ -583,7 +599,7 @@ describe('/api/otc/verify — enumeration resistance', () => {
   it('still logs in when the analytics write fails (best-effort, post-rotation)', async () => {
     mockJwtVerify.mockReturnValue(validToken());
     mockVerifyPendingOTC.mockResolvedValue(true);
-    const { logEvent } = await import('@server/utils/analyticsLog');
+    const { logEvent } = await import('@bike4mind/server-utils/utils/analyticsLog');
     vi.mocked(logEvent).mockRejectedValueOnce(new Error('analytics db down'));
     mockFindByEmail.mockResolvedValue({
       id: 'u1',
@@ -627,7 +643,7 @@ describe('/api/otc/verify — enumeration resistance', () => {
     mockVerifyPendingOTC.mockResolvedValue(true);
     mockFindByEmail.mockResolvedValue(null);
     mockRegisterViaOTC.mockResolvedValue({ id: 'new1', tokenVersion: 0 });
-    const { logEvent } = await import('@server/utils/analyticsLog');
+    const { logEvent } = await import('@bike4mind/server-utils/utils/analyticsLog');
     vi.mocked(logEvent).mockRejectedValueOnce(new Error('analytics db down'));
 
     const req = makeReq({ email: 'user@example.com', code: '123456', username: 'newbie', pendingToken: 'tok' });

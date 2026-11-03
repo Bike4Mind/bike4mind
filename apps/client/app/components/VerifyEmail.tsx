@@ -3,6 +3,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { Box, Button, CircularProgress, Container, Link, Stack, Typography, Alert } from '@mui/joy';
 import Image from 'next/image';
 import { useNavigate } from '@tanstack/react-router';
+import { useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import useGetLogo from '../hooks/useGetLogo';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -18,6 +19,7 @@ const VerifyEmail: React.FC<IProps> = ({ token }) => {
   const [success, setSuccess] = useState<boolean>(false);
   const { currentUser, refreshUser } = useUser();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const logoUrl = useGetLogo();
 
   const isLoggedIn = !!currentUser;
@@ -41,6 +43,7 @@ const VerifyEmail: React.FC<IProps> = ({ token }) => {
       .then(async () => {
         setSuccess(true);
         setError(null);
+        await queryClient.invalidateQueries({ queryKey: ['gears', 'status'] });
         // Refresh user data to get updated emailVerified status. We deliberately omit
         // refreshUser/isLoggedIn from the effect deps (relying on the ref guard above),
         // because including them re-fires this effect after the verify mutates user state.
@@ -123,6 +126,7 @@ const VerifyEmail: React.FC<IProps> = ({ token }) => {
           ) : success ? (
             <Alert
               color="success"
+              data-testid="verify-email-success"
               variant="soft"
               sx={{
                 width: '100%',
@@ -145,6 +149,7 @@ const VerifyEmail: React.FC<IProps> = ({ token }) => {
           ) : (
             <Alert
               color="danger"
+              data-testid="verify-email-error"
               variant="soft"
               sx={{
                 width: '100%',

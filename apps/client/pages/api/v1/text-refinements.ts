@@ -2,20 +2,23 @@
  * POST /api/v1/text-refinements - rewrites a short description to be clearer and more detailed.
  *
  * Shares refineTextRequest (cache + operations model) with the legacy POST /api/ai/refineText.
- * Not credit-metered, matching the legacy route; ai:generate plus the per-key rate limit bound the cost.
+ * A cache miss is credit-metered against the caller inside refineTextRequest; a billing refusal
+ * (422 insufficient_credits, 400 for a departed org key holder) propagates to errorHandler.
  */
 
 import { createTextRefinementContract } from '@bike4mind/common';
 import { getHttpStatus } from '@bike4mind/utils';
 import { RefineFailedError, RefineProviderUnavailableError, refineTextRequest } from '@server/ai/refineTextRequest';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
 
 const handler = nextRouteForContract(createTextRefinementContract).post(async (req, res) => {
   const { text, context } = req.validated;
 
+  const quota = await admitRequestCompletion(req, { holdSlot: true });
   let refined: string | undefined;
   try {
-    refined = await refineTextRequest({ text, context }, { logger: req.logger });
+    refined = await refineTextRequest({ text, context }, req);
   } catch (error) {
     if (error instanceof RefineProviderUnavailableError) {
       req.logger.warn('Text refinement provider not configured', error.cause ?? error);
@@ -40,6 +43,8 @@ const handler = nextRouteForContract(createTextRefinementContract).post(async (r
     // Anything unclassified - a cache/DB fault, a resolver failure - is an internal error, not a
     // provider one. Rethrow so errorHandler answers the same 500 the legacy route gets.
     throw error;
+  } finally {
+    await quota.release();
   }
 
   // Deliberate product decision, not a schema requirement: TextRefinementResponseSchema is

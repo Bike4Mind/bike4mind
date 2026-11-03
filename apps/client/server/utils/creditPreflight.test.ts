@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const { mocks } = vi.hoisted(() => {
   // The enforceCredits default (hosted on, self-host off) is computed when the
@@ -20,6 +20,11 @@ vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: {},
   userRepository: { findById: (...a: unknown[]) => mocks.findById(...a) },
   organizationRepository: { findById: (...a: unknown[]) => mocks.orgFindById(...a) },
+  // No samples and no settings rows: the spend cap reads defaults and never refuses here.
+  newAccountSpendCapAdapters: {
+    adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+    personalSpendSince: async () => [],
+  },
 }));
 // Real cap helper: the org branch's decision is the one under test.
 vi.mock('@bike4mind/services', async () => {
@@ -51,6 +56,10 @@ const checkOrg = (estimatedCredits: number | undefined, organizationId = 'org1')
 beforeEach(() => {
   Object.values(mocks).forEach(m => m.mockReset());
   mocks.getSettingsMap.mockResolvedValue({});
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe('assertPreflightCredits', () => {
@@ -137,6 +146,7 @@ describe('assertPreflightCredits', () => {
     });
 
     it('admits a zero-balance pool when enforcement is off, but still requires the org to exist', async () => {
+      vi.stubEnv('B4M_SELF_HOST', 'true');
       mocks.getSettingsMap.mockResolvedValue({ enforceCredits: 'false' });
       mocks.orgFindById.mockResolvedValue({ currentCredits: 0, userDetails: [] });
       await expect(checkOrg(100)).resolves.toBeUndefined();
@@ -147,7 +157,10 @@ describe('assertPreflightCredits', () => {
   });
 
   describe('enforcement off (an explicit false setting)', () => {
-    beforeEach(() => mocks.getSettingsMap.mockResolvedValue({ enforceCredits: 'false' }));
+    beforeEach(() => {
+      vi.stubEnv('B4M_SELF_HOST', 'true');
+      mocks.getSettingsMap.mockResolvedValue({ enforceCredits: 'false' });
+    });
 
     it('admits a zero-balance user', async () => {
       mocks.findById.mockResolvedValue({ currentCredits: 0 });

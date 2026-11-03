@@ -3,6 +3,8 @@ import qs from 'qs';
 import { useAccessToken } from '../hooks/useAccessToken';
 import { getOrCreateIdempotencyKeyWithUUID } from '@client/lib/utils/idempotency';
 import { generateRequestId } from '@bike4mind/common';
+import { observeDeployedRevision } from '../utils/deployRevision';
+import { useClientOutdatedStore } from '../stores/useClientOutdatedStore';
 
 /**
  * The axios instance and the request-side interceptors, split out as a LEAF module.
@@ -14,7 +16,8 @@ import { generateRequestId } from '@bike4mind/common';
  * module evaluation order.
  *
  * The 401 response interceptor lives in ApiContext (it owns session teardown); anything that needs
- * refresh-and-retry must therefore go through the `api` re-exported from there.
+ * refresh-and-retry must therefore go through the `api` re-exported from there. The one response
+ * interceptor here only reads a header, so it has no stake in that ordering.
  */
 
 const PUBLIC_PATHS = ['/login', '/register', '/auth/callback'];
@@ -68,3 +71,40 @@ api.interceptors.request.use(config => {
   }
   return config;
 });
+
+// Every baseApi response carries the revision it was served by. A revision other than the one this
+// page load started on means a deploy happened under this tab; an errored response counts too,
+// since a stale tab's first hint is often a 4xx/5xx it cannot explain.
+// Lowercase spelling of DEPLOY_REVISION_HEADER in server/middlewares/deployRevision.ts - must stay
+// in sync (apiClient.test.ts pins the pair).
+const DEPLOY_REVISION_HEADER = 'x-deployed-revision';
+
+const noteDeployedRevision = (headers: unknown): void => {
+  const record = headers as Record<string, unknown> | undefined;
+  // Freshness and stale-reuse windows can replay a previous deploy's revision. Such responses
+  // must neither set nor be compared against the baseline. Accept quoted and zero-padded ages too.
+  const cacheControl = record?.['cache-control'];
+  if (
+    typeof cacheControl === 'string' &&
+    !/(?:^|,)\s*no-store\s*(?:,|$)/i.test(cacheControl) &&
+    /(?:^|,)\s*(?:s-maxage|max-age|stale-while-revalidate|stale-if-error)\s*=\s*(?:0*[1-9]\d*|"0*[1-9]\d*")\s*(?:,|$)/i.test(
+      cacheControl
+    )
+  )
+    return;
+  const revision = record?.[DEPLOY_REVISION_HEADER];
+  if (typeof revision === 'string' && observeDeployedRevision(revision)) {
+    useClientOutdatedStore.getState().markOutdated();
+  }
+};
+
+api.interceptors.response.use(
+  response => {
+    noteDeployedRevision(response.headers);
+    return response;
+  },
+  (error: unknown) => {
+    noteDeployedRevision((error as { response?: { headers?: unknown } } | null)?.response?.headers);
+    return Promise.reject(error);
+  }
+);

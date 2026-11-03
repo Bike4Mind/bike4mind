@@ -8,12 +8,16 @@ import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { AuthState } from '@shared/auth';
-import type { ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
+import { DEFAULT_PROMPT_CACHE_TTL, type PromptCacheTtl } from '@bike4mind/common';
+import type { ChatModelOption, ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import type { SkillMarketListingRef } from '@shared/skillMarket';
-import { SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
-import { effectiveContextLimit } from '@shared/contextLimit';
+import { findModelOption, isLocalBackend, isLocalModel, SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
+import { composerBlock, isLocalMode, noLocalModels } from './noLocalModels';
+import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
+import { LOCAL_SERVER_ID } from '@shared/modelServers';
 import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
+import { BlankChat, BlankChatGreeting } from './BlankChat';
 import { SkillMarketPanel } from './SkillMarketPanel';
 import { BackgroundTaskChip, BackgroundTaskPanel } from './BackgroundTaskPanel';
 import { readPanelFlag, spawnedSessions, writePanelFlag } from './backgroundTasks';
@@ -22,11 +26,17 @@ import { readBrowserPaneOpen, writeBrowserPaneOpen } from './agentBrowser';
 import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
 import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
-import { GlobeIcon, PanelRightIcon, TerminalIcon } from './icons';
+import type { ModelsInUse } from '../models/InstalledTab';
+import { ModelsScreen } from '../models/ModelsScreen';
+import { useModelServers } from '../models/useModelHub';
+import { GlobeIcon, PanelRightIcon, SearchIcon, TerminalIcon } from './icons';
 import { MessageThread } from './MessageThread';
-import { columnStackSx, contentColumnSx } from './layout';
+import { chatShellRootSx, columnStackSx, contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
+import { modelSwitchCredits } from './modelSwitchCost';
 import { ReasoningEffortPicker } from './ReasoningEffortPicker';
+import { PromptCacheTtlPicker } from './PromptCacheTtlPicker';
+import { CacheExpiryNote } from './CacheExpiryNote';
 import { GrantedFolderChips, SessionChips } from './SessionChips';
 import { SESSION_PANEL_ID, SessionPanel } from './SessionPanel';
 import { panelFitsBesideThread, useElementWidth, useSessionPanelPrefs } from './sessionPanelState';
@@ -35,6 +45,7 @@ import { useWorkspaceChanges } from './useWorkspaceChanges';
 import { openInSessionBrowser } from './prLinks';
 import { usePrSummaries, usePullRequest } from './usePullRequest';
 import { SessionList } from './SessionList';
+import { DeleteSessionDialog } from './DeleteSessionDialog';
 import { isUntouchedImport, projectForGroup } from './grouping';
 import { useImportedInline } from './importedInline';
 import { TerminalPanel } from './TerminalPanel';
@@ -56,7 +67,7 @@ import { seedOnArrival } from './firstRunSeed';
 import { readLastSession, useLastSession } from './lastSession';
 import { newSessionInProject } from './newSessionInProject';
 import { roundsOf } from './replyRounds';
-import { contextTokens, describeActivity, latestReply, writingProse, type ComposerUsage } from './statusLine';
+import { describeActivity, latestReply, writingProse, type ComposerUsage } from './statusLine';
 import { useAccountCredits } from './useAccountCredits';
 import { ImageMenuProvider } from './ImageContextMenu';
 import { toAttachmentInputs, useAttachmentDraft } from './useAttachments';
@@ -70,6 +81,7 @@ import { useFileDrop } from './useFileDrop';
 import { useSkills } from './useSkills';
 import { useSessionStartTiming } from './useSessionStartTiming';
 import { SpawnFailureToast } from './SpawnFailureToast';
+import { useCreationTools } from './useCreationTools';
 
 function SessionHeader({ title, onRename }: { title: string; onRename: (title: string) => void }) {
   const [editing, setEditing] = useState(false);
@@ -140,7 +152,7 @@ function WorkingDirectoryLine({ project }: { project: ChatProject }) {
  * What the main pane is showing. One value rather than a flag per screen, so the screens
  * cannot both be up and nothing has to remember to shut the other one.
  */
-type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market';
+type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market' | 'models';
 
 /**
  * The sidebar's account strip, given the dot that says whether a reply is running.
@@ -151,7 +163,15 @@ type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market';
  */
 export type AccountStrip = (status: ReactNode) => ReactNode;
 
-export function ChatShell({ auth, account }: { auth?: AuthState | null; account?: AccountStrip }) {
+export function ChatShell({
+  auth,
+  account,
+  onOpenModelServers,
+}: {
+  auth?: AuthState | null;
+  account?: AccountStrip;
+  onOpenModelServers?: () => void;
+}) {
   const {
     sessions,
     loading,
@@ -211,7 +231,11 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   const background = useBackgroundProcesses(activeId);
   const videoJobs = useVideoJobs(activeId);
   const skills = useSkills(activeId);
-  const catalog = useModelCatalog();
+  const localMode = isLocalMode(auth);
+  const catalog = useModelCatalog(localMode);
+  const noLocal = localMode ? noLocalModels(catalog) : null;
+  const modelServers = useModelServers();
+  const savedServers = useMemo(() => modelServers?.filter(server => !server.local), [modelServers]);
   const statuses = useSessionStatuses();
   const prSummaries = usePrSummaries();
   const [collapsed, setCollapsed] = useState(false);
@@ -228,6 +252,24 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   const [terminalFocus, setTerminalFocus] = useState<{ sessionId: string; seq: number } | null>(null);
   const draft = useAttachmentDraft(activeId);
   const nextPrompt = usePromptSuggestion(activeId);
+  const blankChatId =
+    screen === 'conversation' &&
+    !opening &&
+    activeId &&
+    conversation.session?.mode === 'chat' &&
+    conversation.messages.length === 0
+      ? activeId
+      : null;
+  const creationTools = useCreationTools(
+    `${auth?.status ?? 'none'}:${auth?.environment.url ?? ''}:${auth?.user?.id ?? 'device-local'}`,
+    blankChatId,
+    conversation.session?.model
+  );
+  // Cleared once the composer takes it, or a composer remounted by another screen would take it again.
+  const [composerFill, setComposerFill] = useState<{ id: number; text: string } | null>(null);
+  const fillSeq = useRef(0);
+  const fillComposer = useCallback((text: string) => setComposerFill({ id: ++fillSeq.current, text }), []);
+  const clearComposerFill = useCallback(() => setComposerFill(null), []);
   // Only the conversation screen counts as showing one: main polls what is on screen faster.
   const pullRequest = usePullRequest(screen === 'conversation' ? activeId : null);
   // What the browser pane trades width with; see BrowserPane.
@@ -262,12 +304,16 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     });
   }, []);
 
-  const selectSession = useCallback((sessionId: string) => {
-    // A screen takes over the same pane the transcript lives in, so picking a conversation has
-    // to put it back or the click reads as doing nothing.
-    setScreen('conversation');
-    setActiveId(sessionId);
-  }, []);
+  const selectSession = useCallback(
+    (sessionId: string) => {
+      // History search spans both modes, so the owning mode follows the selected result.
+      const selected = sessions.find(session => session.id === sessionId);
+      if (selected) setMode(selected.mode);
+      setScreen('conversation');
+      setActiveId(sessionId);
+    },
+    [sessions]
+  );
 
   const terminalOpen = !!activeId && terminalSessions.includes(activeId);
   const setTerminalOpen = useCallback((sessionId: string, open: boolean) => {
@@ -308,6 +354,8 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     setBrowserOpen(true);
     writeBrowserPaneOpen(true);
   }, []);
+  const setHistory = conversation.setHistory;
+  const onHistory = useCallback((enabled: boolean) => void setHistory(enabled), [setHistory]);
   const openInBrowserPane = useCallback(
     (url: string) => openInSessionBrowser(url, activeId, showBrowserPane),
     [activeId, showBrowserPane]
@@ -328,17 +376,49 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
    * it and is silent for the rest, so treating silence as "no" would refuse images on models
    * that handle them - the same reasoning the model picker applies to an unreadable list.
    */
-  const modelOption = catalog.models.find(model => model.id === conversation.session?.model);
-  const blockedReason =
+  const modelOption = findModelOption(catalog.models, conversation.session?.model);
+  const sessionCacheTtl = conversation.session?.promptCacheTtl ?? DEFAULT_PROMPT_CACHE_TTL;
+  // Main sends the hour only to a model that takes it; see ChatService cacheTtlField.
+  const cacheTtlFor = (model: ChatModelOption | undefined): PromptCacheTtl =>
+    model?.supportsOneHourCache ? sessionCacheTtl : DEFAULT_PROMPT_CACHE_TTL;
+  const modelsInUse = useMemo<ModelsInUse>(() => {
+    const inUse = (id: string | undefined) => {
+      const model = catalog.models.find(candidate => candidate.id === id && isLocalBackend(candidate));
+      return model ? { serverId: model.server?.id ?? LOCAL_SERVER_ID, name: model.name } : null;
+    };
+    return {
+      active: inUse(conversation.session?.model),
+      conversations: sessions.filter(session => !session.archived).flatMap(session => inUse(session.model) ?? []),
+    };
+  }, [catalog.models, conversation.session?.model, sessions]);
+  const block = composerBlock(
+    noLocal,
     modelOption?.supportsVision === false && draft.attachments.some(attachment => attachment.kind === 'image')
       ? `${modelOption.name} cannot read images. Pick a model that can, or remove the image before sending.`
-      : null;
+      : null
+  );
+  const blockedReason = block.reason;
+  const blockedAction =
+    block.action === 'open-models' ? { label: 'Open Models', onClick: () => setScreen('models') } : null;
 
-  // A Code session with no project has no working directory, so main refuses the turn. Nothing
-  // is written out in prose: the unset folder chip a few pixels above is the thing to act on,
-  // and the composer names the state in one word where the reader already looks for "can I
-  // send?". Main's refusal stays as the guard, and surfaces through chat-send-error if a turn
-  // ever reaches it.
+  // Main saves the model a send would use as soon as one is listed, so the picker shows it.
+  const settleLocalModel = conversation.settleLocalModel;
+  const settledFor = useRef<string | null>(null);
+  const sessionModel = conversation.session?.model;
+  const sessionKey = conversation.session?.id;
+  const listed = catalog.models.length > 0 && !catalog.loading;
+  const modelListed = !!findModelOption(catalog.models, sessionModel);
+  useEffect(() => {
+    if (!localMode || !listed || !sessionKey || !sessionModel || modelListed) return;
+    const key = `${sessionKey}:${sessionModel}:${catalog.models[0]?.id}`;
+    if (settledFor.current === key) return;
+    settledFor.current = key;
+    void settleLocalModel();
+  }, [localMode, listed, sessionKey, sessionModel, modelListed, catalog.models, settleLocalModel]);
+
+  // A Code session with no project has no working directory, so main refuses the turn. The
+  // centered workspace form is the thing to act on, and the composer names the state in one word
+  // where the reader already looks for "can I send?". Main's refusal stays as the guard.
   const unbound = conversation.session?.mode === 'code' && !conversation.session.project;
 
   /**
@@ -372,20 +452,24 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     conversation.session?.project,
     conversation.settledTurns
   );
-  // The sidebar summary as well as the bar: a dismissed PR bar reports no binding, but the PR is
-  // still this session's, and offering to open a second one for the same branch would be wrong.
-  const hasPullRequest = !!pullRequest?.binding || (!!activeId && prSummaries.has(activeId));
+  // A dismissed bar reports no binding, but the PR is still this session's, and offering to open
+  // a second one for the same branch would be wrong. The sidebar summary covers the moment before
+  // the bar's state arrives on a switch, except for a dismissed bar, which has no summary.
+  const hasPullRequest =
+    !!pullRequest?.binding || !!pullRequest?.dismissed || (!!activeId && prSummaries.has(activeId));
   const spawned = useMemo(() => spawnedSessions(sessions, statuses, activeId), [sessions, statuses, activeId]);
+  const initialCodeSetup = conversation.session?.mode === 'code' && conversation.messages.length === 0;
 
   /**
-   * The session panel: a Code session with a folder only. An unbound one keeps its chips above the
-   * composer, since they are how the folder gets chosen, and a Chat session has nothing to put in it.
+   * The session panel: a Code session with a folder after its first message. Until then the same
+   * controls are centered in the empty transcript, and a Chat session has nothing to put in it.
    *
    * Docked when it fits beside the reading column, and then its open flag is remembered; on a
    * narrower pane it folds into the header button and opens as a popover, which is never left open
    * across conversations or launches.
    */
-  const panelProject = !opening && conversation.session?.mode === 'code' ? conversation.session.project : undefined;
+  const panelProject =
+    !opening && !initialCodeSetup && conversation.session?.mode === 'code' ? conversation.session.project : undefined;
   const panelDocked = threadRegionWidth === null || panelFitsBesideThread(threadRegionWidth);
   const panelShown = !!panelProject && (panelDocked ? panelPrefs.open : panelPopoverOpen);
   const bindingErrorHidden =
@@ -400,10 +484,21 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
 
   const composerUsage: ComposerUsage = useMemo(() => {
     const reply = latestReply(conversation.messages, turnOpen);
+    // The figure ChatService.autoCompact decides on, so red means the same thing on both sides.
+    const local = !!conversation.session?.model && isLocalModel(conversation.session.model);
+    const snapshot =
+      reply?.contextSnapshot && reply.contextSnapshot.model === conversation.session?.model
+        ? reply.contextSnapshot
+        : null;
+    const modelWindow = (local ? snapshot?.modelWindow : modelOption?.contextWindow) ?? null;
     return {
-      contextTokens: contextTokens(reply),
-      contextLimit: effectiveContextLimit(modelOption?.contextWindow),
-      modelWindow: modelOption?.contextWindow ?? null,
+      contextTokens:
+        reply?.contextSnapshot && reply.contextSnapshot.model !== conversation.session?.model
+          ? null
+          : occupiedTokens(conversation.messages, turnOpen, local),
+      contextSnapshot: snapshot,
+      contextLimit: modelWindow ? effectiveContextLimit(modelWindow) : null,
+      modelWindow,
       credits: credits.balance,
       monthlyAllowance: credits.monthlyAllowance,
       ...(credits.error ? { creditsError: credits.error } : {}),
@@ -411,6 +506,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     };
   }, [
     conversation.messages,
+    conversation.session?.model,
     turnOpen,
     modelOption?.contextWindow,
     credits.balance,
@@ -450,12 +546,14 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     async (text: string) => {
       const attached = draft.attachments;
       // Cleared before the await so the row does not sit under the composer while the turn is
-      // accepted; a rejected turn restores nothing, but its files are still on disk and named
-      // in the error.
+      // accepted; a rejected turn restores its text (see useConversation.send) but not its
+      // attachments.
       draft.clear();
-      await conversation.send(text, attached);
+      const accepted = await conversation.send(text, attached);
+      // Main knows something this window did not: reread so the banner and Send gate catch up.
+      if (!accepted && localMode) void catalog.reload();
     },
-    [conversation, draft]
+    [conversation, draft, localMode, catalog]
   );
 
   /**
@@ -490,8 +588,8 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
    * the New button is a click on the sidebar and has to put the transcript back, the first-run
    * seeding below must not pull a user out of the screen they opened.
    *
-   * A Code session is created UNBOUND - no directory, no branch - and the chip row above the
-   * composer is where a project gets chosen. Creating one used to open the OS folder picker
+   * A Code session is created UNBOUND - no directory, no branch - and its empty transcript is where
+   * a project gets chosen. Creating one used to open the OS folder picker
    * first, which meant dismissing that dialog produced nothing at all: no session, no message,
    * and no way back in. Nothing is asked up front now, so there is nothing left to cancel.
    */
@@ -517,6 +615,64 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     const created = await startSession();
     if (created) setActiveId(created);
   }, [startSession, markSessionStart]);
+
+  /** "Use in chat" on the Models screen: a new Chat conversation already on that model. */
+  const [chatOnError, setChatOnError] = useState<string | null>(null);
+  useEffect(() => {
+    if (screen !== 'models') setChatOnError(null);
+  }, [screen]);
+  const startingChatOn = useRef(false);
+  const startChatOn = useCallback(
+    async (modelId: string) => {
+      if (startingChatOn.current) return;
+      startingChatOn.current = true;
+      setChatOnError(null);
+      try {
+        markSessionStart('new');
+        const created = await create();
+        const updated = await window.b4m.chat.setSessionModel(created, modelId).catch(() => null);
+        if (!updated) {
+          // Opening it anyway would send the first message to the default model, which can be a hosted one.
+          const removed = await remove(created).then(
+            () => true,
+            () => false
+          );
+          setChatOnError(
+            removed
+              ? 'Desktop could not start a conversation on that model. Try again, or pick it in a chat.'
+              : 'Desktop could not start a conversation on that model, and could not remove the empty one it made. Delete it from the sidebar before chatting in it.'
+          );
+          return;
+        }
+        apply(updated);
+        setMode('chat');
+        setActiveId(created);
+        setScreen('conversation');
+      } catch (error) {
+        setChatOnError(
+          `Desktop could not start a conversation: ${error instanceof Error ? error.message : String(error)}`
+        );
+      } finally {
+        startingChatOn.current = false;
+      }
+    },
+    [create, remove, apply, markSessionStart]
+  );
+  /** The catalog's own entry for an installed model, so the conversation routes to the server it runs on. */
+  const chatWith = useCallback(
+    (serverId: string, name: string) => {
+      const wanted = name.toLowerCase();
+      const option = catalog.models.find(
+        model =>
+          isLocalBackend(model) &&
+          !model.unavailable &&
+          (model.server?.id ?? LOCAL_SERVER_ID) === serverId &&
+          model.name.toLowerCase() === wanted
+      );
+      return option ? () => void startChatOn(option.id) : null;
+    },
+    [catalog.models, startChatOn]
+  );
 
   /**
    * New, from a user section's header or menu: the same session New makes, but in that section
@@ -582,17 +738,26 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     [sessions, createCode, clearCodeError, markSessionStart]
   );
 
+  const [deleteSessionId, setDeleteSessionId] = useState<string | null>(null);
   const onDelete = useCallback(
-    async (sessionId: string) => {
-      await remove(sessionId);
+    async (sessionId: string, removeWorktree: boolean) => {
+      await remove(sessionId, removeWorktree);
       setActiveId(current => (current === sessionId ? null : current));
     },
     [remove]
   );
 
   return (
-    <Box sx={{ position: 'relative', display: 'flex', height: '100vh', bgcolor: 'background.body' }} {...drop.handlers}>
+    <Box sx={chatShellRootSx} {...drop.handlers} data-testid="chat-shell">
       <SpawnFailureToast />
+      {deleteSessionId && (
+        <DeleteSessionDialog
+          key={deleteSessionId}
+          sessionId={deleteSessionId}
+          onDelete={onDelete}
+          onClose={() => setDeleteSessionId(null)}
+        />
+      )}
       {drop.over && (
         <Box
           sx={{
@@ -629,7 +794,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
         onOpenArtifacts={() => setScreen('artifacts')}
         onCreateInProject={directory => void onCreateInProject(directory)}
         onCreateInSection={sectionId => void onCreateInSection(sectionId)}
-        onDelete={sessionId => void onDelete(sessionId)}
+        onDelete={setDeleteSessionId}
         onTogglePin={session => void togglePin(session)}
         onToggleArchived={session => void toggleArchived(session)}
         onRename={(session, title) => void rename(session, title)}
@@ -640,6 +805,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
         sectionError={sectionError}
         onDismissSectionError={dismissSectionError}
         customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
+        onOpenModels={() => setScreen('models')}
         footer={account?.(
           <TurnDot state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })} />
         )}
@@ -647,6 +813,18 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
 
       {screen === 'artifacts' ? (
         <ArtifactLibraryPanel onClose={() => setScreen('conversation')} />
+      ) : screen === 'models' ? (
+        <ModelsScreen
+          onClose={() => {
+            setChatOnError(null);
+            setScreen('conversation');
+          }}
+          inUse={modelsInUse}
+          onOpenModelServers={onOpenModelServers}
+          chatWith={chatWith}
+          chatError={chatOnError}
+          onDismissChatError={() => setChatOnError(null)}
+        />
       ) : screen === 'skill-market' ? (
         <SkillMarketPanel initial={marketListing} onClose={() => setScreen('customize')} />
       ) : screen === 'customize' ? (
@@ -676,6 +854,24 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                   </Typography>
                 )}
               </Box>
+              {!opening && conversation.session?.historyEnabled === true && (
+                <Tooltip
+                  size="sm"
+                  variant="soft"
+                  placement="bottom-end"
+                  title="Local history is on. Change it in the browser's ... menu."
+                >
+                  <Box
+                    component="span"
+                    role="img"
+                    aria-label="Local history is on"
+                    data-testid="chat-history-indicator"
+                    sx={{ display: 'inline-flex', color: 'text.tertiary', px: 0.5 }}
+                  >
+                    <SearchIcon />
+                  </Box>
+                </Tooltip>
+              )}
               {panelProject && (
                 <Tooltip
                   size="sm"
@@ -785,22 +981,59 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                       // sentence pointing at the sidebar: the header above says what the state is, this
                       // says what to do about it, and the composer's placeholder names the same step.
                       noSession={
-                        <Stack spacing={1.5} alignItems="center">
-                          <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-no-session">
-                            {mode === 'code'
-                              ? 'Start a Code session to run a task here.'
-                              : 'Start a conversation to send your first message.'}
-                          </Typography>
-                          <Button
-                            size="sm"
-                            variant="soft"
-                            loading={creatingCode}
-                            onClick={() => void onCreate()}
-                            data-testid="chat-start-session-btn"
+                        mode === 'code' ? (
+                          <Stack spacing={1.5} alignItems="center">
+                            <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-no-session">
+                              Start a Code session to run a task here.
+                            </Typography>
+                            <Button
+                              size="sm"
+                              variant="soft"
+                              loading={creatingCode}
+                              onClick={() => void onCreate()}
+                              data-testid="chat-start-session-btn"
+                            >
+                              New Code session
+                            </Button>
+                          </Stack>
+                        ) : (
+                          <BlankChatGreeting line="Start a conversation to chat, write, or create something new.">
+                            <Button
+                              size="sm"
+                              variant="soft"
+                              loading={creatingCode}
+                              onClick={() => void onCreate()}
+                              sx={{ mt: 2.5 }}
+                              data-testid="chat-start-session-btn"
+                            >
+                              New conversation
+                            </Button>
+                          </BlankChatGreeting>
+                        )
+                      }
+                      emptySession={
+                        initialCodeSetup ? (
+                          <Box
+                            sx={{ width: '100%', maxWidth: 420, minWidth: 0 }}
+                            data-testid="chat-code-workspace-setup"
                           >
-                            {mode === 'code' ? 'New Code session' : 'New conversation'}
-                          </Button>
-                        </Stack>
+                            <Typography level="title-sm" sx={{ mb: 1.5 }}>
+                              Set up this workspace
+                            </Typography>
+                            <SessionChips
+                              layout="embedded"
+                              project={conversation.session?.project ?? null}
+                              {...(conversation.session?.grantedDirectories
+                                ? { grantedDirectories: conversation.session.grantedDirectories }
+                                : {})}
+                              binding={conversation.project}
+                              settledTurns={conversation.settledTurns}
+                              preparing={conversation.preparing !== null}
+                            />
+                          </Box>
+                        ) : blankChatId ? (
+                          <BlankChat sessionId={blankChatId} tools={creationTools} onPick={fillComposer} />
+                        ) : undefined
                       }
                       // turnOpen, not `streaming`: a turn this window never saw start - after a reload, or
                       // one parked at the approval gate - is still running, and Continue must not be
@@ -947,27 +1180,37 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             onDismiss={spawnSuggestions.dismiss}
           />
 
-          {/* An unbound Code session: the chips are how a project is chosen, so they stay here,
-            where they cannot be hidden. Once bound they live in the session panel, unless a binding
-            error would have nowhere on screen to appear. */}
-          {conversation.session?.mode === 'code' && (!conversation.session.project || bindingErrorHidden) && (
-            <SessionChips
-              project={conversation.session.project ?? null}
-              {...(conversation.session.grantedDirectories
-                ? { grantedDirectories: conversation.session.grantedDirectories }
-                : {})}
-              binding={conversation.project}
-              settledTurns={conversation.settledTurns}
-              inUse={conversation.messages.length > 0}
-              preparing={conversation.preparing !== null}
-            />
-          )}
+          {/* After first use, an unbound session or a hidden panel error still needs these controls
+            above the composer. Empty Code sessions render them in the transcript instead. */}
+          {conversation.session?.mode === 'code' &&
+            !initialCodeSetup &&
+            (!conversation.session.project || bindingErrorHidden) && (
+              <SessionChips
+                project={conversation.session.project ?? null}
+                {...(conversation.session.grantedDirectories
+                  ? { grantedDirectories: conversation.session.grantedDirectories }
+                  : {})}
+                binding={conversation.project}
+                settledTurns={conversation.settledTurns}
+                inUse={conversation.messages.length > 0}
+                preparing={conversation.preparing !== null}
+              />
+            )}
           {conversation.session && conversation.session.mode !== 'code' && (
             <GrantedFolderChips
               directories={conversation.session.grantedDirectories ?? []}
               onRemove={conversation.project.removeContextDirectory}
             />
           )}
+
+          <CacheExpiryNote
+            stamp={latestReply(conversation.messages)?.promptCache}
+            model={modelOption}
+            contextTokens={composerUsage.contextTokens ?? 0}
+            ttl={cacheTtlFor(modelOption)}
+            turnOpen={turnOpen}
+            sx={contentColumnSx}
+          />
 
           <Composer
             sessionId={activeId}
@@ -976,7 +1219,15 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             streaming={turnOpen}
             attachments={draft}
             blockedReason={blockedReason}
-            notReady={unbound ? 'No folder' : null}
+            blockedAction={blockedAction}
+            // Blocked rather than refused: a refused send has already cleared the box.
+            notReady={
+              auth?.reauthRequired && !(conversation.session && isLocalModel(conversation.session.model))
+                ? 'Sign in'
+                : unbound
+                  ? 'No folder'
+                  : null
+            }
             usage={composerUsage}
             placeholder={
               conversation.session?.mode === 'code' ? 'Describe a task or ask a question' : 'Send a message...'
@@ -993,6 +1244,8 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             onSendQueuedNow={conversation.sendQueuedNow}
             returned={conversation.returned}
             onReturnedConsumed={conversation.clearReturned}
+            fill={composerFill}
+            onFillConsumed={clearComposerFill}
             skills={skills}
             leading={
               <ApprovalModePill
@@ -1008,6 +1261,15 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                   modelId={conversation.session?.model ?? null}
                   disabled={!activeId}
                   onSelect={model => void conversation.setModel(model)}
+                  noLocal={noLocal}
+                  local={localMode}
+                  onOpenModels={() => setScreen('models')}
+                  switchCredits={model =>
+                    modelSwitchCredits(model, composerUsage.contextTokens ?? 0, cacheTtlFor(model))
+                  }
+                  servers={savedServers}
+                  hasHistory={conversation.messages.length > 0}
+                  sessionId={activeId}
                 />
                 <ReasoningEffortPicker
                   models={catalog.models}
@@ -1015,6 +1277,13 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                   effort={conversation.session?.reasoningEffort ?? 'default'}
                   disabled={!activeId}
                   onSelect={effort => void conversation.setReasoningEffort(effort)}
+                />
+                <PromptCacheTtlPicker
+                  model={modelOption}
+                  ttl={sessionCacheTtl}
+                  contextTokens={composerUsage.contextTokens ?? 0}
+                  disabled={!activeId}
+                  onSelect={ttl => void conversation.setPromptCacheTtl(ttl)}
                 />
               </Stack>
             }
@@ -1059,7 +1328,13 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
         page floating over them would be unreachable - and it is told to stand down while the
         drop overlay is up, which is drawn in the React tree and so would be behind it. */}
       {browserOpen && browserAvailable && screen === 'conversation' && (
-        <BrowserPane sessionId={activeId} suspended={drop.over} conversation={conversationColumn} />
+        <BrowserPane
+          sessionId={activeId}
+          suspended={drop.over}
+          conversation={conversationColumn}
+          historyEnabled={!opening && conversation.session ? conversation.session.historyEnabled === true : null}
+          onHistory={onHistory}
+        />
       )}
     </Box>
   );

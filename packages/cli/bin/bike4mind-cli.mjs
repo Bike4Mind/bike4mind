@@ -19,6 +19,7 @@ import { dirname, join, resolve } from 'path';
 import { existsSync } from 'fs';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
+import { splitEnvFlags } from './envFlags.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -29,29 +30,42 @@ const require = createRequire(import.meta.url);
 // whichever package.json it discovers first, which is not necessarily ours.
 const { version: cliVersion } = require('../package.json');
 
-// --- API environment flags (--dev / --prod) ---
-// Intercept these BEFORE yargs parses argv. They're accepted with either a
-// single or double dash (e.g. `b4m -prod` and `b4m --prod` both work), but
-// single-dash multi-char tokens would otherwise be split into clustered short
-// flags by yargs (`-prod` -> `-p -r -o -d`, colliding with -p/--prompt). We pull
-// them out here, record the target, and strip them so yargs sees a clean argv.
-const ENV_FLAG_MAP = {
-  '--dev': 'dev', '-dev': 'dev', '--local': 'dev', '-local': 'dev',
-  '--prod': 'prod', '-prod': 'prod', '--production': 'prod', '-production': 'prod',
-};
-let envTarget = null;
-{
-  const cleaned = [];
-  for (const token of process.argv.slice(2)) {
-    if (Object.prototype.hasOwnProperty.call(ENV_FLAG_MAP, token)) {
-      envTarget = ENV_FLAG_MAP[token]; // last one wins
-    } else {
-      cleaned.push(token);
-    }
+// Auto-detect environment: prefer production mode when dist exists
+const distPath = join(__dirname, '../dist/index.mjs');
+const srcPath = join(__dirname, '../src/index.tsx');
+const hasSource = existsSync(srcPath);
+const hasDist = existsSync(distPath);
+
+// Development mode ONLY when:
+// 1. NODE_ENV is explicitly 'development', OR
+// 2. dist doesn't exist but source does (fallback)
+// Otherwise: use production mode (this is what npm users will run)
+const isDev = process.env.NODE_ENV === 'development' ||
+              (!hasDist && hasSource);
+
+// `b4m host ...` is b4m-host: its arguments go through untouched, before yargs or the env flags see them,
+// and dial-stdio's stdout must carry nothing but the bridged bytes.
+if (process.argv[2] === 'host') {
+  let handleHostCommand;
+  if (isDev) {
+    const { register } = require('tsx/esm/api');
+    register();
+    ({ handleHostCommand } = await import('../src/commands/hostCommand.ts'));
+  } else {
+    ({ handleHostCommand } = await import('../dist/commands/hostCommand.mjs'));
   }
-  // Rebuild argv without the env tokens so yargs doesn't choke on them.
-  process.argv = [process.argv[0], process.argv[1], ...cleaned];
+  process.exit(await handleHostCommand(process.argv.slice(3)));
 }
+
+// --- API environment flags (--dev / --prod) ---
+// Intercept these BEFORE yargs parses argv (see envFlags.mjs) and strip them so
+// yargs sees a clean argv.
+const { cleaned: cleanedArgs, envTarget, envFlags, mcpServe, serveLocal } = splitEnvFlags(process.argv.slice(2));
+if (serveLocal && envTarget) {
+  process.stderr.write(`Error: mcp serve --local ignores the backend; drop ${envFlags.join(' ')}.\n`);
+  process.exit(1);
+}
+process.argv = [process.argv[0], process.argv[1], ...cleanedArgs];
 
 const argv = await yargs(hideBin(process.argv))
   // --dev / --prod are declared here ONLY so they appear in `--help`. The actual
@@ -93,7 +107,7 @@ const argv = await yargs(hideBin(process.argv))
   })
   .option('output-format', {
     type: 'string',
-    description: 'Output format when using -p: text (default), json, stream-json (NDJSON)',
+    description: 'Output format when using -p: text (default), json, stream-json (NDJSON); json also applies to b4m models ls/search/show/curated',
     choices: ['text', 'json', 'stream-json'],
     default: 'text',
   })
@@ -108,7 +122,7 @@ const argv = await yargs(hideBin(process.argv))
   })
   .option('ollama-host', {
     type: 'string',
-    description: 'Add local Ollama models to the model picker (e.g. http://localhost:11434)',
+    description: 'Add local Ollama models to the model picker (e.g. http://localhost:11434); `b4m models` remembers it',
   })
   // claude-compatible flags (host drop-in masquerade). Declared so a host's
   // claude launch flags parse into named options instead of leaking into the
@@ -204,6 +218,11 @@ const argv = await yargs(hideBin(process.argv))
             description: 'Serve over streamable HTTP instead of stdio',
             default: false,
           })
+          .option('local', {
+            type: 'boolean',
+            description: 'Serve only the local model tools (models_*), with no Bike4Mind backend. Stdio only',
+            default: false,
+          })
           .option('port', {
             type: 'number',
             description: 'Port for --http mode',
@@ -222,6 +241,7 @@ const argv = await yargs(hideBin(process.argv))
             description: 'Bearer token required by --http mode (overrides B4M_MCP_TOKEN; generated and printed when unset). Visible in process listings; prefer B4M_MCP_TOKEN',
           })
           .example('b4m mcp serve', 'Serve over stdio for Claude Desktop and other local clients')
+          .example('b4m mcp serve --local', 'Serve only the local model tools, without a backend')
           .example('b4m mcp serve --http --port 7000', 'Serve over streamable HTTP on port 7000');
       }, async () => {
         // Handled by external command handler
@@ -256,7 +276,7 @@ const argv = await yargs(hideBin(process.argv))
   })
   .command('skills', 'Manage your Bike4Mind skills', (yargs) => {
     return yargs
-      .command('push <path>', 'Create or update a skill from a Claude Code SKILL.md', (yargs) => {
+      .command('push <path>', 'Create or update a skill from a Claude Code SKILL.md, and optionally publish it', (yargs) => {
         return yargs
           .positional('path', {
             type: 'string',
@@ -272,12 +292,151 @@ const argv = await yargs(hideBin(process.argv))
             description: "Push another author's Skill Market skill as your own without asking",
             default: false,
           })
+          .option('publish', {
+            type: 'boolean',
+            description: 'Also list it on the Skill Market: a new listing, or a new version of its live listing',
+            default: false,
+          })
+          .option('visibility', {
+            type: 'string',
+            choices: ['organization', 'public', 'unlisted'],
+            description: 'Who can see a new listing (with --publish)',
+            default: 'organization',
+          })
+          .option('org', {
+            type: 'string',
+            description: 'Organization id for an organization listing; optional when you belong to exactly one',
+          })
+          .option('tags', {
+            type: 'string',
+            description: 'Comma-separated listing tags (with --publish)',
+          })
+          .option('api-key', {
+            type: 'string',
+            description:
+              'Bike4Mind API key with the skills:write and me:read scopes (overrides B4M_API_KEY and the stored login). Visible in process listings; prefer B4M_API_KEY, which also takes precedence over the stored login when set, even without --publish',
+          })
           .example('b4m skills push ~/.claude/skills/my-skill', 'Create a skill from a Claude Code skill folder')
-          .example('b4m skills push ./SKILL.md --update', 'Update the existing skill of the same name');
+          .example('b4m skills push ./SKILL.md --update', 'Update the existing skill of the same name')
+          .example('b4m skills push ./my-skill --publish --update', 'Update the skill and publish it to the Skill Market');
       }, async () => {
         // Handled by external command handler
       })
       .demandCommand(1, 'You must provide a subcommand (push)');
+  })
+  .command('host', 'Run b4m-host, which reports this machine\'s hardware and Ollama to Bike4Mind (see: b4m host --help)', {}, () => {
+    // `host` as the first argument is handled at the top of this file; reaching here means a flag came before it.
+    process.stderr.write('b4m host must be the first argument: b4m host <command> (see: b4m host --help)\n');
+    process.exit(2);
+  })
+  .command('models', 'Find, download and use local models (Ollama, Hugging Face GGUF)', (yargs) => {
+    return yargs
+      .option('server', {
+        type: 'string',
+        description: "Run ls, use, pull or rm against one of Desktop's saved model servers (see: b4m models servers)",
+      })
+      .command(['ls', 'list'], 'List models installed on the local runtime', {}, async () => {
+        // Handled by external command handler
+      })
+      .command('servers [action] [name]', "List Desktop's saved model servers, or log in or out of one", (yargs) => {
+        return yargs
+          .positional('action', { type: 'string', choices: ['login', 'logout'], describe: 'Keep or remove the CLI\'s credential for a server' })
+          .positional('name', { type: 'string', describe: 'Server name, as `b4m models servers` shows it' })
+          .option('check-tools', {
+            type: 'boolean',
+            description: 'servers: send each OpenAI-compatible server a one-token request to see whether it accepts tool calls',
+            default: false,
+          })
+          .option('token-stdin', {
+            type: 'boolean',
+            description: 'login: read the credential from stdin instead of prompting',
+            default: false,
+          })
+          .example('b4m models servers', 'List the servers with their status')
+          .example('b4m models servers login gpu-box', 'Enter the CLI\'s credential for gpu-box (hidden)');
+      }, async () => {
+        // Handled by external command handler
+      })
+      .command('search <query..>', 'Search Hugging Face for GGUF models', (yargs) => {
+        return yargs
+          .positional('query', { type: 'string', describe: 'Search terms' })
+          .option('include-abliterated', {
+            type: 'boolean',
+            description: 'Also list abliterated and uncensored builds, labelled and last',
+            default: false,
+          });
+      }, async () => {
+        // Handled by external command handler
+      })
+      .command('show <repo>', "Show a Hugging Face repo's GGUF builds, license and gating", (yargs) => {
+        return yargs.positional('repo', { type: 'string', describe: 'owner/repo' });
+      }, async () => {
+        // Handled by external command handler
+      })
+      .command('curated', 'List the models Bike4Mind picked, with picks for this computer first', (yargs) => {
+        return yargs
+          .option('refresh', {
+            type: 'boolean',
+            description: 'Check for a newer signed list now instead of when the last check is 6 hours old',
+            default: false,
+          })
+          .option('offline', {
+            type: 'boolean',
+            description: 'Use the last verified list on this computer (else the bundled one) with no update check (also: B4M_CURATED=off)',
+            default: false,
+          });
+      }, async () => {
+        // Handled by external command handler
+      })
+      .command('pull <ref>', 'Download a model after showing its size and license', (yargs) => {
+        return yargs
+          .positional('ref', {
+            type: 'string',
+            describe: 'owner/repo[:quant] or hf.co/owner/repo:quant (Hugging Face), or an Ollama name like qwen2.5:0.5b',
+          })
+          .option('yes', {
+            type: 'boolean',
+            description: 'Download without asking for confirmation',
+            default: false,
+          })
+          .option('accept-license', {
+            type: 'boolean',
+            description: 'Accept a non-permissive model license without a prompt',
+            default: false,
+          })
+          .option('force', {
+            type: 'boolean',
+            description: 'Download even when the fit check rates the model too large for this machine',
+            default: false,
+          })
+          .option('offline', {
+            type: 'boolean',
+            description: 'Use the last verified curated list on this computer with no update check (also: B4M_CURATED=off)',
+            default: false,
+          })
+          .example('b4m models pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M', 'Pull a Hugging Face GGUF build')
+          .example('b4m models pull qwen2.5:0.5b', 'Pull from the Ollama library');
+      }, async () => {
+        // Handled by external command handler
+      })
+      .command(['rm <name>', 'remove <name>'], 'Remove an installed model', (yargs) => {
+        return yargs
+          .positional('name', { type: 'string', describe: 'Installed model name' })
+          .option('yes', {
+            type: 'boolean',
+            description: 'Remove without asking for confirmation',
+            default: false,
+          });
+      }, async () => {
+        // Handled by external command handler
+      })
+      .command('use <name>', 'Make an installed model the default the CLI chats with', (yargs) => {
+        return yargs.positional('name', { type: 'string', describe: 'Installed model name' });
+      }, async () => {
+        // Handled by external command handler
+      })
+      .example('b4m models ls --ollama-host http://127.0.0.1:11434', 'Use and remember an Ollama host')
+      .demandCommand(1, 'You must provide a subcommand (ls, search, show, curated, servers, pull, rm, use)');
   })
   .command('update', 'Check for and install CLI updates')
   .command('doctor', 'Run diagnostic checks on CLI installation')
@@ -314,6 +473,7 @@ if (argv['no-remote-skills']) {
 }
 
 // claude-compatible flags -> B4M_* env (read by src/index.tsx init).
+// Host-launch signal: keep in sync with HOST_FLAG_ENV_KEYS in src/bootstrap/startupTrustGates.ts.
 // Mirrors the established bin->env->init channel (cf. --add-dir -> B4M_ADDITIONAL_DIRS).
 if (argv['mcp-config']) {
   process.env.B4M_MCP_CONFIG_FILE = resolve(argv['mcp-config']);
@@ -341,23 +501,10 @@ if (argv.resume) {
 }
 // Positional task (claude `<prompt>` form): seeds AND submits turn 1, stays interactive.
 // Only when it's not a known subcommand and headless -p wasn't used.
-const KNOWN_SUBCOMMANDS = new Set(['mcp', 'plugin', 'skills', 'update', 'doctor', 'acp']);
+const KNOWN_SUBCOMMANDS = new Set(['mcp', 'plugin', 'skills', 'models', 'update', 'doctor', 'acp', 'host']);
 if (argv.prompt === undefined && argv._.length > 0 && !KNOWN_SUBCOMMANDS.has(String(argv._[0]))) {
   process.env.B4M_INITIAL_PROMPT = String(argv._[0]);
 }
-
-// Auto-detect environment: prefer production mode when dist exists
-const distPath = join(__dirname, '../dist/index.mjs');
-const srcPath = join(__dirname, '../src/index.tsx');
-const hasSource = existsSync(srcPath);
-const hasDist = existsSync(distPath);
-
-// Development mode ONLY when:
-// 1. NODE_ENV is explicitly 'development', OR
-// 2. dist doesn't exist but source does (fallback)
-// Otherwise: use production mode (this is what npm users will run)
-const isDev = process.env.NODE_ENV === 'development' ||
-              (!hasDist && hasSource);
 
 // Signal source mode to the app so endpoint resolution can default an
 // otherwise-unconfigured run to the local dev server (build-time brand
@@ -414,7 +561,14 @@ if (envTarget) {
       ({ applyEnvironmentFlag } = await import('../dist/commands/envCommand.mjs'));
     }
 
-    await applyEnvironmentFlag(envTarget);
+    // On `mcp serve` stdout is the JSON-RPC stream, so the banner goes to stderr.
+    const log = console.log;
+    if (mcpServe) console.log = console.error;
+    try {
+      await applyEnvironmentFlag(envTarget);
+    } finally {
+      console.log = log;
+    }
   } catch (error) {
     console.error('Failed to switch API environment:', error.message);
     process.exit(1);
@@ -528,6 +682,30 @@ if (argv._[0] === 'skills') {
 
     await handleSkillsCommand(skillsSubcommand, argv);
     process.exit(0);
+  } catch (error) {
+    console.error('Error:', error.message);
+    process.exit(1);
+  }
+}
+
+// Handle models subcommands (external commands)
+if (argv._[0] === 'models') {
+  const modelsSubcommand = argv._[1];
+
+  try {
+    let handleModelsCommand;
+
+    if (isDev) {
+      const { register } = require('tsx/esm/api');
+      register();
+      const module = await import('../src/commands/modelsCommand.ts');
+      handleModelsCommand = module.handleModelsCommand;
+    } else {
+      const module = await import('../dist/commands/modelsCommand.mjs');
+      handleModelsCommand = module.handleModelsCommand;
+    }
+
+    process.exit(await handleModelsCommand(modelsSubcommand, argv));
   } catch (error) {
     console.error('Error:', error.message);
     process.exit(1);

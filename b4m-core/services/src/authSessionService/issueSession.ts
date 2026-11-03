@@ -14,6 +14,7 @@ export interface IssueSessionParams {
   /** User's current tokenVersion, embedded in the minted access token. */
   tokenVersion: number;
   impersonatedBy?: string | null;
+  impersonationExpiresAt?: Date;
   /** OAuth client that minted this session (authorization-code or device flow). */
   clientId?: string | null;
   device?: IAuthSessionDevice;
@@ -60,6 +61,8 @@ export const issueSession = async (
     device: params.device,
     createdVia: params.createdVia,
     impersonatedBy: params.impersonatedBy ?? null,
+    impersonationExpiresAt: params.impersonationExpiresAt ?? null,
+    impersonationWriteEnabled: false,
     clientId: params.clientId ?? null,
     lastUsedAt: now,
     expiresAt,
@@ -68,7 +71,9 @@ export const issueSession = async (
 
   const accessToken = signAccessToken(userId, params.tokenVersion, {
     sid,
-    ...(params.impersonatedBy ? { impersonatedBy: params.impersonatedBy } : {}),
+    ...(params.impersonatedBy
+      ? { impersonatedBy: params.impersonatedBy, impersonationExpiresAt: params.impersonationExpiresAt?.getTime() }
+      : {}),
   });
 
   logger?.log('Issued auth session', sid, 'for user', userId, 'via', params.createdVia);

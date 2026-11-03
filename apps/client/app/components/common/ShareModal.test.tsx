@@ -5,7 +5,14 @@ import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { InviteType, IFabFileDocument, ISessionDocument } from '@bike4mind/common';
-import { MAX_EMAIL_MESSAGE_LENGTH, MAX_EMAIL_RECIPIENTS, MAX_EMAIL_RECIPIENTS_ERROR } from '@client/types/api';
+import {
+  MAX_EMAIL_MESSAGE_LENGTH,
+  MAX_EMAIL_RECIPIENTS,
+  MAX_EMAIL_RECIPIENTS_ERROR,
+  MAX_INVITE_MESSAGE_LENGTH,
+  MAX_INVITE_RECIPIENTS,
+  MAX_INVITE_RECIPIENTS_ERROR,
+} from '@client/types/api';
 import ShareDocumentModal from './ShareModal';
 
 // ShareModal pulls in several data/context hooks. Stub them so the modal renders
@@ -214,6 +221,28 @@ describe('ShareModal - By Link tab', () => {
 });
 
 describe('ShareModal - By Users tab', () => {
+  it('blocks more recipients than the invite route accepts without calling the API', async () => {
+    const user = await openByUsersTab();
+    const input = screen.getByTestId('share-modal-recipients-input');
+    await user.click(input);
+    for (let i = 0; i <= MAX_INVITE_RECIPIENTS; i++) {
+      await user.paste(`u${i}@example.com`);
+      await user.keyboard('{Enter}');
+    }
+    await user.click(screen.getByTestId('share-modal-submit-button'));
+
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith(MAX_INVITE_RECIPIENTS_ERROR));
+    expect(mocks.mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it('caps the description at the server limit', async () => {
+    await openByUsersTab();
+    expect(screen.getByTestId('share-modal-description-input')).toHaveAttribute(
+      'maxLength',
+      String(MAX_INVITE_MESSAGE_LENGTH)
+    );
+  });
+
   it('fires the share request when a recipient is committed with Enter', async () => {
     const user = await openByUsersTab();
     const input = screen.getByTestId('share-modal-recipients-input');
@@ -338,6 +367,36 @@ describe('ShareModal - By Users tab', () => {
     expect(mocks.toast.warning).toHaveBeenCalledTimes(1);
     expect(mocks.toast.error).not.toHaveBeenCalled();
   });
+
+  it('stops a bulk share at the first rate-limit refusal and says why', async () => {
+    mocks.mutateAsync
+      .mockImplementationOnce(async () => ({}))
+      .mockImplementationOnce(async () => {
+        const error = {
+          isAxiosError: true,
+          response: { status: 429, data: { message: 'Too many invitations. Try again later.' } },
+        };
+        mocks.shareDocumentOptions?.onError?.(error);
+        throw error;
+      });
+
+    const user = await openByUsersTab([
+      { id: 'file-1', fileName: 'a.pdf' } as IFabFileDocument,
+      { id: 'file-2', fileName: 'b.pdf' } as IFabFileDocument,
+      { id: 'file-3', fileName: 'c.pdf' } as IFabFileDocument,
+    ]);
+    const input = screen.getByTestId('share-modal-recipients-input');
+    await user.type(input, 'friend@test.com{Enter}');
+    await user.click(screen.getByTestId('share-modal-submit-button'));
+
+    await waitFor(() =>
+      expect(mocks.toast.error).toHaveBeenCalledWith(
+        'Too many invitations. Try again later. Shared 1 of 3 files. Not shared: b.pdf, c.pdf'
+      )
+    );
+    expect(mocks.mutateAsync).toHaveBeenCalledTimes(2);
+    expect(mocks.toast.warning).not.toHaveBeenCalled();
+  });
 });
 
 describe('ShareModal - Email tab', () => {
@@ -376,6 +435,20 @@ describe('ShareModal - Email tab', () => {
 
     await waitFor(() => expect(mocks.apiPost).toHaveBeenCalledTimes(1));
     expect(mocks.apiPost.mock.calls[0][1].recipients).toHaveLength(MAX_EMAIL_RECIPIENTS);
+  });
+
+  it('shows the server message when the send is refused', async () => {
+    mocks.apiPost.mockRejectedValue({
+      isAxiosError: true,
+      response: { status: 429, data: { message: 'Email limit reached. Try again in 1800 seconds.' } },
+    });
+    const user = await openEmailTab();
+    await addRecipients(user, 1);
+    await user.click(screen.getByTestId('share-modal-submit-button'));
+
+    await waitFor(() =>
+      expect(mocks.toast.error).toHaveBeenCalledWith('Email limit reached. Try again in 1800 seconds.')
+    );
   });
 
   it('caps the personal message at the server limit', async () => {

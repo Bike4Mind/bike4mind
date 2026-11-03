@@ -98,7 +98,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: {
     getOperationsModel: async () => ({
       modelId: 'test-model',
@@ -122,7 +122,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload: h.upload, getSignedUrl: vi.fn(async () => 'https://example.test/signed') }),
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
 vi.mock('@workers/events/recordSessionOperationalUsage', () => ({
   recordSessionOperationalUsage: h.recordSessionOperationalUsage,
 }));
@@ -549,6 +549,23 @@ describe('sessionSummarization requester write-time re-check', () => {
     );
     expect(h.publishTag).toHaveBeenCalledWith({ sessionId: SESSION_ID, requesterId: SHAREE, payerId: undefined });
   });
+
+  it.each([OWNER, SHAREE, 'user-payer'])(
+    'skips queued AI work when %s is pending review at execution',
+    async heldId => {
+      h.userFindById.mockImplementation(async id => ({
+        id,
+        isAdmin: false,
+        ...(id === heldId ? { riskScore: { reviewState: 'pending' as const } } : {}),
+      }));
+      const requesterId = heldId === OWNER ? undefined : SHAREE;
+      await run({ requesterId, payerId: 'user-payer', callTagging: true });
+      expect(h.modelMessages).not.toHaveBeenCalled();
+      expect(h.recordSessionOperationalUsage).not.toHaveBeenCalled();
+      expect(h.sessionUpdateWithUpdateAccess).not.toHaveBeenCalled();
+      expect(h.publishTag).not.toHaveBeenCalled();
+    }
+  );
 
   it('bills the sharee who asked, not the owner', async () => {
     h.sessionUpdateWithUpdateAccess.mockResolvedValue({ id: SESSION_ID });

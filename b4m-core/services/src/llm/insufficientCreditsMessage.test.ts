@@ -27,6 +27,22 @@ describe('buildInsufficientCreditsMessage', () => {
     // Steers the user to the real remedy instead.
     expect(msg).toMatch(/add credits/i);
   });
+
+  it('reports a negative balance as credits owed instead of a negative amount available', () => {
+    const personal = buildInsufficientCreditsMessage({ available: -42.3, required: 50 });
+    expect(personal).toContain('leaving 43 credits owed');
+    expect(personal).toContain('Add credits to keep going.');
+    expect(personal).not.toContain('-42');
+
+    const org = buildInsufficientCreditsMessage({ available: -10, required: 50, organizationName: 'Acme' });
+    expect(org).toContain('Your organization "Acme" is out of credits');
+    expect(org).toContain('leaving 10 credits owed');
+    expect(org).not.toContain('Add credits to keep going.');
+  });
+
+  it('uses the singular for a single credit owed', () => {
+    expect(buildInsufficientCreditsMessage({ available: -0.3, required: 5 })).toContain('leaving 1 credit owed');
+  });
 });
 
 describe('buildMemberCreditCapMessage', () => {

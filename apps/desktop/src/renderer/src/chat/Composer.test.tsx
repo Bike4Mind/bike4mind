@@ -372,6 +372,19 @@ describe('the suggested next prompt', () => {
   });
 });
 
+describe('a composer that cannot send yet', () => {
+  it('keeps the draft on Enter instead of clearing it into a refused send', () => {
+    const send = vi.fn();
+    mount({ notReady: 'Sign in', onSend: send });
+
+    type('written while signed out');
+    press('Enter');
+
+    expect(send).not.toHaveBeenCalled();
+    expect(input().value).toBe('written while signed out');
+  });
+});
+
 describe('the attach shortcut', () => {
   const withPick = (overrides: Partial<AttachmentDraft> = {}) => {
     const pick = vi.fn(async () => {});
@@ -480,6 +493,17 @@ describe('the attach shortcut', () => {
     expect(pick).not.toHaveBeenCalled();
     add.mockRestore();
     remove.mockRestore();
+  });
+
+  it('blocks sending with a reason and runs the fix button', () => {
+    const onSend = vi.fn();
+    const onClick = vi.fn();
+    mount({ onSend, blockedReason: 'No local model.', blockedAction: { label: 'Open Models', onClick } });
+    expect(host?.querySelector('[data-testid="composer-blocked-reason"]')?.textContent).toContain('No local model.');
+    act(() => (host?.querySelector('[data-testid="composer-blocked-action-btn"]') as HTMLElement).click());
+    expect(onClick).toHaveBeenCalledOnce();
+    expect((host?.querySelector('[data-testid="chat-send-btn"]') as HTMLButtonElement).disabled).toBe(true);
+    expect(onSend).not.toHaveBeenCalled();
   });
 
   it('advertises the chord on the attach button', () => {

@@ -12,8 +12,8 @@ import {
 import { secureParameters } from '@bike4mind/utils';
 import { meterCompletionBackend, notebookCurationService } from '@bike4mind/services';
 import { CreditHolderType, type CurationOptions } from '@bike4mind/common';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
-import { sendToClient } from '@server/websocket/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { NotebookCurationBillingSchema, NotebookCurationEvents } from '@server/utils/eventBus';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { z } from 'zod';
@@ -138,7 +138,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       logger.info('Initializing LLM service for executive summary generation...');
       try {
         // Get operations model with initialized LLM backend
-        const { OperationsModelService } = await import('@client/services/operationsModelService');
+        const { OperationsModelService } = await import('@bike4mind/server-utils/services/operationsModelService');
         const { llm, modelInfo } = await OperationsModelService.getOperationsModel();
 
         // Every summary call is reserved and settled against the user's billing owner (org seat when

@@ -65,6 +65,16 @@ describe('agentExecutor toolDeps wiring', () => {
     );
   });
 
+  // Each child reloads the owner itself, so a child row without the flag would regain the admin role.
+  it('carries a withheld admin role to every child row', () => {
+    const baseFieldsAt = source.indexOf('const baseFields = {');
+    expect(baseFieldsAt).toBeGreaterThan(-1);
+    expect(source.slice(baseFieldsAt, source.indexOf('};', baseFieldsAt))).toContain(
+      '...(execution.adminRoleWithheld && { adminRoleWithheld: true }),'
+    );
+    expect(source).toMatch(/nodeDefaults: \{[^}]*adminRoleWithheld: execution\.adminRoleWithheld,/);
+  });
+
   // The MCP tools are merged into the built list AFTER the native name filter, so this denylist is
   // the only thing that reaches a `server__tool` id - and it is the only place the surface denials
   // do. `processExecution` has no harness, so the call itself is pinned here.

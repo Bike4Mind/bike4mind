@@ -1,4 +1,5 @@
 import type { BackgroundProcessInfo } from '@shared/chat';
+import { shellCommandRan } from './sessionScripts';
 import { doubleWrapRefusal, refusalReason, resolveCwd, shellApproval } from './shellTools';
 import {
   capOutput,
@@ -31,7 +32,7 @@ function requireSessionId(context: ToolContext): string {
   return context.sessionId;
 }
 
-function describeStatus(info: BackgroundProcessInfo): string {
+export function describeStatus(info: BackgroundProcessInfo): string {
   switch (info.status) {
     case 'running':
       return 'running';
@@ -72,6 +73,12 @@ export const bashBackground: ToolDefinition = {
       `The call waits about ${SETTLE_MS / 1000}s and returns whatever the command printed in that`,
       'time, so a process that dies immediately is reported as dead rather than as a handle. Read',
       'later output with bash_output, list processes with bash_list, and stop one with bash_kill.',
+      '',
+      'When a background command exits on its own you are told automatically - its handle, exit',
+      'code and last output arrive as a message, waking this conversation if it is idle. So to wait',
+      'for a build, install or test run you started here, end your turn and say what you are',
+      'waiting for. Do not sleep, or call bash_output in a loop, until it finishes: every check',
+      'costs a full round trip and keeps the user waiting on your turn.',
       '',
       'Every background process is killed when the app quits. None of them survive a restart, so',
       'do not describe one as still running in a later session.',
@@ -116,12 +123,14 @@ export const bashBackground: ToolDefinition = {
     if (refused) throw new Error(`Refused: this command ${refused}. It was not run.`);
 
     const cwd = await resolveCwd(input, context.roots, context.workingDirectory);
+    shellCommandRan(context);
     const started = await registry.start({
       sessionId,
       command,
       cwd,
       roots: context.roots,
       protectedPaths: context.protectedPaths ?? [],
+      wakeOnExit: true,
     });
 
     await registry.settle(started.id, SETTLE_MS);
@@ -157,6 +166,9 @@ export const bashOutput: ToolDefinition = {
       'Output is buffered as a bounded tail, so a process that has printed megabytes will have',
       'had its oldest output discarded; the result says so explicitly when that has happened.',
       'It also reports whether the process is still running.',
+      '',
+      'Do not poll this to find out when a command finishes: you are told automatically when one',
+      'exits. Use it for what a still-running process has printed.',
     ].join('\n'),
     parameters: {
       type: 'object',
@@ -217,6 +229,7 @@ export const bashList: ToolDefinition = {
     const sessionId = requireSessionId(context);
 
     const processes = registry.list(sessionId);
+    registry.markExitsSeen(sessionId);
     if (processes.length === 0) return 'No background commands have been started in this conversation.';
 
     const running = processes.filter(info => info.status === 'running');

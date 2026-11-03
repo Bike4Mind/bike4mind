@@ -67,27 +67,23 @@ export async function executeServerTool(
 
   try {
     let content: any;
+    const input: unknown = request.input;
 
     switch (request.toolName) {
       case 'weather_info': {
-        content = await fetchWeatherData(adapters.db, request.input as WeatherParams);
+        content = await fetchWeatherData(adapters.db, input as WeatherParams);
         break;
       }
 
       case 'web_search': {
-        const result = await performWebSearch(
-          { db: adapters.db },
-          request.input as WebSearchParams,
-          imageUrlSigningSecret
-        );
+        const result = await performWebSearch({ db: adapters.db }, input as WebSearchParams, imageUrlSigningSecret);
         content = result.formattedResults;
         break;
       }
 
       case 'web_fetch': {
-        const result = await firecrawlFetch({ db: adapters.db }, request.input.url, {
-          offset: request.input.offset,
-        });
+        const { url, offset } = input as { url: string; offset?: number };
+        const result = await firecrawlFetch({ db: adapters.db }, url, { offset });
         // Shared formatter keeps truncation/continuation in-band and consistent with the
         // web_fetch tool and HTTP endpoint.
         content = webFetchBody(result);

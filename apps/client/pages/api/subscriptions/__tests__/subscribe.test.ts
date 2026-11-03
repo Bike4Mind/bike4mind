@@ -32,13 +32,13 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 const mockFindUserSubByPrice = vi.fn();
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: { findUserSubscriptionByPriceId: (...args: unknown[]) => mockFindUserSubByPrice(...args) },
 }));
 
 // Two plans: one gated behind an availability flag, one always-purchasable.
-vi.mock('@client/lib/userSubscriptions/constants', () => ({
-  SUBSCRIPTION_PLANS: [
+vi.mock('@client/lib/userSubscriptions/constants', () => {
+  const plans = [
     {
       priceId: 'price_gated',
       availabilityFlag: 'EnableGatedProduct',
@@ -49,8 +49,9 @@ vi.mock('@client/lib/userSubscriptions/constants', () => ({
       description: '',
     },
     { priceId: 'price_open', interval: 'monthly', name: 'Open', credits: 1, features: [], description: '' },
-  ],
-}));
+  ];
+  return { findSubscriptionPlan: (priceId: string) => plans.find(plan => plan.priceId === priceId) };
+});
 
 // Use the REAL appendSuccessParams so the success_url this route builds is
 // actually asserted below - mocking it away is what let the individual path ship
@@ -67,16 +68,29 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { STAGE: 'test'
 const mockSessionsCreate = vi.fn();
 const mockPricesRetrieve = vi.fn();
 const mockCustomersRetrieve = vi.fn();
+const mockCustomersUpdate = vi.fn();
 const mockCreateCustomer = vi.fn();
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   createCustomer: (...args: unknown[]) => mockCreateCustomer(...args),
   CustomerType: { User: 'User' },
   stripe: {
-    customers: { retrieve: (...args: unknown[]) => mockCustomersRetrieve(...args) },
+    customers: {
+      retrieve: (...args: unknown[]) => mockCustomersRetrieve(...args),
+      update: (...args: unknown[]) => mockCustomersUpdate(...args),
+    },
     prices: { retrieve: (...args: unknown[]) => mockPricesRetrieve(...args) },
     checkout: { sessions: { create: (...args: unknown[]) => mockSessionsCreate(...args) } },
   },
 }));
+
+const mockFirstPurchaseCardOptions = vi.fn();
+vi.mock('@server/integrations/stripe/threeDSecure', () => ({
+  firstPurchaseCardOptions: (...args: unknown[]) => mockFirstPurchaseCardOptions(...args),
+}));
+// The gate's own rules are covered in server/billing/checkoutGate.test.ts; here only that the route calls it.
+const { mockAssertCheckoutAllowed } = vi.hoisted(() => ({ mockAssertCheckoutAllowed: vi.fn() }));
+vi.mock('@server/billing/checkoutGate', () => ({ assertCheckoutAllowed: mockAssertCheckoutAllowed }));
+vi.mock('@server/auth/networkMeta', () => ({ readNetworkMeta: () => ({ ip: '203.0.113.7' }) }));
 
 import Stripe from 'stripe';
 import handler from '../subscribe';
@@ -84,6 +98,10 @@ import handler from '../subscribe';
 type HandlerFn = (req: unknown, res: unknown) => Promise<unknown>;
 
 const CALLBACK_URL = 'https://app.example.com/cb';
+
+beforeEach(() => {
+  mockFirstPurchaseCardOptions.mockResolvedValue({});
+});
 
 function makeReq(priceId: string, callbackUrl = CALLBACK_URL, userOverrides: Record<string, unknown> = {}) {
   const { req, res } = createMocks({ method: 'POST' });
@@ -95,6 +113,7 @@ function makeReq(priceId: string, callbackUrl = CALLBACK_URL, userOverrides: Rec
     stripeCustomerId: 'cus_existing',
     ...userOverrides,
   };
+  (req as Record<string, unknown>).logger = { warn: vi.fn() };
   return { req, res };
 }
 
@@ -127,6 +146,22 @@ describe('POST /api/subscriptions/subscribe — launch/availability gate', () =>
     expect(mockSessionsCreate).toHaveBeenCalledTimes(1);
     expect(res.statusCode).toBe(200);
     expect(res._getData()).toEqual({ sessionUrl: 'https://checkout.stripe/session' });
+  });
+
+  it('refuses before any Stripe call when the payment-risk gate refuses', async () => {
+    mockGetSettingsValue.mockResolvedValue(true);
+    mockAssertCheckoutAllowed.mockRejectedValueOnce(new Error('refused'));
+    const { req, res } = makeReq('price_gated');
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toThrow('refused');
+
+    expect(mockAssertCheckoutAllowed).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user_1' }),
+      { ip: '203.0.113.7' },
+      expect.anything(),
+      'subscription'
+    );
+    expect(mockSessionsCreate).not.toHaveBeenCalled();
   });
 
   it('marks the individual success_url so a completed purchase is distinguishable from a cancel', async () => {
@@ -313,6 +348,57 @@ describe('POST /api/subscriptions/subscribe - Stripe customer writes', () => {
     expect(mockUserUpdate).toHaveBeenCalledWith({ id: 'user_1', stripeCustomerId: 'cus_new' });
     expect(res.statusCode).toBe(200);
   });
+
+  describe('signup network on the customer, for Radar rules on renewal charges', () => {
+    const signupMeta = {
+      ip: '203.0.113.7',
+      userAgent: 'agent',
+      asn: 16509,
+      asnOrg: 'hosting',
+      country: 'DE',
+      isDatacenter: true,
+      capturedAt: new Date('2026-10-01T00:00:00Z'),
+    };
+    const signupFields = { signup_asn: '16509', signup_is_datacenter: 'true', signup_country: 'DE' };
+
+    it('creates the customer with the signup fields', async () => {
+      const { req, res } = makeReq('price_open', CALLBACK_URL, { stripeCustomerId: null, signupMeta });
+
+      await (handler as HandlerFn)(req, res);
+
+      expect(mockCreateCustomer).toHaveBeenCalledWith(expect.objectContaining({ metadata: signupFields }));
+      expect(JSON.stringify(mockCreateCustomer.mock.calls[0][0])).not.toContain('203.0.113.7');
+      expect(mockCustomersUpdate).not.toHaveBeenCalled();
+    });
+
+    it('backfills an existing customer that lacks the fields', async () => {
+      mockCustomersRetrieve.mockResolvedValue({ id: 'cus_existing', metadata: { type: 'User' } });
+      const { req, res } = makeReq('price_open', CALLBACK_URL, { signupMeta });
+
+      await (handler as HandlerFn)(req, res);
+
+      expect(mockCustomersUpdate).toHaveBeenCalledWith('cus_existing', { metadata: signupFields });
+      expect(mockSessionsCreate).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves an existing customer alone once it carries the fields', async () => {
+      mockCustomersRetrieve.mockResolvedValue({ id: 'cus_existing', metadata: { type: 'User', ...signupFields } });
+      const { req, res } = makeReq('price_open', CALLBACK_URL, { signupMeta });
+
+      await (handler as HandlerFn)(req, res);
+
+      expect(mockCustomersUpdate).not.toHaveBeenCalled();
+    });
+
+    it('makes no customer write for an account with no signup capture', async () => {
+      mockCustomersRetrieve.mockResolvedValue({ id: 'cus_existing', metadata: { type: 'User' } });
+      const { req, res } = makeReq('price_open');
+
+      await (handler as HandlerFn)(req, res);
+
+      expect(mockCustomersUpdate).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('POST /api/subscriptions/subscribe - acquisition touches', () => {
@@ -428,5 +514,41 @@ describe('POST /api/subscriptions/subscribe - acquisition touches', () => {
     req.body.surface = 'Not A Surface!';
     await expect((handler as HandlerFn)(req, res)).rejects.toThrow();
     expect(mockSessionsCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/subscriptions/subscribe - 3-D Secure on first purchase', () => {
+  const accountCreatedAt = new Date('2026-10-01T00:00:00Z');
+  const challengeOptions = { payment_method_options: { card: { request_three_d_secure: 'challenge' } } };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFirstPurchaseCardOptions.mockResolvedValue({});
+    mockIsAllowedCallbackOrigin.mockReturnValue(true);
+    mockFindUserSubByPrice.mockResolvedValue(null);
+    mockCustomersRetrieve.mockResolvedValue({ id: 'cus_existing' });
+    mockPricesRetrieve.mockResolvedValue({ id: 'price_open', active: true });
+    mockSessionsCreate.mockResolvedValue({ url: 'https://checkout.stripe/session' });
+  });
+
+  it('adds the challenge options to the checkout session and asks the helper about this account', async () => {
+    mockFirstPurchaseCardOptions.mockResolvedValue(challengeOptions);
+    const { req, res } = makeReq('price_open', CALLBACK_URL, { createdAt: accountCreatedAt });
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockFirstPurchaseCardOptions.mock.calls[0][0]).toEqual({
+      stripeCustomerId: 'cus_existing',
+      accountCreatedAt,
+    });
+    expect(mockSessionsCreate).toHaveBeenCalledWith(expect.objectContaining(challengeOptions));
+  });
+
+  it('leaves payment_method_options off when the helper returns nothing', async () => {
+    const { req, res } = makeReq('price_open', CALLBACK_URL, { createdAt: accountCreatedAt });
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockSessionsCreate.mock.calls[0][0]).not.toHaveProperty('payment_method_options');
   });
 });

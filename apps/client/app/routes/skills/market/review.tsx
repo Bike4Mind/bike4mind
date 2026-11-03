@@ -41,6 +41,7 @@ import {
   FindingsList,
   HonestSummaryPanel,
   MismatchAlert,
+  SupportingFiles,
   TierChip,
   VisibilityChip,
 } from '@client/app/components/SkillMarket/parts';
@@ -152,6 +153,7 @@ const VersionReviewCard: FC<{ item: ReviewQueueVersionItem; mode: 'pending' | 'a
           ) : (
             <BodyBlock body={version.snapshot.body} />
           )}
+          <SupportingFiles files={version.snapshot.files} />
         </Stack>
       </Box>
 

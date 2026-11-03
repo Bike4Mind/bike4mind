@@ -17,10 +17,13 @@ import { adminAuditService } from '@bike4mind/services';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { getSettingsMap, getSettingsValue, postMessageToSlack } from '@bike4mind/utils';
 import { Resource } from 'sst';
+import type { Request } from 'express';
+import { reconcileExpiredImpersonations } from '@server/auth/impersonation';
 
 const logger = new Logger({ metadata: { service: 'adminAuditAlerts' } });
 
 export async function runAdminAuditAlerts(): Promise<adminAuditService.AdminAuditAlertRunResult> {
+  await reconcileExpiredImpersonations({ headers: {}, url: '/workers/support-access-expiry', logger } as Request);
   // Fresh read every run so clearing the webhook stops alerts on the next minute, not after a cache TTL.
   const settings = await getSettingsMap(
     { adminSettings: adminSettingsRepository },

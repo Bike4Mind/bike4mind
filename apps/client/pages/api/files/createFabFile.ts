@@ -6,6 +6,8 @@ import {
   FileEvents,
   MODAL_MEDIA_PREFIX,
   Permission,
+  hasAdminPermission,
+  createdFabFileResponseSchema,
 } from '@bike4mind/common';
 import {
   adminSettingsRepository,
@@ -20,9 +22,11 @@ import {
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { getFileExtension } from '@bike4mind/utils';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';
+import { respond } from '@server/utils/respond';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -35,6 +39,7 @@ import {
 } from '@server/files/fileScopes';
 import { getS3Url } from '@client/app/utils/s3Url';
 import { Resource } from 'sst';
+import { persistedIsAdmin, requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 
 // No caller-chosen `prefix`: the key namespace decides how the S3 upload hook treats an object,
 // and a prefix such as `tmp` lands in one it skips (`isUntrackedFabFileKey`), so the object
@@ -72,8 +77,12 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
       const { user } = req;
 
       const parsed = createFabFileSchema.parse(req.body);
-      const adminModalMedia = !!user.isAdmin && parsed.purpose === 'modal-media';
       const releaseNotesOnly = isReleaseNotesOnlyUpload(req);
+      // A release-notes key arrives with the owner's admin role withheld; it still counts when the owner is an admin.
+      // settings:manage is what lets a delegated admin edit modals, so it covers their media too.
+      const adminModalMedia =
+        (hasAdminPermission(user, 'settings:manage') || (releaseNotesOnly && persistedIsAdmin(user))) &&
+        parsed.purpose === 'modal-media';
       if (!adminModalMedia && releaseNotesOnly) {
         throw new ForbiddenError("This API key may only upload What's New media; files:write is required", {
           required_scopes: FILES_WRITE_SCOPES,
@@ -154,12 +163,14 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
         });
       }
 
+      await consumeFileUploadBudget(req, 1);
+
       const result = await withTransaction(async () => {
         return fabFilesService.createFabFile(user.id, params, {
           db: {
             adminSettings: adminSettingsRepository,
             fabFiles: FabFile,
-            users: User,
+            users: requesterScopedUsers(req, User),
             organizations: organizationRepository,
             dataLakes: dataLakeRepository,
             // The service re-gates the lake tag internally, so its inputs must stay at least as
@@ -215,7 +226,9 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
 
       const signed = await signBrowserFileResponse(result);
       // Same URL the admin form builds (AdminModalVideoFields), so API-key callers need no bucket name.
-      return res.json(
+      return respond(
+        res,
+        createdFabFileResponseSchema,
         adminModalMedia && result.filePath
           ? { ...signed, mediaUrl: getS3Url({ bucket: Resource.fabFileBucket.name, key: result.filePath }) }
           : signed

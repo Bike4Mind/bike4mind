@@ -151,6 +151,7 @@ re-deciding per endpoint:
 | Provider rejected *our* credentials | `401` | `provider_rejected` |
 | Provider failed to generate (upstream error) | `502` | - |
 | Model id unknown or not available to the caller | `400` | `unknown_model` |
+| Assistant prefill sent for a model that does not support it | `400` | `assistant_prefill_unsupported` |
 | Tool search server tool, `tool_reference` or tool search block sent for a model that cannot serve it on this route | `400` | `tool_search_unsupported` |
 | Every tool is `defer_loading: true` and no tool search server tool is sent (native tool search models only) | `400` | `all_tools_deferred` |
 | A deferred tool also carries `cache_control` (native tool search models only) | `400` | `deferred_tool_cache_control` |
@@ -160,12 +161,16 @@ re-deciding per endpoint:
 | The model's provider is not configured on this deployment, or the self-hosted model server that lists it (Ollama, local image) is unreachable | `503` | `provider_not_configured` |
 | Insufficient credits | `422` | `insufficient_credits` |
 | Spend cap exceeded | `422` | `spend_cap_exceeded` |
+| A reasoning model spent the caller's own `max_tokens` thinking and produced no answer (a server-chosen budget is a plain `502`) | `422` | `output_budget_exhausted` |
+| Free-tier daily credit allowance used up (`Retry-After` is the next UTC midnight) | `429` | `daily_free_limit_reached` |
 | Per-user active API key cap reached | `400` | `api_key_user_cap` |
 | Per-tier agent cap reached | `400` | `agent_limit_reached` |
 | User storage quota exceeded | `400` | `storage_limit_exceeded` |
 | Organization per-file storage ceiling exceeded | `400` | `org_storage_limit_exceeded` |
 | Per-file size cap exceeded | `400` | `file_too_large` |
 | Rate limit exceeded | `429` | - |
+| Account tokens-per-minute allowance used up (`Retry-After`) | `429` | `token_rate_limit_exceeded` |
+| Account already has its allowed number of completions in flight | `429` | `concurrency_limit_exceeded` |
 | Database unreachable while authenticating the credential | `503` | - (`Retry-After`; the credential was not judged, so retry rather than re-prompt for a key) |
 | A blocking request ran past its server-side deadline (the work is ended, not left running) | `504` | `request_timeout` |
 | Generated payload exceeds the platform ceiling, raw-bytes response | `303` | - (`Location` is a signed URL for the payload) |
@@ -173,6 +178,7 @@ re-deciding per endpoint:
 | Referenced resource does not exist | `404` | - |
 | Malformed path/query resource id | `404` | - |
 | Concurrent write lost to another request on the same resource | `409` | - (the loser undoes any side effect, such as refunding a credit reserve; callers retry) |
+| Free-tier account calls a model that needs a paid plan (admin-set free-tier allowlist) | `403` | `model_requires_subscription` (upgrade, or choose a free-tier model from `GET /api/v1/models`) |
 | Org-billed API key names a billing organization other than its own | `403` | `billing_organization_mismatch` |
 | Org-billed API key's organization is gone, or its holder has left it | `400` | - (re-mint the key) |
 | Cancel of a job the provider is already rendering and billing | `409` | `not_cancellable` (do not retry; the job runs to its end and is charged if it produces output) |
@@ -285,7 +291,8 @@ are published wire shapes, so what had to be shared was the vocabulary, not the 
 
 `/api/ai/v1/completions` classifies its frame with `COMPLETION_SSE_ERROR_CODES`: the billing
 codes plus `provider_rejected` (the provider refused our credentials), `content_blocked` (the
-model's safety classifier declined the request) and `provider_error` (any other provider failure). The frame message is sanitized; a raw upstream body never
+model's safety classifier declined the request), `output_budget_exhausted` (a reasoning model spent the
+caller's whole `max_tokens` thinking; unchanged retries fail the same way) and `provider_error` (any other provider failure). The frame message is sanitized; a raw upstream body never
 reaches the client.
 
 The pairing a caller needs is worth stating in the contract `description`: `/api/chat`,
@@ -332,6 +339,16 @@ for the whole window. Removing an alias is a major-version change.
   `scripts/check-contract-gate.sh` enforces this for every handler outside `pages/api/v1`
   (these roots included): it must declare `auth: 'jwtOnly'` or be listed in
   `scripts/contract-gate-api-key-allowlist.txt`.
+- **A Lambda exposed through a Function URL needs a contract too.** An `sst.aws.Function` in
+  `infra/` with `url:` serves requests with none of the Next.js middleware chain, so the
+  handler must be built on `defineLambdaRoute(contract, ...)`: the gate accepts a call in the
+  handler file or in a module up to three imports away, reached by a relative or `@workers/*`
+  import (the transport is `apps/workers/src/cli/defineLambdaRoute.ts`; a thin entry that
+  imports the routed module is fine, see `CliToolHandler`). `scripts/check-contract-gate.sh`
+  fails otherwise. Handlers under `premium-generated/` are skipped, since they are re-exported
+  from an overlay. The other escape is `scripts/contract-gate-function-url-allowlist.txt`,
+  which is frozen debt: entries are only ever removed (the gate prints an already-ported entry
+  as INFO but does not fail), and every entry needs a trailing `# reason`.
 - `LEGACY_PUBLIC_PATHS` in `assertContractConventions.ts` is the baseline: the seven paths
   already shipped in `apps/client/public/openapi.json` when this rule landed. **The list is
   frozen - entries are only ever removed.** Adding to it is the thing this convention

@@ -12,7 +12,7 @@ const h = vi.hoisted(() => ({
   order: [] as string[],
 }));
 
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptToken: (v?: string | null) => (v ? `enc(${v})` : null),
   decryptToken: (v?: string | null) => {
     if (!v) return null;
@@ -45,7 +45,10 @@ vi.mock('@googleapis/drive', () => ({
   drive: vi.fn(),
 }));
 
-import { releaseDriveConnection, releaseDriveConnectionForLake } from './common';
+import {
+  releaseDriveConnection,
+  releaseDriveConnectionForLake,
+} from '@bike4mind/server-utils/integrations/google/drive/common';
 import type { LakeConnectionOwner } from '@bike4mind/common';
 
 const orgA: LakeConnectionOwner = { kind: 'organization', organizationId: 'orgA' };

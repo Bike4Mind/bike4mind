@@ -54,6 +54,10 @@ vi.mock('@bike4mind/database', () => ({
   creditLotRepository: {},
   creditTransactionRepository: {},
   partnerSignupRuleRepository: {},
+  dataLakeRepository: {},
+  dataLakeAccessGrantRepository: {},
+  lakeConfigChangeEventRepository: {},
+  adminSettingsRepository: {},
   userRepository: {},
   withTransaction: async (fn: any) => {
     credit.events.push('tx:start');
@@ -72,8 +76,8 @@ vi.mock('@server/utils/adminAudit', () => ({
   recordAdminActionFromRequest: credit.recordAdminActionFromRequest,
 }));
 vi.mock('@server/entitlements/partnerRules', () => ({ invalidatePartnerRuleCache: vi.fn() }));
-vi.mock('@server/models/Subscription', () => ({ subscriptionRepository: {} }));
-vi.mock('@client/lib/subscriptions/types', () => ({ SubscriptionOwnerType: {} }));
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({ subscriptionRepository: {} }));
+vi.mock('@bike4mind/server-utils/lib/subscriptions/types', () => ({ SubscriptionOwnerType: {} }));
 
 import '@pages/api/organizations/[id]/index';
 

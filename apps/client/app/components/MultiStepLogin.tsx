@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useRouter } from '@tanstack/react-router';
-import { applyRedirect, appendRedirectTo } from '@client/app/utils/authRedirect';
+import { applyRedirect } from '@client/app/utils/authRedirect';
 import { getLoginErrorMessage } from '@client/app/utils/loginErrorMessages';
 import { markFirstSignupSession } from '@client/app/utils/firstSignupSession';
 import { useTranslation, Trans } from 'react-i18next';
@@ -27,9 +27,10 @@ import OktaIcon from './svgs/flags/OktaIcon';
 import GoogleColorIcon from './svgs/flags/GoogleColorIcon';
 
 import { useUser } from '@client/app/contexts/UserContext';
-import { useSendOTC, useVerifyOTC } from '@client/app/hooks/data/auth';
+import { useSendOTC, useSignupBotFields, useStartOAuthSignIn, useVerifyOTC } from '@client/app/hooks/data/auth';
 import { formatCountdown, useOtcRateLimit } from '@client/app/hooks/useOtcRateLimit';
 import OtcRateLimitNotice from './OtcRateLimitNotice';
+import SignupHoneypot from './SignupHoneypot';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useMfaChallenge } from '@client/app/hooks/useMfaChallenge';
 import { resetRefreshCoordinator } from '@client/app/utils/refreshCoordinator';
@@ -53,16 +54,7 @@ import {
 } from '@client/app/utils/otcCode';
 import { useCookieSettings } from '@client/app/components/CookieConsentBanner';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
-
-/**
- * Reads the SPA's current `?redirectTo=` and merges it onto a provider auth
- * URL so it round-trips through the IdP `state`/`RelayState` param (the
- * full-page navigation to the provider drops the in-URL query). The merge
- * itself lives in `appendRedirectTo` (pure + unit-tested).
- */
-function withRedirectTo(targetUrl: string): string {
-  return appendRedirectTo(targetUrl, new URLSearchParams(window.location.search).get('redirectTo'));
-}
+import { useJoinWaitlist } from '@client/app/hooks/useJoinWaitlist';
 
 interface MultiStepLoginProps {
   enableRegister?: boolean;
@@ -89,6 +81,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
 }) => {
   const { setCurrentUser, currentUser } = useUser();
   const { mutate: logEvent } = useLogEvent();
+  const startOAuthSignIn = useStartOAuthSignIn();
   // Only a live session (token present) counts as "already logged in". A stale persisted
   // `currentUser` with no access token must fall through to the login form rather than be
   // bounced back into the app shell - otherwise a broken session is trapped in a /login <->
@@ -115,10 +108,14 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   // Resend cooldown
   const [resendCooldown, setResendCooldown] = useState(0);
   const cooldownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Synchronous: isPending re-renders too late to stop a double-clicked Resend starting a second challenge.
+  const resendingRef = useRef(false);
 
   const navigate = useNavigate();
+  const joinWaitlist = useJoinWaitlist();
   const router = useRouter();
   const { mutateAsync: sendOTC, isPending: isSendingOTC } = useSendOTC();
+  const { botFields, honeypotProps } = useSignupBotFields();
   const rateLimit = useOtcRateLimit();
   const [emailError, setEmailError] = useState<string | null>(null);
   const { mutateAsync: verifyOTC, isPending: isVerifying } = useVerifyOTC();
@@ -181,12 +178,18 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   // Surface SSO/OAuth failures
   useEffect(() => {
     const url = new URL(window.location.href);
-    const message = getLoginErrorMessage(url.searchParams.get('error'));
+    const errorCode = url.searchParams.get('error');
+    const message = getLoginErrorMessage(errorCode);
     if (!message) return;
-    toast.error(message, { duration: 8000 });
+    toast.error(message, {
+      duration: 8000,
+      ...(errorCode === 'registration_closed' && {
+        action: { label: t('auth.joinWaitlist'), onClick: () => joinWaitlist('oauth_signup_closed') },
+      }),
+    });
     url.searchParams.delete('error');
     window.history.replaceState({}, '', url.pathname + url.search + url.hash);
-  }, []);
+  }, [joinWaitlist, t]);
 
   // Cleanup cooldown timer
   useEffect(() => {
@@ -241,17 +244,19 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
         setCurrentStep('redirect');
         // Redirect to the appropriate OAuth/SAML provider, carrying redirectTo
         // through the IdP state/RelayState round-trip (the full-page navigation
-        // below drops the SPA's ?redirectTo= query).
-        window.location.href = withRedirectTo(strategy.redirectUrl);
+        // drops the SPA's ?redirectTo= query).
+        await startOAuthSignIn(strategy.redirectUrl);
         return;
       }
 
-      const sendResult = await sendOTC({ email: trimmedEmail });
+      const sendResult = await sendOTC({ email: trimmedEmail, ...botFields });
       setPendingToken(sendResult.pendingToken);
       toastOtcCodeSent(t('auth.codeSent'));
       setCurrentStep('otc');
       startResendCooldown();
     } catch (error) {
+      // A provider redirect that could not start must not leave the spinner up with no way back.
+      setCurrentStep('email');
       // useSendOTC rejects with a plain { message, code } object (not an Error instance),
       // so read .message off either shape - otherwise real server messages like the OTC
       // rate-limit's "try again in N seconds" collapse into "An unexpected error occurred".
@@ -264,9 +269,10 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   };
 
   const handleResendCode = async () => {
-    if (resendCooldown > 0 || rateLimit.secondsLeft > 0) return;
+    if (resendingRef.current || resendCooldown > 0 || rateLimit.secondsLeft > 0) return;
+    resendingRef.current = true;
     try {
-      const sendResult = await sendOTC({ email: email.trim() });
+      const sendResult = await sendOTC({ email: email.trim(), ...botFields });
       setPendingToken(sendResult.pendingToken);
       toastOtcCodeSent(t('auth.codeSent'));
       startResendCooldown();
@@ -275,6 +281,8 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
       if (rateLimit.handleError(error)) return;
       const errorMessage = rateLimit.errorMessage(error, 'Failed to resend code');
       toast.error(errorMessage);
+    } finally {
+      resendingRef.current = false;
     }
   };
 
@@ -330,7 +338,10 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
         // The verified email may qualify for a partner bypass even on an invite-only instance.
         // Fall back to public config for responses from servers predating this decision field.
         if (!(response.registrationAllowed ?? enableRegister)) {
-          toast.error(t('auth.registrationClosed'));
+          toast.error(t('auth.registrationClosed'), {
+            duration: 10000,
+            action: { label: t('auth.joinWaitlist'), onClick: () => joinWaitlist('login_signup_closed', email) },
+          });
           return;
         }
         setCurrentStep('register-username');
@@ -468,9 +479,9 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   };
 
   const handleSocialLogin = (provider: 'google' | 'github' | 'okta') => {
-    // Carry redirectTo through the IdP state round-trip (the full-page
-    // navigation below drops the SPA's ?redirectTo= query).
-    window.location.href = withRedirectTo(`/api/auth/${provider}`);
+    startOAuthSignIn(`/api/auth/${provider}`).catch((error: unknown) => {
+      toast.error(error instanceof Error ? error.message : 'Sign-in could not start. Please try again.');
+    });
   };
 
   const handleBackToEmail = () => {
@@ -598,6 +609,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                 >
                   <Button
                     className="google-login-button"
+                    data-testid="login-google-btn"
                     type="button"
                     variant="outlined"
                     color="neutral"
@@ -629,6 +641,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                   {enableGithubAuth && (
                     <Button
                       className="github-login-button"
+                      data-testid="login-github-btn"
                       type="button"
                       variant="outlined"
                       color="neutral"
@@ -661,6 +674,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                   {enableOktaAuth && (
                     <Button
                       className="okta-login-button"
+                      data-testid="login-okta-btn"
                       type="button"
                       variant="outlined"
                       color="neutral"
@@ -781,35 +795,51 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                   testId="login-rate-limit-alert"
                 />
 
-                {enableRegister && (
-                  <Box
-                    className="register-prompt-container"
-                    sx={{ display: 'flex', justifyContent: 'center', mt: '20px' }}
-                  >
-                    <Typography sx={{ color: 'text.tertiary', fontSize: '14px' }}>
-                      {t('auth.noAccount')}{' '}
-                      <Link
-                        className="register-link"
-                        data-testid="signup-text"
-                        color="primary"
-                        onClick={() => {
-                          const searchParams = new URLSearchParams(window.location.search);
-                          const redirectTo = searchParams.get('redirectTo');
-                          navigate({ to: '/register', search: redirectTo ? { redirectTo } : undefined });
-                        }}
-                        sx={{
-                          fontWeight: 500,
-                          fontSize: '14px',
-                          cursor: 'pointer',
-                          transition: 'color 0.2s ease-in-out',
-                          '&:hover': { textDecoration: 'underline' },
-                        }}
-                      >
-                        {t('auth.registerNow')}
-                      </Link>
-                    </Typography>
-                  </Box>
-                )}
+                <Box
+                  className="register-prompt-container"
+                  sx={{ display: 'flex', justifyContent: 'center', mt: '20px' }}
+                >
+                  <Typography sx={{ color: 'text.tertiary', fontSize: '14px' }}>
+                    {t('auth.noAccount')}{' '}
+                    <Link
+                      component="button"
+                      type="button"
+                      className="register-link"
+                      data-testid="signup-text"
+                      color="primary"
+                      onClick={() => {
+                        const searchParams = new URLSearchParams(window.location.search);
+                        const redirectTo = searchParams.get('redirectTo');
+                        navigate({ to: '/register', search: redirectTo ? { redirectTo } : undefined });
+                      }}
+                      sx={{
+                        fontWeight: 500,
+                        fontSize: '14px',
+                        cursor: 'pointer',
+                        transition: 'color 0.2s ease-in-out',
+                        '&:hover': { textDecoration: 'underline' },
+                      }}
+                    >
+                      {enableRegister ? t('auth.registerNow') : 'Have an invite code?'}
+                    </Link>
+                    {!enableRegister && (
+                      <>
+                        {' / '}
+                        <Link
+                          component="button"
+                          type="button"
+                          data-testid="login-join-waitlist-link"
+                          color="primary"
+                          onClick={() => joinWaitlist('login_signup_closed', email)}
+                          sx={{ fontWeight: 500, fontSize: '14px', '&:hover': { textDecoration: 'underline' } }}
+                        >
+                          {t('auth.joinWaitlist')}
+                        </Link>
+                      </>
+                    )}
+                  </Typography>
+                </Box>
+                <SignupHoneypot {...honeypotProps} />
               </form>
             )}
 

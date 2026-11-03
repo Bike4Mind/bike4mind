@@ -12,7 +12,7 @@ const LEGACY_KEYS = [{ _id: 1, fabFileId: 1 }, { fabFileId: 1 }];
  * declarations were removed.
  *
  * Both the precondition and the two drops below match by key pattern rather than by name, since an
- * auto-derived name is not guaranteed identical on every engine (prod runs DocumentDB). Dropping by
+ * auto-derived name is not guaranteed (an index may have been built under a different name). Dropping by
  * a hardcoded name would let a name mismatch make `safeDropIndex` silently swallow the drop as
  * "not found" while this migration still gets recorded as applied - permanently un-retryable.
  *

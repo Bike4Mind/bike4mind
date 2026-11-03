@@ -13,10 +13,11 @@ import path from 'node:path';
  * (`{ id: doc.id, status }`) or use an atomic repo method. Nothing else fails when someone writes
  * `db.quests.update(quest)`, so this scan is the only guard.
  *
- * Flags a repository-shaped receiver (`db.<coll>`, `...Repository`) whose `.update(` first argument
+ * Flags a repository-shaped receiver (`db.<coll>`, `db?.<coll>`, `...Repository`) whose `.update(` first argument
  * (or `.updateMany(` second argument) is a bare identifier / member expression, or an object literal that opens with a spread of one
  * (`{ ...doc, x }`) or spreads the doc it takes its id from (`{ id: doc.id, ...doc }`), the same
- * hazard. Object literals naming their fields (`{ id, status }`, `{ id, ...changes }`) pass.
+ * hazard. Casts, parentheses and copies (`structuredClone(doc)`, `doc.toObject()`) of a doc count as the
+ * doc. Object literals naming their fields (`{ id, status }`, `{ id, ...changes }`) pass.
  *
  * Not covered: dynamic receivers (`db[name].update(x)`), non-repository receivers (`this.repo`,
  * `deps.users`), and a doc spread under a bare id (`{ id, ...doc }`), which is indistinguishable
@@ -38,10 +39,6 @@ const ALLOWED = new Map<string, string>([
   [
     'packages/scripts/migrate/migrations/20250321142457_add-user-details-to-org.ts::organization',
     'historical migration, never re-run',
-  ],
-  [
-    'b4m-core/services/src/llm/ChatCompletionProcess.ts::quest',
-    'saveQuest: deliberate whole-doc write by the streaming owner (see comment there)',
   ],
   ['b4m-core/services/src/userApiKeyService/updateEmbedKey.ts::patch', PARTIAL],
   ['apps/client/pages/api/email/change.ts::user', PASSTHROUGH],
@@ -65,16 +62,19 @@ const ALLOWED = new Map<string, string>([
   ['b4m-core/services/src/tagService/update.ts::buildData', 'id plus validated params'],
   ['packages/scripts/generateAgentSystemPrompts.ts::updateData', PARTIAL],
 ]);
-const ALLOWED_ENTRIES = 23;
+const ALLOWED_ENTRIES = 22;
 // Sum of the per-entry SITE_COUNTs; pinned so a new site under an existing key is not absorbed silently.
-const TOTAL_SITES = 25;
+const TOTAL_SITES = 24;
 const SITE_COUNT = new Map<string, number>([
   ['b4m-core/services/src/latticeService/latticeModelService.ts::updatedModel', 3],
 ]);
 
 const RECEIVER =
   /(?:^|[^\w$.])((?:[\w$]+[?!]?\.)*[\w$]+)[?!]?\s*\.(update|updateGuarded|updateMany)(?:<(?:[^<>()]|<[^<>()]*>)*>)?\(/g;
-const isRepositoryReceiver = (r: string) => /Repository$/.test(r) || /(?:^|\.)db\.[\w$]+$/.test(r);
+const isRepositoryReceiver = (receiver: string) => {
+  const r = receiver.replace(/[?!]\./g, '.');
+  return /Repository$/.test(r) || /(?:^|\.)db\.[\w$]+$/.test(r);
+};
 
 /** Returns the text of argument `index` of the call whose `(` is at `open`, or null when unbalanced or absent. */
 function nthArg(src: string, open: number, index: number): string | null {
@@ -155,16 +155,27 @@ function topLevelSpreads(arg: string): string[] {
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const MEMBER = String.raw`[\w$]+(?:[?!]?\.[\w$]+)*`;
 
-const isWholeDoc = (arg: string) =>
-  // `doc`, `req.user`, `doc!`, `doc as IDoc`, `doc.toObject()`, `Object.assign(doc, ...)`
-  new RegExp(String.raw`^${MEMBER}!?(?:\s+as\s+[\w$.<>\[\], ]+)?$`).test(arg) ||
-  new RegExp(String.raw`^${MEMBER}\.to(?:Object|JSON)\(\)$`).test(arg) ||
-  /^Object\.assign\(\s*[\w$]/.test(arg) ||
-  // `{ ...doc, x }`, `{ ...doc.toObject(), x }`, `{ ...(doc as IDoc) }`
-  /^\{\s*\.\.\.\(?[\w$.]+/.test(arg) ||
-  // `{ id: doc.id, ...doc }`: spreads the doc it takes its id from
-  (arg.startsWith('{') &&
-    topLevelSpreads(arg).some(e => new RegExp(String.raw`(?:^|[^\w$.])${escapeRegExp(e)}\??\.`).test(arg)));
+const unwrapParens = (arg: string): string => {
+  const m = /^\(([^()]*)\)$/.exec(arg);
+  return m ? unwrapParens(m[1].trim()) : arg;
+};
+
+const isWholeDoc = (raw: string) => {
+  const arg = unwrapParens(raw);
+  return (
+    // `doc`, `req.user`, `doc!`, `doc as IDoc`, `(doc satisfies IDoc)`, `doc.toObject({ ... })`,
+    // `Object.assign(doc, ...)`, `structuredClone(doc)`
+    new RegExp(String.raw`^${MEMBER}!?(?:\s+(?:as|satisfies)\s+[\w$.<>\[\], ]+)?$`).test(arg) ||
+    new RegExp(String.raw`^${MEMBER}\.to(?:Object|JSON)\([^()]*\)$`).test(arg) ||
+    /^Object\.assign\(\s*[\w$]/.test(arg) ||
+    new RegExp(String.raw`^structuredClone\(\s*${MEMBER}\s*\)$`).test(arg) ||
+    // `{ ...doc, x }`, `{ ...doc.toObject(), x }`, `{ ...(doc as IDoc) }`
+    /^\{\s*\.\.\.\(?[\w$.]+/.test(arg) ||
+    // `{ id: doc.id, ...doc }`: spreads the doc it takes its id from
+    (arg.startsWith('{') &&
+      topLevelSpreads(arg).some(e => new RegExp(String.raw`(?:^|[^\w$.])${escapeRegExp(e)}\??\.`).test(arg)))
+  );
+};
 
 function* walk(dir: string): Generator<string> {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -245,6 +256,13 @@ describe('repository whole-document update guard', () => {
     expect(isWholeDoc('{ ...user.toObject(), name }')).toBe(true);
     expect(isWholeDoc('{ ...(user as IUser) }')).toBe(true);
     expect(isWholeDoc('{ id, ...changes } as Partial<IUser>')).toBe(false);
+    expect(isWholeDoc('(user as IUser)')).toBe(true);
+    expect(isWholeDoc('user as unknown as IUser')).toBe(true);
+    expect(isWholeDoc('user satisfies Partial<IUser>')).toBe(true);
+    expect(isWholeDoc('user.toObject({ virtuals: true })')).toBe(true);
+    expect(isWholeDoc('structuredClone(user)')).toBe(true);
+    expect(isWholeDoc('({ id, ...changes })')).toBe(false);
+    expect(isWholeDoc('{ id: quest.id, ...changed }')).toBe(false);
   });
 
   it('matches generic receivers, one level of nesting deep', () => {
@@ -252,6 +270,12 @@ describe('repository whole-document update guard', () => {
     expect(receivers('userRepository.update<IUser>(user)')).toEqual(['userRepository']);
     expect(receivers('userRepository.update<Partial<IUser>>(user)')).toEqual(['userRepository']);
     expect(receivers('tagRepository.updateMany({ userId }, tag)')).toEqual(['tagRepository']);
+  });
+
+  it('treats optional-chained and non-null db receivers as repositories', () => {
+    expect(isRepositoryReceiver('db?.users')).toBe(true);
+    expect(isRepositoryReceiver('this.db!.quests')).toBe(true);
+    expect(isRepositoryReceiver('deps?.users')).toBe(false);
   });
 
   it('reads the argument at the requested index', () => {

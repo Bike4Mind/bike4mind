@@ -79,6 +79,22 @@ describe('backfillOrphanedPublishedArtifacts', () => {
     expect(await Annotation.countDocuments({ deletedAt: null })).toBe(0);
   });
 
+  it("deletes the removed bundles' owner-only thumbnails, and nothing in a dry run", async () => {
+    const gone = String(new mongoose.Types.ObjectId());
+    await artifact(gone);
+    const bundleId = `pub-${seq}`;
+    await artifact(gone, { source: { kind: 'reply' } });
+    await artifact(await liveUser());
+    const deleteThumbnails = vi.fn(async (_publicIds: string[]) => 0);
+
+    await backfillOrphanedPublishedArtifacts({ dryRun: true, log: silent, deleteThumbnails });
+    expect(deleteThumbnails).not.toHaveBeenCalled();
+
+    await backfillOrphanedPublishedArtifacts({ dryRun: false, log: silent, deleteThumbnails });
+    expect(deleteThumbnails).toHaveBeenCalledTimes(1);
+    expect(deleteThumbnails).toHaveBeenCalledWith([bundleId]);
+  });
+
   it('treats an ownerId that cannot be a user id as orphaned', async () => {
     await artifact('not-an-object-id');
 

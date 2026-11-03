@@ -22,7 +22,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { z } from 'zod';
-import { SAFE_USER_LOOKUP_PROJECT, dayjs } from '@bike4mind/common';
+import {
+  INTERNAL_ACCOUNT_FLAGS,
+  SAFE_USER_LOOKUP_PROJECT,
+  dayjs,
+  internalAccountCondition,
+  internalStaffEmailRegex,
+  parseInternalStaffDomains,
+} from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { DEFAULT_PAGE_SIZE, MetadataFilterSchema, type MetadataFilter } from './metadataFilterContract';
 
@@ -62,11 +69,20 @@ export interface UserActivityQueryParams {
   events?: string[];
   orgs?: string[];
   excludeOrgs?: string[];
+  /** Drop rows whose counter log carries no organization (empty or missing userOrganization). */
+  excludeNoOrg?: boolean;
+  /** Drop admin, system and synthetic accounts and emails on the staff domains. */
+  excludeStaff?: boolean;
+  /** Defaults to NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS, the list the analytics report uses. */
+  staffDomains?: string[];
   counterName?: string;
   userEmail?: string;
   metadataFilters?: MetadataFilter[];
   usersCollection?: string;
 }
+
+/** The producer (incrementUserCounter) writes '' for a user without an org; older rows may lack the key. */
+const NO_ORGANIZATION_VALUES = ['', null];
 
 /**
  * Escapes a value for use as a regex, dropping control characters first: BSON rejects a pattern
@@ -124,6 +140,10 @@ function metadataCondition({ field, operator, value }: MetadataFilter): Record<s
   }
 }
 
+const INTERNAL_USER_FIELDS: Record<string, 1> = Object.fromEntries(
+  ['email', ...INTERNAL_ACCOUNT_FLAGS].map(field => [field, 1])
+);
+
 export interface UserActivityPipeline {
   pipeline: any[];
   facetStages: Record<string, any[]>;
@@ -138,6 +158,9 @@ export function buildUserActivityPipeline({
   events,
   orgs,
   excludeOrgs,
+  excludeNoOrg = false,
+  excludeStaff = false,
+  staffDomains = parseInternalStaffDomains(process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS),
   counterName,
   userEmail,
   metadataFilters = [],
@@ -164,12 +187,14 @@ export function buildUserActivityPipeline({
   // Both constrain userOrganization, so they merge into one operator. Assigning twice dropped the
   // $in whenever both were sent - invisible from the UI, which only offers the exclusion
   // checkboxes while "All Organizations" is selected, but an API caller can send both.
-  const orgFilter: Record<string, string[]> = {};
+  const orgFilter: Record<string, Array<string | null>> = {};
   if (orgs?.length && !orgs.includes('all')) {
     orgFilter.$in = orgs;
   }
-  if (excludeOrgs?.length) {
-    orgFilter.$nin = excludeOrgs;
+  const excludedOrgValues = [...(excludeOrgs ?? []), ...(excludeNoOrg ? NO_ORGANIZATION_VALUES : [])];
+  if (excludedOrgValues.length) {
+    // $nin with null also drops documents where the field is missing.
+    orgFilter.$nin = excludedOrgValues;
   }
   if (Object.keys(orgFilter).length) {
     matchCondition.userOrganization = orgFilter;
@@ -214,17 +239,22 @@ export function buildUserActivityPipeline({
     },
     {
       // Aggregation $lookup bypasses Mongoose select:false, so project off the shared
-      // secret-free baseline plus the one extra non-secret field this route reads (email).
-      // Never add credential/secret fields here.
+      // secret-free baseline plus the non-secret fields this route reads (email, and the
+      // internal-account flags for the staff exclusion). Never add credential/secret fields here.
       $lookup: {
         from: usersCollection,
         localField: 'userObjectId',
         foreignField: '_id',
-        pipeline: [{ $project: { ...SAFE_USER_LOOKUP_PROJECT, email: 1 } }],
+        pipeline: [{ $project: { ...SAFE_USER_LOOKUP_PROJECT, ...INTERNAL_USER_FIELDS } }],
         as: 'user',
       },
     },
     { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
+    // Same definition of "internal" as the analytics report. A row whose user did not join
+    // (deleted account, 'SYSTEM') carries no flags and is kept.
+    ...(excludeStaff
+      ? [{ $match: { $nor: [internalAccountCondition('user', internalStaffEmailRegex(staffDomains))] } }]
+      : []),
     { $addFields: { userEmail: { $ifNull: ['$user.email', ''] } } },
     // The email lives on the joined user, so this can only be matched after the join.
     ...(userEmail ? [{ $match: { userEmail: { $regex: escapeRegex(userEmail), $options: 'i' } } }] : []),

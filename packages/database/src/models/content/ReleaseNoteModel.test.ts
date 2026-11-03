@@ -114,6 +114,35 @@ describe('ReleaseNoteRepository.upsertGenerated', () => {
     expect(result.kind).toBe('notFound');
   });
 
+  it('attachImage sets the image without marking the note edited, so it still regenerates', async () => {
+    const { note: stored } = await releaseNoteRepository.upsertGenerated(makeNote());
+    const image = {
+      landscapeUrl: 'https://d111.cloudfront.net/still.png',
+      portraitUrl: 'https://d111.cloudfront.net/still-9x16.png',
+    };
+    const attached = await releaseNoteRepository.attachImage(stored.id, image);
+    expect(attached.kind).toBe('ok');
+    expect(attached.kind === 'ok' && attached.note.image).toMatchObject(image);
+    expect(attached.kind === 'ok' && attached.note.editedAt).toBeNull();
+
+    const { note, preserved } = await releaseNoteRepository.upsertGenerated(makeNote({ headline: 'Regenerated' }));
+    expect(preserved).toBe(false);
+    expect(note.image).toMatchObject(image);
+  });
+
+  it('attachImage reports notFound for a missing note', async () => {
+    const result = await releaseNoteRepository.attachImage(new mongoose.Types.ObjectId().toString(), null);
+    expect(result.kind).toBe('notFound');
+  });
+
+  it('sets editedAt when an admin edit clears the image', async () => {
+    const { note: stored } = await releaseNoteRepository.upsertGenerated(makeNote());
+    await releaseNoteRepository.attachImage(stored.id, { landscapeUrl: 'https://d111.cloudfront.net/still.png' });
+    const cleared = await releaseNoteRepository.edit(stored.id, { image: null });
+    expect(cleared.kind === 'ok' && cleared.note.image).toBeNull();
+    expect(cleared.kind === 'ok' && cleared.note.editedAt).toBeInstanceOf(Date);
+  });
+
   it('treats a duplicate key from a concurrent unedited insert as a race, not an edit', async () => {
     await ReleaseNote.create({ ...makeNote(), editedAt: null });
     const spy = vi

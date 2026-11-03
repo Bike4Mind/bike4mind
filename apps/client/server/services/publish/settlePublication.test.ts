@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   checkPublishQuota: vi.fn(),
   invalidatePublishCdn: vi.fn(),
   restrictDuplicatePublications: vi.fn(),
+  consumePublishAction: vi.fn(),
+  refund: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -26,15 +28,19 @@ vi.mock('./invalidatePublishCdn', async importOriginal => ({
 vi.mock('./restrictDuplicatePublications', () => ({
   restrictDuplicatePublications: mocks.restrictDuplicatePublications,
 }));
+vi.mock('./publishRateLimit', () => ({ consumePublishAction: mocks.consumePublishAction }));
 
+import { TooManyRequestsError } from '@bike4mind/common';
 import { settlePublication, type SettlePublicationInput } from './settlePublication';
 
 const OWNER = 'owner1';
+const CREATED_AT = new Date('2026-01-01T00:00:00.000Z');
 const logger = { info: vi.fn(), warn: vi.fn() };
 
 const input = (over: Partial<SettlePublicationInput> = {}): SettlePublicationInput => ({
   ownerId: OWNER,
   isAdmin: false,
+  ownerCreatedAt: CREATED_AT,
   source: { kind: 'reply', sessionId: 's1', messageId: 'm1' },
   tier: 'user',
   scopeId: OWNER,
@@ -73,6 +79,8 @@ beforeEach(() => {
   }));
   mocks.invalidatePublishCdn.mockResolvedValue(undefined);
   mocks.restrictDuplicatePublications.mockResolvedValue(0);
+  mocks.refund.mockResolvedValue(undefined);
+  mocks.consumePublishAction.mockResolvedValue({ refund: mocks.refund });
 });
 
 describe('settlePublication - lookup', () => {
@@ -194,18 +202,19 @@ describe('settlePublication - re-publish rewrites the existing record in place',
 
 describe('settlePublication - quota', () => {
   it('returns the quota rejection and writes nothing', async () => {
+    const details = { scope: 'user', limit: 100, current: 99, attempted: 104 };
     mocks.checkPublishQuota.mockResolvedValue({
       ok: false,
       status: 413,
       error: 'over',
-      code: 'quota_exceeded',
-      details: { x: 1 },
+      code: 'quota_bytes_exceeded',
+      details,
     });
     const result = await settlePublication(input());
     expect(result).toEqual({
       ok: false,
       status: 413,
-      body: { error: 'over', code: 'quota_exceeded', details: { x: 1 } },
+      body: { error: 'over', code: 'quota_bytes_exceeded', details },
     });
     expect(mocks.findOneAndUpdate).not.toHaveBeenCalled();
   });
@@ -215,6 +224,65 @@ describe('settlePublication - quota', () => {
     expect(mocks.checkPublishQuota).toHaveBeenCalledWith(
       expect.objectContaining({ ownerId: OWNER, orgScopeId: 'org1', incoming: { bytes: 5, fileCount: 0 } })
     );
+  });
+});
+
+describe('settlePublication - daily publish allowance', () => {
+  it("counts one action against the owner's allowance, with the account age that picks its tier", async () => {
+    await settlePublication(input());
+    expect(mocks.consumePublishAction).toHaveBeenCalledTimes(1);
+    expect(mocks.consumePublishAction).toHaveBeenCalledWith({ id: OWNER, isAdmin: false, createdAt: CREATED_AT });
+  });
+
+  it('counts a re-publish too, since it rewrites the live page', async () => {
+    mocks.findOneLean.mockResolvedValue(existingRow());
+    await settlePublication(input());
+    expect(mocks.consumePublishAction).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not count a publish the storage quota refused', async () => {
+    mocks.checkPublishQuota.mockResolvedValue({
+      ok: false,
+      status: 413,
+      error: 'over',
+      code: 'quota_bytes_exceeded',
+      details: { scope: 'user', limit: 1, current: 1, attempted: 2 },
+    });
+    await settlePublication(input());
+    expect(mocks.consumePublishAction).not.toHaveBeenCalled();
+  });
+
+  it('writes nothing when the allowance is used up, and lets the 429 reach the error handler', async () => {
+    const limited = new TooManyRequestsError('limited', { code: 'publish_rate_limited', retryAfter: 60 });
+    mocks.consumePublishAction.mockRejectedValue(limited);
+
+    await expect(settlePublication(input())).rejects.toBe(limited);
+    expect(mocks.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(mocks.invalidatePublishCdn).not.toHaveBeenCalled();
+  });
+
+  it('keeps the action once the page is written', async () => {
+    const result = await settlePublication(input());
+    expect(result.ok).toBe(true);
+    expect(mocks.refund).not.toHaveBeenCalled();
+  });
+
+  it('hands the action back when the page was removed while it was being updated', async () => {
+    mocks.findOneLean.mockResolvedValue(existingRow());
+    mocks.findOneAndUpdate.mockResolvedValue(null);
+
+    const result = await settlePublication(input());
+
+    expect(result).toMatchObject({ ok: false, status: 409 });
+    expect(mocks.refund).toHaveBeenCalledTimes(1);
+  });
+
+  it('hands the action back when the write fails, and still surfaces the failure', async () => {
+    const writeFailed = new Error('write failed');
+    mocks.findOneAndUpdate.mockRejectedValue(writeFailed);
+
+    await expect(settlePublication(input())).rejects.toBe(writeFailed);
+    expect(mocks.refund).toHaveBeenCalledTimes(1);
   });
 });
 

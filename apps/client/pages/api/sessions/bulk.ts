@@ -11,7 +11,7 @@ import {
   organizationRepository,
   withTransaction,
 } from '@bike4mind/database';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 
 const handler = baseApi()
   /**

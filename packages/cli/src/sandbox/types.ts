@@ -45,6 +45,8 @@ export interface SandboxConfig {
   network: NetworkConfig;
   excludedCommands: string[];
   allowUnsandboxedCommands: boolean;
+  /** Let sandboxed commands reach Docker/Podman and similar container engine sockets */
+  allowContainerSockets: boolean;
   platform: PlatformConfig;
 }
 
@@ -119,6 +121,7 @@ export interface PartialSandboxConfig {
   network?: Partial<NetworkConfig>;
   excludedCommands?: string[];
   allowUnsandboxedCommands?: boolean;
+  allowContainerSockets?: boolean;
   platform?: PlatformConfig;
 }
 
@@ -172,6 +175,7 @@ export const DEFAULT_SANDBOX_CONFIG: SandboxConfig = {
   },
   excludedCommands: ['docker', 'watchman', 'podman'],
   allowUnsandboxedCommands: true,
+  allowContainerSockets: false,
   platform: {
     linux: {
       runtime: 'bubblewrap',

@@ -1,14 +1,19 @@
+import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { authMiddleware, auth } from '@server/auth/auth';
 import { registerToolGearObserver } from '@bike4mind/server-utils/services/gears/toolGearObserver';
 import { logging } from '@server/middlewares/logging';
+import { deployRevision } from '@server/middlewares/deployRevision';
 import errorHandler from '@server/middlewares/errorHandler';
 import { apiKeyAuth } from '@server/middlewares/apiKeyAuth';
+import { checkBlockedIP } from './checkBlockedIP';
 import { oauthRouteGate } from '@server/middlewares/oauthRouteGate';
+import { impersonationGate, impersonationAnonymousGate } from './impersonationGate';
 import { apiKeyAnomalyDetection } from '@server/middlewares/apiKeyAnomalyDetection';
 import { apiKeyRateLimit } from '@server/middlewares/apiKeyRateLimit';
+import { defaultWriteRateLimit } from '@server/middlewares/defaultWriteRateLimit';
 import { analyticsMiddleware } from '@server/analytics/analyticsMiddleware';
 import { connectDB } from '@bike4mind/database';
-import { ApiKeyScope, MethodNotAllowedError } from '@bike4mind/common';
+import { ApiKeyScopeValue, MethodNotAllowedError } from '@bike4mind/common';
 import { Request, Response } from 'express';
 import nc from 'next-connect';
 import { Config, isDevelopment } from '@bike4mind/server-utils/utils/config';
@@ -36,7 +41,7 @@ interface BaseAPIOptions {
    * authorized, exactly as before. JWT/browser callers are never affected: the
    * scope gate only runs for requests authenticated by an API key.
    */
-  requiredScopes?: ApiKeyScope[];
+  requiredScopes?: ApiKeyScopeValue[];
   /**
    * API-key scopes this route ALSO requires, on top of `requiredScopes` (AND
    * semantics - every one of these must be held). Use when a route needs two
@@ -45,7 +50,7 @@ interface BaseAPIOptions {
    * `requiredScopes`, this has no staging grace period - see decideScopeGate's
    * doc comment (apiKeyScopeGate.ts).
    */
-  alsoRequiredScopes?: ApiKeyScope[];
+  alsoRequiredScopes?: ApiKeyScopeValue[];
   /**
    * OAuth reachability for this route. Relying-party OAuth access tokens are default-denied at
    * every JWT-authed route; set this to opt a route in.
@@ -82,6 +87,12 @@ interface BaseAPIOptions {
    * no-match answer is a 404 that only fires after auth has already run.
    */
   allowedMethods?: readonly string[];
+  /**
+   * `false` opts this route out of the default per-user write limit (defaultWriteRateLimit.ts), for
+   * high-frequency, low-cost writes the app sends on its own, such as analytics events. Defaults to
+   * true; a route's own `rateLimit` still applies either way.
+   */
+  defaultWriteRateLimit?: boolean;
 }
 
 /** 405s any method outside `allowedMethods` (GET implies HEAD), setting `Allow`; passes the rest. */
@@ -133,6 +144,10 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
     req.receivedAt = new Date();
     next();
   });
+
+  // Immediately after the stamp, ahead of connectDB, the body-size 413 and every auth middleware
+  // (the things that can reject): even a 413/401 must tell a stale tab that a deploy happened.
+  router.use(deployRevision);
 
   // Add req.logger early in the middleware chain, so subsequent
   // middlewares can take advantage of it.
@@ -209,6 +224,7 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
     router.use(middleware);
   }
 
+  if (!resolvedOptions.auth) router.use(impersonationAnonymousGate);
   if (resolvedOptions.auth) {
     // 'jwtOnly' skips the whole api-key chain, so a presented key is never
     // validated/metered/billed - it simply isn't a credential this route knows,
@@ -234,6 +250,7 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
 
     // Apply JWT authentication middleware (will be skipped if already authenticated via API key)
     router.use(auth);
+    router.use(impersonationGate);
 
     // Default-deny relying-party OAuth tokens: a no-op for first-party sessions and API keys,
     // and 403 for an OAuth token unless this route opted in via `oauthScopes`.
@@ -242,6 +259,15 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
     // Fire-and-forget analytics: ≤1 emit/user/UTC-day per Lambda instance (best-effort).
     // Gates on human JWT only; no-op when B4M_ANALYTICS_ENABLED is false or secrets unset.
     router.use(analyticsMiddleware());
+
+    // An admin's `all` IP block refuses every write an authenticated caller makes from that network:
+    // checkout, every AI completion route, and whatever spends money or compute next, with no per-route
+    // list to keep current. Anonymous entry points (sign-in, signup, embed) opt in with checkBlockedIP.
+    router.use(checkBlockedIP({ surface: 'app', writesOnly: true, exemptAdmins: true }));
+
+    // After baseApi's auth and IP-block gates, so a request they refuse never spends the user's write budget.
+    // Requests refused later (a route's own rateLimit, validation, handler errors) still count.
+    if (resolvedOptions.defaultWriteRateLimit !== false) router.use(defaultWriteRateLimit);
   }
 
   // TODO: idempotency middleware disabled - it was creating a lot of idempotency keys in local

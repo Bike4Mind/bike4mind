@@ -1,6 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
+  ARTIFACT_EMISSION_PROMPT,
   settingsMap,
+  stageHiddenSettingKeys,
   publicSafeSettingKeys,
   userReadableSettingKeys,
   redactSettingSecrets,
@@ -20,6 +22,7 @@ import {
   SEARCH_BUDGET_SETTING_KEYS,
   FORCED_RETRIEVAL_SETTING_KEYS,
   isBlankSettingValue,
+  isEnforceCreditsLocked,
   type SettingKey,
 } from './settings';
 import {
@@ -198,8 +201,6 @@ describe('other object settings use makeObjectSetting', () => {
     'logoSettings',
     'RapidReplySettings',
     'releaseNotesConfig',
-    'whatsNewConfig',
-    'whatsNewSyncConfig',
   ] as const;
 
   it.each(objectSettings)('%s should parse JSON strings', settingKey => {
@@ -230,6 +231,12 @@ describe('first-session feature defaults', () => {
 
 describe('public settings projection (M2.5 security boundary)', () => {
   describe('userReadableSettingKeys', () => {
+    it('includes the no-card unlock flags the billing card reads', () => {
+      const keys = new Set(userReadableSettingKeys());
+      expect(keys.has('noCardUnlockEnabled')).toBe(true);
+      expect(keys.has('noCardUnlockProbeInconclusiveAllows')).toBe(true);
+    });
+
     it('excludes admin-only operational config a non-admin has no claim to', () => {
       // These carry no `isSensitive` flag, which is exactly why the previous opt-OUT
       // filter served them to every authenticated caller.
@@ -288,6 +295,9 @@ describe('public settings projection (M2.5 security boundary)', () => {
         // admin guard - carry no secret, but were missed by the initial opt-in pass.
         'ReferralCreditsAmount',
         'SystemFiles',
+        // The Desktop app follows these rather than deciding deferral itself.
+        'EnableDeferredToolLoading',
+        'DeferredToolStartSetMaxTokens',
       ]) {
         expect(keys.has(k)).toBe(true);
       }
@@ -908,6 +918,16 @@ describe('Credits System group', () => {
     expect(indexed).toEqual(carried);
   });
 
+  // AdminSettingsTab sorts by each definition's own `order`, which these leave unset, so the
+  // admin Settings page renders them in settingsMap definition order, not the index order.
+  it('defines its settings in index order', () => {
+    const indexed = [...API_SERVICE_GROUPS.CREDITS.settings].sort((a, b) => a.order - b.order).map(entry => entry.key);
+    const defined = Object.values(settingsMap)
+      .filter(setting => setting.group === API_SERVICE_GROUPS.CREDITS.id)
+      .map(setting => setting.key);
+    expect(defined).toEqual(indexed);
+  });
+
   it('is not repeated in the User Management index', () => {
     expect(API_SERVICE_GROUPS.USER_MANAGEMENT.settings.map(entry => entry.key)).not.toContain('enforceCredits');
   });
@@ -1361,5 +1381,176 @@ describe('SimulatorComputeCreditsPerRound', () => {
     expect(setting.order).toBeGreaterThan(settingsMap.HardwareComputeMaxUsdPerUserPerDay.order);
     expect(setting.order).toBeLessThan(settingsMap.EnableDataLakeSlackAdd.order);
     expect(setting.order).toBeLessThan(settingsMap.EnableQuestMaster.order);
+  });
+});
+
+describe('ARTIFACT_EMISSION_PROMPT multi-file wording', () => {
+  it('keeps single-file as the default and strict for non-React types', () => {
+    expect(ARTIFACT_EMISSION_PROMPT).toContain('ONE <artifact> = ONE file, and that is the strong default');
+    expect(ARTIFACT_EMISSION_PROMPT).toContain('For every type except React, NEVER use a relative/sibling import');
+    expect(ARTIFACT_EMISSION_PROMPT).toContain('No sibling files (./app.js), no second artifact.');
+  });
+
+  it('allows React splits only with identifier equal to the import basename in the same reply', () => {
+    expect(ARTIFACT_EMISSION_PROMPT).toContain('REACT MULTI-FILE');
+    expect(ARTIFACT_EMISSION_PROMPT).toContain('SAME reply');
+    expect(ARTIFACT_EMISSION_PROMPT).toContain("each sibling's identifier must equal its import basename exactly");
+  });
+
+  it('lets a split React app publish when every file is in the same reply', () => {
+    expect(ARTIFACT_EMISSION_PROMPT).toContain(
+      'A split React app can be published/shared as one page as long as every file is in the same reply.'
+    );
+    expect(ARTIFACT_EMISSION_PROMPT).not.toContain('must still be a single file');
+  });
+
+  it('ties export default to the entry file so the React rules do not contradict the split', () => {
+    expect(ARTIFACT_EMISSION_PROMPT).toContain('exactly ONE entry file, the one nothing else imports, has');
+    expect(ARTIFACT_EMISSION_PROMPT).not.toContain('REACT ARTIFACTS: ONE file with ONE');
+  });
+
+  it('no longer claims the publish transpiler rejects TypeScript', () => {
+    expect(ARTIFACT_EMISSION_PROMPT).not.toContain('has no TS preset');
+  });
+});
+
+describe('isEnforceCreditsLocked', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('is locked when B4M_SELF_HOST is unset (hosted)', () => {
+    vi.stubEnv('B4M_SELF_HOST', undefined);
+    expect(isEnforceCreditsLocked()).toBe(true);
+  });
+
+  it('is unlocked on a self-host deployment', () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    expect(isEnforceCreditsLocked()).toBe(false);
+  });
+
+  it('stays locked for any value other than the literal "true"', () => {
+    vi.stubEnv('B4M_SELF_HOST', 'false');
+    expect(isEnforceCreditsLocked()).toBe(true);
+  });
+});
+
+describe('apiKeyAccess default', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it('is paid on hosted, so the paid-only gate is live without an admin write', async () => {
+    vi.stubEnv('B4M_SELF_HOST', '');
+    vi.resetModules();
+    const { settingsMap: fresh } = await import('./settings');
+    expect(fresh.apiKeyAccess.defaultValue).toBe('paid');
+  });
+
+  it('is all on self-host, which has no billing stack', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    vi.resetModules();
+    const { settingsMap: fresh } = await import('./settings');
+    expect(fresh.apiKeyAccess.defaultValue).toBe('all');
+  });
+
+  it('accepts only all, paid and disabled', () => {
+    const schema = settingsMap.apiKeyAccess.schema;
+    expect(['all', 'paid', 'disabled'].every(v => schema.safeParse(v).success)).toBe(true);
+    expect(schema.safeParse('anyone').success).toBe(false);
+  });
+});
+
+describe('API rate limit settings floor', () => {
+  it('lets the Free tier be set to 0 but rejects negatives and fractions', () => {
+    const { schema } = settingsMap.apiRateLimitFreePerMin;
+    expect(schema.safeParse(0).success).toBe(true);
+    expect(schema.safeParse(-1).success).toBe(false);
+    expect(schema.safeParse(0.5).success).toBe(false);
+    expect(schema.safeParse(1.5).success).toBe(false);
+  });
+
+  it.each(['apiRateLimitBasicPerMin', 'apiRateLimitProPerMin'] as const)(
+    'keeps a floor of 1 and requires an integer for %s',
+    key => {
+      expect(settingsMap[key].schema.safeParse(0).success).toBe(false);
+      expect(settingsMap[key].schema.safeParse(1.5).success).toBe(false);
+    }
+  );
+});
+
+describe('BedrockNews Headword reward settings', () => {
+  it.each([
+    ['BedrockNewsPuzzleCredits5', 40],
+    ['BedrockNewsPuzzleCredits6', 60],
+    ['BedrockNewsPuzzleCredits7', 100],
+    ['BedrockNewsPuzzleHardMultiplier', 1.5],
+    ['BedrockNewsFirstSolveCredits', 500],
+    ['BedrockNewsPuzzleDailyCap', 300],
+    ['BedrockNewsRewardsDailyBudget', 200000],
+  ] as const)('%s defaults to %s', (key, expected) => {
+    expect(settingsMap[key].defaultValue).toBe(expected);
+  });
+});
+
+describe('spend monitor settings', () => {
+  const expectedDefaults = {
+    spendMonitorEnabled: true,
+    spendMonitorSlackEnabled: false,
+    spendMonitorPlatformSpikeRatio: 3,
+    spendMonitorPlatformCriticalRatio: 6,
+    spendMonitorPlatformSpikeFloorCredits: 5000,
+    spendMonitorPlatformCostFloorUsd: 20,
+    spendMonitorAccountSpikeRatio: 10,
+    spendMonitorAccountSpikeFloorCredits: 1000,
+    spendMonitorAccountCeilingCredits: 5000,
+  } as const;
+
+  it.each(Object.entries(expectedDefaults))('%s defaults to %s and belongs to the CREDITS group', (key, expected) => {
+    const setting = settingsMap[key as keyof typeof expectedDefaults];
+    expect(setting.defaultValue).toBe(expected);
+    expect(setting.schema.parse(undefined)).toBe(expected);
+    expect(API_SERVICE_GROUPS.CREDITS.settings.some(entry => entry.key === key)).toBe(true);
+  });
+
+  it.each([
+    'spendMonitorPlatformSpikeFloorCredits',
+    'spendMonitorPlatformCostFloorUsd',
+    'spendMonitorAccountSpikeFloorCredits',
+    'spendMonitorAccountCeilingCredits',
+  ] as const)('%s rejects 0 and accepts 1', key => {
+    expect(settingsMap[key].schema.safeParse(0).success).toBe(false);
+    expect(settingsMap[key].schema.parse(1)).toBe(1);
+  });
+
+  it('keeps the settings admin-only', () => {
+    const readable = new Set(userReadableSettingKeys());
+    for (const key of Object.keys(expectedDefaults)) {
+      expect(readable.has(key as never)).toBe(false);
+    }
+  });
+});
+
+describe('preference arena settings exposure', () => {
+  it('keeps every arena setting except the enabled flag out of the user-readable set', () => {
+    const readable = new Set<string>(userReadableSettingKeys());
+    const arenaKeys = Object.keys(settingsMap).filter(key => key.startsWith('preferenceArena'));
+    expect(arenaKeys.length).toBeGreaterThan(1);
+    expect(arenaKeys.filter(key => readable.has(key))).toEqual(['preferenceArenaEnabled']);
+  });
+});
+
+describe('stageHiddenSettingKeys', () => {
+  it('hides the deprecated drip settings and preview test mode on production stages', () => {
+    expect(stageHiddenSettingKeys(true).sort()).toEqual([
+      'signupGrantActivityMinDays',
+      'signupGrantActivityMinMessages',
+      'signupGrantActivityPreviewTestMode',
+    ]);
+  });
+
+  it('hides nothing elsewhere', () => {
+    expect(stageHiddenSettingKeys(false)).toEqual([]);
   });
 });

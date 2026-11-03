@@ -6,12 +6,19 @@ import { SETTING_TABS, settingsMap, type SettingKey } from '@bike4mind/common';
 
 // Read at render time, so a test can seed the stored platform rows.
 let serverSettings: { settingName: string; settingValue: unknown }[] = [];
+let serverConfig: { hiddenAdminSettingKeys?: string[] } | undefined = { hiddenAdminSettingKeys: [] };
 vi.mock('@client/app/hooks/data/settings', () => ({
   useSettingsFromServer: () => ({ data: serverSettings, isLoading: false }),
+  useConfig: () => ({ data: serverConfig }),
 }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
 vi.mock('./EmbeddingProviderLimits', () => ({ EmbeddingProviderLimits: () => null }));
 vi.mock('./AdminOperationsModelSetting', () => ({ AdminOperationsModelSetting: () => null }));
+vi.mock('./AdminTurnstileStatusNotice', () => ({
+  AdminTurnstileStatusNotice: ({ enabled }: { enabled: boolean }) => (
+    <div data-testid="admin-turnstile-notice" data-enabled={String(enabled)} />
+  ),
+}));
 vi.mock('./ScopedOverridesByScope', () => ({ ScopedOverridesByScope: () => null }));
 vi.mock('./AdminLogoUpload', () => ({ default: () => null }));
 vi.mock('./AdminGenerationModelsSetting', () => ({
@@ -34,6 +41,8 @@ vi.mock('./AdminStringListSettingField', () => ({
 type SearchRecord = Record<string, unknown>;
 const router = vi.hoisted(() => ({ search: {} as Record<string, unknown>, navigate: vi.fn() }));
 vi.mock('@tanstack/react-router', () => ({
+  useBlocker: () => ({ status: 'idle' }),
+  useRouter: () => ({ state: { location: { pathname: '/admin', search: router.search } }, navigate: router.navigate }),
   useSearch: () => router.search,
   useNavigate: () => router.navigate,
 }));
@@ -42,7 +51,8 @@ import AdminSettingsTab, { GROWTH_PRICING_ONLY_KEYS } from './AdminSettingsTab';
 import { GROWTH_PRICING_SECTIONS } from './AdminGrowthPricingTab';
 import { AdminTab } from './adminSidebarConfig';
 import { useAdminModal } from './useAdminModal';
-import { SEARCH_TERM_URL_DEBOUNCE_MS } from './useAdminSettingsSearchParams';
+import { SEARCH_TERM_URL_DEBOUNCE_MS } from './shared/useAdminListUrlState';
+import { AdminCommandPalette } from './shared/AdminCommandPalette';
 
 /** The search the component's most recent navigate would produce from `previous`. */
 const lastWrittenSearch = (previous: SearchRecord) => {
@@ -71,6 +81,7 @@ const findTab = (category: string) =>
 
 const aiTab = findTab(settingsMap.videoGeneration.category);
 const securityTab = findTab(settingsMap.ImageModerationReviewerEmails.category);
+const usersTab = findTab(settingsMap.turnstileEnabled.category);
 
 // The section comes from the URL, so seed it rather than click a tab: the mocked navigate does not
 // write the search back.
@@ -89,11 +100,25 @@ const renderSecurityTab = () => renderTab(securityTab);
 
 beforeEach(() => {
   serverSettings = [];
+  serverConfig = { hiddenAdminSettingKeys: [] };
   router.search = {};
   router.navigate.mockReset();
 });
 
 describe('AdminSettingsTab URL state', () => {
+  it('focuses the real settings search with /', () => {
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <div data-admin-surface>
+          <AdminCommandPalette />
+          <AdminSettingsTab />
+        </div>
+      </CssVarsProvider>
+    );
+    fireEvent.keyDown(document.body, { key: '/' });
+    expect(screen.getByTestId('admin-settings-search-input')).toHaveFocus();
+  });
+
   const sections = Object.values(SETTING_TABS);
   const [firstSection, secondSection] = sections;
   const isSelected = (id: string) =>
@@ -215,6 +240,19 @@ describe('AdminSettingsTab recommended models setting', () => {
   });
 });
 
+describe('AdminSettingsTab Turnstile notice', () => {
+  it.each([
+    ['true', 'true'],
+    ['false', 'false'],
+    [true, 'true'],
+    [false, 'false'],
+  ])('passes enabled for a saved turnstileEnabled of %j', (saved, expected) => {
+    serverSettings = [{ settingName: 'turnstileEnabled', settingValue: saved }];
+    renderTab(usersTab);
+    expect(screen.getByTestId('admin-turnstile-notice').getAttribute('data-enabled')).toBe(expected);
+  });
+});
+
 describe('AdminSettingsTab reviewer emails setting', () => {
   it('renders the string-list editor with the stored reviewers and no generic card', () => {
     serverSettings = [{ settingName: 'ImageModerationReviewerEmails', settingValue: '["reviewer@example.com"]' }];
@@ -295,6 +333,7 @@ describe('AdminSettingsTab Credits System group', () => {
     for (const key of ['billOperationalUsage', 'blockDisposableEmails', 'syntheticUserEmailDomains']) {
       expect(screen.getByTestId(`generic-setting-${key}`), key).toBeTruthy();
     }
+    expect(screen.getByTestId('string-list-setting-blockedEmailDomains')).toBeTruthy();
   });
 
   it('links to the Growth and Pricing tab', () => {
@@ -320,5 +359,48 @@ describe('AdminSettingsTab Credits System group', () => {
     renderSettings();
 
     expect(screen.queryByTestId('admin-settings-search-growth-pricing-hint')).toBeNull();
+  });
+});
+
+describe('AdminSettingsTab stage-hidden settings', () => {
+  const stageGated = [
+    'signupGrantActivityMinMessages',
+    'signupGrantActivityMinDays',
+    'signupGrantActivityPreviewTestMode',
+  ] as const;
+  const renderUsersTab = () => renderTab(findTab(settingsMap.signupGrantActivityMinMessages.category));
+
+  it('hides the keys the server reports for this stage', () => {
+    serverConfig = { hiddenAdminSettingKeys: [...stageGated] };
+    renderUsersTab();
+
+    for (const key of stageGated) expect(screen.queryByTestId(`generic-setting-${key}`), key).toBeNull();
+    expect(screen.getByTestId('generic-setting-signupGrantActivityMinActiveSeconds')).toBeTruthy();
+  });
+
+  it('shows them when the server hides nothing', () => {
+    renderUsersTab();
+
+    for (const key of stageGated) expect(screen.getByTestId(`generic-setting-${key}`), key).toBeTruthy();
+  });
+
+  it.each([
+    ['config still loading', undefined],
+    ['config without the field', {}],
+  ])('hides them while the stage is unknown (%s)', (_label, config) => {
+    serverConfig = config;
+    renderUsersTab();
+
+    for (const key of stageGated) expect(screen.queryByTestId(`generic-setting-${key}`), key).toBeNull();
+  });
+
+  it('keeps them out of an All Tabs search', () => {
+    serverConfig = { hiddenAdminSettingKeys: [...stageGated] };
+    router.search = { tab: 'admin-settings', q: 'signup activity' };
+    renderSettings();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'All Tabs' }));
+
+    expect(screen.getByTestId('generic-setting-signupGrantActivityMinActiveSeconds')).toBeTruthy();
+    for (const key of stageGated) expect(screen.queryByTestId(`generic-setting-${key}`), key).toBeNull();
   });
 });

@@ -6,6 +6,10 @@ export const ArtifactStatusSchema = z.enum(['draft', 'review', 'published', 'arc
 
 export const VisibilitySchema = z.enum(['private', 'project', 'organization', 'public']);
 
+// `POST /api/artifacts` 403 body when the user's artifact opt-out refuses an AI-authored create.
+// Desktop matches on it to tell the opt-out from other 403s, so released builds depend on the wording.
+export const ARTIFACTS_DISABLED_ERROR = 'Artifacts are disabled for this user';
+
 // Permissions schema
 export const ArtifactPermissionsSchema = z.object({
   canRead: z.array(z.string()),
@@ -45,6 +49,9 @@ export const BaseArtifactSchema = z.object({
   sourceQuestId: z.string().optional(),
   sessionId: z.string().optional(),
   parentArtifactId: z.uuid().optional(),
+  // The reply's `<artifact identifier=...>`. A React artifact re-emitted under the same identifier
+  // in the same session becomes a new version of this row (app/utils/artifactPersistence.ts).
+  identifier: z.string().optional(),
 
   // Status
   status: ArtifactStatusSchema.prefault('draft'),

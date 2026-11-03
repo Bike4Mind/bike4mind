@@ -5,10 +5,8 @@ import {
   API_KEY_RATE_LIMIT_HEADER_NAMES,
   API_KEY_RATE_LIMIT_HEADERS,
   MAX_REQUEST_ID_LENGTH,
-  MIN_PASSAGE_TOKEN_TARGET,
-  OVERSIZED_PASSAGE_TOKEN_THRESHOLD,
 } from '@bike4mind/common';
-import type { ApiKeyScopeOption } from '@client/app/constants/apiKeyScopes';
+import type { ApiKeyScopeOption } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 
 // Generated from the same catalog the New-Key modals offer, so the table can't drift from
 // what a user can actually select. A literal `|` would split a GFM table cell.
@@ -132,7 +130,8 @@ use to build a typed client). They are deliberately not repeated here, so the tw
 - Agents: \`/api/v1/agents\`, \`/api/v1/agents/{id}\`
 - Projects: \`/api/v1/projects\`, \`/api/v1/projects/{id}\`
 - Files and data lakes: \`/api/v1/files[?search=]\` (list, upload), \`/api/v1/files/{id}\` (get, update,
-  delete), \`/api/v1/data-lakes\`, \`/api/v1/data-lakes/*\`
+  delete), \`/api/v1/files/{id}/chunk\`, \`/api/v1/files/search\`, \`/api/v1/files/by-ids\`,
+  \`/api/v1/files/bulk-delete\`, \`/api/v1/data-lakes\`, \`/api/v1/data-lakes/*\`
 - Generation: \`/api/v1/image-generations\`, \`/api/v1/image-edits\`, \`/api/v1/video-*\`,
   \`/api/v1/music-*\`, \`/api/v1/voice/*\`, \`/api/ai/tts\`, \`/api/ai/sound-effects\`,
   \`/api/ai/music\` (deprecated, sunset 2027-01-15; use \`/api/v1/music-generations\`)
@@ -143,7 +142,13 @@ use to build a typed client). They are deliberately not repeated here, so the tw
 - Account and models: \`/api/v1/me\`, \`/api/v1/credits\`, \`/api/v1/models\`
 - Skill Market as a Claude Code plugin marketplace: \`/api/v1/skills/market/claude-marketplace.json\`,
   \`/api/v1/skills/market/{id}/claude-plugin.zip\`
+- Skill Market listings: \`/api/v1/skills/market/listings\`, \`/api/v1/skills/market/listings/mine\`,
+  \`/api/v1/skills/market/listings/{id}\` (+ \`/versions\`, \`/import\`),
+  \`/api/v1/skills/market/versions/{vid}/rescan\`
+- Skill Market review (org admins): \`/api/v1/skills/market/review-queue\`,
+  \`/api/v1/skills/market/versions/{vid}/review\`
 - Release notes: \`/api/v1/whats-new\`, \`/api/v1/whats-new/media/*\` (public, no key needed)
+- Slack (post to channels an org owner enabled): \`/api/v1/slack/messages\`
 
 Image, video, music and chat work is asynchronous; the Async jobs section of the
 [generated API docs](/api/v1/docs) says what to poll for each kind of job and when it is terminal.
@@ -154,24 +159,6 @@ Image, video, music and chat work is asynchronous; the Async jobs section of the
 
 The sections below are still hand-written. Each row was checked against its route file, but
 treat the handler as authoritative.
-
-### Files (FabFiles)
-
-File list, upload, get, update and delete are covered by the generated docs (see above). The routes below are
-still hand-written.
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | /api/files/chunk | Trigger the chunking and embedding pipeline |
-| GET | /api/files/search | Full-text search across file content |
-| DELETE | /api/files/bulk-delete | Delete multiple files |
-| GET | /api/files/byIds | Get multiple files by ID |
-| GET | /api/files/getFabFileNameById | Get filename by ID |
-
-\`POST /api/files/chunk\` takes \`fabFileId\` (string) and \`chunkSize\`, the passage target in tokens: an integer
-between ${MIN_PASSAGE_TOKEN_TARGET} and ${OVERSIZED_PASSAGE_TOKEN_THRESHOLD}, inclusive.
-
----
 
 ### Sessions (Notebooks)
 
@@ -213,9 +200,9 @@ still hand-written.
 Custom AI agents with configurable personas, system prompts, and tool access.
 
 **Required API-key scope:** \`agents:read\` (or \`agents:write\`) to list and read,
-\`agents:write\` to create, update, and delete.
+\`agents:write\` to create, update, delete, and run the authoring assistants.
 
-#### List, Get, Create, Update, and Delete Agents
+#### List, Get, Create, Update, Delete, and Author Agents
 
 \`\`\`
 GET    /api/v1/agents
@@ -223,11 +210,16 @@ GET    /api/v1/agents/[id]
 POST   /api/v1/agents
 PATCH  /api/v1/agents/[id]
 DELETE /api/v1/agents/[id]
+POST   /api/v1/agents/[id]/generate-avatar
+POST   /api/v1/agents/[id]/generate-description
+POST   /api/v1/agents/[id]/generate-system-prompt
+POST   /api/v1/agents/[id]/enhance-field
 \`\`\`
 
 > **These endpoints are generated from their contracts.** The full request/response
 > reference lives in the [generated API docs](/api/v1/docs) under \`listAgents\`,
-> \`getAgent\`, \`createAgent\`, \`updateAgent\`, and \`deleteAgent\`.
+> \`getAgent\`, \`createAgent\`, \`updateAgent\`, \`deleteAgent\`, \`generateAgentAvatar\`,
+> \`generateAgentDescription\`, \`generateAgentSystemPrompt\`, and \`enhanceAgentField\`.
 
 #### List Agents (existing app route)
 
@@ -248,10 +240,6 @@ DELETE /api/v1/agents/[id]
 | GET | /api/agents/[id] | Get agent details |
 | PUT | /api/agents/[id] | Update agent |
 | DELETE | /api/agents/[id] | Delete agent |
-| POST | /api/agents/[id]/generate-avatar | AI-generate agent avatar |
-| POST | /api/agents/[id]/generate-description | AI-generate agent description |
-| POST | /api/agents/[id]/generate-system-prompt | AI-generate system prompt |
-| POST | /api/agents/[id]/enhance-field | AI-enhance a specific field |
 | POST | /api/agents/[id]/transfer-credits | Transfer credits to agent |
 | POST | /api/agents/create-from-context | Create agent from conversation context |
 

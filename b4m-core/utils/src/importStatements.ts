@@ -42,6 +42,12 @@ export interface ImportScanner {
   renameAsBindings(clause: string): string;
 }
 
+/** Additional module-graph operations returned by the factory, without tightening legacy scanners. */
+export type ModuleImportScanner = ImportScanner & {
+  findRelativeImports(source: string): string[];
+  moduleBaseName(path: string): string;
+};
+
 /* eslint-disable no-var -- `var` keeps the serialized body free of anything a compiler might downlevel */
 /**
  * Builds the scanner. The sandbox preview ships this function's own source text to the browser
@@ -50,7 +56,7 @@ export interface ImportScanner {
  * into a helper call: `var`/`function`, no `??`, `?.`, arrows, spread, default params, template
  * literals or non-ASCII. importStatements.test.ts evaluates the source in an empty context.
  */
-export function createImportScanner(): ImportScanner {
+export function createImportScanner(): ModuleImportScanner {
   'use strict';
   var WS = /\s/;
   var WORD = /\w/;
@@ -215,13 +221,14 @@ export function createImportScanner(): ImportScanner {
   // Any relative reference (import/export-from, side-effect import, require) points at a sibling
   // file a single-file artifact can't resolve. Same match set, in the same order, as the three
   // regexes this replaced:
-  //   /(?:import|export)\b[^;'"]*\bfrom\s*['"](\.\.?\/[^'"]+)['"]/  -> findRelativeImportFrom
+  //   /(?:import|export)\b[^;'"]*\bfrom\s*['"](\.\.?\/[^'"]+)['"]/  -> relativeImportsFrom
   //   /\bimport\s*['"](\.\.?\/[^'"]+)['"]/                          -> RELATIVE_SIDE_EFFECT_IMPORT
   //   /\brequire\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/                  -> RELATIVE_REQUIRE
   // Only the first was super-linear. The other two stay regexes: a start position can only reach
   // the one quote adjacent to it, so their backtracking runs are disjoint and total work is linear.
-  var RELATIVE_SIDE_EFFECT_IMPORT = /\bimport\s*['"](\.\.?\/[^'"]+)['"]/;
-  var RELATIVE_REQUIRE = /\brequire\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/;
+  // Flagged `g` so findRelativeImports can walk every match; relativeMatches resets lastIndex.
+  var RELATIVE_SIDE_EFFECT_IMPORT = /\bimport\s*['"](\.\.?\/[^'"]+)['"]/g;
+  var RELATIVE_REQUIRE = /\brequire\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/g;
 
   /** `['"](\.\.?\/[^'"]+)['"]` anchored at `quoteAt`: a quote, `./` or `../`, then a non-empty run
    *  to the next quote of EITHER kind - the two quote classes are independent in the patterns
@@ -251,7 +258,7 @@ export function createImportScanner(): ImportScanner {
   /** The `\bfrom\s*` tail that must sit immediately before the opening quote at `at`, with the
    *  relative specifier it opens. `\s*` can only end where the quote begins, so `from` is at one
    *  fixed offset: the start of the whitespace run before the quote, minus its own length. */
-  function relativeFromTail(source: string, at: number): { fromAt: number; specifier: string } | null {
+  function relativeFromTail(source: string, at: number): { fromAt: number; specifier: string; end: number } | null {
     var spec = relativeSpecifierAt(source, at);
     if (!spec) return null;
     var wsStart = at;
@@ -259,7 +266,7 @@ export function createImportScanner(): ImportScanner {
     var fromAt = wsStart - 4;
     if (fromAt < 0 || !source.startsWith('from', fromAt)) return null;
     if (fromAt > 0 && WORD.test(source[fromAt - 1])) return null; // the `\b` before `from`
-    return { fromAt: fromAt, specifier: spec.specifier };
+    return { fromAt: fromAt, specifier: spec.specifier, end: spec.end };
   }
 
   /**
@@ -267,14 +274,17 @@ export function createImportScanner(): ImportScanner {
    * the rest of the file (quadratic). The greedy `[^;'"]*` cannot cross a `;` or a quote and the
    * pattern's own opening quote has to follow `from\s*`, so that first terminator IS the opening
    * quote and `from` sits at one fixed offset before it: one candidate per keyword instead of one
-   * per position. Leftmost keyword that completes the shape wins, as in the regex.
+   * per position. Leftmost keyword that completes the shape wins, as in the regex. With `all`, the
+   * scan continues past each match the way the pattern's `g` form would, collecting every one.
    */
-  function findRelativeImportFrom(source: string): string | null {
+  function relativeImportsFrom(source: string, all: boolean): string[] {
+    var found: string[] = [];
     var importAt = source.indexOf('import');
     var exportAt = source.indexOf('export');
     var terminator = -1;
     var tailFor = -1;
-    var tail: { fromAt: number; specifier: string } | null = null;
+    var tail: { fromAt: number; specifier: string; end: number } | null = null;
+    var matchEnd = 0;
     while (importAt !== -1 || exportAt !== -1) {
       var at: number;
       if (exportAt === -1 || (importAt !== -1 && importAt < exportAt)) {
@@ -284,30 +294,62 @@ export function createImportScanner(): ImportScanner {
         at = exportAt;
         exportAt = source.indexOf('export', at + 1);
       }
+      if (at < matchEnd) continue; // inside the previous match, which a `g` scan resumes after
       var afterKeyword = at + 6;
       if (WORD.test(source.charAt(afterKeyword))) continue; // the `\b` after import/export
       // Both lookups are monotone in `afterKeyword`, so each one advances at most once per keyword.
       if (terminator < afterKeyword) {
         terminator = nextClauseTerminator(source, afterKeyword);
-        if (terminator === -1) return null; // no `;`/quote left: no later keyword can match either
+        if (terminator === -1) break; // no `;`/quote left: no later keyword can match either
       }
       if (tailFor !== terminator) {
         tailFor = terminator;
         tail = relativeFromTail(source, terminator);
       }
       // `[^;'"]*` starts at the keyword, so a `from` before it belongs to an earlier statement.
-      if (tail && tail.fromAt >= afterKeyword) return tail.specifier;
+      if (tail && tail.fromAt >= afterKeyword) {
+        found.push(tail.specifier);
+        if (!all) break;
+        matchEnd = tail.end;
+      }
     }
-    return null;
+    return found;
+  }
+
+  /** Capture 1 of the first match of a `g` pattern, or of every match with `all`, onto `into`. */
+  function relativeMatches(pattern: RegExp, source: string, all: boolean, into: string[]): void {
+    pattern.lastIndex = 0;
+    for (var m = pattern.exec(source); m; m = all ? pattern.exec(source) : null) into.push(m[1]);
+    pattern.lastIndex = 0;
   }
 
   function findRelativeImport(source: string): string | null {
-    var importFrom = findRelativeImportFrom(source);
-    if (importFrom !== null) return importFrom;
-    var sideEffect = source.match(RELATIVE_SIDE_EFFECT_IMPORT);
-    if (sideEffect) return sideEffect[1];
-    var required = source.match(RELATIVE_REQUIRE);
-    return required ? required[1] : null;
+    var found = relativeImportsFrom(source, false);
+    if (!found.length) relativeMatches(RELATIVE_SIDE_EFFECT_IMPORT, source, false, found);
+    if (!found.length) relativeMatches(RELATIVE_REQUIRE, source, false, found);
+    return found.length ? found[0] : null;
+  }
+
+  /** Every distinct relative specifier, led by the one findRelativeImport reports: import/export-from
+   *  matches in source order, then side-effect imports, then require() calls. */
+  function findRelativeImports(source: string): string[] {
+    var found = relativeImportsFrom(source, true);
+    relativeMatches(RELATIVE_SIDE_EFFECT_IMPORT, source, true, found);
+    relativeMatches(RELATIVE_REQUIRE, source, true, found);
+    var unique: string[] = [];
+    for (var i = 0; i < found.length; i++) {
+      if (unique.indexOf(found[i]) === -1) unique.push(found[i]);
+    }
+    return unique;
+  }
+
+  /** The name a relative specifier and a multi-file artifact's file key are matched on: the last
+   *  path segment, minus a JS/TS extension, lowercased (`../ui/Panel.tsx` -> `panel`). */
+  function moduleBaseName(path: string): string {
+    return path
+      .slice(path.lastIndexOf('/') + 1)
+      .replace(/\.[cm]?[jt]sx?$/i, '')
+      .toLowerCase();
   }
 
   /** `clause.replace(/(\w+)\s+as\s+(\w+)/g, '$1: $2')` without the regex's rescan of a long word
@@ -351,6 +393,8 @@ export function createImportScanner(): ImportScanner {
     braceSpan: braceSpan,
     stripTypeOnlyImports: stripTypeOnlyImports,
     findRelativeImport: findRelativeImport,
+    findRelativeImports: findRelativeImports,
+    moduleBaseName: moduleBaseName,
     renameAsBindings: renameAsBindings,
   };
 }
@@ -366,6 +410,8 @@ export const braceSpan = scanner.braceSpan;
 export const stripTypeOnlyImports = scanner.stripTypeOnlyImports;
 /** Exported for unit tests (differential vs the original patterns). */
 export const findRelativeImport = scanner.findRelativeImport;
+export const findRelativeImports = scanner.findRelativeImports;
+export const moduleBaseName = scanner.moduleBaseName;
 const terminatorAt = scanner.terminatorAt;
 
 const WS = /\s/;

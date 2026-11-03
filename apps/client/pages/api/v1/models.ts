@@ -27,7 +27,7 @@ const handler = nextRouteForContract(listModelsContract, {
   exemptReadsFromDailyRateLimit: true,
 }).get(async (req, res) => {
   const { limit, cursor } = req.validatedQuery;
-  const { models } = await getCallerModelList(req.user.id, req.logger);
+  const { models } = await getCallerModelList(req.user, req.logger);
   // Filtered here, not in getCallerModelList: the picker shares that list and keeps a disabled model
   // when it is the caller's active selection. Speech-to-text models (aws transcribe) are not servable
   // by completions or image generation.

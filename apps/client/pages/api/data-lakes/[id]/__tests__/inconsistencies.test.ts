@@ -55,7 +55,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: Record<string, unknown>) => {
     const bucket = options.bucket as string;
     h.rateLimitOptionsByBucket[bucket] = options;

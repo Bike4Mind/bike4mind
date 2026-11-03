@@ -1,5 +1,9 @@
+// @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import type { IAdminAuditLogRepository } from '@bike4mind/common';
+import type { RecordAdminActionFromRequestInput } from '@server/utils/adminAudit';
+import { adminAuditService } from '@bike4mind/services';
 
 // Middleware stripped so the handler body runs directly (same pattern as
 // pages/api/email/__tests__/verify.test.ts). The chain object doubles as the
@@ -33,7 +37,10 @@ vi.mock('@bike4mind/database', () => ({
   },
   generateModelPriceSeed: (...a: unknown[]) => mockGenerateSeed(...a),
   SEED_NOTE: 'adapter-seed',
+  withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
+const mockAudit = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
 
 import handler, {
   MANUAL_REPRICE_BAND_ERROR_CODE,
@@ -551,5 +558,129 @@ describe('POST /api/admin/model-prices', () => {
     });
     await expect(run()).rejects.toThrow(/not seed-managed/);
     expect(mockAppend).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/admin/model-prices admin audit', () => {
+  const REPRICE_BODY = { modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER }, note: 'invoice A' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAudit.mockResolvedValue(null);
+    mockAppend.mockResolvedValue({ id: 'row1' });
+    mockGenerateSeed.mockResolvedValue([{ modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER } }]);
+    mockRowsInForce.mockResolvedValue([]);
+  });
+
+  it('records a strict reprice with before/after pricing after the append', async () => {
+    const newPricing = { '0': { input: 5e-6, output: 20e-6 } };
+    mockRowsInForce.mockResolvedValue([inForceRow]);
+    const { req, run } = call({ method: 'POST', body: { ...REPRICE_BODY, pricing: newPricing } });
+    await run();
+
+    expect(mockAudit).toHaveBeenCalledTimes(1);
+    expect(mockAudit.mock.calls[0][0]).toBe(req);
+    expect(mockAudit.mock.calls[0][1]).toMatchObject({
+      action: 'settings.model_price.repriced',
+      target: { kind: 'settings', id: 'gpt-x:per_token' },
+      changes: [{ field: 'pricing', before: inForceRow.pricing, after: newPricing }],
+    });
+    expect(mockAppend.mock.invocationCallOrder[0]).toBeLessThan(mockAudit.mock.invocationCallOrder[0]);
+  });
+
+  it('records a revert-to-seed as a reprice', async () => {
+    mockRowsInForce.mockResolvedValue([inForceRow]);
+    await call({ method: 'POST', body: { modelId: 'gpt-x', unit: 'per_token', action: 'revert-to-seed' } }).run();
+
+    expect(mockAudit).toHaveBeenCalledTimes(1);
+    expect(mockAudit.mock.calls[0][1]).toMatchObject({
+      action: 'settings.model_price.repriced',
+      target: { kind: 'settings', id: 'gpt-x:per_token' },
+      changes: [{ before: inForceRow.pricing, after: { '0': TIER } }],
+      details: { revertToSeed: true },
+    });
+  });
+
+  it('does not append or audit a revert-to-seed when the row in force already is the seed', async () => {
+    const seedRow = { modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER }, note: 'adapter-seed' };
+    mockRowsInForce.mockResolvedValue([seedRow]);
+    const { res, run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-x', unit: 'per_token', action: 'revert-to-seed' },
+    });
+    await run();
+
+    expect(mockAppend).not.toHaveBeenCalled();
+    expect(mockAudit).not.toHaveBeenCalled();
+    expect(res._getJSONData().row).toMatchObject(seedRow);
+  });
+
+  it.each(
+    (['per_token', 'per_image', 'per_minute'] as const).flatMap(unit =>
+      (['reprice', 'revert-to-seed'] as const).flatMap(action =>
+        ['gpt-x', 'vendor/secret-model'].map(modelId => ({ unit, action, modelId }))
+      )
+    )
+  )(
+    'preserves stored pricing through audit redaction for $modelId $unit $action',
+    async ({ unit, action, modelId }) => {
+      const before = { '0': TIER };
+      const after = { '0': { input: 5e-6, output: 20e-6 } };
+      const appendAudit = vi.fn<IAdminAuditLogRepository['append']>();
+      mockRowsInForce.mockResolvedValue([{ modelId, unit, pricing: before, note: 'invoice A' }]);
+      mockGenerateSeed.mockResolvedValue([{ modelId, unit, pricing: after }]);
+      mockAudit.mockImplementationOnce(async (_request: unknown, input: RecordAdminActionFromRequestInput) => {
+        await adminAuditService.recordAdminAction(
+          {
+            ...input,
+            actor: { kind: 'user', scope: 'platform', userId: 'admin-1', name: 'Admin', wasAdmin: true },
+            context: { source: 'admin_ui' },
+          },
+          { db: { adminAuditLog: { append: appendAudit } } }
+        );
+        return null;
+      });
+
+      await call({
+        method: 'POST',
+        body:
+          action === 'reprice' ? { modelId, unit, pricing: after, note: 'updated price' } : { modelId, unit, action },
+      }).run();
+
+      expect(appendAudit).toHaveBeenCalledOnce();
+      expect(appendAudit.mock.calls[0][0]).toMatchObject({
+        action: 'settings.model_price.repriced',
+        target: { kind: 'settings', id: `${modelId}:${unit}` },
+        changes: [{ field: 'pricing', before, after }],
+        details: { modelId, unit, revertToSeed: action === 'revert-to-seed' },
+      });
+    }
+  );
+
+  it('does not audit an idempotent resubmit that appended nothing', async () => {
+    mockRowsInForce.mockResolvedValue([inForceRow]);
+    await call({ method: 'POST', body: { ...REPRICE_BODY, note: 'invoice A' } }).run();
+
+    expect(mockAppend).not.toHaveBeenCalled();
+    expect(mockAudit).not.toHaveBeenCalled();
+  });
+
+  it('does not report success when the audit write rejects', async () => {
+    mockAudit.mockRejectedValue(new Error('audit down'));
+    const { res, run } = call({ method: 'POST', body: REPRICE_BODY });
+
+    await expect(run()).rejects.toThrow('audit down');
+    expect(res._isEndCalled()).toBe(false);
+  });
+
+  it('does not report a revert-to-seed as done when the audit write rejects', async () => {
+    mockAudit.mockRejectedValue(new Error('audit down'));
+    const { res, run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-x', unit: 'per_token', action: 'revert-to-seed' },
+    });
+
+    await expect(run()).rejects.toThrow('audit down');
+    expect(res._isEndCalled()).toBe(false);
   });
 });

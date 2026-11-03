@@ -6,6 +6,7 @@ import {
   findTransferableOrgArtifacts,
   purgeOwnerPublishedArtifacts,
 } from '@bike4mind/database';
+import { deletePublishThumbnails } from '@bike4mind/server-utils/utils/publishThumbnails';
 
 export const ORPHAN_BACKFILL_DELETED_BY = 'system:orphaned-owner-backfill';
 
@@ -14,6 +15,8 @@ export interface BackfillOrphanedPublishedArtifactsOptions {
   /** Owner ids checked against the users collection per query. */
   batchSize?: number;
   log?: (message: string) => void;
+  /** Deletes the removed bundles' owner-only thumbnail objects; never throws. Injectable for tests. */
+  deleteThumbnails?: (publicIds: string[]) => Promise<unknown>;
 }
 
 export interface BackfillOrphanedPublishedArtifactsResult {
@@ -48,7 +51,12 @@ export interface BackfillOrphanedPublishedArtifactsResult {
 export async function backfillOrphanedPublishedArtifacts(
   options: BackfillOrphanedPublishedArtifactsOptions
 ): Promise<BackfillOrphanedPublishedArtifactsResult> {
-  const { dryRun, batchSize = 500, log = console.log } = options;
+  const {
+    dryRun,
+    batchSize = 500,
+    log = console.log,
+    deleteThumbnails = ids => deletePublishThumbnails(ids, { warn: log }),
+  } = options;
 
   const ownerIds = (await PublishedArtifact.distinct<string>('ownerId', { deletedAt: null })).map(String);
 
@@ -72,6 +80,8 @@ export async function backfillOrphanedPublishedArtifacts(
       );
     } else {
       const result = await purgeOwnerPublishedArtifacts(ownerId, { deletedBy: ORPHAN_BACKFILL_DELETED_BY });
+      // Same as the account-deletion path (purgeUserPublishedArtifacts): only bundles are rendered.
+      await deleteThumbnails(result.artifacts.filter(a => a.source.kind === 'bundle').map(a => a.publicId));
       artifacts += result.artifacts.length;
       transferred += result.transferred.length;
       log(

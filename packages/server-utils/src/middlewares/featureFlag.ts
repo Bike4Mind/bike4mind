@@ -1,4 +1,4 @@
-import { SettingKey, settingsMap } from '@bike4mind/common';
+import { resolveSettingDefinition, SettingKey } from '@bike4mind/common';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { getSettingByName } from '@bike4mind/utils';
 import type { Request, RequestHandler } from 'express';
@@ -25,7 +25,7 @@ export async function isFeatureEnabled(featureName: SettingKey): Promise<boolean
   // Cached read (short TTL) rather than a per-request findOne. Every gated route
   // pays this on each call, so the uncached round-trip added up once flags went wide.
   const settingValue = await getSettingByName(featureName, { adminSettings: adminSettingsRepository });
-  return isSettingEnabled(settingValue ?? settingsMap[featureName]?.defaultValue);
+  return isSettingEnabled(settingValue ?? resolveSettingDefinition(featureName)?.defaultValue);
 }
 
 /**

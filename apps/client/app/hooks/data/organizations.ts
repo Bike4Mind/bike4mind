@@ -265,7 +265,10 @@ export function useUploadOrganizationLogo() {
   });
 }
 
-export function useGetUserOrganizations(userId: string | undefined | null) {
+export function useGetUserOrganizations(
+  userId: string | undefined | null,
+  { refetchOnMount = false }: { refetchOnMount?: boolean | 'always' } = {}
+) {
   const queryClient = useQueryClient();
   return useQuery({
     queryKey: ['organizations', 'user', userId],
@@ -295,7 +298,7 @@ export function useGetUserOrganizations(userId: string | undefined | null) {
     },
     enabled: !!userId,
     staleTime: 1000 * 60 * 5, // 5 minutes
-    refetchOnMount: false,
+    refetchOnMount,
   });
 }
 

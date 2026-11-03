@@ -18,6 +18,9 @@ export function secretUserFields() {
     oauthCredentials: { github: SECRET_VALUE },
     securityQuestions: [{ question: 'first pet', answer: SECRET_VALUE }],
     loginRecords: [{ ip: SECRET_VALUE }],
+    signupMeta: { ip: SECRET_VALUE },
+    freeCreditClaimEmail: SECRET_VALUE,
+    signupGrantAssessment: { policyVersion: SECRET_VALUE },
     authProviders: [
       {
         id: 'goog-sub-1',
@@ -56,7 +59,11 @@ export function secretUserFields() {
     pendingEmailExpires: new Date('2026-01-02'),
     pendingNotionOAuthNonce: SECRET_VALUE,
     userNotes: SECRET_VALUE,
+    throttle: { tier: 'shadow', reason: SECRET_VALUE, source: 'admin', changedAt: new Date('2026-01-01') },
+    riskSignals: [{ type: 'signup_honeypot', at: new Date('2026-01-01'), futureField: SECRET_VALUE }],
     stripeCustomerId: SECRET_VALUE,
+    riskScore: { score: 90, signals: [{ signal: 'quickApiKey', points: 15, reason: SECRET_VALUE }] },
+    riskEvidence: { summary: { trigger: SECRET_VALUE }, refresh: { lastFailure: SECRET_VALUE } },
     notInSchema: SECRET_VALUE,
   } satisfies Record<(typeof USER_SECRET_FIELDS)[number] | 'passwordHash' | 'notInSchema', unknown>;
 }

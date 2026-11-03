@@ -1,9 +1,9 @@
 import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { securityScanScheduleRepository, SecurityScanType } from '@bike4mind/database';
+import { adminApi } from '@server/middlewares/adminApi';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { securityScanScheduleRepository, SECURITY_SCAN_TYPES, SecurityScanType } from '@bike4mind/database';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { calculateNextRunTime } from '@bike4mind/server-utils/utils/scheduleCalculator';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
@@ -14,7 +14,7 @@ const FIXED_DAY_OF_WEEK = 0; // Sunday
 const FIXED_TIME_OF_DAY = '02:00'; // 2:00 AM UTC
 
 /** Supported security scan types. */
-const ScanTypeSchema = z.enum(['web', 'code', 'packages', 'secrets', 'cloud', 'waf']);
+const ScanTypeSchema = z.enum(SECURITY_SCAN_TYPES);
 
 /** POST body: only the enabled flag is toggleable; the schedule is fixed. */
 const UpdateScheduleSchema = z.object({
@@ -35,10 +35,13 @@ function validateStageName(stage: string): void {
  * Retrieve the current schedule configuration for a specific scan type.
  * Returns the schedule if it exists, or default values if not configured.
  *
- * @param scanType - Type of security scan (web, code, packages, secrets, cloud)
+ * @param scanType - Type of security scan (web, cloud)
  * @returns Schedule configuration including enabled status and next run time
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .use(
     rateLimit({
       limit: 30, // 30 requests per minute per user
@@ -46,15 +49,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     })
   )
   .get(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     let scanType: SecurityScanType;
     try {
       scanType = ScanTypeSchema.parse(req.query.scanType);
     } catch (error) {
-      throw new BadRequestError('Invalid scan type. Must be one of: web, code, packages, secrets, cloud, waf');
+      throw new BadRequestError('Invalid scan type. Must be one of: web, cloud');
     }
 
     const stage = resolveStage();
@@ -87,15 +86,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
    * @returns Success response with updated schedule
    */
   .post(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     let scanType: SecurityScanType;
     try {
       scanType = ScanTypeSchema.parse(req.query.scanType);
     } catch (error) {
-      throw new BadRequestError('Invalid scan type. Must be one of: web, code, packages, secrets, cloud, waf');
+      throw new BadRequestError('Invalid scan type. Must be one of: web, cloud');
     }
 
     let validatedData: z.infer<typeof UpdateScheduleSchema>;

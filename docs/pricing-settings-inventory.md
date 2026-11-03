@@ -11,6 +11,8 @@ The source of truth stays in code:
   `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`.
 - Keys hidden from Admin Settings because Growth and Pricing owns them: `GROWTH_PRICING_ONLY_KEYS` in
   `apps/client/app/components/admin/AdminSettingsTab.tsx`.
+- Keys hidden from Admin Settings on `PRODUCTION_STAGES` (`production`, `dev`): definitions with
+  `hideOnProductionStages`, collected by `stageHiddenSettingKeys` in `b4m-core/common/src/schemas/settings.ts`.
 
 ## Scope
 
@@ -43,9 +45,25 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 |---|---|---|---|---|
 | `allowOpenRegistration` | Growth and Pricing > Signup and starter credits | Registration (`b4m-core/services/src/userService/register.ts`), the login and register pages through `/api/settings/serverConfigPublic`, OTP and OAuth sign-in through `isOpenRegistrationAllowed` (`apps/client/server/utils/auth/openRegistration.ts`), and the starter-credit amount (`getOpenSignupStarterCredits` in `apps/client/server/utils/starterCredits.ts`). | no. Decides who receives `defaultFreeCredits`, so it changes platform cost, not price. | Signup and starter credits |
 | `defaultFreeCredits` | Growth and Pricing > Signup and starter credits | The verified-email grant (`b4m-core/services/src/userService/freeCredits.ts`, `register.ts`), the new-user welcome and plan cards (`NewUserWelcome.tsx`, `PlansSection.tsx`, `CreditsExplanation.tsx`), the publish share footer, the entitlements registry, and three backfill scripts in `packages/scripts`. | no. A free grant. | Signup and starter credits |
-| `ReferralCreditsAmount` | **Two editors**: Growth and Pricing > Signup and starter credits, and Admin Settings > User Management > Referrals | The referred-user grant at registration (`register.ts`), the referral send route (`apps/client/pages/api/reg-invites/refer.ts`) and the "invited person gets N credits" line (`ReferralModal.tsx`). | no. A free grant. | Signup and starter credits |
+| `signupGrantDailyBudget` | Admin Settings > User Management > Credits System > Signup Grant Daily Budget | The daily budget reservation (`b4m-core/services/src/userService/signupGrantBudget.ts`), the flat and staged signup grants that draw it (`freeCredits.ts`, `stagedSignupGrant.ts`), and no-card unlocks, which draw it and refuse while a signup tranche is held for it (`noCardUnlock.ts`). | no. Caps how many free signup credits are paid per UTC day; overflow is held, not priced. | Signup and starter credits |
+| `signupGrantActivityEnabled` | Admin Settings > User Management > Credits System > Signup Grant Activity Unlock | The activity drip gate (`isActivityDripEnabled` in `apps/client/server/credits/activityUnlock.ts`), the heartbeat (`apps/client/server/credits/recordActiveSession.ts`, `useSignupGrantHeartbeat.ts`) and the unlock copy (`SignupGrantStatus.tsx`, `NewUserWelcome.tsx`). | no. Switches the free daily drip on or off. | Signup and starter credits |
+| `signupGrantActivityMinActiveSeconds` | Admin Settings > User Management > Credits System > Signup Activity Minimum Active Seconds | The server-accrued active time a UTC day needs before the drip pays (`resolveRequiredActiveSeconds` in `activityUnlock.ts`, `recordActiveSession.ts`) and the "about N minutes" unlock copy (`newUserWelcomeModel.ts`). Clamped to 60-7200, default 60. | no. Sets how long a free drip takes to earn. | Signup and starter credits |
+| `signupGrantActivityDailyCredits` | Admin Settings > User Management > Credits System > Signup Activity Daily Credits | The per-day drip amount (`resolveDripLimits` in `stagedSignupGrant.ts`), the heartbeat gate and the unlock copy. Pays only from the unlock pool (`verifiedUnlockCredits`) and nothing while that is 0. | no. A free grant. | Signup and starter credits |
+| `signupGrantActivityMaxCredits` | Admin Settings > User Management > Credits System > Signup Activity Maximum Credits | The lifetime per-account cap on the activity drip (`resolveDripLimits` in `stagedSignupGrant.ts`, `activityUnlock.ts`, `recordActiveSession.ts`). | no. Caps free credits. | Signup and starter credits |
+| `signupGrantActivityPreviewTestMode` | Admin Settings > User Management > Credits System > Signup Drip Preview Test Mode (not shown on `production` or `dev`) | Preview-only five-minute earning windows in `signupDripPeriod.ts`; default off. Only `pr<number>` stages honor the switch. Production/staging keep UTC days, and the platform budget still uses real UTC days. | no. Accelerates free-grant testing only. | Signup and starter credits |
+| `ReferralCreditsAmount` | Growth and Pricing > Signup and starter credits | The referred-user grant at registration (`register.ts`), the referral send route (`apps/client/pages/api/reg-invites/refer.ts`) and the "invited person gets N credits" line (`ReferralModal.tsx`). | no. A free grant. | Signup and starter credits |
+| `ReferralFirstAnswerCredits` | Growth and Pricing > Referral rewards for inviters | The inviter payout when the invited friend has a first answer and a verified email (`apps/client/server/referrals/firstAnswerReward.ts`). Only friends who signed up on or after the first-value launch date (`FIRST_VALUE_LAUNCH_AT` in `apps/client/server/analytics/funnel.ts`) qualify. Default 0 (off). | no. A free grant. | Signup and starter credits |
+| `preferenceArenaCreditsPerVote` | Growth and Pricing > Preference arena | The arena vote reward (`apps/client/server/preferenceArena/`), judged by `judgeArenaVote` in `b4m-core/common/src/preferenceArena.ts`. Default 0 (off). | no. A free grant. | Signup and starter credits |
+| `preferenceArenaDailyVoteCap` | Growth and Pricing > Preference arena | The same arena vote judge. Default 0 earns nothing. | no. A limit. | Usage limits |
+| `preferenceArenaLifetimeCreditCap` | Growth and Pricing > Preference arena | The same arena vote judge. Default 0 earns nothing. | no. A limit. | Usage limits |
+| `ReferralFirstPaymentCredits` | Growth and Pricing > Referral rewards for inviters | The reward held for the inviter on the invited friend's first full-price Professional payment (`apps/client/server/referrals/subscriptionReward.ts`), locked when the payment is recorded. Payments made while both payment rewards are 0 are not counted, so after activation the next eligible payment takes the first step. Default 0 (off). | no. A free grant. | Signup and starter credits |
+| `ReferralSecondPaymentCredits` | Growth and Pricing > Referral rewards for inviters | The reward held for the inviter on the invited friend's second full-price Professional payment (`apps/client/server/referrals/subscriptionReward.ts`), locked when the payment is recorded. Payments made while both payment rewards are 0 are not counted, so after activation the next eligible payment takes the first step. Default 0 (off). | no. A free grant. | Signup and starter credits |
+| `ReferralHoldDays` | Growth and Pricing > Referral rewards for inviters | Days a payment reward is held before the release job credits it (`apps/client/server/referrals/subscriptionReward.ts`, `apps/workers/src/cron/referralRewardRelease.ts`). | no. A hold period. | Signup and starter credits |
+| `ReferralInvitesPerUser` | Growth and Pricing > Referral rewards for inviters | The starting invite count at registration (`register.ts`). New signups only. | no. A limit. | Usage limits |
+| `ReferralAlertRewardsPerDay` | Growth and Pricing > Referral rewards for inviters | The 24-hour reward-count alert in `apps/client/server/referrals/firstAnswerReward.ts`, also checked when a held reward is released (`apps/client/server/referrals/subscriptionReward.ts`). | no. An alert threshold. | Usage limits |
 | `blockDisposableEmails` | Admin Settings > User Management > Credits System | `shouldBlockDisposableEmail` (`b4m-core/services/src/userService/disposableEmail.ts`), called from registration, the email-verified grant (`apps/client/server/auth/emailVerifiedGrants.ts`) and the OAuth starting-grant backfill. | no. Stops free-credit farming. | Signup and starter credits |
-| `syntheticUserEmailDomains` | Admin Settings > User Management > Credits System | Funnel analytics only (`apps/client/server/analytics/funnel.ts`). | no. Flags test accounts. | Signup and starter credits |
+| `blockedEmailDomains` | Admin Settings > User Management > Credits System | `isAdminBlockedEmailDomain` inside `shouldBlockDisposableEmail` (`b4m-core/services/src/userService/disposableEmail.ts`), so the same readers as `blockDisposableEmails`. Entries are normalized and validated on save in `apps/client/pages/api/settings/update.ts`. | no. Stops free-credit farming from domains the disposable list misses. | Signup and starter credits |
+| `syntheticUserEmailDomains` | Admin Settings > User Management > Credits System | Funnel analytics (`apps/client/server/analytics/funnel.ts`), and the reserved `persona-` username check (`b4m-core/services/src/userService/reservedUsername.ts`), which lets a verified email on one of these domains choose that prefix. | no. Flags test accounts. | Signup and starter credits |
 | `pricePerCredit` | Growth and Pricing > Credits and pricing | The per-credit Stripe purchase (`handlePerCreditTransaction` in `apps/client/lib/credits/utils.ts`, reached from `/api/stripe/start-payment`), the floor check on save (`apps/client/pages/api/settings/update.ts`) and `PaymentButton.tsx`. | yes, but only on the per-credit purchase path. No UI offers it today (every `PaymentButton` is a credit pack), and credit packs ignore this key. | Credit pricing and conversion |
 | `enforceCredits` | Growth and Pricing > Credits and pricing | 62 files. The credit gates on every billed path: chat completion and reservation (`apps/client/server/billing/reserveRequestCredits.ts`, `creditPreflight.ts`), image, music, video and generation jobs, voice sessions, embeddings, the agent executor in `apps/workers`, and `areCreditsEnforced` in `b4m-core/services/src/billing/isOperationalBillingEnabled.ts`; plus the credit UI (balance chip, composer, billing and credits modals). Default is off on self-host (`B4M_SELF_HOST`). | yes. Off means usage is not deducted from balances. | Credit pricing and conversion |
 | `billOperationalUsage` | Admin Settings > User Management > Credits System | `isOperationalBillingEnabled` and `recordOperationalUsage` (`b4m-core/services/src/billing/`), used by session preflight and lake semantic search. Lake research runs (`apps/workers/src/dataLakes/runLakeResearch.ts`) do not read it: they bill credits through `forceCreditBilling` whatever this key is set to. | yes. On also debits credits for background model and embedding spend (naming, summarization, tagging, KB search). | Credit pricing and conversion |
@@ -56,9 +74,13 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 | `teamPlanMaxSeats` | Growth and Pricing > Team plan | The same resolver and helpers as `teamPlanMinSeats`, plus admin seat changes (`apps/client/pages/api/admin/organizations/[id]/seats.ts`), the partner-signup auto-raise (`applyPartnerRuleMembership.ts`, `OrganizationModel.ts`) and the admin Organizations tab. | no. A cap on seats. | Plans, seats and packs |
 | `teamPlanCreditsPerSeat` | Growth and Pricing > Team plan | The invoice credit grant (`getTeamPlanSettings` in `apps/workers/src/lib/userSubscriptions/serverUtils.ts`), admin team grants, and the Team plan card and grant modal through `useTeamCreditsPerSeat`. | yes. Sets how many credits each paid seat buys. | Plans, seats and packs |
 | `lowCreditsThreshold` | Growth and Pricing > Credits and pricing | `resolveLowCreditsThreshold` (`b4m-core/common/src/utils/teamPlanSettings.ts`) through `useLowCreditsThreshold`: the credit chip, composer, billing modal and agent views. | no. A warning threshold. | Usage limits |
-| `apiRateLimitFreePerMin` | Admin Settings > Security > API Rate Limiting (linked from Growth and Pricing) | `apps/client/server/utils/userRateTier.ts`, applied by the per-user rate limiter (`apps/client/server/middlewares/perUserRateLimit.ts`) on `/api/chat` and the `/api/v1` routes that opt in. | no. A request rate limit. | Usage limits |
+| `apiRateLimitFreePerMin` | Admin Settings > Security > API Rate Limiting (linked from Growth and Pricing) | `apps/client/server/utils/userRateTier.ts`, applied by the per-user rate limiter (`apps/client/server/middlewares/perUserRateLimit.ts`) on every per-user rate-limited API route (`/api/chat`, `/api/opti`, and the other routes that opt in). A Free value of 0 blocks all free-tier requests on those routes. | no. A request rate limit. | Usage limits |
 | `apiRateLimitBasicPerMin` | Admin Settings > Security > API Rate Limiting (linked from Growth and Pricing) | Same as `apiRateLimitFreePerMin`. | no. A request rate limit. | Usage limits |
 | `apiRateLimitProPerMin` | Admin Settings > Security > API Rate Limiting (linked from Growth and Pricing) | Same as `apiRateLimitFreePerMin`. | no. A request rate limit. | Usage limits |
+| `apiRateLimitDefaultWritePerMin` | Admin Settings > Security > API Rate Limiting | The default per-user write limit (`apps/client/server/middlewares/defaultWriteRateLimit.ts`), mounted by `baseApi` on every authenticated route: one counter per signed-in user across all POST, PUT, PATCH and DELETE requests. API-key requests, admins, developer-tagged users and routes that opt out are not counted. | no. A request rate limit. | Usage limits |
+| `apiRateLimitDefaultWriteMode` | Admin Settings > Security > API Rate Limiting | The same middleware: `log` allows and logs writes over the limit, `enforce` refuses them with 429, `off` stops counting. | no. A request rate limit. | Usage limits |
+| `fileUploadLimitFreePerHour` | Admin Settings > Security > API Rate Limiting | The per-user hourly file-upload allowance (`apps/client/server/files/fileUploadBudget.ts`), spent per file by these upload routes: single and batch presign, direct upload, URL import, generated-image copy, re-chunk, reprocess and the public API. Applies to Free and admin-restricted users; a value of 0 blocks their uploads. Default 300 files per hour. | no. An upload rate limit. | Usage limits |
+| `fileUploadLimitPaidPerHour` | Admin Settings > Security > API Rate Limiting | Same as `fileUploadLimitFreePerHour`, for Basic and Pro subscribers. Admins and developer-tagged users are not limited. Default 3000 files per hour. | no. An upload rate limit. | Usage limits |
 
 ## Pricing that is not an admin setting
 
@@ -72,8 +94,7 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 
 ## Findings
 
-- **One key still has two editors.** `ReferralCreditsAmount` is edited on Growth and Pricing and under Admin
-  Settings > User Management > Referrals. Every other key in scope has exactly one editor.
+- **Every key in scope has exactly one editor.**
 - **`pricePerCredit` prices a path no UI offers.** Only the per-credit branch of `/api/stripe/start-payment`
   reads it, and every purchase button in the app sells a credit pack. It is a candidate for the legacy-path
   cleanup in the admin settings epic.
@@ -120,7 +141,7 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`) appear because they 
 - `apps/client/app/components/subscription/CreditsExplanation.tsx`
 - `apps/client/app/components/subscription/PlansSection.tsx`
 - `apps/client/app/utils/shareFooter.ts`
-- `apps/client/lib/entitlements/registry.ts`
+- `packages/server-utils/src/lib/entitlements/registry.ts`
 - `apps/client/server/utils/starterCredits.ts`
 - `b4m-core/common/src/types/entities/UserTypes.ts`
 - `b4m-core/services/src/userService/freeCredits.ts`
@@ -141,15 +162,65 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`) appear because they 
 
 </details>
 
+<details><summary><code>ReferralFirstAnswerCredits</code> (3 files)</summary>
+
+- `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
+- `apps/client/app/components/admin/AdminSettingsTab.tsx`
+- `apps/client/server/referrals/firstAnswerReward.ts`
+
+</details>
+
+<details><summary><code>ReferralFirstPaymentCredits</code> (3 files)</summary>
+
+- `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
+- `apps/client/app/components/admin/AdminSettingsTab.tsx`
+- `apps/client/server/referrals/subscriptionReward.ts`
+
+</details>
+
+<details><summary><code>ReferralSecondPaymentCredits</code> (3 files)</summary>
+
+- `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
+- `apps/client/app/components/admin/AdminSettingsTab.tsx`
+- `apps/client/server/referrals/subscriptionReward.ts`
+
+</details>
+
+<details><summary><code>ReferralHoldDays</code> (3 files)</summary>
+
+- `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
+- `apps/client/app/components/admin/AdminSettingsTab.tsx`
+- `apps/client/server/referrals/subscriptionReward.ts`
+
+</details>
+
+<details><summary><code>ReferralInvitesPerUser</code> (3 files)</summary>
+
+- `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
+- `apps/client/app/components/admin/AdminSettingsTab.tsx`
+- `b4m-core/services/src/userService/register.ts`
+
+</details>
+
+<details><summary><code>ReferralAlertRewardsPerDay</code> (4 files)</summary>
+
+- `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
+- `apps/client/app/components/admin/AdminSettingsTab.tsx`
+- `apps/client/server/referrals/firstAnswerReward.ts`
+- `apps/client/server/referrals/subscriptionReward.ts`
+
+</details>
+
 <details><summary><code>blockDisposableEmails</code> (1 file)</summary>
 
 - `b4m-core/services/src/userService/disposableEmail.ts`
 
 </details>
 
-<details><summary><code>syntheticUserEmailDomains</code> (1 file)</summary>
+<details><summary><code>syntheticUserEmailDomains</code> (2 files)</summary>
 
 - `apps/client/server/analytics/funnel.ts`
+- `b4m-core/services/src/userService/reservedUsername.ts`
 
 </details>
 
@@ -267,7 +338,7 @@ No match outside the definition and tests.
 - `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
 - `apps/client/app/components/admin/AdminSettingsTab.tsx`
 - `apps/client/app/hooks/data/teamPlanSettings.ts`
-- `apps/client/lib/subscriptions/schema.ts`
+- `packages/server-utils/src/lib/subscriptions/schema.ts`
 - `apps/client/pages/api/admin/users/[userId]/grant-subscription.ts`
 - `apps/client/server/services/organizationService.ts`
 - `b4m-core/common/src/constants/organization.ts`
@@ -281,7 +352,7 @@ No match outside the definition and tests.
 - `apps/client/app/components/admin/AdminSettingsTab.tsx`
 - `apps/client/app/components/admin/OrganizationsTab.tsx`
 - `apps/client/app/hooks/data/teamPlanSettings.ts`
-- `apps/client/lib/subscriptions/schema.ts`
+- `packages/server-utils/src/lib/subscriptions/schema.ts`
 - `apps/client/pages/api/admin/organizations/[id]/convert-to-paid.ts`
 - `apps/client/pages/api/admin/organizations/[id]/seats.ts`
 - `apps/client/pages/api/admin/organizations/grant.ts`
@@ -336,5 +407,29 @@ No match outside the definition and tests.
 <details><summary><code>apiRateLimitProPerMin</code> (1 file)</summary>
 
 - `apps/client/server/utils/userRateTier.ts`
+
+</details>
+
+<details><summary><code>apiRateLimitDefaultWritePerMin</code> (1 file)</summary>
+
+- `apps/client/server/middlewares/defaultWriteRateLimit.ts`
+
+</details>
+
+<details><summary><code>apiRateLimitDefaultWriteMode</code> (1 file)</summary>
+
+- `apps/client/server/middlewares/defaultWriteRateLimit.ts`
+
+</details>
+
+<details><summary><code>fileUploadLimitFreePerHour</code> (1 file)</summary>
+
+- `apps/client/server/files/fileUploadBudget.ts`
+
+</details>
+
+<details><summary><code>fileUploadLimitPaidPerHour</code> (1 file)</summary>
+
+- `apps/client/server/files/fileUploadBudget.ts`
 
 </details>

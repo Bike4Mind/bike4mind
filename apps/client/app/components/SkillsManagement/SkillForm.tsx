@@ -1,4 +1,4 @@
-import React, { FC, useRef, useState } from 'react';
+import React, { FC, useCallback, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -13,7 +13,8 @@ import {
   Textarea,
   Typography,
 } from '@mui/joy';
-import { parseSkillMd, type ParseSkillMdResult } from '@bike4mind/common/utils/skillMd';
+import { parseSkillMd, referencedRelativePaths, type ParseSkillMdResult } from '@bike4mind/common/utils/skillMd';
+import { SKILL_FILE_DIRS, checkSkillFiles, type ISkillFile } from '@bike4mind/common';
 import { SkillFormInput } from '@client/app/hooks/data/skills';
 
 export interface SkillFormProps {
@@ -30,6 +31,40 @@ const SKILL_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
 /** Bounds a local file read; the server accepts 50k characters, so this is already generous. */
 const MAX_IMPORT_BYTES = 200_000;
+
+/**
+ * A picked skill folder (`webkitRelativePath` is `<folder>/...`): its top-level SKILL.md, the text
+ * files under scripts/ and references/, and the other files it skipped. Dotfiles are skipped silently.
+ */
+export async function readSkillFolder(
+  picked: File[]
+): Promise<{ ok: true; skillMd: string; files: ISkillFile[]; skipped: string[] } | { ok: false; error: string }> {
+  let skillMd: File | undefined;
+  const files: ISkillFile[] = [];
+  const skipped: string[] = [];
+  for (const file of picked) {
+    const path = file.webkitRelativePath.split('/').slice(1).join('/');
+    if (path.split('/').some(segment => segment.startsWith('.'))) continue;
+    if (path === 'SKILL.md') {
+      skillMd = file;
+    } else if ((SKILL_FILE_DIRS as readonly string[]).includes(path.split('/')[0])) {
+      if (file.size > MAX_IMPORT_BYTES) return { ok: false, error: `${path} is too large to import.` };
+      try {
+        const content = new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer());
+        files.push({ path, content });
+      } catch {
+        return { ok: false, error: `${path}: only text files are supported.` };
+      }
+    } else {
+      skipped.push(path);
+    }
+  }
+  if (!skillMd) return { ok: false, error: 'The folder has no SKILL.md at its top level.' };
+  if (skillMd.size > MAX_IMPORT_BYTES) return { ok: false, error: 'SKILL.md is too large to import (200 KB maximum).' };
+  const checked = checkSkillFiles(files);
+  if (!checked.ok) return { ok: false, error: checked.error };
+  return { ok: true, skillMd: await skillMd.text(), files: checked.files, skipped };
+}
 
 /** Only a same-origin export gets a clickable provenance link; anything else stays plain text. */
 const isSameOrigin = (url: string): boolean => {
@@ -58,26 +93,46 @@ export const SkillForm: FC<SkillFormProps> = ({
   const [body, setBody] = useState(initialValue?.body ?? '');
   const [argumentHint, setArgumentHint] = useState(initialValue?.argumentHint ?? '');
   const [disableModelInvocation, setDisableModelInvocation] = useState(Boolean(initialValue?.disableModelInvocation));
+  const [claudeCodeAllowedTools, setClaudeCodeAllowedTools] = useState(initialValue?.claudeCodeAllowedTools ?? []);
   const [importResult, setImportResult] = useState<ParseSkillMdResult | null>(null);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState('');
+  const [files, setFiles] = useState<ISkillFile[]>(initialValue?.files ?? []);
+  const [skippedFiles, setSkippedFiles] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
+  // React has no typed prop for webkitdirectory (precedent: DataLakeWizard SourceSelectionStep).
+  const setFolderInputRef = useCallback((input: HTMLInputElement | null) => {
+    folderInputRef.current = input;
+    input?.setAttribute('webkitdirectory', '');
+  }, []);
   // Bumped by every import so a slow earlier file read cannot overwrite a newer one.
   const importReadId = useRef(0);
 
-  // Replaces argument hint and model-invocation flag with the file's values; other fields change only if the file sets them. A malformed file touches nothing.
-  const applySkillMd = (text: string) => {
+  // Replaces argument hint, Claude Code tools and model-invocation flag with the file's values; other fields change only if the file sets them. A malformed file touches nothing.
+  const applySkillMd = (text: string): boolean => {
+    // Checked here, not in parseSkillMd: the CLI relies on it accepting a frontmatter-less commands/*.md.
+    if (text.includes('\u0000')) {
+      setImportResult({ ok: false, error: 'This is not a text file (it looks like a binary or .zip file).' });
+      return false;
+    }
+    if (!/^\uFEFF?---/.test(text)) {
+      setImportResult({ ok: false, error: 'No frontmatter found: a SKILL.md starts with a --- block.' });
+      return false;
+    }
     const result = parseSkillMd(text);
     setImportResult(result);
-    if (!result.ok) return;
+    if (!result.ok) return false;
     const { fields } = result;
     if (fields.name !== undefined) setName(fields.name);
     if (fields.description !== undefined) setDescription(fields.description);
     setArgumentHint(fields.argumentHint ?? '');
     if (fields.body !== undefined) setBody(fields.body);
     setDisableModelInvocation(fields.disableModelInvocation ?? false);
+    setClaudeCodeAllowedTools(fields.claudeCodeAllowedTools ?? []);
     setPasteOpen(false);
     setPasteText('');
+    return true;
   };
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -99,6 +154,23 @@ export const SkillForm: FC<SkillFormProps> = ({
       });
   };
 
+  const handleFolder = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const picked = Array.from(e.target.files ?? []);
+    e.target.value = '';
+    if (!picked.length) return;
+    const readId = ++importReadId.current;
+    void readSkillFolder(picked).then(result => {
+      if (readId !== importReadId.current) return;
+      if (!result.ok) {
+        setImportResult({ ok: false, error: result.error });
+        return;
+      }
+      if (!applySkillMd(result.skillMd)) return;
+      setFiles(result.files);
+      setSkippedFiles(result.skipped);
+    });
+  };
+
   const applyPasted = () => {
     importReadId.current += 1;
     applySkillMd(pasteText);
@@ -106,6 +178,10 @@ export const SkillForm: FC<SkillFormProps> = ({
 
   const source = importResult?.ok ? importResult.source : undefined;
   const sourceIsSameOrigin = source ? isSameOrigin(source.url) : false;
+  // Files a folder import brought in are not missing, so they do not count toward the warning.
+  const supportingFiles = importResult?.ok
+    ? referencedRelativePaths(importResult.fields.body ?? '').filter(path => !files.some(f => f.path === path))
+    : [];
 
   const nameError =
     name.length === 0
@@ -140,7 +216,10 @@ export const SkillForm: FC<SkillFormProps> = ({
       description: description.trim(),
       body,
       ...(argumentHint.trim() && { argumentHint: argumentHint.trim() }),
+      // Always sent, so re-importing a file without allowed-tools clears it on edit.
+      claudeCodeAllowedTools,
       disableModelInvocation,
+      files,
     });
   };
 
@@ -162,6 +241,21 @@ export const SkillForm: FC<SkillFormProps> = ({
               <Button size="sm" variant="outlined" onClick={() => fileInputRef.current?.click()} disabled={submitting}>
                 Choose file
               </Button>
+              <input
+                ref={setFolderInputRef}
+                type="file"
+                hidden
+                onChange={handleFolder}
+                data-testid="skill-form-import-folder"
+              />
+              <Button
+                size="sm"
+                variant="outlined"
+                onClick={() => folderInputRef.current?.click()}
+                disabled={submitting}
+              >
+                Choose folder
+              </Button>
               <Button
                 size="sm"
                 variant="plain"
@@ -173,8 +267,9 @@ export const SkillForm: FC<SkillFormProps> = ({
               </Button>
             </Stack>
             <Typography level="body-xs" textColor="text.tertiary" data-testid="skill-form-import-file-limitations">
-              Only SKILL.md is imported. Supporting files next to it, such as scripts or reference documents,
-              aren&apos;t imported.
+              Choose a skill folder to also import the text files in its scripts/ and references/ folders. Scripts run
+              on the user&apos;s machine, so a skill with scripts is always reviewed by a person before it is shared in
+              the Skill Market.
             </Typography>
             {pasteOpen ? (
               <Stack spacing={1}>
@@ -228,6 +323,13 @@ export const SkillForm: FC<SkillFormProps> = ({
                 Not supported in Bike4Mind skills: {importResult.dropped.join(', ')}. These were ignored.
               </Alert>
             ) : null}
+            {supportingFiles.length ? (
+              <Alert color="warning" variant="soft" data-testid="skill-form-import-supporting-files">
+                This skill references files that were not imported: {supportingFiles.slice(0, 5).join(', ')}
+                {supportingFiles.length > 5 ? ` and ${supportingFiles.length - 5} more` : ''}. Paste what it needs into
+                the body, or the skill may not work.
+              </Alert>
+            ) : null}
           </Stack>
         ) : null}
 
@@ -272,6 +374,22 @@ export const SkillForm: FC<SkillFormProps> = ({
           <FormHelperText>Optional — appears next to the name in the picker.</FormHelperText>
         </FormControl>
 
+        {claudeCodeAllowedTools.length ? (
+          <Typography level="body-sm" textColor="text.tertiary" data-testid="skill-form-claude-code-tools">
+            Claude Code tools: {claudeCodeAllowedTools.join(', ')}. Kept for Claude Code exports; not used in Bike4Mind.{' '}
+            <Link
+              component="button"
+              type="button"
+              level="body-sm"
+              onClick={() => setClaudeCodeAllowedTools([])}
+              disabled={submitting}
+              data-testid="skill-form-claude-code-tools-remove"
+            >
+              Remove
+            </Link>
+          </Typography>
+        ) : null}
+
         <FormControl error={Boolean(bodyError && body.length > 0)} required>
           <FormLabel>Body</FormLabel>
           <Textarea
@@ -289,6 +407,39 @@ export const SkillForm: FC<SkillFormProps> = ({
             {bodyError && body.length > 0 ? bodyError : `${body.length} / 50000 characters`}
           </FormHelperText>
         </FormControl>
+
+        {files.length || skippedFiles.length ? (
+          <Stack spacing={1} data-testid="skill-form-files">
+            {files.length ? (
+              <>
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <Typography level="title-sm">Supporting files ({files.length})</Typography>
+                  <Button
+                    size="sm"
+                    variant="plain"
+                    color="danger"
+                    onClick={() => setFiles([])}
+                    disabled={submitting}
+                    data-testid="skill-form-files-remove"
+                  >
+                    Remove files
+                  </Button>
+                </Stack>
+                <Typography level="body-sm" component="ul" sx={{ m: 0, pl: 3, fontFamily: 'code' }}>
+                  {files.map(f => (
+                    <li key={f.path}>{f.path}</li>
+                  ))}
+                </Typography>
+              </>
+            ) : null}
+            {skippedFiles.length ? (
+              <Alert color="warning" variant="soft" data-testid="skill-form-files-skipped">
+                Not imported (only SKILL.md, scripts/ and references/ are): {skippedFiles.slice(0, 10).join(', ')}
+                {skippedFiles.length > 10 ? ` and ${skippedFiles.length - 10} more` : ''}
+              </Alert>
+            ) : null}
+          </Stack>
+        ) : null}
 
         <FormControl>
           <Checkbox

@@ -8,6 +8,7 @@ import {
   findDenied,
   parseReleaseNotesConfig,
   ReleaseNotesConfigSchema,
+  type ModalStillImage,
   type ModalVideo,
   type ReleaseNoteItem,
   type ReleaseNotesConfig,
@@ -25,6 +26,7 @@ export interface AdminReleaseNote {
   summary: string;
   items: ReleaseNoteItem[];
   video: ModalVideo | null;
+  image: ModalStillImage | null;
   state: ReleaseNoteAdminStatus;
   publishAt: string;
   deployedAt: string;
@@ -54,6 +56,7 @@ export const toAdminReleaseNote = (
   summary: note.summary,
   items: note.items.map(({ category, text, importance, sourcePrs }) => ({ category, text, importance, sourcePrs })),
   video: note.video ?? null,
+  image: note.image ?? null,
   state: note.status === 'hidden' ? 'hidden' : note.publishAt <= now ? 'published' : 'scheduled',
   publishAt: note.publishAt.toISOString(),
   deployedAt: note.deployedAt.toISOString(),

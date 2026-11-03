@@ -13,6 +13,7 @@ import {
 } from '@bike4mind/database';
 import {
   ChatModels,
+  CONVERSATIONAL_VOICE_MODEL_ID,
   createVoiceSessionContract,
   insufficientCreditsError,
   type ChatModelName,
@@ -24,6 +25,7 @@ import { sessionService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { createElevenLabsConversationalTransport, type ElevenLabsClientBootstrap } from '@bike4mind/voice';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
 import {
   BadGatewayError,
   BadRequestError,
@@ -42,6 +44,10 @@ import {
 } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { requestTurnAuth } from '@server/auth/turnAuth';
+import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
+import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
 
 const DEFAULT_MODEL = ChatModels.CLAUDE_4_6_SONNET as ChatModelName;
 // Mirror v1's concurrency guard so a user (or a leaked session endpoint) can't
@@ -73,6 +79,7 @@ function remapVoiceModel(modelId: ChatModelName): ChatModelName {
 }
 
 const handler = nextRouteForContract(createVoiceSessionContract).post(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const { sessionId, reasoningModelId: bodyModelId, isReconnect } = req.validated;
 
   const settings = await getSettingsMap(
@@ -95,6 +102,9 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
     throw new ForbiddenError(`Maximum ${MAX_CONCURRENT_VOICE_SESSIONS} concurrent voice sessions allowed`);
   }
 
+  // No slot: the call runs on the provider long after this request returns.
+  await admitRequestCompletion(req, { holdSlot: false });
+
   const elevenLabsApiKey = getSettingsValue('elevenLabsServerApiKey', settings);
   if (!elevenLabsApiKey) {
     throw new HTTPError(503, 'ElevenLabs server API key must be configured in admin settings', {
@@ -113,6 +123,9 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
   const elevenLabsAgentId = voiceAgent.elevenLabsAgentId;
 
   const reasoningModelId = remapVoiceModel((bodyModelId ?? DEFAULT_MODEL) as ChatModelName);
+  const admission = await createModelAdmission(req.user!);
+  await admission.assert(CONVERSATIONAL_VOICE_MODEL_ID);
+  await admission.assert(reasoningModelId);
 
   // Always resolve to a real session row so transcripts can be persisted to it.
   // Either attach to an existing notebook or create a new one with a voice-flavored
@@ -176,6 +189,7 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
       sessionId: String(resolvedSessionId),
       reasoningModelId,
       ...requestTurnAuth(req),
+      ...(adminRoleWithheldFor(req.apiKeyInfo) ? { adminRoleWithheld: true } : {}),
       voiceHoldStartedAt: holdStartedAt.toISOString(),
     },
     // Expires with the hold's window, not a fresh window per token: ElevenLabs replays it on every
@@ -244,6 +258,7 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
       realtime: false,
       unaffordable: () =>
         insufficientCreditsError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`),
+      newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
     });
     if (!opened) {
       throw new ConflictError('Another voice call on this session started at the same time; retry');

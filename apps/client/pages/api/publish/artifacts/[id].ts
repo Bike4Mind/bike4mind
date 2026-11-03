@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAllowed';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import { PublishedArtifact, liveShareTokens } from '@bike4mind/database';
@@ -17,6 +18,7 @@ import {
   validateEmbedOrigins,
 } from '@server/services/publish';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
+import { deletePublishThumbnails } from '@bike4mind/server-utils/utils/publishThumbnails';
 
 /**
  * /api/publish/artifacts/[id] - manage one published artifact by its publicId.
@@ -110,8 +112,10 @@ const handler = baseApi()
     const publicId = String(req.query.id);
     // Exclude the share-token capability: this GET is reachable by ANY viewer of a public
     // artifact, and .lean() bypasses the schema's toJSON strip - so project it out here.
+    // The thumbnail record goes too: thumbnails reach only the owner, and only as the signed
+    // link on GET /api/publish/artifacts?mine=true, never as a stored key on a manager/admin read.
     const artifact = await PublishedArtifact.findOne({ publicId, deletedAt: null })
-      .select('-shareTokens.token')
+      .select('-shareTokens.token -thumbnail')
       .lean<(Record<string, unknown> & { ownerId: string; visibility: string }) | null>();
     if (!artifact) {
       return res.status(404).json({ error: 'Artifact not found' });
@@ -159,7 +163,11 @@ const handler = baseApi()
     // "Open public" = cacheable, anonymous, ungated. Adding a gate to a public
     // artifact leaves `visibility` alone but must still purge the CDN, so track
     // the gate in the before/after comparison, not just the visibility level.
-    const wasOpenPublic = artifact.visibility === 'public' && !artifact.accessGate;
+    const wasPublic = artifact.visibility === 'public';
+    const wasOpenPublic = wasPublic && !artifact.accessGate;
+    const gateKindBefore = artifact.accessGate?.kind ?? null;
+    const domainsBefore = artifact.accessGate?.kind === 'domain' ? [...(artifact.accessGate.allowedDomains ?? [])] : [];
+    const embedOriginsBefore = [...(artifact.embedOrigins ?? [])];
     if (parsed.data.visibility !== undefined) {
       // Validate the requested visibility against the artifact's scope-tier policy
       // (same rules as publish) so PATCH can't set a tier-invalid visibility.
@@ -269,6 +277,23 @@ const handler = baseApi()
       // Absent (undefined) when empty so the field stays off the document.
       artifact.embedOrigins = check.value.length > 0 ? check.value : undefined;
     }
+    // Checked on the resulting state so a restricted owner can narrow a page but not widen it.
+    // A gate change counts wherever the gate is still served: public, or via a live share link.
+    const gateKindAfter = artifact.accessGate?.kind ?? null;
+    // Any gate-kind change counts as loosening, even domain to passphrase, so the check stays conservative.
+    const gateLoosened =
+      parsed.data.accessGate !== undefined &&
+      gateKindBefore !== null &&
+      (artifact.visibility === 'public' || liveShareTokens(artifact).length > 0) &&
+      (gateKindAfter !== gateKindBefore ||
+        (gateKindAfter === 'domain' &&
+          (artifact.accessGate?.allowedDomains ?? []).some(domain => !domainsBefore.includes(domain))));
+    const widensExposure =
+      (artifact.visibility === 'public' && !wasPublic) ||
+      gateLoosened ||
+      (!!artifact.discoverable && !discoverableBefore) ||
+      (artifact.embedOrigins ?? []).some(origin => !embedOriginsBefore.includes(origin));
+    if (widensExposure) await assertOutboundActionAllowed(req.user, req);
     await artifact.save();
 
     // Any change that alters the CACHED public response must purge the CDN, or the
@@ -299,6 +324,8 @@ const handler = baseApi()
     // Defense in depth: the hash is select:false, but this doc was loaded in this
     // request's write path - never echo it.
     if (json.accessGate && 'passphraseHash' in json.accessGate) delete json.accessGate.passphraseHash;
+    // Same rule as the GET: the stored thumbnail record never leaves the server.
+    delete json.thumbnail;
     return res.status(200).json({ artifact: json });
   })
   .delete(async (req, res) => {
@@ -316,6 +343,8 @@ const handler = baseApi()
     if (wasPublic) {
       void invalidatePublishCdn(toCacheTarget(artifact), req.logger);
     }
+    // softDelete dropped the owner-only thumbnail record; drop its objects too. Never throws.
+    await deletePublishThumbnails([publicId], req.logger);
     return res.status(200).json({ ok: true });
   });
 

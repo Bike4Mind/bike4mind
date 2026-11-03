@@ -69,167 +69,121 @@ data: [DONE]
 
 ## Implementation Examples
 
-### JavaScript (Browser - Fetch API)
+### JavaScript (Fetch API)
 
-The most common approach for web applications:
+The most common approach. In a browser, send the request through your own backend instead of exposing the key (see [Authentication](./authentication.md)):
 
 ```javascript
-async function streamCompletion(messages) {
+async function streamCompletion(messages, onEvent, { signal } = {}) {
   const response = await fetch('https://app.bike4mind.com/api/ai/v1/completions', {
     method: 'POST',
     headers: {
-      'X-API-Key': process.env.B4M_API_KEY,
+      'Authorization': `Bearer ${process.env.B4M_API_KEY}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'claude-3-5-sonnet',
+      model: 'claude-sonnet-5',
       messages: messages
-    })
+    }),
+    signal,
   });
 
-  // Check for errors before streaming
+  // Errors before the stream opens carry a real HTTP status
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+    throw Object.assign(new Error(`HTTP ${response.status}: ${await response.text()}`), {
+      status: response.status,
+      retryAfterHeader: response.headers.get('Retry-After'), // Raw header; parse seconds or HTTP-date before retrying
+    });
   }
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let stopReason;
+  let requestId;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-    // Decode chunk and add to buffer
-    buffer += decoder.decode(value, { stream: true });
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || ''; // Keep incomplete line in buffer
 
-    // Split by newlines
-    const lines = buffer.split('\n');
-
-    // Keep incomplete line in buffer
-    buffer = lines.pop() || '';
-
-    // Process complete lines
-    for (const line of lines) {
-      if (line.startsWith('data: ')) {
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
         const data = line.slice(6).trim();
 
-        // Check for completion signal
         if (data === '[DONE]') {
-          console.log('Stream complete');
+          if (['max_tokens', 'degenerate_repetition', 'refusal', 'pause_turn'].includes(stopReason)) {
+            throw Object.assign(new Error(`Reply did not finish: ${stopReason}`), { code: stopReason, requestId });
+          }
           return;
         }
 
+        let event;
         try {
-          const event = JSON.parse(data);
-          handleEvent(event);
-        } catch (err) {
-          console.error('JSON parse error:', err, 'Raw data:', data);
+          event = JSON.parse(data);
+        } catch {
+          throw new Error(`Malformed stream event: ${data}`);
         }
+        if (event.requestId) requestId = event.requestId;
+        if (typeof event.stopReason === 'string') stopReason = event.stopReason;
+
+        // The HTTP status is already 200, so a failure arrives as an event
+        if (event.type === 'error') {
+          throw Object.assign(new Error(event.message), {
+            status: response.status,
+            code: event.code,
+            requestId: event.requestId,
+          });
+        }
+
+        onEvent(event);
       }
     }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch (cleanupError) {
+      console.warn('Could not cancel completion stream', cleanupError);
+    } finally {
+      reader.releaseLock();
+    }
   }
-}
 
-function handleEvent(event) {
-  switch (event.type) {
-    case 'content':
-      console.log('Content:', event.text);
-      console.log('Usage:', event.usage);
-      break;
-    case 'tool_use':
-      console.log('Tool call:', event.tools);
-      console.log('Response:', event.text);
-      break;
-    case 'error':
-      console.error('Error:', event.message);
-      break;
-    default:
-      console.warn('Unknown event type:', event.type);
-  }
+  throw new Error('Stream ended without [DONE] or an error event');
 }
 
 // Usage
-streamCompletion([
-  { role: 'user', content: 'What is 2+2?' }
-]);
+try {
+  await streamCompletion([{ role: 'user', content: 'What is 2+2?' }], (event) => {
+    if (event.type === 'content') console.log(event.text, event.usage);
+    else if (event.type === 'tool_use') console.log(event.tools, event.text);
+  });
+} catch (err) {
+  console.error(err.code ?? err.status, err.requestId, err.message);
+}
 ```
 
 **Key points:**
-1. Use `response.body.getReader()` for streaming
-2. Buffer incomplete lines (SSE events may span multiple chunks)
-3. Parse only complete `data:` lines
-4. Handle `[DONE]` signal to close stream
-5. Always wrap JSON.parse in try/catch
+1. Use `response.body.getReader()` for streaming, and cancel the stream and release the reader in a `finally` block.
+2. Buffer incomplete lines: an event can be split across chunks, so parse only complete `data:` lines. A `JSON.parse` error such as "Unexpected end of JSON input" usually means a missing buffer.
+3. `[DONE]` means the transport finished; check `stopReason` to tell a finished answer from an incomplete one. A stream that ends without it and without an `error` event is incomplete.
+4. Wrap only `JSON.parse` in try/catch and treat malformed data as a failure; do not skip the line. Exceptions from your own handler must propagate.
+5. An `error` event is terminal: throw with its `code` and `requestId`.
+   The final `content` event carries `stopReason` when the provider reports one. `max_tokens` means the reply was truncated even though `[DONE]` follows: raise `max_tokens` or reduce thinking. A missing `stopReason` means unknown, not truncated. `degenerate_repetition` means B4M stopped a repeating stream; discard the unusable tail instead of treating it as a finished answer. `refusal` means the model declined the request. `pause_turn` requires continuing the conversation with its provider blocks, as described in the in-app reference; it is not a final answer. The samples reject these known incomplete reasons so callers can handle them explicitly; absent or unrecognized reasons remain compatible with older servers and new providers.
+6. Check `response.ok` before you read the body, and log the raw `data` when parsing fails.
+7. Ignore event types you do not recognize instead of throwing; new types can be added.
+8. Pass an `AbortSignal` such as `AbortSignal.timeout(ms)` as the `signal` option so a stalled connection cannot hang forever.
+9. Retry only transient failures, and restart the whole request. See [Errors](./errors.md#retry-guidance) for which ones.
 
 ---
 
-### Node.js (with node-fetch)
+### Node.js
 
-For server-side JavaScript:
-
-```javascript
-import fetch from 'node-fetch';
-
-async function streamCompletion(apiKey, messages) {
-  const response = await fetch('https://app.bike4mind.com/api/ai/v1/completions', {
-    method: 'POST',
-    headers: {
-      'X-API-Key': apiKey,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'claude-3-5-sonnet',
-      messages: messages
-    })
-  });
-
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${await response.text()}`);
-  }
-
-  let buffer = '';
-
-  response.body.on('data', (chunk) => {
-    buffer += chunk.toString();
-
-    // Split by double newline (SSE message separator)
-    const messages = buffer.split('\n\n');
-    buffer = messages.pop() || ''; // Keep incomplete message
-
-    for (const message of messages) {
-      if (message.startsWith('data: ')) {
-        const data = message.slice(6).trim();
-
-        if (data === '[DONE]') {
-          console.log('Stream complete');
-          return;
-        }
-
-        try {
-          const event = JSON.parse(data);
-          handleEvent(event);
-        } catch (err) {
-          console.error('Parse error:', err);
-        }
-      }
-    }
-  });
-
-  response.body.on('end', () => {
-    console.log('Connection closed');
-  });
-
-  response.body.on('error', (err) => {
-    console.error('Stream error:', err);
-  });
-}
-
-// Usage
-const apiKey = process.env.B4M_API_KEY;
-const messages = [{ role: 'user', content: 'What is 2+2?' }];
-streamCompletion(apiKey, messages);
-```
+Node 18 and later has a global `fetch`, so the sample above runs unchanged. In Node you can also replace the `getReader()` loop with `for await (const chunk of response.body)`, decoding each chunk with a `TextDecoder` in streaming mode. See the [JavaScript examples](./examples/javascript.md) for a complete client.
 
 ---
 
@@ -241,66 +195,61 @@ import os
 import requests
 from sseclient import SSEClient
 
+class StreamError(Exception):
+    def __init__(self, message, code=None, request_id=None):
+        super().__init__(message)
+        self.code = code
+        self.request_id = request_id
+
 def stream_completion(api_key: str, messages: list):
     """
-    Stream a completion from the B4M API.
-
-    Args:
-        api_key: B4M API key
-        messages: List of message dicts with 'role' and 'content'
+    Raises requests.HTTPError for errors before the stream opens (inspect
+    e.response.status_code and the Retry-After header), and StreamError for
+    in-band errors and incomplete streams.
     """
-    url = "https://app.bike4mind.com/api/ai/v1/completions"
-    headers = {
-        "X-API-Key": api_key,
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": "claude-3-5-sonnet",
-        "messages": messages
-    }
+    with requests.post(
+        "https://app.bike4mind.com/api/ai/v1/completions",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json={"model": "claude-sonnet-5", "messages": messages},
+        stream=True,  # Without this, requests buffers the whole response
+    ) as response:
+        response.raise_for_status()
 
-    response = requests.post(url, headers=headers, json=payload, stream=True)
-    response.raise_for_status()  # Raise error for non-200 status
+        done = False
+        stop_reason = None
+        request_id = None
+        for event in SSEClient(response).events():
+            if event.data == "[DONE]":
+                done = True
+                break
 
-    client = SSEClient(response)
+            try:
+                data = json.loads(event.data)
+            except json.JSONDecodeError as e:
+                raise StreamError(f"Malformed stream event: {event.data!r}") from e
 
-    for event in client.events():
-        if event.data == "[DONE]":
-            print("\n✓ Stream complete")
-            break
+            # The HTTP status is already 200, so a failure arrives as an event
+            if data.get("type") == "error":
+                raise StreamError(data["message"], data.get("code"), data.get("requestId"))
 
-        try:
-            data = json.loads(event.data)
-            handle_event(data)
-        except json.JSONDecodeError as e:
-            print(f"\nJSON parse error: {e}")
+            request_id = data.get("requestId") or request_id
+            stop_reason = data.get("stopReason") or stop_reason
+            print(data)
 
-def handle_event(event):
-    event_type = event.get("type")
-
-    if event_type == "content":
-        print(f"Content: {event['text']}")
-        print(f"Usage: {event.get('usage', {})}")
-    elif event_type == "tool_use":
-        print(f"Tool call: {event['tools']}")
-        print(f"Response: {event['text']}")
-    elif event_type == "error":
-        print(f"Error: {event['message']}")
-    else:
-        print(f"Unknown event type: {event_type}")
+        if not done:
+            raise StreamError("Stream ended without [DONE] or an error event")
+        if stop_reason in {"max_tokens", "degenerate_repetition", "refusal", "pause_turn"}:
+            raise StreamError(f"Reply did not finish: {stop_reason}", stop_reason, request_id)
 
 # Usage
 if __name__ == "__main__":
-    api_key = os.environ.get("B4M_API_KEY")
-    messages = [{"role": "user", "content": "What is 2+2?"}]
-    stream_completion(api_key, messages)
+    try:
+        stream_completion(os.environ["B4M_API_KEY"], [{"role": "user", "content": "What is 2+2?"}])
+    except StreamError as e:
+        print(f"Stream failed: {e.code} (request {e.request_id}): {e}")
 ```
 
-**Install sseclient-py:**
-
-```bash
-pip install sseclient-py requests
-```
+Install it with `pip install sseclient-py requests`. See the [Python examples](./examples/python.md) for a complete client.
 
 ---
 
@@ -310,466 +259,52 @@ The simplest way to test SSE streaming:
 
 ```bash
 curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
-  -H "X-API-Key: $B4M_API_KEY" \
+  -H "Authorization: Bearer $B4M_API_KEY" \
   -H "Content-Type: application/json" \
   --no-buffer \
   -d '{
-    "model": "claude-3-5-sonnet",
+    "model": "claude-sonnet-5",
     "messages": [
-      {"role": "user", "content": "What is 2+2?"}
+      {"role": "user", "content": "Count to 5"}
     ]
   }'
 ```
 
-**Critical:** Always use `--no-buffer` to see streaming output in real-time. Without it, curl will buffer the entire response.
+**Critical:** Always use `--no-buffer` to see streaming output in real-time. Without it, curl will buffer the entire response. Add `-v` to see the response headers.
 
 ---
 
 ## Error Handling
 
-Errors can occur at two points in the stream lifecycle.
+Errors can occur at two points in the stream lifecycle:
 
-### 1. Before Streaming Starts
+- **Before the stream starts** (authentication, validation, rate limiting): a JSON error body with a real HTTP status, and no SSE stream. Check `response.ok` first.
+- **During the stream** (model errors, running out of credits): the HTTP status is already 200 and stays 200. One terminal SSE `error` event arrives, such as `{"type":"error","message":"...","requestId":"...","code":"provider_error"}`, and no `[DONE]` follows.
 
-These errors occur during connection setup (authentication, validation, rate limiting).
-
-**Indicators:**
-- HTTP error status (401, 403, 429, 500, etc.)
-- No SSE stream starts
-
-**Example handling:**
-
-```javascript
-const response = await fetch(...);
-
-// Check HTTP status first
-if (!response.ok) {
-  const errorText = await response.text();
-  throw new Error(`HTTP ${response.status}: ${errorText}`);
-}
-
-// If OK, start parsing stream
-const reader = response.body.getReader();
-// ...
-```
-
-### 2. During Streaming
-
-These errors occur while the stream is active (model errors, timeouts, etc.).
-
-**Indicators:**
-- SSE error event: `{"type":"error","message":"..."}`
-- Stream is active but returns error
-
-**Example handling:**
-
-```javascript
-function handleEvent(event) {
-  if (event.type === 'error') {
-    throw new Error(`Stream error: ${event.message}`);
-  }
-
-  // Handle other event types
-  // ...
-}
-```
-
-**Complete error handling example:**
-
-```javascript
-async function streamWithErrorHandling(messages) {
-  try {
-    const response = await fetch('https://app.bike4mind.com/api/ai/v1/completions', {
-      method: 'POST',
-      headers: {
-        'X-API-Key': process.env.B4M_API_KEY,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'claude-3-5-sonnet',
-        messages: messages
-      })
-    });
-
-    // Error before streaming
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`HTTP ${response.status}: ${errorText}`);
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6).trim();
-
-            if (data === '[DONE]') {
-              return; // Success
-            }
-
-            const event = JSON.parse(data);
-
-            // Error during streaming
-            if (event.type === 'error') {
-              throw new Error(`Stream error: ${event.message}`);
-            }
-
-            handleEvent(event);
-          }
-        }
-      }
-    } finally {
-      reader.releaseLock(); // Always release reader
-    }
-
-  } catch (error) {
-    console.error('Stream failed:', error);
-    throw error;
-  }
-}
-```
+The `streamCompletion` function above throws on both. See [Errors](./errors.md) for the status codes, the `code` values and which ones to retry.
 
 ---
 
 ## Common Pitfalls
 
-### 1. Buffering Issues
+### Buffering
 
-**Problem:** HTTP clients may buffer responses, preventing real-time streaming.
-
-**Symptoms:**
-- Seeing entire response at once instead of chunks
-- Long wait before any output appears
+**Problem:** HTTP clients and proxies may buffer the response, so you see the whole answer at once or wait a long time before any output.
 
 **Solutions:**
 
-**curl:**
-```bash
-curl --no-buffer ...  # Always use this flag
-```
-
-**Python requests:**
-```python
-response = requests.post(..., stream=True)  # Set stream=True
-```
-
-**Node.js:** Streams work correctly by default
-
-**Proxies (nginx, CDN):** The API sets `X-Accel-Buffering: no` to disable buffering
-
----
-
-### 2. Partial JSON Parsing
-
-**Problem:** SSE events may arrive split across multiple chunks, causing JSON.parse errors.
-
-**Symptoms:**
-- "Unexpected end of JSON input" errors
-- "Unexpected token" at start of JSON
-
-**Solution:** Always buffer incomplete lines
-
-```javascript
-let buffer = '';
-
-for (const chunk of chunks) {
-  buffer += chunk;
-
-  const lines = buffer.split('\n');
-  buffer = lines.pop() || ''; // Keep incomplete line
-
-  for (const line of lines) {
-    if (line.startsWith('data: ')) {
-      const data = line.slice(6).trim();
-
-      // Now safe to parse
-      const event = JSON.parse(data);
-    }
-  }
-}
-```
-
----
-
-### 3. Not Handling [DONE]
-
-**Problem:** Continuing to read stream after [DONE] signal.
-
-**Symptoms:**
-- Stream never closes
-- Memory leaks from unclosed connections
-
-**Solution:** Always check for [DONE] and return/break
-
-```javascript
-if (data === '[DONE]') {
-  console.log('Stream complete');
-  return; // Exit stream handler
-}
-```
-
----
-
-### 4. Memory Leaks
-
-**Problem:** Not closing readers/connections properly.
-
-**Symptoms:**
-- Increasing memory usage over time
-- "Too many open connections" errors
-
-**Solution:** Always clean up in `finally` blocks
-
-```javascript
-const reader = response.body.getReader();
-
-try {
-  // Stream processing
-} finally {
-  reader.releaseLock(); // Always release
-}
-```
-
----
-
-### 5. Ignoring Unknown Event Types
-
-**Problem:** Future API versions may add new event types.
-
-**Symptoms:**
-- Code breaks when new event types are added
-
-**Solution:** Handle unknown types gracefully
-
-```javascript
-function handleEvent(event) {
-  switch (event.type) {
-    case 'content':
-      // Handle content
-      break;
-    case 'tool_use':
-      // Handle tool use
-      break;
-    case 'error':
-      // Handle error
-      break;
-    default:
-      // Log but don't crash
-      console.warn('Unknown event type:', event.type);
-  }
-}
-```
-
----
-
-## Best Practices
-
-### 1. Buffer Incomplete Lines
-
-Always keep incomplete SSE lines in a buffer:
-
-```javascript
-let buffer = '';
-
-// For each chunk
-buffer += decodedChunk;
-const lines = buffer.split('\n');
-buffer = lines.pop() || ''; // Keep last (potentially incomplete) line
-```
-
-### 2. Handle All Event Types
-
-Process all event types, including unknown ones:
-
-```javascript
-switch (event.type) {
-  case 'content':      // Content
-  case 'tool_use':     // Tool calls
-  case 'error':        // Errors
-  default:             // Unknown (log, don't crash)
-}
-```
-
-### 3. Implement Timeouts
-
-Don't wait forever for [DONE]:
-
-```javascript
-const TIMEOUT_MS = 60000; // 60 seconds
-
-const timeoutPromise = new Promise((_, reject) => {
-  setTimeout(() => reject(new Error('Stream timeout')), TIMEOUT_MS);
-});
-
-const streamPromise = streamCompletion(messages);
-
-await Promise.race([streamPromise, timeoutPromise]);
-```
-
-### 4. Close Streams Properly
-
-Always clean up resources:
-
-```javascript
-try {
-  await streamCompletion(messages);
-} finally {
-  reader.releaseLock();
-  // Close any other resources
-}
-```
-
-### 5. Log Parsing Errors
-
-Debug SSE parsing issues:
-
-```javascript
-try {
-  const event = JSON.parse(data);
-} catch (err) {
-  console.error('Parse error:', err);
-  console.error('Raw data:', data); // Log what failed to parse
-}
-```
-
-### 6. Check HTTP Status First
-
-Validate response before parsing stream:
-
-```javascript
-if (!response.ok) {
-  throw new Error(`HTTP ${response.status}`);
-}
-
-// Now safe to parse stream
-```
-
-### 7. Use Exponential Backoff
-
-Retry failed streams with backoff:
-
-```javascript
-async function streamWithRetry(messages, maxRetries = 3) {
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      return await streamCompletion(messages);
-    } catch (err) {
-      if (attempt < maxRetries - 1) {
-        const delay = Math.pow(2, attempt) * 1000;
-        await sleep(delay);
-      } else {
-        throw err;
-      }
-    }
-  }
-}
-```
-
----
-
-## Testing Streams
-
-### Testing with curl
-
-```bash
-# Basic test
-curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
-  -H "X-API-Key: $B4M_API_KEY" \
-  -H "Content-Type: application/json" \
-  --no-buffer \
-  -d '{
-    "model": "claude-3-5-sonnet",
-    "messages": [{"role": "user", "content": "Count to 5"}]
-  }'
-
-# Verbose (shows headers)
-curl -v --no-buffer ...
-
-# Save to file
-curl --no-buffer ... > output.txt
-```
-
-### Testing Programmatically
-
-```javascript
-async function testStream() {
-  console.log('Testing SSE stream...');
-
-  const messages = [{ role: 'user', content: 'Say hello' }];
-
-  let eventCount = 0;
-  let receivedDone = false;
-
-  await streamCompletion(messages, (event) => {
-    eventCount++;
-    console.log(`Event ${eventCount}:`, event.type);
-
-    if (event.type === 'content') {
-      console.log('  Text:', event.text);
-    }
-  });
-
-  receivedDone = true;
-
-  console.log(`✓ Stream test passed`);
-  console.log(`  Events received: ${eventCount}`);
-  console.log(`  [DONE] signal: ${receivedDone ? 'yes' : 'no'}`);
-}
-
-testStream();
-```
-
----
-
-## Troubleshooting
-
-### Stream Never Starts
-
-**Check:**
-1. HTTP status code (should be 200)
-2. Authentication header (valid API key)
-3. Request body (valid JSON, correct schema)
-
-### Stream Buffers Instead of Streaming
-
-**Check:**
-1. Using `--no-buffer` in curl
-2. Using `stream=True` in Python requests
-3. Not using incorrect HTTP client
-4. No buffering proxies in the middle
-
-### JSON Parse Errors
-
-**Check:**
-1. Buffering incomplete lines properly
-2. Splitting by `\n\n` for SSE message boundaries
-3. Wrapping JSON.parse in try/catch
-4. Logging raw data before parsing
-
-### Stream Never Ends
-
-**Check:**
-1. Handling `[DONE]` signal properly
-2. Closing connection after [DONE]
-3. Not continuing to read after completion
-4. Implementing timeout for safety
+- **curl:** pass `--no-buffer`.
+- **Python requests:** pass `stream=True`.
+- **Node.js and browsers:** `fetch` streams by default.
+- **Proxies (nginx, CDN):** the API does not set `X-Accel-Buffering`. If you proxy the stream yourself, disable response buffering and compression for the route (for nginx, `proxy_buffering off`, or send `X-Accel-Buffering: no` from your own proxy).
+
+If a stream never starts, check the HTTP status, the `Authorization` header and that the request body is valid JSON. If it never ends, check that you return on `[DONE]` and stop reading afterward.
 
 ---
 
 ## Next Steps
 
-- **[Tools & Function Calling](/api/completions/tools)** - Add function calling to streams
-- **[Code Examples](/api/completions/examples/javascript)** - See complete implementations
-- **[Error Handling](/api/completions/errors)** - Handle stream errors
-- **[Best Practices](/api/completions/best-practices)** - Production streaming patterns
+- **[Tools & Function Calling](./tools.md)** - Add function calling to streams
+- **[Code Examples](./examples/javascript.md)** - See complete implementations
+- **[Error Handling](./errors.md)** - Handle stream errors
+- **[Best Practices](./best-practices.md)** - Production streaming patterns

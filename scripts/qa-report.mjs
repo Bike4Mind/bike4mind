@@ -188,15 +188,25 @@ export function creditsMetrics(entries) {
     }));
 }
 
+/**
+ * The cell's gated latency: the median, or the mean a results file (or backfilled Slack post)
+ * written before the switch to a median carries. undefined when neither is a number.
+ */
+function cellLatencySec(json) {
+  if (typeof json?.medianResponseTimeSec === 'number') return json.medianResponseTimeSec;
+  if (typeof json?.averageResponseTimeSec === 'number') return json.averageResponseTimeSec;
+  return undefined;
+}
+
 /** 0 means "no data" in e2e-ai-latency.yml's Aggregate step. */
 export function latencyMetric(fileName, json) {
-  const avg = json?.averageResponseTimeSec;
-  if (typeof avg !== 'number' || avg <= 0 || typeof json.model !== 'string') return null;
+  const latencySec = cellLatencySec(json);
+  if (latencySec === undefined || latencySec <= 0 || typeof json.model !== 'string') return null;
   const metric = {
     kind: 'latency',
     model: json.model,
     label: path.basename(fileName, '-results.json'),
-    value: avg,
+    value: latencySec,
     unit: 's',
   };
   if (typeof json.thresholdSec === 'number') metric.threshold = json.thresholdSec;
@@ -206,23 +216,24 @@ export function latencyMetric(fileName, json) {
 /**
  * The Aggregate step in e2e-ai-latency.yml fails the run on a latency breach after Playwright
  * passed, so the breach has to reach /status as a failed test. Mirrors that step's per-cell rule
- * (over threshold, no threshold, or an abandoned gated prompt); keep the two in sync. A cell
- * within budget posts a passed test, so the alarm's flake history (evaluateAlarm.ts) sees the
- * cell's passes too and does not call every repeat breach "known flaky". No data: no test.
+ * (over threshold, no threshold, or a gated prompt whose latest attempt was abandoned); keep the
+ * two in sync. A cell within budget posts a passed test, so the alarm's flake history
+ * (evaluateAlarm.ts) sees the cell's passes too and does not call every repeat breach "known
+ * flaky". No data: no test.
  */
 export function latencyGateTest(fileName, json) {
   if (typeof json?.model !== 'string') return null;
-  const avg = typeof json.averageResponseTimeSec === 'number' ? json.averageResponseTimeSec : 0;
+  const latencySec = cellLatencySec(json) ?? 0;
   const threshold = typeof json.thresholdSec === 'number' ? json.thresholdSec : undefined;
   const abandoned = (Array.isArray(json.results) ? json.results : []).filter(
-    r => r?.incomplete === true && r.measuresDeliverable !== true
+    r => r?.incomplete === true && r.measuresDeliverable !== true && r.retried !== true
   ).length;
-  if (threshold !== undefined && avg === 0) return null;
+  if (threshold !== undefined && latencySec === 0) return null;
   const label = `${path.basename(fileName, '-results.json')} [${json.model}]`;
   const testKey = `latency-gate::${label}`;
   const title = `Latency gate: ${label}`;
-  if (threshold !== undefined && avg <= threshold && abandoned === 0) return gateTest(testKey, title, 'passed');
-  let error = `avg ${avg.toFixed(2)}s, ${threshold === undefined ? 'no threshold declared' : `threshold ${threshold}s`}`;
+  if (threshold !== undefined && latencySec <= threshold && abandoned === 0) return gateTest(testKey, title, 'passed');
+  let error = `${typeof json.medianResponseTimeSec === 'number' ? 'median' : 'avg'} ${latencySec.toFixed(2)}s, ${threshold === undefined ? 'no threshold declared' : `threshold ${threshold}s`}`;
   if (abandoned > 0) error += `, ${abandoned} prompt(s) never finished`;
   return gateTest(testKey, title, 'failed', error);
 }

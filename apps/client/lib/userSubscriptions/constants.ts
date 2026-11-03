@@ -1,16 +1,24 @@
-import { LIBREONCOLOGY_PRO_PRICE_ID } from '@client/lib/entitlements/registry';
+import { LIBREONCOLOGY_PRO_PRICE_ID } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/subscriptions/constants';
-import { SubscriptionPlanDetail, SubscriptionPlanInterval, UserSubscriptionTier } from './types';
+import {
+  SubscriptionPlanDetail,
+  SubscriptionPlanInterval,
+  UserSubscriptionTier,
+} from '@bike4mind/server-utils/lib/userSubscriptions/types';
 
 const isTestMode = process.env.NEXT_PUBLIC_SEED_STAGE_NAME !== 'production';
 
 // Account-tied Stripe price for the Professional plan; sourced per-stage from
 // NEXT_PUBLIC_* env vars with no brand fallback. Exported as the single
 // source of truth so the upsell modal (SubscriptionModal) doesn't re-type the ids.
-// Empty when unconfigured == Professional checkout inactive.
-export const PROFESSIONAL_PRICE_ID = isTestMode
-  ? (process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_TEST ?? '')
-  : (process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_PROD ?? '');
+// Empty when unconfigured == Professional checkout inactive. PlansSection picks the stage at runtime,
+// so it calls the resolver rather than reading the build-time constant.
+export const professionalPriceIdForStage = (testMode: boolean): string =>
+  testMode
+    ? (process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_TEST ?? '')
+    : (process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_PROD ?? '');
+
+export const PROFESSIONAL_PRICE_ID = professionalPriceIdForStage(isTestMode);
 
 export const SUBSCRIPTION_PLANS: Array<SubscriptionPlanDetail> = [
   {
@@ -105,3 +113,13 @@ export const TEAM_PLAN: Pick<SubscriptionPlanDetail, 'priceId' | 'name' | 'inter
   interval: SubscriptionPlanInterval.Monthly,
   tier: UserSubscriptionTier.Pro,
 };
+
+/**
+ * The individual plan checkout sells under `priceId`. The subscribe route and the invoice credit grant
+ * both resolve through this, and the admin checkout catalog test asserts every listed plan does too.
+ */
+export const findSubscriptionPlan = (priceId: string): SubscriptionPlanDetail | undefined =>
+  SUBSCRIPTION_PLANS.find(plan => plan.priceId === priceId);
+
+/** Whether `priceId` is the Team seat price the org subscribe route accepts. */
+export const isTeamPlanPriceId = (priceId: string): boolean => priceId === TEAM_PLAN.priceId;

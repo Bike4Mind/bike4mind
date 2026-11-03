@@ -1,6 +1,6 @@
 import { resolveApiCompletionSource, type ApiKeyCompletionSource } from '@bike4mind/common';
 import type { IncomingHttpHeaders } from 'http';
-import { flattenHeaders } from '@server/utils/flattenHeaders';
+import { flattenHeaders } from '@bike4mind/server-utils/utils/flattenHeaders';
 
 /**
  * The `source` a public API route stamps on its UsageEvent and ledger rows: `cli` for the b4m CLI,

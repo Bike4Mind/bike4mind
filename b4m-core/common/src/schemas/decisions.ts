@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ModelIdSchema } from './modelId';
 import type { ApiErrorCode } from '../apiErrorCodes';
 import { DECISION_PLATFORM_LIMITS } from '../decisions/catalog';
 import { ApiErrorSchema } from './chat';
@@ -96,7 +97,7 @@ export const DecisionQuestionSchema = z.discriminatedUnion('type', [
 ]);
 
 export const DecisionsRequestSchema = z.strictObject({
-  model: z.string().min(1).max(128).describe('A decision model id from `GET /api/v1/decision-models`.'),
+  model: ModelIdSchema.describe('A decision model id from `GET /api/v1/decision-models`.'),
   input: DecisionInputSchema,
   questions: z.array(DecisionQuestionSchema).min(1).max(DECISION_PLATFORM_LIMITS.maxQuestions),
   safety_identifier: z

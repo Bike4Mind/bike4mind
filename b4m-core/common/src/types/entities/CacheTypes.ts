@@ -3,8 +3,7 @@ import { IBaseRepository } from './BaseTypes';
 
 export interface ICacheDocument extends IMongoDocument {
   key: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  result: any;
+  result: unknown;
   expiresAt: Date;
 }
 
@@ -122,4 +121,14 @@ export interface ICacheRepository extends IBaseRepository<ICacheDocument> {
    *   false when the condition was not met.
    */
   casDeleteDedup(key: string, ownerField: string, ownerValue: string): Promise<boolean>;
+  /**
+   * Take one of `limit` concurrency slots under `key` for `holderId`, as a lease that lapses after
+   * `leaseMs` - a distributed semaphore whose crashed holders cannot leak a slot forever. Expired
+   * leases are pruned in the same atomic update, so they never count against the limit.
+   *
+   * @returns true when this holder now holds a slot; false when all `limit` slots are live.
+   */
+  tryAcquireLease(key: string, holderId: string, limit: number, leaseMs: number): Promise<boolean>;
+  /** Give back `holderId`'s slot under `key`. A no-op when the lease already lapsed or was never held. */
+  releaseLease(key: string, holderId: string): Promise<void>;
 }

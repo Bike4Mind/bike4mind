@@ -430,6 +430,21 @@ describe('createFabFile provenance', () => {
     expect(persisted.sourceMetadata).toEqual({ channel: 'C1', messageTs: '1700000000.0001' });
   });
 
+  it('persists generated-asset lineage, and no key when it is empty', async () => {
+    const derivedFrom = [{ fileId: 'a'.repeat(24), role: 'reference' as const }];
+    await createFabFile(mockUserId, params, {
+      ...mockAdapters,
+      provenance: { sourceType: FabFileSourceType.TOOL_GENERATED, derivedFrom },
+    });
+    expect(fabFilesCreate.mock.calls[0][0].derivedFrom).toEqual(derivedFrom);
+
+    await createFabFile(mockUserId, params, {
+      ...mockAdapters,
+      provenance: { sourceType: FabFileSourceType.TOOL_GENERATED, derivedFrom: [] },
+    });
+    expect(fabFilesCreate.mock.calls[1][0]).not.toHaveProperty('derivedFrom');
+  });
+
   it('leaves both fields off when no provenance is supplied', async () => {
     await createFabFile(mockUserId, params, mockAdapters);
 

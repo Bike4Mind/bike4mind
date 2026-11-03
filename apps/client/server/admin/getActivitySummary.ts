@@ -1,8 +1,11 @@
 import { CounterLog } from '@bike4mind/database';
+import { UserApiKeyEvents } from '@bike4mind/common';
 import type { AdminActivitySummary } from '@client/shared/adminActivitySummary';
 import { categorizeEvent } from './categorizeEvent';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+// Route template stamped as metadata.endpoint by apiKeyAuth (pages/api/overwatch/v1/events.ts).
+const OVERWATCH_INGEST_ENDPOINT = '/api/overwatch/v1/events';
 const WINDOW_DAYS = 7;
 
 type DailyEventCount = { _id: { date: string; eventName: string }; count: number };
@@ -15,6 +18,9 @@ export async function getActivitySummary(now = new Date()): Promise<AdminActivit
       $match: {
         datetime: { $gte: windowStart, $lte: now },
         counterName: { $type: 'string' },
+        // apiKeyAuth no longer emits these; this drops rows written before it stopped. Unindexed
+        // field, so delete this clause once those rows age out of the window (a week after release).
+        $nor: [{ counterName: UserApiKeyEvents.USED, 'metadata.endpoint': OVERWATCH_INGEST_ENDPOINT }],
       },
     },
     {

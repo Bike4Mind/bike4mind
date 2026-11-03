@@ -12,7 +12,13 @@ const { apiPost, apiPut, apiGet, apiDelete, axiosPut } = vi.hoisted(() => ({
 vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { post: apiPost, put: apiPut, get: apiGet, delete: apiDelete },
 }));
-vi.mock('axios', () => ({ default: { put: axiosPut, isCancel: () => false } }));
+vi.mock('axios', () => ({
+  default: {
+    put: axiosPut,
+    isCancel: () => false,
+    isAxiosError: (e: unknown) => (e as { isAxiosError?: boolean })?.isAxiosError === true,
+  },
+}));
 vi.mock('./imageResizer', () => ({ resizeImageFile: vi.fn(), isImageFile: () => false }));
 
 const { createFabFileOnServerWithUpload, chunkFileUtility, moderateFabFileNow } = await import('./filesAPICalls');
@@ -56,6 +62,25 @@ describe('createFabFileOnServerWithUpload PUT routing', () => {
     await createFabFileOnServerWithUpload({ fileSize: 999 } as CreateFabFileRequestInputType, fakeFile);
 
     expect(apiPost.mock.calls[0][1]).toMatchObject({ fileSize: 11 });
+  });
+
+  it('hides a raw S3 XML body behind a generic message, keeping the original as the cause', async () => {
+    apiPost.mockResolvedValue({ data: { id: 'ff1', presignedUrl: 'https://s3.example.invalid/x', filePath: 'x.txt' } });
+    const s3Error = { isAxiosError: true, response: { status: 403, data: '<Error><Code>AccessDenied</Code></Error>' } };
+    axiosPut.mockRejectedValue(s3Error);
+
+    const rejection = createFabFileOnServerWithUpload(formData, fakeFile);
+
+    await expect(rejection).rejects.toThrow('Failed to upload fab file');
+    await expect(rejection).rejects.toMatchObject({ cause: s3Error });
+  });
+
+  it('passes a structured error through unchanged', async () => {
+    apiPost.mockResolvedValue({ data: { id: 'ff1', presignedUrl: 'https://s3.example.invalid/x', filePath: 'x.txt' } });
+    const apiError = { isAxiosError: true, response: { status: 500, data: { message: 'Upload proxy down' } } };
+    axiosPut.mockRejectedValue(apiError);
+
+    await expect(createFabFileOnServerWithUpload(formData, fakeFile)).rejects.toBe(apiError);
   });
 });
 

@@ -18,6 +18,7 @@ import {
   PROMPT_SOURCE_ORDER,
   relocatePerTurnContext,
   resolveForcedRetrieval,
+  resolveIdentityReminder,
   markShareablePrefixBoundary,
   SHAREABLE_PREFIX_SOURCES,
   PER_CALLER_AUTHORED_SOURCES,
@@ -673,6 +674,35 @@ describe('per-turn context placement', () => {
       const messages = [head, user('no answer yet'), prompt];
 
       expect(markHistoryCacheAnchor(messages, messages[1])).toBe(messages);
+    });
+
+    it('flags a tool_result that ends history even though the current prompt is a user turn too', () => {
+      const toolResult: IMessage = {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] as IMessage['content'],
+      };
+
+      expect(markHistoryCacheAnchor([head, toolResult, prompt], toolResult).map(m => m.cache)).toEqual([
+        undefined,
+        true,
+        undefined,
+      ]);
+    });
+  });
+});
+
+describe('resolveIdentityReminder', () => {
+  it.each([
+    ['the tool is offered', undefined, ['web_search', 'current_model_details'], false, true],
+    ['raw, tool-less', 'raw', [], true, false],
+    ['raw, tool offered', 'raw', ['current_model_details'], true, true],
+    ['tool-less default turn', undefined, [], false, false],
+    ['tool stripped (Ollama trim, deny-list, non-tool model)', undefined, ['web_search'], false, false],
+    ['grounded without the tool', 'grounded', [], false, false],
+  ] as const)('%s', (_label, promptMode, offeredToolNames, omit, viaTool) => {
+    expect(resolveIdentityReminder({ promptMode, offeredToolNames })).toEqual({
+      omitIdentityReminder: omit,
+      identityViaTool: viaTool,
     });
   });
 });

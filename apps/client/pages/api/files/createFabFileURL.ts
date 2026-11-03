@@ -8,13 +8,15 @@ import {
   withTransaction,
   organizationRepository,
 } from '@bike4mind/database';
-import { Permission } from '@bike4mind/common';
+import { Permission, fabFileResponseSchema } from '@bike4mind/common';
 import { fabFilesService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';
+import { respond } from '@server/utils/respond';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { FileEvents } from '@bike4mind/common';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 
@@ -31,6 +33,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
       const { url } = req.body;
 
       if (!url) throw new BadRequestError('No URL provided');
+      await consumeFileUploadBudget(req, 1);
 
       const newFabFile = await withTransaction(() =>
         fabFilesService.createFabFileByUrl(
@@ -70,7 +73,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
         { ability: req.ability }
       );
 
-      return res.json(await signBrowserFileResponse(newFabFile));
+      return respond(res, fabFileResponseSchema, await signBrowserFileResponse(newFabFile));
     })
   );
 

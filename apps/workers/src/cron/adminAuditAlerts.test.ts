@@ -7,6 +7,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
+vi.mock('@server/auth/impersonation', () => ({ reconcileExpiredImpersonations: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%' } }));
 vi.mock('@bike4mind/database', () => ({
   connectDB: vi.fn(),

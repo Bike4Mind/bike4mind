@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { ApiKeyScope, isPlaceholderValue } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { Resource } from 'sst';
 import { securityDashboardSnapshotRepository, type ISecurityDashboardSnapshotDocument } from '@bike4mind/database';
 import axios from 'axios';
@@ -15,35 +15,28 @@ import { getTargetUrlForStage } from '@bike4mind/server-utils/integrations/githu
 
 export interface WebSecuritySnapshotResponse extends ISecurityDashboardSnapshotDocument {}
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     const stage = resolveStage();
-    const latestOwasp = await securityDashboardSnapshotRepository.findLatestByStageAndScanType(stage, 'web-owasp');
-    const latestLegacy =
-      latestOwasp ?? (await securityDashboardSnapshotRepository.findLatestByStageAndScanType(stage, 'web')); // backwards compatibility
+    const latest = await securityDashboardSnapshotRepository.findLatestByStageAndScanType(stage, 'web-owasp');
 
-    if (!latestLegacy) {
+    if (!latest) {
       return res.status(404).json({ error: 'No website security scan has been recorded yet for this stage.' });
     }
 
-    const { score, counts } = computeCategoryScoreAndCounts('web', latestLegacy.findings ?? []);
+    const { score, counts } = computeCategoryScoreAndCounts('web', latest.findings ?? []);
     const status = computeDeterministicStatus(counts, score);
 
     return res.status(200).json({
-      ...latestLegacy,
+      ...latest,
       score,
       status,
     });
   })
   .post(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     const stage = resolveStage();
     const targetUrl = getTargetUrlForStage(stage);
 
@@ -91,6 +84,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           },
         }
       );
+
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.security_scan.triggered',
+        target: { kind: 'system', id: 'security-scan:web', displayName: 'web security scan' },
+        summary: 'triggered a manual web scan',
+        details: { scanType: 'web', stage },
+      });
 
       return res.status(202).json({ canRun: true, queued: true });
     } catch (error) {

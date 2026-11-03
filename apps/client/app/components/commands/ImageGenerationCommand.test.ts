@@ -13,7 +13,7 @@ vi.mock('sonner', () => ({ toast: { error: vi.fn() } }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: {} }));
 vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({ resolveActiveOrg: vi.fn() }));
 
-import { assertNoStrayBillingOrgKeys } from '@server/utils/orgAccess';
+import { assertNoStrayBillingOrgKeys } from '@bike4mind/server-utils/utils/orgAccess';
 import { handleImageEditCommand, handleImageGenerationCommand } from './ImageGenerationCommand';
 
 // The commands forward every arg they do not destructure (`...rest`) to the public image routes,

@@ -16,6 +16,13 @@ const SIZED: readonly [string, readonly string[], string][] = [
   [ImageModels.GPT_IMAGE_2_5_FLARE, GPT_IMAGE_2.sizes, GPT_IMAGE_2.defaultSize],
   [ImageModels.FLUX_PRO, BFL.sizes, BFL.defaultSize],
   [ImageModels.FLUX_PRO_1_1, BFL.sizes, BFL.defaultSize],
+  [ImageModels.FLUX_2_MAX, BFL.sizes, BFL.defaultSize],
+  [ImageModels.FLUX_2_PRO, BFL.sizes, BFL.defaultSize],
+  [ImageModels.FLUX_2_PRO_PREVIEW, BFL.sizes, BFL.defaultSize],
+  [ImageModels.FLUX_2_FLEX, BFL.sizes, BFL.defaultSize],
+  [ImageModels.FLUX_2_KLEIN_9B, BFL.sizes, BFL.defaultSize],
+  [ImageModels.FLUX_2_KLEIN_9B_PREVIEW, BFL.sizes, BFL.defaultSize],
+  [ImageModels.FLUX_2_KLEIN_4B, BFL.sizes, BFL.defaultSize],
   [ImageModels.DALL_E_2, DALL_E_2.sizes, DALL_E_2.defaultSize],
 ];
 

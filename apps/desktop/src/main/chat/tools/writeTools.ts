@@ -6,6 +6,7 @@ import { buildDiff, diffLines, splitLines, summarizeDiff } from './diff';
 import { isWithin, PathAccessDenied, physicalTarget, realpathNearest, resolveWithinRoots } from './paths';
 import { recordRecentFile } from './recentFiles';
 import { protectionFor } from './sandbox';
+import { recordSessionWrite } from './sessionScripts';
 import { requireString, type ApprovalPrompt, type ToolContext, type ToolDefinition } from './types';
 
 /**
@@ -901,6 +902,7 @@ async function applyPlan(plan: WritePlan, context: ToolContext): Promise<string>
   recordOwnWrite(plan.target, fingerprint(plan.state.exists, plan.state.content), fingerprint(true, plan.after));
   approvedState.delete(plan.key);
   recordRecentFile(context, plan.target);
+  await recordSessionWrite(context, plan.target);
 
   // AFTER the write, deliberately: everything above can throw - a revoked root, a stale
   // approval, a stopped turn - and a transcript row showing a diff for a write that never

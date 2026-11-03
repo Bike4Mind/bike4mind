@@ -11,16 +11,24 @@
  * Auth mode, scopes and body validation all come from `startAgentExecutionContract`.
  */
 
-import { BadRequestError, ConflictError, ForbiddenError, NotFoundError, BadGatewayError } from '@bike4mind/server-utils/utils/errors';
+import {
+  BadRequestError,
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  BadGatewayError,
+} from '@bike4mind/server-utils/utils/errors';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { BILLING_ORGANIZATION_MISMATCH_ERROR_CODE, startAgentExecutionContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { isChatModelUsable, resolveDefaultChatModel } from '@server/utils/chatCompletionDefaults';
+import { resolveCallerDefaultModel } from '@server/utils/callerModelList';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 const handler = nextRouteForContract(startAgentExecutionContract, {
   rateLimit: rateLimit({
@@ -28,6 +36,7 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
     windowMs: 60 * 1000,
   }),
 }).post(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const body = req.validated;
 
   // Same model-resolution ladder as POST /api/chat: an explicit model wins, else the
@@ -41,7 +50,8 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
       userId: req.user.id,
       logger: req.logger,
     });
-    model = resolved.model;
+    // A free account must not start on a paid-only admin default.
+    model = await resolveCallerDefaultModel(resolved.model, req.user, req.logger);
     // Self-host guard: apiKeys/models are populated only there. Fail fast with
     // actionable guidance rather than a cryptic error deep inside the executor.
     if (resolved.apiKeys && resolved.models) {
@@ -83,6 +93,7 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
       enableMementos: body.enable_mementos,
       enableLattice: body.enable_lattice,
       enableArtifacts: body.enable_artifacts,
+      confidenceOverrides: body.confidence_overrides,
       // No `routingSource`: that field records which UI signal routed a send to the
       // agent pipeline, and a REST caller chose the pipeline outright. Its enum has no
       // value for "the API asked", and inventing one would be rejected by the Quest
@@ -105,6 +116,8 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
         throw new ForbiddenError(result.message, { errorCode: BILLING_ORGANIZATION_MISMATCH_ERROR_CODE });
       case 'billing_key_stale':
         throw new BadRequestError(result.message);
+      case 'confidence_overrides_forbidden':
+        throw new ForbiddenError(result.message);
       case 'concurrent_limit':
         throw new ConflictError(result.message);
       case 'dispatch_failed':

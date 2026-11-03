@@ -46,7 +46,7 @@ const repo = vi.hoisted(() => ({
 vi.mock('@bike4mind/database', () => ({ workItemRepository: repo }));
 
 const verifyOrgAccess = vi.hoisted(() => vi.fn());
-vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess }));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgAccess }));
 
 currentModule.name = 'collection';
 await import('@pages/api/work-items/index');

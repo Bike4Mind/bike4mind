@@ -17,7 +17,7 @@ import type { Request, Response } from 'express';
  * endpoint accepts either transport; see pages/api/auth/refreshToken.ts.
  */
 
-/** Primary session refresh cookie. */
+/** Primary session refresh cookie; the base name, see sessionCookieName for the name on the wire. */
 export const REFRESH_COOKIE_NAME = 'b4m_rt';
 
 /**
@@ -30,12 +30,14 @@ export const REFRESH_COOKIE_NAME = 'b4m_rt';
 export const ADMIN_RETURN_COOKIE_NAME = 'b4m_rt_admin';
 
 /**
- * Scoped to /api: the cookie only ever needs to reach the refresh, logout and impersonation
- * endpoints, and this keeps it off every static-asset request. SameSite=Strict is affordable
- * because normal API calls authenticate with `Authorization: Bearer`, so no cross-site
- * navigation depends on the cookie riding along.
+ * Where Secure is set (production), each session cookie is written as `__Host-<name>` with Path=/:
+ * the browser accepts that name only host-only, Secure and on Path=/, so only this host can write
+ * it. Plain-http dev cannot use the prefix and keeps the bare name on /api.
+ * SameSite=Strict is affordable because normal API calls authenticate with `Authorization: Bearer`,
+ * so no cross-site navigation depends on the cookie riding along.
  */
-const COOKIE_PATH = '/api';
+const HOST_PREFIX = '__Host-';
+const LEGACY_COOKIE_PATH = '/api';
 
 /**
  * Bounds a mobile session, so it tracks the AuthSession lifetime (30d), not the access-token TTL.
@@ -50,8 +52,14 @@ const COOKIE_PATH = '/api';
  */
 const REFRESH_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 
-/** Secure breaks plain-http localhost, where e2e and local dev run. */
-export const secureAttribute = (): string => (process.env.NODE_ENV === 'production' ? '; Secure' : '');
+/** Production only, since plain-http localhost drops Secure cookies; this also picks the cookie name. */
+const isSecureTransport = (): boolean => process.env.NODE_ENV === 'production';
+export const secureAttribute = (): string => (isSecureTransport() ? '; Secure' : '');
+
+/** The name a session cookie is written and read under; writers and readers must both use this. */
+export const sessionCookieName = (baseName: string): string =>
+  isSecureTransport() ? `${HOST_PREFIX}${baseName}` : baseName;
+const sessionCookiePath = (): string => (isSecureTransport() ? '/' : LEGACY_COOKIE_PATH);
 
 /**
  * Append rather than overwrite: `res.setHeader('Set-Cookie', string)` replaces any Set-Cookie
@@ -71,15 +79,28 @@ export function appendSetCookie(res: CookieResponse, cookie: string): void {
   res.setHeader('Set-Cookie', next);
 }
 
-function setCookie(res: Response, name: string, value: string): void {
+function expireLegacyCookie(res: Response, baseName: string): void {
+  if (sessionCookieName(baseName) === baseName) return;
   appendSetCookie(
     res,
-    `${name}=${value}; Path=${COOKIE_PATH}; Max-Age=${REFRESH_COOKIE_MAX_AGE_SECONDS}; HttpOnly; SameSite=Strict${secureAttribute()}`
+    `${baseName}=; Path=${LEGACY_COOKIE_PATH}; Max-Age=0; HttpOnly; SameSite=Strict${secureAttribute()}`
   );
 }
 
-function expireCookie(res: Response, name: string): void {
-  appendSetCookie(res, `${name}=; Path=${COOKIE_PATH}; Max-Age=0; HttpOnly; SameSite=Strict${secureAttribute()}`);
+function setCookie(res: Response, baseName: string, value: string): void {
+  appendSetCookie(
+    res,
+    `${sessionCookieName(baseName)}=${value}; Path=${sessionCookiePath()}; Max-Age=${REFRESH_COOKIE_MAX_AGE_SECONDS}; HttpOnly; SameSite=Strict${secureAttribute()}`
+  );
+  expireLegacyCookie(res, baseName);
+}
+
+function expireCookie(res: Response, baseName: string): void {
+  appendSetCookie(
+    res,
+    `${sessionCookieName(baseName)}=; Path=${sessionCookiePath()}; Max-Age=0; HttpOnly; SameSite=Strict${secureAttribute()}`
+  );
+  expireLegacyCookie(res, baseName);
 }
 
 /** Minimal cookie-header parser (same pattern as publishGateToken / analyticsMiddleware). */
@@ -99,13 +120,14 @@ export function readCookie(req: Pick<Request, 'headers'>, name: string): string 
 
 export const setRefreshCookie = (res: Response, token: string): void => setCookie(res, REFRESH_COOKIE_NAME, token);
 export const clearRefreshCookie = (res: Response): void => expireCookie(res, REFRESH_COOKIE_NAME);
-export const readRefreshCookie = (req: Pick<Request, 'headers'>): string | null => readCookie(req, REFRESH_COOKIE_NAME);
+export const readRefreshCookie = (req: Pick<Request, 'headers'>): string | null =>
+  readCookie(req, sessionCookieName(REFRESH_COOKIE_NAME));
 
 export const setAdminReturnCookie = (res: Response, token: string): void =>
   setCookie(res, ADMIN_RETURN_COOKIE_NAME, token);
 export const clearAdminReturnCookie = (res: Response): void => expireCookie(res, ADMIN_RETURN_COOKIE_NAME);
 export const readAdminReturnCookie = (req: Pick<Request, 'headers'>): string | null =>
-  readCookie(req, ADMIN_RETURN_COOKIE_NAME);
+  readCookie(req, sessionCookieName(ADMIN_RETURN_COOKIE_NAME));
 
 /** Clear every session cookie - logout, and any path that tears a session down. */
 export function clearSessionCookies(res: Response): void {

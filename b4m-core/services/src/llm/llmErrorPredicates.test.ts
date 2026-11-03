@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   LlmTimeoutError,
+  bedrockEmptyResponseMessage,
   createAnthropicRequestTimeoutError,
   createAnthropicStreamTimeoutError,
 } from '@bike4mind/llm-adapters';
@@ -47,5 +48,15 @@ describe('timeout predicates', () => {
       expect(isSlowModelTimeoutError(truncated)).toBe(false);
     }
     expect(isTruncatedStreamError(createAnthropicStreamTimeoutError('stream_idle', 90_000))).toBe(false);
+  });
+
+  it('retries a stalled empty Bedrock stream but not a deterministic empty one', () => {
+    const stalled = new Error(bedrockEmptyResponseMessage('m', 'r', true));
+    const deterministic = new Error(bedrockEmptyResponseMessage('m', 'r', false));
+
+    expect(isStreamIdleTimeoutError(stalled)).toBe(true);
+    expect(isTruncatedStreamError(stalled)).toBe(false);
+    expect(isStreamIdleTimeoutError(deterministic)).toBe(false);
+    expect(isTruncatedStreamError(deterministic)).toBe(false);
   });
 });

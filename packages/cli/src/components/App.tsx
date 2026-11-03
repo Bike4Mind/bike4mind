@@ -54,6 +54,7 @@ interface AppProps {
   onReviewGateResponse: (response: { decision: 'approved' | 'rejected'; note?: string }, promptId: string) => void;
   onImageDetected?: (imageData: Buffer) => Promise<string>;
   commandHistory?: string[];
+  onHistoryEntry?: (entry: string) => void;
   commands?: CommandDefinition[]; // Merged built-in + custom commands
   config?: CliConfig;
   availableModels?: ModelInfo[];
@@ -74,6 +75,7 @@ export function App({
   onReviewGateResponse,
   onImageDetected,
   commandHistory = [],
+  onHistoryEntry,
   commands = [],
   config,
   availableModels = [],
@@ -402,6 +404,7 @@ export function App({
                 onImageDetected={onImageDetected}
                 disabled={!!permissionPrompt || !!userQuestionPrompt || !!reviewGatePrompt || !!exitHandoffPrompt}
                 history={commandHistory}
+                onHistoryEntry={onHistoryEntry}
                 commands={commands}
                 prefillInput={prefillInput}
                 onPrefillConsumed={onPrefillConsumed}

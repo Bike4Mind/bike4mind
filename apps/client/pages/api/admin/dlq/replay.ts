@@ -1,6 +1,7 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ensureAdmin, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getDlqByLabel, getDlqUrl, getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { receiveFromQueue, sendToQueue, deleteFromQueue } from '@bike4mind/server-utils/utils/sqs';
 import type { Message } from '@aws-sdk/client-sqs';
@@ -46,9 +47,10 @@ interface ReplayResult {
  * - Batch: Receives messages from the DLQ (optionally filtered by `messageIds`),
  *   sends to source queue, then deletes from DLQ on success.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
-
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(async (req, res) => {
   const result = BodySchema.safeParse(req.body);
   if (!result.success) {
     throw new BadRequestError(result.error.issues[0]?.message || 'Invalid request body');
@@ -66,6 +68,28 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   const dlqUrl = getDlqUrl(dlqEntry.label);
   const sourceQueueUrl = getSourceQueueUrl(dlqEntry.sourceQueue as Parameters<typeof getSourceQueueUrl>[0]);
   const results: ReplayResult[] = [];
+
+  const recordReplayAudit = (summary: {
+    replayed: number;
+    failed: number;
+    skipped: number;
+    total: number;
+    results: ReplayResult[];
+  }) =>
+    recordAdminActionFromRequest(req, {
+      action: 'ops.dlq.replayed',
+      target: { kind: 'system', id: 'dlq-replay', displayName: 'DLQ replay' },
+      summary: `replayed ${summary.replayed} messages from ${queueLabel}`,
+      details: {
+        queueLabel,
+        messageCount: summary.replayed,
+        failed: summary.failed,
+        skipped: summary.skipped,
+        total: summary.total,
+        // IDs only, never bodies; bounded by MAX_BATCH_SIZE via the request schema.
+        replayedMessageIds: summary.results.filter(r => r.status === 'replayed').map(r => r.messageId),
+      },
+    });
 
   const safeLogReplay = async (data: Omit<Parameters<typeof dlqReplayLogRepository.logReplay>[0], never>) => {
     try {
@@ -198,6 +222,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     };
 
     Logger.info(`[DLQ Replay] Completed direct replay for ${queueLabel}`, { adminUserId, ...summary });
+    await recordReplayAudit(summary);
     return res.json(summary);
   }
 
@@ -343,6 +368,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     ...summary,
   });
 
+  await recordReplayAudit(summary);
   return res.json(summary);
 });
 

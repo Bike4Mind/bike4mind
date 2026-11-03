@@ -47,6 +47,12 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
 
 # ── Builder: build all @bike4mind/* packages, then the Next app (shim active) ─
 FROM deps AS builder
+# The install above ran codegen without infra/, so the runtime glue lacks the core resource
+# names it needs before it registers any contributed secret. Regenerate with infra/ present.
+COPY infra ./infra
+RUN node apps/client/scripts/generate-premium-glue.mjs
+# @bike4mind/local-models bundles the Curated models list from catalog/model-hub.
+COPY catalog ./catalog
 # Build every workspace package except the client (incl. @bike4mind/resource).
 RUN pnpm turbo:build
 # The client `prebuild` regenerates the help index and bundles the help markdown from

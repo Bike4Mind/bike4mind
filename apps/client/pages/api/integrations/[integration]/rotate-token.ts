@@ -23,7 +23,7 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { recordTokenRotationInitiated, recordTokenRotationFailed } from '@bike4mind/server-utils/utils/cloudwatch';
-import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { issueStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import type { Response } from 'express';
 
 function isRotatableIntegration(value: string): value is RotatableIntegration {
@@ -162,7 +162,7 @@ async function generateAuthUrl(
       const params = new URLSearchParams({
         client_id: clientId,
         redirect_uri: `${baseUrl}/api/auth/github/mcp-callback`,
-        scope: 'repo,read:org,read:user,project',
+        scope: 'repo,read:org,read:user,user:email,project',
         state,
         allow_signup: 'false',
       });

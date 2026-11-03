@@ -2,7 +2,7 @@ import { hearthRepository, MAX_ROSTER_ROWS, PRESENCE_STALE_AFTER_MS } from '@bik
 import { ApiKeyScope, NotFoundError, UnauthorizedError } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { requireUser } from '@server/middlewares/requireUser';
 import { toWireHearthPresence } from '@server/utils/hearthWire';
 import { NextApiRequest, NextApiResponse } from 'next';

@@ -8,8 +8,12 @@ import { ApiKeyScope } from '@bike4mind/common';
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (config?: unknown) => {
     const handlers: Record<string, (req: unknown, res: unknown) => Promise<unknown>> = {};
-    const chain = async (req: { method: string }, res: unknown) => handlers[req.method](req, res);
-    chain.use = () => chain;
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
+    const chain = async (req: { method: string }, res: unknown) => {
+      for (const middleware of middlewares) middleware(req, res, () => undefined);
+      return handlers[req.method](req, res);
+    };
+    chain.use = (fn: (req: unknown, res: unknown, next: () => void) => void) => (middlewares.push(fn), chain);
     chain.get = (fn: (typeof handlers)[string]) => {
       handlers.GET = fn;
       return chain;
@@ -56,7 +60,7 @@ describe('GET /api/admin/platform-usage/endpoints', () => {
 
   it('rejects a non-admin', async () => {
     const { run } = call({ isAdmin: false });
-    await expect(run()).rejects.toThrow(/[Aa]dmin/);
+    await expect(run()).rejects.toThrow(/missing permission/i);
     expect(mockPlatformEndpointUsage).not.toHaveBeenCalled();
   });
 

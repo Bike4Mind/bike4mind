@@ -2,6 +2,7 @@ import {
   IRegInviteDocument,
   IRegistrationInvite,
   IRegistrationInviteRepository,
+  RegInviteSource,
   RegInviteStatusType,
 } from '@bike4mind/common';
 import mongoose from 'mongoose';
@@ -93,6 +94,11 @@ const RegistrationInviteSchema = new mongoose.Schema<IRegInviteDocument>(
     },
     used: {
       type: Date,
+      required: false,
+    },
+    source: {
+      type: String,
+      enum: Object.values(RegInviteSource),
       required: false,
     },
     unlimitedUse: {

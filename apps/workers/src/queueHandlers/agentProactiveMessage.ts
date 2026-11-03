@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { getUserEntitlements } from '@server/entitlements';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import {
   sessionAgentConfigRepository,
   sessionRepository,
@@ -17,11 +18,11 @@ import { ClientMessageSender, getSettingsByNames } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
 import { apiKeyService } from '@bike4mind/services';
-import { getQuestErrorCode } from '@bike4mind/common';
+import { isTerminalCreditRefusal } from '@bike4mind/common';
 import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import * as agentProactiveMessagingService from '@bike4mind/services/agentProactiveMessagingService';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { canAccessSession } from '@server/utils/sessionAccess';
+import { canAccessSession } from '@bike4mind/server-utils/utils/sessionAccess';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
 const agentProactiveMessageQueuePayload = z.object({
@@ -104,6 +105,7 @@ async function processAgentProactiveMessage(payload: { sessionAgentConfigId: str
         agent,
         session,
         user,
+        getEntitlements: () => getUserEntitlements(user),
         logger,
         recentMessages: recentMessages.reverse(), // Reverse to get chronological order
         db: {
@@ -129,9 +131,9 @@ async function processAgentProactiveMessage(payload: { sessionAgentConfigId: str
         meter: createCompletionMeter(user, logger, 'proactive agent messages', { sessionId: config.sessionId }),
       });
     } catch (err) {
-      // Refused before any provider call; retrying cannot help until the owner adds credits.
-      if (getQuestErrorCode(err) !== 'insufficient_credits') throw err;
-      logger.info(`Skipping proactive message for agent ${config.agentId}: owner has insufficient credits`);
+      // Refused before any provider call; retrying cannot help until the owner adds credits or the daily cap resets.
+      if (!isTerminalCreditRefusal(err)) throw err;
+      logger.info(`Skipping proactive message for agent ${config.agentId}: ${(err as Error).message}`);
       return;
     }
 

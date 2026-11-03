@@ -9,9 +9,11 @@ import { registerAccount } from './account';
 import { onAuthStateChanged, registerAuth } from './auth';
 import { registerChat } from './chat';
 import { sessionScopeFor, sessionScopeKey } from './chat/sessionScope';
+import { closeBrowsersOnScopeChange } from './chat/browser/browserScope';
 import { resolveUserPath } from './chat/tools/userPath';
 import { attachDevLogShortcut, closeDevLogWindow, registerDevLog } from './devlog';
 import { registerFleet } from './fleet';
+import { registerModels } from './models';
 import { registerArtifactScheme } from './chat/artifacts/sandboxProtocol';
 import { registerMediaScheme } from './chat/media/protocol';
 import { isExternallyOpenable } from '@shared/externalLinks';
@@ -135,10 +137,17 @@ void app.whenReady().then(async () => {
     pullRequests,
     claudeImport,
     spareWorktrees,
+    modelServers,
+    localContext,
+    capabilityLedger,
   } = registerChat(auth, {
     sessionClosed: sessionId => terminals.killSession(sessionId),
+    releaseSessionTerminals: sessionId => terminals.acquireSessionCleanup(sessionId),
     observeStream: event => fleet.observe(event),
+    cancelModelPull: key => models.stop(key),
+    pinnedProjectors: () => models.pinnedProjectors(),
   });
+  const models = registerModels(modelServers, { localContext: () => localContext.read() }, capabilityLedger);
   fleet.setDirectoryResolver(async sessionId => {
     const session = await chat.getSession(sessionId);
     return session?.project?.workingDirectory ?? session?.grantedDirectories?.[0] ?? null;
@@ -217,6 +226,7 @@ void app.whenReady().then(async () => {
   app.once('will-quit', () => {
     auth.dispose();
     fleet.dispose();
+    models.dispose();
     chat.dispose();
     claudeImport.dispose();
     pullRequests.dispose();
@@ -243,6 +253,7 @@ void app.whenReady().then(async () => {
 
   createWindow();
   claudeImport.start();
+  onAuthStateChanged(closeBrowsersOnScopeChange(auth.getState(), () => browser.closeAll()));
   let importScope = sessionScopeKeyOf(auth.getState());
   onAuthStateChanged(state => {
     const next = sessionScopeKeyOf(state);

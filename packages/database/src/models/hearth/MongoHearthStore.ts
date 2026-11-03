@@ -1,4 +1,5 @@
 import { Types } from 'mongoose';
+import { ConflictError } from '@bike4mind/common';
 import type { AppendEventInput, HearthEvent, HearthStore, EventsSinceOptions } from '@bike4mind/hearth';
 import { HearthChannel, type IHearthChannelDoc } from './HearthChannelModel.js';
 import { HearthActor, type IHearthActorDoc } from './HearthActorModel.js';
@@ -141,6 +142,50 @@ export class MongoHearthStore implements HearthStore {
  */
 export const MAX_ROSTER_ROWS = 200;
 
+/**
+ * Storage-only ceiling on the channels one user can own. Far above real use (a
+ * channel per bridge or project is a handful) and tiny for an account minting a
+ * row per request.
+ */
+export const MAX_HEARTH_CHANNELS_PER_USER = 100;
+
+/** Creating one more channel would pass the owner's channel cap. */
+export class HearthChannelCapError extends ConflictError {
+  constructor(readonly limit: number) {
+    super(`You can have at most ${limit} Hearth channels`, { code: 'channel_limit', limit });
+    this.name = 'HearthChannelCapError';
+  }
+}
+
+/**
+ * Create a channel only if the owner is under the cap.
+ *
+ * Count, insert, re-count: the last writer to insert counted every other
+ * writer, so unused rows never push the total past the cap, while racers at the
+ * boundary may all roll back (a retry fixes it). A row that already took an
+ * event before its re-count is kept, so the total can overshoot by the number of
+ * such racers; with no delete path that overshoot is permanent but bounded. Same
+ * trade as McpConnectionModel.createWithinUserCap, chosen over an atomic counter
+ * because no delete path exists to keep a counter honest.
+ */
+async function createChannelWithinCap(userId: Types.ObjectId, name: string): Promise<IHearthChannelDoc> {
+  const atCap = (await HearthChannel.countDocuments({ userId })) >= MAX_HEARTH_CHANNELS_PER_USER;
+  // A name the owner already holds falls through so create raises the duplicate, not the cap.
+  if (atCap && !(await HearthChannel.exists({ userId, name }))) {
+    throw new HearthChannelCapError(MAX_HEARTH_CHANNELS_PER_USER);
+  }
+
+  const created = await HearthChannel.create({ userId, name });
+
+  if ((await HearthChannel.countDocuments({ userId })) > MAX_HEARTH_CHANNELS_PER_USER) {
+    // Only an unused row is rolled back. One that already took an event stays:
+    // a bounded overshoot is better than destroying a channel someone holds.
+    const { deletedCount } = await HearthChannel.deleteOne({ _id: created._id, nextSeq: 0 });
+    if (deletedCount) throw new HearthChannelCapError(MAX_HEARTH_CHANNELS_PER_USER);
+  }
+  return created;
+}
+
 /** Fields a presence event contributes to the roster row it projects onto. */
 export interface UpsertPresenceInput {
   channelId: string;
@@ -205,33 +250,30 @@ export const hearthRepository = {
   },
 
   async createChannel(userId: string, name: string): Promise<IHearthChannelDoc> {
-    return HearthChannel.create({ userId: new Types.ObjectId(userId), name });
+    return createChannelWithinCap(new Types.ObjectId(userId), name);
   },
 
   /**
-   * Find-or-create a channel by (user, name). Atomic upsert against the unique
-   * (userId, name) index, so two writers racing the very first write - a bridge
-   * register and a Claude Code hook heartbeat arriving together - cannot end up
-   * with two channels of the same name or a failed presence report.
+   * Find-or-create a channel by (user, name). A name that already resolves
+   * creates nothing, so it returns before the cap count: posting to an existing
+   * channel must keep working at the ceiling (the CLI hook posts to `agents` on
+   * every prompt). Only a miss runs the capped create.
    */
   async ensureChannelByName(userId: string, name: string): Promise<IHearthChannelDoc> {
     const filter = { userId: new Types.ObjectId(userId), name };
-    try {
-      return await HearthChannel.findOneAndUpdate(
-        filter,
-        { $setOnInsert: { nextSeq: 0 } },
-        { upsert: true, new: true }
-      );
-    } catch (err) {
-      // An upsert whose filter misses can still lose the insert race and take
-      // E11000 from the unique index. The row exists by then, so re-reading it
-      // is the correct answer rather than propagating the collision.
-      if (isDuplicateKeyError(err)) {
-        const winner = await HearthChannel.findOne(filter);
-        if (winner) return winner;
+    // A same-name racer takes E11000 from the unique index and loops back to the
+    // find. If the winner rolled back over the cap in the meantime the find
+    // misses, so the retry meets the cap itself instead of a raw driver error.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const existing = await HearthChannel.findOne(filter);
+      if (existing) return existing;
+      try {
+        return await createChannelWithinCap(filter.userId, name);
+      } catch (err) {
+        if (!isDuplicateKeyError(err)) throw err;
       }
-      throw err;
     }
+    throw new HearthChannelCapError(MAX_HEARTH_CHANNELS_PER_USER);
   },
 
   /** Returns the channel only if it belongs to the user; null otherwise. */

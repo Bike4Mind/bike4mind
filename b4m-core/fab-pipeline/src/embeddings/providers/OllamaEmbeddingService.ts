@@ -1,56 +1,7 @@
 import { OllamaEmbeddingModel } from '@bike4mind/common';
-import { EmbeddingModelInfo, EmbeddingModelProvider, EmbeddingService } from '../EmbeddingService';
+import { EmbeddingModelInfo, EmbeddingService, embeddingModelInfoMap } from '../EmbeddingService';
 
-// Dimensions and context windows for the local embedders self-host can pull.
-// Must stay in sync with OllamaEmbeddingModel (common). contextWindow is used by
-// SmartChunker to size chunks and by the vectorize skip logic.
-export const OLLAMA_EMBEDDING_MODEL_MAP: Record<OllamaEmbeddingModel, EmbeddingModelInfo<OllamaEmbeddingModel>> = {
-  // Qwen3-Embedding dimensions per the model card (0.6B=1024, 4B=2560, 8B=4096). contextWindow
-  // kept at a retrieval size (2048), not the models' 32k: it sizes chunks (SmartChunker) and the
-  // Ollama num_ctx in embed() below, and a large window balloons embedder VRAM for no RAG gain.
-  [OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B]: {
-    provider: EmbeddingModelProvider.OLLAMA,
-    model: OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B,
-    contextWindow: 2048,
-    dimensions: [1024],
-  },
-  [OllamaEmbeddingModel.QWEN3_EMBEDDING_4B]: {
-    provider: EmbeddingModelProvider.OLLAMA,
-    model: OllamaEmbeddingModel.QWEN3_EMBEDDING_4B,
-    contextWindow: 2048,
-    dimensions: [2560],
-  },
-  [OllamaEmbeddingModel.QWEN3_EMBEDDING_8B]: {
-    provider: EmbeddingModelProvider.OLLAMA,
-    model: OllamaEmbeddingModel.QWEN3_EMBEDDING_8B,
-    contextWindow: 2048,
-    dimensions: [4096],
-  },
-  [OllamaEmbeddingModel.NOMIC_EMBED_TEXT]: {
-    provider: EmbeddingModelProvider.OLLAMA,
-    model: OllamaEmbeddingModel.NOMIC_EMBED_TEXT,
-    contextWindow: 2048,
-    dimensions: [768],
-  },
-  [OllamaEmbeddingModel.MXBAI_EMBED_LARGE]: {
-    provider: EmbeddingModelProvider.OLLAMA,
-    model: OllamaEmbeddingModel.MXBAI_EMBED_LARGE,
-    contextWindow: 512,
-    dimensions: [1024],
-  },
-  [OllamaEmbeddingModel.BGE_M3]: {
-    provider: EmbeddingModelProvider.OLLAMA,
-    model: OllamaEmbeddingModel.BGE_M3,
-    contextWindow: 8192,
-    dimensions: [1024],
-  },
-  [OllamaEmbeddingModel.SNOWFLAKE_ARCTIC_EMBED]: {
-    provider: EmbeddingModelProvider.OLLAMA,
-    model: OllamaEmbeddingModel.SNOWFLAKE_ARCTIC_EMBED,
-    contextWindow: 512,
-    dimensions: [1024],
-  },
-};
+export const OLLAMA_EMBEDDING_MODEL_MAP = embeddingModelInfoMap(Object.values(OllamaEmbeddingModel));
 
 /** Ollama batches many inputs per /api/embed call; cap sub-batch size to bound memory. */
 const OLLAMA_EMBED_BATCH_SIZE = 64;

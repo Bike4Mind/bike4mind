@@ -6,6 +6,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * snapshot id (ChatModels.GPT4_1 = 'gpt-4.1-2025-04-14'), which a plain `.find()` never
  * matches against the bare name.
  */
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+vi.mock('./llm/modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./llm/modelAdmission')>()),
+  loadFreeTierAllowedModels: async () => undefined,
+}));
+
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
 vi.mock('./creditService', async importOriginal => ({
   ...(await importOriginal<typeof import('./creditService')>()),
@@ -19,8 +25,10 @@ let capturedCompleteModel: unknown;
 const { DATED_GPT_4_1 } = vi.hoisted(() => ({
   DATED_GPT_4_1: {
     id: 'gpt-4.1-2025-04-14',
+    type: 'text',
     backend: 'openai',
     max_tokens: 32_768,
+    pricing: { 200_000: { input: 1 / 1_000_000, output: 1 / 1_000_000 } },
   },
 }));
 

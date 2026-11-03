@@ -1,12 +1,16 @@
 import { isPrivateIP } from '@bike4mind/fab-pipeline';
 import {
+  type CloudFrontViewerNetwork,
   getCloudFrontViewerIp,
+  getCloudFrontViewerNetwork,
   getTrustedForwardedForIp,
   type HeaderReader,
   isSelfHost,
   readTrustedProxyHops,
   stripPort,
 } from './trustedClientIpHeaders';
+
+export type { CloudFrontViewerNetwork };
 
 // Extracts the most accurate client IP behind proxies/CDNs.
 //
@@ -64,6 +68,11 @@ const UNTRUSTED_HEADER_ORDER = [
   'fly-client-ip',
 ] as const;
 
+/** The viewer ASN and country CloudFront forwarded for this request; nulls when absent or self-hosted. */
+export function getClientNetwork(req: ClientIpRequest): CloudFrontViewerNetwork {
+  return getCloudFrontViewerNetwork(headerReader(req));
+}
+
 export function getClientIp(req: ClientIpRequest): string {
   const readHeader = headerReader(req);
   if (isSelfHost()) return getTrustedForwardedForIp(readHeader, readTrustedProxyHops()) ?? getSocketIp(req);
@@ -83,12 +92,21 @@ export function getClientIp(req: ClientIpRequest): string {
  * Truncate an IP address for privacy (GDPR Breyer ruling compliance).
  * IPv4: zeros the last octet (e.g., 192.168.1.42 -> 192.168.1.0)
  * IPv6: keeps first 3 groups, zeros the rest (/48 mask)
+ * IPv4-mapped/translated IPv6: truncates the embedded IPv4 (::ffff:192.168.1.42 -> ::ffff:192.168.1.0),
+ * compressed or expanded, for ::ffff:0:0/96 and ::ffff:0:0:0/96
+ * Idempotent: truncating a truncated address returns it unchanged.
  *
- * Applied only to telemetry audit logs. Security/integration audit logs
+ * Applied to telemetry audit logs, and to the signup IP once it passes its retention window
+ * (apps/workers/src/cron/signupIpRetention.ts). Security/integration audit logs
  * retain full IPs under a stronger legitimate interest basis (fraud/intrusion detection).
  */
 export function truncateIp(ip: string): string {
   if (!ip || ip === 'unknown') return ip;
+
+  // IPv4-mapped IPv6 (a dual-stack socket's remoteAddress): truncate the embedded IPv4. The /48
+  // rule below would zero every group and lose the network entirely.
+  const mapped = /^((?:(?:0{1,4}:){5}|::)ffff:|(?:(?:0{1,4}:){4}|::)ffff:0{1,4}:)(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
+  if (mapped) return `${mapped[1]}${truncateIp(mapped[2])}`;
 
   // IPv6: expand compressed notation, keep first 3 groups (/48), zero the rest
   if (ip.includes(':')) {

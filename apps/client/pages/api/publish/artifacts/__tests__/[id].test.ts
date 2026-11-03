@@ -9,7 +9,17 @@ import bcrypt from 'bcryptjs';
  * No real database; the artifact doc is a plain mutable object with save()/toJSON().
  */
 
-const { findOne } = vi.hoisted(() => ({ findOne: vi.fn() }));
+const { findOne, deletePublishThumbnails, assertOutbound } = vi.hoisted(() => ({
+  assertOutbound: vi.fn(async (_user: unknown, _req: unknown) => undefined as void),
+  findOne: vi.fn(),
+  deletePublishThumbnails: vi.fn(async (_publicIds: string[], _logger: unknown) => 0),
+}));
+
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: assertOutbound,
+}));
+vi.mock('@bike4mind/server-utils/utils/publishThumbnails', () => ({ deletePublishThumbnails }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -90,6 +100,7 @@ async function patchGate(allowedDomains: string[], artifact = makeArtifact()) {
 
 beforeEach(() => {
   findOne.mockReset();
+  assertOutbound.mockClear();
 });
 
 /** A public artifact carrying owner/moderation/storage internals. */
@@ -133,7 +144,69 @@ describe('GET public artifact - share-token capability', () => {
     const select = vi.fn();
     await getArtifact({ id: 'someone-else', isAdmin: false }, makePublicArtifactRow(), select);
     expect(select).toHaveBeenCalledOnce();
-    expect(select).toHaveBeenCalledWith('-shareTokens.token');
+    expect(select).toHaveBeenCalledWith('-shareTokens.token -thumbnail');
+  });
+});
+
+describe('owner-only thumbnails on the single-artifact route', () => {
+  const thumbnail = { key: `publish-thumbnails/pub-1/${'a'.repeat(64)}.webp`, versionId: 'a'.repeat(64) };
+
+  beforeEach(() => {
+    deletePublishThumbnails.mockClear();
+  });
+
+  it('projects the stored thumbnail record out of the GET, so not even an admin read carries the key', async () => {
+    const select = vi.fn();
+    await getArtifact({ id: 'admin-1', isAdmin: true }, makePublicArtifactRow(), select);
+    expect(String(select.mock.calls[0][0]).split(' ')).toContain('-thumbnail');
+  });
+
+  it('never echoes the thumbnail record in a PATCH response', async () => {
+    const artifact = makeArtifact();
+    const toJSON = artifact.toJSON.bind(artifact);
+    artifact.toJSON = () => ({ ...toJSON(), thumbnail });
+    findOne.mockResolvedValue(artifact);
+    const { req, res } = createMocks({ method: 'PATCH' });
+    (req as unknown as { query: unknown }).query = { id: 'pub-1' };
+    (req as unknown as { user?: unknown }).user = { id: OWNER };
+    (req as unknown as { body: unknown }).body = { title: 'Renamed' };
+    (req as unknown as { logger: unknown }).logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(JSON.stringify(res._getJSONData())).not.toContain('publish-thumbnails');
+    expect('thumbnail' in res._getJSONData().artifact).toBe(false);
+  });
+
+  async function remove(user: { id: string; isAdmin?: boolean }, artifact: Record<string, unknown> | null) {
+    findOne.mockResolvedValue(artifact);
+    const { req, res } = createMocks({ method: 'DELETE' });
+    const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
+    (req as unknown as { query: unknown }).query = { id: 'pub-1' };
+    (req as unknown as { user?: unknown }).user = user;
+    (req as unknown as { logger: unknown }).logger = logger;
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+    return { res, logger };
+  }
+
+  it('deletes the thumbnail objects after the soft delete', async () => {
+    const order: string[] = [];
+    const softDelete = vi.fn(async () => void order.push('softDelete'));
+    deletePublishThumbnails.mockImplementationOnce(async () => (order.push('thumbnails'), 1));
+    const { res, logger } = await remove({ id: OWNER }, { ...makeArtifact(), softDelete });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(softDelete).toHaveBeenCalledWith(OWNER);
+    expect(deletePublishThumbnails).toHaveBeenCalledWith(['pub-1'], logger);
+    expect(order).toEqual(['softDelete', 'thumbnails']);
+  });
+
+  it('deletes nothing when the caller may not delete the artifact', async () => {
+    const softDelete = vi.fn();
+    const { res } = await remove({ id: 'someone-else' }, { ...makeArtifact(), softDelete });
+    expect(res._getStatusCode()).toBe(403);
+    expect(softDelete).not.toHaveBeenCalled();
+    expect(deletePublishThumbnails).not.toHaveBeenCalled();
   });
 });
 
@@ -638,5 +711,139 @@ describe('PATCH /api/publish/artifacts/[id] - title/description purge the cached
   it('does NOT purge a renamed gated public artifact - it is not cache-eligible', async () => {
     const gated = titled({ accessGate: { kind: 'passphrase', passphraseHash: 'x' } });
     expect(await patchBody({ title: 'New title' }, gated)).not.toHaveBeenCalled();
+  });
+});
+
+describe('PATCH /api/publish/artifacts/[id] - outbound gate on widening exposure', () => {
+  async function patch(
+    body: Record<string, unknown>,
+    artifact = Object.assign(makeArtifact(), { visibility: 'private' })
+  ) {
+    findOne.mockResolvedValue(artifact);
+    const { req, res } = createMocks({ method: 'PATCH' });
+    (req as unknown as { query: unknown }).query = { id: 'pub-1' };
+    (req as unknown as { user?: unknown }).user = { id: OWNER };
+    (req as unknown as { body: unknown }).body = body;
+    (req as unknown as { logger: unknown }).logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+    return { res, artifact };
+  }
+
+  it('rejects making a page public when the gate refuses, without saving', async () => {
+    const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
+    assertOutbound.mockRejectedValueOnce(new ForbiddenError('restricted'));
+    const artifact = Object.assign(makeArtifact(), { visibility: 'private' });
+    await expect(patch({ visibility: 'public' }, artifact)).rejects.toBeInstanceOf(ForbiddenError);
+    expect(artifact.save).not.toHaveBeenCalled();
+  });
+
+  it('does not consult the gate for a title-only edit', async () => {
+    const { res } = await patch({ title: 'Renamed' });
+    expect(res._getStatusCode()).toBe(200);
+    expect(assertOutbound).not.toHaveBeenCalled();
+  });
+
+  const passphraseGated = () =>
+    Object.assign(makeArtifact(), { accessGate: { kind: 'passphrase', passphraseHash: 'x' } as unknown });
+  const domainGated = (allowedDomains: string[]) =>
+    Object.assign(makeArtifact(), { accessGate: { kind: 'domain', allowedDomains } as unknown });
+
+  it.each([
+    [
+      'making a private page public',
+      { visibility: 'public' },
+      () => Object.assign(makeArtifact(), { visibility: 'private' }),
+    ],
+    ['clearing the gate on a public page', { accessGate: null }, passphraseGated],
+    ['turning on search indexing', { discoverable: true }, makeArtifact],
+    [
+      'adding an allowed domain',
+      { accessGate: { kind: 'domain', allowedDomains: ['acme.com', 'other.com'] } },
+      () => domainGated(['acme.com']),
+    ],
+    [
+      'swapping a passphrase for a domain gate',
+      { accessGate: { kind: 'domain', allowedDomains: ['acme.com'] } },
+      passphraseGated,
+    ],
+    [
+      'swapping a domain gate for a passphrase',
+      { accessGate: { kind: 'passphrase', passphrase: 'long-enough-pass' } },
+      () => domainGated(['acme.com']),
+    ],
+    [
+      'clearing the gate on a private page reachable by share link',
+      { accessGate: null },
+      () =>
+        Object.assign(passphraseGated(), {
+          visibility: 'private',
+          shareTokens: [{ token: 'tok', revokedAt: null }],
+        }),
+    ],
+  ])('rejects %s when the gate refuses, without saving', async (_label, body, build) => {
+    const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
+    assertOutbound.mockRejectedValueOnce(new ForbiddenError('restricted'));
+    const artifact = build();
+    await expect(patch(body, artifact)).rejects.toBeInstanceOf(ForbiddenError);
+    expect(artifact.save).not.toHaveBeenCalled();
+  });
+
+  it('rejects adding an embed origin when the gate refuses, without saving', async () => {
+    const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
+    const { validateEmbedOrigins } = await import('@server/services/publish');
+    vi.mocked(validateEmbedOrigins).mockReturnValueOnce({ ok: true, value: ['https://example.com'] });
+    assertOutbound.mockRejectedValueOnce(new ForbiddenError('restricted'));
+    const artifact = makeArtifact();
+    await expect(patch({ embedOrigins: ['https://example.com'] }, artifact)).rejects.toBeInstanceOf(ForbiddenError);
+    expect(artifact.save).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'adding a passphrase to an open public page',
+      { accessGate: { kind: 'passphrase', passphrase: 'long-enough-pass' } },
+      makeArtifact,
+    ],
+    ['making a public page private', { visibility: 'private' }, makeArtifact],
+    [
+      'rotating the passphrase',
+      { accessGate: { kind: 'passphrase', passphrase: 'another-long-pass' } },
+      passphraseGated,
+    ],
+    [
+      'removing an allowed domain',
+      { accessGate: { kind: 'domain', allowedDomains: ['acme.com'] } },
+      () => domainGated(['acme.com', 'other.com']),
+    ],
+    [
+      'turning off search indexing',
+      { discoverable: false },
+      () => Object.assign(makeArtifact(), { discoverable: true }),
+    ],
+    [
+      'taking a gated public page private and clearing the gate',
+      { visibility: 'private', accessGate: null },
+      passphraseGated,
+    ],
+    ['re-sending public on a public page', { visibility: 'public' }, makeArtifact],
+    [
+      're-sending search indexing on a discoverable page',
+      { discoverable: true },
+      () => Object.assign(makeArtifact(), { discoverable: true }),
+    ],
+    [
+      're-sending the same allowed domains',
+      { accessGate: { kind: 'domain', allowedDomains: ['acme.com'] } },
+      () => domainGated(['acme.com']),
+    ],
+    [
+      'removing every embed origin',
+      { embedOrigins: [] },
+      () => Object.assign(makeArtifact(), { embedOrigins: ['https://example.com'] }),
+    ],
+  ])('does not consult the gate for %s', async (_label, body, build) => {
+    const { res } = await patch(body, build());
+    expect(res._getStatusCode()).toBe(200);
+    expect(assertOutbound).not.toHaveBeenCalled();
   });
 });

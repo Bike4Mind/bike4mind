@@ -66,6 +66,8 @@ vi.mock('@bike4mind/database', () => ({
   CounterLog: {},
 }));
 
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
+
 import '@pages/api/admin/user-api-keys/[id]/rate-limit';
 import '@pages/api/admin/user-api-keys/[id]/reset-rate-limit';
 

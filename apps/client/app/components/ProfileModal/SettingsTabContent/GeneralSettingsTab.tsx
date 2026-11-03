@@ -24,8 +24,10 @@ import LanguageSelector from '@client/app/components/LanguageSelector';
 import { useTranslation } from 'react-i18next';
 import VoicePreferenceSection from './VoicePreferenceSection';
 import ActiveSessionsSection from './ActiveSessionsSection';
+import { SupportAccessActivity } from '../SecurityTab/tabs/SupportAccessActivity';
 import ApprovedAppsSection from './ApprovedAppsSection';
 import DocxTemplateSection from './DocxTemplateSection';
+import PromptCacheDefaultCard from './PromptCacheDefaultCard';
 import { DeleteAllKnowledgeFilesConfirm, DeleteAllNotebooksConfirm } from './DeleteAllConfirmModals';
 import WorkspaceVisibilitySection from './WorkspaceVisibilitySection';
 import ExperimentalFeatureToggle from '../ExperimentalFeatureToggle';
@@ -279,6 +281,9 @@ const GeneralSettingsTab = () => {
                 <Typography level="title-md" sx={{ fontSize: '16px', fontWeight: 500 }}>
                   Knowledge Files
                 </Typography>
+                <Typography level="body-xs" data-testid="knowledge-export-helper" sx={{ mt: 0.5 }}>
+                  Export All downloads the text of each file. Images are not included, and long files are shortened.
+                </Typography>
               </Box>
               <Box
                 sx={{
@@ -324,6 +329,7 @@ const GeneralSettingsTab = () => {
         <SectionContainer title="Security">
           <MfaCard />
           <ActiveSessionsSection />
+          <SupportAccessActivity />
           <ApprovedAppsSection />
         </SectionContainer>
       </Box>
@@ -464,6 +470,8 @@ const GeneralSettingsTab = () => {
               />
             </Box>
           </Grid>
+
+          <PromptCacheDefaultCard />
         </Grid>
       </SectionContainer>
 

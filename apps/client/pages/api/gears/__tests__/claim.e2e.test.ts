@@ -55,7 +55,8 @@ afterEach(async () => {
   await mongoose.connection.dropDatabase();
 });
 
-/** A user who owns a project, which unlocks the Projects gear (1000 credits). */
+/** A user who owns a project, which unlocks the Projects gear (1000 credits).
+ *  emailVerified and a past createdAt are set so the trust gate allows the payout. */
 const seedUnlockedUser = async () => {
   const user = await User.create({
     name: 'Claimer',
@@ -63,6 +64,8 @@ const seedUnlockedUser = async () => {
     password: null,
     hasUsablePassword: false,
     currentCredits: 0,
+    emailVerified: true,
+    createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000),
   });
   await Project.create({ name: 'First project', description: 'd', userId: user.id, users: [], fileIds: [] });
   return user;

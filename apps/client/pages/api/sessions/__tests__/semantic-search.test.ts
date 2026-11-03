@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => {} }),
+}));
+
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
 const { mockGetEffectiveLLMApiKeys, mockGetSettingsValue, mockGetProviderFromModel, mockGenerateEmbedding } =
   vi.hoisted(() => ({
@@ -43,6 +47,11 @@ vi.mock('@bike4mind/database', () => ({
   usageEventRepository: {},
   creditTransactionRepository: {},
   userRepository: {},
+  // No samples and no settings rows: the spend cap reads defaults and never refuses here.
+  newAccountSpendCapAdapters: {
+    adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+    personalSpendSince: async () => [],
+  },
 }));
 vi.mock('@server/billing/meterPlatformCompletion', () => ({
   isCreditsEnforced: async () => false,
@@ -71,7 +80,7 @@ vi.mock('@bike4mind/services/llm/SmallLLMService', () => ({
 vi.mock('@bike4mind/services/llm/reranker', () => ({
   ReRankService: class {},
 }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: vi.fn(async () => ({ modelId: 'm', llm: {} })) },
 }));
 

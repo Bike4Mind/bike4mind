@@ -1,6 +1,6 @@
 // Tab identity and visibility rules for the organization detail route.
 
-import { isOrgOwnerOrPlatformAdmin } from '@bike4mind/common';
+import { isOrgOwnerOrCurrentAdmin, isOrgOwnerOrPlatformAdmin, type AdministrableOrg } from '@bike4mind/common';
 import { hasOrgUpdateAccess } from '@client/app/utils/orgAccessGate';
 
 export enum OrganizationTabs {
@@ -13,12 +13,13 @@ export enum OrganizationTabs {
   Integrations = 'integrations',
   GitHub = 'github',
   Webhooks = 'webhooks',
+  Connectors = 'connectors',
   Settings = 'settings',
 }
 
 /**
  * Who may see the org's feedback analysis. Mirrors the server gate the feedback-report routes run
- * (apps/client/server/utils/orgAccess.ts, verifyOrgAccess): a platform admin, the org owner, or a
+ * (packages/server-utils/src/utils/orgAccess.ts, verifyOrgAccess): a platform admin, the org owner, or a
  * manager - NOT every member holding manage permissions, so the tab is never offered to someone the
  * API would answer with a 404. Must stay in sync with that function.
  *
@@ -74,6 +75,16 @@ export const canViewOrgBilling = (
   return currentUser.id === organization.userId;
 };
 
+/**
+ * Who may see the Connectors tab - the org's custom MCP connector policy and kill switch
+ * (`organizations/[id]/custom-mcp/*`, `verifyOrgAccess`). Owner, current manager or platform admin;
+ * must stay in sync with that gate.
+ */
+export const canManageOrgConnectors = (
+  currentUser: { id: string; isAdmin?: boolean | null } | null | undefined,
+  organization: AdministrableOrg | null | undefined
+): boolean => !!currentUser && !!organization && isOrgOwnerOrCurrentAdmin(currentUser, organization);
+
 export interface OrgTabAccess {
   canManageOrg: boolean;
   canViewUsage: boolean;
@@ -81,6 +92,7 @@ export interface OrgTabAccess {
   canManageIntegrations: boolean;
   canManageGroups: boolean;
   canViewBilling: boolean;
+  canManageConnectors: boolean;
 }
 
 /**
@@ -99,6 +111,7 @@ export const resolveAccessibleTab = (selected: OrganizationTabs, access: OrgTabA
   if (!access.canViewUsage && selected === OrganizationTabs.Usage) return OrganizationTabs.Overview;
   if (!access.canViewAnalysis && selected === OrganizationTabs.Analysis) return OrganizationTabs.Overview;
   if (!access.canManageGroups && selected === OrganizationTabs.Groups) return OrganizationTabs.Overview;
+  if (!access.canManageConnectors && selected === OrganizationTabs.Connectors) return OrganizationTabs.Overview;
   // Billing has its own gate rather than riding canManageOrg: every action on it is owner-only.
   if (!access.canViewBilling && selected === OrganizationTabs.Billing) return OrganizationTabs.Overview;
   return selected;

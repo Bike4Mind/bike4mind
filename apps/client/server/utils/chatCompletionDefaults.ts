@@ -1,3 +1,4 @@
+import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import {
   adminSettingsRepository,
@@ -31,6 +32,7 @@ import {
   dataLakeRepository,
   fallbackLakeSettingsRepository,
 } from '@bike4mind/database';
+import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import {
   ChatModels,
@@ -43,7 +45,7 @@ import {
   Permission,
   type ModelInfo,
 } from '@bike4mind/common';
-import { MCPClient } from '@bike4mind/mcp';
+import { MCPClient, assertMcpServerStartable } from '@bike4mind/mcp';
 import { apiKeyService } from '@bike4mind/services';
 import type { IChatCompletionServiceOptions } from '@bike4mind/services/llm';
 import { ApiKeyTable, getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
@@ -51,17 +53,19 @@ import { getSettingsByNames, ITokenizer, TiktokenTokenizer } from '@bike4mind/ut
 import { ILogger, Logger } from '@bike4mind/observability';
 import { accessibleBy } from '@casl/mongoose';
 import { runDecisionTool } from '@server/decisions/runDecisionTool';
-import { logEvent } from '@server/utils/analyticsLog';
-import { recallMementosV2 } from '@server/memory/recallMementosV2';
-import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
-import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
+import { operationalBillingAdapters } from '@server/billing/operationalBilling';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
+import { recallMementosV2 } from '@bike4mind/server-utils/memory/recallMementosV2';
+import { recallLakeMemoryForSession } from '@bike4mind/server-utils/memory/lakeMemoryRecall';
+import { loadSystemPromptById } from '@bike4mind/server-utils/utils/sessionSystemPromptResolver';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { getUserEntitlements } from '@server/entitlements';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { Resource } from 'sst';
-import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
-import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
+import { premiumWorkspaceDeniedTools } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { buildMcpEnvVariables } from '@server/utils/mcpEnv';
 import { LLMEvents, TelemetryEvents } from '@server/utils/eventBus';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
@@ -150,8 +154,10 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
       projects: projectRepository,
       organizations: organizationRepository,
       mcpServers: mcpServerRepository,
+      newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
       creditTransactions: creditTransactionRepository,
       usageEvents: usageEventRepository,
+      operationalBilling: operationalBillingAdapters,
       agents: agentRepository,
       skills: skillRepository,
       prompts: promptRepository,
@@ -207,6 +213,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
     // comp-tag holder already gets here, closing the Q3b asymmetry on the generic surfaces
     // (not just the libonc Tutor). Pure fn ref; per-request resolution is memoized in core.
     getEntitlements: getUserEntitlements,
+    getThinkingVisibility: resolveThinkingVisibility,
     autoNameSession: autoNameSessionAdapter,
     invokeCreateMemento: async (questId, sessionId, userId, prompt, model, flags): Promise<void> => {
       await LLMEvents.CompletionCompleted.publish({
@@ -241,6 +248,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
           const client = new LambdaClient({});
 
           const envVariables = await buildMcpEnvVariables(mcpServer);
+          assertMcpServerStartable(mcpServer.name, envVariables);
           const command = new InvokeCommand({
             FunctionName: Resource.mcpHandler.name,
             Payload: JSON.stringify({
@@ -261,6 +269,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
           const client = new LambdaClient({});
 
           const envVariables = await buildMcpEnvVariables(mcpServer);
+          assertMcpServerStartable(mcpServer.name, envVariables);
           const command = new InvokeCommand({
             FunctionName: Resource.mcpHandler.name,
             Payload: JSON.stringify({

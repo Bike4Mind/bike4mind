@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import type { IUserApiKeyDocument } from '../types/entities/UserApiKeyTypes';
 import { passthroughShape } from './responseShape';
+import { adminApiKeyAccessSchema, adminApiKeyRequestCountsSchema } from './adminUserCredits';
 
 /**
  * Secret fields of an API key, never sent to a client: the legacy bcrypt hash, the SHA-256 digest
@@ -22,6 +23,7 @@ const USER_API_KEY_RESPONSE_FIELDS = {
   revokedAt: true,
   revokedBy: true,
   revokedReason: true,
+  revokedBatchId: true,
   callbackSigningSecretCreatedAt: true,
   rateLimit: true,
   usage: true,
@@ -64,4 +66,7 @@ export type ApiKeyRateLimitUsage = z.infer<typeof apiKeyRateLimitUsageSchema>;
 export const adminUserApiKeysResponseSchema = z.object({
   apiKeys: z.array(userApiKeyResponseSchema),
   liveUsage: z.record(z.string(), apiKeyRateLimitUsageSchema),
+  /** Requests per key from the usage log (90-day TTL), keyed by key id; absent keys made none. */
+  requests: z.record(z.string(), adminApiKeyRequestCountsSchema),
+  access: adminApiKeyAccessSchema,
 });

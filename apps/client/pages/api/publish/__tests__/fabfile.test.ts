@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 
 // fabfile.ts wires an Express-style handler at module load and imports server-only deps; stub them
 // so we can drive the handler (default export) in isolation. @bike4mind/common is NOT mocked - the
@@ -12,13 +16,16 @@ const mocks = vi.hoisted(() => ({
   checkPublishQuota: vi.fn(),
   findOneAndUpdate: vi.fn(),
   download: vi.fn(),
+  refund: vi.fn(() => Promise.resolve()),
+  consumePublishAction: vi.fn(),
 }));
+mocks.consumePublishAction.mockImplementation(() => Promise.resolve({ refund: mocks.refund }));
 
 // baseApi().post(fn) returns fn, so `export default handler` IS the handler function.
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const chain: Record<string, unknown> = {};
-    Object.assign(chain, { use: () => chain, post: (fn: unknown) => fn });
+    Object.assign(chain, { use: () => chain, post: (...fns: unknown[]) => fns[fns.length - 1] });
     return chain;
   },
 }));
@@ -48,6 +55,7 @@ vi.mock('@server/services/publish/restrictDuplicatePublications', () => ({
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ download: mocks.download }),
 }));
+vi.mock('@server/services/publish/publishRateLimit', () => ({ consumePublishAction: mocks.consumePublishAction }));
 
 import handler from '../fabfile';
 
@@ -121,6 +129,18 @@ describe('POST /api/publish/fabfile - body sourcing (#722)', () => {
     expect(snapshottedBody()).toBe('already extracted text');
   });
 
+  it("counts the publish against the caller's daily allowance, by their account age", async () => {
+    mocks.fileLean.mockResolvedValue({ userId: OWNER, moderationStatus: 'clean', mimeType: 'text/plain', text: 'hi' });
+    const createdAt = new Date('2026-10-20T00:00:00.000Z');
+    const req = makeReq();
+
+    const res = await run({ ...req, user: { ...req.user, createdAt } });
+
+    expect(res.statusCode).toBe(200);
+    expect(mocks.consumePublishAction).toHaveBeenCalledTimes(1);
+    expect(mocks.consumePublishAction).toHaveBeenCalledWith({ id: OWNER, isAdmin: false, createdAt });
+  });
+
   it('rejects a non-text (binary) file with no extracted text (415)', async () => {
     mocks.fileLean.mockResolvedValue({
       userId: OWNER,
@@ -134,6 +154,7 @@ describe('POST /api/publish/fabfile - body sourcing (#722)', () => {
     expect(res.statusCode).toBe(415);
     expect(mocks.download).not.toHaveBeenCalled();
     expect(mocks.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(mocks.consumePublishAction).not.toHaveBeenCalled();
   });
 
   it('publishes a binary file using its already-extracted text when present', async () => {
@@ -250,6 +271,8 @@ describe('POST /api/publish/fabfile - re-publish updates the owner record in pla
     const res = await run(makeReq());
     expect(res.statusCode).toBe(409);
     expect(mocks.invalidatePublishCdn).not.toHaveBeenCalled();
+    // Nothing was published, so the counted action is handed back.
+    expect(mocks.refund).toHaveBeenCalledTimes(1);
   });
 
   it('narrows any older duplicate of the same file to the saved record', async () => {

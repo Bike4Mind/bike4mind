@@ -15,7 +15,6 @@ import { CreditHolderType } from '@bike4mind/common';
 import { TransactionLedger } from './components/TransactionLedger';
 import { CreditAdjustmentsLog } from './components/CreditAdjustmentsLog';
 import { UserCreditsManager } from './components/UserCreditsManager';
-import AdminProfileModal from '../AdminProfileModal';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useCreditAnalysisStore, type CreditAnalysisTab } from './store';
 
@@ -102,8 +101,6 @@ export const CreditAnalyticsTab: React.FC = () => {
           <CreditAdjustmentsLog />
         </TabPanel>
       </Tabs>
-
-      <AdminProfileModal />
     </Box>
   );
 };

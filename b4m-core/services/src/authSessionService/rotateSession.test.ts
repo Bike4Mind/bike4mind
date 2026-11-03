@@ -127,6 +127,61 @@ const setupStateful = (initialSecret: string) => {
 };
 
 describe('rotateSession', () => {
+  it('rejects a refresh that crosses the hard deadline during user lookup', async () => {
+    const { authSessions, users, db, signAccessToken } = setup();
+    const secret = generateRefreshSecret();
+    const now = Date.now();
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    authSessions.findBySid.mockResolvedValue(
+      makeSession({
+        refreshTokenHash: hashRefreshSecret(secret),
+        impersonatedBy: 'admin',
+        impersonationExpiresAt: new Date(now + 1000),
+      })
+    );
+    users.findById.mockImplementation(async () => {
+      vi.setSystemTime(now + 1001);
+      return { id: 'user-1' } as never;
+    });
+    try {
+      await expect(rotateSession(buildRefreshToken(SID, secret), { db, signAccessToken })).rejects.toThrow(
+        UnauthorizedError
+      );
+      expect(signAccessToken).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('rejects impersonation after its fixed deadline even when refresh expiry is still live', async () => {
+    const { authSessions, db, signAccessToken } = setup();
+    authSessions.findBySid.mockResolvedValue(makeSession({ impersonatedBy: 'admin', impersonationExpiresAt: past() }));
+    await expect(
+      rotateSession(buildRefreshToken(SID, generateRefreshSecret()), { db, signAccessToken })
+    ).rejects.toThrow(UnauthorizedError);
+    expect(signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('never slides impersonation lifetime on refresh', async () => {
+    const { authSessions, db, signAccessToken } = setup();
+    const secret = generateRefreshSecret();
+    const expiresAt = future();
+    authSessions.findBySid.mockResolvedValue(
+      makeSession({
+        refreshTokenHash: hashRefreshSecret(secret),
+        impersonatedBy: 'admin',
+        impersonationExpiresAt: expiresAt,
+        expiresAt,
+      })
+    );
+    await rotateSession(buildRefreshToken(SID, secret), { db, signAccessToken });
+    expect(authSessions.rotateHash).toHaveBeenCalledWith(SID, expect.objectContaining({ newExpiresAt: expiresAt }));
+    expect(signAccessToken).toHaveBeenCalledWith('user-1', 7, {
+      sid: SID,
+      impersonatedBy: 'admin',
+      impersonationExpiresAt: expiresAt.getTime(),
+    });
+  });
   it('rotates on a current-hash match and returns a fresh opaque token + access token', async () => {
     const { authSessions, signAccessToken, db } = setup();
     const secret = generateRefreshSecret();

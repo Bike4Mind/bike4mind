@@ -210,6 +210,354 @@
         }
       }
     },
+    "/v1/flux-2-flex": {
+      "post": {
+        "tags": [
+          "Models"
+        ],
+        "summary": "Generate or edit an image with FLUX.2 [flex]",
+        "operationId": "generate_flux_2_flex_v1_flux_2_flex_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Flux2FlexInputs"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AsyncResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AsyncWebhookResponse"
+                    }
+                  ],
+                  "title": "Response Generate Flux 2 Flex V1 Flux 2 Flex Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-mint": {
+          "metadata": {
+            "sidebarTitle": "FLUX.2 [flex]"
+          },
+          "content": "Best for text and typography in the image. For most use cases, start with FLUX.2 [pro]. See [which model to use](/flux_2/flux2_overview#which-model-to-choose)."
+        }
+      }
+    },
+    "/v1/flux-2-klein-4b": {
+      "post": {
+        "tags": [
+          "Models"
+        ],
+        "summary": "Generate or edit an image with FLUX.2 [klein] 4B",
+        "operationId": "generate_flux_2_klein_4b_v1_flux_2_klein_4b_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Flux2KleinInputs"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AsyncResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AsyncWebhookResponse"
+                    }
+                  ],
+                  "title": "Response Generate Flux 2 Klein 4B V1 Flux 2 Klein 4B Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-mint": {
+          "metadata": {
+            "sidebarTitle": "FLUX.2 [klein] 4B"
+          },
+          "content": "The fastest and most affordable model, with open weights that run on consumer GPUs. 9B trades some speed for higher quality. See [which model to use](/flux_2/flux2_overview#which-model-to-choose)."
+        }
+      }
+    },
+    "/v1/flux-2-klein-9b": {
+      "post": {
+        "tags": [
+          "Models"
+        ],
+        "summary": "Generate or edit an image with FLUX.2 [klein] 9B",
+        "operationId": "generate_flux_2_klein_9b_v1_flux_2_klein_9b_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Flux2KleinInputs"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AsyncResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AsyncWebhookResponse"
+                    }
+                  ],
+                  "title": "Response Generate Flux 2 Klein 9B V1 Flux 2 Klein 9B Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-mint": {
+          "metadata": {
+            "sidebarTitle": "FLUX.2 [klein] 9B"
+          },
+          "content": "Fastest and most affordable, with open weights. 9B balances quality and speed; 4B is the fastest. See [which model to use](/flux_2/flux2_overview#which-model-to-choose)."
+        }
+      }
+    },
+    "/v1/flux-2-klein-9b-preview": {
+      "post": {
+        "tags": [
+          "Models"
+        ],
+        "summary": "Generate or edit an image with FLUX.2 [klein] 9B (preview)",
+        "operationId": "generate_flux_2_klein_9b_kv_v1_flux_2_klein_9b_preview_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Flux2KleinInputs"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AsyncResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AsyncWebhookResponse"
+                    }
+                  ],
+                  "title": "Response Generate Flux 2 Klein 9B Kv V1 Flux 2 Klein 9B Preview Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-mint": {
+          "metadata": {
+            "sidebarTitle": "FLUX.2 [klein] 9B (preview)"
+          },
+          "content": "Preview endpoint for FLUX.2 [klein] 9B. For stable production use, start with FLUX.2 [klein] 9B. See [which model to use](/flux_2/flux2_overview#which-model-to-choose)."
+        }
+      }
+    },
+    "/v1/flux-2-max": {
+      "post": {
+        "tags": [
+          "Models"
+        ],
+        "summary": "Generate or edit an image with FLUX.2 [max]",
+        "operationId": "generate_flux_2_max_v1_flux_2_max_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Flux2Inputs"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AsyncResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AsyncWebhookResponse"
+                    }
+                  ],
+                  "title": "Response Generate Flux 2 Max V1 Flux 2 Max Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-mint": {
+          "metadata": {
+            "sidebarTitle": "FLUX.2 [max]"
+          },
+          "content": "Highest quality, for the hardest edits and maximum prompt following. For most use cases, start with FLUX.2 [pro]. See [which model to use](/flux_2/flux2_overview#which-model-to-choose)."
+        }
+      }
+    },
+    "/v1/flux-2-pro-preview": {
+      "post": {
+        "tags": [
+          "Models"
+        ],
+        "summary": "Generate or edit an image with FLUX.2 [pro] (preview)",
+        "operationId": "generate_flux_2_pro_preview_v1_flux_2_pro_preview_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Flux2Inputs"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AsyncResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AsyncWebhookResponse"
+                    }
+                  ],
+                  "title": "Response Generate Flux 2 Pro Preview V1 Flux 2 Pro Preview Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-mint": {
+          "metadata": {
+            "sidebarTitle": "FLUX.2 [pro] (preview)"
+          },
+          "content": "Preview endpoint for FLUX.2 [pro]. For stable production use, start with FLUX.2 [pro]. See [which model to use](/flux_2/flux2_overview#which-model-to-choose)."
+        }
+      }
+    },
     "/v1/flux-dev": {
       "post": {
         "tags": [
@@ -492,7 +840,7 @@
           },
           "safety_tolerance": {
             "type": "integer",
-            "maximum": 5.0,
+            "maximum": 7.0,
             "minimum": 0.0,
             "title": "Safety Tolerance",
             "default": 2,
@@ -683,7 +1031,7 @@
           },
           "safety_tolerance": {
             "type": "integer",
-            "maximum": 5.0,
+            "maximum": 7.0,
             "minimum": 0.0,
             "title": "Safety Tolerance",
             "default": 2
@@ -760,7 +1108,7 @@
           },
           "safety_tolerance": {
             "type": "integer",
-            "maximum": 5.0,
+            "maximum": 7.0,
             "minimum": 0.0,
             "title": "Safety Tolerance",
             "default": 2
@@ -1286,6 +1634,409 @@
         },
         "type": "object",
         "title": "FluxUltraInput"
+      },
+      "Flux2KleinInputs": {
+        "properties": {
+          "user": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[^\\x00]*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User"
+          },
+          "prompt": {
+            "type": "string",
+            "title": "Prompt",
+            "example": "ein fantastisches bild"
+          },
+          "input_image": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Image"
+          },
+          "input_image_2": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Image 2"
+          },
+          "input_image_3": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Image 3"
+          },
+          "input_image_4": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Image 4"
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed",
+            "example": 42
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 64.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width",
+            "default": 0
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 64.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height",
+            "default": 0
+          },
+          "safety_tolerance": {
+            "type": "integer",
+            "maximum": 7.0,
+            "minimum": 0.0,
+            "title": "Safety Tolerance",
+            "default": 2
+          },
+          "output_format": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OutputFormat"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "jpeg"
+          },
+          "webhook_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2083,
+                "minLength": 1,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Url"
+          },
+          "webhook_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Secret"
+          }
+        },
+        "type": "object",
+        "required": [
+          "prompt"
+        ],
+        "title": "Flux2KleinInputs"
+      },
+      "Flux2FlexInputs": {
+        "properties": {
+          "user": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[^\\x00]*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User"
+          },
+          "prompt": {
+            "type": "string",
+            "title": "Prompt",
+            "example": "ein fantastisches bild"
+          },
+          "prompt_upsampling": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Upsampling",
+            "default": true
+          },
+          "input_image": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Image"
+          },
+          "input_image_2": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Image 2"
+          },
+          "input_image_3": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Image 3"
+          },
+          "input_image_4": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Image 4"
+          },
+          "input_image_5": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Image 5"
+          },
+          "input_image_6": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Image 6"
+          },
+          "input_image_7": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Image 7"
+          },
+          "input_image_8": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Image 8"
+          },
+          "input_image_blob_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Image Blob Path"
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed",
+            "example": 42
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 64.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width",
+            "default": 0
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 64.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height",
+            "default": 0
+          },
+          "guidance": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 10.0,
+                "minimum": 1.5
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Guidance",
+            "default": 5.0,
+            "example": 5.0
+          },
+          "steps": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 50.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Steps",
+            "default": 50,
+            "example": 50
+          },
+          "safety_tolerance": {
+            "type": "integer",
+            "maximum": 7.0,
+            "minimum": 0.0,
+            "title": "Safety Tolerance",
+            "default": 2
+          },
+          "output_format": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OutputFormat"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "jpeg"
+          },
+          "webhook_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2083,
+                "minLength": 1,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Url"
+          },
+          "webhook_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Secret"
+          }
+        },
+        "type": "object",
+        "required": [
+          "prompt"
+        ],
+        "title": "Flux2FlexInputs"
       }
     }
   }

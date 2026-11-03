@@ -1,16 +1,19 @@
-import { ModelBackend, type ModelRecord } from '@bike4mind/common';
+import { DISCOVERY_VERDICT_PREFIX, ModelBackend, type ModelRecord } from '@bike4mind/common';
 import { DISPATCHABLE_ADAPTER_FAMILIES } from '@bike4mind/llm-adapters';
 import type { DiscoveryAutoEnablePolicy, DiscoveryCredentials, PromotionBlocker } from './types';
 
-/** Set on a record discovery will not promote, so pickers stay closed until it can. */
-export const AWAITING_PRICE_REASON = 'discovered, awaiting price';
+/**
+ * Set on a record discovery will not promote, so pickers stay closed until it can. Every one is
+ * worded off DISCOVERY_VERDICT_PREFIX (shared with the catalog merge via @bike4mind/common) so the
+ * read path can recognise a disable discovery invented without parsing this module.
+ */
+export const AWAITING_PRICE_REASON = `${DISCOVERY_VERDICT_PREFIX}awaiting price`;
 /** An aggregator quoted a price but it is not corroborated: a lone quote, or quotes that disagree. */
-export const UNCORROBORATED_PRICE_REASON = 'discovered, awaiting price (aggregator quote not corroborated)';
+export const UNCORROBORATED_PRICE_REASON = `${DISCOVERY_VERDICT_PREFIX}awaiting price (aggregator quote not corroborated)`;
 /** This build ships a price for the model, but a per-image or per-minute one, which is not a trusted per-token price. */
-export const PRICED_IN_BUILD_REASON =
-  'discovered, priced in this build per image or minute, no trusted per-token price';
-export const AWAITING_APPROVAL_REASON = 'discovered, awaiting admin approval';
-export const NOT_INVOCABLE_REASON = 'discovered, not invocable by this build';
+export const PRICED_IN_BUILD_REASON = `${DISCOVERY_VERDICT_PREFIX}priced in this build per image or minute, no trusted per-token price`;
+export const AWAITING_APPROVAL_REASON = `${DISCOVERY_VERDICT_PREFIX}awaiting admin approval`;
+export const NOT_INVOCABLE_REASON = `${DISCOVERY_VERDICT_PREFIX}not invocable by this build`;
 
 /**
  * Which backends a deployment credential unlocks. Bedrock and AWS are IAM-only,
@@ -34,6 +37,7 @@ export const CREDENTIAL_OF_BACKEND: Readonly<Record<ModelBackend, (creds: Discov
   [ModelBackend.BFL]: creds => creds.bfl !== null,
   [ModelBackend.VoyageAI]: creds => creds.voyageai !== null,
   [ModelBackend.Ollama]: creds => creds.ollama !== null,
+  [ModelBackend.OpenAICompatible]: () => false,
   [ModelBackend.LocalImage]: creds => creds.imageGen !== null,
   [ModelBackend.Bedrock]: creds => creds.bedrock,
   [ModelBackend.AWS]: creds => creds.awsIam,
@@ -152,5 +156,5 @@ function reasonFor(blockedBy: readonly PromotionBlocker[], awaitingPrice: Awaiti
     if (awaitingPrice === 'build-literal') return PRICED_IN_BUILD_REASON;
     return awaitingPrice === 'aggregator-quote' ? UNCORROBORATED_PRICE_REASON : AWAITING_PRICE_REASON;
   }
-  return `discovered, ${blockedBy.join(', ')}`;
+  return `${DISCOVERY_VERDICT_PREFIX}${blockedBy.join(', ')}`;
 }

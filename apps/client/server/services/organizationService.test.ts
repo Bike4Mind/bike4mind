@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { organizationRepository, inviteRepository } from '@bike4mind/database';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import {
   validateSeatChange,
   setSeats,
@@ -8,7 +8,7 @@ import {
   resolveSubscriptionSource,
   reconcileOrgSeatsFromSubscription,
 } from './organizationService';
-import { SubscriptionSource } from '@client/lib/subscriptions/types';
+import { SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { ORGANIZATION_SUBSCRIPTION_MAX_SEATS } from '@bike4mind/server-utils/lib/subscriptions/constants';
 
 // Vitest hoists vi.mock() calls above imports, so the mocked modules win
@@ -35,7 +35,7 @@ const mockGetTeamPlanSettings = vi.hoisted(() =>
 );
 vi.mock('@bike4mind/server-utils/services/teamPlanSettings', () => ({ getTeamPlanSettings: mockGetTeamPlanSettings }));
 
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     findActiveSubscriptionsByOwner: vi.fn(),
     updateByStripeSubscriptionId: vi.fn(),

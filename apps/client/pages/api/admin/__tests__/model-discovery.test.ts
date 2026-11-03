@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
@@ -52,12 +53,15 @@ vi.mock('@aws-sdk/client-lambda', () => ({
   }),
 }));
 vi.mock('sst', () => ({ Resource: resource }));
-vi.mock('@server/modelDiscovery/scheduledRun', () => ({ runScheduledDiscovery }));
+vi.mock('@bike4mind/server-utils/modelDiscovery/scheduledRun', () => ({ runScheduledDiscovery }));
 // The real module pulls the whole discovery source registry in; only its gate matters here.
 vi.mock('@server/modelDiscovery/startupLeg', () => ({
   DISCOVERY_DRIVER_ENV: 'B4M_DISCOVERY_DRIVER',
   isDiscoveryDriver: () => process.env.B4M_DISCOVERY_DRIVER === 'true',
 }));
+
+const mockAudit = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
 
 import handler from '../model-discovery';
 
@@ -448,5 +452,36 @@ describe('/api/admin/model-discovery', () => {
     expect(res._getStatusCode()).toBe(503);
     expect(res._getJSONData().message).toMatch(/not linked/);
     expect(lambdaSend).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/admin/model-discovery admin audit', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resource.lambdaFunctionNames = { modelDiscovery: 'dev-model-discovery-fn' };
+    delete process.env.B4M_SELF_HOST;
+    process.env.B4M_DISCOVERY_DRIVER = 'true';
+    getSettingsValue.mockImplementation(async () => 'manual');
+  });
+
+  it('records a triggered run after dispatch', async () => {
+    const { run } = call({ method: 'POST' });
+    await run();
+
+    expect(mockAudit).toHaveBeenCalledTimes(1);
+    expect(mockAudit.mock.calls[0][1]).toMatchObject({
+      action: 'settings.model_discovery.triggered',
+      target: { kind: 'system', id: 'model-discovery' },
+      details: { dispatched: 'lambda' },
+    });
+    expect(lambdaSend.mock.invocationCallOrder[0]).toBeLessThan(mockAudit.mock.invocationCallOrder[0]);
+  });
+
+  it('does not audit a run that was refused', async () => {
+    getSettingsValue.mockImplementation(async (key: string) => (key === 'enableModelDiscovery' ? false : 'report'));
+    const { run } = call({ method: 'POST' });
+    await run();
+
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 });

@@ -75,7 +75,7 @@ Copy `images.example.yaml` outside the checkout and replace all registry placeho
 
    The MinIO API forward matches `config.S3_PRESIGN_ENDPOINT` for QuestMaster ZIP downloads. Backend storage traffic keeps the private service endpoint. For remote browsers, set this value to a trusted HTTPS S3 API origin serving the same buckets; preserve the signed host, path and query through any proxy.
 
-   Open `http://localhost:3000`. Read test email by forwarding deployment/b4m-mail port 8025. Mailpit's UI port is intentionally absent from its Service.
+   Open `http://localhost:3000`. Read test email by forwarding deployment/b4m-mail port 8025. Mailpit's UI port is intentionally absent from its Service. The gateway's management API has its own internal Service (`b4m-ws-management`, port 3002) that only the application pods call; do not port-forward or expose it.
 
 ## Configuration and mixed providers
 
@@ -91,6 +91,7 @@ For agent execution, set `agentExecutor.enabled: true`, supply the matching sour
 
 - Record the exact source/image references and `helm get values b4m -n bike4mind-eval` before upgrading. Never include secret values in receipts.
 - Upgrade with the same release/namespace and reviewed values. Local mode now ignores a `MONGODB_URI` left in the runtime Secret: an install that used that key to reach an external database must set `externalMongo.enabled: true` (with `config.MONGODB_URI` unset) to keep using it. PVCs retain MongoDB, object and queue data. App deployments use `Recreate`; transient interruption is expected. Changing Secret contents does not restart pods automatically. After a reviewed Secret update, bump `initializationRevision` and run the same upgrade command.
+- The gateway's management endpoint is `<release>-ws-management:3002`. Remove any `config.WEBSOCKET_MANAGEMENT_ENDPOINT` override that points at `<release>-ws:3001` before upgrading, and keep `images.ws` at the same revision as the other images.
 - An upgrade to a release that requires `MEMORY_KEY_SECRET` fails with `CreateContainerConfigError` if the existing runtime Secret has no such key. Add one to the Secret (a new, persistent value; never a value changed on every deploy) before running the upgrade.
 - For a restart proof, record a signed-in user's ID, recreate Mongo and app pods, wait for PRIMARY/readiness and sign in again. Check unchanged PVC identities and the same user. This proves persistence for that case, not full restore or host-loss recovery.
 - Inspect `kubectl logs -n bike4mind-eval pod/<mongo-pod> -c wait-member-dns` for DNS guard failures. Confirm the advertised member DNS resolves only to its current IP. An existing replica-set configuration mismatch fails closed; investigate it rather than deleting database storage or silently reconfiguring it.

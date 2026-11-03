@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApprovalGate, patternMatches } from './ApprovalGate';
 import { commandTokens } from './bashArity';
+import { scanShell } from './shellScan';
 import type { ChatApprovalAnswer } from '@shared/chat';
 import type { ApprovalAlways } from './types';
 
@@ -53,6 +54,23 @@ describe('ApprovalGate', () => {
 
     expect(gate.isStanding('session-a', 'bash:rm')).toEqual({});
     expect(gate.isStanding('session-b', 'bash:rm')).toBeNull();
+  });
+
+  it('reports an "always" it did not keep as "once", so callers never record it as standing', async () => {
+    const gate = new ApprovalGate();
+    for (const options of [{ remember: false }, { rememberable: ['run'] }]) {
+      let approvalId = '';
+      const answer = gate.request(
+        'session-a',
+        'bash:rm',
+        new AbortController().signal,
+        id => (approvalId = id),
+        options
+      );
+      gate.resolve(approvalId, { decision: 'always', optionId: 'redirect' });
+      await expect(answer).resolves.toMatchObject({ decision: 'once' });
+    }
+    expect(gate.isStanding('session-a', 'bash:rm')).toBeNull();
   });
 
   describe('a card waits for an answer', () => {
@@ -153,6 +171,42 @@ describe('ApprovalGate', () => {
     expect(gate.pendingApprovals).toBeUndefined();
   });
 
+  it('revokes a standing approval immediately without affecting another session', async () => {
+    const gate = new ApprovalGate();
+    const first = ask(gate, 'session-a');
+    gate.resolve(first.approvalId(), { decision: 'always' });
+    await first.answer;
+    expect(gate.revoke('session-a', 'bash:rm')).toBe(true);
+    expect(gate.revoke('session-a', 'bash:rm')).toBe(false);
+    expect(gate.revoke('missing-session', 'bash:rm')).toBe(false);
+    expect(gate.isStanding('session-a', 'bash:rm')).toBeNull();
+    expect(gate.isStanding('session-b', 'bash:rm')).toBeNull();
+  });
+
+  it('reports removal of option-specific approvals and leaves unrelated keys intact', async () => {
+    const gate = new ApprovalGate();
+    const controller = new AbortController();
+    for (const [key, optionId] of [
+      ['browser-script:https://example.com', 'signed-in'],
+      ['unrelated', 'run'],
+    ]) {
+      await gate.request(
+        'session-a',
+        key,
+        controller.signal,
+        id => {
+          gate.resolve(id, { decision: 'always', optionId });
+        },
+        { rememberable: [optionId] }
+      );
+    }
+    expect(gate.isStanding('session-a', 'browser-script:https://example.com', ['signed-in'])).not.toBeNull();
+    expect(gate.revoke('session-a', 'browser-script:https://example.com')).toBe(true);
+    expect(gate.isStanding('session-a', 'browser-script:https://example.com', ['signed-in'])).toBeNull();
+    expect(gate.isStanding('session-a', 'unrelated', ['run'])).not.toBeNull();
+    expect(gate.revoke('session-a', 'browser-script:https://example.com')).toBe(false);
+  });
+
   describe('always allow by prefix', () => {
     const always = (patterns: string[], texts: string[], directories: string[] = []): ApprovalAlways => ({
       namespace: 'bash_execute',
@@ -160,10 +214,13 @@ describe('ApprovalGate', () => {
       directories,
     });
 
-    async function allow(gate: ApprovalGate, remembered: ApprovalAlways) {
+    async function allow(gate: ApprovalGate, remembered: ApprovalAlways, tainted = false) {
       const controller = new AbortController();
       let approvalId = '';
-      const answer = gate.request('s', 'key', controller.signal, id => (approvalId = id), { always: remembered });
+      const answer = gate.request('s', 'key', controller.signal, id => (approvalId = id), {
+        always: remembered,
+        tainted,
+      });
       gate.resolve(approvalId, { decision: 'always' });
       await answer;
     }
@@ -212,6 +269,82 @@ describe('ApprovalGate', () => {
       ).toBe(false);
     });
 
+    it('covers a tainted reply only with prefixes answered over taint', async () => {
+      const gate = new ApprovalGate();
+      await allow(gate, always(['git status *'], ['git status']));
+      const later = always(['git status *'], ['git status --short']);
+      expect(gate.coversCommands('s', later)).toBe(true);
+      expect(gate.coversCommands('s', later, true)).toBe(false);
+
+      await allow(gate, always(['git diff *', 'git status *'], ['git diff', 'git status']), true);
+      expect(gate.coversCommands('s', later, true)).toBe(true);
+      expect(gate.coversCommands('s', always(['git diff *'], ['git diff --stat']), true)).toBe(true);
+    });
+
+    it('never carries a one-word pattern over taint', async () => {
+      const gate = new ApprovalGate();
+      await allow(gate, always(['node *'], ['node a.js']), true);
+      expect(gate.coversCommands('s', always(['node *'], ['node b.js']), true)).toBe(false);
+      expect(gate.coversCommands('s', always(['node *'], ['node b.js']))).toBe(true);
+    });
+
+    const scanned = async (command: string): Promise<ApprovalAlways> => {
+      const result = await scanShell(command, process.cwd(), [process.cwd()]);
+      if (!result) throw new Error('command did not parse');
+      return {
+        namespace: 'bash_execute',
+        commands: result.commands.map(({ always: pattern, ...entry }) => ({ ...entry, pattern })),
+        directories: result.directories,
+      };
+    };
+    it.each([
+      ['pnpm exec vitest run a.test.ts', 'pnpm exec vitest run b.test.ts'],
+      ['pnpm test a', 'pnpm test b'],
+      ['make test -j1', 'make test -j2'],
+      ['pnpm run node a', 'pnpm run node b'],
+      ['bun x vitest run a.test.ts', 'bun x vitest run b.test.ts'],
+    ])('carries the bounded prefix from %s over taint', async (first, later) => {
+      const gate = new ApprovalGate();
+      await allow(gate, await scanned(first), true);
+      expect(gate.coversCommands('s', await scanned(later), true)).toBe(true);
+    });
+
+    it.each([
+      ['pnpm exec -- vitest run', 'pnpm exec -- node -e "process.exit(1)"'],
+      ['npm x vitest run', 'npm x some-other-package'],
+      ['yarn exec vitest run', 'yarn exec node x.js'],
+      ['pnpm exec node a.js', 'pnpm exec node b.js'],
+      ['pnpm exec "node" a.js', 'pnpm exec "node" b.js'],
+      ['pnpm exec /usr/bin/node a.js', 'pnpm exec /usr/bin/node b.js'],
+      ['pnpm node a.js', 'pnpm node b.js'],
+      ['pnpm exec tsx a.ts', 'pnpm exec tsx -e "process.exit(1)"'],
+      ['npm exec ts-node a.ts', 'npm exec ts-node -e "process.exit(1)"'],
+      ['bun x tsx a.ts', 'bun x tsx -e "process.exit(1)"'],
+      ['pnpm tsx a.ts', 'pnpm tsx -e "process.exit(1)"'],
+      ['pnpm exec pypy3 a.py', 'pnpm exec pypy3 b.py'],
+      ['deno run a.js', 'deno run b.js'],
+      ['go run a.go', 'go run b.go'],
+      ['poetry run pytest', 'poetry run python x.py'],
+      ['docker exec container echo ok', 'docker exec container node x.js'],
+    ])('does not carry the unbounded runner prefix from %s over taint', async (first, later) => {
+      const gate = new ApprovalGate();
+      await allow(gate, await scanned(first), true);
+      const next = await scanned(later);
+      expect(gate.coversCommands('s', next, true)).toBe(false);
+    });
+
+    it('never covers an opaque command over taint, whatever was answered', async () => {
+      const gate = new ApprovalGate();
+      await allow(gate, always(['pnpm exec node *'], ['pnpm exec node -e x']), true);
+      const opaque: ApprovalAlways = {
+        namespace: 'bash_execute',
+        commands: [{ pattern: 'pnpm exec node *', text: 'pnpm exec node -e y', coverable: true, opaque: 'node -e' }],
+        directories: [],
+      };
+      expect(gate.coversCommands('s', opaque)).toBe(true);
+      expect(gate.coversCommands('s', opaque, true)).toBe(false);
+    });
+
     it('keeps the two shell tools apart', async () => {
       const gate = new ApprovalGate();
       await allow(gate, always(['npm run dev *'], ['npm run dev']));
@@ -230,6 +363,45 @@ describe('ApprovalGate', () => {
       await allow(gate, always(['ls *'], ['ls']));
       gate.forgetSession('s');
       expect(gate.coversCommands('s', always(['ls *'], ['ls']))).toBe(false);
+    });
+
+    it('drops shell prefix coverage when its standing grant is revoked', async () => {
+      const gate = new ApprovalGate();
+      const remembered = always(['git status *'], ['git status']);
+      await allow(gate, remembered);
+      expect(gate.coversCommands('s', remembered)).toBe(true);
+      gate.revoke('s', 'key');
+      expect(gate.coversCommands('s', remembered)).toBe(false);
+    });
+
+    it('keeps unrelated shell coverage when another grant is revoked', async () => {
+      const gate = new ApprovalGate();
+      const remembered = always(['git status *'], ['git status']);
+      await allow(gate, remembered);
+      gate.revoke('s', 'browser-open:https://example.com');
+      expect(gate.coversCommands('s', remembered)).toBe(true);
+    });
+
+    it('revokes tainted coverage without removing another exact grants normal coverage', async () => {
+      const gate = new ApprovalGate();
+      const remembered = always(['git status *'], ['git status'], ['/tmp/tainted']);
+      await allow(gate, remembered, true);
+      await gate.request(
+        's',
+        'other-key',
+        new AbortController().signal,
+        id => {
+          gate.resolve(id, { decision: 'always' });
+        },
+        { always: always(['git status *'], ['git status'], ['/tmp/normal']) }
+      );
+      expect(gate.coversCommands('s', remembered, true)).toBe(true);
+
+      gate.revoke('s', 'key');
+
+      expect(gate.coversCommands('s', remembered)).toBe(true);
+      expect(gate.coversCommands('s', remembered, true)).toBe(false);
+      expect(gate.uncoveredDirectories('s', ['/tmp/tainted', '/tmp/normal'])).toEqual(['/tmp/tainted']);
     });
   });
 

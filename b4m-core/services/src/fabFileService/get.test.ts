@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import mongoose from 'mongoose';
 import { generateSignedUrl, type GetFabFileAdapter } from './get';
 import type { IFabFileDocument } from '@bike4mind/common';
 
@@ -28,6 +29,41 @@ describe('generateSignedUrl - curator ruling boundary', () => {
   it('strips it on the not-yet-serveable early return too', async () => {
     const result = await generateSignedUrl(fabFile({ moderationStatus: 'pending' }), adapters());
     expect(result.supersededInLakes).toBeUndefined();
+  });
+});
+
+describe('generateSignedUrl - hydrated Mongoose document', () => {
+  // findAllAccessibleByIds (byIds, list) hands over hydrated docs, whose fields live on the
+  // prototype: a spread copies only _doc/$__, so the response lost id and moderationStatus.
+  const schema = new mongoose.Schema(
+    { fileName: String, mimeType: String, filePath: String, moderationStatus: String },
+    { toJSON: { virtuals: true, transform: (_doc, ret) => void (ret.id = ret._id.toString()) } }
+  );
+  const Model = mongoose.models.GetFabFileHydratedTest || mongoose.model('GetFabFileHydratedTest', schema);
+  const hydrated = (moderationStatus: string) =>
+    new Model({
+      fileName: 'paste.png',
+      mimeType: 'image/png',
+      filePath: 'p.png',
+      moderationStatus,
+    }) as unknown as IFabFileDocument;
+
+  it('returns the fields top-level, without Mongoose internals', async () => {
+    const doc = hydrated('clean');
+    const adapter = adapters();
+    vi.mocked(adapter.storage.generateSignedUrl).mockResolvedValue('https://signed.example.invalid/p.png');
+    adapter.db.fabFiles.update = vi.fn();
+    const result = await generateSignedUrl(doc, adapter);
+    expect(result).toMatchObject({ id: doc.id, moderationStatus: 'clean', fileName: 'paste.png' });
+    expect(result.fileUrl).toBe('https://signed.example.invalid/p.png');
+    expect(result).not.toHaveProperty('_doc');
+    expect(result).not.toHaveProperty('$__');
+  });
+
+  it('keeps a pending image recognisable as pending', async () => {
+    const result = await generateSignedUrl(hydrated('pending'), adapters());
+    expect(result).toMatchObject({ moderationStatus: 'pending', fileUrl: undefined });
+    expect(result).not.toHaveProperty('_doc');
   });
 });
 
@@ -65,7 +101,7 @@ describe('generateSignedUrl - request-local signing', () => {
     const serverAdapter = adapters();
     const server = await generateSignedUrl(original, serverAdapter);
     expect(server.fileUrl).toBe(privateUrl);
-    expect(fetchMock).toHaveBeenCalledWith(privateUrl, { method: 'GET' });
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(serverAdapter.storage.generateSignedUrl).not.toHaveBeenCalled();
   });
 
@@ -96,5 +132,74 @@ describe('generateSignedUrl - request-local signing', () => {
     expect(held.fileUrl).toBeUndefined();
     expect(browser.storage.generateSignedUrl).not.toHaveBeenCalled();
     expect(browser.db.fabFiles.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('generateSignedUrl - cached URL reuse', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const cachedUrl = 'https://cached.example.invalid/file';
+  const freshUrl = 'https://fresh.example.invalid/file';
+  const minutesFromNow = (minutes: number) => new Date(Date.now() + minutes * 60 * 1000);
+  const signingAdapter = () => {
+    const adapter = adapters();
+    adapter.db.fabFiles.update = vi.fn();
+    vi.mocked(adapter.storage.generateSignedUrl).mockResolvedValue(freshUrl);
+    return adapter;
+  };
+
+  // 6 min here and 4 min below sit either side of the 5-minute refresh margin, pinning it.
+  it('reuses an unexpired cached URL without fetching the object', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const adapter = signingAdapter();
+    const result = await generateSignedUrl(
+      fabFile({ filePath: 'owned/file.txt', fileUrl: cachedUrl, fileUrlExpireAt: minutesFromNow(6) }),
+      adapter
+    );
+    expect(result.fileUrl).toBe(cachedUrl);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(adapter.storage.generateSignedUrl).not.toHaveBeenCalled();
+    expect(adapter.db.fabFiles.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['expired', -1],
+    ['about to expire', 4],
+  ])('re-signs a cached URL that is %s', async (_label, minutes) => {
+    const adapter = signingAdapter();
+    const result = await generateSignedUrl(
+      fabFile({ filePath: 'owned/file.txt', fileUrl: cachedUrl, fileUrlExpireAt: minutesFromNow(minutes) }),
+      adapter
+    );
+    expect(result.fileUrl).toBe(freshUrl);
+    expect(adapter.db.fabFiles.update).toHaveBeenCalledWith(
+      { id: 'f1', fileUrl: freshUrl, fileUrlExpireAt: expect.any(Date) },
+      { timestamps: false }
+    );
+  });
+});
+
+describe('generateSignedUrl - derived cache expiry', () => {
+  const signedAt = new Date('2026-01-02T03:04:05Z');
+  const sigV4Url = (expiresSeconds: number) =>
+    `https://bucket.example.invalid/owned/file.txt?X-Amz-Date=20260102T030405Z&X-Amz-Expires=${expiresSeconds}`;
+
+  afterEach(() => vi.useRealTimers());
+
+  it('persists the clamped expiry on the FabFile row', async () => {
+    vi.useFakeTimers({ now: signedAt });
+    const adapter = adapters();
+    adapter.db.fabFiles.update = vi.fn();
+    vi.mocked(adapter.storage.generateSignedUrl).mockResolvedValue(sigV4Url(19 * 60));
+    const clampedExpiry = new Date(signedAt.getTime() + 19 * 60 * 1000);
+
+    const result = await generateSignedUrl(fabFile({ filePath: 'owned/file.txt' }), adapter);
+
+    expect(result.fileUrlExpireAt).toEqual(clampedExpiry);
+    expect(adapter.db.fabFiles.update).toHaveBeenCalledWith(
+      { id: 'f1', fileUrl: sigV4Url(19 * 60), fileUrlExpireAt: clampedExpiry },
+      { timestamps: false }
+    );
   });
 });

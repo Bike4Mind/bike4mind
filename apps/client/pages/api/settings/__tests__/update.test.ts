@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Keep @bike4mind/common real so the sensitive/non-sensitive split comes from the actual
 // settingsMap. Mock only the infra + middleware seams.
@@ -316,6 +316,67 @@ describe('settings/update per-credit price floor', () => {
   });
 });
 
+describe('settings/update enforceCredits hosted lock', () => {
+  beforeEach(() => {
+    stored = null;
+    recordAdminActionFromRequest.mockReset().mockResolvedValue(null);
+    findOneAndUpdate.mockReset();
+    vi.mocked(invalidateSettingsCache).mockClear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  describe('hosted', () => {
+    beforeEach(() => {
+      vi.stubEnv('B4M_SELF_HOST', undefined);
+    });
+
+    it.each([false, 'false'])('refuses to disable credits with %j and records a denied audit entry', async value => {
+      await expect(runHandler('enforceCredits', value)).rejects.toMatchObject({
+        statusCode: 400,
+        message: expect.stringContaining('always on for hosted'),
+      });
+      expect(findOneAndUpdate).not.toHaveBeenCalled();
+      expect(invalidateSettingsCache).not.toHaveBeenCalled();
+      expect(recordAdminActionFromRequest).toHaveBeenCalledTimes(1);
+      expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: 'settings.admin_settings.denied',
+          target: { kind: 'settings', id: 'enforceCredits', displayName: 'enforceCredits' },
+        })
+      );
+    });
+
+    it('stores true', async () => {
+      stageWriteResult('enforceCredits', true);
+      await runHandler('enforceCredits', true);
+      expect(findOneAndUpdate).toHaveBeenCalledWith(
+        { settingName: 'enforceCredits' },
+        { $set: { settingValue: true } },
+        expect.anything()
+      );
+    });
+  });
+
+  it('stores false on a self-host deployment', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    stageWriteResult('enforceCredits', false);
+    await runHandler('enforceCredits', false);
+    expect(findOneAndUpdate).toHaveBeenCalledWith(
+      { settingName: 'enforceCredits' },
+      { $set: { settingValue: false } },
+      expect.anything()
+    );
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: 'settings.admin_settings.denied' })
+    );
+  });
+});
+
 describe('settings/update reviewer email list', () => {
   beforeEach(() => {
     stored = null;
@@ -354,6 +415,50 @@ describe('settings/update reviewer email list', () => {
     expect(findOneAndUpdate).toHaveBeenCalledWith(
       { settingName: 'ImageModerationReviewerEmails' },
       { $set: { settingValue: [] } },
+      expect.anything()
+    );
+  });
+});
+
+describe('settings/update blocked email domain list', () => {
+  beforeEach(() => {
+    stored = null;
+    findOneAndUpdate.mockReset();
+    vi.clearAllMocks();
+  });
+
+  it('refuses a list with an invalid domain and names the entry', async () => {
+    await expect(runHandler('blockedEmailDomains', ['kashre.com', 'not a domain'])).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringContaining('not a domain'),
+    });
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each([['co.uk'], ['github.io']])('refuses the bare public suffix %s', async suffix => {
+    await expect(runHandler('blockedEmailDomains', ['kashre.com', suffix])).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringContaining(JSON.stringify(suffix)),
+    });
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('accepts a subdomain under a public suffix', async () => {
+    stageWriteResult('blockedEmailDomains', ['burner.co.uk', 'np.kashre.com']);
+    await runHandler('blockedEmailDomains', ['burner.co.uk', 'np.kashre.com']);
+    expect(findOneAndUpdate).toHaveBeenCalledWith(
+      { settingName: 'blockedEmailDomains' },
+      { $set: { settingValue: ['burner.co.uk', 'np.kashre.com'] } },
+      expect.anything()
+    );
+  });
+
+  it('stores a valid list normalized and deduped', async () => {
+    stageWriteResult('blockedEmailDomains', ['kashre.com', 'xzcoot.com']);
+    await runHandler('blockedEmailDomains', [' Kashre.com', '@kashre.com', '*.xzcoot.com']);
+    expect(findOneAndUpdate).toHaveBeenCalledWith(
+      { settingName: 'blockedEmailDomains' },
+      { $set: { settingValue: ['kashre.com', 'xzcoot.com'] } },
       expect.anything()
     );
   });

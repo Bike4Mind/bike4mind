@@ -5,7 +5,38 @@ import {
 } from '@bike4mind/database';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
-import { IInternalTeamMemberDocument } from '@bike4mind/common';
+import { IInternalTeamMemberDocument, type CreateIpBlockRequest, type IpBlockScope } from '@bike4mind/common';
+import type {
+  IncidentRange,
+  IncidentSignals,
+  IncidentState,
+} from '@client/app/components/admin/SecurityDashboard/incidentTypes';
+import type { SignupAnomalySnapshot } from '@client/app/utils/signupAnomaly';
+
+export interface LiveOpsTriageEnv {
+  stage: string;
+  isForkProduction: boolean;
+  isSourceDeployment: boolean;
+  isPreviewEnvironment: boolean;
+  isLocalDevelopment: boolean;
+  showTab: boolean;
+}
+
+/**
+ * Deployment descriptor shared by the admin tabs: the stage, plus whether this is a fork's
+ * production stage. One query key, so AdminPage and the tab it renders share a single request.
+ */
+export function useLiveOpsTriageEnv(enabled = true) {
+  return useQuery({
+    queryKey: ['liveops-triage', 'env'],
+    queryFn: async () => {
+      const { data } = await api.get<LiveOpsTriageEnv>('/api/admin/liveops-triage-env');
+      return data;
+    },
+    enabled,
+    staleTime: 1000 * 60 * 60, // environment does not change
+  });
+}
 
 export interface SuspiciousPatternSummary {
   ip?: string;
@@ -120,15 +151,50 @@ export const useGetAllRecentSecurityEvents = () => {
 };
 
 // Blocked IPs
+export type BlockedIPItem = {
+  _id: string;
+  /** A bare address or a CIDR range. */
+  ip: string;
+  /** Absent on rows written before scopes, which were all login lockouts. */
+  scope?: IpBlockScope;
+  reason?: string;
+  source?: 'auto' | 'manual';
+  blockedAt: string;
+  expiresAt: string;
+  blockedByName?: string;
+};
+
 export const useGetBlockedIPs = () => {
   return useQuery({
     queryKey: BLOCKED_IPS_KEY,
     queryFn: async () => {
-      const res = await api.get<{ items: Array<{ ip: string; reason?: string; blockedAt: string }> }>(
-        '/api/security/blocked-ips?limit=10'
-      );
+      const res = await api.get<{ items: BlockedIPItem[] }>('/api/security/blocked-ips?limit=50');
       return res.data.items;
     },
+  });
+};
+
+export const useBlockIP = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (request: CreateIpBlockRequest) => {
+      const res = await api.post<{ item: BlockedIPItem; alreadyBlocked: boolean; extended: boolean }>(
+        '/api/security/blocked-ips',
+        request
+      );
+      return res.data;
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: BLOCKED_IPS_KEY }),
+  });
+};
+
+export const useUnblockIP = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, reason }: { id: string; reason: string }) => {
+      await api.delete('/api/security/blocked-ips', { data: { id, reason } });
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: BLOCKED_IPS_KEY }),
   });
 };
 
@@ -217,7 +283,7 @@ export const useGetSecurityBehavioralSummary = () => {
 // Security Dashboard (Admin)
 export type SecurityCheckStatus = 'pass' | 'warning' | 'fail' | 'disabled';
 
-export type SecurityCheckId = 'web' | 'code' | 'packages' | 'secrets' | 'cloud' | 'waf';
+export type SecurityCheckId = 'web' | 'cloud';
 
 export interface SecurityCheckSummary {
   id: SecurityCheckId;
@@ -243,41 +309,6 @@ export interface SecurityDashboardOverview {
   nextScanInMinutes: number | null;
   checks: SecurityCheckSummary[];
 }
-
-// Admin Security Dashboard AI Assessment
-export type AiSecurityCategoryId = SecurityCheckId;
-
-export type AiSecurityRecommendationPriority = 'high' | 'medium' | 'low';
-
-export interface AiSecurityRecommendation {
-  id: string;
-  category: 'database' | 'packages' | 'waf' | 'cloud' | 'secrets' | 'code' | 'web' | 'misc';
-  priority: AiSecurityRecommendationPriority;
-  title: string;
-  rationale: string;
-  suggestedAction: string;
-}
-
-export interface AiSecurityAssessment {
-  overallSummary: string;
-  recommendations: AiSecurityRecommendation[];
-  generatedAt: string;
-  nextAssessmentAt: string;
-}
-
-export const useSecurityDashboardAiAssessment = () => {
-  return useQuery<AiSecurityAssessment>({
-    queryKey: ['admin', 'security-dashboard', 'ai-assessment'],
-    queryFn: async () => {
-      const res = await api.get<AiSecurityAssessment>('/api/admin/security-dashboard/ai-assessment');
-      return res.data;
-    },
-    staleTime: 5 * 60 * 1000, // UI is allowed to be slightly stale; server enforces longer cache TTL
-    refetchOnWindowFocus: true,
-    refetchOnReconnect: true,
-    refetchOnMount: true,
-  });
-};
 
 export interface SecurityDashboardFinding {
   id: string;
@@ -313,24 +344,6 @@ export const useSecurityDashboardOverview = () => {
   });
 };
 
-export interface SecurityDashboardCodeSnapshot {
-  stage: string;
-  scanType: 'code-semgrep';
-  targetUrl: string;
-  status: SecurityCheckStatus;
-  score: number;
-  summary: string;
-  findings: Array<{
-    id: string;
-    title: string;
-    severity: 'critical' | 'high' | 'medium' | 'low';
-    description: string;
-    recommendation?: string;
-    documentationUrl?: string;
-  }>;
-  checkedAt: string;
-}
-
 export const useSecurityDashboardWeb = () => {
   return useQuery<SecurityDashboardWebSnapshot>({
     queryKey: ['admin', 'security-dashboard', 'web'],
@@ -342,73 +355,6 @@ export const useSecurityDashboardWeb = () => {
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
     refetchOnMount: true,
-  });
-};
-
-export const useSecurityDashboardCode = () => {
-  return useQuery<SecurityDashboardCodeSnapshot>({
-    queryKey: ['admin', 'security-dashboard', 'code'],
-    queryFn: async () => {
-      const res = await api.get<SecurityDashboardCodeSnapshot>('/api/admin/security-dashboard/code');
-      return res.data;
-    },
-    staleTime: 5 * 60 * 1000, // 5 minutes
-    refetchOnWindowFocus: true,
-    refetchOnReconnect: true,
-    refetchOnMount: true,
-  });
-};
-
-export interface SecurityDashboardPackagesSnapshot {
-  stage: string;
-  scanType: 'packages';
-  targetUrl: string;
-  status: SecurityCheckStatus;
-  score: number;
-  summary: string;
-  findings: Array<{
-    id: string;
-    title: string;
-    severity: 'critical' | 'high' | 'medium' | 'low';
-    description: string;
-    recommendation?: string;
-    documentationUrl?: string;
-    metadata?: {
-      packageName?: string;
-      currentVersion?: string;
-      vulnerableRange?: string;
-      recommendedVersion?: string;
-    };
-  }>;
-  checkedAt: string;
-}
-
-export const useSecurityDashboardPackages = () => {
-  return useQuery<SecurityDashboardPackagesSnapshot>({
-    queryKey: ['admin', 'security-dashboard', 'packages'],
-    queryFn: async () => {
-      const res = await api.get<SecurityDashboardPackagesSnapshot>('/api/admin/security-dashboard/packages');
-      return res.data;
-    },
-    staleTime: 5 * 60 * 1000, // 5 minutes
-    refetchOnWindowFocus: true,
-    refetchOnReconnect: true,
-    refetchOnMount: true,
-  });
-};
-
-export const useRunPackagesSecurityScan = () => {
-  const queryClient = useQueryClient();
-
-  return useMutation<RunSecurityScanResponse>({
-    mutationFn: async () => {
-      const res = await api.post<RunSecurityScanResponse>('/api/admin/security-dashboard/packages');
-      return res.data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['admin', 'security-dashboard', 'overview'] });
-      queryClient.invalidateQueries({ queryKey: ['admin', 'security-dashboard', 'packages'] });
-    },
   });
 };
 
@@ -433,45 +379,6 @@ export const useRunWebSecurityScan = () => {
     },
   });
 };
-
-export const useRunCodeSecurityScan = () => {
-  const queryClient = useQueryClient();
-
-  return useMutation<RunSecurityScanResponse>({
-    mutationFn: async () => {
-      const res = await api.post<RunSecurityScanResponse>('/api/admin/security-dashboard/code');
-      return res.data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['admin', 'security-dashboard', 'overview'] });
-      queryClient.invalidateQueries({ queryKey: ['admin', 'security-dashboard', 'code'] });
-    },
-  });
-};
-
-export interface SecurityDashboardSecretsSnapshot {
-  stage: string;
-  scanType: 'secrets';
-  targetUrl: string;
-  status: SecurityCheckStatus;
-  score: number;
-  summary: string;
-  findings: Array<{
-    id: string;
-    title: string;
-    severity: 'critical' | 'high' | 'medium' | 'low';
-    description: string;
-    recommendation?: string;
-    documentationUrl?: string;
-    metadata?: {
-      secretType?: string;
-      filePath?: string;
-      line?: number;
-      commitId?: string;
-    };
-  }>;
-  checkedAt: string;
-}
 
 export interface SecurityDashboardCloudSnapshot {
   stage: string;
@@ -508,31 +415,6 @@ export interface SecurityDashboardProwlerSnapshot {
     metadata?: {
       region?: string;
       resourceArn?: string;
-    };
-  }>;
-  checkedAt: string;
-}
-
-export interface SecurityDashboardWafSnapshot {
-  stage: string;
-  scanType: 'waf';
-  targetUrl: string;
-  status: SecurityCheckStatus;
-  score: number;
-  summary: string;
-  findings: Array<{
-    id: string;
-    title: string;
-    severity: 'critical' | 'high' | 'medium' | 'low';
-    description: string;
-    recommendation?: string;
-    documentationUrl?: string;
-    metadata?: {
-      informational?: boolean;
-      env?: 'dev' | 'prod';
-      webAcls?: string[];
-      distributions?: string[];
-      discoverySource?: 'none' | 'secrets' | 'tags' | 'secrets+tags';
     };
   }>;
   checkedAt: string;
@@ -737,49 +619,6 @@ export const useSecurityDashboardWafBlockedRequests = (params: { range: WafRange
   });
 };
 
-export const useSecurityDashboardWaf = () => {
-  return useQuery<SecurityDashboardWafSnapshot>({
-    queryKey: ['admin', 'security-dashboard', 'waf'],
-    queryFn: async () => {
-      const res = await api.get<SecurityDashboardWafSnapshot>('/api/admin/security-dashboard/waf');
-      return res.data;
-    },
-    staleTime: 5 * 60 * 1000, // 5 minutes
-    refetchOnWindowFocus: true,
-    refetchOnReconnect: true,
-    refetchOnMount: true,
-  });
-};
-
-export const useSecurityDashboardSecrets = () => {
-  return useQuery<SecurityDashboardSecretsSnapshot>({
-    queryKey: ['admin', 'security-dashboard', 'secrets'],
-    queryFn: async () => {
-      const res = await api.get<SecurityDashboardSecretsSnapshot>('/api/admin/security-dashboard/secrets');
-      return res.data;
-    },
-    staleTime: 5 * 60 * 1000, // 5 minutes
-    refetchOnWindowFocus: true,
-    refetchOnReconnect: true,
-    refetchOnMount: true,
-  });
-};
-
-export const useRunSecretsSecurityScan = () => {
-  const queryClient = useQueryClient();
-
-  return useMutation<RunSecurityScanResponse>({
-    mutationFn: async () => {
-      const res = await api.post<RunSecurityScanResponse>('/api/admin/security-dashboard/secrets');
-      return res.data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['admin', 'security-dashboard', 'overview'] });
-      queryClient.invalidateQueries({ queryKey: ['admin', 'security-dashboard', 'secrets'] });
-    },
-  });
-};
-
 export const useRunCloudSecurityScan = () => {
   const queryClient = useQueryClient();
 
@@ -838,15 +677,12 @@ export const useSecurityScanSchedule = (scanType: string) => {
  */
 export interface SecurityScanSchedules {
   web: Omit<SecurityScanSchedule, 'stage' | 'scanType'> | null;
-  code: Omit<SecurityScanSchedule, 'stage' | 'scanType'> | null;
-  packages: Omit<SecurityScanSchedule, 'stage' | 'scanType'> | null;
-  secrets: Omit<SecurityScanSchedule, 'stage' | 'scanType'> | null;
   cloud: Omit<SecurityScanSchedule, 'stage' | 'scanType'> | null;
 }
 
 /**
  * Fetch all security scan schedules in a single request
- * Replaces 5 individual `useSecurityScanSchedule` calls with one batch request
+ * Replaces individual `useSecurityScanSchedule` calls with one batch request
  */
 export const useSecurityScanSchedules = () => {
   return useQuery<SecurityScanSchedules>({
@@ -873,28 +709,15 @@ export const useUpdateSecurityScanSchedule = (scanType: string) => {
         queryKey: ['admin', 'security-scan-schedule', scanType],
       });
       queryClient.invalidateQueries({
+        queryKey: ['admin', 'security-scan-schedules'],
+      });
+      queryClient.invalidateQueries({
         queryKey: ['admin', 'security-dashboard', 'overview'],
       });
     },
   });
 };
 
-export const useRunWafSecurityScan = () => {
-  const queryClient = useQueryClient();
-
-  return useMutation<RunSecurityScanResponse>({
-    mutationFn: async () => {
-      const res = await api.post<RunSecurityScanResponse>('/api/admin/security-dashboard/waf');
-      return res.data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['admin', 'security-dashboard', 'waf'] });
-      queryClient.invalidateQueries({ queryKey: ['admin', 'security-dashboard', 'overview'] });
-    },
-  });
-};
-
-// Team Members
 export const useGetTeamMembers = () => {
   return useQuery({
     queryKey: ['admin', 'team-members'],
@@ -992,5 +815,42 @@ export const useRunAttackSimulation = () => {
         queryKey: ['admin', 'security-dashboard', 'attack-simulation'],
       });
     },
+  });
+};
+
+export const useSecurityIncidentSignals = (range: IncidentRange) => {
+  return useQuery<IncidentSignals>({
+    queryKey: ['admin', 'security-dashboard', 'incident-signals', range],
+    queryFn: async () => {
+      const res = await api.get<IncidentSignals>('/api/admin/security-dashboard/incident-signals', {
+        params: { range },
+      });
+      return res.data;
+    },
+    staleTime: 60 * 1000, // matches the server-side cache TTL
+    refetchInterval: 60 * 1000,
+    refetchOnWindowFocus: true,
+  });
+};
+
+export const useSecurityIncidentState = () => {
+  return useQuery<IncidentState>({
+    queryKey: ['admin', 'security-dashboard', 'incident-state'],
+    queryFn: async () => {
+      const res = await api.get<IncidentState>('/api/admin/security-dashboard/incident-state');
+      return res.data;
+    },
+    staleTime: 60 * 1000,
+    refetchInterval: 60 * 1000,
+    refetchOnWindowFocus: true,
+  });
+};
+
+export const useSignupAnomaly = () => {
+  return useQuery({
+    queryKey: ['admin-signup-anomaly'],
+    queryFn: async () => (await api.get<SignupAnomalySnapshot>('/api/admin/signup-anomaly')).data,
+    staleTime: 60_000,
+    refetchInterval: 60_000,
   });
 };

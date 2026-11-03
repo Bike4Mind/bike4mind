@@ -5,6 +5,10 @@
  * The real meterPlatformCompletion + reserveRequestCredits run; only the credit store is faked.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => {} }),
+}));
 import { createMocks } from 'node-mocks-http';
 import { getEmbeddingModelCost, getTextModelCost, insufficientCreditsError, usdToCredits } from '@bike4mind/common';
 
@@ -39,7 +43,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return api;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@server/middlewares/perUserRateLimit', () => ({ blockedAtZeroTierLimit: (n: number) => n }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@bike4mind/database', async () => ({
@@ -65,6 +70,7 @@ vi.mock('@bike4mind/services', async () => ({
 }));
 vi.mock('@bike4mind/services/llm/modelAdmission', () => ({
   loadModelConfigurations: async () => [],
+  loadFreeTierAllowedModels: async () => undefined,
   createModelAdmission: () => ({ admits: async () => true, assert: async () => undefined }),
 }));
 vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 1000 }));
@@ -302,6 +308,14 @@ describe('POST /api/help/chat metering', () => {
 
       expect(m.findOrg).not.toHaveBeenCalled();
       expect(m.recordOperationalUsage.mock.calls[0][0].organization).toBeNull();
+    });
+
+    it('records the authenticating API key on the embedding charge', async () => {
+      m.enforce = false;
+
+      await call({ apiKeyInfo: { keyId: 'key-1', billingOwnerType: 'User' } });
+
+      expect(m.recordOperationalUsage.mock.calls[0][0]).toMatchObject({ apiKeyId: 'key-1' });
     });
   });
 

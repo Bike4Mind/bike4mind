@@ -81,6 +81,21 @@ describe('S3Storage browser-facing signing endpoint', () => {
     expect(url.searchParams.get('X-Amz-Signature')).toBe(expectedGetSignature(url));
   });
 
+  it('returns the identical URL for a fixed signingDate, dated from it', async () => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://objects.example.invalid:9443');
+    const storage = new S3Storage('exports-bucket', 'us-east-2');
+    const signingDate = new Date('2026-03-04T05:00:00.000Z');
+    const sign = () =>
+      storage.getSignedUrl('thumbs/a.webp', 'get', { audience: 'browser', expiresIn: 1800, signingDate });
+
+    const first = await sign();
+    expect(await sign()).toBe(first);
+    const url = new URL(first);
+    expect(url.searchParams.get('X-Amz-Date')).toBe('20260304T050000Z');
+    expect(url.searchParams.get('X-Amz-Expires')).toBe('1800');
+    expect(url.searchParams.get('X-Amz-Signature')).toBe(expectedGetSignature(url));
+  });
+
   it('uses the configured signing origin for PUT capabilities too', async () => {
     vi.stubEnv('S3_PRESIGN_ENDPOINT', 'http://localhost:19000');
     const url = new URL(
@@ -201,5 +216,28 @@ describe('S3Storage.browserSigningOrigin', () => {
     // A dotted bucket name cannot use a virtual host over TLS, so the SDK signs path-style.
     const origin = await new S3Storage('exports.bucket', 'us-east-2').browserSigningOrigin();
     expect(origin).toBe('');
+  });
+});
+
+describe('S3Storage signed URL lifetime vs. signing credentials', () => {
+  const signedExpiry = async (credentialExpiration?: Date, signingDate = new Date()) => {
+    if (credentialExpiration) vi.stubEnv('AWS_CREDENTIAL_EXPIRATION', credentialExpiration.toISOString());
+    const storage = new S3Storage('files-bucket', 'us-east-2');
+    const url = new URL(await storage.getSignedUrl('owned/file.txt', 'get', { expiresIn: 3600, signingDate }));
+    return Number(url.searchParams.get('X-Amz-Expires'));
+  };
+
+  it('clamps the link to end a minute before credentials that expire inside the window', async () => {
+    const signingDate = new Date();
+    const credentialExpiration = new Date(signingDate.getTime() + 20 * 60 * 1000);
+    expect(await signedExpiry(credentialExpiration, signingDate)).toBe(19 * 60);
+  });
+
+  it('keeps the requested lifetime when the credentials outlive it', async () => {
+    expect(await signedExpiry(new Date(Date.now() + 6 * 60 * 60 * 1000))).toBe(3600);
+  });
+
+  it('keeps the requested lifetime for credentials with no expiration', async () => {
+    expect(await signedExpiry()).toBe(3600);
   });
 });

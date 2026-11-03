@@ -38,11 +38,13 @@ const mockDlqUrls = vi.hoisted(() => ({
   'data-lake-research': 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeResearchQueueDLQ',
   'data-lake-taxonomy': 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeTaxonomyQueueDLQ',
   'lake-memory': 'https://sqs.us-east-2.amazonaws.com/123456789/lakeMemoryQueueDLQ',
+  'risk-evidence': 'https://sqs.us-east-2.amazonaws.com/123456789/riskEvidenceQueueDLQ',
   'lake-inconsistency-model': 'https://sqs.us-east-2.amazonaws.com/123456789/lakeInconsistencyModelQueueDLQ',
   'drive-lake-ingest': 'https://sqs.us-east-2.amazonaws.com/123456789/driveLakeIngestQueueDLQ',
   'drive-disconnect-purge': 'https://sqs.us-east-2.amazonaws.com/123456789/driveDisconnectPurgeQueueDLQ',
   'github-lake-ingest': 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeIngestQueueDLQ',
   'github-lake-revoke': 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeRevokeQueueDLQ',
+  'publish-thumbnail': 'https://sqs.us-east-2.amazonaws.com/123456789/publishThumbnailQueueDLQ',
 }));
 
 const mockSourceQueueUrls = vi.hoisted(() => ({
@@ -80,11 +82,13 @@ const mockSourceQueueUrls = vi.hoisted(() => ({
   dataLakeResearchQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeResearchQueue',
   dataLakeTaxonomyQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeTaxonomyQueue',
   lakeMemoryQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/lakeMemoryQueue',
+  riskEvidenceQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/riskEvidenceQueue',
   lakeInconsistencyModelQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/lakeInconsistencyModelQueue',
   driveLakeIngestQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/driveLakeIngestQueue',
   driveDisconnectPurgeQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/driveDisconnectPurgeQueue',
   githubLakeIngestQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeIngestQueue',
   githubLakeRevokeQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeRevokeQueue',
+  publishThumbnailQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/publishThumbnailQueue',
 }));
 
 // Mock SST Resource bindings: both DLQ and source queue URLs via Linkables
@@ -99,9 +103,9 @@ import { getDlqRegistry, getDlqByLabel, getSourceQueueUrl, getDlqUrl } from './d
 
 describe('dlqRegistry', () => {
   describe('getDlqRegistry', () => {
-    it('returns all 39 DLQ entries', () => {
+    it('returns every DLQ entry', () => {
       const registry = getDlqRegistry();
-      expect(registry).toHaveLength(39);
+      expect(registry).toHaveLength(41);
     });
 
     it('each entry has required fields', () => {

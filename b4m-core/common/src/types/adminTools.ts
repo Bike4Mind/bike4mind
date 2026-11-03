@@ -51,13 +51,13 @@ export interface SystemData {
 // Additional data types for admin tool results
 export interface ModalListData {
   type: 'modalList';
-  modals: any[];
+  modals: Record<string, unknown>[];
   message?: string;
 }
 
 export interface TriggerModalData {
   type: 'triggerModal';
-  modal: any;
+  modal: Record<string, unknown>;
 }
 
 export interface ListData {
@@ -75,8 +75,7 @@ export type AdminToolData =
   | ModalListData
   | TriggerModalData
   | ListData
-  | { type: string; [key: string]: any } // Allow any object with a type property
-  | Record<string, any>; // Allow any record for flexibility
+  | Record<string, unknown>;
 
 // Preview content types
 export interface ModalPreviewContent {
@@ -170,7 +169,7 @@ export interface AdminToolAttachment {
 
 export interface AdminToolResult {
   success: boolean;
-  data?: AdminToolData | string | any; // Allow any data type for maximum flexibility
+  data?: AdminToolData | string | unknown[];
   error?: string;
   message?: string;
   type?: 'modal' | 'preview' | 'help' | 'list' | 'success' | 'error';

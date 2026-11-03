@@ -47,9 +47,6 @@ export function resolveProxyTarget(cdnPath: string): ProxyTarget | null {
   if (cdnPath.startsWith('app-config/')) {
     return { bucket: 'appFiles', key: cdnPath };
   }
-  // `whats-new/` is intentionally NOT allowlisted: it routes to
-  // whatsNewDistributionBucket (a separate distribution bucket), not
-  // appFilesBucket, so the proxy cannot serve it.
   // Not an allowlisted prefix - block.
   return null;
 }

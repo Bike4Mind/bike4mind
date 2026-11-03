@@ -34,6 +34,6 @@ const LakeAccessQueryTextSchema = new Schema<ILakeAccessQueryTextDocument>(
 // first while the audit event's metadata lives on.
 LakeAccessQueryTextSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
-export const LakeAccessQueryTextModel =
+export const LakeAccessQueryTextModel: mongoose.Model<ILakeAccessQueryTextDocument> =
   (mongoose.models[ModelName] as unknown as mongoose.Model<ILakeAccessQueryTextDocument>) ||
   mongoose.model<ILakeAccessQueryTextDocument>(ModelName, LakeAccessQueryTextSchema);

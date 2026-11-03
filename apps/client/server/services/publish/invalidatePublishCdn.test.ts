@@ -20,7 +20,7 @@ vi.mock('@aws-sdk/client-cloudfront', () => ({
 
 // The distribution id comes from the canonical resolver (reads RouterDistributionId.id);
 // drive it per-test. Throwing models "not linked" (local/test) -> invalidation no-ops.
-vi.mock('@server/security/wafSharedHelpers', () => ({ resolveRouterDistributionId: resolveIdMock }));
+vi.mock('@bike4mind/server-utils/security/wafSharedHelpers', () => ({ resolveRouterDistributionId: resolveIdMock }));
 
 import {
   invalidatePublishCdn,

@@ -228,7 +228,7 @@ export async function resizeImageFile(file: File, options: ImageResizeOptions = 
     };
 
     img.onerror = () => {
-      reject(new Error('Failed to load image'));
+      reject(new Error("This image couldn't be opened to shrink it for upload - its format may not be supported."));
       URL.revokeObjectURL(img.src);
     };
 

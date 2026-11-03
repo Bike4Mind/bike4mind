@@ -1,6 +1,6 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
@@ -57,12 +57,24 @@ vi.mock('@client/app/utils/printToPdf', () => ({
   printHtmlForPdf: (...a: unknown[]) => mockPrint(...a),
 }));
 
-// Stub the panel so this test targets the toggle wiring, not the panel's fetch.
+// Stub the panel so this test targets the toggle wiring, not the panel's fetch. The buttons stand
+// in for a gate apply in the real AccessGateEditor.
 vi.mock('@client/app/components/common/ManageSharingPanel', () => ({
-  ManageSharingPanel: (p: { publicId: string }) => <div data-testid={`stub-panel-${p.publicId}`} />,
+  ManageSharingPanel: (p: { publicId: string; onGateChange?: (gate: { kind: 'passphrase' } | null) => void }) => (
+    <div data-testid={`stub-panel-${p.publicId}`}>
+      <button
+        data-testid={`stub-panel-set-passphrase-${p.publicId}`}
+        onClick={() => p.onGateChange?.({ kind: 'passphrase' })}
+      />
+      <button data-testid={`stub-panel-clear-gate-${p.publicId}`} onClick={() => p.onGateChange?.(null)} />
+    </div>
+  ),
 }));
 
+import { AxiosError } from 'axios';
+import { deletePublishedArtifact, restorePreviousVersion } from '@client/app/utils/publishApi';
 import PublishedArtifactsTabContent from './PublishedArtifactsTabContent';
+import { PUBLISHED_ARTIFACTS_VIEW_KEY, usePublishedArtifactsView } from './usePublishedArtifactsView';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const renderTab = () => {
@@ -74,6 +86,7 @@ const renderTab = () => {
       </CssVarsProvider>
     </QueryClientProvider>
   );
+  return qc;
 };
 
 const bundleRow = {
@@ -112,7 +125,21 @@ const expandRow = (publicId: string) => fireEvent.click(screen.getByTestId(`publ
 /** A bundle that still knows its in-app source, so it can be refreshed. */
 const sourcedRow = { ...bundleRow, publicId: 'pub-3', source: { kind: 'bundle', artifactId: 'artifact_html_x_1_0' } };
 
+const RATE_LIMIT_MESSAGE = "You've published a lot today. Try again in 42 minutes.";
+/** The 429 a publish write route answers once the daily publish allowance is used up. */
+const publishRateLimited = () => {
+  const error = new AxiosError('Request failed with status code 429');
+  error.response = {
+    status: 429,
+    data: { error: RATE_LIMIT_MESSAGE, code: 'publish_rate_limited', retryAfter: 2520 },
+  } as AxiosError['response'];
+  return error;
+};
+
 beforeEach(() => {
+  // The view preference is a module-level store backed by localStorage, so it outlives a test unless reset.
+  localStorage.clear();
+  usePublishedArtifactsView.setState({ view: 'list' });
   mockList.mockReset().mockResolvedValue(page([bundleRow]));
   mockExport.mockReset().mockResolvedValue('# exported');
   mockDownloadData.mockReset();
@@ -272,6 +299,31 @@ describe('PublishedArtifactsTabContent - refresh from source (issue #1142, optio
     await waitFor(() => expect(mockToastError).toHaveBeenCalled());
     expect(mockToastSuccess).not.toHaveBeenCalled();
     confirm.mockRestore();
+  });
+
+  it("shows the daily publish limit's own message when a refresh is refused with a 429", async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mockRefresh.mockRejectedValue(publishRateLimited());
+    mockList.mockResolvedValue(page([sourcedRow]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-3');
+    expandRow('pub-3');
+
+    fireEvent.click(screen.getByTestId('published-artifact-refresh-pub-3'));
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(RATE_LIMIT_MESSAGE));
+    confirm.mockRestore();
+  });
+
+  it("shows the daily publish limit's own message when a restore is refused with a 429", async () => {
+    vi.mocked(restorePreviousVersion).mockRejectedValueOnce(publishRateLimited());
+    mockList.mockResolvedValue(page([{ ...bundleRow, previousVersionMeta: { sha256Index: 'prev' } }]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expandRow('pub-1');
+
+    fireEvent.click(screen.getByTestId('published-artifact-restore-pub-1'));
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(RATE_LIMIT_MESSAGE));
+    expect(mockToastSuccess).not.toHaveBeenCalled();
   });
 
   it('points the single-version hint at Refresh when the row can use it', async () => {
@@ -837,6 +889,20 @@ describe('PublishedArtifactsTabContent - tag review fixes', () => {
 });
 
 describe('PublishedArtifactsTabContent - visibility choices follow the scope tier', () => {
+  it('keeps an unexpected stored visibility selectable when the row is expanded', async () => {
+    mockList.mockResolvedValue(page([{ ...bundleRow, visibility: 'unlisted' }]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expandRow('pub-1');
+
+    const select = screen.getByTestId('published-artifact-visibility-pub-1').querySelector('button');
+    expect(select?.textContent).toBe('unlisted');
+    if (!select) throw new Error('Visibility select did not render');
+    fireEvent.click(select);
+    expect(await screen.findByTestId('published-artifact-visibility-option-unlisted')).not.toBeNull();
+    expect(screen.getByTestId('published-artifact-visibility-option-private')).not.toBeNull();
+  });
+
   const teamRow = { ...replyRow, publicId: 'pub-t', tier: 'organization', scopeId: 'org1', visibility: 'organization' };
   const visibilitySelect = (publicId: string) =>
     screen.getByTestId(`published-artifact-visibility-${publicId}`).querySelector('button') as HTMLButtonElement;
@@ -877,5 +943,1064 @@ describe('PublishedArtifactsTabContent - visibility choices follow the scope tie
     fireEvent.click(visibilitySelect('pub-1'));
     expect(await screen.findByTestId('published-artifact-visibility-option-private')).not.toBeNull();
     expect(screen.queryByTestId('published-artifact-visibility-option-organization')).toBeNull();
+  });
+});
+
+describe('PublishedArtifactsTabContent - access badge and aligned columns', () => {
+  const lastQuery = () => {
+    const listCalls = mockList.mock.calls.map(c => c[0] as Record<string, unknown>).filter(c => c.facets !== true);
+    return listCalls[listCalls.length - 1];
+  };
+  const accessRows = [
+    { ...bundleRow, publicId: 'acc-public' },
+    { ...bundleRow, publicId: 'acc-pass', gateKind: 'passphrase' },
+    { ...bundleRow, publicId: 'acc-domain', gateKind: 'domain' },
+    { ...bundleRow, publicId: 'acc-org', tier: 'organization', visibility: 'organization' },
+    { ...bundleRow, publicId: 'acc-project', tier: 'project', visibility: 'project' },
+    { ...bundleRow, publicId: 'acc-private', visibility: 'private' },
+  ];
+
+  it('shows one access badge per row, naming each of the six states', async () => {
+    mockList.mockResolvedValue(page(accessRows));
+    renderTab();
+    await screen.findByTestId('published-artifact-access-acc-public');
+
+    const expected: Array<[string, string, string]> = [
+      ['acc-public', 'public', 'Public'],
+      ['acc-pass', 'passphrase', 'Passphrase'],
+      ['acc-domain', 'domain', 'Domain'],
+      ['acc-org', 'organization', 'Team'],
+      ['acc-project', 'project', 'Project'],
+      ['acc-private', 'private', 'Private'],
+    ];
+    for (const [id, access, label] of expected) {
+      const badge = screen.getByTestId(`published-artifact-access-${id}`);
+      expect(badge.getAttribute('data-access')).toBe(access);
+      expect(badge.textContent).toBe(label);
+      // Word and icon together: the state is never carried by color alone.
+      expect(badge.querySelector('svg')).not.toBeNull();
+    }
+  });
+
+  it('reads a passphrase link as Passphrase only - no separate Public chip or lock icon', async () => {
+    mockList.mockResolvedValue(page([{ ...bundleRow, gateKind: 'passphrase' }]));
+    renderTab();
+    await screen.findByTestId('published-artifact-access-pub-1');
+
+    const meta = screen.getByTestId('published-artifact-meta-pub-1');
+    expect(meta.textContent).toContain('Passphrase');
+    expect(meta.textContent).not.toContain('Public');
+    // The raw visibility word from the old chip is gone too.
+    expect(meta.textContent).not.toContain('public');
+    expect(meta.querySelector('[data-testid="LockIcon"]')).toBeNull();
+    expect(meta.querySelector('[data-testid="DomainIcon"]')).toBeNull();
+  });
+
+  it('keeps the versions column populated: a count for 2+ versions, a muted "1 version" otherwise', async () => {
+    mockList.mockResolvedValue(
+      page([
+        { ...bundleRow, publicId: 'v-many', versionsCount: 4 },
+        { ...bundleRow, publicId: 'v-one', versionsCount: 1 },
+        { ...bundleRow, publicId: 'v-unset', versionsCount: undefined },
+      ])
+    );
+    renderTab();
+    await screen.findByTestId('published-artifact-versions-v-many');
+
+    expect(screen.getByTestId('published-artifact-versions-v-many').textContent).toBe('4 versions');
+    expect(screen.getByTestId('published-artifact-versions-v-one').textContent).toBe('1 version');
+    expect(screen.getByTestId('published-artifact-versions-v-unset').textContent).toBe('1 version');
+  });
+
+  it('leaves the versions cell empty for a reply snapshot, which has no version history', async () => {
+    mockList.mockResolvedValue(page([replyRow]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-2');
+
+    expect(screen.queryByTestId('published-artifact-versions-pub-2')).toBeNull();
+    // The row still renders every other column.
+    expect(screen.getByTestId('published-artifact-access-pub-2')).not.toBeNull();
+    expect(screen.getByTestId('published-artifact-views-pub-2').textContent).toBe('0');
+  });
+
+  it('shows the view count and a short published date in their own cells', async () => {
+    mockList.mockResolvedValue(page([{ ...bundleRow, viewCount: 1234, publishedAt: '2020-03-05T12:00:00.000Z' }]));
+    renderTab();
+    await screen.findByTestId('published-artifact-views-pub-1');
+
+    expect(screen.getByTestId('published-artifact-views-pub-1').textContent).toBe('1234');
+    expect(screen.getByTestId('published-artifact-date-pub-1').textContent).toMatch(/2020/);
+  });
+
+  it('abbreviates a very large view count so it cannot outgrow its column', async () => {
+    mockList.mockResolvedValue(page([{ ...bundleRow, viewCount: 1_250_000 }]));
+    renderTab();
+    await screen.findByTestId('published-artifact-views-pub-1');
+
+    expect(screen.getByTestId('published-artifact-views-pub-1').textContent).not.toBe('1250000');
+    expect(screen.getByTestId('published-artifact-views-pub-1').getAttribute('title')).toBe('1250000 views');
+  });
+
+  it('keeps a four-digit view count exact and abbreviates from 10,000', async () => {
+    mockList.mockResolvedValue(
+      page([
+        { ...bundleRow, publicId: 'views-4', viewCount: 9_999 },
+        { ...bundleRow, publicId: 'views-5', viewCount: 10_000 },
+      ])
+    );
+    renderTab();
+    await screen.findByTestId('published-artifact-views-views-4');
+
+    expect(screen.getByTestId('published-artifact-views-views-4').textContent).toBe('9999');
+    const compact = screen.getByTestId('published-artifact-views-views-5').textContent;
+    expect(compact).not.toBe('10000');
+    expect(compact).toBe(new Intl.NumberFormat(undefined, { notation: 'compact' }).format(10_000));
+  });
+
+  it('labels the columns with a header row', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+
+    const header = screen.getByTestId('published-artifacts-columns');
+    for (const word of ['Title', 'Access', 'Versions', 'Views', 'Published']) {
+      expect(header.textContent).toContain(word);
+    }
+    // The date cell is publishedAt; "Updated" would promise the updatedAt order of the
+    // Recently updated sort, which a rename or tag edit also moves.
+    expect(header.textContent).not.toContain('Updated');
+  });
+
+  it('groups the facet chips under Tags, Type, Access and Comments, with visibility and gate together', async () => {
+    mockList.mockResolvedValue(
+      page([bundleRow], {
+        facets: {
+          kind: { bundle: 5 },
+          visibility: { public: 4, private: 1 },
+          gate: { passphrase: 2, domain: 1 },
+          comments: 3,
+          tag: { northwind: 2 },
+        },
+      })
+    );
+    renderTab();
+    await screen.findByTestId('published-artifacts-facet-gate-passphrase');
+
+    const group = (id: string) => screen.getByTestId(`published-artifacts-facet-group-${id}`);
+    expect(group('tags').textContent).toContain('Tags');
+    expect(group('type').textContent).toContain('Type');
+    expect(group('comments').textContent).toContain('Comments');
+
+    const access = group('access');
+    expect(access.textContent).toContain('Access');
+    for (const id of ['visibility-public', 'visibility-private', 'gate-passphrase', 'gate-domain']) {
+      expect(access.querySelector(`[data-testid="published-artifacts-facet-${id}"]`)).not.toBeNull();
+    }
+    expect(access.querySelector('[data-testid="published-artifacts-facet-kind-bundle"]')).toBeNull();
+
+    // Same counts as before, now in the badge's own words and with its icons.
+    const passphrase = screen.getByTestId('published-artifacts-facet-gate-passphrase').closest('div');
+    expect(passphrase?.textContent).toBe('Passphrase 2');
+    expect(passphrase?.querySelector('svg')).not.toBeNull();
+    const priv = screen.getByTestId('published-artifacts-facet-visibility-private').closest('div');
+    expect(priv?.textContent).toBe('Private 1');
+    expect(priv?.querySelector('svg')).not.toBeNull();
+    // The Public filter counts gated pages too, unlike the badge, and says so.
+    expect(screen.getByTestId('published-artifacts-facet-visibility-public').getAttribute('title')).toMatch(
+      /including passphrase and domain gated/
+    );
+    // The group label already says Comments; the chip does not repeat it.
+    expect(screen.getByTestId('published-artifacts-facet-comments').closest('div')?.textContent).toBe('On 3');
+  });
+
+  it('omits a facet group that has no chips instead of showing an orphan label', async () => {
+    mockList.mockResolvedValue(
+      page([bundleRow], { facets: { kind: { bundle: 1 }, visibility: {}, gate: {}, comments: 0, tag: {} } })
+    );
+    renderTab();
+    await screen.findByTestId('published-artifacts-facet-kind-bundle');
+
+    expect(screen.getByTestId('published-artifacts-facet-group-type')).not.toBeNull();
+    for (const id of ['tags', 'access', 'comments']) {
+      expect(screen.queryByTestId(`published-artifacts-facet-group-${id}`)).toBeNull();
+    }
+  });
+
+  it('still filters on a gate chip and on a visibility chip', async () => {
+    mockList.mockResolvedValue(
+      page([bundleRow], {
+        facets: { kind: {}, visibility: { public: 3 }, gate: { passphrase: 1 }, comments: 0, tag: {} },
+      })
+    );
+    renderTab();
+    await screen.findByTestId('published-artifacts-facet-gate-passphrase');
+
+    fireEvent.click(screen.getByTestId('published-artifacts-facet-gate-passphrase'));
+    await waitFor(() => expect(lastQuery().gate).toBe('passphrase'));
+
+    fireEvent.click(screen.getByTestId('published-artifacts-facet-visibility-public'));
+    await waitFor(() => expect(lastQuery().visibility).toBe('public'));
+  });
+
+  it('still filters on the comments chip', async () => {
+    mockList.mockResolvedValue(
+      page([bundleRow], { facets: { kind: {}, visibility: {}, gate: {}, comments: 2, tag: {} } })
+    );
+    renderTab();
+    await screen.findByTestId('published-artifacts-facet-comments');
+
+    fireEvent.click(screen.getByTestId('published-artifacts-facet-comments'));
+    await waitFor(() => expect(lastQuery().comments).toBe('on'));
+  });
+
+  it('keeps the gate visible on a private row, which the Passphrase filter also returns', async () => {
+    // The server enforces a gate on a non-public page's private links, and counts it under the
+    // gate facet - so the row must not read as a bare Private chip once that filter is on.
+    mockList.mockResolvedValue(page([{ ...bundleRow, visibility: 'private', gateKind: 'passphrase' }]));
+    renderTab();
+    const badge = await screen.findByTestId('published-artifact-access-pub-1');
+
+    expect(badge.textContent).toBe('Private');
+    expect(badge.getAttribute('data-link-gate')).toBe('passphrase');
+    expect(badge.querySelector('[data-testid="KeyIcon"]')).not.toBeNull();
+    expect(badge.getAttribute('title')).toMatch(/Private links also need the passphrase/);
+  });
+
+  it('moves the badge as soon as the sharing panel changes the gate, without refetching the page', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-access-pub-1');
+    expandRow('pub-1');
+    fireEvent.click(screen.getByTestId('published-artifact-manage-pub-1'));
+    const listCalls = () => mockList.mock.calls.filter(c => (c[0] as { facets?: boolean }).facets !== true).length;
+    const facetCalls = () => mockList.mock.calls.filter(c => (c[0] as { facets?: boolean }).facets === true).length;
+    const listBefore = listCalls();
+    const facetsBefore = facetCalls();
+
+    fireEvent.click(screen.getByTestId('stub-panel-set-passphrase-pub-1'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('published-artifact-access-pub-1').getAttribute('data-access')).toBe('passphrase')
+    );
+    // The open panel stays mounted (its show-once passphrase lives there), and the counts refresh.
+    expect(screen.getByTestId('stub-panel-pub-1')).not.toBeNull();
+    await waitFor(() => expect(facetCalls()).toBeGreaterThan(facetsBefore));
+    expect(listCalls()).toBe(listBefore);
+
+    fireEvent.click(screen.getByTestId('stub-panel-clear-gate-pub-1'));
+    await waitFor(() =>
+      expect(screen.getByTestId('published-artifact-access-pub-1').getAttribute('data-access')).toBe('public')
+    );
+  });
+
+  it('drops the private-link gate from a private row once the sharing panel clears it', async () => {
+    mockList.mockResolvedValue(page([{ ...bundleRow, visibility: 'private', gateKind: 'passphrase' }]));
+    renderTab();
+    const before = await screen.findByTestId('published-artifact-access-pub-1');
+    expect(before.getAttribute('data-link-gate')).toBe('passphrase');
+    expandRow('pub-1');
+    fireEvent.click(screen.getByTestId('published-artifact-manage-pub-1'));
+    const listCalls = () => mockList.mock.calls.filter(c => (c[0] as { facets?: boolean }).facets !== true).length;
+    const facetCalls = () => mockList.mock.calls.filter(c => (c[0] as { facets?: boolean }).facets === true).length;
+    const listBefore = listCalls();
+    const facetsBefore = facetCalls();
+
+    fireEvent.click(screen.getByTestId('stub-panel-clear-gate-pub-1'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('published-artifact-access-pub-1').getAttribute('data-link-gate')).toBeNull()
+    );
+    const after = screen.getByTestId('published-artifact-access-pub-1');
+    expect(after.textContent).toBe('Private');
+    expect(after.getAttribute('data-access')).toBe('private');
+    expect(after.querySelector('[data-testid="KeyIcon"]')).toBeNull();
+    expect(after.getAttribute('title')).toBe('Only you, and anyone you send a private link to');
+    await waitFor(() => expect(facetCalls()).toBeGreaterThan(facetsBefore));
+    expect(listCalls()).toBe(listBefore);
+  });
+
+  it('does not bring a cleared private-link gate back when a list response started before the clear arrives', async () => {
+    const oldPage = page([{ ...bundleRow, visibility: 'private', gateKind: 'passphrase' }]);
+    const pendingList = Promise.withResolvers<ReturnType<typeof page>>();
+    let listLoads = 0;
+    mockList.mockImplementation((query: { facets?: boolean }) => {
+      if (query.facets) return Promise.resolve(page([]));
+      listLoads += 1;
+      return listLoads === 1 ? Promise.resolve(oldPage) : pendingList.promise;
+    });
+    renderTab();
+    const before = await screen.findByTestId('published-artifact-access-pub-1');
+    expect(before.getAttribute('data-link-gate')).toBe('passphrase');
+    expandRow('pub-1');
+    fireEvent.click(screen.getByTestId('published-artifact-manage-pub-1'));
+
+    // Another row setting starts a list refresh that still carries the stored gate.
+    fireEvent.click(screen.getByTestId('published-artifact-comments-pub-1').querySelector('input')!);
+    await waitFor(() => expect(listLoads).toBe(2));
+    fireEvent.click(screen.getByTestId('stub-panel-clear-gate-pub-1'));
+    await waitFor(() =>
+      expect(screen.getByTestId('published-artifact-access-pub-1').getAttribute('data-link-gate')).toBeNull()
+    );
+
+    await act(async () => {
+      pendingList.resolve(oldPage);
+      await pendingList.promise;
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+    const after = screen.getByTestId('published-artifact-access-pub-1');
+    expect(after.getAttribute('data-link-gate')).toBeNull();
+    expect(after.getAttribute('data-access')).toBe('private');
+    expect(after.querySelector('[data-testid="KeyIcon"]')).toBeNull();
+    expect(screen.getByTestId('stub-panel-pub-1')).not.toBeNull();
+    expect(listLoads).toBe(2);
+  });
+
+  it.each([
+    [undefined, 'passphrase', 'set-passphrase'],
+    ['passphrase', 'public', 'clear-gate'],
+  ] as const)(
+    'keeps a gate edit from %s to %s when an older list response arrives',
+    async (gateKind, access, action) => {
+      const oldPage = page([{ ...bundleRow, gateKind }]);
+      const pendingList = Promise.withResolvers<ReturnType<typeof page>>();
+      let listLoads = 0;
+      mockList.mockImplementation((query: { facets?: boolean }) => {
+        if (query.facets) return Promise.resolve(page([]));
+        listLoads += 1;
+        return listLoads === 1 ? Promise.resolve(oldPage) : pendingList.promise;
+      });
+      renderTab();
+      await screen.findByTestId('published-artifact-access-pub-1');
+      expandRow('pub-1');
+      fireEvent.click(screen.getByTestId('published-artifact-manage-pub-1'));
+
+      // Another row setting can start a list refresh while the gate editor remains usable.
+      fireEvent.click(screen.getByTestId('published-artifact-comments-pub-1').querySelector('input')!);
+      await waitFor(() => expect(listLoads).toBe(2));
+      fireEvent.click(screen.getByTestId(`stub-panel-${action}-pub-1`));
+      await waitFor(() =>
+        expect(screen.getByTestId('published-artifact-access-pub-1').getAttribute('data-access')).toBe(access)
+      );
+
+      await act(async () => {
+        pendingList.resolve(oldPage);
+        await pendingList.promise;
+        await new Promise(resolve => setTimeout(resolve, 0));
+      });
+      expect(screen.getByTestId('published-artifact-access-pub-1').getAttribute('data-access')).toBe(access);
+      expect(screen.getByTestId('stub-panel-pub-1')).not.toBeNull();
+      expect(listLoads).toBe(2);
+    }
+  );
+});
+
+describe('PublishedArtifactsTabContent - list / grid view', () => {
+  const lastQuery = () => {
+    const listCalls = mockList.mock.calls.map(c => c[0] as Record<string, unknown>).filter(c => c.facets !== true);
+    return listCalls[listCalls.length - 1];
+  };
+  const goGrid = () => fireEvent.click(screen.getByTestId('published-artifacts-view-grid'));
+  const pubTwo = { ...replyRow, title: 'Energy portfolio study', viewCount: 12_345 };
+  const pubThree = { ...sourcedRow, title: 'Desktop app mockup', visibility: 'private' };
+
+  it('defaults to the list, which is what the tab looked like before the toggle', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expect(screen.queryByTestId('published-artifacts-grid')).toBeNull();
+    expect(screen.getByTestId('published-artifacts-view-list').getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByTestId('published-artifacts-view-grid').getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('switches between list and grid with the segmented toggle', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+
+    goGrid();
+    expect(screen.getByTestId('published-artifacts-grid')).not.toBeNull();
+    expect(screen.queryByTestId('published-artifact-pub-1')).toBeNull();
+    expect(screen.getByTestId('published-artifact-card-pub-1')).not.toBeNull();
+    expect(screen.getByTestId('published-artifacts-view-grid').getAttribute('aria-pressed')).toBe('true');
+    // The list's column header only labels list columns.
+    expect(screen.queryByTestId('published-artifacts-columns')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('published-artifacts-view-list'));
+    expect(screen.queryByTestId('published-artifacts-grid')).toBeNull();
+    expect(screen.getByTestId('published-artifact-pub-1')).not.toBeNull();
+  });
+
+  it('keeps one view on when the pressed button is clicked again', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+    goGrid();
+    expect(screen.getByTestId('published-artifacts-grid')).not.toBeNull();
+  });
+
+  it('persists the choice to localStorage', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+    expect(JSON.parse(localStorage.getItem(PUBLISHED_ARTIFACTS_VIEW_KEY) ?? '{}').state.view).toBe('grid');
+
+    fireEvent.click(screen.getByTestId('published-artifacts-view-list'));
+    expect(JSON.parse(localStorage.getItem(PUBLISHED_ARTIFACTS_VIEW_KEY) ?? '{}').state.view).toBe('list');
+  });
+
+  it('opens in the stored view on the next visit', async () => {
+    localStorage.setItem(PUBLISHED_ARTIFACTS_VIEW_KEY, JSON.stringify({ state: { view: 'grid' }, version: 0 }));
+    await usePublishedArtifactsView.persist.rehydrate();
+    renderTab();
+    await screen.findByTestId('published-artifact-card-pub-1');
+    expect(screen.getByTestId('published-artifacts-view-grid').getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('falls back to the list for a stored value it does not recognise', async () => {
+    localStorage.setItem(PUBLISHED_ARTIFACTS_VIEW_KEY, JSON.stringify({ state: { view: 'carousel' }, version: 0 }));
+    await usePublishedArtifactsView.persist.rehydrate();
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expect(screen.queryByTestId('published-artifacts-grid')).toBeNull();
+  });
+
+  it('renders one card per artifact, each with badge, title, meta and the row-scheme test ids', async () => {
+    mockList.mockResolvedValue(page([bundleRow, pubTwo, pubThree]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+
+    expect(screen.getByTestId('published-artifacts-grid').children).toHaveLength(3);
+    for (const [id, title, access] of [
+      ['pub-1', 'My Artifact', 'public'],
+      ['pub-2', 'Energy portfolio study', 'public'],
+      ['pub-3', 'Desktop app mockup', 'private'],
+    ]) {
+      expect(screen.getByTestId(`published-artifact-card-${id}`)).not.toBeNull();
+      expect(screen.getByTestId(`published-artifact-card-title-${id}`).textContent).toBe(title);
+      expect(screen.getByTestId(`published-artifact-card-access-${id}`).getAttribute('data-access')).toBe(access);
+      expect(screen.getByTestId(`published-artifact-card-date-${id}`)).not.toBeNull();
+      expect(screen.getByTestId(`published-artifact-card-views-${id}`)).not.toBeNull();
+      expect(screen.getByTestId(`published-artifact-card-copy-${id}`)).not.toBeNull();
+      expect(screen.getByTestId(`published-artifact-card-more-${id}`)).not.toBeNull();
+    }
+    // A reply has no version history, so its card shows no versions.
+    expect(screen.queryByTestId('published-artifact-card-versions-pub-2')).toBeNull();
+    expect(screen.getByTestId('published-artifact-card-versions-pub-1').textContent).toBe('1 version');
+  });
+
+  it('applies search, filters and the pager to the grid exactly as to the list', async () => {
+    mockList.mockResolvedValue(
+      page([bundleRow], {
+        total: 60,
+        facets: { kind: { bundle: 1 }, visibility: {}, gate: {}, comments: 0, tag: {} },
+      })
+    );
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+
+    fireEvent.change(screen.getByTestId('published-artifacts-search'), { target: { value: 'planning' } });
+    await waitFor(() => expect(lastQuery().q).toBe('planning'));
+
+    fireEvent.click(screen.getByTestId('published-artifacts-facet-kind-bundle'));
+    await waitFor(() => expect(lastQuery().kind).toBe('bundle'));
+
+    expect(screen.getByTestId('published-artifacts-pager').textContent).toContain('of 60');
+    fireEvent.click(screen.getByTestId('published-artifacts-next'));
+    await waitFor(() => expect(lastQuery().skip).toBe(25));
+    // Still the grid after the page turned.
+    expect(screen.getByTestId('published-artifacts-grid')).not.toBeNull();
+  });
+
+  it('shows the same empty state in the grid', async () => {
+    mockList.mockResolvedValue(page([], { total: 0 }));
+    renderTab();
+    await screen.findByTestId('published-artifacts-empty');
+    expect(screen.queryByTestId('published-artifacts-grid')).toBeNull();
+  });
+
+  it('copies the share link from a card', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+
+    fireEvent.click(screen.getByTestId('published-artifact-card-copy-pub-1'));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/p/u/erik/s`));
+    expect(mockToastSuccess).toHaveBeenCalledWith('Link copied');
+    vi.unstubAllGlobals();
+  });
+
+  it('opens the same settings panel in a dialog when More is clicked', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+
+    expect(screen.queryByTestId('published-artifact-settings-modal')).toBeNull();
+    fireEvent.click(screen.getByTestId('published-artifact-card-more-pub-1'));
+
+    const dialog = screen.getByTestId('published-artifact-settings-modal');
+    // The controls the list row shows when expanded, under the same test ids.
+    for (const id of ['visibility', 'comments', 'manage', 'save-html', 'save-pdf', 'restore', 'delete']) {
+      expect(within(dialog).getByTestId(`published-artifact-${id}-pub-1`), id).not.toBeNull();
+    }
+    expect(within(dialog).getByTestId('published-artifact-tag-input-pub-1')).not.toBeNull();
+    expect(within(dialog).getByTestId('published-artifact-single-version-pub-1')).not.toBeNull();
+    expect(within(dialog).getByText('My Artifact')).not.toBeNull();
+  });
+
+  it('mounts the sharing panel from the dialog, and unmounts it when the dialog closes', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+    fireEvent.click(screen.getByTestId('published-artifact-card-more-pub-1'));
+
+    expect(screen.queryByTestId('stub-panel-pub-1')).toBeNull();
+    fireEvent.click(screen.getByTestId('published-artifact-manage-pub-1'));
+    expect(screen.getByTestId('stub-panel-pub-1')).not.toBeNull();
+
+    fireEvent.click(screen.getByTestId('published-artifact-settings-close'));
+    await waitFor(() => expect(screen.queryByTestId('published-artifact-settings-modal')).toBeNull());
+    expect(screen.queryByTestId('stub-panel-pub-1')).toBeNull();
+
+    // Reopening starts with the sharing panel shut, like a freshly expanded row.
+    fireEvent.click(screen.getByTestId('published-artifact-card-more-pub-1'));
+    expect(screen.queryByTestId('stub-panel-pub-1')).toBeNull();
+  });
+
+  it('runs the same handlers from the dialog as from the row (export)', async () => {
+    mockExport.mockResolvedValue('<html></html>');
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+    fireEvent.click(screen.getByTestId('published-artifact-card-more-pub-1'));
+
+    fireEvent.click(screen.getByTestId('published-artifact-save-html-pub-1'));
+    await waitFor(() =>
+      expect(mockDownloadData).toHaveBeenCalledWith('<html></html>', 'my-artifact.html', 'text/html; charset=utf-8')
+    );
+    expect(mockExport).toHaveBeenCalledWith('/p/u/erik/s', 'html');
+  });
+
+  it('refreshes from source from the dialog after confirmation', async () => {
+    mockList.mockResolvedValue(page([sourcedRow]));
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-3');
+    goGrid();
+    fireEvent.click(screen.getByTestId('published-artifact-card-more-pub-3'));
+
+    fireEvent.click(screen.getByTestId('published-artifact-refresh-pub-3'));
+    await waitFor(() => expect(mockRefresh).toHaveBeenCalledTimes(1));
+    vi.restoreAllMocks();
+  });
+
+  it('closes the dialog when the artifact is deleted from it', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.mocked(deletePublishedArtifact).mockResolvedValue(undefined);
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+    fireEvent.click(screen.getByTestId('published-artifact-card-more-pub-1'));
+
+    fireEvent.click(screen.getByTestId('published-artifact-delete-pub-1'));
+    await waitFor(() => expect(screen.queryByTestId('published-artifact-settings-modal')).toBeNull());
+    expect(deletePublishedArtifact).toHaveBeenCalledWith('pub-1');
+    vi.restoreAllMocks();
+  });
+
+  it('closes the dialog when its artifact leaves the list, and does not reopen it if it returns', async () => {
+    const qc = renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+    fireEvent.click(screen.getByTestId('published-artifact-card-more-pub-1'));
+    expect(screen.getByTestId('published-artifact-settings-modal')).not.toBeNull();
+
+    // e.g. a visibility change under an active visibility filter drops the row on the refetch.
+    mockList.mockResolvedValue(page([pubTwo]));
+    await qc.invalidateQueries({ queryKey: ['published-artifacts', 'mine'] });
+    await waitFor(() => expect(screen.queryByTestId('published-artifact-settings-modal')).toBeNull());
+
+    mockList.mockResolvedValue(page([bundleRow]));
+    await qc.invalidateQueries({ queryKey: ['published-artifacts', 'mine'] });
+    await screen.findByTestId('published-artifact-card-pub-1');
+    expect(screen.queryByTestId('published-artifact-settings-modal')).toBeNull();
+  });
+
+  it('uses the thumbnail in the list row cover slot when the artifact has one', async () => {
+    mockList.mockResolvedValue(page([{ ...bundleRow, thumbnailUrl: 'https://cdn.example/thumbs/pub-1.png' }]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    const img = screen.getByTestId('published-artifact-cover-pub-1-image');
+    expect(img.getAttribute('src')).toBe('https://cdn.example/thumbs/pub-1.png');
+
+    fireEvent.error(img);
+    expect(screen.queryByTestId('published-artifact-cover-pub-1-image')).toBeNull();
+    expect(screen.getByTestId('published-artifact-cover-pub-1').textContent).toBe('M');
+  });
+
+  it('uses the thumbnail on the card, and the letter cover when there is none', async () => {
+    mockList.mockResolvedValue(page([{ ...bundleRow, thumbnailUrl: 'https://cdn.example/thumbs/pub-1.png' }, pubTwo]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+
+    expect(screen.getByTestId('published-artifact-card-cover-pub-1-image')).not.toBeNull();
+    expect(screen.queryByTestId('published-artifact-card-cover-pub-2-image')).toBeNull();
+    expect(screen.getByTestId('published-artifact-card-cover-pub-2').textContent).toBe('E');
+  });
+});
+
+describe('PublishedArtifactsTabContent - grid dialog, facet labels and container layout', () => {
+  it('moves the card badge as soon as the sharing panel in the dialog changes the gate', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    fireEvent.click(screen.getByTestId('published-artifacts-view-grid'));
+    fireEvent.click(screen.getByTestId('published-artifact-card-more-pub-1'));
+    fireEvent.click(screen.getByTestId('published-artifact-manage-pub-1'));
+    const listCalls = () => mockList.mock.calls.filter(c => (c[0] as { facets?: boolean }).facets !== true).length;
+    const listBefore = listCalls();
+
+    fireEvent.click(screen.getByTestId('stub-panel-set-passphrase-pub-1'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('published-artifact-card-access-pub-1').getAttribute('data-access')).toBe('passphrase')
+    );
+    // The dialog (and the show-once passphrase in its panel) survives, and the page is not refetched.
+    expect(screen.getByTestId('stub-panel-pub-1')).not.toBeNull();
+    expect(listCalls()).toBe(listBefore);
+  });
+
+  it.each([
+    [undefined, 'passphrase', 'set-passphrase'],
+    ['passphrase', 'public', 'clear-gate'],
+  ] as const)(
+    'keeps the card badge for a gate edit from %s to %s when an older list response arrives',
+    async (gateKind, access, action) => {
+      const oldPage = page([{ ...bundleRow, gateKind }]);
+      const pendingList = Promise.withResolvers<ReturnType<typeof page>>();
+      let listLoads = 0;
+      mockList.mockImplementation((query: { facets?: boolean }) => {
+        if (query.facets) return Promise.resolve(page([]));
+        listLoads += 1;
+        return listLoads === 1 ? Promise.resolve(oldPage) : pendingList.promise;
+      });
+      renderTab();
+      await screen.findByTestId('published-artifact-pub-1');
+      fireEvent.click(screen.getByTestId('published-artifacts-view-grid'));
+      fireEvent.click(screen.getByTestId('published-artifact-card-more-pub-1'));
+      fireEvent.click(screen.getByTestId('published-artifact-manage-pub-1'));
+
+      fireEvent.click(screen.getByTestId('published-artifact-comments-pub-1').querySelector('input')!);
+      await waitFor(() => expect(listLoads).toBe(2));
+      fireEvent.click(screen.getByTestId(`stub-panel-${action}-pub-1`));
+      await waitFor(() =>
+        expect(screen.getByTestId('published-artifact-card-access-pub-1').getAttribute('data-access')).toBe(access)
+      );
+
+      await act(async () => {
+        pendingList.resolve(oldPage);
+        await pendingList.promise;
+        await new Promise(resolve => setTimeout(resolve, 0));
+      });
+      expect(screen.getByTestId('published-artifact-card-access-pub-1').getAttribute('data-access')).toBe(access);
+      expect(screen.getByTestId('stub-panel-pub-1')).not.toBeNull();
+      expect(listLoads).toBe(2);
+    }
+  );
+
+  it('labels the Type facet chips with names for people, and still filters on the raw kind', async () => {
+    mockList.mockResolvedValue(
+      page([bundleRow], {
+        facets: { kind: { bundle: 2, reply: 1, fabfile: 1 }, visibility: {}, gate: {}, comments: 0, tag: {} },
+      })
+    );
+    renderTab();
+    await screen.findByTestId('published-artifacts-facet-kind-bundle');
+
+    const text = (kind: string) =>
+      screen.getByTestId(`published-artifacts-facet-kind-${kind}`).closest('div')?.textContent;
+    expect(text('bundle')).toBe('Bundle 2');
+    expect(text('reply')).toBe('Reply 1');
+    expect(text('fabfile')).toBe('File 1');
+
+    fireEvent.click(screen.getByTestId('published-artifacts-facet-kind-fabfile'));
+    await waitFor(() =>
+      expect(
+        mockList.mock.calls
+          .map(c => c[0] as Record<string, unknown>)
+          .filter(c => c.facets !== true)
+          .pop()?.kind
+      ).toBe('fabfile')
+    );
+  });
+
+  it('shows the same human label in the settings panel source chip', async () => {
+    mockList.mockResolvedValue(page([{ ...bundleRow, source: { kind: 'fabfile' } }]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expandRow('pub-1');
+    expect(screen.getByTestId('published-artifact-settings-pub-1').textContent).toContain('File');
+  });
+
+  it('switches the row layout on the list width, not the viewport', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    const css = Array.from(document.querySelectorAll('style'))
+      .map(s => s.textContent ?? '')
+      .join('\n');
+    // The list wrapper is the size container, and the wide layout hangs off it.
+    expect(css).toMatch(/container-type:\s*inline-size/);
+    expect(css).toMatch(/@container \(min-width:\s*720px\)/);
+    // No row rule is still keyed to the md viewport breakpoint.
+    const rowRules = css.split('}').filter(r => r.includes('grid-template-areas'));
+    expect(rowRules.length).toBeGreaterThan(0);
+    expect(rowRules.some(r => /@media/.test(r))).toBe(false);
+  });
+});
+
+describe('PublishedArtifactsTabContent - grid dialog focus, sharing state and narrow layout', () => {
+  const goGrid = () => fireEvent.click(screen.getByTestId('published-artifacts-view-grid'));
+
+  it('keeps the list row title as its link name; the tooltip only describes it', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expect(screen.getByRole('link', { name: 'My Artifact' }).getAttribute('href')).toBe(
+      `${window.location.origin}/p/u/erik/s`
+    );
+    expect(screen.queryByRole('link', { name: 'Opens in a new tab' })).toBeNull();
+  });
+
+  it('closes the dialog on Escape and hands focus back to the More button that opened it', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+    const more = screen.getByTestId('published-artifact-card-more-pub-1');
+    more.focus();
+    fireEvent.click(more);
+    const dialog = screen.getByTestId('published-artifact-settings-modal');
+    expect(dialog.getAttribute('role')).toBe('dialog');
+    expect(dialog.getAttribute('aria-labelledby')).toBe('published-artifact-settings-title-pub-1');
+
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId('published-artifact-settings-modal')).toBeNull());
+    expect(document.activeElement).toBe(screen.getByTestId('published-artifact-card-more-pub-1'));
+  });
+
+  it('does not restore an earlier delete focus after another settings dialog is opened', async () => {
+    const other = { ...bundleRow, publicId: 'pub-2', title: 'Other artifact' };
+    let finishDelete = () => {};
+    vi.mocked(deletePublishedArtifact).mockImplementation(
+      () =>
+        new Promise<void>(resolve => {
+          finishDelete = resolve;
+        })
+    );
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    try {
+      mockList.mockResolvedValue(page([bundleRow, other]));
+      renderTab();
+      await screen.findByTestId('published-artifact-pub-1');
+      goGrid();
+      screen.getByTestId('published-artifact-card-more-pub-1').focus();
+      fireEvent.click(screen.getByTestId('published-artifact-card-more-pub-1'));
+      fireEvent.click(screen.getByTestId('published-artifact-delete-pub-1'));
+      fireEvent.keyDown(screen.getByTestId('published-artifact-settings-modal'), { key: 'Escape' });
+      await waitFor(() => expect(screen.queryByTestId('published-artifact-settings-modal')).toBeNull());
+
+      const otherMore = screen.getByTestId('published-artifact-card-more-pub-2');
+      otherMore.focus();
+      fireEvent.click(otherMore);
+      mockList.mockResolvedValue(page([other]));
+      await act(async () => {
+        finishDelete();
+      });
+      await waitFor(() => expect(screen.queryByTestId('published-artifact-card-pub-1')).toBeNull());
+      expect(screen.getByTestId('published-artifact-settings-modal')).toBeTruthy();
+
+      fireEvent.keyDown(screen.getByTestId('published-artifact-settings-modal'), { key: 'Escape' });
+      await waitFor(() => expect(screen.queryByTestId('published-artifact-settings-modal')).toBeNull());
+      expect(document.activeElement).toBe(otherMore);
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
+  it.each(['card', 'search'] as const)('preserves delete focus ownership after Escape to %s', async focusAfterClose => {
+    const other = { ...bundleRow, publicId: 'pub-2', title: 'Other artifact' };
+    let finishDelete = () => {};
+    vi.mocked(deletePublishedArtifact).mockImplementation(
+      () =>
+        new Promise<void>(resolve => {
+          finishDelete = resolve;
+        })
+    );
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    try {
+      mockList.mockResolvedValue(page([bundleRow, other]));
+      renderTab();
+      await screen.findByTestId('published-artifact-pub-1');
+      goGrid();
+      const more = screen.getByTestId('published-artifact-card-more-pub-1');
+      more.focus();
+      fireEvent.click(more);
+      fireEvent.click(screen.getByTestId('published-artifact-delete-pub-1'));
+      fireEvent.keyDown(screen.getByTestId('published-artifact-settings-modal'), { key: 'Escape' });
+      await waitFor(() => expect(document.activeElement).toBe(more));
+      const search = screen.getByTestId('published-artifacts-search');
+      if (focusAfterClose === 'search') search.focus();
+
+      mockList.mockResolvedValue(page([other]));
+      await act(async () => {
+        finishDelete();
+      });
+      await waitFor(() => expect(screen.queryByTestId('published-artifact-card-pub-1')).toBeNull());
+      expect(document.activeElement).toBe(
+        focusAfterClose === 'search' ? search : screen.getByTestId('published-artifact-card-title-pub-2')
+      );
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
+  it('opens the dialog with the sharing panel shut even when the list row left it open', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expandRow('pub-1');
+    fireEvent.click(screen.getByTestId('published-artifact-manage-pub-1'));
+    expect(screen.getByTestId('stub-panel-pub-1')).not.toBeNull();
+
+    goGrid();
+    fireEvent.click(screen.getByTestId('published-artifact-card-more-pub-1'));
+    expect(screen.getByTestId('published-artifact-settings-modal')).not.toBeNull();
+    expect(screen.queryByTestId('stub-panel-pub-1')).toBeNull();
+  });
+
+  it('shuts the sharing panel with a dialog that closed because its artifact left the list', async () => {
+    const qc = renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+    fireEvent.click(screen.getByTestId('published-artifact-card-more-pub-1'));
+    fireEvent.click(screen.getByTestId('published-artifact-manage-pub-1'));
+    expect(screen.getByTestId('stub-panel-pub-1')).not.toBeNull();
+
+    mockList.mockResolvedValue(page([replyRow]));
+    await qc.invalidateQueries({ queryKey: ['published-artifacts', 'mine'] });
+    await waitFor(() => expect(screen.queryByTestId('published-artifact-settings-modal')).toBeNull());
+
+    // Back in the list, expanding the returned row must not mount a sharing panel nobody opened.
+    mockList.mockResolvedValue(page([bundleRow]));
+    await qc.invalidateQueries({ queryKey: ['published-artifacts', 'mine'] });
+    fireEvent.click(screen.getByTestId('published-artifacts-view-list'));
+    expandRow('pub-1');
+    expect(screen.getByTestId('published-artifact-settings-pub-1')).not.toBeNull();
+    expect(screen.queryByTestId('stub-panel-pub-1')).toBeNull();
+  });
+
+  it('lets a grid column shrink below its 260px minimum instead of overflowing a narrow tab', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+    const css = Array.from(document.querySelectorAll('style'))
+      .map(s => s.textContent ?? '')
+      .join('\n');
+    expect(css).toMatch(/grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(min\(260px,\s*100%\),\s*1fr\)\)/);
+    expect(css).not.toMatch(/minmax\(260px,\s*1fr\)/);
+  });
+
+  it('wraps a dialog title that has no spaces instead of widening the dialog', async () => {
+    const longTitle = 'https://example.com/a/very/long/pasted/address/with/no/spaces/at/all';
+    mockList.mockResolvedValue(page([{ ...bundleRow, title: longTitle }]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+    fireEvent.click(screen.getByTestId('published-artifact-card-more-pub-1'));
+    const title = document.getElementById('published-artifact-settings-title-pub-1') as HTMLElement;
+    expect(title.textContent).toBe(longTitle);
+    expect(getComputedStyle(title).overflowWrap).toBe('anywhere');
+  });
+
+  it('keeps list semantics on the unstyled card list, so screen readers announce the count', async () => {
+    mockList.mockResolvedValue(page([bundleRow, replyRow]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+    const grid = screen.getByTestId('published-artifacts-grid');
+    expect(grid.getAttribute('role')).toBe('list');
+    expect(within(grid).getAllByRole('listitem')).toHaveLength(2);
+  });
+});
+
+describe.each(['list', 'grid'] as const)('PublishedArtifactsTabContent - focus after delete (%s view)', view => {
+  const first = { ...bundleRow, publicId: 'pub-1', title: 'First artifact' };
+  const second = { ...bundleRow, publicId: 'pub-2', title: 'Second artifact' };
+  const third = { ...bundleRow, publicId: 'pub-3', title: 'Third artifact' };
+  type Row = typeof first;
+
+  const rowTestId = (r: Row) =>
+    view === 'grid' ? `published-artifact-card-${r.publicId}` : `published-artifact-${r.publicId}`;
+  const titleLink = (r: Row) =>
+    view === 'grid'
+      ? screen.getByTestId(`published-artifact-card-title-${r.publicId}`)
+      : within(screen.getByTestId(rowTestId(r))).getByRole('link', { name: r.title });
+
+  /** Opens the settings the way a keyboard user does and returns the focused Delete button. */
+  const focusDelete = (r: Row) => {
+    if (view === 'grid') {
+      const more = screen.getByTestId(`published-artifact-card-more-${r.publicId}`);
+      more.focus();
+      fireEvent.click(more);
+    } else {
+      expandRow(r.publicId);
+    }
+    const del = screen.getByTestId(`published-artifact-delete-${r.publicId}`);
+    del.focus();
+    return del;
+  };
+
+  const renderRows = async (rows: Row[], over: Record<string, unknown> = {}) => {
+    mockList.mockResolvedValue(page(rows, over));
+    usePublishedArtifactsView.setState({ view });
+    renderTab();
+    await screen.findByTestId(rowTestId(rows[0]));
+  };
+
+  let confirmSpy: { mockRestore: () => void };
+  beforeEach(() => {
+    confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.mocked(deletePublishedArtifact).mockReset().mockResolvedValue(undefined);
+  });
+  afterEach(() => confirmSpy.mockRestore());
+
+  it('focuses the next title when a middle item is deleted, and keeps it there once the row is gone', async () => {
+    await renderRows([first, second, third]);
+    mockList.mockResolvedValue(page([first, third]));
+    const del = focusDelete(second);
+
+    fireEvent.click(del);
+    await waitFor(() => expect(document.activeElement).toBe(titleLink(third)));
+
+    await waitFor(() => expect(screen.queryByTestId(rowTestId(second))).toBeNull());
+    expect(document.activeElement).toBe(titleLink(third));
+  });
+
+  it('focuses the first remaining title when the first item is deleted', async () => {
+    await renderRows([first, second, third]);
+    mockList.mockResolvedValue(page([second, third]));
+
+    fireEvent.click(focusDelete(first));
+    await waitFor(() => expect(document.activeElement).toBe(titleLink(second)));
+  });
+
+  it('focuses the previous title when the last item is deleted', async () => {
+    await renderRows([first, second, third]);
+    mockList.mockResolvedValue(page([first, second]));
+    const del = focusDelete(third);
+
+    fireEvent.click(del);
+    await waitFor(() => expect(document.activeElement).toBe(titleLink(second)));
+
+    await waitFor(() => expect(screen.queryByTestId(rowTestId(third))).toBeNull());
+    expect(document.activeElement).toBe(titleLink(second));
+  });
+
+  it('focuses the search input when the only item in a filtered view is deleted', async () => {
+    await renderRows([first]);
+    const search = screen.getByTestId('published-artifacts-search');
+    fireEvent.change(search, { target: { value: 'first' } });
+    await waitFor(() => expect(mockList.mock.calls.some(c => (c[0] as { q?: string }).q === 'first')).toBe(true));
+    mockList.mockResolvedValue(page([], { total: 0 }));
+
+    fireEvent.click(focusDelete(first));
+    await waitFor(() => expect(document.activeElement).toBe(search));
+
+    await waitFor(() => expect(screen.queryByTestId(rowTestId(first))).toBeNull());
+    expect(document.activeElement).toBe(search);
+  });
+
+  it('focuses the search input when the only item on a later page is deleted', async () => {
+    let deleted = false;
+    vi.mocked(deletePublishedArtifact).mockImplementation(async () => {
+      deleted = true;
+    });
+    mockList.mockImplementation(async (q: { skip?: number }) =>
+      q.skip === 25 ? page([second], { total: 26, skip: 25 }) : page([first], { total: deleted ? 25 : 26, skip: 0 })
+    );
+    usePublishedArtifactsView.setState({ view });
+    renderTab();
+    await screen.findByTestId(rowTestId(first));
+    fireEvent.click(screen.getByTestId('published-artifacts-next'));
+    await screen.findByTestId(rowTestId(second));
+
+    fireEvent.click(focusDelete(second));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('published-artifacts-search')));
+
+    // The page steps back, and the search input is still where focus is.
+    await screen.findByTestId(rowTestId(first));
+    expect(document.activeElement).toBe(screen.getByTestId('published-artifacts-search'));
+  });
+
+  it('focuses the tab heading when the whole library is emptied, since the toolbar goes with it', async () => {
+    await renderRows([first]);
+    mockList.mockResolvedValue(page([], { total: 0 }));
+
+    fireEvent.click(focusDelete(first));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('published-artifacts-heading')));
+
+    await screen.findByTestId('published-artifacts-empty');
+    expect(screen.queryByTestId('published-artifacts-search')).toBeNull();
+    expect(document.activeElement).toBe(screen.getByTestId('published-artifacts-heading'));
+  });
+
+  it('leaves focus where it was when the delete fails', async () => {
+    await renderRows([first, second, third]);
+    vi.mocked(deletePublishedArtifact).mockRejectedValue(new Error('Server said no'));
+    const del = focusDelete(second);
+
+    fireEvent.click(del);
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith('Server said no'));
+    await waitFor(() => expect(del.hasAttribute('disabled')).toBe(false));
+
+    expect(document.activeElement).toBe(del);
+    // Nothing was removed, and in the grid the dialog is still the place focus lives.
+    expect(screen.getByTestId(rowTestId(second))).not.toBeNull();
+    if (view === 'grid') expect(screen.getByTestId('published-artifact-settings-modal')).not.toBeNull();
+  });
+});
+
+describe('PublishedArtifactsTabContent - helper text contrast', () => {
+  /** Helper text is dimmed by a theme text token, never `opacity`, which stacks on the token and drops it below AA. */
+  const expectTokenDimmed = (el: HTMLElement, token: 'secondary' | 'tertiary') => {
+    const style = getComputedStyle(el);
+    expect(['', '1']).toContain(style.opacity);
+    expect(style.color).toContain(`--joy-palette-text-${token}`);
+  };
+
+  it('dims the intro, pager and row settings helper text with a text token, not opacity', async () => {
+    usePublishedArtifactsView.setState({ view: 'list' });
+    mockList.mockResolvedValue(page([bundleRow], { total: 60 }));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expandRow('pub-1');
+
+    expectTokenDimmed(screen.getByText(/Everything you've published as a live link/), 'secondary');
+    expectTokenDimmed(within(screen.getByTestId('published-artifacts-pager')).getByText(/of 60/), 'tertiary');
+    const settings = screen.getByTestId('published-artifact-settings-pub-1');
+    expectTokenDimmed(within(settings).getByText(`0/${PUBLISH_TAGS_MAX}`), 'tertiary');
+    expectTokenDimmed(within(settings).getByText('Visibility'), 'tertiary');
+    expectTokenDimmed(within(settings).getByText('Comments'), 'tertiary');
+    expectTokenDimmed(screen.getByTestId('published-artifact-single-version-pub-1'), 'tertiary');
+  });
+
+  it('dims the empty-library message with a text token, not opacity', async () => {
+    mockList.mockResolvedValue(page([]));
+    renderTab();
+    expectTokenDimmed(await screen.findByTestId('published-artifacts-empty'), 'secondary');
+  });
+
+  it('dims the no-matches message with a text token, not opacity', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    mockList.mockResolvedValue(page([]));
+    fireEvent.change(screen.getByTestId('published-artifacts-search'), { target: { value: 'nothing matches' } });
+    expectTokenDimmed(await screen.findByTestId('published-artifacts-no-matches'), 'secondary');
   });
 });

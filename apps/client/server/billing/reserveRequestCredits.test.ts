@@ -31,14 +31,28 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class BadRequestError extends Error {
     statusCode = 400;
   },
+  ForbiddenError: class ForbiddenError extends Error {
+    statusCode = 403;
+  },
+  UnauthorizedError: class UnauthorizedError extends Error {
+    statusCode = 401;
+  },
 }));
 vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: {},
   organizationRepository: { findById: orgFindById, incrementCredits: orgIncrement },
   userRepository: { findById: userFindById, incrementCredits: userIncrement },
   pendingCreditHoldRepository: { record: recordHold, claim: claimHold, markSettled, findSettlement },
+  usageEventRepository: {},
   withTransaction,
+  // No samples and no settings rows: the spend cap reads defaults and never refuses here.
+  newAccountSpendCapAdapters: {
+    adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+    personalSpendSince: async () => [],
+  },
 }));
+const checkDailyCap = vi.hoisted(() => vi.fn());
+vi.mock('./freeTierDailyCapGate', () => ({ checkFreeTierDailySpendCap: checkDailyCap }));
 vi.mock('@bike4mind/services', async () => {
   const creditService = await vi.importActual<typeof import('@bike4mind/services/creditService')>(
     '@bike4mind/services/creditService'
@@ -106,6 +120,53 @@ describe('reserveRequestCredits', () => {
       return pending;
     });
   });
+
+  it.each([true, false])(
+    'refuses a moderated user before touching any balance (enforceCredits %s)',
+    async enforceCredits => {
+      const req = {
+        ...userReq(),
+        user: { id: 'u1', organizationId: null, isModerated: true },
+      } as unknown as Parameters<typeof reserveRequestCredits>[0]['req'];
+
+      await expect(
+        reserveRequestCredits({ req, requiredCredits: 5, enforceCredits, featureLabel: 'embeddings' })
+      ).rejects.toMatchObject({ statusCode: 403, message: expect.stringContaining('AI features are disabled') });
+      expect(userIncrement).not.toHaveBeenCalled();
+      expect(recordHold).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses a capped free-tier user before reserving anything', async () => {
+    const capError = new Error('Daily free-tier credit limit reached.');
+    checkDailyCap.mockRejectedValueOnce(capError);
+    const req = userReq();
+
+    await expect(
+      reserveRequestCredits({ req, requiredCredits: 5, enforceCredits: true, featureLabel: 'embeddings' })
+    ).rejects.toBe(capError);
+    expect(checkDailyCap).toHaveBeenCalledWith(expect.objectContaining({ user: req.user }));
+    expect(userIncrement).not.toHaveBeenCalled();
+    expect(recordHold).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])(
+    'refuses a signup review hold before any billing (enforceCredits %s)',
+    async enforceCredits => {
+      const req = userReq({ keyId: 'key1', billingOwnerType: CreditHolderType.User });
+      req.user = {
+        ...req.user!,
+        riskScore: { score: 70, signals: [], computedAt: new Date(), reviewState: 'pending' },
+      };
+      await expect(
+        reserveRequestCredits({ req, requiredCredits: 5, enforceCredits, featureLabel: 'embeddings' })
+      ).rejects.toMatchObject({ statusCode: 403, message: expect.stringContaining('awaits review') });
+      expect(checkDailyCap).not.toHaveBeenCalled();
+      expect(userIncrement).not.toHaveBeenCalled();
+      expect(orgIncrement).not.toHaveBeenCalled();
+      expect(recordHold).not.toHaveBeenCalled();
+    }
+  );
 
   it('reserves nothing and touches no balance when credits are not enforced', async () => {
     const reservation = await reserveRequestCredits({
@@ -240,6 +301,7 @@ describe('reserveRequestCredits', () => {
       });
 
       expect(reservation).toMatchObject({ ownerId: 'teamOrg', ownerType: CreditHolderType.Organization });
+      expect(checkDailyCap).toHaveBeenCalledWith(expect.objectContaining({ billingOrganizationId: 'teamOrg' }));
       expect(orgIncrement).toHaveBeenCalledWith('teamOrg', -5);
       expect(userIncrement).not.toHaveBeenCalled();
     });
@@ -248,6 +310,7 @@ describe('reserveRequestCredits', () => {
       const reservation = await reserveRequestCredits({ ...base, req: homeOrgReq(), billingOrganizationId: null });
 
       expect(reservation).toMatchObject({ ownerId: 'u1', ownerType: CreditHolderType.User });
+      expect(checkDailyCap).toHaveBeenCalledWith(expect.objectContaining({ billingOrganizationId: undefined }));
       expect(userIncrement).toHaveBeenCalledWith('u1', -5);
       expect(orgIncrement).not.toHaveBeenCalled();
     });
@@ -268,7 +331,45 @@ describe('reserveRequestCredits', () => {
       });
 
       expect(reservation).toMatchObject({ ownerId: 'o1', ownerType: CreditHolderType.Organization });
+      expect(checkDailyCap).toHaveBeenCalledWith(expect.objectContaining({ billingOrganizationId: 'o1' }));
       expect(orgIncrement).toHaveBeenCalledWith('o1', -5);
+    });
+  });
+
+  describe('API-key attribution on the settled ledger row', () => {
+    const reserve = (apiKeyInfo?: unknown) =>
+      reserveRequestCredits({ req: userReq(apiKeyInfo), requiredCredits: 2, enforceCredits: true, featureLabel: 'x' });
+
+    it('records the authenticating key on the row', async () => {
+      const reservation = await reserve({ keyId: 'key-1', billingOwnerType: CreditHolderType.User });
+
+      await reservation.settle(1, ledger);
+
+      expect(deductCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ apiKeyId: 'key-1' }),
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it('keeps a key the entry already names', async () => {
+      const reservation = await reserve({ keyId: 'key-1', billingOwnerType: CreditHolderType.User });
+
+      await reservation.settle(1, { ...ledger, apiKeyId: 'key-explicit' });
+
+      expect(deductCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ apiKeyId: 'key-explicit' }),
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it('records no key for a JWT caller', async () => {
+      const reservation = await reserve();
+
+      await reservation.settle(1, ledger);
+
+      expect(deductCredits.mock.calls.at(-1)?.[0]).not.toHaveProperty('apiKeyId');
     });
   });
 
@@ -284,6 +385,7 @@ describe('reserveRequestCredits', () => {
     });
 
     expect(reservation).toMatchObject({ ownerId: 'o1', ownerType: CreditHolderType.Organization });
+    expect(checkDailyCap).toHaveBeenCalledWith(expect.objectContaining({ billingOrganizationId: 'o1' }));
     expect(orgIncrement).toHaveBeenCalledWith('o1', -2);
     expect(userIncrement).not.toHaveBeenCalled();
   });

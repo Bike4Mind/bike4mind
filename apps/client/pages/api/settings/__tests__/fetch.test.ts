@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Keep @bike4mind/common real so we assert against the actual settingsMap default; mock only
 // the infra + middleware seams. AdminSettings.find(...).lean() returns whatever we stage below.
@@ -94,5 +94,38 @@ describe('settings/fetch sensitive value redaction', () => {
     stored = [{ settingName: 'anthropicDemoKey', settingValue: '' }];
     const result = await runHandler();
     expect(result.find(s => s.settingName === 'anthropicDemoKey')?.settingValue).toBe('');
+  });
+});
+
+describe('settings/fetch enforceCredits hosted lock', () => {
+  beforeEach(() => {
+    stored = [];
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('reports true on a hosted deployment even when false is stored', async () => {
+    vi.stubEnv('B4M_SELF_HOST', undefined);
+    stored = [{ settingName: 'enforceCredits', settingValue: false }];
+    const result = await runHandler();
+    const entry = result.filter(s => s.settingName === 'enforceCredits');
+    expect(entry).toHaveLength(1);
+    expect(entry[0].settingValue).toBe(true);
+  });
+
+  it('does not add an entry on a hosted deployment when none is stored', async () => {
+    vi.stubEnv('B4M_SELF_HOST', undefined);
+    const result = await runHandler();
+    expect(result.some(s => s.settingName === 'enforceCredits')).toBe(false);
+  });
+
+  it('passes a stored false through unchanged on a self-host deployment', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    stored = [{ settingName: 'enforceCredits', settingValue: false }];
+    const result = await runHandler();
+    expect(result.find(s => s.settingName === 'enforceCredits')?.settingValue).toBe(false);
   });
 });

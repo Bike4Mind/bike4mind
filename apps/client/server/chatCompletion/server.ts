@@ -1,12 +1,15 @@
 import express, { type Request, type Response } from 'express';
+import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { connectDB, mongoose } from '@bike4mind/database';
 import { registerProcessErrorHandlers } from '@bike4mind/utils';
+import { hasModelCatalogProvider } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { registerInternalRoutes } from './internal/route';
 import { registerExternalRoutes } from './external/sseRoute';
 import { registerWsCompletionRoutes } from './external/wsRoute';
 import { registerEmbedRoutes } from './external/embedRoute';
+import { requireOriginVerify } from './originVerify';
 
 /**
  * ChatCompletion - always-on HTTP worker (Fargate). Serves both internal quest
@@ -104,6 +107,15 @@ export function createApp() {
   // Internal quest-processing surface (frontend Lambda -> WebSocket streaming).
   registerInternalRoutes(app, track);
 
+  // Everything registered below is gated, so a new route is CloudFront-only by default. /health and
+  // /process are registered above because they are reached directly (ALB health check, frontend
+  // Lambda via NAT); keep any other direct-only route above this line too.
+  app.use(requireOriginVerify);
+
+  // Every user-facing route below (completions, CLI WS completions, embed chat) refuses a caller
+  // on an admin's `all` IP block; the internal route above is service-to-service and is not.
+  app.use(checkBlockedIP({ surface: 'app' }));
+
   // External CLI/3rd-party completions endpoint (user-authenticated SSE stream). Registered on
   // the always-on service so it has no cold start / 15-min Lambda ceiling. Its in-flight streams
   // join the same drain set so SIGTERM lets them finish (bounded by DRAIN_TIMEOUT_MS).
@@ -119,6 +131,20 @@ export function createApp() {
   registerEmbedRoutes(app, track);
 
   return app;
+}
+
+/**
+ * connectDB wires the model catalog onto the llm-adapters instance its own (ESM) graph loads. A
+ * second instance in this process (see esmWorkspacePackages.mjs) leaves completions without the
+ * catalog and price overlays, so DB-only models fail as unknown. Exported for tests.
+ */
+export function checkModelCatalogWired(logger: Pick<Logger, 'error'>): boolean {
+  if (hasModelCatalogProvider()) return true;
+  logger.error(
+    'Model catalog provider is not wired on the llm-adapters instance completions read; ' +
+      'catalog-only models will fail as unknown and billing falls back to adapter prices'
+  );
+  return false;
 }
 
 async function main() {
@@ -147,6 +173,7 @@ async function main() {
   connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), bootLogger)
     .then(() => {
       bootLogger.info('MongoDB connected at boot');
+      checkModelCatalogWired(bootLogger);
     })
     .catch(err =>
       bootLogger.error('MongoDB connection failed at boot', {

@@ -24,7 +24,7 @@ vi.mock('@bike4mind/utils', async importActual => ({
 }));
 vi.mock('@server/billing/reserveRequestCredits', () => ({ reserveRequestCredits: (...a: unknown[]) => reserve(...a) }));
 // The real TestDecisionProvider behind a spy, so the runner exercises the real retry policy.
-vi.mock('@server/decisions/providers', async () => {
+vi.mock('@bike4mind/server-utils/decisions/providers', async () => {
   const { TestDecisionProvider } = await import('@bike4mind/utils/decisionProviders');
   const real = new TestDecisionProvider();
   const provider = {
