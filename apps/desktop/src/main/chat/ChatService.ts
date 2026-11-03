@@ -370,6 +370,12 @@ type SendOptions = {
 export const MAX_CONCURRENT_SPAWNED = 10;
 
 /**
+ * How long a spawned agent's first turn waits for its new worktree's dependency install (ms).
+ * It cannot wait out an install itself: ending its turn reads as the agent having finished.
+ */
+export const SPAWN_INSTALL_WAIT_MS = 10 * 60_000;
+
+/**
  * How long a title request may take before it is dropped.
  *
  * Short on purpose: the sidebar row already reads acceptably, so a slow answer is worth less
@@ -634,6 +640,9 @@ export class ChatService {
   private readonly preparing = new Map<string, WorkspacePreparation>();
 
   private readonly launching = new Set<string>();
+
+  /** Ends a spawned agent's wait for its install early, when it is stopped or deleted meanwhile. */
+  private readonly installWaits = new Map<string, (reason: 'stopped' | 'deleted') => void>();
 
   /** Startup has failed; no new input may race its preservation or deletion. */
   private readonly abandoning = new Set<string>();
@@ -1825,6 +1834,8 @@ export class ChatService {
     const scopeKey = this.deps.store.scopeKey() ?? 'local';
     this.deps.approvals?.forgetSession(sessionId);
     this.deps.history?.removeSession(sessionId, historyScope);
+    // Ahead of stop(), so a spawn waiting on its install reads this as the delete it is.
+    this.installWaits.get(sessionId)?.('deleted');
     this.stop(sessionId);
     await this.deps.capabilities
       ?.revokeMatching(
@@ -1885,6 +1896,7 @@ export class ChatService {
    * server it started. `bash_kill` and the panel's Stop button are how those end.
    */
   stop(sessionId: string): void {
+    this.installWaits.get(sessionId)?.('stopped');
     this.active.get(sessionId)?.abort();
   }
 
@@ -2884,7 +2896,7 @@ export class ChatService {
           host: !!host,
           explore: !!explore,
           mcpServers: this.deps.mcp ? mcpServers : null,
-          dependencyLines: this.deps.dependencies?.promptLines(session.id) ?? [],
+          dependencyLines: this.deps.dependencies?.promptLines(session.id, { spawned: !!session.origin }) ?? [],
           projectContext: !!projectContext,
           browser: !!browser,
           patchEdits,
@@ -2955,7 +2967,7 @@ export class ChatService {
           toolsSupported && !!explore,
           toolsSupported && this.deps.mcp ? mcpServers : null,
           session.project,
-          this.deps.dependencies?.promptLines(session.id) ?? [],
+          this.deps.dependencies?.promptLines(session.id, { spawned: !!session.origin }) ?? [],
           projectContext,
           toolsSupported && !!browser,
           patchEdits,
@@ -4870,6 +4882,7 @@ export class ChatService {
     this.launching.add(child.id);
     this.deps.activity?.preparingStarted(child.id);
     let failure: string | null = null;
+    let deleted = false;
     try {
       let text = seed;
       if (worktree) {
@@ -4879,6 +4892,11 @@ export class ChatService {
         if (!unprepared && child.project) {
           const workingDirectory = child.project.workingDirectory;
           text = `${worktreePreamble(projectDirectory, { ...worktree, workingDirectory })}\n\n${seed}`;
+        }
+        if (!unprepared) {
+          const waited = await this.awaitSpawnInstall(child.id);
+          if (waited !== 'ready') failure = 'It was stopped before its first turn.';
+          deleted = waited === 'deleted';
         }
       }
       if (!failure) {
@@ -4896,7 +4914,7 @@ export class ChatService {
         this.deps.logger.debug(`CHAT: spawned ${child.id} from ${parentId}`);
         return;
       }
-      await this.abandonSpawn(parentId, child, failure, onFailed).catch((err: unknown) => {
+      await this.abandonSpawn(parentId, child, failure, onFailed, deleted).catch((err: unknown) => {
         this.deps.logger.warn(`CHAT: could not clean up ${child.id}: ${err instanceof Error ? err.message : err}`);
       });
     } finally {
@@ -4908,6 +4926,32 @@ export class ChatService {
   }
 
   /**
+   * Hold a spawned agent's first turn until its worktree's install settles, or the cap passes.
+   * A timeout or failure still starts the turn, whose prompt then says the install is running or
+   * failed; only a stop or a delete meanwhile does not.
+   */
+  private async awaitSpawnInstall(sessionId: string): Promise<'ready' | 'stopped' | 'deleted'> {
+    const installer = this.deps.dependencies;
+    if (!installer) return 'ready';
+    let interrupted: 'stopped' | 'deleted' | null = null;
+    const stopped = new Promise<null>(resolve =>
+      this.installWaits.set(sessionId, reason => {
+        interrupted ??= reason;
+        resolve(null);
+      })
+    );
+    try {
+      const outcome = await Promise.race([installer.waitFor(sessionId, SPAWN_INSTALL_WAIT_MS), stopped]);
+      if (outcome && outcome !== 'none') this.deps.logger.debug(`CHAT: spawn ${sessionId} install wait: ${outcome}`);
+    } finally {
+      this.installWaits.delete(sessionId);
+    }
+    if (interrupted) return interrupted;
+    if (this.abandoning.has(sessionId) || !(await this.deps.store.get(sessionId))) return 'deleted';
+    return 'ready';
+  }
+
+  /**
    * Remove an empty failed spawn, or retain accepted input and its files for retry.
    * Only a removed child reopens its suggestion: a retained child is the retry destination.
    */
@@ -4915,13 +4959,15 @@ export class ChatService {
     parentId: string,
     child: ChatSessionSummary,
     reason: string,
-    onFailed?: (message: string) => Promise<void>
+    onFailed?: (message: string) => Promise<void>,
+    /** Already being deleted, though the store may not have caught up yet. */
+    deleted = false
   ): Promise<void> {
     this.abandoning.add(child.id);
     try {
       this.spawnWatch.delete(child.id);
       // Deleted by the user while it was preparing: that was their call, not a failure to report.
-      const stored = await this.deps.store.get(child.id);
+      const stored = deleted ? null : await this.deps.store.get(child.id);
       if (!stored) return;
       const pending = this.deps.queue?.list(child.id) ?? [];
       const retained = pending.some(message => !message.automatic);
