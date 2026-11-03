@@ -28,7 +28,7 @@ function allowRules(rules: readonly string[]): PermissionRuleSet {
   );
 }
 
-// Stubs first on PATH, so the gh and curl commands below run without the network or an account.
+// Tool stubs first on PATH, so the commands below run without the network or an account.
 const stub = vi.hoisted(() => ({ bin: '' }));
 vi.mock('./tools/userPath', () => ({ resolveUserPath: async () => `${stub.bin}:${process.env.PATH ?? ''}` }));
 
