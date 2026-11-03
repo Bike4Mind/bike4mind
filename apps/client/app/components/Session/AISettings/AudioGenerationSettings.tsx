@@ -1,4 +1,4 @@
-import { Box, FormControl, FormLabel, Option, Select, Slider, Typography } from '@mui/joy';
+import { Box, Button, FormControl, FormLabel, Option, Select, Slider, Typography } from '@mui/joy';
 import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
 import GraphicEqIcon from '@mui/icons-material/GraphicEq';
 import {
@@ -135,11 +135,23 @@ export const AudioGenerationSettings: React.FC<{ mode?: AudioGenMode }> = ({ mod
           </Select>
         </FormControl>
       )}
-      {sectioned && ttsProvider === 'elevenlabs' && (
-        <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-          ElevenLabs uses the voice configured in your account settings.
-        </Typography>
-      )}
+      {sectioned &&
+        ttsProvider === 'elevenlabs' &&
+        (voice ? (
+          // Studio's list can store an ElevenLabs voice id; synthesis uses it over the account voice.
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+              ElevenLabs uses the voice picked in Studio.
+            </Typography>
+            <Button size="sm" variant="plain" onClick={() => setVoice('')} data-testid="audio-gen-voice-reset-btn">
+              Use my account voice
+            </Button>
+          </Box>
+        ) : (
+          <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+            ElevenLabs uses the voice configured in your account settings.
+          </Typography>
+        ))}
 
       <FormControl size="sm">
         <FormLabel>Format</FormLabel>

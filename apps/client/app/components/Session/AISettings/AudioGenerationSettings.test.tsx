@@ -75,4 +75,14 @@ describe('AudioGenerationSettings voice picker', () => {
     expect(screen.getByTestId('audio-gen-voice-select')).toBeTruthy();
     expect(screen.queryByTestId('voice-sample-list')).toBeNull();
   });
+
+  it('says when the modal synthesizes with an ElevenLabs voice picked in Studio, and resets it', () => {
+    useAudioGenSettings.setState({ ttsProvider: 'elevenlabs', voice: 'v1' });
+    renderSettings();
+
+    expect(screen.getByText('ElevenLabs uses the voice picked in Studio.')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('audio-gen-voice-reset-btn'));
+    expect(useAudioGenSettings.getState().voice).toBe('');
+    expect(screen.getByText('ElevenLabs uses the voice configured in your account settings.')).toBeTruthy();
+  });
 });
