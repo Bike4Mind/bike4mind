@@ -298,10 +298,13 @@ resolved decision just before the beacon that carries a token, so the server
 reads that page load's answer. Without consent the hop is still redeemed and
 the `hop` event is still sent, with no visit and no cookie: it is counted in
 aggregate only and links nothing. While the visitor is still being asked, the
-page holds the token and sends it with the beacon that follows the answer; a
-token held past its 10 minutes no longer redeems. The source follows the same
-rule on its side and sends no session id or visitor hash without its own
-visitor's consent.
+page holds the token and sends it with the beacon that follows the answer, or
+with the one it sends when the tab is hidden or closed first. A tab hidden
+before the answer (on a phone, switching apps while the banner is up) therefore
+redeems the hop with no visit and no cookie, and a grant given on returning
+cannot link it. A token held past its 10 minutes no longer redeems. The source
+follows the same rule on its side and sends no session id or visitor hash
+without its own visitor's consent.
 
 A new account gets a verified touch only when its signup happens in the same
 session as the hop's redeem. Concretely, the signup request carries:
@@ -338,6 +341,13 @@ stamping are treated as money-path code.
 The Overwatch ingest route (`POST /api/overwatch/v1/events`) refuses
 `hop_minted` from every key, and `hop` from every key but the host app's own,
 event by event.
+
+The two events leave this app by different paths. The mint route puts
+`hop_minted` straight onto the Overwatch ingest queue, as the ingest route does,
+so only `OVERWATCH_INGEST_ENABLED` switches it off. The redeem sends `hop` the
+way the app sends its own product events, to `OVERWATCH_INGEST_URL`, so
+`B4M_ANALYTICS_ENABLED=false` also stops it. With the app's analytics switched
+off, mints are still counted and redeems are not.
 
 ### What a source site must do
 
