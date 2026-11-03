@@ -89,17 +89,22 @@ function useDetectedPlatform(): DetectedPlatform {
 }
 
 function downloadFor(platform: AvailablePlatformId, release: DesktopRelease | undefined) {
-  const { url, fileLabel } = {
-    'mac-arm64': { url: release?.macArm64DmgUrl, fileLabel: '.dmg' },
-    'linux-x64': { url: release?.linuxX64AppImageUrl, fileLabel: '.AppImage' },
-    windows: { url: release?.windowsSetupUrl, fileLabel: '.exe' },
+  const { url, fileLabel, testId } = {
+    'mac-arm64': { url: release?.macArm64DmgUrl, fileLabel: '.dmg', testId: 'desktop-download-dmg-link' },
+    'linux-x64': {
+      url: release?.linuxX64AppImageUrl,
+      fileLabel: '.AppImage',
+      testId: 'desktop-download-appimage-link',
+    },
+    windows: { url: release?.windowsSetupUrl, fileLabel: '.exe', testId: 'desktop-download-exe-link' },
   }[platform];
   return url
-    ? { href: url, label: `Download ${fileLabel}`, external: false }
+    ? { href: url, label: `Download ${fileLabel}`, external: false, testId }
     : {
         href: release?.releaseUrl ?? DESKTOP_RELEASES_PAGE_URL,
         label: `Get the ${fileLabel} on GitHub`,
         external: true,
+        testId,
       };
 }
 
@@ -239,7 +244,7 @@ function HeroDetails({
       </Stack>
       {isWindows ? (
         <Typography level="body-sm">
-          Download the installer and run it. Install the next version over it to update.
+          Download the installer and run it. The app installs its own updates after that.
         </Typography>
       ) : (
         <>
@@ -258,13 +263,7 @@ function HeroDetails({
       )}
       <Box>
         <Button
-          data-testid={
-            isMac
-              ? 'desktop-download-dmg-link'
-              : isWindows
-                ? 'desktop-download-exe-link'
-                : 'desktop-download-appimage-link'
-          }
+          data-testid={download.testId}
           component="a"
           href={download.href}
           {...externalLinkProps(download.external)}

@@ -51,11 +51,15 @@ describe('parseDesktopRelease', () => {
     const release = parseDesktopRelease(
       githubRelease({
         html_url: 'https://example.com/release',
-        assets: [{ name: 'Bike4Mind-0.42.0-arm64.dmg', browser_download_url: 'https://example.com/a-arm64.dmg' }],
+        assets: [
+          { name: 'Bike4Mind-0.42.0-arm64.dmg', browser_download_url: 'https://example.com/a-arm64.dmg' },
+          { name: 'Bike4Mind-0.42.0-setup.exe', browser_download_url: 'https://example.com/a-setup.exe' },
+        ],
       })
     );
     expect(release?.releaseUrl).toBe(DESKTOP_RELEASES_PAGE_URL);
     expect(release?.macArm64DmgUrl).toBeUndefined();
+    expect(release?.windowsSetupUrl).toBeUndefined();
   });
 
   it('drops links that only share a prefix with the releases repo', () => {
