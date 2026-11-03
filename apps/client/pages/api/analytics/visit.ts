@@ -16,6 +16,8 @@ import {
   visitPendingCookieHeader,
 } from '@server/analytics/visitSession';
 import { readVisitLanding } from '@server/analytics/visitLanding';
+import { hopCookieHeader, readHopToken, redeemHop } from '@server/analytics/hops';
+import { resolveServerConsent } from '@bike4mind/server-utils/analytics/serverConsent';
 
 /**
  * POST /api/analytics/visit - the visit beacon.
@@ -53,6 +55,15 @@ import { readVisitLanding } from '@server/analytics/visitLanding';
  * app's own page, so the header always names that page, and a visit read from it came from the
  * app itself. A body without one (consent declined or never given, no referrer, or a page loaded
  * before this shipped) records none, which reads as direct.
+ *
+ * The beacon is also where a verified hop is redeemed (server/analytics/hops.ts): a landing from a
+ * source product's redirect carries a hop token, which the page takes off its URL and sends here.
+ * Redeemed here, the hop names the same visit id as this visit's event. It is redeemed on any
+ * beacon that carries one, not only the one that starts the visit, since a visitor can arrive by a
+ * hop mid-visit. Never on a beacon still awaiting consent: the page holds the token until the
+ * answer, and sends it with the beacon that releases the visit. The visit is linked to the hop (the
+ * hop's sessionId, its cookie) only with consent, read server-side as signup attribution reads it;
+ * without it the hop is counted alone. The token is never logged.
  */
 
 // Per-IP, and generous against real use: a page load fires this once, so a browser needs
@@ -93,6 +104,21 @@ const handler = baseApi({ auth: false, maxBodySize: 1024 })
     // it while the event is held, and is expired once it is not.
     const cookies = [visitCookieHeader(visitId, { secure })];
     if (hold || markedPending) cookies.push(visitPendingCookieHeader(hold, { secure }));
+
+    const hopToken = hold ? undefined : readHopToken(req.body);
+    if (hopToken !== undefined) {
+      // Awaited, unlike the visit event below: a hop is redeemed once, so a `hop` event lost to a
+      // frozen Lambda has no later request to recover it. The emit's HTTP call times out at 2s; the
+      // store update and a failure metric add to that.
+      const linkVisit = resolveServerConsent(req) === 'granted';
+      const outcome = await redeemHop({ token: hopToken, visitId, linkVisit });
+      if (outcome.redeemed) {
+        if (linkVisit) cookies.push(hopCookieHeader(outcome.hop.hopId, { secure }));
+        req.logger?.info('analytics.hop.redeemed', { hopId: outcome.hop.hopId, linked: linkVisit });
+      } else {
+        req.logger?.info('analytics.hop.refused', { reason: outcome.reason });
+      }
+    }
     res.setHeader('Set-Cookie', cookies);
 
     if (hold) return res.status(204).end();

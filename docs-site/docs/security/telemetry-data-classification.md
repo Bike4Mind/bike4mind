@@ -262,6 +262,87 @@ site is still attributed by signup until the app loads again and republishes,
 while checkout, which resolves consent in the browser at request time, would
 already see the denial.
 
+## Verified hops
+
+A verified hop records that a visitor clicked through from another Overwatch
+product to this app, as the source product's own server saw it. Unlike the
+campaign touches above, nothing in it comes from the browser: the source is the
+product whose Overwatch ingest key minted the hop, so no link or parameter can
+name another product as the source.
+
+1. The source's server calls `POST /api/overwatch/v1/hops` with its ingest key
+   when a visitor follows one of its links to this app. The app stores the hop
+   and returns a token that redeems once, within 10 minutes.
+2. The source redirects the browser straight to the app with the token in the
+   `b4m_hop` query parameter.
+3. The page takes the token off its URL at once (`history.replaceState`) and
+   sends it with the visit beacon, which redeems it: the token must carry a valid
+   signature for this app and be unexpired, and the stored hop must be this
+   app's and not yet redeemed. A landing that carries a token is served with
+   `Referrer-Policy: strict-origin`, so the token is not sent as a Referer
+   before the page removes it.
+
+| Data         | Storage                                                                                                                                                                                                                          | Lifetime                                   | Purpose                                         |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ | ----------------------------------------------- |
+| Hop record   | MongoDB `analytics_hops`: hop id, source product, destination, landing path, lane, minted and redeemed times; the source's session id and visitor hash when the source may send them; the visit it was redeemed in, with consent | 90 days after minting (TTL on `expiresAt`) | Single-use redeem; check counts against records |
+| Redeemed hop | App cookie `b4m_hop` holding the hop id, HttpOnly, `SameSite=Lax`, set only with consent                                                                                                                                         | 24 hours                                   | Lets a signup that follows find its hop         |
+| `hop_minted` | Overwatch event under the source product: hop id, destination, lane; the source's session id when sent                                                                                                                           | Overwatch retention                        | Hops minted, per source                         |
+| `hop`        | Overwatch event under this app: hop id, source, destination, `verified: true`, lane; the visit id with consent                                                                                                                   | Overwatch retention                        | Hops redeemed, joined to the visit              |
+
+The cookie and every link between the hop and the visitor (the visit stored on
+the hop, and the `hop` event's session id) use the same server-side gate as
+signup attribution: an explicit `granted` decision. The page publishes its
+resolved decision just before the beacon that carries a token, so the server
+reads that page load's answer. Without consent the hop is still redeemed and
+the `hop` event is still sent, with no visit and no cookie: it is counted in
+aggregate only and links nothing. While the visitor is still being asked, the
+page holds the token and sends it with the beacon that follows the answer; a
+token held past its 10 minutes no longer redeems. The source follows the same
+rule on its side and sends no session id or visitor hash without its own
+visitor's consent.
+
+The token is a bearer value. It is never rendered into a page, the app never
+logs it, and the recorded landing path never includes it. It is in the URL of
+the one landing request, so a CDN or firewall access log of that request can
+hold it; by then it is redeemed or within minutes of expiring.
+
+A verified hop says which product a click came from. It does not change the
+rule above: a count that money or a contract depends on still comes from
+host-owned, Stripe-reconciled paid conversions, and what weight a hop carries in
+that is a policy decision made outside this app. Minting, redeeming and lane
+stamping are treated as money-path code.
+
+The Overwatch ingest route (`POST /api/overwatch/v1/events`) refuses
+`hop_minted` from every key, and `hop` from every key but the host app's own,
+event by event.
+
+### What a source site must do
+
+1. Point each link to this app at the source's own server endpoint, for example
+   `GET /out/b4m?path=/new`, so the click is a top-level navigation the visitor
+   made. Mint only there: not on page render, not for a prefetch
+   (`Sec-Purpose: prefetch`), and not for a known crawler.
+2. In that endpoint, call `POST /api/overwatch/v1/hops` with the source's ingest
+   key in `x-api-key` and a JSON body
+   `{ dest: "bike4mind", path, srcSessionId, srcVisitorHash, lane }`. Only
+   `dest` is required. Send `srcSessionId` and `srcVisitorHash` only with the
+   visitor's consent, and send a hash, never a raw identifier. Never send a
+   source product: the body is refused if it names one. A test persona's run
+   sends `lane: "synthetic"`.
+3. Answer the visitor with a 302 straight to the returned `url`
+   (`<app><path>?b4m_hop=<token>`), with `Cache-Control: no-store`. No
+   intermediate page and no second hop: a cached or bounced redirect would replay
+   one token to many visitors, and all but the first would be refused.
+4. Never put the token in HTML, a link, a log or analytics. It is returned to the
+   source's server only.
+5. If the mint fails (any non-201, including 429 and 503), redirect to the same
+   path on this app without a token. The visitor always arrives; only the hop is
+   lost.
+
+The endpoint allows 120 mints a minute per key, on top of the key's own request
+limits. It answers 400 for an invalid body, 401 or 403 for a missing, wrong-scope
+or unbound key, and 503 while ingest is switched off or hops are not configured.
+
 ## Troubleshooting missing attribution
 
 - Confirm consent was granted when checkout was requested. Cookie presence alone

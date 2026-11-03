@@ -268,6 +268,7 @@ import EnsureRevenueSnapshotIndex from './20260921237100_ensure-revenue-snapshot
 import EnsureSpendRollupIndexes from './20260921237200_ensure-spend-rollup-indexes';
 import QueueHeldSignupGrantsForRiskReview from './20260921237300_queue-held-signup-grants-for-risk-review';
 import SeedSignupGrantSchedule from './20260921237400_seed-signup-grant-schedule';
+import EnsureAnalyticsHopIndexes from './20260921238200_ensure-analytics-hop-indexes';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -470,6 +471,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureSpendRollupIndexes,
   QueueHeldSignupGrantsForRiskReview,
   SeedSignupGrantSchedule,
+  EnsureAnalyticsHopIndexes,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];
