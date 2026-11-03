@@ -157,7 +157,16 @@ export class GenerationJobEngine {
       });
     }
 
-    if (job.state === 'pending') return this.submit(job, handler, lease, context);
+    if (job.state === 'pending') {
+      const denial = await this.deps.aiAccessDenial?.(job.requestedBy);
+      if (denial) {
+        return this.toTerminal(job, handler, lease, {
+          state: 'failed',
+          error: { code: 'account_blocked', message: denial },
+        });
+      }
+      return this.submit(job, handler, lease, context);
+    }
     const result = await this.runStep(job, handler, context);
     return this.apply(job, handler, lease, result, context);
   }

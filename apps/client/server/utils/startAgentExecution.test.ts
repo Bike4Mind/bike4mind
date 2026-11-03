@@ -572,6 +572,7 @@ describe('startAgentExecution', () => {
           'loop_ticket_list',
           'loop_ticket_create',
           'loop_ticket_update',
+          'loop_ticket_unsure',
           'loop_directive_respond',
           'loop_oversee_status',
           'loop_directive_issue',

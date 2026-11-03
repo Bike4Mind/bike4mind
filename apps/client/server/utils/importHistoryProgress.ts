@@ -1,5 +1,5 @@
 import { Resource } from 'sst';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { importHistoryJobRepository, IImportHistoryJob } from '@bike4mind/database/content';
 
 interface ProgressUpdate {

@@ -23,7 +23,7 @@
  */
 import { baseApi } from '@server/middlewares/baseApi';
 import { Resource } from 'sst';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Connection } from '@bike4mind/database/social';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';

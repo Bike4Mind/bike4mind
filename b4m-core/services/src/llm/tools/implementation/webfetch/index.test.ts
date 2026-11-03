@@ -14,7 +14,8 @@ vi.mock('./firecrawlApp', () => ({
 }));
 
 // Keyless fallback reader, exercised when createFirecrawlApp returns null.
-vi.mock('./plainFetch', () => ({
+vi.mock('./plainFetch', async importOriginal => ({
+  ...(await importOriginal<typeof import('./plainFetch')>()),
   plainFetchScrape: vi.fn(async () => ({ markdown: 'plain-markdown-content', title: 'Plain Title' })),
 }));
 
@@ -34,7 +35,7 @@ import {
 } from './index';
 import { UnsafeScrapeTargetError } from './errors';
 import { createFirecrawlApp } from './firecrawlApp';
-import { plainFetchScrape } from './plainFetch';
+import { NoExtractableContentError, plainFetchScrape } from './plainFetch';
 
 const mockCreateApp = vi.mocked(createFirecrawlApp);
 const mockPlainFetch = vi.mocked(plainFetchScrape);
@@ -542,6 +543,95 @@ describe('firecrawlFetch fresh', () => {
   });
 });
 
+describe('firecrawlFetch screenshot', () => {
+  // The params object scrapeUrl was called with on the nth call.
+  const paramsOfCall = (n: number) => (scrapeUrl.mock.calls[n] as unknown[])[1];
+  const SHOT = 'https://storage.example.com/shot.png';
+  const withShot = () => scrapeUrl.mockResolvedValueOnce({ markdown: 'x'.repeat(100), screenshot: SHOT } as never);
+
+  it('sends exactly the same params and returns no screenshot key when not asked', async () => {
+    scrapeMarkdown = 'x'.repeat(100);
+    // Even if Firecrawl volunteered one, a caller that did not ask never sees it.
+    scrapeUrl.mockResolvedValueOnce({ markdown: scrapeMarkdown, screenshot: SHOT } as never);
+    const res = await firecrawlFetch(adapters, 'https://example.com/doc');
+    expect(paramsOfCall(0)).toEqual({
+      formats: ['markdown'],
+      timeout: 60_000,
+      actions: [{ type: 'wait', milliseconds: 1000 }],
+    });
+    expect(res).not.toHaveProperty('screenshot');
+    expect(Object.keys(res).sort()).toEqual(
+      [
+        'cap',
+        'durationMs',
+        'extractedChars',
+        'llmsTxtUrl',
+        'markdown',
+        'offset',
+        'originalChars',
+        'title',
+        'truncated',
+      ].sort()
+    );
+  });
+
+  it('screenshot: false and mobile alone change nothing', async () => {
+    scrapeMarkdown = 'x'.repeat(100);
+    await firecrawlFetch(adapters, 'https://example.com/doc', { screenshot: false, mobile: true });
+    expect(paramsOfCall(0)).toEqual({
+      formats: ['markdown'],
+      timeout: 60_000,
+      actions: [{ type: 'wait', milliseconds: 1000 }],
+    });
+  });
+
+  it('asks for the viewport screenshot (not full page) on desktop and returns it', async () => {
+    withShot();
+    const res = await firecrawlFetch(adapters, 'https://example.com/doc', { screenshot: true });
+    expect(paramsOfCall(0)).toEqual({
+      formats: ['markdown', 'screenshot'],
+      timeout: 60_000,
+      actions: [{ type: 'wait', milliseconds: 1000 }],
+    });
+    expect(paramsOfCall(0)).not.toHaveProperty('mobile');
+    expect(res.screenshot).toBe(SHOT);
+  });
+
+  it('adds mobile: true for a phone screenshot and returns it', async () => {
+    withShot();
+    const res = await firecrawlFetch(adapters, 'https://example.com/doc', { screenshot: true, mobile: true });
+    expect(paramsOfCall(0)).toMatchObject({ formats: ['markdown', 'screenshot'], mobile: true });
+    expect(res.screenshot).toBe(SHOT);
+  });
+
+  it('keeps the screenshot request on the no-actions retry', async () => {
+    scrapeUrl.mockRejectedValueOnce(new Error('Actions are not supported'));
+    withShot();
+    const res = await firecrawlFetch(adapters, 'https://example.com/doc', { screenshot: true, mobile: true });
+    expect(paramsOfCall(1)).toMatchObject({ formats: ['markdown', 'screenshot'], mobile: true });
+    expect(res.screenshot).toBe(SHOT);
+  });
+
+  it('has no screenshot field when Firecrawl returns none', async () => {
+    scrapeMarkdown = 'x'.repeat(100);
+    const res = await firecrawlFetch(adapters, 'https://example.com/doc', { screenshot: true });
+    expect(res).not.toHaveProperty('screenshot');
+  });
+
+  it('never asks for a screenshot of a PDF', async () => {
+    scrapeMarkdown = 'x'.repeat(100);
+    const res = await firecrawlFetch(adapters, 'https://example.com/doc.pdf', { screenshot: true, mobile: true });
+    expect(paramsOfCall(0)).toEqual({ formats: ['markdown'], timeout: 90_000 });
+    expect(res).not.toHaveProperty('screenshot');
+  });
+
+  it('gives the keyless plain-fetch fallback no screenshot', async () => {
+    mockCreateApp.mockReturnValueOnce(null);
+    const res = await firecrawlFetch(adapters, 'https://example.com/doc', { screenshot: true });
+    expect(res).not.toHaveProperty('screenshot');
+  });
+});
+
 describe('firecrawlFetch keyless plain-fetch fallback', () => {
   it('falls back to plainFetchScrape when Firecrawl is not configured', async () => {
     mockCreateApp.mockReturnValueOnce(null);
@@ -586,6 +676,56 @@ describe('firecrawlFetch keyless plain-fetch fallback', () => {
     mockPlainFetch.mockRejectedValueOnce(new Error('totally unexpected parse failure'));
 
     await expect(runTool('https://example.com/doc')).rejects.toThrow('totally unexpected parse failure');
+  });
+});
+
+describe('web_fetch on a page with no extractable content', () => {
+  async function runWithLogger(url = 'https://example.com/empty') {
+    const context = makeContext(vi.fn(async () => {}));
+    const result = await webFetchTool.implementation(context, {}).toolFn({ url });
+    return { result: result as string, logger: context.logger as unknown as Record<string, ReturnType<typeof vi.fn>> };
+  }
+
+  it('throws a 422 NoExtractableContentError when Firecrawl returns no markdown', async () => {
+    scrapeMarkdown = '';
+
+    const error = await firecrawlFetch(adapters, 'https://example.com/empty').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(NoExtractableContentError);
+    expect(error).toMatchObject({ statusCode: 422, message: 'No content could be extracted from the URL' });
+  });
+
+  it.each([
+    ['Firecrawl', () => (scrapeMarkdown = '')],
+    [
+      'the keyless plain fetch',
+      () => {
+        mockCreateApp.mockReturnValueOnce(null);
+        mockPlainFetch.mockRejectedValueOnce(new NoExtractableContentError());
+      },
+    ],
+  ])('returns a hint to the model and logs once at warn via %s', async (_label, arrange) => {
+    arrange();
+
+    const { result, logger } = await runWithLogger();
+
+    expect(result).toContain('No readable content could be extracted from this page');
+    expect(result).toContain('web_search');
+    expect(validateWebFetchResult(result)).toEqual({ confidence: 0.1, source: 'deterministic' });
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith('WebFetch no extractable content', { url: 'https://example.com/empty' });
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('still logs a Firecrawl auth failure at error and rethrows it', async () => {
+    const failure = new FirecrawlError('Status code: 401', 401);
+    scrapeUrl.mockRejectedValueOnce(failure);
+
+    const context = makeContext(vi.fn(async () => {}));
+    await expect(webFetchTool.implementation(context, {}).toolFn({ url: 'https://example.com/doc' })).rejects.toBe(
+      failure
+    );
+    expect(context.logger.error).toHaveBeenCalledWith('WebFetch error:', failure);
   });
 });
 

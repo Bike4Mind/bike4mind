@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE } from '@bike4mind/common';
+import { ForbiddenError } from '@bike4mind/utils';
 import {
   ARTIST_REFERENCE_REFUSAL,
   PROVIDER_BLOCK_REFUSAL,
@@ -16,10 +18,11 @@ type BuildOptions = {
   findJob?: MusicToolConfig['findJob'];
   releaseDiscardedJob?: MusicToolConfig['releaseDiscardedJob'];
   signal?: AbortSignal;
+  apiKeyId?: string;
 };
 
 const build = (createJob: MusicToolConfig['createJob'], options: BuildOptions = {}) => {
-  const { usableModels = ['test-music'], findJob, releaseDiscardedJob, signal } = options;
+  const { usableModels = ['test-music'], findJob, releaseDiscardedJob, signal, apiKeyId } = options;
   const questId = 'questId' in options ? options.questId : 'q1';
   const statusUpdate = vi.fn().mockResolvedValue(undefined);
   const onStart = vi.fn();
@@ -39,6 +42,7 @@ const build = (createJob: MusicToolConfig['createJob'], options: BuildOptions = 
     organizationId: 'org1',
     sessionId: 's1',
     questId,
+    apiKeyId,
     statusUpdate,
     onStart,
     onFinish,
@@ -60,6 +64,13 @@ describe('music_generation tool', () => {
       request: { model: 'test-music', prompt: 'a sea shanty' },
     });
     expect(statusUpdate).toHaveBeenCalledWith({ generationJobs: [{ id: 'job1', kind: 'music' }] });
+  });
+
+  it('attributes the job to the authenticating API key', async () => {
+    const createJob = vi.fn().mockResolvedValue(okJob);
+    const { tool } = build(createJob, { apiKeyId: 'key1' });
+    await tool.toolFn({ model: 'test-music', prompt: 'a sea shanty' });
+    expect(createJob.mock.calls[0][0]).toMatchObject({ apiKeyId: 'key1' });
   });
 
   it('song prompts written from chat describe style without naming artists', async () => {
@@ -436,5 +447,26 @@ describe('music_generation tool', () => {
       expect(statusUpdate).toHaveBeenCalledOnce();
       expect(logger.warn).toHaveBeenCalledOnce();
     });
+  });
+});
+
+describe('music_generation model admission', () => {
+  it('returns a free-tier refusal from the job engine as the tool result, logged at warn', async () => {
+    const refusal = new ForbiddenError('Model "test-music" requires a paid plan.', {
+      errorCode: MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
+    });
+    const { tool, statusUpdate, logger } = build(vi.fn().mockRejectedValue(refusal));
+    await expect(tool.toolFn({ model: 'test-music', prompt: 'a sea shanty' })).resolves.toBe(
+      'Error: Model "test-music" requires a paid plan.'
+    );
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('[music_generation]'), { modelId: 'test-music' });
+    expect(statusUpdate).not.toHaveBeenCalled();
+  });
+
+  it('still throws any other job-engine failure', async () => {
+    const failure = new Error('database unavailable');
+    const { tool, logger } = build(vi.fn().mockRejectedValue(failure));
+    await expect(tool.toolFn({ model: 'test-music', prompt: 'a sea shanty' })).rejects.toBe(failure);
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 });

@@ -23,7 +23,7 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: mocks.emitMetric }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: mocks.publish } } }));
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     claimPaymentFailureNotice: mocks.claimFailure,
     releasePaymentFailureNotice: mocks.releaseFailure,

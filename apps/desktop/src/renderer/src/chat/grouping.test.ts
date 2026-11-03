@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatProject, ChatSessionSummary } from '@shared/chat';
-import { groupSessions, orderedSessions, projectForGroup } from './grouping';
+import { descendantsOf, groupSessions, orderedSessions, projectForGroup } from './grouping';
 
 function project(directory: string, name: string): ChatProject {
   return {
@@ -278,5 +278,57 @@ describe('starting a session from a project group', () => {
     expect(projectForGroup(sessions, '/work/repo')).toBe(tree);
     expect(projectForGroup(sessions, other.directory)).toBe(other);
     expect(projectForGroup(sessions, '/missing')).toBeUndefined();
+  });
+});
+
+describe('nested sub-sessions', () => {
+  const spawned = (id: string, parentSessionId: string, extra: Partial<ChatSessionSummary> = {}) =>
+    session({ id, origin: { parentSessionId, depth: 1, seedPrompt: 'go' }, ...extra });
+
+  it('hangs children under their parent and out of the flat list', () => {
+    const sessions = [session({ id: 'root' }), spawned('kid', 'root'), spawned('grandkid', 'kid')];
+    const grouped = groupSessions(sessions, 'chat', undefined, false, true);
+    expect(grouped.loose.map(entry => entry.id)).toEqual(['root']);
+    expect(descendantsOf(grouped.children, 'root').map(entry => entry.id)).toEqual(['kid', 'grandkid']);
+  });
+
+  it('stays flat when nesting is off', () => {
+    const grouped = groupSessions([session({ id: 'root' }), spawned('kid', 'root')], 'chat');
+    expect(grouped.loose.map(entry => entry.id)).toEqual(['root', 'kid']);
+    expect(grouped.children.size).toBe(0);
+  });
+
+  it('gives a child its own row when the parent is not drawn, or the user placed it', () => {
+    const sessions = [
+      session({ id: 'gone', archived: true }),
+      spawned('orphan', 'gone'),
+      spawned('missing-parent', 'deleted'),
+      session({ id: 'root' }),
+      spawned('pinned-kid', 'root', { pinned: true }),
+      spawned('filed-kid', 'root'),
+    ];
+    const state = { sections: [{ id: 's1', name: 'Mine' }], assignments: { 'filed-kid': 's1' } };
+    const grouped = groupSessions(sessions, 'chat', state, false, true);
+    expect(grouped.loose.map(entry => entry.id)).toEqual(['orphan', 'missing-parent', 'root']);
+    expect(grouped.pinned.map(entry => entry.id)).toEqual(['pinned-kid']);
+    expect(grouped.custom[0].sessions.map(entry => entry.id)).toEqual(['filed-kid']);
+    expect(grouped.children.size).toBe(0);
+  });
+
+  it('survives a corrupt cycle by drawing its members flat', () => {
+    const grouped = groupSessions([spawned('a', 'b'), spawned('b', 'a')], 'chat', undefined, false, true);
+    expect(grouped.loose.map(entry => entry.id)).toEqual(['a', 'b']);
+  });
+
+  it('counts open children in the quick-switch order and skips folded ones', () => {
+    const grouped = groupSessions(
+      [session({ id: 'root' }), spawned('kid', 'root'), session({ id: 'next' })],
+      'chat',
+      undefined,
+      false,
+      true
+    );
+    expect(orderedSessions(grouped).map(entry => entry.id)).toEqual(['root', 'next']);
+    expect(orderedSessions(grouped, { isOpen: () => true }).map(entry => entry.id)).toEqual(['root', 'kid', 'next']);
   });
 });

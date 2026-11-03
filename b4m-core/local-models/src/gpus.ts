@@ -75,6 +75,8 @@ export interface DetectedGpu {
   sharedMemory?: 'carve-out' | 'gtt';
   /** The kernel version could not be read, so `memoryBytes` is the smaller of the carve-out and the GTT budget. */
   memoryUnconfirmed?: true;
+  /** In use now, from amdgpu's sysfs counter for the pool behind `memoryBytes`; absent when not exposed. */
+  memoryUsedBytes?: number;
 }
 
 interface PciGpu extends DetectedGpu {
@@ -156,6 +158,13 @@ async function reachable(root: string, dir: string, driver: string): Promise<boo
 }
 
 type Classified = { gpu: PciGpu; reachable: boolean } | null | undefined;
+type GpuMemory = Pick<DetectedGpu, 'memoryBytes' | 'sharedMemory' | 'memoryUnconfirmed' | 'memoryUsedBytes'>;
+
+async function usedBytes(dir: string, file: string): Promise<Pick<DetectedGpu, 'memoryUsedBytes'>> {
+  const text = await readText(join(dir, file));
+  const bytes = text && /^\d+$/.test(text) ? Number(text) : null;
+  return bytes === null || !Number.isSafeInteger(bytes) ? {} : { memoryUsedBytes: bytes };
+}
 
 /**
  * How amdgpu_amdkfd_get_local_mem_info sizes an APU for ROCm, by kernel: the carve-out before 6.10, the TTM page
@@ -223,9 +232,7 @@ async function linuxGpu(
   const vendor = VENDORS[vendorId];
   const driver = driverLink ? basename(driverLink) : null;
   if (!vendor || !driver) return null;
-  const classified = async (
-    memory: Pick<DetectedGpu, 'memoryBytes' | 'sharedMemory' | 'memoryUnconfirmed'>
-  ): Promise<Classified> => ({
+  const classified = async (memory: GpuMemory): Promise<Classified> => ({
     gpu: { vendor, name: await readText(join(dir, 'product_name')), ...memory, vendorId, deviceId },
     reachable: await reachable(root, dir, driver),
   });
@@ -240,12 +247,17 @@ async function linuxGpu(
     const vram = positive(await readText(join(dir, 'mem_info_vram_total')));
     const node = kfd.get(address);
     if (node ? node.gfxTarget === STRIX_HALO_GFX_TARGET : deviceId === STRIX_HALO_DEVICE_ID) {
-      return classified(await strixHaloMemory(root, dir, vram, rule));
+      const memory = await strixHaloMemory(root, dir, vram, rule);
+      const usedFile = memory.sharedMemory === 'gtt' ? 'mem_info_gtt_used' : 'mem_info_vram_used';
+      return classified({ ...memory, ...(await usedBytes(dir, usedFile)) });
     }
     if (vram !== null && vram <= INTEGRATED_MAX_VRAM_BYTES) return null;
     if (node && (AMD_APU_GFX_TARGETS.has(node.gfxTarget) || node.cpuCores > 0)) return null;
     // Unless the target is a known card, an APU's firmware carve-out could pass for VRAM, so leave it unmeasured.
-    return classified({ memoryBytes: node && AMD_DISCRETE_GFX_TARGETS.has(node.gfxTarget) ? vram : null });
+    return classified({
+      memoryBytes: node && AMD_DISCRETE_GFX_TARGETS.has(node.gfxTarget) ? vram : null,
+      ...(await usedBytes(dir, 'mem_info_vram_used')),
+    });
   }
   // Intel integrated graphics sit on the root bus (00:02.0); discrete Arc cards hang off a PCIe port.
   const bus = parseInt(address.split(':')[1] ?? '', 16);

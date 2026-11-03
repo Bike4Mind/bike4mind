@@ -11,7 +11,7 @@ const mockReconcile = vi.fn();
 vi.mock('@server/services/organizationService', () => ({
   reconcileOrgSeatsFromSubscription: (...args: unknown[]) => mockReconcile(...args),
 }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn() }));
 vi.mock('@server/utils/adminAudit', async importOriginal => {
   const actual = await importOriginal<typeof import('@server/utils/adminAudit')>();
   return { ...actual, recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) };

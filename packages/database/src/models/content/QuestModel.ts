@@ -49,6 +49,10 @@ const CORRECTION_LINK_PROJECTION = {
   timestamp: 1,
 } as const;
 
+// The conversation fields a session's turn listing returns; shared by the page-numbered and keyset reads.
+const SESSION_PAGE_FIELDS =
+  'sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed attachmentNotices attachmentDelivery turnTiming suggestedChoices pinned';
+
 // PromptMetaSchema must cover every path in PromptMetaZodSchema (@bike4mind/common), minus a
 // short deliberate exclusion list. Mongoose runs strict, so an undeclared subpath is dropped in
 // silence on both save() and the findOneAndUpdate + $set path production actually uses.
@@ -382,6 +386,8 @@ export const PromptMetaSchema: Schema<PromptMeta> = new Schema<PromptMeta>(
       // expensive component of a cold turn. Must stay declared alongside the Zod field or
       // strict mode strips it and the write rate becomes unmeasurable again.
       cacheCreationInputTokens: { type: Number, required: false },
+      cacheWrite1hInputTokens: { type: Number, required: false },
+      promptCacheTtl: { type: String, enum: ['5m', '1h'], required: false },
       estimatedCost: { type: Number, required: false },
       creditsUsed: { type: Number, required: false },
       settledBasis: { type: String, enum: ['provider', 'local'], required: false },
@@ -1048,9 +1054,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     const { limit, page, sort = 'asc' } = options;
     const result = await this.model
       .find({ sessionId, deletedAt: null })
-      .select(
-        'sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed attachmentNotices attachmentDelivery turnTiming suggestedChoices pinned'
-      )
+      .select(SESSION_PAGE_FIELDS)
       .sort({ timestamp: sort, _id: sort })
       .skip(limit * (page - 1))
       .limit(limit + 1);
@@ -1061,6 +1065,31 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
       data: rows.map(d => ({ ...d.toJSON() }) as IChatHistoryItemDocument),
       hasMore,
     };
+  }
+
+  /**
+   * Keyset twin of findPageBySessionId, oldest first by (timestamp, _id): pass the last row of the
+   * previous page as `after` to continue strictly past it. Same filter and projection (plus the
+   * fields the public listing needs), so the two cannot disagree on which turns a session holds.
+   */
+  async findPageAfterBySessionId(
+    sessionId: string,
+    options: { limit: number; after?: { timestamp: Date; id: string } }
+  ): Promise<IChatHistoryItemDocument[]> {
+    const { limit, after } = options;
+    const filter: Record<string, unknown> = { sessionId, deletedAt: null };
+    if (after) {
+      filter.$or = [
+        { timestamp: { $gt: after.timestamp } },
+        { timestamp: after.timestamp, _id: { $gt: convertId(after.id) } },
+      ];
+    }
+    const rows = await this.model
+      .find(filter)
+      .select(`${SESSION_PAGE_FIELDS} createdAt pendingAction`)
+      .sort({ timestamp: 1, _id: 1 })
+      .limit(limit);
+    return rows.map(d => ({ ...d.toJSON() }) as IChatHistoryItemDocument);
   }
 
   async findAllBySessionIdAndLessThanOrEqualToTimestamp(sessionId: string, timestamp: Date) {

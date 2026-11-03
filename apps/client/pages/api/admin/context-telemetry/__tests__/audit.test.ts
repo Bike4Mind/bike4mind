@@ -52,7 +52,7 @@ vi.mock('@bike4mind/observability', () => ({
     error = vi.fn();
   },
 }));
-vi.mock('@server/utils/telemetryAnalysis', () => ({
+vi.mock('@bike4mind/server-utils/utils/telemetryAnalysis', () => ({
   computeHistoricalBaselines: vi.fn().mockResolvedValue(null),
   generateRuleBasedAnalysis: vi.fn().mockReturnValue({ summary: 'rule based' }),
   generateLLMAnalysis: vi.fn(),
@@ -76,7 +76,7 @@ vi.mock('@bike4mind/server-utils/services/telemetryFingerprint', () => ({
   formatPrimaryAnomaly: () => '',
 }));
 vi.mock('@bike4mind/server-utils/services/issueDedup', () => ({ checkFingerprintDedup: vi.fn() }));
-vi.mock('@server/services/githubService', () => ({ GitHubService: { forSystem: vi.fn() } }));
+vi.mock('@bike4mind/server-utils/services/githubService', () => ({ GitHubService: { forSystem: vi.fn() } }));
 
 const QUEST_ID = '64b7f0f0f0f0f0f0f0f0f0f0';
 

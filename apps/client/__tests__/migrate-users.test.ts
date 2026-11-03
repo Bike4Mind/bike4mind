@@ -39,7 +39,7 @@ vi.mock('@server/utils/adminAudit', () => ({
   recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({
   logEvent: (...args: unknown[]) => mockLogEvent(...args),
 }));
 

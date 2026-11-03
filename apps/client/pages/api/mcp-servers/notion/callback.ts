@@ -105,7 +105,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   }
 
   if (!state || typeof state !== 'string') {
-    console.error('[Notion Callback] Missing state parameter');
+    console.warn('[Notion Callback] Missing state parameter');
     auditLogger.failure('missing_state');
     return redirectWithError(res, 'Notion authorization failed: invalid callback state. Please try connecting again.');
   }
@@ -127,7 +127,9 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
       throw new Error('Missing required state parameters');
     }
   } catch (parseError) {
-    console.error('[Notion Callback] Failed to parse state parameter:', parseError);
+    // warn, not error: a junk state is caller input (scanners, hand-edited URLs), not a server fault,
+    // and error-level lines raise production alerts. The audit row still records it.
+    console.warn('[Notion Callback] Failed to parse state parameter:', parseError);
     auditLogger.failure('invalid_state');
     return redirectWithError(res, 'Notion authorization failed: corrupted callback data. Please try connecting again.');
   }

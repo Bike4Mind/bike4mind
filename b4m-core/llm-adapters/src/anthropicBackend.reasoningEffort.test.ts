@@ -139,7 +139,7 @@ describe('AnthropicBackend reasoningEffort', () => {
       responseFormat: jsonSchemaFormat,
     });
 
-    expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer' });
+    expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer', disable_parallel_tool_use: true });
     expect(request.thinking).toBeUndefined();
     expect(request.output_config).toBeUndefined();
   });
@@ -152,7 +152,7 @@ describe('AnthropicBackend reasoningEffort', () => {
       responseFormat: jsonSchemaFormat,
     });
 
-    expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer' });
+    expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer', disable_parallel_tool_use: true });
     expect(request.thinking).toBeUndefined();
     expect(request.output_config).toBeUndefined();
   });
@@ -165,7 +165,7 @@ describe('AnthropicBackend reasoningEffort', () => {
     });
 
     expect(request.thinking).toEqual({ type: 'disabled' });
-    expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer' });
+    expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer', disable_parallel_tool_use: true });
   });
 
   it('keeps the native structured-output format when adding effort on a model without forced tool use', async () => {
@@ -178,6 +178,127 @@ describe('AnthropicBackend reasoningEffort', () => {
     expect(request.tool_choice).toBeUndefined();
     expect(request.thinking).toEqual({ type: 'adaptive' });
     expect(request.output_config).toMatchObject({ effort: 'low', format: { type: 'json_schema' } });
+  });
+
+  describe('a caller-set reasoning request with json_schema on a model with forced tool use', () => {
+    it.each([ChatModels.CLAUDE_5_5_HAIKU, ChatModels.CLAUDE_5_SONNET, ChatModels.CLAUDE_4_8_OPUS] as const)(
+      'moves %s to native structured outputs and applies the effort',
+      async model => {
+        const { request, thinkingEnabled } = await run(model, {
+          reasoningEffort: 'low',
+          explicitReasoning: true,
+          maxTokens: 2000,
+          responseFormat: jsonSchemaFormat,
+        });
+
+        expect(request.tools).toBeUndefined();
+        expect(request.tool_choice).toBeUndefined();
+        expect(request.thinking).toEqual({ type: 'adaptive' });
+        expect(request.output_config).toEqual({
+          effort: 'low',
+          format: { type: 'json_schema', schema: { type: 'object', properties: {}, additionalProperties: false } },
+        });
+        expect(request.max_tokens).toBe(2000);
+        expect(thinkingEnabled).toBe(true);
+      }
+    );
+
+    it('moves an explicit thinking request native without raising max_tokens', async () => {
+      const request = await requestFor(ChatModels.CLAUDE_5_SONNET, {
+        thinking: { enabled: true, budget_tokens: 8000 },
+        explicitReasoning: true,
+        maxTokens: 2000,
+        responseFormat: jsonSchemaFormat,
+      });
+
+      expect(request.tool_choice).toBeUndefined();
+      expect(request.thinking).toEqual({ type: 'adaptive' });
+      expect(request.output_config).toMatchObject({ effort: 'high', format: { type: 'json_schema' } });
+      expect(request.max_tokens).toBe(2000);
+    });
+
+    it('keeps the forced tool for a route-default effort', async () => {
+      const request = await requestFor(ChatModels.CLAUDE_5_5_HAIKU, {
+        reasoningEffort: 'medium',
+        maxTokens: 2000,
+        responseFormat: jsonSchemaFormat,
+      });
+
+      expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer', disable_parallel_tool_use: true });
+      expect(request.thinking).toBeUndefined();
+      expect(request.output_config).toBeUndefined();
+    });
+
+    it('keeps the forced tool and the off switch for `none`', async () => {
+      const request = await requestFor(ChatModels.CLAUDE_5_5_HAIKU, {
+        reasoningEffort: 'none',
+        explicitReasoning: true,
+        maxTokens: 800,
+        responseFormat: jsonSchemaFormat,
+      });
+
+      expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer', disable_parallel_tool_use: true });
+      expect(request.thinking).toEqual({ type: 'disabled' });
+    });
+
+    // Fable 5 has no off switch, so `none` plans the lowest effort; under the forced tool it stays off.
+    it('keeps the forced tool, without thinking, for `none` on a model with no off switch', async () => {
+      const request = await requestFor(ChatModels.CLAUDE_FABLE_5, {
+        reasoningEffort: 'none',
+        explicitReasoning: true,
+        maxTokens: 800,
+        responseFormat: jsonSchemaFormat,
+      });
+
+      expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer', disable_parallel_tool_use: true });
+      expect(request.thinking).toBeUndefined();
+      expect(request.output_config).toBeUndefined();
+    });
+
+    it('keeps the forced tool, without thinking, on a model that thinks with a budget', async () => {
+      const request = await requestFor(ChatModels.CLAUDE_4_5_SONNET, {
+        reasoningEffort: 'high',
+        explicitReasoning: true,
+        maxTokens: 8192,
+        responseFormat: jsonSchemaFormat,
+      });
+
+      expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer', disable_parallel_tool_use: true });
+      expect(request.thinking).toBeUndefined();
+      expect(request.output_config).toBeUndefined();
+    });
+
+    it('keeps the forced tool, without thinking, for a schema structured outputs reject', async () => {
+      const request = await requestFor(ChatModels.CLAUDE_5_5_HAIKU, {
+        reasoningEffort: 'low',
+        explicitReasoning: true,
+        maxTokens: 2000,
+        responseFormat: { type: 'json_schema', json_schema: { name: 'answer', schema: { type: 'object' } } },
+      });
+
+      expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer', disable_parallel_tool_use: true });
+      expect(request.thinking).toBeUndefined();
+      expect(request.output_config).toBeUndefined();
+    });
+
+    it('keeps the forced tool, unconstrained, for a schema that declares an open object', async () => {
+      const schema = {
+        type: 'object',
+        properties: { name: { type: 'string' } },
+        additionalProperties: { type: 'number' },
+      };
+      const request = await requestFor(ChatModels.CLAUDE_5_5_HAIKU, {
+        reasoningEffort: 'high',
+        explicitReasoning: true,
+        maxTokens: 2000,
+        responseFormat: { type: 'json_schema', json_schema: { name: 'answer', schema } },
+      });
+
+      expect(request.tools).toEqual([{ name: 'answer', input_schema: schema }]);
+      expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer', disable_parallel_tool_use: true });
+      expect(request.thinking).toBeUndefined();
+      expect(request.output_config).toBeUndefined();
+    });
   });
 
   it('sends no thinking config when reasoningEffort is absent', async () => {

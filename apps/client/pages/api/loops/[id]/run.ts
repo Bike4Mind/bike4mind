@@ -17,7 +17,12 @@ const handler = baseApi({ auth: 'jwtOnly' })
     if (!loop) throw new NotFoundError('Loop not found for id: ' + id);
     if (loop.status !== 'live') throw new ConflictError('Only a live loop can be run; set it live first');
 
-    const updated = await loopRepository.updateForUser(id, req.user!.id, { nextRunAt: new Date() }, 'live');
+    const updated = await loopRepository.updateForUser(
+      id,
+      req.user!.id,
+      { nextRunAt: new Date(), idleStreak: 0 },
+      'live'
+    );
     if (!updated) throw new ConflictError('Only a live loop can be run; set it live first');
     res.json(updated);
   });

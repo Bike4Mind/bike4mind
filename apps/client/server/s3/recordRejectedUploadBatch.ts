@@ -1,7 +1,7 @@
 import { dataLakeBatchRepository } from '@bike4mind/database';
 import type { ILogger } from '@bike4mind/observability';
 import { completedBatchStatus, finalizeBatchIfComplete } from '@server/dataLakes/dataLakeBatchProgress';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import type { Types } from 'mongoose';
 import { Resource } from 'sst';
 

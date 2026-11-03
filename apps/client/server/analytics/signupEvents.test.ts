@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const { mockEmit, mockKeyFor } = vi.hoisted(() => ({ mockEmit: vi.fn(), mockKeyFor: vi.fn() }));
-vi.mock('./emitActiveEvent', () => ({
+vi.mock('@bike4mind/server-utils/analytics/emitActiveEvent', () => ({
   HOST_PRODUCT_ID: 'bike4mind',
   emitProductEvent: mockEmit,
   ingestKeyFor: mockKeyFor,

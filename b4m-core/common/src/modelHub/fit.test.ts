@@ -84,8 +84,9 @@ const MOE_64K = arch({ ...ARCH_64K, blockCount: 40, moe: { experts: 128, used: 8
 
 const LS = { kind: 'llama-server', flashAttn: 'on' } as const;
 const OLLAMA = { kind: 'ollama' } as const;
+/** A working set as large as the OS reserve allows, so nothing can load past it. */
 const mac = (budgetGiB: number): HardwareProfile => ({
-  ...machine('unified', 128),
+  ...machine('unified', budgetGiB / FIT_CONSTANTS.cpuFraction),
   gpuWorkingSetBytes: budgetGiB * GIB,
 });
 /** Strix Halo: RAM the OS sees and the device memory ROCm reports. */
@@ -534,7 +535,33 @@ describe('estimateFit', () => {
     expect(fit({ hardware: strix(31, 96) }).memory.budgetBytes).toBe(96 * GIB);
     expect(fit({ hardware: strix(125, 62) }).memory.budgetBytes).toBe(62 * GIB);
     expect(fit({ hardware: strix(31, 96), weightsGiB: 60, runtime: OLLAMA })).toMatchObject({ verdict: 'fast' });
-    expect(fit({ hardware: strix(125, 62), weightsGiB: 70, runtime: OLLAMA })).toMatchObject({ verdict: 'too-large' });
+    // Past the 62 GiB device, layers load on the CPU up to 3/4 of the RAM the OS sees.
+    expect(fit({ hardware: strix(125, 62), weightsGiB: 70, runtime: OLLAMA })).toMatchObject({
+      verdict: 'slow',
+      reason: 'layer-offload',
+    });
+    expect(fit({ hardware: strix(125, 62), weightsGiB: 100, runtime: OLLAMA })).toMatchObject({ verdict: 'too-large' });
+  });
+
+  it('loads past the GPU part of unified memory only when nothing fits all on the GPU, within the OS reserve', () => {
+    const m16 = machine('unified', 16);
+    expect(memoryBudgets(m16)).toEqual({ gpu: 16 * GIB * 0.66, ramPool: 16 * GIB * (0.75 - 0.66), cpuOnly: false });
+    expect(memoryBudgets(machine('unified', 64))).toMatchObject({ gpu: 48 * GIB, ramPool: 0 });
+    // A firmware carve-out sits outside the RAM the OS sees, so all of that RAM's reserve can take spilled layers.
+    expect(memoryBudgets(strix(31, 96))).toMatchObject({ gpu: 96 * GIB, ramPool: 31 * GIB * 0.75 });
+    expect(memoryBudgets(strix(125, 62))).toMatchObject({ gpu: 62 * GIB, ramPool: 125 * GIB * 0.75 - 62 * GIB });
+    // 8.5 GiB of weights stays all-GPU below the floor rather than offloading at the target.
+    expect(fit({ hardware: m16, weightsGiB: 8.5, runtime: OLLAMA })).toMatchObject({
+      verdict: 'slow',
+      reason: 'below-floor',
+      placement: 'gpu',
+    });
+    const near = fit({ hardware: m16, weightsGiB: 9.5, runtime: OLLAMA, context: 8192 }).requested;
+    expect(near).toMatchObject({ fits: true, placement: 'layer-offload' });
+    expect(near!.memory.totalBytes + near!.memory.marginBytes).toBeLessThanOrEqual(12 * GIB);
+    expect(fit({ hardware: m16, weightsGiB: 11, runtime: OLLAMA, context: 8192 }).requested).toMatchObject({
+      fits: false,
+    });
   });
 
   it('plans a Windows Strix Halo carve-out machine from RAM, since its reported bytes are not the usable pool', () => {
@@ -655,6 +682,40 @@ describe('estimateFit', () => {
   });
 });
 
+describe('estimateFit decode estimate', () => {
+  const bandwidth = (hw: HardwareProfile, gib = 100): HardwareProfile => ({
+    ...hw,
+    memoryBandwidthBytesPerSec: gib * GIB,
+  });
+
+  it('rates a resident plan, the requested one included, from the bandwidth', () => {
+    const r = fit({ hardware: bandwidth(mac(16)), context: 8192 });
+    expect(r.placement).toBe('gpu');
+    // 100 GiB/s at 0.8 efficiency over 10 GiB of weights.
+    expect(r.decode?.tokensPerSec).toBeCloseTo(8);
+    expect(r.requested?.decode?.tokensPerSec).toBeCloseTo(8);
+    expect(fit().decode).toBeNull();
+  });
+
+  it('leaves offload plans unrated, their reads spanning two memories', () => {
+    const moe = { arch: arch(MOE_35B_ARCH), weightsBytes: 21.71e9, expertBytesPerLayer: 492_750_000 };
+    const runtime = { ...LS, nCpuMoe: 10 };
+    const offload = estimateFit({ model: moe, hardware: bandwidth(mac(32)), mode: 'chat', runtime });
+    expect(offload.placement).toBe('expert-offload');
+    expect(offload.decode).toBeNull();
+    const split = fit({ weightsGiB: 30, hardware: bandwidth(machine('discrete', 64, 24)) });
+    expect(split.placement).toBe('layer-offload');
+    expect(split.decode).toBeNull();
+  });
+
+  it('rates a CPU placement only on a machine without a GPU', () => {
+    expect(fit({ hardware: bandwidth(machine('cpu', 64), 50) }).decode?.tokensPerSec).toBeCloseTo(4);
+    const unknownVram = fit({ hardware: bandwidth(machine('discrete', 64, null)) });
+    expect(unknownVram.placement).toBe('cpu');
+    expect(unknownVram.decode).toBeNull();
+  });
+});
+
 describe('contextOptions', () => {
   it('lists the target and every preset below it, smallest first, with fits flags', () => {
     const options = contextOptions({
@@ -669,6 +730,35 @@ describe('contextOptions', () => {
       [32768, false],
       [65536, false],
     ]);
+  });
+});
+
+describe('estimateFit requested past the RAM pool', () => {
+  it('reports the layer split it refused, whose host copy can put it past the pool when the GPU plan is not', () => {
+    const mac16 = machine('unified', 16);
+    const { gpu, ramPool } = memoryBudgets(mac16);
+    const machineBytes = gpu + ramPool - fitMarginBytes(mac16);
+    const requested = estimateFit({
+      model: { arch: QWEN38_27B, weightsBytes: 9.5 * GIB },
+      hardware: mac16,
+      mode: 'chat',
+      runtime: OLLAMA,
+      context: 16384,
+    }).requested!;
+    expect(requested).toMatchObject({ fits: false, placement: 'layer-offload' });
+    expect(requested.memory.totalBytes).toBeGreaterThan(machineBytes);
+    expect(requested.memory.offloadedBytes).toBeGreaterThan(ramPool);
+  });
+
+  it('keeps the GPU plan when a split would need more than the weights in RAM', () => {
+    const requested = estimateFit({
+      model: { arch: ARCH_64K, weightsBytes: GIB },
+      hardware: machine('discrete', 64, 4),
+      mode: 'chat',
+      runtime: OLLAMA,
+      context: 131072,
+    }).requested!;
+    expect(requested).toMatchObject({ fits: false, placement: 'gpu' });
   });
 });
 
@@ -726,6 +816,43 @@ describe('estimateFitFromSize', () => {
     expect(split.offloadBytes).toBeGreaterThan(6 * GIB);
     expect(estimateFitFromSize(100 * GIB, rig, 16384).level).toBe('too-large');
   });
+
+  it('keeps the context room a resident fit keeps when it splits into system RAM', () => {
+    const rig = machine('discrete', 64, 24);
+    expect(estimateFitFromSize(55 * GIB, rig, 16384).level).toBe('tight');
+    // Within the 44.8 GiB pool, but not with a fifth of the GPU left for the cache.
+    const near = estimateFitFromSize(60 * GIB, rig, 16384);
+    expect(near.offloadBytes).toBeLessThan(memoryBudgets(rig).ramPool);
+    expect(near.level).toBe('too-large');
+  });
+
+  // A dense 14B: 48 layers of 8 KV heads at 128, so 16K of f16 cache is 3 GiB the size alone cannot see.
+  const DENSE_14B = arch({
+    contextMax: 131072,
+    blockCount: 48,
+    headCount: 40,
+    embeddingLength: 5120,
+    activeFeedForwardLength: 13824,
+    full: { layers: 48, kvHeads: 8, keyLength: 128, valueLength: 128 },
+  });
+
+  it.each([16384, 32768])(
+    'does not call a file past the GPU part of a 16 GB Mac tight when its arch says it will not load (%i)',
+    context => {
+      const mac16 = machine('unified', 16);
+      const sizeOnly = estimateFitFromSize(9 * GIB, mac16, context);
+      const withArch = estimateFit({
+        model: { arch: DENSE_14B, weightsBytes: 9 * GIB },
+        hardware: mac16,
+        mode: 'chat',
+        runtime: OLLAMA,
+        context,
+      }).requested!;
+      expect(sizeOnly.offloadBytes).toBeGreaterThan(0);
+      expect(withArch.fits).toBe(false);
+      expect(sizeOnly.level).toBe('too-large');
+    }
+  );
 
   it('needs more at a longer context', () => {
     const short = estimateFitFromSize(4 * GIB, cpu128, 8192);

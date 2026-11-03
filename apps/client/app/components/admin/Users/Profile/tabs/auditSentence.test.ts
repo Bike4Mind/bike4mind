@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { makeAuditEntry } from '@client/app/components/admin/AuditLog/shared/auditTestFixtures';
 import { buildProfile } from '../profileTestUtils';
-import { auditUndo, describeAuditEntry, formatAuditValue } from './auditSentence';
+import { auditUndo, describeAuditEntry, fieldLabel, formatAuditValue } from './auditSentence';
 
 const profileUpdate = (changes: Array<{ field: string; before: unknown; after: unknown }>, id = 'e1') =>
   makeAuditEntry({ id, action: 'user.profile.updated', summary: 'updated fields', changes });
@@ -19,6 +19,17 @@ describe('describeAuditEntry', () => {
     );
   });
 
+  it('words an admin identity edit, naming the email the user still has to confirm', () => {
+    const entry = makeAuditEntry({
+      action: 'user.identity.updated',
+      changes: [
+        { field: 'name', before: 'Ada', after: 'Ada King' },
+        { field: 'pendingEmail', before: null, after: 'new@example.com' },
+      ],
+    });
+    expect(describeAuditEntry(entry)).toBe('Changed name; Requested an email change to new@example.com');
+  });
+
   it('shows a credit adjustment as the delta with before and after', () => {
     const entry = makeAuditEntry({
       action: 'user.credits.adjusted',
@@ -34,6 +45,59 @@ describe('describeAuditEntry', () => {
     );
   });
 
+  it('names the organization on membership entries', () => {
+    const details = { organizationName: 'Acme' };
+    expect(describeAuditEntry(makeAuditEntry({ action: 'org.member.added', details }))).toBe('Added to Acme');
+    expect(describeAuditEntry(makeAuditEntry({ action: 'org.member.removed', details }))).toBe('Removed from Acme');
+    expect(
+      describeAuditEntry(
+        makeAuditEntry({
+          action: 'org.member.role_changed',
+          details,
+          changes: [{ field: 'role', before: 'member', after: 'manager' }],
+        })
+      )
+    ).toBe('Made a manager of Acme');
+  });
+
+  it.each([
+    ['member', [{ field: 'role', before: 'manager', after: 'member' }], 'Made a member of Acme'],
+    ['an unrecognised role', [{ field: 'role', before: 'member', after: 'owner' }], 'Changed role in Acme'],
+    ['a missing role change', undefined, 'Changed role in Acme'],
+  ])('words a role change to %s', (_label, changes, expected) => {
+    const entry = makeAuditEntry({
+      action: 'org.member.role_changed',
+      details: { organizationName: 'Acme' },
+      changes,
+    });
+    expect(describeAuditEntry(entry)).toBe(expected);
+  });
+
+  it('words the other side of each toggle and falls back to the field name', () => {
+    const sentence = (field: string, before: unknown, after: unknown) =>
+      describeAuditEntry(profileUpdate([{ field, before, after }]));
+
+    expect(sentence('isBanned', true, false)).toBe('Reinstated account');
+    expect(sentence('isModerated', false, true)).toBe('Restricted account');
+    expect(sentence('emailVerified', false, true)).toBe('Marked email verified');
+    expect(sentence('emailVerified', true, false)).toBe('Marked email unverified');
+    expect(sentence('tags', ['a'], ['a', 'b'])).toBe('Tags: added b');
+    expect(sentence('tags', 'a', null)).toBe('Changed tags');
+    expect(sentence('preferredContact', 'Text', 'Call')).toBe('Changed preferred contact');
+  });
+
+  it('shows a credit debit, a no-op and a change it cannot measure', () => {
+    const credits = (before: unknown, after: unknown) =>
+      describeAuditEntry(
+        makeAuditEntry({ action: 'user.credits.adjusted', changes: [{ field: 'currentCredits', before, after }] })
+      );
+
+    expect(credits(500, 200)).toBe('Credits -300 (500 to 200)');
+    expect(credits(5, 5)).toBe('Credits 0 (5 to 5)');
+    expect(credits(null, 5)).toBe('Adjusted credits');
+    expect(credits(5, '7')).toBe('Adjusted credits');
+  });
+
   it('falls back to the stored summary', () => {
     expect(describeAuditEntry(makeAuditEntry({ action: 'user.misc', summary: 'did a thing' }))).toBe('Did a thing');
   });
@@ -45,6 +109,16 @@ describe('formatAuditValue', () => {
     expect(formatAuditValue([])).toBe('None');
     expect(formatAuditValue(true)).toBe('Yes');
     expect(formatAuditValue(1234)).toBe('1,234');
+    expect(formatAuditValue(undefined)).toBe('-');
+    expect(formatAuditValue('')).toBe('-');
+    expect(formatAuditValue(false)).toBe('No');
+    expect(formatAuditValue(['a', 2])).toBe('a, 2');
+    expect(formatAuditValue({ a: 1 })).toBe('{"a":1}');
+  });
+
+  it('labels known fields and humanizes the rest', () => {
+    expect(fieldLabel('isBanned')).toBe('Suspended');
+    expect(fieldLabel('api_key.scope')).toBe('Api key scope');
   });
 });
 
@@ -108,6 +182,46 @@ describe('auditUndo', () => {
   it('refuses when a newer entry touched the same field', () => {
     const newer = profileUpdate([{ field: 'isBanned', before: true, after: true }], 'e2');
     expect(auditUndo(suspend, [newer], buildProfile({ isBanned: true }))).toBeNull();
+  });
+
+  it('reverses restriction and tag changes, restoring a missing before to its default', () => {
+    const restrict = { ...profileUpdate([{ field: 'isModerated', before: undefined, after: true }]), reason: 'Spam' };
+    expect(auditUndo(restrict, [], buildProfile({ isModerated: true }))).toEqual({
+      patch: { isModerated: false, statusChangeReason: 'Undo: Spam' },
+      redo: { isModerated: true, statusChangeReason: 'Spam' },
+    });
+    const tag = profileUpdate([{ field: 'tags', before: null, after: ['vip'] }]);
+    expect(auditUndo(tag, [], buildProfile({ tags: ['vip'] }))).toEqual({
+      patch: { tags: [] },
+      redo: { tags: ['vip'] },
+    });
+  });
+
+  it('treats unset flags and tags on the account as false and empty', () => {
+    const unban = { ...profileUpdate([{ field: 'isBanned', before: true, after: false }]), reason: 'Appeal upheld' };
+    expect(auditUndo(unban, [], buildProfile({ isBanned: undefined }))).toEqual({
+      patch: { isBanned: true, statusChangeReason: 'Undo: Appeal upheld' },
+      redo: { isBanned: false, statusChangeReason: 'Appeal upheld' },
+    });
+    const lift = { ...profileUpdate([{ field: 'isModerated', before: true, after: false }]), reason: 'Appeal upheld' };
+    expect(auditUndo(lift, [], buildProfile({ isModerated: undefined }))).not.toBeNull();
+    const clear = profileUpdate([{ field: 'tags', before: ['a'], after: [] }]);
+    expect(auditUndo(clear, [], buildProfile({ tags: undefined }))).not.toBeNull();
+  });
+
+  it('ignores newer entries that carry no changes or touch other fields', () => {
+    const bare = makeAuditEntry({ id: 'e2', action: 'user.mfa.reset' });
+    const other = profileUpdate([{ field: 'tags', before: [], after: ['a'] }], 'e3');
+    expect(auditUndo(suspend, [bare, other], buildProfile({ isBanned: true }))).not.toBeNull();
+  });
+
+  it('refuses when the entry wrote no value the account could still hold', () => {
+    const unknownAfter = profileUpdate([{ field: 'isBanned', before: false, after: undefined }]);
+    expect(auditUndo(unknownAfter, [], buildProfile({ isBanned: true }))).toBeNull();
+  });
+
+  it('refuses a profile update with no changes recorded', () => {
+    expect(auditUndo(makeAuditEntry({ action: 'user.profile.updated' }), [], buildProfile())).toBeNull();
   });
 
   it('refuses actions with their own flows, like credits and roles', () => {

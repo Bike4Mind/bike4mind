@@ -29,7 +29,7 @@ import { readShowAbliterated, writeShowAbliterated } from './abliteratedSetting'
 import { AccessSteps } from './AccessSteps';
 import { FitBadge } from './FitBadge';
 import { HuggingFaceToken } from './HuggingFaceToken';
-import type { ModelTarget } from './modelTarget';
+import type { ChatOn, ModelTarget } from './modelTarget';
 import { PullDialog, type PullConsent } from './PullDialog';
 import { pullLabel, pullPercent } from './pullDisplay';
 
@@ -146,6 +146,7 @@ export function BuildRow({
   canPull,
   preparing = false,
   onPull,
+  onUse = null,
 }: {
   repo: string;
   build: HubBuildView;
@@ -156,6 +157,8 @@ export function BuildRow({
   /** The Download button waits on a check before the dialog opens. */
   preparing?: boolean;
   onPull: () => void;
+  /** Set once chat lists the installed build. */
+  onUse?: (() => void) | null;
 }) {
   let action = null;
   if (pull && pull.phase !== 'failed') {
@@ -172,9 +175,16 @@ export function BuildRow({
     );
   } else if (installed) {
     action = (
-      <Chip size="sm" color="success" variant="soft" data-testid="models-build-installed-chip">
-        Installed
-      </Chip>
+      <Stack direction="row" spacing={1} alignItems="center">
+        <Chip size="sm" color="success" variant="soft" data-testid="models-build-installed-chip">
+          Installed
+        </Chip>
+        {onUse && (
+          <Button size="sm" variant="soft" onClick={onUse} data-testid="models-build-use-btn" data-build={build.id}>
+            Use in chat
+          </Button>
+        )}
+      </Stack>
     );
   } else if (build.blockedReason) {
     action = (
@@ -231,6 +241,7 @@ function ModelDetail({
   target,
   installedNames,
   pulls,
+  chatOn,
   onRecheck,
 }: {
   repo: string;
@@ -238,6 +249,7 @@ function ModelDetail({
   target: ModelTarget;
   installedNames: Set<string>;
   pulls: ModelPull[];
+  chatOn?: ChatOn;
   onRecheck: () => void;
 }) {
   const [detail, setDetail] = useState<DetailState>({ state: 'loading' });
@@ -249,11 +261,12 @@ function ModelDetail({
     if (!canPull) setConfirming(null);
   }, [canPull]);
 
+  const serverId = target.local ? undefined : target.id;
   const load = useCallback(async () => {
     setDetail({ state: 'loading' });
-    const result = await window.b4m.models.getDetail(repo);
+    const result = await window.b4m.models.getDetail(repo, serverId);
     setDetail(result.ok ? { state: 'ready', model: result.model } : { state: 'error', error: result.error });
-  }, [repo]);
+  }, [repo, serverId]);
 
   useEffect(() => {
     setPullError(null);
@@ -284,8 +297,6 @@ function ModelDetail({
 
   const model = detail.model;
   const runtimeReady = status?.reachable === true;
-  // Fit rates this computer, not a saved server.
-  const shown = (build: HubBuildView): HubBuildView => (target.local ? build : { ...build, fit: null });
   const start = async (build: HubBuildView, serverId: string | undefined, consent: PullConsent) => {
     setConfirming(null);
     setPullError(null);
@@ -376,18 +387,22 @@ function ModelDetail({
         {model.builds.length === 0 ? (
           <Typography level="body-sm">This repo has no GGUF files.</Typography>
         ) : (
-          model.builds.map(build => (
-            <BuildRow
-              key={build.id}
-              repo={model.id}
-              build={shown(build)}
-              pull={pulls.find(entry => entry.key === pullKey(model.id, build.id, target.id))}
-              installed={build.installedNames.some(name => installedNames.has(name))}
-              runtimeReady={runtimeReady}
-              canPull={canPull}
-              onPull={() => setConfirming({ build, serverId: target.local ? undefined : target.id })}
-            />
-          ))
+          model.builds.map(build => {
+            const installedAs = build.installedNames.find(name => installedNames.has(name));
+            return (
+              <BuildRow
+                key={build.id}
+                repo={model.id}
+                build={build}
+                pull={pulls.find(entry => entry.key === pullKey(model.id, build.id, target.id))}
+                installed={installedAs !== undefined}
+                runtimeReady={runtimeReady}
+                canPull={canPull}
+                onPull={() => setConfirming({ build, serverId })}
+                onUse={installedAs ? (chatOn?.(installedAs) ?? null) : null}
+              />
+            );
+          })
         )}
         {model.projectorBytes !== null && (
           <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5 }}>
@@ -399,7 +414,7 @@ function ModelDetail({
       {canPull && confirmingOn && (
         <PullDialog
           model={model}
-          build={shown(confirmingOn.build)}
+          build={confirmingOn.build}
           target={target}
           onClose={() => setConfirming(null)}
           onConfirm={consent => void start(confirmingOn.build, confirmingOn.serverId, consent)}
@@ -414,12 +429,14 @@ export function ExploreTab({
   target,
   installed,
   pulls,
+  chatOn,
   onRecheck,
 }: {
   status: ModelRuntimeStatus | null;
   target: ModelTarget;
   installed: InstalledModelsResult | null;
   pulls: ModelPull[];
+  chatOn?: ChatOn;
   onRecheck: () => void;
 }) {
   const [query, setQuery] = useState(remembered.query);
@@ -635,6 +652,7 @@ export function ExploreTab({
             target={target}
             installedNames={installedNames}
             pulls={pulls}
+            chatOn={chatOn}
             onRecheck={onRecheck}
           />
         ) : (

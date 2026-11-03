@@ -117,7 +117,7 @@ function mintArtifactId(type: string, identifier: string): string {
  * That makes it match the reply's `identifier` attribute only when the two happen to agree; use
  * `remintArtifactId` when an id for the same artifact already exists and the attribute is known.
  *
- * `apps/client/app/utils/artifactParser.ts` exports `generateCompleteArtifactId`, which mints the
+ * `packages/server-utils/src/app/utils/artifactParser.ts` exports `generateCompleteArtifactId`, which mints the
  * same shape for artifacts parsed out of a reply and does record a real batch index there. The two
  * are a known fork - see `persistAgentArtifacts.ts` for why they are not interchangeable - but the
  * shape has to stay in sync across both, and the identifier segment is the one the client compares.

@@ -1,4 +1,5 @@
 import { RECURRENT_KINDS, type HubRuntime, type KvCacheType, type ModelArch } from '../schemas/modelHub';
+import { estimateDecode, type DecodeEstimate } from './decode';
 
 /** Source of truth for the machine description; `@bike4mind/local-models` probes the same fields. */
 export interface HardwareProfile {
@@ -23,6 +24,8 @@ export interface HardwareProfile {
   confidence: 'high' | 'low';
   /** Apple: `recommendedMaxWorkingSetSize` from a llama-server load log, or a non-zero `iogpu.wired_limit_mb`. */
   gpuWorkingSetBytes?: number | null;
+  /** Entered spec-sheet figure; decode.ts scales it, or CHIP_BANDWIDTH's when absent, by bandwidthEfficiency. */
+  memoryBandwidthBytesPerSec?: number | null;
 }
 
 export type FitMode = 'chat' | 'code' | 'embeddings';
@@ -72,7 +75,11 @@ export const FIT_CONSTANTS = {
   unifiedSmallFraction: 0.66,
   // Tuned to the SELF_HOST.md RAM tiers, so partly circular until measured offload runs replace it.
   discreteOffloadRamFraction: 0.7,
+  // Of all RAM on a CPU-only machine; on unified memory, of the GPU part and the layers past it together.
   cpuFraction: 0.75,
+  // The vision encoder's compute buffer, a share of its projector: measured 0.43 on gemma4's and 0.28 on qwen3.8's
+  // (Ollama 0.40.11, CPU); a 16 GB M4 load of qwen3.8 implies about 0.36.
+  projectorComputeFraction: 0.45,
   // Query heads assumed for flash attention off when the arch has no headCount; at or above current families.
   faOffAssumedHeads: 128,
 } as const;
@@ -85,6 +92,8 @@ export interface FitModel {
   draftBytes?: number;
   /** From the build's tensorStats; enables expert offload on llama-server. */
   expertBytesPerLayer?: number;
+  /** An MoE entry's active parameters over its total; sizes decode reads when tensor stats are absent. */
+  activeParamsFraction?: number;
 }
 
 export interface FitRuntime {
@@ -105,6 +114,8 @@ export interface FitRuntime {
   nCpuMoe?: 'auto' | number;
   /** Draft tokens per step when speculative decoding is on; recurrent models keep one state snapshot per token. */
   draftMax?: number;
+  /** The preset turns speculative decoding on, which scales the decode estimate. */
+  speculative?: boolean;
 }
 
 export interface FitInput {
@@ -144,6 +155,8 @@ export interface FitPlan {
   nCpuMoe: number;
   ubatch: number;
   memory: FitMemory;
+  /** Null without a known bandwidth or MoE active share, or when weights sit outside the memory it measures. */
+  decode: DecodeEstimate | null;
 }
 
 export interface FitResult extends FitPlan {
@@ -357,20 +370,25 @@ export function contextFloor(arch: ModelArch, mode: FitMode, contextCap?: number
 export interface MemoryBudgets {
   /** Bytes a model may use on the GPU, or in RAM on a CPU-only machine. */
   gpu: number;
-  /** System RAM layer or expert offload may spill into on a discrete GPU; 0 elsewhere. */
+  /** System RAM layer or expert offload may spill into: beside a discrete GPU, or past the GPU part of unified memory. */
   ramPool: number;
   cpuOnly: boolean;
 }
 
 export function memoryBudgets(hw: HardwareProfile): MemoryBudgets {
   if (hw.memoryKind === 'unified') {
-    // AMD reports what ROCm can allocate, which a firmware carve-out keeps outside totalMemoryBytes.
-    if (hw.gpuMemoryBytes) return { gpu: hw.gpuMemoryBytes, ramPool: 0, cpuOnly: false };
+    // AMD reports what ROCm can allocate, which a firmware carve-out keeps outside totalMemoryBytes. hardwareClass in
+    // tiers.ts classes the Curated tier by the same pool.
     const fraction =
       hw.totalMemoryBytes >= FIT_CONSTANTS.unifiedLargeMinBytes
         ? FIT_CONSTANTS.unifiedLargeFraction
         : FIT_CONSTANTS.unifiedSmallFraction;
-    return { gpu: hw.gpuWorkingSetBytes || hw.totalMemoryBytes * fraction, ramPool: 0, cpuOnly: false };
+    const gpu = hw.gpuMemoryBytes || hw.gpuWorkingSetBytes || hw.totalMemoryBytes * fraction;
+    // Layers past the GPU part load on the CPU from the same RAM, which keeps a CPU-only machine's OS reserve. A GPU
+    // pool larger than that RAM can only be a carve-out outside it, so none of the RAM is the GPU's.
+    const cpuRam = hw.totalMemoryBytes * FIT_CONSTANTS.cpuFraction;
+    const ramPool = gpu > hw.totalMemoryBytes ? cpuRam : Math.max(0, cpuRam - gpu);
+    return { gpu, ramPool, cpuOnly: false };
   }
   if (hw.memoryKind === 'discrete' && hw.gpuMemoryBytes) {
     return {
@@ -404,10 +422,12 @@ class Planner {
   private readonly fixedMoe: number | undefined;
   private readonly margin: number;
   private readonly ollamaEmbedding: boolean;
+  private readonly decode: DecodeEstimate | null;
 
   constructor(private readonly input: FitInput) {
     this.budgets = memoryBudgets(input.hardware);
     this.margin = fitMarginBytes(input.hardware);
+    this.decode = estimateDecode(input.model, input.hardware, input.runtime);
     this.kvs = kvCandidates(input.runtime, input.model.arch);
     this.ollamaEmbedding = input.runtime.kind === 'ollama' && input.mode === 'embeddings';
     // Ollama loads embedding models with one slot.
@@ -427,11 +447,23 @@ class Planner {
     return this.budgets.cpuOnly;
   }
 
+  get unified(): boolean {
+    return this.input.hardware.memoryKind === 'unified';
+  }
+
   /** The plan as the runtime would load it at this context, for reporting when nothing fits. */
   unfit(context: number): FitPlan {
     if (this.budgets.cpuOnly) return this.plan(context, this.preferredKv, 'cpu');
     if (this.fixedMoe) return this.plan(context, this.preferredKv, 'expert-offload', this.fixedMoe);
     return this.plan(context, this.preferredKv, 'gpu');
+  }
+
+  /** The unfit plan, or the layer split when only the RAM pool refused it, so its total is what was too large. */
+  refused(context: number): FitPlan {
+    const unfit = this.unfit(context);
+    if (this.budgets.cpuOnly || this.budgets.ramPool === 0 || this.fixedMoe) return unfit;
+    const split = this.plan(context, this.preferredKv, 'layer-offload');
+    return split.memory.offloadedBytes <= this.input.model.weightsBytes ? split : unfit;
   }
 
   private ubatch(context: number): number {
@@ -462,19 +494,23 @@ class Planner {
     const ubatch = this.ubatch(context);
     const kvBytes = kvCacheBytes(model.arch, context, kv, this.slots, ubatch);
     const recurrentBytes = (model.arch.recurrent?.stateBytesPerSeq ?? 0) * this.slots * (1 + (runtime.draftMax ?? 0));
+    const mmprojBytes = model.mmprojBytes ?? 0;
     const computeBytes =
       computeBufferBytes(model, context, ubatch, {
         memoryKind: this.budgets.cpuOnly ? 'cpu' : hardware.memoryKind,
         flashAttnOff: runtime.flashAttn === 'off',
         slots: this.slots,
         devices: splitDevices(hardware),
-      }) + this.hostWeightCopyBytes(placement, nCpuMoe, ubatch);
-    const mmprojBytes = model.mmprojBytes ?? 0;
+      }) +
+      this.hostWeightCopyBytes(placement, nCpuMoe, ubatch) +
+      Math.ceil(mmprojBytes * FIT_CONSTANTS.projectorComputeFraction);
     const draftBytes = model.draftBytes ?? 0;
     const totalBytes = model.weightsBytes + mmprojBytes + draftBytes + kvBytes + recurrentBytes + computeBytes;
     let offloadedBytes = 0;
     if (placement === 'expert-offload') offloadedBytes = nCpuMoe * (model.expertBytesPerLayer ?? 0);
     if (placement === 'layer-offload') offloadedBytes = Math.max(0, totalBytes + this.margin - this.budgets.gpu);
+    // A CPU placement on a machine with a GPU would read RAM at a bandwidth the GPU's figure does not describe.
+    const resident = placement === 'gpu' || (placement === 'cpu' && hardware.memoryKind === 'cpu');
     return {
       context,
       kv,
@@ -494,6 +530,7 @@ class Planner {
         budgetBytes: this.budgets.gpu,
         ramPoolBytes: this.budgets.ramPool,
       },
+      decode: resident ? this.decode : null,
     };
   }
 
@@ -587,7 +624,7 @@ export function estimateFit(input: FitInput): FitResult {
   if (input.context === undefined) return result;
 
   const atRequested = planner.best(input.context);
-  const requested = atRequested ? { ...atRequested, fits: true } : { ...planner.unfit(input.context), fits: false };
+  const requested = atRequested ? { ...atRequested, fits: true } : { ...planner.refused(input.context), fits: false };
   return { ...result, requested };
 }
 
@@ -613,12 +650,17 @@ function search(planner: Planner, contexts: number[], target: number, floor: num
       const p = planner.expertOffload(context);
       if (p) return { ...p, ...frame, verdict: 'tight', reason: 'expert-offload' };
     }
-    for (const context of contexts) {
-      const p = planner.best(context);
-      if (!p) continue;
-      const reason = p.placement === 'gpu' ? 'below-floor' : p.placement;
-      return { ...p, ...frame, verdict: 'slow', reason: reason === 'cpu' ? 'cpu-only' : reason };
-    }
+    // Layers past unified memory's GPU part run at CPU speed, so any all-GPU context comes before them there.
+    const passes = planner.unified
+      ? [(c: number) => planner.resident(c), (c: number) => planner.best(c)]
+      : [(c: number) => planner.best(c)];
+    for (const place of passes)
+      for (const context of contexts) {
+        const p = place(context);
+        if (!p) continue;
+        const reason = p.placement === 'gpu' ? 'below-floor' : p.placement;
+        return { ...p, ...frame, verdict: 'slow', reason: reason === 'cpu' ? 'cpu-only' : reason };
+      }
   }
   const smallest = contexts[contexts.length - 1];
   return {
@@ -696,9 +738,10 @@ export function estimateFitFromSize(sizeBytes: number, hardware: HardwareProfile
   const plannedBytes = needBytes + fitMarginBytes(hardware);
   const over = plannedBytes - budgetBytes;
   const base = { needBytes, budgetBytes, offloadBytes: Math.max(0, over), cpuOnly, context: tokens };
-  // Only weights move to RAM in a layer split.
+  // Only weights move to RAM in a layer split, and the context room a resident fit keeps must still be free.
   if (over > 0) {
-    const level = cpuOnly || over > ramPool || over > sizeBytes ? 'too-large' : 'tight';
+    const roomy = over <= ramPool - budgetBytes * (1 - SIZE_HEADROOM);
+    const level = cpuOnly || over > sizeBytes || !roomy ? 'too-large' : 'tight';
     return { ...base, level };
   }
   return { ...base, level: plannedBytes > budgetBytes * SIZE_HEADROOM ? 'tight' : 'fits' };

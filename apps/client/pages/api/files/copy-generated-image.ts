@@ -17,7 +17,7 @@ import {
   scopedSettingsRepository,
 } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { respond } from '@server/utils/respond';
@@ -25,8 +25,9 @@ import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/e
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { userCanAccessGeneratedImage } from '@bike4mind/server-utils/utils/generatedImageAccess';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
+import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';
 import { z } from 'zod';
-import { requesterScopedUsers } from '@server/auth/apiKeyAdminScope';
+import { requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 
 const copyGeneratedImageSchema = z.object({
   imageS3Key: z.string().describe('The S3 key of the image in the generatedImagesBucket'),
@@ -73,6 +74,8 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
       // spreadsheetml) map to ".xlsx" instead of a bogus ".sheet".
       const extension = extensionFromMimeType(contentType) || 'png';
       const finalFileName = fileName || `image_${Date.now()}.${extension}`;
+
+      await consumeFileUploadBudget(req, 1);
 
       const result = await withTransaction(async () => {
         return fabFilesService.createFabFile(

@@ -1,16 +1,27 @@
 import {
   CreditHolderType,
   hasPaidSignupDrip,
+  isPaymentUnlockReason,
   PENDING_FREE_CREDITS_TAG,
   settingsMap,
+  signupGrantRemaining,
+  SignupRiskScoringSchema,
   type IUserDocument,
+  type PaymentUnlockReason,
   type SignupGrant,
   type SignupGrantUnlockReason,
+  type SignupUnlockForfeitCause,
 } from '@bike4mind/common';
 import { withTransaction } from '@bike4mind/db-core';
 import { addCreditsWithLedgerRow, DuplicateCreditTransactionError } from '../creditService';
 import type { FreeCreditAdapters, GrantFreeCreditsResult } from './freeCredits';
-import { evaluateSignupRisk, signupRiskPolicySchema, type SignupRiskBand, type SignupRiskSignals } from './signupRisk';
+import {
+  evaluateSignupRisk,
+  isSignupGrantHeldForReview,
+  signupRiskPolicySchema,
+  type SignupRiskBand,
+  type SignupRiskSignals,
+} from './signupRisk';
 import { accountBlockReasons, isAiAccessRevoked } from './accountState';
 import { protectSignupCredits } from './signupProtection';
 import { reserveSignupGrantBudget, type SignupGrantBudgetReservation } from './signupGrantBudget';
@@ -31,6 +42,27 @@ type DripEvidence = { drip: { day: string; dailyCredits: number; maxCredits: num
 
 const noGrant = (): GrantFreeCreditsResult => ({ creditsGranted: 0, currentCredits: null });
 
+/** The ledger description of an unlock tranche; the row's `reason` carries the machine label. */
+const SIGNUP_UNLOCK_DESCRIPTIONS: Readonly<Record<SignupGrantUnlockReason, string>> = {
+  card_verified: 'card verified',
+  phone_verified: 'phone verified',
+  admin: 'released by an admin',
+  activity: 'account activity',
+  org_invite: 'organization invite accepted',
+  github_verified: 'GitHub account verified',
+  work_email_verified: 'work email verified',
+  activity_drip: 'daily activity',
+  subscription: 'paid subscription started',
+};
+
+const grantClock = (db: GrantAdapters['db']) => db.signupProtection?.grantBudget?.now?.() ?? new Date();
+
+/** The grant without its payment hold; a fully released grant has nothing left to hold. */
+function withoutHeldUnlock(grant: SignupGrant): SignupGrant {
+  const { heldUnlock: _released, ...rest } = grant;
+  return rest;
+}
+
 /** Card verification, subscription and admin releases are never throttled by the daily signup grant budget. */
 const BUDGET_EXEMPT_REASONS: ReadonlySet<SignupGrantUnlockReason | undefined> = new Set([
   'card_verified',
@@ -48,6 +80,20 @@ function isReleaseEligible(
   if (expected === 'pending_email') return user.signupGrant.stage === expected;
   // An unpaid tranche blocks every unlock; unlockSignupGrant pays a held tranche first on a card or subscription unlock.
   return user.signupGrant.stage !== 'pending_email';
+}
+
+/** Whether the stored risk score alone keeps the account in review (refreshSignupRiskScore's needsReview). */
+async function scoreNeedsReview(score: number, adminSettings: GrantAdapters['db']['adminSettings']) {
+  const setting = await adminSettings.findBySettingName('signupRiskScoring');
+  let value: unknown = setting?.settingValue ?? {};
+  try {
+    if (typeof value === 'string') value = JSON.parse(value);
+  } catch {
+    value = undefined;
+  }
+  const parsed = SignupRiskScoringSchema.safeParse(value);
+  // An unreadable setting keeps the account queued rather than releasing it unreviewed.
+  return !parsed.success || score >= parsed.data.reviewThreshold;
 }
 
 async function releaseStage(
@@ -195,6 +241,7 @@ async function releaseStage(
             type: 'generic_add',
             transactionId,
             reason: reason ? `signup_unlock:${reason}` : 'signup_tranche',
+            description: reason ? `Signup credits unlocked: ${SIGNUP_UNLOCK_DESCRIPTIONS[reason]}` : 'Signup credits',
           },
           {
             db: { creditTransactions: db.creditTransactions, creditLots: db.creditLots },
@@ -207,22 +254,51 @@ async function releaseStage(
       }
       const released = grant.creditsReleased + amount;
       const unlocked = released >= maximum;
+      const nextGrant: SignupGrant = {
+        ...(unlocked ? withoutHeldUnlock(grant) : grant),
+        stage: unlocked ? 'unlocked' : 'signup',
+        creditsReleased: released,
+        nextCondition: unlocked ? null : 'verification',
+        ...(reason ? { unlockedBy: reason } : {}),
+        ...(dripDay ? { dripCredits: (grant.dripCredits ?? 0) + dripAmount, lastDripDay: dripDay } : {}),
+        ...(dripPeriod ? { lastDripPeriod: dripPeriod } : {}),
+        ...(typeof evidence === 'object' && 'unlockedOrgId' in evidence
+          ? { unlockedOrgId: evidence.unlockedOrgId }
+          : {}),
+      };
+      // A held tranche is released only from the admin risk review queue, and not every caller rescores
+      // after this (refreshSignupRiskScore), so queue it here. An admin decision already taken stands.
+      const enterRiskReview =
+        !!assessedBand &&
+        isSignupGrantHeldForReview({ signupGrant: nextGrant, signupGrantAssessment: assessment }) &&
+        (user.riskScore?.reviewState ?? 'none') === 'none';
+      // An unlock that pays the held tranche (card, subscription, ...) ends the hold, so an account queued
+      // only for it leaves the queue. An admin release is approved by its caller (admin/signup-risk-reviews).
+      const leaveRiskReview =
+        reason !== 'admin' &&
+        user.riskScore?.reviewState === 'pending' &&
+        isSignupGrantHeldForReview(user) &&
+        !isSignupGrantHeldForReview({ signupGrant: nextGrant, signupGrantAssessment: assessment }) &&
+        !(await scoreNeedsReview(user.riskScore.score, db.adminSettings));
       const updated = await db.users.update({
         id: userId,
         ...(assessment ? { signupGrantAssessment: assessment } : {}),
         ...(user.signupGrantHeldReason ? { signupGrantHeldReason: null } : {}),
-        signupGrant: {
-          ...grant,
-          stage: unlocked ? 'unlocked' : 'signup',
-          creditsReleased: released,
-          nextCondition: unlocked ? null : 'verification',
-          ...(reason ? { unlockedBy: reason } : {}),
-          ...(dripDay ? { dripCredits: (grant.dripCredits ?? 0) + dripAmount, lastDripDay: dripDay } : {}),
-          ...(dripPeriod ? { lastDripPeriod: dripPeriod } : {}),
-          ...(typeof evidence === 'object' && 'unlockedOrgId' in evidence
-            ? { unlockedOrgId: evidence.unlockedOrgId }
-            : {}),
-        },
+        ...(enterRiskReview
+          ? {
+              riskScore: {
+                score: 0,
+                signals: [],
+                computedAt: new Date(),
+                ...user.riskScore,
+                reviewState: 'pending' as const,
+              },
+            }
+          : {}),
+        ...(leaveRiskReview && user.riskScore
+          ? { riskScore: { ...user.riskScore, reviewState: 'none' as const } }
+          : {}),
+        signupGrant: nextGrant,
       });
       if (!updated) throw new Error('Staged grant account update failed');
       await audit?.({ userId, credits: amount, creditTransactionId });
@@ -267,19 +343,79 @@ export const releaseSignupTranche = (userId: string, adapters: GrantAdapters) =>
     adapters
   );
 
-/** Validators are server-owned integrations, never request payloads. Missing integrations fail closed. */
-export const unlockSignupGrant = (
-  userId: string,
-  reason: SignupGrantUnlockReason,
-  adapters: GrantAdapters & { validators: Partial<Record<SignupGrantUnlockReason, SignupGrantValidator>> }
-) => {
+type UnlockAdapters = GrantAdapters & {
+  validators: Partial<Record<SignupGrantUnlockReason, SignupGrantValidator>>;
+  /** Held-release job only: pays a payment unlock whose hold has reached `releaseAt` by this time. */
+  releaseHeldUnlockAt?: Date;
+};
+
+/**
+ * Validators are server-owned integrations, never request payloads. Missing integrations fail closed.
+ * A payment unlock (card or subscription) is held for `signupUnlockPaymentHoldHours` so a stolen card
+ * cannot cash out the remainder before its dispute or early fraud warning arrives.
+ */
+export const unlockSignupGrant = (userId: string, reason: SignupGrantUnlockReason, adapters: UnlockAdapters) => {
   const validator = adapters.validators[reason];
   if (!validator || (reason === 'admin' && !adapters.audit)) return Promise.resolve(noGrant());
-  const unlock = () =>
-    releaseStage(userId, 'signup', reason, async user => (user.emailVerified ? validator(user) : false), adapters);
-  if (reason !== 'card_verified' && reason !== 'subscription') return unlock();
-  return unlockWithHeldTranche(userId, adapters, validator, unlock);
+  if (!isPaymentUnlockReason(reason))
+    return releaseStage(
+      userId,
+      'signup',
+      reason,
+      async user => (user.emailVerified ? validator(user) : false),
+      adapters
+    );
+  const releaseAt = adapters.releaseHeldUnlockAt;
+  const paymentValidator: SignupGrantValidator = async user => {
+    const grant = user.signupGrant;
+    if (!user.emailVerified || !grant || grant.unlockForfeited) return false;
+    if (releaseAt && !(grant.heldUnlock && new Date(grant.heldUnlock.releaseAt) <= releaseAt)) return false;
+    return validator(user);
+  };
+  const unlock = async () => {
+    if (releaseAt || (await resolvePaymentUnlockHoldHours(adapters.db.adminSettings)) === 0)
+      return releaseStage(userId, 'signup', reason, paymentValidator, adapters);
+    return holdPaymentUnlock(userId, reason, paymentValidator, adapters);
+  };
+  return unlockWithHeldTranche(userId, adapters, paymentValidator, unlock);
 };
+
+export async function resolvePaymentUnlockHoldHours(adminSettings: GrantAdapters['db']['adminSettings']) {
+  const { schema, defaultValue } = settingsMap.signupUnlockPaymentHoldHours;
+  const parsed = schema.safeParse(
+    (await adminSettings.findBySettingName('signupUnlockPaymentHoldHours'))?.settingValue
+  );
+  // A missing or invalid setting holds rather than pays.
+  return parsed.success ? parsed.data : (defaultValue ?? 72);
+}
+
+/**
+ * Records the payment unlock as held instead of paying it. Repeat payments keep the first payment's
+ * release time, so renewals cannot push it out and a fresh card cannot pull it in.
+ */
+async function holdPaymentUnlock(
+  userId: string,
+  reason: PaymentUnlockReason,
+  validate: SignupGrantValidator,
+  adapters: GrantAdapters
+): Promise<GrantFreeCreditsResult> {
+  const { db } = adapters;
+  // Same domain protection as a payout, so a protected account records no hold either.
+  if (db.signupProtection && (await protectSignupCredits(userId, db))) return { ...noGrant(), withheld: true };
+  const hours = await resolvePaymentUnlockHoldHours(db.adminSettings);
+  const releaseAt = await withTransaction<Date | null>(async () => {
+    const user = await db.users.findById(userId);
+    if (!isReleaseEligible(user, 'signup') || signupGrantRemaining(user.signupGrant) === 0) return null;
+    if (user.signupGrant.heldUnlock) return user.signupGrant.heldUnlock.releaseAt;
+    if (!(await validate(user))) return null;
+    const heldAt = grantClock(db);
+    const heldUnlock = { reason, heldAt, releaseAt: new Date(heldAt.getTime() + hours * 3_600_000) };
+    const updated = await db.users.update({ id: userId, signupGrant: { ...user.signupGrant, heldUnlock } });
+    if (!updated) throw new Error('Staged grant account update failed');
+    return heldUnlock.releaseAt;
+  });
+  return releaseAt ? { ...noGrant(), withheld: true, heldUntil: new Date(releaseAt) } : noGrant();
+}
 
 /**
  * A card unlock on an account whose signup tranche is held for the budget pays the tranche under its
@@ -308,6 +444,82 @@ async function unlockWithHeldTranche(
   const remainder = await unlock();
   const creditsGranted = tranche.creditsGranted + remainder.creditsGranted;
   return { ...remainder, creditsGranted, currentCredits: remainder.currentCredits ?? tranche.currentCredits };
+}
+
+export type HeldUnlockReleaseResult = { scanned: number; released: number; creditsPaid: number; failed: number };
+
+/**
+ * Pays held payment unlocks whose settling window has passed. `listDueIds` returns only payable
+ * accounts; a dispute flags the account and cancels the hold, so a disputed payment never pays here.
+ */
+export async function releaseDueHeldUnlocks(
+  adapters: GrantAdapters & {
+    listDueIds: (input: { now: Date; afterId?: string; limit: number }) => Promise<string[]>;
+    logger: { error: (message: string, ...args: unknown[]) => void };
+  },
+  options: { now: Date; maxUsers: number; pageSize?: number }
+): Promise<HeldUnlockReleaseResult> {
+  const result: HeldUnlockReleaseResult = { scanned: 0, released: 0, creditsPaid: 0, failed: 0 };
+  const pageSize = options.pageSize ?? 50;
+  let afterId: string | undefined;
+  while (result.scanned < options.maxUsers) {
+    const ids = await adapters.listDueIds({
+      now: options.now,
+      afterId,
+      limit: Math.min(pageSize, options.maxUsers - result.scanned),
+    });
+    if (!ids.length) break;
+    for (const userId of ids) {
+      result.scanned++;
+      try {
+        const reason = (await adapters.db.users.findById(userId))?.signupGrant?.heldUnlock?.reason;
+        if (!reason) continue;
+        const paid = await unlockSignupGrant(userId, reason, {
+          ...adapters,
+          validators: { [reason]: async (user: IUserDocument) => user.emailVerified },
+          releaseHeldUnlockAt: options.now,
+        });
+        if (paid.creditsGranted > 0) {
+          result.released++;
+          result.creditsPaid += paid.creditsGranted;
+        }
+      } catch (error) {
+        result.failed++;
+        adapters.logger.error(`Held signup unlock release failed for user ${userId}`, error);
+      }
+    }
+    afterId = ids[ids.length - 1];
+  }
+  return result;
+}
+
+export type ForfeitPaymentUnlockResult = {
+  outcome: 'cancelled' | 'forfeited' | 'already_forfeited' | 'not_enrolled';
+};
+
+/**
+ * Voids payment unlocks after a dispute, refund or early fraud warning on the account's payments:
+ * cancels a held bonus before the held-release job can pay it, and closes payment unlocks for good.
+ * A bonus already paid is left to the dispute clawback. Idempotent: a replay finds the marker.
+ */
+export async function forfeitPaymentUnlock(
+  userId: string,
+  cause: SignupUnlockForfeitCause,
+  adapters: Pick<GrantAdapters, 'db'>
+): Promise<ForfeitPaymentUnlockResult> {
+  const { db } = adapters;
+  return withTransaction<ForfeitPaymentUnlockResult>(async () => {
+    const user = await db.users.findById(userId);
+    const grant = user?.signupGrant;
+    if (!grant) return { outcome: 'not_enrolled' };
+    if (grant.unlockForfeited) return { outcome: 'already_forfeited' };
+    const updated = await db.users.update({
+      id: userId,
+      signupGrant: { ...withoutHeldUnlock(grant), unlockForfeited: { cause, at: grantClock(db) } },
+    });
+    if (!updated) throw new Error('Staged grant account update failed');
+    return { outcome: grant.heldUnlock ? 'cancelled' : 'forfeited' };
+  });
 }
 
 export async function resolveDripLimits(adminSettings: GrantAdapters['db']['adminSettings']) {

@@ -1,6 +1,6 @@
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
 import { checkFreeTierDailySpendCap } from '@server/billing/freeTierDailyCapGate';
-import { actorScopeForKey } from '@server/auth/apiKeyAdminScope';
+import { actorScopeForKey } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import express, { type Request, type Response, type Express, type NextFunction } from 'express';
 import {
   CompletionRequestSchema,
@@ -42,12 +42,13 @@ import {
   userApiKeyRepository,
   usageEventRepository,
   organizationRepository,
+  cacheRepository,
 } from '@bike4mind/database';
 import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@server/cli/auth';
 import { resolveContractAuth } from '@server/cli/resolveContractAuth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { flattenHeaders } from '@server/utils/flattenHeaders';
+import { flattenHeaders } from '@bike4mind/server-utils/utils/flattenHeaders';
 import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
 import { createMethodGuard } from '@bike4mind/server-utils/utils/allowedMethods';
 import { buildErrorBody, httpErrorToResponse } from '@server/middlewares/errorHandler';
@@ -100,6 +101,8 @@ const OPERATOR_SIDE_4XX_PATTERNS = [
   /api key (?:not valid|is invalid|has expired|is missing)/i,
   /invalid api key/i,
   /credit balance/i,
+  // Anthropic's org spend cap; keep in sync with isProviderSpendLimitError (@bike4mind/utils).
+  /reached your specified api usage limits/i,
 ];
 
 function isUpstreamCallerError(error: unknown): error is Error {
@@ -372,6 +375,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           usageEvents: usageEventRepository,
           // Required to reserve/settle against an org pool for org-billed API keys.
           organizations: organizationRepository,
+          cache: cacheRepository,
         },
         apiKeyInfo: apiKeyInfoForCompletion,
         scopeActor: actorScopeForKey(apiKeyInfo),
@@ -381,6 +385,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         // Correlation id for the usage-event dual write (synthesized downstream if absent).
         requestId,
         source,
+        sessionId: body.sessionId,
         logger,
         onReady,
         onChunk: async (text, info) => {

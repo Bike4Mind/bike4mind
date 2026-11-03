@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 
 // fabfile.ts wires an Express-style handler at module load and imports server-only deps; stub them
 // so we can drive the handler (default export) in isolation. @bike4mind/common is NOT mocked - the
@@ -21,7 +25,7 @@ mocks.consumePublishAction.mockImplementation(() => Promise.resolve({ refund: mo
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const chain: Record<string, unknown> = {};
-    Object.assign(chain, { use: () => chain, post: (fn: unknown) => fn });
+    Object.assign(chain, { use: () => chain, post: (...fns: unknown[]) => fns[fns.length - 1] });
     return chain;
   },
 }));

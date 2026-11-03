@@ -5,6 +5,7 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 // Linking an account that promotes emailVerified runs applyEmailVerifiedGrants, which rescores.
 const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
+vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
 vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore }));
 
 const mockFindOne = vi.fn();
@@ -13,6 +14,7 @@ const mockCreate = vi.fn();
 const mockRevokeAllByUserId = vi.fn();
 const mockUserRepositoryUpdate = vi.fn();
 const mockClearPending = vi.fn();
+const mockClaimFreeCreditGrant = vi.fn();
 const mockEndConnections = vi.fn();
 
 // Pulled in transitively by signupDomainGrant; these tests never reach a rule with a subscription.
@@ -34,6 +36,9 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {
     update: (...args: unknown[]) => mockUserRepositoryUpdate(...args),
     clearPendingFreeCreditGrant: (...args: unknown[]) => mockClearPending(...args),
+    // The domain grant claims the one-grant-per-inbox entitlement before crediting; these tests
+    // are about the callback, so the inbox is always free here.
+    claimFreeCreditGrant: (...args: unknown[]) => mockClaimFreeCreditGrant(...args),
   },
 }));
 
@@ -126,6 +131,9 @@ beforeEach(() => {
   mockUserRepositoryUpdate.mockResolvedValue(undefined);
   mockClearPending.mockReset();
   mockClearPending.mockImplementation(async (id: string) => ({ id, tags: [] }));
+  mockClaimFreeCreditGrant.mockReset();
+  // This inbox has not claimed its free-credit grant anywhere else, so the domain grant pays.
+  mockClaimFreeCreditGrant.mockResolvedValue(true);
   mockEmitVerifiedFunnel.mockReset();
   mockReleasePending.mockReset();
   mockReleasePending.mockImplementation(async (user: { tags?: string[] | null }) =>

@@ -22,7 +22,7 @@ const {
 }));
 
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ isDevelopment: () => isDevelopmentMock() }));
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     findActiveUserSubscriptions: findActiveUserSubscriptionsMock,
     findActiveSubscriptionsByOwners: findActiveSubscriptionsByOwnersMock,
@@ -46,17 +46,13 @@ vi.mock('@client/lib/userSubscriptions/constants', () => ({
   TEAM_PLAN: { priceId: 'price_team', tier: 2 },
 }));
 
-import {
-  __resetTierSettingsCache,
-  hasPaidSubscription,
-  resolveUserRateTier,
-  resolveUserRateLimitPerMin,
-} from './userRateTier';
+import { __resetTierSettingsCache, resolveUserRateTier, resolveUserRateLimitPerMin } from './userRateTier';
 
 const TIER_LIMITS: Record<string, number> = {
   apiRateLimitFreePerMin: 10,
   apiRateLimitBasicPerMin: 30,
   apiRateLimitProPerMin: 60,
+  shadowTierRequestsPerMin: 3,
 };
 
 describe('resolveUserRateTier', () => {
@@ -131,9 +127,31 @@ describe('resolveUserRateTier', () => {
     expect(await resolveUserRateTier({ id: 'u1' })).toBe('basic');
   });
 
-  it('treats tier-less standalone plans as "free" (not on the ladder)', async () => {
+  it('returns "shadow" for a shadow-tier user without reading subscriptions', async () => {
+    expect(await resolveUserRateTier({ id: 'u1', throttle: { tier: 'shadow' } })).toBe('shadow');
+    expect(findActiveUserSubscriptionsMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps bypass for a shadow-tier admin', async () => {
+    expect(await resolveUserRateTier({ id: 'u1', isAdmin: true, throttle: { tier: 'shadow' } })).toBe('bypass');
+  });
+
+  it('floors a tier-less standalone plan at "basic": paid standing, but not on the ladder', async () => {
     findActiveUserSubscriptionsMock.mockResolvedValue([{ priceId: 'price_standalone' }]);
-    expect(await resolveUserRateTier({ id: 'u1' })).toBe('free');
+    expect(await resolveUserRateTier({ id: 'u1' })).toBe('basic');
+  });
+
+  it('floors a credit buyer with no plan at "basic"', async () => {
+    expect(await resolveUserRateTier({ id: 'u1', lastCreditsPurchasedAt: new Date('2026-01-01') })).toBe('basic');
+  });
+
+  it("keeps a credit buyer's higher ladder tier", async () => {
+    findActiveUserSubscriptionsMock.mockResolvedValue([{ priceId: 'price_pro' }]);
+    expect(await resolveUserRateTier({ id: 'u1', lastCreditsPurchasedAt: new Date('2026-01-01') })).toBe('pro');
+  });
+
+  it('keeps a user with no plan and no purchase on "free"', async () => {
+    expect(await resolveUserRateTier({ id: 'u1', lastCreditsPurchasedAt: null })).toBe('free');
   });
 
   it.each(['membership', 'subscriptions'])('strict tier resolution propagates an org %s read failure', async leg => {
@@ -261,20 +279,16 @@ describe('resolveUserRateLimitPerMin', () => {
     expect(await resolveUserRateLimitPerMin({ id: 'u1' })).toBe(60);
     expect(getSettingsValueMock).toHaveBeenCalledWith('apiRateLimitProPerMin', expect.anything());
   });
-});
 
-describe('hasPaidSubscription', () => {
-  it('counts a standalone (tier-less) paid plan as paid, unlike the rate tier', () => {
-    expect(hasPaidSubscription([{ priceId: 'price_standalone' }])).toBe(true);
+  it('reads the shadow setting for a shadow-tier user', async () => {
+    findActiveUserSubscriptionsMock.mockResolvedValue([{ priceId: 'price_pro' }]);
+    expect(await resolveUserRateLimitPerMin({ id: 'u1', throttle: { tier: 'shadow' } })).toBe(3);
+    expect(getSettingsValueMock).toHaveBeenCalledWith('shadowTierRequestsPerMin', expect.anything());
   });
 
-  it('counts ladder and Team plans as paid', () => {
-    expect(hasPaidSubscription([{ priceId: 'price_basic' }])).toBe(true);
-    expect(hasPaidSubscription([{ priceId: 'price_team' }])).toBe(true);
-  });
-
-  it('treats no rows, unknown and empty price ids as not paid', () => {
-    expect(hasPaidSubscription([])).toBe(false);
-    expect(hasPaidSubscription([{ priceId: 'price_unknown' }, { priceId: '' }])).toBe(false);
+  it('restores the subscription limit on the next call once the tier is cleared', async () => {
+    findActiveUserSubscriptionsMock.mockResolvedValue([{ priceId: 'price_pro' }]);
+    expect(await resolveUserRateLimitPerMin({ id: 'u1', throttle: { tier: 'shadow' } })).toBe(3);
+    expect(await resolveUserRateLimitPerMin({ id: 'u1', throttle: { tier: 'none' } })).toBe(60);
   });
 });

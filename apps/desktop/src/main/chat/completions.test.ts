@@ -46,6 +46,11 @@ describe('streamCompletion reasoning effort', () => {
   it('leaves the field off the payload when none is set', async () => {
     expect(await sentOptions(REQUEST)).not.toHaveProperty('reasoningEffort');
   });
+
+  it('sends a prompt cache lifetime under options only when one is set', async () => {
+    expect(await sentOptions({ ...REQUEST, cacheTtl: '1h' })).toMatchObject({ cacheTtl: '1h' });
+    expect(await sentOptions(REQUEST)).not.toHaveProperty('cacheTtl');
+  });
 });
 
 describe('streamCompletion', () => {
@@ -63,6 +68,30 @@ describe('streamCompletion', () => {
     await done;
 
     expect(events.map(event => ('text' in event ? event.text : event.type))).toEqual(['meta', 'Hel', 'lo']);
+  });
+
+  it('drops a generation rate from a hosted stream, keeping its usage and credits', async () => {
+    const stream = new PassThrough();
+    const { instance } = fakeAxios(stream);
+    const events: CompletionStreamEvent[] = [];
+
+    const done = streamCompletion(instance, '/c', REQUEST, event => events.push(event));
+
+    stream.write(
+      frame({
+        type: 'content',
+        stopReason: 'end_turn',
+        usage: { outputTokens: 12 },
+        credits: { used: 3 },
+        rate: { evalTokens: 12, evalMs: 500 },
+      })
+    );
+    stream.write(frame('[DONE]'));
+    await done;
+
+    expect(events).toEqual([
+      { type: 'content', stopReason: 'end_turn', usage: { outputTokens: 12 }, credits: { used: 3 } },
+    ]);
   });
 
   it('reassembles a frame split across chunk boundaries', async () => {
@@ -206,6 +235,17 @@ describe('streamCompletion', () => {
     await done;
 
     expect(post.mock.calls[0][1]).toMatchObject({ max_tokens: 16_384 });
+  });
+
+  it('sends the session id so the server ledger can tie the spend to the conversation', async () => {
+    const stream = new PassThrough();
+    const { instance, post } = fakeAxios(stream);
+
+    const done = streamCompletion(instance, '/c', { ...REQUEST, sessionId: 'session-1' }, () => {});
+    stream.write(frame('[DONE]'));
+    await done;
+
+    expect(post.mock.calls[0][1]).toMatchObject({ sessionId: 'session-1' });
   });
 
   it('asks for readable reasoning only when told to', async () => {
@@ -400,6 +440,19 @@ describe('withCacheBreakpoints', () => {
     const grown = [...history, { role: 'assistant' as const, content: 'two' }, { role: 'user' as const, content: 'x' }];
     const marked = withCacheBreakpoints(grown).flatMap((message, index) => (message.cache ? [index] : []));
     expect(marked).toEqual([0, 5]);
+  });
+
+  it('re-marks the previous rolling breakpoint only on the request right after a tool change', () => {
+    const change = {
+      role: 'system' as const,
+      content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'file_read' } }],
+    };
+    const ended = [history[0], history[1], change];
+    expect(withCacheBreakpoints(ended).flatMap((message, index) => (message.cache ? [index] : []))).toEqual([0, 1]);
+    const next = [...ended, { role: 'assistant' as const, content: 'a' }, { role: 'user' as const, content: 'b' }];
+    expect(withCacheBreakpoints(next).flatMap((message, index) => (message.cache ? [index] : []))).toEqual([0, 1, 4]);
+    const later = [...next, { role: 'assistant' as const, content: 'c' }, { role: 'user' as const, content: 'd' }];
+    expect(withCacheBreakpoints(later).flatMap((message, index) => (message.cache ? [index] : []))).toEqual([0, 6]);
   });
 
   it('never marks a message that ends on a reasoning block, and moves back to one that can carry it', () => {

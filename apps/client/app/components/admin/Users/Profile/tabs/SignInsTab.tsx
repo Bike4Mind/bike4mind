@@ -1,11 +1,13 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Box, Button, Link, Stack, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
 import { authMethodLabel, type UserSignIn, type UserSignInResult } from '@bike4mind/common';
-import { useUserSignIns, useUserSignupCluster } from '@client/app/hooks/data/adminUserTimeline';
+import { useUserLinkedAccounts, useUserSignIns, useUserSignupCluster } from '@client/app/hooks/data/adminUserTimeline';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import { DataTable, Fact, RelativeTime, SectionCard, StatusChip, type DataColumn } from '../../../shared';
+import { BlockIpDialog } from '../../../BlockedIPs/IpBlockDialogs';
 import { useOpenUserProfile } from '../useOpenUserProfile';
+import { RowAction } from './cardActions';
 import { ActiveSessions } from './ActiveSessions';
 import type { AdminUserProfile } from '../userProfileModel';
 
@@ -107,12 +109,47 @@ const SignupCluster: React.FC<{ userId: string }> = ({ userId }) => {
   );
 };
 
+const LINK_VIA_LABELS = { card: 'same card', paymentNetwork: 'same payment IP', signupNetwork: 'same signup IP' };
+
+/** Accounts sharing this user's card (strong) or only an IP (weak); the payment-risk actions act on these. */
+const LinkedAccounts: React.FC<{ userId: string }> = ({ userId }) => {
+  const linked = useUserLinkedAccounts(userId);
+  const openProfile = useOpenUserProfile();
+  if (linked.isLoading) return <>Checking...</>;
+  if (linked.isError || !linked.data) return <>Could not be checked</>;
+  if (linked.data.length === 0) return <>No account shares a card or IP</>;
+  return (
+    <Stack gap={0.5} data-testid="user-linked-accounts">
+      {linked.data.map(account => (
+        <Stack key={account.id} direction="row" gap={1} alignItems="center" flexWrap="wrap">
+          <Link
+            component="button"
+            type="button"
+            level="body-sm"
+            onClick={() => void openProfile(account.id)}
+            sx={{ textAlign: 'left' }}
+            data-testid="user-linked-account-link"
+          >
+            {account.name || account.email || account.id}
+          </Link>
+          <StatusChip
+            tone={account.strength === 'strong' ? 'warn' : 'neutral'}
+            label={account.via.map(how => LINK_VIA_LABELS[how]).join(', ')}
+          />
+          {account.blocked && <StatusChip tone="bad" label="Blocked" />}
+        </Stack>
+      ))}
+    </Stack>
+  );
+};
+
 /** How the account was made: the record written once at signup plus accounts that share its client. */
 const SignupRecord: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
   const navigate = useNavigate();
   const meta = user.signupMeta ?? undefined;
   const domain = emailDomain(user.email);
   const method = authMethodLabel(user.acquisition?.signupMethod);
+  const [blockingIp, setBlockingIp] = useState(false);
   return (
     <SectionCard title="Signup" data-testid="user-profile-signup">
       <Fact label="Signed up">{user.createdAt && <RelativeTime at={user.createdAt} />}</Fact>
@@ -138,7 +175,17 @@ const SignupRecord: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
           <StatusChip tone="warn" label="Not verified" data-testid="user-signup-verification" />
         )}
       </Fact>
-      <Fact label="IP address">{meta?.ip && <Mono value={meta.ip} />}</Fact>
+      <Fact label="IP address">
+        {meta?.ip && (
+          <Stack direction="row" alignItems="center" gap={1}>
+            <Mono value={meta.ip} />
+            <RowAction onClick={() => setBlockingIp(true)} data-testid="user-signup-block-ip-btn">
+              Block this IP
+            </RowAction>
+          </Stack>
+        )}
+        {blockingIp && meta?.ip && <BlockIpDialog initialIp={meta.ip} onClose={() => setBlockingIp(false)} />}
+      </Fact>
       <Fact label="Country">{meta?.country}</Fact>
       <Fact label="Network">{meta && networkLabel(meta)}</Fact>
       <Fact label="User agent">
@@ -150,6 +197,9 @@ const SignupRecord: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
       </Fact>
       <Fact label="Signup cluster">
         <SignupCluster userId={user.id} />
+      </Fact>
+      <Fact label="Linked accounts">
+        <LinkedAccounts userId={user.id} />
       </Fact>
     </SectionCard>
   );

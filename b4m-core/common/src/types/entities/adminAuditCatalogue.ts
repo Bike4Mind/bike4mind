@@ -51,9 +51,11 @@ export const ADMIN_AUDIT_CATALOGUE = {
   },
   'user.credits.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
   'user.subscription.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
+  'billing.comp.changed': { category: 'credits', severity: 'notice', write: 'strict' },
 
   'user.role.admin_granted': { category: 'access', severity: 'critical', write: 'strict' },
   'user.role.admin_revoked': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.throttle_tier.changed': { category: 'access', severity: 'critical', write: 'strict' },
   'user.role.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
   'user.impersonation.started': { category: 'access', severity: 'critical', write: 'strict' },
   'user.impersonation.escalated': { category: 'access', severity: 'critical', write: 'strict' },
@@ -74,6 +76,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.note.deleted': { category: 'support', severity: 'notice', write: 'strict' },
   'user.note.restored': { category: 'support', severity: 'notice', write: 'strict' },
   'user.tags.updated': { category: 'account', severity: 'notice', write: 'strict' },
+  // Name and username as written, plus a requested email change that the user still has to verify.
+  'user.identity.updated': { category: 'identity', severity: 'notice', write: 'strict' },
 
   'org.seats.changed': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.seats.ceiling_raised': { category: 'org', severity: 'info', write: 'bestEffort' },
@@ -86,6 +90,11 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.invite.created': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.member_budget.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.custom_mcp_policy.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.slack_channel_api_posting.updated': { category: 'org', severity: 'notice', write: 'strict' },
+  // Target the member, not the org, so the entry reaches the user's Admin log; organizationId names the org.
+  'org.member.added': { category: 'org', severity: 'notice', write: 'strict' },
+  'org.member.removed': { category: 'org', severity: 'notice', write: 'strict' },
+  'org.member.role_changed': { category: 'org', severity: 'notice', write: 'strict' },
 
   'settings.admin_settings.updated': { category: 'settings', severity: 'notice', write: 'strict' },
   'settings.admin_settings.denied': { category: 'settings', severity: 'critical', write: 'bestEffort' },
@@ -106,6 +115,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.email.verified': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.api_key_trust.approved': { category: 'identity', severity: 'notice', write: 'strict' },
   'user.api_key_trust.revoked': { category: 'identity', severity: 'notice', write: 'bestEffort' },
+  'user.new_account_spend_cap.lifted': { category: 'identity', severity: 'notice', write: 'strict' },
+  'user.new_account_spend_cap.restored': { category: 'identity', severity: 'notice', write: 'bestEffort' },
   'user.email.unverified': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.verification_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.change_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
@@ -286,6 +297,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'security.blocked_ip.added': { category: 'access', severity: 'notice', write: 'strict' },
   'security.blocked_ip.removed': { category: 'access', severity: 'critical', write: 'strict' }, // critical: removing a block lifts a security control
   'security.blocked_ip.auto_added': { category: 'access', severity: 'notice', write: 'strict' },
+  // bestEffort: the verdict history on the ShadowDetection record is the source of truth; grading never acts.
+  'security.detection.reviewed': { category: 'access', severity: 'info', write: 'bestEffort' },
   'moderation.incident.verdict_recorded': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.published_artifact.taken_down': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.published_artifact.takedown_reverted': { category: 'support', severity: 'notice', write: 'strict' },
@@ -305,6 +318,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'settings.agent_ops.repaired': { category: 'settings', severity: 'info', write: 'bestEffort' },
 
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
+
+  'model_hub.curated.imported': { category: 'settings', severity: 'critical', write: 'strict' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;
 
 export type AdminAuditAction = keyof typeof ADMIN_AUDIT_CATALOGUE;

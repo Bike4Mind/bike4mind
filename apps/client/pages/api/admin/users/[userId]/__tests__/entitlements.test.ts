@@ -8,7 +8,7 @@ import {
   EMBED_WHITELABEL_ENTITLEMENT_KEY,
   PRICE_ENTITLEMENTS,
   __registryRows,
-} from '@client/lib/entitlements/registry';
+} from '@bike4mind/server-utils/lib/entitlements/registry';
 
 const { mockUserFind, mockSubs, mockPartnerKeys } = vi.hoisted(() => ({
   mockUserFind: vi.fn(),

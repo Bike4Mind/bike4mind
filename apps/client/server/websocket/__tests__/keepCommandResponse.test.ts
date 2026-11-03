@@ -4,7 +4,7 @@ vi.mock('@bike4mind/database/social', () => ({
   Connection: { findOne: vi.fn() },
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   withWebSocketContext: vi.fn(
     (handler: (event: unknown, context: unknown, logger: unknown) => Promise<unknown>) => handler
   ),
@@ -12,7 +12,7 @@ vi.mock('@server/websocket/utils', () => ({
 }));
 
 import { Connection } from '@bike4mind/database/social';
-import { sendToConnection } from '@server/websocket/utils';
+import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 import { func } from '../keepCommandResponse';
 
 /**

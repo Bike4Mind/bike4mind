@@ -3,7 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
-import { createModalVideoSchema } from '@bike4mind/common';
+import { createModalVideoSchema, hasAdminPermission } from '@bike4mind/common';
 import { definedKeys } from '@server/utils/adminAudit';
 import { modalAuditTitle } from '@client/server/tools/modalOperations';
 import { recordModalChanges } from '@client/server/tools/recordModalChanges';
@@ -102,10 +102,12 @@ const handler = baseApi().put(
       'admin-modals'
     );
 
-    // Defense-in-depth: strip variants + generationMetadata from the response even
-    // though this endpoint is admin-only today. Insulates the invariant from future
-    // ability-rule changes.
-    const audienceKey = await viewerClassifier.classify({ isAdmin: req.user?.isAdmin ?? false } as never);
+    // Defense-in-depth: strip variants + generationMetadata from the response even though
+    // only admins and settings:manage delegates reach this endpoint. Delegates are classified
+    // as admins so their response is not null for a modal with no customer variant.
+    const audienceKey = await viewerClassifier.classify({
+      isAdmin: hasAdminPermission(req.user, 'settings:manage'),
+    } as never);
     return res.json(extractVariantForViewer(updatedModal.toObject(), audienceKey));
   })
 );

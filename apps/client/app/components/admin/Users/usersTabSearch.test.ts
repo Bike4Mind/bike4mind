@@ -204,3 +204,45 @@ describe('created-at window params', () => {
     });
   });
 });
+
+describe('analytics drill-down params', () => {
+  const drillDown = {
+    createdFrom: '2026-10-01T00:00:00.000Z',
+    createdTo: '2026-11-01T00:00:00.000Z',
+    verdict: 'legit',
+    funnelStep: 'cameBack',
+    activeFrom: '2026-10-01',
+    activeTo: '2026-10-07',
+  } as const;
+
+  it('accepts only known verdicts and funnel steps, and real UTC days', () => {
+    expect(USERS_SEARCH_PARSERS.verdict('suspected')).toBe('suspected');
+    expect(USERS_SEARCH_PARSERS.verdict('unclassified')).toBeUndefined();
+    expect(USERS_SEARCH_PARSERS.funnelStep('paid')).toBe('paid');
+    expect(USERS_SEARCH_PARSERS.funnelStep('bought')).toBeUndefined();
+    expect(USERS_SEARCH_PARSERS.activeFrom('2026-10-03')).toBe('2026-10-03');
+    expect(USERS_SEARCH_PARSERS.activeFrom('2026-02-30')).toBeUndefined();
+    expect(USERS_SEARCH_PARSERS.activeTo('2026-10-03T00:00:00.000Z')).toBeUndefined();
+    expect(USERS_SEARCH_PARSERS.activeTo(20261003)).toBeUndefined();
+  });
+
+  it('round-trips every key through the URL as part of the view', () => {
+    const view = usersViewFromSearch(drillDown);
+    expect(view).toMatchObject({ page: 1, ...drillDown });
+    expect(usersViewToSearch({ ...DEFAULT_USERS_PARAMS, ...view })).toMatchObject(drillDown);
+    for (const [key, value] of Object.entries(drillDown)) {
+      expect(usersViewFromSearch({ [key]: value }), key).toMatchObject({ page: 1, [key]: value });
+    }
+  });
+
+  it('counts the active window as one filter and clears every drill-down key', () => {
+    const params = { ...DEFAULT_USERS_PARAMS, ...drillDown };
+    // Created window, verdict, funnel step and active window.
+    expect(countActiveFilters(params)).toBe(4);
+    expect(countActiveFilters({ ...params, ...CLEARED_FILTER_PARAMS })).toBe(0);
+  });
+
+  it('restores the drill-down from a stored view', () => {
+    expect(migrateStoredUsersParams({ ...DEFAULT_USERS_PARAMS, ...drillDown })).toMatchObject(drillDown);
+  });
+});

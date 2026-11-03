@@ -40,6 +40,7 @@ If your computer has no secure storage available, Desktop keeps the credential o
 |-------|-------------------|-------------|
 | Tailscale with HTTPS | `https://gpu.tailnet-name.ts.net` | Optional |
 | Caddy in front of Ollama | `https://ollama.example.com` | Bearer token |
+| Connect with: SSH | `user@gpu.example.com` or a `Host` alias | Your SSH keys |
 | SSH local port forward | `http://127.0.0.1:21434` | None needed |
 | Plain LAN | `http://192.168.1.20:11434` | None, shown as Unencrypted |
 
@@ -69,46 +70,232 @@ Then add `https://<machine>.<tailnet>.ts.net` in Settings > Model servers. Check
 
 Ollama rejects requests whose `Host` header is not a local name, and Tailscale's documentation does not say whether `serve` rewrites that header. Before you add the server, run `curl -i https://<machine>.<tailnet>.ts.net/api/version` from another machine on the tailnet. If it returns `403`, use the Caddy setup below on the same machine instead, or connect over the Tailscale IPv6 address without `serve`.
 
-## Caddy with https and a bearer token
+## Caddy with https and two bearer tokens
 
-Use this when the server has a public name and you want a token in front of Ollama. Caddy gets a certificate for the name automatically. Point the DNS record for the name at the server and open ports 80 and 443.
+Use this when the server has a public name. Caddy gets a certificate for the name automatically. Point the DNS record for the name at the server and open ports 80 and 443.
+
+Ollama has no per-user access control, so the Chat only setting is enforced only on your device: anyone who holds the credential can still pull and delete models by calling the server directly. To enforce it on the server, give the proxy two tokens and let only the second one reach the management paths:
+
+| Token | Allowed paths | Use it for |
+|-------|---------------|------------|
+| Chat token | `/api/version`, `/api/tags`, `/api/show`, `/api/ps`, `/api/chat` | Servers set to Chat only |
+| Manage token | The chat paths, plus `/api/pull` and `/api/delete` | Servers set to Chat and manage |
+
+These are the Ollama paths Desktop calls on a saved server, and the CLI's `b4m models` commands use the same ones except `/api/chat`: `/api/version` and `/api/tags` for the connection test and the model list, `/api/show` for each model's context size and capabilities, `/api/ps` for the models loaded in memory, and `/api/chat` for replies. Downloads use `/api/pull` and removals use `/api/delete`.
 
 Create a `Caddyfile`:
 
 ```text
 {$SITE_ADDRESS} {
-	@unauthorized not header Authorization "Bearer {$OLLAMA_TOKEN}"
-	respond @unauthorized "Unauthorized" 401
-	reverse_proxy 127.0.0.1:11434 {
-		header_up Host {upstream_hostport}
+	@chat {
+		header Authorization "Bearer {$CHAT_TOKEN}"
+		path /api/version /api/tags /api/show /api/ps /api/chat
+	}
+	@manage {
+		header Authorization "Bearer {$MANAGE_TOKEN}"
+		path /api/version /api/tags /api/show /api/ps /api/chat /api/pull /api/delete
+	}
+	@chat_token header Authorization "Bearer {$CHAT_TOKEN}"
+	@manage_token header Authorization "Bearer {$MANAGE_TOKEN}"
+
+	handle @chat {
+		reverse_proxy 127.0.0.1:11434 {
+			header_up Host {upstream_hostport}
+		}
+	}
+	handle @manage {
+		reverse_proxy 127.0.0.1:11434 {
+			header_up Host {upstream_hostport}
+		}
+	}
+	handle @chat_token {
+		respond "Forbidden" 403
+	}
+	handle @manage_token {
+		respond "Forbidden" 403
+	}
+	handle {
+		respond "Unauthorized" 401
 	}
 }
 ```
 
-The `header_up` line is required. Caddy passes the public name through as the `Host` header, and Ollama answers `403` to any `Host` that is not a local name.
+A request with no token or a wrong token gets `401`. A valid token on a path it may not use gets `403`. Every path that is not listed is refused for both tokens, including Ollama's account routes (`/api/me`, `/api/signout`), `/api/create`, `/api/copy`, `/api/push`, `/api/generate`, `/api/embed` and the `/v1/*` routes. Desktop does not call any of those on a saved Ollama server.
 
-Generate a token and run Caddy with both values set:
+The `header_up` lines are required. Caddy passes the public name through as the `Host` header, and Ollama answers `403` to any `Host` that is not a local name.
+
+Generate the tokens and run Caddy with all three values set:
 
 ```bash
-export OLLAMA_TOKEN="$(openssl rand -hex 32)"
+export CHAT_TOKEN="$(openssl rand -hex 32)"
+export MANAGE_TOKEN="$(openssl rand -hex 32)"
 export SITE_ADDRESS=ollama.example.com
 caddy run --config Caddyfile
 ```
 
-Keep the token out of the Caddyfile itself so you do not commit it by accident. In Desktop, add `https://ollama.example.com` with Credentials set to Bearer token and paste the token.
+Keep the tokens out of the Caddyfile itself so you do not commit them by accident. Share the chat token with everyone who should only chat, and keep the manage token for yourself.
+
+### Stop cloud models
+
+A path rule cannot stop Ollama's cloud models. Ollama picks them from the `model` field inside a chat request, so a chat token that is allowed on `/api/chat` can name a cloud model and use the cloud account signed in on the server. Start Ollama with cloud models turned off. This needs Ollama 0.16.2 or later; older versions ignore the variable without a warning.
+
+```bash
+OLLAMA_NO_CLOUD=1 ollama serve
+```
+
+If you run Ollama as a service, set the variable in the service's environment instead, then restart the service. On a shared server, do this even when you trust the people with the token. To check it, ask for a cloud model with the chat token. A model name that does not exist locally returns `404`, while a cloud model with cloud disabled returns `403`:
+
+```bash
+curl -i -H "Authorization: Bearer $CHAT_TOKEN" https://ollama.example.com/api/chat -d '{"model":"gpt-oss:120b-cloud","stream":false,"messages":[{"role":"user","content":"hi"}]}'
+```
+
+### Which token goes in Desktop
+
+In Settings > Model servers, add `https://ollama.example.com`, set Credentials to Bearer token and paste one token:
+
+- For Access set to Chat only, paste the chat token.
+- For Access set to Chat and manage, paste the manage token.
+
+The Access setting is enforced only on your device: Desktop and the CLI refuse downloads and removals on a Chat only server. The token is what the server enforces. If you set Chat and manage with the chat token, the controls appear and the proxy answers `403` when you use them.
+
+### Which token the CLI uses
+
+The CLI cannot read the credential Desktop stores, so give it its own copy. Use the same token as in Desktop for that server:
+
+```bash
+b4m models servers login gpu-box
+```
+
+The CLI keeps the token in its config file. See [Model commands](../cli/model-commands.md#use-the-model-servers-saved-in-desktop) for the details.
+
+### Check the proxy
 
 You can confirm the proxy before you add it:
 
 ```bash
 curl -i https://ollama.example.com/api/version
-curl -i -H "Authorization: Bearer $OLLAMA_TOKEN" https://ollama.example.com/api/version
+curl -i -H "Authorization: Bearer " https://ollama.example.com/api/version
+curl -i -H "Authorization: Bearer $CHAT_TOKEN" https://ollama.example.com/api/version
+curl -i -H "Authorization: Bearer $CHAT_TOKEN" https://ollama.example.com/api/pull -d '{"model":"no-such-model"}'
+curl -i -H "Authorization: Bearer $MANAGE_TOKEN" https://ollama.example.com/api/pull -d '{"model":"no-such-model"}'
 ```
 
-The first call returns `401`. The second returns the Ollama version.
+The first and second calls return `401`. The third returns the Ollama version. The fourth returns `403`. The fifth reaches Ollama, which answers `200` with an `error` line in the body because the model does not exist, so nothing downloads.
 
-## SSH local port forward
+### vLLM and other OpenAI-compatible servers
 
-If you can already SSH to the server, forward its Ollama port to your computer. Desktop then sees a loopback address, which it trusts without `https`, and SSH encrypts the traffic.
+An OpenAI-compatible server has no pull or delete calls in Desktop, so one token is enough. Desktop uses `/v1/models` for the connection test and the model list, and `/v1/chat/completions` for replies. The CLI lists models from `/v1/models` and calls `/v1/chat/completions` only for `b4m models servers --check-tools`. The connection test also reads the server version from vLLM's `/version` or llama-server's `/props`, and Desktop reads a llama-server's context size from `/props`. For LM Studio, Desktop and the CLI also list models from `/api/v0/models`, which adds each model's capabilities and quantization. If you leave any of these out of the proxy, the server still works, but that version, figure or detail is blank. The `Host` header does not matter to vLLM, so no `header_up` line is needed:
+
+```text
+{$SITE_ADDRESS} {
+	@chat {
+		header Authorization "Bearer {$CHAT_TOKEN}"
+		path /v1/models /v1/chat/completions /version /props /api/v0/models
+	}
+	@chat_token header Authorization "Bearer {$CHAT_TOKEN}"
+
+	handle @chat {
+		reverse_proxy 127.0.0.1:8000
+	}
+	handle @chat_token {
+		respond "Forbidden" 403
+	}
+	handle {
+		respond "Unauthorized" 401
+	}
+}
+```
+
+Replace `8000` with the port your server listens on. Add the server in Desktop with Kind set to OpenAI-compatible and the chat token as the bearer token. To have vLLM check the token itself too, start it with `--api-key` set to the same value as the chat token, because Caddy forwards Desktop's `Authorization` header unchanged.
+
+### Already self-hosting Bike4Mind?
+
+If you run the [self-host stack](https://github.com/Bike4Mind/bike4mind/blob/main/SELF_HOST.md) with its bundled Caddy ([Path B](https://github.com/Bike4Mind/bike4mind/blob/main/SELF_HOST.md#path-b-public-domain-with-the-bundled-caddy-proxy), which covers setting up that proxy), you can serve the stack's bundled Ollama to Desktop through the same Caddy. That guide does not cover Ollama through the proxy, so the steps are here.
+
+Use a separate host name for the models, such as `models.example.com`, with its own DNS record. Do not share the app's host name: the app serves its own `/api/chat`, so the model paths would collide. The stack's Caddy reaches the bundled `ollama` service by name on the compose network, so you start the `ollama` profile as well as the `proxy` profile.
+
+The stack's `compose.caddy.yaml` passes only `B4M_DOMAIN` to Caddy, and the `ollama` service has no cloud setting, so this needs a small override file of your own. Save it as `compose.models.yaml` next to the other compose files:
+
+```yaml
+name: bike4mind-selfhost
+
+services:
+  caddy:
+    env_file: ./.env.models
+    environment:
+      MODEL_DOMAIN: ${MODEL_DOMAIN:?set MODEL_DOMAIN in .env.selfhost}
+  ollama:
+    environment:
+      OLLAMA_NO_CLOUD: '1'
+```
+
+Add `MODEL_DOMAIN=models.example.com` to `.env.selfhost`. Put the tokens in a separate `.env.models` file, so only the Caddy container receives them, and do not commit it:
+
+```text
+CHAT_TOKEN=<chat token>
+MANAGE_TOKEN=<manage token>
+```
+
+Then paste the Caddy block from above at the end of `selfhost/caddy/Caddyfile`, as a second site block under `{$MODEL_DOMAIN} {`, with two changes: the upstream is `ollama:11434` and the Host line is `header_up Host localhost`. Bring the stack up with the override and both profiles:
+
+```bash
+docker compose -f compose.selfhost.yaml -f compose.caddy.yaml -f compose.models.yaml \
+  --env-file .env.selfhost --profile proxy --profile ollama up -d
+```
+
+Both edits are changes to your copy of the stack, not settings: the Caddyfile is a tracked file, and the override adds the environment the stock files do not pass.
+
+The tailnet setup (Path A) has no equivalent. The tailnet sidecar publishes only the app and the realtime gateway. Tailscale Serve routes by path but cannot check a token per path, so Chat only and Chat and manage would not be enforced on the server. Publishing Ollama through it would need a new entry in `selfhost/tailscale/serve.json` for `http://ollama:11434`, and it would let every tailnet member pull and delete models. Use Path B for the two-token setup.
+
+## SSH
+
+If you can already sign in to the server with SSH, Desktop can reach its Ollama through SSH. Nothing is installed on the server, Ollama stays on `127.0.0.1`, and SSH encrypts the traffic. Desktop can open the SSH connection itself, or you can run a port forward yourself.
+
+### Connect with an SSH destination
+
+Desktop runs your computer's own `ssh` client with a stdio forward to `127.0.0.1:11434` on the server, the same as `ssh -W 127.0.0.1:11434 user@gpu.example.com`. It reads your SSH config and keys, so a `Host` alias and its `HostName`, `User`, `Port`, `IdentityFile` and `ProxyJump` settings all apply.
+
+Before you add the server:
+
+1. Run Ollama on the server on its default address, `127.0.0.1:11434`.
+2. In a terminal on your computer, run `ssh user@gpu.example.com` once. This confirms you can sign in and trusts the server's host key.
+3. Sign in with a key. Desktop cannot type a password or a passphrase. If your key has a passphrase, load it into your SSH agent with `ssh-add` first.
+4. Check that the server's SSH daemon allows TCP forwarding. OpenSSH allows it by default; some systems set `AllowTcpForwarding no` in `sshd_config`. Set it to `yes` or `local`.
+
+Then add it in Desktop:
+
+1. Open Settings > Model servers. Under Add a server, set Connect with to SSH.
+2. Enter the SSH destination: `user@gpu.example.com`, or a `Host` alias from your SSH config. A destination may contain only letters, digits, dots, dashes, underscores and one `@`.
+3. Select Test. Desktop reports the Ollama version, model count and latency, or why it could not connect.
+4. Check the Name, set Access, then select Save server.
+
+An SSH server is always Ollama, and it has no token or header: SSH does the sign-in. Its models appear in the model picker next to the ones on your computer, even when your computer runs the same model, and each chat goes to the server you picked.
+
+How Desktop runs `ssh`:
+
+- It never prompts. It runs with `BatchMode=yes`, a 15-second connect timeout, agent and X11 forwarding off, and no terminal. A `RemoteCommand` in your config, such as one that starts `tmux`, is turned off for this connection.
+- It checks host keys strictly. A server whose host key you have not trusted yet fails with "Connect once from a terminal with `ssh <destination>` to trust this server's host key." A host key that changed fails too.
+- On a `ProxyJump` host, host key checks and sign-in follow your SSH config, not the settings above. Connect once from a terminal so that host's key is trusted too.
+- It passes `ssh` a minimal environment: your user and home, `PATH`, locale settings and `SSH_AUTH_SOCK` for your agent. API keys and other variables in Desktop's environment are not passed on, so a `ProxyCommand` that needs another variable, such as `AWS_PROFILE` for `aws ssm`, does not work.
+- On macOS, Desktop opened from Finder or the Dock does not see your shell's `PATH`, so write a `ProxyCommand` helper such as `cloudflared` or `tailscale` with its absolute path.
+- If your key needs an approval, such as an agent prompt or a security-key touch, approve it within about 20 seconds, or the check reports the server as unreachable.
+- It shares one SSH connection between requests when your SSH config sets no `ControlPath`, through a socket in `~/.ssh/b4m` that closes two minutes after the last request. If your config sets a `ControlPath`, Desktop uses a shared connection you already have open but never opens one there itself. On Windows, and when your home folder path is too long for a socket path, each request opens its own SSH connection, which is slower but otherwise the same.
+
+The `b4m` CLI lists an SSH server under `b4m models servers` as SSH, Desktop only. The CLI cannot use it yet; save a local port forward in Desktop for CLI access.
+
+If an SSH server does not work, read the message under Test or on the server in Settings:
+
+- Connect once from a terminal: run `ssh <destination>` in a terminal, accept the host key, then select Check now.
+- Refused the SSH login: run `ssh <destination>` in a terminal. If it asks for a password or passphrase, set up a key, or load your key with `ssh-add`.
+- Does not allow SSH port forwarding: set `AllowTcpForwarding` to `yes` or `local` in the server's `sshd_config` and restart its SSH daemon.
+- Nothing answers at `127.0.0.1:11434` there: SSH works, but Ollama is not running on the server, or listens on another port.
+- Refused the forward to `127.0.0.1:11434`: over a shared connection `ssh` reports both of the causes above the same way. Check that Ollama is running on the server and that its `sshd_config` allows TCP forwarding.
+- Could not find `<destination>`: the host name does not resolve. Check the spelling, or the `HostName` for that alias in your SSH config.
+- Unreachable with an `ssh <destination> failed` message: the last line of `ssh`'s own error, such as a timeout.
+
+### SSH local port forward
+
+Use a port forward for llama-server or another OpenAI-compatible server, for an Ollama on another port, or for the CLI. Forward the server's port to your computer. Desktop then sees a loopback address, which it trusts without `https`, and SSH encrypts the traffic.
 
 ```bash
 ssh -N -L 21434:127.0.0.1:11434 user@gpu.example.com
@@ -152,13 +339,26 @@ If a download connection drops or stops reporting progress, the download pauses.
 
 Removing a saved server or changing its Access to Chat only stops its downloads in Desktop and closes open download and removal dialogs. It does not remove models already stored on the server.
 
+## Rate models for a server's hardware
+
+Desktop cannot measure a remote server's memory, so by default the Models screen shows no fit badges for a saved server and its Curated picks are not chosen for it. To rate models for the server, enter its hardware:
+
+1. In Settings > Model servers, select Hardware on the server.
+2. Enter its RAM and, if it has one, its GPU memory, in GB as the hardware is sold. Tick The GPU shares this RAM for a machine with unified memory, such as an Apple silicon Mac. For a machine whose GPU can use only part of that memory, enter that part as GPU memory.
+3. Select Save hardware.
+
+The Curated tab then picks models for that server and shows fit badges for it, as it does for your own computer. Explore and the download dialog use the same figures. RAM is required; without it the server stays unrated.
+
+This computer has the same Hardware fields. Desktop detects this computer's hardware itself and shows what it found next to the fields. Fill in only what it got wrong: an entered figure replaces the detected one for fit badges, Curated picks and the context size local chat uses. Select Use detected hardware to go back.
+
+You can also enter memory bandwidth in GB/s. It does not change ratings. A fit badge's details use it to estimate how fast replies come early in a chat, unless the model has to be split between GPU memory and system RAM. Curated picks use the same estimate to rank a model that would reply slowly, or that has to be split, after one that would not. On a machine with a discrete GPU the field is the GPU memory bandwidth, so enter the GPU's figure and not the system RAM's. On a machine with unified memory, enter the bandwidth of the memory the CPU and GPU share. Without it, Desktop shows that estimate only for hardware whose bandwidth it already knows.
+
 ## Troubleshooting
 
 - Download or Remove is missing: select an Ollama server with Access set to Chat and manage. Chat only and OpenAI-compatible servers do not offer these controls.
 - A download is paused: check the server and connection, then select Resume. If it pauses again behind a proxy, check whether the proxy allows long-running streaming responses.
-
-- Needs credentials: the server returned 401 or 403, or Desktop no longer has the saved credential. Check the token, or the header name and value. If the message says the saved credential could not be read, the secure storage lost it, for example after a keyring reset. If it says the credential was kept only until Desktop quit, it was session-only and Desktop restarted. In both cases open the server's credentials and enter the value again.
-- Needs credentials with a correct token, behind a proxy: Ollama may be answering 403 because the `Host` header was not rewritten. Check the Caddy setup above, and test with `curl -i` against the address.
+- Needs credentials: the server returned 401, or Desktop no longer has the saved credential. Check the token, or the header name and value. If the message says the saved credential could not be read, the secure storage lost it, for example after a keyring reset. If it says the credential was kept only until Desktop quit, it was session-only and Desktop restarted. In both cases open the server's credentials and enter the value again.
 - Unreachable: the address, port or firewall is wrong, or the SSH forward is closed.
-- Refused: the server redirected, its certificate is not trusted, or the address is not allowed. Read the message under Test. If you were redirected to another address, enter the final `https` address. If the redirect stayed on the same address, check the path you entered.
+- Unreachable on macOS, for a server on your local network: macOS asks the first time an app connects to a LAN address and blocks it if you decline. Open System Settings > Privacy & Security > Local Network, turn on Bike4Mind, then select Check now on the server. This applies to macOS 15 and later. Servers reached over the internet or on this computer are not affected.
+- Refused: the server redirected, a proxy or Ollama answered 403, its certificate is not trusted, or the address is not allowed. Read the message under Test. A 403 with a correct token behind a proxy means Ollama saw a `Host` header that was not rewritten, or the Caddy setup above refused a path your token may not use; check the Caddy setup and test with `curl -i` against the address. If you were redirected to another address, enter the final `https` address. If the redirect stayed on the same address, check the path you entered.
 - The certificate is not trusted: Test shows this message, and the server shows Refused, when the certificate fails verification. Use a certificate from a trusted authority or a local CA your computer already trusts. Tailscale certificates also work.

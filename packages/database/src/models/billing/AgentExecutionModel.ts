@@ -344,6 +344,11 @@ export interface IAgentExecution {
    */
   loopId?: string;
   /**
+   * Most credits this run may spend (`totalCreditsUsed`), set by the loop scheduler from the loop's and
+   * owner's remaining daily budgets. The executor stops before an iteration that would cross it.
+   */
+  creditCap?: number;
+  /**
    * The caller's per-request artifact intent, mirroring the chat surface's `enableArtifacts` body
    * field. Combined with the admin `EnableArtifacts` setting by `resolveArtifactsEnabled`, so only
    * an explicit `false` opts out and `undefined` leaves the admin setting as the only gate.
@@ -432,11 +437,13 @@ export interface IAgentExecution {
    * `'abandoned'` is set by the scheduled / admin-triggered sweep on stale
    * executions so they can be distinguished from real executor errors.
    * `'insufficient_credits'` is set when the executor refuses to start a run for
-   * credits (balance or org member cap); the loop scheduler pauses on it.
+   * credits (balance or org member cap), or stops one mid-run because the payer's balance cannot cover
+   * the next iteration; the loop scheduler pauses on it. `'credit_cap'` is set when a run stops before
+   * an iteration that would cross its `creditCap`.
    * Schema is untyped at the Mongoose level so future variants can be added
    * without a migration; the TS union is the source of truth.
    */
-  failureReason?: 'abandoned' | 'insufficient_credits';
+  failureReason?: 'abandoned' | 'insufficient_credits' | 'credit_cap';
 
   /**
    * Set when the abandoned-sweep's post-abandonment quest settlement fails for
@@ -813,6 +820,7 @@ const AgentExecutionSchema = new mongoose.Schema(
     enableMementos: { type: Boolean },
     enableLattice: { type: Boolean },
     loopId: { type: String },
+    creditCap: { type: Number },
     enableArtifacts: { type: Boolean },
     // `default: undefined` so an absent field stays absent (a bare [String] would
     // materialize [] on every doc, indistinguishable from "profile denies nothing").
@@ -1202,6 +1210,28 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       { $group: { _id: '$loopId', credits: { $sum: '$totalCreditsUsed' } } },
     ]);
     return Object.fromEntries(rows.map(row => [row._id, row.credits]));
+  }
+
+  /**
+   * Credits over all of a user's top-level loop runs created since `since`. Served by the
+   * { userId, createdAt } index. `reserveInFlight` counts a run still in flight at its `creditCap` when
+   * that is higher, so parallel capped runs cannot each be admitted against the same remaining budget.
+   */
+  async sumLoopCreditsForUser(userId: string, since: Date, reserveInFlight = false): Promise<number> {
+    const credits = reserveInFlight
+      ? {
+          $cond: [
+            { $in: ['$status', [...ACTIVE_AGENT_EXECUTION_STATUSES]] },
+            { $max: ['$totalCreditsUsed', '$creditCap'] },
+            '$totalCreditsUsed',
+          ],
+        }
+      : '$totalCreditsUsed';
+    const [row] = await this.model.aggregate<{ credits: number }>([
+      { $match: { userId, createdAt: { $gte: since }, loopId: { $exists: true }, parentExecutionId: null } },
+      { $group: { _id: null, credits: { $sum: credits } } },
+    ]);
+    return row?.credits ?? 0;
   }
 
   /** A loop's newest top-level runs; `sessionId` (its notebook) narrows the scan like `sumCreditsByLoop`. */

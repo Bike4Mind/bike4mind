@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ProviderBundle } from './ProviderBundle';
@@ -14,9 +14,11 @@ import { ProviderBundle } from './ProviderBundle';
  * etc.), so they're stubbed out here; this file is not a test of those components.
  */
 
-const { subscribeToAction, passthrough } = vi.hoisted(() => ({
+const { subscribeToAction, passthrough, mfaGate } = vi.hoisted(() => ({
   subscribeToAction: vi.fn(() => () => {}),
   passthrough: ({ children }: { children: React.ReactNode }) => children,
+  // Stands in for MFAEnforcementWrapper: `blocking` mimics it rendering the enrollment screen.
+  mfaGate: { blocking: false },
 }));
 
 vi.mock('@client/app/contexts/WebsocketContext', () => ({
@@ -24,7 +26,7 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
 }));
 
 vi.mock('./InboxContext', () => ({ InboxProvider: passthrough }));
-vi.mock('./LLMContext', () => ({ LLMProvider: () => null }));
+vi.mock('./LLMContext', () => ({ LLMProvider: () => <div data-testid="llm-provider" /> }));
 vi.mock('./OrganizationContext', () => ({ OrganizationProvider: passthrough }));
 vi.mock('./SessionsContext', () => ({ SessionsProvider: passthrough }));
 vi.mock('./UserSettingsContext', () => ({ UserSettingsProvider: passthrough }));
@@ -33,7 +35,7 @@ vi.mock('@client/app/components/Project/ProjectAddToModal', () => ({ ProjectAddT
 vi.mock('./SnackbarContext', () => ({ SnackbarProvider: passthrough }));
 vi.mock('@client/app/components/organizations/CreateTeamModal', () => ({ default: () => null }));
 vi.mock('./ModalTriggerContext', () => ({ ModalTriggerProvider: passthrough }));
-vi.mock('@client/app/components/modals/ModalManager', () => ({ default: () => null }));
+vi.mock('@client/app/components/modals/ModalManager', () => ({ default: () => <div data-testid="modal-manager" /> }));
 vi.mock('@client/app/components/modals/ModalErrorBoundary', () => ({ default: passthrough }));
 vi.mock('@client/app/components/referrals/ReferralModal', () => ({
   default: () => null,
@@ -43,7 +45,10 @@ vi.mock('@client/app/components/HelpModal', () => ({ default: () => null }));
 vi.mock('@client/app/components/Session/PromptMetaInspector', () => ({ default: () => null }));
 vi.mock('../components/Files/Browser', () => ({ default: () => null }));
 vi.mock('@client/app/components/DataLakeWizard/SendToDataLakeModal', () => ({ default: () => null }));
-vi.mock('../components/auth/MFAEnforcementWrapper', () => ({ default: passthrough }));
+vi.mock('../components/auth/MFAEnforcementWrapper', () => ({
+  default: ({ children }: { children: React.ReactNode }) =>
+    mfaGate.blocking ? <div data-testid="mfa-enrollment-screen" /> : children,
+}));
 vi.mock('@client/app/components/EmailVerificationBanner', () => ({ default: () => null }));
 vi.mock('../components/CommandPalette', () => ({ default: () => null }));
 
@@ -101,5 +106,30 @@ describe('ProviderBundle - batch-completion cache sync (#3238), rendered without
     });
 
     expect(invalidatedKeys(spy)).toEqual([]);
+  });
+});
+
+describe('ProviderBundle - MFA enforcement encloses the app shell', () => {
+  afterEach(() => {
+    mfaGate.blocking = false;
+  });
+
+  it('mounts nothing that fetches app data while enrollment is owed', () => {
+    mfaGate.blocking = true;
+    const { queryByTestId, getByTestId } = mountBare();
+
+    getByTestId('mfa-enrollment-screen');
+    // Each of these requests a route the enrollment gate 403s (/api/modals, /api/models, ...).
+    expect(queryByTestId('modal-manager')).toBeNull();
+    expect(queryByTestId('llm-provider')).toBeNull();
+    expect(queryByTestId('standalone-premium-route-content')).toBeNull();
+  });
+
+  it('mounts the shell once enforcement lets the session through', () => {
+    const { getByTestId } = mountBare();
+
+    getByTestId('modal-manager');
+    getByTestId('llm-provider');
+    getByTestId('standalone-premium-route-content');
   });
 });

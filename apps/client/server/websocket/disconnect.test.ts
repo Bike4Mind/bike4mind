@@ -25,7 +25,7 @@ vi.mock('@bike4mind/services', () => ({
 
 vi.mock('@server/websocket/ccAgentHearth', () => ({ reportCcAgentPresence: vi.fn() }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   sendToClient: vi.fn(),
   withWebSocketContext: (handler: (event: unknown, context: unknown, logger: unknown) => Promise<unknown>) => handler,
 }));

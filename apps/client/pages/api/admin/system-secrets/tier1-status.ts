@@ -67,9 +67,6 @@ const SECRET_READERS: Record<string, () => string | undefined> = {
   SECRET_ENCRYPTION_KEY: () => Config.SECRET_ENCRYPTION_KEY,
   CHAT_COMPLETION_INTERNAL_SECRET: () => readLinkedSecret(() => Resource.CHAT_COMPLETION_INTERNAL_SECRET.value),
   SECOPS_ZAP_INGEST_TOKEN: () => readLinkedSecret(() => Resource.SECOPS_ZAP_INGEST_TOKEN.value),
-  SECOPS_CODE_INGEST_TOKEN: () => readLinkedSecret(() => Resource.SECOPS_CODE_INGEST_TOKEN.value),
-  SECOPS_PACKAGES_INGEST_TOKEN: () => readLinkedSecret(() => Resource.SECOPS_PACKAGES_INGEST_TOKEN.value),
-  SECOPS_SECRETS_INGEST_TOKEN: () => readLinkedSecret(() => Resource.SECOPS_SECRETS_INGEST_TOKEN.value),
   SECOPS_PROWLER_INGEST_TOKEN: () => readLinkedSecret(() => Resource.SECOPS_PROWLER_INGEST_TOKEN.value),
   SECOPS_ATTACK_SIMULATION_INGEST_TOKEN: () =>
     readLinkedSecret(() => Resource.SECOPS_ATTACK_SIMULATION_INGEST_TOKEN.value),
@@ -100,10 +97,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
 
     return res.json(response);
   } catch (error) {
-    Logger.error('Error fetching Tier 1 secrets status:', error);
     if (error instanceof ForbiddenError) {
+      Logger.warn('Error fetching Tier 1 secrets status:', error.message);
       return res.status(403).json({ error: error.message });
     }
+    Logger.error('Error fetching Tier 1 secrets status:', error);
     return res.status(500).json({ error: 'Failed to fetch Tier 1 secrets status' });
   }
 });

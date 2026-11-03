@@ -230,6 +230,7 @@ describe('move-to-server-utils', () => {
       toMove('apps/client/config/activityType.ts'),
       toMove('apps/client/services/teamPlanSettings.ts'),
       toMove('apps/client/app/utils/chartSchemas.ts'),
+      toMove('apps/client/app/constants/apiKeyScopes.ts'),
       toMove('apps/client/server/utils/errors.ts'),
     ];
     const rewriteOutside = (source: string, file: string) => rewriteSource(source, file, OUTSIDE);
@@ -241,6 +242,7 @@ describe('move-to-server-utils', () => {
         'packages/server-utils/src/config/activityType',
         'packages/server-utils/src/services/teamPlanSettings',
         'packages/server-utils/src/app/utils/chartSchemas',
+        'packages/server-utils/src/app/constants/apiKeyScopes',
         'packages/server-utils/src/utils/errors',
       ]);
     });
@@ -260,6 +262,11 @@ describe('move-to-server-utils', () => {
         'apps/client/app/components/Chart/Chart.tsx',
         "import { c } from '../../utils/chartSchemas';",
         "import { c } from '@bike4mind/server-utils/app/utils/chartSchemas';",
+      ],
+      [
+        'apps/client/app/components/ApiKeys/ScopePicker.tsx',
+        "import { s } from '@client/app/constants/apiKeyScopes';",
+        "import { s } from '@bike4mind/server-utils/app/constants/apiKeyScopes';",
       ],
       [
         'apps/client/pages/api/activity.test.ts',

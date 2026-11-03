@@ -1,9 +1,10 @@
+import { desktopStagesOf } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { loopRepository, workItemRepository } from '@bike4mind/database';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { assertLoopsEnabled, LOOP_RATE_LIMIT, LOOP_RATE_WINDOW_MS } from '@server/utils/loopValidation';
-import { LOOP_TICKET_CLOSED_WINDOW } from '@server/utils/loopTickets';
+import { LOOP_TICKET_CLOSED_WINDOW, ticketRunLimit } from '@server/utils/loopTickets';
 
 /** A loop's tickets grouped by stage, in the loop's stage order. A ticket in a stage the loop no longer has lists under the first stage. */
 const handler = baseApi({ auth: 'jwtOnly' })
@@ -21,6 +22,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
     );
     const openDeps = new Set(deps.filter(dep => dep.status !== 'closed').map(dep => dep.id));
 
+    // A desktop-stage ticket is never picked by a cloud run, so it is not queued here.
+    const desktopStages = new Set(desktopStagesOf(loop));
     const groups = new Map(loop.stages.map(stage => [stage, [] as unknown[]]));
     for (const ticket of tickets) {
       const group = groups.get(ticket.stage ?? '') ?? groups.get(loop.stages[0]);
@@ -33,13 +36,20 @@ const handler = baseApi({ auth: 'jwtOnly' })
         statusReason: ticket.statusReason,
         dependencies: ticket.dependencies,
         executionId: ticket.executionId,
-        ready: ticket.status === 'open' && ticket.dependencies.every(depId => !openDeps.has(depId)),
+        runCount: ticket.runCount ?? 0,
+        ready:
+          ticket.status === 'open' &&
+          !desktopStages.has(ticket.stage ?? '') &&
+          ticket.dependencies.every(depId => !openDeps.has(depId)),
         createdAt: ticket.createdAt,
         updatedAt: ticket.updatedAt,
       });
     }
 
-    res.json({ stages: Array.from(groups, ([stage, stageTickets]) => ({ stage, tickets: stageTickets })) });
+    res.json({
+      stages: Array.from(groups, ([stage, stageTickets]) => ({ stage, tickets: stageTickets })),
+      runLimit: ticketRunLimit(loop.stages),
+    });
   });
 
 export default handler;

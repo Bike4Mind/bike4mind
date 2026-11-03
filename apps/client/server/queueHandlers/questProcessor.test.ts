@@ -1,11 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 // The same module instance the handler imports, so the assertion below pins identity, not a copy.
-import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
-import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
+import { premiumWorkspaceDeniedTools } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 
 const mockProcess = vi.hoisted(() => vi.fn());
 const processOptions = vi.hoisted(() => vi.fn());
 const mockCapCheck = vi.hoisted(() => vi.fn());
+const mockRecordFirstChatValue = vi.hoisted(() => vi.fn(async () => false));
 
 // This exercises only the db-adapter assembly in getStaticOptions: the surface
 // save_content_to_data_lake (-> saveContentAdapters in adapters.ts) reads from. Mocks mirror
@@ -73,7 +74,14 @@ vi.mock('@bike4mind/database', async () => {
   };
 });
 
+vi.mock('@server/billing/meterPlatformCompletion', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/billing/meterPlatformCompletion')>()),
+  createCompletionMeter: vi.fn(),
+}));
+
 vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => ({}) }) }));
+
+vi.mock('@server/analytics/funnel', () => ({ recordFirstChatValue: mockRecordFirstChatValue }));
 
 vi.mock('@server/billing/freeTierDailyCapGate', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/billing/freeTierDailyCapGate')>()),
@@ -173,6 +181,25 @@ describe('processQuest', () => {
     );
   }, 120_000);
 
+  it("hands the queued turn's key to the QuestMaster completion meter", async () => {
+    const { processQuest } = await import('./questProcessor');
+    const { createCompletionMeter } = await import('@server/billing/meterPlatformCompletion');
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+    const params = { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {}, apiKeyId: 'k1' };
+
+    await processQuest(params as never, logger as never);
+    const options = processOptions.mock.calls.at(-1)?.[0] as {
+      createCompletionMeter: (opts: { organizationId: string | null; featureLabel: string }) => unknown;
+    };
+    options.createCompletionMeter({ organizationId: 'org-1', featureLabel: 'QuestMaster planning' });
+
+    expect(createCompletionMeter).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'QuestMaster planning', {
+      sessionId: 'session-1',
+      organizationId: 'org-1',
+      apiKeyId: 'k1',
+    });
+  });
+
   it.each([
     ['withholds the admin role when the payload says so', true, false],
     ['keeps the stored role for a payload without the field', undefined, true],
@@ -195,6 +222,34 @@ describe('processQuest', () => {
 
       expect(processOptions.mock.calls[0][0].user.isAdmin).toBe(expected);
       expect(mockCapCheck).toHaveBeenCalled();
+    },
+    120_000
+  );
+
+  it.each([
+    ['withholds the admin role from a tool that re-reads the owner', true, false],
+    ['hands tools the stored role for a payload without the field', undefined, true],
+  ])(
+    '%s',
+    async (_, adminRoleWithheld, expected) => {
+      const { userRepository } = await import('@bike4mind/database');
+      const { getStaticOptions, processQuest } = await import('./questProcessor');
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+      processOptions.mockClear();
+
+      await processQuest(
+        { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {}, adminRoleWithheld } as never,
+        logger as never
+      );
+
+      const { users } = processOptions.mock.calls[0][0].db;
+      if (!adminRoleWithheld) expect(users).toBe(getStaticOptions().db.users);
+      const findUser = vi.spyOn(userRepository, 'findById').mockResolvedValueOnce({ isAdmin: true } as never);
+      try {
+        expect((await users.findById('user-1')).isAdmin).toBe(expected);
+      } finally {
+        findUser.mockRestore();
+      }
     },
     120_000
   );
@@ -275,6 +330,34 @@ describe('processQuest', () => {
     expect(mockProcess).not.toHaveBeenCalled();
     settle.mockRestore();
   }, 120_000);
+
+  describe('first_value', () => {
+    const visitId = 'a'.repeat(32);
+    const run = async (extra: Record<string, unknown>) => {
+      const { processQuest } = await import('./questProcessor');
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+      await processQuest(
+        { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {}, ...extra } as never,
+        logger as never
+      );
+    };
+    const recordedVisits = () =>
+      mockRecordFirstChatValue.mock.calls
+        .map(call => (call as unknown[])[0] as { visitId?: string })
+        .map(o => o.visitId);
+
+    it('names the visit the queued turn carries', async () => {
+      mockRecordFirstChatValue.mockClear();
+      await run({ visitId });
+      expect(recordedVisits()).toEqual([visitId]);
+    }, 120_000);
+
+    it('names no visit for a turn queued without one', async () => {
+      mockRecordFirstChatValue.mockClear();
+      await run({});
+      expect(recordedVisits()).toEqual([undefined]);
+    }, 120_000);
+  });
 
   it('still throws an unrelated error from the cap check', async () => {
     mockCapCheck.mockRejectedValueOnce(new Error('boom'));

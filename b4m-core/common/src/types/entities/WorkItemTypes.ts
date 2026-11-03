@@ -38,6 +38,8 @@ export interface IWorkItem {
   executionId?: string;
   /** Why the ticket is `blocked`; cleared when it leaves `blocked`. */
   statusReason?: string;
+  /** Loop runs that claimed this ticket since its owner last moved it; the scheduler blocks it at its limit. */
+  runCount?: number;
 
   createdAt: Date;
   updatedAt: Date;
@@ -137,34 +139,44 @@ export interface IWorkItemRepository extends IBaseRepository<IWorkItem> {
   /**
    * Scoped update - returns null when the item is missing or owned by someone else. With `expectedStatus`
    * it only applies while the item still has that status, so a loop's fold landing mid-request is not overwritten.
+   * `guard` narrows that further to an exact `statusReason` and/or `loopId`.
    */
   updateForUser(
     id: string,
     userId: string,
     patch: WorkItemPatch,
-    expectedStatus?: WorkItemStatus
+    expectedStatus?: WorkItemStatus,
+    guard?: { statusReason?: string; loopId?: string }
   ): Promise<IWorkItem | null>;
 
   /** Soft delete. Returns false when nothing matched. */
   softDeleteForUser(id: string, userId: string): Promise<boolean>;
 
   /**
-   * The oldest `open` ticket of the loop, outside `lastStage`, whose dependencies are all closed or
-   * gone, skipping `skipStages` (desktop stages). This is what the loop scheduler works next.
+   * The first of `listReadyForLoop`: the ticket the loop scheduler works next.
    */
   findNextReadyForLoop(
     userId: string,
     loopId: string,
-    lastStage: string,
+    stages: string[],
     skipStages?: string[]
   ): Promise<IWorkItem | null>;
+
+  /**
+   * The loop's `open` tickets outside its last stage and `skipStages` (desktop stages) whose dependencies
+   * are all closed or gone, furthest stage first, then oldest first.
+   */
+  listReadyForLoop(userId: string, loopId: string, stages: string[], skipStages?: string[]): Promise<IWorkItem[]>;
 
   /** `open -> in_progress`, conditional on still being `open`; null when another tick won the claim. */
   claimForRun(id: string, loopId: string): Promise<IWorkItem | null>;
 
+  /** Count of the loop's tickets created or updated in [from, to]. */
+  countTouchedForLoop(userId: string, loopId: string, from: Date, to: Date): Promise<number>;
+
   setExecution(id: string, executionId: string): Promise<void>;
 
-  /** Undoes `claimForRun` when the run could not be started. */
+  /** Undoes `claimForRun` (its `runCount` increment too) when the run could not be started. */
   releaseClaim(id: string): Promise<void>;
 
   findByExecutionId(executionId: string): Promise<IWorkItem | null>;
@@ -172,8 +184,9 @@ export interface IWorkItemRepository extends IBaseRepository<IWorkItem> {
   /**
    * Applies a finished run's outcome, conditional on the ticket still being `in_progress` under that
    * run - so a run that set its own ticket's status is respected and a second fold is a no-op.
+   * `uncount` takes back the claim's `runCount` increment, for a run stopped by credits, not by the ticket.
    */
-  foldTicketRun(id: string, executionId: string, patch: WorkItemPatch): Promise<boolean>;
+  foldTicketRun(id: string, executionId: string, patch: WorkItemPatch, uncount?: boolean): Promise<boolean>;
 
   /** Moves a ticket blocked under `executionId` back to `in_progress`, for a run its owner resumed. */
   resumeBlockedRun(id: string, executionId: string): Promise<boolean>;

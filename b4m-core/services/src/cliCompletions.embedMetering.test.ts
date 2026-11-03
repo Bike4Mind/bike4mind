@@ -5,6 +5,12 @@ import { CreditHolderType } from '@bike4mind/common';
 let enforceCredits = true;
 
 // The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+// Pricing is stubbed flat in this file, so the per-round credit cap cannot be priced here; it is held
+// open, and cliCompletions.creditCap.test.ts covers it on real pricing.
+vi.mock('./completionCreditBudget', async importOriginal => ({
+  ...(await importOriginal<typeof import('./completionCreditBudget')>()),
+  affordableRoundBudget: () => ({ affordable: true, outputTokens: Number.MAX_SAFE_INTEGER }),
+}));
 vi.mock('./llm/modelAdmission', async importOriginal => ({
   ...(await importOriginal<typeof import('./llm/modelAdmission')>()),
   loadFreeTierAllowedModels: async () => undefined,
@@ -52,8 +58,23 @@ vi.mock('@bike4mind/common', async importOriginal => ({
   getTextModelCost: vi.fn(() => 0.001),
 }));
 
+import { getLlmByModel } from '@bike4mind/llm-adapters';
 import { executeCompletion } from './cliCompletions';
 import { subtractCredits } from './creditService';
+
+const timeoutUsage = { inputTokens: 1200, cacheReadInputTokens: 30_000, cacheCreationInputTokens: 500 };
+
+function failWith(error: Error) {
+  vi.mocked(getLlmByModel).mockReturnValueOnce({
+    currentModel: '',
+    complete: vi.fn(async () => {
+      throw error;
+    }),
+  } as never);
+}
+
+const timeoutError = () =>
+  Object.assign(new Error('Anthropic API stream timeout'), { name: 'LlmTimeoutError', usage: timeoutUsage });
 
 function buildDb() {
   // executeCompletion re-verifies org membership at use time; every case here bills org1.
@@ -176,6 +197,67 @@ describe('executeCompletion - unconditional usage metering (alwaysRecordUsage)',
     await executeCompletion({ ...baseParams, model: 'model-not-in-catalog', db, alwaysRecordUsage: true });
 
     expect(usageEvents.record).not.toHaveBeenCalled();
+  });
+});
+
+describe('executeCompletion - timed-out stream', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    enforceCredits = true;
+  });
+
+  it('records the usage the provider reported before the cut as one unbilled timeout row', async () => {
+    const { db, usageEvents } = buildDb();
+    const error = timeoutError();
+    failWith(error);
+
+    await expect(executeCompletion({ ...baseParams, db })).rejects.toBe(error);
+
+    expect(usageEvents.record).toHaveBeenCalledTimes(1);
+    expect(usageEvents.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: 'test-model',
+        status: 'timeout',
+        inputTokens: 0,
+        outputTokens: 0,
+        providerInputTokens: 1200,
+        cachedInputTokens: 30_000,
+        cacheWriteTokens: 500,
+        settledBasis: 'provider',
+        creditsCharged: 0,
+        ownerId: 'org1',
+        apiKeyId: 'k1',
+      })
+    );
+    expect(vi.mocked(subtractCredits)).not.toHaveBeenCalled();
+  });
+
+  it('records nothing for a timeout when neither enforceCredits nor alwaysRecordUsage is set', async () => {
+    enforceCredits = false;
+    const { db, usageEvents } = buildDb();
+    failWith(timeoutError());
+
+    await expect(executeCompletion({ ...baseParams, db })).rejects.toThrow('stream timeout');
+
+    expect(usageEvents.record).not.toHaveBeenCalled();
+  });
+
+  it('records an error row, not a timeout row, for a timeout that carries no usage', async () => {
+    const { db, usageEvents } = buildDb();
+    failWith(Object.assign(new Error('Anthropic API stream timeout'), { name: 'LlmTimeoutError' }));
+
+    await expect(executeCompletion({ ...baseParams, db, alwaysRecordUsage: true })).rejects.toThrow();
+
+    expect(usageEvents.record).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'timeout' }));
+  });
+
+  it('rethrows the timeout itself when the usage row fails to write', async () => {
+    const { db, usageEvents } = buildDb();
+    usageEvents.record.mockRejectedValueOnce(new Error('ledger down'));
+    const error = timeoutError();
+    failWith(error);
+
+    await expect(executeCompletion({ ...baseParams, db })).rejects.toBe(error);
   });
 });
 

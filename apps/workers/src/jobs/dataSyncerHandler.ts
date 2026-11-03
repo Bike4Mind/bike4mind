@@ -12,7 +12,7 @@ import { Resource } from 'sst';
 import { ciphertextPatternSource } from '@bike4mind/utils/security';
 import type { Handler } from 'aws-lambda';
 import { MongoClient } from 'mongodb';
-import '@client/lib/settings/registerContributedSettings';
+import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { allSettingDefinitions } from '@bike4mind/common';
 
 interface DataSyncerEvent {

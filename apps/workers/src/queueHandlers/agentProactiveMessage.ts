@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { getUserEntitlements } from '@server/entitlements';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import {
   sessionAgentConfigRepository,
   sessionRepository,

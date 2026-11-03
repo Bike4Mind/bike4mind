@@ -27,6 +27,7 @@ import {
   type ILoopTicket,
   type ILoopTicketsResponse,
 } from '@client/app/hooks/data/loops';
+import { LoopMarkdown } from './loopUi';
 
 const TITLE_MAX = 300;
 const DESCRIPTION_MAX = 10_000;
@@ -49,12 +50,14 @@ function TicketCard({
   ticket,
   stages,
   desktop,
+  runLimit,
   onViewRun,
 }: {
   ticket: ILoopTicket;
   stages: string[];
   /** The ticket's stage is worked by a desktop runner, never by a cloud run. */
   desktop: boolean;
+  runLimit?: number;
   onViewRun: (executionId: string) => void;
 }) {
   const moveTicket = useMoveLoopTicket();
@@ -75,6 +78,11 @@ function TicketCard({
             {ticket.dependencies.length} {ticket.dependencies.length === 1 ? 'dep' : 'deps'}
           </Typography>
         )}
+        {ticket.runCount > 0 && runLimit !== undefined && (
+          <Typography level="body-xs" data-testid="loop-ticket-run-count">
+            Run {ticket.runCount} of {runLimit}
+          </Typography>
+        )}
         {ticket.executionId && (
           <Link
             component="button"
@@ -87,8 +95,10 @@ function TicketCard({
         )}
       </Stack>
       {ticket.status === 'blocked' && ticket.statusReason && (
-        <Typography level="body-xs" color="danger" data-testid="loop-ticket-blocked-reason">
-          {ticket.statusReason}
+        <Typography level="body-xs" color="danger" component="div">
+          <LoopMarkdown level="body-xs" testId="loop-ticket-blocked-reason">
+            {ticket.statusReason}
+          </LoopMarkdown>
         </Typography>
       )}
       <Select
@@ -213,8 +223,11 @@ export default function LoopTicketBoard({
   const [adding, setAdding] = useState(false);
   const desktopStages = new Set(desktopStagesOf(loop));
   const all = data?.stages.flatMap(group => group.tickets) ?? [];
-  // Same order the scheduler picks in (WorkItemModel.findNextReadyForLoop): oldest created first.
-  const ready = all.filter(t => t.ready).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  // Same order the scheduler picks in (WorkItemModel.listReadyForLoop): furthest stage first, then oldest.
+  const stageIndex = (t: ILoopTicket) => loop.stages.indexOf(t.stage ?? '');
+  const ready = all
+    .filter(t => t.ready)
+    .sort((a, b) => stageIndex(b) - stageIndex(a) || a.createdAt.localeCompare(b.createdAt));
 
   return (
     <Stack gap={2}>
@@ -257,6 +270,7 @@ export default function LoopTicketBoard({
                 ticket={ticket}
                 stages={loop.stages}
                 desktop={!!ticket.stage && desktopStages.has(ticket.stage)}
+                runLimit={data?.runLimit}
                 onViewRun={onViewRun}
               />
             ))}

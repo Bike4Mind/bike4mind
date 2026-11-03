@@ -31,8 +31,25 @@ const scopeSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('tool'), value: z.string() }),
   z.object({ kind: z.literal('project'), value: z.string() }),
   z.object({ kind: z.literal('approval'), value: z.string() }),
+  z.object({
+    kind: z.literal('model-pull'),
+    value: z.string(),
+    model: z.string(),
+    server: z.string(),
+    bytes: z.number().int().nonnegative(),
+    path: z.string().optional(),
+    pathSource: z.enum(['runtime', 'elsewhere', 'default']).optional(),
+  }),
 ]);
-const capabilitySchema = z.enum(['files', 'tool', 'browser-origin', 'credits', 'imported-identity', 'project-trust']);
+const capabilitySchema = z.enum([
+  'files',
+  'tool',
+  'browser-origin',
+  'credits',
+  'imported-identity',
+  'project-trust',
+  'model-download',
+]);
 const grantSchema = z.object({
   id: z.string(),
   subject: subjectSchema,
@@ -42,6 +59,8 @@ const grantSchema = z.object({
   approvalKey: z.string().optional(),
   source: z.enum(['folder-picker', 'permission-rule', 'project-trust', 'approval', 'migration']),
 });
+// Builds that predate a new event type skip it (see laterBuildSequence), so an event that
+// narrows access must reuse 'revoke' rather than add a type an older build would ignore.
 const eventSchema = z.discriminatedUnion('type', [
   z.object({
     sequence: z.number().int().nonnegative(),
@@ -65,6 +84,25 @@ const eventSchema = z.discriminatedUnion('type', [
     grantId: z.string(),
   }),
 ]);
+/** Only the fields that say which kinds an event uses; see laterBuildSequence. */
+const headerSchema = z.object({ sequence: z.number().int().nonnegative(), type: z.string() });
+const kindsSchema = z.object({
+  capability: z.string().optional(),
+  scope: z.object({ kind: z.string() }).optional(),
+  grant: z
+    .object({
+      capability: z.string().optional(),
+      scope: z.object({ kind: z.string() }).optional(),
+      subject: z.object({ kind: z.string() }).optional(),
+      source: z.string().optional(),
+    })
+    .optional(),
+});
+const EVENT_TYPES = new Set<string>(eventSchema.options.map(option => option.shape.type.value));
+const SCOPE_KINDS = new Set<string>(scopeSchema.options.map(option => option.shape.kind.value));
+const SUBJECT_KINDS = new Set<string>(subjectSchema.options.map(option => option.shape.kind.value));
+const CAPABILITIES = new Set<string>(capabilitySchema.options);
+const SOURCES = new Set<string>(grantSchema.shape.source.options);
 const fileSchema = z.object({ version: z.literal(1), events: z.array(eventSchema) }).superRefine((value, context) => {
   value.events.forEach((event, index) => {
     if (event.sequence !== index)
@@ -327,6 +365,7 @@ export class CapabilityLedger {
       endsInNewline = chunk.toString().endsWith('\n');
     });
     const lines = createInterface({ input: stream, crlfDelay: Infinity });
+    let skipped = 0;
     try {
       for await (const line of lines) {
         if (!line.trim()) continue;
@@ -343,10 +382,20 @@ export class CapabilityLedger {
           for (const event of legacy.events) this.apply(event);
           return;
         }
-        const event = eventSchema.parse(JSON.parse(line));
-        if (event.sequence !== this.sequence) throw new SyntaxError('Out of order audit sequence');
-        this.apply(event);
+        const value: unknown = JSON.parse(line);
+        const parsed = eventSchema.safeParse(value);
+        // A newer build's event keeps its place in the sequence and its line in the file, but
+        // grants nothing here. A malformed event of a kind this build knows still quarantines.
+        const sequence = parsed.success ? parsed.data.sequence : laterBuildSequence(value);
+        if (sequence === null) throw parsed.error;
+        if (sequence !== this.sequence) throw new SyntaxError('Out of order audit sequence');
+        if (parsed.success) this.apply(parsed.data);
+        else {
+          this.sequence = sequence + 1;
+          skipped += 1;
+        }
       }
+      if (skipped > 0) console.warn(`[CapabilityLedger] Skipped ${skipped} event(s) written by a newer Desktop`);
       // A process can stop after the JSON record but before its newline. Repair
       // that boundary before the next append can concatenate two valid records.
       if (!endsInNewline) await appendFile(this.filePath, '\n', { encoding: 'utf8', mode: 0o600 });
@@ -437,6 +486,24 @@ function normalizeScope(scope: CapabilityScope): CapabilityScope {
   if (scope.kind === 'path' || scope.kind === 'project') return { ...scope, value: resolve(scope.value) };
   if (scope.kind !== 'browser-origin') return scope;
   return { ...scope, value: new URL(scope.value).origin };
+}
+
+/** The sequence of an event that names a type, capability, scope, subject or source this build does not know; else null. */
+function laterBuildSequence(value: unknown): number | null {
+  const header = headerSchema.safeParse(value);
+  if (!header.success) return null;
+  // A type this build does not know may shape its other fields any way it likes.
+  if (!EVENT_TYPES.has(header.data.type)) return header.data.sequence;
+  const parsed = kindsSchema.safeParse(value);
+  if (!parsed.success) return null;
+  const event = parsed.data;
+  const unknown = (known: Set<string>, kind: string | undefined) => kind !== undefined && !known.has(kind);
+  const newer =
+    unknown(CAPABILITIES, event.capability ?? event.grant?.capability) ||
+    unknown(SCOPE_KINDS, (event.scope ?? event.grant?.scope)?.kind) ||
+    unknown(SUBJECT_KINDS, event.grant?.subject?.kind) ||
+    unknown(SOURCES, event.grant?.source);
+  return newer ? header.data.sequence : null;
 }
 
 function isLegacyDocument(line: string): boolean {

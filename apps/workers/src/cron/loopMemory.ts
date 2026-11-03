@@ -1,4 +1,4 @@
-import type { ILoop, ILoopDirective, ILoopMemory, IWorkItem } from '@bike4mind/common';
+import { visibleReplyText, type ILoop, type ILoopDirective, type ILoopMemory, type IWorkItem } from '@bike4mind/common';
 
 /** Ticket description cap (chars) in the run's prompt. */
 export const LOOP_TICKET_PROMPT_CHARS = 4000;
@@ -12,9 +12,10 @@ const MEMORY_FENCE = /```loop-memory[^\S\n]*\n([\s\S]*?)```/g;
  * Reads the memory a run left for the next one: the LAST fenced `loop-memory`
  * JSON block in its answer. Without a valid block the answer's tail becomes the
  * notes and the previous `nextAction` is kept, so a run that ignores the format
- * still advances the loop.
+ * still advances the loop. Reasoning (`<think>` blocks) is stripped first, so it never becomes the notes.
  */
-export function parseLoopMemory(answer: string, previous: ILoopMemory): Omit<ILoopMemory, 'updatedAt'> {
+export function parseLoopMemory(rawAnswer: string, previous: ILoopMemory): Omit<ILoopMemory, 'updatedAt'> {
+  const answer = visibleReplyText(rawAnswer).trim();
   const blocks = Array.from(answer.matchAll(MEMORY_FENCE), match => match[1]);
   const last = blocks.at(-1);
   if (last !== undefined) {
@@ -55,6 +56,8 @@ export function buildLoopQuery(
   ticket?: {
     item: Pick<IWorkItem, 'id' | 'title' | 'description' | 'stage'>;
     stages: string[];
+    /** The owner's answers to this ticket's earlier `loop_ticket_unsure` questions, newest first. */
+    answers?: { question: string; note: string }[];
     /** The owner's instructions for the ticket's stage; trusted, so they sit with the goal, above `---`. */
     instructions?: string;
   },
@@ -68,8 +71,13 @@ export function buildLoopQuery(
         `Title: ${JSON.stringify(ticket.item.title)}`,
         `Description: ${JSON.stringify((ticket.item.description ?? '').slice(0, LOOP_TICKET_PROMPT_CHARS))}`,
         `Current stage: ${ticket.item.stage} (stages: ${ticket.stages.join(' -> ')})`,
-        'When this run completes, the ticket moves to the next stage automatically. If you cannot finish it,',
-        `call loop_ticket_update with { "id": "${ticket.item.id}", "status": "blocked", "reason": "..." }.`,
+        ...(ticket.answers ?? []).map(
+          answer => `Owner answered your question ${JSON.stringify(answer.question)}: ${JSON.stringify(answer.note)}`
+        ),
+        'When this run completes, the ticket moves to the next stage automatically.',
+        'If the ticket is ambiguous or you need the owner to decide, call loop_ticket_unsure with your question; use',
+        'blocked only when you need something you cannot get (access, a key, a file):',
+        `loop_ticket_update with { "id": "${ticket.item.id}", "status": "blocked", "reason": "..." }.`,
       ]
     : [];
   const directives = oversight?.directives ?? [];

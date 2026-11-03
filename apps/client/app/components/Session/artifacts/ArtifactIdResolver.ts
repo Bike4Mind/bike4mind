@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { findExistingArtifactId } from '@client/app/utils/artifactPersistence';
-import { generateCompleteArtifactId, getArtifactTimestamp } from '@client/app/utils/artifactParser';
+import { generateCompleteArtifactId, getArtifactTimestamp } from '@bike4mind/server-utils/app/utils/artifactParser';
 
 // Module-level caches shared across all instances (client-side only). Persist
 // across mount/unmount and avoid the infinite loop from state values in

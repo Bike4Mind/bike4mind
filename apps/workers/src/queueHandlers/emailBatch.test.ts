@@ -4,7 +4,7 @@ import { EmailJobStatus } from '@bike4mind/common';
 // Passthrough so `dispatch` is the raw (event, ctx, logger) handler - the queue is
 // subscribed with batch.partialResponses: true, so dispatch's return value (the
 // batchItemFailures contract) is what SQS actually reads.
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
 }));
 

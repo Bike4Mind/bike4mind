@@ -50,6 +50,7 @@ export const getApiKeyTypeFromBackend = (backend: ModelBackend): ApiKeyType | nu
     case ModelBackend.Bedrock:
     case ModelBackend.AWS:
     case ModelBackend.LocalImage:
+    case ModelBackend.OpenAICompatible:
       return null;
   }
 };

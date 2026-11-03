@@ -2,12 +2,12 @@ import {
   CompletionReasoningEffortSchema,
   isClaudeModelId,
   ModelBackend,
-  REASONING_SUPPORTED_MODELS,
   type ModelInfo,
   type ReasoningEffort,
 } from '@bike4mind/common';
 import { deepseekReasoningParams } from './deepseekParams';
 import { kimiReasoningParams } from './kimiParams';
+import { supportsOpenAIReasoningEffort } from './openaiReasoning';
 import { planReasoningEffort } from './thinkingParams';
 
 const REASONING_EFFORTS: readonly ReasoningEffort[] = CompletionReasoningEffortSchema.options;
@@ -24,7 +24,7 @@ const UNBOUNDED_MAX_TOKENS = Number.MAX_SAFE_INTEGER;
 /**
  * The `options.reasoningEffort` levels the model's adapter acts on, in ascending order; empty when
  * the adapter ignores the option. Each level is asked of the same request shaper the adapter uses
- * (planReasoningEffort, kimiReasoningParams, deepseekReasoningParams, REASONING_SUPPORTED_MODELS),
+ * (planReasoningEffort, kimiReasoningParams, deepseekReasoningParams, supportsOpenAIReasoningEffort),
  * so a change there changes this answer too.
  *
  * `none` is listed only where it turns reasoning off. Kimi K3, DeepSeek and the adaptive Claude
@@ -34,7 +34,7 @@ const UNBOUNDED_MAX_TOKENS = Number.MAX_SAFE_INTEGER;
 export function reasoningEffortsFor(modelInfo: ModelInfo): ReasoningEffort[] {
   const { id } = modelInfo;
   if (modelInfo.backend === ModelBackend.OpenAI) {
-    return REASONING_SUPPORTED_MODELS.has(id) ? [...OPENAI_ACCEPTED_BY_ALL] : [];
+    return supportsOpenAIReasoningEffort(modelInfo, id) ? [...OPENAI_ACCEPTED_BY_ALL] : [];
   }
   if (isAnthropicServed(modelInfo)) return REASONING_EFFORTS.filter(effort => claudeHonours(modelInfo, effort));
   return REASONING_EFFORTS.filter(

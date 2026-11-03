@@ -9,18 +9,21 @@ import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope } from '@bike4mind/common';
 
-const { mockValidate, mockUserFindById, mockKeyRateLimit, mockSearch, mockAuditCreate, counters } = vi.hoisted(() => ({
-  mockValidate: vi.fn(),
-  mockUserFindById: vi.fn(),
-  mockKeyRateLimit: vi.fn(),
-  mockSearch: vi.fn(),
-  mockAuditCreate: vi.fn(),
-  counters: new Map<string, number>(),
-}));
+const { mockResolveTrust, mockValidate, mockUserFindById, mockKeyRateLimit, mockSearch, mockAuditCreate, counters } =
+  vi.hoisted(() => ({
+    mockResolveTrust: vi.fn(),
+    mockValidate: vi.fn(),
+    mockUserFindById: vi.fn(),
+    mockKeyRateLimit: vi.fn(),
+    mockSearch: vi.fn(),
+    mockAuditCreate: vi.fn(),
+    counters: new Map<string, number>(),
+  }));
 
 const USER = { id: 'user-1', _id: 'user-1', username: 'jules', tokenVersion: 0, isBanned: false };
 
 vi.mock('@server/utils/apiKeyTrust', () => ({
+  resolveApiKeyTrust: (...a: unknown[]) => mockResolveTrust(...a),
   resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
     rateLimit: key.rateLimit,
     ownerUntrusted: false,
@@ -30,7 +33,7 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockKeyRateLimit(...a),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<Record<string, unknown>>();
@@ -80,6 +83,7 @@ vi.mock('@server/auth/auth', async orig => {
 });
 
 import webSearch from '../web-search';
+import webFetch from '../web-fetch';
 import weather from '../weather';
 import { TOOL_ROUTES_HOURLY_LIMIT } from '@server/middlewares/toolRoutesRateLimit';
 
@@ -126,6 +130,7 @@ describe('/api/tools/*', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     counters.clear();
+    mockResolveTrust.mockResolvedValue({ assessment: { status: 'trusted' }, settings: {} });
     mockUserFindById.mockResolvedValue(USER);
     mockKeyRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: {} });
     mockSearch.mockResolvedValue({ formattedResults: 'results' });
@@ -190,11 +195,45 @@ describe('/api/tools/*', () => {
     expect(mockSearch).not.toHaveBeenCalled();
   });
 
+  it.each([
+    'http://169.254.169.254/latest/meta-data/',
+    'http://2852039166/latest/meta-data/',
+    'http://0xA9FEA9FE/latest/meta-data/',
+    'http://127.0.0.1:8080/',
+  ])('400s a refused fetch target (%s) instead of a 500', async url => {
+    const res = await call(webFetch, '/api/tools/web-fetch', { url });
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().error).toMatch(/not allowed or could not be resolved/);
+    expect(res._getJSONData().error).not.toMatch(/private|reserved|loopback|dns/i);
+    expect(mockAuditCreate).toHaveBeenCalledWith(expect.objectContaining({ toolName: 'web_fetch', success: false }));
+  });
+
   it('admits an API key holding ai:chat', async () => {
     keyWithScopes([ApiKeyScope.AI_CHAT]);
     const res = await search(VALID_KEY);
 
     expect(res._getStatusCode()).toBe(200);
     expect(mockAuditCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('403s an untrusted account before the tool runs', async () => {
+    mockResolveTrust.mockResolvedValue({
+      assessment: { status: 'untrusted', reason: 'email_unverified' },
+      settings: {},
+    });
+    const res = await search();
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(JSON.stringify(res._getJSONData())).toContain('account_trust_required');
+    expect(mockSearch).not.toHaveBeenCalled();
+  });
+
+  it('403s a moderated account with a message that is not AI-specific', async () => {
+    const res = await search(undefined, { ...USER, isModerated: true } as typeof USER);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(JSON.stringify(res._getJSONData())).not.toMatch(/\bAI\b/);
+    expect(mockSearch).not.toHaveBeenCalled();
   });
 });

@@ -107,6 +107,12 @@ describe('createVideoJob', () => {
     expect(result).toMatchObject({ ok: true, job: { delivery } });
   });
 
+  it('persists the authenticating API key on the job for its settlement row', async () => {
+    const { deps } = makeDeps();
+    const result = await createVideoJob({ user, request: validRequest, source: 'api', apiKeyId: 'key-1' }, deps);
+    expect(result).toMatchObject({ ok: true, job: { apiKeyId: 'key-1' } });
+  });
+
   it('leaves delivery unset when none is given', async () => {
     const { deps } = makeDeps();
     const result = await createVideoJob({ user, request: validRequest, source: 'studio' }, deps);

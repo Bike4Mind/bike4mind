@@ -63,7 +63,7 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mocks.rateLimit(...a),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/voice/voiceSessionToken', () => ({
   signVoiceSessionToken: (...a: unknown[]) => mocks.signVoiceSessionToken(...a),
 }));
@@ -137,6 +137,12 @@ vi.mock('@bike4mind/database', async orig => {
     userRepository: {
       ...(actual.userRepository as object),
       incrementCredits: (...a: unknown[]) => mocks.incrementCredits(...a),
+      // reserveVoiceHold's new-account spend cap reads the user; this one has no createdAt, so it is never capped.
+      findById: async (id: string) => ({ id }),
+    },
+    newAccountSpendCapAdapters: {
+      adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+      personalSpendSince: async () => [],
     },
   };
 });
@@ -357,10 +363,14 @@ describe('POST /api/v1/voice/sessions', () => {
     const { res, run } = fireSessions();
     await run();
     expect(res._getStatusCode()).toBe(200);
-    expect(mocks.getSettingsMap).toHaveBeenCalledExactlyOnceWith(
-      { adminSettings: adminSettingsRepository },
-      { names: ['voiceV2Enabled', 'enforceCredits', 'elevenLabsServerApiKey'], skipCache: true }
-    );
+    // The route's own settings are read once, uncached; the new-account spend cap makes its own cached read.
+    const directReads = mocks.getSettingsMap.mock.calls.filter(([, options]) => options?.skipCache);
+    expect(directReads).toEqual([
+      [
+        { adminSettings: adminSettingsRepository },
+        { names: ['voiceV2Enabled', 'enforceCredits', 'elevenLabsServerApiKey'], skipCache: true },
+      ],
+    ]);
   });
 
   it('rejects a key lacking ai:generate (403) before taking a credit hold', async () => {

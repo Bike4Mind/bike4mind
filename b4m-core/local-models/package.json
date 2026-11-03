@@ -24,6 +24,36 @@
         "default": "./dist/index.cjs"
       }
     },
+    "./servers": {
+      "import": {
+        "types": "./dist/servers.d.mts",
+        "default": "./dist/servers.mjs"
+      },
+      "require": {
+        "types": "./dist/servers.d.cts",
+        "default": "./dist/servers.cjs"
+      }
+    },
+    "./curated-signing": {
+      "import": {
+        "types": "./dist/curated-signing.d.mts",
+        "default": "./dist/curated-signing.mjs"
+      },
+      "require": {
+        "types": "./dist/curated-signing.d.cts",
+        "default": "./dist/curated-signing.cjs"
+      }
+    },
+    "./licenses": {
+      "import": {
+        "types": "./dist/licenses.d.mts",
+        "default": "./dist/licenses.mjs"
+      },
+      "require": {
+        "types": "./dist/licenses.d.cts",
+        "default": "./dist/licenses.cjs"
+      }
+    },
     "./testing": {
       "import": {
         "types": "./dist/testing.d.mts",

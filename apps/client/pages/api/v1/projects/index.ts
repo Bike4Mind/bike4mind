@@ -14,7 +14,7 @@ import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
-import { logEventSafe } from '@server/utils/analyticsLog';
+import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import { UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import { toPublicProject } from '@server/projects/toPublicProject';
 

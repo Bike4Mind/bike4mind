@@ -28,7 +28,7 @@ const ModelName = 'WorkItem';
  */
 export const MAX_GRAPH_ITEMS = 2000;
 
-/** ponytail: candidate window for `findNextReadyForLoop`; a loop with more open tickets than this can starve the tail. */
+/** ponytail: candidate window for `listReadyForLoop`; a loop with more open tickets than this can starve the tail. */
 const LOOP_READY_CANDIDATES = 200;
 
 export interface IWorkItemModel extends Model<IWorkItem> {}
@@ -120,29 +120,57 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
   async findNextReadyForLoop(
     userId: string,
     loopId: string,
-    lastStage: string,
+    stages: string[],
     skipStages: string[] = []
   ): Promise<IWorkItem | null> {
+    return (await this.listReadyForLoop(userId, loopId, stages, skipStages))[0] ?? null;
+  }
+
+  /**
+   * A loop's open tickets whose dependencies are closed, in the order its runs take them: finish first
+   * (a later stage before an earlier one), then oldest first.
+   */
+  async listReadyForLoop(
+    userId: string,
+    loopId: string,
+    stages: string[],
+    skipStages: string[] = []
+  ): Promise<IWorkItem[]> {
     // Skipped stages are filtered in the query so they never eat the candidate window.
     const candidates = (
       await this.workItemModel
-        .find({ userId, loopId, deletedAt: null, status: 'open', stage: { $nin: [lastStage, ...skipStages] } })
+        .find({
+          userId,
+          loopId,
+          deletedAt: null,
+          status: 'open',
+          stage: { $nin: [stages.at(-1) ?? '', ...skipStages] },
+        })
         .sort({ createdAt: 1 })
         .limit(LOOP_READY_CANDIDATES)
     ).map(doc => doc.toJSON());
     const depIds = [...new Set(candidates.flatMap(item => item.dependencies))];
     const deps = await this.findManyByIdsForUser(depIds, userId);
     const open = new Set(deps.filter(dep => dep.status !== 'closed').map(dep => dep.id));
-    return candidates.find(item => item.dependencies.every(depId => !open.has(depId))) ?? null;
+    const stageIndex = (item: IWorkItem) => stages.indexOf(item.stage ?? '');
+    // Array.prototype.sort is stable, so equal stages keep the createdAt order.
+    return candidates
+      .filter(item => item.dependencies.every(depId => !open.has(depId)))
+      .sort((a, b) => stageIndex(b) - stageIndex(a));
   }
 
   async claimForRun(id: string, loopId: string): Promise<IWorkItem | null> {
     const result = await this.workItemModel.findOneAndUpdate(
       { _id: id, loopId, deletedAt: null, status: 'open' },
-      { $set: { status: 'in_progress' } },
+      { $set: { status: 'in_progress' }, $inc: { runCount: 1 } },
       { new: true }
     );
     return result?.toJSON() ?? null;
+  }
+
+  /** Tickets of a loop created or changed in [from, to]; a run that touched none changed nothing on the board. */
+  async countTouchedForLoop(userId: string, loopId: string, from: Date, to: Date): Promise<number> {
+    return this.workItemModel.countDocuments({ userId, loopId, updatedAt: { $gte: from, $lte: to } });
   }
 
   async setExecution(id: string, executionId: string): Promise<void> {
@@ -152,7 +180,7 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
   async releaseClaim(id: string): Promise<void> {
     await this.workItemModel.updateOne(
       { _id: id, status: 'in_progress' },
-      { $set: { status: 'open' }, $unset: { executionId: '' } }
+      { $set: { status: 'open' }, $unset: { executionId: '' }, $inc: { runCount: -1 } }
     );
   }
 
@@ -161,13 +189,14 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     return result?.toJSON() ?? null;
   }
 
-  async foldTicketRun(id: string, executionId: string, patch: WorkItemPatch): Promise<boolean> {
+  async foldTicketRun(id: string, executionId: string, patch: WorkItemPatch, uncount = false): Promise<boolean> {
     const { set, unset } = splitPatch(patch);
     const result = await this.workItemModel.updateOne(
       { _id: id, executionId, status: 'in_progress', deletedAt: null },
       {
         ...(Object.keys(set).length > 0 && { $set: set }),
         ...(Object.keys(unset).length > 0 && { $unset: unset }),
+        ...(uncount && { $inc: { runCount: -1 } }),
       }
     );
     return result.modifiedCount > 0;
@@ -213,13 +242,21 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     id: string,
     userId: string,
     patch: WorkItemPatch,
-    expectedStatus?: WorkItemStatus
+    expectedStatus?: WorkItemStatus,
+    guard?: { statusReason?: string; loopId?: string }
   ): Promise<IWorkItem | null> {
     if (!mongoose.isValidObjectId(id)) return null;
 
     const { set, unset } = splitPatch(patch);
     const result = await this.workItemModel.findOneAndUpdate(
-      { _id: id, userId, deletedAt: null, ...(expectedStatus && { status: expectedStatus }) },
+      {
+        _id: id,
+        userId,
+        deletedAt: null,
+        ...(expectedStatus && { status: expectedStatus }),
+        ...(guard?.statusReason !== undefined && { statusReason: guard.statusReason }),
+        ...(guard?.loopId && { loopId: guard.loopId }),
+      },
       {
         ...(Object.keys(set).length > 0 && { $set: set }),
         ...(Object.keys(unset).length > 0 && { $unset: unset }),
@@ -371,6 +408,7 @@ export const WorkItemSchema = new Schema<IWorkItem, IWorkItemModel>(
     stage: { type: String },
     executionId: { type: String },
     statusReason: { type: String },
+    runCount: { type: Number, default: 0 },
   },
   {
     timestamps: { createdAt: true, updatedAt: true },
@@ -389,6 +427,8 @@ WorkItemSchema.index(
   { loopId: 1, deletedAt: 1, status: 1, stage: 1 },
   { partialFilterExpression: { loopId: { $exists: true } } }
 );
+// The loop notice sweep's global read of blocked loop tickets (apps/workers/src/cron/loopNotices.ts).
+WorkItemSchema.index({ status: 1, loopId: 1 }, { partialFilterExpression: { loopId: { $exists: true } } });
 WorkItemSchema.index({ executionId: 1 }, { partialFilterExpression: { executionId: { $exists: true } } });
 
 export const WorkItem: IWorkItemModel =

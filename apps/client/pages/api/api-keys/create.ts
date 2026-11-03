@@ -1,4 +1,4 @@
-import { logEventSafe } from '@server/utils/analyticsLog';
+import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
 import { apiKeyService } from '@bike4mind/services';
 import { apiKeyRepository } from '@bike4mind/database';

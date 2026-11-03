@@ -23,7 +23,12 @@ export const loopStatusNeedsOwner = (loop: Pick<ILoop, 'status' | 'statusReason'
  * Server agent tools offered only on loop runs (`apps/workers/src/queueHandlers/agentExecutor.loopTicketTools.ts`).
  * Pre-approved on headless loop runs in `startAgentExecution`.
  */
-export const LOOP_TICKET_TOOL_NAMES = ['loop_ticket_list', 'loop_ticket_create', 'loop_ticket_update'] as const;
+export const LOOP_TICKET_TOOL_NAMES = [
+  'loop_ticket_list',
+  'loop_ticket_create',
+  'loop_ticket_update',
+  'loop_ticket_unsure',
+] as const;
 
 /**
  * Directive tools (`apps/workers/src/queueHandlers/agentExecutor.loopDirectiveTools.ts`): every loop run can
@@ -118,11 +123,24 @@ export interface ILoop {
   runCount: number;
   /** Non-credit failures in a row; the loop moves to `error` at the scheduler's limit. */
   consecutiveFailures: number;
+  /** Idle runs in a row (no ticket, memory unchanged, no ticket touched); each doubles the wait before the next. */
+  idleStreak?: number;
   /** Ids of the same owner's loops this loop oversees: its runs may read their state and send them directives. */
   oversees?: string[];
 
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * GET /api/loops/budget: what all of the caller's loops spent today (since `startOfUtcDay`) against the
+ * all-loops cap. `effectiveCap` is the lower of the admin and user caps; each is absent when unset.
+ */
+export interface ILoopsBudget {
+  creditsToday: number;
+  userDailyCredits?: number;
+  adminDailyCredits?: number;
+  effectiveCap?: number;
 }
 
 /**
@@ -148,7 +166,7 @@ export interface ILoopRepository extends IBaseRepository<ILoop> {
   ): Promise<ILoop | null>;
   deleteForUser(id: string, userId: string): Promise<boolean>;
   /** Atomically leases one due `live` loop with no run in flight and not in `skipIds`, or returns null. */
-  claimDue(now: Date, leaseMs: number, skipIds?: string[]): Promise<ILoop | null>;
+  claimDue(now: Date, leaseMs: number, skipIds?: string[], skipUserIds?: string[]): Promise<ILoop | null>;
   releaseLease(id: string): Promise<void>;
   markDispatched(id: string, executionId: string, nextRunAt: Date): Promise<void>;
   listInFlight(): Promise<ILoop[]>;
@@ -162,7 +180,7 @@ export interface ILoopRepository extends IBaseRepository<ILoop> {
     executionId: string,
     update: { $set?: Record<string, unknown>; $inc?: Record<string, number>; $unset?: Record<string, ''> }
   ): Promise<boolean>;
-  /** Pulls a `live` loop's `nextRunAt` forward to `now`; used when one of its tickets becomes ready. */
+  /** Pulls a `live` loop's `nextRunAt` forward to `now` and ends its idle back-off; used when one of its tickets becomes ready. */
   makeDueNow(id: string, now: Date): Promise<void>;
   /** Moves a still-`live` loop to `error` once it has `maxFailures` failures in a row. */
   markErroredIfFailing(id: string, maxFailures: number): Promise<void>;
@@ -195,33 +213,43 @@ export interface ILoopEvent {
   loopId: string;
   userId: string;
   kind: LoopEventKind;
+  /**
+   * `unsure` only: `gate` (absent on older rows) is a run paused at the confidence gate, resolved through its
+   * gate card; `asked` is a run asking the owner with `loop_ticket_unsure`, resolved from the Log.
+   */
+  source?: 'gate' | 'asked';
   executionId: string;
   workItemId?: string;
   ticketTitle?: string;
-  /** Set on `unsure` only. */
+  /** Set on gate `unsure` only. */
   iteration?: number;
-  /** Set on `unsure` only. */
+  /** Set on gate `unsure` only. */
   confidence?: number;
   reason: string;
   /** The gate's `requestedAt`; with `executionId` it identifies the event. */
   requestedAt: Date;
-  resolution?: { outcome: LoopGateOutcome; by?: string; at: Date };
+  /** `note` is the owner's answer to an `asked` event. */
+  resolution?: { outcome: LoopGateOutcome; by?: string; at: Date; note?: string };
   /** Set once the scheduler has folded a resumed run back into its ticket. */
   foldedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
 
-export type LoopUnsureFields = Omit<
+type LoopUnsureBase = Omit<
   ILoopEvent,
-  'id' | 'kind' | 'iteration' | 'confidence' | 'resolution' | 'foldedAt' | 'createdAt' | 'updatedAt'
-> & { iteration: number; confidence: number };
+  'id' | 'kind' | 'source' | 'iteration' | 'confidence' | 'resolution' | 'foldedAt' | 'createdAt' | 'updatedAt'
+>;
+
+export type LoopUnsureFields = LoopUnsureBase & { source?: 'gate'; iteration: number; confidence: number };
+
+export type LoopAskedFields = LoopUnsureBase & { source: 'asked' };
 
 export type LoopAutoResumedFields = Pick<ILoopEvent, 'loopId' | 'userId' | 'executionId' | 'reason' | 'requestedAt'>;
 
 export interface ILoopEventRepository extends IBaseRepository<ILoopEvent> {
   /** Records an unsure event once per gate (`executionId` + `requestedAt`); a repeat is a no-op. */
-  recordUnsure(fields: LoopUnsureFields): Promise<void>;
+  recordUnsure(fields: LoopUnsureFields | LoopAskedFields): Promise<void>;
   recordAutoResumed(fields: LoopAutoResumedFields): Promise<void>;
   /** Records the event if missing, then its resolution. The first resolution wins. */
   resolveUnsure(
@@ -233,6 +261,20 @@ export interface ILoopEventRepository extends IBaseRepository<ILoopEvent> {
   /** Resumed events whose run the scheduler has not folded yet. */
   listResumedUnfolded(limit: number): Promise<ILoopEvent[]>;
   markFolded(id: string, now: Date): Promise<void>;
+  /**
+   * Resolves an unresolved `asked` event and marks it folded in the same write, so the scheduler's resumed-run
+   * fold never picks it up (the asking run already ended). Null when no such event matched.
+   */
+  resolveAsked(
+    id: string,
+    userId: string,
+    loopId: string,
+    resolution: NonNullable<ILoopEvent['resolution']>
+  ): Promise<ILoopEvent | null>;
+  /** Undoes a `resolveAsked` written at `at` (when its ticket write failed), so the owner can answer again. */
+  reopenAsked(id: string, at: Date): Promise<void>;
+  /** A ticket's resumed `asked` events that carry the owner's answer, newest first. */
+  listAnsweredForTicket(userId: string, workItemId: string, limit: number): Promise<ILoopEvent[]>;
   deleteManyForLoop(userId: string, loopId: string): Promise<number>;
 }
 

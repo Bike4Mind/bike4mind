@@ -20,7 +20,13 @@ const payload = {
 
 const LEASE_MS = 330_000;
 
-const setup = ({ submitMode = 'async' }: { submitMode?: GenerationJobHandler['submitMode'] } = {}) => {
+const setup = ({
+  submitMode = 'async',
+  aiAccessDenial,
+}: {
+  submitMode?: GenerationJobHandler['submitMode'];
+  aiAccessDenial?: (userId: string) => Promise<string | null>;
+} = {}) => {
   let clock = new Date('2026-10-06T00:00:00Z');
   const now = () => clock;
   const repository = createInMemoryGenerationJobRepository({ now });
@@ -51,6 +57,7 @@ const setup = ({ submitMode = 'async' }: { submitMode?: GenerationJobHandler['su
     now,
     logger,
     leaseMs: LEASE_MS,
+    aiAccessDenial,
   });
   const create = (overrides: Partial<IGenerationJob> = {}) =>
     repository.createJob({
@@ -108,6 +115,32 @@ describe('GenerationJobEngine', () => {
     expect(final.leaseUntil).toBeNull();
     expect(t.handler.onTerminal).toHaveBeenCalledTimes(1);
     expect(t.notify).toHaveBeenCalled();
+  });
+
+  it('fails a pending job whose requester is blocked before the provider is called, and settles the hold', async () => {
+    const aiAccessDenial = vi.fn(async () => 'Account suspended pending dispute resolution. Please contact support.');
+    const t = setup({ aiAccessDenial });
+    const job = await t.create();
+
+    expect(await t.engine.step(job.id)).toBe('terminal');
+
+    expect(aiAccessDenial).toHaveBeenCalledWith('u1');
+    expect(t.handler.submit).not.toHaveBeenCalled();
+    const final = t.repository.jobs.get(job.id)!;
+    expect(final.state).toBe('failed');
+    expect(final.error).toEqual({ code: 'account_blocked', message: expect.stringContaining('dispute') });
+    expect(final.submitAttemptedAt).toBeFalsy();
+    expect(t.handler.onTerminal).toHaveBeenCalledTimes(1);
+  });
+
+  it('submits as usual for a requester who may still spend', async () => {
+    const aiAccessDenial = vi.fn(async () => null);
+    const t = setup({ aiAccessDenial });
+    const job = await t.create();
+    t.results.submit.push({ next: 'running', payload });
+
+    expect(await t.engine.step(job.id)).toBe('advanced');
+    expect(t.handler.submit).toHaveBeenCalledOnce();
   });
 
   it('duplicate message while leased is a no-op', async () => {

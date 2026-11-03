@@ -1,4 +1,5 @@
 import {
+  AdminPermissionId,
   isReservedUsername,
   resolveUserStorageLimit,
   IUser,
@@ -32,6 +33,7 @@ export async function createUser(
     tags?: Array<string>;
     level?: UserLevelType;
     isAdmin?: boolean;
+    adminPermissions?: AdminPermissionId[];
     initialCredits?: number;
     emailVerified?: boolean;
     allowReservedUsername?: boolean;
@@ -42,8 +44,19 @@ export async function createUser(
     };
   }
 ): Promise<IUser> {
-  const { username, name, email, record, tags, level, isAdmin, initialCredits, emailVerified, allowReservedUsername } =
-    params;
+  const {
+    username,
+    name,
+    email,
+    record,
+    tags,
+    level,
+    isAdmin,
+    adminPermissions,
+    initialCredits,
+    emailVerified,
+    allowReservedUsername,
+  } = params;
   const { db } = adapters;
 
   if (!allowReservedUsername && isReservedUsername(username)) {
@@ -70,6 +83,7 @@ export async function createUser(
     mementos: [],
     ...record,
     isAdmin: isAdmin ?? false,
+    ...(adminPermissions ? { adminPermissions } : {}),
     storageLimit: storage.limitMb,
     storageLimitOverride: record?.storageLimitOverride ?? (storage.source === 'override' ? storage.limitMb : null),
     planStorageLimit: record?.planStorageLimit ?? null,

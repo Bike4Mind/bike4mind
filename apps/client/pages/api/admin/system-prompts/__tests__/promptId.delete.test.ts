@@ -47,7 +47,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 const mockGetDefaults = vi.fn();
-vi.mock('@server/utils/systemPrompts/defaults', () => ({
+vi.mock('@bike4mind/server-utils/utils/systemPrompts/defaults', () => ({
   getDefaultSystemPrompts: () => mockGetDefaults(),
 }));
 

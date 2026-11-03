@@ -66,6 +66,7 @@ describe('approval capabilities', () => {
       revokeRoot: vi.fn().mockResolvedValue(true),
       untrustProject: vi.fn().mockResolvedValue(true),
       revokeAllow: vi.fn().mockResolvedValue(true),
+      cancelModelPull: vi.fn().mockResolvedValue(true),
     });
     const grant = (fields: Pick<CapabilityGrant, 'subject' | 'capability' | 'scope'> & Partial<CapabilityGrant>) => ({
       id: 'grant',
@@ -109,6 +110,21 @@ describe('approval capabilities', () => {
         t
       );
       expect(t.untrustProject).toHaveBeenCalledWith('/work/p');
+    });
+
+    it('stops the download a model-pull grant approved', async () => {
+      const t = targets();
+      const revoked = await enforceRevocation(
+        grant({
+          subject: { kind: 'desktop-user' },
+          capability: 'model-download',
+          scope: { kind: 'model-pull', value: 'qwen3:0.6b#q4', model: 'qwen3:0.6b', server: 'This computer', bytes: 1 },
+        }),
+        t
+      );
+      expect(revoked).toBe(true);
+      expect(t.cancelModelPull).toHaveBeenCalledWith('qwen3:0.6b#q4');
+      expect(t.approvals.revoke).not.toHaveBeenCalled();
     });
 
     it.each([

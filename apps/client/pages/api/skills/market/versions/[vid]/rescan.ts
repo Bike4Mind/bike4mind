@@ -1,6 +1,6 @@
 // apps/client/pages/api/skills/market/versions/[vid]/rescan.ts
 import { baseApi } from '@client/server/middlewares/baseApi';
-import { submitRateLimits } from '@server/skillMarket/market';
+import { submitRateLimits } from '@bike4mind/server-utils/skillMarket/market';
 import { rescanOwnVersion } from '@server/skillMarket/author';
 
 /** POST /api/skills/market/versions/[vid]/rescan - the author retries a scan that errored or stalled. */

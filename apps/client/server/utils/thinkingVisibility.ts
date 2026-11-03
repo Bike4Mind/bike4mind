@@ -8,7 +8,7 @@ import {
   type ThinkingVisibilitySettings,
 } from '@bike4mind/services';
 import { getActiveSubscriptionsForUser } from '@server/entitlements/activeSubscriptions';
-import { persistedIsAdmin } from '@server/auth/apiKeyAdminScope';
+import { persistedIsAdmin } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 
 type ThinkingVisibilityUser = Pick<IUser, 'isAdmin' | 'apiKeyTrustApproved' | 'lastCreditsPurchasedAt'> & {
   id: string;

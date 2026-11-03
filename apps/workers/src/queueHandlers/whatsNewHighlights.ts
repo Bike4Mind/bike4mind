@@ -4,13 +4,16 @@ import {
   apiKeyRepository,
   adminSettingsRepository,
 } from '@bike4mind/database';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { WhatsNewHighlightsPayloadSchema } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
 import type {
   WhatsNewHighlightsConfig,
   HighlightsRunStatus,
 } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
-import { loadHighlightsReleaseNotes, parseHighlightsEndDate } from '@server/whatsNew/releaseNoteHighlights';
+import {
+  loadHighlightsReleaseNotes,
+  parseHighlightsEndDate,
+} from '@bike4mind/server-utils/whatsNew/releaseNoteHighlights';
 import {
   buildHighlightsPrompt,
   createSlackBlocks,

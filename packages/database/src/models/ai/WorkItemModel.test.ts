@@ -279,6 +279,27 @@ describe('WorkItemRepository', () => {
   });
 
   describe('updateForUser', () => {
+    it('applies a guard only while statusReason and loopId still match', async () => {
+      const loopId = '507f1f77bcf86cd799439011';
+      const itemId = (await create('Parked', { status: 'blocked', statusReason: 'Unsure: Q', loopId })).id;
+      const reopen = { status: 'open' as const, statusReason: null };
+
+      expect(
+        await workItemRepository.updateForUser(itemId, USER, reopen, 'blocked', { statusReason: 'other' })
+      ).toBeNull();
+      expect(
+        await workItemRepository.updateForUser(itemId, USER, reopen, 'blocked', {
+          statusReason: 'Unsure: Q',
+          loopId: '507f1f77bcf86cd799439012',
+        })
+      ).toBeNull();
+      const updated = await workItemRepository.updateForUser(itemId, USER, reopen, 'blocked', {
+        statusReason: 'Unsure: Q',
+        loopId,
+      });
+      expect(updated?.status).toBe('open');
+    });
+
     it('clears closedAt via $unset when passed null', async () => {
       const itemId = (await create('Closed', { status: 'closed', closedAt: new Date() })).id;
 
@@ -355,6 +376,7 @@ describe('WorkItemRepository', () => {
 
   describe('loop tickets', () => {
     const LOOP = 'loop-1';
+    const STAGES = ['todo', 'doing', 'done'];
     const ticket = (title: string, overrides: Record<string, unknown> = {}) =>
       create(title, { loopId: LOOP, stage: 'todo', ...overrides });
 
@@ -362,7 +384,11 @@ describe('WorkItemRepository', () => {
       await WorkItem.syncIndexes();
       const keys = (await WorkItem.collection.indexes()).map(index => index.key);
       expect(keys).toEqual(
-        expect.arrayContaining([{ loopId: 1, deletedAt: 1, status: 1, stage: 1 }, { executionId: 1 }])
+        expect.arrayContaining([
+          { loopId: 1, deletedAt: 1, status: 1, stage: 1 },
+          { status: 1, loopId: 1 },
+          { executionId: 1 },
+        ])
       );
     });
 
@@ -402,19 +428,22 @@ describe('WorkItemRepository', () => {
       await ticket('Theirs', { userId: OTHER_USER });
       const next = await ticket('Next');
 
-      expect((await workItemRepository.findNextReadyForLoop(USER, LOOP, 'done'))?.id).toBe(next.id);
+      expect((await workItemRepository.findNextReadyForLoop(USER, LOOP, STAGES))?.id).toBe(next.id);
 
       await workItemRepository.updateForUser(otherLoopBlocker.id, USER, { status: 'closed' });
-      expect((await workItemRepository.findNextReadyForLoop(USER, LOOP, 'done'))?.title).toBe('Waits');
+      expect((await workItemRepository.findNextReadyForLoop(USER, LOOP, STAGES))?.title).toBe('Waits');
     });
 
-    it('findNextReadyForLoop skips tickets in skipStages', async () => {
-      await ticket('Desktop', { stage: 'review' });
+    it('listReadyForLoop and findNextReadyForLoop skip tickets in skipStages', async () => {
+      await ticket('Desktop', { stage: 'doing' });
       const cloud = await ticket('Cloud', { stage: 'todo' });
-      expect((await workItemRepository.findNextReadyForLoop(USER, LOOP, 'done'))?.title).toBe('Desktop');
-      expect((await workItemRepository.findNextReadyForLoop(USER, LOOP, 'done', ['review']))?.id).toBe(cloud.id);
+      expect((await workItemRepository.findNextReadyForLoop(USER, LOOP, STAGES))?.title).toBe('Desktop');
+      expect((await workItemRepository.listReadyForLoop(USER, LOOP, STAGES, ['doing'])).map(t => t.id)).toEqual([
+        cloud.id,
+      ]);
+      expect((await workItemRepository.findNextReadyForLoop(USER, LOOP, STAGES, ['doing']))?.id).toBe(cloud.id);
       await workItemRepository.updateForUser(cloud.id, USER, { status: 'closed' });
-      expect(await workItemRepository.findNextReadyForLoop(USER, LOOP, 'done', ['review'])).toBeNull();
+      expect(await workItemRepository.findNextReadyForLoop(USER, LOOP, STAGES, ['doing'])).toBeNull();
     });
 
     it('claimForRun wins once; releaseClaim reopens and unlinks', async () => {
@@ -465,13 +494,44 @@ describe('WorkItemRepository', () => {
       expect(listed.map(item => item.title)).toEqual(['Open', 'New']);
     });
 
+    it('listReadyForLoop puts a ticket further along before an older one in an earlier stage', async () => {
+      const oldest = await ticket('Oldest');
+      const along = await ticket('Along', { stage: 'doing' });
+      const newer = await ticket('Newer');
+      expect((await workItemRepository.listReadyForLoop(USER, LOOP, STAGES)).map(t => t.id)).toEqual([
+        along.id,
+        oldest.id,
+        newer.id,
+      ]);
+    });
+
+    it('claimForRun counts a run; releaseClaim and an uncounted fold take it back', async () => {
+      const t = await ticket('Counted');
+      expect((await workItemRepository.claimForRun(t.id, LOOP))?.runCount).toBe(1);
+      await workItemRepository.releaseClaim(t.id);
+      expect((await workItemRepository.claimForRun(t.id, LOOP))?.runCount).toBe(1);
+      await workItemRepository.setExecution(t.id, 'exec-1');
+      expect(await workItemRepository.foldTicketRun(t.id, 'exec-1', { status: 'open' }, true)).toBe(true);
+      expect((await workItemRepository.findById(t.id))?.runCount).toBe(0);
+      expect((await workItemRepository.claimForRun(t.id, LOOP))?.runCount).toBe(1);
+    });
+
+    it('countTouchedForLoop counts tickets updated in the window', async () => {
+      const before = new Date();
+      await ticket('Touched', { loopId: 'loop-touched' });
+      await create('Other loop', { loopId: 'loop-2', stage: 'todo' });
+      const later = new Date(Date.now() + 1000);
+      expect(await workItemRepository.countTouchedForLoop(USER, 'loop-touched', before, later)).toBe(1);
+      expect(await workItemRepository.countTouchedForLoop(USER, 'loop-touched', later, later)).toBe(0);
+    });
+
     it("softDeleteByLoop removes only that loop's tickets", async () => {
       await ticket('A');
       await create('Other loop', { loopId: 'loop-2' });
       await create('Plain');
 
       expect(await workItemRepository.softDeleteByLoop(USER, LOOP)).toBe(1);
-      expect(await workItemRepository.findNextReadyForLoop(USER, LOOP, 'done')).toBeNull();
+      expect(await workItemRepository.findNextReadyForLoop(USER, LOOP, STAGES)).toBeNull();
     });
 
     it('countBlockedByLoop counts live blocked tickets per loop for the user only', async () => {

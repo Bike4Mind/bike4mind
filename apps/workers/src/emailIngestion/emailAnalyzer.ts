@@ -28,7 +28,7 @@ import {
 } from '@bike4mind/database';
 // @ts-ignore - services may not be exported in types yet
 import { emailAnalysisService, apiKeyService } from '@bike4mind/services';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { NotFoundError, getSettingsByNames } from '@bike4mind/utils';
 import { getLlmByModel, getAvailableModels } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';

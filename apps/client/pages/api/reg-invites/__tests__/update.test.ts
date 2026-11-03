@@ -22,7 +22,7 @@ vi.mock('@bike4mind/database', () => ({
   registrationInviteRepository: { formatRegInvites: h.formatRegInvites },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
 vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 await import('../update');

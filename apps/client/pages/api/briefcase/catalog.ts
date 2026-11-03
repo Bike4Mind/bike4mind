@@ -5,7 +5,7 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { briefcaseService } from '@bike4mind/services';
 import { briefcasePromptRepository } from '@bike4mind/database';
 import { BriefcaseBatchRequestSchema, BriefcaseEvents, isOAuthSourceTag, type ICaller } from '@bike4mind/common';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { Request } from 'express';
 
 const toCaller = (req: Request): ICaller => ({

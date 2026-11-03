@@ -331,3 +331,45 @@ it('redacts preview aliases and tool results', () => {
   for (const value of ['result-canary', 'response-canary', 'snippet-canary', 'tool-canary'])
     expect(output).not.toContain(value);
 });
+
+describe('Logger context provider', () => {
+  afterEach(() => {
+    Logger.setContextProvider(undefined);
+    Logger.resetMetadata();
+  });
+
+  function lastJson(spy: ReturnType<typeof vi.spyOn>) {
+    return JSON.parse(spy.mock.calls.at(-1)![0] as string) as Record<string, unknown>;
+  }
+
+  it("routes static calls to the provider's logger", () => {
+    const spy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const scoped = jsonLogger({ requestId: 'r1' });
+    Logger.setContextProvider(() => scoped);
+    Logger.info('hi');
+    expect(lastJson(spy).requestId).toBe('r1');
+  });
+
+  it('falls back to the singleton when the provider yields undefined', () => {
+    const spy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    Logger.globalInstance.setLevel('debug');
+    Logger.setContextProvider(() => undefined);
+    Logger.updateMetadata({ a: 1 });
+    Logger.info('x');
+    expect(spy).toHaveBeenCalled();
+    expect(lastJson(spy).a).toBe(1);
+  });
+
+  it('keeps Logger.updateMetadata inside a context off the singleton', () => {
+    const spy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const scoped = jsonLogger();
+    Logger.setContextProvider(() => scoped);
+    Logger.updateMetadata({ userId: 'u1' });
+    Logger.info('scoped');
+    expect(lastJson(spy).userId).toBe('u1');
+
+    Logger.setContextProvider(undefined);
+    Logger.info('later');
+    expect(lastJson(spy).userId).toBeUndefined();
+  });
+});

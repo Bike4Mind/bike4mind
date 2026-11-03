@@ -8,7 +8,7 @@ import type { LocalModelFootprint } from './localContext';
 import { HardwareProbe, localContextSizing } from './localContextSizing';
 import { forgetLocalContexts, OllamaLocal, type LocalContextSizing } from './OllamaLocal';
 import { createThinkFilter } from './thinkFilter';
-import { ServerCredentialsError } from '../modelServers/errors';
+import { ServerCredentialsError, ServerForbiddenError } from '../modelServers/errors';
 
 vi.mock('@bike4mind/common', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/common')>()),
@@ -213,6 +213,21 @@ describe('OllamaLocal', () => {
     const error = await server.listModels().catch((err: unknown) => err);
     expect(error).toBeInstanceOf(ServerCredentialsError);
     expect((error as Error).message).toContain('gpu box');
+  });
+
+  it('reports a 403 from a saved server as a refusal, not as rejected credentials', async () => {
+    const fetch = vi.fn(async () => new Response('', { status: 403 }));
+    const server = new OllamaLocal(undefined, undefined, {
+      runtimeId: 'srv-aaa111',
+      baseUrl: 'https://one.example.test',
+      label: 'gpu box',
+      fetch,
+      hasCredentials: () => true,
+      redact: text => text,
+    });
+    const error = await server.listModels().catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(ServerForbiddenError);
+    expect((error as Error).message).toMatch(/gpu box answered 403 Forbidden/);
   });
 
   it('streams chat through the fetch it is given and keeps the short calls on global fetch', async () => {
@@ -767,6 +782,27 @@ describe('OllamaLocal', () => {
   ])('preserves only reported valid token counts: %j', async ({ usage, ...counts }) => {
     const { events } = await streamWith(`${JSON.stringify({ done: true, ...counts })}\n`);
     expect(events).toEqual([{ type: 'content', stopReason: 'end_turn', ...(usage ? { usage } : {}) }]);
+  });
+
+  it('reports the final frame timings as the generation rate', async () => {
+    const { events } = await streamWith(
+      `${JSON.stringify({
+        done: true,
+        prompt_eval_count: 30,
+        prompt_eval_duration: 60_000_000,
+        eval_count: 48,
+        eval_duration: 2_000_000_000,
+        load_duration: 1_200_000_000,
+      })}\n`
+    );
+    expect(events).toEqual([
+      {
+        type: 'content',
+        stopReason: 'end_turn',
+        usage: { inputTokens: 30, outputTokens: 48 },
+        rate: { evalTokens: 48, evalMs: 2000, promptTokens: 30, promptMs: 60, loadMs: 1200 },
+      },
+    ]);
   });
 
   it('ignores token counts on partial frames until the final measurement arrives', async () => {

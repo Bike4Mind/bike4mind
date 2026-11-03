@@ -531,7 +531,71 @@ describe('findYoungAccountSpend', () => {
 
     expect(result.totalCredits).toBe(540);
     expect(result.accountCount).toBe(2);
-    expect(result.topSpenders).toEqual([{ userId: big, creditsSpent: 500, accountCreatedAt: threeDaysBefore }]);
+    expect(result.topSpenders).toEqual([
+      { userId: big, creditsSpent: 500, accountCreatedAt: threeDaysBefore, stripeCustomerId: null },
+    ]);
+  });
+
+  it("carries each spender's Stripe customer id, or null when the account has none", async () => {
+    const paying = await seedUser('paying@example.com', threeDaysBefore);
+    const unpaid = await seedUser('unpaid@example.com', threeDaysBefore);
+    await mongoose.connection
+      .collection('users')
+      .updateOne({ _id: new mongoose.Types.ObjectId(paying) }, { $set: { stripeCustomerId: 'cus_paying' } });
+    await spendFor(paying, 300, halfHourAgo);
+    await spendFor(unpaid, 200, halfHourAgo);
+
+    const result = await counterLogRepository.findYoungAccountSpend(windowStart, windowEnd, 10);
+
+    expect(result.topSpenders.map(({ userId, stripeCustomerId }) => ({ userId, stripeCustomerId }))).toEqual([
+      { userId: paying, stripeCustomerId: 'cus_paying' },
+      { userId: unpaid, stripeCustomerId: null },
+    ]);
+  });
+
+  it('leaves out accounts already banned, dispute-pending or suspended', async () => {
+    const open = await seedUser('open@example.com', threeDaysBefore);
+    const locked = await Promise.all(
+      [{ isBanned: true }, { disputePending: true }, { moderation: { status: 'suspended' } }].map(
+        async (state, index) => {
+          const userId = await seedUser(`locked${index}@example.com`, threeDaysBefore);
+          await mongoose.connection
+            .collection('users')
+            .updateOne({ _id: new mongoose.Types.ObjectId(userId) }, { $set: state });
+          return userId;
+        }
+      )
+    );
+    // A suspension still awaiting confirmation does not lock the account, so it keeps alerting.
+    const pending = await seedUser('pending@example.com', threeDaysBefore);
+    await mongoose.connection
+      .collection('users')
+      .updateOne(
+        { _id: new mongoose.Types.ObjectId(pending) },
+        { $set: { moderation: { status: 'suspend_pending' } } }
+      );
+    await spendFor(open, 100, halfHourAgo);
+    await spendFor(pending, 50, halfHourAgo);
+    await Promise.all(locked.map(userId => spendFor(userId, 9000, halfHourAgo)));
+
+    const result = await counterLogRepository.findYoungAccountSpend(windowStart, windowEnd, 10);
+
+    expect(result.totalCredits).toBe(150);
+    expect(result.accountCount).toBe(2);
+    expect(result.topSpenders.map(({ userId }) => userId)).toEqual([open, pending]);
+  });
+
+  it('reads the hour through the ownerType/createdAt/type index instead of a collection scan', async () => {
+    await CreditTransaction.init();
+    await spendFor(await seedUser('plan@example.com', threeDaysBefore), 100, halfHourAgo);
+    const aggregate = vi.spyOn(CreditTransaction, 'aggregate');
+    await counterLogRepository.findYoungAccountSpend(windowStart, windowEnd, 10);
+    const pipeline = aggregate.mock.calls[0][0] as mongoose.PipelineStage[];
+    const explain = await CreditTransaction.collection.aggregate(pipeline).explain('queryPlanner');
+    // Only the winning plan counts; a losing candidate can still name the index.
+    const plan = JSON.stringify(explain, (key, value) => (key === 'rejectedPlans' ? undefined : value));
+    expect(plan).toContain('ownerType_1_createdAt_-1_type_1');
+    expect(plan).not.toContain('COLLSCAN');
   });
 
   it('excludes non-user owners and non-usage ledger entries', async () => {

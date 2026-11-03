@@ -505,6 +505,28 @@ describe('loop tickets through the work-items routes', () => {
     );
   });
 
+  it('an owner unblock or stage move gives the ticket a fresh run allowance; a rename does not', async () => {
+    repo.findByIdForUser.mockResolvedValue(
+      item({
+        loopId: LOOP,
+        stage: 'todo',
+        status: 'blocked',
+        statusReason: 'Ran 6 times without finishing',
+        runCount: 6,
+      })
+    );
+    await call('item', 'patch', { query: { id: OID_A }, body: { status: 'open' } }).result;
+    expect(repo.updateForUser).toHaveBeenLastCalledWith(
+      OID_A,
+      'u1',
+      expect.objectContaining({ status: 'open', runCount: 0 }),
+      'blocked'
+    );
+
+    await call('item', 'patch', { query: { id: OID_A }, body: { title: 'Renamed' } }).result;
+    expect(repo.updateForUser.mock.lastCall![2]).not.toHaveProperty('runCount');
+  });
+
   it('blocking needs a reason', async () => {
     repo.findByIdForUser.mockResolvedValue(item({ loopId: LOOP, stage: 'todo' }));
     await expect(

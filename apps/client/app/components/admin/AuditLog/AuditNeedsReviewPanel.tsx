@@ -48,31 +48,36 @@ export const AuditNeedsReviewPanel: React.FC<AuditNeedsReviewPanelProps> = ({
 
   return (
     <Box data-testid="audit-needs-review-panel">
-      <SectionCard title="Needs review">
-        <Stack direction="row" spacing={1} alignItems="center">
-          <IconButton
-            size="sm"
-            variant="plain"
-            aria-expanded={expanded}
-            aria-label={expanded ? 'Collapse needs review' : 'Expand needs review'}
-            onClick={() => setUserExpanded(!expanded)}
-            data-testid="audit-needs-review-toggle-btn"
-          >
-            {expanded ? <KeyboardArrowDownIcon /> : <KeyboardArrowRightIcon />}
-          </IconButton>
-          {summary && !isError && (
-            <Chip
+      <SectionCard
+        title="Needs review"
+        body="custom"
+        action={
+          <Stack direction="row" spacing={1} alignItems="center">
+            <IconButton
               size="sm"
-              variant="soft"
-              color={isEmpty ? 'neutral' : 'danger'}
-              data-testid="audit-needs-review-count"
+              variant="plain"
+              aria-expanded={expanded}
+              aria-label={expanded ? 'Collapse needs review' : 'Expand needs review'}
+              onClick={() => setUserExpanded(!expanded)}
+              data-testid="audit-needs-review-toggle-btn"
             >
-              {isEmpty ? `Nothing critical in ${windowDays} days` : `${countLabel} critical in ${windowDays} days`}
-            </Chip>
-          )}
-        </Stack>
+              {expanded ? <KeyboardArrowDownIcon /> : <KeyboardArrowRightIcon />}
+            </IconButton>
+            {summary && !isError && (
+              <Chip
+                size="sm"
+                variant="soft"
+                color={isEmpty ? 'neutral' : 'danger'}
+                data-testid="audit-needs-review-count"
+              >
+                {isEmpty ? `Nothing critical in ${windowDays} days` : `${countLabel} critical in ${windowDays} days`}
+              </Chip>
+            )}
+          </Stack>
+        }
+      >
         {expanded && (
-          <Box>
+          <Box sx={{ px: 2, py: 1.5 }}>
             <Typography level="body-xs" sx={{ mb: 1 }}>
               {describeCriticalRules(alertStatus)}
             </Typography>

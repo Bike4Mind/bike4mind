@@ -8,6 +8,7 @@ import {
 import type { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { isAdminBlockedEmailDomain, isDisposableEmail } from './disposableEmail';
+import { isSignupGrantHeldForReview } from './signupRisk';
 import { scoreSignupRisk } from './signupRiskScore';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -26,7 +27,8 @@ export interface RefreshSignupRiskScoreAdapters {
 
 /**
  * Gathers what is known about a user, scores it (scoreSignupRisk) and stores the result. Run on
- * email verification, on API key creation, and by the signupRiskSweep worker for young accounts.
+ * email verification and on API key creation. Never scheduled: it can move none to pending, which
+ * holds AI access (signupRiskSweep refreshes the shadow-only risk evidence instead).
  * Never throws: none of those callers should fail because scoring did, so a failure logs at warn.
  */
 export async function refreshSignupRiskScore(
@@ -65,7 +67,8 @@ export async function refreshSignupRiskScore(
       score,
       signals,
       computedAt: now,
-      reviewState: needsReview ? 'pending' : 'none',
+      // A grant held by the signup grant policy is released by approving it here, whatever this score says.
+      reviewState: needsReview || isSignupGrantHeldForReview(user) ? 'pending' : 'none',
     });
   } catch (error) {
     logger.warn('Signup risk score refresh failed', {

@@ -24,7 +24,7 @@ vi.mock('@bike4mind/observability', () => ({
 // (-> fab-pipeline -> BedrockEmbeddingModel from @bike4mind/common), which the
 // partial @bike4mind/common mock below doesn't provide. The mailer only calls
 // postEmailMirrorToSlack, which swallows its own errors.
-vi.mock('@server/integrations/slack/slack', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   postEmailMirrorToSlack: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -163,7 +163,7 @@ describe('MailService', () => {
 
     it('mirrors to the email-audit Slack channel by default', async () => {
       mockSendMail.mockResolvedValue({ messageId: '<m-1>' });
-      const { postEmailMirrorToSlack } = await import('@server/integrations/slack/slack');
+      const { postEmailMirrorToSlack } = await import('@bike4mind/server-utils/integrations/slack/slack');
 
       const mailer = await createMailService();
       await mailer.sendEmail('user@test.com', { subject: 'Welcome', html: '<p>Hi</p>' });
@@ -172,7 +172,7 @@ describe('MailService', () => {
     });
 
     it('skips the Slack mirror and keeps the recipient out of the logs when asked', async () => {
-      const { postEmailMirrorToSlack } = await import('@server/integrations/slack/slack');
+      const { postEmailMirrorToSlack } = await import('@bike4mind/server-utils/integrations/slack/slack');
       const { Logger } = await import('@bike4mind/observability');
       const mailer = await createMailService();
 

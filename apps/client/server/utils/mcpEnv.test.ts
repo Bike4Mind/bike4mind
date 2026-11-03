@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import type { IMcpServerDocument } from '@bike4mind/common';
 
 vi.mock('@bike4mind/database', () => ({ userRepository: { findById: vi.fn() } }));
-vi.mock('@server/integrations/jira/atlassianTokenManager', () => ({
+vi.mock('@bike4mind/server-utils/integrations/jira/atlassianTokenManager', () => ({
   AtlassianTokenManager: { getValidTokens: vi.fn() },
   AtlassianReconnectRequiredError: class extends Error {},
 }));

@@ -2,14 +2,11 @@
  * API Endpoint: GET /api/admin/security-scan-schedules
  *
  * Returns all security scan schedules in a single request.
- * Replaces 5 individual API calls with one batch request (N+1 fix).
+ * Replaces individual API calls with one batch request (N+1 fix).
  *
  * Response format:
  * {
  *   web: { enabled: boolean, nextRunAt: string, ... },
- *   code: { enabled: boolean, nextRunAt: string, ... },
- *   packages: { enabled: boolean, nextRunAt: string, ... },
- *   secrets: { enabled: boolean, nextRunAt: string, ... },
  *   cloud: { enabled: boolean, nextRunAt: string, ... }
  * }
  */
@@ -26,11 +23,8 @@ const handler = adminApi({
 }).get(async (req: Request, res: Response) => {
   const stage = resolveStage();
 
-  const [web, code, packages, secrets, cloud] = await Promise.all([
+  const [web, cloud] = await Promise.all([
     securityScanScheduleRepository.findByStageAndScanType(stage, 'web'),
-    securityScanScheduleRepository.findByStageAndScanType(stage, 'code'),
-    securityScanScheduleRepository.findByStageAndScanType(stage, 'packages'),
-    securityScanScheduleRepository.findByStageAndScanType(stage, 'secrets'),
     securityScanScheduleRepository.findByStageAndScanType(stage, 'cloud'),
   ]);
 
@@ -42,33 +36,6 @@ const handler = adminApi({
           lastRunAt: web.lastRunAt?.toISOString() ?? null,
           dayOfWeek: web.dayOfWeek,
           timeOfDay: web.timeOfDay,
-        }
-      : null,
-    code: code
-      ? {
-          enabled: code.enabled,
-          nextRunAt: code.nextRunAt?.toISOString() ?? null,
-          lastRunAt: code.lastRunAt?.toISOString() ?? null,
-          dayOfWeek: code.dayOfWeek,
-          timeOfDay: code.timeOfDay,
-        }
-      : null,
-    packages: packages
-      ? {
-          enabled: packages.enabled,
-          nextRunAt: packages.nextRunAt?.toISOString() ?? null,
-          lastRunAt: packages.lastRunAt?.toISOString() ?? null,
-          dayOfWeek: packages.dayOfWeek,
-          timeOfDay: packages.timeOfDay,
-        }
-      : null,
-    secrets: secrets
-      ? {
-          enabled: secrets.enabled,
-          nextRunAt: secrets.nextRunAt?.toISOString() ?? null,
-          lastRunAt: secrets.lastRunAt?.toISOString() ?? null,
-          dayOfWeek: secrets.dayOfWeek,
-          timeOfDay: secrets.timeOfDay,
         }
       : null,
     cloud: cloud

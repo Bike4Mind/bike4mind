@@ -99,6 +99,26 @@ describe('createModelAdmission', () => {
     await expect(admission.admits('anything')).rejects.toBeInstanceOf(ForbiddenError);
   });
 
+  it.each([
+    ['banned', { isBanned: true }],
+    ['dispute-pending', { disputePending: true }],
+    ['suspended', { moderation: { status: 'suspended' as const } }],
+  ])('refuses every model for a %s user, even an admin, before resolving entitlements', async (_label, state) => {
+    const getEntitlements = vi.fn().mockResolvedValue([PAID_PLAN_ENTITLEMENT_KEY]);
+    const admission = createModelAdmission({ user: { isAdmin: true, ...state }, configs: [], getEntitlements });
+    await expect(admission.assert('anything')).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(admission.admits('anything')).rejects.toThrow('Please contact support');
+    expect(getEntitlements).not.toHaveBeenCalled();
+  });
+
+  it('admits an active account with the block flags cleared', async () => {
+    const admission = createModelAdmission({
+      user: { isBanned: false, disputePending: false, moderation: { status: 'active' } },
+      configs: [],
+    });
+    await expect(admission.assert('anything')).resolves.toBeUndefined();
+  });
+
   it('admits as usual once moderation is lifted', async () => {
     const admission = createModelAdmission({ user: { isModerated: false }, configs: [] });
     await expect(admission.admits('anything')).resolves.toBe(true);
@@ -290,6 +310,49 @@ describe('free-tier model gate', () => {
     const admission = createModelAdmission({ user: { tags: [] }, configs: [], models: catalog });
     await expect(admission.admits('premium')).resolves.toBe(true);
   });
+
+  describe('with text models open', () => {
+    const textOpen = Object.assign(new Set(['priced']), { textModelsOpen: true as const });
+    const admission = () =>
+      createModelAdmission({
+        user: { tags: [] },
+        configs: [],
+        models: catalog,
+        freeTierAllowedModels: textOpen,
+        getEntitlements: async () => ['base'],
+      });
+
+    it('admits a free account an unlisted text model', async () => {
+      await expect(admission().assert('premium')).resolves.toBeUndefined();
+    });
+
+    it('still requires a paid plan for an unlisted media model', async () => {
+      await expect(admission().assert('img')).rejects.toMatchObject({
+        additionalInfo: { errorCode: MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE },
+      });
+    });
+
+    it('gates an id the catalog does not report as text', async () => {
+      await expect(admission().admits('not-in-catalog')).resolves.toBe(false);
+      await expect(
+        createModelAdmission({ user: { tags: [] }, configs: [], freeTierAllowedModels: textOpen }).admits('premium')
+      ).resolves.toBe(false);
+    });
+
+    it('still refuses an unpriced text model while credits are enforced', async () => {
+      const err = await createModelAdmission({
+        user: { tags: [] },
+        configs: [],
+        models: [unpriced],
+        enforceCredits: true,
+        freeTierAllowedModels: textOpen,
+      })
+        .assert('unpriced')
+        .catch(e => e);
+      expect(err).toBeInstanceOf(ForbiddenError);
+      expect(err.message).toContain('no price');
+    });
+  });
 });
 
 describe('free-tier media admission', () => {
@@ -347,6 +410,20 @@ describe('loadFreeTierAllowedModels', () => {
       DefaultAPIModel: ChatModels.CLAUDE_5_5_OPUS,
     });
     await expect(loadFreeTierAllowedModels(adminSettings)).resolves.toEqual(new Set(['cheap']));
+  });
+
+  it('marks text models open only when the gate scope is media', async () => {
+    getSettingsMap.mockResolvedValueOnce({
+      freeTierModelGateEnabled: 'true',
+      freeTierModelGateScope: 'media',
+      freeTierAllowedModels: JSON.stringify(['cheap']),
+    });
+    const media = await loadFreeTierAllowedModels(adminSettings);
+    expect(media).toEqual(new Set(['cheap']));
+    expect(media?.textModelsOpen).toBe(true);
+
+    getSettingsMap.mockResolvedValueOnce({ freeTierModelGateEnabled: 'true', freeTierModelGateScope: 'all' });
+    expect((await loadFreeTierAllowedModels(adminSettings))?.textModelsOpen).toBeUndefined();
   });
 
   it('propagates a settings read failure instead of opening the gate', async () => {

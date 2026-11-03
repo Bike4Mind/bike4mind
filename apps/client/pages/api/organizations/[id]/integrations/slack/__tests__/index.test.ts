@@ -33,7 +33,15 @@ vi.mock('@server/middlewares/baseApi', () => ({
 const mockOrgFindById = vi.fn();
 const mockFindByOrganizationId = vi.fn();
 const mockWorkspaceDelete = vi.fn();
+const mockClearApiPosting = vi.fn();
+const mockRecordAudit = vi.fn();
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: (...args: unknown[]) => mockRecordAudit(...args),
+}));
 vi.mock('@bike4mind/database/infra', () => ({
+  slackChannelConfigRepository: {
+    clearApiPostingBySlackTeamId: (...args: unknown[]) => mockClearApiPosting(...args),
+  },
   organizationRepository: {
     findById: (...args: unknown[]) => mockOrgFindById(...args),
   },
@@ -85,6 +93,7 @@ beforeEach(() => {
   mockOrgFindById.mockResolvedValue(org);
   mockFindByOrganizationId.mockResolvedValue(workspace);
   mockWorkspaceDelete.mockResolvedValue(undefined);
+  mockClearApiPosting.mockResolvedValue([]);
 });
 
 describe('GET /api/organizations/[id]/integrations/slack', () => {
@@ -166,6 +175,26 @@ describe('DELETE /api/organizations/[id]/integrations/slack', () => {
     expect(mockWorkspaceDelete).toHaveBeenCalledWith('ws_1');
     expect(res.statusCode).toBe(200);
     expect(res._getJSONData()).toMatchObject({ success: true });
+    expect(mockClearApiPosting).toHaveBeenCalledWith('T1');
+    expect(mockRecordAudit).not.toHaveBeenCalled();
+  });
+
+  it("turns off the workspace's API posting opt-ins before disconnecting, and audits it", async () => {
+    mockClearApiPosting.mockResolvedValue(['C1', 'C2']);
+    const { req, res } = makeReq(owner);
+
+    await routeHandlers.DELETE(req, res);
+
+    expect(mockRecordAudit).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'org.slack_channel_api_posting.updated',
+        details: { slackTeamId: 'T1', channelIds: ['C1', 'C2'] },
+      })
+    );
+    expect(mockClearApiPosting.mock.invocationCallOrder[0]).toBeLessThan(
+      mockWorkspaceDelete.mock.invocationCallOrder[0]
+    );
   });
 
   // The load-bearing one. DELETE is destructive and holds a freshly swapped gate; a dropped or
@@ -180,6 +209,7 @@ describe('DELETE /api/organizations/[id]/integrations/slack', () => {
 
     expect(mockFindByOrganizationId).not.toHaveBeenCalled();
     expect(mockWorkspaceDelete).not.toHaveBeenCalled();
+    expect(mockClearApiPosting).not.toHaveBeenCalled();
   });
 
   it('400s a malformed org id and deletes nothing', async () => {

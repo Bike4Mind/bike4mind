@@ -41,7 +41,7 @@ const mockResolveSecondFactor = vi.fn();
 vi.mock('@server/auth/signInSecondFactor', () => ({
   resolveSecondFactor: (...a: any[]) => mockResolveSecondFactor(...a),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 const mockRecordForActor = vi.fn();
 vi.mock('@server/utils/adminAudit', () => ({
   recordAdminActionForActor: (...a: unknown[]) => mockRecordForActor(...a),

@@ -22,7 +22,7 @@ vi.mock('@server/cli/auth', () => ({
 // launcher must sanitize identically to the widget page, so exercise the actual
 // shared helpers, not stubs.
 import handler from '../branding';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 const VALID_INFO = {

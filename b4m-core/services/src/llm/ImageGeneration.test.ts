@@ -851,7 +851,9 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
       organizationId,
       validatedCost = { requiredCredits: 40, usdCost: 0.02 },
       settledCredits,
+      apiKeyId,
     }: {
+      apiKeyId?: string;
       model?: ImageModels;
       n?: number;
       recentMessages?: unknown[];
@@ -906,6 +908,7 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
         ...(n === undefined ? {} : { n }),
         fabFileIds,
         ...(organizationId === undefined ? {} : { organizationId }),
+        ...(apiKeyId === undefined ? {} : { apiKeyId }),
       } as any,
       logger: silentLogger,
     });
@@ -1007,6 +1010,20 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
       expect.anything()
     );
     expect(record).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: expected }));
+  });
+
+  it('records the authenticating API key carried on the job body', async () => {
+    const quest = await runCharged(
+      vi.fn(async () => undefined),
+      { apiKeyId: 'key-1' }
+    );
+
+    expect(quest.creditHolds.settle).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(Number),
+      expect.objectContaining({ type: 'image_generation_usage', apiKeyId: 'key-1' }),
+      expect.anything()
+    );
   });
 
   it('settles 0 for a tiny cost (the whole hold is refunded), and the usage event still records the generation', async () => {

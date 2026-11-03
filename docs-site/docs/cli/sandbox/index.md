@@ -19,7 +19,7 @@ The sandbox is currently in beta. It works well for most development workflows, 
 | Platform | Runtime | Binary | Status |
 |----------|---------|--------|--------|
 | macOS | Seatbelt | `sandbox-exec` (built-in) | Supported |
-| Linux | Bubblewrap | `bwrap` (install via package manager) | Supported |
+| Linux | Bubblewrap | `bwrap` (install via package manager); `socat` for network filtering | Supported |
 | Windows | Not supported | — | — |
 
 ## Quick Start

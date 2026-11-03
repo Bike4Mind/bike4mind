@@ -40,7 +40,7 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: (...a: unknown[]) => mockLogEvent(...a) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: (...a: unknown[]) => mockLogEvent(...a) }));
 vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
   unpublishUserArtifactsBySource: (...a: unknown[]) => mockUnpublish(...a),
 }));

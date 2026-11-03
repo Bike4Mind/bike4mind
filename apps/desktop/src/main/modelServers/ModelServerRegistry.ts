@@ -10,6 +10,32 @@ import {
   type LocalRuntime,
   type OpenAICompatibleProduct,
 } from '@bike4mind/local-models';
+import {
+  answersWithoutCredentials,
+  createServerFetch,
+  createSshFetch,
+  describeFailure,
+  DROP_CODES,
+  errorCode,
+  leastTrusted,
+  parseServerAddress,
+  probeServer,
+  redactServerResponse,
+  scopeOfIp,
+  parseSshDestination,
+  ServerRedirectError,
+  ServerTransportError,
+  SSH_OLLAMA_URL,
+  SSH_PROBE_TIMEOUT_MS,
+  sshDestinationProblem,
+  suggestServerName,
+  suggestSshName,
+  transportVerdict,
+  type AddressScope,
+  type ParsedAddress,
+  type ServerEndpoint,
+  type SshEndpoint,
+} from '@bike4mind/local-models/servers';
 import { localBackend, localModelId, type ChatModelOption } from '@shared/chat';
 import {
   LOCAL_SERVER_ID,
@@ -19,37 +45,21 @@ import {
   serverRuntimeId,
   type ModelServerAddInput,
   type ModelServerHealth,
-  type ModelServerKind,
   type ModelServerProbeInput,
   type ModelServerProbeResult,
+  type ModelServerSpecs,
   type ModelServerUpdateInput,
   type ModelServerView,
 } from '@shared/modelServers';
 import type { LocalChat } from '../chat/localChat';
 import { OllamaLocal } from '../chat/OllamaLocal';
 import type { ModelHubServer } from '../models/ModelHubService';
-import {
-  leastTrusted,
-  parseServerAddress,
-  scopeOfIp,
-  suggestServerName,
-  transportVerdict,
-  type AddressScope,
-  type ParsedAddress,
-} from './addressPolicy';
-import { ServerCredentialsError, ServerUnreachableError } from './errors';
+import { ServerCredentialsError, ServerForbiddenError, ServerUnreachableError } from './errors';
+import { withLocalNetworkHint } from './localNetworkHint';
 import { credentialHeaders, type ModelServerRecord, type ModelServerStore } from './ModelServerStore';
 import { OpenAICompatibleChat } from './OpenAICompatibleChat';
-import {
-  createServerFetch,
-  redactServerResponse,
-  ServerRedirectError,
-  ServerTransportError,
-  type ServerEndpoint,
-} from './serverFetch';
 
 export const LOCAL_OLLAMA_URL = 'http://127.0.0.1:11434';
-const PROBE_TIMEOUT_MS = 5_000;
 const LOCAL_TIMEOUT_MS = 1_500;
 /** Background recheck while the app runs. */
 export const HEALTH_INTERVAL_MS = 60_000;
@@ -61,11 +71,16 @@ export const PICKER_CHECK_WAIT_MS = 2_000;
 
 interface ServerClient extends LocalChat {
   listModels(): Promise<ChatModelOption[]>;
+  toolsHint?(): string | null;
+  recheckTools?(model: string | undefined): Promise<void>;
 }
 
 interface Entry {
   record: ModelServerRecord;
+  /** For an SSH server, the far end's loopback Ollama. */
   parsed: ParsedAddress;
+  /** The SSH destination; null for a server reached by address. */
+  ssh: string | null;
   scope: AddressScope | null;
   fetch: FetchLike;
   client: ServerClient;
@@ -73,6 +88,8 @@ interface Entry {
   runtime: LocalRuntime;
   health: ModelServerHealth;
   product: OpenAICompatibleProduct | null;
+  /** From the last listing, so a conversation saved on an alias still finds its model while the server is down. */
+  aliasIds?: ReadonlyMap<string, string[]>;
 }
 
 export interface ModelServerRegistryDeps {
@@ -83,9 +100,15 @@ export interface ModelServerRegistryDeps {
   /** Resolves a host name to its addresses; defaults to `dns.lookup` with `all: true`. */
   resolve?(host: string): Promise<string[]>;
   fetchFor?(endpoint: ServerEndpoint): FetchLike;
+  /** For servers reached over SSH; defaults to the system ssh (createSshFetch). */
+  sshFetchFor?(endpoint: SshEndpoint): FetchLike;
   /** For "This computer"; defaults to the global fetch. */
   localFetch?: FetchLike;
   now?(): number;
+  /** This computer's entered hardware was loaded or changed, so whatever was sized from its probe is stale. */
+  localSpecsChanged?(): void;
+  /** Defaults to `process.platform`; decides whether a LAN failure gets the macOS Local Network hint. */
+  platform?: NodeJS.Platform;
 }
 
 const UNKNOWN_HEALTH: ModelServerHealth = {
@@ -96,17 +119,6 @@ const UNKNOWN_HEALTH: ModelServerHealth = {
   error: null,
 };
 
-interface ProbeOutcome {
-  kind: ModelServerKind | null;
-  product: OpenAICompatibleProduct | null;
-  version: string | null;
-  latencyMs: number | null;
-  models: number | null;
-  auth: boolean;
-  error: string | null;
-  refused: boolean;
-}
-
 /**
  * The saved model servers: one chat client per server keyed by `srv-<id>`, their health, and the
  * add/test/remove flow Settings drives. "This computer" is reported here too but chats through the
@@ -115,12 +127,17 @@ interface ProbeOutcome {
 export class ModelServerRegistry {
   private readonly entries = new Map<string, Entry>();
   private localHealth: ModelServerHealth = { ...UNKNOWN_HEALTH };
+  private localSpecs: ModelServerSpecs | null = null;
   private timer: ReturnType<typeof setInterval> | undefined;
   private loaded: Promise<void> | null = null;
   private readonly savedListeners = new Set<(id: string) => void>();
   private readonly checking = new WeakMap<Entry, Promise<void>>();
 
   constructor(private readonly deps: ModelServerRegistryDeps) {}
+
+  private get platform(): NodeJS.Platform {
+    return this.deps.platform ?? process.platform;
+  }
 
   /** Calls `listener` with a server's id after its saved settings change or it is removed. */
   onServerSaved(listener: (id: string) => void): () => void {
@@ -149,6 +166,7 @@ export class ModelServerRegistry {
       name: LOCAL_SERVER_NAME,
       local: true,
       kind: 'ollama',
+      transport: 'http',
       address: LOCAL_OLLAMA_URL,
       access: 'manage',
       auth: { type: 'none' },
@@ -157,28 +175,33 @@ export class ModelServerRegistry {
       unencrypted: false,
       health: this.localHealth,
       models: [],
+      specs: this.localSpecs,
     };
     return [local, ...[...this.entries.values()].map(entry => this.view(entry))];
   }
 
-  /** Tests an address without saving it. */
+  /** Hardware entered in Settings for a server or this computer; null before the list loads. */
+  specs(id: string): ModelServerSpecs | null {
+    if (id === LOCAL_SERVER_ID) return this.localSpecs;
+    return this.entries.get(id)?.record.specs ?? null;
+  }
+
+  /** Tests an address or SSH destination without saving it. */
   async probe(input: ModelServerProbeInput): Promise<ModelServerProbeResult> {
-    const failed = (error: string, extra: Partial<ModelServerProbeResult> = {}): ModelServerProbeResult => ({
-      ok: false,
-      address: null,
-      kind: null,
-      version: null,
-      latencyMs: null,
-      models: null,
-      needsCredentials: false,
-      unencrypted: false,
-      openToAnyone: false,
-      suggestedName: null,
-      error,
-      ...extra,
-    });
+    if (input.transport === 'ssh') return this.probeSsh(input.address);
     const parsed = parseServerAddress(input.address);
-    if (!parsed) return failed('Enter an address like https://host, http://192.168.1.5:11434 or host:port.');
+    if (!parsed) {
+      return failed(
+        parseSshDestination(input.address)?.includes('@')
+          ? 'This looks like an SSH destination. Choose SSH above, then test again.'
+          : 'Enter an address like https://host, http://192.168.1.5:11434 or host:port.'
+      );
+    }
+    if (isLocalOllama(parsed)) {
+      return failed(
+        `${new URL(parsed.baseUrl).host} is ${LOCAL_SERVER_NAME}, which is already listed. To reach another machine through an SSH tunnel, forward a different local port, such as 21434.`
+      );
+    }
     let headers: Record<string, string> | null;
     try {
       headers = credentialHeaders(input.credential);
@@ -191,7 +214,7 @@ export class ModelServerRegistry {
     if (!verdict.ok) return failed(verdict.reason);
     const label = parsed.host;
     const fetch = this.fetchFor({ origin: parsed.origin, label, credentialHeaders: () => headers });
-    const outcome = await detect(fetch, parsed.baseUrl, label, this.now);
+    const outcome = await probeServer(fetch, parsed.baseUrl, label, this.now);
     const base = {
       address: parsed.baseUrl,
       unencrypted: verdict.unencrypted,
@@ -204,12 +227,25 @@ export class ModelServerRegistry {
         kind: outcome.kind,
       });
     }
-    if (!outcome.kind)
-      return failed(outcome.error ?? `${label} did not answer as Ollama or an OpenAI-compatible server.`, base);
+    if (!outcome.kind) {
+      // Some servers answer 403, not 401, when the token is missing.
+      const hint = outcome.forbidden && !headers ? ' If this server needs an API key, enter it and test again.' : '';
+      // The system code tells a declined macOS Local Network permission (EHOSTUNREACH) apart from a down server.
+      if (outcome.code) this.deps.logger.warn(`MODEL SERVERS: testing ${label} (${scope}) failed with ${outcome.code}`);
+      return failed(
+        withLocalNetworkHint(
+          `${outcome.error ?? `${label} did not answer as Ollama or an OpenAI-compatible server.`}${hint}`,
+          outcome.code,
+          scope,
+          this.platform
+        ),
+        base
+      );
+    }
     let openToAnyone = false;
     if (scope === 'public') {
       openToAnyone = headers
-        ? await answersWithout(
+        ? await answersWithoutCredentials(
             this.fetchFor({ origin: parsed.origin, label, credentialHeaders: () => null }),
             parsed.baseUrl,
             outcome.kind
@@ -229,6 +265,31 @@ export class ModelServerRegistry {
     };
   }
 
+  /** An SSH server is always Ollama on the far end's loopback, so only the connection is in question. */
+  private async probeSsh(address: string): Promise<ModelServerProbeResult> {
+    const problem = sshDestinationProblem(address);
+    if (problem) return failed(problem);
+    const destination = address.trim();
+    const base = { address: destination, suggestedName: suggestSshName(destination) };
+    const fetch = this.sshFetchFor({ destination, label: destination, app: 'Desktop' });
+    const outcome = await probeServer(fetch, SSH_OLLAMA_URL, destination, this.now, 'ollama', SSH_PROBE_TIMEOUT_MS);
+    if (outcome.kind !== 'ollama') {
+      return failed(outcome.error ?? `${destination} did not answer as Ollama at 127.0.0.1:11434.`, base);
+    }
+    return {
+      ok: true,
+      ...base,
+      kind: 'ollama',
+      version: outcome.version,
+      latencyMs: outcome.latencyMs,
+      models: outcome.models,
+      needsCredentials: false,
+      unencrypted: false,
+      openToAnyone: false,
+      error: null,
+    };
+  }
+
   async add(input: ModelServerAddInput): Promise<ModelServerView[]> {
     await this.load();
     const probe = await this.probe(input);
@@ -236,9 +297,15 @@ export class ModelServerRegistry {
     if (probe.openToAnyone && !input.acceptOpen) {
       throw new Error('This server answers anyone on the internet. Confirm that before saving it.');
     }
+    const ssh = input.transport === 'ssh';
     const record = await this.deps.store.add(
-      { name: input.name, kind: input.kind, transport: { type: 'http', baseUrl: probe.address }, access: input.access },
-      input.credential
+      {
+        name: input.name,
+        kind: ssh ? 'ollama' : input.kind,
+        transport: ssh ? { type: 'ssh', destination: probe.address } : { type: 'http', baseUrl: probe.address },
+        access: input.access,
+      },
+      ssh ? { type: 'none' } : input.credential
     );
     const entry = this.build(record);
     this.entries.set(record.id, entry);
@@ -248,8 +315,22 @@ export class ModelServerRegistry {
 
   async update(id: string, input: ModelServerUpdateInput): Promise<ModelServerView[]> {
     await this.load();
+    if (id === LOCAL_SERVER_ID) {
+      if (input.specs === undefined) throw new Error('This computer has no other settings to change here.');
+      this.localSpecs = await this.deps.store.setLocalSpecs(input.specs);
+      this.deps.localSpecsChanged?.();
+      this.saved(id);
+      this.emit();
+      return this.views();
+    }
     const entry = this.entries.get(id);
     if (!entry) throw new Error('That model server is no longer saved.');
+    if (entry.ssh && input.kind && input.kind !== 'ollama') {
+      throw new Error('An SSH server reaches Ollama on that machine, so its kind stays Ollama.');
+    }
+    if (entry.ssh && input.credential && input.credential.type !== 'none') {
+      throw new Error('An SSH server signs in with your SSH keys and takes no token or header.');
+    }
     if (input.credential) {
       const hasCredentials = !!credentialHeaders(input.credential);
       entry.scope = (await this.scopeOf(entry.parsed.host)) ?? entry.scope;
@@ -295,6 +376,12 @@ export class ModelServerRegistry {
     const lists = await Promise.all(
       [...this.entries.values()].map(async entry => {
         const server = { id: entry.record.id, name: entry.record.name };
+        // Asking without the credential would get a 401 that replaces this message with a vaguer one.
+        const missing = this.deps.store.credentialMissing(entry.record) ? this.missingCredentialHealth() : null;
+        if (missing && (entry.health.state !== missing.state || entry.health.error !== missing.error)) {
+          this.setHealth(entry, missing);
+          this.emit();
+        }
         // A server shown as down may be back: a check already running (say, after a pull) decides, or a
         // picker refresh starts one when the last is stale. A server not checked yet is listed directly.
         const down = entry.health.state !== 'online' && entry.health.state !== 'unknown';
@@ -313,26 +400,36 @@ export class ModelServerRegistry {
               )
               .catch(() => undefined);
             entry.record = { ...entry.record, models: listed.map(model => model.name) };
+            entry.aliasIds = aliasIdsOf(listed);
             if (entry.health.state === 'unknown') void this.check(entry.record.id);
             return listed.map(model => ({ ...model, server }));
           } catch (raw) {
             const err = this.unwrapFailure(raw, entry);
-            entry.health = failureHealth(err, entry.record.name) ?? {
+            entry.health = failureHealth(err, entry.record.name, entry.scope, this.platform) ?? {
               ...entry.health,
               state: 'unreachable',
-              error: `${entry.record.name}: ${describeFailure(err)}`,
+              error: withLocalNetworkHint(
+                `${entry.record.name}: ${describeFailure(err)}`,
+                errorCode(err),
+                entry.scope,
+                this.platform
+              ),
             };
           }
         }
         const reason = unavailableReason(entry);
         const runtimeId = serverRuntimeId(entry.record.id);
-        return entry.record.models.map(name => ({
-          id: localModelId(runtimeId, name),
-          name,
-          backend: localBackend(runtimeId),
-          server,
-          unavailable: reason,
-        }));
+        return entry.record.models.map(name => {
+          const aliasIds = entry.aliasIds?.get(name);
+          return {
+            id: localModelId(runtimeId, name),
+            name,
+            backend: localBackend(runtimeId),
+            server,
+            ...(aliasIds ? { aliasIds } : {}),
+            unavailable: reason,
+          };
+        });
       })
     );
     return lists.flat();
@@ -362,7 +459,7 @@ export class ModelServerRegistry {
       name: record.name,
       management: serverManagement({ local: false, kind: record.kind, access: record.access }),
       runtime: {
-        baseUrl: record.transport.baseUrl,
+        baseUrl: entry.ssh ? `ssh://${entry.ssh}` : entry.parsed.baseUrl,
         health: async () => {
           const health = (await this.check(id)).find(server => server.id === id)?.health;
           return health?.state === 'online'
@@ -395,22 +492,25 @@ export class ModelServerRegistry {
       // A stalled pull says nothing about chat, so the server's health is left as it was.
       if (err instanceof PullIdleTimeoutError)
         throw new ServerUnreachableError(entry.record.name, describeFailure(err), { cause: err });
-      const health = failureHealth(err, entry.record.name);
+      const health = failureHealth(err, entry.record.name, entry.scope, this.platform);
       if (!health) throw raw;
       entry.health = health;
       this.emit();
-      if (health.state === 'unreachable')
-        throw new ServerUnreachableError(entry.record.name, describeFailure(err), { cause: err });
+      if (health.state === 'unreachable') {
+        const reason = withLocalNetworkHint(describeFailure(err), errorCode(err), entry.scope, this.platform);
+        throw new ServerUnreachableError(entry.record.name, reason, { cause: err });
+      }
       throw err;
     }
   }
 
-  /** The runtime's 401/403 as a credentials error, and the cause of a connection error it wrapped. */
+  /** The runtime's 401 as a credentials error, its 403 as a refusal, and the cause of a connection error it wrapped. */
   private unwrapFailure(err: unknown, entry: Entry): unknown {
     const inner = err instanceof RuntimeConnectionError && err.cause !== undefined ? err.cause : err;
-    if (inner instanceof RuntimeHttpError && (inner.status === 401 || inner.status === 403)) {
+    if (inner instanceof RuntimeHttpError && inner.status === 401) {
       return new ServerCredentialsError(entry.record.name, !!this.deps.store.headers(entry.record));
     }
+    if (inner instanceof RuntimeHttpError && inner.status === 403) return new ServerForbiddenError(entry.record.name);
     return inner;
   }
 
@@ -458,23 +558,16 @@ export class ModelServerRegistry {
   private async probeEntry(entry: Entry): Promise<void> {
     entry.scope = (await this.scopeOf(entry.parsed.host)) ?? entry.scope;
     if (this.deps.store.credentialMissing(entry.record)) {
-      this.setHealth(entry, {
-        state: 'credentials',
-        version: null,
-        latencyMs: null,
-        checkedAt: new Date().toISOString(),
-        error: this.deps.store.credentialPersisted()
-          ? 'The saved credential could not be read. Enter it again.'
-          : 'The credential was kept only until Desktop quit. Enter it again.',
-      });
+      this.setHealth(entry, this.missingCredentialHealth());
       return;
     }
-    const outcome = await detect(
+    const outcome = await probeServer(
       entry.fetch,
-      entry.record.transport.baseUrl,
+      entry.parsed.baseUrl,
       entry.record.name,
       this.now,
-      entry.record.kind
+      entry.record.kind,
+      entry.ssh ? SSH_PROBE_TIMEOUT_MS : undefined
     );
     const checkedAt = new Date().toISOString();
     if (outcome.auth) {
@@ -488,12 +581,17 @@ export class ModelServerRegistry {
       return;
     }
     if (!outcome.kind) {
+      if (outcome.code) {
+        this.deps.logger.debug(
+          `MODEL SERVERS: checking ${entry.record.name} (${entry.scope}) failed with ${outcome.code}`
+        );
+      }
       this.setHealth(entry, {
         state: outcome.refused ? 'refused' : 'unreachable',
         version: null,
         latencyMs: null,
         checkedAt,
-        error: outcome.error,
+        error: outcome.error && withLocalNetworkHint(outcome.error, outcome.code, entry.scope, this.platform),
       });
       return;
     }
@@ -512,14 +610,31 @@ export class ModelServerRegistry {
       error: null,
     });
     try {
-      const names = (await entry.client.listModels()).map(model => model.name);
+      const listed = await entry.client.listModels();
+      const names = listed.map(model => model.name);
       entry.record = { ...entry.record, models: names };
+      entry.aliasIds = aliasIdsOf(listed);
       await this.deps.store.setModels(entry.record.id, names);
     } catch (err) {
       this.deps.logger.debug(
         `MODEL SERVERS: listing ${entry.record.id} failed: ${err instanceof Error ? err.name : 'unknown'}`
       );
     }
+    // Each check is how tools come back after the server restarts with tool calling on. Not awaited: the probe
+    // generates a token, and a change reaches Settings and the picker through toolsChanged.
+    void entry.client.recheckTools?.(entry.record.models[0]);
+  }
+
+  private missingCredentialHealth(): ModelServerHealth {
+    return {
+      state: 'credentials',
+      version: null,
+      latencyMs: null,
+      checkedAt: new Date().toISOString(),
+      error: this.deps.store.credentialPersisted()
+        ? 'The saved credential could not be read. Enter it again.'
+        : 'The credential was kept only until Desktop quit. Enter it again.',
+    };
   }
 
   private stale(entry: Entry): boolean {
@@ -532,13 +647,18 @@ export class ModelServerRegistry {
   }
 
   private build(record: ModelServerRecord, previous?: Entry): Entry {
-    const parsed = parseServerAddress(record.transport.baseUrl) as ParsedAddress;
-    const endpoint: ServerEndpoint = {
-      origin: parsed.origin,
-      label: record.name,
-      credentialHeaders: () => this.deps.store.headers(record),
-    };
-    const fetch = this.fetchFor(endpoint);
+    const ssh = record.transport.type === 'ssh' ? record.transport.destination : null;
+    const parsed = parseServerAddress(
+      record.transport.type === 'ssh' ? SSH_OLLAMA_URL : record.transport.baseUrl
+    ) as ParsedAddress;
+    const fetch = ssh
+      ? this.sshFetchFor({ destination: ssh, label: record.name, app: 'Desktop' })
+      : this.fetchFor({
+          origin: parsed.origin,
+          label: record.name,
+          app: 'Desktop',
+          credentialHeaders: () => this.deps.store.headers(record),
+        });
     const runtimeId = serverRuntimeId(record.id);
     const hasCredentials = () => !!this.deps.store.headers(record);
     const product = previous?.record.kind === record.kind ? previous.product : null;
@@ -560,31 +680,37 @@ export class ModelServerRegistry {
             fetch,
             hasCredentials,
             redact: redactServerResponse,
+            toolsChanged: () => this.emit(),
           });
     const runtime: LocalRuntime =
       record.kind === 'ollama'
-        ? new OllamaRuntime({ baseUrl: parsed.baseUrl, id: runtimeId, fetch })
+        ? new OllamaRuntime({ baseUrl: parsed.baseUrl, id: runtimeId, fetch, redact: redactServerResponse })
         : new OpenAICompatibleRuntime({ baseUrl: parsed.baseUrl, id: runtimeId, fetch, product });
     return {
       record,
       parsed,
+      ssh,
       scope: previous?.scope ?? (isIP(parsed.host) ? scopeOfIp(parsed.host) : null),
       fetch,
       client,
       runtime,
       health: previous && previous.record.kind === record.kind ? previous.health : { ...UNKNOWN_HEALTH },
       product,
+      ...(previous?.aliasIds ? { aliasIds: previous.aliasIds } : {}),
     };
   }
 
   private view(entry: Entry): ModelServerView {
     const { record } = entry;
+    const toolsHint = entry.client.toolsHint?.();
     return {
+      ...(toolsHint ? { toolsHint } : {}),
       id: record.id,
       name: record.name,
       local: false,
       kind: record.kind,
-      address: record.transport.baseUrl,
+      transport: record.transport.type,
+      address: entry.ssh ?? entry.parsed.baseUrl,
       access: record.access,
       auth:
         record.auth.type === 'header' ? { type: 'header', headerName: record.auth.name } : { type: record.auth.type },
@@ -593,14 +719,19 @@ export class ModelServerRegistry {
       unencrypted: entry.parsed.protocol === 'http:' && entry.scope === 'private',
       health: entry.health,
       models: record.models,
+      specs: record.specs,
     };
   }
 
   private load(): Promise<void> {
-    this.loaded ??= this.deps.store.list().then(records => {
+    this.loaded ??= Promise.all([this.deps.store.list(), this.deps.store.localSpecs()]).then(([records, specs]) => {
       for (const record of records) {
-        if (parseServerAddress(record.transport.baseUrl)) this.entries.set(record.id, this.build(record));
+        if (record.transport.type === 'ssh' || parseServerAddress(record.transport.baseUrl)) {
+          this.entries.set(record.id, this.build(record));
+        }
       }
+      this.localSpecs = specs;
+      if (specs) this.deps.localSpecsChanged?.();
     });
     return this.loaded;
   }
@@ -618,6 +749,10 @@ export class ModelServerRegistry {
     return (this.deps.fetchFor ?? createServerFetch)(endpoint);
   }
 
+  private sshFetchFor(endpoint: SshEndpoint): FetchLike {
+    return this.deps.sshFetchFor ? this.deps.sshFetchFor(endpoint) : createSshFetch(endpoint);
+  }
+
   private readonly now = () => (this.deps.now ?? performance.now.bind(performance))();
 
   private async scopeOf(host: string): Promise<AddressScope | null> {
@@ -633,6 +768,34 @@ export class ModelServerRegistry {
   }
 }
 
+const LOCAL_OLLAMA_PORT = new URL(LOCAL_OLLAMA_URL).port;
+const LOOPBACK_NAMES = new Set(['127.0.0.1', 'localhost', '::1', '0.0.0.0', '::', '::ffff:7f00:1']);
+
+/** The port "This computer" already uses: saving it again would list the same Ollama twice. */
+function isLocalOllama(parsed: ParsedAddress): boolean {
+  return (
+    LOOPBACK_NAMES.has(parsed.host.toLowerCase().replace(/\.$/, '')) &&
+    new URL(parsed.origin).port === LOCAL_OLLAMA_PORT
+  );
+}
+
+function failed(error: string, extra: Partial<ModelServerProbeResult> = {}): ModelServerProbeResult {
+  return {
+    ok: false,
+    address: null,
+    kind: null,
+    version: null,
+    latencyMs: null,
+    models: null,
+    needsCredentials: false,
+    unencrypted: false,
+    openToAnyone: false,
+    suggestedName: null,
+    error,
+    ...extra,
+  };
+}
+
 async function resolveAll(host: string): Promise<string[]> {
   const addresses = await dns.promises.lookup(host, { all: true });
   return addresses.map(entry => entry.address);
@@ -645,6 +808,12 @@ function within<T, L>(work: Promise<T>, ms: number, late: L): Promise<T | L> {
   return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
 }
 
+function aliasIdsOf(listed: readonly ChatModelOption[]): Map<string, string[]> {
+  return new Map(
+    listed.flatMap((model): [string, string[]][] => (model.aliasIds?.length ? [[model.name, model.aliasIds]] : []))
+  );
+}
+
 function unavailableReason(entry: Entry): string {
   if (entry.health.state === 'credentials') return `${entry.record.name} needs new credentials`;
   if (entry.health.state === 'refused')
@@ -652,41 +821,22 @@ function unavailableReason(entry: Entry): string {
   return `${entry.record.name} is unreachable`;
 }
 
-/** The system error code on the error itself (Node http mid-body drops) or on its cause (fetch). */
-function errorCode(err: unknown): string | undefined {
-  if (!(err instanceof Error)) return undefined;
-  const own = (err as { code?: unknown }).code;
-  if (typeof own === 'string') return own;
-  const cause = (err.cause as { code?: unknown } | undefined)?.code;
-  return typeof cause === 'string' ? cause : undefined;
-}
-
-const DROP_CODES = new Set(['ECONNRESET', 'UND_ERR_SOCKET', 'ERR_STREAM_PREMATURE_CLOSE']);
-
-/** One line for a failed request; never includes a header or credential. */
-export function describeFailure(err: unknown): string {
-  if (err instanceof ServerTransportError || err instanceof ServerRedirectError) return err.message;
-  if (err instanceof DOMException && err.name === 'TimeoutError') return 'it did not answer in time';
-  if (err instanceof Error && err.name === 'TimeoutError') return 'it did not answer in time';
-  if (err instanceof PullIdleTimeoutError) return 'it stopped sending data';
-  const code = errorCode(err);
-  if (code === 'ECONNREFUSED') return 'connection refused';
-  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return 'host not found';
-  if (code === 'EHOSTUNREACH' || code === 'ENETUNREACH') return 'no route to the host';
-  if (code === 'ETIMEDOUT') return 'the connection timed out';
-  if (code && DROP_CODES.has(code)) return 'the connection dropped';
-  if (err instanceof TypeError && /terminated|aborted/i.test(err.message)) return 'the connection dropped';
-  if (err instanceof Error && /ended (the reply )?before/i.test(err.message)) return 'the connection dropped';
-  return code ?? (err instanceof Error ? err.message : String(err));
-}
-
 /** The health a failed request implies; null when the failure says nothing about the server (a model error). */
-function failureHealth(err: unknown, label: string): ModelServerHealth | null {
+function failureHealth(
+  err: unknown,
+  label: string,
+  scope: AddressScope | null,
+  platform: NodeJS.Platform
+): ModelServerHealth | null {
   const checkedAt = new Date().toISOString();
   if (err instanceof ServerCredentialsError) {
     return { state: 'credentials', version: null, latencyMs: null, checkedAt, error: err.message };
   }
-  if (err instanceof ServerTransportError || err instanceof ServerRedirectError) {
+  if (
+    err instanceof ServerTransportError ||
+    err instanceof ServerRedirectError ||
+    err instanceof ServerForbiddenError
+  ) {
     return { state: 'refused', version: null, latencyMs: null, checkedAt, error: err.message };
   }
   const connection =
@@ -701,116 +851,6 @@ function failureHealth(err: unknown, label: string): ModelServerHealth | null {
     version: null,
     latencyMs: null,
     checkedAt,
-    error: `${label}: ${describeFailure(err)}`,
+    error: withLocalNetworkHint(`${label}: ${describeFailure(err)}`, errorCode(err), scope, platform),
   };
-}
-
-const OWNER_PRODUCT: Record<string, OpenAICompatibleProduct> = { llamacpp: 'llama-server', vllm: 'vllm' };
-
-/** Identifies the server by what it answers, never by port, and times the answer. */
-async function detect(
-  fetch: FetchLike,
-  baseUrl: string,
-  label: string,
-  now: () => number,
-  expected?: ModelServerKind
-): Promise<ProbeOutcome> {
-  const get = async (path: string) => {
-    const started = now();
-    try {
-      const response = await fetch(`${baseUrl}${path}`, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
-      const latencyMs = Math.round(now() - started);
-      const body: unknown = response.ok
-        ? await response.json().catch(() => null)
-        : (await response.body?.cancel(), null);
-      return { status: response.status, body, latencyMs, error: null as unknown };
-    } catch (error) {
-      return { status: 0, body: null, latencyMs: null, error };
-    }
-  };
-  const [version, models] = await Promise.all([
-    expected === 'openai-compatible' ? null : get('/api/version'),
-    expected === 'ollama' ? null : get('/v1/models'),
-  ]);
-  const auth = [version, models].some(result => result?.status === 401 || result?.status === 403);
-  const ollamaVersion = (version?.body as { version?: unknown } | null)?.version;
-  if (version && version.status === 200 && typeof ollamaVersion === 'string') {
-    const tags = await get('/api/tags');
-    const listed = (tags.body as { models?: unknown } | null)?.models;
-    return {
-      kind: 'ollama',
-      product: null,
-      version: ollamaVersion,
-      latencyMs: version.latencyMs,
-      models: Array.isArray(listed) ? listed.length : null,
-      auth: false,
-      error: null,
-      refused: false,
-    };
-  }
-  const data = (models?.body as { data?: unknown } | null)?.data;
-  if (models && models.status === 200 && Array.isArray(data)) {
-    const owner = data
-      .map(entry => (entry as { owned_by?: unknown } | null)?.owned_by)
-      .find(value => typeof value === 'string' && value in OWNER_PRODUCT) as string | undefined;
-    const product = owner ? OWNER_PRODUCT[owner] : null;
-    return {
-      kind: 'openai-compatible',
-      product,
-      version: await openAIVersion(get, product),
-      latencyMs: models.latencyMs,
-      models: data.length,
-      auth: false,
-      error: null,
-      refused: false,
-    };
-  }
-  const failure = [version, models].find(result => result && result.error)?.error;
-  const refused = failure instanceof ServerTransportError || failure instanceof ServerRedirectError;
-  const status = [version, models].find(result => result && result.status > 0)?.status;
-  return {
-    kind: null,
-    product: null,
-    version: null,
-    latencyMs: null,
-    models: null,
-    auth,
-    refused,
-    error: failure
-      ? refused
-        ? describeFailure(failure)
-        : `Could not reach ${label}: ${describeFailure(failure)}`
-      : status
-        ? `${label} answered HTTP ${status}, not as Ollama or an OpenAI-compatible server.`
-        : null,
-  };
-}
-
-async function openAIVersion(
-  get: (path: string) => Promise<{ status: number; body: unknown }>,
-  product: OpenAICompatibleProduct | null
-): Promise<string | null> {
-  if (product === 'llama-server') {
-    const props = await get('/props');
-    const build = (props.body as { build_info?: unknown } | null)?.build_info;
-    return typeof build === 'string' ? build : null;
-  }
-  if (product === 'vllm') {
-    const version = (await get('/version')).body as { version?: unknown } | null;
-    return typeof version?.version === 'string' ? version.version : null;
-  }
-  return null;
-}
-
-/** Whether the server lists its models with no credential at all. */
-async function answersWithout(fetch: FetchLike, baseUrl: string, kind: ModelServerKind): Promise<boolean> {
-  try {
-    const response = await fetch(`${baseUrl}${kind === 'ollama' ? '/api/tags' : '/v1/models'}`, {
-      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-    });
-    await response.body?.cancel();
-    return response.ok;
-  } catch {
-    return false;
-  }
 }

@@ -99,6 +99,16 @@ const handler = baseApi({ auth: 'jwtOnly' })
     ) {
       patch.nextRunAt = nextRunAtFor({ lastRunAt: existing.lastRunAt, intervalMinutes }, now);
     }
+    // An owner edit ends an idle back-off: the loop is back on its plain interval.
+    if (existing.idleStreak) {
+      patch.idleStreak = 0;
+      if (existing.status === 'live' && patch.nextRunAt === undefined) {
+        patch.nextRunAt = nextRunAtFor(
+          { lastRunAt: existing.lastRunAt, intervalMinutes: intervalMinutes ?? existing.intervalMinutes },
+          now
+        );
+      }
+    }
 
     // Conditional on the status the patch was computed from, so a scheduler write in between is not lost, and
     // on the stages stageConfig was checked against, so a concurrent stage edit can't leave orphan config.

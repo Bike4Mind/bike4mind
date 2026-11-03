@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures';
 import { apiGetOtcCode } from './helpers/api';
+import { getTestUsers } from './helpers/test-users';
 
 test.describe('Signup', () => {
   // The "Sign up" link + /register are gated on the global `allowOpenRegistration` setting.
@@ -78,10 +79,24 @@ test.describe('Signup', () => {
 
     await loginPage.fillInlineRegisterUsername(`inline-signup-${timestamp}`);
     await loginPage.acceptInlineRegisterPolicies();
+    const registered = page.waitForResponse(
+      r => r.url().includes('/api/otc/verify') && r.request().method() === 'POST' && r.ok()
+    );
     await loginPage.submitInlineRegister();
+    const { user } = (await (await registered).json()) as { user: { id: string } };
     await basePage.dismissModals();
 
     // Account created and signed in - we're off /login and into the app.
     await expect(page).not.toHaveURL(/.*login.*/);
+
+    // A normal UI signup must not be down-tiered. Only an admin read exposes `throttle`; the
+    // account's own session redacts it.
+    // Bot checks are skipped under E2E, so this only guards against tiering every new signup.
+    const apiUrl = process.env.API_URL || 'http://localhost:3000';
+    const res = await request.get(`${apiUrl}/api/users/${user.id}`, {
+      headers: { Authorization: `Bearer ${getTestUsers().admin.accessToken}` },
+    });
+    expect(res.ok()).toBe(true);
+    expect((await res.json()).throttle).toBeUndefined();
   });
 });

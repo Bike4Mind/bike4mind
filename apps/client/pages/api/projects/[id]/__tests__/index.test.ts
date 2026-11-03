@@ -60,7 +60,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/server-utils/utils/isDuplicateKeyError', () => ({ isDuplicateKeyError: () => false }));
 vi.mock('@bike4mind/common', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/common')>()),

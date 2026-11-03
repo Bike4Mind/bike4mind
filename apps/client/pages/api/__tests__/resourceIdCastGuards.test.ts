@@ -120,13 +120,13 @@ vi.mock('@bike4mind/database/ai', () => ({
   McpServer: { findOne: spies.mcpServerFindOne, findById: vi.fn(), findOneAndDelete: vi.fn() },
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
-vi.mock('@server/utils/generatedFiles', () => ({ toGeneratedFiles: async () => [] }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/generatedFiles', () => ({ toGeneratedFiles: async () => [] }));
 vi.mock('@bike4mind/server-utils/chatCompletion/questTimeoutRecovery', () => ({
   resolveQuestTimeoutRecovery: () => null,
 }));
 vi.mock('@server/utils/sessionOwnership', () => ({ isSessionOwnedByUser: () => true }));
-vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: () => Promise.resolve([]) }));
+vi.mock('@bike4mind/server-utils/utils/invokeMcpHandler', () => ({ invokeMcpHandler: () => Promise.resolve([]) }));
 vi.mock('@bike4mind/mcp', () => ({ MCPClient: class {}, findForbiddenMcpEnvKeys: () => [] }));
 vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptEnvVariables: (v: unknown) => v,
@@ -134,7 +134,7 @@ vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
 }));
 vi.mock('@server/utils/mcpEnvValidation', () => ({ assertNoForbiddenMcpEnvKeys: () => undefined }));
 vi.mock('@server/utils/mcpServerFlag', () => ({ assertMcpServerEnabled: () => Promise.resolve() }));
-vi.mock('@server/utils/telemetryAnalysis', () => ({ DEFAULT_SLOS: {} }));
+vi.mock('@bike4mind/server-utils/utils/telemetryAnalysis', () => ({ DEFAULT_SLOS: {} }));
 vi.mock('@bike4mind/services', () => ({ MODAL_SAFE_DEFAULT_KEY: 'customer' }));
 vi.mock('@server/middlewares/optionalAuth', () => ({ optionalAuth: () => undefined }));
 vi.mock('@server/services/publish', () => ({

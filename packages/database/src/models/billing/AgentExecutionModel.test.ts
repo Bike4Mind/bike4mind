@@ -112,6 +112,38 @@ describe('AgentExecutionRepository', () => {
     });
   });
 
+  describe('sumLoopCreditsForUser', () => {
+    it("sums the user's top-level loop runs since the given time, across loops", async () => {
+      const since = new Date(Date.now() - 60_000);
+      const parent = await agentExecutionRepository.create(
+        makeBaseExecution({ userId: 'u1', loopId: 'loopA', totalCreditsUsed: 4 })
+      );
+      await agentExecutionRepository.create(makeBaseExecution({ userId: 'u1', loopId: 'loopB', totalCreditsUsed: 6 }));
+      await agentExecutionRepository.create(
+        makeBaseExecution({ userId: 'u1', loopId: 'loopA', parentExecutionId: parent.id, totalCreditsUsed: 99 })
+      );
+      await agentExecutionRepository.create(makeBaseExecution({ userId: 'u1', totalCreditsUsed: 50 }));
+      await agentExecutionRepository.create(makeBaseExecution({ userId: 'u2', loopId: 'loopC', totalCreditsUsed: 70 }));
+
+      expect(await agentExecutionRepository.sumLoopCreditsForUser('u1', since)).toBe(10);
+      expect(await agentExecutionRepository.sumLoopCreditsForUser('u1', new Date(Date.now() + 60_000))).toBe(0);
+    });
+
+    it('reserves an in-flight run at its credit cap when asked', async () => {
+      const since = new Date(Date.now() - 60_000);
+      const run = (overrides: Parameters<typeof makeBaseExecution>[0]) =>
+        agentExecutionRepository.create(makeBaseExecution({ userId: 'u1', loopId: 'loopA', ...overrides }));
+      await run({ status: 'running', totalCreditsUsed: 1, creditCap: 20 });
+      await run({ status: 'awaiting_subagent', totalCreditsUsed: 25, creditCap: 20 });
+      await run({ status: 'running', totalCreditsUsed: 2 });
+      await run({ status: 'completed', totalCreditsUsed: 3, creditCap: 20 });
+
+      expect(await agentExecutionRepository.sumLoopCreditsForUser('u1', since)).toBe(31);
+      // 20 (reserved) + 25 (over its cap) + 2 (uncapped) + 3 (finished, at what it spent)
+      expect(await agentExecutionRepository.sumLoopCreditsForUser('u1', since, true)).toBe(50);
+    });
+  });
+
   describe('listRecentForLoop', () => {
     it("returns a loop's newest top-level runs", async () => {
       const older = await agentExecutionRepository.create(

@@ -191,7 +191,16 @@ export function usersColumns({
       sortable: true,
       numeric: true,
       width: '6rem',
-      render: row => formatNumber(row.currentCredits ?? 0),
+      render: row => {
+        const held = row.signupGrant?.heldUnlock;
+        if (!held) return formatNumber(row.currentCredits ?? 0);
+        const releaseAt = new Date(held.releaseAt).toLocaleString('en-US');
+        return (
+          <Tooltip title={`Signup bonus held until ${releaseAt} while the ${held.reason} payment settles`}>
+            <span data-testid="admin-users-held-unlock">{formatNumber(row.currentCredits ?? 0)} (held)</span>
+          </Tooltip>
+        );
+      },
     },
     {
       id: 'spend',

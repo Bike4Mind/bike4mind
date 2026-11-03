@@ -226,6 +226,28 @@ describe('POST /api/data-lakes/batches/[batchId]/reanalyze-taxonomy', () => {
     expect(json).toHaveBeenCalledWith({ id: 'b1', taxonomyStatus: 'ready' });
   });
 
+  it('strips server-only and undeclared fields from the returned batch', async () => {
+    h.analyzeBatchTaxonomy.mockResolvedValue({
+      claimed: true,
+      outcome: 'ready',
+      batch: {
+        id: 'b1',
+        taxonomyStatus: 'ready',
+        taxonomyBilling: { organizationId: 'org1', apiKeyId: 'key1' },
+        uploaderManageRung: 'owner',
+        uploadHistoryRecordedAt: new Date(),
+        _id: 'raw-object-id',
+        __v: 7,
+        notInSchema: 'secret',
+      },
+    });
+    const { res, json } = makeRes();
+
+    await run('b1', res);
+
+    expect(json).toHaveBeenCalledWith({ id: 'b1', taxonomyStatus: 'ready' });
+  });
+
   // Unlike the queue handler, there's no SQS retry safety net on this synchronous path -
   // an unexpected error must fail the batch immediately rather than leaving it stuck in
   // 'analyzing' until the reconciler's generic timeout kicks in. The stored taxonomyError,

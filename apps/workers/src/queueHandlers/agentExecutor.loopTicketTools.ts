@@ -15,11 +15,11 @@ import {
   type IWorkItem,
   type WorkItemStatus,
 } from '@bike4mind/common';
-import { loopRepository, workItemRepository } from '@bike4mind/database';
+import { loopEventRepository, loopRepository, workItemRepository } from '@bike4mind/database';
 import type { ToolDefinition } from '@bike4mind/services/llm';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ConflictError } from '@bike4mind/server-utils/utils/errors';
-import { makeDueIfReady, ticketMovePatch } from '@server/utils/loopTickets';
+import { makeDueIfReady, ticketMovePatch, UNSURE_PREFIX, unsureReason } from '@server/utils/loopTickets';
 import { assertDependenciesUsable } from '@server/utils/workItemDependencies';
 import {
   validateWorkItemDependencies,
@@ -35,10 +35,12 @@ const LIST_LIMIT = 100;
 /** Same text for another user's loop and a missing one, so a refusal never confirms a foreign loop exists. */
 export const LOOP_NOT_FOUND = 'loop not found';
 const TICKET_NOT_FOUND = 'ticket not found';
+const QUESTION_MAX = 1000;
 
 interface LoopTicketScope {
   userId: string;
   loopId: string;
+  executionId: string;
 }
 
 export interface LoopTicketToolContribution {
@@ -50,15 +52,17 @@ export function resolveLoopTicketTools({
   loopId,
   loopsEnabled,
   userId,
+  executionId,
 }: {
   loopId?: string;
   loopsEnabled: boolean;
   userId: string;
+  executionId: string;
 }): LoopTicketToolContribution {
   if (!loopId || !loopsEnabled) return { loopTicketEnabledTools: [], loopTicketExternalTools: {} };
   return {
     loopTicketEnabledTools: LOOP_TICKET_TOOL_NAMES,
-    loopTicketExternalTools: buildLoopTicketTools({ userId, loopId }),
+    loopTicketExternalTools: buildLoopTicketTools({ userId, loopId, executionId }),
   };
 }
 
@@ -85,7 +89,7 @@ export async function asToolResult(run: () => Promise<unknown>): Promise<string>
   }
 }
 
-export function buildLoopTicketTools({ userId, loopId }: LoopTicketScope): Record<string, ToolDefinition> {
+export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicketScope): Record<string, ToolDefinition> {
   let creates = 0;
 
   const ownLoop = async (id: unknown): Promise<ILoop> => {
@@ -271,5 +275,65 @@ export function buildLoopTicketTools({ userId, loopId }: LoopTicketScope): Recor
     }),
   };
 
-  return { loop_ticket_list: list, loop_ticket_create: create, loop_ticket_update: update };
+  const unsure: ToolDefinition = {
+    name: 'loop_ticket_unsure',
+    implementation: () => ({
+      toolFn: async value =>
+        asToolResult(async () => {
+          const params = (value ?? {}) as { id?: unknown; question?: unknown };
+          const question = typeof params.question === 'string' ? params.question.trim().slice(0, QUESTION_MAX) : '';
+          if (!question) throw new BadRequestError('question is required');
+          const existing =
+            typeof params.id === 'string' ? await workItemRepository.findByIdForUser(params.id, userId) : null;
+          if (!existing || existing.loopId !== loopId) throw new NotFoundError(TICKET_NOT_FOUND);
+          if (existing.status === 'closed') throw new BadRequestError('ticket is closed');
+          // A second question would replace the first in the ticket's reason, so answering the first could no
+          // longer reopen it. Not an error, so the model does not retry.
+          if (existing.status === 'blocked' && existing.statusReason?.startsWith(UNSURE_PREFIX)) {
+            return 'This ticket is already waiting on the owner. Their answer reaches your next run; do not ask again.';
+          }
+          const loop = await ownLoop(loopId);
+
+          // Event first: if the ticket write then fails, the question is still in the Log and answerable,
+          // instead of a ticket blocked with nothing to resolve it from. An answer landing in the ms between the
+          // two writes leaves the ticket parked under a resolved event; the owner then moves it by hand.
+          await loopEventRepository.recordUnsure({
+            source: 'asked',
+            loopId,
+            userId,
+            executionId,
+            workItemId: existing.id,
+            ticketTitle: existing.title,
+            reason: question,
+            requestedAt: new Date(),
+          });
+          const patch = ticketMovePatch(loop, existing, { status: 'blocked', reason: unsureReason(question) });
+          const updated = await workItemRepository.updateForUser(existing.id, userId, patch, existing.status);
+          // Not an error: the question is already recorded, and a retry would ask it twice.
+          if (!updated) return 'Question recorded for the owner. The ticket changed meanwhile, so it was not parked.';
+          await makeDueIfReady(loop);
+          return summarize(updated);
+        }),
+      toolSchema: {
+        name: 'loop_ticket_unsure',
+        description:
+          'Ask the owner a question when the ticket is ambiguous or needs their decision. Parks the ticket as Unsure until they answer; their answer reaches your next run.',
+        parameters: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', description: 'Id of a ticket in this loop.' },
+            question: { type: 'string', description: 'What you need the owner to answer (1,000 characters max).' },
+          },
+          required: ['id', 'question'],
+        },
+      },
+    }),
+  };
+
+  return {
+    loop_ticket_list: list,
+    loop_ticket_create: create,
+    loop_ticket_update: update,
+    loop_ticket_unsure: unsure,
+  };
 }

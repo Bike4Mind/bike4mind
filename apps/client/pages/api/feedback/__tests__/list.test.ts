@@ -83,8 +83,8 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsValue: vi.fn(),
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
-vi.mock('@server/integrations/slack/slack', () => ({ postFeedbackToSlack: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postFeedbackToSlack: vi.fn() }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { STAGE: 'production' } }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }));

@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
+  assertProxyPort,
+  createSandboxRuntime,
   detectPlatform,
   expandPath,
   getContainerSocketPaths,
@@ -9,7 +11,12 @@ import {
 } from './SandboxRuntimeAdapter.js';
 import os from 'os';
 import path from 'path';
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'fs';
+import { chmodSync, mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
+
+vi.mock('fs', async () => {
+  const actual = await vi.importActual<typeof import('fs')>('fs');
+  return { ...actual, realpathSync: vi.fn(actual.realpathSync) };
+});
 
 describe('SandboxRuntimeAdapter', () => {
   const fixtureDirectories: string[] = [];
@@ -60,6 +67,29 @@ describe('SandboxRuntimeAdapter', () => {
     expect(getProtectedWorkspacePaths(cwd)).toEqual(
       expect.arrayContaining([path.join(cwd, '.git'), metadata, path.resolve(metadata, '../..')])
     );
+  });
+
+  it('protects worktree metadata that has no common directory file', () => {
+    const fixture = mkdtempSync(path.join(os.tmpdir(), 'sandbox-worktree-'));
+    fixtureDirectories.push(fixture);
+    const cwd = path.join(fixture, 'checkout');
+    const metadata = path.join(fixture, 'metadata');
+    mkdirSync(cwd);
+    mkdirSync(metadata);
+    writeFileSync(path.join(cwd, '.git'), `gitdir: ${metadata}\n`);
+    expect(getProtectedWorkspacePaths(cwd)).toEqual(expect.arrayContaining([path.join(cwd, '.git'), metadata]));
+  });
+
+  it('keeps a fully unresolvable path as-is once it reaches the root', async () => {
+    const fs = await vi.importActual<typeof import('fs')>('fs');
+    vi.mocked(realpathSync).mockImplementation((() => {
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    }) as unknown as typeof realpathSync);
+    try {
+      expect(resolveSandboxPath('/unresolvable/child')).toBe('/unresolvable/child');
+    } finally {
+      vi.mocked(realpathSync).mockImplementation(fs.realpathSync as typeof realpathSync);
+    }
   });
 
   it('resolves absent sensitive paths through the nearest symlinked ancestor', () => {
@@ -209,8 +239,86 @@ describe('SandboxRuntimeAdapter', () => {
       expect(isBinaryAvailable('bash')).toBe(true);
     });
 
+    it('returns false when PATH is unset', () => {
+      const originalPath = process.env.PATH;
+      delete process.env.PATH;
+      try {
+        expect(isBinaryAvailable('bash')).toBe(false);
+      } finally {
+        process.env.PATH = originalPath;
+      }
+    });
+
     it('returns false for a nonexistent binary', () => {
       expect(isBinaryAvailable('nonexistent-binary-that-should-not-exist-12345')).toBe(false);
+    });
+  });
+  describe('protected path lookup errors', () => {
+    const isRoot = process.getuid?.() === 0;
+
+    it.skipIf(isRoot)('rethrows a .git lookup failure other than a missing entry', () => {
+      const fixture = mkdtempSync(path.join(os.tmpdir(), 'sandbox-locked-'));
+      fixtureDirectories.push(fixture);
+      const cwd = path.join(fixture, 'locked');
+      mkdirSync(cwd);
+      chmodSync(cwd, 0o000);
+      try {
+        expect(() => getProtectedWorkspacePaths(cwd)).toThrow(expect.objectContaining({ code: 'EACCES' }));
+      } finally {
+        chmodSync(cwd, 0o700);
+      }
+    });
+
+    it.skipIf(isRoot)('rethrows an unreadable .git file', () => {
+      const fixture = mkdtempSync(path.join(os.tmpdir(), 'sandbox-gitfile-'));
+      fixtureDirectories.push(fixture);
+      writeFileSync(path.join(fixture, '.git'), 'gitdir: elsewhere\n', { mode: 0o000 });
+      expect(() => getProtectedWorkspacePaths(fixture)).toThrow(expect.objectContaining({ code: 'EACCES' }));
+    });
+  });
+
+  describe('assertProxyPort', () => {
+    it.each([1, 8080, 65535])('accepts port %s', port => {
+      expect(() => assertProxyPort(port)).not.toThrow();
+    });
+
+    it.each([0, -1, 65536, 1.5, Number.NaN])('rejects port %s', port => {
+      expect(() => assertProxyPort(port)).toThrow(`Invalid sandbox proxy port: ${port}`);
+    });
+  });
+
+  describe('createSandboxRuntime', () => {
+    const originalPath = process.env.PATH;
+    afterEach(() => {
+      process.env.PATH = originalPath;
+      vi.restoreAllMocks();
+    });
+
+    const withBinary = (binary: string | null) => {
+      const binDir = mkdtempSync(path.join(os.tmpdir(), 'sandbox-bin-'));
+      fixtureDirectories.push(binDir);
+      if (binary) writeFileSync(path.join(binDir, binary), '', { mode: 0o755 });
+      process.env.PATH = binDir;
+    };
+
+    it('returns null on an unsupported platform', async () => {
+      vi.spyOn(os, 'platform').mockReturnValue('win32');
+      expect(await createSandboxRuntime()).toBeNull();
+    });
+
+    it.each([
+      ['darwin', 'sandbox-exec', 'seatbelt'],
+      ['linux', 'bwrap', 'bubblewrap'],
+    ] as const)('returns the %s runtime when %s is installed', async (platform, binary, name) => {
+      vi.spyOn(os, 'platform').mockReturnValue(platform);
+      withBinary(binary);
+      expect((await createSandboxRuntime())?.name).toBe(name);
+    });
+
+    it.each(['darwin', 'linux'] as const)('returns null on %s when the runtime binary is missing', async platform => {
+      vi.spyOn(os, 'platform').mockReturnValue(platform);
+      withBinary(null);
+      expect(await createSandboxRuntime()).toBeNull();
     });
   });
 });

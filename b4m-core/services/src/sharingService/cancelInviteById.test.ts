@@ -7,7 +7,7 @@ describe('sharingService - cancelInviteById', () => {
   const user = { id: 'user-1', isAdmin: false } as any;
 
   let db: {
-    invites: { findById: Mock; update: Mock };
+    invites: { findById: Mock; closeInvite: Mock };
     fabFiles: { shareable: { findShareAccessById: Mock } };
     sessions: { shareable: { findShareAccessById: Mock } };
     projects: { shareable: { findShareAccessById: Mock } };
@@ -18,7 +18,7 @@ describe('sharingService - cancelInviteById', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     db = {
-      invites: { findById: vi.fn(), update: vi.fn() },
+      invites: { findById: vi.fn(), closeInvite: vi.fn() },
       fabFiles: { shareable: { findShareAccessById: vi.fn() } },
       sessions: { shareable: { findShareAccessById: vi.fn() } },
       projects: { shareable: { findShareAccessById: vi.fn() } },
@@ -27,7 +27,7 @@ describe('sharingService - cancelInviteById', () => {
     };
   });
 
-  it('cancels a FabFile invite for a share-authorized caller (remaining=0, pending cleared, refused kept)', async () => {
+  it('cancels a FabFile invite for a share-authorized caller ', async () => {
     const invite = {
       id: 'inv-1',
       type: InviteType.FabFile,
@@ -41,12 +41,7 @@ describe('sharingService - cancelInviteById', () => {
     await cancelInviteById(user, { id: 'inv-1' }, { db } as any);
 
     expect(db.fabFiles.shareable.findShareAccessById).toHaveBeenCalledWith(user, 'doc-1');
-    expect(db.invites.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        remaining: 0,
-        recipients: { pending: [], accepted: [], refused: ['gone@example.com'] },
-      })
-    );
+    expect(db.invites.closeInvite).toHaveBeenCalledWith('inv-1');
   });
 
   it('denies a caller without share access to the document', async () => {
@@ -60,7 +55,7 @@ describe('sharingService - cancelInviteById', () => {
     db.sessions.shareable.findShareAccessById.mockResolvedValue(null);
 
     await expect(cancelInviteById(user, { id: 'inv-1' }, { db } as any)).rejects.toThrow(UnauthorizedError);
-    expect(db.invites.update).not.toHaveBeenCalled();
+    expect(db.invites.closeInvite).not.toHaveBeenCalled();
   });
 
   it('authorizes an Organization invite for an admin via findById', async () => {
@@ -78,7 +73,7 @@ describe('sharingService - cancelInviteById', () => {
     await cancelInviteById(admin, { id: 'inv-1' }, { db } as any);
 
     expect(db.organizations.findById).toHaveBeenCalledWith('org-1');
-    expect(db.invites.update).toHaveBeenCalled();
+    expect(db.invites.closeInvite).toHaveBeenCalled();
   });
 
   it('denies a plain org member from cancelling a Group invite by id (must be billing owner, org admin, or platform admin)', async () => {
@@ -92,10 +87,14 @@ describe('sharingService - cancelInviteById', () => {
     };
     db.invites.findById.mockResolvedValue(invite);
     db.groups.findById.mockResolvedValue({ id: 'grp-1', organizationId: 'org-1' });
-    db.organizations.findById.mockResolvedValue({ id: 'org-1', userId: 'other', users: [{ userId: 'member-1', permissions: ['read'] }] });
+    db.organizations.findById.mockResolvedValue({
+      id: 'org-1',
+      userId: 'other',
+      users: [{ userId: 'member-1', permissions: ['read'] }],
+    });
 
     await expect(cancelInviteById(member, { id: 'inv-1' }, { db } as any)).rejects.toThrow(ForbiddenError);
-    expect(db.invites.update).not.toHaveBeenCalled();
+    expect(db.invites.closeInvite).not.toHaveBeenCalled();
   });
 
   it('lets the billing owner cancel a Group invite by id', async () => {
@@ -113,7 +112,7 @@ describe('sharingService - cancelInviteById', () => {
 
     await cancelInviteById(owner, { id: 'inv-1' }, { db } as any);
 
-    expect(db.invites.update).toHaveBeenCalled();
+    expect(db.invites.closeInvite).toHaveBeenCalled();
   });
 
   it('denies a plain org member from cancelling an Organization invite by id', async () => {
@@ -126,10 +125,14 @@ describe('sharingService - cancelInviteById', () => {
       recipients: { pending: [], accepted: [], refused: [] },
     };
     db.invites.findById.mockResolvedValue(invite);
-    db.organizations.findById.mockResolvedValue({ id: 'org-1', userId: 'other', users: [{ userId: 'member-1', permissions: ['read'] }] });
+    db.organizations.findById.mockResolvedValue({
+      id: 'org-1',
+      userId: 'other',
+      users: [{ userId: 'member-1', permissions: ['read'] }],
+    });
 
     await expect(cancelInviteById(member, { id: 'inv-1' }, { db } as any)).rejects.toThrow(ForbiddenError);
-    expect(db.invites.update).not.toHaveBeenCalled();
+    expect(db.invites.closeInvite).not.toHaveBeenCalled();
   });
 
   it('denies a Group invite whose parent group is missing', async () => {
@@ -143,7 +146,7 @@ describe('sharingService - cancelInviteById', () => {
     db.groups.findById.mockResolvedValue(null);
 
     await expect(cancelInviteById(user, { id: 'inv-1' }, { db } as any)).rejects.toThrow(UnauthorizedError);
-    expect(db.invites.update).not.toHaveBeenCalled();
+    expect(db.invites.closeInvite).not.toHaveBeenCalled();
   });
 
   it('throws NotFoundError when the invite does not exist', async () => {

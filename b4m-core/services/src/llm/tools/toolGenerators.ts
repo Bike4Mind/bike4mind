@@ -55,6 +55,7 @@ export const generateTools = (
     slackDestination,
     numberCitables,
     decide,
+    toLedgerModel,
     getAbortSignal,
   }: {
     db: ToolContext['db'];
@@ -79,6 +80,7 @@ export const generateTools = (
     slackDestination?: ToolContext['slackDestination'];
     numberCitables?: ToolContext['numberCitables'];
     decide?: ToolContext['decide'];
+    toLedgerModel?: ToolContext['toLedgerModel'];
     getAbortSignal?: ToolContext['getAbortSignal'];
   },
   storage: BaseStorage,
@@ -145,6 +147,7 @@ export const generateTools = (
       ? memoizeOperationalBillingCheck({ adminSettings: db.adminSettings }, logger)
       : undefined,
     decide,
+    toLedgerModel,
     getAbortSignal,
     numberCitables,
     servingModel,
@@ -247,6 +250,12 @@ export const generateMcpTools = async (
     if (errorName === 'AtlassianReconnectRequiredError') {
       Logger.globalInstance.warn(`Atlassian reconnection required during getTools for ${mcpData.serverName}`);
       // Return empty array - the real-time subscription will show toast to user
+      return [];
+    }
+    // From @bike4mind/mcp, matched by name as above: the server lacks a credential it needs to
+    // start, so this turn goes without its tools rather than failing.
+    if (errorName === 'McpServerConfigError') {
+      Logger.globalInstance.warn(`MCP server ${mcpData.serverName} is not configured: ${(error as Error).message}`);
       return [];
     }
     throw error;

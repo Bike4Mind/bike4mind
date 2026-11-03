@@ -225,6 +225,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/artifacts',
   },
+  listCreditTransactions: {
+    method: 'GET',
+    path: '/api/v1/credits/transactions',
+  },
   listDataLakes: {
     method: 'GET',
     path: '/api/v1/data-lakes',
@@ -261,6 +265,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/quests/{id}/files',
   },
+  listSessionQuests: {
+    method: 'GET',
+    path: '/api/v1/sessions/{id}/quests',
+  },
   listSessions: {
     method: 'GET',
     path: '/api/v1/sessions',
@@ -288,6 +296,10 @@ export const operations = {
   listWhatsNew: {
     method: 'GET',
     path: '/api/v1/whats-new',
+  },
+  postSlackMessage: {
+    method: 'POST',
+    path: '/api/v1/slack/messages',
   },
   publishSkillMarketListing: {
     method: 'POST',
