@@ -72,6 +72,12 @@ beforeEach(async () => {
   vi.spyOn(adminSettingsRepository, 'findBySettingName').mockImplementation(
     async name => (config[name] === undefined ? null : { settingValue: config[name] }) as never
   );
+  vi.spyOn(adminSettingsRepository, 'findBySettingNames').mockImplementation(
+    async names =>
+      names
+        .filter(name => config[name] !== undefined)
+        .map(name => ({ settingName: name, settingValue: config[name] })) as never
+  );
   await User.collection.deleteMany({});
   await CreditTransaction.collection.deleteMany({});
   await SignupGrantBudgetDayModel.deleteMany({});

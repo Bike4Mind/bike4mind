@@ -3,7 +3,7 @@ import { resolveSignupDripPeriod } from './signupDripPeriod';
 import { adminSettingsRepository, User, userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { signupProtection } from '@server/auth/signupProtection';
-import { isDripScheduleOn, payActivityDripForDay, resolveRequiredActiveSeconds } from './activityUnlock';
+import { payActivityDripForDay, resolveRequiredActiveSeconds } from './activityUnlock';
 
 // Client interval/idle constants live in app/hooks/useSignupGrantHeartbeat.ts; MAX_CREDIT_MS must exceed its interval.
 const MIN_GAP_MS = 45_000;
@@ -33,11 +33,11 @@ export async function recordHeartbeat(userId: string, now: Date = new Date()): P
   const { day } = period;
   result.nextEligibleAt = period.endsAt;
   if (hasPaidSignupDrip(grant, day, period.key)) return { ...result, paidToday: true };
-  if (!(await isDripScheduleOn())) return result;
+  const limits = await userService.resolveDripLimits(adminSettingsRepository);
+  if (!(limits.dailyCredits > 0)) return result;
   const requiredSeconds = await resolveRequiredActiveSeconds();
   result.requiredSeconds = requiredSeconds;
-  const { dailyCredits, dripCap } = await userService.resolveDripLimits(adminSettingsRepository);
-  if (!(dailyCredits > 0) || signupGrantDripRemaining(grant, dripCap) <= 0) return result;
+  if (signupGrantDripRemaining(grant, limits.dripCap) <= 0) return result;
 
   const prior = grant.activity;
   const samePeriod = prior?.day === day && prior.period === period.key;
@@ -61,7 +61,7 @@ export async function recordHeartbeat(userId: string, now: Date = new Date()): P
 
   result.activeSeconds = Math.floor(ms / 1000);
   if (ms < requiredSeconds * 1000) return result;
-  const drip = await payActivityDripForDay(userId, clock, period);
+  const drip = await payActivityDripForDay(userId, clock, period, limits);
   result.creditsGranted = drip.creditsGranted;
   result.paidToday = drip.creditsGranted > 0;
   result.withheld = !result.paidToday && !!(drip.withheld || drip.budgetExhausted);

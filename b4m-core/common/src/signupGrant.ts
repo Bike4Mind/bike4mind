@@ -190,36 +190,40 @@ const SCHEDULE_KEYS: SignupGrantCreditKey[] = [
   'verifiedUnlockCredits',
 ];
 
-/** The new schedule keys win; while one is unset its pre-schedule key still applies. */
-export async function resolveSignupGrantSchedule(
-  adminSettings: Pick<IAdminSettingsRepository, 'findBySettingName'>
-): Promise<SignupGrantSchedule> {
-  const stored = new Map<SignupGrantCreditKey, number | undefined>();
-  for (const key of SCHEDULE_KEYS) {
-    stored.set(key, storedGrantCredits(key, (await adminSettings.findBySettingName(key))?.settingValue));
+type ScheduleSettingsReader = Pick<IAdminSettingsRepository, 'findBySettingName'> &
+  Partial<Pick<IAdminSettingsRepository, 'findBySettingNames'>>;
+
+/** The new schedule keys win; while one is unset its pre-schedule key still applies. One batched read when available. */
+export async function resolveSignupGrantSchedule(adminSettings: ScheduleSettingsReader): Promise<SignupGrantSchedule> {
+  const toggleKeys = ['stagedSignupGrantEnabled', 'signupGrantActivityEnabled'] as const;
+  const values = new Map<string, unknown>();
+  if (adminSettings.findBySettingNames) {
+    for (const row of await adminSettings.findBySettingNames([...SCHEDULE_KEYS, ...toggleKeys])) {
+      values.set(row.settingName, row.settingValue);
+    }
+  } else {
+    for (const key of [...SCHEDULE_KEYS, ...toggleKeys]) {
+      values.set(key, (await adminSettings.findBySettingName(key))?.settingValue);
+    }
   }
-  const toggle = async (key: 'stagedSignupGrantEnabled' | 'signupGrantActivityEnabled') =>
-    isStoredToggleOn((await adminSettings.findBySettingName(key))?.settingValue);
-  return signupGrantScheduleFromValues(key => stored.get(key), {
-    staged: await toggle('stagedSignupGrantEnabled'),
-    activity: await toggle('signupGrantActivityEnabled'),
+  return signupGrantScheduleFromValues(key => storedGrantCredits(key, values.get(key)), {
+    staged: isStoredToggleOn(values.get('stagedSignupGrantEnabled')),
+    activity: isStoredToggleOn(values.get('signupGrantActivityEnabled')),
   });
 }
 
-export async function resolveSignupGrantSettings(adminSettings: Pick<IAdminSettingsRepository, 'findBySettingName'>) {
+export async function resolveSignupGrantSettings(adminSettings: ScheduleSettingsReader) {
   const schedule = await resolveSignupGrantSchedule(adminSettings);
   return { signupCredits: schedule.initialCredits, unlockCredits: schedule.unlockCredits };
 }
 
 /**
  * Every signup enrolls a staged grant. A drip cap of 0 (seeded where staging used to be off) locks nothing,
- * so the grant pays the same credits the flat path did.
+ * so the grant pays the flat path's amount; unlike the flat path, an invite-resolved amount now takes the
+ * canonical-inbox claim and the risk policy on payout, as a staged referral grant always did.
  * `totalCredits` fixes the whole entitlement (tranche first, remainder locked) instead of the signup settings.
  */
-export async function newSignupGrant(
-  adminSettings: Pick<IAdminSettingsRepository, 'findBySettingName'>,
-  totalCredits?: number
-) {
+export async function newSignupGrant(adminSettings: ScheduleSettingsReader, totalCredits?: number) {
   const schedule = await resolveSignupGrantSchedule(adminSettings);
   const signupCredits =
     totalCredits === undefined

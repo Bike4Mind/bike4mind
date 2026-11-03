@@ -18,6 +18,8 @@ import { resolveSignupDripPeriod, type SignupDripPeriod } from './signupDripPeri
 type DripResult = Awaited<ReturnType<typeof userService.dripSignupGrant>>;
 const noGrant = (): DripResult => ({ creditsGranted: 0, currentCredits: null });
 
+type DripLimits = Awaited<ReturnType<typeof userService.resolveDripLimits>>;
+
 /** The drip runs whenever the schedule pays a positive daily amount; there is no separate on/off toggle. */
 export async function isDripScheduleOn(): Promise<boolean> {
   return (await userService.resolveDripLimits(adminSettingsRepository)).dailyCredits > 0;
@@ -41,13 +43,18 @@ async function qualifiesForPeriod(user: IUserDocument, period: SignupDripPeriod)
  * Pays the activity drip for the earning window of `now` unless the account is ineligible, already paid or capped.
  * Called by the heartbeat and, via unlockSignupGrantFromActivity, the eligibility route; the ledger id keeps each window to one payout.
  */
-export async function payActivityDripForDay(userId: string, now: Date = new Date(), resolvedPeriod?: SignupDripPeriod) {
+export async function payActivityDripForDay(
+  userId: string,
+  now: Date = new Date(),
+  resolvedPeriod?: SignupDripPeriod,
+  resolvedLimits?: DripLimits
+) {
   const user = await userRepository.findById(userId);
   const grant = user?.signupGrant;
   if (!user || !grant || !signupGrantDripOpen(grant)) return noGrant();
   const period = resolvedPeriod ?? (await resolveSignupDripPeriod(signupProtection.grantBudget?.now?.() ?? now));
   if (hasPaidSignupDrip(grant, period.day, period.key)) return noGrant();
-  const { dailyCredits, dripCap } = await userService.resolveDripLimits(adminSettingsRepository);
+  const { dailyCredits, dripCap } = resolvedLimits ?? (await userService.resolveDripLimits(adminSettingsRepository));
   if (!(dailyCredits > 0) || signupGrantDripRemaining(grant, dripCap) <= 0) return noGrant();
   return userService.dripSignupGrant(
     userId,
