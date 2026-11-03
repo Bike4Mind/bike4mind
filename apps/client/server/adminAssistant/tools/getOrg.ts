@@ -33,7 +33,7 @@ export const ADMIN_ASSISTANT_ORG_FIELDS = [
 
 const toOrgFieldValue = (org: IOrganizationDocument, field: (typeof ADMIN_ASSISTANT_ORG_FIELDS)[number]): unknown => {
   const value: unknown = org[field];
-  if (field === 'description' && typeof value === 'string') return value.slice(0, MAX_DESCRIPTION_CHARS);
+  if (field === 'description' && typeof value === 'string') return Array.from(value).slice(0, MAX_DESCRIPTION_CHARS).join('');
   return value instanceof Date ? value.toISOString() : (value ?? null);
 };
 

@@ -151,6 +151,15 @@ describe('getOrgTool', () => {
     expect(result.data.organization.description).toHaveLength(500);
   });
 
+  it('truncates a description without splitting a surrogate pair', async () => {
+    const description = `${'a'.repeat(499)}\u{1F680}tail`;
+    resolveAdminOrgRef.mockResolvedValue({ ok: true, org: orgDoc({ description }) });
+
+    const result = await runTool({ orgId: ORG_ID });
+
+    expect(result.data.organization.description).toBe(`${'a'.repeat(499)}\u{1F680}`);
+  });
+
   it('reports the default storage limit in bytes when the org has none set', async () => {
     resolveAdminOrgRef.mockResolvedValue({ ok: true, org: orgDoc({ storageLimit: null }) });
 
