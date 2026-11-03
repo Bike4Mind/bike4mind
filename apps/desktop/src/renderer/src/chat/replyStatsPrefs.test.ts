@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { act, createElement } from 'react';
+import { createRoot } from 'react-dom/client';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { CONTENT_MAX_WIDTH } from './layout';
 import {
@@ -10,11 +12,36 @@ import {
   REPLY_STATS_RAIL_WIDTH,
   setReplyStatShown,
   setReplyStatsRail,
+  useReplyStatsPrefs,
 } from './replyStatsPrefs';
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 beforeEach(() => {
   window.localStorage.clear();
   reloadReplyStatsPrefs();
+});
+
+describe('a change made in another window', () => {
+  it('reaches this one through the storage event', () => {
+    let rail: boolean | null = null;
+    function Probe() {
+      rail = useReplyStatsPrefs().rail;
+      return null;
+    }
+    const root = createRoot(document.createElement('div'));
+    act(() => root.render(createElement(Probe)));
+    expect(rail).toBe(true);
+
+    window.localStorage.setItem('b4m.chat.replyStats.rail', '0');
+    act(() => window.dispatchEvent(new StorageEvent('storage', { key: 'b4m.chat.replyStats.rail' })));
+    expect(rail).toBe(false);
+
+    window.localStorage.clear();
+    act(() => window.dispatchEvent(new StorageEvent('storage', { key: null })));
+    expect(rail).toBe(true);
+    act(() => root.unmount());
+  });
 });
 
 describe('railFitsBesideThread', () => {
