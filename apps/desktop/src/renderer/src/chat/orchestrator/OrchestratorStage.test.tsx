@@ -152,4 +152,96 @@ describe('OrchestratorStage', () => {
     await renderStage(FIXTURE, <span data-testid="dock-probe" />);
     expect(query('dock-probe')).not.toBeNull();
   });
+
+  describe('the finale', () => {
+    const onReadReport = vi.fn();
+    const renderRun = (agents: AgentView[], parent: { status?: 'processing' | 'done' } = {}) =>
+      themed.render(
+        <OrchestratorStage
+          agents={agents}
+          parent={parent}
+          rootId="root"
+          view="table"
+          onViewChange={onViewChange}
+          actions={actions}
+          introPlaying={false}
+          onReadReport={onReadReport}
+        />
+      );
+    const finished = [
+      agentFixture('a', 'done', {
+        createdAt: '2026-10-01T00:00:00.000Z',
+        updatedAt: '2026-10-01T00:03:12.000Z',
+        usdCost: 1.5,
+      }),
+      agentFixture('b', 'failed', { usdCost: 0.25 }),
+    ];
+
+    beforeEach(() => {
+      window.localStorage.clear();
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    });
+    afterEach(() => vi.useRealTimers());
+
+    const settle = () =>
+      act(async () => {
+        vi.advanceTimersByTime(5000);
+      });
+
+    it('shows a banner with the run stats once the run completes, over any view', async () => {
+      await renderRun([agentFixture('a', 'working'), agentFixture('b', 'working')], { status: 'processing' });
+      await renderRun(finished, { status: 'done' });
+      expect(query('orchestrator-finale')).toBeNull();
+      await settle();
+      const banner = el('orchestrator-finale');
+      expect(banner.textContent).toContain('Quest complete');
+      expect(el('orchestrator-finale-stats').textContent).toBe(
+        '2 agents \u00B7 3m 12s \u00B7 $1.75 \u00B7 1 done \u00B7 1 failed'
+      );
+      expect(query('orchestrator-table')).not.toBeNull();
+    });
+
+    it('reads the report and dismisses the banner', async () => {
+      await renderRun([agentFixture('a', 'working')]);
+      await renderRun(finished);
+      await settle();
+      await act(async () => el('orchestrator-finale-read-btn').click());
+      expect(onReadReport).toHaveBeenCalledTimes(1);
+      expect(query('orchestrator-finale')).toBeNull();
+    });
+
+    it('dismisses without reading', async () => {
+      await renderRun([agentFixture('a', 'working')]);
+      await renderRun(finished);
+      await settle();
+      await act(async () => el('orchestrator-finale-dismiss-btn').click());
+      expect(query('orchestrator-finale')).toBeNull();
+      expect(onReadReport).not.toHaveBeenCalled();
+    });
+
+    it('tells the views to celebrate while the banner is up', async () => {
+      const seen: boolean[] = [];
+      const renderView = (_view: string, props: { celebrating?: boolean }) => {
+        seen.push(props.celebrating ?? false);
+        return null;
+      };
+      const renderWith = (agents: AgentView[]) =>
+        themed.render(
+          <OrchestratorStage
+            agents={agents}
+            rootId="root"
+            view="tavern"
+            onViewChange={onViewChange}
+            actions={actions}
+            introPlaying={false}
+            renderView={renderView}
+          />
+        );
+      await renderWith([agentFixture('a', 'working')]);
+      await renderWith(finished);
+      expect(seen.at(-1)).toBe(false);
+      await settle();
+      expect(seen.at(-1)).toBe(true);
+    });
+  });
 });

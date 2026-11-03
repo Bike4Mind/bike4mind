@@ -65,6 +65,12 @@ const bob = keyframes`
   50%, 100% { transform: translateY(-3%); }
 `;
 
+// A mug raised: hop up, hold, drop.
+const cheer = keyframes`
+  0%, 100% { transform: translateY(0); }
+  30%, 60% { transform: translateY(-12%); }
+`;
+
 const twinkle = keyframes`
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
@@ -213,6 +219,7 @@ function Sprite({
   walkIn,
   selected,
   visited,
+  cheering,
   onSelect,
 }: {
   agent: AgentView;
@@ -224,6 +231,7 @@ function Sprite({
   selected: boolean;
   /** The Innkeeper is checking on this agent but, under reduced motion, does not walk over. */
   visited: boolean;
+  cheering: boolean;
   onSelect(id: string): void;
 }) {
   const entered = useAfterFirstPaint(!walkIn);
@@ -241,6 +249,7 @@ function Sprite({
       aria-label={`${fullName}: ${AGENT_STATE_LABEL[agent.state]}`}
       aria-pressed={selected}
       data-innkeeper-visit={visited || undefined}
+      data-cheering={cheering || undefined}
       title={tooltip}
       onClick={() => onSelect(agent.id)}
       style={{ left: `${at.x}%`, top: `${at.y}%`, '--sprite-z': Math.round(at.y) } as CssVars}
@@ -271,7 +280,11 @@ function Sprite({
           height: '100%',
           imageRendering: 'pixelated',
           filter: selected || visited ? 'drop-shadow(0 0 3px #f5c542) drop-shadow(0 0 1px #f5c542)' : undefined,
-          animation: pose === 'work' ? `${bob} 0.8s steps(1, end) infinite` : 'none',
+          animation: cheering
+            ? `${cheer} 0.9s ease-in-out infinite`
+            : pose === 'work'
+              ? `${bob} 0.8s steps(1, end) infinite`
+              : 'none',
           [NO_MOTION]: { animation: 'none' },
         }}
       />
@@ -369,6 +382,7 @@ export function TavernView({
   personas,
   parent = NO_PARENT,
   onInnkeeperSelect,
+  celebrating = false,
 }: OrchestratorViewProps) {
   const placements = usePlacements(agents);
   const arrived = useArrived(introPlaying);
@@ -460,12 +474,13 @@ export function TavernView({
             walkIn={mounted.current && !prefersReducedMotion()}
             selected={agent.id === selectedId}
             visited={reducedMotion && agent.id === visit}
+            cheering={celebrating}
             onSelect={onSelect}
           />
         ))}
         <Innkeeper
           point={innkeeperPoint}
-          pose={visit ? 'walking' : act.pose}
+          pose={celebrating ? 'cheering' : visit ? 'walking' : act.pose}
           bubble={innkeeperBubble(parent)}
           urgent={parent.status === 'needs-action'}
           label={labels.get(INNKEEPER_KEY) ?? HIDDEN_LABEL}

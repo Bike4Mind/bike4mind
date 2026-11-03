@@ -335,4 +335,19 @@ describe('TavernView', () => {
       expect(onSelect).not.toHaveBeenCalled();
     });
   });
+
+  describe('celebrating', () => {
+    it('raises every agent and has the Innkeeper cheer', async () => {
+      await renderTavern([agentFixture('a', 'done'), agentFixture('b', 'failed')], false, null, { celebrating: true });
+      expect(el('orchestrator-tavern-agent-a').getAttribute('data-cheering')).toBe('true');
+      expect(el('orchestrator-tavern-agent-b').getAttribute('data-cheering')).toBe('true');
+      expect(el('orchestrator-tavern-innkeeper').getAttribute('data-pose')).toBe('cheering');
+    });
+
+    it('does nothing of the sort otherwise', async () => {
+      await renderTavern([agentFixture('a', 'done')]);
+      expect(el('orchestrator-tavern-agent-a').getAttribute('data-cheering')).toBeNull();
+      expect(el('orchestrator-tavern-innkeeper').getAttribute('data-pose')).toBe('idle');
+    });
+  });
 });

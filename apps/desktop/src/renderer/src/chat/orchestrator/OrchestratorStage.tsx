@@ -6,6 +6,8 @@ import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
 import { useEffect, useMemo, type ReactNode, useState } from 'react';
 import { AgentPeekDrawer } from './AgentPeekDrawer';
+import { useFinale } from './finale';
+import { FinaleBanner } from './FinaleBanner';
 import { ORCHESTRATOR_VIEWS, type OrchestratorViewId } from './orchestratorPrefs';
 import { assignPersonas, type AgentPersona } from './tavern/agentPersona';
 import { formatAgentCost, summarizeRoster, type AgentView, type ParentView } from './roster';
@@ -26,6 +28,8 @@ export interface OrchestratorViewProps {
   /** The orchestrating session itself; the Tavern draws it as the Innkeeper. */
   parent?: ParentView;
   onInnkeeperSelect?(): void;
+  /** The run's finale is up: the Tavern raises its mugs. */
+  celebrating?: boolean;
 }
 
 export interface OrchestratorStageProps {
@@ -33,6 +37,10 @@ export interface OrchestratorStageProps {
   parent?: ParentView;
   /** Clicking the Innkeeper: bring the parent's own conversation forward. */
   onParentFocus?(): void;
+  /** The orchestrating session; scopes the remembered finale. Without it the finale never plays. */
+  rootId?: string;
+  /** The finale's "Read the report": show the parent's final answer. */
+  onReadReport?(): void;
   view: OrchestratorViewId;
   onViewChange(view: OrchestratorViewId): void;
   actions: AgentActions;
@@ -45,6 +53,8 @@ export interface OrchestratorStageProps {
   delegate?: { on: boolean; onChange(on: boolean): void };
 }
 
+const NO_PARENT: ParentView = {};
+
 const VIEW_LABEL: Record<OrchestratorViewId, string> = { tavern: 'Tavern', board: 'Board', table: 'Table' };
 
 const pulse = keyframes`
@@ -54,8 +64,10 @@ const pulse = keyframes`
 
 export function OrchestratorStage({
   agents,
-  parent,
+  parent = NO_PARENT,
   onParentFocus,
+  rootId,
+  onReadReport,
   view,
   onViewChange,
   actions,
@@ -86,6 +98,8 @@ export function OrchestratorStage({
   const needsYou = counts['needs-you'];
   const firstNeedsYou = agents.find(agent => agent.state === 'needs-you');
 
+  const finale = useFinale(rootId, agents, parent);
+
   const viewProps: OrchestratorViewProps = {
     agents,
     onSelect: setSelectedId,
@@ -94,6 +108,7 @@ export function OrchestratorStage({
     personas,
     parent,
     onInnkeeperSelect: onParentFocus,
+    celebrating: finale.shown,
   };
 
   return (
@@ -149,7 +164,27 @@ export function OrchestratorStage({
         {dockControl}
       </Box>
       <Box sx={{ display: 'flex', flex: 1, minHeight: 0 }}>
-        <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0, overflow: 'auto' }}>
+        <Box
+          sx={{
+            position: 'relative',
+            display: 'flex',
+            flexDirection: 'column',
+            flex: 1,
+            minWidth: 0,
+            minHeight: 0,
+            overflow: 'auto',
+          }}
+        >
+          {finale.shown && (
+            <FinaleBanner
+              agents={agents}
+              onRead={() => {
+                finale.dismiss();
+                onReadReport?.();
+              }}
+              onDismiss={finale.dismiss}
+            />
+          )}
           {agents.length === 0 ? (
             <Box
               data-testid="orchestrator-empty-state"

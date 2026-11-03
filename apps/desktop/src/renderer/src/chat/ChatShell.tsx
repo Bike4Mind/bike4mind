@@ -97,6 +97,7 @@ import { readIntroSeen, writeIntroSeen, type OrchestratorViewId } from './orches
 import { TableView } from './orchestrator/TableView';
 import { TavernView } from './orchestrator/tavern/TavernView';
 import { agentStates } from './orchestrator/roster';
+import { prefersReducedMotion } from './orchestrator/motion';
 import { useOrchestratorPrefs } from './orchestrator/useOrchestrator';
 
 function SessionHeader({ title, onRename }: { title: string; onRename: (title: string) => void }) {
@@ -538,6 +539,18 @@ export function ChatShell({
     // new session's intro still needs its full run.
   }, [introPhase, introEntry]);
   const orchestratorView = introPhase === 'off' ? orchestratorPrefs.view : 'tavern';
+  const threadHost = useRef<HTMLDivElement | null>(null);
+  const readParentReport = useCallback(() => {
+    setDockOpen(true);
+    // After the dock is shown again, or a hidden dock would scroll nothing into view.
+    window.requestAnimationFrame(() => {
+      const replies = threadHost.current?.querySelectorAll('[data-assistant-reply]');
+      replies?.[replies.length - 1]?.scrollIntoView({
+        block: 'start',
+        behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+      });
+    });
+  }, [setDockOpen]);
   const focusParentChat = useCallback(() => {
     setDockOpen(true);
     setComposerFocus(request => request + 1);
@@ -1217,6 +1230,7 @@ export function ChatShell({
                   introPlaying={introPhase === 'playing'}
                   renderView={renderOrchestratorView}
                   onParentFocus={focusParentChat}
+                  onReadReport={readParentReport}
                   delegate={
                     orchestrateCapable ? { on: delegating, onChange: on => void setOrchestrate(on) } : undefined
                   }
@@ -1242,7 +1256,7 @@ export function ChatShell({
                   }
                 />
               )}
-              <Box data-testid={threadHostTestId} sx={threadHostSx}>
+              <Box ref={threadHost} data-testid={threadHostTestId} sx={threadHostSx}>
                 {thread}
               </Box>
             </Box>

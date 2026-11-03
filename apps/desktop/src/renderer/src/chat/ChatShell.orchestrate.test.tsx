@@ -2,7 +2,13 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import type { ChatModelOption, ChatSession, ChatSessionSummary } from '@shared/chat';
+import type {
+  ChatMessage,
+  ChatModelOption,
+  ChatSession,
+  ChatSessionStatusEvent,
+  ChatSessionSummary,
+} from '@shared/chat';
 import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
@@ -112,6 +118,9 @@ let host: HTMLElement | null = null;
 const streamUnsubscribe = vi.fn();
 const onStreamEvent = vi.fn(() => streamUnsubscribe);
 let listed: ChatSessionSummary[] = SESSIONS;
+let statusSnapshot: ChatSessionStatusEvent[] = [];
+let statusListener: ((event: ChatSessionStatusEvent) => void) | null = null;
+let parentMessages: ChatMessage[] = [];
 let catalogModels: ChatModelOption[] = [];
 const setSessionOrchestrate = vi.fn(async (id: string, orchestrate: boolean) => {
   const found = listed.find(session => session.id === id);
@@ -126,6 +135,9 @@ beforeEach(() => {
   window.localStorage.clear();
   listed = SESSIONS;
   catalogModels = [];
+  statusSnapshot = [];
+  statusListener = null;
+  parentMessages = [];
   Element.prototype.scrollIntoView = () => undefined;
   vi.stubGlobal(
     'IntersectionObserver',
@@ -144,12 +156,19 @@ beforeEach(() => {
         onStreamEvent,
         listSessions: async () => listed,
         getSession: async (id: string) =>
-          ({ ...(listed.find(session => session.id === id) ?? PARENT), messages: [] }) as unknown as ChatSession,
+          ({
+            ...(listed.find(session => session.id === id) ?? PARENT),
+            messages: id === PARENT.id ? parentMessages : [],
+          }) as unknown as ChatSession,
         setSessionOrchestrate,
         inspectProject: async () => ({ currentBranch: 'main', branches: [] }),
         workspaceChanges: async () => null,
         getQueuedMessages: async () => [],
-        getSessionStatuses: async () => [],
+        getSessionStatuses: async () => statusSnapshot,
+        onSessionStatus: (listener: (event: ChatSessionStatusEvent) => void) => {
+          statusListener = listener;
+          return () => undefined;
+        },
         listModels: async () => ({ models: catalogModels }),
       }),
       sidebar: quietBridge({ getSections: async () => EMPTY_SIDEBAR_SECTIONS }),
@@ -438,6 +457,39 @@ describe('orchestrate mode in the chat shell', () => {
     await act(async () => el('orchestrator-tavern-innkeeper').click());
     expect(query('orchestrator-dock')).not.toBeNull();
     expect(document.activeElement).toBe(el('chat-composer-input'));
+  });
+
+  it("celebrates a finished run and reads the report by scrolling to the parent's last reply", async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    const at = '2026-10-01T00:00:00.000Z';
+    parentMessages = [
+      { id: 'a1', role: 'assistant', content: 'Spawning agents', createdAt: at },
+      { id: 'a2', role: 'assistant', content: 'The combined report', createdAt: at },
+    ] as ChatMessage[];
+    statusSnapshot = [{ sessionId: CHILD.id, status: 'processing' }];
+    const scrolled: Element[] = [];
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this);
+    };
+    await openParent();
+    await enterOrchestrate();
+    act(() => el('orchestrator-dock-toggle-btn').click());
+
+    vi.useFakeTimers();
+    await act(async () => statusListener?.({ sessionId: CHILD.id, status: 'done' }));
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(el('orchestrator-finale').textContent).toContain('Quest complete');
+
+    scrolled.length = 0;
+    await act(async () => el('orchestrator-finale-read-btn').click());
+    await act(async () => {
+      vi.advanceTimersByTime(100);
+    });
+    expect(query('orchestrator-finale')).toBeNull();
+    expect(query('orchestrator-dock')).not.toBeNull();
+    expect(scrolled.at(-1)?.textContent).toContain('The combined report');
   });
 
   it('opens an agent session from the stage', async () => {

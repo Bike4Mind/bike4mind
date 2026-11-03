@@ -1,5 +1,5 @@
 import { activityLabel } from '../activity';
-import type { AgentState, AgentView, ParentView } from '../roster';
+import { isParentBusy, type AgentState, type AgentView, type ParentView } from '../roster';
 import type { InnkeeperPose } from './tavernArt';
 
 export type InnkeeperAct = { pose: Exclude<InnkeeperPose, 'walking'> } | { pose: 'walking'; target: string };
@@ -7,8 +7,6 @@ export type InnkeeperAct = { pose: Exclude<InnkeeperPose, 'walking'> } | { pose:
 /** Tools whose `session_id` is a child the parent is checking on, so the Innkeeper walks over to it. */
 const VISIT_TOOLS: ReadonlySet<string> = new Set(['session_read', 'session_send']);
 const SETTLED: ReadonlySet<AgentState> = new Set(['done', 'failed', 'stopped', 'idle']);
-
-export const isParentBusy = (parent: ParentView) => parent.status === 'processing' || parent.status === 'needs-action';
 
 /**
  * What the Innkeeper is doing, from the parent's live activity: checking on an agent, posting quests,

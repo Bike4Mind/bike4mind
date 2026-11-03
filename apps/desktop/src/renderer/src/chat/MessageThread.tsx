@@ -302,6 +302,8 @@ const AssistantTurn = memo(function AssistantTurn({
         ...revealCopyButtonSx,
       }}
       data-testid="chat-message-assistant"
+      // The orchestrator's "Read the report" scrolls to the last of these.
+      data-assistant-reply
     >
       {/* The turn in the order it happened: each round's prose, then the tools that round went
           on to run, then the next round's prose. A reply that touched six files across ten

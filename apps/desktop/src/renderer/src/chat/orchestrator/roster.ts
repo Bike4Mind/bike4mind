@@ -50,6 +50,8 @@ export interface ParentView {
   activity?: AgentActivity;
 }
 
+export const isParentBusy = (parent: ParentView) => parent.status === 'processing' || parent.status === 'needs-action';
+
 const OUTCOME_STATE: Record<ChildOutcome, AgentState> = {
   finished: 'done',
   'max-tokens': 'failed',

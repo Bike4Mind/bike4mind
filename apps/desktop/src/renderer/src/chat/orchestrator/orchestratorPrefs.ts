@@ -7,6 +7,7 @@ const SURFACE_KEY = 'b4m.orchestrator.surface.';
 const VIEW_KEY = 'b4m.orchestrator.view.';
 const DOCK_OPEN_KEY = 'b4m.orchestrator.dockOpen';
 const INTRO_SEEN_KEY = 'b4m.orchestrator.introSeen';
+const FINALE_SEEN_KEY = 'b4m.orchestrator.finaleSeen.';
 
 /** Storage can be blocked or full; every preference then just falls back to its default. */
 function readItem(key: string): string | null {
@@ -50,6 +51,7 @@ export function forgetSessionPrefs(sessionId: string): void {
   try {
     window.localStorage.removeItem(SURFACE_KEY + sessionId);
     window.localStorage.removeItem(VIEW_KEY + sessionId);
+    window.localStorage.removeItem(FINALE_SEEN_KEY + sessionId);
   } catch {
     // A stale preference is harmless; it only applies if the same id ever comes back.
   }
@@ -69,4 +71,13 @@ export function readIntroSeen(): boolean {
 
 export function writeIntroSeen(): void {
   writeItem(INTRO_SEEN_KEY, '1');
+}
+
+/** The run (see runKey) whose finale this session last showed; only the latest is kept. */
+export function readFinaleSeen(sessionId: string): string | null {
+  return readItem(FINALE_SEEN_KEY + sessionId);
+}
+
+export function writeFinaleSeen(sessionId: string, run: string): void {
+  writeItem(FINALE_SEEN_KEY + sessionId, run);
 }

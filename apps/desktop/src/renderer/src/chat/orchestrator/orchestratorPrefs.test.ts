@@ -4,10 +4,12 @@ import {
   ORCHESTRATOR_VIEWS,
   forgetSessionPrefs,
   readDockOpen,
+  readFinaleSeen,
   readIntroSeen,
   readSurface,
   readView,
   writeDockOpen,
+  writeFinaleSeen,
   writeIntroSeen,
   writeSurface,
   writeView,
@@ -26,6 +28,15 @@ describe('orchestratorPrefs', () => {
     expect(readView('s1')).toBe('tavern');
     expect(readDockOpen()).toBe(true);
     expect(readIntroSeen()).toBe(false);
+  });
+
+  it('remembers the last celebrated run per session', () => {
+    expect(readFinaleSeen('s1')).toBeNull();
+    writeFinaleSeen('s1', 'run-a');
+    expect(readFinaleSeen('s1')).toBe('run-a');
+    expect(readFinaleSeen('s2')).toBeNull();
+    writeFinaleSeen('s1', 'run-b');
+    expect(readFinaleSeen('s1')).toBe('run-b');
   });
 
   it('round-trips each preference, keyed per session', () => {
@@ -72,6 +83,7 @@ describe('orchestratorPrefs', () => {
   it('forgets one session surface and view, and nothing else', () => {
     writeSurface('gone', 'orchestrate');
     writeView('gone', 'table');
+    writeFinaleSeen('gone', 'run');
     writeSurface('kept', 'orchestrate');
     writeDockOpen(false);
 
@@ -79,6 +91,7 @@ describe('orchestratorPrefs', () => {
 
     expect(window.localStorage.getItem('b4m.orchestrator.surface.gone')).toBeNull();
     expect(window.localStorage.getItem('b4m.orchestrator.view.gone')).toBeNull();
+    expect(readFinaleSeen('gone')).toBeNull();
     expect(readSurface('kept')).toBe('orchestrate');
     expect(readDockOpen()).toBe(false);
   });

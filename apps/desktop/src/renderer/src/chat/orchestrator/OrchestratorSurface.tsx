@@ -3,7 +3,7 @@ import type { PrSummary } from '@shared/pullRequest';
 import { OrchestratorStage, type OrchestratorStageProps } from './OrchestratorStage';
 import { useOrchestratorRoster } from './useOrchestrator';
 
-interface OrchestratorSurfaceProps extends Omit<OrchestratorStageProps, 'agents' | 'parent'> {
+interface OrchestratorSurfaceProps extends Omit<OrchestratorStageProps, 'agents' | 'parent' | 'rootId'> {
   rootId: string;
   sessions: readonly ChatSessionSummary[];
   statuses: ReadonlyMap<string, ChatSessionStatus>;
@@ -22,5 +22,5 @@ export function OrchestratorSurface({
   ...stageProps
 }: OrchestratorSurfaceProps) {
   const { agents, parent } = useOrchestratorRoster(rootId, sessions, statuses, prSummaries);
-  return <OrchestratorStage agents={agents} parent={parent} {...stageProps} />;
+  return <OrchestratorStage agents={agents} parent={parent} rootId={rootId} {...stageProps} />;
 }
