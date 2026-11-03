@@ -194,6 +194,20 @@ describe('ChatService quest_complete', () => {
     expect(interim.questComplete).toBeUndefined();
   });
 
+  it('leaves the reply unmarked when the user stops it after quest_complete', async () => {
+    const parent = await parentWithAgent();
+    reply(await nthStreamOf('task a', 1), 'did a');
+    callQuestComplete(await nthStreamOf('go', 3), 'quest-1', 'Here is the final');
+    await nthStreamOf('go', 4);
+    service.stop(parent.id);
+    await idle(parent.id);
+
+    const stopped = await lastReply(parent.id);
+    expect(stopped.stopReason).toBe('aborted');
+    expect(call(stopped, 'quest-1')).toMatchObject({ status: 'done' });
+    expect(stopped.questComplete).toBeUndefined();
+  });
+
   it('is refused while an agent is still working, and leaves the reply unmarked', async () => {
     const parent = await parentWithAgent();
     await nthStreamOf('task a', 1);

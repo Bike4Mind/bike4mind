@@ -3080,7 +3080,8 @@ export class ChatService {
           ...(promptCache ? { promptCache } : {}),
           ...(contextSnapshot ? { contextSnapshot } : {}),
           ...(deferred ? { deferred } : {}),
-          ...(marksQuestComplete(toolCalls) ? { questComplete: true as const } : {}),
+          // A stopped reply is cut off mid-summary, so it cannot stand as the final one.
+          ...(stopReason !== 'aborted' && marksQuestComplete(toolCalls) ? { questComplete: true as const } : {}),
         };
         await this.settleReply(sessionId, !!resume, historyScope, message);
         this.emit({
