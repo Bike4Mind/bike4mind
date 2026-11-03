@@ -43,7 +43,8 @@ export { HOP_EVENT, HOP_MINTED_EVENT };
 
 /**
  * Products a hop may be minted to: the ones that can redeem one. Only this app, for now. A hop to
- * anywhere else would be stored and counted as minted but could never be redeemed.
+ * anywhere else would be stored and counted as minted but could never be redeemed. Adding one also
+ * means redeemHop below and the `hop` rule in pages/api/overwatch/v1/events.ts.
  */
 export const HOP_DESTINATIONS = [HOST_PRODUCT_ID] as const;
 

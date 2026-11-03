@@ -6,7 +6,7 @@ const { mockResolveConsent, mockPublishConsent } = vi.hoisted(() => ({
 }));
 vi.mock('../consentRegion', () => ({ resolveConsent: mockResolveConsent, publishResolvedConsent: mockPublishConsent }));
 
-import { beaconVisit, releaseVisitBeacon } from '../visitBeacon';
+import { beaconVisit, releaseVisitBeacon, visitBeaconLanding } from '../visitBeacon';
 
 const setReferrer = (value: string) => Object.defineProperty(document, 'referrer', { value, configurable: true });
 const setVisibility = (value: DocumentVisibilityState) =>
@@ -202,16 +202,16 @@ describe('beaconVisit', () => {
     });
 
     it("publishes this load's consent before the beacon, so the server reads the same answer", () => {
-      const fetchMock = vi.fn().mockImplementation(() => {
-        expect(mockPublishConsent).toHaveBeenCalledWith('granted');
-        return Promise.resolve({ status: 204 });
-      });
+      // Asserted after the call: send() swallows anything thrown inside fetch.
+      const fetchMock = vi.fn().mockResolvedValue({ status: 204 });
       vi.stubGlobal('fetch', fetchMock);
       window.history.replaceState(null, '', `/?b4m_hop=${TOKEN}`);
 
       beaconVisit();
 
       expect(fetchMock).toHaveBeenCalledOnce();
+      expect(mockPublishConsent).toHaveBeenCalledWith('granted');
+      expect(mockPublishConsent.mock.invocationCallOrder[0]).toBeLessThan(fetchMock.mock.invocationCallOrder[0]);
     });
 
     it('sends the token, and no source, when consent is declined', () => {
@@ -312,5 +312,59 @@ describe('beaconVisit', () => {
   it('does nothing where fetch does not exist', () => {
     vi.stubGlobal('fetch', undefined);
     expect(() => beaconVisit()).not.toThrow();
+  });
+});
+
+// The page beacon reads this to decide whether a grant on the landing must name it (pageBeacon.ts).
+describe('visitBeaconLanding', () => {
+  beforeEach(() => window.history.replaceState(null, '', '/pricing'));
+
+  it('is the landing a beacon sent with consent', () => {
+    beaconVisit();
+
+    expect(visitBeaconLanding()).toBe('/pricing');
+  });
+
+  it('is none when the beacon went out without consent', () => {
+    beaconVisit();
+    mockResolveConsent.mockReturnValue('denied');
+    beaconVisit();
+
+    expect(visitBeaconLanding()).toBeUndefined();
+  });
+
+  it('is none while a beacon waits for the answer, and the landing once a grant releases it', () => {
+    mockResolveConsent.mockReturnValue('unset');
+    beaconVisit();
+    expect(visitBeaconLanding()).toBeUndefined();
+
+    mockResolveConsent.mockReturnValue('granted');
+    releaseVisitBeacon();
+
+    expect(visitBeaconLanding()).toBe('/pricing');
+  });
+
+  it('is none when the waiting beacon is released without an answer', () => {
+    mockResolveConsent.mockReturnValue('unset');
+    beaconVisit();
+    setVisibility('hidden');
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    expect(visitBeaconLanding()).toBeUndefined();
+  });
+
+  it('is none when the request could not be made at all', () => {
+    mockResolveConsent.mockReturnValue('denied');
+    beaconVisit();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => {
+        throw new TypeError('keepalive is not supported');
+      })
+    );
+    mockResolveConsent.mockReturnValue('granted');
+    beaconVisit();
+
+    expect(visitBeaconLanding()).toBeUndefined();
   });
 });

@@ -22,6 +22,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 }));
 
 const mockEmitVisitEvent = vi.fn().mockResolvedValue(undefined);
+const mockEmitPageViewEvent = vi.fn().mockResolvedValue(undefined);
 const mockIsConfigured = vi.fn(() => true);
 vi.mock('@bike4mind/server-utils/analytics/emitActiveEvent', async importOriginal => {
   const original = await importOriginal<typeof import('@bike4mind/server-utils/analytics/emitActiveEvent')>();
@@ -29,6 +30,7 @@ vi.mock('@bike4mind/server-utils/analytics/emitActiveEvent', async importOrigina
     ...original,
     isAnalyticsConfigured: () => mockIsConfigured(),
     emitVisitEvent: (...args: unknown[]) => mockEmitVisitEvent(...args),
+    emitPageViewEvent: (...args: unknown[]) => mockEmitPageViewEvent(...args),
   };
 });
 
@@ -341,7 +343,8 @@ describe('POST /api/analytics/visit', () => {
       expect(pendingCookieHeader(reload.res as never)).toContain(`${VISIT_PENDING_COOKIE}=1`);
     });
 
-    it('takes no source for a visit already recorded, so a late answer cannot add a second event', async () => {
+    // A second tab's answer, or one given on a later page load: the visit has its event already.
+    it('takes no source for a visit already recorded, so a late answer adds only its page', async () => {
       const { minted } = await startHeld();
 
       const late = call({
@@ -351,6 +354,7 @@ describe('POST /api/analytics/visit', () => {
       await late.run();
 
       expect(mockEmitVisitEvent).not.toHaveBeenCalled();
+      expect(mockEmitPageViewEvent).toHaveBeenCalledExactlyOnceWith({ sessionId: minted, path: '/pricing' });
       expect(pendingCookieHeader(late.res as never)).toBeUndefined();
     });
 
@@ -365,6 +369,96 @@ describe('POST /api/analytics/visit', () => {
 
       expect(mockEmitVisitEvent).not.toHaveBeenCalled();
       expect(pendingCookieHeader(later.res as never)).toBeUndefined();
+    });
+  });
+
+  // After its first, a visit's page loads (a new tab, a typed URL, a link, a reload) send no visit
+  // event, and the page beacon skips each load's landing, so this is the only place they are seen.
+  describe('a later page load of a recorded visit', () => {
+    const VISIT_ID = '0123456789abcdef0123456789abcdef';
+    const RECORDED = `${VISIT_COOKIE}=${VISIT_ID}`;
+
+    it('records the page it loaded as a page view, with only the visit id and the cleaned path', async () => {
+      const { res, run } = call({
+        cookie: RECORDED,
+        body: {
+          referrer: 'https://news.example.com/story',
+          landingPath: '/share/0f8fad5b-d9cb-469f-a165-70867728950e?x=1',
+        },
+      });
+      await run();
+
+      expect(mockEmitVisitEvent).not.toHaveBeenCalled();
+      // Exactly these two fields: the referrer and campaign belong to the visit's one event.
+      expect(mockEmitPageViewEvent).toHaveBeenCalledExactlyOnceWith({ sessionId: VISIT_ID, path: '/share/:token' });
+      expect(setCookieHeader(res as never)).toContain(RECORDED);
+      expect(pendingCookieHeader(res as never)).toBeUndefined();
+    });
+
+    // The server keeps no page state across loads, and the page beacon's repeat check is per load.
+    it('records a reload of the same page again', async () => {
+      await call({ cookie: RECORDED, body: { landingPath: '/pricing' } }).run();
+      await call({ cookie: RECORDED, body: { landingPath: '/pricing' } }).run();
+
+      expect(mockEmitPageViewEvent.mock.calls).toEqual([
+        [{ sessionId: VISIT_ID, path: '/pricing' }],
+        [{ sessionId: VISIT_ID, path: '/pricing' }],
+      ]);
+    });
+
+    it.each([
+      ['consent declined, which sends no path', {}],
+      ['no body', undefined],
+      ['consent not yet given', { awaitingConsent: true }],
+      ['a body still awaiting consent, whatever path it holds', { awaitingConsent: true, landingPath: '/pricing' }],
+      ['a path holding an address', { landingPath: '/users/someone@example.com' }],
+      ['something not a path', { landingPath: 'https://evil.example/x' }],
+    ])('records nothing for %s', async (_label, body) => {
+      const { res, run } = call({ cookie: RECORDED, body });
+      await run();
+
+      expect(mockEmitPageViewEvent).not.toHaveBeenCalled();
+      expect(mockEmitVisitEvent).not.toHaveBeenCalled();
+      // Still the same visit: the window slides whether or not a page is recorded.
+      expect(setCookieHeader(res as never)).toContain(RECORDED);
+    });
+
+    it('records nothing for a visit still held for the consent answer', async () => {
+      await call({
+        cookie: `${RECORDED}; ${VISIT_PENDING_COOKIE}=1`,
+        body: { awaitingConsent: true, landingPath: '/pricing' },
+      }).run();
+
+      expect(mockEmitPageViewEvent).not.toHaveBeenCalled();
+      expect(mockEmitVisitEvent).not.toHaveBeenCalled();
+    });
+
+    it('filters a non-human agent, and does nothing when analytics is not configured', async () => {
+      await call({
+        cookie: RECORDED,
+        userAgent: 'Googlebot/2.1 (+http://www.google.com/bot.html)',
+        body: { landingPath: '/pricing' },
+      }).run();
+      await call({ cookie: RECORDED, userAgent: 'HeadlessChrome/124', body: { landingPath: '/pricing' } }).run();
+      mockIsConfigured.mockReturnValue(false);
+      await call({ cookie: RECORDED, body: { landingPath: '/pricing' } }).run();
+
+      expect(mockEmitPageViewEvent).not.toHaveBeenCalled();
+      expect(mockEmitVisitEvent).not.toHaveBeenCalled();
+    });
+  });
+
+  // The landing is on the visit event, so a page view for it would count it twice.
+  describe("a visit's first page load", () => {
+    it.each([
+      ['starting a visit', undefined],
+      ['releasing one held for consent', `${VISIT_COOKIE}=0123456789abcdef0123456789abcdef; ${VISIT_PENDING_COOKIE}=1`],
+    ])('emits only the visit, with its landing, when %s', async (_label, cookie) => {
+      await call({ cookie, body: { landingPath: '/pricing' } }).run();
+
+      expect(mockEmitVisitEvent).toHaveBeenCalledTimes(1);
+      expect(mockEmitVisitEvent).toHaveBeenCalledWith(expect.objectContaining({ landingPath: '/pricing' }));
+      expect(mockEmitPageViewEvent).not.toHaveBeenCalled();
     });
   });
 });

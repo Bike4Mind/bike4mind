@@ -2,7 +2,7 @@ import { Alert, Box, Button, Stack, Typography } from '@mui/joy';
 import PlayArrowOutlinedIcon from '@mui/icons-material/PlayArrowOutlined';
 import { useAttackSimulationData, useRunAttackSimulation } from '@client/app/hooks/data/admin';
 import { useSecurityScanCooldown } from '@client/app/hooks/useSecurityScanCooldown';
-import { AdminPageHeader, DataTable, ErrorState, SectionCard, StatusChip } from '../shared';
+import { AdminPageHeader, DataTable, ErrorState, SectionCard, StatusChip, UpdatingBar } from '../shared';
 import { SecurityFindingsTable } from './SecurityFindingsTable';
 
 const COOLDOWN_MS = 30 * 60 * 1000;
@@ -13,7 +13,7 @@ const formatDateTime = (value: Date | string | undefined) => {
 };
 
 const ActiveDefenseTab = () => {
-  const { data, isLoading, error, refetch } = useAttackSimulationData();
+  const { data, isLoading, isFetching, error, refetch } = useAttackSimulationData();
   const runMutation = useRunAttackSimulation();
   const latestTerminalRun = data?.runs?.find(run => run.status === 'completed' || run.status === 'failed');
   const cooldown = useSecurityScanCooldown(latestTerminalRun?.finishedAt ?? latestTerminalRun?.startedAt, COOLDOWN_MS);
@@ -42,11 +42,14 @@ const ActiveDefenseTab = () => {
           </Button>
         }
       />
-      <Typography level="body-sm">
-        Last run: {formatDateTime(latestRun?.startedAt)}
-        {cooldown.cooldownActive ? ` - Cooldown: ${cooldown.minutesRemaining} min remaining.` : ''}
-        {latestRun?.status === 'running' ? ' - A run is currently in flight.' : ''}
-      </Typography>
+      <UpdatingBar active={Boolean(data) && isFetching} testId="active-defense-updating" />
+      {!isLoading && (
+        <Typography level="body-sm">
+          Last run: {formatDateTime(latestRun?.startedAt)}
+          {cooldown.cooldownActive ? ` - Cooldown: ${cooldown.minutesRemaining} min remaining.` : ''}
+          {latestRun?.status === 'running' ? ' - A run is currently in flight.' : ''}
+        </Typography>
+      )}
       {runMutation.isError && (
         <Alert color="danger" data-testid="active-defense-run-error">
           {runMutation.error instanceof Error ? runMutation.error.message : 'Failed to start attack simulation.'}
@@ -63,7 +66,7 @@ const ActiveDefenseTab = () => {
         </Box>
       ) : (
         <>
-          <SectionCard title={`Active findings (${findings.length})`}>
+          <SectionCard title={isLoading ? 'Active findings' : `Active findings (${findings.length})`}>
             {isLoading ? (
               <DataTable
                 rows={[]}

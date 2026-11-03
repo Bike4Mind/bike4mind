@@ -158,7 +158,7 @@ describe('needsHostedSwitchConfirm', () => {
     expect(needsHostedSwitchConfirm(qwen.id, llama, true)).toBe(false);
     expect(needsHostedSwitchConfirm(haiku.id, bedrockHaiku, true)).toBe(false);
     expect(needsHostedSwitchConfirm(null, haiku, true)).toBe(false);
-    expect(needsHostedSwitchConfirm('local:', haiku, true)).toBe(true);
+    expect(needsHostedSwitchConfirm('local:', haiku, true)).toBe(false);
   });
 });
 

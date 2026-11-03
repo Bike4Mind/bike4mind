@@ -10,11 +10,17 @@ interface FakeSession {
   voiceBilledCredits?: number;
   voiceLastActivityAt?: Date | null;
   voiceHoldUserId?: string | null;
+  voiceHoldApiKeyId?: string | null;
 }
 const state = vi.hoisted(() => ({
   session: null as unknown as FakeSession,
   balance: 0,
-  transactions: [] as Array<{ credits: number; transactionId?: string; metadata?: Record<string, unknown> }>,
+  transactions: [] as Array<{
+    credits: number;
+    transactionId?: string;
+    apiKeyId?: string;
+    metadata?: Record<string, unknown>;
+  }>,
   // Runs just before a claim, to stand in for another settler that got there first.
   beforeClaim: null as null | (() => void),
   failIncrement: false,
@@ -105,13 +111,14 @@ vi.mock('@bike4mind/database', () => ({
       if (options?.realtimeOnly && state.session.voiceBilledCredits === undefined) return null;
       const billedCredits = state.session.voiceBilledCredits ?? null;
       const payerId = state.session.voiceHoldUserId ?? null;
+      const apiKeyId = state.session.voiceHoldApiKeyId ?? null;
       state.session = {
         id: state.session.id,
         userId: state.session.userId,
         voiceReservedCredits: null,
         voiceSessionStartedAt: null,
       };
-      return { billedCredits, payerId };
+      return { billedCredits, payerId, apiKeyId };
     },
   },
 }));
@@ -338,6 +345,24 @@ describe('voiceSessionEnded realtime billing', () => {
     expect(state.session.voiceSessionStartedAt).toEqual(startedAt);
     expect(state.session.voiceBilledCredits).toBe(30);
     expect(charged()).toBe(HOLD);
+  });
+
+  it('attributes every response row and the closing row to the API key that opened the hold', async () => {
+    state.session.voiceHoldApiKeyId = 'key-1';
+
+    await send(30, 'resp-1');
+    await send(5);
+
+    expect(state.transactions).toHaveLength(2);
+    expect(state.transactions.map(t => t.apiKeyId)).toEqual(['key-1', 'key-1']);
+  });
+
+  it('attributes no API key to the rows of a hold a JWT caller opened', async () => {
+    await send(30, 'resp-1');
+    await send(5);
+
+    expect(state.transactions).toHaveLength(2);
+    expect(state.transactions.every(t => !('apiKeyId' in t))).toBe(true);
   });
 
   it("keys the closing ledger row on the hold's start", async () => {

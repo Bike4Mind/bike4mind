@@ -6,6 +6,8 @@ import {
   SHADOW_DETECTION_VERDICTS,
   SHADOW_DETECTORS,
   shadowDetectionPrecision,
+  type AccountCampaignIgnoredReason,
+  type AccountCampaignRelationship,
   type ShadowDetectionAction,
   type ShadowDetectionNetwork,
   type ShadowDetectionSummaryRow,
@@ -38,12 +40,27 @@ import {
 import {
   useShadowDetectionVerdict,
   useShadowDetections,
+  type CampaignGroupRow,
   type ShadowDetectionRow,
 } from '@client/app/hooks/data/shadowDetections';
 import { getErrorMessage } from '@client/app/utils/error';
 
 export const DETECTOR_LABELS: Record<ShadowDetector, string> = {
   signupNetworkBurst: 'Signup network burst',
+  accountCampaign: 'Account campaign',
+};
+
+const RELATIONSHIP_LABELS: Record<AccountCampaignRelationship, string> = {
+  networkPrefix: 'Network',
+  hostingAsn: 'Hosting network',
+  mailDomain: 'Mail domain',
+  fingerprint: 'Client fingerprint',
+  lifecycle: 'Lifecycle timing',
+};
+
+const IGNORED_REASON_LABELS: Record<AccountCampaignIgnoredReason, string> = {
+  common: 'common',
+  personalMailProvider: 'personal mail provider',
 };
 
 const ACTION_DISPLAY: Record<ShadowDetectionAction, { label: string; tone: AdminStatusTone }> = {
@@ -243,26 +260,117 @@ const SummaryStrip: React.FC<{ row: ShadowDetectionSummaryRow }> = ({ row }) => 
 
 const CONFLICT_FALLBACK_MESSAGE = 'Another admin graded this detection first. Review it again.';
 
-/** Every account and the network the detection names, so each profile is one click from grading. */
-const DialogActors: React.FC<{ row: ShadowDetectionRow }> = ({ row }) => (
-  <Stack gap={0.25} data-testid="shadow-detection-dialog-actors" sx={{ minWidth: 0 }}>
+const countOf = (count: number, noun: string) => `${count.toLocaleString()} ${noun}${count === 1 ? '' : 's'}`;
+
+/**
+ * A campaign group's accounts with how each is linked, then the shared values that linked them and the
+ * ones discounted as common. Transitive members are context, linked to the group through one member.
+ */
+const CampaignGroupEvidence: React.FC<{ group: CampaignGroupRow; now: number }> = ({ group, now }) => (
+  <Stack gap={1} data-testid="shadow-detection-campaign-group" sx={{ minWidth: 0 }}>
     <Typography level="body-xs" sx={muted}>
-      {row.userIds.length === 1 ? 'Account' : `Accounts (${row.userIds.length.toLocaleString()})`}
+      Accounts ({group.totals.direct.toLocaleString()} direct, {group.totals.transitive.toLocaleString()} transitive,{' '}
+      {group.totals.links.toLocaleString()} links). Last seen {relativeTime(new Date(group.lastObservedAt), now)}, first
+      seen {formatUtc(new Date(group.firstObservedAt))}. Populations count the accounts scanned from{' '}
+      {formatUtc(new Date(group.window.from))} to {formatUtc(new Date(group.window.to))}.
     </Typography>
-    {row.userIds.length === 0 ? (
-      <Dash />
-    ) : (
-      row.userIds.map(userId => (
-        <UserLink key={userId} userId={userId} testId={`shadow-detection-dialog-user-link-${userId}`} />
-      ))
+    <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
+      {group.members.map(member => (
+        <Box component="li" key={member.userId} data-testid={`shadow-detection-campaign-member-${member.userId}`}>
+          <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
+            <UserLink userId={member.userId} testId={`shadow-detection-dialog-user-link-${member.userId}`} />
+            <Box component="span" data-testid={`shadow-detection-campaign-membership-${member.userId}`}>
+              <StatusChip
+                tone={member.membership === 'direct' ? 'warn' : 'neutral'}
+                label={member.membership === 'direct' ? 'Direct' : 'Transitive'}
+              />
+            </Box>
+            <Typography level="body-xs" sx={muted}>
+              {member.linkCount.toLocaleString()} {member.linkCount === 1 ? 'link' : 'links'}
+            </Typography>
+          </Stack>
+        </Box>
+      ))}
+    </Box>
+    {group.truncated && (
+      <Typography level="body-xs" sx={muted} data-testid="shadow-detection-campaign-truncated">
+        Lists were cut to their stored caps; the counts above are complete.
+      </Typography>
     )}
-    {row.network && (
-      <Typography level="body-xs" sx={{ ...muted, overflowWrap: 'anywhere' }}>
-        {formatNetwork(row.network)}
+    <Typography level="body-xs" sx={muted}>
+      Linked by
+    </Typography>
+    <Box component="ul" sx={{ m: 0, pl: 2.5 }} data-testid="shadow-detection-campaign-evidence">
+      {group.evidence.map(entry => (
+        <Typography
+          key={`${entry.relationship}:${entry.value ?? ''}`}
+          component="li"
+          level="body-sm"
+          sx={{ overflowWrap: 'anywhere' }}
+        >
+          {entry.label} ({countOf(entry.userIds.length, 'member')}; shared by{' '}
+          {countOf(entry.population, 'scanned account')})
+        </Typography>
+      ))}
+    </Box>
+    {group.ignored.length > 0 && (
+      <>
+        <Typography level="body-xs" sx={muted}>
+          Shared but not counted
+        </Typography>
+        <Box component="ul" sx={{ m: 0, pl: 2.5 }} data-testid="shadow-detection-campaign-ignored">
+          {group.ignored.map(entry => (
+            <Typography
+              key={`${entry.relationship}:${entry.value}`}
+              component="li"
+              level="body-sm"
+              sx={{ ...muted, overflowWrap: 'anywhere' }}
+            >
+              {RELATIONSHIP_LABELS[entry.relationship]} {entry.value}: {IGNORED_REASON_LABELS[entry.reason]} (
+              {countOf(entry.memberCount, 'member')}; shared by {countOf(entry.population, 'scanned account')})
+            </Typography>
+          ))}
+        </Box>
+      </>
+    )}
+    {(group.unknown.fingerprint > 0 || group.unknown.network > 0) && (
+      <Typography level="body-xs" sx={muted} data-testid="shadow-detection-campaign-unknown">
+        Not captured, so neither for nor against a link:{' '}
+        {[
+          group.unknown.fingerprint > 0 && `client fingerprint for ${countOf(group.unknown.fingerprint, 'member')}`,
+          group.unknown.network > 0 && `network for ${countOf(group.unknown.network, 'member')}`,
+        ]
+          .filter(Boolean)
+          .join(', ')}
+        .
       </Typography>
     )}
   </Stack>
 );
+
+/** Every account and the network the detection names, so each profile is one click from grading. */
+const DialogActors: React.FC<{ row: ShadowDetectionRow; now: number }> = ({ row, now }) =>
+  row.group ? (
+    <CampaignGroupEvidence group={row.group} now={now} />
+  ) : (
+    <Stack gap={0.25} data-testid="shadow-detection-dialog-actors" sx={{ minWidth: 0 }}>
+      <Typography level="body-xs" sx={muted}>
+        {row.userIds.length === 1 ? 'Account' : `Accounts (${row.userIds.length.toLocaleString()})`}
+      </Typography>
+      {row.userIds.length === 0 ? (
+        <Dash />
+      ) : (
+        row.userIds.map(userId => (
+          <UserLink key={userId} userId={userId} testId={`shadow-detection-dialog-user-link-${userId}`} />
+        ))
+      )}
+      {row.network && (
+        <Typography level="body-xs" sx={{ ...muted, overflowWrap: 'anywhere' }}>
+          {formatNetwork(row.network)}
+        </Typography>
+      )}
+    </Stack>
+  );
 
 type VerdictDialogProps = {
   row: ShadowDetectionRow;
@@ -316,7 +424,7 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({ row, now, onClose, onRowC
           <VerdictChip verdict={row.verdict} testId="shadow-detection-dialog-current-verdict" />
         </Stack>
       </Stack>
-      <DialogActors row={row} />
+      <DialogActors row={row} now={now} />
       {conflict && (
         <Alert color="warning" data-testid="shadow-detection-verdict-conflict">
           {conflict} Its current verdict and history are shown below.

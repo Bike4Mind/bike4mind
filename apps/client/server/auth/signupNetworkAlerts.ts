@@ -51,7 +51,12 @@ const SHADOW_DEDUPE_KEY_PREFIX = 'shadow-detection:signup-network';
 export const SIGNUP_NETWORK_BURST_POLICY_VERSION = 1;
 
 // Enterprise SSO (Okta, SAML) onboards whole teams from one office network by design.
-const SELF_SERVE_SIGNUP_METHODS: ReadonlySet<string> = new Set(['otc', AuthStrategy.Google, AuthStrategy.Github]);
+const SELF_SERVE_SIGNUP_METHODS: ReadonlySet<string> = new Set([
+  'otc',
+  AuthStrategy.Google,
+  AuthStrategy.Github,
+  AuthStrategy.Apple,
+]);
 
 export type SignupNetworkAlertThresholds = {
   enabled: boolean;
@@ -213,6 +218,7 @@ export function buildSignupNetworkShadowDetection(input: {
       threshold: burst.max,
     })),
     windowMinutes,
+    group: null,
     detectedAt,
   };
 }

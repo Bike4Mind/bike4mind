@@ -33,7 +33,11 @@ import { applyOAuthSignupDomainGrant } from './oauthSignupGrants';
  * the authorization - gating them would break enterprise onboarding on instances that
  * are invite-only for the public.
  */
-const SELF_SERVE_STRATEGIES: ReadonlySet<AuthStrategy> = new Set([AuthStrategy.Google, AuthStrategy.Github]);
+const SELF_SERVE_STRATEGIES: ReadonlySet<AuthStrategy> = new Set([
+  AuthStrategy.Google,
+  AuthStrategy.Github,
+  AuthStrategy.Apple,
+]);
 
 /** The user `done` hands the callback endpoints, with the transient flags this module sets (never persisted). */
 export type OAuthUser = IUserObject & {
@@ -368,3 +372,28 @@ export const selfServeVerifyCallback =
       readNetworkMeta(req),
       wasTurnstileVerified(req)
     );
+
+/**
+ * Self-serve login for a strategy that builds its own profile (Apple derives it from the id_token, not
+ * a userinfo call), with the same network and challenge gating as selfServeVerifyCallback.
+ */
+export const authenticateSelfServeProfile = (
+  strategy: AuthStrategy,
+  req: NetworkRequest,
+  accessToken: string,
+  refreshToken: string,
+  profile: unknown,
+  // any: passport's untyped verify callback, as in verifyCallback above
+  done: any,
+  authProvider?: Partial<IAuthProviders>
+) =>
+  authenticateUser(
+    strategy,
+    accessToken,
+    refreshToken,
+    profile,
+    done,
+    authProvider,
+    readNetworkMeta(req),
+    wasTurnstileVerified(req)
+  );

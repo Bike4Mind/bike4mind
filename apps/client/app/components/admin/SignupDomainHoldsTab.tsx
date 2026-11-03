@@ -1,13 +1,16 @@
 import { useRef, useState } from 'react';
 import { Alert, Button, Stack, Typography } from '@mui/joy';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { DisposableSourceStatus, SignupDomainReview } from '@bike4mind/common';
+import type { DisposableSourceStatus, SignupDomainHoldAutoPolicy, SignupDomainReview } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
 import { DataTable } from './shared/DataTable';
 
 const QUERY_KEY = ['signup-domain-holds'];
 const ENDPOINT = '/api/admin/signup-domain-holds';
+const AUTO_POLICY_LABELS: Record<SignupDomainHoldAutoPolicy, string> = {
+  'disposable-aggregate-rule': 'Auto-confirmed by the disposable list rule',
+};
 
 export default function SignupDomainHoldsTab() {
   const [page, setPage] = useState(1);
@@ -58,7 +61,10 @@ export default function SignupDomainHoldsTab() {
         Patterned signup bursts, domains only on the aggregate disposable list, freshly registered domains and domains
         whose mail runs through a disposable provider defer pending free credits. Confirm keeps credits held. Release
         allows future grants and retries existing pending grants. Granted balances are never changed. Configure
-        detection in Users settings. Released domains stay exempt from automatic holds.
+        detection in Users settings. Released domains stay exempt from automatic holds. Holds from domains only on the
+        aggregate disposable list are confirmed automatically on stages that run scheduled jobs unless that is turned
+        off in Users settings; each is recorded in the Admin Audit Log as a system action and can still be released
+        here.
       </Typography>
       {decision.error && <Alert color="danger">{getErrorMessage(decision.error)}</Alert>}
       {decision.data?.status === 'blocked' && (
@@ -118,7 +124,21 @@ export default function SignupDomainHoldsTab() {
               </>
             ),
           },
-          { id: 'status', label: 'Status', render: review => review.status },
+          {
+            id: 'status',
+            label: 'Status',
+            render: review => (
+              <>
+                {review.status}
+                {review.autoDecision && (
+                  <Typography level="body-sm" data-testid={`signup-domain-auto-decision-${review.domain}`}>
+                    {AUTO_POLICY_LABELS[review.autoDecision.policy]}{' '}
+                    {new Date(review.autoDecision.decidedAt).toLocaleString()}
+                  </Typography>
+                )}
+              </>
+            ),
+          },
           {
             id: 'review',
             label: 'Review',

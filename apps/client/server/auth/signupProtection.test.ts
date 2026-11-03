@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Logger } from '@bike4mind/observability';
 import { postMessageToSlackWithOutcome } from '@bike4mind/server-utils/integrations/slack/slack';
+import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { signupProtection } from './signupProtection';
 
 vi.mock('@bike4mind/database', () => ({ signupProtectionRepository: {} }));
+vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics: vi.fn() }));
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlackWithOutcome: vi.fn() }));
 
 const review = {
@@ -49,5 +52,30 @@ describe('signup protection alerts', () => {
     expect(Logger.globalInstance.error).toHaveBeenCalledWith('Signup domain hold alert was not delivered', {
       domain: '<example.net>',
     });
+  });
+
+  it('posts the unset drip cap alert to the liveops channel and rejects when undelivered', async () => {
+    await signupProtection.notifyConfig!({ setting: 'signupGrantDripCap', fallback: 9000 });
+    expect(postMessageToSlackWithOutcome).toHaveBeenCalledWith(
+      expect.stringContaining('9,000 credits'),
+      'SlackLiveopsWebhookUrl',
+      { timeoutMs: 3000 }
+    );
+
+    vi.mocked(postMessageToSlackWithOutcome).mockResolvedValue('failed');
+    await expect(signupProtection.notifyConfig!({ setting: 'signupGrantDripCap', fallback: 9000 })).rejects.toThrow(
+      'Signup grant config alert was not delivered'
+    );
+  });
+});
+
+describe('disposable refusal metric', () => {
+  it('emits one SignupRefusals datum per source, dimensioned by stage and source', async () => {
+    await signupProtection.recordDisposableRefusal!({ domain: 'burner.test', sources: ['curated', 'tompec'] });
+
+    expect(emitMetrics).toHaveBeenCalledExactlyOnceWith('Lumina5/DisposableDomains', [
+      { name: 'SignupRefusals', value: 1, dimensions: { Stage: 'test', Source: 'curated' }, unit: 'Count' },
+      { name: 'SignupRefusals', value: 1, dimensions: { Stage: 'test', Source: 'tompec' }, unit: 'Count' },
+    ]);
   });
 });

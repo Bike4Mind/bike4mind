@@ -101,3 +101,4 @@ export class PassportOAuthStateStore implements OAuth2Strategy.StateStore {
 
 export const githubOAuthStateStore = new PassportOAuthStateStore('github-oauth-state');
 export const googleOAuthStateStore = new PassportOAuthStateStore('google-oauth-state');
+export const appleOAuthStateStore = new PassportOAuthStateStore('apple-oauth-state');

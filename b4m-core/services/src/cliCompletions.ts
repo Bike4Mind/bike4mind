@@ -669,6 +669,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     }
   }
   const modelInfo = shadowModelInfo ?? requestedModelInfo;
+  // Credits are priced on the requested model; cost and token sizing stay on the one that runs.
+  const chargedModelInfo = shadowModelInfo ? requestedModelInfo : modelInfo;
   const runModel = shadowModelInfo ? shadowModelInfo.id : model;
   const withholdReasoning = withholdsReasoning(await resolveCallerThinkingVisibility(params, actor, logger), runModel);
   const reasoningChannel = reasoningChannelOf(modelInfo ?? { id: runModel });
@@ -835,8 +837,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     db.cache &&
     !(await reserveShadowTokenBudget(storedActor!, shadowSettings.dailyTokenCap, { cache: db.cache }))
   ) {
-    const required = modelInfo
-      ? usdToCredits(getTextModelCost(modelInfo, estimateInputTokens(messages), maxTokens)) || 1
+    const required = chargedModelInfo
+      ? usdToCredits(getTextModelCost(chargedModelInfo, estimateInputTokens(messages), maxTokens)) || 1
       : 1;
     throw outOfCreditsError(0, required);
   }
@@ -889,7 +891,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       reservationOutputTokens(maxTokens, reasonsWithinOutputBudget(modelInfo))
     );
     const estimatedUsdCost = estimateReservationUsd(
-      modelInfo,
+      chargedModelInfo!,
       messages,
       estimatedInputTokens,
       estimatedOutputTokens,
@@ -918,7 +920,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     // Still not an upper bound on the turn: it prices one round at the uncached input
     // rate, so a multi-round tool loop or a cache-write turn can settle above it.
     if (billToOrg) {
-      const capCheckCredits = usdToCredits(getTextModelCost(modelInfo, estimatedInputTokens, maxTokens));
+      const capCheckCredits = usdToCredits(getTextModelCost(chargedModelInfo!, estimatedInputTokens, maxTokens));
       if (isMemberCreditCapExceeded(organization!, userId, capCheckCredits)) {
         throw new InsufficientCreditsError(MEMBER_CREDIT_CAP_MESSAGE, 'insufficient_credits');
       }
@@ -966,8 +968,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       const toolTokens = estimateToolTokens(completionOptions.tools ?? [], toolSearch);
       const inputTokens = estimateInputTokens(roundMessages) + toolTokens;
       return affordableRoundBudget({
-        modelInfo,
-        inputUsd: estimateReservationUsd(modelInfo, roundMessages, inputTokens, 0, toolTokens),
+        modelInfo: chargedModelInfo!,
+        inputUsd: estimateReservationUsd(chargedModelInfo!, roundMessages, inputTokens, 0, toolTokens),
         inputTokens,
         availableCredits,
         minimumOutputTokens,
@@ -1139,7 +1141,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       ? gateEveryRound(llm, async (roundMessages, roundOptions, round) => {
           if (round === 0) return roundOptions;
           adoptAccumulatedUsage(roundOptions._internal);
-          const spentCredits = usdToCredits(settledUsdCost(modelInfo!));
+          const spentCredits = usdToCredits(settledUsdCost(chargedModelInfo!));
           const balance = (await fetchHolder())?.currentCredits ?? 0;
           const budget = roundBudget(roundMessages, balance + reservedCredits - spentCredits);
           if (!budget.affordable) {
@@ -1259,6 +1261,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Final settlement: one stochastic draw, shared by the client-facing final
   // event and the ledger adjustment below so display always equals charge.
   let finalUsdCost = 0;
+  let chargedUsdCost = 0;
   let finalCredits = 0;
 
   if (shadowSettings && db.cache) {
@@ -1271,7 +1274,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
 
   if (modelInfo) {
     finalUsdCost = settledUsdCost(modelInfo);
-    finalCredits = usdToCreditsStochastic(finalUsdCost);
+    chargedUsdCost = settledUsdCost(chargedModelInfo!);
+    finalCredits = usdToCreditsStochastic(chargedUsdCost);
     logLlmUsageSettled({
       backend: modelInfo.backend,
       model: modelInfo.id,
@@ -1303,7 +1307,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         cacheCreationInputTokens: finalCacheCreationTokens || undefined,
         cacheWrite1hInputTokens: finalCacheWrite1hTokens() || undefined,
         creditsUsed: finalCredits,
-        usdCost: finalUsdCost,
+        usdCost: chargedUsdCost,
         stopReason: finalStopReason,
       });
   } else {

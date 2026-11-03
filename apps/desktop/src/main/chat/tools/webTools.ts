@@ -72,11 +72,22 @@ function describeFailure(error: unknown, action: string, stalled: string, log?: 
   if (message === STOPPED_WHILE_QUEUED) return new Error(message);
   if (name === 'SessionRevokedError' || name === 'NotAuthenticatedError') return new Error(SIGNED_OUT);
   const status = isAxiosError(error) ? error.response?.status : undefined;
-  const body = (isAxiosError(error) ? (error.response?.data ?? {}) : {}) as { error?: unknown; message?: unknown };
+  const body = (isAxiosError(error) ? (error.response?.data ?? {}) : {}) as {
+    error?: unknown;
+    message?: unknown;
+    errorCode?: unknown;
+  };
   const raw = typeof body.error === 'string' ? body.error : typeof body.message === 'string' ? body.message : '';
   const detail = oneLine(raw, 300);
   const code = isAxiosError(error) ? error.code : undefined;
   if (status === 401 || status === 403) return new Error(SIGNED_OUT);
+  // Refused before the provider ran, so retrying the same call changes nothing until credits are added.
+  if (status === 422 && body.errorCode === 'insufficient_credits') {
+    return new Error(
+      `The ${action} was not run: the account is out of credits. Tell the user to add credits in Bike4Mind, then try again.` +
+        (detail ? ` (${detail})` : '')
+    );
+  }
   if (status === 429) return new Error(`The ${action} was rate limited by the server. Try again later.`);
   if (
     code === 'ECONNABORTED' ||

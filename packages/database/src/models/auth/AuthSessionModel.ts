@@ -1,6 +1,7 @@
 import { IAuthSessionDocument, IAuthSessionRepository, IAuthSessionStepUpEmailChallenge } from '@bike4mind/common';
 import mongoose, { Schema, model, Model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
+import { pushTokenRepository } from './PushTokenModel';
 
 const AuthSessionDeviceSchema = new Schema(
   {
@@ -257,17 +258,23 @@ class AuthSessionRepository extends BaseRepository<IAuthSessionDocument> impleme
   }
 
   async revokeBySid(sid: string): Promise<IAuthSessionDocument | null> {
-    return AuthSessionModel.findOneAndUpdate(
+    const revoked = await AuthSessionModel.findOneAndUpdate(
       { sid, revokedAt: null },
       { $set: { revokedAt: new Date() } },
       { new: true }
     ).exec();
+    // Pruned even when the row was already revoked, so a token registered in the gap is still cleared.
+    // Here rather than in each route/service: every revoke path (logout, refresh-reuse, admin, impersonation
+    // end) funnels through this method or revokeAllByUserId, including the ones that call the repository directly.
+    await pushTokenRepository.removeBySid(sid);
+    return revoked;
   }
 
   async revokeAllByUserId(userId: string, options?: { exceptSid?: string }): Promise<number> {
     const filter: Record<string, unknown> = { userId, revokedAt: null };
     if (options?.exceptSid) filter.sid = { $ne: options.exceptSid };
     const result = await AuthSessionModel.updateMany(filter, { $set: { revokedAt: new Date() } }).exec();
+    await pushTokenRepository.removeByUser(userId, options);
     return result.modifiedCount ?? 0;
   }
 }
