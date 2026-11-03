@@ -88,7 +88,7 @@ describe('sessionUsageBuckets', () => {
       contextTokens: result.reduce((sum, bucket) => sum + bucket.contextTokens, 0),
     });
 
-    it('splits it by the model each round went to, counting each token once', () => {
+    it('splits it by the model each round went to, counting each token once and the reply once', () => {
       const result = buckets([
         {
           ...reply(at, {
@@ -105,11 +105,11 @@ describe('sessionUsageBuckets', () => {
       ]);
       expect(result.map(bucket => [bucket.model, bucket.replies, bucket.outputTokens, bucket.contextTokens])).toEqual([
         [OLLAMA, 1, 30, 300],
-        [SERVER, 1, 40, 400],
+        [SERVER, 0, 40, 400],
       ]);
       expect(totals(result)).toEqual({ outputTokens: 70, contextTokens: 700 });
       expect(result[0]).toMatchObject({ timedReplies: 1, evalTokens: 30, evalMs: 900, loads: 1, loadMs: 300 });
-      expect(result[1]).toMatchObject({ timedReplies: 1, evalTokens: 40, evalMs: 500, loads: 0 });
+      expect(result[1]).toMatchObject({ timedReplies: 0, evalTokens: 40, evalMs: 500, loads: 0 });
     });
 
     it('counts a share untimed when its rounds carry no rate, even if the reply does', () => {
@@ -123,6 +123,92 @@ describe('sessionUsageBuckets', () => {
         [OLLAMA, 0, 0],
         [SERVER, 0, 0],
       ]);
+    });
+
+    it('counts a reply that started hosted on no local model, and a reply that started local once', () => {
+      const result = buckets([
+        {
+          ...reply(at, { inputTokens: 1100, outputTokens: 110 }, 'claude-sonnet-5'),
+          rounds: [
+            round('claude-sonnet-5', { inputTokens: 1000, outputTokens: 100 }),
+            round(OLLAMA, { inputTokens: 100, outputTokens: 10 }),
+          ],
+        },
+        reply(at, { outputTokens: 7 }, OLLAMA),
+      ]);
+      expect(result.map(bucket => [bucket.model, bucket.replies, bucket.outputTokens])).toEqual([[OLLAMA, 1, 17]]);
+    });
+
+    it('counts a reply that started local even when only its later rounds carry usage', () => {
+      const result = buckets([
+        {
+          ...reply(at, { outputTokens: 40 }, OLLAMA),
+          rounds: [round(OLLAMA), round(SERVER, { outputTokens: 40 })],
+        },
+      ]);
+      expect(result.map(bucket => [bucket.model, bucket.replies, bucket.outputTokens])).toEqual([
+        [SERVER, 0, 40],
+        [OLLAMA, 1, 0],
+      ]);
+    });
+
+    describe('as ChatService stores it', () => {
+      const HOSTED = 'claude-sonnet-5';
+
+      it('hosted to local, the local run aborted: only the local round counts', () => {
+        const result = buckets([
+          {
+            ...reply(at, { inputTokens: 1050, outputTokens: 205 }, HOSTED),
+            stopReason: 'aborted',
+            rounds: [
+              round(HOSTED, { inputTokens: 1000, outputTokens: 200 }),
+              round(OLLAMA, { inputTokens: 50, outputTokens: 5 }),
+            ],
+          },
+        ]);
+        expect(result.map(bucket => [bucket.model, bucket.replies, bucket.outputTokens, bucket.contextTokens])).toEqual(
+          [[OLLAMA, 0, 5, 50]]
+        );
+      });
+
+      it('hosted to local, the local run failed: the reply stays hosted, with the rounds it came in with', () => {
+        const result = buckets([
+          {
+            ...reply(at, { inputTokens: 1000, outputTokens: 200 }, HOSTED),
+            error: 'the server fell over',
+            rounds: [round(HOSTED, { inputTokens: 1000, outputTokens: 200 })],
+          },
+        ]);
+        expect(result).toEqual([]);
+      });
+
+      it('local to hosted, the hosted run aborted: the local spend is kept', () => {
+        const result = buckets([
+          {
+            ...reply(at, { inputTokens: 400, outputTokens: 40 }, OLLAMA),
+            stopReason: 'aborted',
+            rounds: [
+              round(OLLAMA, { inputTokens: 300, outputTokens: 30 }),
+              round(HOSTED, { inputTokens: 100, outputTokens: 10 }),
+            ],
+          },
+        ]);
+        expect(result.map(bucket => [bucket.model, bucket.replies, bucket.outputTokens, bucket.contextTokens])).toEqual(
+          [[OLLAMA, 1, 30, 300]]
+        );
+      });
+
+      it('a hosted reply with no stored rounds, continued locally: its earlier tokens stay hosted', () => {
+        const result = buckets([
+          {
+            ...reply(at, { inputTokens: 1060, outputTokens: 207 }, HOSTED),
+            rounds: [round(HOSTED), round(OLLAMA, { inputTokens: 60, outputTokens: 7 })],
+          },
+        ]);
+        expect(result.map(bucket => [bucket.model, bucket.replies, bucket.outputTokens, bucket.contextTokens])).toEqual(
+          [[OLLAMA, 0, 7, 60]]
+        );
+      });
     });
 
     it('keeps only the local share of a reply that also ran on a hosted model', () => {
@@ -144,8 +230,10 @@ describe('sessionUsageBuckets', () => {
     it('gives what no round carries to the reply model when every round ran locally', () => {
       const result = buckets([
         {
+          // A reply stored without rounds and continued on another server: the earlier 500 tokens ride
+          // on a usage-less fallback round that keeps the original model.
           ...reply(at, { inputTokens: 900, outputTokens: 90 }, OLLAMA),
-          rounds: [round(undefined), round(SERVER, { inputTokens: 400, outputTokens: 40 })],
+          rounds: [round(OLLAMA), round(SERVER, { inputTokens: 400, outputTokens: 40 })],
         },
       ]);
       expect(result.map(bucket => [bucket.model, bucket.outputTokens, bucket.contextTokens])).toEqual([
