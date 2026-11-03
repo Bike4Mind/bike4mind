@@ -25,7 +25,8 @@ No Node.js, pnpm, or source checkout is required.
    A project opened from `\\wsl.localhost\<distro>\...` (or `\\wsl$\<distro>\...`) runs git,
    shell commands, search and the terminal inside that WSL distro instead, with the distro's own
    git and toolchain and the PATH of the user's login shell there; such a project does not need
-   Git for Windows.
+   Git for Windows. `gh` still runs on Windows, so finding a project's open pull request by
+   branch needs `gh` installed and signed in on the Windows side.
    The rest of the local tool layer (file access, sandboxing) is not yet verified on Windows.
 
 New distribution releases require Developer ID signing and notarization. Legacy unsigned
