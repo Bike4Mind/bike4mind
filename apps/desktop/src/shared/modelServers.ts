@@ -59,7 +59,8 @@ export interface ModelServerView {
 
 /**
  * Hardware typed in Settings, which fit badges and Curated picks rate against. Memory is in GiB, the unit RAM and
- * GPUs are sold in; bandwidth is in GB/s and nothing rates against it yet. Blank fields are null.
+ * GPUs are sold in; bandwidth is in GB/s and sets the reply speed estimate, which orders Curated picks within a fit
+ * class but never changes the rating. Blank fields are null.
  */
 export interface ModelServerSpecs {
   ramGiB: number | null;

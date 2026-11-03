@@ -682,6 +682,40 @@ describe('estimateFit', () => {
   });
 });
 
+describe('estimateFit decode estimate', () => {
+  const bandwidth = (hw: HardwareProfile, gib = 100): HardwareProfile => ({
+    ...hw,
+    memoryBandwidthBytesPerSec: gib * GIB,
+  });
+
+  it('rates a resident plan, the requested one included, from the bandwidth', () => {
+    const r = fit({ hardware: bandwidth(mac(16)), context: 8192 });
+    expect(r.placement).toBe('gpu');
+    // 100 GiB/s at 0.8 efficiency over 10 GiB of weights.
+    expect(r.decode?.tokensPerSec).toBeCloseTo(8);
+    expect(r.requested?.decode?.tokensPerSec).toBeCloseTo(8);
+    expect(fit().decode).toBeNull();
+  });
+
+  it('leaves offload plans unrated, their reads spanning two memories', () => {
+    const moe = { arch: arch(MOE_35B_ARCH), weightsBytes: 21.71e9, expertBytesPerLayer: 492_750_000 };
+    const runtime = { ...LS, nCpuMoe: 10 };
+    const offload = estimateFit({ model: moe, hardware: bandwidth(mac(32)), mode: 'chat', runtime });
+    expect(offload.placement).toBe('expert-offload');
+    expect(offload.decode).toBeNull();
+    const split = fit({ weightsGiB: 30, hardware: bandwidth(machine('discrete', 64, 24)) });
+    expect(split.placement).toBe('layer-offload');
+    expect(split.decode).toBeNull();
+  });
+
+  it('rates a CPU placement only on a machine without a GPU', () => {
+    expect(fit({ hardware: bandwidth(machine('cpu', 64), 50) }).decode?.tokensPerSec).toBeCloseTo(4);
+    const unknownVram = fit({ hardware: bandwidth(machine('discrete', 64, null)) });
+    expect(unknownVram.placement).toBe('cpu');
+    expect(unknownVram.decode).toBeNull();
+  });
+});
+
 describe('contextOptions', () => {
   it('lists the target and every preset below it, smallest first, with fits flags', () => {
     const options = contextOptions({

@@ -348,7 +348,7 @@ const mintUserApiKey = async (
   const pool = isExchangeKey ? 'oauth-exchange' : untrusted ? 'personal' : 'standard';
   const cap = isExchangeKey
     ? MAX_ACTIVE_EXCHANGE_KEYS_PER_USER
-    : untrusted?.reason === 'not_yet_trusted'
+    : untrusted && untrusted.reason !== 'email_unverified'
       ? Math.min(untrusted.maxActiveKeys, MAX_ACTIVE_KEYS_PER_USER)
       : MAX_ACTIVE_KEYS_PER_USER;
 

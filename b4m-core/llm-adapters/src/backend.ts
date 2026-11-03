@@ -351,6 +351,8 @@ export interface ICompletionOptions {
      * Internal - do not set manually.
      */
     downgradedToolChoice?: DowngradedToolChoice;
+    /** Set on anthropicBackend's one retry after a strict schema rejection, so it never retries again. Internal. */
+    strictSchemaRetried?: boolean;
     /**
      * Per-turn timing sink, set by ChatCompletionProcess and threaded unchanged through recursive
      * tool rounds so every round's semaphore wait and transport retry lands on one turn record.

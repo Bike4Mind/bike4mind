@@ -16,6 +16,7 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'GET /api/v1/quests/:id',
     'GET /api/v1/quests/:id/files',
     'GET /api/v1/sessions',
+    'GET /api/v1/sessions/:id/quests',
   ],
   [ApiKeyScope.WRITE_NOTEBOOKS]: [
     'DELETE /api/sessions',
@@ -27,6 +28,7 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'GET /api/v1/artifacts/:id/versions/:version',
     'GET|POST /api/v1/sessions',
     'POST /api/v1/sessions/:id/clone',
+    'GET /api/v1/sessions/:id/quests',
   ],
   [ApiKeyScope.READ_FILES]: [
     'POST /api/ai/context-dry-run',
@@ -167,7 +169,7 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'POST /api/v1/agents/:id/generate-description',
     'POST /api/v1/agents/:id/generate-system-prompt',
   ],
-  [ApiKeyScope.ME_READ]: ['GET /api/v1/credits', 'GET /api/v1/me'],
+  [ApiKeyScope.ME_READ]: ['GET /api/v1/credits', 'GET /api/v1/credits/transactions', 'GET /api/v1/me'],
   [ApiKeyScope.OVERWATCH_INGEST_WRITE]: ['POST /api/overwatch/v1/events'],
   [ApiKeyScope.REWARDS_GRANT]: ['POST /api/partners/rewards/grant'],
   [ApiKeyScope.EMBED_CHAT]: [

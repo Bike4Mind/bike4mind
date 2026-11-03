@@ -8,6 +8,7 @@ import {
 import { userService } from '@bike4mind/services';
 import { signupProtection } from '@server/auth/signupProtection';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
+import { alertFraudBlock } from '@server/billing/fraudBlockAlert';
 
 type ForfeitLogger = { info: (message: string, meta?: Record<string, unknown>) => void };
 
@@ -25,8 +26,14 @@ export async function forfeitSignupUnlock(userId: string, cause: SignupUnlockFor
       creditLots: creditLotRepository,
     },
   });
-  if (result.outcome === 'cancelled')
+  if (result.outcome === 'cancelled') {
     logger.info(`Held signup unlock bonus cancelled after a payment ${cause}`, { userId });
+    await alertFraudBlock({
+      kind: 'signupUnlockForfeited',
+      userId,
+      details: [`*Cause:* payment ${cause.replace(/_/g, ' ')}`],
+    });
+  }
   return result;
 }
 

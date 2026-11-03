@@ -40,6 +40,7 @@ import axios from 'axios';
 import { z } from 'zod';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
 
 const CreateSessionBodySchema = z.object({
   sessionId: z.string().optional(),
@@ -445,6 +446,7 @@ When you get the tool result back, summarize it conversationally for voice.`;
       realtime: true,
       unaffordable: () =>
         new ForbiddenError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`),
+      newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
     });
     if (!opened) {
       throw new ConflictError('Another voice call on this session started at the same time; retry');

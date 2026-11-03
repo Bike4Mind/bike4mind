@@ -270,6 +270,7 @@ describe('probeModelHost', () => {
     };
     const result = await probeModelHost(options(tree(files), { exec: unitExec }));
     expect(result.host.ollama.store).toMatchObject({ path: '/srv/ollama-home/.ollama/models', source: 'service-home' });
+    expect(result.ollamaHome).toBe('/srv/ollama-home');
     const text = JSON.stringify(result);
     expect(text).not.toContain('sk-secret');
     expect(text).not.toContain('PATH=');
