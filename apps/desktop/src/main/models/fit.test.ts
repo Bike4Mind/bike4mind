@@ -245,6 +245,16 @@ describe('fitFromArch', () => {
     expect(fitFromArch(DENSE, 4 * GIB, gpu(24, 64), 16384).detail).toMatch(new RegExp(`\\. ${sentence}$`));
   });
 
+  it('puts the reply speed after the tight note, for this computer and a saved server', () => {
+    stub(10.5, { placement: 'gpu', tokensPerSec: 20 });
+    expect(fitFromArch(DENSE, 4 * GIB, gpu(12, 64), 16384).detail).toMatch(
+      /Close other apps first, or this computer may slow down\. Replies at about 20 tokens\/s early in a chat\.$/
+    );
+    expect(fitFromArch(DENSE, 4 * GIB, gpu(12, 64), 16384, { where: 'server' }).detail).toMatch(
+      /Close other apps on that server first, or it may slow down\. Replies at about 20 tokens\/s early in a chat\.$/
+    );
+  });
+
   it('leaves the reply speed out of a plan that does not fit', () => {
     stub(13, { fits: false, placement: 'gpu', tokensPerSec: 20 });
     expect(fitFromArch(DENSE, 4 * GIB, gpu(12, 64), 16384).detail).not.toContain('Replies');

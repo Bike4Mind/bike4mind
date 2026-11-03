@@ -1150,8 +1150,9 @@ describe('ModelHubService entered hardware', () => {
   it("adds a reply speed from this computer's entered bandwidth, sizing MoE reads by the active share", async () => {
     const { service } = rated({ local: { ramGiB: null, gpuMemoryGiB: null, bandwidthGBps: 256, unified: false } });
     const list = await service.curated();
-    // 256 GB/s at 0.8 efficiency; 15.6 GB of weights, 3.8B of 25.2B parameters active, read twice over.
-    expect(curatedFit(list, 'gemma-4-26b')?.detail).toContain('Replies at about 43 tokens/s early in a chat.');
+    // 256 GB/s at 0.8 efficiency, over library weights less the pinned projector. MoE: 14.44 GB * (3.8 / 25.2) * 2 reads
+    // 4.35 GB, so 204.8 / 4.35 is 47. Dense: 16.81 GB gives 12.2.
+    expect(curatedFit(list, 'gemma-4-26b')?.detail).toContain('Replies at about 47 tokens/s early in a chat.');
     expect(curatedFit(list, 'qwen3-8-27b')?.detail).toContain('Replies at about 12 tokens/s early in a chat.');
     const unrated = await rated({}).service.curated();
     expect(curatedFit(unrated, 'gemma-4-26b')?.detail).not.toContain('Replies');
@@ -1159,7 +1160,8 @@ describe('ModelHubService entered hardware', () => {
 
   it("adds a reply speed from a saved server's entered bandwidth only for a model that loads whole", async () => {
     const list = await rated({ a: GPU_16 }).service.curated('a');
-    expect(curatedFit(list, 'gemma-4-12b')?.detail).toContain('Replies at about 50 tokens/s early in a chat.');
+    // 448 GB/s at 0.8 efficiency over the 7.15 GB layer less its 0.18 GB projector: 358.4 / 6.98 is 51.
+    expect(curatedFit(list, 'gemma-4-12b')?.detail).toContain('Replies at about 51 tokens/s early in a chat.');
     expect(curatedFit(list, 'gemma-4-26b')?.detail).toContain('system RAM');
     expect(curatedFit(list, 'gemma-4-26b')?.detail).not.toContain('Replies');
   });
