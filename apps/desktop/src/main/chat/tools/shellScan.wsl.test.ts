@@ -60,7 +60,7 @@ vi.doMock('../../wsl/wslPath', async () => {
   };
 });
 
-const { scanShell, SYSTEM_DISTRO, UNNAMED_DISTRO } = await import('./shellScan');
+const { scanShell, SYSTEM_DISTRO, UNNAMED_DISTRO, WSL_MANAGEMENT } = await import('./shellScan');
 const { shareName } = await import('../../wsl/wslPath');
 
 const OTHER = '\\\\wsl.localhost\\Debian\\etc\\hosts';
@@ -177,7 +177,7 @@ describe('a command wsl runs in a distro', () => {
     for (const option of ['--shutdown', '--terminate', '--update', '--install', '--unregister']) {
       const scan = await scanShell(`wsl.exe -d Ubuntu ${option}`, root, [root, ubuntu]);
 
-      expect(scan?.ungranted, option).toContain(UNNAMED_DISTRO);
+      expect(scan?.ungranted, option).toEqual([WSL_MANAGEMENT]);
     }
   });
 
@@ -185,6 +185,59 @@ describe('a command wsl runs in a distro', () => {
     const scan = await scanShell('wsl.exe -d Ubuntu --system ls', ubuntu, [ubuntu]);
 
     expect(scan?.ungranted).toEqual([SYSTEM_DISTRO]);
+  });
+
+  it('does not read --system after -e as an option, since the rest is the program', async () => {
+    const scan = await scanShell('wsl.exe -e --system ls', ubuntu, [ubuntu]);
+
+    expect(scan?.ungranted).toEqual([UNNAMED_DISTRO]);
+  });
+
+  it('checks every distro named, not only the last', async () => {
+    const scan = await scanShell('wsl.exe -d Debian -d Ubuntu ls', ubuntu, [ubuntu]);
+
+    expect(scan?.ungranted).toEqual(['\\\\wsl.localhost\\Debian\\']);
+  });
+
+  it.each([
+    'wsl.exe -d Ubuntu --cd /tmp ls',
+    'wsl.exe -d Ubuntu --shell-type login ls',
+    'wsl.exe -d Ubuntu --user root ls',
+    'wsl.exe -d Ubuntu -u root ls',
+    'wsl.exe -d Ubuntu --exec ls',
+    'wsl.exe -d Ubuntu -e ls',
+    'wsl.exe -d Ubuntu cd /tmp',
+  ])('lets %s through to the project distro unasked', async command => {
+    const scan = await scanShell(command, ubuntu, [ubuntu]);
+
+    expect(scan?.ungranted).toEqual([]);
+  });
+
+  it('asks before wsl --system runs, names the system distro and offers no grant', async () => {
+    const { shellApproval } = await import('./shellTools');
+    const context = { roots: [ubuntu], signal: new AbortController().signal, protectedPaths: [] };
+
+    const prompt = await shellApproval('bash_execute', { command: 'wsl.exe --system ls' }, context);
+
+    expect(prompt.askInAuto).toBe(true);
+    expect(prompt.detail).toContain('Runs wsl in the WSL system distro, which no project folder is in.');
+    expect(prompt.detail).not.toContain('Reaches');
+    expect(prompt.always?.ungranted).toEqual([SYSTEM_DISTRO]);
+  });
+
+  it('asks before a wsl management option runs and does not read its operand as a command', async () => {
+    const { shellApproval } = await import('./shellTools');
+    const context = { roots: [ubuntu], signal: new AbortController().signal, protectedPaths: [] };
+
+    const prompt = await shellApproval('bash_execute', { command: 'wsl.exe --unregister Ubuntu' }, context);
+
+    expect(prompt.askInAuto).toBe(true);
+    expect(prompt.detail).toContain(
+      'Runs wsl with an option that manages WSL itself, such as --shutdown or --unregister.'
+    );
+    expect(prompt.detail).not.toContain('Reaches');
+    expect(prompt.detail).not.toContain('Can send data');
+    expect(prompt.always?.ungranted).toEqual([WSL_MANAGEMENT]);
   });
 
   it('asks before running it, in auto mode too, and names the distro', async () => {

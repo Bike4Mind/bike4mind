@@ -466,11 +466,11 @@ const WRAPPERS: ReadonlyMap<string, Wrapper> = new Map([
 
 const NO_OPTIONS: Wrapper = { values: '' };
 
-/** A program's name as the scan looks it up: `/usr/bin/curl`, `curl.exe` and `CURL.EXE` are all `curl`. */
+/** A program's name as the scan looks it up: `/usr/bin/curl`, `curl.exe` and `CURL.EXE` are all `curl`; so is `npx.cmd` `npx`. */
 export const programName = (executable: string): string =>
   basename(executable)
     .toLowerCase()
-    .replace(/\.exe$/, '');
+    .replace(/\.(exe|cmd|bat)$/, '');
 
 /** Whether a word names a wrapper (`sudo`, `/usr/bin/env`). */
 export const isWrapper = (word: string): boolean => WRAPPERS.has(programName(unquote(word)));
@@ -594,6 +594,9 @@ export const UNNAMED_DISTRO = 'a WSL distro the command does not name';
 /** What `ungranted` holds for a wsl run with `--system`, which starts the WSL system distro. */
 export const SYSTEM_DISTRO = 'the WSL system distro';
 
+/** What `ungranted` holds for a wsl run with an option that manages WSL itself, such as `--shutdown`. */
+export const WSL_MANAGEMENT = 'a wsl option that manages WSL itself';
+
 /** wsl's options that run a command in a distro; any other, such as `--shutdown`, manages WSL itself. */
 const WSL_RUNS = new Set([
   'd',
@@ -612,8 +615,8 @@ interface WslRun {
   /** The index of the `wsl` word, and the index past its own options. */
   at: number;
   end: number;
-  /** The distro `-d` names; undefined for the default distro or one the text does not name. */
-  distro: string | undefined;
+  /** The distro each `-d` names, undefined for one the text does not name; none given reads as the default distro. */
+  distros: (string | undefined)[];
   /** Whether `-e` hands the words after its options to a program, not to the distro's shell as a command line. */
   exec: boolean;
   /** Whether `--system` starts the system distro, and whether an option outside `WSL_RUNS` is given. */
@@ -629,22 +632,23 @@ function wslRuns(tokens: readonly string[]): WslRun[] {
     if (programName(unquote(tokens[at])) !== 'wsl') continue;
     const { options, end } = wrapperWords('wsl', tokens, at + 1);
     if (WSL_REPORTS.has(unquote(tokens[options[0]] ?? ''))) break;
-    let distro: string | undefined;
+    const distros: (string | undefined)[] = [];
     let exec = false;
     let system = false;
     let managing = false;
     for (const index of options) {
+      if (exec) break;
       const word = unquote(tokens[index]);
       const name = word.startsWith('--') ? longOptionName(wsl, word.slice(2).split('=')[0]) : word.slice(1, 2);
       if (name === undefined || !WSL_RUNS.has(name)) managing = true;
       if (name === 'e' || name === 'exec') exec = true;
       if (name === 'system') system = true;
-      if (name === 'distribution-id' || name === 'system') distro = undefined;
+      if (name === 'distribution-id') distros.push(undefined);
       if (name !== 'd' && name !== 'distribution') continue;
       const { value } = optionArgument(tokens, index, 'd');
-      distro = value === undefined || isDynamic(value) ? undefined : unquote(value);
+      distros.push(value === undefined || isDynamic(value) ? undefined : unquote(value));
     }
-    runs.push({ at, end, distro, exec, system, managing });
+    runs.push({ at, end, distros: distros.length > 0 ? distros : [undefined], exec, system, managing });
   }
   return runs;
 }
@@ -767,8 +771,8 @@ const POWERSHELL_PARAMETERS: readonly (readonly [
   ['commandwithargs', 'commandwithargs', null, 'command'],
   ['cwa', 'cwa', null, 'command'],
   ['windowstyle', 'w', 'value', 'value'],
-  ['workingdirectory', 'wo', 'value', 'value'],
-  ['wd', 'wd', 'value', 'value'],
+  ['workingdirectory', 'wo', null, 'value'],
+  ['wd', 'wd', null, 'value'],
   ['file', 'f', 'file', 'file'],
   ['executionpolicy', 'ex', 'value', 'value'],
   ['ep', 'ep', 'value', 'value'],
@@ -788,8 +792,9 @@ const POWERSHELL_PARAMETERS: readonly (readonly [
 /** The name a PowerShell switch gives after its dash (two for PowerShell 7) or slash, lowercased; undefined for other words. */
 function powershellSwitch(arg: string, seven: boolean): string | undefined {
   const leader = seven ? /^(?:[-\u{2013}-\u{2015}]{1,2}|\/)/u : /^[-\u{2013}-\u{2015}/]/u;
-  const match = leader.exec(arg);
-  return match ? arg.slice(match[0].length).toLowerCase() : undefined;
+  const trimmed = arg.trim();
+  const match = leader.exec(trimmed);
+  return match ? trimmed.slice(match[0].length).toLowerCase() : undefined;
 }
 
 function powershellParameter(name: string, seven: boolean): PowershellParameter | undefined {
@@ -800,10 +805,13 @@ function powershellParameter(name: string, seven: boolean): PowershellParameter 
   return undefined;
 }
 
-/** Whether `arg` names a parameter PowerShell knows, so a value such as `/c/repo` is not read as one. */
-function isPowershellParameter(arg: string, seven: boolean): boolean {
+/**
+ * Whether `arg` is a parameter that starts a command. A value parameter takes the next word whatever
+ * it is, but one that would run a command is not skipped, so `-wd -c` still reads the command.
+ */
+function isCommandParameter(arg: string, seven: boolean): boolean {
   const name = powershellSwitch(arg, seven);
-  return name !== undefined && powershellParameter(name, seven) !== undefined;
+  return name !== undefined && powershellParameter(name, seven) === 'command';
 }
 
 /** What PowerShell (`seven` for pwsh) runs given `args`; null when it runs a script file or only prints help. */
@@ -815,7 +823,7 @@ function powershellRun(args: readonly string[], seven: boolean): WindowsRun | nu
     if (meaning === 'command') return { words: at + 1, shown: args[at], stdin: false };
     if (meaning === 'help') return null;
     if (meaning === 'file') return args[at + 1] === '-' ? READS_STDIN : null;
-    if (meaning === 'value' && args[at + 1] !== undefined && !isPowershellParameter(args[at + 1], seven)) at++;
+    if (meaning === 'value' && args[at + 1] !== undefined && !isCommandParameter(args[at + 1], seven)) at++;
     if (meaning !== undefined) continue;
     // 5.1 runs the first word it does not know, and every word after it, as a command; 7 runs it as a script.
     return seven ? null : { words: at, shown: 'running its arguments as a command', stdin: false };
@@ -1054,6 +1062,7 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
   const wslShell = wslRuns(tokens).find(run => !run.exec);
   if (wslShell) {
     const wsl = basename(tokens[wslShell.at]);
+    if (wslShell.managing) return null;
     if (wslShell.end < tokens.length) return `${wsl} running its arguments as a command`;
     return stdin ? `${wsl} reading a script from stdin` : null;
   }
@@ -1783,14 +1792,19 @@ export async function scanShell(
         const computed = tokens.some(isDynamic);
         sends.push({ reason, target: assigns || computed ? null : repositoryWrite(tokens.map(unquote), state.cwd) });
       }
-      for (const { distro, system, managing } of wslRuns(tokens)) {
-        if (managing) ungranted.add(UNNAMED_DISTRO);
+      for (const { distros, system, managing } of wslRuns(tokens)) {
+        if (managing) {
+          ungranted.add(WSL_MANAGEMENT);
+          continue;
+        }
         if (system) {
           ungranted.add(SYSTEM_DISTRO);
           continue;
         }
-        const root = distro === undefined ? UNNAMED_DISTRO : wslUncPath({ host: 'wsl.localhost', distro }, '/');
-        if (distro === undefined || inUngrantedDistro(root, allowed)) ungranted.add(root);
+        for (const distro of distros) {
+          const root = distro === undefined ? UNNAMED_DISTRO : wslUncPath({ host: 'wsl.localhost', distro }, '/');
+          if (distro === undefined || inUngrantedDistro(root, allowed)) ungranted.add(root);
+        }
       }
       for (const file of ghReadFiles(tokens.map(unquote))) await check(file, state.cwd);
       if (reason || assigns || arithmetic || !containedCommand(tokens)) contained = false;
