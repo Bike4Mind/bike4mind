@@ -2,6 +2,7 @@ import { buildApiKeyTable, getAvailableModels, getSupersededModels } from '@bike
 import { apiKeyService } from '@bike4mind/services';
 import {
   createModelAdmission,
+  type FreeTierAllowedModels,
   isFreeTierExempt,
   isFreeTierModel,
   isUnpricedTextModel,
@@ -93,7 +94,7 @@ async function holdsPaidPlan(user: IUserDocument): Promise<boolean> {
 async function withoutPaidOnlyModels(list: CatalogModelList, user: IUserDocument | null): Promise<CallerModelList> {
   const unfiltered = { ...list, lockedModels: [] };
   if (!user || isFreeTierExempt(user)) return unfiltered;
-  let allowedModels: ReadonlySet<string> | undefined;
+  let allowedModels: FreeTierAllowedModels | undefined;
   try {
     allowedModels = await loadFreeTierAllowedModels(adminSettingsRepository);
   } catch (error) {
@@ -105,7 +106,7 @@ async function withoutPaidOnlyModels(list: CatalogModelList, user: IUserDocument
   const models: ModelInfo[] = [];
   const lockedModels: ModelInfo[] = [];
   for (const model of list.models) {
-    if (isFreeTierModel(model.id, allowedModels)) models.push(model);
+    if (isFreeTierModel(model.id, allowedModels, model)) models.push(model);
     else if (!model.disabled && !isModelDeprecated(model)) lockedModels.push({ ...model, access: PAID_PLAN_LOCK });
   }
   const offeredIds = new Set<string>(models.map(model => model.id));
@@ -118,8 +119,8 @@ async function withoutPaidOnlyModels(list: CatalogModelList, user: IUserDocument
 }
 
 /**
- * The model for a request that names none: a free account whose default is paid-only starts on the first allowlisted
- * text model (admin order) that admission accepts. Read failures propagate, as they do at call time.
+ * The model for a request that names none: a free account whose default is paid-only (not listed, and not a text
+ * model while text models are open) starts on the first allowlisted text model (admin order) that admission accepts. Read failures propagate, as they do at call time.
  */
 export async function resolveCallerDefaultModel(
   defaultModel: string,
@@ -132,6 +133,8 @@ export async function resolveCallerDefaultModel(
   const entitlements = await getUserEntitlements(toEntitlementUser(user));
   if (entitlements.includes(PAID_PLAN_ENTITLEMENT_KEY)) return defaultModel;
   const { models } = await getCachedCallerModelList(user.id, logger);
+  const defaultModelInfo = models.find(model => model.id === defaultModel);
+  if (isFreeTierModel(defaultModel, allowedModels, defaultModelInfo)) return defaultModel;
   const admission = createModelAdmission({
     user,
     configs: await loadModelConfigurations(adminSettingsRepository),

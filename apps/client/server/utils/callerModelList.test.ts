@@ -120,6 +120,14 @@ describe('getCallerModelList free-tier gate', () => {
     expect(await listedIds()).toEqual(['priced']);
   });
 
+  it('lists every text model but locks unlisted media while text models are open', async () => {
+    mocks.loadFreeTierAllowedModels.mockResolvedValue(Object.assign(new Set(['priced']), { textModelsOpen: true }));
+    const list = await callerList(makeUser());
+
+    expect(list.models.map(model => model.id)).toEqual(['priced', 'free']);
+    expect(list.lockedModels.map(model => model.id)).toEqual(['image-model']);
+  });
+
   it('lists explicitly allowlisted media for a free user', async () => {
     mocks.loadFreeTierAllowedModels.mockResolvedValue(new Set(['priced', 'image-model']));
 
@@ -250,6 +258,12 @@ describe('resolveCallerDefaultModel', () => {
     mocks.getAvailableModels.mockResolvedValue([premium, cheap, textModel('cheaper', { disabled: true })]);
 
     expect(await resolveDefault()).toBe('cheap');
+  });
+
+  it('keeps an unlisted text default while text models are open', async () => {
+    mocks.loadFreeTierAllowedModels.mockResolvedValue(Object.assign(new Set(['cheap']), { textModelsOpen: true }));
+
+    expect(await resolveDefault()).toBe('premium');
   });
 
   it('keeps the default when it is allowlisted', async () => {
