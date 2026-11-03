@@ -42,6 +42,23 @@ describe('a change made in another window', () => {
     expect(rail).toBe(true);
     act(() => root.unmount());
   });
+
+  it('follows a stat ticked or unticked there', () => {
+    let hidden: ReadonlySet<string> = new Set();
+    function Probe() {
+      hidden = useReplyStatsPrefs().hidden;
+      return null;
+    }
+    const root = createRoot(document.createElement('div'));
+    act(() => root.render(createElement(Probe)));
+    expect(hidden.has('speed')).toBe(false);
+
+    window.localStorage.setItem('b4m.chat.replyStats.shown', JSON.stringify({ speed: false, load: true }));
+    act(() => window.dispatchEvent(new StorageEvent('storage', { key: 'b4m.chat.replyStats.shown' })));
+    expect(hidden.has('speed')).toBe(true);
+    expect(hidden.has('load')).toBe(false);
+    act(() => root.unmount());
+  });
 });
 
 describe('railFitsBesideThread', () => {

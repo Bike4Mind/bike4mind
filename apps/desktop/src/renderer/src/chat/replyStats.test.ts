@@ -104,6 +104,17 @@ describe('cacheReadShare', () => {
     ).toBe(0.5);
   });
 
+  it('takes the whole prompt from the usage when a llama-server reply mixes rated and unrated rounds', () => {
+    // The rated round evaluated 100 of its prompt; the unrated one reports only its cached 200.
+    expect(
+      cacheReadShare({
+        inputTokens: 1000,
+        cachedPromptTokens: 200,
+        rate: { evalTokens: 10, evalMs: 100, promptTokens: 100, promptMs: 10, cachedPromptTokens: 600 },
+      })
+    ).toBe(0.8);
+  });
+
   it('never claims more than the whole prompt was cached', () => {
     expect(cacheReadShare({ inputTokens: 4000, cachedPromptTokens: 5000 })).toBe(1);
     expect(cacheReadShare({ inputTokens: 2000, rate: { evalTokens: 1, evalMs: 1, cachedPromptTokens: 3000 } })).toBe(1);
