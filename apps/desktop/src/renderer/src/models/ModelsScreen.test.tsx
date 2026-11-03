@@ -2011,6 +2011,30 @@ describe('ModelsScreen servers', () => {
       await act(async () => release());
     });
 
+    it('does not cache a removed model again from a listing that started before the removal', async () => {
+      bridge.remote.gpu.installed = { ok: true, models: [llama, qwen] };
+      await mount();
+      await pickServer('gpu');
+      let releaseListing = () => {};
+      bridge.installedGate = new Promise(resolve => (releaseListing = resolve));
+      await act(async () => pushInstalled('gpu'));
+      const row = all('models-installed-row').find(candidate => candidate.dataset.name === 'qwen2.5:0.5b');
+      await click(row?.querySelector<HTMLElement>('[data-testid="models-installed-remove-btn"]') ?? null);
+      await click(q('models-remove-dialog-confirm-btn'));
+      expect(calls.remove).toHaveBeenCalledWith('qwen2.5:0.5b', 'gpu');
+      await act(async () => releaseListing());
+      await flush();
+      await pickServer('local');
+
+      let release = () => {};
+      bridge.installedGate = new Promise(resolve => (release = resolve));
+      await click(q('models-server-select'));
+      act(() => q('models-server-option-gpu')?.click());
+      expect(rowNames()).toHaveLength(1);
+      expect(rowNames()[0]).toContain('llama3.2:3b');
+      await act(async () => release());
+    });
+
     it('keeps the last list with the reason when the server is down, and checks again on request', async () => {
       await visitGpuThenLeave();
       bridge.remote.gpu.status = remoteStatus(GPU_BOX, {

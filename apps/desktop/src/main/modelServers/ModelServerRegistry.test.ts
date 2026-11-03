@@ -91,17 +91,19 @@ function registry(
   const store = new ModelServerStore(cipher, memoryFile(), { debug: () => undefined, warn: () => undefined });
   const changed = vi.fn();
   const listedLate = vi.fn();
+  const edited = vi.fn();
   const instance = new ModelServerRegistry({
     store,
     logger: options.logger ?? { debug: () => undefined, warn: () => undefined },
     platform: options.platform,
     changed,
+    edited,
     listedLate,
     fetchFor: fake.fetchFor,
     localFetch: async () => json({ version: '0.12.0' }),
     resolve: typeof resolve === 'function' ? resolve : async host => resolve[host] ?? [],
   });
-  return { registry: instance, store, changed, listedLate };
+  return { registry: instance, store, changed, edited, listedLate };
 }
 
 const none = { type: 'none' as const };
@@ -368,6 +370,29 @@ describe('ModelServerRegistry', () => {
       expect((error as Error).message).toMatch(/gpu box answered 403 Forbidden/);
       expect((await servers.views())[1].health.state).toBe('refused');
     });
+  });
+
+  it('says a server was edited on add, save and remove, but not when only its health changes', async () => {
+    const fake = fakeOllama();
+    const { registry: servers, changed, edited } = registry(fake);
+    await servers.add({
+      address: 'http://127.0.0.2:11434',
+      credential: none,
+      name: 'a',
+      kind: 'ollama',
+      access: 'chat',
+    });
+    const id = (await servers.views())[1].id;
+    expect(edited).toHaveBeenCalledTimes(1);
+    fake.state.down.add('http://127.0.0.2:11434');
+    changed.mockClear();
+    await servers.check(id);
+    await vi.waitFor(() => expect(changed).toHaveBeenCalled());
+    expect(edited).toHaveBeenCalledTimes(1);
+    await servers.update(id, { name: 'b' });
+    expect(edited).toHaveBeenCalledTimes(2);
+    await servers.remove(id);
+    expect(edited).toHaveBeenCalledTimes(3);
   });
 
   it('keys models by server so two servers can offer the same model', async () => {

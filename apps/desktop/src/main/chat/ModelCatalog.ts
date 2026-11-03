@@ -179,6 +179,14 @@ export class ModelCatalog {
     this.localWritten = this.localReads;
   }
 
+  /**
+   * After a server's health changed: the next list reads again, but a read in flight still caches its result,
+   * since a picker read can itself be what changed that health.
+   */
+  expireLocal(): void {
+    this.localCache = null;
+  }
+
   private mergeLocal(hosted: ChatModelOption[], local = this.freshLocal()): ChatModelOption[] {
     return [...hosted.filter(model => !local.some(candidate => candidate.id === model.id)), ...local];
   }

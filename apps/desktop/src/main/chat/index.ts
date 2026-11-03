@@ -290,6 +290,8 @@ export interface RegisteredChat {
   spareWorktrees: SpareWorktrees;
   /** Saved model servers, which the Models screen also pulls to and removes from. */
   modelServers: ModelServerRegistry;
+  /** Stops their health checks and any pending model list reload, on quit. */
+  stopModelServers(): void;
   /** The Settings choice of local model context, which the Models screen's fit badges also plan for. */
   localContext: LocalContextPreference;
   /** The capability ledger, which the Models screen records approved downloads in. */
@@ -481,17 +483,19 @@ export function registerChat(
     pinnedProjectors: () => hooks.pinnedProjectors?.() ?? new Map(),
   });
   let lateReload: ReturnType<typeof setTimeout> | undefined;
+  let modelServersStopped = false;
   // safeStorage like the MCP secrets: a server's token or header value never goes to plain JSON.
   const modelServers = new ModelServerRegistry({
     store: new ModelServerStore(safeStorage, privateFile(join(userData, 'model-servers.json')), logger),
     logger,
     changed: servers => {
-      models.forgetLocal();
+      models.expireLocal();
       send(IPC_CHANNELS.modelServersChanged, servers);
     },
+    edited: () => models.forgetLocal(),
     // Several servers finishing together cause one reload.
     listedLate: () => {
-      if (lateReload) return;
+      if (lateReload || modelServersStopped) return;
       lateReload = setTimeout(() => {
         lateReload = undefined;
         models.forgetLocal();
@@ -503,10 +507,6 @@ export function registerChat(
       localSizing.forget?.();
       models.forgetLocal();
     },
-  });
-  app.once('will-quit', () => {
-    clearTimeout(lateReload);
-    modelServers.stop();
   });
   localHardware.setOverride(probed => withEnteredSpecs(probed, modelServers.specs(LOCAL_SERVER_ID)));
   void modelServers.start().catch(error => logger.warn(`MODEL SERVERS: could not load: ${String(error)}`));
@@ -1347,6 +1347,11 @@ export function registerChat(
     claudeImport,
     spareWorktrees,
     modelServers,
+    stopModelServers: () => {
+      modelServersStopped = true;
+      clearTimeout(lateReload);
+      modelServers.stop();
+    },
     localContext,
     capabilityLedger,
   };

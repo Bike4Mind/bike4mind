@@ -37,10 +37,18 @@ export class InstalledCache {
     this.#entries.set(serverId, { identity, models, listedAt });
   }
 
+  readonly #drops = new Map<string, number>();
+
   /** A model removed through the app leaves that server's cached list too. */
   dropModel(serverId: string, name: string): void {
+    this.#drops.set(serverId, this.drops(serverId) + 1);
     const entry = this.#entries.get(serverId);
     if (entry) this.#entries.set(serverId, { ...entry, models: entry.models.filter(model => model.name !== name) });
+  }
+
+  /** Counts dropModel calls for a server; a listing started before the latest one may still hold the model. */
+  drops(serverId: string): number {
+    return this.#drops.get(serverId) ?? 0;
   }
 
   /** Drops entries for servers no longer saved, or saved under the same id with another address or kind. */
@@ -53,6 +61,7 @@ export class InstalledCache {
 
   clear(): void {
     this.#entries.clear();
+    this.#drops.clear();
   }
 }
 

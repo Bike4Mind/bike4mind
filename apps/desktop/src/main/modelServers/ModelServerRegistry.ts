@@ -123,6 +123,8 @@ export interface ModelServerRegistryDeps {
   logger: { debug(message: string): void; warn(message: string): void };
   /** Called with the full list whenever a server or its health changes. */
   changed?(servers: ModelServerView[]): void;
+  /** A server was added, saved or removed, so a model list read before now is out of date. */
+  edited?(): void;
   /** A server's model listing outlasted the picker's wait and has now finished, so the picker should list again. */
   listedLate?(serverId: string): void;
   /** Resolves a host name to its addresses; defaults to `dns.lookup` with `all: true`. */
@@ -338,6 +340,7 @@ export class ModelServerRegistry {
     );
     const entry = this.build(record);
     this.entries.set(record.id, entry);
+    this.deps.edited?.();
     await this.check(record.id);
     return this.views();
   }
@@ -371,6 +374,7 @@ export class ModelServerRegistry {
     }
     const record = await this.deps.store.update(id, input);
     this.entries.set(id, this.build(record, entry));
+    this.deps.edited?.();
     this.saved(id);
     if (input.credential || input.kind) await this.check(id);
     else this.emit();
@@ -381,6 +385,7 @@ export class ModelServerRegistry {
     await this.load();
     await this.deps.store.remove(id);
     this.entries.delete(id);
+    this.deps.edited?.();
     this.saved(id);
     this.emit();
     return this.views();
