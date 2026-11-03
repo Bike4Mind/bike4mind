@@ -154,6 +154,12 @@ describe('XcodeSimulatorDriver', () => {
     expect(callsOf(run)).toEqual([['axe', ['tap', '-x', '100', '-y', '200', '--udid', UDID]]]);
   });
 
+  it('holds the HID connection open so Xcode 27 does not drop the tap', async () => {
+    const { run, driver } = fakeRunner();
+    await driver.tap(UDID, 100, 200, undefined);
+    expect(run.mock.calls[0][2]?.env).toEqual({ AXE_HID_STABILIZATION_MS: '250' });
+  });
+
   it('turns a long tap into a held touch', async () => {
     const { run, driver } = fakeRunner();
     await driver.tap(UDID, 1, 2, 1.5);

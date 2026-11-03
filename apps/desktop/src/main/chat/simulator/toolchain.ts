@@ -28,6 +28,8 @@ export interface RunOptions {
   cwd?: string;
   /** Bytes of stdout kept; xcodebuild logs run to megabytes. */
   maxBuffer?: number;
+  /** Added to the user's command environment. */
+  env?: Record<string, string>;
 }
 
 /** Runs one toolchain command. Injected so the driver can be tested without Xcode. */
@@ -48,7 +50,7 @@ export class ToolchainCommandError extends Error {
 const DEFAULT_TIMEOUT_MS = 60_000;
 
 export const runToolchain: Runner = async (file, args, options = {}) => {
-  const env = await commandEnv();
+  const env = { ...(await commandEnv()), ...options.env };
   return new Promise((resolve, reject) => {
     execFile(
       file,

@@ -21,6 +21,10 @@ import {
 const BOOT_TIMEOUT_MS = 180_000;
 const BUILD_TIMEOUT_MS = 20 * 60_000;
 const BUILD_LOG_TAIL_CHARS = 4_000;
+// On Xcode 27 the simulator's HID service activates only after AXe connects, and a short-lived
+// `axe tap` exits before then: the tap is dropped while axe still reports success. Holding the
+// connection open this long (ms) lets it land. See cameroncooke/AXe issue 71.
+const AXE_INPUT_ENV = { AXE_HID_STABILIZATION_MS: '250' };
 
 /** USB HID usage ids, which is what `axe key` takes. */
 const HID_KEYCODES: Record<SimulatorKey, number> = {
@@ -309,7 +313,7 @@ export class XcodeSimulatorDriver implements SimulatorDriver {
 
   private async axe(args: readonly string[]) {
     try {
-      return await this.run('axe', args, { timeoutMs: 30_000 });
+      return await this.run('axe', args, { timeoutMs: 30_000, env: AXE_INPUT_ENV });
     } catch (error) {
       return explainToolchainFailure(error);
     }
