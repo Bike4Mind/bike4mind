@@ -1,7 +1,7 @@
 /**
  * Human labels, units and meanings for the business metrics the hourly anomaly cron compares.
- * The Slack formatter and docs/security/business-metric-alerts.md both read from here, so a
- * metric added to collect.ts gets its label in one place. Metric names are `family` or
+ * The Slack formatter reads from here; docs/security/business-metric-alerts.md is written by
+ * hand and must stay in sync with these labels and meanings. Metric names are `family` or
  * `family:cut` (spendUsd:openai, requests:user, revenueMinor:usd); unknown families fall back
  * to a count with the raw name as label.
  */
@@ -26,6 +26,17 @@ const SOURCE_CUTS: Record<string, string> = {
   user: 'third-party keys',
   firstParty: 'CLI and desktop',
   unclassified: 'unstamped source',
+};
+
+const PROVIDER_NAMES: Record<string, string> = {
+  openai: 'OpenAI',
+  anthropic: 'Anthropic',
+  bedrock: 'Bedrock',
+  gemini: 'Gemini',
+  google: 'Google',
+  xai: 'xAI',
+  elevenlabs: 'ElevenLabs',
+  bfl: 'BFL',
 };
 
 export const METRIC_FAMILIES: Record<string, MetricFamily> = {
@@ -148,7 +159,10 @@ export function describeMetric(name: string): MetricDescription {
     const currency = cut.toUpperCase();
     return { name, family, cut, label: `${known.label} (${currency})`, unit: 'minor', currency };
   }
-  if (family === 'spendUsd') return { name, family, cut, label: `Estimated ${cut} spend`, unit: 'usd' };
+  if (family === 'spendUsd') {
+    const provider = PROVIDER_NAMES[cut] ?? capitalise(cut);
+    return { name, family, cut, label: `Estimated ${provider} spend`, unit: 'usd' };
+  }
   return { name, family, cut, label: `${known.label} (${SOURCE_CUTS[cut] ?? cut})`, unit: known.unit };
 }
 
@@ -193,10 +207,11 @@ const MODEL_VENDORS: Record<string, string> = {
 /**
  * Display name for a model id without loading the adapter catalogs: strips a Bedrock region
  * prefix, then "claude-opus-5-5" reads as "Claude Opus 5.5" and "gpt-5-4-mini" as "GPT-5.4 Mini".
- * A trailing date stamp is dropped; anything unrecognised is returned with dashes as spaces.
+ * A trailing date stamp and Bedrock version tail (-v1:0) are dropped; anything unrecognised is
+ * returned with dashes as spaces.
  */
 export function modelDisplayName(modelId: string): string {
-  const id = modelId.replace(/^(?:[a-z]{2}|global)\.[a-z]+\./, '');
+  const id = modelId.replace(/^(?:[a-z]{2}|global)\.[a-z]+\./, '').replace(/-v\d+(?::\d+)?$/, '');
   const parts = id.split('-').filter(part => part !== '' && !/^\d{8}$/.test(part));
   if (parts.length === 0) return modelId;
   const vendor = MODEL_VENDORS[parts[0]];
