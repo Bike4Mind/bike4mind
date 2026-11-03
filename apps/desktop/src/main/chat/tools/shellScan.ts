@@ -313,29 +313,105 @@ function globPrefix(text: string): string | null {
   return match.index === 0 ? null : text.slice(0, match.index);
 }
 
-const WRAPPERS = new Set(['sudo', 'env', 'command', 'exec', 'nohup', 'time', 'nice', 'timeout', 'xargs']);
+/**
+ * A program that runs the command after its own words. Any option letter not listed is a flag that
+ * takes no value.
+ */
+interface Wrapper {
+  /** Letters whose value is the rest of their word, or the next word when they end it. */
+  values: string;
+  /** Letters whose optional value is only ever the rest of their word. */
+  glued?: string;
+  /** Long options whose value is the next word unless written with `=`. */
+  long?: readonly string[];
+  /** Whether `NAME=value` words after the options set the command's environment. */
+  assignments?: boolean;
+  /** Words after the options that come before the command: timeout's duration. */
+  operands?: number;
+}
 
-/** Each wrapper's options that take the next word as their value (`sudo -u bob`, `timeout -s KILL 5`). */
-const WRAPPER_VALUE_OPTIONS: Record<string, RegExp> = {
-  sudo: /^(-[A-Za-z]*[aCcDgpRrTtUu]|--(auth-type|chdir|chroot|close-from|command-timeout|group|login-class|other-user|prompt|role|type|user))$/,
-  env: /^(-[A-Za-z0]*[CPSu]|--(chdir|split-string|unset))$/,
-  exec: /^-[cl]*a$/,
-  nice: /^(-n|--adjustment)$/,
-  time: /^(-[A-Za-z]*[fo]|--(format|output))$/,
-  timeout: /^(-[A-Za-z]*[ks]|--(kill-after|signal))$/,
-  xargs: /^(-[A-Za-z0]*[EILPadns]|--(arg-file|delimiter|max-args|max-chars|max-procs|process-slot-var))$/,
+const WRAPPERS: Readonly<Record<string, Wrapper>> = {
+  sudo: {
+    values: 'aCcDgpRrTtUu',
+    glued: 'h',
+    long: [
+      'auth-type',
+      'chdir',
+      'chroot',
+      'close-from',
+      'command-timeout',
+      'group',
+      'host',
+      'login-class',
+      'other-user',
+      'prompt',
+      'role',
+      'type',
+      'user',
+    ],
+    assignments: true,
+  },
+  env: { values: 'CPSafu', long: ['argv0', 'chdir', 'file', 'split-string', 'unset'], assignments: true },
+  command: { values: '' },
+  exec: { values: 'a' },
+  nohup: { values: '' },
+  time: { values: 'fo', long: ['format', 'output'] },
+  nice: { values: 'n', long: ['adjustment'] },
+  timeout: { values: 'ks', long: ['kill-after', 'signal'], operands: 1 },
+  xargs: {
+    values: 'EILPadns',
+    glued: 'eil',
+    long: ['arg-file', 'delimiter', 'max-args', 'max-chars', 'max-procs', 'process-slot-var'],
+  },
 };
+
+const isWrapperName = (name: string): boolean => Object.hasOwn(WRAPPERS, name);
+
+/** Whether a word names a wrapper (`sudo`, `/usr/bin/env`). */
+export const isWrapper = (word: string): boolean => isWrapperName(basename(unquote(word)));
+
+/** How many words one of a wrapper's options spans: two when its value is the next word. */
+function optionWords(wrapper: Wrapper, word: string): 1 | 2 {
+  if (word.startsWith('--')) return !word.includes('=') && (wrapper.long ?? []).includes(word.slice(2)) ? 2 : 1;
+  // A value letter ends the cluster: `-Eu bob` and `-ubob` are both `-E -u bob`.
+  for (let at = 1; at < word.length; at++) {
+    if (wrapper.glued?.includes(word[at])) return 1;
+    if (wrapper.values.includes(word[at])) return at === word.length - 1 ? 2 : 1;
+  }
+  return 1;
+}
+
+/** Where the words of `name`'s options (and, for env and sudo, assignments) that start at `from` end. */
+function wrapperOptionsEnd(name: string, tokens: readonly string[], from: number): number {
+  const wrapper = WRAPPERS[name] ?? { values: '' };
+  let at = from;
+  let options = true;
+  while (at < tokens.length) {
+    const word = unquote(tokens[at]);
+    if (options && word === '--') {
+      options = false;
+      at++;
+    } else if (options && word.startsWith('-')) {
+      at += optionWords(wrapper, word);
+    } else if (wrapper.assignments && /^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) {
+      at++;
+    } else {
+      break;
+    }
+  }
+  return Math.min(at, tokens.length);
+}
+
+/** The index past the wrapper at `tokens[at]` and its own words: options and their values, assignments, timeout's duration. */
+export function pastWrapper(tokens: readonly string[], at: number): number {
+  const name = basename(unquote(tokens[at] ?? ''));
+  return Math.min(wrapperOptionsEnd(name, tokens, at + 1) + (WRAPPERS[name]?.operands ?? 0), tokens.length);
+}
 
 /** The command a wrapper (`sudo`, `env X=1`, `timeout 5`) runs, with the wrapper's own words dropped. */
 function withoutWrappers(tokens: readonly string[]): string[] {
   let start = 0;
-  while (start < tokens.length && WRAPPERS.has(basename(unquote(tokens[start])))) {
-    const valued = WRAPPER_VALUE_OPTIONS[basename(unquote(tokens[start]))];
-    start++;
-    while (start < tokens.length && /^(-|\d)|=/.test(tokens[start])) {
-      start += valued?.test(unquote(tokens[start])) ? 2 : 1;
-    }
-  }
+  while (start < tokens.length && isWrapper(tokens[start])) start = pastWrapper(tokens, start);
   return tokens.slice(start);
 }
 
@@ -351,7 +427,7 @@ export function requiresExactShellRule(command: string): boolean {
     head[1] !== undefined ||
     head[2] !== undefined ||
     executable !== program ||
-    WRAPPERS.has(program) ||
+    isWrapperName(program) ||
     /^(curl|wget|rsync|aws|gsutil|gcloud|docker|podman)$/.test(program) ||
     (program === 'gh' &&
       (/^(?:api|"api"|'api')(?:\s|$)/.test(argumentsText) || !/^[A-Za-z]+\s+[A-Za-z]+(?:\s|$)/.test(argumentsText)))
@@ -508,7 +584,7 @@ const STDIN_SCRIPT = /^(python[\d.]*|node|ruby|perl|php|bun|osascript|sh|bash|zs
 export function opaqueForm(tokens: readonly string[]): string | null {
   const normalised = tokens.map(unquote);
   let start = 0;
-  while (start < normalised.length && WRAPPERS.has(basename(normalised[start]))) {
+  while (start < normalised.length && isWrapperName(basename(normalised[start]))) {
     start++;
     while (start < normalised.length && /^(-|\d|[A-Za-z_][A-Za-z0-9_]*=)/.test(normalised[start])) start++;
   }
@@ -593,7 +669,7 @@ function sendsBody(method: string | undefined): boolean {
 export function outboundReason(raw: readonly string[], stdin = false): string | null {
   const tokens = raw.map(unquote);
   let start = 0;
-  while (start < tokens.length && WRAPPERS.has(basename(tokens[start]))) {
+  while (start < tokens.length && isWrapperName(basename(tokens[start]))) {
     start++;
     while (start < tokens.length && /^(-|\d)|=/.test(tokens[start])) start++;
   }

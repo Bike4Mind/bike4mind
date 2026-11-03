@@ -302,6 +302,57 @@ describe('a Windows program run from a WSL project', () => {
     expect(touched.filter(path => /^[\\/]{2}fileserver/.test(path))).toEqual([]);
   });
 
+  it.each([
+    'sudo -u root',
+    'sudo -uroot',
+    'sudo -gdocker',
+    'sudo -Eu root',
+    'sudo -Euroot',
+    'sudo --user root',
+    'sudo --user=root',
+    'sudo --host build',
+    'sudo --host=build',
+    'sudo A=1 -- B=2',
+    'env -u TERM',
+    'env -uTERM',
+    'env -iu TERM',
+    'env -iuTERM',
+    'env --unset TERM',
+    'env -- A=1',
+    'command -p',
+    'exec -a n',
+    'exec -an',
+    'exec -ca n',
+    'exec -can',
+    'nohup',
+    'nice -n +5',
+    'nice -n+5',
+    'nice --adjustment +5',
+    'nice -5',
+    "time -f '%e'",
+    'time -f%e',
+    "time -pf '%e'",
+    'time -ofoo',
+    'time --output foo',
+    'timeout 5',
+    'timeout -s KILL 5',
+    'timeout -sKILL 5',
+    'timeout -vs KILL 5',
+    'timeout --signal KILL 5',
+    'timeout --kill-after=1 5',
+    'xargs -I {}',
+    'xargs -Id',
+    'xargs -rI {}',
+    'xargs -rId',
+    'xargs -ia',
+    'xargs --max-procs 4',
+    'sudo -u root timeout -s KILL 5',
+  ])('finds the Windows program %s runs', async wrapper => {
+    const scan = await scanShell(`${wrapper} notepad.exe 'C:\\Users\\me\\notes.txt'`, root, [root]);
+
+    expect(scan?.directories).toEqual(['C:\\Users\\me']);
+  });
+
   it.each(['cmd.exe /c dir', 'git.exe status', 'explorer.exe .', 'cmd.exe /c type notes.txt'])(
     'asks about no folder for %s',
     async command => {
