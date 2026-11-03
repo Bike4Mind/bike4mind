@@ -4214,7 +4214,12 @@ export class ChatService {
     };
     // Every conversation of the signed-in account: the store is already scoped to it, so this is
     // as wide as messaging reaches and no wider.
-    const resolveAnywhere = async (ref: string) => resolveSessionRef(ref, await this.deps.store.list());
+    // Matched and described by the title the caller is allowed to see, not the stored one.
+    const resolveAnywhere = async (ref: string) =>
+      resolveSessionRef(
+        ref,
+        (await this.deps.store.list()).map(entry => ({ ...entry, title: visibleTitle(entry) }))
+      );
 
     return {
       spawn: (prompt, title, placement) => this.spawnSession(session, prompt, title, placement),

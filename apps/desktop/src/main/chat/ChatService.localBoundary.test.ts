@@ -218,6 +218,33 @@ describe('device-local conversation boundary', () => {
     expect((await store.get(targetId))?.archived).toBe(true);
   });
 
+  it('does not let a hosted session address a local conversation by its stored title', async () => {
+    const { service, store, events, hostedStreams, queue, create } = await fixture(async () => undefined);
+    const sourceId = await create('hosted');
+    const targetId = await create();
+    await service.renameSession(targetId, 'Private local title');
+    await service.send(sourceId, 'send by title');
+    await vi.waitUntil(() => hostedStreams.length === 1);
+    hostedStreams[0].end(
+      `data: ${JSON.stringify({
+        type: 'tool_use',
+        tools: [
+          {
+            id: 'send-by-title',
+            name: 'session_send',
+            arguments: JSON.stringify({ session_id: 'Private local title', message: 'public message' }),
+          },
+        ],
+      })}\n\ndata: [DONE]\n\n`
+    );
+    await vi.waitUntil(() => hostedStreams.length === 2);
+    expect(queue.list(targetId)).toEqual([]);
+    expect((await store.get(targetId))?.messages).toEqual([]);
+    hostedStreams[1].end('data: {"type":"content","text":"No such conversation"}\n\ndata: [DONE]\n\n');
+    await settled(events, sourceId);
+    expect((await store.get(sourceId))?.messages.at(-1)?.toolCalls?.[0]).toMatchObject({ status: 'error' });
+  });
+
   it('redacts a local title when a hosted relay is refused because the target is archived', async () => {
     const { service, store, events, post, hostedStreams, queue, create } = await fixture(async () => undefined);
     const sourceId = await create('hosted');
