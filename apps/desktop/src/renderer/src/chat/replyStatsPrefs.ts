@@ -121,8 +121,17 @@ export function replyStatsSummary({ rail, hidden }: ReplyStatsPrefs): string {
   return `${which}, ${rail ? 'beside the conversation when the window is wide enough' : 'under each reply on hover'}`;
 }
 
-/** Test seam: re-read storage, as a fresh launch would. */
+/** Re-read storage, as a fresh launch would; also the test seam. */
 export function reloadReplyStatsPrefs(): void {
   prefs = readStored();
   for (const listener of listeners) listener();
+}
+
+// Another window's change reaches this one's storage, but only this event says it did. A null key is a clear().
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', event => {
+    if (event.key === null || event.key === RAIL_KEY || event.key === HIDDEN_KEY || event.key === LEGACY_RATE_KEY) {
+      reloadReplyStatsPrefs();
+    }
+  });
 }
