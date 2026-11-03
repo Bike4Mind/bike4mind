@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import { registerUser, registerViaOTC, RegisterUserParameters } from './register';
 import { BadRequestError } from '@bike4mind/utils';
 import {
@@ -137,7 +137,7 @@ describe('registerUser', () => {
   });
 
   describe('grant package invites', () => {
-    let grantPackages: any;
+    let grantPackages: Record<'findById' | 'reserveRedemption' | 'releaseRedemption' | 'isInboxClaimed', Mock>;
     const pkg = {
       id: 'pkg-1',
       name: 'Synthetic package',
