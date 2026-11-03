@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ForbiddenError, UnauthorizedError } from '@bike4mind/common';
+import { ACCOUNT_DELETION_PENDING_CODE, ForbiddenError, UnauthorizedError } from '@bike4mind/common';
 import { toApiKeyAuthError } from '../../auth/apiKeyAuthFailure';
 import { InternalServerError } from '../../utils/errors';
 import { Logger } from '@bike4mind/observability';
@@ -113,6 +113,39 @@ describe('withWebSocketContext - auth-error detection', () => {
     const handler = withWebSocketContext(
       async () => {
         throw new ForbiddenError('MFA enrollment required.');
+      },
+      { skipDatabase: true }
+    );
+
+    const result = await handler({} as never, mockContext);
+
+    expect(result.statusCode).toBe(403);
+    expect(JSON.parse(result.body ?? '{}')).toEqual({ error: 'Forbidden' });
+  });
+
+  it('keeps the deletion-pending code and date on the 403 so the client can show the cancel screen', async () => {
+    const scheduledFor = '2026-12-01T00:00:00.000Z';
+    const handler = withWebSocketContext(
+      async () => {
+        throw new ForbiddenError('Scheduled for deletion.', { code: ACCOUNT_DELETION_PENDING_CODE, scheduledFor });
+      },
+      { skipDatabase: true }
+    );
+
+    const result = await handler({} as never, mockContext);
+
+    expect(result.statusCode).toBe(403);
+    expect(JSON.parse(result.body ?? '{}')).toEqual({
+      error: 'Scheduled for deletion.',
+      code: ACCOUNT_DELETION_PENDING_CODE,
+      scheduledFor,
+    });
+  });
+
+  it('does not forward additionalInfo of any other ForbiddenError', async () => {
+    const handler = withWebSocketContext(
+      async () => {
+        throw new ForbiddenError('Nope.', { code: 'SOMETHING_ELSE', secret: 'x' });
       },
       { skipDatabase: true }
     );
