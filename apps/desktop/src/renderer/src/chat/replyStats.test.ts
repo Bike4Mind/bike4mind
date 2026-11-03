@@ -16,13 +16,14 @@ import type { TurnProgress } from './statusLine';
 const base: ChatReplyStats = { totalMs: 20_000, modelMs: 20_000, toolMs: 0 };
 
 describe('thinkingShare', () => {
-  it('is thinking time over the whole reply', () => {
+  it("is thinking time over the model's time, not diluted by tools and approvals", () => {
     expect(thinkingShare({ ...base, reasoningMs: 5000 })).toBe(0.25);
+    expect(thinkingShare({ totalMs: 60_000, modelMs: 10_000, toolMs: 50_000, reasoningMs: 5000 })).toBe(0.5);
   });
 
-  it('is absent for a reply that did not think, or took no time', () => {
+  it('is absent for a reply that did not think, or where the model took no time', () => {
     expect(thinkingShare(base)).toBeNull();
-    expect(thinkingShare({ ...base, totalMs: 0, reasoningMs: 10 })).toBeNull();
+    expect(thinkingShare({ ...base, modelMs: 0, reasoningMs: 10 })).toBeNull();
     expect(thinkingShare(undefined)).toBeNull();
   });
 
@@ -201,6 +202,13 @@ describe('replyStats', () => {
 
     expect(text?.split('\n')[0]).toBe('Thinking time: ~2.0s (estimated from the wait before the first output)');
     expect(describeReplyStats([])).toBeNull();
+  });
+
+  it('says what the total takes in when tools ran', () => {
+    const rows = replyStats({ stats: { totalMs: 9000, modelMs: 5900, toolMs: 3100 } });
+
+    expect(describeReplyStats(rows)).toBe('Total time: 9.0s (includes 3.1s running tools and waiting for approval)');
+    expect(replyStats({ stats: base })[0]?.note).toBeUndefined();
   });
 });
 

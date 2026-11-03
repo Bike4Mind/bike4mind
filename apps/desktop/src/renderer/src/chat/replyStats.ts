@@ -33,11 +33,15 @@ interface ReplyStatText {
 
 export const REPLY_STAT_TEXT: Record<ReplyStatId, ReplyStatText> = {
   thinking: { label: 'Thinking time', setting: 'Thinking time', inline: value => `${value} thinking` },
-  total: { label: 'Total time', setting: 'Total time', inline: value => `${value} total` },
+  total: {
+    label: 'Total time',
+    setting: 'Total time, tools and approvals included',
+    inline: value => `${value} total`,
+  },
   thinkingShare: {
     label: 'Thinking share',
-    setting: 'Share of the time spent thinking',
-    inline: value => `${value} thinking`,
+    setting: "Share of the model's time spent thinking",
+    inline: value => `${value} of model time thinking`,
   },
   thinkingTokens: { label: 'Thinking tokens', setting: 'Thinking tokens', inline: value => `${value} thinking tokens` },
   tokens: {
@@ -63,6 +67,8 @@ export interface ReplyStat {
   value: string;
   /** What the estimate rests on; absent on a measured or reported value. */
   estimate?: string;
+  /** What else the figure takes in, where its label alone would not say. */
+  note?: string;
 }
 
 /** The two halves of a message a reply's stats are read from. */
@@ -90,10 +96,13 @@ export function formatShare(share: number): string {
   return percent === 0 && share > 0 ? '<1%' : `${percent}%`;
 }
 
-/** Thinking over the whole reply, 0 to 1; null when the reply did not think or took no time. */
+/**
+ * Thinking over the time spent waiting on the model, 0 to 1, so tools and approvals do not dilute
+ * it; null when the reply did not think or the model took no time.
+ */
 export function thinkingShare(stats: ChatReplyStats | undefined): number | null {
-  if (!stats || stats.reasoningMs === undefined || stats.totalMs <= 0) return null;
-  return Math.min(1, Math.max(0, stats.reasoningMs / stats.totalMs));
+  if (!stats || stats.reasoningMs === undefined || stats.modelMs <= 0) return null;
+  return Math.min(1, Math.max(0, stats.reasoningMs / stats.modelMs));
 }
 
 /**
@@ -132,9 +141,14 @@ export function cacheReadShare(usage: ChatUsage | null | undefined): number | nu
   return whole > 0 ? read / whole : null;
 }
 
-function stat(id: ReplyStatId, value: string | null, estimate?: string | false): ReplyStat | null {
+function stat(id: ReplyStatId, value: string | null, estimate?: string | false, note?: string): ReplyStat | null {
   if (value === null) return null;
-  return estimate ? { id, value: `~${value}`, estimate } : { id, value };
+  return {
+    id,
+    value: estimate ? `~${value}` : value,
+    ...(estimate ? { estimate } : {}),
+    ...(note ? { note } : {}),
+  };
 }
 
 /**
@@ -155,7 +169,14 @@ export function replyStats(source: ReplyStatsSource, { live = false }: { live?: 
 
   const all: Record<ReplyStatId, ReplyStat | null> = {
     thinking: stat('thinking', stats?.reasoningMs !== undefined ? duration(stats.reasoningMs) : null, thinkingEstimate),
-    total: stat('total', stats && !live ? duration(stats.totalMs) : null),
+    total: stat(
+      'total',
+      stats && !live ? duration(stats.totalMs) : null,
+      false,
+      stats && stats.toolMs > 0
+        ? `includes ${formatDuration(stats.toolMs)} running tools and waiting for approval`
+        : undefined
+    ),
     thinkingShare: stat('thinkingShare', share !== null ? formatShare(share) : null, thinkingEstimate),
     thinkingTokens: stat(
       'thinkingTokens',
@@ -186,11 +207,20 @@ export function messageStats(message: ChatMessage): ReplyStat[] {
   return replyStats({ stats: message.stats, usage: message.usage });
 }
 
+/** A stat's estimate and note, for a title or a screen reader; null with neither. */
+export function statDetail(row: ReplyStat): string | null {
+  const parts = [row.estimate, row.note].filter((part): part is string => !!part);
+  return parts.length > 0 ? parts.join('; ') : null;
+}
+
 /** One line per stat, label first, with what each estimate rests on; for a native title. */
 export function describeReplyStats(rows: readonly ReplyStat[]): string | null {
   if (rows.length === 0) return null;
   return rows
-    .map(row => `${REPLY_STAT_TEXT[row.id].label}: ${row.value}${row.estimate ? ` (${row.estimate})` : ''}`)
+    .map(row => {
+      const detail = statDetail(row);
+      return `${REPLY_STAT_TEXT[row.id].label}: ${row.value}${detail ? ` (${detail})` : ''}`;
+    })
     .join('\n');
 }
 

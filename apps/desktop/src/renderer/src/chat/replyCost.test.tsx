@@ -128,7 +128,7 @@ describe('the cost on a reply', () => {
     ]);
 
     expect(costs()[0]?.textContent).toBe(
-      '12 credits \xb7 ~1.5s thinking \xb7 10.0s total \xb7 ~15% thinking \xb7 400 tokens \xb7 ~50.0 tok/s \xb7 90% cached \xb7 1.5s to first token'
+      '12 credits \xb7 ~1.5s thinking \xb7 10.0s total \xb7 ~15% of model time thinking \xb7 400 tokens \xb7 ~50.0 tok/s \xb7 90% cached \xb7 1.5s to first token'
     );
   });
 
