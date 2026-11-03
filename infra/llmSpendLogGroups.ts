@@ -1,10 +1,13 @@
 import { chatCompletionLogGroupName } from './chatCompletionLogGroup';
 import { cliCompletionRoute } from './websocket';
+import { websocketRouteLogGroup } from './websocketRouteLogGroup';
 
 export type LlmSpendLogSource = {
   /** Appended to logical and physical filter names; empty keeps the original ChatCompletion resources. */
   key: string;
   logGroupName: $util.Output<string>;
+  /** Set when the log group is an SST node; otherwise the relay looks its arn up by name. */
+  logGroupArn?: $util.Output<string>;
 };
 
 /**
@@ -14,14 +17,13 @@ export type LlmSpendLogSource = {
  * accounts behind a young-account spend alarm, so both must read this one list.
  */
 export function llmSpendLogSources(): LlmSpendLogSource[] {
-  const cliCompletionLogGroupName = cliCompletionRoute.nodes.function
-    .apply(fn => fn.nodes.logGroup)
-    .apply(logGroup => {
-      if (!logGroup) throw new Error('cli_completion_request function is missing its CloudWatch log group');
-      return logGroup.name;
-    });
+  const cliCompletionLogGroup = websocketRouteLogGroup(cliCompletionRoute, 'cli_completion_request');
   return [
     { key: '', logGroupName: chatCompletionLogGroupName },
-    { key: 'cli-completion', logGroupName: cliCompletionLogGroupName },
+    {
+      key: 'cli-completion',
+      logGroupName: cliCompletionLogGroup.apply(logGroup => logGroup.name),
+      logGroupArn: cliCompletionLogGroup.apply(logGroup => logGroup.arn),
+    },
   ];
 }

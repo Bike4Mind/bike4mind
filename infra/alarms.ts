@@ -21,6 +21,7 @@ import {
 import { whatsNewGenerationQueueSubscription, webhookDeliveryQueueSubscription } from './queues';
 import { subscribeQueryRoute, unsubscribeQueryRoute } from './subscriberFanout';
 import { dlqAlarmTopic } from './dlqAlarms';
+import { websocketRouteLogGroup } from './websocketRouteLogGroup';
 import {
   isMonitoredStage as _isMonitoredStage,
   QUESTS_NAMESPACE,
@@ -788,12 +789,7 @@ if (isMonitoredStage) {
    * the same per-route attribution while remaining a valid PutMetricFilter call.
    */
   const oomLogGroupName = (route: typeof subscribeQueryRoute) =>
-    route.nodes.function
-      .apply(fn => fn.nodes.logGroup)
-      .apply(logGroup => {
-        if (!logGroup) throw new Error('WebSocket route function is missing its CloudWatch log group');
-        return logGroup.name;
-      });
+    websocketRouteLogGroup(route, 'WebSocket route').apply(logGroup => logGroup.name);
 
   for (const { key, metricName, route } of [
     { key: 'subscribe-query', metricName: 'SubscribeQueryOutOfMemory', route: subscribeQueryRoute },

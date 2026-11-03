@@ -26,7 +26,8 @@ describe('alarm relay log query wiring', () => {
     const sourcesImport = "import { llmSpendLogSources } from './llmSpendLogGroups';";
     expect(DLQ_ALARMS).toContain(sourcesImport);
     expect(read('infra/llmSpend.ts')).toContain('llmSpendLogSources()');
-    expect(DLQ_ALARMS).toContain('const spendLogGroupNames = llmSpendLogSources().map(source => source.logGroupName);');
+    expect(DLQ_ALARMS).toContain('const spendLogSources = llmSpendLogSources();');
+    expect(DLQ_ALARMS).toContain('const spendLogGroupNames = spendLogSources.map(source => source.logGroupName);');
     expect(RELAY).toContain("LLM_SPEND_LOG_GROUPS: $util.all(spendLogGroupNames).apply(names => names.join(','))");
     expect(read('apps/workers/src/events/youngAccountSpendDetail.ts')).toContain(
       "export const LLM_SPEND_LOG_GROUPS_ENV = 'LLM_SPEND_LOG_GROUPS';"
@@ -36,7 +37,9 @@ describe('alarm relay log query wiring', () => {
   it('lets the relay start a query on those groups only, and read or stop any query', () => {
     expect(RELAY).toContain("actions: ['logs:StartQuery'], resources: spendLogGroupArns");
     expect(RELAY).toContain("actions: ['logs:GetQueryResults', 'logs:StopQuery'], resources: ['*']");
-    expect(DLQ_ALARMS).toContain('const arn = aws.cloudwatch.getLogGroupOutput({ name }).arn;');
+    expect(DLQ_ALARMS).toContain(
+      'const arn = logGroupArn ?? aws.cloudwatch.getLogGroupOutput({ name: logGroupName }).arn;'
+    );
     expect(DLQ_ALARMS).toContain('return [arn, $interpolate`${arn}:*`];');
   });
 

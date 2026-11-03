@@ -132,10 +132,11 @@ if (isMonitoredStage) {
   const mentionArgs = alarmSlackMentionFunctionArgs();
   // The young-account spend alarms list the accounts behind a breach by querying the log groups
   // their metric is filtered from (apps/workers/src/events/youngAccountSpendDetail.ts).
-  // The lookup's arn drops the API's trailing stream wildcard, so the policy names both forms.
-  const spendLogGroupNames = llmSpendLogSources().map(source => source.logGroupName);
-  const spendLogGroupArns = spendLogGroupNames.flatMap(name => {
-    const arn = aws.cloudwatch.getLogGroupOutput({ name }).arn;
+  // A log group arn drops the API's trailing stream wildcard, so the policy names both forms.
+  const spendLogSources = llmSpendLogSources();
+  const spendLogGroupNames = spendLogSources.map(source => source.logGroupName);
+  const spendLogGroupArns = spendLogSources.flatMap(({ logGroupName, logGroupArn }) => {
+    const arn = logGroupArn ?? aws.cloudwatch.getLogGroupOutput({ name: logGroupName }).arn;
     return [arn, $interpolate`${arn}:*`];
   });
   dlqAlarmTopic!.subscribe(
