@@ -7,6 +7,7 @@ import type { ChatMoveToBackgroundResult } from '@shared/chat';
 import { BackgroundProcessRegistry } from './BackgroundProcessRegistry';
 import { ForegroundCommandRegistry } from './ForegroundCommandRegistry';
 import { UNNAMED_DISTRO } from './shellScan';
+import * as sessionScripts from './sessionScripts';
 import { forgetSessionWrites, recordSessionWrite } from './sessionScripts';
 import { bashExecute, bashExecuteRunOptions, doubleWrapRefusal, mainCheckoutOf, shellApproval } from './shellTools';
 import type { ToolContext } from './types';
@@ -470,6 +471,25 @@ describe('shellApproval for a script written in this session', () => {
       const result = await prompt(`./run.sh; ${name}`);
       expect(result.askInAuto, name).toBe(true);
       expect(result.detail, name).toContain('Runs code from ./run.sh');
+    }
+  });
+});
+
+describe('shellApproval when the session-script check cannot finish', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('asks in auto mode with a neutral reason', async () => {
+    vi.spyOn(sessionScripts, 'sessionScriptRun').mockRejectedValue(new Error('unreadable'));
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-approval-fail-')));
+    try {
+      const context: ToolContext = { roots: [root], signal: new AbortController().signal, protectedPaths: [] };
+      const result = await shellApproval('bash_execute', { command: 'ls', cwd: root }, context);
+      expect(result.askInAuto).toBe(true);
+      expect(result.detail).toContain('Could not check whether it runs code written in this session.');
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 });

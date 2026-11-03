@@ -435,13 +435,18 @@ export async function shellApproval(
   // Recorded before the check, so a script written and run by this same command counts.
   for (const written of scan.writes) await recordSessionWrite(context, written);
   for (const tree of scan.writtenTrees) await recordSessionTreeWrite(context, tree);
-  const script = await sessionScriptRun(command, startDirectory, context.sessionId).catch(() => null);
+  let scriptCheckFailed = false;
+  const script = await sessionScriptRun(command, startDirectory, context.sessionId).catch(() => {
+    scriptCheckFailed = true;
+    return null;
+  });
   const gitProgram = gitRunsConfiguredProgram(scan.commands);
   const unreachable = [...new Set([...ungranted, ...scan.ungranted])];
   const named = unreachable.filter(
     place => place !== UNNAMED_DISTRO && place !== SYSTEM_DISTRO && place !== WSL_MANAGEMENT
   );
   const reasons = [
+    ...(scriptCheckFailed ? ['Could not check whether it runs code written in this session.'] : []),
     ...(scan.envFiles.length > 0 ? [`Reads ${scan.envFiles.join(', ')}, which usually holds secrets.`] : []),
     ...(scan.outbound.length > 0 ? [`Can send data off this computer (${scan.outbound.join(', ')}).`] : []),
     ...(script && script.names.length > 0
@@ -476,7 +481,12 @@ export async function shellApproval(
   const main = scan.readOnly && context.workingDirectory ? await mainCheckoutOf(context.workingDirectory) : null;
   const outside = main ? scan.directories.filter(directory => !isWithin(main, directory)) : scan.directories;
   const asks =
-    scan.envFiles.length > 0 || ownRepository.includes(false) || !!script || !!gitProgram || unreachable.length > 0;
+    scan.envFiles.length > 0 ||
+    ownRepository.includes(false) ||
+    !!script ||
+    scriptCheckFailed ||
+    !!gitProgram ||
+    unreachable.length > 0;
   // An exact "always" for the run lapses when the script is written again.
   const runKey = script ? `${key}\x00${script.generation}` : key;
   if (script && context.sessionId) expectShellRun(runKey, context.sessionId, script.hooks);
