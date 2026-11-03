@@ -22,7 +22,10 @@ vi.mock('@bike4mind/database', () => ({
   paymentAttemptRepository: { summarizeWindow: h.summarizeWindow },
 }));
 vi.mock('@bike4mind/services', () => ({
-  userService: { signupGrantBudgetDay: (now: Date) => now.toISOString().slice(0, 10) },
+  userService: {
+    signupGrantBudgetDay: (now: Date) => now.toISOString().slice(0, 10),
+    signupGrantCounterKey: (pool: string, day: string) => `${pool}:${day}`,
+  },
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {
