@@ -6,5 +6,5 @@ services:
       - ./data/db:/data/db
       - ./data/configdb:/data/configdb
     ports:
-      - 27017:27017
+      - 127.0.0.1:27017:27017
     entrypoint: ["mongod", "--replSet", "rs0", "--bind_ip_all"]

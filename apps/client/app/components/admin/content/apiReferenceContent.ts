@@ -5,8 +5,6 @@ import {
   API_KEY_RATE_LIMIT_HEADER_NAMES,
   API_KEY_RATE_LIMIT_HEADERS,
   MAX_REQUEST_ID_LENGTH,
-  MIN_PASSAGE_TOKEN_TARGET,
-  OVERSIZED_PASSAGE_TOKEN_THRESHOLD,
 } from '@bike4mind/common';
 import type { ApiKeyScopeOption } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 
@@ -132,7 +130,8 @@ use to build a typed client). They are deliberately not repeated here, so the tw
 - Agents: \`/api/v1/agents\`, \`/api/v1/agents/{id}\`
 - Projects: \`/api/v1/projects\`, \`/api/v1/projects/{id}\`
 - Files and data lakes: \`/api/v1/files[?search=]\` (list, upload), \`/api/v1/files/{id}\` (get, update,
-  delete), \`/api/v1/data-lakes\`, \`/api/v1/data-lakes/*\`
+  delete), \`/api/v1/files/{id}/chunk\`, \`/api/v1/files/search\`, \`/api/v1/files/by-ids\`,
+  \`/api/v1/files/bulk-delete\`, \`/api/v1/data-lakes\`, \`/api/v1/data-lakes/*\`
 - Generation: \`/api/v1/image-generations\`, \`/api/v1/image-edits\`, \`/api/v1/video-*\`,
   \`/api/v1/music-*\`, \`/api/v1/voice/*\`, \`/api/ai/tts\`, \`/api/ai/sound-effects\`,
   \`/api/ai/music\` (deprecated, sunset 2027-01-15; use \`/api/v1/music-generations\`)
@@ -160,24 +159,6 @@ Image, video, music and chat work is asynchronous; the Async jobs section of the
 
 The sections below are still hand-written. Each row was checked against its route file, but
 treat the handler as authoritative.
-
-### Files (FabFiles)
-
-File list, upload, get, update and delete are covered by the generated docs (see above). The routes below are
-still hand-written.
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | /api/files/chunk | Trigger the chunking and embedding pipeline |
-| GET | /api/files/search | Full-text search across file content |
-| DELETE | /api/files/bulk-delete | Delete multiple files |
-| GET | /api/files/byIds | Get multiple files by ID |
-| GET | /api/files/getFabFileNameById | Get filename by ID |
-
-\`POST /api/files/chunk\` takes \`fabFileId\` (string) and \`chunkSize\`, the passage target in tokens: an integer
-between ${MIN_PASSAGE_TOKEN_TARGET} and ${OVERSIZED_PASSAGE_TOKEN_THRESHOLD}, inclusive.
-
----
 
 ### Sessions (Notebooks)
 

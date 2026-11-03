@@ -3,6 +3,7 @@ import {
   estimateFitFromSize,
   fitMarginBytes,
   memoryBudgets,
+  type FitModel,
   type FitPlan,
   type FitRuntime,
   type HardwareProfile,
@@ -74,9 +75,17 @@ function tooLarge(needBytes: number, usable: number, machine: number, where: Fit
 const withTightNote = (fit: { level: FitLevel; detail: string }, where: FitWhere) =>
   fit.level === 'tight' ? { ...fit, detail: `${fit.detail} ${WORDS[where].tight}` } : fit;
 
-function plan(arch: ModelArch, weightsBytes: number, hardware: HardwareProfile, context: number, mmproj = 0): Plan {
+type ModelExtras = Pick<FitModel, 'mmprojBytes' | 'expertBytesPerLayer' | 'activeParamsFraction'>;
+
+function plan(
+  arch: ModelArch,
+  weightsBytes: number,
+  hardware: HardwareProfile,
+  context: number,
+  extras: ModelExtras
+): Plan {
   const fit = estimateFit({
-    model: { arch, weightsBytes, mmprojBytes: mmproj },
+    model: { arch, weightsBytes, ...extras },
     hardware,
     mode: 'chat',
     runtime: OLLAMA_RUNTIME,
@@ -114,21 +123,25 @@ function describe(plan: Plan, cpuOnly: boolean, where: FitWhere): { level: FitLe
   return { level: 'fits', detail: `Fits ${place} at ${ctx}: ${usage}.${note}` };
 }
 
+/** The estimator's decode speed, which leaves out the K/V reads that slow a long chat. */
+function replySpeed(plan: Plan): string {
+  const rate = plan.decode?.tokensPerSec;
+  if (!plan.fits || rate === undefined) return '';
+  return ` Replies at ${rate < 1 ? 'under 1 token' : `about ${Math.round(rate)} tokens`}/s early in a chat.`;
+}
+
 /** The shared estimator's plan for an Ollama load at `context`, the one chatContextTokens (main/chat/localContext.ts) says chat requests. */
 export function fitFromArch(
   arch: ModelArch,
   weightsBytes: number,
   hardware: HardwareProfile,
   context: number,
-  options: { mmprojBytes?: number; where?: FitWhere } = {}
+  options: ModelExtras & { where?: FitWhere } = {}
 ): ModelFit {
-  const where = options.where ?? 'local';
-  const planned = plan(arch, weightsBytes, hardware, context, options.mmprojBytes);
-  return {
-    ...withTightNote(describe(planned, memoryBudgets(hardware).cpuOnly, where), where),
-    basis: 'arch',
-    context: planned.context,
-  };
+  const { where = 'local', ...extras } = options;
+  const planned = plan(arch, weightsBytes, hardware, context, extras);
+  const { level, detail } = withTightNote(describe(planned, memoryBudgets(hardware).cpuOnly, where), where);
+  return { level, detail: detail + replySpeed(planned), basis: 'arch', context: planned.context };
 }
 
 /**

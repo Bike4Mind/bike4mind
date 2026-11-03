@@ -177,6 +177,36 @@ describe('checkNewAccountSpendCap', () => {
     expect(personalSpendSince).not.toHaveBeenCalled();
   });
 
+  it('tells onRefused about a refusal, and only a refusal', async () => {
+    const onRefused = vi.fn(async () => undefined);
+    const { adapters } = makeAdapters([minutesAgo(50, 9_500)]);
+    const notified = { ...adapters, onRefused };
+    const params = { user: newUser(), billedToOrganization: false, logger, now: NOW };
+
+    await checkNewAccountSpendCap({ ...params, requestedCredits: 100 }, notified);
+    expect(onRefused).not.toHaveBeenCalled();
+
+    await checkNewAccountSpendCap({ ...params, requestedCredits: 1_000 }, notified);
+    expect(onRefused).toHaveBeenCalledExactlyOnceWith({
+      userId: 'u1',
+      requestedCredits: 1_000,
+      refusal: expect.objectContaining({ window: 'hour', capCredits: 10_000, spentCredits: 9_500 }),
+    });
+  });
+
+  it('still refuses when onRefused fails', async () => {
+    const { adapters } = makeAdapters([minutesAgo(50, 9_500)]);
+    const onRefused = vi.fn(async () => {
+      throw new Error('slack down');
+    });
+    await expect(
+      checkNewAccountSpendCap(
+        { user: newUser(), requestedCredits: 1_000, billedToOrganization: false, logger, now: NOW },
+        { ...adapters, onRefused }
+      )
+    ).resolves.toMatch(/^New accounts can spend up to 10,000 credits per hour/);
+  });
+
   it('assertNewAccountSpendWithinCap throws the insufficient-credits error shape', async () => {
     const { adapters } = makeAdapters();
     const error = await assertNewAccountSpendWithinCap(

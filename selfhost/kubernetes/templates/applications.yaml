@@ -138,9 +138,10 @@ spec:
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           {{ include "b4m.env" . | nindent 10 }}
             - {name: PORT, value: '3001'}
+            - {name: MANAGEMENT_PORT, value: '3002'}
             - {name: APP_INTERNAL_URL, value: 'http://{{ .Release.Name }}-app:3000'}
           resources: {{ .Values.resources.ws | toJson }}
-          ports: [{name: http, containerPort: 3001}]
+          ports: [{name: http, containerPort: 3001}, {name: management, containerPort: 3002}]
           startupProbe:
             httpGet: {path: /health, port: http}
             periodSeconds: 5
@@ -157,6 +158,17 @@ spec:
   type: ClusterIP
   selector: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: ws}
   ports: [{name: http, port: 3001, targetPort: http}]
+---
+# The management API gets its own Service so the browser-facing one above, which
+# users port-forward or put behind an ingress, never carries it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-ws-management
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: ws}
+  ports: [{name: management, port: 3002, targetPort: management}]
 ---
 apiVersion: apps/v1
 kind: Deployment

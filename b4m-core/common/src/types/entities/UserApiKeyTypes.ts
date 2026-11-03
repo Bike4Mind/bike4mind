@@ -43,6 +43,8 @@ export enum ApiKeyScope {
   MARKETING_REPORTS_WRITE = 'marketing-reports:write',
   /** Server-to-server ingest scope for Overwatch analytics. Admin-provisioned only - never shown in user-facing key creation UI. */
   OVERWATCH_INGEST_WRITE = 'overwatch-ingest:write',
+  /** Server-to-server credit grants for partner games. Admin-provisioned only - never shown in user-facing key creation UI. */
+  REWARDS_GRANT = 'rewards:grant',
   /** Authorizes only embedded-widget chat against the single agent the key is
    *  bound to (`agentId`). Like CC_BRIDGE, a leaked embed key has a narrow blast
    *  radius: it can talk to one agent from allow-listed origins, nothing else. */
@@ -242,6 +244,7 @@ export const CONFINED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
   ApiKeyScope.QA_INGEST,
   ApiKeyScope.SKILLS_READ,
   ApiKeyScope.RELEASE_NOTES_WRITE,
+  ApiKeyScope.REWARDS_GRANT,
   ApiKeyScope.SLACK_POST,
 ];
 

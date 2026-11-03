@@ -12,6 +12,12 @@ import { BadRequestError, ForbiddenError, getSettingsMap, getSettingsValue, isMo
 import { Logger } from '@bike4mind/observability';
 import { aiAccessDeniedMessage, type AiAccessStateFields } from '../userService/accountState';
 
+/**
+ * The free-tier allowlist. `textModelsOpen` (freeTierModelGateScope "media") also admits any model the catalog
+ * reports as text; only loadFreeTierAllowedModels sets it, so a plain Set keeps the all-modality gate.
+ */
+export type FreeTierAllowedModels = ReadonlySet<string> & { readonly textModelsOpen?: boolean };
+
 export type ModelAdmissionInput = {
   user: AiAccessStateFields & { isAdmin?: boolean | null; tags?: string[] | null };
   /** The llmModelConfigurations admin setting. */
@@ -23,9 +29,9 @@ export type ModelAdmissionInput = {
   enforceCredits?: boolean;
   /**
    * The free-tier allowlist from loadFreeTierAllowedModels; undefined when the gate is off. While set,
-   * a model of any modality outside it needs the PAID_PLAN_ENTITLEMENT_KEY entitlement (admins and developers exempt).
+   * a model outside it needs the PAID_PLAN_ENTITLEMENT_KEY entitlement (admins and developers exempt).
    */
-  freeTierAllowedModels?: ReadonlySet<string>;
+  freeTierAllowedModels?: FreeTierAllowedModels;
 };
 
 export type ModelAdmission = {
@@ -59,13 +65,15 @@ export async function loadModelConfigurations(
  */
 export async function loadFreeTierAllowedModels(
   adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>
-): Promise<ReadonlySet<string> | undefined> {
+): Promise<FreeTierAllowedModels | undefined> {
   const settings = await getSettingsMap(
     { adminSettings },
-    { names: ['freeTierModelGateEnabled', 'freeTierAllowedModels'] }
+    { names: ['freeTierModelGateEnabled', 'freeTierModelGateScope', 'freeTierAllowedModels'] }
   );
   if (getSettingsValue('freeTierModelGateEnabled', settings) !== true) return undefined;
-  return new Set(getSettingsValue('freeTierAllowedModels', settings) ?? []);
+  const allowed = new Set(getSettingsValue('freeTierAllowedModels', settings) ?? []);
+  if (getSettingsValue('freeTierModelGateScope', settings) !== 'media') return allowed;
+  return Object.assign(allowed, { textModelsOpen: true as const });
 }
 
 /** Whether an admission error is the free-tier refusal, as opposed to any other reason a model is refused. */
@@ -80,10 +88,15 @@ export function isFreeTierExempt(user: Pick<ModelAdmissionInput['user'], 'isAdmi
 }
 
 /**
- * Whether a free account may call the model, regardless of modality or catalog presence.
+ * Whether a free account may call the model: listed, or a text model while text models are open. Pass the
+ * catalog entry when there is one; without it only the list counts, so an unknown model stays gated.
  */
-export function isFreeTierModel(modelId: string, allowedModels: ReadonlySet<string>): boolean {
-  return allowedModels.has(modelId);
+export function isFreeTierModel(
+  modelId: string,
+  allowedModels: FreeTierAllowedModels,
+  model?: Pick<ModelInfo, 'type'>
+): boolean {
+  return allowedModels.has(modelId) || (Boolean(allowedModels.textModelsOpen) && model?.type === 'text');
 }
 
 /** A text model with no usable per-token price settles at $0, so it cannot run while credits are enforced. */
@@ -117,9 +130,9 @@ export function createModelAdmission({
       return [];
     }));
 
-  const requiresPaidPlan = async (modelId: string): Promise<boolean> => {
+  const requiresPaidPlan = async (modelId: string, model: ModelInfo | undefined): Promise<boolean> => {
     if (!freeTierAllowedModels || isFreeTierExempt(user)) return false;
-    if (isFreeTierModel(modelId, freeTierAllowedModels)) return false;
+    if (isFreeTierModel(modelId, freeTierAllowedModels, model)) return false;
     return !(await resolveEntitlements()).includes(PAID_PLAN_ENTITLEMENT_KEY);
   };
 
@@ -143,7 +156,7 @@ export function createModelAdmission({
         return new ForbiddenError(`Model "${modelId}" is not accessible and no fallback available`);
       }
     }
-    if (await requiresPaidPlan(modelId)) {
+    if (await requiresPaidPlan(modelId, model)) {
       if (entitlementReadFailed) {
         return new ServiceUnavailableError(`Could not verify your plan for model "${modelId}". Please try again.`);
       }

@@ -44,6 +44,7 @@ export * from './analytics';
 export * from './llm';
 export * from './me';
 export * from './creditBalance';
+export * from './creditTransaction';
 export * from './publicFile';
 export * from './artifactPublic';
 export * from './transcriptionPublic';

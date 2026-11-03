@@ -13,6 +13,9 @@ export const OUTBOUND_ACTIONS_RESTRICTED_MESSAGE =
 
 function describeOutboundTrustRequirement(assessment: userApiKeyService.UntrustedApiKeyAssessment): string {
   if (assessment.reason === 'email_unverified') return 'Verify your email address to use this feature.';
+  if (assessment.reason === 'paid_standing_required') {
+    return 'Free accounts cannot use this feature. To unlock it, purchase credits or a plan, or contact support.';
+  }
   const unlockDate = assessment.trustedAfter.toISOString().slice(0, 10);
   return `New accounts cannot use this feature yet. To unlock it, purchase credits or a plan, wait until ${unlockDate}, or contact support.`;
 }
@@ -29,7 +32,8 @@ export async function assertOutboundActionAllowed(
   if (!user) throw new UnauthorizedError('User not found');
   if (isAiAccessRevoked(user)) throw new ForbiddenError(OUTBOUND_ACTIONS_RESTRICTED_MESSAGE);
 
-  const { assessment } = await resolveApiKeyTrust(user, req);
+  // Account age always counts here; apiKeyAccountAgeTrustsKeys only governs API keys.
+  const { assessment } = await resolveApiKeyTrust(user, req, { honorAccountAge: true });
   if (assessment.status !== 'untrusted') return;
   throw new ForbiddenError(describeOutboundTrustRequirement(assessment), {
     errorCode: ACCOUNT_TRUST_REQUIRED_ERROR_CODE,

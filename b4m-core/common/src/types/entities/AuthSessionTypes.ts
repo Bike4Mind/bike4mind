@@ -15,6 +15,7 @@ export type AuthSessionCreatedVia =
   | 'identify'
   | 'oauth-token'
   | 'device'
+  | 'ios'
   | 'legacy-migration';
 
 /** Device/agent metadata captured at session creation, for the active-sessions list. */
@@ -24,6 +25,8 @@ export interface IAuthSessionDevice {
   os?: string;
   ip?: string;
   location?: string;
+  /** Human label the client reports for itself (e.g. a device name), shown in the active-sessions list. */
+  displayName?: string;
 }
 
 /**
