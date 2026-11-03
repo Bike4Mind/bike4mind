@@ -324,7 +324,11 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
             key: 'loops',
             priority: 3,
             label: t('loops.title'),
-            icon: iconSlot(<AutorenewOutlinedIcon sx={{ fontSize: '18px' }} />),
+            icon: (
+              <NavIcon>
+                <AutorenewOutlinedIcon sx={{ fontSize: '18px' }} />
+              </NavIcon>
+            ),
             isActive: location.pathname === '/loops' || location.pathname.startsWith('/loops/'),
             onClick: () => {
               closeOnMobile();
