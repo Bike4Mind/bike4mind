@@ -6,6 +6,7 @@ import {
   catalogSuccessors,
   resetReplacedByOverlay,
   resolveDeprecatedModelId,
+  resolveSuccessorChain,
   updateReplacedByOverlay,
 } from './resolveDeprecatedModel';
 import { AnthropicBackend } from './anthropicBackend';
@@ -48,6 +49,9 @@ describe('resolveDeprecatedModelId', () => {
       'global.anthropic.claude-haiku-5-5'
     );
     expect(resolveDeprecatedModelId('anthropic.claude-3-opus-20240229-v1:0')).toBe('global.anthropic.claude-opus-4-8');
+    expect(resolveSuccessorChain('us.anthropic.claude-3-5-haiku-20241022-v1:0')).toBe(
+      'global.anthropic.claude-haiku-5-5'
+    );
   });
 
   it('should resolve deprecated Anthropic-hosted model IDs', () => {
@@ -58,6 +62,7 @@ describe('resolveDeprecatedModelId', () => {
     expect(resolveDeprecatedModelId('claude-opus-4-1-20250805')).toBe('claude-opus-4-8');
     expect(resolveDeprecatedModelId('claude-3-opus-20240229')).toBe('claude-opus-4-8');
     expect(resolveDeprecatedModelId('claude-3-haiku-20240307')).toBe('claude-haiku-5-5');
+    expect(resolveSuccessorChain('claude-3-5-haiku-20241022')).toBe('claude-haiku-5-5');
   });
 
   it('should pass through unknown model IDs unchanged', () => {
@@ -164,8 +169,6 @@ const UNMAPPED_LEGACY: ReadonlySet<string> = new Set<string>([
   'gpt-image-1',
   'gpt-image-1-mini',
   'gpt-image-1.5',
-  'claude-3-5-haiku-20241022',
-  'us.anthropic.claude-3-5-haiku-20241022-v1:0',
   'gemini-1.5-flash',
   'gemini-1.5-flash-8b',
   'gemini-1.5-pro',

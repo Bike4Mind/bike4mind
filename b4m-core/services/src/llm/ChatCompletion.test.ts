@@ -1766,6 +1766,30 @@ describe('ChatCompletionProcess', () => {
       });
       expect(mockQuest.promptMeta.model.supportsTools).toBeUndefined();
     });
+
+    it('hands features the resolved model id, not the retired one the session is pinned to', async () => {
+      mockSession.userId = 'user1';
+      const body = wireMinimalTurn();
+      body.params = { ...body.params, model: 'gpt-5-chat-latest' };
+      vi.mocked(resolveDeprecatedModelId).mockImplementation((id: string) =>
+        id === 'gpt-5-chat-latest' ? ChatModels.GPT4 : id
+      );
+      const seen: string[] = [];
+      service.features.set('capture', {
+        beforeDataGathering: async ({ model }: { model: string }) => {
+          seen.push(model);
+          return { shouldContinue: true };
+        },
+      } as any);
+
+      try {
+        await service.process({ body, logger: mockLogger });
+      } finally {
+        vi.mocked(resolveDeprecatedModelId).mockImplementation((id: string) => id);
+      }
+
+      expect(seen).toEqual([ChatModels.GPT4]);
+    });
   });
 
   describe('a user stop', () => {
