@@ -36,7 +36,7 @@ export interface SignupGrantPoolSeedStore {
 /**
  * Splits the old single daily cap across the signup-grant pools; a missing pool row reads as paused.
  * Never writes 0 and never touches an existing row. Shared by the hosted migration (packages/scripts/migrate) and the self-host worker boot
- * (apps/workers/src/selfhost/main.ts), which runs no migrations.
+ * (apps/workers/src/selfhost/main.ts, once via runSeedOnce), which runs no migrations.
  */
 export async function seedSignupGrantPools(store: SignupGrantPoolSeedStore): Promise<void> {
   const legacy = await store.findOne({ settingName: 'signupGrantDailyBudget' });
@@ -51,16 +51,4 @@ export async function seedSignupGrantPools(store: SignupGrantPoolSeedStore): Pro
       { upsert: true }
     );
   }
-}
-
-/**
- * The self-host boot seed: runs on every container start, so it seeds only while neither pool row exists.
- * Once either is written the pools are the operator's, and a row they later remove stays removed (paused)
- * rather than coming back on the next restart.
- */
-export async function seedSignupGrantPoolsOnFirstBoot(store: SignupGrantPoolSeedStore): Promise<boolean> {
-  for (const settingName of Object.values(SIGNUP_GRANT_POOL_SETTING_NAMES))
-    if (await store.findOne({ settingName })) return false;
-  await seedSignupGrantPools(store);
-  return true;
 }

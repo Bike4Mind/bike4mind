@@ -3,7 +3,8 @@ import {
   AdminSettings,
   adminSettingsRepository,
   connectDB,
-  seedSignupGrantPoolsOnFirstBoot,
+  runSeedOnce,
+  seedSignupGrantPools,
 } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
@@ -118,7 +119,7 @@ async function main() {
   bootLogger.info('MongoDB connected');
   // Self-host runs no packages/scripts migrations, so the pool seed the hosted migration
   // writes happens here, once; on failure the pools read as missing (paused, admin alerted).
-  await seedSignupGrantPoolsOnFirstBoot(AdminSettings).catch(err =>
+  await runSeedOnce('signupGrantPools', () => seedSignupGrantPools(AdminSettings)).catch(err =>
     bootLogger.error(`Could not seed the signup-grant pool settings; free signup grants stay paused: ${err}`)
   );
 
