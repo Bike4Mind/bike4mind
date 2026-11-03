@@ -8,6 +8,7 @@ import {
   McpConnectionSlugConflictError,
   NotFoundError,
   TooManyRequestsError,
+  getMcpPresetHost,
   isValidMcpConnectionSlug,
   toMcpApiKeyLast4,
   toMcpConnectionPublic,
@@ -82,6 +83,7 @@ export function toPublicView(
     evaluateConnectionPolicy(context, {
       urlHost: connection.urlHost,
       authKind: connection.auth?.kind ?? 'none',
+      presetRemoteHost: getMcpPresetHost(connection.presetId),
       url: connection.displayUrl,
     })
   );
@@ -205,12 +207,19 @@ async function probe(
 function assertPolicyAllows(
   actor: ConnectionActor,
   context: CustomMcpContext,
-  connection: Pick<IMcpConnectionDocument, 'urlHost'> & Partial<Pick<IMcpConnectionDocument, 'id' | 'slug'>>,
+  connection: Pick<IMcpConnectionDocument, 'urlHost'> &
+    Partial<Pick<IMcpConnectionDocument, 'id' | 'slug' | 'presetId'>>,
   authKind: IMcpConnectionAuth['kind'],
   url: string,
   action: string
 ): void {
-  const verdict = evaluateConnectionPolicy(context, { urlHost: connection.urlHost, authKind, url });
+  // The preset host comes from the catalog entry the stored `presetId` names, never from the request.
+  const verdict = evaluateConnectionPolicy(context, {
+    urlHost: connection.urlHost,
+    authKind,
+    presetRemoteHost: getMcpPresetHost(connection.presetId),
+    url,
+  });
   if (verdict.allowed) return;
   audit(actor, action, connection, { policyVerdict: verdict.reason }).failure('policy_blocked');
   throw new ForbiddenError(verdict.message, { code: 'policy_blocked', reason: verdict.reason });
@@ -228,7 +237,22 @@ export async function createUserConnection(
   options: InvokeRemoteMcpOptions = {}
 ): Promise<IMcpConnectionPublic> {
   const prepared = prepareConnectionUrl(body.url, context.network);
-  assertPolicyAllows(actor, context, { urlHost: prepared.urlHost }, body.auth.kind, prepared.url, 'connection_created');
+  // A preset connects to its own server only: a body naming a preset with another host is refused
+  // before the policy runs, so a preset id can never carry a custom URL past `presets_only`.
+  if (body.presetId && getMcpPresetHost(body.presetId) !== prepared.urlHost) {
+    audit(actor, 'connection_created', { urlHost: prepared.urlHost }).failure('preset_host_mismatch');
+    throw new BadRequestError('This URL is not the server of the chosen connector preset', {
+      code: 'preset_host_mismatch',
+    });
+  }
+  assertPolicyAllows(
+    actor,
+    context,
+    { urlHost: prepared.urlHost, presetId: body.presetId },
+    body.auth.kind,
+    prepared.url,
+    'connection_created'
+  );
 
   // String() first: the membership ids are strings, so an ObjectId pointer never matched them.
   const selectedOrgId = actor.organizationId ? String(actor.organizationId) : undefined;
@@ -238,6 +262,7 @@ export async function createUserConnection(
     ownerKey: actor.id,
     userId: actor.id,
     ...(organizationId ? { organizationId } : {}),
+    ...(body.presetId ? { presetId: body.presetId } : {}),
     displayName: body.displayName,
     urlEnc: prepared.urlEnc,
     displayUrl: prepared.displayUrl,

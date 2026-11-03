@@ -61,6 +61,16 @@ export interface IntegrationCapability {
  */
 export type IntegrationAudience = 'admin' | 'tavern';
 
+/**
+ * A hosted MCP server a catalog entry connects to as a preset. `url` is the one server address a
+ * connection created from the preset may use: the policy's `presets_only` mode admits exactly its
+ * host. `auth` is how the user signs in; only an API key is wired today.
+ */
+export interface IntegrationRemoteMcp {
+  url: string;
+  auth: 'api_key';
+}
+
 export interface IntegrationDefinition {
   name: string;
   /** One line, no promises or dates. */
@@ -71,6 +81,8 @@ export interface IntegrationDefinition {
   /** Admin flag gating every capability of the entry. */
   flag?: SettingKey;
   audience?: IntegrationAudience;
+  /** Set on an entry users connect as a custom MCP connector preset (see customMcpPolicy). */
+  remoteMcp?: IntegrationRemoteMcp;
   capabilities: readonly IntegrationCapability[];
 }
 
