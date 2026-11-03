@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -21,6 +21,43 @@ describe('resolveUserPath on Windows', () => {
 
     expect(await resolveUserPath()).toBe('C:\\Windows\\System32;C:\\Tools');
     expect(execFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('findOnPath', () => {
+  it('takes the first absolute Windows PATH folder with <name>.exe and never looks up a relative one', async () => {
+    const { findOnPath } = await import('./userPath');
+    const checked: string[] = [];
+    const isExecutable = async (file: string) => {
+      checked.push(file);
+      return file === 'C:\\Program Files\\GitHub CLI\\gh.exe';
+    };
+
+    const found = await findOnPath('gh', '.;bin;;D:\\Tools;"C:\\Program Files\\GitHub CLI"', 'win32', isExecutable);
+
+    expect(found).toBe('C:\\Program Files\\GitHub CLI\\gh.exe');
+    expect(checked).toEqual(['D:\\Tools\\gh.exe', 'C:\\Program Files\\GitHub CLI\\gh.exe']);
+    expect(await findOnPath('gh', '.;bin', 'win32', isExecutable)).toBeNull();
+  });
+
+  it.skipIf(process.platform === 'win32')('skips relative and non-executable entries on POSIX', async () => {
+    const { findOnPath } = await import('./userPath');
+    const directory = await mkdtemp(join(tmpdir(), 'b4m-on-path-'));
+    try {
+      for (const [folder, mode] of [
+        ['here', 0o755],
+        ['plain', 0o644],
+        ['bin', 0o755],
+      ] as const) {
+        await mkdir(join(directory, folder));
+        await writeFile(join(directory, folder, 'gh'), '#!/bin/sh\n', { mode });
+      }
+      const path = ['.', '', 'here', join(directory, 'plain'), join(directory, 'bin')].join(':');
+
+      expect(await findOnPath('gh', path, 'linux')).toBe(join(directory, 'bin', 'gh'));
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });
 

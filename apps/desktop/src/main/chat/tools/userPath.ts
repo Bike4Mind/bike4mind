@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
+import { access, constants, stat } from 'node:fs/promises';
 import { homedir, userInfo } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, join, posix, win32 } from 'node:path';
 
 /** Generous on purpose: a login shell loading nix-darwin, direnv and plugins takes seconds, more on a cold launch. */
 const SHELL_PATH_TIMEOUT_MS = 20_000;
@@ -51,3 +52,34 @@ export function resolveUserPath(): Promise<string> {
   return cachedPath;
 }
 let cachedPath: Promise<string> | undefined;
+
+async function isExecutableFile(file: string, platform: NodeJS.Platform): Promise<boolean> {
+  try {
+    if (!(await stat(file)).isFile()) return false;
+    if (platform !== 'win32') await access(file, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The absolute path of `name` in the first absolute PATH directory that has it, `<name>.exe` on
+ * Windows. Relative entries are skipped, so nothing resolves from the working directory.
+ */
+export async function findOnPath(
+  name: string,
+  path: string,
+  platform: NodeJS.Platform = process.platform,
+  isExecutable: (file: string) => Promise<boolean> = file => isExecutableFile(file, platform)
+): Promise<string | null> {
+  const paths = platform === 'win32' ? win32 : posix;
+  const file = platform === 'win32' ? `${name}.exe` : name;
+  for (const entry of path.split(platform === 'win32' ? ';' : ':')) {
+    const directory = entry.trim().replace(/^"(.*)"$/, '$1');
+    if (!paths.isAbsolute(directory)) continue;
+    const candidate = paths.join(directory, file);
+    if (await isExecutable(candidate)) return candidate;
+  }
+  return null;
+}
