@@ -253,7 +253,7 @@ describe('payCreditReward', () => {
     expect(await balance(user.id)).toBe(0);
   });
 
-  it('voids on release what the hold-time gate refuses: suspend_pending inviter, deleted friend', async () => {
+  it('keeps a suspend_pending account queued and voids a deleted friend at release', async () => {
     config.signupGrantTricklePoolDaily = '0';
     const pending = await makeUser();
     const inviter = await makeUser();
@@ -272,9 +272,17 @@ describe('payCreditReward', () => {
       { $set: { deletedAt: new Date() } }
     );
     config.signupGrantTricklePoolDaily = '1000';
-    expect(await creditService.releaseHeldCreditRewards(adapters, { limit: 10 })).toMatchObject({ paid: 0, voided: 2 });
+    expect(await creditService.releaseHeldCreditRewards(adapters, { limit: 10 })).toMatchObject({
+      paid: 0,
+      voided: 1,
+      deferred: 1,
+    });
     expect(await balance(pending.id)).toBe(0);
     expect(await balance(inviter.id)).toBe(0);
+
+    await User.updateOne({ _id: pending.id }, { 'moderation.status': 'active' });
+    expect(await creditService.releaseHeldCreditRewards(adapters, { limit: 10 })).toMatchObject({ paid: 1 });
+    expect(await balance(pending.id)).toBe(100);
   });
 
   it('pays and queues nothing for a blocked account, and voids a queued reward once its account is blocked', async () => {

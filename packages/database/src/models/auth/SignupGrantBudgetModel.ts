@@ -38,6 +38,31 @@ const isDuplicate = (error: unknown): boolean =>
 // would write-conflict on it. Callers refund a reservation whose payout aborts.
 const detached = { session: null } as const;
 
+/**
+ * Moves today's spend on the pre-pool counter (keyed by the bare day) onto the pool counters, signup pool
+ * first, so the day the pools go live cannot pay the retired cap again on top of what it already paid.
+ * The `<pool>:<day>` key must match signupGrantBudgetKey (b4m-core/services userService/signupGrantBudget.ts).
+ */
+export async function carryLegacyGrantBudgetSpend(
+  caps: { signup: number; trickle: number },
+  now: Date = new Date()
+): Promise<void> {
+  const day = now.toISOString().slice(0, 10);
+  const legacy = await SignupGrantBudgetDayModel.findById(day, { spent: 1 }, detached).lean();
+  if (!legacy?.spent) return;
+  const signup = Math.min(legacy.spent, caps.signup);
+  const shares = { signup, trickle: legacy.spent - signup };
+  for (const pool of ['signup', 'trickle'] as const) {
+    if (shares[pool] <= 0) continue;
+    // $max, not $set: draws the new code already made on the pool counter are kept.
+    await SignupGrantBudgetDayModel.updateOne(
+      { _id: `${pool}:${day}` },
+      { $max: { spent: shares[pool] } },
+      { upsert: true }
+    );
+  }
+}
+
 export const signupGrantBudgetRepository: SignupGrantBudgetRepository = {
   async reserve(day, transactionId, amount, budget) {
     // A grant larger than the whole budget could never fit any day, so it may draw only on an untouched day.

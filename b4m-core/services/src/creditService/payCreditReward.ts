@@ -66,13 +66,23 @@ export type PayCreditRewardAdapters = AddCreditsAdapters & {
 export type PayCreditRewardOutcome =
   { outcome: 'paid'; creditTransactionId: string } | { outcome: 'queued' | 'duplicate' | 'blocked' };
 
-async function partiesBlocked(reward: HeldCreditRewardInput, adapters: PayCreditRewardAdapters) {
-  const user = await adapters.users.findById(reward.userId);
-  if (!user || isRewardPartyBlocked(user)) return true;
+/**
+ * 'transient' covers states an account can leave (dispute pending, suspension or suspend_pending, both
+ * appealable): the release keeps such a reward queued rather than voiding it, which would forfeit it for good.
+ */
+type PartyBlock = 'terminal' | 'transient' | null;
+
+const partyBlock = (party: RewardPartyFields | null): PartyBlock => {
+  if (!party || party.deletedAt || party.isSynthetic || party.isBanned) return 'terminal';
+  return isRewardPartyBlocked(party) ? 'transient' : null;
+};
+
+async function partiesBlock(reward: HeldCreditRewardInput, adapters: PayCreditRewardAdapters): Promise<PartyBlock> {
+  const userBlock = partyBlock(await adapters.users.findById(reward.userId));
+  if (userBlock === 'terminal') return userBlock;
   const friendId = reward.metadata?.[REFERRED_USER_ID_METADATA_KEY];
-  if (reward.source !== 'referral_first_answer' || typeof friendId !== 'string') return false;
-  const friend = await adapters.users.findById(friendId);
-  return !friend || isRewardPartyBlocked(friend);
+  if (reward.source !== 'referral_first_answer' || typeof friendId !== 'string') return userBlock;
+  return partyBlock(await adapters.users.findById(friendId)) ?? userBlock;
 }
 
 type PayNowResult =
@@ -145,7 +155,7 @@ export async function payCreditReward(
 ): Promise<PayCreditRewardOutcome> {
   if (await adapters.db.creditTransactions.findOne({ transactionId: reward.transactionId }))
     return { outcome: 'duplicate' };
-  if (await partiesBlocked(reward, adapters)) return { outcome: 'blocked' };
+  if (await partiesBlock(reward, adapters)) return { outcome: 'blocked' };
 
   const [own] = await adapters.heldRewards.findByTransactionIds([reward.transactionId]);
   // A voided row was refused at release; answering 'duplicate' would read as claimed and loop the user.
@@ -169,6 +179,8 @@ export type ReleaseHeldCreditRewardsResult = {
   scanned: number;
   paid: number;
   voided: number;
+  /** Rewards left queued because an account is in a state it can leave (see partyBlock). */
+  deferred: number;
   /** Rewards whose release threw; they stay held for the next run. */
   failed: number;
   budgetExhausted: boolean;
@@ -185,6 +197,7 @@ export async function releaseHeldCreditRewards(
     scanned: 0,
     paid: 0,
     voided: 0,
+    deferred: 0,
     failed: 0,
     budgetExhausted: false,
     paidRewards: [],
@@ -199,7 +212,12 @@ export async function releaseHeldCreditRewards(
         await adapters.heldRewards.settle(reward.transactionId, 'paid');
         continue;
       }
-      if (await partiesBlocked(reward, adapters)) {
+      const block = await partiesBlock(reward, adapters);
+      if (block === 'transient') {
+        result.deferred++;
+        continue;
+      }
+      if (block === 'terminal') {
         await adapters.heldRewards.settle(reward.transactionId, 'void');
         result.voided++;
         continue;

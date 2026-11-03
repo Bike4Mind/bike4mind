@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
-import { AdminSettings, POOL_SEED_UNMETERED } from '@bike4mind/database';
+import { AdminSettings, POOL_SEED_UNMETERED, SignupGrantBudgetDayModel } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/__test__/createMongoServer';
 import { AvailableMigrations } from './index';
 
@@ -24,6 +24,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await AdminSettings.collection.deleteMany({});
+  await SignupGrantBudgetDayModel.collection.deleteMany({});
 });
 
 const setRaw = (settingName: string, settingValue: unknown) =>
@@ -85,6 +86,23 @@ describe('seed-signup-grant-pools migration', () => {
       signupGrantSignupPoolDaily: String(POOL_SEED_UNMETERED),
       signupGrantTricklePoolDaily: String(POOL_SEED_UNMETERED),
     });
+  });
+
+  it("carries today's spend on the retired counter onto the pools, signup first, keeping larger pool spend", async () => {
+    const day = new Date().toISOString().slice(0, 10);
+    await setRaw('signupGrantDailyBudget', '500');
+    await SignupGrantBudgetDayModel.collection.insertMany([
+      { _id: day, spent: 300, reservedIds: [] },
+      { _id: '2000-01-01', spent: 400, reservedIds: [] },
+    ]);
+    await migration.up();
+    const spent = async (id: string) => (await SignupGrantBudgetDayModel.findById(id).lean())?.spent ?? 0;
+    expect([await spent(`signup:${day}`), await spent(`trickle:${day}`)]).toEqual([250, 50]);
+    expect(await spent('signup:2000-01-01')).toBe(0);
+
+    await SignupGrantBudgetDayModel.updateOne({ _id: `trickle:${day}` }, { $set: { spent: 120 } });
+    await migration.up();
+    expect([await spent(`signup:${day}`), await spent(`trickle:${day}`)]).toEqual([250, 120]);
   });
 
   it('keeps an operator pool row, leaves the legacy row alone, and is a no-op on rerun', async () => {
