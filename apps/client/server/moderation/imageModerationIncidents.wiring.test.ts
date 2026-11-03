@@ -13,6 +13,7 @@ const ALLOWED = new Set([
   'apps/client/server/moderation/imageModerationIncidents.ts',
   'apps/client/pages/api/admin/moderation-incidents/index.ts',
   'apps/client/pages/api/admin/moderation-incidents/[id]/verdict.ts',
+  'apps/client/pages/api/admin/moderation-incidents/[id]/view.ts',
   'apps/client/pages/api/admin/users/[userId]/compliance.ts',
 ]);
 
