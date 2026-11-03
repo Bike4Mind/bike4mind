@@ -1,5 +1,6 @@
 import { Permission } from '@bike4mind/common';
 import { getFabFileById } from '@server/managers/fabFileManager';
+import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
@@ -30,6 +31,9 @@ export async function requestFileRechunk(
   if (!req.ability?.can?.(Permission.update, fabFile)) return { status: 'denied' };
 
   if (fabFile.isChunking) return { status: 'already_chunking' };
+
+  // Spent after the gates above and before anything is sent, so a refused rechunk enqueues nothing.
+  await consumeFileUploadBudget(req, 1);
 
   await sendToClient(req.user.id, Resource.websocket.managementEndpoint, {
     action: 'update_file_chunk_vector_status',
