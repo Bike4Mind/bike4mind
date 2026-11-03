@@ -66,42 +66,69 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-describe('sharing a folder into a chat by id', () => {
-  it.each([
-    {
-      reply: {
-        status: 'added',
-        path: NOTES,
-        warning: 'This is your home folder.',
-        session: summary([NOTES]),
-      } as ShareDirectoryResult,
-      outcome: { value: `Shared ${NOTES} with this conversation. This is your home folder.` },
-    },
-    {
-      reply: { status: 'refused', error: 'The filesystem root cannot be shared.' } as ShareDirectoryResult,
-      outcome: { error: 'The filesystem root cannot be shared.' },
-    },
-  ])('hands back a $reply.status reply that lands before the opened chat has reset', async ({ reply, outcome }) => {
-    let answer: (result: ShareDirectoryResult) => void = () => undefined;
-    stubBridge({
-      getSession: async () => session([]),
-      addContextDirectory: () => new Promise<ShareDirectoryResult>(resolve => (answer = resolve)),
-    });
-    // Main's reply arrives in the commit that opens the chat, ahead of that chat's passive reset.
-    onOpen = () => answer(reply);
-    root.render(<Harness sessionId={null} />);
-    await settle();
+const lateReplies = [
+  {
+    reply: {
+      status: 'added',
+      path: NOTES,
+      warning: 'This is your home folder.',
+      session: summary([NOTES]),
+    } as ShareDirectoryResult,
+    outcome: { value: `Shared ${NOTES} with this conversation. This is your home folder.` },
+  },
+  {
+    reply: { status: 'refused', error: 'The filesystem root cannot be shared.' } as ShareDirectoryResult,
+    outcome: { error: 'The filesystem root cannot be shared.' },
+  },
+];
 
-    const shared = conversation.addContextDirectoryTo('fresh', NOTES).then(
-      value => ({ value }),
-      (error: Error) => ({ error: error.message })
-    );
-    root.render(<Harness sessionId="fresh" />);
-    expect(await shared).toEqual(outcome);
-    await settle();
-    expect(conversation.notice).toBeNull();
-    expect(conversation.sendError).toBeNull();
-  });
+describe('sharing a folder into a chat by id', () => {
+  it.each(lateReplies)(
+    'hands back a $reply.status reply that lands before the opened chat has reset',
+    async ({ reply, outcome }) => {
+      let answer: (result: ShareDirectoryResult) => void = () => undefined;
+      stubBridge({
+        getSession: async () => session([]),
+        addContextDirectory: () => new Promise<ShareDirectoryResult>(resolve => (answer = resolve)),
+      });
+      // Main's reply arrives in the commit that opens the chat, ahead of that chat's passive reset.
+      onOpen = () => answer(reply);
+      root.render(<Harness sessionId={null} />);
+      await settle();
+
+      const shared = conversation.addContextDirectoryTo('fresh', NOTES).then(
+        value => ({ value }),
+        (error: Error) => ({ error: error.message })
+      );
+      root.render(<Harness sessionId="fresh" />);
+      expect(await shared).toEqual(outcome);
+      await settle();
+      expect(conversation.notice).toBeNull();
+      expect(conversation.sendError).toBeNull();
+    }
+  );
+
+  it.each(lateReplies)(
+    'hands back a $reply.status reply that lands after its chat was left, before the next one resets',
+    async ({ reply, outcome }) => {
+      let answer: (result: ShareDirectoryResult) => void = () => undefined;
+      stubBridge({
+        getSession: async () => session([]),
+        addContextDirectory: () => new Promise<ShareDirectoryResult>(resolve => (answer = resolve)),
+      });
+      root.render(<Harness sessionId="fresh" />);
+      await settle();
+
+      // Main's reply arrives in the commit that opens another chat, while the reset still names this one.
+      onOpen = () => answer(reply);
+      const shared = conversation.addContextDirectoryTo('fresh', NOTES).then(
+        value => ({ value }),
+        (error: Error) => ({ error: error.message })
+      );
+      root.render(<Harness sessionId="other" />);
+      expect(await shared).toEqual(outcome);
+    }
+  );
 
   it('reads a chat again when a share lands during its read, not laying the older summary over it', async () => {
     let stored = session([]);
