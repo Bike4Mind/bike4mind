@@ -1279,14 +1279,12 @@ export async function scanShell(
             ungranted.add(target);
             continue;
           }
-          // A WSL folder's command reads its operands by Linux rules, so the root to judge them against is its distro's.
+          // A WSL folder's command reads its operands by Linux rules, judged against its own distro. A Windows path
+          // or a granted other distro is not on that filesystem and is left unread; one that is and fails fails the scan.
           const here = wslLocation(state.cwd);
+          if (here && wslLocation(target)?.distro.toLowerCase() !== here.distro.toLowerCase()) continue;
           const filesystemRoot = here ? wslUncPath(here, '/') : parse(target).root;
-          // An operand that filesystem cannot judge, such as a path in another distro, is left unread.
-          await resolveWithinRootsPhysically(prefix, [filesystemRoot], state.cwd).then(
-            physical => paths.add(physical),
-            () => undefined
-          );
+          paths.add(await resolveWithinRootsPhysically(prefix, [filesystemRoot], state.cwd));
         }
         return;
       }

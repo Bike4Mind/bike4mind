@@ -11,6 +11,8 @@ const distroUser: { current: { path: string; home: string } | null } = {
   current: { path: '/usr/bin', home: '/home/me' },
 };
 
+const unresolvable = { current: false };
+
 vi.doMock('node:path', async () => {
   const { win32 } = await vi.importActual<typeof import('node:path')>('node:path');
   return { ...win32, default: win32 };
@@ -38,7 +40,7 @@ vi.doMock('../../wsl/wslPath', async () => {
     wslUserEnvironment: async () => distroUser.current,
     wslRealpath: async (distro: string, linuxPath: string) => {
       asked.push(`${distro}:${linuxPath}`);
-      return posix.normalize(linuxPath);
+      return unresolvable.current ? null : posix.normalize(linuxPath);
     },
   };
 });
@@ -102,6 +104,17 @@ describe('a path in a distro no root is in', () => {
       expect(scan?.ungranted).toEqual([]);
     }
   );
+
+  it('fails the scan for an operand in its own distro that the distro cannot resolve', async () => {
+    const root = '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo';
+    unresolvable.current = true;
+    try {
+      await expect(scanShell('sed -n p notes.txt', root, [root])).rejects.toThrow();
+      await expect(scanShell('sed C:/out', root, [root])).resolves.not.toBeNull();
+    } finally {
+      unresolvable.current = false;
+    }
+  });
 });
 
 describe('the folders a command in a WSL project may reach unasked', () => {
