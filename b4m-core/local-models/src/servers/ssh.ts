@@ -175,15 +175,30 @@ function lastLine(stderr: string): string | null {
 }
 
 /** What ssh's stderr and exit code mean, in words that say what to do. */
-export function describeSshFailure(stderr: string, code: number | null, destination: string, app = 'Desktop'): Error {
+export function describeSshFailure(
+  stderr: string,
+  code: number | null,
+  destination: string,
+  app = 'Desktop',
+  platform: NodeJS.Platform = process.platform
+): Error {
   const terminal = `\`ssh ${destination}\``;
+  // Windows ssh.exe keeps its own known_hosts and keys, so a WSL terminal does not help, and BatchMode cannot prompt.
+  const connectOnce =
+    platform === 'win32'
+      ? `a Windows terminal (PowerShell or Command Prompt, not WSL) with ${terminal}`
+      : `a terminal with ${terminal}`;
+  const passphrase =
+    platform === 'win32'
+      ? ` ${app} cannot ask for a passphrase, so a key that has one must be loaded into ssh-agent.`
+      : '';
   if (/REMOTE HOST IDENTIFICATION HAS CHANGED/i.test(stderr)) {
     return new SshRefusedError(
-      `The host key of ${destination} has changed since this computer last connected. Check why, then connect once from a terminal with ${terminal} to trust the new key.`
+      `The host key of ${destination} has changed since this computer last connected. Check why, then connect once from ${connectOnce} to trust the new key.${passphrase}`
     );
   }
   if (/Host key verification failed|host key is known|No .* host key is known/i.test(stderr)) {
-    return new SshRefusedError(`Connect once from a terminal with ${terminal} to trust this server's host key.`);
+    return new SshRefusedError(`Connect once from ${connectOnce} to trust this server's host key.${passphrase}`);
   }
   if (/open failed: connect failed/i.test(stderr)) {
     return new SshConnectionError(
@@ -435,7 +450,7 @@ export function createSshFetch(endpoint: SshEndpoint, deps: SshDeps = {}): Fetch
       }
       return new SshForward(
         child,
-        (stderr, code) => describeSshFailure(stderr, code, destination as string, app),
+        (stderr, code) => describeSshFailure(stderr, code, destination as string, app, platform),
         spawnFailed
       );
     },

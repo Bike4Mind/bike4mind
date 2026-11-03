@@ -169,6 +169,19 @@ describe('ssh failures', () => {
     expect(err.message).toBe("Connect once from a terminal with `ssh me@gpu` to trust this server's host key.");
   });
 
+  it('names a Windows terminal and ssh-agent for an unknown host key on Windows', () => {
+    const err = describeSshFailure('Host key verification failed.\n', 255, 'me@gpu', 'Desktop', 'win32');
+    expect(err).toBeInstanceOf(SshRefusedError);
+    expect(err.message).toBe(
+      "Connect once from a Windows terminal (PowerShell or Command Prompt, not WSL) with `ssh me@gpu` to trust this server's host key. Desktop cannot ask for a passphrase, so a key that has one must be loaded into ssh-agent."
+    );
+    for (const platform of ['darwin', 'linux'] as const) {
+      expect(describeSshFailure('Host key verification failed.\n', 255, 'me@gpu', 'Desktop', platform).message).toBe(
+        "Connect once from a terminal with `ssh me@gpu` to trust this server's host key."
+      );
+    }
+  });
+
   it('says a changed host key changed', () => {
     const err = describeSshFailure(
       '@@@@\nWARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!\nHost key verification failed.\n',
@@ -402,7 +415,7 @@ describe('createSshFetch', () => {
     const ssh = fakeSsh(await ollama(), { stderr: `${debug}Host key verification failed.\n` });
     const fetch = createSshFetch({ destination: 'gpu', label: 'gpu' }, { spawn: ssh.spawn, platform: 'win32' });
     await expect(fetch(`${SSH_OLLAMA_URL}/api/version`)).rejects.toThrow(
-      "Connect once from a terminal with `ssh gpu` to trust this server's host key."
+      "Connect once from a Windows terminal (PowerShell or Command Prompt, not WSL) with `ssh gpu` to trust this server's host key."
     );
     expect(ssh.spawned[0].detached).toBe(false);
   });
@@ -433,7 +446,7 @@ describe('createSshFetch', () => {
     expect(outcome).toMatchObject({
       kind: null,
       refused: true,
-      error: "Connect once from a terminal with `ssh me@gpu` to trust this server's host key.",
+      error: expect.stringContaining('Connect once from a Windows terminal (PowerShell or Command Prompt, not WSL)'),
     });
   });
 
