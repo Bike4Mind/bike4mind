@@ -282,7 +282,7 @@ const BedrockNewsClaimPage = () => {
           </Link>
         </Typography>
       )}
-      {ticket && view.afterConfirm && RETRYABLE.has(claim.state) && (
+      {ticket && (claim.state === 'in-progress' || (view.afterConfirm && RETRYABLE.has(claim.state))) && (
         <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
           <Button onClick={() => loadPreview(ticket)}>Try again</Button>
         </Box>

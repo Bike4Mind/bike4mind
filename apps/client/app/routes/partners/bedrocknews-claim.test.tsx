@@ -1,7 +1,7 @@
 import React from 'react';
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
@@ -224,11 +224,20 @@ describe('BedrockNewsClaimPage', () => {
     }
   );
 
-  it('does not offer Try again for a preview error', async () => {
-    mockPost.mockResolvedValue({ data: { state: 'unavailable' } });
+  it.each(['unavailable', 'budget-spent', 'expired'])('does not offer Try again for a %s preview', async state => {
+    mockPost.mockResolvedValue({ data: { state } });
     renderPage();
-    expect(await screen.findByText(/Couldn\u2019t reach BedrockNews/)).toBeInTheDocument();
+    await screen.findByTestId('claim-card');
     expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+  });
+
+  it('offers Try again for an in-progress preview and re-runs it', async () => {
+    mockPost.mockResolvedValueOnce({ data: { state: 'in-progress' } }).mockResolvedValueOnce({ data: READY });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('button', { name: 'Add 150 credits' })).toBeInTheDocument();
+    expect(mockPost).toHaveBeenCalledTimes(2);
+    expect(mockPost).toHaveBeenLastCalledWith('/api/partners/bedrocknews/claims/preview', { ticket: TICKET });
   });
 
   it('does not offer Try again after an expired redeem', async () => {
@@ -243,8 +252,10 @@ describe('BedrockNewsClaimPage', () => {
     mockPost.mockResolvedValueOnce({ data: READY }).mockReturnValueOnce(new Promise(() => {}));
     renderPage();
     const button = await screen.findByRole('button', { name: 'Add 150 credits' });
-    fireEvent.click(button);
-    fireEvent.click(button);
+    act(() => {
+      button.click();
+      button.click();
+    });
     expect(mockPost.mock.calls.filter(([url]) => url === '/api/partners/bedrocknews/claims/redeem')).toHaveLength(1);
   });
 
