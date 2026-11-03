@@ -20,7 +20,7 @@ describe('ProgressBatcher', () => {
       { type: 'delta', ...base, text: 'lo' },
       { type: 'usage', ...base, usage: { creditsUsed: 1 } },
       { type: 'tool-start', ...base, call },
-      { type: 'phase', ...base, phase: 'thinking' } as ChatStreamEvent,
+      { type: 'phase', ...base, phase: { kind: 'thinking' } },
       { type: 'tool-end', ...base, call: { ...call, status: 'done', preview: 'a\nb' } },
       { type: 'usage', ...base, usage: { creditsUsed: 2 } },
     ];

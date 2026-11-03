@@ -17,6 +17,7 @@ import {
 } from './sessionScripts';
 import { commandEnv, launchCommand } from './commandLaunch';
 import type { SandboxedCommand } from './sandbox';
+import { lowerPriority } from './lowPriority';
 import {
   capOutputMiddle,
   optionalNumber,
@@ -74,6 +75,8 @@ export interface RunOptions {
   offerMove?(move: () => BackgroundProcessInfo | null): () => void;
   /** Perform the handover. Required alongside `offerMove`; throwing leaves the command running. */
   adopt?(handover: Handover): BackgroundProcessInfo;
+  /** See ToolContext.lowPriority. */
+  lowPriority?: boolean;
 }
 
 /**
@@ -199,6 +202,7 @@ function runCommand(
       stdio: ['ignore', 'pipe', 'pipe'],
       env,
     });
+    if (options.lowPriority) lowerPriority(child.pid);
 
     const stdout = new CappedOutput();
     const stderr = new CappedOutput();
@@ -612,6 +616,7 @@ export const bashExecute: ToolDefinition = {
       const outcome = await runCommand(launch.executable, launch.args, cwd, env, timeoutMs, context.signal, {
         ...bashExecuteRunOptions,
         ...movableOptions(context, { command, cwd, startedAt, launch }),
+        ...(context.lowPriority ? { lowPriority: true } : {}),
       });
 
       if (outcome.movedToBackground) {

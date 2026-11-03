@@ -16,7 +16,13 @@ export function displayText(message: Pick<ChatMessage, 'content' | 'display'>): 
 /** The collapsed row for a turn the app started: who started it, then what it is about. */
 export function automaticSummary(message: Pick<ChatMessage, 'automatic'>): string {
   const summary = message.automatic?.summary;
-  const head = message.automatic?.kind === 'background-exit' ? 'Background command finished' : 'Started by auto-fix';
+  const kind = message.automatic?.kind;
+  const head =
+    kind === 'background-exit'
+      ? 'Background command finished'
+      : kind === 'loop-runner'
+        ? 'Started by the loop runner'
+        : 'Started by auto-fix';
   return summary ? `${head}: ${summary}` : head;
 }
 

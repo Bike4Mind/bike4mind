@@ -337,6 +337,13 @@ export interface ToolContext {
   mcp?: McpToolContext;
   /** The calling session's PR binding. Absent in tests; set_session_pull_request then refuses. */
   pullRequests?: PullRequestContext;
+  /**
+   * Set in a loop runner session: every process a shell tool starts runs at below-normal
+   * priority, so unattended work yields to the user's own. See lowerPriority.
+   */
+  lowPriority?: boolean;
+  /** A loop runner session's merge, under its stage's policy. Absent elsewhere; loop_merge_pr refuses. */
+  loopMerge?: { merge(prUrl: string): Promise<string> };
   /** Absent outside the chat loop; every tool treats it as optional. */
   report?: ToolReporter;
   /**

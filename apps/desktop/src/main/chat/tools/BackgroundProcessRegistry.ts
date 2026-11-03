@@ -6,6 +6,7 @@ import { PARENT_WATCH_FD, wrapWithParentWatchdog } from './backgroundScript';
 import { OutputBuffer, type OutputStream } from './outputBuffer';
 import { commandEnv, launchCommand } from './commandLaunch';
 import type { SandboxedCommand } from './sandbox';
+import { lowerPriority } from './lowPriority';
 
 /** Retained per process. The tail is what matters for a watcher; see OutputBuffer. */
 const MAX_BUFFERED_CHARS = 200_000;
@@ -46,6 +47,8 @@ export interface StartRequest {
   protectedPaths: readonly string[];
   /** The agent started it, so its exit is worth telling the conversation about. See `exited`. */
   wakeOnExit?: boolean;
+  /** See ToolContext.lowPriority. */
+  lowPriority?: boolean;
 }
 
 /**
@@ -161,6 +164,7 @@ export class BackgroundProcessRegistry {
         stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
         env,
       });
+      if (request.lowPriority) lowerPriority(child.pid);
     } catch (err) {
       await launch.cleanup();
       throw err;

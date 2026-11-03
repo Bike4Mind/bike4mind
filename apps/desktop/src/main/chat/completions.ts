@@ -113,7 +113,15 @@ export interface CompletionRequest {
   sessionId?: string;
   /** Set when the tools were left out because the model's fixed context cannot hold them: Desktop's prompt plus tools. */
   toolPromptTokens?: number;
+  /**
+   * The loop run this request works for, sent as LOOP_RUN_HEADER so the server counts its credits
+   * against the loop's daily budget. Set only in a loop runner session.
+   */
+  loopRunId?: string;
 }
+
+/** Must match the header the server's loop runner credit attribution reads. */
+export const LOOP_RUN_HEADER = 'X-B4M-Loop-Run';
 
 /**
  * Stream one completion, calling `onEvent` for each decoded SSE event.
@@ -153,7 +161,11 @@ export async function streamCompletion(
           ...(request.cacheTtl ? { cacheTtl: request.cacheTtl } : {}),
         },
       },
-      { responseType: 'stream', signal }
+      {
+        responseType: 'stream',
+        signal,
+        ...(request.loopRunId ? { headers: { [LOOP_RUN_HEADER]: request.loopRunId } } : {}),
+      }
     );
   } catch (err) {
     if (signal?.aborted || (isAxiosError(err) && err.code === 'ERR_CANCELED')) return;

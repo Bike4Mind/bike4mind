@@ -65,7 +65,9 @@ export function QueuedMessageList({
             {message.automatic
               ? message.automatic.kind === 'background-exit'
                 ? 'Background'
-                : 'Auto-fix'
+                : message.automatic.kind === 'loop-runner'
+                  ? 'Loop'
+                  : 'Auto-fix'
               : message.relay
                 ? `From ${message.relay.fromTitle}`
                 : 'Queued'}
