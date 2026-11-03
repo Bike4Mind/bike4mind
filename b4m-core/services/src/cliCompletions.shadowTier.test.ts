@@ -8,10 +8,11 @@ vi.mock('./creditService', async importOriginal => ({
 }));
 
 const h = vi.hoisted(() => {
-  const pricing = { 200_000: { input: 1e-6, output: 2e-6 } };
+  const premiumPricing = { 200_000: { input: 1e-5, output: 2e-5 } };
+  const cheapPricing = { 200_000: { input: 1e-6, output: 2e-6 } };
   return {
-    premium: { id: 'premium-model', type: 'text', backend: 'anthropic', max_tokens: 1000, pricing },
-    cheap: { id: 'cheap-model', type: 'text', backend: 'gemini', max_tokens: 1000, pricing },
+    premium: { id: 'premium-model', type: 'text', backend: 'anthropic', max_tokens: 1000, pricing: premiumPricing },
+    cheap: { id: 'cheap-model', type: 'text', backend: 'gemini', max_tokens: 1000, pricing: cheapPricing },
     complete: vi.fn(),
     getLlmByModel: vi.fn(),
   };
@@ -24,8 +25,8 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
 }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
-  usdToCredits: vi.fn(() => 10),
-  usdToCreditsStochastic: vi.fn(() => 10),
+  usdToCredits: vi.fn((usd: number) => Math.ceil(usd * 1e6)),
+  usdToCreditsStochastic: vi.fn((usd: number) => Math.ceil(usd * 1e6)),
   getSettingsMap: vi.fn().mockResolvedValue({}),
   getSettingsValue: vi.fn((key: string) => {
     if (key === 'shadowTierModelAllowlist') return ['cheap-model'];
@@ -37,7 +38,9 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   getSettingsByNames: vi.fn(),
 }));
 
-import { executeCompletion } from './cliCompletions';
+import { executeCompletion, estimateInputTokens } from './cliCompletions';
+import { CREDITS_PER_USD_COST, getTextModelCost, type ModelInfo } from '@bike4mind/common';
+import { usdToCredits } from '@bike4mind/utils';
 import { subtractCredits } from './creditService';
 
 const restricted = { id: 'user1', currentCredits: 100_000, tags: [], throttle: { tier: 'shadow' } };
@@ -163,5 +166,98 @@ describe('executeCompletion for a restricted-tier caller', () => {
     expect(outOfCredits.code).toBe('insufficient_credits');
     expect(errorShape(overCap)).toEqual(errorShape(outOfCredits));
     expect(h.complete).not.toHaveBeenCalled();
+  });
+
+  describe('credit pricing', () => {
+    const unrestricted = { id: 'user1', currentCredits: 100_000, tags: [] };
+    const credits = (usd: number) => Math.ceil(usd * 1e6);
+    // 30 input + 5 output tokens, as the mocked provider reports them.
+    const premiumCost = getTextModelCost(h.premium as unknown as ModelInfo, 30, 5);
+    const cheapCost = getTextModelCost(h.cheap as unknown as ModelInfo, 30, 5);
+
+    const capture = async (user: Record<string, unknown>) => {
+      const db = buildDb(user);
+      const onChunk = vi.fn().mockResolvedValue(undefined);
+      vi.mocked(subtractCredits).mockClear();
+      await run(db, onChunk);
+      const final = onChunk.mock.calls.map(c => c[1]).find(info => info?.creditsUsed !== undefined);
+      return {
+        hold: db.users.incrementCredits.mock.calls[0][1],
+        ledgerCredits: vi.mocked(subtractCredits).mock.calls[0][0].credits,
+        final,
+        usage: db.usageEvents.record.mock.calls[0][0],
+      };
+    };
+
+    it('charges a restricted turn what the requested model would cost, and records the run model cost', async () => {
+      const restrictedTurn = await capture(restricted);
+      const normalTurn = await capture(unrestricted);
+
+      expect(credits(premiumCost)).toBeGreaterThan(credits(cheapCost));
+      expect(restrictedTurn.hold).toBe(normalTurn.hold);
+      expect(restrictedTurn.ledgerCredits).toBe(credits(premiumCost));
+      expect(restrictedTurn.final).toMatchObject({ creditsUsed: credits(premiumCost), usdCost: premiumCost });
+      expect(restrictedTurn.usage).toMatchObject({
+        creditsCharged: credits(premiumCost),
+        costUsd: cheapCost,
+        executedModel: 'cheap-model',
+      });
+    });
+
+    it('leaves a normal turn priced on the model it ran', async () => {
+      const normalTurn = await capture(unrestricted);
+
+      expect(normalTurn.ledgerCredits).toBe(credits(premiumCost));
+      expect(normalTurn.final).toMatchObject({ creditsUsed: credits(premiumCost), usdCost: premiumCost });
+      expect(normalTurn.usage).toMatchObject({ creditsCharged: credits(premiumCost), costUsd: premiumCost });
+    });
+
+    it('caps a restricted turn output at what the balance buys on the requested model', async () => {
+      const input = estimateInputTokens([{ role: 'user', content: 'hi' }]);
+      const premiumInfo = h.premium as unknown as ModelInfo;
+      const cheapInfo = h.cheap as unknown as ModelInfo;
+      // The hold prices a shrunk reply (16384 tokens), so a balance above the hold can still sit below
+      // the cost of the full 100K ceiling; 40K tokens' worth binds the cap. balanceAfter is post-hold.
+      const balance = Math.ceil(getTextModelCost(premiumInfo, input, 40_000) * CREDITS_PER_USD_COST);
+      const hold = Math.ceil(getTextModelCost(premiumInfo, input, 16_384) * CREDITS_PER_USD_COST);
+      const ceilingOf = async (user: Record<string, unknown>) => {
+        h.complete.mockClear();
+        await executeCompletion({
+          userId: 'user1',
+          model: 'premium-model',
+          messages: [{ role: 'user', content: 'hi' }],
+          options: { maxTokens: 100_000 },
+          onChunk: vi.fn().mockResolvedValue(undefined),
+          db: buildDb(user, { balanceAfter: balance - hold }),
+        });
+        return h.complete.mock.calls[0][2].outputTokenCeiling;
+      };
+
+      // The file's usdToCredits mock is 1e6 credits per USD; the budget math uses the real rate.
+      vi.mocked(usdToCredits).mockImplementation(usd => Math.ceil(usd * CREDITS_PER_USD_COST));
+      h.premium.max_tokens = h.cheap.max_tokens = 100_000;
+      try {
+        const restrictedCeiling = await ceilingOf({ ...restricted, currentCredits: balance });
+        const normalCeiling = await ceilingOf({ ...unrestricted, currentCredits: balance });
+
+        expect(normalCeiling).toBeLessThan(100_000);
+        expect(restrictedCeiling).toBe(normalCeiling);
+        expect(getTextModelCost(cheapInfo, input, normalCeiling + 1) * CREDITS_PER_USD_COST).toBeLessThan(balance);
+      } finally {
+        h.premium.max_tokens = h.cheap.max_tokens = 1000;
+        vi.mocked(usdToCredits).mockImplementation((usd: number) => Math.ceil(usd * 1e6));
+      }
+    });
+
+    it('prices the daily-cap refusal estimate on the requested model', async () => {
+      await run(buildDb(restricted, { cacheSuccess: false })).catch(() => undefined);
+
+      const expected = getTextModelCost(
+        h.premium as unknown as ModelInfo,
+        estimateInputTokens([{ role: 'user', content: 'hi' }]),
+        1000
+      );
+      expect(vi.mocked(usdToCredits).mock.calls[0][0]).toBe(expected);
+    });
   });
 });

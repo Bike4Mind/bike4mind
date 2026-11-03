@@ -1458,3 +1458,42 @@ describe('billIteration (UsageEvent price stamp)', () => {
     expect(event).not.toHaveProperty('priceSource');
   });
 });
+
+describe('billIteration (charged model)', () => {
+  const run = (chargedModelInfo?: ModelInfo) => {
+    const counters = makeCounters();
+    const { effects, spies } = makeEffects();
+    const promise = billIteration({
+      iterationIndex: 1,
+      checkpoint: checkpoint(100),
+      counters,
+      modelInfo: makeModelInfo(1000, 1),
+      chargedModelInfo,
+      model: 'test-model',
+      startTime: 0,
+      toolUsage: { costUsd: 5, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      effects,
+    });
+    return { counters, spies, promise };
+  };
+
+  it('prices credits on the charged model while cost stays on the run model', async () => {
+    const { counters, spies, promise } = run(makeModelInfo(1000, 10));
+    await promise;
+
+    // credits: charged 100 * 10 + tool 5; cost: run 100 + tool 5.
+    expect(spies.deductCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 1005 }));
+    expect(spies.recordUsageEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ costUsd: 105, creditsCharged: 1005 })
+    );
+    expect(counters.cumulativeCost).toBe(100);
+  });
+
+  it('without a charged model credits follow the run model', async () => {
+    const { spies, promise } = run(undefined);
+    await promise;
+
+    expect(spies.deductCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 105 }));
+    expect(spies.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({ costUsd: 105, creditsCharged: 105 }));
+  });
+});

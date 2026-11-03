@@ -80,6 +80,7 @@ import {
   NARRATED_TOOL_CALL_NOTICE,
   usdToCreditsStochastic as realUsdToCreditsStochastic,
   getTextModelCost,
+  getTurnsCost,
   type IMessage,
   type ModelInfo,
 } from '@bike4mind/common';
@@ -1472,6 +1473,145 @@ describe('ChatCompletionProcess', () => {
       }
       expect(outcome()).toEqual(outOfCredits);
       expect(mockQuest.reply).toMatch(/out of credits/);
+    });
+
+    describe('credit pricing', () => {
+      // 100 in + 50 out: requested $0.0025 (5 credits), substitute $0.00025 (rounds up to 1).
+      const requestedPricing = { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } };
+      const cheapPricing = { 200000: { input: 1 / 1_000_000, output: 3 / 1_000_000 } };
+      const arrange = async (restricted: boolean, cacheSuccess = true) => {
+        const { body, complete } = wireRestrictedTurn(cacheSuccess);
+        const requested = {
+          ...((await mockedGetAvailableModels()) as unknown as ModelInfo[])[0],
+          contextWindow: 200_000,
+          pricing: requestedPricing,
+        };
+        mockedGetAvailableModels.mockResolvedValue(
+          (restricted
+            ? [requested, { ...cheapModel, contextWindow: 200_000, pricing: cheapPricing }]
+            : [requested]) as never
+        );
+        complete.mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Hi!'], { inputTokens: 100, outputTokens: 50 });
+        });
+        mockedCalculateTotalTokenLength.mockResolvedValue(80);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
+        mockedUsdToCredits.mockImplementation(realUsdToCredits);
+        mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+        enableAdminFlags('enforceCredits');
+        if (restricted) restrict();
+        const incrementCredits = vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 1_000_000 });
+        mockDb.users = { ...mockDb.users, incrementCredits };
+        mockDb.creditTransactions = { createTransaction: vi.fn().mockResolvedValue(undefined) };
+        const usageEventsRecord = vi.fn().mockResolvedValue(null);
+        mockDb.usageEvents = { record: usageEventsRecord };
+        return { body, complete, incrementCredits, usageEventsRecord };
+      };
+      const settledUsage = () =>
+        mockDb.quests.update.mock.calls
+          .map(([arg]: [any]) => arg)
+          .find(arg => arg?.promptMeta?.tokenUsage?.creditsUsed !== undefined);
+
+      it('settles credits at the requested model price and cost at the model that ran', async () => {
+        const { body, usageEventsRecord } = await arrange(true);
+
+        await service.process({ body, logger: mockLogger });
+
+        const saved = settledUsage();
+        expect(saved.promptMeta.tokenUsage.creditsUsed).toBe(5);
+        expect(saved.creditsUsed).toBe(5);
+        expect(saved.promptMeta.tokenUsage.estimatedCost).toBeCloseTo(0.00025, 9);
+        expect(usageEventsRecord.mock.calls[0][0]).toMatchObject({ creditsCharged: 5, executedModel: 'cheap-model' });
+        expect(usageEventsRecord.mock.calls[0][0].costUsd).toBeCloseTo(0.00025, 9);
+      });
+
+      it('prices a multi-turn restricted turn with cache reads per request on the requested model', async () => {
+        const { body, complete, usageEventsRecord } = await arrange(true);
+        const turnUsage = [
+          { inputTokens: 1_000, cacheReadInputTokens: 4_000, outputTokens: 500 },
+          { inputTokens: 2_000, cacheReadInputTokens: 6_000, outputTokens: 700 },
+        ];
+        complete.mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Hi!'], { inputTokens: 3_000, cacheReadInputTokens: 10_000, outputTokens: 1_200, turnUsage });
+        });
+        const [requested] = (await mockedGetAvailableModels()) as unknown as ModelInfo[];
+        const substitute = { ...cheapModel, contextWindow: 200_000, pricing: cheapPricing } as ModelInfo;
+        const requestedCost = getTurnsCost(requested, turnUsage);
+        const substituteCost = getTurnsCost(substitute, turnUsage);
+        const requestedCredits = realUsdToCreditsStochastic(requestedCost, () => 0);
+
+        await service.process({ body, logger: mockLogger });
+
+        const saved = settledUsage();
+        expect(realUsdToCreditsStochastic(substituteCost, () => 0)).toBeLessThan(requestedCredits);
+        expect(saved.creditsUsed).toBe(requestedCredits);
+        expect(saved.promptMeta.tokenUsage.estimatedCost).toBeCloseTo(substituteCost, 9);
+        expect(usageEventsRecord.mock.calls[0][0]).toMatchObject({ creditsCharged: requestedCredits });
+        expect(usageEventsRecord.mock.calls[0][0].costUsd).toBeCloseTo(substituteCost, 9);
+      });
+
+      it('settles an unrestricted turn on the model that ran', async () => {
+        const { body, usageEventsRecord } = await arrange(false);
+
+        await service.process({ body, logger: mockLogger });
+
+        const saved = settledUsage();
+        expect(saved.promptMeta.tokenUsage.creditsUsed).toBe(5);
+        expect(saved.promptMeta.tokenUsage.estimatedCost).toBeCloseTo(0.0025, 9);
+        expect(usageEventsRecord.mock.calls[0][0]).toMatchObject({ creditsCharged: 5 });
+        expect(usageEventsRecord.mock.calls[0][0].costUsd).toBeCloseTo(0.0025, 9);
+      });
+
+      it('prices an aborted turn at the requested model and records the cost it ran at', async () => {
+        const { body, usageEventsRecord } = await arrange(true);
+        mockedGetLlmByModel.mockReturnValue({
+          complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+            await cb(['Hi!'], { inputTokens: 100, outputTokens: 50 });
+            const abort = new Error('The operation was aborted');
+            abort.name = 'AbortError';
+            throw abort;
+          }),
+          getModelInfo: vi.fn(),
+          currentModel: '',
+        } as any); // any: minimal backend shape, as elsewhere in this file
+
+        await service.process({ body, logger: mockLogger });
+
+        expect(usageEventsRecord).toHaveBeenCalledTimes(1);
+        expect(usageEventsRecord.mock.calls[0][0]).toMatchObject({
+          creditsCharged: 5,
+          status: 'error',
+          executedModel: 'cheap-model',
+        });
+        expect(usageEventsRecord.mock.calls[0][0].costUsd).toBeCloseTo(0.00025, 9);
+      });
+
+      it('holds credits at the same amount an unrestricted caller of the requested model is held', async () => {
+        const restricted = await arrange(true);
+        await service.process({ body: restricted.body, logger: mockLogger });
+        const restrictedHold = restricted.incrementCredits.mock.calls[0][1];
+
+        mockDb.quests.update.mockClear();
+        const normal = await arrange(false);
+        (service as any).user = mockUser; // any: user is private
+        await service.process({ body: normal.body, logger: mockLogger });
+
+        expect(restrictedHold).toBeLessThan(0);
+        expect(restrictedHold).toBe(normal.incrementCredits.mock.calls[0][1]);
+      });
+
+      it('prices the daily-cap refusal on the requested model', async () => {
+        const { body } = await arrange(true, false);
+
+        await service.process({ body, logger: mockLogger });
+
+        const requestedModel = ((await mockedGetAvailableModels()) as unknown as ModelInfo[])[0];
+        expect(mockQuest.errorCode).toBe('insufficient_credits');
+        expect(mockedUsdToCredits.mock.calls.map(([usd]) => usd)).toContain(getTextModelCost(requestedModel, 80, 10));
+      });
     });
   });
 
@@ -5668,7 +5808,7 @@ describe('ChatCompletionProcess', () => {
         expect(mockDb.organizations.incrementCredits).not.toHaveBeenCalled();
       });
 
-      it('bills a substituted configuration at the model that ran and names both on its row', async () => {
+      it('prices a substituted configuration at the requested model, records the cost it ran at, and names both on its row', async () => {
         const { complete } = reservationOrgSetup();
         const [requested] = (await mockedGetAvailableModels()) as unknown as ModelInfo[];
         const runModel = {
@@ -5711,11 +5851,13 @@ describe('ChatCompletionProcess', () => {
         await service.process({ body: body as never, logger: mockLogger });
 
         expect(complete.mock.calls.map(call => call[0])).toEqual(['cheap-model']);
+        const requestedCredits = realUsdToCreditsStochastic(getTextModelCost(requested, 10, 1000), () => 0);
         const runModelCredits = realUsdToCreditsStochastic((1000 * 3) / 1_000_000, () => 0);
+        expect(requestedCredits).toBeGreaterThan(runModelCredits + 1);
         const [[, row]] = mockDb.creditTransactions.createTransaction.mock.calls;
         expect(row.model).toBe(requested.id);
-        expect(Math.abs(row.credits)).toBeGreaterThanOrEqual(runModelCredits);
-        expect(Math.abs(row.credits)).toBeLessThanOrEqual(runModelCredits + 1);
+        expect(Math.abs(row.credits)).toBeGreaterThanOrEqual(requestedCredits);
+        expect(Math.abs(row.credits)).toBeLessThanOrEqual(requestedCredits + 1);
         expect(usageEventsRecord).toHaveBeenCalledTimes(1);
         expect(usageEventsRecord.mock.calls[0][0]).toMatchObject({
           model: requested.id,
