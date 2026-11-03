@@ -1,7 +1,7 @@
-import { mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const listDistroFiles = vi.hoisted(() => vi.fn());
 const ripgrepSearch = vi.hoisted(() => vi.fn());
@@ -21,6 +21,10 @@ describe('file search in a WSL folder without ripgrep or git', () => {
     ripgrepSearch.mockReset().mockResolvedValue('unavailable');
     root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-wslfiles-')));
     context = { roots: [root], signal: new AbortController().signal };
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
   });
 
   it('lists with the distro and takes sizes and times from that listing instead of statting the share', async () => {
