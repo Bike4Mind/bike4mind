@@ -8,9 +8,10 @@ import type { ElevenLabsVoice } from './elevenLabsVoices';
  * for Studio's voice picker. Unlike useElevenLabsVoices (the admin voice agent catalog) it works
  * without Voice v2. Empty when no ElevenLabs key is configured.
  */
-export function useElevenLabsTtsVoices() {
+export function useElevenLabsTtsVoices({ enabled = true }: { enabled?: boolean } = {}) {
   const userId = useUser(state => state.currentUser?.id);
   return useQuery({
+    enabled,
     // Per user: the list depends on whose key the server resolves, so another account must not reuse it.
     queryKey: ['ai/elevenlabs-voices', userId],
     queryFn: async (): Promise<ElevenLabsVoice[]> => {
