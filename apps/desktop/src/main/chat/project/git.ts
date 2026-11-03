@@ -1,10 +1,11 @@
 import { execFile } from 'node:child_process';
-import { realpath, stat } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { BranchCheckout } from '@shared/chat';
 import { gitCommand, gitCommandEnv, hostGitArgs, hostNetworkGitArgs } from '../../git/hostGitArgs';
 import { toWindowsPath, wslLocation } from '../../wsl/wslPath';
+import { hostRealpath } from '../tools/paths';
 
 const execFileAsync = promisify(execFile);
 
@@ -279,7 +280,7 @@ export async function branchCheckouts(directory: string): Promise<Record<string,
 async function samePathAs(directory: string): Promise<(path: string) => boolean> {
   const names = new Set([resolve(directory)]);
   try {
-    names.add(await realpath(directory));
+    names.add(resolve(await hostRealpath(directory)));
   } catch {
     // Gone or unreadable: the plain resolve is all there is to match on.
   }

@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { ChatProject } from '@shared/chat';
 import type {
@@ -23,6 +23,7 @@ import {
   resolveBaseRef,
 } from './git';
 import { gitArgumentPath } from '../../git/hostGitArgs';
+import { hostRealpath } from '../tools/paths';
 
 /**
  * A branch's folder name under the app's worktree root.
@@ -113,7 +114,7 @@ async function registeredAt(entries: readonly WorktreeEntry[], path: string): Pr
 
 async function canonical(path: string): Promise<string | null> {
   try {
-    return await realpath(path);
+    return await hostRealpath(path);
   } catch {
     return null;
   }
@@ -536,7 +537,7 @@ async function inspectCheckout(input: {
 async function canonicalWorktreeRoot(directory: string): Promise<{ container: string; root: string } | null> {
   const container = await containerDirectory(directory);
   const root = await canonical(appWorktreeRoot(container));
-  if (!root || root !== appWorktreeRoot(await realpath(container))) return null;
+  if (!root || root !== appWorktreeRoot(await hostRealpath(container))) return null;
   return { container, root };
 }
 

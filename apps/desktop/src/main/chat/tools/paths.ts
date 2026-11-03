@@ -1,4 +1,4 @@
-import { readlink, realpath } from 'node:fs/promises';
+import { readlink, realpath, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, join, parse, resolve, sep } from 'node:path';
 import { parseWslPath, wslLocation, wslRealpath, wslUncPath, type WslLocation } from '../../wsl/wslPath';
 
@@ -161,6 +161,20 @@ async function realRoot(root: string, checked: WslLocation | null): Promise<stri
   if (wsl && !(checked && sameDistro(wsl, checked))) return resolve(root);
   const real = wsl ? await inDistro(wsl, wsl.linuxPath) : await realpath(root).catch(() => null);
   return real ?? resolve(root);
+}
+
+/**
+ * `realpath`, failures included, except that a WSL path has its symlinks followed by its distro;
+ * Windows cannot follow them over the share.
+ */
+export async function hostRealpath(path: string): Promise<string> {
+  const wsl = wslLocation(path);
+  if (!wsl) return realpath(path);
+  const real = await inDistro(wsl, wsl.linuxPath);
+  if (real === null) throw new Error(`Cannot resolve ${path} in its WSL distro`);
+  // The distro also answers for a path that does not exist, which realpath refuses.
+  await stat(real);
+  return real;
 }
 
 async function realpathOrSelf(target: string): Promise<string> {
