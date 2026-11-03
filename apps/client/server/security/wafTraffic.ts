@@ -372,6 +372,15 @@ async function getTopBlockedRules(params: {
   return { topBlockedRules, topBlockedRulesSeries };
 }
 
+/** The Router distribution and the WebACL attached to it; `webAclArn` is '' when none is attached. */
+export async function resolveRouterWebAcl(): Promise<{ distributionId: string; webAclArn: string }> {
+  const distributionId = resolveRouterDistributionId();
+  // CloudFront is global, so we do not set a region.
+  const cloudfront = new CloudFrontClient({});
+  const dist = await cloudfront.send(new GetDistributionCommand({ Id: distributionId }));
+  return { distributionId, webAclArn: dist.Distribution?.DistributionConfig?.WebACLId || '' };
+}
+
 export async function getWafTrafficOverview(params: {
   stage: string;
   range: WafRangeInput;
@@ -393,12 +402,7 @@ async function fetchWafTrafficOverview(params: {
   debug?: boolean;
 }): Promise<WafTrafficOverview> {
   const checkedAt = new Date().toISOString();
-  const distributionId = resolveRouterDistributionId();
-
-  // CloudFront is global, so we do not set a region.
-  const cloudfront = new CloudFrontClient({});
-  const dist = await cloudfront.send(new GetDistributionCommand({ Id: distributionId }));
-  const webAclArn = dist.Distribution?.DistributionConfig?.WebACLId || '';
+  const { distributionId, webAclArn } = await resolveRouterWebAcl();
 
   if (!webAclArn) {
     return {

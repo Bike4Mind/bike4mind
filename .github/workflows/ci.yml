@@ -225,7 +225,7 @@ jobs:
           fi
 
   # Blocking secret scan of the commits a change adds, so a `--no-verify` commit is still caught
-  # before merge. secrets-scan.yml only feeds a dashboard (--exit-code=0, manual dispatch).
+  # before merge.
   #
   # Deliberately NOT inside `repo-guards` and NOT gated on `changes`: a non-deployable change
   # (docs, `**/*.md`, `**/.env.example`, docs-site/) skips repo-guards, and those are exactly the
@@ -252,7 +252,7 @@ jobs:
 
       - name: Install gitleaks CLI
         env:
-          # Keep in sync with secrets-scan.yml and gitleaks-config-guard.yml.
+          # Keep in sync with gitleaks-config-guard.yml.
           GITLEAKS_VERSION: 8.24.3
         run: |
           echo "Installing gitleaks ${GITLEAKS_VERSION}..."

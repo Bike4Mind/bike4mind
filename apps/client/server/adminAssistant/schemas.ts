@@ -28,3 +28,29 @@ export const withExactlyOneUserRef = <S extends z.ZodType<UserRefInput>>(schema:
 export const AdminUserRefSchema = withExactlyOneUserRef(AdminUserRefFields);
 
 export type AdminUserRef = UserRefInput;
+
+export const AdminOrgRefFields = z.object({
+  orgId: objectIdString
+    .optional()
+    .describe('The organization id (24-character hex ObjectId). Provide exactly one of orgId or name; omit the other.'),
+  name: z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe(
+      'The organization name, matched case-insensitively; a unique partial match also resolves. Provide exactly one of orgId or name; omit the other.'
+    ),
+});
+
+type OrgRefInput = { orgId?: string; name?: string };
+
+export const withExactlyOneOrgRef = <S extends z.ZodType<OrgRefInput>>(schema: S) =>
+  schema.refine(ref => (ref.orgId === undefined) !== (ref.name === undefined), {
+    message: 'Provide exactly one of orgId or name',
+  });
+
+export const AdminOrgRefSchema = withExactlyOneOrgRef(AdminOrgRefFields);
+
+export type AdminOrgRef = OrgRefInput;

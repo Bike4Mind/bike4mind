@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { ADMIN_AUDIT_LOG_TAB_SLUG, ADMIN_FEEDBACK_TAB_SLUG, ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
 import { AdminTab } from './adminSidebarConfig';
+import { ADMIN_WAITLIST_TAB_SLUG } from './adminTabParams';
 import { adminTabFromSlug, adminTabToSlug } from './adminTabSlugs';
 
 const ALL_TABS = Object.values(AdminTab).filter((value): value is AdminTab => typeof value === 'number');
@@ -47,7 +48,8 @@ describe('adminTabFromSlug', () => {
   it('resolves the renamed waitlist slug and its legacy alias to the waitlist tab', () => {
     expect(adminTabFromSlug('waitlist')).toBe(AdminTab.Waitlist);
     expect(adminTabFromSlug('subscribers')).toBe(AdminTab.Waitlist);
-    expect(adminTabToSlug(AdminTab.Waitlist)).toBe('waitlist');
+    expect(adminTabToSlug(AdminTab.Waitlist)).toBe(ADMIN_WAITLIST_TAB_SLUG);
+    expect(ADMIN_WAITLIST_TAB_SLUG).toBe('waitlist');
   });
 
   it('resolves the users slug to the users tab', () => {

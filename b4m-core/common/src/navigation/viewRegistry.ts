@@ -699,6 +699,16 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
+    id: 'admin.shadow_detections',
+    section: 'admin',
+    label: 'Detections',
+    description: 'Grade what abuse detectors would have done, without acting, to measure their precision',
+    navigationType: 'tab',
+    target: '73', // AdminTab.ShadowDetections
+    keywords: ['detections', 'shadow detections', 'detector precision', 'false positives', 'abuse detection'],
+    requiresAdmin: true,
+  },
+  {
     id: 'admin.held_signup_grants',
     section: 'admin',
     label: 'Held signup grants',

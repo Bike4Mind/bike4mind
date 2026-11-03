@@ -59,6 +59,8 @@ function mount(options: {
           noLocal={options.noLocal ?? null}
           onOpenModels={options.onOpenModels ?? vi.fn()}
           local
+          hasHistory={false}
+          sessionId={null}
         />
       </CssVarsProvider>
     );

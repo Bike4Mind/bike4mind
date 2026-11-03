@@ -663,6 +663,8 @@ export interface ChatMessage {
    * ordering was never captured for those and cannot be recovered.
    */
   rounds?: ChatReplyRound[];
+  /** The model an assistant reply started on; a continuation on another model does not change it. Absent on older replies. */
+  model?: string;
   /** What the whole reply cost, summed over its requests, on assistant messages. Never sent to the model. */
   usage?: ChatUsage;
   /** When the reply's last request refreshed the server's prompt cache, and for how long; see ChatPromptCacheStamp. */
@@ -1008,7 +1010,8 @@ export interface CreationTool {
 }
 
 /**
- * Token counts the SERVER reported, never a client-side estimate.
+ * Token counts the SERVER reported, never a client-side estimate. `rate` is the one exception,
+ * and says so when its timing is this app's own.
  *
  * The completions endpoint reports usage per request, so an agent turn - which makes one
  * request per tool round trip - produces several of these, and the turn's cost is their sum.
@@ -1025,6 +1028,28 @@ export interface ChatUsage {
   /** Credits the server charged for these requests. */
   creditsUsed?: number;
   usdCost?: number;
+  /** Generation speed, from self-hosted model servers only; see ChatTokenRate. */
+  rate?: ChatTokenRate;
+}
+
+/**
+ * How fast a self-hosted model server ran these requests, as token counts paired with the time
+ * they took, so requests sum and the rate is always tokens over time. Each pair is present only
+ * when the server reported it.
+ */
+export interface ChatTokenRate {
+  /** Generated tokens timed by `evalMs`. */
+  evalTokens: number;
+  evalMs: number;
+  promptTokens?: number;
+  promptMs?: number;
+  /** Time spent loading the model into memory before the request ran. */
+  loadMs?: number;
+  /** Speculative decoding: tokens the draft proposed and how many the model accepted. */
+  draftTokens?: number;
+  draftAccepted?: number;
+  /** Timed by this app from the first streamed token to the last, because the server reported no timings. */
+  estimated?: boolean;
 }
 
 /**
@@ -1801,6 +1826,8 @@ export interface ChatReplyRound {
   timing?: ChatRoundTiming;
   /** What this round's request cost, as the server reported it. Never sent to the model. */
   usage?: ChatUsage;
+  /** The model this round's request went to; a continued reply's rounds can differ. Absent on older rounds. */
+  model?: string;
   /**
    * The model's readable reasoning before this round's prose, drawn in the transcript as a row
    * that is closed by default (ReasoningRow) and never drawn for the round still streaming -

@@ -6,9 +6,6 @@ const PROBE_NAME = 'ingestTokenSecurity';
 
 const INGEST_PATHS = [
   '/api/admin/security-dashboard/web-owasp-ingest',
-  '/api/admin/security-dashboard/code-semgrep-ingest',
-  '/api/admin/security-dashboard/packages-ingest',
-  '/api/admin/security-dashboard/secrets-ingest',
   '/api/admin/security-dashboard/cloud-prowler-ingest',
   '/api/admin/security-dashboard/attack-simulation-ingest',
 ];

@@ -81,7 +81,6 @@ export default {
   'ScopedOverridesByScope.tsx': [[9, '3599e2aac9a178b8']],
   'SecopsTriageTab.tsx': [[10, '50bebb0fffebdd6d']],
   'SecretsRotationTab.tsx': [[2, '643a8ed5e319a1fa']],
-  'SecurityDashboardOverview.tsx': [[2, 'f612371b3a748144']],
   'SlackMetrics/SlackMetricsTab.tsx': [[2, 'e2ae0a0feb2b939a']],
   'SlackWorkspacesTab.tsx': [[2, '533bd942dfb864f5']],
   'SreAgentTab.tsx': [[11, '5feea0e0c55f7cf4']],

@@ -27,6 +27,7 @@ import {
 import { ServerCredentialsError, ServerForbiddenError } from '../modelServers/errors';
 import type { CompletionStreamEvent } from './streamEvents';
 import { createThinkFilter, type ThinkSplit } from './thinkFilter';
+import { ollamaRate } from './tokenRate';
 
 export const OLLAMA_RUNTIME_ID = 'ollama';
 const OLLAMA_URL = 'http://127.0.0.1:11434';
@@ -51,6 +52,7 @@ const showSchema = z.object({
   model_info: z.record(z.string(), z.unknown()).nullable().optional(),
   parameters: z.string().optional(),
   template: z.string().optional().catch(undefined),
+  modelfile: z.string().optional().catch(undefined),
   /** The `think` values the model honors (booleans or effort names); absent when Ollama does not know. */
   thinking: z
     .object({ values: z.array(z.unknown()) })
@@ -170,6 +172,8 @@ export type ChatFetch = (url: typeof CHAT_URL, init: RequestInit) => Promise<Res
 export interface LocalModelFacts {
   name: string;
   modelInfo?: Record<string, unknown>;
+  /** `/api/show`'s Modelfile, whose FROM lines name the projector blobs. */
+  modelfile?: string;
   sizeBytes?: number;
   digest?: string;
 }
@@ -524,7 +528,12 @@ export class OllamaLocal {
 
   private async facts(name: string, inspection: Inspection): Promise<LocalModelFacts> {
     if (!tagFacts.has(this.key(name))) await this.tags().catch(() => null);
-    return { name, modelInfo: inspection.model_info ?? undefined, ...tagFacts.get(this.key(name)) };
+    return {
+      name,
+      modelInfo: inspection.model_info ?? undefined,
+      modelfile: inspection.modelfile,
+      ...tagFacts.get(this.key(name)),
+    };
   }
 
   /** One `/api/tags` per refresh; a changed digest is a different model under the same name. */
@@ -748,6 +757,9 @@ function emitFrame(
     error?: unknown;
     prompt_eval_count?: unknown;
     eval_count?: unknown;
+    prompt_eval_duration?: unknown;
+    eval_duration?: unknown;
+    load_duration?: unknown;
     message?: { content?: unknown; thinking?: unknown; tool_calls?: unknown[] };
   };
   if (typeof raw.error === 'string') throw new Error(redact(raw.error));
@@ -777,10 +789,12 @@ function emitFrame(
       ...(inputTokens !== undefined ? { inputTokens } : {}),
       ...(outputTokens !== undefined ? { outputTokens } : {}),
     };
+    const rate = ollamaRate(raw);
     onEvent({
       type: 'content',
       stopReason,
       ...(Object.keys(usage).length > 0 ? { usage } : {}),
+      ...(rate ? { rate } : {}),
     });
   }
 }

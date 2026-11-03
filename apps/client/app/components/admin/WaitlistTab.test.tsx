@@ -23,6 +23,10 @@ vi.mock('./AdminPage', () => ({
   useAdminNotifications: (select: (state: unknown) => unknown) =>
     select({ hiddenNotifications: [], hideNotification: vi.fn() }),
 }));
+vi.mock('@tanstack/react-router', () => ({
+  useSearch: () => ({}),
+  useNavigate: () => vi.fn(),
+}));
 vi.mock('sonner', () => ({ toast: { success: vi.fn() } }));
 
 const theme = extendTheme({ ...getThemeConfig() });
@@ -75,5 +79,17 @@ describe('WaitlistTab invite dialog', () => {
       ['email', 'emailBody', 'firstName', 'lastName', 'startingCredits', 'startingStorage', 'subscriberId'].sort()
     );
     expect(body).toMatchObject({ subscriberId: 'sub-1', startingCredits: 500, startingStorage: 1000 });
+  });
+});
+
+describe('WaitlistTab Invite Center', () => {
+  it('shows the Invite Center header with the waitlist in the Waitlist section', async () => {
+    mocks.fetchSubscribers.mockResolvedValue({ data: [SUBSCRIBER], meta: { total: 1 } });
+    render(<WaitlistTab />, { wrapper: Wrapper });
+
+    expect(screen.getByText('Invite Center')).toBeInTheDocument();
+    const section = screen.getByTestId('invite-center-section-waitlist');
+    expect(await screen.findByText('ada@example.com')).toBeInTheDocument();
+    expect(section).toContainElement(screen.getByText('ada@example.com'));
   });
 });

@@ -17,6 +17,7 @@ vi.mock('../../entitlements/activeSubscriptions', () => ({
 }));
 vi.mock('@client/lib/userSubscriptions/constants', () => ({
   SUBSCRIPTION_PLANS: [{ priceId: 'price_pro', name: 'Professional' }],
+  TEAM_PLAN: { priceId: 'price_team', name: 'Team' },
 }));
 vi.mock('../../entitlements', () => ({
   toEntitlementUser: (user: { id: string }) => ({ id: user.id }),
@@ -156,6 +157,17 @@ describe('getUserTool', () => {
     expect(search).toHaveBeenCalledWith('', { userId: USER_ID }, { page: 1, limit: 20 }, expect.anything());
     expect(result.data.organizations).toHaveLength(20);
     expect(result.data.organizationsTruncated).toBe(true);
+  });
+
+  it('names an org-owned Team seat subscription', async () => {
+    resolveAdminUserRef.mockResolvedValue(userDoc());
+    getActiveSubscriptionsForUser.mockResolvedValue([
+      { priceId: 'price_team', status: 'active', ownerType: 'Organization', periodEndsAt: new Date() },
+    ]);
+
+    const result = await runTool({ userId: USER_ID });
+
+    expect(result.data.subscriptions[0]).toMatchObject({ plan: 'Team', owner: 'organization' });
   });
 
   it('never emits an unknown price id as the plan', async () => {
