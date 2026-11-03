@@ -225,6 +225,44 @@ describe('signup domain hold decisions', () => {
     await expect(handlers.post(missing.req, missing.res)).rejects.toThrow();
     expect(recordAudit).not.toHaveBeenCalled();
   });
+  it.each(['release', 'confirm'] as const)(
+    'fails the %s and grants nothing when the audit entry cannot be written',
+    async action => {
+      reviewUpdate.mockResolvedValue({ domain: 'example.net', status: 'held_pending_review', reason: 'pattern' });
+      recordAudit.mockRejectedValueOnce(new Error('audit down'));
+      const { req, res } = makeRequest({ domain: 'example.net', action });
+      await expect(handlers.post(req, res)).rejects.toThrow('audit down');
+      expect(release).not.toHaveBeenCalled();
+      expect(find).not.toHaveBeenCalled();
+    }
+  );
+  it('writes no new decision entry when a release is re-posted for an already released hold', async () => {
+    reviewUpdate.mockResolvedValue({ domain: 'example.net', status: 'released', reason: 'pattern' });
+    const { req, res } = makeRequest({
+      domain: 'example.net',
+      action: 'release',
+      afterUserId: '000000000000000000000064',
+    });
+    await handlers.post(req, res);
+    expect(recordAudit).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalled();
+  });
+  it('records the overridden policy when an admin confirms an auto-confirmed hold', async () => {
+    reviewUpdate.mockResolvedValue({
+      domain: 'example.net',
+      status: 'blocked',
+      reason: 'disposable-aggregate',
+      autoDecision: { policy: 'disposable-aggregate-rule', decidedAt: new Date() },
+    });
+    const { req, res } = makeRequest({ domain: 'example.net', action: 'confirm' });
+    await handlers.post(req, res);
+    expect(recordAudit).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        details: { reason: 'disposable-aggregate', overrodeAutoDecision: 'disposable-aggregate-rule' },
+      })
+    );
+  });
   it('confirmation grants no credits', async () => {
     const { req, res } = makeRequest({ domain: 'example.net', action: 'confirm' });
     await handlers.post(req, res);

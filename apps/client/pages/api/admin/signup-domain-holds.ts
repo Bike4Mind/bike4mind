@@ -85,6 +85,8 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
           { new: false }
         );
         if (!previous) return null;
+        // Release continuation pages and grant retries re-post an already released hold; that is not a new decision.
+        if (previous.status === 'released') return previous;
         await recordAdminActionFromRequest(req, {
           action: action === 'release' ? 'signup_domain_hold.released' : 'signup_domain_hold.confirmed',
           target: { kind: 'system', id: `signup-domain-hold:${domain}`, displayName: domain },
