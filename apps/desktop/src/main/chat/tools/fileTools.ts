@@ -5,6 +5,7 @@ import { envReadPrompt, readsEnvFile } from './envFiles';
 import { resolveWithinRoots } from './paths';
 import { recordRecentFile } from './recentFiles';
 import { ripgrepSearch, type RipgrepFile } from './ripgrep';
+import { listDistroFiles } from './wslFiles';
 import { IMAGE_FORMAT_NAMES, showImage, sniffImageType } from './toolImages';
 import {
   capOutput,
@@ -161,6 +162,8 @@ interface FileListing {
   files: string[];
   /** False when the fallback walk stopped at MAX_WALKED_FILES. */
   complete: boolean;
+  /** Size and modification time by path, when the listing already carries them. */
+  stats?: ReadonlyMap<string, { size: number; modified: number }>;
 }
 
 /**
@@ -172,6 +175,15 @@ interface FileListing {
 async function listFiles(base: string, context: ToolContext): Promise<FileListing> {
   const tracked = await gitListing(base);
   if (tracked) return { files: tracked.sort(), complete: true };
+
+  const inDistro = await listDistroFiles(base, IGNORED, MAX_WALKED_FILES, context.signal);
+  if (inDistro) {
+    return {
+      files: inDistro.files.map(file => file.path).sort(),
+      complete: inDistro.complete,
+      stats: new Map(inDistro.files.map(file => [file.path, { size: file.size, modified: file.modified }])),
+    };
+  }
 
   const files: string[] = [];
   let complete = true;
@@ -313,7 +325,14 @@ export const globFiles: ToolDefinition = {
     const matched = listing.files.filter(file => matchesGlob(file, pattern));
 
     const found: { path: string; size: number; modified: number }[] = [];
-    for (let start = 0; start < matched.length && !context.signal.aborted; start += SCAN_BATCH) {
+    const known = listing.stats;
+    if (known) {
+      for (const file of matched) {
+        const entry = known.get(file);
+        if (entry) found.push({ path: file, ...entry });
+      }
+    }
+    for (let start = 0; !known && start < matched.length && !context.signal.aborted; start += SCAN_BATCH) {
       const batch = await Promise.all(
         matched.slice(start, start + SCAN_BATCH).map(async file => {
           try {
