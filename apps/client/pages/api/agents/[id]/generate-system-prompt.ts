@@ -4,9 +4,11 @@ import { baseApi } from '@client/server/middlewares/baseApi';
 import { AGENTS_WRITE_SCOPES } from '@server/agents/agentScopes';
 import { assertAgentAccess } from '@server/agents/assertAgentAccess';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAllowed';
 import { agentRepository } from '@bike4mind/database';
 import { ForbiddenError, BadRequestError } from '@bike4mind/utils';
 import { generateAgentSystemPrompt } from '@server/agents/authoring/generateAgentSystemPrompt';
+import { logSystemPromptGenerationFailure } from '@server/agents/systemPromptRateLimit';
 
 interface GenerateSystemPromptResponse {
   success: boolean;
@@ -18,6 +20,7 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
   Request<{ id: string }, GenerateSystemPromptResponse, {}>
 >(
   withRequestCompletionQuota(async (req, res) => {
+    await assertOutboundActionAllowed(req.user, req);
     assertAiAccessAllowed(req.user);
     const { id } = req.query;
     const userId = req.user!.id;
@@ -40,7 +43,7 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
         message: 'System prompt generated successfully',
       });
     } catch (error) {
-      req.logger.error('Error generating system prompt:', error);
+      logSystemPromptGenerationFailure(req.logger, 'Error generating system prompt:', error);
 
       // Provide user-friendly error messages
       let errorMessage = 'Failed to generate system prompt. Please try again.';

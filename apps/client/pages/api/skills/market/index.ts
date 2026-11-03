@@ -1,7 +1,7 @@
 // apps/client/pages/api/skills/market/index.ts
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
-import { memberOrgIdsFor } from '@server/skillMarket/market';
+import { memberOrgIdsFor } from '@bike4mind/server-utils/skillMarket/market';
 import { searchListings, type MarketSearchParams, type MarketSort } from '@server/skillMarket/search';
 
 const SORTS = new Set<MarketSort>(['relevance', 'top', 'imports', 'new', 'updated']);

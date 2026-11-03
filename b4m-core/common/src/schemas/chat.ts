@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAX_MODEL_ID_LENGTH } from './modelId';
 import {
   BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
   REQUEST_TIMEOUT_ERROR_CODE,
@@ -52,7 +53,7 @@ export const SimplifiedChatRequestSchema = z.object({
   // resolveActiveOrg). Omitted (the default) bills the caller personally, matching the app UI's
   // selected-account model. An org member is no longer forced onto the org pool.
   organizationId: z.string().optional(),
-  model: z.string().optional(), // Made optional - will use admin setting if not provided
+  model: z.string().max(MAX_MODEL_ID_LENGTH).optional(), // Made optional - will use admin setting if not provided
   temperature: z.number().min(0).max(2).optional(),
   // Output-budget override. `max_tokens` is the canonical field; `maxTokens` and
   // `maxOutputTokens` are accepted aliases so callers using either casing aren't

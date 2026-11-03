@@ -7,6 +7,7 @@ import {
   UNKNOWN_MODEL_ERROR_CODE,
   MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
   REQUEST_TIMEOUT_ERROR_CODE,
+  ACCOUNT_TRUST_REQUIRED_ERROR_CODE,
   API_KEY_TRUST_REQUIRED_ERROR_CODE,
   TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE,
   CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE,
@@ -25,6 +26,7 @@ import { MUSIC_GENERATION_API_ERROR_CODES, MUSIC_JOB_PUBLIC_ERROR_CODES } from '
 import { DECISIONS_ERROR_CODES } from './schemas/decisions';
 import { STORAGE_ERROR_CODES } from './errors';
 import { SKILL_MARKET_IMPORT_ERROR_CODES } from './schemas/skillMarketPublic';
+import { SLACK_MESSAGE_ERROR_CODES } from './schemas/slackMessagesApi';
 
 /**
  * The `satisfies readonly ApiErrorCode[]` on each narrowing tuple is what actually
@@ -61,6 +63,7 @@ describe('API_ERROR_CODES', () => {
       STORAGE_ERROR_CODES,
       COMPLETION_TOOL_ERROR_CODES,
       SKILL_MARKET_IMPORT_ERROR_CODES,
+      SLACK_MESSAGE_ERROR_CODES,
       COMPLETION_SSE_ERROR_CODES,
     ];
     // API_KEY_USER_CAP_ERROR_CODE has no narrowing tuple; its emission is proven by userApiKeyService/__tests__/create.test.ts (the additionalInfo assertion).
@@ -69,6 +72,7 @@ describe('API_ERROR_CODES', () => {
     // BILLING_ORGANIZATION_MISMATCH_ERROR_CODE likewise; proven by apps/client/server/billing/resolveMediaBillingOrgId.test.ts.
     // REQUEST_TIMEOUT_ERROR_CODE likewise; proven by apps/client/pages/api/__tests__/chat.integration.test.ts (over the wait=true deadline).
     // API_KEY_TRUST_REQUIRED_ERROR_CODE likewise; proven by userApiKeyService/__tests__/trust.test.ts.
+    // ACCOUNT_TRUST_REQUIRED_ERROR_CODE likewise; proven by apps/client/server/auth/assertOutboundActionAllowed.test.ts.
     // TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE and CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE likewise; proven by
     // apps/client/server/utils/untrustedCompletionQuota.test.ts.
     // MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE likewise; proven by services/src/llm/modelAdmission.test.ts.
@@ -83,6 +87,7 @@ describe('API_ERROR_CODES', () => {
       REQUEST_TIMEOUT_ERROR_CODE,
       ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE,
       API_KEY_TRUST_REQUIRED_ERROR_CODE,
+      ACCOUNT_TRUST_REQUIRED_ERROR_CODE,
       TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE,
       CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE,
       DAILY_FREE_LIMIT_REACHED_ERROR_CODE,

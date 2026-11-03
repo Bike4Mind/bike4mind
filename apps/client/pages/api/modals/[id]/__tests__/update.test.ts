@@ -169,3 +169,26 @@ describe('PUT /api/modals/[id] - video', () => {
     expect(audit).not.toHaveBeenCalled();
   });
 });
+
+describe('PUT /api/modals/[id] - response audience', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    audit.mockResolvedValue(null);
+    mockRefs.findOneAndUpdate.mockImplementation(async () => mockRefs.modal);
+    mockRefs.modal = { _id: { toString: () => MODAL_ID }, title: 'Demo', tags: [], toObject: () => mockRefs.modal };
+  });
+
+  it.each([
+    ['a full admin', { isAdmin: true }, true],
+    ['a settings:manage delegate', { isAdmin: false, adminPermissions: ['settings:manage'] }, true],
+    ['a delegate holding only another permission', { isAdmin: false, adminPermissions: ['support:read'] }, false],
+  ])('classifies %s', async (_case, user, expectedAdmin) => {
+    const { viewerClassifier } = await import('@bike4mind/services');
+    const { req, res } = mocks({ enabled: false });
+    (req as any).user = { id: 'user-1', ...user };
+
+    await mockRefs.putHandler!(req, res);
+
+    expect(viewerClassifier.classify).toHaveBeenCalledWith({ isAdmin: expectedAdmin });
+  });
+});

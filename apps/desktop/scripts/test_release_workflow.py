@@ -1,8 +1,13 @@
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
+import tempfile
+import textwrap
 import unittest
+
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -54,6 +59,62 @@ class ReleaseWorkflowTest(unittest.TestCase):
         self.assertIn('GH_TOKEN: ${{ steps.release-token.outputs.token }}', reserve)
         self.assertIn('run: python3 apps/desktop/scripts/reserve-source-tag.py', reserve)
         self.assertNotIn('2>/dev/null', reserve)
+
+    def test_windows_leg_packages_installs_and_uploads(self):
+        build = job('build')
+        self.assertIn('--win --publish never', build)
+        self.assertIn("if: matrix.platform != 'win'\n        run: pnpm --filter @bike4mind/desktop test", build)
+        self.assertIn('node --test scripts/test_package_local.cjs', build)
+        step = '- name: Install and launch packaged Windows installer'
+        self.assertLess(build.index('--win --publish never'), build.index(step))
+        smoke = build.split(step, 1)[1].split('- name:', 1)[0]
+        self.assertIn('shell: pwsh', smoke)
+        self.assertIn("'/S'", smoke)
+        self.assertIn("EXPECT_UPDATES_ENABLED: 'true'", smoke)
+        self.assertIn('smoke-packaged.mjs', smoke)
+        self.assertIn('apps/desktop/release/*.exe', build)
+        self.assertIn('installers/latest.yml', job('validate'))
+
+    def test_windows_installer_carries_x64_and_arm64(self):
+        config = yaml.safe_load((ROOT / 'apps/desktop/electron-builder.yml').read_text())
+        self.assertEqual(config['win']['target'], [{'target': 'nsis', 'arch': ['x64', 'arm64']}])
+        self.assertEqual(config['nsis']['artifactName'], '${productName}-${version}-setup.${ext}')
+        build = job('build')
+        command = next(line for line in build.splitlines() if 'electron-builder --win' in line)
+        self.assertIsNone(re.search(r'--(x64|arm64|ia32|armv7l|universal)\b', command))
+        packaging = build.split(command, 1)[1].split('\n          else\n', 1)[0]
+        self.assertIn('7z l "release/Bike4Mind-$DESKTOP_VERSION-setup.exe"', packaging)
+        self.assertIn('for archive in app-64.7z app-arm64.7z; do', packaging)
+
+    def test_windows_installer_check_requires_both_archives(self):
+        build = job('build')
+        start = build.index('contents=$(7z l')
+        check = textwrap.dedent(build[build.rindex('\n', 0, start) + 1:build.index('done\n', start) + 4])
+        both = '$PLUGINSDIR\\app-arm64.7z\n$PLUGINSDIR\\app-64.7z\n'
+        cases = [(both, 0, True), (both, 2, True), ('$PLUGINSDIR\\app-64.7z\n', 0, False), ('', 2, False)]
+        for listing, status, passes in cases:
+            with self.subTest(listing=listing, status=status), tempfile.TemporaryDirectory() as directory:
+                fake = Path(directory) / '7z'
+                fake.write_text(f'#!/bin/sh\nprintf %s {shlex.quote(listing)}\nexit {status}\n')
+                fake.chmod(0o755)
+                env = {**os.environ, 'PATH': f'{directory}{os.pathsep}{os.environ["PATH"]}', 'DESKTOP_VERSION': '0.1.1'}
+                result = subprocess.run(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', check],
+                                        env=env, capture_output=True)
+                self.assertEqual(result.returncode == 0, passes)
+
+    def test_installer_refuses_32_bit_windows(self):
+        config = yaml.safe_load((ROOT / 'apps/desktop/electron-builder.yml').read_text())
+        # electron-builder includes build/installer.nsh only when neither of these overrides it.
+        self.assertNotIn('include', config['nsis'])
+        self.assertNotIn('script', config['nsis'])
+        self.assertEqual(config['directories']['buildResources'], 'build')
+        script = (ROOT / 'apps/desktop/build/installer.nsh').read_text()
+        macro = script.split('!macro customInit\n', 1)[1].split('!macroend', 1)[0]
+        self.assertIn('${IfNot} ${RunningX64}', macro)
+        self.assertIn('${AndIfNot} ${IsNativeARM64}', macro)
+        self.assertIn('$(x64WinRequired)', macro)
+        self.assertIn('/SD IDOK', macro)
+        self.assertIn('Quit', macro)
 
     def test_curated_build_check_runs_between_each_build_and_packaging(self):
         build = job('build')

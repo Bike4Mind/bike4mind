@@ -1,7 +1,7 @@
 import { AuthEvents } from '@bike4mind/common';
 import { userRepository, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { userService, authSessionService } from '@bike4mind/services';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { baseApi } from '@server/middlewares/baseApi';
 import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';

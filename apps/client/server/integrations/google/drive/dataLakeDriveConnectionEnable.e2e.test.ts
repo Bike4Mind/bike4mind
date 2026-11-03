@@ -38,7 +38,10 @@ vi.mock('googleapis', () => ({
 }));
 
 import { DataLakeModel, OrgGoogleDriveConnection, orgGoogleDriveConnectionRepository } from '@bike4mind/database';
-import { disableDriveConnectionForLake, enableDriveConnectionForLake } from './common';
+import {
+  disableDriveConnectionForLake,
+  enableDriveConnectionForLake,
+} from '@bike4mind/server-utils/integrations/google/drive/common';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND hooks.
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });

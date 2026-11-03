@@ -111,6 +111,17 @@ describe('recordOperationalUsage', () => {
     expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: 100 });
   });
 
+  it('records the authenticating API key on the debit', async () => {
+    setToggles({ bill: true, enforce: true });
+
+    await recordOperationalUsage(
+      { ...baseParams, apiKeyId: 'key-1' },
+      { db: fullBillingDb(vi.fn().mockResolvedValue(null)), logger }
+    );
+
+    expect(deductMock).toHaveBeenCalledWith(expect.objectContaining({ apiKeyId: 'key-1' }), expect.anything());
+  });
+
   it('stays recorded-only when the toggle is on but billing repos are absent (a host that does not bill)', async () => {
     setToggles({ bill: true, enforce: true });
     const record = vi.fn().mockResolvedValue(null);

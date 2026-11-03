@@ -301,4 +301,77 @@ describe('main', () => {
       [`${P}1.json`, `${P}1.json.sig`, `${P}latest.json`, `${P}latest.json.sig`].sort()
     );
   });
+
+  describe('--target api', () => {
+    const env = () => ({ INIT_CWD: dir, B4M_API_KEY: 'b4m_live_test' });
+    const apiArgs = async (manifest: Uint8Array, sig: Uint8Array) => [
+      ...(await files(manifest, sig)),
+      '--target',
+      'api',
+      '--api-url',
+      'http://127.0.0.1:4100',
+      '--reason',
+      'Ship the reviewed list',
+    ];
+    const reply = (status: number, body: unknown) =>
+      vi.fn(async (_url: URL | RequestInfo, _init?: RequestInit) => new Response(JSON.stringify(body), { status }));
+
+    it('posts the exact texts with the key and reason, skipping the main keyring', async () => {
+      const manifest = catalogBytes(2);
+      const sig = sigBytes(manifest, [signing], 2);
+      const fetch = reply(201, { sequence: 2, sha256: 'ab', keyIds: [signing.key.keyId] });
+      const readMain = vi.fn(readKeyring);
+      const code = await main(await apiArgs(manifest, sig), env(), { log, readKeyring: readMain, fetch });
+      expect(code).toBe(EXIT.ok);
+      expect(readMain).not.toHaveBeenCalled();
+      const [url, init] = fetch.mock.calls[0];
+      expect(String(url)).toBe('http://127.0.0.1:4100/api/admin/model-hub/curated/versions');
+      expect(init?.method).toBe('POST');
+      expect((init?.headers as Record<string, string>)['x-api-key']).toBe('b4m_live_test');
+      const body = JSON.parse(String(init?.body));
+      expect(Buffer.from(body.manifest, 'utf8').equals(Buffer.from(manifest))).toBe(true);
+      expect(Buffer.from(body.signature, 'utf8').equals(Buffer.from(sig))).toBe(true);
+      expect(body.reason).toBe('Ship the reviewed list');
+      expect(lines.at(-1)).toMatch(/stored sequence 2 \(sha256 ab, signed by /);
+    });
+
+    it('maps a 409 to the behind-live code and another refusal to failed, with the server message', async () => {
+      const manifest = catalogBytes(2);
+      const args = await apiArgs(manifest, sigBytes(manifest, [signing], 2));
+      const conflict = reply(409, { error: 'sequence 2 is not above live sequence 2' });
+      expect(await main(args, env(), { log, fetch: conflict })).toBe(EXIT.behindLive);
+      expect(lines.at(-1)).toMatch(/HTTP 409\): sequence 2 is not above live sequence 2/);
+      expect(await main(args, env(), { log, fetch: reply(400, { error: 'bad-signature: x' }) })).toBe(EXIT.failed);
+      expect(lines.at(-1)).toMatch(/HTTP 400\): bad-signature: x/);
+    });
+
+    it('needs a key, a reason and an https or loopback URL', async () => {
+      const manifest = catalogBytes(2);
+      const args = await apiArgs(manifest, sigBytes(manifest, [signing], 2));
+      const fetch = reply(201, {});
+      expect(await main(args, { INIT_CWD: dir }, { log, fetch })).toBe(EXIT.usage);
+      expect(await main(args.slice(0, -2), env(), { log, fetch })).toBe(EXIT.usage);
+      const remote = args.map(arg => (arg === 'http://127.0.0.1:4100' ? 'http://example.com' : arg));
+      expect(await main(remote, env(), { log, fetch })).toBe(EXIT.usage);
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it('refuses --dry-run and --verify-only before any request', async () => {
+      const manifest = catalogBytes(2);
+      const args = await apiArgs(manifest, sigBytes(manifest, [signing], 2));
+      const fetch = reply(201, {});
+      expect(await main([...args, '--dry-run'], env(), { log, fetch })).toBe(EXIT.usage);
+      expect(lines.at(-1)).toMatch(/neither --dry-run nor --verify-only/);
+      expect(await main([...args, '--verify-only'], env(), { log, fetch })).toBe(EXIT.usage);
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it('exits ok when the app already serves the same pair', async () => {
+      const manifest = catalogBytes(2);
+      const args = await apiArgs(manifest, sigBytes(manifest, [signing], 2));
+      const fetch = reply(200, { alreadyLive: true, sequence: 2 });
+      expect(await main(args, env(), { log, fetch })).toBe(EXIT.ok);
+      expect(lines.at(-1)).toMatch(/already serves sequence 2 with these bytes/);
+    });
+  });
 });

@@ -117,11 +117,11 @@ vi.mock('@server/utils/apiKeyTrust', () => ({
     ownerUntrusted: false,
   }),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/server-utils/managers/apiKeyUsageManager', () => ({
   ApiKeyUsageManager: { logUsage: vi.fn().mockResolvedValue(undefined) },
 }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test' } } }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/utils/adminAudit', () => ({

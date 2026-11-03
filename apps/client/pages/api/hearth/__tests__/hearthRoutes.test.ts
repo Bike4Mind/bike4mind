@@ -94,7 +94,7 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => vi.fn() }));
 vi.mock('@server/middlewares/requireUser', () => ({ requireUser: vi.fn() }));
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: featureGateMock }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: sendToClientMock }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: sendToClientMock }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test' } } }));
 // Real constants (not re-declared literals) so the route is pinned to the same
 // window the roster sort uses; only the repository is faked.

@@ -1,4 +1,12 @@
-import { pendingCreditHoldRepository, withTransaction, type PendingCreditHold } from '@bike4mind/database';
+import { CreditHolderType } from '@bike4mind/common';
+import {
+  newAccountSpendCapAdapters,
+  pendingCreditHoldRepository,
+  userRepository,
+  withTransaction,
+  type PendingCreditHold,
+} from '@bike4mind/database';
+import { creditService } from '@bike4mind/services';
 import type { CompletionCreditHolds } from '@bike4mind/services/cliCompletions';
 import type { Logger } from '@bike4mind/observability';
 
@@ -12,6 +20,15 @@ export function createCompletionCreditHolds(logger: Logger): CompletionCreditHol
 
   return {
     async reserve(hold, debit) {
+      if (hold.ownerType === CreditHolderType.User) {
+        const user = await userRepository.findById(hold.userId);
+        if (user) {
+          await creditService.assertNewAccountSpendWithinCap(
+            { user, requestedCredits: hold.reservedCredits, billedToOrganization: false, logger },
+            newAccountSpendCapAdapters
+          );
+        }
+      }
       pending = await withTransaction(async () => {
         const holder = await debit();
         return pendingCreditHoldRepository.record(

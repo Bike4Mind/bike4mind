@@ -72,10 +72,50 @@ describe('assessApiKeyTrust', () => {
     ['an active plan', youngVerifiedUser(), true],
     ['admin approval', youngVerifiedUser({ apiKeyTrustApproved: true }), false],
     ['account age at the threshold', youngVerifiedUser({ createdAt: new Date(NOW.getTime() - 7 * DAY_MS) }), false],
-    ['a legacy account with no createdAt', youngVerifiedUser({ createdAt: undefined }), false],
     ['a platform admin', youngVerifiedUser({ isAdmin: true, emailVerified: false }), false],
   ])('trusts %s', async (_label, user, hasActivePlan) => {
     expect(await assess(user, { hasActivePlan })).toEqual({ status: 'trusted' });
+  });
+
+  describe('an account with no createdAt', () => {
+    const objectIdAt = (ms: number) =>
+      Math.floor(ms / 1000)
+        .toString(16)
+        .padStart(8, '0') + '0'.repeat(16);
+
+    it('trusts it when the ObjectId is older than the minimum age', async () => {
+      const user = youngVerifiedUser({ createdAt: undefined, id: objectIdAt(NOW.getTime() - 30 * DAY_MS) });
+      expect(await assess(user)).toEqual({ status: 'trusted' });
+    });
+
+    it('does not trust it when the ObjectId is recent', async () => {
+      const user = youngVerifiedUser({ createdAt: undefined, id: objectIdAt(NOW.getTime() - DAY_MS) });
+      expect(await assess(user)).toMatchObject({ status: 'untrusted', reason: 'not_yet_trusted' });
+    });
+
+    it('falls back to the ObjectId when createdAt is unparseable', async () => {
+      const user = youngVerifiedUser({ createdAt: 'not-a-date', id: objectIdAt(NOW.getTime() - 30 * DAY_MS) });
+      expect(await assess(user)).toEqual({ status: 'trusted' });
+    });
+
+    it('treats an unparseable createdAt with no id as brand new, with a valid trustedAfter', async () => {
+      const result = await assess(youngVerifiedUser({ createdAt: 'not-a-date', id: undefined }));
+      expect(result).toMatchObject({ status: 'untrusted', reason: 'not_yet_trusted' });
+      if (result.status === 'untrusted' && result.reason === 'not_yet_trusted') {
+        expect(Number.isFinite(result.trustedAfter.getTime())).toBe(true);
+      }
+    });
+
+    it.each([[undefined], ['not-an-object-id']])('treats it as brand new when the id is %s', async id => {
+      const user = youngVerifiedUser({ createdAt: undefined, id });
+      expect(await assess(user)).toEqual({
+        status: 'untrusted',
+        reason: 'not_yet_trusted',
+        maxActiveKeys: 1,
+        trustedAfter: new Date(NOW.getTime() + 7 * DAY_MS),
+      });
+      expect(await assess(user, { hasActivePlan: true })).toEqual({ status: 'trusted' });
+    });
   });
 
   it('skips the plan lookup when a cheap field already settles trust', async () => {

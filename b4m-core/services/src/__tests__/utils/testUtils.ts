@@ -49,6 +49,7 @@ export const createMockShareableRepository = <T>(): IShareableStaticMethods<T> =
   findUpdateAccessById: vi.fn(),
   findAllUpdateAccessByIds: vi.fn(),
   findShareAccessById: vi.fn(),
+  updateUserShares: vi.fn(),
 });
 
 export const createMockProjectRepository = (): IProjectRepository => ({
@@ -274,6 +275,11 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     findRiskScoringCandidateIds: vi.fn().mockResolvedValue([]),
     findPendingRiskReviews: vi.fn().mockResolvedValue([]),
     setRiskReviewState: vi.fn(),
+    claimRiskEvidenceRefresh: vi.fn().mockResolvedValue(true),
+    releaseRiskEvidenceRefresh: vi.fn(),
+    setRiskEvidenceSummary: vi.fn().mockResolvedValue(true),
+    recordRiskEvidenceFailure: vi.fn(),
+    riskEvidenceCoverage: vi.fn(),
     removeGroupsFromAllUsers: vi.fn(),
     clearOrganizationPointer: vi.fn(),
     addGroupToUser: vi.fn(),
@@ -294,6 +300,7 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     searchCollections: vi.fn(),
     findByStripeCustomerId: vi.fn(),
     incrementCredits: vi.fn(),
+    decrementCreditsFloored: vi.fn(),
     incrementCurrentStorage: vi.fn(),
     setCurrentStorageIfUnchanged: vi.fn(),
     findCurrentStorageSize: vi.fn(),
@@ -330,6 +337,7 @@ export const createMockOrganizationRepository = (): MockedObject<IOrganizationRe
     findIdsAdministeredBy: vi.fn(),
     findIdsWithAdminRights: vi.fn(),
     incrementCredits: vi.fn(),
+    decrementCreditsFloored: vi.fn(),
     findByIdAndUserId: vi.fn(),
     ensureUserDetails: vi.fn(),
     removeMember: vi.fn(),

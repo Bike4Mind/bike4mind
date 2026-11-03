@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth';
+import type { PromptCacheTtl } from '@bike4mind/common';
 import type {
   ChatApprovalAnswer,
   ChatApprovalMode,
@@ -87,6 +88,7 @@ const api: DesktopApi = {
     resumePull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsResumePull, key),
     dismissPull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsDismissPull, key),
     remove: (name: string, serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsRemove, name, serverId),
+    getStoreLocation: (serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsGetStoreLocation, serverId),
     getHfToken: () => ipcRenderer.invoke(IPC_CHANNELS.modelsGetHfAccess),
     setHfToken: (token: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsSaveHfAccess, token),
     clearHfToken: () => ipcRenderer.invoke(IPC_CHANNELS.modelsClearHfAccess),
@@ -163,6 +165,8 @@ const api: DesktopApi = {
     },
     setSessionReasoningEffort: (sessionId: string, effort: ReasoningEffortSetting) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionReasoningEffort, sessionId, effort),
+    setSessionPromptCacheTtl: (sessionId: string, ttl: PromptCacheTtl) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionPromptCacheTtl, sessionId, ttl),
     setSessionPinned: (sessionId: string, pinned: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionPinned, sessionId, pinned),
     setApprovalMode: (sessionId: string, mode: ChatApprovalMode) =>
@@ -380,6 +384,7 @@ const api: DesktopApi = {
     getState: () => ipcRenderer.invoke(IPC_CHANNELS.permissionsGetState),
     setRules: (scope, lists) => ipcRenderer.invoke(IPC_CHANNELS.permissionsSetRules, scope, lists),
     setSharing: (share: boolean) => ipcRenderer.invoke(IPC_CHANNELS.permissionsSetSharing, share),
+    exportApprovalSummary: () => ipcRenderer.invoke(IPC_CHANNELS.permissionsExportApprovalSummary),
   },
   capabilities: {
     getState: () => ipcRenderer.invoke(IPC_CHANNELS.capabilitiesGetState),

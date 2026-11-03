@@ -62,7 +62,7 @@ const h = vi.hoisted(() => {
 });
 
 // Run the raw handler directly (no SQS logger injection wrapper).
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
 }));
 
@@ -141,7 +141,7 @@ vi.mock('@bike4mind/server-utils/utils/generatedImageAccess', () => ({
   userCanAccessGeneratedImage: h.canAccessGeneratedImage,
 }));
 
-vi.mock('@server/websocket/utils', () => ({ sendToClient: h.progress }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: h.progress }));
 
 vi.mock('@bike4mind/server-utils/shared/subQuestStatusPresentation', () => ({ getSubQuestStatusIcon: () => '' }));
 

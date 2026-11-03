@@ -491,6 +491,17 @@ describe('curated sequence, changelog and tiers', () => {
     );
     expect(parseHubManifest(m).dropped.map(d => d.path)).toContain(`entries.${index('gemma-12b')}`);
   });
+
+  it('reads an entry minimum CLI version and drops the entry when it is not a version', () => {
+    const m = curated();
+    m.entries.find(e => e.id === 'gemma-12b')!.minCliVersion = '0.5.0';
+    expect(parseHubManifest(m).manifest.entries.find(e => e.id === 'gemma-12b')?.minCliVersion).toBe('0.5.0');
+    Object.assign(
+      m.entries.find(e => e.id === 'gemma-12b')!,
+      { minCliVersion: 'next' }
+    );
+    expect(parseHubManifest(m).dropped.map(d => d.path)).toContain(`entries.${index('gemma-12b')}`);
+  });
 });
 
 describe('CuratedCatalogSchema', () => {

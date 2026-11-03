@@ -12,7 +12,7 @@ import {
   getEffectiveApiKeyByBackend,
   OperationsModelService,
 } from '@bike4mind/server-utils/services/operationsModelService';
-import { resolveSlackWebhookUrl } from '@server/integrations/slack/slack';
+import { resolveSlackWebhookUrl } from '@bike4mind/server-utils/integrations/slack/slack';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
 

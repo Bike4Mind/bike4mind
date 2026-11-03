@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
   ANTHROPIC_EFFORT_LEVELS,
+  applyAnthropicOutputCeiling,
   belowReasoningFloor,
   buildThinkingParams,
   DEFAULT_ANTHROPIC_EFFORT,
@@ -132,6 +133,39 @@ describe('buildThinkingParams', () => {
       const result = buildThinkingParams(ChatModels.CLAUDE_4_7_OPUS, adaptiveModel, 16000, 4096);
       expect(result.temperature).toBe('delete');
     });
+  });
+});
+
+describe('applyAnthropicOutputCeiling', () => {
+  it('lowers an adaptive request raised to the thinking floor', () => {
+    const body = { max_tokens: ADAPTIVE_THINKING_MAX_TOKENS_FLOOR, thinking: { type: 'adaptive' } };
+    applyAnthropicOutputCeiling(body, 5000);
+    expect(body).toEqual({ max_tokens: 5000, thinking: { type: 'adaptive' } });
+  });
+
+  it('brings a legacy thinking budget down under the answer headroom', () => {
+    const body = { max_tokens: 17_000, thinking: { type: 'enabled', budget_tokens: 16_000 } };
+    applyAnthropicOutputCeiling(body, 5000);
+    expect(body).toEqual({
+      max_tokens: 5000,
+      thinking: { type: 'enabled', budget_tokens: 5000 - THINKING_ANSWER_HEADROOM_TOKENS },
+    });
+  });
+
+  it('turns legacy thinking off when the minimum budget no longer fits', () => {
+    const body: { max_tokens: number; thinking?: unknown } = {
+      max_tokens: 17_000,
+      thinking: { type: 'enabled', budget_tokens: 16_000 },
+    };
+    applyAnthropicOutputCeiling(body, 1500);
+    expect(body).toEqual({ max_tokens: 1500 });
+  });
+
+  it('leaves a request already within the ceiling, or with none, untouched', () => {
+    const body = { max_tokens: 4096, thinking: { type: 'enabled', budget_tokens: 3000 } };
+    applyAnthropicOutputCeiling(body, 8000);
+    applyAnthropicOutputCeiling(body, undefined);
+    expect(body).toEqual({ max_tokens: 4096, thinking: { type: 'enabled', budget_tokens: 3000 } });
   });
 });
 

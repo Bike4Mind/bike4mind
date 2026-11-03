@@ -6,13 +6,14 @@ import { GetEffectiveApiKeyAdapters, getFirecrawlConfig } from '../../../../apiK
 import { CitableSource, UnprocessableEntityError } from '@bike4mind/common';
 import { FirecrawlError } from '@mendable/firecrawl-js';
 import { createFirecrawlApp, type FirecrawlClient, type FirecrawlScrapeParams } from './firecrawlApp';
-import { plainFetchScrape } from './plainFetch';
-import { UnsafeScrapeTargetError } from './errors';
-import { resolveAndVetUrl, unsafeFetchUrlReason } from './ssrfGuard';
+import { NoExtractableContentError, plainFetchScrape } from './plainFetch';
+import { refuseFetch, resolveAndVetUrl, unsafeFetchUrlReason } from './ssrfGuard';
 
 // Re-exported so external construction sites (e.g. apps/workers researchEngineQueue)
 // can use the interop-safe constructor instead of the raw default import.
 export { createFirecrawlApp } from './firecrawlApp';
+export { RefusedFetchTargetError } from './errors';
+export { NoExtractableContentError } from './plainFetch';
 
 interface WebFetchParams {
   url: string;
@@ -222,13 +223,9 @@ export async function firecrawlFetch(
   // Checked before choosing a backend: a self-hosted Firecrawl (`apiUrl`) fetches from inside our
   // network, so handing it a private address is the same SSRF as fetching it ourselves. Same
   // handling as the guard inside the Firecrawl wrapper: a private or protocol refusal is permanent
-  // (`UnsafeScrapeTargetError`), a DNS hiccup is a plain Error so a retry wrapper still retries it.
+  // (`UnsafeScrapeTargetError`), a DNS hiccup is retryable (see refuseFetch).
   const vetted = await resolveAndVetUrl(new URL(url));
-  if (!vetted.safe) {
-    const message = `Refusing to fetch ${url}: ${vetted.reason}`;
-    if (vetted.retryable) throw new Error(message);
-    throw new UnsafeScrapeTargetError(message);
-  }
+  if (!vetted.safe) throw refuseFetch(url, vetted);
 
   // Use longer timeout for PDF URLs - large PDFs need more server-side processing time.
   // Callers with shorter Lambda lifetimes can cap via maxTimeoutMs.
@@ -279,8 +276,7 @@ export async function firecrawlFetch(
   }
 
   if (!('markdown' in result) || !result.markdown) {
-    Logger.globalInstance.error('❌ WebFetch Tool: No markdown content returned');
-    throw new Error('No content could be extracted from the URL');
+    throw new NoExtractableContentError();
   }
 
   return buildWebFetchResult(result.markdown, result.metadata?.title, url, options?.offset, durationMs);
@@ -377,10 +373,15 @@ const WEB_FETCH_UNREACHABLE_MSG =
   'The page could not be reached \u2014 the server may be down, unreachable, or blocking automated access. ' +
   'Try using web_search to find the information instead.';
 
+const WEB_FETCH_NO_CONTENT_MSG =
+  'No readable content could be extracted from this page \u2014 it may be empty, need a login, or render ' +
+  'its text in a way the scraper cannot read. Try web_search, or ask the user for another URL.';
+
 const WEB_FETCH_FAILURE_MESSAGES = new Set([
   ...Object.values(FIRECRAWL_FAILURE_MESSAGES).map(m => m.userMessage),
   WEB_FETCH_PDF_TOO_LARGE_MSG,
   WEB_FETCH_UNREACHABLE_MSG,
+  WEB_FETCH_NO_CONTENT_MSG,
 ]);
 
 /** Scores the failures web_fetch reports as text; a fetched page is left to the default score. */
@@ -457,6 +458,12 @@ export const webFetchTool: ToolDefinition = {
           });
           await context.statusUpdate({}, `WebFetch: ${statusLabel}`);
           return userMessage;
+        }
+
+        if (error instanceof NoExtractableContentError) {
+          context.logger.warn('WebFetch no extractable content', { url: params.url });
+          await context.statusUpdate({}, 'WebFetch: no readable content');
+          return WEB_FETCH_NO_CONTENT_MSG;
         }
 
         // Firecrawl 500 with PDF page-count timeout hint - the PDF is too large to process

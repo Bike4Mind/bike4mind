@@ -138,6 +138,11 @@ describe('registerModelsIpc', () => {
     });
     expect(await invoke(IPC_CHANNELS.modelsListInstalled, id)).toMatchObject({ ok: false, error: { kind: 'invalid' } });
     expect(await invoke(IPC_CHANNELS.modelsGetStatus, id)).toMatchObject({ reachable: false, serverId: '' });
+    expect(await invoke(IPC_CHANNELS.modelsGetStoreLocation, id)).toEqual({
+      path: null,
+      source: null,
+      freeBytes: null,
+    });
     expect(local.remove).not.toHaveBeenCalled();
     expect(remote.remove).not.toHaveBeenCalled();
   });

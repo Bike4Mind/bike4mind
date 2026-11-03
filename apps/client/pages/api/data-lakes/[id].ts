@@ -22,7 +22,7 @@ import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigA
 import { respond } from '@server/utils/respond';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { isSessionActivatablePromptId } from '@bike4mind/server-utils/utils/sessionActivatablePrompts';
-import { disableDriveConnectionForLake } from '@server/integrations/google/drive/common';
+import { disableDriveConnectionForLake } from '@bike4mind/server-utils/integrations/google/drive/common';
 import { disableGitHubConnectionForLake } from '@server/integrations/github/dataLake/githubLakeConnection';
 
 // The canonical single READ gate observes the read-time grant cutover (#1673): its assertLakeAccess

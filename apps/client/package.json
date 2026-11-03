@@ -153,7 +153,7 @@
     "html-escaper": "^3.0.3",
     "i18next": "^26.4.2",
     "i18next-browser-languagedetector": "^8.2.1",
-    "i18next-http-backend": "^4.0.2",
+    "i18next-http-backend": "^4.0.4",
     "idb-keyval": "^6.3.0",
     "isolated-vm": "^7.0.1",
     "jsonrepair": "^3.15.0",

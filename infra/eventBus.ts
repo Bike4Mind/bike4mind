@@ -4,7 +4,7 @@ import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { lambdaVpc } from './vpc';
 import { fabFileBucket, generatedImagesBucket, appFilesBucket } from './buckets';
 import { eventBus } from './bus';
-import { notebookCurationQueue, sreFixQueue, sreFixQueueDLQ } from './queues';
+import { notebookCurationQueue, riskEvidenceQueue, riskEvidenceQueueDLQ, sreFixQueue, sreFixQueueDLQ } from './queues';
 import { createEventBusDeadLetter } from './eventBusDeadLetter';
 import { otcEmailConfigurationSet } from './otcEmailMetrics';
 import { appUrlForLambdaEnv } from './router';
@@ -425,6 +425,27 @@ const sreFixDispatchSubscription = eventBus.subscribeQueue('SreFixDispatch', sre
 // target's policy created by subscribeQueue only covers the main queue).
 sst.aws.Queue.createPolicy('SreFixQueueDLQEventsPolicy', sreFixQueueDLQ.arn);
 
+// Account behavioral risk evidence. completion.completed is published only for turns with mementos
+// enabled (publishMementoCompletion), so this is a freshness nudge for that cohort; the hourly
+// signupRiskSweep is the baseline. The input transformer keeps the event's prompt out of the queue and
+// its DLQ. Failed deliveries go to riskEvidenceQueueDLQ, which is already alarmed in infra/dlqAlarms.ts.
+const riskEvidenceCompletionSubscription = eventBus.subscribeQueue('RiskEvidenceCompletion', riskEvidenceQueue, {
+  pattern: {
+    detailType: ['completion.completed'],
+  },
+  transform: {
+    target: targetArgs => {
+      targetArgs.deadLetterConfig = { arn: riskEvidenceQueueDLQ.arn };
+      targetArgs.inputTransformer = {
+        inputPaths: { userId: '$.detail.userId' },
+        inputTemplate: '{"kind":"completion","userId":<userId>}',
+      };
+    },
+  },
+});
+
+sst.aws.Queue.createPolicy('RiskEvidenceQueueDLQEventsPolicy', riskEvidenceQueueDLQ.arn);
+
 export {
   eventBus,
   telemetryAlertDeadLetter,
@@ -434,6 +455,7 @@ export {
   completionEventsDeadLetter,
   sessionEnrichmentDeadLetter,
   sreFixDispatchSubscription,
+  riskEvidenceCompletionSubscription,
   sessionAutoNamingSubscription,
   sessionSummarizationSubscription,
   sessionContextSummarizationSubscription,

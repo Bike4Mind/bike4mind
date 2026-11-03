@@ -79,6 +79,7 @@ vi.mock('@server/auth/signupNetworkLimits', () => ({
   assertSignupNetworkWithinLimits: vi.fn().mockResolvedValue(undefined),
   createSignupRiskCollector: vi.fn(() => vi.fn()),
 }));
+vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
 vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   cacheRepository: {
@@ -137,7 +138,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { JWT_SECRET: 'test-secret' },
   isE2EEnabled: () => false,
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 const mockEmitSignup = vi.fn().mockResolvedValue([]);
 vi.mock('@server/analytics/signupEvents', () => ({
   emitSignupForSourceProducts: (...a: unknown[]) => mockEmitSignup(...a),
@@ -178,7 +179,7 @@ describe('/api/otc/verify — enumeration resistance', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     mockJwtSign.mockReturnValue('reissued-token');
-    mockValidateAndRotateNonce.mockResolvedValue('$2a$hash');
+    mockValidateAndRotateNonce.mockResolvedValue({ otcHash: '$2a$hash', riskSignals: [] });
     mockUserHasMFA.mockReturnValue(false);
     mockCountPasskeys.mockResolvedValue(0);
     sentCookies = [];
@@ -257,7 +258,7 @@ describe('/api/otc/verify — enumeration resistance', () => {
 
   it('verify checks the code against the server-side record', async () => {
     mockJwtVerify.mockReturnValue(validToken({ otcHash: 'token-hash' }));
-    mockValidateAndRotateNonce.mockResolvedValue('server-hash');
+    mockValidateAndRotateNonce.mockResolvedValue({ otcHash: 'server-hash', riskSignals: [] });
     mockVerifyPendingOTC.mockResolvedValue(false);
 
     await handler(makeReq({ email: 'user@example.com', code: '00000000', pendingToken: 'tok' }), mockRes);
@@ -401,7 +402,7 @@ describe('/api/otc/verify — enumeration resistance', () => {
 
     it('signs in with a 6-digit code that matches a live token', async () => {
       mockJwtVerify.mockReturnValue(validToken());
-      mockValidateAndRotateNonce.mockResolvedValue(await bcrypt.hash('012345', 4));
+      mockValidateAndRotateNonce.mockResolvedValue({ otcHash: await bcrypt.hash('012345', 4), riskSignals: [] });
 
       await handler(makeReq({ email: 'user@example.com', code: '012345', pendingToken: 'tok' }), mockRes);
 
@@ -411,7 +412,7 @@ describe('/api/otc/verify — enumeration resistance', () => {
 
     it('rejects a 6-digit code against an 8-digit token as a wrong guess', async () => {
       mockJwtVerify.mockReturnValue(validToken());
-      mockValidateAndRotateNonce.mockResolvedValue(await bcrypt.hash('01234567', 4));
+      mockValidateAndRotateNonce.mockResolvedValue({ otcHash: await bcrypt.hash('01234567', 4), riskSignals: [] });
 
       await handler(makeReq({ email: 'user@example.com', code: '012345', pendingToken: 'tok' }), mockRes);
 
@@ -598,7 +599,7 @@ describe('/api/otc/verify — enumeration resistance', () => {
   it('still logs in when the analytics write fails (best-effort, post-rotation)', async () => {
     mockJwtVerify.mockReturnValue(validToken());
     mockVerifyPendingOTC.mockResolvedValue(true);
-    const { logEvent } = await import('@server/utils/analyticsLog');
+    const { logEvent } = await import('@bike4mind/server-utils/utils/analyticsLog');
     vi.mocked(logEvent).mockRejectedValueOnce(new Error('analytics db down'));
     mockFindByEmail.mockResolvedValue({
       id: 'u1',
@@ -642,7 +643,7 @@ describe('/api/otc/verify — enumeration resistance', () => {
     mockVerifyPendingOTC.mockResolvedValue(true);
     mockFindByEmail.mockResolvedValue(null);
     mockRegisterViaOTC.mockResolvedValue({ id: 'new1', tokenVersion: 0 });
-    const { logEvent } = await import('@server/utils/analyticsLog');
+    const { logEvent } = await import('@bike4mind/server-utils/utils/analyticsLog');
     vi.mocked(logEvent).mockRejectedValueOnce(new Error('analytics db down'));
 
     const req = makeReq({ email: 'user@example.com', code: '123456', username: 'newbie', pendingToken: 'tok' });

@@ -65,6 +65,7 @@
     "backfill:fabfile-moderation-status": "tsx src/backfill-fabfile-moderation-status.ts",
     "backfill:session-image-count": "tsx src/backfill-session-image-count.ts",
     "backfill:analytics-rollup": "tsx src/backfill-analytics-rollup.ts",
+    "backfill:spend-rollups": "tsx src/backfill-spend-rollups.ts",
     "backfill:orphaned-published-artifacts": "tsx src/backfill-orphaned-published-artifacts.ts",
     "backfill:publish-thumbnails": "tsx src/backfill-publish-thumbnails.ts",
     "trim:ai-edit-versions": "tsx src/trim-ai-edit-versions.ts",
@@ -85,6 +86,7 @@
     "curated:keygen": "tsx src/curatedCatalog/keygenCurated.ts",
     "curated:sign": "tsx src/curatedCatalog/signCurated.ts",
     "curated:publish": "tsx src/curatedCatalog/publishCurated.ts",
+    "curated:schema": "tsx src/curatedCatalog/curatedSchema.ts",
     "curated:check-build": "tsx src/curatedCatalog/checkDesktopBuild.ts"
   },
   "dependencies": {
@@ -124,6 +126,8 @@
   "devDependencies": {
     "@types/mailparser": "^3.9.0",
     "@types/yargs": "^17.0.35",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "aws-sdk-client-mock": "^4.1.0",
     "mailparser": "^3.12.4",
     "ora": "^9.4.1",

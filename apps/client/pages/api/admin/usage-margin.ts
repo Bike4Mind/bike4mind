@@ -4,14 +4,14 @@ import { usdToCredits } from '@bike4mind/utils';
 import { ApiKeyScope } from '@bike4mind/common';
 import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
-const VIEWS = ['model-day', 'user', 'provider-month', 'settlement'] as const;
+const VIEWS = ['model-day', 'user', 'provider-month', 'settlement', 'funding-cohort'] as const;
 // A year of reconciliation history; keeps the dashboard's provider-month list finite.
 const PROVIDER_MONTH_WINDOW = 12;
 type MarginView = (typeof VIEWS)[number];
 
 /**
  * Margin reporting over usage events.
- * GET ?view=model-day|user|provider-month|settlement&days=30
+ * GET ?view=model-day|user|provider-month|settlement|funding-cohort&days=30
  *
  * Responses include targetCreditsPerUsd = usdToCredits(1): what current pricing
  * charges per $1 of COGS. Rows below it were charged under older pricing or
@@ -61,6 +61,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
 
   if (view === 'settlement') {
     const rows = await usageEventRepository.settlementBreakdown(days);
+    return res.json({ targetCreditsPerUsd, rows });
+  }
+
+  if (view === 'funding-cohort') {
+    const rows = await usageEventRepository.costByFundingCohort(days);
     return res.json({ targetCreditsPerUsd, rows });
   }
 

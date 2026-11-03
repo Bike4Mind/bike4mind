@@ -4,7 +4,7 @@ import { act, render, screen } from '@testing-library/react';
 import ArtifactRenderer from './ArtifactRenderer';
 import { getCachedArtifactId } from './ArtifactIdResolver';
 import { registerArtifactType } from './registry';
-import { getArtifactTimestamp } from '@client/app/utils/artifactParser';
+import { getArtifactTimestamp } from '@bike4mind/server-utils/app/utils/artifactParser';
 import { findExistingArtifactId } from '@client/app/utils/artifactPersistence';
 
 // The handler registry is populated at module scope by './handlers', which pulls in the

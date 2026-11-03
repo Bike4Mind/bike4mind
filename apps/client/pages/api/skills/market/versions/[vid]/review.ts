@@ -4,7 +4,7 @@ import { baseApi } from '@client/server/middlewares/baseApi';
 import { SkillListing, SkillListingVersion } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { ConflictError, ForbiddenError, NotFoundError, type ISkillListing } from '@bike4mind/common';
-import { canReviewListing } from '@server/skillMarket/market';
+import { canReviewListing } from '@bike4mind/server-utils/skillMarket/market';
 import { decideVersion } from '@server/skillMarket/submitVersion';
 
 const bodySchema = z.discriminatedUnion('action', [

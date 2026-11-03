@@ -39,7 +39,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   withWebSocketContext: vi.fn(
     (handler: (event: unknown, context: unknown, logger: unknown) => Promise<unknown>) => handler
   ),
@@ -102,7 +102,7 @@ import { ApiKeyScope, PROMPT_TEXT_MAX, TooManyRequestsError } from '@bike4mind/c
 import { verifyApiKey, verifyJwtToken, checkApiKeyRateLimitOrThrow, checkRateLimit } from '@server/cli/auth';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { func, handlePermissionResponse, handleGateResponse } from './agentExecute';
 

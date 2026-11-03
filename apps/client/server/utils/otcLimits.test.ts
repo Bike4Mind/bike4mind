@@ -325,6 +325,7 @@ describe('admin-lowered limits', () => {
     ...Object.values(OTC_LIMITS.send),
     ...Object.values(OTC_LIMITS.verify),
     ...Object.values(OTC_LIMITS.register),
+    ...Object.values(OTC_LIMITS.formToken),
   ].filter(w => typeof w === 'object');
 
   beforeEach(() => {
@@ -410,6 +411,12 @@ describe('admin-lowered limits', () => {
       OTC_LIMITS.register.perDomainDaily,
       'otc-limit:register-domain-daily:',
       () => reserveOtcRegistrationDomainBudget('x@new.example'),
+    ],
+    [
+      'formToken.perIp',
+      OTC_LIMITS.formToken.perIp,
+      'otc-limit:form-token-ip:',
+      counter('form-token-ip', OTC_LIMITS.formToken.perIp),
     ],
   ] as const;
 

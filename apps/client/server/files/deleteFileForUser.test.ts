@@ -56,7 +56,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: {} }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: () => false }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: mockLogEvent }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: mockLogEvent }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn(),
   getGeneratedImageStorage: vi.fn(),

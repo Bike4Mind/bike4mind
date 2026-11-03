@@ -15,6 +15,7 @@ import {
   claimedGroups,
   describeSchemaIssues,
   relativeGap,
+  snapshotAliasOf,
   type CatalogWritePlan,
 } from './catalogWrite';
 import type { PerTokenRates } from './pricePlan';
@@ -54,6 +55,9 @@ export const HEURISTIC_SOURCE = 'heuristic';
 
 /** Suggestion `source` for everything the K-miss protocol raised, successor included. */
 export const ABSENCE_SOURCE = 'absence';
+
+/** Suggestion `source` for a catalog alias listed next to its own dated snapshot. */
+export const SNAPSHOT_ALIAS_SOURCE = 'snapshot-alias';
 
 /**
  * The end of the road. Three uses, all the same idea: a docs row may only
@@ -336,6 +340,8 @@ export interface LifecyclePlanInput {
   priorContributors?: ReadonlyMap<string, readonly ICatalogContributor[]>;
   autoRemap: DiscoveryAutoRemapPolicy;
   operatorOwnedModelIds: ReadonlySet<string>;
+  /** Every id the static adapter tables ship; an alias among them is curated, never a duplicate. */
+  staticModelIds?: ReadonlySet<string>;
   runStartedAt: Date;
   runId?: string;
 }
@@ -418,6 +424,11 @@ export function planLifecycle(plannerInput: LifecyclePlanInput): LifecyclePlan {
 
   for (const signal of docsSuggestions(input, sunsetting)) suggestions.push(signal);
   for (const signal of aggregatorSuggestions(input, sunsetting)) suggestions.push(signal);
+  // Last, so a provider's or aggregator's own word on a model keeps its one queue slot.
+  const suggested = new Set(suggestions.map(suggestion => suggestion.modelId));
+  for (const signal of snapshotAliasSuggestions(input, sunsetting)) {
+    if (!suggested.has(signal.modelId)) suggestions.push(signal);
+  }
 
   const rows = input.catalogPlan.rows.map(row => {
     const replacedBy = applied.get(row.modelId);
@@ -771,6 +782,46 @@ function aggregatorSuggestions(input: PlanContext, sunsetting: ReadonlySet<strin
           ? `${signal.source} announces lifecycle dates without a sunset status; an aggregator date alone may not hide the model`
           : `${signal.source} reports this model as ${signal.lifecycle.status}; ` +
             'no provider and no second aggregator corroborates it, so one aggregator alone may not hide the model',
+    });
+  }
+  return suggestions;
+}
+
+/**
+ * Catalog aliases listed next to their own dated snapshot ("gpt-4.1" beside
+ * "gpt-4.1-2025-04-14"), which read as the same model twice. Always a queue item,
+ * never a transition, whatever modelDiscoveryAutoRemap says: a sunset catalog-only
+ * row drops out of the merged list, so writing the status without the successor
+ * would fail every request pinned to the alias. Accepting writes both in one row.
+ *
+ * Only an active snapshot is a successor. One that is itself sunset (o3, o4-mini)
+ * would hand the pin to a hidden model, so that alias is left for an operator.
+ */
+function snapshotAliasSuggestions(input: PlanContext, sunsetting: ReadonlySet<string>): LifecycleSuggestion[] {
+  // The newest active snapshot per alias; YYYY-MM-DD compares as a string.
+  const snapshotOf = new Map<string, string>();
+  for (const [modelId, resolved] of input.resolvedInForce) {
+    const alias = snapshotAliasOf(modelId);
+    if (!alias || statusOf(resolved) !== 'active' || sunsetting.has(modelId)) continue;
+    const held = snapshotOf.get(alias);
+    if (!held || modelId > held) snapshotOf.set(alias, modelId);
+  }
+
+  const suggestions: LifecycleSuggestion[] = [];
+  for (const [alias, snapshot] of snapshotOf) {
+    const existing = input.resolvedInForce.get(alias);
+    if (!existing || statusOf(existing) !== 'active' || sunsetting.has(alias)) continue;
+    if (input.staticModelIds?.has(alias)) continue;
+    if (backendOf(existing) !== backendOf(input.resolvedInForce.get(snapshot))) continue;
+
+    suggestions.push({
+      modelId: alias,
+      status: 'deprecated',
+      replacedBy: snapshot,
+      source: SNAPSHOT_ALIAS_SOURCE,
+      detail:
+        `${alias} is the alias of ${snapshot}, which the catalog also lists, so the picker shows the model twice; ` +
+        `accepting hides ${alias} and moves requests pinned to it onto ${snapshot}`,
     });
   }
   return suggestions;

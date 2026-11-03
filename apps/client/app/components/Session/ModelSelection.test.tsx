@@ -408,6 +408,7 @@ describe('provider classifiers cover every backend', () => {
     [ModelBackend.Kimi]: { id: 'kimi-k3', name: 'Kimi K3', section: 'Moonshot', label: 'Moonshot direct' },
     [ModelBackend.DeepSeek]: { id: 'deepseek-flash', name: 'DeepSeek Flash', section: 'DeepSeek', label: 'DeepSeek' },
     [ModelBackend.Ollama]: { id: 'llama3.3', name: 'llama3.3', section: 'Meta', label: 'Ollama' },
+    [ModelBackend.OpenAICompatible]: { id: 'my-model', name: 'my-model', section: null, label: null },
     [ModelBackend.BFL]: { id: 'flux-pro-1.1', name: 'FLUX 1.1 [pro]', section: 'Black Forest Labs', label: null },
     [ModelBackend.AWS]: { id: 'aws-transcribe', name: 'Amazon Transcribe', section: null, label: null },
     [ModelBackend.VoyageAI]: { id: 'voyage-3', name: 'Voyage 3', section: null, label: null },

@@ -1,4 +1,5 @@
 import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
+import type { PromptCacheTtl } from '@bike4mind/common';
 import type { AccountCredits, AccountProfile } from './account';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
 import type {
@@ -110,6 +111,7 @@ import type {
   ModelPullRequest,
   ModelPullResult,
   ModelRemoveResult,
+  ModelStoreLocation,
   ModelRuntimeStatus,
 } from './models';
 import type { AccountUsageResult, UsageWindowId } from './usage';
@@ -159,6 +161,7 @@ export const IPC_CHANNELS = {
   chatHistoryState: 'chat:history-state',
   chatHistoryChanged: 'chat:history-changed',
   chatSetSessionReasoningEffort: 'chat:set-session-reasoning-effort',
+  chatSetSessionPromptCacheTtl: 'chat:set-session-prompt-cache-ttl',
   chatSetSessionPinned: 'chat:set-session-pinned',
   /**
    * The one way an approval mode changes. Renderer -> main only, driven by the composer pill:
@@ -288,6 +291,7 @@ export const IPC_CHANNELS = {
   permissionsGetState: 'permissions:get-state',
   permissionsSetRules: 'permissions:set-rules',
   permissionsSetSharing: 'permissions:set-sharing',
+  permissionsExportApprovalSummary: 'permissions:export-approval-summary',
   capabilitiesGetState: 'capabilities:get-state',
   capabilitiesRevoke: 'capabilities:revoke',
   /**
@@ -335,6 +339,7 @@ export const IPC_CHANNELS = {
   modelsResumePull: 'models:resume-pull',
   modelsDismissPull: 'models:dismiss-pull',
   modelsRemove: 'models:remove',
+  modelsGetStoreLocation: 'models:get-store-location',
   /** Hugging Face sign-in: whether a token is saved, save one, forget it. None of them returns the token. */
   modelsGetHfAccess: 'models:get-hf-access',
   modelsSaveHfAccess: 'models:save-hf-access',
@@ -610,6 +615,8 @@ export interface DesktopApi {
     resumePull(key: string): Promise<ModelPullResult>;
     dismissPull(key: string): Promise<void>;
     remove(name: string, serverId?: string): Promise<ModelRemoveResult>;
+    /** The folder a pull would land in, and its free space on this computer. */
+    getStoreLocation(serverId?: string): Promise<ModelStoreLocation>;
     /** Whether a Hugging Face token is saved; the token itself never comes back to the renderer. */
     getHfToken(): Promise<HfTokenStatus>;
     /** Saves the token once Hugging Face accepts it. */
@@ -694,6 +701,8 @@ export interface DesktopApi {
     onHistoryChanged(listener: () => void): () => void;
     /** How hard this conversation's model should think. Null when the session is gone. */
     setSessionReasoningEffort(sessionId: string, effort: ReasoningEffortSetting): Promise<ChatSessionSummary | null>;
+    /** How long this conversation's prompt cache lives. Null when the session is gone. */
+    setSessionPromptCacheTtl(sessionId: string, ttl: PromptCacheTtl): Promise<ChatSessionSummary | null>;
     /** Pin a conversation to the top of the sidebar. Null when the session is gone. */
     setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null>;
     /**
@@ -1057,6 +1066,11 @@ export interface DesktopApi {
     /** Replaces one scope's lists. Refused, with the reason, when any rule does not parse. */
     setRules(scope: PermissionScope, lists: PermissionRuleLists): Promise<PermissionMutationResult>;
     setSharing(share: boolean): Promise<PermissionsState>;
+    /**
+     * Saves a Markdown digest of the local approval log where the user picks (see approvalSummary.ts).
+     * False when the save dialog was cancelled.
+     */
+    exportApprovalSummary(): Promise<boolean>;
   };
   capabilities: {
     getState(): Promise<CapabilityLedgerState>;

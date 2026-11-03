@@ -39,7 +39,7 @@ vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
   requireGitHubLakeAppConfig: h.requireGitHubLakeAppConfig,
 }));
 // The grant store has its own dedicated unit tests (githubLakeAuthGrant.test.ts).
-vi.mock('@server/integrations/github/dataLake/githubLakeAuthGrant', () => ({
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/githubLakeAuthGrant', () => ({
   consumeGitHubLakeAuthGrant: h.consumeGitHubLakeAuthGrant,
 }));
 

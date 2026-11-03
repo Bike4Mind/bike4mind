@@ -1,6 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
-import { substitutePromptVariables } from '@server/utils/systemPrompts/defaults';
+import { substitutePromptVariables } from '@bike4mind/server-utils/utils/systemPrompts/defaults';
 import { z } from 'zod';
 
 /**

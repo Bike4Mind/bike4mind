@@ -5,6 +5,7 @@
  * Kept pure (no Ink, no ConfigStore) so the decision is testable without rendering the app.
  */
 
+import type { ApiEndpoint } from '../utils/apiUrl.js';
 import { escapeTerminalControlChars } from '../utils/sanitizeTerminalText.js';
 
 /**
@@ -58,6 +59,25 @@ export type FolderTrustGateDecision = 'prompt' | 'inert' | 'none';
 export function decideFolderTrustGate(input: FolderTrustGateInput): FolderTrustGateDecision {
   if (input.alreadyResolved || input.projectTrusted || !input.projectHasB4mFiles || !input.isTty) return 'none';
   return input.hostLaunch ? 'inert' : 'prompt';
+}
+
+export type EndpointPickerGateInput = {
+  endpointSource: Extract<ApiEndpoint, { status: 'configured' }>['source'];
+  endpointChosen: boolean;
+  hasAuthTokens: boolean;
+};
+
+/**
+ * Whether a resolved endpoint still warrants the first-run backend picker: only on a fresh install
+ * of a build with a baked default (nothing chosen yet, nothing signed in). An unresolved endpoint
+ * always gets the picker; init() checks that first.
+ */
+export function shouldShowEndpointPicker({
+  endpointSource,
+  endpointChosen,
+  hasAuthTokens,
+}: EndpointPickerGateInput): boolean {
+  return endpointSource === 'baked-default' && !endpointChosen && !hasAuthTokens;
 }
 
 export type McpApprovalGateInput = {

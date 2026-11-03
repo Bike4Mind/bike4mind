@@ -15,6 +15,7 @@ import {
 import { stripToolDependentMessages } from './toolPairingUtils';
 import { appendCacheInclusiveTurn, cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import OpenAI from 'openai';
+import { providerFetchOptions } from './providerDispatcher';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources';
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
@@ -71,7 +72,7 @@ export class XAIBackend implements ICompletionBackend {
     if (!apiKey) {
       throw new Error('XAI API key is required');
     }
-    this._api = new OpenAI({ apiKey, baseURL: this._baseUrl });
+    this._api = new OpenAI({ apiKey, baseURL: this._baseUrl, fetchOptions: providerFetchOptions() });
     this.logger = logger ?? new Logger();
   }
 
@@ -967,7 +968,10 @@ export class XAIBackend implements ICompletionBackend {
     return convertMessagesToOpenAIFormat(
       shouldOmitIdentityReminder(options)
         ? messages
-        : appendIdentityReminderToMessages(messages, buildIdentityReminder(model, options.modelDisplayName))
+        : appendIdentityReminderToMessages(
+            messages,
+            buildIdentityReminder(options.modelIdentityId ?? model, options.modelDisplayName)
+          )
     ) as OpenAI.ChatCompletionMessageParam[];
   }
 

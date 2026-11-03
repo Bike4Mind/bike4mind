@@ -175,6 +175,75 @@ describe('ModelServerStore', () => {
     await expect(store.add({ ...base, name: 'this computer' }, { type: 'none' })).rejects.toThrow(/already called/);
   });
 
+  describe('when the write fails', () => {
+    function failingOnce(file = memoryFile()) {
+      const write = file.write.bind(file);
+      const state = { fail: false };
+      file.write = (next: string) => {
+        if (!state.fail) return write(next);
+        state.fail = false;
+        return Promise.reject(new Error('disk full'));
+      };
+      return { file, state };
+    }
+
+    it('does not list a server it could not save', async () => {
+      const { file, state } = failingOnce();
+      const store = new ModelServerStore(cipher(), file, logger);
+      state.fail = true;
+      await expect(store.add(base, { type: 'bearer', token: TOKEN })).rejects.toThrow(/disk full/);
+      expect(await store.list()).toEqual([]);
+      await expect(store.add(base, { type: 'none' })).resolves.toMatchObject({ name: 'gpu box' });
+    });
+
+    it('keeps the old credential when saving a new one fails', async () => {
+      const { file, state } = failingOnce();
+      const store = new ModelServerStore(cipher(), file, logger);
+      const record = await store.add(base, { type: 'bearer', token: TOKEN });
+      state.fail = true;
+      await expect(
+        store.update(record.id, { credential: { type: 'header', name: 'X-Api-Key', value: HEADER_VALUE } })
+      ).rejects.toThrow(/disk full/);
+      const [saved] = await store.list();
+      expect(saved.auth).toEqual({ type: 'bearer' });
+      expect(store.headers(saved)).toEqual({ authorization: `Bearer ${TOKEN}` });
+      expect(store.headers(record)).toEqual({ authorization: `Bearer ${TOKEN}` });
+    });
+
+    it('keeps a server and its credential when removing it fails', async () => {
+      const { file, state } = failingOnce();
+      const store = new ModelServerStore(cipher(false), file, logger);
+      const record = await store.add(base, { type: 'bearer', token: TOKEN });
+      state.fail = true;
+      await expect(store.remove(record.id)).rejects.toThrow(/disk full/);
+      expect(await store.list()).toHaveLength(1);
+      expect(store.headers(record)).toEqual({ authorization: `Bearer ${TOKEN}` });
+    });
+
+    it('keeps the entered hardware when saving new figures fails', async () => {
+      const { file, state } = failingOnce();
+      const store = new ModelServerStore(cipher(), file, logger);
+      const record = await store.add(base, { type: 'none' });
+      const specs = { ramGiB: 64, gpuMemoryGiB: 24, bandwidthGBps: null, unified: false };
+      await store.update(record.id, { specs });
+      await store.setLocalSpecs(specs);
+      state.fail = true;
+      await expect(store.update(record.id, { specs: { ...specs, ramGiB: 128 } })).rejects.toThrow(/disk full/);
+      state.fail = true;
+      await expect(store.setLocalSpecs(null)).rejects.toThrow(/disk full/);
+      expect((await store.get(record.id))?.specs).toEqual(specs);
+      expect(await store.localSpecs()).toEqual(specs);
+    });
+  });
+
+  it('keeps both servers when two are added at once', async () => {
+    const file = memoryFile();
+    const store = new ModelServerStore(cipher(), file, logger);
+    await Promise.all([store.add(base, { type: 'none' }), store.add({ ...base, name: 'second' }, { type: 'none' })]);
+    expect((await store.list()).map(server => server.name).sort()).toEqual(['gpu box', 'second']);
+    expect(JSON.parse(file.contents!).servers).toHaveLength(2);
+  });
+
   it('saves, reads back and clears entered hardware for a server and for this computer', async () => {
     const file = memoryFile();
     const store = new ModelServerStore(cipher(), file, logger);

@@ -28,7 +28,7 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   checkApiKeyRateLimit: (...a: unknown[]) => mockApiKeyRateLimit(...a),
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 // Trust is not under test here; pass the key's own rate limit through.
 vi.mock('@server/utils/apiKeyTrust', () => ({
   resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({

@@ -4,7 +4,7 @@ const mockPostToSlack = vi.fn();
 const mockRecordAdminAction = vi.fn();
 const mockFindUserById = vi.fn();
 
-vi.mock('@server/integrations/slack/slack', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   postMessageToSlack: (...args: unknown[]) => mockPostToSlack(...args),
 }));
 

@@ -4,7 +4,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 const dnsLookup = vi.fn(async () => [{ address: '93.184.216.34', family: 4 }]);
 vi.mock('node:dns/promises', () => ({ lookup: (...args: unknown[]) => dnsLookup(...args) }));
 
-import { plainFetchScrape } from './plainFetch';
+import { NoExtractableContentError, plainFetchScrape } from './plainFetch';
 
 const encode = (s: string) => new TextEncoder().encode(s);
 
@@ -135,7 +135,14 @@ describe('plainFetchScrape', () => {
 
   it('rejects a binary content-type without reading the body', async () => {
     fetchMock.mockResolvedValueOnce(makeRes({ contentType: 'application/octet-stream', chunks: [encode('BINARY')] }));
-    await expect(plainFetchScrape('https://example.com/blob')).rejects.toThrow(/No content could be extracted/);
+    await expect(plainFetchScrape('https://example.com/blob')).rejects.toBeInstanceOf(NoExtractableContentError);
+  });
+
+  it('rejects an HTML page with no readable text as NoExtractableContentError', async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeRes({ contentType: 'text/html', chunks: [encode('<html><body><script>render()</script></body></html>')] })
+    );
+    await expect(plainFetchScrape('https://example.com/spa')).rejects.toBeInstanceOf(NoExtractableContentError);
   });
 
   it('pins the vetted IP and sends the original Host header for http URLs', async () => {

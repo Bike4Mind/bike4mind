@@ -3,7 +3,14 @@ import { useUserRevokeSharing } from '@client/app/hooks/data/user';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import { useUser } from '@client/app/contexts/UserContext';
-import { MAX_EMAIL_MESSAGE_LENGTH, MAX_EMAIL_RECIPIENTS, MAX_EMAIL_RECIPIENTS_ERROR } from '@client/types/api';
+import {
+  MAX_EMAIL_MESSAGE_LENGTH,
+  MAX_EMAIL_RECIPIENTS,
+  MAX_EMAIL_RECIPIENTS_ERROR,
+  MAX_INVITE_MESSAGE_LENGTH,
+  MAX_INVITE_RECIPIENTS,
+  MAX_INVITE_RECIPIENTS_ERROR,
+} from '@client/types/api';
 
 import { InviteType, IUserShare, Permission, IFabFileDocument, ISessionDocument } from '@bike4mind/common';
 import {
@@ -41,6 +48,7 @@ import { toast } from 'sonner';
 import { brandAlpha } from '../../utils/themes/colors';
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
+import { isAxiosError } from 'axios';
 
 // Helper to show bulk operation feedback with success/partial/failure states
 const showBulkFeedback = (
@@ -64,6 +72,22 @@ const showBulkFeedback = (
     toast.error(`Failed to ${action.replace(/ed$/, '')} any ${itemType}s`);
     return 'failure';
   }
+};
+
+const isRateLimitError = (error: unknown) => isAxiosError(error) && error.response?.status === 429;
+
+// A rate-limited bulk share stops at the first refusal: every later item would be refused too.
+const showRateLimitedBulkFeedback = (
+  message: string,
+  successCount: number,
+  totalCount: number,
+  itemType: string,
+  unsharedItems: string[]
+): 'partial' | 'failure' => {
+  // Name what is left: re-sharing the whole selection would charge the already-shared items again.
+  const unsharedPreview = unsharedItems.slice(0, 3).join(', ') + (unsharedItems.length > 3 ? '...' : '');
+  toast.error(`${message} Shared ${successCount} of ${totalCount} ${itemType}s. Not shared: ${unsharedPreview}`);
+  return successCount > 0 ? 'partial' : 'failure';
 };
 
 // The server now resolves recipients case-insensitively (UserModel.findAllByEmailsOrUsernames),
@@ -225,6 +249,11 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
         setRecipients({ ...recipients, error: message });
         toast.error(message);
         isInvalid = true;
+      } else if (tabIndex === 0 && recipientValue.length > MAX_INVITE_RECIPIENTS) {
+        const message = MAX_INVITE_RECIPIENTS_ERROR;
+        setRecipients({ ...recipients, error: message });
+        toast.error(message);
+        isInvalid = true;
       } else if (tabIndex === 2 && recipientValue.length > MAX_EMAIL_RECIPIENTS) {
         const message = MAX_EMAIL_RECIPIENTS_ERROR;
         setRecipients({ ...recipients, error: message });
@@ -329,6 +358,7 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
           // Handle bulk sharing to users - process items sequentially to show accurate progress
           const successResults: Array<{ link?: string }> = [];
           const failedItems: string[] = [];
+          let rateLimitMessage: string | null = null;
           const items = isBulkSharingFiles ? files! : sessions!;
 
           for (let i = 0; i < items.length; i++) {
@@ -348,13 +378,28 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
 
               successResults.push(result);
             } catch (error) {
+              if (isRateLimitError(error)) {
+                rateLimitMessage = getErrorMessage(error);
+                failedItems.push(
+                  ...items
+                    .slice(i)
+                    .map(rest =>
+                      isBulkSharingFiles
+                        ? (rest as IFabFileDocument).fileName
+                        : (rest as ISessionDocument).name || 'Untitled'
+                    )
+                );
+                break;
+              }
               console.error(`Failed to share ${itemName}:`, error);
               failedItems.push(itemName);
             }
             setCompletedShares(i + 1);
           }
 
-          const result = showBulkFeedback(successResults.length, failedItems, itemType, 'shared');
+          const result = rateLimitMessage
+            ? showRateLimitedBulkFeedback(rateLimitMessage, successResults.length, items.length, itemType, failedItems)
+            : showBulkFeedback(successResults.length, failedItems, itemType, 'shared');
           if (result === 'failure') {
             setLoading(false);
             return; // Don't close modal if all failed
@@ -591,6 +636,12 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
                       minRows={4}
                       variant={'outlined'}
                       name={'description'}
+                      slotProps={{
+                        textarea: {
+                          maxLength: MAX_INVITE_MESSAGE_LENGTH,
+                          'data-testid': 'share-modal-description-input',
+                        },
+                      }}
                       placeholder={
                         isBulkSharing
                           ? `Description for others to understand what you are sharing (${itemCount} files)...`

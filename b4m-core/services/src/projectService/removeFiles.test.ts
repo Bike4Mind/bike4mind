@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ForbiddenError, InviteType, IUserDocument, Permission } from '@bike4mind/common';
 import { removeFiles } from './removeFiles';
+import { applyUserSharesChange } from '../__tests__/utils/shareableFake';
 
 /**
  * IUserShare tracks a single projectId, so a user who is both a project member AND holds a
@@ -48,8 +49,11 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
         update: vi.fn(async () => project),
       },
       fabFiles: {
-        shareable: { findAllAccessibleByIds: vi.fn(async () => [file]) },
-        update: vi.fn(async () => file),
+        shareable: {
+          findAllAccessibleByIds: vi.fn(async () => [file]),
+          updateUserShares: vi.fn(async (_id: string, change: never) => applyUserSharesChange(file, change)),
+        },
+        update: vi.fn(),
       },
       invites: {
         findAllByDocumentId: vi.fn(async () => []),
@@ -69,7 +73,7 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
     await removeFiles(OWNER_ID, { projectId: PROJECT_ID, fileIds: [JUNK_ID] }, { db });
 
     expect(project.fileIds).toEqual([FILE_ID]);
-    expect(db.fabFiles.update).not.toHaveBeenCalled();
+    expect(db.fabFiles.shareable.updateUserShares).not.toHaveBeenCalled();
     expect(db.projects.update).toHaveBeenCalledTimes(1);
     expect(db.projects.update.mock.calls[0][0]).toStrictEqual({
       id: PROJECT_ID,
@@ -93,8 +97,9 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
     // Asserting the file is GONE, not merely that the call returned: a case-sensitive filter
     // answered 200 having removed nothing, which a status-only assertion happily accepts.
     expect(project.fileIds).toEqual([]);
-    expect(db.fabFiles.update).toHaveBeenCalledTimes(1);
-    expect(db.fabFiles.update.mock.calls[0][0]).toStrictEqual({ id: FILE_ID_HEX, users: [] });
+    expect(db.fabFiles.shareable.updateUserShares.mock.calls).toStrictEqual([
+      [FILE_ID_HEX, { remove: { projectId: PROJECT_ID }, add: [] }],
+    ]);
     expect(db.projects.update).toHaveBeenCalledTimes(1);
     expect(db.projects.update.mock.calls[0][0]).toStrictEqual({
       id: PROJECT_ID,
@@ -117,7 +122,7 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
     file.userId = 'someone-else';
 
     await expect(call()).rejects.toBeInstanceOf(ForbiddenError);
-    expect(db.fabFiles.update).not.toHaveBeenCalled();
+    expect(db.fabFiles.shareable.updateUserShares).not.toHaveBeenCalled();
   });
 
   it('drops a user whose only access to the file came from this project', async () => {
@@ -150,9 +155,8 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
 
     await call();
 
-    expect(file.users).toEqual([
-      { userId: 'member-1', permissions: [Permission.read, Permission.share], projectId: undefined },
-    ]);
+    expect(file.users).toEqual([{ userId: 'member-1', permissions: [Permission.read, Permission.share] }]);
+    expect(db.fabFiles.update).not.toHaveBeenCalled();
   });
 
   it('unions permissions across more than one accepted direct invite for the same recipient', async () => {

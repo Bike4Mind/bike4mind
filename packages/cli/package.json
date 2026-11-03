@@ -135,6 +135,7 @@
     "@bike4mind/llm-adapters": "workspace:*",
     "@bike4mind/local-models": "workspace:*",
     "@bike4mind/mcp": "workspace:*",
+    "@bike4mind/model-host": "workspace:*",
     "@bike4mind/observability": "workspace:*",
     "@bike4mind/sdk": "workspace:*",
     "@bike4mind/services": "workspace:*",

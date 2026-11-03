@@ -34,7 +34,7 @@ vi.mock('@server/utils/userRateTier', async () =>
 vi.mock('@bike4mind/server-utils/utils/orgAccess', async orig =>
   (await import('@server/generations/__test__/routeHarness')).orgAccessMock(orig)
 );
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/services', async orig =>
   (await import('@server/generations/__test__/routeHarness')).servicesMock(orig)
 );
@@ -81,6 +81,7 @@ describe('POST /api/v1/music-generations', () => {
         user: { id: 'user-1', organizationId: null, adminRoleWithheld: true },
         source: 'api',
         request: { model: 'test-music', prompt: 'a calm piano piece' },
+        apiKeyId: 'k1',
       },
       expect.anything()
     );

@@ -340,6 +340,7 @@ export function statusFields(turn: TurnProgress, now: number, activity: string, 
  * A stand-in zero in any of them reads as a fact the server never stated.
  */
 export interface ComposerUsage {
+  contextSnapshot?: import('@shared/contextBreakdown').ContextSnapshot | null;
   contextTokens: number | null;
   contextLimit: number | null;
   modelWindow?: number | null;

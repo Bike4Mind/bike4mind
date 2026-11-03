@@ -52,7 +52,7 @@ vi.mock('@bike4mind/database', () => ({
   DISMISSABLE_STATUSES: ['failed'],
   RETRYABLE_STATUSES: ['failed'],
 }));
-vi.mock('@server/services/githubService', () => ({ GitHubService: { forSystem: vi.fn() } }));
+vi.mock('@bike4mind/server-utils/services/githubService', () => ({ GitHubService: { forSystem: vi.fn() } }));
 vi.mock('@bike4mind/server-utils/integrations/github/sreWebhookDispatch', () => ({
   dispatchIssueToSre: vi.fn(),
   parseIssueNumberFromUrl: vi.fn(),
@@ -61,7 +61,7 @@ vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl:
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
-import { GitHubService } from '@server/services/githubService';
+import { GitHubService } from '@bike4mind/server-utils/services/githubService';
 import { dispatchIssueToSre } from '@bike4mind/server-utils/integrations/github/sreWebhookDispatch';
 import dismissHandler from '../dismiss';
 import rerunHandler from '../rerun';

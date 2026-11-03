@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { ADMIN_USERS_PAGE_SIZES, ADMIN_USERS_SORT_FIELDS, AdminUsersFilterSchema } from './adminUsersFilter';
+import {
+  ADMIN_USERS_PAGE_SIZES,
+  ADMIN_USERS_SORT_FIELDS,
+  AdminUsersFilterFieldsSchema,
+  refineAdminUsersFilter,
+} from './adminUsersFilter';
 
 /**
  * The admin saved views contract, shared by the admin lists and /api/admin/saved-views. Pure and
@@ -23,7 +28,7 @@ export const AdminSavedViewNameSchema = z.string().trim().min(1, 'Name the view'
  * What a users-list view persists: the filters (free-text search included), sort, page size and
  * grouping. The page is deliberately left out so a view always opens on page 1.
  */
-export const UsersSavedViewParamsSchema = AdminUsersFilterSchema.extend({
+export const UsersSavedViewParamsSchema = AdminUsersFilterFieldsSchema.extend({
   sortField: z.enum(ADMIN_USERS_SORT_FIELDS),
   sortOrder: z.enum(['asc', 'desc']),
   limit: z
@@ -31,7 +36,7 @@ export const UsersSavedViewParamsSchema = AdminUsersFilterSchema.extend({
     .int()
     .refine(value => (ADMIN_USERS_PAGE_SIZES as readonly number[]).includes(value)),
   groupBy: z.enum(['emailDomain']).optional(),
-});
+}).superRefine(refineAdminUsersFilter);
 export type UsersSavedViewParams = z.infer<typeof UsersSavedViewParamsSchema>;
 
 /** The stored view envelope. A new shape gets a new version, and readers skip versions they do not know. */

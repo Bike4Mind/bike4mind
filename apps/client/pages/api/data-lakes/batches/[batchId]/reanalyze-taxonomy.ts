@@ -16,6 +16,7 @@ import {
   InternalServerError,
   NotFoundError,
   ReanalyzeTaxonomyRequestInput,
+  dataLakeBatchResponseSchema,
   hasDeveloperUserTag,
 } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
@@ -23,6 +24,7 @@ import { dataLakeBatchRepository, dataLakeRepository, dataLakeAccessGrantReposit
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertRequestCanAfford } from '@server/billing/meterPlatformCompletion';
+import { respond } from '@server/utils/respond';
 
 // Shared with the automatic post-upload trigger (see taxonomyRateLimit.ts) - a manual
 // re-analyze is still a real OpenAI spend per click, same as the automatic path.
@@ -111,7 +113,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
         return res.status(400).json({ error: result.error });
       }
 
-      return res.json(result.batch);
+      return respond(res, dataLakeBatchResponseSchema, result.batch);
     })
   );
 

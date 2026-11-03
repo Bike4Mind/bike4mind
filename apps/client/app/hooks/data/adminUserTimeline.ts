@@ -1,6 +1,7 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import type {
+  UserLinkedAccount,
   UserSignIn,
   UserSignInsPage,
   UserSignupCluster,
@@ -80,6 +81,14 @@ export const useUserSignIns = (userId: string) =>
     getNextPageParam: lastPage => lastPage.nextCursor ?? undefined,
     initialPageParam: undefined as string | undefined,
     staleTime: 1000 * 30,
+  });
+
+export const useUserLinkedAccounts = (userId: string) =>
+  useQuery({
+    queryKey: ['admin', 'users', userId, 'linked-accounts'],
+    queryFn: async (): Promise<UserLinkedAccount[]> =>
+      (await api.get<UserLinkedAccount[]>(`/api/admin/users/${encodeURIComponent(userId)}/linked-accounts`)).data,
+    staleTime: 1000 * 60,
   });
 
 type WireSignupCluster = Omit<UserSignupCluster, 'matches'> & {

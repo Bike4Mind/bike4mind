@@ -37,6 +37,7 @@ export const CREDENTIAL_OF_BACKEND: Readonly<Record<ModelBackend, (creds: Discov
   [ModelBackend.BFL]: creds => creds.bfl !== null,
   [ModelBackend.VoyageAI]: creds => creds.voyageai !== null,
   [ModelBackend.Ollama]: creds => creds.ollama !== null,
+  [ModelBackend.OpenAICompatible]: () => false,
   [ModelBackend.LocalImage]: creds => creds.imageGen !== null,
   [ModelBackend.Bedrock]: creds => creds.bedrock,
   [ModelBackend.AWS]: creds => creds.awsIam,

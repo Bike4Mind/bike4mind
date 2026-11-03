@@ -8,8 +8,9 @@ export type ModelServerKind = 'ollama' | 'openai-compatible';
 /** What this device may do on the server. Only chat is wired so far; pulls and removals need 'manage'. */
 export type ModelServerAccess = 'chat' | 'manage';
 
-/** How the server is reached. Only 'http' exists today; an SSH destination is a later variant. */
-export type ModelServerTransport = { type: 'http'; baseUrl: string };
+/** How the server is reached: an address, or the system ssh to the far end's Ollama on its loopback. */
+export type ModelServerTransport = { type: 'http'; baseUrl: string } | { type: 'ssh'; destination: string };
+export type ModelServerTransportType = ModelServerTransport['type'];
 
 export type ModelServerAuthKind = 'none' | 'bearer' | 'header';
 
@@ -36,6 +37,8 @@ export interface ModelServerView {
   name: string;
   local: boolean;
   kind: ModelServerKind;
+  transport: ModelServerTransportType;
+  /** The URL, or the SSH destination. */
   address: string;
   access: ModelServerAccess;
   auth: { type: ModelServerAuthKind; headerName?: string };
@@ -50,6 +53,8 @@ export interface ModelServerView {
   models: string[];
   /** Hardware entered in Settings; null when none is. */
   specs: ModelServerSpecs | null;
+  /** Set while the server refuses tool calls: why, and how to turn them on. */
+  toolsHint?: string;
 }
 
 /**
@@ -101,8 +106,11 @@ export function specsProblem(specs: ModelServerSpecs, local: boolean): string | 
 }
 
 export interface ModelServerProbeInput {
+  /** A URL, or with `transport: 'ssh'` an SSH destination (`user@host` or a Host alias). */
   address: string;
   credential: ModelServerCredentialInput;
+  /** Defaults to 'http'. An SSH server takes no credential: ssh signs in with the user's keys. */
+  transport?: ModelServerTransportType;
 }
 
 export interface ModelServerProbeResult {

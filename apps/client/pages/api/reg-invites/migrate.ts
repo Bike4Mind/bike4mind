@@ -3,7 +3,7 @@ import { organizationService, userService } from '@bike4mind/services';
 import { withTransaction } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { userRepository } from '@bike4mind/database/auth';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';

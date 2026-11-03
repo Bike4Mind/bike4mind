@@ -48,7 +48,7 @@ describe('getUserEntitlements with a malformed NEXT_PUBLIC_PREMIUM_DOMAIN_GRANTS
     // the same values the verify-credit path consumes - a mixed-case env key must already be
     // canonical here for those callers to match a gate.
     await loadWithEnv(JSON.stringify([{ domain: 'Malformed.Example', entitlements: [' Some:Key '] }]));
-    const { entitlementsForEmail } = await import('@client/lib/entitlements/registry');
+    const { entitlementsForEmail } = await import('@bike4mind/server-utils/lib/entitlements/registry');
     expect([...entitlementsForEmail('person@malformed.example', true)]).toEqual(['some:key']);
   });
 

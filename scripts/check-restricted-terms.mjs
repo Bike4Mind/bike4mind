@@ -19,6 +19,13 @@
 //                        had). Fails on any hit.
 //   push                 the same for the pushed commits. Main is already
 //                        updated by then, so this only reports.
+//   issue_comment, pull_request_review, pull_request_review_comment
+//                        the body of the one comment or review the event
+//                        carries. On a hit, one nudge comment is posted on the
+//                        PR (updated in place on later hits, found by a hidden
+//                        marker) naming the author and linking the comment, so
+//                        they can edit it. Nothing scans comments later, so the
+//                        nudge is the only record of the hit besides this log.
 //
 // Fails closed: a missing or invalid list, or a PR too large to check
 // completely, is a failure rather than a silent pass.
@@ -33,6 +40,16 @@ const MAX_PR_COMMITS = 250;
 const MAX_PR_FILES = 3000;
 // compare/{base}...{head} returns at most 300 files.
 const MAX_COMPARE_FILES = 300;
+// A rate-limited request is retried only while the wait fits well inside the
+// workflow's 10-minute timeout; a longer one (an exhausted hourly limit) fails now
+// and says so, instead of hanging until the runner kills the job. Times in ms.
+const MAX_RATE_LIMIT_RETRIES = 3;
+const MAX_RATE_LIMIT_WAIT_MS = 90_000;
+const MAX_RATE_LIMIT_TOTAL_WAIT_MS = 180_000;
+// Marks the nudge comment so a later hit on the same PR updates it instead of
+// adding another.
+const NUDGE_MARKER = '<!-- restricted-terms-nudge -->';
+const NUDGE_AUTHOR = 'github-actions[bot]';
 
 // Errors whose message this script wrote and knows to be safe to publish. Any
 // other error is reported by name only: a RegExp SyntaxError quotes the pattern
@@ -154,28 +171,76 @@ function contentLines(buffer) {
     .map(run => ({ text: run }));
 }
 
-function github(token, fetchImpl) {
+/**
+ * How long to wait before retrying a rate-limited response, or undefined when
+ * the response is not a rate limit and must fail now. GitHub answers both its
+ * primary (hourly) and secondary (burst) limits with 403 or 429; a 403 without
+ * a rate-limit signal is a real permission error.
+ * https://docs.github.com/en/rest/using-the-rest-api/troubleshooting-the-rest-api#rate-limit-errors
+ */
+async function rateLimitWaitMs(res, nowMs) {
+  if (res.status !== 403 && res.status !== 429) return undefined;
+  const retryAfter = Number(res.headers.get('retry-after'));
+  if (res.headers.get('retry-after') !== null && Number.isFinite(retryAfter)) return Math.max(retryAfter, 1) * 1000;
+  const reset = Number(res.headers.get('x-ratelimit-reset'));
+  if (res.headers.get('x-ratelimit-remaining') === '0' && Number.isFinite(reset)) {
+    return Math.max(reset * 1000 - nowMs, 0) + 1000;
+  }
+  if (res.status === 429) return 60_000;
+  // A secondary limit may carry no header at all, only its message.
+  const body = await res.text().catch(() => '');
+  return /rate limit/i.test(body) ? 60_000 : undefined;
+}
+
+function github(token, fetchImpl, { sleep, now }) {
   const headers = {
     Accept: 'application/vnd.github+json',
     Authorization: `Bearer ${token}`,
     'X-GitHub-Api-Version': '2022-11-28',
   };
 
-  async function request(url, accept) {
-    const res = await fetchImpl(url.startsWith('http') ? url : `${API}${url}`, {
-      headers: accept ? { ...headers, Accept: accept } : headers,
-    });
-    if (!res.ok) {
-      const err = new SafeError(`GitHub API ${res.status} for ${url.split('?')[0]}`);
-      err.status = res.status;
-      throw err;
+  let waitedMs = 0;
+
+  async function request(url, { accept, method = 'GET', body } = {}) {
+    const path = url.split('?')[0];
+    for (let attempt = 1; ; attempt++) {
+      const res = await fetchImpl(url.startsWith('http') ? url : `${API}${url}`, {
+        method,
+        headers: {
+          ...headers,
+          ...(accept ? { Accept: accept } : {}),
+          ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+      if (res.ok) return res;
+
+      const waitMs = await rateLimitWaitMs(res, now());
+      if (waitMs === undefined) {
+        const err = new SafeError(`GitHub API ${res.status} for ${path}`);
+        err.status = res.status;
+        throw err;
+      }
+      if (
+        attempt > MAX_RATE_LIMIT_RETRIES ||
+        waitMs > MAX_RATE_LIMIT_WAIT_MS ||
+        waitedMs + waitMs > MAX_RATE_LIMIT_TOTAL_WAIT_MS
+      ) {
+        const err = new SafeError(
+          `GitHub API ${res.status} for ${path}: rate limit exceeded, retry in about ${Math.ceil(waitMs / 60_000)} min.`
+        );
+        err.status = res.status;
+        throw err;
+      }
+      waitedMs += waitMs;
+      await sleep(waitMs);
     }
-    return res;
   }
 
   return {
     json: async url => (await request(url)).json(),
-    raw: async url => Buffer.from(await (await request(url, 'application/vnd.github.raw')).arrayBuffer()),
+    raw: async url => Buffer.from(await (await request(url, { accept: 'application/vnd.github.raw' })).arrayBuffer()),
+    send: async (method, url, body) => (await request(url, { method, body })).json(),
     // `pick` extracts the page's items, for endpoints that wrap them in an object.
     async paginate(url, pick = body => body) {
       const items = [];
@@ -226,6 +291,23 @@ async function scanFiles({ files, matcher, gh, repo, ref, hit, note, label = '' 
 }
 
 /**
+ * Splits a complete `?recursive=1` listing of `rootSha` (entries carry full
+ * paths) into one name-keyed listing per directory, cached by tree sha in the
+ * same shape a non-recursive listing gives.
+ */
+function cacheRecursiveListing(trees, rootSha, entries) {
+  const shaOfDir = new Map([['', rootSha]]);
+  for (const entry of entries) if (entry.type === 'tree') shaOfDir.set(entry.path, entry.sha);
+  const listings = new Map([...shaOfDir.values()].map(sha => [sha, new Map()]));
+  for (const entry of entries) {
+    const slash = entry.path.lastIndexOf('/');
+    const name = entry.path.slice(slash + 1);
+    listings.get(shaOfDir.get(entry.path.slice(0, Math.max(slash, 0)))).set(name, { ...entry, path: name });
+  }
+  for (const [sha, listing] of listings) if (!trees.has(sha)) trees.set(sha, listing);
+}
+
+/**
  * Lists the blobs a merge commit changed relative to EVERY parent, as
  * `{ path, sha, parentShas }`, where `parentShas` are the parents' blobs at the
  * same path. A file or directory identical to one parent's holds nothing that
@@ -234,13 +316,23 @@ async function scanFiles({ files, matcher, gh, repo, ref, hit, note, label = '' 
  * the result is never capped by the size of the branches being merged.
  */
 async function mergeOnlyBlobs({ commit, gh, repo, incomplete, trees }) {
+  // One recursive listing caches every directory under a root, so a merge costs a
+  // request per root tree instead of one per directory the walk descends into
+  // (over a thousand on a long-lived branch, past the token's hourly budget).
   const entriesOf = async sha => {
     if (sha === undefined) return new Map();
     if (!trees.has(sha)) {
-      const tree = await gh.json(`/repos/${repo}/git/trees/${sha}`);
-      // The directory path is withheld: it may itself contain a term.
-      if (tree.truncated) incomplete(`merge ${commit.sha.slice(0, 12)} has a directory too large to list.`);
-      trees.set(sha, new Map((tree.tree ?? []).map(entry => [entry.path, entry])));
+      const listing = await gh.json(`/repos/${repo}/git/trees/${sha}?recursive=1`);
+      if (listing.truncated) {
+        // Too large for one response: list this directory alone and let the walk
+        // fetch the subdirectories it needs.
+        const tree = await gh.json(`/repos/${repo}/git/trees/${sha}`);
+        // The directory path is withheld: it may itself contain a term.
+        if (tree.truncated) incomplete(`merge ${commit.sha.slice(0, 12)} has a directory too large to list.`);
+        trees.set(sha, new Map((tree.tree ?? []).map(entry => [entry.path, entry])));
+      } else {
+        cacheRecursiveListing(trees, sha, listing.tree ?? []);
+      }
     }
     return trees.get(sha);
   };
@@ -381,12 +473,78 @@ async function scanPush({ event, matcher, gh, repo, hit, incomplete }) {
   return `push to ${event.ref}: ${commits.length} commit(s), ${files.length} file(s)`;
 }
 
+/**
+ * The comment or review a comment event carries, or `{ skip }` with the reason
+ * there is nothing to check. A review submitted with inline comments only has
+ * an empty body (its state is `commented`); the inline comments arrive as
+ * their own events.
+ */
+function commentOf(eventName, event) {
+  if (eventName === 'issue_comment') {
+    if (!event.issue?.pull_request) return { skip: 'the comment is on an issue, not a pull request' };
+    const { comment, issue } = event;
+    return {
+      kind: 'comment',
+      body: comment.body,
+      url: comment.html_url,
+      login: comment.user?.login,
+      number: issue.number,
+    };
+  }
+  if (eventName === 'pull_request_review') {
+    const { review, pull_request: pr } = event;
+    if (!review.body) return { skip: 'the review has no text' };
+    return { kind: 'review', body: review.body, url: review.html_url, login: review.user?.login, number: pr.number };
+  }
+  const { comment, pull_request: pr } = event;
+  return {
+    kind: 'review comment',
+    body: comment.body,
+    url: comment.html_url,
+    login: comment.user?.login,
+    number: pr.number,
+  };
+}
+
+function scanComment({ eventName, event, matcher, hit }) {
+  const comment = commentOf(eventName, event);
+  if (comment.skip) return { comment, summary: null };
+  // A login could itself be a term; the link still says whose comment it is.
+  comment.who = comment.login && !matches(matcher, comment.login) ? ` by @${comment.login}` : '';
+  const where = `${comment.kind}${comment.who} (${comment.url})`;
+  if (matches(matcher, comment.body ?? '')) hit(where);
+  return { comment, summary: `PR #${comment.number}: ${where}` };
+}
+
+/**
+ * Posts the nudge for a hit comment on its PR, or rewrites the one already
+ * there so the PR carries a single nudge pointing at the latest hit. The
+ * check's own failure never reaches the PR's checks for an issue comment (that
+ * run belongs to the default branch's head commit), and the comment's author
+ * may never open the Checks tab for a review.
+ */
+async function nudge({ gh, repo, comment }) {
+  const body =
+    `${NUDGE_MARKER}\nThe Restricted Terms check found a restricted term in a [${comment.kind}](${comment.url})` +
+    `${comment.who}. Please edit it to remove the term (the matched text is deliberately not shown; ` +
+    'the list is maintained by the repository maintainers). The check runs again on the edit.';
+  const comments = await gh.paginate(`/repos/${repo}/issues/${comment.number}/comments`);
+  const existing = comments.find(c => c.user?.login === NUDGE_AUTHOR && c.body?.includes(NUDGE_MARKER));
+  if (existing) {
+    await gh.send('PATCH', `/repos/${repo}/issues/comments/${existing.id}`, { body });
+  } else {
+    await gh.send('POST', `/repos/${repo}/issues/${comment.number}/comments`, { body });
+  }
+}
+
 /** Runs the check and returns its exit code; every line it logs is safe to publish. */
 export async function run({
   env = process.env,
   fetchImpl = fetch,
   log = console.log,
   readFile = fs.readFileSync,
+  sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
+  now = Date.now,
 } = {}) {
   // Paths in a message come from the PR. Git allows a newline in a path, and an
   // unescaped one would start a line the runner parses as a workflow command.
@@ -414,19 +572,27 @@ export async function run({
 
   const eventName = env.GITHUB_EVENT_NAME;
   const event = JSON.parse(readFile(env.GITHUB_EVENT_PATH, 'utf8'));
-  const gh = github(env.GITHUB_TOKEN, fetchImpl);
+  const gh = github(env.GITHUB_TOKEN, fetchImpl, { sleep, now });
   const repo = env.GITHUB_REPOSITORY;
 
   const hits = [];
   const gaps = [];
   const ctx = { event, matcher, gh, repo, hit: where => hits.push(where), incomplete: why => gaps.push(why) };
 
+  const isCommentEvent = ['issue_comment', 'pull_request_review', 'pull_request_review_comment'].includes(eventName);
   let summary;
+  let comment;
   try {
     if (eventName === 'pull_request_target' || eventName === 'pull_request') {
       summary = await scanPullRequest(ctx);
     } else if (eventName === 'push') {
       summary = await scanPush(ctx);
+    } else if (isCommentEvent) {
+      ({ comment, summary } = scanComment({ eventName, ...ctx }));
+      if (!summary) {
+        log(`Nothing to check: ${comment.skip}.`);
+        return 0;
+      }
     } else {
       log(`Nothing to check for ${eventName} events.`);
       return 0;
@@ -445,8 +611,18 @@ export async function run({
       `${hits.length} restricted-term hit(s). The matched text is deliberately not shown. ` +
         (isPush
           ? 'This push is already on the branch: a maintainer must follow up.'
-          : 'Remove it from the locations above (rewrite commit messages if needed) and push again.')
+          : isCommentEvent
+            ? 'The author must edit the comment to remove it.'
+            : 'Remove it from the locations above (rewrite commit messages if needed) and push again.')
     );
+    if (isCommentEvent) {
+      try {
+        await nudge({ gh, repo, comment });
+        log('Posted a nudge comment on the PR.');
+      } catch (err) {
+        annotate('warning', `Could not post the nudge comment on the PR: ${safeMessage(err)}`);
+      }
+    }
     return 1;
   }
   // A push already landed, but a partial check must still go red, or a large

@@ -65,7 +65,7 @@ vi.mock('@bike4mind/database', () => ({
   realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
 }));
 const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe }));
 
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { realtimeConnectionRepository } from '@bike4mind/database';

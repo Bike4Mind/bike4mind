@@ -46,6 +46,8 @@ export type RevocationTargets = {
   revokeRoot(root: string): Promise<boolean>;
   untrustProject(directory: string): Promise<boolean>;
   revokeAllow(scope: PermissionScope, rule: string): Promise<boolean>;
+  /** Stops the download a model-pull grant approved; resolves true once it is no longer running. */
+  cancelModelPull(key: string): Promise<boolean>;
 };
 
 /** The ledger may record a revoke only after enforcement actually withdrew access. */
@@ -56,6 +58,7 @@ export async function enforceRevocation(grant: CapabilityGrant, targets: Revocat
       : targets.revokeRoot(grant.scope.value);
   }
   if (grant.scope.kind === 'project') return targets.untrustProject(grant.scope.value);
+  if (grant.scope.kind === 'model-pull') return targets.cancelModelPull(grant.scope.value);
   if (grant.scope.kind === 'permission-rule') {
     const scope: PermissionScope =
       grant.subject.kind === 'project' ? { kind: 'project', directory: grant.subject.directory } : { kind: 'user' };

@@ -175,6 +175,7 @@ class BackfillPendingFreeCredits {
               // this short-circuits to a net-zero increment instead of double-crediting.
               transactionId: `verify-grant:${user.id}`,
               reason: 'backfill: stranded by pre-c2c1b5e6 verify atomicity bug',
+              description: 'Signup credits (backfill)',
             },
             { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository }
           );

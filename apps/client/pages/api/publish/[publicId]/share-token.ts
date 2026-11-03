@@ -1,5 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { PublishedArtifact, liveShareTokens, type PublishedArtifactShareToken } from '@bike4mind/database';
+import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { generateShareToken } from '@server/services/publish';
 import type { Request, Response } from 'express';
 import { Types } from 'mongoose';
@@ -151,7 +152,7 @@ const handler = baseApi()
       shareLinks,
     });
   })
-  .post(async (req: Request, res: Response) => {
+  .post(outboundActionGate(), async (req: Request, res: Response) => {
     const artifact = await loadOwnedArtifact(req, res);
     if (!artifact) return;
 

@@ -157,6 +157,21 @@ describe('holdPreflightCredits', () => {
       expect(mocks.reservedSettle).not.toHaveBeenCalled();
     });
 
+    it('records the authenticating API key on the direct charge', async () => {
+      const preflight = await holdPreflightCredits({
+        req: { user: user as never, logger: logger as never, apiKeyInfo: { keyId: 'key-1' } as never },
+        requiredCredits: 100,
+        featureLabel: 'text-to-speech',
+      });
+
+      await preflight.settle(25, { type: 'text_to_speech_usage', model: 'tts-1', sessionId: 's1' });
+
+      expect(mocks.deductCreditsWithOrgSupport).toHaveBeenCalledWith(
+        expect.objectContaining({ apiKeyId: 'key-1' }),
+        expect.anything()
+      );
+    });
+
     it('logs the billing miss and resolves when the direct charge fails', async () => {
       mocks.deductCreditsWithOrgSupport.mockRejectedValue(new Error('ledger down'));
       const preflight = await hold();

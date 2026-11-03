@@ -1,5 +1,5 @@
 import { REACT_BLESSED_SCRIPT_PATHS, PUBLISH_REACT_DEP_SCRIPTS } from '@bike4mind/common';
-import { checkHasDefaultExport } from '@client/app/utils/artifactParser';
+import { checkHasDefaultExport } from '@bike4mind/server-utils/app/utils/artifactParser';
 import {
   braceSpan,
   findRelativeImport,

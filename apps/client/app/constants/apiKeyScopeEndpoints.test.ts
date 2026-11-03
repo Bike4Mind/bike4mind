@@ -31,8 +31,8 @@ import {
   USER_API_KEY_SCOPES,
   endpointKeys,
   type ApiKeyScopeOption,
-} from './apiKeyScopes';
-import { DERIVED_API_KEY_SCOPE_ENDPOINTS } from './apiKeyScopeEndpoints.generated';
+} from '@bike4mind/server-utils/app/constants/apiKeyScopes';
+import { DERIVED_API_KEY_SCOPE_ENDPOINTS } from '@bike4mind/server-utils/app/constants/apiKeyScopeEndpoints.generated';
 
 // Only the gate lists are needed; keep dataLakeScopes from loading the services graph.
 vi.mock('@bike4mind/services', () => ({}));

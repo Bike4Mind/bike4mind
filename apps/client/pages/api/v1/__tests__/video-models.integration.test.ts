@@ -30,7 +30,7 @@ vi.mock('@server/utils/userRateTier', async () =>
 vi.mock('@bike4mind/server-utils/utils/orgAccess', async orig =>
   (await import('@server/generations/__test__/routeHarness')).orgAccessMock(orig)
 );
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/services', async orig =>
   (await import('@server/generations/__test__/routeHarness')).servicesMock(orig)
 );

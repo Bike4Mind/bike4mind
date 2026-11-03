@@ -28,6 +28,7 @@ import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { Theme } from '@mui/joy/styles';
+import { keyframes } from '@mui/system';
 import {
   awaitsWorktree,
   normalizeSessionTitle,
@@ -40,7 +41,7 @@ import { useLocalHistory } from './localHistory';
 import type { PrSummary } from '@shared/pullRequest';
 import { sectionOf, type SidebarSection, type SidebarSectionsState } from '@shared/sidebarSections';
 import { capRows, raisedRows, setGroupLimit, useGroupLimit } from './groupCap';
-import { groupSessions, orderedSessions, type CustomGroup, type ProjectGroup } from './grouping';
+import { descendantsOf, groupSessions, orderedSessions, type CustomGroup, type ProjectGroup } from './grouping';
 import { ImportedBadge } from './ImportedBadge';
 import { useImportedInline } from './importedInline';
 import { keepMenuOpen } from './keepMenuOpen';
@@ -54,7 +55,9 @@ import {
   PanelLeftIcon,
   PlusIcon,
   SearchIcon,
+  SubSessionsIcon,
 } from './icons';
+import { foldedParents, toggleFolded, useFoldedParents, useNestedSessions } from './nestedSessions';
 import { ModeSwitcher } from './ModeSwitcher';
 import { ResizeHandle } from './ResizeHandle';
 import { SectionNameDialog, type SectionNameRequest } from './SectionNameDialog';
@@ -135,6 +138,169 @@ export function NavItem({
   );
 }
 
+/**
+ * px each level of sub-session steps in. With the list's 8px inset and a 14px badge, a parent's
+ * badge is centred 15px in, and its rail drops from there to the child's badge one step right.
+ */
+const NEST_INDENT = 18;
+const BADGE_CENTER = 15;
+/** The gap SESSION_LIST_SX leaves between rows, which a rail has to bridge to stay unbroken. */
+const ROW_GAP = 2;
+/** A step past outlinedBorder, which all but vanished against the sidebar in the dark theme. */
+const RAIL_COLOR = 'rgba(var(--joy-palette-neutral-mainChannel) / 0.4)';
+/** Where an elbow stops, 2px short of the child's 14px badge (which starts 8px into the row). */
+const ELBOW_END = 6;
+/** From a first child's top edge up to 1px under its parent's badge: the gap plus half a row less half a badge, less 1. */
+const FIRST_RAIL_REACH = ROW_GAP + 14 / 2 - 1;
+
+/**
+ * Where a row sits in a tree of spawned sessions, and what hangs under it. Spread onto the row as
+ * primitives rather than passed as an object, so the memoized row still compares by value.
+ */
+interface NestProps {
+  /** 0, or absent, for a row that is no one's child. */
+  nestDepth?: number;
+  /** First of its siblings, whose rail starts at the parent's badge rather than its own top. */
+  nestFirst?: boolean;
+  /** Last of its siblings, so its rail turns into it instead of running on past it. */
+  nestLast?: boolean;
+  /**
+   * One character per ancestor level above the parent's: '1' where that ancestor still has
+   * siblings below, so its rail runs straight through this row.
+   */
+  nestGuides?: string;
+  /** Sessions anywhere under this one; 0 or absent on a row with none. */
+  subCount?: number;
+  /** The loudest state among them, which the fold pill wears while they are folded away. */
+  subActivity?: SubActivity;
+  subFolded?: boolean;
+  /** False while a search holds every branch open, when folding could not show. */
+  subFoldable?: boolean;
+}
+
+type SubActivity = 'needs-action' | 'processing' | undefined;
+
+/**
+ * The rails into a nested row: straight lines for every ancestor level still running, and a
+ * rounded elbow from the parent's badge into this one. Drawn on the ListItem's pseudo-elements
+ * so they cost no DOM, and outside the button so its hover and selected fill start at the indent.
+ */
+function railSx(depth: number, first: boolean, last: boolean, guides: string) {
+  const indent = depth * NEST_INDENT;
+  const straight = [...guides].flatMap((guide, level) => (guide === '1' ? [level] : []));
+  if (!last) straight.push(depth - 1);
+  const line = `linear-gradient(${RAIL_COLOR}, ${RAIL_COLOR})`;
+  return {
+    marginInlineStart: `${indent}px`,
+    // Above the button, so a selected or hovered row's fill does not paint over its own elbow.
+    '&::before': straight.length > 0 && {
+      content: '""',
+      position: 'absolute',
+      zIndex: 1,
+      pointerEvents: 'none',
+      top: -ROW_GAP,
+      bottom: 0,
+      left: -indent,
+      width: indent,
+      backgroundImage: straight.map(() => line).join(', '),
+      backgroundSize: '1px 100%',
+      backgroundRepeat: 'no-repeat',
+      backgroundPosition: straight.map(level => `${level * NEST_INDENT + BADGE_CENTER}px 0`).join(', '),
+    },
+    // The first child reaches on up through the parent row to just under the parent's badge.
+    '&::after': {
+      content: '""',
+      position: 'absolute',
+      zIndex: 1,
+      pointerEvents: 'none',
+      top: -(first ? FIRST_RAIL_REACH : ROW_GAP),
+      height: `calc(50% + ${first ? FIRST_RAIL_REACH : ROW_GAP}px)`,
+      left: BADGE_CENTER - NEST_INDENT,
+      width: NEST_INDENT - BADGE_CENTER + ELBOW_END,
+      borderLeft: `1px solid ${RAIL_COLOR}`,
+      borderBottom: `1px solid ${RAIL_COLOR}`,
+      borderBottomLeftRadius: '7px',
+    },
+  };
+}
+
+const pulse = keyframes({ '0%, 100%': { opacity: 1 }, '50%': { opacity: 0.35 } });
+
+/**
+ * The fold control on a parent row: a branch glyph and how many sessions hang under it. Folded,
+ * it fills in, and takes on the colour of anything underneath that is working or waiting on the
+ * user, so folding a busy tree away never hides that it needs attention.
+ *
+ * A mouse shortcut only, hidden from assistive tech: it sits inside the row's own button, and the
+ * row already carries aria-expanded and folds on Left/Right, so a second control would be nested.
+ */
+function FoldPill({
+  sessionId,
+  count,
+  activity,
+  folded,
+  foldable,
+}: {
+  sessionId: string;
+  count: number;
+  activity: SubActivity;
+  folded: boolean;
+  foldable: boolean;
+}) {
+  const color = activity === 'needs-action' ? 'warning' : activity === 'processing' ? 'primary' : 'neutral';
+  const label = `${folded ? 'Show' : 'Hide'} ${count} sub-session${count === 1 ? '' : 's'}`;
+  const toggle = (event: SyntheticEvent) => {
+    event.stopPropagation();
+    toggleFolded(sessionId);
+  };
+  return (
+    <Box
+      component="span"
+      aria-hidden
+      title={foldable ? label : undefined}
+      onClick={foldable ? toggle : undefined}
+      onDoubleClick={isolate}
+      sx={{
+        flexShrink: 0,
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '3px',
+        height: 18,
+        px: '5px',
+        borderRadius: '9px',
+        fontSize: '0.6875rem',
+        fontVariantNumeric: 'tabular-nums',
+        lineHeight: 1,
+        cursor: foldable ? 'pointer' : 'default',
+        transition: 'background-color 120ms, color 120ms',
+        color: folded && activity ? `${color}.plainColor` : 'text.tertiary',
+        bgcolor: folded ? `${color}.softBg` : 'transparent',
+        '& svg': { transition: 'transform 160ms', transform: folded ? 'none' : 'rotate(90deg) scaleY(-1)' },
+        '&:hover': foldable ? { bgcolor: `${color}.softHoverBg`, color: `${color}.softColor` } : undefined,
+      }}
+      data-testid="chat-session-fold-btn"
+      data-folded={folded ? 'true' : 'false'}
+      data-activity={activity}
+    >
+      <SubSessionsIcon size={12} />
+      {count}
+      {folded && activity && (
+        <Box
+          component="span"
+          sx={{
+            width: 5,
+            height: 5,
+            borderRadius: '50%',
+            bgcolor: `${color}.solidBg`,
+            animation: activity === 'processing' ? `${pulse} 1.2s ease-in-out infinite` : 'none',
+            '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
+          }}
+        />
+      )}
+    </Box>
+  );
+}
+
 /** One object for the whole list, stable across renders, so a memoized row only redraws when its own data does. */
 interface RowActions {
   select: (sessionId: string) => void;
@@ -150,7 +316,7 @@ interface RowActions {
   drag: (sessionId: string | null) => void;
 }
 
-interface RowProps {
+interface RowProps extends NestProps {
   session: ChatSessionSummary;
   selected: boolean;
   status: ChatSessionStatus;
@@ -314,6 +480,14 @@ const SessionRow = memo(function SessionRow({
   userSections,
   sectionId,
   actions,
+  nestDepth = 0,
+  nestFirst = false,
+  nestLast = false,
+  nestGuides = '',
+  subCount = 0,
+  subActivity,
+  subFolded = false,
+  subFoldable = true,
 }: RowProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuView, setMenuView] = useState<'main' | 'move'>('main');
@@ -330,8 +504,10 @@ const SessionRow = memo(function SessionRow({
 
   return (
     <ListItem
-      sx={
-        editing
+      data-nest-depth={nestDepth || undefined}
+      sx={{
+        ...(nestDepth > 0 && railSx(nestDepth, nestFirst, nestLast, nestGuides)),
+        ...(editing
           ? { '--ListItem-endActionWidth': '0px' }
           : {
               // Hidden until the row is hovered, focused, or its own menu is open. Focus counts as
@@ -347,8 +523,8 @@ const SessionRow = memo(function SessionRow({
                 '--row-actions-opacity': 1,
                 '--ListItem-endActionWidth': MENU_BUTTON_WIDTH,
               },
-            }
-      }
+            }),
+      }}
       endAction={
         // Gone while editing, not just hidden: closing the menu hands focus back to its button,
         // which would blur - and so save - the input the Rename item just opened.
@@ -437,6 +613,15 @@ const SessionRow = memo(function SessionRow({
       <ListItemButton
         selected={selected}
         onClick={editing ? undefined : () => actions.select(session.id)}
+        aria-expanded={subCount > 0 ? !subFolded : undefined}
+        onKeyDown={event => {
+          // A tree's own keys: right opens a folded parent, left folds an open one.
+          if (subCount === 0 || !subFoldable || editing) return;
+          if (event.key === (subFolded ? 'ArrowRight' : 'ArrowLeft')) {
+            event.preventDefault();
+            toggleFolded(session.id);
+          }
+        }}
         // Not while renaming, or selecting text in the input would pick the whole row up.
         draggable={!editing}
         onDragStart={event => {
@@ -500,6 +685,18 @@ const SessionRow = memo(function SessionRow({
             >
               {PREPARING_WORKTREE}
             </Typography>
+          )}
+          {subCount > 0 && !editing && (
+            // A spacer rather than margin-left: auto, which the Stack's own spacing overrides.
+            <Box sx={{ flex: 1, display: 'flex', justifyContent: 'flex-end' }}>
+              <FoldPill
+                sessionId={session.id}
+                count={subCount}
+                activity={subActivity}
+                folded={subFolded}
+                foldable={subFoldable}
+              />
+            </Box>
           )}
         </Stack>
       </ListItemButton>
@@ -646,6 +843,20 @@ const SHOW_MORE_SX = {
 /** Statuses a row is never hidden behind "Show more" in: the user is waiting on it or it on them. */
 const isLive = (status: ChatSessionStatus | undefined) => status === 'processing' || status === 'needs-action';
 
+/** The loudest live status among `sessions`: the user waiting on one outranks one working. */
+function loudestActivity(
+  sessions: readonly ChatSessionSummary[],
+  statuses: ReadonlyMap<string, ChatSessionStatus>
+): SubActivity {
+  let loudest: SubActivity;
+  for (const session of sessions) {
+    const status = statuses.get(session.id);
+    if (status === 'needs-action') return status;
+    if (status === 'processing') loudest = status;
+  }
+  return loudest;
+}
+
 /**
  * A group's rows, capped at GROUP_ROW_CAP with "Show more" below them. The active, live and
  * just-moved rows draw in place whatever the cap, and a row that has drawn past the cap keeps
@@ -661,6 +872,7 @@ function CappedSessionRows({
   statuses,
   revealId,
   row,
+  descendants,
 }: {
   groupKey: string;
   testIdPrefix: 'sidebar-project' | 'sidebar-section';
@@ -671,26 +883,29 @@ function CappedSessionRows({
   /** A session just moved into this group, whose updatedAt slot may sit behind the cap. */
   revealId: string | null;
   row: (session: ChatSessionSummary) => ReactNode;
+  /** What hangs under a row, which keeps the row in view whenever one of those would be kept. */
+  descendants: (session: ChatSessionSummary) => readonly ChatSessionSummary[];
 }) {
   const limit = useGroupLimit(groupKey);
   const capped = useMemo(() => {
     if (uncapped) return null;
     // Append-only and idempotent, so a repeat render (React may discard and re-run one) is harmless.
     const raised = raisedRows(groupKey);
+    const kept = (session: ChatSessionSummary) =>
+      session.id === activeId || isLive(statuses.get(session.id)) || session.id === revealId;
     const rows = capRows(
       sessions,
       limit,
-      session =>
-        raised.has(session.id) || session.id === activeId || isLive(statuses.get(session.id)) || session.id === revealId
+      session => raised.has(session.id) || kept(session) || descendants(session).some(kept)
     );
     for (const session of rows.visible.slice(limit)) raised.add(session.id);
     return rows;
-  }, [groupKey, sessions, uncapped, limit, activeId, revealId, statuses]);
+  }, [groupKey, sessions, uncapped, limit, activeId, revealId, statuses, descendants]);
 
   return (
     <>
       <List size="sm" sx={SESSION_LIST_SX}>
-        {(capped?.visible ?? sessions).map(row)}
+        {(capped?.visible ?? sessions).flatMap(row)}
       </List>
       {capped && capped.hidden > 0 && (
         <Button
@@ -806,6 +1021,8 @@ export function SessionList({
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [importedOpen, setImportedOpen] = useState(false);
   const [importedInline] = useImportedInline();
+  const [nested] = useNestedSessions();
+  const foldedIds = useFoldedParents();
 
   // `section` is set when the right-click landed in a user section, which then offers a new session in
   // it and a rename.
@@ -820,10 +1037,42 @@ export function SessionList({
 
   const searching = query.trim() !== '';
   const sections = useMemo(() => {
-    const grouped = groupSessions(matching, mode, userSections, importedInline);
+    const grouped = groupSessions(matching, mode, userSections, importedInline, nested);
     // An empty section under a search is only noise; with no query it stays so it can be found.
     return searching ? { ...grouped, custom: grouped.custom.filter(group => group.sessions.length > 0) } : grouped;
-  }, [matching, mode, userSections, searching, importedInline]);
+  }, [matching, mode, userSections, searching, importedInline, nested]);
+
+  const descendants = useMemo(() => {
+    const cache = new Map<string, ChatSessionSummary[]>();
+    return (session: ChatSessionSummary): ChatSessionSummary[] => {
+      let found = cache.get(session.id);
+      if (!found) cache.set(session.id, (found = descendantsOf(sections.children, session.id)));
+      return found;
+    };
+  }, [sections]);
+
+  // The open session's ancestors, as a key that only changes when the chain itself does, so a
+  // fold the user makes later with the open session inside it is not undone by the next update.
+  const activeAncestry = useMemo(() => {
+    const parentOf = new Map<string, string>();
+    for (const [parentId, children] of sections.children) {
+      for (const child of children) parentOf.set(child.id, parentId);
+    }
+    const chain: string[] = [];
+    for (let id = activeId && parentOf.get(activeId); id; id = parentOf.get(id)) chain.push(id);
+    return chain.join('\n');
+  }, [sections, activeId]);
+
+  // Opening a sub-session from anywhere unfolds the branches it sits in, so it is never folded out
+  // of sight. Cleared from the store rather than overridden, so the pill always shows what a click does.
+  useEffect(() => {
+    if (!activeAncestry) return;
+    for (const id of activeAncestry.split('\n')) if (foldedParents().has(id)) toggleFolded(id);
+  }, [activeAncestry]);
+
+  // A fold gives way to a search, which would otherwise hide its own matches; the pill is inert
+  // meanwhile, since a toggle could not show.
+  const isFolded = useCallback((sessionId: string) => foldedIds.has(sessionId) && !searching, [foldedIds, searching]);
   const empty =
     sections.pinned.length === 0 &&
     sections.custom.length === 0 &&
@@ -835,8 +1084,8 @@ export function SessionList({
   // Also open while it holds the open session, so clearing a search does not hide the selection.
   const importedShown = importedOpen || searching || sections.imported.some(session => session.id === activeId);
   const ordered = useMemo(
-    () => (importedShown ? [...orderedSessions(sections), ...sections.imported] : orderedSessions(sections)),
-    [sections, importedShown]
+    () => orderedSessions(sections, { isOpen: sessionId => !isFolded(sessionId), includeImported: importedShown }),
+    [sections, importedShown, isFolded]
   );
 
   // Read inside the key handler so the listener is bound once rather than rebuilt on every
@@ -929,18 +1178,49 @@ export function SessionList({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  const row = (session: ChatSessionSummary) => (
-    <SessionRow
-      key={session.id}
-      session={session}
-      selected={session.id === activeId}
-      status={statuses.get(session.id) ?? 'done'}
-      pr={prSummaries.get(session.id)}
-      userSections={userSections.sections}
-      sectionId={sectionOf(userSections, session.id)}
-      actions={actions}
-    />
-  );
+  /**
+   * A row, then - unless it is folded - every session it spawned beneath it, recursively. One
+   * List holds the whole tree so the rails between rows meet. A flat array rather than a
+   * Fragment: Joy's List clones each child to mark the first and last, which a Fragment refuses.
+   */
+  const tree = (
+    session: ChatSessionSummary,
+    depth: number,
+    first: boolean,
+    last: boolean,
+    guides: string
+  ): ReactNode[] => {
+    const children = sections.children.get(session.id) ?? [];
+    const under = descendants(session);
+    const folded = isFolded(session.id);
+    const childGuides = depth > 0 ? guides + (last ? '0' : '1') : '';
+    return [
+      <SessionRow
+        key={session.id}
+        session={session}
+        selected={session.id === activeId}
+        status={statuses.get(session.id) ?? 'done'}
+        pr={prSummaries.get(session.id)}
+        userSections={userSections.sections}
+        sectionId={sectionOf(userSections, session.id)}
+        actions={actions}
+        nestDepth={depth}
+        nestFirst={first}
+        nestLast={last}
+        nestGuides={guides}
+        subCount={under.length}
+        subActivity={loudestActivity(under, statuses)}
+        subFolded={folded}
+        subFoldable={!searching}
+      />,
+      ...(folded
+        ? []
+        : children.flatMap((child, index) =>
+            tree(child, depth + 1, index === 0, index === children.length - 1, childGuides)
+          )),
+    ];
+  };
+  const row = (session: ChatSessionSummary) => tree(session, 0, false, false, '');
 
   const draggingSectionId = draggedSession ? sectionOf(userSections, draggedSession) : undefined;
 
@@ -1022,6 +1302,7 @@ export function SessionList({
           statuses={statuses}
           revealId={revealId}
           row={row}
+          descendants={descendants}
         />
       ) : (
         // Nothing at rest, where a line of text read as a row; a dashed slot only while a row is in the air.
@@ -1250,7 +1531,7 @@ export function SessionList({
               <Box data-testid="sidebar-pinned">
                 <SectionLabel>Pinned</SectionLabel>
                 <List size="sm" sx={SESSION_LIST_SX}>
-                  {sections.pinned.map(row)}
+                  {sections.pinned.flatMap(row)}
                 </List>
               </Box>
             )}
@@ -1269,6 +1550,7 @@ export function SessionList({
                   statuses={statuses}
                   revealId={revealId}
                   row={row}
+                  descendants={descendants}
                 />
               </Box>
             ))}
@@ -1281,7 +1563,7 @@ export function SessionList({
                   <SectionLabel>{mode === 'code' ? 'No project' : 'Conversations'}</SectionLabel>
                 )}
                 <List size="sm" sx={SESSION_LIST_SX}>
-                  {sections.loose.map(row)}
+                  {sections.loose.flatMap(row)}
                 </List>
               </Box>
             )}
@@ -1304,7 +1586,7 @@ export function SessionList({
                 </Button>
                 {importedShown && (
                   <List size="sm" sx={SESSION_LIST_SX}>
-                    {sections.imported.map(row)}
+                    {sections.imported.flatMap(row)}
                   </List>
                 )}
               </Box>
@@ -1328,7 +1610,7 @@ export function SessionList({
                 </Button>
                 {archivedOpen && (
                   <List size="sm" sx={SESSION_LIST_SX}>
-                    {sections.archived.map(row)}
+                    {sections.archived.flatMap(row)}
                   </List>
                 )}
               </Box>

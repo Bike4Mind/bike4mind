@@ -108,7 +108,7 @@ vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.selfHostOpen
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
-vi.mock('@server/integrations/google/drive/common', () => ({
+vi.mock('@bike4mind/server-utils/integrations/google/drive/common', () => ({
   disableDriveConnectionForLake: h.disableDriveConnectionForLake,
   enableDriveConnectionForLake: h.enableDriveConnectionForLake,
 }));

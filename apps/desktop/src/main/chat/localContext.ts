@@ -1,5 +1,6 @@
 /** Context sizing and history fitting for local Ollama chat requests. */
 import { estimateFit, isCpuOnly, type FitInput, type HardwareProfile, type ModelArch } from '@bike4mind/common';
+import { OUTPUT_RESERVE_TOKENS, replyRoom } from '@bike4mind/local-models/servers';
 import { estimateTextTokens } from '@shared/contextLimit';
 import { LOCAL_CONTEXT_SIZES, type LocalContextSetting } from '@shared/localContextSetting';
 
@@ -31,7 +32,6 @@ export const LOCAL_CONTEXT_TARGET_TOKENS = 16_384;
 // CPU prefill runs at tens of tokens a second, so a larger window only costs RAM and load time;
 // a conversation that needs more still grows past it.
 export const CPU_ONLY_CONTEXT_CAP_TOKENS = 32_768;
-const OUTPUT_RESERVE_TOKENS = 2_048;
 const CHARS_PER_TOKEN = 4;
 /** Ollama's own per-image figure when it fits chat history (ollama server/prompt.go). */
 const IMAGE_TOKENS = 768;
@@ -195,7 +195,7 @@ export function fitToContext(
   maxTokens?: number,
   scale = 1
 ): ContextFit {
-  const budget = numCtx - Math.min(maxTokens ?? OUTPUT_RESERVE_TOKENS, Math.floor(numCtx / 4));
+  const budget = numCtx - replyRoom(numCtx, maxTokens);
   const starts = turnStarts(messages);
   const first = messages.findIndex(message => message.role !== 'system');
   if (first === -1 || starts.length === 0) return { messages: [...messages], dropped: 0, visible: 0 };

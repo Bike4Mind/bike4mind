@@ -1,4 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 
 type RouteHandler = (request: unknown, response: unknown) => unknown;
 const route = vi.hoisted(() => ({
@@ -17,7 +21,8 @@ import {
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => ({
-    post: (handler: RouteHandler) => {
+    post: (...handlers: RouteHandler[]) => {
+      const handler = handlers[handlers.length - 1];
       route.handler = handler;
       return handler;
     },

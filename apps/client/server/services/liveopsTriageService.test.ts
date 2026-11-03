@@ -47,7 +47,7 @@ const {
 }));
 
 // Mock GitHubService - this is what we're testing the integration with
-vi.mock('./githubService', () => ({
+vi.mock('@bike4mind/server-utils/services/githubService', () => ({
   GitHubService: {
     forSystem: vi.fn(),
     forOrganization: vi.fn(),
@@ -126,7 +126,7 @@ import {
   REQUIRED_GITHUB_LABELS,
   extractTriageJson,
 } from './liveopsTriageService';
-import { GitHubService } from './githubService';
+import { GitHubService } from '@bike4mind/server-utils/services/githubService';
 import {
   GROWTH_RATIO_CEILING,
   SMALL_INPUT_MS_CEILING,

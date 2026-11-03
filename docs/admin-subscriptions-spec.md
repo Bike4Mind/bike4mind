@@ -250,8 +250,8 @@ Detail anatomy, max width 1280.
     - Amounts are before discounts and coupons: the mirror stores the price's unit amount, not the invoice total.
     - The account currency is USD (`MRR_CURRENCY`), the only currency checkout charges. A row whose `currency` is set to anything else is counted in the other-currency note. A counted row with no `unitAmount` (not yet synced or backfilled, or a price with no flat amount in the billed currency) is counted in the "no billed amount" note. Some of those causes are permanent (a tiered or `unit_amount_decimal` price, a currency with no `currency_options`), so the copy never promises the amount will arrive.
     - Rounding: a row's MRR is rounded to a whole minor unit; a total is summed unrounded and rounded once, so it can differ from the sum of the column by a cent per few yearly rows.
-  - **New MRR**: subscriptions created in the range.
-  - **Churned MRR**: MRR of subscriptions that reached canceled in the range.
+  - **New MRR**: MRR of subscriptions created in the range that count toward MRR now (a row created in the range and already canceled is in neither New nor Churned).
+  - **Churned MRR**: MRR of Stripe subscriptions that ended (reached canceled) in the range, at the price they were billed. The end is `cancelAt` (a scheduled cancel counts when it takes effect), else `canceledAt` for an immediate cancel. A row created in the same range is left out, so New - Churned stays the net change. As built: `churnedWithin` in `server/admin/revenue/revenueSnapshot.ts`.
   - Expansion/contraction (seat or plan changes) is a wish (needs BillingEvent history).
   - Single currency is assumed. A row in another currency is excluded from totals and counted in a "Not in totals: N other-currency subscriptions" note, never silently summed.
 
@@ -386,7 +386,7 @@ A nightly cron. This is acceptable under infra principle 5 (cleanup and reconcil
 
 ### 6.4 Daily snapshot
 
-The same cron writes one `RevenueSnapshot` per day: date, MRR, paying count, MRR by plan. That is enough for the 12-month chart without replaying history.
+A daily cron (`apps/workers/src/cron/revenueSnapshot.ts`, 00:20 UTC, its own schedule rather than the reconciliation cron) writes one `RevenueSnapshot` per day: date, MRR, paying count, MRR by plan. That is enough for the 12-month chart without replaying history.
 
 ### 6.5 Admin endpoints
 

@@ -8,6 +8,7 @@ import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import {
+  findModelOption,
   REASONING_EFFORT_SETTINGS,
   THINKING_OFF_SETTING,
   type ChatModelOption,
@@ -47,7 +48,7 @@ function supportState(
   models: readonly ChatModelOption[],
   modelId: string | null
 ): { supported: boolean; known: boolean } {
-  const option = modelId ? models.find(model => model.id === modelId) : undefined;
+  const option = findModelOption(models, modelId);
   if (!option || option.supportsReasoningEffort === undefined) return { supported: true, known: false };
   return { supported: option.supportsReasoningEffort, known: true };
 }
@@ -79,7 +80,7 @@ export function ReasoningEffortPicker({
   const sx = { fontWeight: 'normal', minWidth: 0 } as const;
 
   // A local model's server takes no effort, only thinking on or off; any setting but Off thinks.
-  const local = modelId ? models.find(model => model.id === modelId) : undefined;
+  const local = findModelOption(models, modelId);
   if (local?.thinkingToggle) {
     const alwaysOn = local.thinkingAlwaysOn === true;
     const thinkingOn = alwaysOn || effort !== THINKING_OFF_SETTING;

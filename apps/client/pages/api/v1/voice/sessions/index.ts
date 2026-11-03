@@ -44,7 +44,7 @@ import {
 } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { requestTurnAuth } from '@server/auth/turnAuth';
-import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
+import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
 

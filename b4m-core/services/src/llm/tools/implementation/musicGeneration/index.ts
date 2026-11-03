@@ -7,6 +7,7 @@ import {
 } from '@bike4mind/common';
 import type { CreateMusicJobInput, CreateMusicJobResult } from '../../../../musicJobs/types';
 import type { ToolContext, ToolDefinition } from '../../base/types';
+import { paidPlanRefusalOrRethrow } from '../../helpers/toolModelRefusal';
 import {
   buildJobIdempotencyKey,
   buildUnavailableTool,
@@ -183,18 +184,25 @@ export const musicGenerationTool: ToolDefinition = {
           return ARTIST_REFERENCE_REFUSAL;
         }
         const request = toRequest(args);
-        const result = await config.createJob({
-          user: {
-            id: context.userId,
-            organizationId: context.organizationId ?? null,
-            adminRoleWithheld: !context.user.isAdmin,
-          },
-          request,
-          source: 'agent',
-          sessionId: context.sessionId,
-          questId: context.questId,
-          idempotencyKey: buildJobIdempotencyKey(context.userId, context.questId, request),
-        });
+        // createMusicJob asserts model admission itself; its REST callers need the throw, the model needs a result.
+        let result: Awaited<ReturnType<typeof config.createJob>>;
+        try {
+          result = await config.createJob({
+            user: {
+              id: context.userId,
+              organizationId: context.organizationId ?? null,
+              adminRoleWithheld: !context.user.isAdmin,
+            },
+            request,
+            source: 'agent',
+            apiKeyId: context.apiKeyId,
+            sessionId: context.sessionId,
+            questId: context.questId,
+            idempotencyKey: buildJobIdempotencyKey(context.userId, context.questId, request),
+          });
+        } catch (error) {
+          return paidPlanRefusalOrRethrow(context, error, request.model, 'music_generation');
+        }
         if (!result.ok) return `Music generation failed (${result.code}): ${result.message}`;
         if (isReplayOfDeadJob(result.created, result.job.state)) {
           const reason = result.job.error?.code ?? result.job.state;

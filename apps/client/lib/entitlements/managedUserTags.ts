@@ -1,5 +1,5 @@
 import { PENDING_FREE_CREDITS_TAG, RESERVED_PARTNER_RULE_TAGS } from '@bike4mind/common';
-import { allKnownEntitlementKeys, grantTagForEntitlement, isDatalakeEntitlementKey, normalizeTag } from './registry';
+import { allKnownEntitlementKeys, grantTagForEntitlement, isDatalakeEntitlementKey, normalizeTag } from '@bike4mind/server-utils/lib/entitlements/registry';
 
 const managedTags = new Set([
   normalizeTag(PENDING_FREE_CREDITS_TAG),

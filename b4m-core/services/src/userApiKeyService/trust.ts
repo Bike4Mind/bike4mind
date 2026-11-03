@@ -68,12 +68,23 @@ export const loadApiKeyTrustSettings = async (db: {
   };
 };
 
-// createdAt comes from mongoose timestamps and is not on IUser.
+// createdAt comes from mongoose timestamps and is not on IUser. id is the fallback clock: its ObjectId
+// timestamp dates accounts that predate timestamps.
 export type ApiKeyTrustSubject = Pick<
   IUser,
   'isAdmin' | 'emailVerified' | 'apiKeyTrustApproved' | 'lastCreditsPurchasedAt'
 > & {
   createdAt?: Date | string | null;
+  id?: string | null;
+};
+
+const accountCreatedMs = (user: ApiKeyTrustSubject): number | null => {
+  if (user.createdAt) {
+    const ms = new Date(user.createdAt).getTime();
+    if (Number.isFinite(ms)) return ms;
+  }
+  if (user.id && /^[0-9a-f]{24}$/i.test(user.id)) return parseInt(user.id.slice(0, 8), 16) * 1000;
+  return null;
 };
 
 /**
@@ -94,7 +105,8 @@ export type UntrustedApiKeyAssessment = Extract<ApiKeyTrustAssessment, { status:
 
 /**
  * Trusted = platform admin, or emailVerified AND (purchase or active plan OR account age >= minAccountAgeDays OR
- * admin-approved). `hasActivePlan` is lazy because it is the only check that hits the database,
+ * admin-approved). Account age comes from createdAt, then the id's ObjectId timestamp; with neither the account
+ * counts as new. `hasActivePlan` is lazy because it is the only check that hits the database,
  * and the cheap user-field checks settle most accounts first.
  */
 export const assessApiKeyTrust = async (
@@ -106,10 +118,7 @@ export const assessApiKeyTrust = async (
   if (!user.emailVerified) return { status: 'untrusted', reason: 'email_unverified' };
   if (user.apiKeyTrustApproved || user.lastCreditsPurchasedAt) return { status: 'trusted' };
 
-  // A missing createdAt predates mongoose timestamps, so the account is old.
-  const createdAt = user.createdAt ? new Date(user.createdAt) : null;
-  if (!createdAt) return { status: 'trusted' };
-  const trustedAfter = new Date(createdAt.getTime() + settings.minAccountAgeDays * MS_PER_DAY);
+  const trustedAfter = new Date((accountCreatedMs(user) ?? now.getTime()) + settings.minAccountAgeDays * MS_PER_DAY);
   if (now >= trustedAfter) return { status: 'trusted' };
 
   if (await hasActivePlan()) return { status: 'trusted' };

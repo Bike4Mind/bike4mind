@@ -4,7 +4,7 @@ import { mcpServerResponseSchema } from '@bike4mind/common';
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { MCPClient } from '@bike4mind/mcp';
-import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { respond } from '@server/utils/respond';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';

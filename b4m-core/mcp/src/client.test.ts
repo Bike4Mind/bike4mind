@@ -513,3 +513,15 @@ describe('MCPClient (stdio child environment)', () => {
     }
   });
 });
+
+describe('MCPClient (bundled server missing a startup credential)', () => {
+  it('refuses before spawning, naming the key instead of "Connection closed"', async () => {
+    const client = new MCPClient({ name: 'github', envVariables: [], suppressStderr: true });
+
+    await expect(client.connectToServer()).rejects.toMatchObject({
+      name: 'McpServerConfigError',
+      missingKeys: ['GITHUB_ACCESS_TOKEN'],
+    });
+    expect(client.childPid).toBeNull();
+  });
+});

@@ -60,6 +60,17 @@ describe('GET /api/data-lakes/:id/proposals', () => {
     expect(json).toHaveBeenCalledWith({ data: [{ id: 'prop-1' }] });
   });
 
+  it('strips undeclared fields and the dedupe digest from each proposal', async () => {
+    h.listByLake.mockResolvedValue([
+      { id: 'prop-1', status: 'pending', textHash: 'digest', _id: 'raw-object-id', __v: 7, notInSchema: 'secret' },
+    ]);
+    const { res, json } = makeRes();
+
+    await handler(makeReq() as never, res);
+
+    expect(json).toHaveBeenCalledWith({ data: [{ id: 'prop-1', status: 'pending' }] });
+  });
+
   it('refuses a caller who can read the lake but not manage it, as a 403', async () => {
     h.resolveCanManageLake.mockResolvedValue(false);
     const { res } = makeRes();

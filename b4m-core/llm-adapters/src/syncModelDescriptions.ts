@@ -59,6 +59,7 @@ class SyncModelDescriptions {
     [ModelBackend.Bedrock]: 'bedrockBackend', // Special case - directory with multiple files
     [ModelBackend.Gemini]: 'geminiBackend.ts',
     [ModelBackend.Ollama]: 'ollamaBackend.ts',
+    [ModelBackend.OpenAICompatible]: 'openaiCompatibleBackend.ts',
     [ModelBackend.BFL]: 'bflBackend.ts',
     [ModelBackend.XAI]: 'xaiBackend.ts',
     [ModelBackend.Kimi]: 'kimiBackend.ts',

@@ -1,7 +1,7 @@
 import type { PipelineStage } from 'mongoose';
 import { SkillListing, SkillListingImport, skillRepository } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
-import { marketVisibilityFilter, serializeListing } from './market';
+import { marketVisibilityFilter, serializeListing } from '@bike4mind/server-utils/skillMarket/market';
 
 /**
  * Market search and the rule-based recommendation rails. Every query starts from

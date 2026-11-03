@@ -11,7 +11,7 @@ export class SubscriberRepository extends BaseRepository<ISubscriberDocument> im
   }
 
   async findByEmail(email: string) {
-    const result = await this.model.findOne({ email });
+    const result = await this.model.findOne({ email: email.trim().toLowerCase() });
     return result?.toJSON() ?? null;
   }
 
@@ -80,7 +80,7 @@ export const SubscriberSchema = new Schema<ISubscriberDocument, ISubscriberModel
   {
     firstName: { type: String, required: true },
     lastName: { type: String, required: true },
-    email: { type: String, required: true, unique: true },
+    email: { type: String, required: true, unique: true, trim: true, lowercase: true },
     source: { type: String, enum: SUBSCRIBER_SOURCES, default: 'subscribe_page' },
     deletedAt: { type: Date, default: null },
     // Invite generation tracking

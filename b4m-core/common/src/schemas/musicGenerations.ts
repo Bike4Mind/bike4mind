@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ModelIdSchema } from './modelId';
 import { BillingOrganizationIdSchema } from './billingOrganization';
 import type { ApiErrorCode } from '../apiErrorCodes';
 import { GENERATION_OUTPUT_AVAILABILITIES } from '../generation/types';
@@ -52,6 +53,9 @@ export function toPublicMusicJobErrorCode(code: GenerationJobErrorCode): MusicJo
     case 'output_too_large':
     case 'cancelled':
       return code;
+    // Refused before submit, so the provider never ran and the hold is returned, as for a cancel.
+    case 'account_blocked':
+      return 'cancelled';
     default: {
       const unreachable: never = code;
       throw new Error(`Unmapped generation job error code: ${String(unreachable)}`);
@@ -67,7 +71,7 @@ export const MUSIC_PROMPT_MAX_LENGTH = 4000;
 
 // No transforms or defaults: omitted fields take the model's catalog defaults in createMusicJob.
 export const CreateMusicGenerationBodySchema = z.strictObject({
-  model: z.string().min(1).describe('A model id from GET /api/v1/music-models.'),
+  model: ModelIdSchema.describe('A model id from GET /api/v1/music-models.'),
   prompt: z.string().min(1).max(MUSIC_PROMPT_MAX_LENGTH).describe('The style, mood and subject of the song.'),
   lyrics: z
     .string()

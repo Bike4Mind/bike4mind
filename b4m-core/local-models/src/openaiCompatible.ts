@@ -39,12 +39,18 @@ export interface OpenAICompatibleRuntimeOptions {
 
 export const openAIModelsSchema = z.object({ data: z.array(z.unknown()) });
 
-// `meta` is llama-server's extension; `owned_by` is 'llamacpp' there and 'vllm' on vLLM.
+// `meta` is llama-server's extension; `owned_by` is 'llamacpp' there and 'vllm' on vLLM. vLLM's ModelCard adds
+// `root` (the weights, shared by every served name), `parent` (a LoRA adapter's base) and `max_model_len`.
 export const openAIModelEntrySchema = z.object({
   id: z.string().min(1),
   owned_by: z.string().optional(),
   meta: z.object({ size: z.number().optional() }).nullable().optional(),
+  root: z.unknown().optional(),
+  parent: z.unknown().optional(),
+  max_model_len: z.unknown().optional(),
 });
+
+type OpenAIModelEntry = z.infer<typeof openAIModelEntrySchema>;
 
 // LM Studio's native REST API (`GET /api/v0/models`), documented at lmstudio.ai/docs/developer/rest/endpoints.
 export const lmStudioModelsSchema = z.object({ object: z.literal('list'), data: z.array(z.unknown()) });
@@ -89,6 +95,42 @@ function bareModel(name: string, sizeBytes: number | null = null): InstalledMode
     modifiedAt: null,
     capabilities: { ...NO_CAPABILITIES },
   };
+}
+
+const text = (value: unknown) => (typeof value === 'string' && value ? value : undefined);
+const positiveInt = (value: unknown) =>
+  typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined;
+
+/**
+ * One model per set of weights: names sharing a `root` collapse into the first listed, which keeps the
+ * rest as aliases. An adapter names its base by that first name and inherits the base's context.
+ */
+function listedModels(entries: OpenAIModelEntry[]): InstalledModel[] {
+  const models: InstalledModel[] = [];
+  const byRoot = new Map<string, InstalledModel>();
+  const byName = new Map<string, InstalledModel>();
+  for (const entry of entries) {
+    const root = text(entry.root);
+    const parent = text(entry.parent);
+    const shared = !parent && root ? byRoot.get(root) : undefined;
+    if (shared) {
+      if (shared.name !== entry.id && !shared.aliases?.includes(entry.id))
+        shared.aliases = [...(shared.aliases ?? []), entry.id];
+      byName.set(entry.id, shared);
+      continue;
+    }
+    const base = parent ? byName.get(parent) : undefined;
+    const contextLength = positiveInt(entry.max_model_len) ?? base?.contextLength;
+    const model: InstalledModel = {
+      ...bareModel(entry.id, entry.meta?.size ?? null),
+      ...(contextLength ? { contextLength } : {}),
+      ...(parent ? { baseModel: base?.name ?? parent } : {}),
+    };
+    if (root && !parent) byRoot.set(root, model);
+    byName.set(entry.id, model);
+    models.push(model);
+  }
+  return models;
 }
 
 /** LM Studio, llama-server, vLLM and anything else serving the OpenAI `/v1/models` endpoint. */
@@ -138,14 +180,16 @@ export class OpenAICompatibleRuntime implements LocalRuntime {
     const { data } = await requestJson(this.client, '/v1/models', openAIModelsSchema, {
       timeoutMs: this.requestTimeoutMs,
     });
-    return data.flatMap(raw => {
-      const entry = openAIModelEntrySchema.safeParse(raw);
-      return entry.success ? [bareModel(entry.data.id, entry.data.meta?.size ?? null)] : [];
-    });
+    return listedModels(
+      data.flatMap(raw => {
+        const entry = openAIModelEntrySchema.safeParse(raw);
+        return entry.success ? [entry.data] : [];
+      })
+    );
   }
 
   async inspect(model: string): Promise<ModelInspection> {
-    const found = (await this.list()).find(entry => entry.name === model);
+    const found = (await this.list()).find(entry => entry.name === model || entry.aliases?.includes(model));
     if (!found) throw new ModelNotFoundError(this.id, model);
     return { model: found, arch: null, tensorStats: null };
   }

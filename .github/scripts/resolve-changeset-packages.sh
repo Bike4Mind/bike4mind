@@ -60,6 +60,12 @@ if [ -z "$publishable" ]; then
   exit 0
 fi
 
+# Inputs a publishable package bundles from outside its own directory, as "<dir><TAB><package name>" lines.
+# The CLI inlines the private @bike4mind/local-models, which embeds the curated model list.
+bundled_inputs="catalog/model-hub	@bike4mind/cli
+b4m-core/local-models	@bike4mind/cli
+"
+
 changed=""
 while IFS= read -r file || [ -n "$file" ]; do
   [ -n "$file" ] || continue
@@ -74,6 +80,22 @@ while IFS= read -r file || [ -n "$file" ]; do
     esac
   done <<EOF
 $publishable
+EOF
+  case "$file" in
+    *.md | *.mdx) continue ;;
+  esac
+  while IFS="	" read -r dir name; do
+    [ -n "$dir" ] || continue
+    case "$file" in
+      "$dir"/*)
+        if printf '%s' "$publishable" | cut -f2 | grep -qxF "$name"; then
+          changed="${changed}${name}
+"
+        fi
+        ;;
+    esac
+  done <<EOF
+$bundled_inputs
 EOF
 done
 

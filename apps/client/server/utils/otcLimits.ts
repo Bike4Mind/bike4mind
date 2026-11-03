@@ -69,10 +69,14 @@ export const OTC_LIMITS = {
     perDomainHourly: { limit: 5, windowMs: HOUR_MS, setting: 'otcLimitRegisterPerDomainHourly' },
     perDomainDaily: { limit: 20, windowMs: DAY_MS, setting: 'otcLimitRegisterPerDomainDaily' },
   },
+  formToken: {
+    perIp: { limit: 600, windowMs: HOUR_MS, setting: 'otcLimitFormTokenPerIp' },
+  },
 } as const satisfies {
   send: Record<string, OtcWindow | number>;
   verify: Record<string, OtcWindow>;
   register: Record<string, OtcWindow>;
+  formToken: Record<string, OtcWindow>;
 };
 
 /** The window's limit as an admin has lowered it, else the built-in. A setting can never raise it. */

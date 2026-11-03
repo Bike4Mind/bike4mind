@@ -1,8 +1,8 @@
 import type { MeSubscription, MeTier } from '@bike4mind/common';
 import { SubscriptionOwnerType, type ISubscription } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { getEntitlingPlanByPriceId } from '@client/lib/userSubscriptions/utils';
-import { SubscriptionPlanInterval, UserSubscriptionTier } from '@client/lib/userSubscriptions/types';
-import { resolveSubscriptionCycleCredits } from '@client/lib/userSubscriptions/cycleCredits';
+import { SubscriptionPlanInterval, UserSubscriptionTier } from '@bike4mind/server-utils/lib/userSubscriptions/types';
+import { resolveSubscriptionCycleCredits } from '@bike4mind/server-utils/lib/userSubscriptions/cycleCredits';
 
 const TIER_KEYS: Record<UserSubscriptionTier, MeTier> = {
   [UserSubscriptionTier.Basic]: 'basic',

@@ -8,7 +8,7 @@ import { adminSettingsRepository, authSessionRepository } from '@bike4mind/datab
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import {
   getActiveSubscriptionsForUser,
   type ActiveSubscriptionsRequest,

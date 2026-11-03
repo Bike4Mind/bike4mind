@@ -106,6 +106,7 @@ vi.mock('./actions/accountDialogs', () => {
     LoginAsDialog: stub('login-as-dialog'),
     ResetMfaDialog: stub('mfa-reset-dialog'),
     RestrictDialog: stub('restrict-dialog'),
+    ShadowTierDialog: stub('profile-shadow-tier-dialog'),
     SendMessageDialog: stub('send-message-dialog'),
     DeleteUserDialog: ({ onDeleted }: { onDeleted: () => void }) => (
       <div data-testid="delete-user-dialog">
@@ -249,6 +250,7 @@ describe('UserProfileView', () => {
       ['role', 'change-role-dialog'],
       ['productAccess', 'product-access-dialog'],
       ['restrict', 'restrict-dialog'],
+      ['shadowTier', 'profile-shadow-tier-dialog'],
       ['delete', 'delete-user-dialog'],
       ['subscription', 'grant-subscription-modal'],
     ])('the More menu item %s opens %s', async (action, dialogId) => {

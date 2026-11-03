@@ -9,7 +9,9 @@ import {
   localPartTemplate,
   networkPrefix,
   SHARED_NETWORK_MIN_ACCOUNTS,
+  DORMANCY_MIN_AGE_MS,
   SPIKE_MIN_ACCOUNTS,
+  signupVerdictOf,
   spikeHours,
   type SignupCandidate,
 } from './signupClassifier';
@@ -294,5 +296,27 @@ describe('signup spike', () => {
     const result = classifySignups(ordinary, now, hourlyCountsOf(ordinary));
     expect(ordinary.some(u => isSuspectedSignup(result.get(u.id) ?? []))).toBe(false);
     expect([...result.values()].some(signals => signals.includes('signupSpike'))).toBe(false);
+  });
+});
+
+describe('signupVerdictOf', () => {
+  const createdAt = at(0);
+  const mature = at(DORMANCY_MIN_AGE_MS);
+  const young = at(DORMANCY_MIN_AGE_MS - 1);
+
+  it('calls a strong signal or two weak ones suspected at any age', () => {
+    expect(signupVerdictOf(['domainBurst'], createdAt, young)).toBe('suspected');
+    expect(signupVerdictOf(['datacenterNetwork', 'earlyApiKey'], createdAt, young)).toBe('suspected');
+    expect(signupVerdictOf(['wafBotSignal'], createdAt, mature)).toBe('suspected');
+  });
+
+  it('leaves an account too young for dormancy unclassified, never legit', () => {
+    expect(signupVerdictOf([], createdAt, young)).toBe('unclassified');
+    expect(signupVerdictOf(['datacenterNetwork'], createdAt, young)).toBe('unclassified');
+  });
+
+  it('calls a mature account with at most one weak signal legit', () => {
+    expect(signupVerdictOf([], createdAt, mature)).toBe('legit');
+    expect(signupVerdictOf(['dormantAfterSignup'], createdAt, mature)).toBe('legit');
   });
 });

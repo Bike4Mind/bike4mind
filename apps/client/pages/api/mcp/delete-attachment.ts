@@ -7,7 +7,7 @@ import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
-import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler';
 import { parseMcpResult } from '@server/utils/parseMcpResult';
 import { getMcpToolText, isMcpToolError } from '@server/utils/isMcpToolError';
 import { cleanupConfluencePageContent } from '@server/integrations/atlassian/confluenceAttachmentCleanup';

@@ -72,7 +72,7 @@ vi.mock('@bike4mind/server-utils/integrations/github/sreWebhookDispatch', () => 
 }));
 
 const mockDispatchReviewToSreRevision = vi.fn().mockResolvedValue({ dispatched: true });
-vi.mock('@server/integrations/github/sreRevisionDispatch', () => ({
+vi.mock('@bike4mind/server-utils/integrations/github/sreRevisionDispatch', () => ({
   dispatchReviewToSreRevision: (...args: unknown[]) => mockDispatchReviewToSreRevision(...args),
 }));
 

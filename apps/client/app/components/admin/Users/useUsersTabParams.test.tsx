@@ -72,6 +72,26 @@ describe('Users tab URL precedence', () => {
     expect(fakeAdminRouter.navigate).not.toHaveBeenCalled();
   });
 
+  it('reproduces an analytics drill-down from its URL and restores it on a bare return to the tab', () => {
+    const drillDown = {
+      createdFrom: '2026-10-01T00:00:00.000Z',
+      createdTo: '2026-11-01T00:00:00.000Z',
+      verdict: 'legit',
+      funnelStep: 'cameBack',
+      activeFrom: '2026-10-03',
+      activeTo: '2026-10-03',
+    };
+    act(() => fakeAdminRouter.reset({ tab: 'users', page: 1, ...drillDown }));
+    const first = renderUsersTab();
+    expect(first.result.current[0]).toMatchObject(drillDown);
+    first.unmount();
+
+    act(() => fakeAdminRouter.reset({ tab: 'users' }));
+    const { result } = renderUsersTab();
+    expect(result.current[0]).toMatchObject(drillDown);
+    expect(fakeAdminRouter.search).toMatchObject({ tab: 'users', page: 1, ...drillDown });
+  });
+
   it('reads a URL whose view params are all invalid as the default view, not the stored one', () => {
     act(() => fakeAdminRouter.reset({ tab: 'users', limit: 7, sort: 'bogus' }));
     const { result } = renderUsersTab();

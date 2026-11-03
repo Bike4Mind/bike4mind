@@ -67,7 +67,7 @@ export {
   loadLinkedAgentContext,
   type CreateMissionInput,
   type CreateMissionResult,
-} from './missions';
+} from '@bike4mind/server-utils/deepAgent/missions';
 export {
   bridgeWakeToSession,
   bridgeReviewToSession,

@@ -63,6 +63,8 @@ const LOGIN_ERROR_MESSAGES = {
   oauth_rate_limited: 'Too many sign-in attempts from your network. Please wait a few minutes and try again.',
   ip_blocked:
     'Sign-in is temporarily blocked from your network after repeated failed attempts. Please try again later or contact support.',
+  network_blocked:
+    "We can't complete sign-in from your network. Please contact support if you believe this is an error.",
 } satisfies Record<string, string>;
 
 /** Union of all known `/login?error=` codes. Thread this through emitters

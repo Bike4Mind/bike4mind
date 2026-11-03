@@ -56,7 +56,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 vi.mock('@bike4mind/database/infra', () => ({ classifyForScan: vi.fn() }));
-vi.mock('@server/services/githubService', () => ({
+vi.mock('@bike4mind/server-utils/services/githubService', () => ({
   GitHubService: { forSystem: vi.fn().mockResolvedValue({ listIssues: h.listIssues, getIssue: h.getIssue }) },
 }));
 vi.mock('@bike4mind/server-utils/integrations/github/sreWebhookDispatch', () => ({

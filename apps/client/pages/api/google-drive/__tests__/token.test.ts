@@ -20,7 +20,7 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: vi.fn().mockResolvedValue({ allowed: true, headers: {} }),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<Record<string, unknown>>();
@@ -48,7 +48,7 @@ vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptToken: (v: unknown) => v,
 }));
 
-vi.mock('@server/integrations/google/drive/common', () => ({
+vi.mock('@bike4mind/server-utils/integrations/google/drive/common', () => ({
   getAuthUrl: () => 'https://accounts.google.example/authorize',
   refreshAccessToken: (...a: unknown[]) => mockRefresh(...a),
   isInvalidGrantError: (e: unknown) => e instanceof Error && e.message === 'invalid_grant',
