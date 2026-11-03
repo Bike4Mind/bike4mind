@@ -81,6 +81,14 @@ const AccountCard: React.FC<{ user: AdminUserProfile; onAction: (action: Profile
           </RowAction>
         </Stack>
       </Fact>
+      <Fact label="Analytics" data-testid="user-profile-fact-internal">
+        <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
+          {user.isInternal ? 'Internal account' : 'Customer'}
+          <RowAction onClick={() => onAction('internalAccount')} data-testid="user-profile-internal-btn">
+            Change
+          </RowAction>
+        </Stack>
+      </Fact>
       <Fact label="Storage">
         {`${formatBytes(user.currentStorageSize ?? 0)} of ${formatBytes(storageLimitToBytes(storage.limitMb))}`}
       </Fact>
