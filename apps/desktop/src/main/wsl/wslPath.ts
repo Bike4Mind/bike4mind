@@ -162,6 +162,9 @@ interface UserEnvironmentEntry {
   retryAt: number;
 }
 
+/** wsl.exe and the share both match a distro name without regard to case, so state is kept per lowercase name. */
+const distroKey = (distro: string): string => distro.toLowerCase();
+
 const userEnvironments = new Map<string, UserEnvironmentEntry>();
 
 function within<T>(promise: Promise<T | null>, ms: number): Promise<T | null> {
@@ -185,7 +188,7 @@ export function wslUserEnvironment(
   now: () => number = Date.now,
   probe: (distro: string) => Promise<UserEnvironmentProbe> = probeUserEnvironment
 ): Promise<WslUserEnvironment | null> {
-  const cached = userEnvironments.get(distro);
+  const cached = userEnvironments.get(distroKey(distro));
   if (cached && now() < cached.retryAt) return cached.settled ? cached.found : within(cached.found, USER_ENV_JOIN_MS);
   const entry: UserEnvironmentEntry = { found: Promise.resolve(null), settled: false, retryAt: Infinity };
   entry.found = probe(distro).then(({ found, timedOut }) => {
@@ -193,7 +196,7 @@ export function wslUserEnvironment(
     if (!found) entry.retryAt = now() + (timedOut ? USER_ENV_TIMEOUT_RETRY_MS : USER_ENV_RETRY_MS);
     return found;
   });
-  userEnvironments.set(distro, entry);
+  userEnvironments.set(distroKey(distro), entry);
   return entry.found;
 }
 
@@ -265,14 +268,14 @@ interface RealpathSession {
 const realpathSessions = new Map<string, RealpathSession>();
 
 function endSession(distro: string, session: RealpathSession): void {
-  if (realpathSessions.get(distro) === session) realpathSessions.delete(distro);
+  if (realpathSessions.get(distroKey(distro)) === session) realpathSessions.delete(distroKey(distro));
   if (session.idle) clearTimeout(session.idle);
   for (const answer of session.pending.splice(0)) answer(undefined);
   session.child.kill('SIGKILL');
 }
 
 function realpathSession(distro: string): RealpathSession {
-  const open = realpathSessions.get(distro);
+  const open = realpathSessions.get(distroKey(distro));
   if (open) return open;
   const child = spawn(system32('wsl.exe'), ['-d', distro, '--exec', 'bash', '-c', REALPATH_SCRIPT], {
     stdio: ['pipe', 'pipe', 'ignore'],
@@ -296,7 +299,7 @@ function realpathSession(distro: string): RealpathSession {
   child.on('exit', () => endSession(distro, session));
   child.stdin?.on('error', () => endSession(distro, session));
   child.unref();
-  realpathSessions.set(distro, session);
+  realpathSessions.set(distroKey(distro), session);
   return session;
 }
 
@@ -324,7 +327,7 @@ function askSession(distro: string, linuxPath: string): Promise<string | null | 
     session.pending.push(path => {
       clearTimeout(timer);
       resolve(path);
-      if (session.pending.length === 0 && realpathSessions.get(distro) === session) {
+      if (session.pending.length === 0 && realpathSessions.get(distroKey(distro)) === session) {
         session.idle = setTimeout(() => endSession(distro, session), REALPATH_IDLE_MS);
         session.idle.unref?.();
       }

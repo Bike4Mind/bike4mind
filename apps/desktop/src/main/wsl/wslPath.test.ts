@@ -191,6 +191,15 @@ describe('the user environment probe', () => {
     expect((await wslCommandEnv({}, bare)).B4M_DESKTOP_LINUX_PATH).toBeUndefined();
   });
 
+  it('keeps one probe for a distro however its name is cased', async () => {
+    const name = `B4M-${randomUUID()}`;
+    const probe = vi.fn(async (): Promise<UserEnvironmentProbe> => ({ found: FOUND, timedOut: false }));
+
+    await wslUserEnvironment(name, Date.now, probe);
+    expect(await wslUserEnvironment(name.toLowerCase(), Date.now, probe)).toEqual(FOUND);
+    expect(probe).toHaveBeenCalledTimes(1);
+  });
+
   it('lets a caller that joins a running probe go on without it after 2 s', async () => {
     vi.useFakeTimers();
     try {

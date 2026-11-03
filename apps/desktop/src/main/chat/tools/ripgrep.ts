@@ -73,7 +73,7 @@ function decode(field: RipgrepText | undefined): string {
 
 export async function ripgrepSearch(search: RipgrepSearch): Promise<RipgrepOutcome> {
   const wsl = wslLocation(search.cwd, search.platform);
-  const engine = wsl?.distro ?? '';
+  const engine = wsl?.distro.toLowerCase() ?? '';
   if (process.env.B4M_DISABLE_RIPGREP === '1' || Date.now() < (unavailableUntil.get(engine) ?? 0)) {
     return 'unavailable';
   }

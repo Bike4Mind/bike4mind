@@ -71,4 +71,11 @@ describe('ripgrep in a WSL folder', () => {
     expect(await search('C:\\repo', 'x')).toBe('done');
     expect(spawned.map(run => run.file)).toEqual([expect.stringMatching(/^[A-Z]:\\.*\\System32\\wsl\.exe$/i), 'rg']);
   });
+
+  it('remembers a missing rg for a distro whatever case its name is written in', async () => {
+    expect(await search('\\\\wsl.localhost\\Fedora\\home\\me', 'x')).toBe('unavailable');
+    expect(await search('\\\\wsl$\\FEDORA\\home\\me', 'x')).toBe('unavailable');
+
+    expect(spawned).toHaveLength(1);
+  });
 });
