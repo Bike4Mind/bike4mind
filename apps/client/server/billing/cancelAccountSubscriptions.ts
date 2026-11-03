@@ -66,6 +66,10 @@ async function billedCustomerIds(user: { id: string; stripeCustomerId?: string |
   return [...new Set(ids.filter((id): id is string => typeof id === 'string' && id.length > 0))];
 }
 
+// Per Stripe request (ms). Bulk callers run this inside a time budget checked only between chunks,
+// so one hung call must not hold a chunk for Stripe's 80 s default.
+const STRIPE_REQUEST_TIMEOUT_MS = 10_000;
+
 async function cancelCustomerSubscriptions(
   customerId: string,
   comment: string,
@@ -74,13 +78,20 @@ async function cancelCustomerSubscriptions(
   // Stripe, not the local rows, is read: a row can lag a renewal, and a deleted account's rows are
   // the very ones that went unnoticed. One page, like voidOpenSubscriptionInvoices: a customer with
   // over 100 live subscriptions is not a real case.
-  const page = await stripe.subscriptions.list({ customer: customerId, status: 'all', limit: 100 });
+  const page = await stripe.subscriptions.list(
+    { customer: customerId, status: 'all', limit: 100 },
+    { timeout: STRIPE_REQUEST_TIMEOUT_MS }
+  );
   for (const subscription of page.data) {
     if (TERMINAL_SUBSCRIPTION_STATUSES.has(subscription.status)) continue;
     try {
       // prorate: false and no invoice_now, so the cancel mints no credit note or invoice; refunds
       // stay an admin decision. customer.subscription.deleted then closes the local row.
-      await stripe.subscriptions.cancel(subscription.id, { prorate: false, cancellation_details: { comment } });
+      await stripe.subscriptions.cancel(
+        subscription.id,
+        { prorate: false, cancellation_details: { comment } },
+        { timeout: STRIPE_REQUEST_TIMEOUT_MS }
+      );
       result.canceled.push(subscription.id);
     } catch (error) {
       result.failed.push({ customerId, subscriptionId: subscription.id, reason: reasonOf(error) });
@@ -89,7 +100,7 @@ async function cancelCustomerSubscriptions(
     // An open invoice keeps Stripe's dunning retries running after the cancel. Best-effort: the
     // subscription is already canceled, which is what this call is for.
     try {
-      await voidOpenSubscriptionInvoices(subscription.id);
+      await voidOpenSubscriptionInvoices(subscription.id, { timeoutMs: STRIPE_REQUEST_TIMEOUT_MS });
     } catch {
       // Dunning on a canceled subscription is noise, not a renewal; nothing to report.
     }
