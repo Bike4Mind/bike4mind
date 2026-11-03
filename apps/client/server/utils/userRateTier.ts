@@ -1,4 +1,4 @@
-import { hasDeveloperUserTag, type SettingKey } from '@bike4mind/common';
+import { hasDeveloperUserTag, isShadowTier, type IUser, type SettingKey } from '@bike4mind/common';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
@@ -8,8 +8,9 @@ import {
   type ActiveSubscription,
   type ActiveSubscriptionsRequest,
 } from '@server/entitlements/activeSubscriptions';
-import { getEntitlingPlanByPriceId, getHighestLadderTier } from '@client/lib/userSubscriptions/utils';
-import { UserSubscriptionTier } from '@client/lib/userSubscriptions/types';
+import { getHighestLadderTier } from '@client/lib/userSubscriptions/utils';
+import { holdsPaidStanding, type PaidStandingUser } from '@server/entitlements/paidStanding';
+import { UserSubscriptionTier } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 import { isDevelopment } from '@bike4mind/server-utils/utils/config';
 
 /**
@@ -20,15 +21,18 @@ import { isDevelopment } from '@bike4mind/server-utils/utils/config';
  * `bypass` - admins and developer-tagged users (internal), never rate limited.
  * `pro` / `basic` - highest tier among the user's active subscriptions,
  *   including org seats (`getActiveSubscriptionsForUser`; a Team plan is Pro).
- * `free` - authenticated user with no active paid, ladder-tiered subscription.
+ *   Paid standing with no ladder plan (a credit purchase, a standalone plan) is `basic`.
+ * `free` - authenticated user without paid standing (`paidStanding.ts`).
+ * `shadow` - admin-restricted users (see `isShadowTier`); checked before subscriptions.
  */
-export type UserRateTier = 'bypass' | 'pro' | 'basic' | 'free';
+export type UserRateTier = 'bypass' | 'pro' | 'basic' | 'free' | 'shadow';
 
 /** The minimal user shape the tier resolver needs (a subset of `Express.User`). */
-export interface RateTierUser {
+export interface RateTierUser extends PaidStandingUser {
   id: string;
   isAdmin?: boolean;
   tags?: string[] | null;
+  throttle?: Pick<NonNullable<IUser['throttle']>, 'tier'> | null;
 }
 
 /**
@@ -44,6 +48,7 @@ const TIER_SETTING_KEY = {
   free: 'apiRateLimitFreePerMin',
   basic: 'apiRateLimitBasicPerMin',
   pro: 'apiRateLimitProPerMin',
+  shadow: 'shadowTierRequestsPerMin',
 } as const satisfies Record<Exclude<UserRateTier, 'bypass'>, SettingKey>;
 
 /**
@@ -58,33 +63,26 @@ export async function resolveUserRateTier(
   options?: { strict?: boolean }
 ): Promise<UserRateTier> {
   if (user.isAdmin || hasDeveloperUserTag(user.tags)) return 'bypass';
+  if (isShadowTier(user)) return 'shadow';
 
   const activeSubscriptions =
     req?.user?.id === user.id
       ? await getRequestActiveSubscriptions(req, options)
       : await getActiveSubscriptionsForUser(user.id, options);
 
-  return ladderRateTier(activeSubscriptions);
-}
-
-/**
- * Whether any active subscription is on a paid plan, ladder or not. Distinct from the rate
- * tier: a standalone plan is paid but confers no tier.
- */
-export function hasPaidSubscription(activeSubscriptions: readonly Pick<ActiveSubscription, 'priceId'>[]): boolean {
-  return activeSubscriptions.some(subscription => getEntitlingPlanByPriceId(subscription.priceId) !== undefined);
+  const tier = ladderRateTier(activeSubscriptions);
+  return tier === 'free' && holdsPaidStanding(user, activeSubscriptions) ? 'basic' : tier;
 }
 
 /**
  * The HIGHEST ladder tier across a set of active subscriptions. Plans with no `tier`
  * (standalone single-product plans sold off the main ladder) are not on the ladder and
- * don't confer a tier - they fall through to `free` unless another subscription grants one.
+ * don't confer a tier - they fall through to `free` here; `resolveUserRateTier` floors paid
+ * standing at `basic`.
  */
 export function ladderRateTier(
   activeSubscriptions: readonly Pick<ActiveSubscription, 'priceId'>[]
 ): Exclude<UserRateTier, 'bypass'> {
-  // Same ladder read as the `plan:paid` entitlement (@server/entitlements), except that a credit
-  // purchase also grants `plan:paid` but leaves the rate tier at `free`.
   const highestTier = getHighestLadderTier(activeSubscriptions);
 
   if (highestTier === UserSubscriptionTier.Pro) return 'pro';

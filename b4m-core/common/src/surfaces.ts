@@ -1,4 +1,5 @@
 import { hasDeveloperUserTag } from './schemas/user';
+import type { IChatHistoryItem } from './types/entities/SessionTypes';
 
 /**
  * Client-safe product-surface name literals.
@@ -242,9 +243,28 @@ export interface WorkspaceSessionSettingsContext<TSession extends SurfaceSetting
   logger?: { warn: (...args: unknown[]) => void };
 }
 
+export interface WorkspaceTurnContext extends WorkspaceSessionSettingsContext {
+  quest: Pick<IChatHistoryItem, 'id' | 'prompt' | 'fabFileIds'>;
+}
+
+/** A turn's answer written without a model. `replies` must hold at least one slot. */
+export type WorkspaceTurnReply = Required<Pick<IChatHistoryItem, 'replies'>> &
+  Pick<IChatHistoryItem, 'structuredReplies' | 'toolResults' | 'uiSideEffects'>;
+
 export interface WorkspaceSessionSettingsEntry {
   ownedFields: readonly SurfaceOwnableSessionField[];
   resolve: (ctx: WorkspaceSessionSettingsContext) => Promise<Partial<SurfaceOwnableSessionSettings>>;
+  /**
+   * Answers a turn on the workspace's sessions before any model runs, for a scripted walkthrough
+   * that must reply the same way every time. Null hands the turn to the model.
+   */
+  respond?: (ctx: WorkspaceTurnContext) => Promise<WorkspaceTurnReply | null>;
+  /**
+   * Whether `respond` scripts this session's turns, for a workspace that scripts only some of its
+   * sessions. Absent, every session on a workspace with `respond` counts as scripted. It sees the
+   * stored session, before `resolve` applies.
+   */
+  answersTurns?: (ctx: WorkspaceSessionSettingsContext) => Promise<boolean>;
 }
 
 /**
@@ -300,6 +320,51 @@ export async function applyWorkspaceSessionSettings<TSession extends SurfaceSett
 }
 
 /**
+ * Whether `ctx.session`'s workspace answers its turns itself, so no model may answer one. A predicate
+ * that throws counts as `whenPredicateFails`: yes by default, since a wrong no would let a model
+ * improvise a scripted reply.
+ */
+export async function workspaceAnswersTurns(
+  ctx: WorkspaceSessionSettingsContext,
+  table: WorkspaceSessionSettingsTable,
+  whenPredicateFails = true
+): Promise<boolean> {
+  const entry = ownedFieldsFor(ctx.session, table, false)?.entry;
+  if (!entry?.respond) return false;
+  if (!entry.answersTurns) return true;
+  try {
+    return await entry.answersTurns(ctx);
+  } catch (error) {
+    ctx.logger?.warn(`Workspace turn predicate for "${normalizeSurfaceId(ctx.session.surface)}" failed`, error);
+    return whenPredicateFails;
+  }
+}
+
+/**
+ * The workspace's own answer to a turn, or null when it has none and the model should answer. A
+ * responder that throws fails the turn rather than letting a model improvise a scripted reply.
+ */
+export async function respondFromWorkspace(
+  ctx: WorkspaceTurnContext,
+  table: WorkspaceSessionSettingsTable
+): Promise<WorkspaceTurnReply | null> {
+  const owned = ownedFieldsFor(ctx.session, table, false);
+  if (!owned?.entry.respond) return null;
+  const surface = normalizeSurfaceId(ctx.session.surface);
+  let reply: WorkspaceTurnReply | null;
+  try {
+    reply = await owned.entry.respond(ctx);
+  } catch (error) {
+    ctx.logger?.warn(`Workspace turn responder for "${surface}" failed`, error);
+    throw new Error(`Workspace turn responder for "${surface}" failed`, { cause: error });
+  }
+  if (reply && !(Array.isArray(reply.replies) && reply.replies.length > 0)) {
+    throw new Error(`Workspace turn responder for "${surface}" returned no replies`);
+  }
+  return reply ?? null;
+}
+
+/**
  * A shallow copy of `copy` without the fields `source`'s workspace owns, for a copy that must not
  * inherit them. `source` defaults to `copy`; pass the original session when `copy` is a new record
  * built from it (its surface may differ, and a live document must not be spread).
@@ -350,7 +415,9 @@ export function userSetSessionFields(
 /** Checks a contributed table once, at load, so a malformed entry fails at startup rather than every turn. */
 export function defineWorkspaceSessionSettingsTable(entries: Record<string, unknown>): WorkspaceSessionSettingsTable {
   for (const [id, entry] of Object.entries(entries)) {
-    const { ownedFields, resolve } = (entry ?? {}) as Partial<Record<keyof WorkspaceSessionSettingsEntry, unknown>>;
+    const { ownedFields, resolve, respond, answersTurns } = (entry ?? {}) as Partial<
+      Record<keyof WorkspaceSessionSettingsEntry, unknown>
+    >;
     if (!Array.isArray(ownedFields) || !ownedFields.every(field => OWNABLE_FIELD_SET.has(field))) {
       throw new Error(
         `Workspace session settings for "${id}": ownedFields must be an array of ${SURFACE_OWNABLE_SESSION_FIELDS.join(', ')}`
@@ -358,6 +425,14 @@ export function defineWorkspaceSessionSettingsTable(entries: Record<string, unkn
     }
     if (typeof resolve !== 'function') {
       throw new Error(`Workspace session settings for "${id}": resolve must be a function`);
+    }
+    if (respond !== undefined && typeof respond !== 'function') {
+      throw new Error(`Workspace session settings for "${id}": respond must be a function when set`);
+    }
+    if (answersTurns !== undefined && (typeof answersTurns !== 'function' || respond === undefined)) {
+      throw new Error(
+        `Workspace session settings for "${id}": answersTurns must be a function, set only beside respond`
+      );
     }
   }
   return entries as WorkspaceSessionSettingsTable;

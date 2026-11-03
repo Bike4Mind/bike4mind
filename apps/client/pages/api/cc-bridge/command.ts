@@ -5,7 +5,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensureTavernAccess } from '@bike4mind/server-utils/utils/errors';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { sendToConnection } from '@server/websocket/utils';
+import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 import { randomUUID } from 'node:crypto';
 import { Resource } from 'sst';
 import { z } from 'zod';

@@ -207,12 +207,15 @@ describe('bedrock wiring', () => {
 });
 
 describe('openai wiring', () => {
-  it('hands the source every id the catalog holds', async () => {
+  it('hands the source every id the catalog holds, and every static adapter id', async () => {
     buildModelDiscoveryAdapters(logger);
 
-    await expect(captured.openai!.knownModelIds!()).resolves.toEqual(
-      new Set(['claude-sonnet-5', 'us.anthropic.claude-sonnet-9', 'grok-3-fast'])
-    );
+    const known = (await captured.openai!.knownModelIds!()) as ReadonlySet<string>;
+    for (const id of ['claude-sonnet-5', 'us.anthropic.claude-sonnet-9', 'grok-3-fast']) {
+      expect(known.has(id)).toBe(true);
+    }
+    // The seed holds the dated snapshot, not its alias; without it the alias reads as new.
+    expect(known.has('gpt-4.1-2025-04-14')).toBe(true);
   });
 
   it('keeps the new-model docs leg off when the catalog read failed', async () => {

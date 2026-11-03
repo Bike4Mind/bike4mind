@@ -17,9 +17,16 @@ export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 export class Logger implements ILogger {
   private static _globalInstance: Logger | undefined;
 
+  // Lets a server runtime scope the global logger per request without this browser-safe package importing node:async_hooks.
+  private static contextProvider: (() => Logger | undefined) | undefined;
+
+  static setContextProvider(provider: (() => Logger | undefined) | undefined): void {
+    Logger.contextProvider = provider;
+  }
+
   // Built on first access, not at import, so importing this module reads no process.env.
   static get globalInstance(): Logger {
-    return (Logger._globalInstance ??= new Logger());
+    return Logger.contextProvider?.() ?? (Logger._globalInstance ??= new Logger());
   }
 
   protected metadata: Record<string, unknown> = {};

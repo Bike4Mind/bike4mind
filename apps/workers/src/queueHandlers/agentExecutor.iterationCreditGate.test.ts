@@ -9,6 +9,7 @@ import {
   aggregationGraceReasonOf,
   refusesUnrunnableModel,
   shouldGateIteration,
+  stopBlockedAccountIteration,
   stopCappedIteration,
   stopUnfundedIteration,
 } from './agentExecutor.iterationCreditGate';
@@ -40,6 +41,7 @@ function args(overrides: Record<string, unknown> = {}) {
     modelInfo: model,
     lastInputTokens: 0,
     readBalance: vi.fn().mockResolvedValue(required()),
+    checkSpendCap: vi.fn().mockResolvedValue(null),
     snapshot: vi.fn().mockReturnValue({ steps, partialAnswer: 'partial answer' as string | undefined }),
     ...overrides,
   };
@@ -100,6 +102,41 @@ describe('stopUnfundedIteration', () => {
     await expect(stopUnfundedIteration(args({ lastInputTokens: 100_000, readBalance }), deps)).resolves.toBe(true);
   });
 
+  it('stops a funded iteration that would take a new account over its spend cap, before the model call', async () => {
+    const deps = makeDeps();
+    const capMessage = 'New accounts can spend up to 10,000 credits per hour; this resets at 12:11 UTC.';
+    const checkSpendCap = vi.fn().mockResolvedValue(capMessage);
+
+    await expect(
+      stopUnfundedIteration(
+        args({ lastInputTokens: 5_000, readBalance: vi.fn().mockResolvedValue(required(5_000)), checkSpendCap }),
+        deps
+      )
+    ).resolves.toBe(true);
+
+    expect(checkSpendCap).toHaveBeenCalledWith(required(5_000));
+    expect(deps.markFailed).toHaveBeenCalledWith('exec-1', { message: capMessage });
+    expect(deps.sendWs).toHaveBeenCalledWith('failed', {
+      executionId: 'exec-1',
+      reason: 'insufficient_credits',
+      partialResult: steps,
+    });
+    expect(deps.persistRunAsQuest).toHaveBeenCalledWith(
+      'exec-1',
+      `Stopped: ${capMessage} Partial response:\n\npartial answer`
+    );
+  });
+
+  it('does not read the spend cap when the balance already stops the run', async () => {
+    const deps = makeDeps();
+    const checkSpendCap = vi.fn();
+
+    await expect(
+      stopUnfundedIteration(args({ readBalance: vi.fn().mockResolvedValue(0), checkSpendCap }), deps)
+    ).resolves.toBe(true);
+    expect(checkSpendCap).not.toHaveBeenCalled();
+  });
+
   it('stops with the plain message when the run produced no partial answer', async () => {
     const deps = makeDeps();
     const gateArgs = args({ readBalance: vi.fn().mockResolvedValue(0) });
@@ -146,6 +183,44 @@ describe('stopCappedIteration', () => {
       'exec-1',
       "Stopped: reached this run's credit cap. Partial response:\n\npartial answer"
     );
+  });
+});
+
+describe('stopBlockedAccountIteration', () => {
+  const denial = 'Account suspended pending dispute resolution. Please contact support.';
+  const gateArgs = (readAccessDenial: () => Promise<string | null>) => ({
+    executionId: 'exec-1',
+    readAccessDenial,
+    snapshot: vi.fn().mockReturnValue({ steps, partialAnswer: 'partial answer' }),
+  });
+
+  it('stops a run whose account was blocked since it was admitted, before the next iteration', async () => {
+    const deps = makeDeps();
+
+    await expect(
+      stopBlockedAccountIteration(
+        gateArgs(async () => denial),
+        deps
+      )
+    ).resolves.toBe(true);
+
+    expect(deps.markFailed).toHaveBeenCalledWith('exec-1', { message: denial });
+    expect(deps.sendWs).toHaveBeenCalledWith('failed', {
+      executionId: 'exec-1',
+      reason: 'account_blocked',
+      partialResult: steps,
+    });
+    expect(deps.persistRunAsQuest).toHaveBeenCalledWith('exec-1', `Stopped: ${denial}`);
+  });
+
+  it('lets an active account run, without snapshotting the agent', async () => {
+    const deps = makeDeps();
+    const args = gateArgs(async () => null);
+
+    await expect(stopBlockedAccountIteration(args, deps)).resolves.toBe(false);
+
+    expect(args.snapshot).not.toHaveBeenCalled();
+    expect(deps.markFailed).not.toHaveBeenCalled();
   });
 });
 
@@ -223,6 +298,14 @@ describe('processExecution iteration-gate wiring', () => {
     );
     expect(loopSource).toMatch(/const stopped = await stopCappedIteration\(/);
     expect(loopSource).toContain('creditCap: execution.creditCap,');
+  });
+
+  it('re-reads the account state before every iteration, ahead of the credit gate', () => {
+    const accountGate = loopSource.indexOf('const blocked = await stopBlockedAccountIteration(');
+    expect(accountGate).toBeGreaterThanOrEqual(0);
+    expect(accountGate).toBeLessThan(loopSource.indexOf('const gateThisIteration = shouldGateIteration({'));
+    expect(loopSource).toContain('readAccessDenial: () => readUserAccessDenial((user as IUserDocument).id),');
+    expect(loopSource).toMatch(/if \(blocked\) return;/);
   });
 
   it('grows the next estimate from the iteration that just ran', () => {

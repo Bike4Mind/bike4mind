@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { editFileTool } from './index';
 import type { ToolContext } from '../../base/types';
+import { recordToolOperationalUsage } from '../../base/recordToolOperationalUsage';
+
+vi.mock('../../base/recordToolOperationalUsage', () => ({ recordToolOperationalUsage: vi.fn() }));
 
 /**
  * edit_file runs its own llm.complete, so it has to forward `context.getAbortSignal()` as
@@ -66,6 +69,49 @@ describe('editFileTool cancellation handling', () => {
     await run(context);
 
     expect(complete.mock.calls[0][2].abortSignal).toBe(controller.signal);
+  });
+
+  it('runs the configured model in place of its default', async () => {
+    const complete = vi.fn(async (_m, _msgs, _o, cb) => cb(['edited'], undefined));
+    const { context } = makeContext(undefined, complete);
+
+    await editFileTool
+      .implementation(context, { model: 'cheap-model' })
+      .toolFn({ fileId: FILE_ID, instruction: 'uppercase it' }, {} as never);
+
+    expect(complete.mock.calls[0][0]).toBe('cheap-model');
+  });
+
+  describe('usage row model', () => {
+    const runConfigured = async (toLedgerModel: (id: string) => string) => {
+      vi.mocked(recordToolOperationalUsage).mockClear();
+      const complete = vi.fn(async (_m, _msgs, _o, cb) => cb(['edited'], undefined));
+      const { context } = makeContext(undefined, complete);
+      await editFileTool
+        .implementation({ ...context, toLedgerModel }, { model: 'cheap-model' })
+        .toolFn({ fileId: FILE_ID, instruction: 'uppercase it' }, {} as never);
+      return vi.mocked(recordToolOperationalUsage).mock.calls[0][1];
+    };
+
+    it('names the default edit model when the configured model is a substitute', async () => {
+      const args = await runConfigured(id => (id === 'cheap-model' ? 'requested-model' : id));
+      expect(args).toMatchObject({ model: 'cheap-model', ledgerModel: 'gpt-4' });
+    });
+
+    it('records the configured model itself when the turn was not substituted', async () => {
+      const args = await runConfigured(id => id);
+      expect(args.model).toBe('cheap-model');
+      expect(args).not.toHaveProperty('ledgerModel');
+    });
+
+    it('rejects a config whose model is not a string', async () => {
+      const complete = vi.fn(async (_m, _msgs, _o, cb) => cb(['edited'], undefined));
+      const { context } = makeContext(undefined, complete);
+      await expect(
+        editFileTool.implementation(context, { model: 42 }).toolFn({ fileId: FILE_ID, instruction: 'x' }, {} as never)
+      ).rejects.toThrow();
+      expect(complete).not.toHaveBeenCalled();
+    });
   });
 
   it('sends no signal when the host supplies no getter', async () => {

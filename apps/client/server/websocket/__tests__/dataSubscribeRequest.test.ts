@@ -84,7 +84,7 @@ vi.mock('@casl/mongoose', () => ({
   accessibleBy: vi.fn().mockReturnValue({ ofType: vi.fn().mockReturnValue({}) }),
 }));
 
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   Subscription: {},
 }));
 
@@ -99,7 +99,7 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   UnauthorizedError: class UnauthorizedError extends Error {},
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   sendToConnection: vi.fn(),
   withWebSocketContext: vi.fn(
     (handler: (event: unknown, context: unknown, logger: unknown) => Promise<unknown>) => handler
@@ -116,7 +116,7 @@ vi.mock('@bike4mind/database/infra', () => ({
 }));
 
 const mockIsWithinGraceWindow = vi.fn();
-vi.mock('@server/auth/secretRotationGrace', () => ({
+vi.mock('@bike4mind/server-utils/auth/secretRotationGrace', () => ({
   isRotatedSecretWithinGraceWindow: (...args: unknown[]) => mockIsWithinGraceWindow(...args),
 }));
 

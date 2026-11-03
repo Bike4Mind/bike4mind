@@ -1,9 +1,9 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { ensureAdmin, NotFoundError, BadRequestError, isZodError } from '@bike4mind/server-utils/utils/errors';
+import { NotFoundError, BadRequestError, isZodError } from '@bike4mind/server-utils/utils/errors';
 import { ModalModel } from '@bike4mind/database/social';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { modalAuditTitle } from '@client/server/tools/modalOperations';
@@ -14,9 +14,10 @@ import { MODAL_AUDIENCE_KEY_SET, MODAL_SAFE_DEFAULT_KEY } from '@bike4mind/servi
  *
  * This is the ONE path that returns / writes the raw `variants` map - the
  * serve-time leak guard (`extractVariantForViewer`) is deliberately NOT applied
- * here. Because the guard never runs on this route, it MUST require admin
- * authorization (authentication alone would expose every variant to any
- * signed-in user). The serving route (`/api/modals`) always applies the guard.
+ * here. Because the guard never runs on this route, it MUST require the
+ * settings:manage admin permission (authentication alone would expose every
+ * variant to any signed-in user). The serving route (`/api/modals`) always applies the
+ * guard.
  */
 
 const ADMIN_RATE_LIMIT = 20; // requests per minute
@@ -67,11 +68,13 @@ function zodResponse(res: Response, error: unknown): Response | null {
   return res.status(400).json({ error: 'Invalid request', details: issues, validationErrors: issues });
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { GET: 'settings:manage', PUT: 'settings:manage', DELETE: 'settings:manage' },
+})
   .use(rateLimit({ limit: ADMIN_RATE_LIMIT, windowMs: ONE_MINUTE_MS }))
   // Read the full modal INCLUDING its raw variants map (for admin editing).
   .get(async (req: Request, res: Response) => {
-    ensureAdmin(req.user?.isAdmin);
     const modalId = typeof req.query.modalId === 'string' ? req.query.modalId : '';
     if (!modalId) throw new BadRequestError('modalId query param is required');
 
@@ -83,7 +86,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   })
   // Create or replace the variants map for a modal.
   .put(async (req: Request, res: Response) => {
-    ensureAdmin(req.user?.isAdmin);
     try {
       const { modalId, variants } = UpdateVariantsSchema.parse(req.body);
 
@@ -120,7 +122,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   })
   // Clear the variants map (revert the modal to legacy single-content mode).
   .delete(async (req: Request, res: Response) => {
-    ensureAdmin(req.user?.isAdmin);
     try {
       const { modalId } = ModalIdBodySchema.parse(req.body);
 

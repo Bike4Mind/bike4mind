@@ -1,6 +1,6 @@
 import React, { FC, useState, useEffect } from 'react';
 import { Box, Typography } from '@mui/joy';
-import { generateCompleteArtifactId, getArtifactTimestamp } from '@client/app/utils/artifactParser';
+import { generateCompleteArtifactId, getArtifactTimestamp } from '@bike4mind/server-utils/app/utils/artifactParser';
 import { getCachedArtifactId, getProvisionalArtifactId, useArtifactIdResolver } from './ArtifactIdResolver';
 import { getArtifactHandler, type ParsedArtifact } from './registry';
 import type { ReactArtifactGroupRole } from '@client/app/utils/reactArtifactGroup';

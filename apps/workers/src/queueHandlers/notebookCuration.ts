@@ -12,8 +12,8 @@ import {
 import { secureParameters } from '@bike4mind/utils';
 import { meterCompletionBackend, notebookCurationService } from '@bike4mind/services';
 import { CreditHolderType, type CurationOptions } from '@bike4mind/common';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
-import { sendToClient } from '@server/websocket/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { NotebookCurationBillingSchema, NotebookCurationEvents } from '@server/utils/eventBus';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { z } from 'zod';

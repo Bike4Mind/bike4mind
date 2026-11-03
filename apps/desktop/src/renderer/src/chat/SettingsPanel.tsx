@@ -33,13 +33,17 @@ import {
   ContrastIcon,
   DownloadIcon,
   FolderIcon,
+  ModelsIcon,
   ServerIcon,
   ShieldIcon,
   SlidersIcon,
   SparkIcon,
+  SubSessionsIcon,
 } from './icons';
+import { nestedSessionsSummary, useNestedSessions } from './nestedSessions';
 import { columnStackSx, contentColumnSx, thinScrollbarSx } from './layout';
 import { useCostDisplayPreference } from './costDisplay';
+import { tokenRateSummary, useTokenRateSetting } from './tokenRate';
 import { PermissionsSettings, permissionsSummary, usePermissions } from './PermissionsSettings';
 import { promptSuggestionsSummary, usePromptSuggestionModel, usePromptSuggestions } from './promptSuggestions';
 import { SuggestionModelPicker } from './SuggestionModelPicker';
@@ -131,6 +135,32 @@ function worktreeEntry(enabled: boolean, toggle: () => void): ConfigEntry {
   };
 }
 
+function nestedSessionsEntry(enabled: boolean, toggle: () => void): ConfigEntry {
+  return {
+    id: 'nested-sessions',
+    icon: <SubSessionsIcon />,
+    label: 'Nest sub-sessions',
+    summary: nestedSessionsSummary(enabled),
+    control: (
+      <Stack spacing={1.25}>
+        <Typography level="body-xs" textColor="text.tertiary">
+          Draw sessions an agent spawns as a branch under the session that started it, folded or open. Off lists every
+          session on its own row.
+        </Typography>
+        <Switch
+          size="sm"
+          checked={enabled}
+          onChange={toggle}
+          sx={{ alignSelf: 'flex-start' }}
+          slotProps={{
+            input: { 'aria-label': 'Nest sub-sessions', 'data-testid': 'settings-nested-sessions-switch' },
+          }}
+        />
+      </Stack>
+    ),
+  };
+}
+
 function dollarCostsEntry(enabled: boolean, setEnabled: (enabled: boolean) => void): ConfigEntry {
   return {
     id: 'dollar-costs',
@@ -144,6 +174,32 @@ function dollarCostsEntry(enabled: boolean, setEnabled: (enabled: boolean) => vo
         onChange={event => setEnabled(event.target.checked)}
         slotProps={{ input: { 'aria-label': 'Show dollar costs', 'data-testid': 'settings-dollar-costs-switch' } }}
       />
+    ),
+  };
+}
+
+function tokenRateEntry(enabled: boolean, toggle: () => void): ConfigEntry {
+  return {
+    id: 'token-rate',
+    icon: <ModelsIcon />,
+    label: 'Self-hosted model speed',
+    summary: tokenRateSummary(enabled),
+    control: (
+      <Stack spacing={1.25}>
+        <Typography level="body-xs" textColor="text.tertiary">
+          Show tokens per second where hosted models show credits. Hover it for prompt speed, load time and draft
+          acceptance when the server reports them; a figure starting with ~ was timed by this app.
+        </Typography>
+        <Switch
+          size="sm"
+          checked={enabled}
+          onChange={toggle}
+          sx={{ alignSelf: 'flex-start' }}
+          slotProps={{
+            input: { 'aria-label': 'Self-hosted model speed', 'data-testid': 'settings-token-rate-switch' },
+          }}
+        />
+      </Stack>
     ),
   };
 }
@@ -328,6 +384,7 @@ const SECTION_ICON: Record<SettingsSection, ReactNode> = {
 function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, ConfigEntry[]> {
   const showDollarCosts = useCostDisplayPreference(state => state.showDollarCosts);
   const setShowDollarCosts = useCostDisplayPreference(state => state.setShowDollarCosts);
+  const [showTokenRate, toggleTokenRate] = useTokenRateSetting();
   const update = useAppUpdate();
   const { mode, setMode } = useColorScheme();
   const theme = useTheme();
@@ -336,6 +393,7 @@ function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, Con
   const [permissions, setPermissions, permissionsError, retryPermissions] = usePermissions();
   const [claudeImport, setClaudeImport, importError, retryImport] = useClaudeImport();
   const [worktreeDefault, toggleWorktreeDefault] = useWorktreeByDefault();
+  const [nestedSessions, toggleNestedSessions] = useNestedSessions();
   const [localContext, setLocalContext, localContextError, localContextFit] = useLocalContextSetting();
   const [modelServers, setModelServers, modelServersError] = useModelServers();
   const curatedList = useCuratedListSettings();
@@ -345,7 +403,9 @@ function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, Con
       appearanceEntry(mode, setMode, theme.palette.mode),
       suggestionsEntry(suggestions, toggleSuggestions, suggestionModel),
       worktreeEntry(worktreeDefault, toggleWorktreeDefault),
+      nestedSessionsEntry(nestedSessions, toggleNestedSessions),
       localContextEntry(localContext, next => void setLocalContext(next), localContextError, localContextFit),
+      tokenRateEntry(showTokenRate, toggleTokenRate),
       curatedListEntry(
         curatedList.settings,
         enabled => void curatedList.setEnabled(enabled),

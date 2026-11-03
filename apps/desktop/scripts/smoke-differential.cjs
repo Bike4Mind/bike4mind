@@ -39,7 +39,7 @@ async function main() {
     await fs.writeFile(newFile, next);
     await appendBlockmap(oldFile);
     const builderInfo = await appendBlockmap(newFile);
-    for (const suffix of ['arm64.zip', 'arm64.dmg', 'arm64.zip.blockmap']) {
+    for (const suffix of ['arm64.zip', 'arm64.dmg', 'arm64.zip.blockmap', 'setup.exe', 'setup.exe.blockmap']) {
       await fs.writeFile(path.join(root, `Bike4Mind-0.2.3-${suffix}`), 'fixture');
     }
     const assets = path.join(root, 'assets');

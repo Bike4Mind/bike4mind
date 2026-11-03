@@ -550,6 +550,23 @@ describe('music job settlement', () => {
     );
   });
 
+  it('records the API key that created the job on its settlement row', async () => {
+    const t = setup({
+      providers: createMusicProviderRegistry([
+        stubProvider(async () => song(30, { reportedDurationSeconds: 95 }), 'gemini-lyria'),
+      ]),
+    });
+    const created = await createMusicJob(
+      { user, request: { model: 'lyria-3.5', prompt: 'x' }, source: 'api', apiKeyId: 'key-1' },
+      t.deps
+    );
+    await t.runToCompletion();
+
+    expect(t.jobOf(created).apiKeyId).toBe('key-1');
+    const [, , entry] = vi.mocked(settleCreditHold).mock.calls[0];
+    expect(entry).toMatchObject({ type: 'music_generation_usage', apiKeyId: 'key-1' });
+  });
+
   it('charges a per-second model the seconds it delivered, capped at the hold', async () => {
     const caps = MUSIC_MODEL_CATALOG.music_v2_5;
     const reported = [42, 75];

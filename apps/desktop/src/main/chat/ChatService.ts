@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { NotAuthenticatedError, SessionRevokedError, type AuthenticatedApiClient } from '@bike4mind/client-auth';
+import { DEFAULT_PROMPT_CACHE_TTL, type PromptCacheTtl } from '@bike4mind/common';
 import type {
   ChatApprovalDecidedBy,
   ChatApprovalSystemReason,
@@ -18,8 +19,10 @@ import type {
   ChatModelCatalog,
   ChatModelOption,
   ChatProject,
+  ChatPromptCacheStamp,
   ChatQueuedMessage,
   ChatReplyRound,
+  ChatSentRound,
   ChatSession,
   ChatSessionStatusEvent,
   ChatSessionSummary,
@@ -31,9 +34,11 @@ import type {
   ChatToolCall,
   ChatToolDetail,
   ChatToolNotice,
+  ChatToolState,
   ChatUsage,
   CreateCodeSessionRequest,
   CreateCodeSessionResult,
+  CreationTool,
   ContextBoundaryResult,
   ReasoningEffortSetting,
   SendMessageResult,
@@ -46,6 +51,7 @@ import type {
 import {
   awaitsWorktree,
   branchHolder,
+  findModelOption,
   isLocalBackend,
   isLocalModel,
   isResumableStop,
@@ -58,7 +64,8 @@ import {
   SERVER_CREDENTIALS_STOP,
   SESSION_EXPIRED_STOP,
 } from '@shared/chat';
-import { AUTO_COMPACT_PERCENT, occupiedTokens, shouldAutoCompact } from '@shared/contextLimit';
+import { AUTO_COMPACT_PERCENT, inputSide, occupiedTokens, shouldAutoCompact } from '@shared/contextLimit';
+import { estimateContextOverhead, type ContextSnapshot } from '@shared/contextBreakdown';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
 import type { AppWorktree } from '@shared/worktreeRemoval';
@@ -76,6 +83,7 @@ import {
 } from '@shared/mcp';
 import { activeTodos, TODO_TOOL_NAME } from '@shared/todos';
 import { autoFixToolRefusal } from '../pr/autoFix';
+import type { PrMonitor } from '../pr/PrMonitor';
 import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import type { CapabilityLedger } from './capabilities/CapabilityLedger';
 import { capabilityFor, capabilityScope } from './capabilities/approvalCapabilities';
@@ -133,10 +141,11 @@ import { describeAlways } from './approvalScope';
 import { reasoningEffortFor, requestsThinking } from './reasoningEffort';
 import { addUsage, foldUsage } from './streamEvents';
 import type { CompletionStreamEvent } from './streamEvents';
-import { LocalModelRemovedError, OllamaLocal } from './OllamaLocal';
+import { LocalModelRemovedError, OllamaLocal, toMessages } from './OllamaLocal';
 import type { LocalChat } from './localChat';
 import { ServerCredentialsError } from '../modelServers/errors';
-import { ContextOverflowError, localTranscriptChars, shrunkTranscriptChars } from './localContext';
+import { holdsPrompt } from '@bike4mind/local-models/servers';
+import { ContextOverflowError, estimateTokens, localTranscriptChars, shrunkTranscriptChars } from './localContext';
 import type { LocalHistory } from './LocalHistory';
 import type { LocalHistoryResult } from '@shared/history';
 import { findStaleResults, historyRounds, sentHistory, toolResultContent } from './contextPruning';
@@ -167,7 +176,7 @@ import { resolveInlineSkills } from './skills/inline';
 import { SkillsPromptCache } from './skills/prompt';
 import { skillSource, type SkillCatalog } from './skills/SkillCatalog';
 import type { McpManager, McpToolBinding } from './mcp/McpManager';
-import { desktopAppGuidance, mcpServerLines } from './mcp/prompt';
+import { desktopAppGuidance, mcpGuidance, mcpServerLines } from './mcp/prompt';
 import { describeFlags, modelSafeRequest, planMcpServerRequest } from './tools/mcpTools';
 import type { AccessStore } from './tools/AccessStore';
 import { forgetSessionWrites } from './tools/sessionScripts';
@@ -181,7 +190,7 @@ import { inspectDirectory, inspectDirectoryRequest } from './tools/requestDirect
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { BackgroundWake } from './backgroundWake';
 import type { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
-import { findTool, isOfferedEditTool, toolsForRequest, usesApplyPatch } from './tools/registry';
+import { findTool, isOfferedEditTool, offeredMediaToolNames, toolsForRequest, usesApplyPatch } from './tools/registry';
 import { webContextFor } from './tools/webTools';
 import { DoomLoopTracker, THRESHOLD as LOOP_THRESHOLD } from './tools/doomLoop';
 import { WEB_SEARCH_TURN_BUDGET, WebSearchLimiter } from './tools/webSearchLimits';
@@ -217,8 +226,23 @@ import {
   type ToolContext,
   type ToolDefinition,
   type ToolReporter,
+  type ToolSchema,
   type WebContext,
 } from './tools/types';
+import {
+  appendLiveToolChange,
+  declareDeferredTools,
+  estimateToolTokens,
+  insertToolChanges,
+  offersCoreTools,
+  optionalToolNames,
+  sameToolState,
+  startToolNames,
+  supportsDeferredTools,
+  toolStateRecords,
+  toolStateReminder,
+  type ToolStateMark,
+} from './deferredTools';
 import {
   IMPORTED_TAINT_SOURCE,
   importedHistoryNeedsCompaction,
@@ -287,11 +311,16 @@ type TurnOutcome = 'completed' | 'aborted' | 'failed' | 'expired';
 const MID_TURN_NOTE =
   'The user sent this while you were still working. Answer or act on it now, then carry on with the task unless it changes what they want.';
 
+/** Rides with a relay that reached a running turn; the relay's own framing says whose words they are. */
+const RELAY_MID_TURN_NOTE =
+  'This message from another conversation arrived while you were still working. Weigh it now, then carry on with the task unless it changes what you should do.';
+
 /** Something that reached a running turn between rounds; see takeArrivals. */
 interface MidTurnArrival {
   message: ChatMessage;
   /** The queue entry it came from, for the event that clears its row. Absent on a notice. */
   queuedId?: string;
+  queuedEntries?: ChatQueuedMessage[];
 }
 
 /** Stored on a turn the session expired under; the thread shows it as paused, not as an error. */
@@ -410,6 +439,12 @@ export interface ChatServiceDeps {
   attachments?: AttachmentStore;
   logger: ChatServiceLogger;
   /**
+   * Deferred tool loading on supported Claude models (chat/deferredTools.ts). Absent keeps today's
+   * request shape. A start set estimated over `startSetMaxTokens` is deferred too; 0 defers all.
+   * Read once per turn, so it may change between turns (DeferredToolsSetting).
+   */
+  deferredTools?: { startSetMaxTokens: number };
+  /**
    * The server's model list. Absent in tests that do not exercise model resolution, which then
    * leaves every session on whatever model it was created with.
    */
@@ -453,6 +488,8 @@ export interface ChatServiceDeps {
   mcp?: McpManager;
   /** The agent's hidden browser. Absent in tests that do not exercise it; the tools are then not declared. */
   browser?: BrowserProvider;
+  /** Each conversation's PR binding. Absent in tests that do not exercise it; set_session_pull_request is then not declared. */
+  pullRequests?: Pick<PrMonitor, 'bindForAgent' | 'dismiss'>;
   /** Other apps' windows, for screen_capture. Absent in tests that do not exercise it; the tool is then not declared. */
   screen?: ScreenCapturer;
   /** Fits an image a tool shows the model. Absent in tests, where file_read then describes an image in text. */
@@ -543,6 +580,9 @@ interface ResumedReply {
   toolCalls: ChatToolCall[];
   artifacts: ChatArtifact[];
   usage?: ChatUsage;
+  contextSnapshot?: ContextSnapshot;
+  /** The model the reply started on, which a resumed run keeps stamping it with. */
+  model?: string;
 }
 
 /** One round as it is produced, before its artifact markup is parsed out of the text. */
@@ -552,6 +592,7 @@ interface RawRound {
   reasoning: string;
   timing: ChatRoundTiming;
   usage?: ChatUsage;
+  sent: ChatSentRound;
 }
 
 /**
@@ -919,6 +960,21 @@ export class ChatService {
   searchHistory(query: string): LocalHistoryResult[] {
     if (!this.deps.history) throw new Error('Local history is unavailable. Restart the app and try again.');
     return this.deps.history.search(query);
+  }
+
+  /**
+   * What a turn on `model` would be offered to generate with: the same conditions runReply reads
+   * for `media`, `video` and a model that takes no tools. Both lists come from the ModelCatalog's
+   * caches, so a blank chat asking for this costs no more than the next turn will.
+   */
+  async listCreationTools(model: string): Promise<CreationTool[]> {
+    if (!this.deps.media || !this.deps.getApiClient() || isLocalModel(model)) return [];
+    const [catalog, video] = await Promise.all([
+      this.deps.models?.list().catch(() => undefined),
+      this.deps.models?.listVideoModels().catch(() => []),
+    ]);
+    if (catalog?.models.find(option => option.id === model)?.supportsTools === false) return [];
+    return offeredMediaToolNames({ media: true, video: video ?? [] }).map(name => ({ name }));
   }
 
   /** What Settings offers for the next-prompt hint; see suggestionModelChoices. */
@@ -1359,8 +1415,9 @@ export class ChatService {
   /**
    * Pin this conversation to a model. Not validated against the catalog: see `reconcileModel`.
    *
-   * Reached only from the model picker, which is what makes it the one place a pick is
-   * remembered for the next conversation. Nothing the app chooses by itself comes through here.
+   * Reached only from a user's pick: the model picker, or Use in chat on the Models screen. That
+   * is what makes it the one place a pick is remembered for the next conversation. Nothing the
+   * app chooses by itself comes through here.
    */
   async setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null> {
     const updated = await this.deps.store.setModel(sessionId, model);
@@ -1376,6 +1433,10 @@ export class ChatService {
   /** Reasoning effort, or thinking On/Off for an Ollama model with a thinking switch. */
   setSessionReasoningEffort(sessionId: string, effort: ReasoningEffortSetting): Promise<ChatSessionSummary | null> {
     return this.deps.store.setReasoningEffort(sessionId, effort);
+  }
+
+  setSessionPromptCacheTtl(sessionId: string, ttl: PromptCacheTtl): Promise<ChatSessionSummary | null> {
+    return this.deps.store.setPromptCacheTtl(sessionId, ttl);
   }
 
   setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null> {
@@ -2117,16 +2178,26 @@ export class ChatService {
 
     // Reached only from the Continue button, so whoever clicked it is there to answer a card.
     this.attendedTurns.add(sessionId);
+    // A reply stored before it was stamped still says what it started on in its context snapshot.
+    const startedOn = last.model ?? last.contextSnapshot?.model;
     const replyId = this.startReply(session, api, historyScope, {
       id: last.id,
       content: last.content,
       // A message stored before rounds were recorded resumes as one round holding everything it
       // said and everything it ran, which is the most the flat shape supports: the turn carries
       // on correctly, and only the ordering of what came BEFORE stays unrecoverable.
-      rounds: last.rounds ?? [{ text: last.content, toolCallIds: (last.toolCalls ?? []).map(call => call.id) }],
+      rounds: last.rounds ?? [
+        {
+          text: last.content,
+          toolCallIds: (last.toolCalls ?? []).map(call => call.id),
+          ...(startedOn ? { model: startedOn } : {}),
+        },
+      ],
       toolCalls: last.toolCalls ?? [],
       artifacts: last.artifacts ?? [],
+      ...(startedOn ? { model: startedOn } : {}),
       ...(last.usage ? { usage: last.usage } : {}),
+      ...(last.contextSnapshot ? { contextSnapshot: last.contextSnapshot } : {}),
     });
     return { ok: true, messageId: replyId };
   }
@@ -2414,7 +2485,7 @@ export class ChatService {
   private async reconcileModel(session: ChatSession): Promise<{ session: ChatSession; notice?: string }> {
     const available = this.deps.models?.cached();
     if (!available || available.length === 0) return { session };
-    if (available.some(model => model.id === session.model)) return { session };
+    if (findModelOption(available, session.model)) return { session };
     // A device-local model is never swapped for a hosted one: that would send the conversation to the server.
     if (isLocalModel(session.model)) return { session };
 
@@ -2436,7 +2507,7 @@ export class ChatService {
    * proceeds and anything else is refused, so nothing goes anywhere hosted.
    */
   private async settleDeviceLocal(session: ChatSession, models: readonly ChatModelOption[]): Promise<SettledModel> {
-    if (models.some(model => model.id === session.model)) return { session };
+    if (findModelOption(models, session.model)) return { session };
     if (models.length === 0)
       return parseLocalModelId(session.model)
         ? { session }
@@ -2461,7 +2532,7 @@ export class ChatService {
    */
   private async localModelsFor(model: string): Promise<ChatModelOption[]> {
     const last = this.deps.models?.lastLocal?.();
-    if (last?.some(option => option.id === model)) return last;
+    if (last && findModelOption(last, model)) return last;
     return (await this.deps.models?.listLocal?.(true)) ?? [];
   }
 
@@ -2507,7 +2578,7 @@ export class ChatService {
   private refuseUnreadableImages(model: string, attachments: readonly ChatAttachment[]): string | null {
     if (!attachments.some(attachment => attachment.kind === 'image')) return null;
 
-    const option = this.deps.models?.cached()?.find(candidate => candidate.id === model);
+    const option = findModelOption(this.deps.models?.cached() ?? undefined, model);
     if (!option || option.supportsVision !== false) return null;
 
     return `${option.name} cannot read images. Pick a model that can, or remove the image before sending.`;
@@ -2572,8 +2643,12 @@ export class ChatService {
     let content = resume?.content ?? '';
     let stopReason: string | undefined;
     let usage: ChatUsage | undefined = resume?.usage;
+    let contextSnapshot: ContextSnapshot | undefined = resume?.contextSnapshot;
     let toolCalls: ChatToolCall[] = [...(resume?.toolCalls ?? [])];
     let thinking: unknown[] | undefined;
+    let segmentSettled = false;
+    // Outside the try so a failed reply is stamped too; see ChatMessage.deferred.
+    let deferredTurn = false;
     let previousRound: string | null = null;
     let stalled = 0;
     let roundsSincePlanUpdate = 0;
@@ -2589,6 +2664,9 @@ export class ChatService {
       const serverConfig = api && !localTurn ? await this.resolveServerConfig(api) : { endpoint: '', cdnUrl: '' };
       // A spawned session's seed run has nobody watching it; a turn the user typed into it does.
       const ask = !session.origin || this.attendedTurns.has(sessionId);
+      // Narrower than `ask`: a relay or automatic turn in a main session can still show a card,
+      // but nobody typed it.
+      const attended = this.attendedTurns.has(sessionId);
       let { roots, workingDirectory } = await this.resolveToolScope(session);
       const media = api && !localTurn ? this.buildMediaContext(session, api, serverConfig.cdnUrl) : undefined;
       // A wrapper over the client and nothing more: a turn that never searches makes no request.
@@ -2621,7 +2699,7 @@ export class ChatService {
           ? { models: await this.localModelsFor(session.model) }
           : await this.deps.models?.list();
       const cacheable = supportsPromptCache(catalog?.models ?? [], session.model);
-      const modelOption = catalog?.models.find(option => option.id === session.model);
+      const modelOption = findModelOption(catalog?.models, session.model);
       const maxTokens = modelOption?.maxOutputTokens;
       const thinkingToggle =
         modelOption?.thinkingToggle ??
@@ -2629,8 +2707,12 @@ export class ChatService {
       const askForThinking = requestsThinking(session.reasoningEffort, { thinkingToggle });
       const effort = reasoningEffortFor(session.reasoningEffort, session.model);
       const effortField = effort ? { reasoningEffort: effort } : {};
+      // The server keeps 5 minutes for a model without the hour, but sending it there says nothing.
+      const cacheTtl: PromptCacheTtl =
+        session.promptCacheTtl === '1h' && modelOption?.supportsOneHourCache ? '1h' : DEFAULT_PROMPT_CACHE_TTL;
+      const cacheTtlField = cacheTtl === '1h' ? { cacheTtl } : {};
       // Silence is not "no": see ChatModelOption.supportsVision.
-      const vision = catalog?.models.find(option => option.id === session.model)?.supportsVision !== false;
+      const vision = modelOption?.supportsVision !== false;
       const images: ImageContext | undefined = this.deps.prepareImage
         ? { vision, prepare: this.deps.prepareImage }
         : undefined;
@@ -2674,8 +2756,10 @@ export class ChatService {
         ? { available: () => skillCatalog.forModel(skillRoot) }
         : undefined;
       const videoModels = await videoModelsRead;
+      // Cleared when the server-fixed context cannot hold Desktop's prompt with tools; see toolPromptOverflow.
+      let roomForTools = true;
       const toolsFor = (granted: readonly string[]) =>
-        modelOption?.supportsTools === false || (localTurn && !modelOption)
+        modelOption?.supportsTools === false || (localTurn && !modelOption) || !roomForTools
           ? []
           : toolsForRequest({
               modelId: session.model,
@@ -2694,6 +2778,7 @@ export class ChatService {
               suggestions: !session.origin,
               mcp: mcpTools.map(binding => binding.definition.schema),
               mcpServers: !!this.deps.mcp,
+              pullRequest: session.mode === 'code' && attended && !!this.deps.pullRequests,
             });
       let tools = toolsFor(roots);
       // A resumed reply replays the interrupted turn's tool results to the model, so untrusted
@@ -2718,13 +2803,92 @@ export class ChatService {
       const contextBlock = this.projectContext.get(session.id, project?.workingDirectory, project?.directory);
       const skillsBlock = this.skillsPrompt?.get(session.id, skillRoot) ?? Promise.resolve('');
       if (!resume) await this.reportSuggestionOutcomes(session);
-      const wire = await toCompletionMessages(
-        session,
-        (attachment: ChatAttachment) => this.deps.attachments?.read(session.id, attachment.id) ?? Promise.resolve(null)
-      );
+      const readAttachment = (attachment: ChatAttachment) =>
+        this.deps.attachments?.read(session.id, attachment.id) ?? Promise.resolve(null);
       const projectContext = await contextBlock;
       const skillsSection = await skillsBlock;
-      const toolsSupported = modelOption?.supportsTools !== false && (!localTurn || !!modelOption);
+      let toolsSupported = modelOption?.supportsTools !== false && (!localTurn || !!modelOption);
+      // See chat/deferredTools.ts. Decided once per turn, so a turn never mixes the two shapes.
+      const deferredSetting = this.deps.deferredTools;
+      const deferred =
+        !!deferredSetting &&
+        !localTurn &&
+        cacheable &&
+        toolsSupported &&
+        supportsDeferredTools(modelOption) &&
+        offersCoreTools(tools);
+      deferredTurn = deferred;
+      const toolState = (): ChatToolState => ({
+        tools: optionalToolNames(toolsFor(roots)),
+        text: buildToolStateText({
+          roots,
+          media: !!media,
+          host: !!host,
+          explore: !!explore,
+          mcpServers: this.deps.mcp ? mcpServers : null,
+          dependencyLines: this.deps.dependencies?.promptLines(session.id) ?? [],
+          projectContext: !!projectContext,
+          browser: !!browser,
+          patchEdits,
+          memory: !!memory,
+          ask,
+          screen: !!screen,
+        }),
+      });
+      const schemaFor = (name: string): ToolSchema | undefined =>
+        toolsFor(roots).find(tool => tool.toolSchema.name === name)?.toolSchema ??
+        findTool(name)?.schema ??
+        mcpTools.find(binding => binding.definition.schema.name === name)?.definition.schema;
+      const declarable = (name: string) => schemaFor(name) !== undefined;
+      // Names the wire's tool changes reference; each must stay declared for the rest of the turn.
+      const referenced = new Set<string>();
+      // Schemas pinned when first seen, so a server dropping mid-turn cannot orphan a named tool.
+      const pinned = new Map<string, ToolSchema>();
+      const pin = (names: readonly string[]) =>
+        names.forEach(name => {
+          const schema = pinned.has(name) ? undefined : schemaFor(name);
+          if (schema) pinned.set(name, schema);
+        });
+      // The conversation's loaded start set; declared on every turn, offered or not.
+      let start: string[] = [];
+      const requestTools = () =>
+        deferred
+          ? declareDeferredTools(
+              toolsFor(roots),
+              [...new Set([...start, ...referenced])].flatMap(name => pinned.get(name) ?? schemaFor(name) ?? []),
+              new Set(start)
+            )
+          : toolsFor(roots);
+      let liveState: ChatToolState | undefined;
+      let wire: CompletionMessage[];
+      if (deferred) {
+        liveState = toolState();
+        pin(liveState.tools);
+        await this.recordToolStates(session, liveState, declarable);
+        const mcpNames = new Set(mcpTools.map(binding => binding.definition.schema.name));
+        start = startToolNames(
+          session.messages.find(message => message.role === 'user' && message.toolState)?.toolState,
+          name => !mcpNames.has(name) && findTool(name) !== undefined
+        ).filter(declarable);
+        const startTokens = estimateToolTokens(start.flatMap(name => schemaFor(name) ?? []));
+        if (startTokens > (deferredSetting?.startSetMaxTokens ?? 0)) start = [];
+        const marks: ToolStateMark[] = [];
+        const deferredReplies = new Set<number>();
+        const replayed = insertToolChanges(
+          await toCompletionMessages(session, readAttachment, marks, deferredReplies),
+          marks,
+          declarable,
+          start,
+          deferredReplies
+        );
+        wire = replayed.wire;
+        pin(start);
+        pin(replayed.referenced);
+        replayed.referenced.forEach(name => referenced.add(name));
+        tools = requestTools();
+      } else {
+        wire = await toCompletionMessages(session, readAttachment);
+      }
       const systemMessage = () =>
         buildSystemMessage(
           toolsSupported ? roots : [],
@@ -2744,12 +2908,23 @@ export class ChatService {
           toolsSupported && !!web,
           toolsSupported && !!screen
         );
-      wire.unshift(systemMessage());
+      wire.unshift(
+        deferred ? buildDeferredSystemMessage(session.project, projectContext, skillsSection) : systemMessage()
+      );
+      let overheadKey = '';
+      let overhead: ContextSnapshot['overhead'] = [];
       // Taken whether or not it is used, so a nudge the model ignored once does not follow the
       // conversation around. It rides on the newest turn only, after the cached prefix.
       const carried = this.pendingPlanReminder.get(sessionId);
       this.pendingPlanReminder.delete(sessionId);
       if (carried && !resume) appendToLastUserTurn(wire, carried);
+      const toolPromptTokens = localTurn ? toolPromptOverflow(modelOption, wire, tools, maxTokens) : undefined;
+      if (toolPromptTokens !== undefined) {
+        roomForTools = false;
+        toolsSupported = false;
+        tools = [];
+        wire[0] = systemMessage();
+      }
 
       /**
        * Store what the reply has produced so far as its own message and announce it finished:
@@ -2777,34 +2952,37 @@ export class ChatService {
 
         const rounds = [
           ...(resume?.rounds ?? []),
-          ...parsed
-            // Trimmed so the join below lands exactly one blank line between rounds, and so a
-            // round does not draw a gap under itself where the model happened to end on newlines.
-            .map(entry => ({
-              text: entry.content.trim(),
-              toolCallIds: entry.round.toolCallIds,
-              timing: entry.round.timing,
-              ...(entry.round.usage ? { usage: entry.round.usage } : {}),
-              ...(entry.round.reasoning.trim() ? { reasoning: entry.round.reasoning.trim() } : {}),
-            }))
-            // A round with only usage is kept: it is the measured size of a trimmed round stopped early.
-            .filter(round => round.text.length > 0 || round.toolCallIds.length > 0 || round.reasoning || round.usage),
+          ...storedRounds(
+            parsed.map(entry => ({ round: entry.round, text: entry.content })),
+            session.model
+          ),
         ];
-        // A plain reply keeps no rounds, but one that reasoned needs them to carry the reasoning.
-        const keepRounds = toolCalls.length > 0 || rounds.some(round => round.reasoning);
+        // A plain reply keeps no rounds, but one that reasoned needs them to carry the reasoning,
+        // and one continued on another model needs them to say which model spent what.
+        const continuedOnOther = resume?.model !== undefined && resume.model !== session.model;
+        const keepRounds = toolCalls.length > 0 || continuedOnOther || rounds.some(round => round.reasoning);
         const finalContent = joinRounds(rounds.map(round => round.text));
+        const lastTiming = produced[produced.length - 1]?.timing;
+        const promptCache: ChatPromptCacheStamp | undefined =
+          cacheable && !localTurn && lastTiming
+            ? { cachedAt: lastTiming.firstTokenAt ?? lastTiming.endedAt, ttl: cacheTtl, model: session.model }
+            : undefined;
 
         const message: ChatMessage = {
           id: replyId,
           role: 'assistant',
           content: finalContent,
           createdAt: new Date().toISOString(),
+          model: resume ? resume.model : session.model,
           stopReason,
           ...(toolCalls.length > 0 ? { toolCalls } : {}),
           ...(keepRounds ? { rounds } : {}),
           ...(thinking ? { thinking } : {}),
           ...(artifacts.length > 0 ? { artifacts } : {}),
           ...(usage ? { usage } : {}),
+          ...(promptCache ? { promptCache } : {}),
+          ...(contextSnapshot ? { contextSnapshot } : {}),
+          ...(deferred ? { deferred } : {}),
         };
         await this.settleReply(sessionId, !!resume, historyScope, message);
         this.emit({
@@ -2814,9 +2992,11 @@ export class ChatService {
           content: finalContent,
           stopReason,
           usage,
+          ...(contextSnapshot ? { contextSnapshot } : {}),
           ...(toolCalls.length > 0 ? { toolCalls } : {}),
-          ...(keepRounds ? { rounds } : {}),
+          ...(keepRounds ? { rounds: withoutSent(rounds) } : {}),
           ...(artifacts.length > 0 ? { artifacts } : {}),
+          ...(promptCache ? { promptCache } : {}),
         });
       };
 
@@ -2824,6 +3004,17 @@ export class ChatService {
       const screenshotTurns: number[] = [];
 
       for (let roundIndex = 0; roundIndex < limits.rounds; roundIndex++) {
+        if (liveState && roundIndex > 0) {
+          const next = toolState();
+          if (!sameToolState(liveState, next)) {
+            appendLiveToolChange(wire, liveState.tools, next);
+            pin(next.tools);
+            [...liveState.tools, ...next.tools].forEach(name => referenced.add(name));
+            await this.recordMidTurnToolState(session, next);
+            liveState = next;
+            tools = requestTools();
+          }
+        }
         const requested: RequestedTool[] = [];
         let turnText = '';
         let turnThinking: unknown[] | undefined;
@@ -2847,6 +3038,23 @@ export class ChatService {
         };
 
         await this.clearStaleResults(session, toolCalls, produced, wire, replyId);
+
+        const system = typeof wire[0].content === 'string' ? wire[0].content : '';
+        const key = system + JSON.stringify(tools);
+        if (key !== overheadKey) {
+          overheadKey = key;
+          const mcpNames = new Set(mcpTools.map(binding => binding.definition.schema.name));
+          overhead = estimateContextOverhead({
+            system,
+            project: projectContext,
+            skills: toolsSupported ? skillsSection : '',
+            tools: tools.map(tool => ({
+              name: tool.toolSchema.name,
+              schema: tool,
+              mcp: mcpNames.has(tool.toolSchema.name),
+            })),
+          });
+        }
 
         const probe = this.deps.turnTiming ? createRoundProbe(roundIndex === 0 ? turnStartedAt : undefined) : undefined;
         const setPhase = createPhaseTracker(phase =>
@@ -2892,6 +3100,7 @@ export class ChatService {
                 sessionId,
                 ...effortField,
                 ...(maxTokens ? { maxTokens } : {}),
+                ...(toolPromptTokens !== undefined ? { toolPromptTokens } : {}),
               },
               onCompletionEvent,
               controller.signal,
@@ -2906,9 +3115,10 @@ export class ChatService {
                 messages: cacheable ? withCacheBreakpoints(wire) : wire,
                 tools,
                 thinking: askForThinking,
-                // Dev log only; never sent on the wire. See CompletionRequest.sessionId.
+                // Ties the turn's ledger row to this session. See CompletionRequest.sessionId.
                 sessionId,
                 ...effortField,
+                ...cacheTtlField,
                 ...(maxTokens ? { maxTokens } : {}),
               },
               onCompletionEvent,
@@ -2930,6 +3140,7 @@ export class ChatService {
           reasoning: turnReasoning || readableThinking(turnThinking),
           timing,
           ...(turnUsage ? { usage: turnUsage } : {}),
+          sent: { ...(turnThinking ? { thinking: turnThinking } : {}), text: turnText },
         };
         produced.push(round);
 
@@ -2939,6 +3150,14 @@ export class ChatService {
         // from the first round trip on - the alternative is a field that stays blank for a
         // minute, or one filled in with a guess.
         usage = addUsage(usage, turnUsage);
+        const inputTokens = inputSide(turnUsage);
+        if (inputTokens !== null)
+          contextSnapshot = {
+            model: session.model,
+            inputTokens,
+            overhead,
+            ...(localTurn ? { modelWindow: await this.contextWindowOf(session.model) } : {}),
+          };
         if (usage) this.emit({ type: 'usage', sessionId, messageId: replyId, usage });
 
         // A turn whose context has run out is not a failed request to report: the rounds before
@@ -2981,7 +3200,7 @@ export class ChatService {
           const before = roots;
           ({ roots, workingDirectory } = await this.resolveToolScope(current));
           explore = exploreFor(roots);
-          tools = toolsFor(roots);
+          tools = requestTools();
           return describeRootChange(before, roots);
         };
         const baseBefore = roots[0];
@@ -3022,8 +3241,10 @@ export class ChatService {
                 web,
                 patchEdits,
                 ask,
+                attended,
                 title: session.title,
                 directories: directoryTurn,
+                ...(deferred ? { offered: new Set(toolsFor(roots).map(tool => tool.toolSchema.name)) } : {}),
                 permissions: {
                   project: session.project?.directory ?? null,
                   workingDirectory: session.project ? (workingDirectory ?? session.project.workingDirectory) : null,
@@ -3050,8 +3271,9 @@ export class ChatService {
         if (mcpToolsChanged(mcpTools, mcpNow)) {
           mcpTools = mcpNow;
           mcpServers = (await this.deps.mcp?.state())?.servers ?? [];
-          tools = toolsFor(roots);
-          wire[0] = systemMessage();
+          tools = requestTools();
+          // A deferred turn's system prompt holds no MCP state; the next round's reminder does.
+          if (!deferred) wire[0] = systemMessage();
         }
         round.toolCallIds = settled.map(call => call.id);
 
@@ -3078,15 +3300,20 @@ export class ChatService {
         // Appended HERE and nowhere else. toolResultContent is also what the two history
         // rebuilds send, so folding this into it would rewrite the text of already-sent
         // messages and break the prompt-cache prefix on every later turn (see contextPruning).
-        // The nudge is ephemeral by design: never stored on the call, never replayed.
+        // The nudge is never stored on the call; it is replayed only as this round's
+        // `sent.resultNote`, so later turns send it exactly where this request did.
         const nudge = stalePlanReminder(
           activeTodos([...sentHistory(session.messages), replySoFar(toolCalls)], true),
           roundsSincePlanUpdate
         );
         const lastResult = results[results.length - 1];
+        const resultBase = lastResult?.content;
         if (nudge && lastResult) lastResult.content = `${lastResult.content}\n\n${nudge}`;
         if (rootNote.length > 0 && lastResult) {
           lastResult.content = [lastResult.content, '', 'The user changed the shared folders:', ...rootNote].join('\n');
+        }
+        if (lastResult && typeof resultBase === 'string' && lastResult.content !== resultBase) {
+          round.sent.resultNote = lastResult.content.slice(resultBase.length);
         }
         wire.push({ role: 'user', content: results });
         const { kept, dropped } = withinImageBudget(
@@ -3134,21 +3361,34 @@ export class ChatService {
         // that is about to end; a turn that stops instead sends the queue as a turn of its own.
         const arrivals = controller.signal.aborted ? [] : await this.takeArrivals(sessionId, session.model);
         if (arrivals.length > 0) {
-          await settleSegment();
-          for (const arrival of arrivals) {
-            const updated = await this.deps.store.appendMessage(sessionId, arrival.message);
-            if (updated) session = updated;
-            if (arrival.queuedId) this.deps.queue?.sent(sessionId, arrival.queuedId, arrival.message);
-            else this.emit({ type: 'message', sessionId, message: arrival.message });
+          const unaccepted = [...arrivals];
+          try {
+            await settleSegment();
+            segmentSettled = true;
+            for (const arrival of arrivals) {
+              const updated = await this.deps.store.appendMessage(sessionId, arrival.message);
+              if (updated) session = updated;
+              unaccepted.shift();
+              if (arrival.queuedId) this.deps.queue?.sent(sessionId, arrival.queuedId, arrival.message);
+              else this.emit({ type: 'message', sessionId, message: arrival.message });
+            }
+          } catch (error) {
+            this.restoreArrivals(
+              sessionId,
+              unaccepted.flatMap(arrival => arrival.queuedEntries ?? [])
+            );
+            throw error;
           }
           // The rest of the turn is a new reply under the new messages. The resumed message, if
           // any, was just written back whole, so nothing more carries over from it.
           resume = undefined;
           replyId = randomUUID();
+          segmentSettled = false;
           content = '';
           toolCalls = [];
           produced = [];
           usage = undefined;
+          contextSnapshot = undefined;
           thinking = undefined;
           stopReason = undefined;
           // New input is new information: repeating the last round may be the right answer to it.
@@ -3201,6 +3441,14 @@ export class ChatService {
           ? { stopReason: SERVER_CREDENTIALS_STOP }
           : {};
 
+      if (segmentSettled) {
+        // settleSegment already stored this reply whole, rounds and artifacts included; a
+        // rewrite from the raw stream would drop them, so only the failure is added.
+        const updated = await this.deps.store.updateMessage(sessionId, replyId, { error: message, ...stop });
+        if (updated) this.captureSessionHistory(updated, historyScope);
+        this.emit({ type: 'error', sessionId, messageId: replyId, message, ...stop });
+        return expired ? 'expired' : 'failed';
+      }
       // Persisted even though it failed: a thread that silently drops the turn leaves the
       // user's own prompt sitting there with no explanation next time they open it.
       await this.settleReply(sessionId, !!resume, historyScope, {
@@ -3208,12 +3456,36 @@ export class ChatService {
         role: 'assistant',
         content,
         createdAt: new Date().toISOString(),
+        model: resume ? resume.model : session.model,
         error: message,
         ...stop,
+        // A resumed reply is rewritten in place, so whatever it already held must be passed back
+        // or the write clears it: its artifact markup is long gone from `content`.
+        ...(resume
+          ? {
+              rounds: [
+                ...resume.rounds,
+                ...storedRounds(
+                  produced.map(round => ({ round, text: round.text })),
+                  session.model
+                ),
+              ],
+              ...(resume.artifacts.length > 0 ? { artifacts: resume.artifacts } : {}),
+            }
+          : {}),
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
         ...(usage ? { usage } : {}),
+        ...(contextSnapshot ? { contextSnapshot } : {}),
+        ...(deferredTurn ? { deferred: true } : {}),
       });
-      this.emit({ type: 'error', sessionId, messageId: replyId, message, ...stop });
+      this.emit({
+        type: 'error',
+        sessionId,
+        messageId: replyId,
+        message,
+        ...stop,
+        ...(contextSnapshot ? { contextSnapshot } : {}),
+      });
       return expired ? 'expired' : 'failed';
     }
   }
@@ -3284,6 +3556,7 @@ export class ChatService {
     // must clear the budget stop the previous one left behind, and `Partial` would keep it.
     const updated = await this.deps.store.updateMessage(sessionId, message.id, {
       content: message.content,
+      model: message.model,
       stopReason: message.stopReason,
       error: message.error,
       toolCalls: message.toolCalls,
@@ -3291,6 +3564,10 @@ export class ChatService {
       thinking: message.thinking,
       artifacts: message.artifacts,
       usage: message.usage,
+      promptCache: message.promptCache,
+      contextSnapshot: message.contextSnapshot,
+      // Never cleared: rounds a deferred run already sent keep replaying as they were sent.
+      ...(message.deferred ? { deferred: true } : {}),
     });
     if (updated) this.captureSessionHistory(updated, historyScope);
   }
@@ -3341,34 +3618,35 @@ export class ChatService {
 
   /**
    * What reached a running turn since its last request, taken for the next one: whatever the
-   * user typed ahead, and any background-exit notice. Two map lookups and nothing else when
-   * neither is waiting, which is every round of almost every turn.
+   * user typed ahead, messages relayed from other sessions, and any background-exit notice. Two
+   * map lookups and nothing else when none is waiting, which is every round of almost every turn.
    *
-   * Only the user's own typed entries ride along. A relay stays a turn of its own: it is
-   * another agent's words, framed and hop-counted per turn, and folding it into this one would
-   * spend this turn's relay budget and blur whose turn it is. An auto-fix entry stays one too,
-   * because it switches on its own tool guard. A `/skill` invocation waits as well: its body is a
-   * new set of instructions, expanded when its turn starts. So does a message whose image the
-   * model cannot read, so it is refused and handed back exactly as before.
+   * A relay stays a message of its own, framed and stored exactly as it would be as its own turn.
+   * The turn goes on at the deeper of its own hop depth and the relay's, with the fresh send
+   * budget the relay's own turn would have started with, so a chain between sessions is bounded
+   * the same whether a message arrives here or after the turn. An auto-fix entry waits for a turn
+   * of its own, because it switches on its own tool guard. A typed `/skill` invocation waits as
+   * well: its body is a new set of instructions, expanded when its turn starts. So does a message
+   * whose image the model cannot read, so it is refused and handed back exactly as before.
    *
-   * The notice goes before the user's message, so their words are the last thing the model reads.
+   * The notice goes first, then the queue in its own order, so the last thing the model reads is
+   * the newest message.
    */
   private async takeArrivals(sessionId: string, model: string): Promise<MidTurnArrival[]> {
     const queue = this.deps.queue;
     const queued = queue?.list(sessionId) ?? [];
     // "Send now" already has it in hand and is about to interrupt this turn.
     if (this.promoted.has(sessionId)) return [];
-    const typed = queued.filter(
+    const eligible = queued.filter(
       entry =>
-        !entry.relay &&
         !entry.automatic &&
-        !(this.deps.skills && parseSkillInvocation(entry.text.trim())) &&
+        !(this.deps.skills && !entry.relay && parseSkillInvocation(entry.text.trim())) &&
         !this.refuseUnreadableImages(model, entry.attachments ?? [])
     );
-    if (typed.length === 0 && !this.wake?.has(sessionId)) return [];
+    if (eligible.length === 0 && !this.wake?.has(sessionId)) return [];
 
     // Taken before any await, so a cancel or a "send now" racing this finds nothing to act on.
-    const taken = queue ? typed.flatMap(entry => queue.take(sessionId, entry.id) ?? []) : [];
+    const taken = queue ? eligible.flatMap(entry => queue.take(sessionId, entry.id) ?? []) : [];
     const notice = this.wake?.take(sessionId) ?? null;
     const arrivals: MidTurnArrival[] = [];
     const createdAt = new Date().toISOString();
@@ -3392,29 +3670,62 @@ export class ChatService {
       });
     }
 
-    if (taken.length > 0) {
-      const attachments = await this.resolveAttachments(
-        sessionId,
-        taken.flatMap(entry => entry.attachments ?? [])
-      );
-      const notes = [...taken.flatMap(entry => entry.notes ?? []), MID_TURN_NOTE];
-      arrivals.push({
-        queuedId: taken[0].id,
-        message: {
-          id: randomUUID(),
-          role: 'user',
-          content: taken
-            .map(entry => entry.text.trim())
-            .filter(Boolean)
-            .join('\n'),
-          createdAt,
-          ...(attachments.length > 0 ? { attachments } : {}),
-          notes,
-        },
-      });
-      this.wake?.attended(sessionId);
+    // Typed entries next to each other go as one message, as they always have; a relay between
+    // them splits the run so each side keeps its place.
+    const runs: ChatQueuedMessage[][] = [];
+    for (const entry of taken) {
+      const last = runs[runs.length - 1];
+      if (!entry.relay && last && !last[0].relay) last.push(entry);
+      else runs.push([entry]);
     }
+
+    try {
+      for (const run of runs) {
+        const [head] = run;
+        const attachments = await this.resolveAttachments(
+          sessionId,
+          run.flatMap(entry => entry.attachments ?? [])
+        );
+        const notes = [...run.flatMap(entry => entry.notes ?? []), head.relay ? RELAY_MID_TURN_NOTE : MID_TURN_NOTE];
+        arrivals.push({
+          queuedId: head.id,
+          queuedEntries: run,
+          message: {
+            id: randomUUID(),
+            role: 'user',
+            content: run
+              .map(entry => entry.text.trim())
+              .filter(Boolean)
+              .join('\n'),
+            createdAt,
+            ...(head.relay ? { system: true, relay: head.relay } : {}),
+            ...(attachments.length > 0 ? { attachments } : {}),
+            notes,
+          },
+        });
+      }
+    } catch (error) {
+      this.restoreArrivals(sessionId, taken);
+      throw error;
+    }
+
+    // Only once every arrival is built: a restored relay is stranded, so its depth must not stick.
+    const relayHops = taken.flatMap(entry => (entry.relay ? [entry.relay.hops] : []));
+    if (relayHops.length > 0) {
+      const hops = Math.max(this.turnRelay.get(sessionId)?.hops ?? 0, ...relayHops);
+      this.turnRelay.set(sessionId, { hops, sends: 0 });
+    }
+    if (taken.some(entry => !entry.relay)) this.wake?.attended(sessionId);
     return arrivals;
+  }
+
+  /**
+   * Keep unaccepted entries available to the failed-turn handback and relay stranding. They go
+   * back at the head of the queue in their own order, so ahead of any untaken auto-fix or `/skill`
+   * entry that was queued before them; the failure hands the whole queue back at once.
+   */
+  private restoreArrivals(sessionId: string, entries: readonly ChatQueuedMessage[]): void {
+    for (const entry of [...entries].reverse()) this.deps.queue?.restore(sessionId, entry);
   }
 
   /**
@@ -3517,10 +3828,17 @@ export class ChatService {
       patchEdits: boolean;
       /** Whether a user is present to answer an ask_user card. */
       ask: boolean;
+      /** Whether the user typed this turn, as opposed to a relay, an automatic turn or a seed prompt. */
+      attended: boolean;
       /** The conversation's title, so a cross-session approval names it rather than its id. */
       title: string;
       /** Absent outside a reply's own loop, where request_directory then has no turn to track. */
       directories?: DirectoryTurn;
+      /**
+       * The tool names this round offers, on a deferred-tools turn. The request also declares tools
+       * it no longer offers (see declareDeferredTools), and those must not run.
+       */
+      offered?: ReadonlySet<string>;
       /** Which project's permission rules apply. */
       permissions?: PermissionScopeKey;
     },
@@ -3542,7 +3860,9 @@ export class ChatService {
       web,
       patchEdits,
       ask,
+      attended,
     } = scope;
+    const pullRequests = this.deps.pullRequests;
     return Promise.all(
       requested.map(async request => {
         const call: ChatToolCall = {
@@ -3560,6 +3880,16 @@ export class ChatService {
         const tool = isOfferedEditTool(request.name, patchEdits)
           ? (findTool(request.name) ?? this.deps.mcp?.findTool(request.name))
           : undefined;
+        if (tool && scope.offered && !scope.offered.has(request.name)) {
+          const withdrawn: ChatToolCall = {
+            ...call,
+            status: 'error',
+            error: `${request.name} is not available in this conversation any more.`,
+          };
+          this.emit({ type: 'tool-start', sessionId, messageId, call });
+          this.emit({ type: 'tool-end', sessionId, messageId, call: withdrawn });
+          return withdrawn;
+        }
         if (tool?.interactive && !ask) {
           const unavailable: ChatToolCall = {
             ...call,
@@ -3678,6 +4008,16 @@ export class ChatService {
           ...(skills ? { skills } : {}),
           ...(web ? { web } : {}),
           ...(this.deps.mcp ? { mcp: this.deps.mcp } : {}),
+          // Not on the declaration alone: an undeclared tool still resolves by name, and in a turn
+          // the user did not type nobody can have asked for the change.
+          ...(pullRequests && attended
+            ? {
+                pullRequests: {
+                  bind: (target: string) => pullRequests.bindForAgent(sessionId, target),
+                  clear: () => pullRequests.dismiss(sessionId),
+                },
+              }
+            : {}),
           report,
           isStanding: key => !!this.deps.approvals?.isStanding(sessionId, key),
         };
@@ -3699,7 +4039,14 @@ export class ChatService {
         if (gated.approval) {
           // The mode the gate decided under, or - on a path no mode can answer - the one in force now.
           const mode = gated.mode ?? (await this.currentApprovalMode(sessionId));
-          this.logApproval(sessionId, call.name, gated.settled?.input ?? gated.input, gated.approval, mode);
+          this.logApproval(
+            sessionId,
+            call.name,
+            gated.settled?.input ?? gated.input,
+            gated.approval,
+            mode,
+            gated.patterns
+          );
         }
         if (gated.settled) return gated.settled;
         // The user's choice becomes part of the call, so every later reader of this row - the
@@ -4062,6 +4409,56 @@ export class ChatService {
 
   private async announceSuggestions(sessionId: string): Promise<void> {
     this.emitSuggestions(sessionId, await this.deps.store.spawnSuggestions(sessionId));
+  }
+
+  /**
+   * Store the tool-state records a deferred-tools turn needs before its request is built, so this
+   * request and every later replay render the same bytes. See toolStateRecords. The exception is
+   * a mid-turn change (recordMidTurnToolState), which the next turn replays somewhere else.
+   */
+  private async recordToolStates(
+    session: ChatSession,
+    current: ChatToolState,
+    declarable: (name: string) => boolean
+  ): Promise<void> {
+    for (const { messageId, state } of toolStateRecords(sentHistory(session.messages), current, declarable)) {
+      await this.storeToolState(session, messageId, state);
+    }
+  }
+
+  /**
+   * A mid-turn change, recorded on the newest user turn so the next turn replays it there. It keeps
+   * every tool the turn already had, so nothing this turn called is replayed before its addition;
+   * the next turn's record drops what is no longer offered. Live, the change rode on the newest
+   * tool result instead, so the next turn misses the cache from that prompt on (a known cost,
+   * paid once per mid-turn change).
+   */
+  private async recordMidTurnToolState(session: ChatSession, next: ChatToolState): Promise<void> {
+    const history = sentHistory(session.messages);
+    const target = history.findLast(message => message.role === 'user' && !message.boundary);
+    if (!target) return;
+    const previous = history.findLast(message => message.role === 'user' && message.toolState)?.toolState;
+    await this.storeToolState(session, target.id, {
+      tools: [...new Set([...(previous?.tools ?? []), ...next.tools])].sort(),
+      text: next.text,
+    });
+  }
+
+  private async storeToolState(session: ChatSession, messageId: string, state: ChatToolState): Promise<void> {
+    const message = session.messages.find(entry => entry.id === messageId);
+    if (message) message.toolState = state;
+    // A lost record replays its change somewhere else after a restart, so a failure gets one retry.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await this.deps.store.updateMessage(session.id, messageId, { toolState: state });
+        return;
+      } catch (err) {
+        if (attempt >= 2) {
+          this.deps.logger.warn(`CHAT: could not store the tool state: ${String(err)}`);
+          return;
+        }
+      }
+    }
   }
 
   /**
@@ -4680,7 +5077,8 @@ export class ChatService {
     tool: string,
     input: Record<string, unknown>,
     approval: ChatToolApproval,
-    mode: ChatApprovalMode | undefined
+    mode: ChatApprovalMode | undefined,
+    patterns: readonly string[] | undefined
   ): void {
     const log = this.deps.approvalLog;
     if (!log) return;
@@ -4694,8 +5092,12 @@ export class ChatService {
         sessionId,
         ...(session ? { sessionTitle: session.title } : {}),
         ...(mode ? { mode } : {}),
+        ...(session?.project ? { project: session.project.directory } : {}),
         tool,
         input: summarizeToolInput(input),
+        ...(patterns && patterns.length > 0
+          ? { patterns: patterns.map(pattern => summarizeToolInput({ command: pattern })) }
+          : {}),
         approval,
       });
     })().catch((error: unknown) => this.deps.logger.warn(`PERMISSIONS: could not log an approval: ${String(error)}`));
@@ -4802,6 +5204,7 @@ export class ChatService {
     // either - only the options that actually run the call can have been remembered.
     const runnable = (prompt.choice?.options ?? []).filter(option => !option.redirect);
     const mode = await this.deps.store.approvalMode(sessionId);
+    const patterns = prompt.always?.commands.map(command => command.pattern);
     // The same call a third time in a row is asked about in 'auto' whatever was allowed before:
     // the model is more likely stuck than making progress, and this is the point to find out.
     const stuck = looping && mode === 'auto';
@@ -4817,6 +5220,7 @@ export class ChatService {
         input: applyOption(call.input, runnable[0]),
         approval: approvalRecord('allowed', ruleDecider(verdict.rule)),
         mode,
+        patterns,
       };
     }
     if (tainted) prompt = { ...prompt, detail: `${prompt.detail}\n\n${untrustedReason(tainted)}` };
@@ -4861,6 +5265,7 @@ export class ChatService {
         input: applyOption(call.input, findOption(prompt, standing.optionId), standing.value),
         approval: approvalRecord('allowed', { kind: 'chat-allowance' }),
         mode,
+        patterns,
       };
     }
 
@@ -4873,6 +5278,7 @@ export class ChatService {
         input: applyOption(call.input, runnable[0]),
         approval: approvalRecord('allowed', { kind: 'mode', mode }),
         mode,
+        patterns,
       };
     }
 
@@ -5026,20 +5432,21 @@ export class ChatService {
         approval,
       };
       this.emit({ type: 'tool-end', sessionId, messageId, call: redirected });
-      return { settled: redirected, input: call.input, approval, mode };
+      return { settled: redirected, input: call.input, approval, mode, patterns };
     }
 
     if (answer.decision === 'deny' || answer.decision === 'redirect') {
       const approval = approvalRecord('denied', decidedBy, card);
       const denied: ChatToolCall = { ...call, status: 'denied', error: deniedMessage(decidedBy), approval };
       this.emit({ type: 'tool-end', sessionId, messageId, call: denied });
-      return { settled: denied, input: call.input, approval, mode };
+      return { settled: denied, input: call.input, approval, mode, patterns };
     }
 
     return {
       input: applyOption(call.input, picked ?? runnable[0], answer.value),
       approval: approvalRecord('allowed', decidedBy, card),
       mode,
+      patterns,
     };
   }
 
@@ -5658,6 +6065,25 @@ function projectPreamble(project: ChatProject): string[] {
 }
 
 /**
+ * Desktop's system prompt plus tool schemas, estimated in tokens, when a context the server fixes (vLLM
+ * --max-model-len) cannot hold them with the latest prompt and room for the reply; undefined when it can.
+ */
+export function toolPromptOverflow(
+  option: ChatModelOption | undefined,
+  wire: readonly CompletionMessage[],
+  tools: readonly { toolSchema: unknown }[],
+  maxTokens: number | undefined
+): number | undefined {
+  const window = option?.contextFixed ? option.contextWindow : undefined;
+  if (!window || tools.length === 0) return undefined;
+  const schemas = tools.map(tool => ({ type: 'function', function: tool.toolSchema }));
+  const toolPrompt = estimateTokens(toMessages(wire.filter(message => message.role === 'system')), schemas);
+  const prompt = wire.findLast(message => message.role === 'user' && !message.continuesTurn);
+  const promptTokens = prompt ? estimateTokens(toMessages([prompt])) : 0;
+  return holdsPrompt(window, toolPrompt + promptTokens, maxTokens) ? undefined : toolPrompt;
+}
+
+/**
  * State the model's current file access, every turn, whether or not anything is granted.
  *
  * Both halves were learned from live failures:
@@ -5696,22 +6122,7 @@ export function buildSystemMessage(
     return {
       role: 'system',
       content: [
-        'You currently have NO access to the user files or filesystem, and no tools to read them.',
-        'Earlier turns in this conversation may show successful file reads; that access has since',
-        'been revoked and you cannot rely on it.',
-        'Never claim to have read, listed or searched a file, and never invent a file name, size,',
-        'path or contents.',
-        ...(ask
-          ? [
-              'If the task needs local files, call request_directory with the folder and your reason:',
-              'the user adds it with one click and you continue in this turn with file tools. Do not',
-              'tell the user you have no filesystem access, and do not ask them to share it themselves.',
-            ]
-          : [
-              // `/add-dir` is a renderer command: keep the name in sync with COMPOSER_COMMANDS.
-              'If asked about local files, say plainly that you have no access and ask the user to share',
-              'the folder by typing /add-dir followed by its path in this conversation.',
-            ]),
+        ...noAccessLines(ask),
         // The browser is not file access and is not withheld with it: a conversation that can
         // read nothing on disk can still open a page, and needs to be told how.
         ...(browser ? BROWSER_GUIDANCE : []),
@@ -5740,109 +6151,11 @@ export function buildSystemMessage(
       ...dependencyLines,
       'These folders are shared with you, including everything beneath them:',
       ...roots.map(root => `  ${root}`),
-      'Always pass absolute paths. The file tools deny any path outside those folders;',
-      ...(ask
-        ? [
-            'if you need one, call request_directory with that folder and your reason - the user adds it',
-            'with one click and you continue in this turn. Never tell the user you lack access to it, and',
-            'never ask them to share it themselves.',
-          ]
-        : [
-            // `/add-dir` is a renderer command: keep the name in sync with COMPOSER_COMMANDS.
-            'if you need one, name it and ask the user to share it by typing /add-dir followed by its',
-            'path in this conversation. No typed message grants access on its own.',
-          ]),
-      'Bash commands run as the user with their full environment, not inside those folders: git,',
-      'gh, pnpm, the keychain and git credentials work as in their terminal. If a command fails',
-      'on authentication, report the command error; do not conclude the user is logged out.',
-      ...(projectContext
-        ? [
-            'The instruction files that apply here are already below in full, each labelled with its',
-            'path, and so is the file tree: do not list the root, and do not re-read those files or',
-            'anything they import. Use glob_files for anything deeper than the tree shows.',
-          ]
-        : []),
-      'Explore with grep_search and glob_files, not grep, find or ls through bash_execute: they need',
-      'no approval, skip ignored and binary files, and are faster.',
-      'Tool calls made together in one reply run in parallel, so batch independent searches and',
-      'reads into one reply instead of one per turn, and do not re-read lines you already have.',
-      'Before a batch of searches, reads or edits, say in one short sentence what you are after and',
-      'why - including the first batch of the turn, which otherwise draws as tool rows with nothing',
-      'above them. One sentence per round of work, not per call, with no label in front of it, and',
-      'none at all when a single call speaks for itself.',
-      'Most work needs no plan. Keep one with todo_write only when the user gave you several separate',
-      'things to do, or the work clearly runs to five or more steps, usually across several files.',
-      'Never for a question, an explanation, an investigation, a piece of research, a single fix or a',
-      'small edit: answer those directly.',
-      'When you do keep one, send the whole list each time and mark one item in_progress before',
-      'starting it. Before writing the message that ends a turn, make the plan match what actually',
-      'happened: an item whose result you are about to report as done is marked completed in that',
-      'same reply, not left for later. Never end a turn with an item still in_progress.',
-      ...(patchEdits
-        ? [
-            'An older file_read result may show as a [stale: ...] placeholder once the file was replaced',
-            'by an apply_patch Add or Delete, or re-read later; read it again if you still need it. An',
-            'apply_patch Update does not invalidate earlier reads, and its result shows the edited lines,',
-            'so patch again without reading the file first.',
-          ]
-        : [
-            'An older file_read result may show as a [stale: ...] placeholder once the file was rewritten',
-            'with file_write or re-read later; read it again if you still need it. A file_edit does not',
-            'invalidate earlier reads, and its result shows the edited lines, so edit again without',
-            'reading the file first.',
-          ]),
-      'file_read returns the whole file, up to 2000 lines; pass offset and limit only when you',
-      'already know which part you need or the file is too large to read at once. It shows you a',
-      'PNG, JPEG, GIF or WebP file as an image, so read a screenshot or image to look at it.',
-      ...(explore
-        ? [
-            'For open-ended exploration across many files, call explore instead - a faster read-only',
-            'sub-agent that returns a report - several in parallel for separate questions. Say what you',
-            'mean to build so its report ends with the edit points. When you already know the file or',
-            'symbol, use grep_search and file_read directly.',
-            'Treat an explore report as already read: do not re-read ranges it quotes, read only what it',
-            `lacks, and ${patchEdits ? 'an apply_patch hunk' : 'file_edit'} can match against its quoted text directly.`,
-          ]
-        : []),
-      'Running a command needs the user to approve it first, and they see the exact command, so',
-      'prefer one clear command over several speculative ones. If they decline, accept it and ask',
-      'what they would like instead rather than trying a variation of the same command.',
-      'Changing a file needs the same approval, and the user sees a line-by-line diff of the',
-      ...(patchEdits
-        ? [
-            'change before they answer. Read a file before you edit it. Change files only with',
-            'apply_patch: Add File to create one, Update File for an in-place change (hunks with',
-            'context lines, in file order), Delete File to remove one. Make all the changes you have',
-            'planned, across every file, in a single apply_patch call: it applies all or nothing, and',
-            'each round trip costs you the whole context.',
-          ]
-        : [
-            'change before they answer. Read a file before you edit it, and prefer file_edit over',
-            'file_write so the rest of the file is left alone; file_write replaces a file entirely.',
-            'Make all the changes you have planned for one file in a single file_edit call with edits:',
-            'they apply in order and all or nothing, and each round trip costs you the whole context.',
-          ]),
-      'Dev servers, watchers and anything else meant to keep running go to bash_background, not',
-      'bash_execute. Background processes belong to this conversation, are all killed when the app',
-      'quits, and none survive a restart - so check bash_list rather than assuming one from an',
-      'earlier session is still up, and stop what you no longer need with bash_kill.',
-      'When one you started exits on its own you are told in a message, even after your turn has',
-      'ended. To wait for a long build or test run, end your turn saying what you are waiting for;',
-      'never sleep or poll bash_output in a loop until it finishes.',
-      'To test a running app, drive the app itself: take its URL from bash_list and bash_output or',
-      'the user, read code only for the routes, request bodies and test credentials you need, then',
-      'exercise it (curl with a cookie jar, or a short script) and report the responses you saw.',
-      'Make the first request early and let the app correct your assumptions, rather than reading',
-      'the whole feature first. Unit tests passing is not an end-to-end result.',
+      ...localToolLines(ask, projectContext ? 'below' : null, explore, patchEdits),
       ...(browser ? BROWSER_GUIDANCE : []),
       ...(screen ? SCREEN_GUIDANCE : []),
       ...(web ? WEB_GUIDANCE : []),
-      'Never invent a file name, size or contents, or the output of a command: if a tool did not',
-      'return it, you do not know it.',
-      'When you mention a GitHub issue, pull request or commit, write it as a markdown link with its',
-      'full URL, e.g. [owner/repo#123](https://github.com/owner/repo/pull/123). Take owner/repo from',
-      'the repo the item belongs to (gh output or the git remote), not guesswork; never write a bare',
-      '#123, and never invent a URL you have not seen or cannot derive.',
+      ...HONESTY_LINES,
       ...(media ? MEDIA_GUIDANCE : []),
       ...(host ? HOST_GUIDANCE : []),
       ...(memory ? MEMORY_GUIDANCE : []),
@@ -5857,6 +6170,208 @@ export function buildSystemMessage(
       ...(mcpServers ? ['', ...mcpServerLines(mcpServers)] : []),
     ].join('\n'),
   };
+}
+
+function noAccessLines(ask: boolean): string[] {
+  return [
+    'You currently have NO access to the user files or filesystem, and no tools to read them.',
+    'Earlier turns in this conversation may show successful file reads; that access has since',
+    'been revoked and you cannot rely on it.',
+    'Never claim to have read, listed or searched a file, and never invent a file name, size,',
+    'path or contents.',
+    ...(ask
+      ? [
+          'If the task needs local files, call request_directory with the folder and your reason:',
+          'the user adds it with one click and you continue in this turn with file tools. Do not',
+          'tell the user you have no filesystem access, and do not ask them to share it themselves.',
+        ]
+      : [
+          // `/add-dir` is a renderer command: keep the name in sync with COMPOSER_COMMANDS.
+          'If asked about local files, say plainly that you have no access and ask the user to share',
+          'the folder by typing /add-dir followed by its path in this conversation.',
+        ]),
+  ];
+}
+
+const HONESTY_LINES: readonly string[] = [
+  'Never invent a file name, size or contents, or the output of a command: if a tool did not',
+  'return it, you do not know it.',
+  'When you mention a GitHub issue, pull request or commit, write it as a markdown link with its',
+  'full URL, e.g. [owner/repo#123](https://github.com/owner/repo/pull/123). Take owner/repo from',
+  'the repo the item belongs to (gh output or the git remote), not guesswork; never write a bare',
+  '#123, and never invent a URL you have not seen or cannot derive.',
+];
+
+/** The local file and command guidance; `instructions` says where the project's instruction files are, if loaded. */
+function localToolLines(
+  ask: boolean,
+  instructions: 'below' | 'in the system prompt' | null,
+  explore: boolean,
+  patchEdits: boolean
+): string[] {
+  return [
+    'Always pass absolute paths. The file tools deny any path outside those folders;',
+    ...(ask
+      ? [
+          'if you need one, call request_directory with that folder and your reason - the user adds it',
+          'with one click and you continue in this turn. Never tell the user you lack access to it, and',
+          'never ask them to share it themselves.',
+        ]
+      : [
+          // `/add-dir` is a renderer command: keep the name in sync with COMPOSER_COMMANDS.
+          'if you need one, name it and ask the user to share it by typing /add-dir followed by its',
+          'path in this conversation. No typed message grants access on its own.',
+        ]),
+    'Bash commands run as the user with their full environment, not inside those folders: git,',
+    'gh, pnpm, the keychain and git credentials work as in their terminal. If a command fails',
+    'on authentication, report the command error; do not conclude the user is logged out.',
+    ...(instructions
+      ? [
+          `The instruction files that apply here are already ${instructions} in full, each labelled with its`,
+          'path, and so is the file tree: do not list the root, and do not re-read those files or',
+          'anything they import. Use glob_files for anything deeper than the tree shows.',
+        ]
+      : []),
+    'Explore with grep_search and glob_files, not grep, find or ls through bash_execute: they need',
+    'no approval, skip ignored and binary files, and are faster.',
+    'Tool calls made together in one reply run in parallel, so batch independent searches and',
+    'reads into one reply instead of one per turn, and do not re-read lines you already have.',
+    'Before a batch of searches, reads or edits, say in one short sentence what you are after and',
+    'why - including the first batch of the turn, which otherwise draws as tool rows with nothing',
+    'above them. One sentence per round of work, not per call, with no label in front of it, and',
+    'none at all when a single call speaks for itself.',
+    'Most work needs no plan. Keep one with todo_write only when the user gave you several separate',
+    'things to do, or the work clearly runs to five or more steps, usually across several files.',
+    'Never for a question, an explanation, an investigation, a piece of research, a single fix or a',
+    'small edit: answer those directly.',
+    'When you do keep one, send the whole list each time and mark one item in_progress before',
+    'starting it. Before writing the message that ends a turn, make the plan match what actually',
+    'happened: an item whose result you are about to report as done is marked completed in that',
+    'same reply, not left for later. Never end a turn with an item still in_progress.',
+    ...(patchEdits
+      ? [
+          'An older file_read result may show as a [stale: ...] placeholder once the file was replaced',
+          'by an apply_patch Add or Delete, or re-read later; read it again if you still need it. An',
+          'apply_patch Update does not invalidate earlier reads, and its result shows the edited lines,',
+          'so patch again without reading the file first.',
+        ]
+      : [
+          'An older file_read result may show as a [stale: ...] placeholder once the file was rewritten',
+          'with file_write or re-read later; read it again if you still need it. A file_edit does not',
+          'invalidate earlier reads, and its result shows the edited lines, so edit again without',
+          'reading the file first.',
+        ]),
+    'file_read returns the whole file, up to 2000 lines; pass offset and limit only when you',
+    'already know which part you need or the file is too large to read at once. It shows you a',
+    'PNG, JPEG, GIF or WebP file as an image, so read a screenshot or image to look at it.',
+    ...(explore
+      ? [
+          'For open-ended exploration across many files, call explore instead - a faster read-only',
+          'sub-agent that returns a report - several in parallel for separate questions. Say what you',
+          'mean to build so its report ends with the edit points. When you already know the file or',
+          'symbol, use grep_search and file_read directly.',
+          'Treat an explore report as already read: do not re-read ranges it quotes, read only what it',
+          `lacks, and ${patchEdits ? 'an apply_patch hunk' : 'file_edit'} can match against its quoted text directly.`,
+        ]
+      : []),
+    'Running a command needs the user to approve it first, and they see the exact command, so',
+    'prefer one clear command over several speculative ones. If they decline, accept it and ask',
+    'what they would like instead rather than trying a variation of the same command.',
+    'Changing a file needs the same approval, and the user sees a line-by-line diff of the',
+    ...(patchEdits
+      ? [
+          'change before they answer. Read a file before you edit it. Change files only with',
+          'apply_patch: Add File to create one, Update File for an in-place change (hunks with',
+          'context lines, in file order), Delete File to remove one. Make all the changes you have',
+          'planned, across every file, in a single apply_patch call: it applies all or nothing, and',
+          'each round trip costs you the whole context.',
+        ]
+      : [
+          'change before they answer. Read a file before you edit it, and prefer file_edit over',
+          'file_write so the rest of the file is left alone; file_write replaces a file entirely.',
+          'Make all the changes you have planned for one file in a single file_edit call with edits:',
+          'they apply in order and all or nothing, and each round trip costs you the whole context.',
+        ]),
+    'Dev servers, watchers and anything else meant to keep running go to bash_background, not',
+    'bash_execute. Background processes belong to this conversation, are all killed when the app',
+    'quits, and none survive a restart - so check bash_list rather than assuming one from an',
+    'earlier session is still up, and stop what you no longer need with bash_kill.',
+    'When one you started exits on its own you are told in a message, even after your turn has',
+    'ended. To wait for a long build or test run, end your turn saying what you are waiting for;',
+    'never sleep or poll bash_output in a loop until it finishes.',
+    'To test a running app, drive the app itself: take its URL from bash_list and bash_output or',
+    'the user, read code only for the routes, request bodies and test credentials you need, then',
+    'exercise it (curl with a cookie jar, or a short script) and report the responses you saw.',
+    'Make the first request early and let the app correct your assumptions, rather than reading',
+    'the whole feature first. Unit tests passing is not an end-to-end result.',
+  ];
+}
+
+/**
+ * The system prompt of a deferred-tools turn: only what is fixed for the session, so a change of
+ * tools, folders or MCP servers never moves it. That part travels in the tool-state reminder
+ * instead; see buildToolStateText and chat/deferredTools.ts.
+ */
+export function buildDeferredSystemMessage(
+  project: ChatProject | undefined,
+  projectContext: string,
+  skillsSection: string
+): CompletionMessage {
+  return {
+    role: 'system',
+    content: [
+      'Which tools you have and which folders are shared with you are stated in a system reminder on',
+      'a user turn. When there are several, the latest one is current and replaces the earlier ones.',
+      ...(project ? projectPreamble(project) : []),
+      ...WEB_GUIDANCE,
+      ...HONESTY_LINES,
+      ...desktopAppGuidance(null),
+      ...(skillsSection ? [skillsSection] : []),
+      '',
+      DESKTOP_ARTIFACT_PROMPT,
+      ...(projectContext ? ['', projectContext] : []),
+    ].join('\n'),
+  };
+}
+
+/** The tool and access half of buildSystemMessage, for the tool-state reminder of a deferred-tools turn. */
+export function buildToolStateText(state: {
+  roots: readonly string[];
+  media: boolean;
+  host: boolean;
+  explore: boolean;
+  mcpServers: readonly McpServerState[] | null;
+  dependencyLines: readonly string[];
+  projectContext: boolean;
+  browser: boolean;
+  patchEdits: boolean;
+  memory: boolean;
+  ask: boolean;
+  screen: boolean;
+}): string {
+  const { roots, ask, mcpServers } = state;
+  const mcp = mcpServers ? (ask ? 'manage' : 'read') : null;
+  return [
+    'Your tools and access from this turn on:',
+    ...(roots.length === 0
+      ? noAccessLines(ask)
+      : [
+          'You can read and change files on the user machine, and run bash commands on it, with the',
+          'provided tools.',
+          ...state.dependencyLines,
+          'These folders are shared with you, including everything beneath them:',
+          ...roots.map(root => `  ${root}`),
+          ...localToolLines(ask, state.projectContext ? 'in the system prompt' : null, state.explore, state.patchEdits),
+        ]),
+    ...(state.browser ? BROWSER_GUIDANCE : []),
+    ...(state.screen ? SCREEN_GUIDANCE : []),
+    ...(state.media ? MEDIA_GUIDANCE : []),
+    ...(state.host ? HOST_GUIDANCE : []),
+    ...(state.memory ? MEMORY_GUIDANCE : []),
+    ...(ask ? ASK_GUIDANCE : []),
+    ...mcpGuidance(mcp),
+    ...(mcpServers ? ['', ...mcpServerLines(mcpServers)] : []),
+  ].join('\n');
 }
 
 /** Whether the connected MCP tools differ from the ones declared, by name. */
@@ -6353,6 +6868,8 @@ interface ApprovalOutcome {
   approval?: ChatToolApproval;
   /** The approval mode the decision was made under, when the gate consulted one. */
   mode?: ChatApprovalMode;
+  /** What "always allow" would remember for each sub-command, e.g. `git commit *`; for the approval log. */
+  patterns?: string[];
 }
 
 const LOOP_ASK_REASON = `Asked because the same call was repeated ${LOOP_THRESHOLD} times in a row.`;
@@ -6540,7 +7057,11 @@ function parseArguments(raw: string | undefined): Record<string, unknown> {
  */
 async function toCompletionMessages(
   session: ChatSession,
-  readAttachment: ReadAttachment
+  readAttachment: ReadAttachment,
+  /** Deferred-tools turns only: tool-state reminders are rendered and each one's position is pushed here. */
+  toolStateMarks?: ToolStateMark[],
+  /** Deferred-tools turns only: the wire index of every assistant message a deferred turn sent. */
+  deferredReplies?: Set<number>
 ): Promise<CompletionMessage[]> {
   const wire: CompletionMessage[] = [];
 
@@ -6550,7 +7071,16 @@ async function toCompletionMessages(
     const calls = message.toolCalls ?? [];
     // Artifact markup is stripped out of the stored text, so it has to go back in here: a model
     // that cannot see the artifact it just wrote cannot revise it.
-    const text = withNotes(message, frameBoundary(message, frameRelay(message, restoreArtifactMarkup(message))));
+    const noted = withNotes(message, frameBoundary(message, frameRelay(message, restoreArtifactMarkup(message))));
+    const toolState = toolStateMarks && message.role === 'user' ? message.toolState : undefined;
+    const text = toolState
+      ? noted
+        ? `${noted}\n\n${toolStateReminder(toolState)}`
+        : toolStateReminder(toolState)
+      : noted;
+    const markToolState = () => {
+      if (toolState) toolStateMarks?.push({ index: wire.length - 1, tools: toolState.tools });
+    };
 
     if (isImportedToolTurn(message)) {
       const flattened = importedTurnAsText(message, text);
@@ -6562,33 +7092,128 @@ async function toCompletionMessages(
       const attachments = message.attachments ?? [];
       if (attachments.length > 0) {
         const content = await toAttachedContent(text, attachments, readAttachment);
-        if (content.length > 0) wire.push({ role: message.role, content });
+        if (content.length > 0) {
+          wire.push({ role: message.role, content });
+          markToolState();
+        }
         continue;
       }
-      if (text.length > 0) wire.push({ role: message.role, content: text });
+      if (text.length > 0) {
+        wire.push({ role: message.role, content: text });
+        markToolState();
+      }
       continue;
     }
 
-    wire.push({
-      role: 'assistant',
-      content: [
-        ...(message.thinking ?? []),
-        ...(text ? [{ type: 'text', text }] : []),
-        ...calls.map(call => ({ type: 'tool_use', id: call.id, name: call.name, input: call.input })),
-      ],
-    });
-    wire.push({
-      role: 'user',
-      content: calls.map(call => ({
-        type: 'tool_result',
-        tool_use_id: call.id,
-        content: toolResultContent(call),
-        ...(call.error ? { is_error: true } : {}),
-      })),
-    });
+    const from = wire.length;
+    const asSent = sentRounds(message);
+    if (asSent) {
+      wire.push(...asSent);
+    } else {
+      wire.push({
+        role: 'assistant',
+        content: [
+          ...(message.thinking ?? []),
+          ...(text ? [{ type: 'text', text }] : []),
+          ...calls.map(call => ({ type: 'tool_use', id: call.id, name: call.name, input: call.input })),
+        ],
+      });
+      wire.push({ role: 'user', content: calls.map(call => toolResultBlock(call)) });
+    }
+    if (message.deferred) {
+      for (let index = from; index < wire.length; index++) {
+        if (wire[index].role === 'assistant') deferredReplies?.add(index);
+      }
+    }
   }
 
   return wire;
+}
+
+function toolResultBlock(call: ChatToolCall, note = ''): Record<string, unknown> {
+  return {
+    type: 'tool_result',
+    tool_use_id: call.id,
+    content: `${toolResultContent(call)}${call.cleared ? '' : note}`,
+    ...(call.error ? { is_error: true } : {}),
+  };
+}
+
+/**
+ * A tool turn as its rounds sent it: each round's assistant message and tool results, then the
+ * answer as its own assistant message, so the next turn reads the entry the last round cached.
+ * Not exact for a round that attached tool images: that user turn is not replayed, so the next turn
+ * misses that round's cache entry. Must stay in step with the round loop in runReply. Undefined when a round predates `sent`.
+ */
+function sentRounds(message: ChatMessage): CompletionMessage[] | undefined {
+  const rounds = message.rounds;
+  if (!rounds?.length || rounds.some(round => !round.sent)) return undefined;
+  const byId = new Map((message.toolCalls ?? []).map(call => [call.id, call]));
+  const out: CompletionMessage[] = [];
+  for (const round of rounds) {
+    const sent = round.sent as ChatSentRound;
+    const calls = round.toolCallIds.flatMap(id => byId.get(id) ?? []);
+    if (calls.length !== round.toolCallIds.length) return undefined;
+    if (calls.length === 0) {
+      if (sent.text) out.push({ role: 'assistant', content: sent.text });
+      continue;
+    }
+    out.push({
+      role: 'assistant',
+      content: [
+        ...(sent.thinking ?? []),
+        ...(sent.text ? [{ type: 'text', text: sent.text }] : []),
+        ...calls.map(call => ({ type: 'tool_use', id: call.id, name: call.name, input: call.input })),
+      ],
+    });
+    out.push({
+      role: 'user',
+      content: calls.map((call, index) =>
+        toolResultBlock(call, index === calls.length - 1 ? (sent.resultNote ?? '') : '')
+      ),
+    });
+  }
+  return out;
+}
+
+/** Stored rounds from a run's raw ones; `text` is whatever prose the caller stores, artifact markup included or not. */
+function storedRounds(runs: { round: RawRound; text: string }[], model: string): ChatReplyRound[] {
+  return (
+    runs
+      // Trimmed so the join lands exactly one blank line between rounds, and so a round does not
+      // draw a gap under itself where the model happened to end on newlines.
+      .map(({ round, text }) => ({
+        text: text.trim(),
+        toolCallIds: round.toolCallIds,
+        timing: round.timing,
+        ...(round.usage ? { usage: round.usage } : {}),
+        model,
+        ...(round.reasoning.trim() ? { reasoning: round.reasoning.trim() } : {}),
+        sent: round.sent,
+      }))
+      // A round with only usage is kept: it is the measured size of a trimmed round stopped early.
+      .filter(round => round.text.length > 0 || round.toolCallIds.length > 0 || round.reasoning || round.usage)
+  );
+}
+
+/** The rounds minus `sent`, which only replay reads, for the renderer: it roughly doubles a tool turn. */
+function withoutSent(rounds: ChatReplyRound[]): ChatReplyRound[] {
+  return rounds.map(round => {
+    if (!round.sent) return round;
+    const { sent, ...shown } = round;
+    return shown;
+  });
+}
+
+/** The session the renderer is sent; see withoutSent. */
+export function sessionForRenderer(session: ChatSession | null): ChatSession | null {
+  if (!session?.messages.some(message => message.rounds?.some(round => round.sent))) return session;
+  return {
+    ...session,
+    messages: session.messages.map(message =>
+      message.rounds ? { ...message, rounds: withoutSent(message.rounds) } : message
+    ),
+  };
 }
 
 /** App-written notes ride after the turn's own words, so what the user said stays first. */

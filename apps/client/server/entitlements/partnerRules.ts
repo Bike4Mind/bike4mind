@@ -5,7 +5,7 @@
  *
  * This module is SERVER-ONLY: it reads `@bike4mind/database`, so it must never
  * be imported from `apps/client/app/**` (the browser bundle) - the pure
- * registry (`@client/lib/entitlements/registry`) stays the isomorphic layer.
+ * registry (`@bike4mind/server-utils/lib/entitlements/registry`) stays the isomorphic layer.
  * The env registry rows remain a fallback (see the resolver callers) so nothing
  * regresses before the collection is seeded.
  *
@@ -16,7 +16,11 @@
  * comparison rule shared with the registry so domain/key matching is identical.
  */
 import { partnerSignupRuleRepository } from '@bike4mind/database';
-import { normalizeTag, KNOWN_ENTITLEMENT_KEYS, unknownEntitlementKeys } from '@client/lib/entitlements/registry';
+import {
+  normalizeTag,
+  KNOWN_ENTITLEMENT_KEYS,
+  unknownEntitlementKeys,
+} from '@bike4mind/server-utils/lib/entitlements/registry';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import type { EntitlementKey } from '@bike4mind/server-utils/lib/entitlements/types';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';

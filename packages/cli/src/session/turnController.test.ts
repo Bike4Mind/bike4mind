@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { runTurn, type TurnContext } from './turnController';
 import { useCliStore } from '../store';
 import { whenTurnIdle } from './whenTurnIdle';
-import type { Session, Message, CliConfig, SessionStore, ConfigStore, CommandHistoryStore } from '../storage';
+import type { Session, Message, CliConfig, SessionStore, ConfigStore } from '../storage';
 import type { CustomCommandStore } from '../storage/CustomCommandStore.js';
 import type { ReActAgent } from '@bike4mind/agents';
 import type { AgentResult, AgentStep } from '@bike4mind/agents';
@@ -55,10 +55,6 @@ function makeCtx(overrides: Partial<TurnContext> = {}): TurnContext {
     configStore: {
       get: vi.fn(async () => ({ preferences: { enableParallelToolExecution: false } })),
     } as unknown as ConfigStore,
-    commandHistoryStore: {
-      add: vi.fn(async () => undefined),
-      list: vi.fn(async () => [] as string[]),
-    } as unknown as CommandHistoryStore,
     customCommandStore: {
       getAllCommands: vi.fn(() => []),
       getModelReachableCommands: vi.fn(() => []),
@@ -82,7 +78,6 @@ function makeCtx(overrides: Partial<TurnContext> = {}): TurnContext {
       blockerStore: { blockers: [] },
       reviewGateStore: { reviewGates: [] },
     },
-    setCommandHistory: vi.fn(),
     setAbortController: vi.fn(),
   };
   return { ...base, ...overrides };
@@ -230,21 +225,19 @@ describe('runTurn', () => {
     expect(useCliStore.getState().sessionHolds).toBe(0);
   });
 
-  it('takes its hold before reading the session, so an append during its first await is not lost', async () => {
+  it('takes its hold before reading the session, so an append during the turn is not lost', async () => {
     seedSession([]);
     const appended: Message = { id: 'bang', role: 'assistant', content: 'shell output', timestamp: ISO };
-    const commandHistoryStore = {
-      // The first await in a turn, before it has written anything back.
-      add: vi.fn(async () => {
-        whenTurnIdle(() => {
-          const session = useCliStore.getState().session!;
-          useCliStore.getState().setSession({ ...session, messages: [...session.messages, appended] });
-        });
-      }),
-      list: vi.fn(async () => [] as string[]),
-    } as unknown as CommandHistoryStore;
+    // Runs inside the turn, before it has written anything back; the null call comes after the write.
+    const setAbortController = vi.fn((controller: AbortController | null) => {
+      if (!controller) return;
+      whenTurnIdle(() => {
+        const session = useCliStore.getState().session!;
+        useCliStore.getState().setSession({ ...session, messages: [...session.messages, appended] });
+      });
+    });
 
-    await runTurn('hi', makeCtx({ commandHistoryStore }));
+    await runTurn('hi', makeCtx({ setAbortController }));
 
     expect(useCliStore.getState().session!.messages.map(message => message.content)).toContain('shell output');
   });
@@ -836,16 +829,15 @@ describe('runTurn', () => {
     it('keeps running queued follow-ups after a turn throws outside its error handling', async () => {
       seedSession([]);
       const { ctx, run } = queueCtx(async () => makeResult());
-      let historyCalls = 0;
-      ctx.commandHistoryStore = {
-        add: vi.fn(async () => {
-          if (historyCalls++ === 0) {
-            useCliStore.getState().enqueueMessage('next', 'followUp');
-            throw new Error('history file locked');
-          }
-        }),
-        list: vi.fn(async () => [] as string[]),
-      } as unknown as CommandHistoryStore;
+      const publish = ctx.setAbortController;
+      let publishCalls = 0;
+      ctx.setAbortController = controller => {
+        if (publishCalls++ === 0) {
+          useCliStore.getState().enqueueMessage('next', 'followUp');
+          throw new Error('ui update failed');
+        }
+        publish(controller);
+      };
 
       await runTurn('first', ctx);
 

@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
-const REGISTRATION_IMPORT = /^import '@client\/lib\/settings\/registerContributedSettings';$/m;
+// The package specifier from the apps, a relative one inside packages/server-utils.
+const REGISTRATION_IMPORT =
+  /^import '(?:@bike4mind\/server-utils\/|(?:\.\.?\/)+)lib\/settings\/registerContributedSettings';$/m;
 // Generated glue that runs extension code, as opposed to the data-only glue modules.
 const EXTENSION_CODE_IMPORT =
   /from '[^']*premium-generated\/premium(AgentExtensions|LlmTools|WorkspaceSessionSettings|SystemPrompts|PartnerSignupHooks)\.generated'/;
@@ -10,7 +12,10 @@ const repoRoot = join(__dirname, '..', '..', '..', '..', '..');
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir, { recursive: true, encoding: 'utf8' })
-    .filter(f => f.endsWith('.ts') && !f.endsWith('.test.ts') && !f.includes('node_modules'))
+    .filter(
+      f =>
+        f.endsWith('.ts') && !f.endsWith('.test.ts') && !f.includes('node_modules') && !f.includes('premium-generated')
+    )
     .map(f => join(dir, f));
 }
 
@@ -22,7 +27,11 @@ describe('baseApi contributed settings registration', () => {
 
   // A process that runs extension code must also see the settings that extension contributes.
   it('is imported by every server module that loads contributed extension code', () => {
-    const loaders = [join(repoRoot, 'apps/client/server'), join(repoRoot, 'apps/workers/src')]
+    const loaders = [
+      join(repoRoot, 'apps/client/server'),
+      join(repoRoot, 'apps/workers/src'),
+      join(repoRoot, 'packages/server-utils/src'),
+    ]
       .flatMap(sourceFiles)
       .filter(f => EXTENSION_CODE_IMPORT.test(readFileSync(f, 'utf8')));
 

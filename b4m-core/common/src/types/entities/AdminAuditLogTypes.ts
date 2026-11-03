@@ -15,7 +15,7 @@ export const AuditActorSchema = z.object({
 export type AuditActor = z.infer<typeof AuditActorSchema>;
 
 export const AuditTargetSchema = z.object({
-  kind: z.enum(['user', 'organization', 'settings', 'oauthClient', 'apiKey', 'system']),
+  kind: z.enum(['user', 'organization', 'settings', 'oauthClient', 'apiKey', 'system', 'curatedCatalog']),
   id: z.string(),
   displayName: z.string(),
 });
@@ -93,6 +93,14 @@ export interface IAdminAuditLogRepository {
   ): Promise<{ inserted: number; duplicates: number }>;
   list(
     filters: AuditLogFilters,
+    page: { limit: number; cursor?: AuditLogCursor }
+  ): Promise<{ entries: AuditEntry[]; nextCursor: AuditLogCursor | null }>;
+  /**
+   * Entries about one subscription, newest first. `subscriptionIds` must hold every id the entries may name:
+   * the Stripe-style `subscriptionId` and the Mongo `_id` string (org revoke writes the latter).
+   */
+  listForSubscription(
+    scope: { owner: { kind: 'user' | 'organization'; id: string }; subscriptionIds: string[] },
     page: { limit: number; cursor?: AuditLogCursor }
   ): Promise<{ entries: AuditEntry[]; nextCursor: AuditLogCursor | null }>;
   findById(id: string): Promise<AuditEntry | null>;

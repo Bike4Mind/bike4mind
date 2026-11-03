@@ -16,12 +16,14 @@ import {
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
+import { userService } from '@bike4mind/services';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { releaseRiskReviewedSignupGrant } from '@server/credits/riskReviewGrantRelease';
 import {
   denySelfAdminAction,
   isSelfOrImpersonator,
@@ -61,7 +63,8 @@ const domainOf = (email: string | null | undefined) => {
 /**
  * The signup risk review queue (admin Risk review tab). GET lists pending accounts with what a
  * reviewer needs to decide; POST approves them (or reopens an approval), one audited transaction
- * per user. Suspending goes through the bulk abuse response routes instead (admin/abuse/bulk-*).
+ * per user. Approving also pays a signup tranche the signup grant policy withheld, which reopening
+ * does not take back. Suspending goes through the bulk abuse response routes instead (admin/abuse/bulk-*).
  */
 const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] })
   .use(
@@ -93,6 +96,7 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
                 computedAt: user.riskScore.computedAt,
                 creditsSpent: creditsSpent[user.id] ?? 0,
                 apiKeysCreated: apiKeysCreated[user.id] ?? 0,
+                grantHeld: userService.isSignupGrantHeldForReview(user),
               },
             ]
           : []
@@ -127,8 +131,28 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
       const updatedUserIds: string[] = [];
       const skippedUserIds: string[] = [];
       const failedUserIds: string[] = [];
+      const grantReleasedUserIds: string[] = [];
       for (const userId of userIds) {
         try {
+          // Pay before approving: a failed payout leaves the account pending, so the admin can retry it
+          // from this queue. A retry after a paid-but-unapproved attempt finds nothing held.
+          let paid = false;
+          if (parsed.data.action === 'approve') {
+            const credits = await releaseRiskReviewedSignupGrant(userId, {
+              reason,
+              audit: async ({ credits, creditTransactionId }) => {
+                await recordAdminActionFromRequest(req, {
+                  action: 'user.credits.adjusted',
+                  target: await userAuditTarget(userId),
+                  summary: 'released a signup grant held for risk review',
+                  reason,
+                  details: { credits, source: 'signup_unlock' },
+                  related: creditTransactionId ? { creditTransactionId } : undefined,
+                });
+              },
+            });
+            paid = credits > 0;
+          }
           // A strict audit entry rides in the same transaction, so an unrecorded decision rolls back.
           const moved = await withTransaction(async () => {
             if (!(await userRepository.setRiskReviewState(userId, transition.from, transition.to))) return false;
@@ -142,12 +166,18 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
             return true;
           });
           (moved ? updatedUserIds : skippedUserIds).push(userId);
+          if (moved && paid) grantReleasedUserIds.push(userId);
         } catch (error) {
           req.logger.error('Signup risk review decision failed for user', { userId, error });
           failedUserIds.push(userId);
         }
       }
-      respond(res, signupRiskReviewDecisionResultSchema, { updatedUserIds, skippedUserIds, failedUserIds });
+      respond(res, signupRiskReviewDecisionResultSchema, {
+        updatedUserIds,
+        skippedUserIds,
+        failedUserIds,
+        grantReleasedUserIds,
+      });
     })
   );
 

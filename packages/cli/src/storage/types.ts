@@ -171,6 +171,7 @@ export interface AuthTokens {
  */
 export interface ApiConfig {
   customUrl?: string; // URL for self-hosted Bike4Mind instance
+  endpointChosen?: boolean; // The user has picked a backend (first-run picker or an API flag/command)
 }
 
 /**
@@ -299,6 +300,8 @@ export interface CliConfig {
   ollamaHost?: string;
   /** The defaultModel `b4m models use` last set; headless runs treat that model as local when it is missing. */
   localDefaultModel?: string;
+  /** What `b4m models servers login` saved, keyed by the model server's id in Desktop's list. Never printed. */
+  modelServerCredentials?: Record<string, { secret: string }>;
 }
 
 /**

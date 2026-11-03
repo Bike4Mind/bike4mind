@@ -1,17 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IUserDocument } from '@bike4mind/common';
 import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, TooManyRequestsError } from '@bike4mind/common';
-import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
+import { withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 
 // Hoisted mocks (vi.hoisted runs before imports)
-const { getSettingsMapMock, getSettingsValueMock, resolveUserRateTierMock, findDailySpendByUserMock, findByIdMock } =
-  vi.hoisted(() => ({
-    getSettingsMapMock: vi.fn().mockResolvedValue({}),
-    getSettingsValueMock: vi.fn(),
-    resolveUserRateTierMock: vi.fn(),
-    findDailySpendByUserMock: vi.fn(),
-    findByIdMock: vi.fn(),
-  }));
+const {
+  getSettingsMapMock,
+  getSettingsValueMock,
+  resolveUserRateTierMock,
+  findDailySpendByUserMock,
+  systemCostUsdByUserSinceMock,
+  findByIdMock,
+} = vi.hoisted(() => ({
+  getSettingsMapMock: vi.fn().mockResolvedValue({}),
+  getSettingsValueMock: vi.fn(),
+  resolveUserRateTierMock: vi.fn(),
+  findDailySpendByUserMock: vi.fn(),
+  systemCostUsdByUserSinceMock: vi.fn(),
+  findByIdMock: vi.fn(),
+}));
 
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: getSettingsMapMock,
@@ -45,9 +52,10 @@ const mockLogger = { warn: vi.fn(), error: vi.fn(), info: vi.fn() } as unknown a
   typeof checkFreeTierDailySpendCap
 >[0]['logger'];
 
-const mockUsageRepo = { findDailySpendByUser: findDailySpendByUserMock } as unknown as Parameters<
-  typeof checkFreeTierDailySpendCap
->[0]['usageEventRepository'];
+const mockUsageRepo = {
+  findDailySpendByUser: findDailySpendByUserMock,
+  systemCostUsdByUserSince: systemCostUsdByUserSinceMock,
+} as unknown as Parameters<typeof checkFreeTierDailySpendCap>[0]['usageEventRepository'];
 
 const mockUserRepo = { findById: findByIdMock };
 
@@ -166,6 +174,25 @@ describe('checkFreeTierDailySpendCap', () => {
     expect(findDailySpendByUserMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['exempts a credit buyer with no plan', new Date('2026-10-01T00:00:00Z'), false],
+    ['caps an account with no plan and no purchase', null, true],
+  ])('%s: the purchase stamp reaches the paid-standing tier', async (_label, lastCreditsPurchasedAt, capped) => {
+    getSettingsValueMock.mockImplementation((key: string) => {
+      if (key === 'enforceCredits') return true;
+      if (key === 'freeTierDailySpendCapCredits') return 200;
+      return undefined;
+    });
+    resolveUserRateTierMock.mockImplementation(async (user: { lastCreditsPurchasedAt?: Date | null }) =>
+      user.lastCreditsPurchasedAt ? 'basic' : 'free'
+    );
+    findDailySpendByUserMock.mockResolvedValue(500);
+    const call = callGate({ ...makeUser(10 * DAY_MS), lastCreditsPurchasedAt } as unknown as IUserDocument);
+
+    if (capped) await expect(call).rejects.toThrow('Daily free-tier credit limit reached');
+    else await expect(call).resolves.toBeUndefined();
+  });
+
   it('skips when steady-state cap is 0', async () => {
     getSettingsValueMock.mockImplementation((key: string) => {
       if (key === 'enforceCredits') return true;
@@ -220,6 +247,23 @@ describe('checkFreeTierDailySpendCap', () => {
     findDailySpendByUserMock.mockResolvedValue(350);
 
     await expect(callGate(makeUser(2 * DAY_MS))).rejects.toBeInstanceOf(TooManyRequestsError);
+  });
+
+  it('holds a restricted free user to the free-tier cap', async () => {
+    getSettingsValueMock.mockImplementation((key: string) => {
+      if (key === 'enforceCredits') return true;
+      if (key === 'freeTierDailySpendCapCredits') return 200;
+      return undefined;
+    });
+    resolveUserRateTierMock.mockImplementation(async (user: { throttle?: unknown }) =>
+      user.throttle ? 'shadow' : 'free'
+    );
+    findDailySpendByUserMock.mockResolvedValue(201);
+    const user = Object.assign(makeUser(10 * DAY_MS), {
+      throttle: { tier: 'shadow', reason: 'test', source: 'admin', changedAt: new Date() },
+    });
+
+    await expect(callGate(user)).rejects.toBeInstanceOf(TooManyRequestsError);
   });
 
   it('uses steady-state cap for an account older than 7 days', async () => {
@@ -432,10 +476,115 @@ describe('checkFreeTierDailySpendCap', () => {
 
     await expect(callGate(user)).resolves.toBeUndefined();
 
-    expect(resolveUserRateTierMock).toHaveBeenCalledWith(user, undefined, { strict: true });
+    expect(resolveUserRateTierMock).toHaveBeenCalledWith(
+      { id: user.id, isAdmin: user.isAdmin, tags: user.tags },
+      undefined,
+      { strict: true }
+    );
     expect(findDailySpendByUserMock).not.toHaveBeenCalled();
     expect(mockLogger.warn).toHaveBeenCalledWith('[freeTierDailyCapGate] cap check failed; allowing request', {
       error,
+    });
+  });
+
+  describe('system cost cap', () => {
+    const settingsWith = (steadyCap: number | undefined, systemCapUsd: number | undefined) =>
+      getSettingsValueMock.mockImplementation((key: string) => {
+        if (key === 'enforceCredits') return true;
+        if (key === 'freeTierDailySpendCapCredits') return steadyCap;
+        if (key === 'freeTierDailySystemCostCapUsd') return systemCapUsd;
+        return undefined;
+      });
+
+    beforeEach(() => {
+      resolveUserRateTierMock.mockResolvedValue('free');
+      findDailySpendByUserMock.mockResolvedValue(0);
+    });
+
+    it('refuses at the system cost cap with the daily-limit code, even with the credit cap off', async () => {
+      settingsWith(0, 0.1);
+      systemCostUsdByUserSinceMock.mockResolvedValue(0.1);
+
+      const error = await callGate(makeUser(10 * DAY_MS)).catch((caught: unknown) => caught);
+
+      expect(isFreeTierDailyCapError(error)).toBe(true);
+      expect((error as TooManyRequestsError).message).toBe('Daily free-tier usage limit reached. Try again tomorrow.');
+      expect(systemCostUsdByUserSinceMock).toHaveBeenCalledWith('user-1', new Date('2026-10-27T00:00:00.000Z'));
+      expect(findDailySpendByUserMock).not.toHaveBeenCalled();
+      expect((error as TooManyRequestsError).additionalInfo?.retryAfter).toBe(12 * 60 * 60);
+    });
+
+    it('allows a user under both caps', async () => {
+      settingsWith(200, 0.1);
+      findDailySpendByUserMock.mockResolvedValue(10);
+      systemCostUsdByUserSinceMock.mockResolvedValue(0.09);
+
+      await expect(callGate(makeUser(10 * DAY_MS))).resolves.toBeUndefined();
+    });
+
+    it('checks the credit cap first and skips the system read once it trips', async () => {
+      settingsWith(200, 0.1);
+      findDailySpendByUserMock.mockResolvedValue(200);
+
+      await expect(callGate(makeUser(10 * DAY_MS))).rejects.toBeInstanceOf(TooManyRequestsError);
+      expect(systemCostUsdByUserSinceMock).not.toHaveBeenCalled();
+    });
+
+    it('skips the system read when its cap is unset or 0', async () => {
+      settingsWith(200, undefined);
+      await expect(callGate(makeUser(10 * DAY_MS))).resolves.toBeUndefined();
+      settingsWith(200, 0);
+      await expect(callGate(makeUser(10 * DAY_MS))).resolves.toBeUndefined();
+
+      expect(systemCostUsdByUserSinceMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['day-1', 60 * 60 * 1000],
+      ['days 2-7', 2 * DAY_MS],
+    ])('uses the steady-state cap when the %s cap is unset', async (_, age) => {
+      settingsWith(200, undefined);
+      findDailySpendByUserMock.mockResolvedValue(200);
+
+      await expect(callGate(makeUser(age))).rejects.toBeInstanceOf(TooManyRequestsError);
+    });
+
+    it('looks the user up when the caller passes an explicit undefined user', async () => {
+      settingsWith(0, 0.1);
+      systemCostUsdByUserSinceMock.mockResolvedValue(0);
+      findByIdMock.mockResolvedValue(makeUser(10 * DAY_MS));
+
+      await checkFreeTierDailySpendCap({
+        user: undefined,
+        userId: 'user-1',
+        userRepository: mockUserRepo,
+        usageEventRepository: mockUsageRepo,
+        logger: mockLogger,
+      });
+
+      expect(findByIdMock).toHaveBeenCalledWith('user-1');
+    });
+
+    it('returns without a tier or cost read when the user is not found', async () => {
+      settingsWith(0, 0.1);
+      findByIdMock.mockResolvedValue(null);
+
+      await checkFreeTierDailySpendCap({
+        userId: 'ghost-user',
+        userRepository: mockUserRepo,
+        usageEventRepository: mockUsageRepo,
+        logger: mockLogger,
+      });
+
+      expect(resolveUserRateTierMock).not.toHaveBeenCalled();
+      expect(systemCostUsdByUserSinceMock).not.toHaveBeenCalled();
+    });
+
+    it('fails open when the system cost read rejects', async () => {
+      settingsWith(0, 0.1);
+      systemCostUsdByUserSinceMock.mockRejectedValue(new Error('DB timeout'));
+
+      await expect(callGate(makeUser(10 * DAY_MS))).resolves.toBeUndefined();
     });
   });
 });

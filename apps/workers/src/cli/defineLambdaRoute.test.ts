@@ -33,7 +33,7 @@ vi.mock('@server/cli/resolveContractAuth', () => ({
 }));
 
 import { defineLambdaRoute } from './defineLambdaRoute';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 
 const makeEvent = (body: unknown): APIGatewayProxyEventV2 =>
   ({ headers: { authorization: 'Bearer x' }, body: JSON.stringify(body) }) as unknown as APIGatewayProxyEventV2;

@@ -27,7 +27,7 @@ import {
   resolveFullConfig,
 } from '@bike4mind/common';
 import { SreAgentService, type SrePatternLookup } from '@bike4mind/services/sreAgentService';
-import { GitHubService, GitHubRateLimitError } from '@server/services/githubService';
+import { GitHubService, GitHubRateLimitError } from '@bike4mind/server-utils/services/githubService';
 import { RATE_LIMITED_SENTINEL } from '@bike4mind/services/sreAgentService/tools';
 import { apiKeyService } from '@bike4mind/services';
 import {

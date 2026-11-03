@@ -15,7 +15,7 @@
  */
 
 import { z } from 'zod';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import {
   cacheRepository,
   webhookDeliveryRepository,

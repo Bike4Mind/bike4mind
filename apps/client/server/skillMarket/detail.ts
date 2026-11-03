@@ -11,7 +11,7 @@ import {
   publicVersionView,
   serializeListing,
   type MarketActor,
-} from './market';
+} from '@bike4mind/server-utils/skillMarket/market';
 import { similarListings } from './search';
 
 /**

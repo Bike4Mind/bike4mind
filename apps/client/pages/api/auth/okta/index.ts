@@ -24,9 +24,11 @@ import { OKTA_STATE_AUDIENCE, LOG_URL_TRUNCATE_LENGTH, OktaStateInput } from '@s
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { validateAppUrl } from '@server/utils/validators';
 import { Logger } from '@bike4mind/observability';
+import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { isLocalAppUrl } from '@server/utils/validators';
 
 const handler = baseApi({ auth: false })
+  .use(checkBlockedIP())
   .use(rateLimit({ limit: 10, windowMs: 60 * 1000 })) // 10 requests per minute
   .get(async (req, res) => {
     // Coerce to string-or-undefined: `?idp=a&idp=b` yields an array, which would

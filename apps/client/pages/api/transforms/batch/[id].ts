@@ -153,6 +153,8 @@ const handler = baseApi().get(async (req, res) => {
         source: claimed.usageSource,
         inputTokens,
         outputTokens,
+        cacheReadTokens,
+        cacheWriteTokens,
       },
       { featureLabel: 'batch transforms', logger: req.logger, throwOnUnconfirmed: true }
     );

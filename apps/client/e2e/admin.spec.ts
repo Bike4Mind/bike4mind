@@ -54,6 +54,23 @@ test.describe('Admin - Navigation', () => {
     }));
     expect(scrollWidth).toBe(clientWidth);
   });
+
+  test('invite center deep links land on their section', async ({ page, basePage, adminPage }) => {
+    // The legacy waitlist slug still works and keeps the section.
+    await page.goto('/admin?tab=subscribers&inviteSection=pending');
+    await page.waitForLoadState('domcontentloaded');
+    await basePage.dismissModals();
+
+    await expect(adminPage.page.getByTestId('invite-center-section-pending')).toBeVisible({
+      timeout: TIMEOUTS.NAVIGATION,
+    });
+    await expect(page).toHaveURL(/tab=waitlist/);
+    await expect(page).toHaveURL(/inviteSection=pending/);
+
+    await adminPage.page.getByTestId('invite-center-sections-waitlist-btn').click();
+    await expect(adminPage.page.getByTestId('invite-center-section-waitlist')).toBeVisible();
+    await expect(page).not.toHaveURL(/inviteSection=/);
+  });
 });
 
 // Independent tests - can run in parallel within workers
@@ -115,15 +132,29 @@ test.describe('Admin - User CRUD', () => {
       await adminPage.searchUser(TEST_USER.name);
       await adminPage.waitForUserVisible(TEST_USER.name);
 
-      await adminPage.clickUserProfileButton(TEST_USER.name);
-      await adminPage.fillProfileField('Name:', EDITED_NAME);
-      await adminPage.saveProfileChanges();
-      await adminPage.closeModal();
+      await adminPage.openEditProfileDialog(TEST_USER.name);
+      await adminPage.fillEditProfileName(EDITED_NAME);
+      await adminPage.saveEditProfile();
 
       // Verify the edit persisted by searching for the new name (the edit happened on the profile page)
       await adminPage.navigateToUsersTab();
       await adminPage.searchUser(EDITED_NAME);
       await adminPage.waitForUserVisible(EDITED_NAME);
+    });
+
+    await test.step('credits tab shows the system-sourced cost card', async () => {
+      await adminPage.gotoAdmin();
+      await adminPage.navigateToUsersTab();
+      await adminPage.searchUser(EDITED_NAME);
+      await adminPage.waitForUserVisible(EDITED_NAME);
+
+      await adminPage.openUserProfile(EDITED_NAME);
+      await adminPage.page.getByTestId('user-profile-tab-credits').click();
+      await expect(adminPage.page.getByTestId('user-credits-system-cost')).toBeVisible({ timeout: TIMEOUTS.ACTION });
+      // A user created moments ago has triggered no system work yet.
+      await expect(adminPage.page.getByTestId('user-credits-system-cost-today')).toContainText('$0.00', {
+        timeout: TIMEOUTS.ACTION,
+      });
     });
 
     await test.step('delete user', async () => {

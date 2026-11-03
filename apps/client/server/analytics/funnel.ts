@@ -8,11 +8,11 @@ import {
 import { adminSettingsRepository, User, userRepository } from '@bike4mind/database';
 import type { AcquisitionTouches } from '@bike4mind/server-utils/lib/subscriptions/acquisition';
 import { readConsentedAcquisitionTouches } from './acquisition';
-import { emitProductEvent, HOST_PRODUCT_ID } from './emitActiveEvent';
-import { laneMetadata } from './lane';
+import { emitProductEvent, HOST_PRODUCT_ID } from '@bike4mind/server-utils/analytics/emitActiveEvent';
+import { laneMetadata } from '@bike4mind/server-utils/analytics/lane';
 import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
 import { stableEventId } from './signupEvents';
-import { logEventSafe } from '@server/utils/analyticsLog';
+import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import { rewardInviterForFirstAnswer } from '@server/referrals/firstAnswerReward';
 
 // Server half of the funnel instrumentation. The client half (begin_checkout, upsell_*) is
@@ -121,11 +121,18 @@ export type FunnelEvent = 'credits_granted' | 'email_verified' | 'first_value' |
  * persona's signup was indistinguishable from no signup at all; marked, it can be counted apart
  * from real signups and a persona run can still be checked. The lane is spread last so caller
  * metadata cannot unmark a synthetic user.
+ *
+ * `visitId` is the visit the stage happened in (readVisitId on the request), when the stage
+ * is the user's own request: it ties the signup to the visit it came from, so the visit's
+ * source and its conversion are one session downstream. A stage recorded by a worker names the
+ * visit of the request that queued its work (first_value: QuestStartBodySchema.visitId). Omitted,
+ * the stage names no visit, as an admin-created account or a background job does.
  */
 export async function emitFunnelEvent(opts: {
   user: FunnelUser;
   event: FunnelEvent;
   metadata?: Record<string, string | number | boolean>;
+  visitId?: string;
 }): Promise<boolean> {
   const utm = opts.user.acquisition?.firstTouch;
   const metadata = { ...opts.metadata, ...laneMetadata(opts.user) };
@@ -134,6 +141,7 @@ export async function emitFunnelEvent(opts: {
     event: opts.event,
     eventId: stableEventId(opts.event, HOST_PRODUCT_ID, pseudonymizeUserId(opts.user.id)),
     userId: opts.user.id,
+    ...(opts.visitId !== undefined && { sessionId: opts.visitId }),
     ...(utm && { utm }),
     ...(Object.keys(metadata).length > 0 && { metadata }),
   }).catch(() => {});
@@ -161,17 +169,21 @@ export async function emitSignupFunnelEvents(opts: {
   method: string;
   emailVerified: boolean;
   creditsGranted: number;
+  /** The signup request's visit; see emitFunnelEvent. Never an admin's own. */
+  visitId?: string;
 }): Promise<void> {
   const metadata = funnelMethodMetadata(opts.method);
+  const { visitId } = opts;
   await Promise.all([
-    opts.emailVerified && emitFunnelEvent({ user: opts.user, event: 'email_verified', metadata }),
+    opts.emailVerified && emitFunnelEvent({ user: opts.user, event: 'email_verified', metadata, visitId }),
     (opts.emailVerified || opts.creditsGranted > 0) &&
       emitFunnelEvent({
         user: opts.user,
         event: 'credits_granted',
         metadata: { amount: opts.creditsGranted, source: 'signup', ...metadata },
+        visitId,
       }),
-    emitFunnelEvent({ user: opts.user, event: 'signup_completed', metadata }),
+    emitFunnelEvent({ user: opts.user, event: 'signup_completed', metadata, visitId }),
   ]);
 }
 
@@ -209,6 +221,8 @@ export async function recordFirstValue(opts: {
   feature: string;
   now?: Date;
   onRecorded?: () => Promise<void>;
+  /** The visit the value happened in; see emitFunnelEvent. */
+  visitId?: string;
 }): Promise<boolean> {
   if (!signedUpAfterLaunch(opts.user.createdAt)) return false;
   try {
@@ -227,6 +241,7 @@ export async function recordFirstValue(opts: {
             secondsSinceSignup: Math.max(0, Math.round((now.getTime() - createdAt) / 1000)),
           }),
         },
+        visitId: opts.visitId,
       }),
       rewardInviterForFirstAnswer(opts.user.id),
     ]);
@@ -247,6 +262,8 @@ export async function recordFirstValue(opts: {
 export async function recordFirstChatValue(opts: {
   user: FunnelUser & { createdAt?: Date | string | null; firstValueAt?: Date | null };
   loadQuest: () => Promise<{ status?: string; type?: string; creditsUsed?: number } | null | undefined>;
+  /** The visit the question was asked in, carried on the queued turn (QuestStartBodySchema.visitId). */
+  visitId?: string;
 }): Promise<boolean> {
   if (opts.user.firstValueAt || !signedUpAfterLaunch(opts.user.createdAt)) return false;
   const quest = await opts.loadQuest().catch(() => undefined);
@@ -254,6 +271,7 @@ export async function recordFirstChatValue(opts: {
   return recordFirstValue({
     user: opts.user,
     feature: 'chat',
+    visitId: opts.visitId,
     onRecorded: () =>
       logEventSafe({
         userId: opts.user.id,

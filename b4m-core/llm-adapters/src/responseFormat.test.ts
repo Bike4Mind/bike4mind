@@ -238,9 +238,9 @@ describe('AnthropicBackend response_format', () => {
 
     const apiParams = getApiParams();
     expect(apiParams.tools).toHaveLength(1);
-    expect(apiParams.tools[0]).toMatchObject({ name: 'extract_user' });
+    expect(apiParams.tools[0]).toMatchObject({ name: 'extract_user', strict: true });
     expect(apiParams.tools[0].input_schema).toEqual(SAMPLE_SCHEMA.json_schema.schema);
-    expect(apiParams.tool_choice).toEqual({ type: 'tool', name: 'extract_user' });
+    expect(apiParams.tool_choice).toEqual({ type: 'tool', name: 'extract_user', disable_parallel_tool_use: true });
 
     // Streamed text should contain the raw JSON
     const allText = calls.flatMap(c => c.text.filter((t): t is string => typeof t === 'string')).join('');

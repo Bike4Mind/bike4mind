@@ -25,7 +25,7 @@ export const GEAR_PRESENTATION: Record<GearKey, GearPresentation> = {
     tagline: 'One goal, one place',
     intro:
       'Group chats, files, and teammates around a single goal. Everything a project needs stays findable in one workspace.',
-    cta: 'Create your first project',
+    cta: 'Create a project',
     ctaAction: 'navigate:/projects',
   },
   agents: {
@@ -33,7 +33,7 @@ export const GEAR_PRESENTATION: Record<GearKey, GearPresentation> = {
     tagline: 'Work that runs itself',
     intro:
       'Autonomous workers that carry out multi-step jobs - research, drafting, monitoring - and report back when done.',
-    cta: 'Build your first agent',
+    cta: 'Build an agent',
     ctaAction: 'navigate:/agents',
   },
   datalakes: {
@@ -41,14 +41,14 @@ export const GEAR_PRESENTATION: Record<GearKey, GearPresentation> = {
     tagline: 'Answers from YOUR documents',
     intro:
       'Ground the AI in your own material. Upload documents once; every answer can retrieve and cite your sources first.',
-    cta: 'Create your first data lake',
+    cta: 'Create a data lake',
     ctaAction: 'navigate:/new',
   },
   files: {
     title: 'Files',
     tagline: 'Bring your stuff',
     intro: 'Upload anything - PDFs, spreadsheets, images - and reference it from any chat or project.',
-    cta: 'Upload your first file',
+    cta: 'Upload a file',
     ctaAction: 'files',
   },
   published: {
@@ -64,7 +64,7 @@ export const GEAR_PRESENTATION: Record<GearKey, GearPresentation> = {
     tagline: 'One log, every actor',
     intro:
       'A shared append-only event log. You, your agents, and your devices all post to the same channel as named actors and catch up from where each left off.',
-    cta: 'Open your first channel',
+    cta: 'Open a channel',
     ctaAction: 'navigate:/hearth',
   },
   // --- Skills ---
@@ -72,7 +72,7 @@ export const GEAR_PRESENTATION: Record<GearKey, GearPresentation> = {
     title: 'Image Generation',
     tagline: 'Paint with a prompt',
     intro: 'Ask any chat to generate or edit an image - concept art, diagrams, marketing shots.',
-    cta: 'Generate your first image',
+    cta: 'Generate an image',
     ctaAction: 'navigate:/new',
   },
   models: {
@@ -121,8 +121,8 @@ export const GEAR_PRESENTATION: Record<GearKey, GearPresentation> = {
   apicall: {
     title: 'API Call',
     tagline: 'Hello, world',
-    intro: 'Make your first API request - one curl with your key and the completions endpoint answers.',
-    cta: 'Make your first call',
+    intro: 'Send an API request - one curl with your key and the completions endpoint answers.',
+    cta: 'Make an API call',
     ctaAction: 'navigate:/profile?tab=settings',
   },
   forknotebook: {
@@ -144,7 +144,7 @@ export const GEAR_PRESENTATION: Record<GearKey, GearPresentation> = {
     title: 'Quest Master',
     tagline: 'A mission, not a message',
     intro: 'Hand the AI a multi-step goal - it plans, executes in parallel, and reports back.',
-    cta: 'Start your first quest',
+    cta: 'Start a quest',
     ctaAction: 'navigate:/new',
   },
   mementos: {

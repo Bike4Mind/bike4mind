@@ -8,13 +8,15 @@ import { verifySlackRequest } from '@server/integrations/slack/slackWebhookVerif
 import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 import { cleanupConfluencePageContent } from '@server/integrations/atlassian/confluenceAttachmentCleanup';
 import { WebClient } from '@slack/web-api';
-import { User, Quest, connectDB, sessionRepository } from '@bike4mind/database';
+import { User, Quest, Session, connectDB, sessionRepository } from '@bike4mind/database';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { SlackDevWorkspace } from '@bike4mind/database/infra';
 import { createSession } from '@server/managers/sessionManager';
 import { Logger } from '@bike4mind/observability';
+import { withRequestLogger } from '@server/middlewares/requestLogger';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { Config, isDevelopment } from '@bike4mind/server-utils/utils/config';
-import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler';
 import { getMcpToolText, isMcpToolError } from '@server/utils/isMcpToolError';
 import {
   JiraResource,
@@ -58,7 +60,7 @@ import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import { McpServer } from '@bike4mind/database/ai';
 import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
-import { ImageModels, IUserDocument, McpServerName } from '@bike4mind/common';
+import { ImageModels, IUserDocument, McpServerName, SLACK_API_POST_EVENT_TYPE } from '@bike4mind/common';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 
 dayjs.extend(utc);
@@ -87,6 +89,7 @@ const SlackInteractivePayloadSchema = z.object({
     .object({
       ts: z.string(),
       thread_ts: z.string().optional(),
+      metadata: z.object({ event_type: z.string().optional() }).passthrough().optional(),
     })
     .optional(),
   actions: z
@@ -410,6 +413,17 @@ async function handleInteractiveAction(
   workspaceId?: string
 ): Promise<any> {
   const { type, user, actions, view, response_url, trigger_id } = payload;
+
+  // A message posted through POST /api/v1/slack/messages is caller-authored: it must never be able to
+  // trigger a bot action, whatever its blocks claim to be. The API refuses interactive blocks; this is
+  // the backstop if one ever reaches Slack.
+  if (payload.message?.metadata?.event_type === SLACK_API_POST_EVENT_TYPE) {
+    Logger.warn('[Slack Interactive] Refused an action on an API-posted message', {
+      actionId: actions?.[0]?.action_id,
+      userId: user?.id,
+    });
+    return {};
+  }
 
   // Handle view_submission (modal form submissions)
   if (type === 'view_submission' && view?.callback_id) {
@@ -1061,6 +1075,18 @@ async function handleSetDefaultNotebook(dbUser: any, slackUserId: string, notebo
   }
 
   try {
+    // Same ownership rule as the settings route (users/[id]/slack-settings.ts): the default notebook is
+    // dereferenced later without a re-check, and the button value is whatever the message carried.
+    const notebook = isValidObjectId(notebookId)
+      ? await Session.findOne({ _id: notebookId, userId: dbUser.id, deletedAt: { $exists: false } }).select('_id')
+      : null;
+    if (!notebook) {
+      return {
+        text: '\u274C That notebook was not found in your account',
+        response_type: 'ephemeral',
+      };
+    }
+
     const slackSettings = dbUser.slackSettings || {};
     await updateUserSlackSettings(dbUser.id, {
       ...slackSettings,
@@ -2080,4 +2106,4 @@ export const config = {
   },
 };
 
-export default handler;
+export default withRequestLogger(handler);

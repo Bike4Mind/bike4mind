@@ -61,6 +61,11 @@ export interface IterationCreditGateArgs {
   lastInputTokens: number;
   /** Live balance of whoever pays for the run, re-read so a snapshot cannot go stale. */
   readBalance: () => Promise<number>;
+  /**
+   * The new-account spend cap's refusal message for an iteration of `requiredCredits`, or null
+   * (creditService.checkNewAccountSpendCap). Read only once the balance covers the iteration.
+   */
+  checkSpendCap: (requiredCredits: number) => Promise<string | null>;
   /** Only read when the gate stops the run, so a live iteration never pays for a snapshot. */
   snapshot: () => { steps: AgentStep[]; partialAnswer: string | undefined };
 }
@@ -68,7 +73,7 @@ export interface IterationCreditGateArgs {
 export interface IterationCreditGateDeps {
   markFailed(
     executionId: string,
-    error: { message: string; failureReason: 'insufficient_credits' | 'credit_cap' }
+    error: { message: string; failureReason?: 'insufficient_credits' | 'credit_cap' }
   ): Promise<void>;
   sendWs(action: string, payload: Record<string, unknown>): Promise<void>;
   persistRunAsQuest(executionId: string, message: string): Promise<void>;
@@ -76,8 +81,9 @@ export interface IterationCreditGateDeps {
 }
 
 /**
- * Stops the run when the payer's live balance cannot cover the next iteration. Returns true
- * when it stopped, so the caller can leave the loop.
+ * Stops the run when the payer's live balance cannot cover the next iteration, or when the
+ * iteration would take a new account over its spend cap. Returns true when it stopped, so the
+ * caller can leave the loop.
  */
 export async function stopUnfundedIteration(
   args: IterationCreditGateArgs,
@@ -85,22 +91,58 @@ export async function stopUnfundedIteration(
 ): Promise<boolean> {
   const balance = await args.readBalance();
   const uncoveredCredits = uncoveredIterationCredits(balance, args.modelInfo, args.lastInputTokens);
-  if (uncoveredCredits === undefined) return false;
+  if (uncoveredCredits !== undefined) {
+    deps.logger.warn('[Credits] Balance cannot cover the next iteration; stopping execution', {
+      balance,
+      requiredCredits: uncoveredCredits,
+      iterationIndex: args.iterationIndex,
+    });
+    await stopRun(args, deps, {
+      message: 'Insufficient credits to continue agent execution',
+      failureReason: 'insufficient_credits',
+      stopped: 'Stopped: out of credits.',
+    });
+    return true;
+  }
 
-  deps.logger.warn('[Credits] Balance cannot cover the next iteration; stopping execution', {
-    balance,
-    requiredCredits: uncoveredCredits,
-    iterationIndex: args.iterationIndex,
-  });
-  await stopRun(args, deps, {
-    message: 'Insufficient credits to continue agent execution',
-    failureReason: 'insufficient_credits',
-    stopped: 'Stopped: out of credits',
-  });
+  const spendCapMessage = await args.checkSpendCap(nextIterationCredits(args.modelInfo, args.lastInputTokens));
+  if (spendCapMessage === null) return false;
+  // Not insufficient_credits: the payer has credits; the new account's spend cap stopped the run.
+  await stopRun(args, deps, { message: spendCapMessage, stopped: `Stopped: ${spendCapMessage}` });
   return true;
 }
 
-export interface IterationCapGateArgs extends Omit<IterationCreditGateArgs, 'readBalance' | 'modelInfo'> {
+export interface IterationAccountGateArgs {
+  executionId: string;
+  /** Why the run's user may no longer spend, re-read per iteration; null when they may. */
+  readAccessDenial: () => Promise<string | null>;
+  snapshot: () => { steps: AgentStep[]; partialAnswer: string | undefined };
+}
+
+/**
+ * Stops the run when its user's account was blocked (ban, dispute, suspension) or AI-restricted after the run
+ * was admitted. Independent of enforceCredits: a blocked account spends nothing either way. Returns true when
+ * it stopped.
+ */
+export async function stopBlockedAccountIteration(
+  args: IterationAccountGateArgs,
+  deps: IterationCreditGateDeps
+): Promise<boolean> {
+  const denial = await args.readAccessDenial();
+  if (!denial) return false;
+
+  deps.logger.warn('[Account] Account can no longer use AI; stopping execution', { executionId: args.executionId });
+  const { steps } = args.snapshot();
+  await deps.markFailed(args.executionId, { message: denial });
+  await deps.sendWs('failed', { executionId: args.executionId, reason: 'account_blocked', partialResult: steps });
+  await deps.persistRunAsQuest(args.executionId, `Stopped: ${denial}`);
+  return true;
+}
+
+export interface IterationCapGateArgs extends Omit<
+  IterationCreditGateArgs,
+  'readBalance' | 'checkSpendCap' | 'modelInfo'
+> {
   /** Unknown model: the next iteration is priced at 0, so the run stops once its spend reaches the cap. */
   modelInfo: ModelInfo | null | undefined;
   /** The run's `creditCap`, set by the loop scheduler at dispatch. */
@@ -128,7 +170,7 @@ export async function stopCappedIteration(args: IterationCapGateArgs, deps: Iter
   await stopRun(args, deps, {
     message: "Stopped at this run's credit cap",
     failureReason: 'credit_cap',
-    stopped: "Stopped: reached this run's credit cap",
+    stopped: "Stopped: reached this run's credit cap.",
   });
   return true;
 }
@@ -136,13 +178,20 @@ export async function stopCappedIteration(args: IterationCapGateArgs, deps: Iter
 async function stopRun(
   args: Pick<IterationCreditGateArgs, 'executionId' | 'snapshot'>,
   deps: IterationCreditGateDeps,
-  stop: { message: string; failureReason: 'insufficient_credits' | 'credit_cap'; stopped: string }
+  stop: { message: string; failureReason?: 'insufficient_credits' | 'credit_cap'; stopped: string }
 ): Promise<void> {
   const { steps, partialAnswer } = args.snapshot();
-  await deps.markFailed(args.executionId, { message: stop.message, failureReason: stop.failureReason });
-  await deps.sendWs('failed', { executionId: args.executionId, reason: stop.failureReason, partialResult: steps });
+  await deps.markFailed(
+    args.executionId,
+    stop.failureReason ? { message: stop.message, failureReason: stop.failureReason } : { message: stop.message }
+  );
+  await deps.sendWs('failed', {
+    executionId: args.executionId,
+    reason: stop.failureReason ?? 'insufficient_credits',
+    partialResult: steps,
+  });
   await deps.persistRunAsQuest(
     args.executionId,
-    partialAnswer ? `${stop.stopped}. Partial response:\n\n${partialAnswer}` : `${stop.stopped}.`
+    partialAnswer ? `${stop.stopped} Partial response:\n\n${partialAnswer}` : stop.stopped
   );
 }

@@ -45,7 +45,7 @@ const findActiveSubscriptionsByOwner = vi.hoisted(() =>
     throw new Error('the org route must read non-terminal rows; the active-only predicate hides past_due');
   })
 );
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: { findNonTerminalSubscriptionsByOwner, findActiveSubscriptionsByOwner },
 }));
 

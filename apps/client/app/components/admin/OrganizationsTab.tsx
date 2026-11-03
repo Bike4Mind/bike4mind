@@ -24,6 +24,7 @@ import {
   Table,
   Typography,
 } from '@mui/joy';
+import { useNavigate } from '@tanstack/react-router';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { IOrganizationDocument, WithId } from '@bike4mind/common';
 import { ActionDialog } from '@client/app/components/admin/shared/ActionDialog';
@@ -183,6 +184,13 @@ const OrganizationsTab: React.FC = () => {
 
   const { data: grants } = useAdminOrgGrants();
   const grantedOrgIds = useMemo(() => new Set((grants ?? []).map(g => g.ownerId)), [grants]);
+  const grantSubscriptionIdByOrgId = useMemo(() => new Map((grants ?? []).map(g => [g.ownerId, g.id])), [grants]);
+  const navigate = useNavigate();
+  const viewSubscription = (orgId: string) => {
+    const subscriptionId = grantSubscriptionIdByOrgId.get(orgId);
+    if (!subscriptionId) return;
+    void navigate({ to: '/admin/subscriptions/$subscriptionId', params: { subscriptionId } });
+  };
 
   const organizations = data?.data ?? [];
   // The modal opens from a row snapshot; read the refreshed row once a write inside it (e.g. a
@@ -511,6 +519,14 @@ const OrganizationsTab: React.FC = () => {
                           </MenuItem>
                           {isGranted && (
                             <MenuItem
+                              data-testid={`view-subscription-${org.id}`}
+                              onClick={() => viewSubscription(org.id)}
+                            >
+                              View subscription
+                            </MenuItem>
+                          )}
+                          {isGranted && (
+                            <MenuItem
                               data-testid={`adjust-seats-${org.id}`}
                               onClick={() => {
                                 setSeatsOrg(org);
@@ -629,6 +645,14 @@ const OrganizationsTab: React.FC = () => {
                               >
                                 Top up credits
                               </MenuItem>
+                              {isGranted && (
+                                <MenuItem
+                                  data-testid={`view-subscription-${org.id}`}
+                                  onClick={() => viewSubscription(org.id)}
+                                >
+                                  View subscription
+                                </MenuItem>
+                              )}
                               {isGranted && (
                                 <MenuItem
                                   data-testid={`adjust-seats-${org.id}`}

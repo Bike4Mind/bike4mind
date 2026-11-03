@@ -5,7 +5,7 @@
 // The stop-reason vocabulary is shared, not restated: it used to be hand-copied here with a
 // "must stay in sync" note, which is a drift hazard the CLI would have tripled.
 import { CLEAN_FINISH_REASONS, DEGENERATE_FINISH_REASON, EARLY_STOP_FINISH_REASONS } from '@bike4mind/common';
-import { hasCompleteOpeningTag } from './artifactParser';
+import { hasCompleteOpeningTag } from '@bike4mind/server-utils/app/utils/artifactParser';
 
 // Re-exported so existing importers of these names from this module keep working.
 export { CLEAN_FINISH_REASONS, DEGENERATE_FINISH_REASON, EARLY_STOP_FINISH_REASONS };

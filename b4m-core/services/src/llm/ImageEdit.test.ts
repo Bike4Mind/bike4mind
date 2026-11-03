@@ -205,6 +205,9 @@ describe('ImageEditService.process model dispatch', () => {
     (service as any).tokenizer = {
       encodeTokens: vi.fn(async () => [1, 2, 3]),
       decodeTokens: vi.fn(async () => 'make it blue'),
+      withLogger() {
+        return this;
+      },
     };
     return { service, quest, creditHolds };
   };
@@ -345,6 +348,28 @@ describe('ImageEditService.process model dispatch', () => {
     );
 
     expect(editSpy.mock.calls[0][2]).toMatchObject({ seed: 12345 });
+  });
+
+  it('carries the authenticating API key from invoke() onto the queued job body', async () => {
+    const enqueued: unknown[] = [];
+    const { service } = makeService({}, async body => {
+      enqueued.push(body);
+    });
+
+    await service.invoke({
+      userId: 'user1',
+      apiKeyId: 'key-1',
+      body: {
+        sessionId: 'session1',
+        questId: 'quest1',
+        prompt: 'make it blue',
+        model: ImageModels.GPT_IMAGE_1_5,
+        image: 'https://example.invalid/source.png',
+        fabFileIds: ['mask1'],
+      },
+    });
+
+    expect(enqueued).toEqual([expect.objectContaining({ apiKeyId: 'key-1' })]);
   });
 
   it('sends the selected OpenAI model instead of defaulting to gpt-image-1', async () => {
@@ -510,10 +535,14 @@ describe('ImageEditService.process model dispatch', () => {
   });
 
   describe('usage event on a charged edit', () => {
-    const runCharged = (record: ReturnType<typeof vi.fn>, settledCredits?: number) =>
+    const runCharged = (
+      record: ReturnType<typeof vi.fn>,
+      settledCredits?: number,
+      bodyOverride: Record<string, unknown> = {}
+    ) =>
       run(
         ImageModels.GPT_IMAGE_1_5,
-        {},
+        bodyOverride,
         { creditTransactions: { create: vi.fn() }, usageEvents: { record } },
         settledCredits
       );
@@ -600,6 +629,22 @@ describe('ImageEditService.process model dispatch', () => {
           expect.anything()
         );
         expect(record).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: expected }));
+      });
+
+      it('records the authenticating API key carried on the job body', async () => {
+        withValidatedCost({ requiredCredits: 41, usdCost: 40.5 / CREDITS_PER_USD_COST });
+        const quest = await runCharged(
+          vi.fn(async () => undefined),
+          undefined,
+          { apiKeyId: 'key-1' }
+        );
+
+        expect(quest.creditHolds.settle).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.any(Number),
+          expect.objectContaining({ type: 'image_edit_usage', apiKeyId: 'key-1' }),
+          expect.anything()
+        );
       });
 
       it('settles 0 for a tiny cost (the whole hold is refunded), and the usage event still records the edit', async () => {
@@ -694,6 +739,9 @@ describe('ImageEditService.process reference images (#2744)', () => {
     (service as any).tokenizer = {
       encodeTokens: vi.fn(async () => [1, 2, 3]),
       decodeTokens: vi.fn(async () => 'make it blue'),
+      withLogger() {
+        return this;
+      },
     };
     await service.process({
       body: {
@@ -844,6 +892,9 @@ describe('ImageEditService.process mask access (#3069)', () => {
     (service as any).tokenizer = {
       encodeTokens: vi.fn(async () => [1, 2, 3]),
       decodeTokens: vi.fn(async () => 'make it blue'),
+      withLogger() {
+        return this;
+      },
     };
     await service.process({
       body: {
@@ -1301,6 +1352,9 @@ describe('ImageEditService quest partial writes', () => {
     (service as unknown as { tokenizer: unknown }).tokenizer = {
       encodeTokens: vi.fn(async () => [1, 2, 3]),
       decodeTokens: vi.fn(async () => 'make it blue'),
+      withLogger() {
+        return this;
+      },
     };
     return { service, quest, update, startImageEditProcess, creditHolds };
   };

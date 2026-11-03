@@ -13,7 +13,6 @@ const resources = vi.hoisted(() => {
     alarm: vi.fn(function (_name: string, _args: Record<string, unknown>) {}),
     logGroup: { name: 'server-logs' } as { name: string } | undefined,
     topic: { arn: 'alarm-topic' } as { arn: string } | undefined,
-    oobTopic: { arn: 'email-topic' } as { arn: string } | undefined,
     hasServer: true,
   };
 });
@@ -31,9 +30,6 @@ vi.mock('../dlqAlarms', () => ({
   get dlqAlarmTopic() {
     return resources.topic;
   },
-  get oobAlarmTopic() {
-    return resources.oobTopic;
-  },
 }));
 vi.mock('@bike4mind/infra', () => import('../../b4m-core/infra/src/stageGating'));
 
@@ -49,7 +45,6 @@ beforeEach(() => {
   vi.stubGlobal('aws', { cloudwatch: { LogMetricFilter: resources.filter, MetricAlarm: resources.alarm } });
   resources.logGroup = { name: 'server-logs' };
   resources.topic = { arn: 'alarm-topic' };
-  resources.oobTopic = { arn: 'email-topic' };
   resources.hasServer = true;
 });
 afterEach(() => {
@@ -96,8 +91,8 @@ describe('turnstile policy alarm wiring', () => {
       statistic: 'Sum',
       threshold: 1,
       treatMissingData: 'notBreaching',
-      alarmActions: ['alarm-topic', 'email-topic'],
-      okActions: ['alarm-topic', 'email-topic'],
+      alarmActions: ['alarm-topic'],
+      okActions: ['alarm-topic'],
       tags: { Application: 'Turnstile', Severity: 'High' },
     });
   });
@@ -119,8 +114,8 @@ describe('turnstile policy alarm wiring', () => {
         metricName: 'TurnstileMisconfigured',
         namespace: 'test-app/production/Turnstile',
         threshold: 1,
-        alarmActions: ['alarm-topic', 'email-topic'],
-        okActions: ['alarm-topic', 'email-topic'],
+        alarmActions: ['alarm-topic'],
+        okActions: ['alarm-topic'],
       })
     );
   });
@@ -140,11 +135,6 @@ describe('turnstile policy alarm wiring', () => {
   it('fails loudly when alarm routing is missing', async () => {
     resources.topic = undefined;
     await expect(loadAlarms()).rejects.toThrow('alarm routing requires dlqAlarmTopic');
-  });
-
-  it('fails loudly when email routing is missing', async () => {
-    resources.oobTopic = undefined;
-    await expect(loadAlarms()).rejects.toThrow('oobAlarmTopic');
   });
 
   it('fails loudly when the server is missing', async () => {

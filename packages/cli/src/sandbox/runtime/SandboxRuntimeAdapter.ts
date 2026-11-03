@@ -16,8 +16,10 @@ export interface WrapCommandOptions {
   /** Grant network egress inside the sandbox. Required so every call site makes the
    *  fail-closed vs. open decision explicitly; false denies IP egress. */
   networkEnabled: boolean;
-  /** Filtering proxy port; Seatbelt grants loopback-only network when set with networkEnabled. */
+  /** Filtering proxy port; with networkEnabled, the only loopback port the sandbox may connect to. */
   proxyPort?: number;
+  /** Host unix socket of the filtering proxy (see UnixSocketRelay); Bubblewrap requires it with networkEnabled. */
+  proxySocketPath?: string;
   /** Leave container engine sockets (see getContainerSocketPaths) reachable inside the sandbox. */
   allowContainerSockets?: boolean;
 }
@@ -60,6 +62,13 @@ export function getContainerSocketPaths(): ContainerSocketPath[] {
     env.XDG_CONFIG_HOME && path.isAbsolute(env.XDG_CONFIG_HOME) ? env.XDG_CONFIG_HOME : path.join(home, '.config');
   addIfAbsolute(path.join(configHome, 'colima'), true);
   return entries;
+}
+
+/** Rejects anything but a TCP port number before it is written into a profile or relay script. */
+export function assertProxyPort(port: number): void {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`Invalid sandbox proxy port: ${port}`);
+  }
 }
 
 /** Abstract interface for platform-specific sandbox runtimes */
@@ -198,11 +207,7 @@ export async function createSandboxRuntime(): Promise<SandboxRuntime | null> {
     return runtime.isAvailable() ? runtime : null;
   }
 
-  if (platform === 'linux') {
-    const { BubblewrapRuntime } = await import('./BubblewrapRuntime.js');
-    const runtime = new BubblewrapRuntime();
-    return runtime.isAvailable() ? runtime : null;
-  }
-
-  return null;
+  const { BubblewrapRuntime } = await import('./BubblewrapRuntime.js');
+  const runtime = new BubblewrapRuntime();
+  return runtime.isAvailable() ? runtime : null;
 }

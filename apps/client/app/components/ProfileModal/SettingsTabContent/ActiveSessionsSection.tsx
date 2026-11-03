@@ -90,7 +90,7 @@ const ActiveSessionsSection: React.FC = () => {
                   <Box sx={{ minWidth: 0 }}>
                     <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap">
                       <Typography level="body-md" sx={{ fontWeight: 500 }}>
-                        {label}
+                        {session.device?.displayName || label}
                       </Typography>
                       {session.current && (
                         <Chip size="sm" color="success" variant="soft" data-testid={`active-session-current-${index}`}>

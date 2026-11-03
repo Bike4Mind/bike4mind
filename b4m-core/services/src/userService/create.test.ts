@@ -168,6 +168,34 @@ describe('createUser - reserved username prefix', () => {
   });
 });
 
+describe('createUser adminPermissions', () => {
+  it('persists a delegated grant without granting full admin', async () => {
+    const db = makeDb();
+
+    await createUser({ username: 'delegate', adminPermissions: ['settings:manage'] }, { db });
+
+    const persisted = db.users.create.mock.calls[0][0] as Omit<IUser, 'id'>;
+    expect(persisted.adminPermissions).toEqual(['settings:manage']);
+    expect(persisted.isAdmin).toBe(false);
+  });
+
+  it('keeps an explicit empty grant as []', async () => {
+    const db = makeDb();
+
+    await createUser({ username: 'nogrant', adminPermissions: [] }, { db });
+
+    expect((db.users.create.mock.calls[0][0] as Omit<IUser, 'id'>).adminPermissions).toEqual([]);
+  });
+
+  it('leaves the field unset when no grant is passed', async () => {
+    const db = makeDb();
+
+    await createUser({ username: 'plain' }, { db });
+
+    expect(db.users.create.mock.calls[0][0]).not.toHaveProperty('adminPermissions');
+  });
+});
+
 describe('createUser storage allocation', () => {
   it.each([
     [{}, 1000, null],

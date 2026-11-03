@@ -6,7 +6,7 @@ import type {
   SkillListingDetail,
 } from '@bike4mind/common';
 import type { ISkillListingDocument } from '@bike4mind/database';
-import { serializeListing } from './market';
+import { serializeListing } from '@bike4mind/server-utils/skillMarket/market';
 import type { buildListingDetail } from './detail';
 
 /**

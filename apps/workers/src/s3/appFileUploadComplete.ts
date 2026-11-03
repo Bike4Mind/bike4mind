@@ -1,5 +1,5 @@
 import { AppFile } from '@bike4mind/database';
-import { decodeS3Key, findWithRetry, withContext } from '@server/s3/utils';
+import { decodeS3Key, findWithRetry, withContext } from '@bike4mind/server-utils/s3/utils';
 import { TEXT_EDIT_BACKUP_PREFIX } from '@bike4mind/server-utils/utils/textEditBackupPrefix';
 
 export const func = withContext(async (event, context, logger) => {

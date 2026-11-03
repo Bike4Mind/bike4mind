@@ -109,6 +109,28 @@ describe('refreshSignupRiskScore', () => {
     expect(stored()).toMatchObject({ score: WEIGHTS.riskyDomain + WEIGHTS.datacenterNetwork, reviewState: 'pending' });
   });
 
+  it('proposes pending below the threshold while the signup grant policy holds the tranche for review', async () => {
+    const grant = { stage: 'signup', signupCredits: 500, unlockCredits: 500, creditsReleased: 0 };
+    const { adapters, stored } = setup({
+      user: { signupGrant: grant, signupGrantAssessment: { band: 'review', status: 'evaluated' } },
+    });
+
+    await refreshSignupRiskScore('u1', adapters);
+
+    expect(stored()).toMatchObject({ score: 0, reviewState: 'pending' });
+  });
+
+  it('leaves state none once the held tranche has been paid', async () => {
+    const grant = { stage: 'signup', signupCredits: 500, unlockCredits: 500, creditsReleased: 500 };
+    const { adapters, stored } = setup({
+      user: { signupGrant: grant, signupGrantAssessment: { band: 'review', status: 'evaluated' } },
+    });
+
+    await refreshSignupRiskScore('u1', adapters);
+
+    expect(stored()?.reviewState).toBe('none');
+  });
+
   it('scores an account with no email without a domain signal', async () => {
     const { adapters, stored } = setup({ user: { email: null } });
 

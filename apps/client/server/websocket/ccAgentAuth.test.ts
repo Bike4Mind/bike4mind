@@ -15,7 +15,7 @@ import { Connection } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { checkRateLimit, verifyBridgeApiKey, verifyJwtToken } from '@server/cli/auth';
 import { resolveBridgeWsAuth } from './ccAgentAuth';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } as unknown as Logger;

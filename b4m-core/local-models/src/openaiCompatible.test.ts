@@ -112,6 +112,85 @@ describe('OpenAICompatibleRuntime', () => {
     ]);
   });
 
+  // vLLM's ModelCard (vllm/entrypoints/serve/engine/protocol.py) as `vllm serve <path> --served-model-name
+  // qwen-small qwen --lora-modules sql-lora=<adapter path>` lists it: one card per name, each with the same
+  // root and max_model_len, then the adapter with parent set to the first name and no max_model_len.
+  const vllmModels = {
+    object: 'list',
+    data: [
+      {
+        id: 'qwen-small',
+        object: 'model',
+        created: 1761800000,
+        owned_by: 'vllm',
+        root: '/models/Qwen2.5-0.5B-Instruct',
+        parent: null,
+        max_model_len: 4096,
+        permission: [],
+      },
+      {
+        id: 'qwen',
+        object: 'model',
+        created: 1761800000,
+        owned_by: 'vllm',
+        root: '/models/Qwen2.5-0.5B-Instruct',
+        parent: null,
+        max_model_len: 4096,
+        permission: [],
+      },
+      {
+        id: 'sql-lora',
+        object: 'model',
+        created: 1761800000,
+        owned_by: 'vllm',
+        root: '/adapters/sql-lora',
+        parent: 'qwen-small',
+        max_model_len: null,
+        permission: [],
+      },
+    ],
+  };
+
+  it('lists a vLLM model once under its first served name, with its context, and an adapter with its base', async () => {
+    server = await startFakeServer({ 'GET /v1/models': json(vllmModels) });
+    const runtime = new OpenAICompatibleRuntime({ baseUrl: server.baseUrl, product: 'vllm' });
+    const models = await runtime.list();
+    expect(
+      models.map(({ name, contextLength, aliases, baseModel }) => ({ name, contextLength, aliases, baseModel }))
+    ).toEqual([
+      { name: 'qwen-small', contextLength: 4096, aliases: ['qwen'], baseModel: undefined },
+      { name: 'sql-lora', contextLength: 4096, aliases: undefined, baseModel: 'qwen-small' },
+    ]);
+    expect((await runtime.inspect('qwen')).model.name).toBe('qwen-small');
+  });
+
+  it("names an adapter's base by its first name when the adapter was loaded against an alias", async () => {
+    const [first, second] = vllmModels.data;
+    server = await startFakeServer({
+      'GET /v1/models': json({
+        data: [first, second, { id: 'chat-lora', owned_by: 'vllm', root: '/adapters/chat', parent: 'qwen' }],
+      }),
+    });
+    const models = await new OpenAICompatibleRuntime({ baseUrl: server.baseUrl }).list();
+    expect(models[1]).toMatchObject({ name: 'chat-lora', baseModel: 'qwen-small', contextLength: 4096 });
+  });
+
+  it('keeps entries without a root apart and ignores a malformed max_model_len', async () => {
+    server = await startFakeServer({
+      'GET /v1/models': json({
+        data: [
+          { id: 'a', max_model_len: 'big' },
+          { id: 'b', max_model_len: 2.5 },
+        ],
+      }),
+    });
+    const models = await new OpenAICompatibleRuntime({ baseUrl: server.baseUrl }).list();
+    expect(models.map(model => [model.name, model.contextLength])).toEqual([
+      ['a', undefined],
+      ['b', undefined],
+    ]);
+  });
+
   it('skips malformed /v1/models entries', async () => {
     server = await startFakeServer({
       'GET /v1/models': json({ data: [{ id: 'a' }, { id: '' }, null, { name: 'b' }] }),

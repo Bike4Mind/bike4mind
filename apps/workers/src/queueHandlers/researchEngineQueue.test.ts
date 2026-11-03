@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { insufficientCreditsError, ResearchTaskStatus, TooManyRequestsError } from '@bike4mind/common';
 
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
 }));
 

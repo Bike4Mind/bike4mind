@@ -341,8 +341,8 @@ describe('ModelLogsTab', () => {
   });
 
   it.each([
-    ['Last 7 Days', '2026-10-14'],
-    ['Last 30 Days', '2026-09-21'],
+    ['Last 7 Days', '2026-10-15'],
+    ['Last 30 Days', '2026-09-22'],
   ])('highlights %s once it sets the range', async (name, startDate) => {
     mocks.useModelLogs.mockReturnValue(queryResult({}));
     act(() => fakeAdminRouter.reset({ tab: 'model-logs', modelLogsFrom: '2026-10-01', modelLogsTo: '2026-10-02' }));

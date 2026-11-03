@@ -77,9 +77,9 @@ const WeeklyReportSchema = new mongoose.Schema<IWeeklyReportDocument>(
 // Compound index to ensure uniqueness of startDate and endDate combination
 WeeklyReportSchema.index({ startDate: 1, endDate: 1 }, { unique: true });
 
-export const DailyReport =
+export const DailyReport: mongoose.Model<IDailyReportDocument> =
   mongoose.models.DailyReport || mongoose.model<IDailyReportDocument>('DailyReport', DailyReportSchema);
-export const WeeklyReport =
+export const WeeklyReport: mongoose.Model<IWeeklyReportDocument> =
   mongoose.models.WeeklyReport || mongoose.model<IWeeklyReportDocument>('WeeklyReport', WeeklyReportSchema);
 
 export const dailyReportRepository = new DailyReportRepository(DailyReport);

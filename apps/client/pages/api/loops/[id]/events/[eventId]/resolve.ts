@@ -55,20 +55,23 @@ const handler = baseApi({ auth: 'jwtOnly' })
       // later run blocked for another reason, is left alone.
       const guard = { statusReason: unsureReason(resolved.reason), loopId: loop.id };
       let reopened = false;
+      let ticketSkipped = false;
       try {
         const patch =
           outcome === 'resumed'
             ? { status: 'open' as const, statusReason: null }
             : { statusReason: `Rejected by owner${note ? `: ${note}` : ''}`.slice(0, 1000) };
-        reopened =
-          !!(await workItemRepository.updateForUser(resolved.workItemId, userId, patch, 'blocked', guard)) &&
-          outcome === 'resumed';
+        const updated = await workItemRepository.updateForUser(resolved.workItemId, userId, patch, 'blocked', guard);
+        ticketSkipped = !updated;
+        reopened = !!updated && outcome === 'resumed';
       } catch (error) {
         // The ticket is still parked on the question, so reopen it for the owner to answer again.
         await loopEventRepository.reopenAsked(resolved.id, now).catch(() => undefined);
         throw error;
       }
       if (reopened) await makeDueIfReady(loop, now);
+      // `ticketSkipped` tells the owner the answer was saved but the ticket was left as it is.
+      if (ticketSkipped) return res.json({ ...unsureRow(resolved), ticketSkipped });
     }
 
     res.json(unsureRow(resolved));

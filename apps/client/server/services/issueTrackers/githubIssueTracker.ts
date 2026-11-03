@@ -5,7 +5,7 @@
  * Uses system-level GitHub connection for authentication.
  */
 
-import { GitHubService } from '../githubService';
+import { GitHubService } from '@bike4mind/server-utils/services/githubService';
 import {
   formatFingerprintComment,
   extractFingerprintFromIssueBody,

@@ -24,7 +24,7 @@ import {
   jiraWebhookSubscriptionResponseSchema,
   jiraWebhookSubscriptionListResponseSchema,
 } from '@bike4mind/common';
-import { AtlassianTokenManager } from '@server/integrations/jira/atlassianTokenManager';
+import { AtlassianTokenManager } from '@bike4mind/server-utils/integrations/jira/atlassianTokenManager';
 import { validateFilters } from '@server/integrations/jira/types';
 
 const handler = baseApi()

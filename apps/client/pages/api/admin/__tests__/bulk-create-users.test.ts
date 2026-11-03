@@ -22,7 +22,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@bike4mind/database', () => ({ userRepository: { update: h.update } }));
 vi.mock('@bike4mind/services', () => ({ userService: { createUser: h.createUser } }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/analytics/funnel', () => ({
   emitSignupFunnelEvents: (...args: unknown[]) => h.emitSignupFunnelEvents(...args),
   recordSyntheticIdentity: (...args: unknown[]) => h.recordSyntheticIdentity(...args),

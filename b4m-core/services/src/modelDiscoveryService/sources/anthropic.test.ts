@@ -8,6 +8,7 @@ import malformed from './__fixtures__/anthropic/malformed.json';
 import models from './__fixtures__/anthropic/models.json';
 import pageTwo from './__fixtures__/anthropic/page-2.json';
 import unknownEnum from './__fixtures__/anthropic/unknown-enum.json';
+import { planPriceWrites } from '../pricePlan';
 import { expectDegradesOnFailure, makeContext, stubFetch } from './__fixtures__/testSupport';
 import {
   ANTHROPIC_MAX_PAGES,
@@ -205,6 +206,53 @@ describe('anthropic pricing parser', () => {
       inputPerMTok: 2,
       outputPerMTok: 10,
     });
+  });
+
+  it('reads the cache hit and 5m cache write rates, including the non-standard Fable 5.1 hit rate', () => {
+    const current = parseAnthropicPricing(read('pricing-sonnet-5-standard.md'));
+    if (!current.ok) throw new Error('parser failed');
+
+    expect(priceInForce(current.rows, 'claude-fable-5-1', RUN_AT)).toMatchObject({
+      inputPerMTok: 10,
+      outputPerMTok: 50,
+      cacheReadPerMTok: 0.25,
+      cacheWritePerMTok: 12.5,
+    });
+    expect(priceInForce(current.rows, 'claude-opus-5-5', RUN_AT)).toMatchObject({
+      cacheReadPerMTok: 0.2,
+      cacheWritePerMTok: 5,
+    });
+  });
+
+  it('writes a first Fable 5.1 row that carries its published cache rates', () => {
+    const current = parseAnthropicPricing(read('pricing-sonnet-5-standard.md'));
+    if (!current.ok) throw new Error('parser failed');
+    const [record] = mergeAnthropicFacts({
+      models: [{ modelId: 'claude-fable-5-1', patch: {} }],
+      pricing: current.rows,
+      at: RUN_AT,
+    });
+
+    const { rows } = planPriceWrites({
+      contributions: [{ name: 'anthropic', kind: 'provider', records: [record] }],
+      rowsInForce: [],
+      knownModelIds: new Set(['claude-fable-5-1']),
+      bandPct: 50,
+      runStartedAt: RUN_AT,
+    });
+
+    expect(rows).toHaveLength(1);
+    const tier = rows[0].pricing['0'];
+    expect(tier.input).toBeCloseTo(1e-5, 12);
+    expect(tier.output).toBeCloseTo(5e-5, 12);
+    expect(tier.cache_read).toBeCloseTo(2.5e-7, 12);
+    expect(tier.cache_write).toBeCloseTo(1.25e-5, 12);
+  });
+
+  it('returns a failure when a cache rate column is renamed away', () => {
+    const renamed = pricingMarkdown.replace('Cache Hits & Refreshes', 'Cached Input');
+    expect(renamed).not.toBe(pricingMarkdown);
+    expect(parseAnthropicPricing(renamed).ok).toBe(false);
   });
 
   it('maps a dated model id onto the undated docs slug', () => {

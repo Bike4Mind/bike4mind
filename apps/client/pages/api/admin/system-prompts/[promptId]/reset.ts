@@ -2,7 +2,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { systemPromptRepository } from '@bike4mind/database';
-import { getDefaultSystemPrompts } from '@server/utils/systemPrompts/defaults';
+import { getDefaultSystemPrompts } from '@bike4mind/server-utils/utils/systemPrompts/defaults';
 
 const handler = adminApi({
   adminPermissions: { POST: 'settings:manage' },

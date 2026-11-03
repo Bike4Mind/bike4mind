@@ -1,5 +1,6 @@
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { isAxiosError } from 'axios';
+import { toast } from 'sonner';
 import {
   Accordion,
   AccordionDetails,
@@ -145,7 +146,16 @@ export default function LoopDetailPage() {
                   overrideDirective.mutate({ loopId: loop.id, eventId, action, note })
                 }
                 onResolveUnsure={(eventId, outcome, note) =>
-                  resolveUnsure.mutate({ loopId: loop.id, eventId, outcome, note })
+                  resolveUnsure.mutate(
+                    { loopId: loop.id, eventId, outcome, note },
+                    {
+                      onSuccess: row => {
+                        if (row.ticketSkipped) {
+                          toast.info('Answer saved. The ticket changed since the question, so it was left as it is.');
+                        }
+                      },
+                    }
+                  )
                 }
                 resolvingUnsureId={resolveUnsure.isPending ? resolveUnsure.variables?.eventId : undefined}
               />

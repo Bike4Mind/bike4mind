@@ -80,13 +80,19 @@ describe('serviceHealthAlarmToSlack handler', () => {
     expect(text).toContain('production');
   });
 
-  it('posts a resolved message for OK and skips INSUFFICIENT_DATA', async () => {
-    await handler(makeEvent({ ...noTasksAlarm, NewStateValue: 'OK' }));
+  it('posts a resolved message for an OK after ALARM and skips INSUFFICIENT_DATA and the OK after it', async () => {
+    await handler(makeEvent({ ...noTasksAlarm, OldStateValue: 'ALARM', NewStateValue: 'OK' }));
     expect(mockFetch).toHaveBeenCalledTimes(1);
     expect(JSON.parse(mockFetch.mock.calls[0][1].body as string).text).toContain('Resolved');
     mockFetch.mockClear();
     await handler(makeEvent({ ...noTasksAlarm, NewStateValue: 'INSUFFICIENT_DATA' }));
+    await handler(makeEvent({ ...noTasksAlarm, OldStateValue: 'INSUFFICIENT_DATA', NewStateValue: 'OK' }));
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('labels the failed-to-start event as infra in the footer', async () => {
+    await handler(makeEvent(taskFailedToStart));
+    expect(postedText()).toContain('category infra');
   });
 
   // The container-level reason is the diagnostic payload; the task-level
@@ -107,6 +113,18 @@ describe('serviceHealthAlarmToSlack handler', () => {
     const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
     expect(body.blocks[0].text.text).toContain('svc<a&b>');
     expect(body.text).toContain('svc&lt;a&amp;b&gt;');
+  });
+
+  it('labels a task failure on stage dev as staging', async () => {
+    resource.App.stage = 'dev';
+    try {
+      await handler(makeEvent(taskFailedToStart));
+    } finally {
+      resource.App.stage = 'production';
+    }
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+    expect(body.blocks[0].text.text).toContain('staging alarm');
+    expect(postedText()).not.toContain('dev alarm');
   });
 
   it('falls back to stoppedReason when no container reported one', async () => {

@@ -152,4 +152,30 @@ export interface IShareableStaticMethods<DocType> {
    * @returns The document
    */
   findShareAccessById: (user: IUserDocument, id: string) => Promise<DocType | null>;
+
+  /**
+   * Atomically edit `users[]` in one write: drop every row matching `remove`, then merge each `add`
+   * grant the way sharingService's pushShareable does (same userId/projectId/sessionId row gets its
+   * permissions unioned, otherwise a new row). Bumps the version key, so a concurrent
+   * `updateGuarded` of `users` conflicts instead of overwriting this edit. Null when no live doc has `id`.
+   */
+  updateUserShares: (id: string, changes: UserSharesChange) => Promise<DocType | null>;
+}
+
+export interface UserShareGrant {
+  userId: string;
+  permissions: Permission[];
+  projectId?: string;
+  sessionId?: string;
+}
+
+/** Matches rows carrying every given field; at least one must be set. */
+export interface UserShareMatch {
+  userId?: string;
+  projectId?: string;
+}
+
+export interface UserSharesChange {
+  remove?: UserShareMatch;
+  add?: UserShareGrant[];
 }

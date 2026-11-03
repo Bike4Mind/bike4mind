@@ -27,6 +27,7 @@ import ActiveSessionsSection from './ActiveSessionsSection';
 import { SupportAccessActivity } from '../SecurityTab/tabs/SupportAccessActivity';
 import ApprovedAppsSection from './ApprovedAppsSection';
 import DocxTemplateSection from './DocxTemplateSection';
+import PromptCacheDefaultCard from './PromptCacheDefaultCard';
 import { DeleteAllKnowledgeFilesConfirm, DeleteAllNotebooksConfirm } from './DeleteAllConfirmModals';
 import WorkspaceVisibilitySection from './WorkspaceVisibilitySection';
 import ExperimentalFeatureToggle from '../ExperimentalFeatureToggle';
@@ -469,6 +470,8 @@ const GeneralSettingsTab = () => {
               />
             </Box>
           </Grid>
+
+          <PromptCacheDefaultCard />
         </Grid>
       </SectionContainer>
 

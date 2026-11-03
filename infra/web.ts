@@ -52,6 +52,8 @@ import {
   dataLakeResearchQueueDLQ,
   lakeMemoryQueue,
   lakeMemoryQueueDLQ,
+  riskEvidenceQueue,
+  riskEvidenceQueueDLQ,
   lakeInconsistencyModelQueue,
   lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueue,
@@ -114,7 +116,7 @@ import { allSecrets } from './secrets';
 import { migratorInvocation } from './database';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
-import { wafReadPermissions, wafStageWebAcl, wafWebAclArn } from './waf';
+import { wafQueryWebAclArn, wafReadPermissions, wafStageWebAcl, wafWebAclArn } from './waf';
 
 // SQS queue URLs bundled as Linkable resources. Stored in resource.enc at deploy
 // time — no IAM statements generated, no env var size concerns. The wildcard SQS
@@ -157,6 +159,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'data-lake-taxonomy': dataLakeTaxonomyQueueDLQ.url,
     'data-lake-research': dataLakeResearchQueueDLQ.url,
     'lake-memory': lakeMemoryQueueDLQ.url,
+    'risk-evidence': riskEvidenceQueueDLQ.url,
     'lake-inconsistency-model': lakeInconsistencyModelQueueDLQ.url,
     'drive-lake-ingest': driveLakeIngestQueueDLQ.url,
     'drive-disconnect-purge': driveDisconnectPurgeQueueDLQ.url,
@@ -221,6 +224,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     dataLakeTaxonomyQueue: dataLakeTaxonomyQueue.url,
     dataLakeResearchQueue: dataLakeResearchQueue.url,
     lakeMemoryQueue: lakeMemoryQueue.url,
+    riskEvidenceQueue: riskEvidenceQueue.url,
     lakeInconsistencyModelQueue: lakeInconsistencyModelQueue.url,
     driveLakeIngestQueue: driveLakeIngestQueue.url,
     driveDisconnectPurgeQueue: driveDisconnectPurgeQueue.url,
@@ -301,6 +305,9 @@ export const web = new sst.aws.Nextjs(
       // Resource.generationCallbackQueue.url, which also has to resolve in the generation queue
       // Lambdas and the timeout sweep, where only direct links exist.
       generationCallbackQueue,
+      // apps/client/server/auth/riskEvidence.ts reads Resource.riskEvidenceQueue.url directly to enqueue
+      // refreshes; via sourceQueueUrls alone the key would not resolve on the Resource proxy.
+      riskEvidenceQueue,
     ],
     permissions: [
       {
@@ -406,12 +413,21 @@ export const web = new sst.aws.Nextjs(
         ],
       },
       {
-        // Read-only CloudWatch metrics access used by the WAF Traffic Overview panel.
-        // Scoped to AWS/WAFV2 namespace metrics only.
+        // Read-only CloudWatch metrics for the WAF Traffic panel and the incident view; neither action is resource-scopable.
         actions: ['cloudwatch:GetMetricData', 'cloudwatch:ListMetrics'],
         resources: ['*'],
       },
       ...wafReadPermissions,
+      // Incident view: lists this stage's alarms by name prefix.
+      { actions: ['cloudwatch:DescribeAlarms'], resources: ['*'] },
+      // Incident view: reads the router WebACL's rules and the size of each IP set they reference.
+      { actions: ['wafv2:GetWebACL'], resources: [wafQueryWebAclArn] },
+      {
+        actions: ['wafv2:GetIPSet'],
+        resources: [
+          $interpolate`arn:${aws.getPartitionOutput().partition}:wafv2:us-east-1:${aws.getCallerIdentityOutput().accountId}:global/ipset/*/*`,
+        ],
+      },
       ...providerFederation.permissions,
     ],
     environment: {

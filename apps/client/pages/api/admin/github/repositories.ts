@@ -16,7 +16,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { Logger } from '@bike4mind/observability';
-import { GitHubService } from '@server/services/githubService';
+import { GitHubService } from '@bike4mind/server-utils/services/githubService';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 
 const logger = new Logger({ metadata: { component: 'admin-github-repositories' } });

@@ -12,10 +12,12 @@ import {
   CalendarX,
   ChartColumn,
   ChartLine,
+  ChartSpline,
   Clock,
   Code,
   Coins,
   CreditCard,
+  Crosshair,
   Database,
   FileText,
   Fingerprint,
@@ -45,6 +47,7 @@ import {
   Plug,
   Radar,
   RotateCcw,
+  Scale,
   ScanSearch,
   ScrollText,
   Settings,
@@ -136,6 +139,9 @@ export enum AdminTab {
   SignupDomainHolds = 68,
   SignupRiskReview = 69,
   HeldSignupGrants = 70,
+  PreferenceArena = 71,
+  Revenue = 72,
+  ShadowDetections = 73,
 }
 
 /**
@@ -153,6 +159,8 @@ export type SidebarItem = {
   tab: AdminTab;
   /** One line in a 248 px sidebar: keep it short ("Credits", not "Credit Analytics"). */
   label: string;
+  /** Former names the sidebar filter still matches, so a renamed page stays findable. */
+  aliases?: readonly string[];
   testid?: string;
   gate?: SidebarGate;
   badge?: SidebarBadge;
@@ -193,7 +201,14 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     items: [
       { Icon: Users, tab: AdminTab.Users, label: 'Users', testid: 'admin-users-tab-btn' },
       { Icon: Building2, tab: AdminTab.Organizations, label: 'Organizations', testid: 'admin-organizations-tab-btn' },
-      { Icon: Inbox, tab: AdminTab.Waitlist, label: 'Waitlist', badge: 'waitingSubscribers' },
+      {
+        Icon: Inbox,
+        tab: AdminTab.Waitlist,
+        label: 'Invite Center',
+        aliases: ['Waitlist'],
+        testid: 'admin-waitlist-tab-btn',
+        badge: 'waitingSubscribers',
+      },
       { Icon: Megaphone, tab: AdminTab.EmailMarketing, label: 'Email marketing' },
       { Icon: UsersRound, tab: AdminTab.Team, label: 'Team' },
       { Icon: UserPlus, tab: AdminTab.RegistrationInvites, label: 'Invites', testid: 'admin-invite-center-tab-btn' },
@@ -207,6 +222,12 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         label: 'Risk review',
         testid: 'admin-signup-risk-review-btn',
       },
+      {
+        Icon: Crosshair,
+        tab: AdminTab.ShadowDetections,
+        label: 'Detections',
+        testid: 'admin-shadow-detections-btn',
+      },
       { Icon: HandCoins, tab: AdminTab.HeldSignupGrants, label: 'Held signup grants' },
       { Icon: ArrowRightLeft, tab: AdminTab.Migrate, label: 'Migration', gate: 'userMigration' },
     ],
@@ -216,6 +237,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     Icon: Coins,
     label: 'Money',
     items: [
+      { Icon: ChartSpline, tab: AdminTab.Revenue, label: 'Revenue', testid: 'admin-revenue-btn' },
       { Icon: Coins, tab: AdminTab.CreditAnalytics, label: 'Credits' },
       { Icon: CreditCard, tab: AdminTab.Subscriptions, label: 'Subscriptions', badge: 'newSubscriptions' },
       { Icon: Tag, tab: AdminTab.GrowthPricing, label: 'Pricing', testid: 'admin-growth-pricing-btn' },
@@ -248,6 +270,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: Wrench, tab: AdminTab.ToolDefinitions, label: 'Tools' },
       { Icon: Settings, tab: AdminTab.ManageGears, label: 'Gears' },
       { Icon: ChartColumn, tab: AdminTab.ModelMetrics, label: 'Model metrics' },
+      { Icon: Scale, tab: AdminTab.PreferenceArena, label: 'Preference arena', testid: 'admin-preference-arena-btn' },
       { Icon: CalendarX, tab: AdminTab.ModelLifecycle, label: 'Model lifecycle', testid: 'admin-model-lifecycle-btn' },
       { Icon: ScanSearch, tab: AdminTab.RetrievalRate, label: 'Retrieval', testid: 'admin-retrieval-rate-btn' },
       {
@@ -349,7 +372,9 @@ export const filterSidebarSections = (
       const items = section.items.filter(
         item =>
           (!item.gate || gates[item.gate]) &&
-          (needle === '' || sectionMatches || item.label.toLowerCase().includes(needle))
+          (needle === '' ||
+            sectionMatches ||
+            [item.label, ...(item.aliases ?? [])].some(name => name.toLowerCase().includes(needle)))
       );
       return { ...section, items };
     })

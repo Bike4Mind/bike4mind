@@ -2,11 +2,12 @@ import { organizationRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { baseApi } from '@server/middlewares/baseApi';
+import { refuseBlockedAccount } from '@server/middlewares/refuseBlockedAccount';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { z } from 'zod';
 import { TEAM_PLAN_SEATS_HARD_LIMIT } from '@bike4mind/common';
 import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import dayjs from 'dayjs';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
 import {
@@ -26,6 +27,7 @@ const UpdateSeatsSchema = z.object({
 
 const handler = baseApi()
   .use(requireStripeWebhook())
+  .use(refuseBlockedAccount())
   .post(async (req, res) => {
     const { organizationId, seats } = UpdateSeatsSchema.parse(req.body);
     const teamPlan = await getTeamPlanSettings();

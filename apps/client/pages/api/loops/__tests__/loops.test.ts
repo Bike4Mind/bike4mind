@@ -828,6 +828,7 @@ describe('POST /api/loops/:id/events/:eventId/resolve', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ source: 'asked', resolution: { outcome: 'resumed', note: 'EU' } });
     expect(res._getJSONData()).not.toHaveProperty('userId');
+    expect(res._getJSONData()).not.toHaveProperty('ticketSkipped');
   });
 
   it('rejects: the ticket stays blocked with the owner note in its reason', async () => {
@@ -855,6 +856,7 @@ describe('POST /api/loops/:id/events/:eventId/resolve', () => {
     const { res, result } = resolve({ outcome: 'resumed', note: 'EU' });
     await result;
     expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ ticketSkipped: true });
     expect(repo.makeDueNow).not.toHaveBeenCalled();
   });
 

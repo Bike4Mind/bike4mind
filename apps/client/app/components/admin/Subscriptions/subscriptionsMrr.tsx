@@ -8,7 +8,7 @@ import { formatMoney } from '../shared/formatMoney';
 const MRR_DEFINITION = [
   'Monthly recurring revenue: what Stripe bills each active or past due subscription, the price per seat times the seats, converted to a month (a yearly price counts one twelfth). Before discounts.',
   'Not counted: comps, trials, and canceled, unpaid, incomplete or paused subscriptions.',
-  'Past due subscriptions count, and the Past due tile shows their share as MRR at risk.',
+  'Past due subscriptions count, and their share is also shown as MRR at risk.',
   `Totals are in ${MRR_CURRENCY.toUpperCase()}. A subscription billed in another currency, or with no billed amount, is left out of the total and counted under it.`,
 ];
 

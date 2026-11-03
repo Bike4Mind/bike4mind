@@ -65,6 +65,7 @@ const row = (over: Partial<SignupRiskReviewRow> = {}): SignupRiskReviewRow => ({
   computedAt: '2026-10-20T11:00:00.000Z',
   creditsSpent: 1200,
   apiKeysCreated: 3,
+  grantHeld: false,
   ...over,
 });
 
@@ -169,9 +170,14 @@ describe('SignupRiskReviewTab', () => {
 
   it('approves with a required reason and offers an undo that reopens the review', async () => {
     m.mutate.mockImplementation((_decision, options: { onSuccess: (result: unknown) => void }) =>
-      options.onSuccess({ updatedUserIds: ['u1'], skippedUserIds: [], failedUserIds: [] })
+      options.onSuccess({ updatedUserIds: ['u1'], skippedUserIds: [], failedUserIds: [], grantReleasedUserIds: [] })
     );
-    m.mutateAsync.mockResolvedValue({ updatedUserIds: ['u1'], skippedUserIds: [], failedUserIds: [] });
+    m.mutateAsync.mockResolvedValue({
+      updatedUserIds: ['u1'],
+      skippedUserIds: [],
+      failedUserIds: [],
+      grantReleasedUserIds: [],
+    });
     renderTab();
 
     await approveFirstRow();
@@ -195,7 +201,7 @@ describe('SignupRiskReviewTab', () => {
 
   it('reports accounts that failed while still offering undo for the rest', async () => {
     m.mutate.mockImplementation((_decision, options: { onSuccess: (result: unknown) => void }) =>
-      options.onSuccess({ updatedUserIds: ['u1'], skippedUserIds: [], failedUserIds: ['u2'] })
+      options.onSuccess({ updatedUserIds: ['u1'], skippedUserIds: [], failedUserIds: ['u2'], grantReleasedUserIds: [] })
     );
     renderTab();
 
@@ -203,6 +209,27 @@ describe('SignupRiskReviewTab', () => {
 
     expect(screen.getByTestId('signup-risk-failed').textContent).toContain('1 account could not be approved');
     expect(screen.getByTestId('undo-toast-message').textContent).toBe('Approved 1 account');
+  });
+
+  it('marks held signup credits and says approval pays them for good', async () => {
+    m.useSignupRiskReviews.mockReturnValue(queue([row({ grantHeld: true, signals: [] }), ROWS[1]]));
+    m.mutate.mockImplementation((_decision, options: { onSuccess: (result: unknown) => void }) =>
+      options.onSuccess({ updatedUserIds: ['u1'], skippedUserIds: [], failedUserIds: [], grantReleasedUserIds: ['u1'] })
+    );
+    renderTab();
+
+    expect(screen.getByTestId('signup-risk-grant-held-u1').textContent).toBe('Credits held');
+    expect(screen.queryByTestId('signup-risk-grant-held-u2')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('signup-risk-actions-u1'));
+    fireEvent.click(await screen.findByTestId('signup-risk-approve-u1'));
+    expect((await screen.findByTestId('signup-risk-approve-grant-note')).textContent).toContain(
+      'Undo does not take them back'
+    );
+    fireEvent.click(screen.getByTestId('signup-risk-approve-reason-preset-0'));
+    fireEvent.click(screen.getByTestId('signup-risk-approve-confirm-btn'));
+
+    expect(screen.getByTestId('undo-toast-message').textContent).toBe('Approved 1 account and paid held credits to 1');
   });
 
   it('clears a stale decision error when the approve dialog opens', () => {
@@ -216,7 +243,7 @@ describe('SignupRiskReviewTab', () => {
 
   it('offers no undo when every account was already decided elsewhere', async () => {
     m.mutate.mockImplementation((_decision, options: { onSuccess: (result: unknown) => void }) =>
-      options.onSuccess({ updatedUserIds: [], skippedUserIds: ['u1'], failedUserIds: [] })
+      options.onSuccess({ updatedUserIds: [], skippedUserIds: ['u1'], failedUserIds: [], grantReleasedUserIds: [] })
     );
     renderTab();
 

@@ -19,7 +19,7 @@ import {
   validateListingTags,
   withdrawListing,
   type MarketActor,
-} from './market';
+} from '@bike4mind/server-utils/skillMarket/market';
 import { rescanVersion, submitListingVersion } from './submitVersion';
 import { getOperationsClassifierLlm } from './classifySkill';
 

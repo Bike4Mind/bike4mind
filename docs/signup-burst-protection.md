@@ -2,13 +2,14 @@
 
 ## Account risk review and AI access
 
-Accounts whose signup risk score reaches the review threshold enter **Admin > Risk review**.
-While a review is pending, AI requests are refused with an account-review message, including
+Accounts whose signup risk score reaches the review threshold enter **Admin > Risk review**, as do
+accounts whose signup credits the signup grant risk policy holds in its review band (marked
+**Credits held**). While a review is pending, AI requests are refused with an account-review message, including
 free models and requests made with API keys. Sign-in and access to existing data remain available;
 users can contact support to request a review. Existing pending reviews also receive this hold.
 
-**Approve** lifts the signup review hold. A separate manual AI restriction or account suspension
-still applies. **Undo** restores the pending review and AI hold. Rescoring updates the score and
+**Approve** lifts the signup review hold and pays any held signup credits. A separate manual AI restriction or account suspension
+still applies. **Undo** restores the pending review and AI hold but keeps the paid credits. Rescoring updates the score and
 signals but never clears a pending hold or overturns an approval. To deny access to the account
 as a whole, use **Suspend** in the review queue.
 

@@ -111,6 +111,8 @@ export type YoungAccountSpender = {
   userId: string;
   creditsSpent: number;
   accountCreatedAt: Date;
+  /** Null when the account never reached Stripe checkout, itself a signal for a big spender. */
+  stripeCustomerId: string | null;
 };
 
 export type YoungAccountSpendSummary = {
@@ -120,8 +122,8 @@ export type YoungAccountSpendSummary = {
 };
 
 /**
- * Per-user AI credit spend in [start, end) for accounts created in the 168 hours before `end`,
- * highest spend first. Shares newAccountExpression with the report's `isNew` flag.
+ * Per-user AI credit spend in [start, end) for accounts created in the 168 hours before `end` and
+ * not banned, dispute-pending or suspended, highest spend first. Shares newAccountExpression with the report's `isNew` flag.
  */
 function buildYoungAccountSpendPipeline(start: Date, end: Date): mongoose.PipelineStage[] {
   return [
@@ -144,8 +146,26 @@ function buildYoungAccountSpendPipeline(start: Date, end: Date): mongoose.Pipeli
       },
     },
     { $unwind: '$user' },
-    { $match: { $expr: newAccountExpression('$user.createdAt', end) } },
-    { $project: { _id: 0, userId: '$_id', creditsSpent: 1, accountCreatedAt: '$user.createdAt' } },
+    {
+      $match: {
+        $expr: newAccountExpression('$user.createdAt', end),
+        // An account already locked can no longer spend, so it must not keep re-tripping the alert or
+        // crowd the top-spender list. Must stay in sync with accountBlockReasons
+        // (b4m-core/services/src/userService/accountState.ts).
+        'user.isBanned': { $ne: true },
+        'user.disputePending': { $ne: true },
+        'user.moderation.status': { $ne: 'suspended' },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        userId: '$_id',
+        creditsSpent: 1,
+        accountCreatedAt: '$user.createdAt',
+        stripeCustomerId: { $ifNull: ['$user.stripeCustomerId', null] },
+      },
+    },
     { $sort: { creditsSpent: -1, userId: 1 } },
   ];
 }

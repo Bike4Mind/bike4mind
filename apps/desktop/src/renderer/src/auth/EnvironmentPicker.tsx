@@ -11,10 +11,11 @@ import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { AuthState, EnvironmentPresetId } from '@shared/auth';
 
-interface EnvironmentPickerProps {
+type EnvironmentPickerProps = {
   state: AuthState;
   disabled?: boolean;
-}
+  onApplied?: () => void;
+};
 
 /** What the apply button switches to, phrased to match the option the Select is showing. */
 const TARGET_NAMES: Record<EnvironmentPresetId, string> = {
@@ -32,7 +33,7 @@ const TARGET_NAMES: Record<EnvironmentPresetId, string> = {
  * apply button is enabled those two name different servers. The live one is therefore captioned
  * and kept on the Select rather than sitting unlabelled beside the control that replaces it.
  */
-export function EnvironmentPicker({ state, disabled }: EnvironmentPickerProps) {
+export function EnvironmentPicker({ state, disabled, onApplied }: EnvironmentPickerProps) {
   const [preset, setPreset] = useState<EnvironmentPresetId>(state.environment.preset);
   const [customUrl, setCustomUrl] = useState(state.environment.preset === 'custom' ? state.environment.url : '');
   const [error, setError] = useState<string | null>(null);
@@ -49,6 +50,7 @@ export function EnvironmentPicker({ state, disabled }: EnvironmentPickerProps) {
     const result = await window.b4m.auth.setEnvironment({ preset, customUrl });
     if (!result.ok) setError(result.error);
     setSaving(false);
+    if (result.ok) onApplied?.();
   }
 
   return (

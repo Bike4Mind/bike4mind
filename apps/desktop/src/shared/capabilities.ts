@@ -1,6 +1,9 @@
+import type { ModelStoreSource } from './models';
+
 export const CAPABILITY_AUDIT_LIMIT = 200;
 
-export type Capability = 'files' | 'tool' | 'browser-origin' | 'credits' | 'imported-identity' | 'project-trust';
+export type Capability =
+  'files' | 'tool' | 'browser-origin' | 'credits' | 'imported-identity' | 'project-trust' | 'model-download';
 
 export type CapabilitySubject =
   | { kind: 'desktop-user' }
@@ -13,7 +16,18 @@ export type CapabilityScope =
   | { kind: 'browser-origin'; value: string; access: 'network' | 'read' | 'act' | 'script' }
   | { kind: 'tool'; value: string }
   | { kind: 'project'; value: string }
-  | { kind: 'approval'; value: string };
+  | { kind: 'approval'; value: string }
+  /** One approved model download; `value` is its pull key, and the grant lasts as long as the download. */
+  | {
+      kind: 'model-pull';
+      value: string;
+      model: string;
+      server: string;
+      bytes: number;
+      path?: string;
+      /** How sure `path` is; see ModelStoreSource. */
+      pathSource?: ModelStoreSource;
+    };
 
 export interface CapabilityGrant {
   id: string;

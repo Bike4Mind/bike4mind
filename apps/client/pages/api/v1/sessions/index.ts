@@ -16,7 +16,7 @@ import {
   User,
   activityRepository,
 } from '@bike4mind/database';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import {
@@ -38,9 +38,9 @@ import { surfaceAccessForRequest } from '@server/entitlements/surfaceAccess';
 import { projectService } from '@bike4mind/services';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { ActivityType } from '@bike4mind/server-utils/config/activityType';
-import { holdsApiKeyScope } from '@server/middlewares/apiKeyScopeGate';
+import { holdsApiKeyScope } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { CreateSessionRequestBody } from '../../../../types/api';
-import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
+import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 
 /**
  * The only fields a key holding `ai:generate` WITHOUT `notebooks:write` may set. Everything else

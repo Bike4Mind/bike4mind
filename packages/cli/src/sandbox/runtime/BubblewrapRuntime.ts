@@ -5,7 +5,7 @@
  * - Read-only system paths (/usr, /lib, /bin, etc.)
  * - Read-write access only to the working directory
  * - Denied paths mounted as empty tmpfs
- * - Process namespace isolation
+ * - Process and network namespace isolation; egress only through the filtering proxy
  */
 import os from 'os';
 import path from 'path';
@@ -13,6 +13,7 @@ import { lstatSync, mkdirSync, statSync } from 'fs';
 import type { SandboxPlatform, WrappedCommand } from '../types.js';
 import { logger } from '../../utils/Logger.js';
 import {
+  assertProxyPort,
   resolveSandboxPath,
   getContainerSocketPaths,
   getProtectedWorkspacePaths,
@@ -30,6 +31,29 @@ const SPECIAL_MOUNTS = {
   proc: '/proc',
   tmp: '/tmp',
 };
+
+/** Where the proxy's host unix socket is mounted; /run is never bound from the host, so nothing shadows it. */
+const SANDBOX_PROXY_SOCKET = '/run/b4m/proxy.sock';
+
+/** Readiness probes for the in-sandbox relay, 50ms apart. */
+const RELAY_READY_ATTEMPTS = 100;
+
+/**
+ * Listen on the sandbox's own loopback at the proxy port, so the proxy env vars work unchanged, and
+ * forward to the mounted socket. The command runs as "$1" once the relay accepts connections.
+ */
+function relayScript(proxyPort: number): string {
+  return [
+    `socat TCP-LISTEN:${proxyPort},bind=127.0.0.1,fork,reuseaddr UNIX-CONNECT:${SANDBOX_PROXY_SOCKET} </dev/null >/dev/null 2>&1 &`,
+    'attempts=0',
+    `until (: </dev/tcp/127.0.0.1/${proxyPort}) 2>/dev/null; do`,
+    '  attempts=$((attempts + 1))',
+    `  if [ "$attempts" -ge ${RELAY_READY_ATTEMPTS} ]; then echo 'sandbox: network relay failed to start' >&2; exit 1; fi`,
+    '  sleep 0.05',
+    'done',
+    'exec bash -c "$1"',
+  ].join('\n');
+}
 
 export class BubblewrapRuntime implements SandboxRuntime {
   readonly platform: SandboxPlatform = 'linux';
@@ -131,16 +155,24 @@ export class BubblewrapRuntime implements SandboxRuntime {
       }
     }
 
-    // Write restrictions: if writeOnlyToWorkingDir, make home read-only
-    // (already done above with --ro-bind for home)
+    // The network namespace is never shared: bwrap brings up only loopback in it, so the mounted
+    // proxy socket is the sole way out. Fail closed if that route cannot be built.
+    let relayPort: number | null = null;
+    if (options.networkEnabled) {
+      if (options.proxyPort === undefined || !options.proxySocketPath) {
+        throw new Error('Sandbox network on Linux requires a running filtering proxy with a unix socket');
+      }
+      assertProxyPort(options.proxyPort);
+      if (!isBinaryAvailable('socat')) {
+        throw new Error('Sandbox network on Linux requires socat; install it or turn sandbox network off');
+      }
+      relayPort = options.proxyPort;
+      args.push('--ro-bind', options.proxySocketPath, SANDBOX_PROXY_SOCKET);
+    }
 
-    // Namespace isolation. Egress is fail-closed: share the net namespace only
-    // when network is explicitly enabled (proxy handles filtering). --unshare-all
-    // already unshares net, so in the disabled case --unshare-net changes nothing
-    // and is emitted purely as an explicit, greppable marker of intent; --share-net
-    // is what actually re-grants the namespace when enabled.
+    // --unshare-all already unshares net; --unshare-net is an explicit, greppable marker of intent.
     args.push('--unshare-all');
-    args.push(options.networkEnabled ? '--share-net' : '--unshare-net');
+    args.push('--unshare-net');
     args.push('--die-with-parent');
 
     // Seccomp profile (optional)
@@ -156,8 +188,8 @@ export class BubblewrapRuntime implements SandboxRuntime {
     // Set working directory
     args.push('--chdir', cwd);
 
-    // The command to execute inside the sandbox
-    args.push('bash', '-c', command);
+    if (relayPort === null) args.push('bash', '-c', command);
+    else args.push('bash', '-c', relayScript(relayPort), 'b4m-sandbox', command);
 
     // Build the full command string for CLI-level wrapping
     const commandString = ['bwrap', ...args.map(shellEscape)].join(' ');

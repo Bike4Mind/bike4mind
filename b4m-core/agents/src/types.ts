@@ -119,6 +119,9 @@ export interface AgentContext {
   llm: ICompletionBackend;
   /** Model ID to use (e.g., 'claude-3-5-sonnet-20241022') */
   model: string;
+  /** Model the identity reminder names when `model` is a stand-in (see ICompletionOptions.modelIdentityId). */
+  modelIdentityId?: string;
+  modelDisplayName?: string;
   /** Available tools the agent can use */
   tools: ICompletionOptionTools[];
   /** Maximum number of reasoning iterations (default: 50) */

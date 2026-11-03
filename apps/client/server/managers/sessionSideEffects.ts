@@ -8,7 +8,7 @@ import {
 } from '@bike4mind/common';
 import { ClientMessageSender } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { ActivityType } from '@bike4mind/server-utils/config/activityType';
 import { Ability } from '@server/auth/ability';
 import { Resource } from 'sst';

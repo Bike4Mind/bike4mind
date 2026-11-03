@@ -238,6 +238,7 @@ describe('OllamaRuntime.inspect', () => {
       projectorBlobs: [projector],
       draftBlobs: [],
       adapterBlobs: [],
+      storeDir: '/models',
     });
 
     await server.close();
@@ -250,18 +251,25 @@ describe('OllamaRuntime.inspect', () => {
       projectorBlobs: [],
       draftBlobs: [],
       adapterBlobs: [],
+      storeDir: null,
     });
   });
 
   it.each([
-    ['a Windows profile with a space', 'C:\\Users\\John Smith\\.ollama\\models\\blobs\\sha256-'],
-    ['a macOS volume with a space', '/Volumes/External Drive/ollama/blobs/sha256-'],
-    ['a bare blob name', 'sha256-'],
-  ])('reads the weights blob from a FROM path on %s', async (_label, prefix) => {
+    [
+      'a Windows profile with a space',
+      'C:\\Users\\John Smith\\.ollama\\models\\blobs\\sha256-',
+      'C:\\Users\\John Smith\\.ollama\\models',
+    ],
+    ['a macOS volume with a space', '/Volumes/External Drive/ollama/blobs/sha256-', '/Volumes/External Drive/ollama'],
+    ['a bare blob name', 'sha256-', null],
+  ])('reads the weights blob and model folder from a FROM path on %s', async (_label, prefix, storeDir) => {
     const blob = 'e'.repeat(64);
     const show = { ...gemma4Show, modelfile: `FROM ${prefix}${blob}\r\nTEMPLATE x\n` };
     server = await startFakeServer({ 'GET /api/tags': json(tags), 'POST /api/show': json(show) });
-    expect((await runtimeFor(server).inspect(fixtureTags.gemma4.name)).contents?.modelBlob).toBe(blob);
+    const { contents } = await runtimeFor(server).inspect(fixtureTags.gemma4.name);
+    expect(contents?.modelBlob).toBe(blob);
+    expect(contents?.storeDir).toBe(storeDir);
   });
 
   it('reads no weights blob from a FROM line that names something else', async () => {
@@ -497,6 +505,65 @@ describe('OllamaRuntime.pull', () => {
     await expect(pull).rejects.toBeInstanceOf(LocalRuntimeError);
     await expect(pull).rejects.not.toBeInstanceOf(ModelNotFoundError);
     await expect(pull).rejects.toThrow(error);
+  });
+
+  it('scrubs the apiKey a proxy echoes into an error line or a status', async () => {
+    server = await startFakeServer({
+      'POST /api/pull': (request, response) =>
+        response.end(
+          ndjson([
+            { status: `pulling as ${request.headers.authorization}` },
+            { error: `upstream refused ${request.headers.authorization}` },
+          ])
+        ),
+    });
+    const statuses: string[] = [];
+    const error = await new OllamaRuntime({ baseUrl: server.baseUrl, apiKey: 'sk-sentinel-91c2' })
+      .pull('qwen3:8b', { onProgress: update => statuses.push(update.status) })
+      .catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(LocalRuntimeError);
+    expect((error as Error).message).toContain('upstream refused Bearer [redacted]');
+    expect(statuses).toEqual(['pulling as Bearer [redacted]']);
+    expect(JSON.stringify([String(error), (error as Error).stack, statuses])).not.toContain('sk-sentinel-91c2');
+  });
+
+  it('scrubs an apiKey that a frame echoes JSON-escaped, and still the plain form', async () => {
+    const apiKey = 'sk/a&b-7F';
+    server = await startFakeServer({
+      'POST /api/pull': (_request, response) =>
+        response.end(
+          ['{"status":"pulling as sk\\/a\\u0026b-7F"}', '{"error":"refused sk\\/a&b-7F and sk/a&b-7F"}'].join('\n') +
+            '\n'
+        ),
+    });
+    const statuses: string[] = [];
+    const error = await new OllamaRuntime({ baseUrl: server.baseUrl, apiKey })
+      .pull('qwen3:8b', { onProgress: update => statuses.push(update.status) })
+      .catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(LocalRuntimeError);
+    expect((error as Error).message).toContain('refused [redacted] and [redacted]');
+    expect(statuses).toEqual(['pulling as [redacted]']);
+    expect(JSON.stringify([String(error), statuses])).not.toMatch(/sk\/a|a&b|a\\u0026b/i);
+  });
+
+  it('passes each streamed line and its response through a given redact', async () => {
+    server = await startFakeServer({
+      'POST /api/pull': (_request, response) =>
+        response.end(ndjson([{ error: 'pull model manifest: file does not exist (token tok-77)' }])),
+    });
+    const seen: unknown[] = [];
+    const pull = new OllamaRuntime({
+      baseUrl: server.baseUrl,
+      redact: (text, response) => {
+        seen.push(response);
+        return text.replaceAll('tok-77', '[redacted]');
+      },
+    }).pull('nope:latest');
+    await expect(pull).rejects.toThrow(
+      'could not pull nope:latest: pull model manifest: file does not exist (token [redacted])'
+    );
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toBeInstanceOf(Response);
   });
 
   it('rejects with ModelNotFoundError when the registry has no such model', async () => {

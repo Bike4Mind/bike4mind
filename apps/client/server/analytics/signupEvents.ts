@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import type { OverwatchUtm } from '@bike4mind/common';
 import type { AcquisitionTouches } from '@bike4mind/server-utils/lib/subscriptions/acquisition';
 import { minorUnitsPerMajor } from '../integrations/stripe/currency';
-import { emitProductEvent, HOST_PRODUCT_ID, ingestKeyFor } from './emitActiveEvent';
+import { emitProductEvent, HOST_PRODUCT_ID, ingestKeyFor } from '@bike4mind/server-utils/analytics/emitActiveEvent';
 import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
 
 // Kept apart from acquisition.ts, which is pure: this is the one piece that sends, so importing

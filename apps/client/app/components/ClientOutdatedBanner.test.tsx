@@ -25,6 +25,14 @@ describe('ClientOutdatedBanner', () => {
     expect(screen.getByTestId('client-outdated-banner')).toBeTruthy();
   });
 
+  it('announces itself assertively, as the Joy Alert it replaced did', () => {
+    renderBanner();
+
+    act(() => useClientOutdatedStore.getState().markOutdated());
+
+    expect(screen.getByRole('alert').getAttribute('data-testid')).toBe('client-outdated-banner');
+  });
+
   it('reloads the page from the banner button', () => {
     const originalLocation = window.location;
     const reload = vi.fn();

@@ -1,8 +1,8 @@
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
+import { isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { KeepCommandRequestAction } from '@bike4mind/common';
 import { verifyJwtToken, checkRateLimit } from '@server/cli/auth';
-import { withWebSocketContext, sendToClient, sendToConnection } from '@server/websocket/utils';
+import { withWebSocketContext, sendToClient, sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 
 /**

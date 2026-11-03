@@ -170,6 +170,62 @@ describe('PermissionsSettings collapsing', () => {
     expect(host.querySelectorAll('[data-testid="capability-grant-row"]')).toHaveLength(0);
   });
 
+  it.each([
+    ['runtime', 'in /home/me/.ollama/models'],
+    ['default', "probably in /home/me/.ollama/models (Ollama's default folder)"],
+  ] as const)('names an approved model download by model, server, size and a %s folder', async (pathSource, where) => {
+    const scope = {
+      kind: 'model-pull' as const,
+      value: 'qwen3:0.6b#q4_k_m',
+      model: 'qwen3:0.6b',
+      server: 'This computer',
+      bytes: 522_653_767,
+      path: '/home/me/.ollama/models',
+      pathSource,
+    };
+    const grant = {
+      id: 'pull1',
+      subject: { kind: 'desktop-user' as const },
+      capability: 'model-download' as const,
+      scope,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      source: 'approval' as const,
+    };
+    (window as unknown as { b4m: unknown }).b4m = {
+      chat: { listRecentFolders: async () => [] },
+      capabilities: {
+        getState: async () => ({
+          grants: [grant],
+          audit: [
+            {
+              sequence: 1,
+              type: 'use',
+              timestamp: grant.createdAt,
+              grantId: 'pull1',
+              capability: 'model-download',
+              scope,
+            },
+            { sequence: 0, type: 'grant', timestamp: grant.createdAt, grant },
+          ],
+        }),
+      },
+    };
+    await act(async () => {
+      root.unmount();
+      root = createRoot(host);
+      root.render(
+        <CssVarsProvider>
+          <PermissionsSettings state={state} onState={() => {}} />
+        </CssVarsProvider>
+      );
+    });
+    const label = `qwen3:0.6b to This computer, 523 MB, ${where}`;
+    expect(host.querySelector('[data-testid="capability-grant-row"]')?.textContent).toContain(label);
+    const audit = [...host.querySelectorAll('[data-testid="capability-audit-row"]')].map(row => row.textContent);
+    expect(audit[0]).toContain(`Used model-download: ${label}`);
+    expect(audit[1]).toContain(`Granted model-download: ${label}`);
+  });
+
   it('renders only the most recent 200 audit events', async () => {
     const audit = Array.from({ length: 250 }, (_, index) => ({
       sequence: 249 - index,
@@ -232,6 +288,7 @@ describe('PermissionsSettings mutation failures', () => {
   let host: HTMLDivElement;
   let root: Root;
   let setRules: ReturnType<typeof vi.fn>;
+  const exportApprovalSummary = vi.fn();
   const onState = vi.fn();
 
   beforeEach(async () => {
@@ -239,7 +296,7 @@ describe('PermissionsSettings mutation failures', () => {
     setRules = vi.fn();
     (window as unknown as { b4m: unknown }).b4m = {
       chat: { listRecentFolders: async () => [] },
-      permissions: { setRules },
+      permissions: { setRules, exportApprovalSummary },
     };
     host = document.createElement('div');
     document.body.appendChild(host);
@@ -255,6 +312,26 @@ describe('PermissionsSettings mutation failures', () => {
   afterEach(() => {
     act(() => root.unmount());
     host.remove();
+  });
+
+  it('exports the approval summary and says where it stands', async () => {
+    const button = () => host.querySelector<HTMLButtonElement>('[data-testid="permissions-export-summary-btn"]');
+    const note = () => host.querySelector('[data-testid="permissions-export-summary-note"]')?.textContent;
+    exportApprovalSummary.mockResolvedValueOnce(false);
+    await act(async () => {
+      button()?.click();
+    });
+    expect(note()).toContain('never full commands');
+    exportApprovalSummary.mockResolvedValueOnce(true);
+    await act(async () => {
+      button()?.click();
+    });
+    expect(note()).toContain('Saved.');
+    exportApprovalSummary.mockRejectedValueOnce(new Error('disk full'));
+    await act(async () => {
+      button()?.click();
+    });
+    expect(note()).toBe('Could not save the summary.');
   });
 
   it('blocks replacement mutations until the first save finishes', async () => {

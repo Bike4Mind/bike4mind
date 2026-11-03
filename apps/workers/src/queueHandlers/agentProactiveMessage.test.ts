@@ -11,7 +11,7 @@ import { insufficientCreditsError, TooManyRequestsError } from '@bike4mind/commo
 
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: h.getUserEntitlements }));
 
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...a: unknown[]) => unknown) => fn,
 }));
 

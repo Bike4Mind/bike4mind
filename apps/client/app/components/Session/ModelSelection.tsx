@@ -36,6 +36,9 @@ import { useAdminModal } from '@client/app/components/admin/useAdminModal';
 import { AdminTab } from '@client/app/components/admin/adminSidebarConfig';
 import { adminTabToSlug } from '@client/app/components/admin/adminTabSlugs';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
+import { useGetSettingsValue } from '@client/app/hooks/data/settings';
+import { useBillingView } from '@client/app/components/subscription/BillingDeepLinkModals';
+import LockedModelsSection from './LockedModelsSection';
 import { useAccessibleModels } from '@client/app/hooks/useAccessibleModels';
 import FilterAltIcon from '@mui/icons-material/FilterAlt';
 import { ModelName, ModelInfo, ModelBackend, SpeechToTextModels, isModelDeprecated } from '@bike4mind/common';
@@ -108,6 +111,12 @@ const BACKEND_LOGOS: Record<string, string> = {
 
 // Function to get backend logo path
 const getBackendLogo = (backend: string): string | null => BACKEND_LOGOS[backend] || null;
+
+// Shared by the accessible and locked sections so one query filters both the same way.
+const modelMatchesSearch = (candidate: ModelInfo, searchLower: string) =>
+  !searchLower ||
+  candidate.name.toLowerCase().includes(searchLower) ||
+  !!candidate.description?.toLowerCase().includes(searchLower);
 
 // Global image cache to prevent re-requests
 const imageCache = new Map<string, string>();
@@ -686,8 +695,12 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
     accessibleTextModels,
     accessibleImageModels,
     accessibleVideoModels,
+    lockedModels,
     isLoading: isConfigsLoading,
   } = useAccessibleModels();
+  const { openView: openBillingView } = useBillingView();
+  // The billing modal only mounts with credits enforced (BillingDeepLinkModals), so the CTA would open nothing otherwise.
+  const isBillingEnabled = !!useGetSettingsValue('enforceCredits');
   const theme = useTheme();
   const mode = theme.palette.mode;
   const isAdmin = useUser(s => s.isAdmin);
@@ -787,10 +800,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
     const deduped = dedupeModelsForPicker(withoutDeprecated, preferredModelIds, model);
 
     const searchLower = debouncedSearchQuery.toLowerCase();
-    const matchesSearch = (candidate: ModelInfo) =>
-      !searchLower ||
-      candidate.name.toLowerCase().includes(searchLower) ||
-      !!candidate.description?.toLowerCase().includes(searchLower);
+    const matchesSearch = (candidate: ModelInfo) => modelMatchesSearch(candidate, searchLower);
     const searchFiltered = deduped.filter(matchesSearch);
 
     // Pinned sections can still show their exact ids when an enabled active twin wins the
@@ -903,6 +913,34 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
 
   // lastUsedTextModel / lastUsedImageModel now ride along in buildModelSelectionPatch, which
   // setModel applies - see aiSettingsUtils.
+  const handleUpgrade = useCallback(() => {
+    onSelectionComplete?.();
+    openBillingView('plans');
+  }, [onSelectionComplete, openBillingView]);
+
+  // The free-tier gate locks every modality, so the locked group follows the type the list shows
+  // (same choice as `availableModels` above).
+  const shownLockedType: ModelInfo['type'] | null = showAllModels
+    ? null
+    : modelFilter === 'video'
+      ? 'video'
+      : imageModel
+        ? 'image'
+        : 'text';
+  const lockedPickerModels = useMemo(() => {
+    if (!lockedModels) return [];
+    const searchLower = debouncedSearchQuery.toLowerCase();
+    const shown = lockedModels.filter(
+      candidate =>
+        (shownLockedType === null || candidate.type === shownLockedType) &&
+        !isModelDeprecated(candidate) &&
+        !EXCLUDED_MODEL_IDS.includes(candidate.id) &&
+        modelMatchesSearch(candidate, searchLower)
+    );
+    // Same dedupe as the main list: drops disabled models (no plan unlocks them) and collapses twins.
+    return sortModelsForPicker(dedupeModelsForPicker(shown, new Set(), model));
+  }, [shownLockedType, lockedModels, debouncedSearchQuery, model]);
+
   const handleModelSelect = useCallback(
     (selectedModel: ModelInfo) => {
       setModel(selectedModel.id);
@@ -1474,8 +1512,8 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
 
       {/* Models Grid */}
       {/* No access to any models */}
-      {!hasVisibleModels && !debouncedSearchQuery && (
-        <Box sx={{ padding: '32px', textAlign: 'center' }}>
+      {!hasVisibleModels && lockedPickerModels.length === 0 && !debouncedSearchQuery && (
+        <Box data-testid="model-selection-no-access" sx={{ padding: '32px', textAlign: 'center' }}>
           <Typography level="body-md" sx={{ color: 'text.primary', fontWeight: 500, mb: 1 }}>
             You don&apos;t have access to any AI models.
           </Typography>
@@ -1486,7 +1524,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
       )}
 
       {/* No models found for search query */}
-      {!hasVisibleModels && debouncedSearchQuery && (
+      {!hasVisibleModels && lockedPickerModels.length === 0 && debouncedSearchQuery && (
         <Box data-testid="model-selection-no-results" sx={{ padding: '32px', textAlign: 'center' }}>
           <Typography level="body-sm" sx={{ color: 'neutral.500' }}>
             No models found for &quot;{searchQuery}&quot;
@@ -1616,6 +1654,8 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
           ))}
         </Box>
       )}
+
+      <LockedModelsSection models={lockedPickerModels} onUpgrade={isBillingEnabled ? handleUpgrade : undefined} />
     </Box>
   );
 };
