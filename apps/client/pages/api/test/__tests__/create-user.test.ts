@@ -133,6 +133,34 @@ describe('POST /api/test/create-user', () => {
     });
   });
 
+  describe('stage and secret guards', () => {
+    const privileged = { isAdmin: true, adminPermissions: ['settings:manage'] };
+
+    it('refuses with a 403 and creates nothing when E2E endpoints are disabled (production)', async () => {
+      h.isE2EEnabled.mockReturnValue(false);
+      const { res, status } = makeRes();
+      await handler(makeReq(privileged) as never, res);
+
+      expect(status).toHaveBeenCalledWith(403);
+      expect(h.createUser).not.toHaveBeenCalled();
+      expect(h.issueSessionForRequest).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a wrong secret', { value: 'right-secret' }, 'wrong-secret'],
+      ['the unset placeholder secret', { value: 'not-configured' }, 'not-configured'],
+      ['no configured secret', undefined, 'right-secret'],
+    ])('refuses with a 401 and creates nothing given %s', async (_label, configured, provided) => {
+      h.sstSecret = configured;
+      const { res, status } = makeRes();
+      await handler({ ...makeReq(privileged), headers: { 'x-e2e-cleanup-secret': provided } } as never, res);
+
+      expect(status).toHaveBeenCalledWith(401);
+      expect(h.createUser).not.toHaveBeenCalled();
+      expect(h.issueSessionForRequest).not.toHaveBeenCalled();
+    });
+  });
+
   describe('adminPermissions', () => {
     it('passes a valid delegated-admin grant through to createUser without full isAdmin', async () => {
       const { res, status } = makeRes();
