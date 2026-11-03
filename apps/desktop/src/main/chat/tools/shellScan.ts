@@ -11,6 +11,7 @@ import {
 } from './bashArity';
 import { parseBash } from './bashParser';
 import { isEnvFile } from './envFiles';
+import { own } from './ownKeys';
 import { ghReadFiles, repositoryWrite, type RepositoryWrite } from './ownRepository';
 import {
   PathAccessDenied,
@@ -1445,7 +1446,7 @@ function readOnlyGh(args: readonly string[]): boolean {
   if (sub === 'api') {
     return outboundReason(['gh', ...args]) === null && !args.some(arg => /^--input(=|$)/.test(arg));
   }
-  return GH_READS[sub]?.has(action) === true;
+  return own(GH_READS, sub)?.has(action) === true;
 }
 
 /** Environment variables that only tune a run's output or parallelism. Any other name in front of a command makes it uncoverable. */
@@ -1614,7 +1615,7 @@ export function containedCommand(raw: readonly string[]): boolean {
   if (program === 'sed') return readOnlySed(raw.slice(1));
   if (LOCAL_PROGRAMS.has(program)) {
     if (program === 'sort') return !sortRunsOrWrites(args);
-    const runs = RUNS_A_PROGRAM[program];
+    const runs = own(RUNS_A_PROGRAM, program);
     return !runs || !args.some(arg => runs.test(arg));
   }
   // A computed argument can carry what it read into the request path itself.

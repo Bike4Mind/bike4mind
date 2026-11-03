@@ -1,3 +1,5 @@
+import { own } from './ownKeys';
+
 /**
  * How many leading tokens name "the command" a person would recognise, so an "always allow" can
  * say `git commit *` rather than the one literal line that was approved. Ported from opencode's
@@ -145,7 +147,7 @@ const ARITY: Readonly<Record<string, number>> = {
 
 export function arityPrefix(tokens: readonly string[]): string[] {
   for (let length = tokens.length; length > 0; length -= 1) {
-    const arity = ARITY[tokens.slice(0, length).join(' ')];
+    const arity = own(ARITY, tokens.slice(0, length).join(' '));
     if (arity !== undefined) return tokens.slice(0, arity);
   }
   return tokens.slice(0, 1);
@@ -172,9 +174,9 @@ const SAFE_OPTIONS: Readonly<Record<string, readonly string[]>> = {
 
 function leadingOptions(tokens: readonly string[]): { end: number; safe: boolean } {
   const [program, ...rest] = tokens;
-  const valued = program === undefined ? undefined : VALUE_OPTIONS[program];
+  const valued = program === undefined ? undefined : own(VALUE_OPTIONS, program);
   if (!valued) return { end: 0, safe: true };
-  const safeNames = SAFE_OPTIONS[program] ?? [];
+  const safeNames = own(SAFE_OPTIONS, program) ?? [];
   let index = 0;
   let safe = true;
   while (index < rest.length && rest[index].startsWith('-')) {
@@ -211,7 +213,7 @@ const DIRECTORY_OPTIONS = new Set(['-C', '--dir', '--prefix']);
  */
 export function directoryOptionValues(tokens: readonly string[]): string[] {
   const [program, ...rest] = tokens;
-  const valued = program === undefined ? undefined : VALUE_OPTIONS[program];
+  const valued = program === undefined ? undefined : own(VALUE_OPTIONS, program);
   if (!valued) return [];
   const values: string[] = [];
   let index = 0;

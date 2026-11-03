@@ -2,6 +2,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import type { Node } from 'web-tree-sitter';
 import { resolveOperand } from './paths';
+import { own } from './ownKeys';
 
 /**
  * Paths a command rewrites in place: `files` are single files, `trees` are folders whose
@@ -254,7 +255,7 @@ function unzipTrees(args: readonly string[]): string[] {
 function decompressed(program: string, args: readonly string[]): string[] {
   const shorts = args.map(shortCluster).join('');
   const decompress =
-    DECOMPRESSORS[program].always ||
+    own(DECOMPRESSORS, program)?.always ||
     shorts.includes('d') ||
     args.some(arg => arg === '--decompress' || arg === '--uncompress');
   const toStdout = /[ctl]/.test(shorts) || args.some(arg => arg === '--stdout' || arg === '--to-stdout');
@@ -413,7 +414,7 @@ async function writesOf(tokens: readonly string[], node: Node, cwd: string): Pro
   if (program === 'cpio' && args.some(arg => shortCluster(arg).includes('i') || arg === '--extract')) {
     return { files: [], trees: [optionValue(args, '-D', '--directory') ?? '.'] };
   }
-  if (DECOMPRESSORS[program]) return { files: decompressed(program, args), trees: [] };
+  if (own(DECOMPRESSORS, program)) return { files: decompressed(program, args), trees: [] };
   if (program === 'git') {
     const git = gitSubcommand(args, cwd);
     if (!git) return none;

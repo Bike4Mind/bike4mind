@@ -1,6 +1,7 @@
 import { basename, dirname, sep } from 'node:path';
 import type { PermissionList } from '@shared/permissions';
 import { MCP_TOOL_PREFIX, serverSlug } from '../mcp/names';
+import { own } from '../tools/ownKeys';
 
 type RuleKind = 'shell' | 'path' | 'domain' | 'plain';
 
@@ -117,7 +118,7 @@ export function parseRule(text: string, options: { native?: boolean } = {}): Par
     };
   }
 
-  const mapping = CLAUDE_CODE_TOOLS[name];
+  const mapping = own(CLAUDE_CODE_TOOLS, name);
   if (!mapping) {
     if (options.native && NATIVE_NAME.test(name)) {
       const kind = DESKTOP_KIND.get(name);
