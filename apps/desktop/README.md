@@ -102,6 +102,13 @@ Accounts without a monthly personal allowance show the balance without a percent
 If the balance or allowance is unavailable, check that you are signed in and can reach the
 backend; older backends may not report an allowance. The separate Context panel shows context usage.
 
+A second ring, left of the credits ring, shows how full the conversation's context is. Its
+tooltip adds how long the last reply's prompt cache stays warm, for models Desktop caches. For an
+Ollama model on this computer or a saved Ollama server, it says whether the model is loaded and
+when keep-alive unloads it, checked every 20 seconds while the conversation is idle. If the
+server cannot be reached, checks pause until you hover the ring or return to the window. A
+loaded model can still have lost its prompt cache. OpenAI-compatible servers show no cache state.
+
 Chat shows the credits reported by the server while a reply streams, after it finishes, and
 in the composer's usage details. Missing credit usage is left blank rather than shown as zero.
 

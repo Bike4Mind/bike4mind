@@ -37,6 +37,7 @@ import { modelSwitchCredits } from './modelSwitchCost';
 import { ReasoningEffortPicker } from './ReasoningEffortPicker';
 import { PromptCacheTtlPicker } from './PromptCacheTtlPicker';
 import { CacheExpiryNote } from './CacheExpiryNote';
+import { ContextRing } from './ContextRing';
 import { GrantedFolderChips, SessionChips } from './SessionChips';
 import { SESSION_PANEL_ID, SessionPanel } from './SessionPanel';
 import { panelFitsBesideThread, useElementWidth, useSessionPanelPrefs } from './sessionPanelState';
@@ -491,6 +492,9 @@ export function ChatShell({
   const closePanelPopover = useCallback(() => setPanelPopoverOpen(false), []);
   useEffect(() => setPanelPopoverOpen(false), [activeId, panelDocked, screen]);
 
+  const settledReply = useMemo(() => latestReply(conversation.messages), [conversation.messages]);
+  const hasReply = settledReply !== null;
+  const promptCache = settledReply?.promptCache;
   const composerUsage: ComposerUsage = useMemo(() => {
     const reply = latestReply(conversation.messages, turnOpen);
     // The figure ChatService.autoCompact decides on, so red means the same thing on both sides.
@@ -1226,7 +1230,7 @@ export function ChatShell({
           )}
 
           <CacheExpiryNote
-            stamp={latestReply(conversation.messages)?.promptCache}
+            stamp={promptCache}
             model={modelOption}
             contextTokens={composerUsage.contextTokens ?? 0}
             ttl={cacheTtlFor(modelOption)}
@@ -1251,6 +1255,16 @@ export function ChatShell({
                   : null
             }
             usage={composerUsage}
+            contextStatus={
+              <ContextRing
+                tokens={composerUsage.contextSnapshot?.inputTokens ?? composerUsage.contextTokens}
+                limit={composerUsage.contextLimit}
+                modelId={conversation.session?.model ?? null}
+                promptCache={promptCache}
+                streaming={turnOpen}
+                hasReply={hasReply}
+              />
+            }
             placeholder={
               conversation.session?.mode === 'code' ? 'Describe a task or ask a question' : 'Send a message...'
             }
