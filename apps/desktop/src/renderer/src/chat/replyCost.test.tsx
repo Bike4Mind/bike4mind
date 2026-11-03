@@ -116,14 +116,12 @@ describe('the cost on a reply', () => {
       message('m1', {
         usage: { inputTokens: 100, outputTokens: 400, cacheReadInputTokens: 900, creditsUsed: 12 },
         stats: {
-          startedAt: 0,
-          firstTokenAt: 1500,
-          endedAt: 10_000,
           totalMs: 10_000,
           modelMs: 10_000,
-          streamMs: 8000,
           toolMs: 0,
+          firstTokenMs: 1500,
           reasoningMs: 1500,
+          generation: { tokens: 400, ms: 8000 },
           derived: ['reasoningMs'],
         },
       }),

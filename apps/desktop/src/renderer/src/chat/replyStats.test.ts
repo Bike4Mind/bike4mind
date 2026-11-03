@@ -13,14 +13,7 @@ import {
 } from './replyStats';
 import type { TurnProgress } from './statusLine';
 
-const base: ChatReplyStats = {
-  startedAt: 1000,
-  endedAt: 21_000,
-  totalMs: 20_000,
-  modelMs: 20_000,
-  streamMs: 0,
-  toolMs: 0,
-};
+const base: ChatReplyStats = { totalMs: 20_000, modelMs: 20_000, toolMs: 0 };
 
 describe('thinkingShare', () => {
   it('is thinking time over the whole reply', () => {
@@ -50,18 +43,29 @@ describe('generationRate', () => {
     );
   });
 
-  it('estimates a hosted reply from output tokens over the time the stream ran', () => {
-    expect(generationRate({ stats: { ...base, streamMs: 4000 }, usage: { outputTokens: 200 } })).toEqual({
+  it('estimates a hosted reply from the generation main timed per request', () => {
+    expect(
+      generationRate({ stats: { ...base, generation: { tokens: 200, ms: 4000 } }, usage: { outputTokens: 201 } })
+    ).toEqual({
       tokens: 200,
       ms: 4000,
       estimated: true,
     });
   });
 
-  it('estimates nothing from a stream too short or too small to time', () => {
-    expect(generationRate({ stats: { ...base, streamMs: 100 }, usage: { outputTokens: 200 } })).toBeNull();
-    expect(generationRate({ stats: { ...base, streamMs: 4000 }, usage: { outputTokens: 1 } })).toBeNull();
+  it('falls back to the timed generation when a server reported a rate it spent no time on', () => {
+    expect(
+      generationRate({
+        stats: { ...base, generation: { tokens: 99, ms: 2000 } },
+        usage: { outputTokens: 100, rate: { evalTokens: 100, evalMs: 0 } },
+      })
+    ).toEqual({ tokens: 99, ms: 2000, estimated: true });
+  });
+
+  it('has no speed where no request could be timed', () => {
+    expect(generationRate({ stats: base, usage: { outputTokens: 200 } })).toBeNull();
     expect(generationRate({ usage: { outputTokens: 200 } })).toBeNull();
+    expect(generationRate({ stats: { ...base, generation: { tokens: 0, ms: 300 } } })).toBeNull();
   });
 });
 
@@ -116,8 +120,7 @@ describe('replyStats', () => {
     const rows = replyStats({
       stats: {
         ...base,
-        firstTokenAt: 1400,
-        streamMs: 19_600,
+        firstTokenMs: 400,
         reasoningMs: 5000,
         reasoningTokens: 120,
         derived: ['reasoningTokens'],
@@ -153,13 +156,28 @@ describe('replyStats', () => {
 
   it('marks a hosted speed as timed by the app', () => {
     const rows = replyStats({
-      stats: { ...base, streamMs: 4000 },
-      usage: { inputTokens: 100, outputTokens: 200, cacheReadInputTokens: 900, reasoningTokens: 50 },
+      stats: { ...base, generation: { tokens: 200, ms: 4000 } },
+      usage: { inputTokens: 100, outputTokens: 201, cacheReadInputTokens: 900, reasoningTokens: 50 },
     });
 
     expect(rows.find(row => row.id === 'speed')).toMatchObject({ value: '~50.0 tok/s' });
     expect(rows.find(row => row.id === 'cacheShare')?.value).toBe('90%');
     expect(rows.find(row => row.id === 'thinkingTokens')?.value).toBe('50');
+  });
+
+  // Both as main stores them: a 3000-token call that arrived whole, then a 20-token answer
+  // over 300ms; and 1900 tokens of thinking the server never streamed, then 100 of text.
+  it('rates a hosted reply by its tokens over the time spent producing them', () => {
+    const speed = (stats: ChatReplyStats, outputTokens: number) =>
+      replyStats({ stats, usage: { outputTokens } }).find(row => row.id === 'speed')?.value;
+
+    expect(speed({ ...base, generation: { tokens: 19, ms: 300 } }, 3020)).toBe('~63.3 tok/s');
+    expect(speed({ ...base, generation: { tokens: 2000, ms: 20_306 } }, 2000)).toBe('~98.5 tok/s');
+  });
+
+  it('times the first token from the request, as main stored it', () => {
+    const rows = replyStats({ stats: { ...base, firstTokenMs: 1250 } });
+    expect(rows.find(row => row.id === 'firstToken')?.value).toBe('1.3s');
   });
 
   it('shows what an older reply, stored before stats, still carries', () => {
@@ -169,11 +187,13 @@ describe('replyStats', () => {
     expect(replyStats({})).toEqual([]);
   });
 
-  it('counts whole seconds while live, to tick with the status line', () => {
-    const rows = replyStats({ stats: { ...base, totalMs: 12_600, reasoningMs: 3200 } }, { live: true });
+  it('counts whole seconds while live, and leaves the total, share and speed to the status line', () => {
+    const rows = replyStats(
+      { stats: { ...base, totalMs: 12_600, reasoningMs: 3200, generation: { tokens: 99, ms: 2000 } } },
+      { live: true }
+    );
 
-    expect(rows.find(row => row.id === 'total')?.value).toBe('12s');
-    expect(rows.find(row => row.id === 'thinking')?.value).toBe('3s');
+    expect(rows.map(row => [row.id, row.value])).toEqual([['thinking', '3s']]);
   });
 
   it('describes the full set for a title, with what each estimate rests on', () => {
@@ -187,25 +207,33 @@ describe('replyStats', () => {
 describe('the live turn', () => {
   const turn: TurnProgress = { startedAt: 10_000, tokens: null };
 
-  it('stamps the first token on the first phase that is not a wait', () => {
+  it('stamps the request on the first wait and the first token on the first phase that is not one', () => {
     const waited = withPhase(turn, { kind: 'waiting' }, 10_500);
-    expect(waited).toBe(turn);
-    expect(withPhase(waited, { kind: 'responding' }, 11_000).firstTokenAt).toBe(11_000);
+    expect(waited.requestAt).toBe(10_500);
+    expect(withPhase(waited, { kind: 'waiting' }, 10_600)).toBe(waited);
+    const answered = withPhase(waited, { kind: 'responding' }, 11_000);
+    expect(answered.firstTokenAt).toBe(11_000);
+    expect(withPhase(answered, { kind: 'waiting' }, 12_000)).toMatchObject({ requestAt: 10_500 });
   });
 
   it('runs a thinking clock across phases, and leaves an unchanged turn alone', () => {
-    let next = withPhase(turn, { kind: 'thinking' }, 11_000);
+    let next = withPhase(turn, { kind: 'waiting' }, 10_400);
+    next = withPhase(next, { kind: 'thinking' }, 11_000);
     expect(withPhase(next, { kind: 'thinking' }, 11_500)).toBe(next);
     next = withPhase(next, { kind: 'responding' }, 14_000);
     next = withPhase(next, { kind: 'waiting' }, 15_000);
     next = withPhase(next, { kind: 'thinking' }, 16_000);
 
     expect(next.thinkingMs).toBe(3000);
-    expect(liveReplyStats(next, 17_500)).toMatchObject({ totalMs: 7500, reasoningMs: 4500, firstTokenAt: 11_000 });
+    expect(liveReplyStats(next, 17_500)).toMatchObject({ reasoningMs: 4500, firstTokenMs: 600 });
   });
 
-  it('has no thinking time for a turn that has not thought', () => {
+  it('times the first token from the turn when no request was seen going out', () => {
+    expect(liveReplyStats({ ...turn, firstTokenAt: 10_700 }, 12_000).firstTokenMs).toBe(700);
+  });
+
+  it('has no thinking time or first token for a turn that has neither', () => {
     expect(liveReplyStats(turn, 12_000).reasoningMs).toBeUndefined();
-    expect(liveReplyStats(turn, 12_000).streamMs).toBe(0);
+    expect(liveReplyStats(turn, 12_000).firstTokenMs).toBeUndefined();
   });
 });

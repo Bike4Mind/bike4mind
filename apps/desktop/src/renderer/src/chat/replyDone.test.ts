@@ -126,7 +126,7 @@ describe('applyReplyDone', () => {
   });
 
   it('takes the stats, so the rail shows the settled figures without a reload', () => {
-    const stats = { startedAt: 1000, endedAt: 5000, totalMs: 4000, modelMs: 4000, streamMs: 3000, toolMs: 0 };
+    const stats = { totalMs: 4000, modelMs: 4000, toolMs: 0, firstTokenMs: 300 };
     const message = streaming([{ text: 'x', toolCallIds: [] }]);
     const settled = applyReplyDone(message, done({ content: 'x', stats }));
 

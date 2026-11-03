@@ -11,14 +11,12 @@ import type { TurnProgress } from './statusLine';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const stats: ChatReplyStats = {
-  startedAt: 0,
-  firstTokenAt: 800,
-  endedAt: 12_000,
   totalMs: 12_000,
   modelMs: 12_000,
-  streamMs: 11_200,
   toolMs: 0,
+  firstTokenMs: 800,
   reasoningMs: 3000,
+  generation: { tokens: 299, ms: 11_200 },
 };
 
 function message(id: string, fields: Partial<ChatMessage> = {}): ChatMessage {
@@ -134,22 +132,29 @@ describe('the reply stats rail and its footer fallback', () => {
     expect(getComputedStyle(reply()!).minHeight).not.toBe(`${railReserve(9)}px`);
   });
 
-  it('ticks the live reply off its own clock and shows thinking so far', () => {
+  it('ticks the live reply off its own clock, leaving the total and speed to the status line', () => {
     vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
     vi.setSystemTime(20_000);
-    const turn: TurnProgress = { startedAt: 15_000, tokens: null, firstTokenAt: 15_500, thinkingSince: 16_000 };
+    const turn: TurnProgress = {
+      startedAt: 14_000,
+      tokens: null,
+      requestAt: 15_000,
+      firstTokenAt: 15_500,
+      thinkingSince: 16_000,
+      usage: { outputTokens: 40, rate: { evalTokens: 40, evalMs: 1000 } },
+    };
 
     render([message('u1', { role: 'user', content: 'Think hard' }), message('a1', { content: '' })], {
       statsRail: true,
       streaming: true,
       liveTurn: turn,
     });
-    expect(statValue('total')).toBe('5s');
     expect(statValue('thinking')).toBe('4s');
     expect(statValue('firstToken')).toBe('500ms');
+    expect(statValue('total')).toBeUndefined();
+    expect(statValue('speed')).toBeUndefined();
 
     act(() => vi.advanceTimersByTime(2000));
-    expect(statValue('total')).toBe('7s');
     expect(statValue('thinking')).toBe('6s');
   });
 
