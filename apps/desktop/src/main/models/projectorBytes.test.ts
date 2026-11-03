@@ -71,7 +71,7 @@ describe('installedProjectorBytes', () => {
     expect(projectorBytes).toHaveBeenCalledTimes(1);
     await sizing.footprint({ ...facts, digest: 'two' });
     expect(projectorBytes).toHaveBeenCalledTimes(2);
-    sizing.forget();
+    sizing.forget?.();
     await sizing.footprint({ ...facts, digest: 'two' });
     expect(projectorBytes).toHaveBeenCalledTimes(3);
     expect((await sizing.footprint({ ...facts, modelfile: undefined, digest: 'three' })).projectorBytes).toBe(0);
