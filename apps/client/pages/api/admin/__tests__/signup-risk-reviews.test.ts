@@ -15,6 +15,8 @@ const h = vi.hoisted(() => ({
   inTransaction: false,
   settings: vi.fn(),
   release: vi.fn(),
+  advisories: vi.fn(),
+  warn: vi.fn(),
 }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
@@ -63,6 +65,7 @@ vi.mock('@server/utils/adminAudit', async importOriginal => ({
   userAuditTarget: async (id: string) => ({ kind: 'user', id, displayName: `${id}@example.com` }),
 }));
 vi.mock('@server/credits/riskReviewGrantRelease', () => ({ releaseRiskReviewedSignupGrant: h.release }));
+vi.mock('@server/security/abuseAssessment/riskReviewAdvisory', () => ({ findRiskReviewAdvisories: h.advisories }));
 import '@pages/api/admin/signup-risk-reviews';
 
 const ADMIN_ID = 'a'.repeat(24);
@@ -72,7 +75,7 @@ const REASON = 'Spam or bot cohort';
 
 const request = (method: 'GET' | 'POST', body?: unknown, isAdmin = true) => {
   const { req, res } = createMocks({ method, body });
-  Object.assign(req, { user: { id: ADMIN_ID, isAdmin }, logger: {} });
+  Object.assign(req, { user: { id: ADMIN_ID, isAdmin }, logger: { warn: h.warn } });
   return { req, res };
 };
 
@@ -90,6 +93,7 @@ const pendingUser = (id: string, email: string, score: number) => ({
 });
 
 beforeEach(() => {
+  h.advisories.mockResolvedValue(new Map());
   h.findPending.mockReset().mockResolvedValue([]);
   h.findAutoApprovals.mockReset().mockResolvedValue([]);
   h.setState.mockReset().mockResolvedValue(true);
@@ -169,6 +173,45 @@ describe('signup risk review queue', () => {
       points: 15,
       reason: 'First API key created 3 minutes after signup',
     });
+  });
+
+  it('attaches the advisory model verdict to the rows it names, and null elsewhere', async () => {
+    h.findPending.mockResolvedValue([
+      pendingUser(USER_A, 'bot1@np.burner-example.com', 80),
+      pendingUser(USER_B, 'jane@example.org', 55),
+    ]);
+    const assessedAt = new Date('2026-11-02T10:00:00Z');
+    h.advisories.mockResolvedValue(
+      new Map([
+        [USER_A, { detectionId: 'd1', detector: 'signupNetworkBurst', result: 'abuse', confidence: 0.8, assessedAt }],
+      ])
+    );
+    const { req, res } = request('GET');
+
+    await h.handlers.get(req, res);
+
+    expect(h.advisories).toHaveBeenCalledWith([USER_A, USER_B]);
+    const body = res._getJSONData();
+    expect(body.data[0].advisory).toEqual({
+      detectionId: 'd1',
+      detector: 'signupNetworkBurst',
+      result: 'abuse',
+      confidence: 0.8,
+      assessedAt: assessedAt.toISOString(),
+    });
+    expect(body.data[1].advisory).toBeNull();
+  });
+
+  it('still lists the queue when the advisory read fails', async () => {
+    h.findPending.mockResolvedValue([pendingUser(USER_A, 'bot1@np.burner-example.com', 80)]);
+    h.advisories.mockRejectedValue(new Error('assessments down'));
+    const { req, res } = request('GET');
+
+    await h.handlers.get(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().data[0].advisory).toBeNull();
+    expect(h.warn).toHaveBeenCalled();
   });
 
   it('returns the configured review threshold', async () => {

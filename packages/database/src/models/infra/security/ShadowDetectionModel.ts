@@ -392,6 +392,28 @@ class ShadowDetectionRepository {
     }).exec();
   }
 
+  /** Detections naming any of these users, newest first, at most `limit`. Uses the userIds index. */
+  async findForUsers(
+    userIds: string[],
+    limit: number
+  ): Promise<Pick<ShadowDetectionItem, 'id' | 'detector' | 'userIds' | 'detectedAt'>[]> {
+    if (userIds.length === 0) return [];
+    const docs = await ShadowDetectionModel.find(
+      { userIds: { $in: userIds } },
+      { detector: 1, userIds: 1, detectedAt: 1 }
+    )
+      .sort({ detectedAt: -1, _id: -1 })
+      .limit(limit)
+      .lean<{ _id: Types.ObjectId; detector: ShadowDetector; userIds?: string[]; detectedAt: Date }[]>()
+      .exec();
+    return docs.map(doc => ({
+      id: doc._id.toString(),
+      detector: doc.detector,
+      userIds: doc.userIds ?? [],
+      detectedAt: doc.detectedAt,
+    }));
+  }
+
   /** Newest first; `truncated` is true when more than `limit` records match. */
   async list(query: {
     detector?: ShadowDetector;

@@ -66,6 +66,7 @@ const row = (over: Partial<SignupRiskReviewRow> = {}): SignupRiskReviewRow => ({
   creditsSpent: 1200,
   apiKeysCreated: 3,
   grantHeld: false,
+  advisory: null,
   ...over,
 });
 
@@ -351,5 +352,42 @@ describe('SignupRiskReviewTab', () => {
       expect((await screen.findByTestId('signup-risk-reopen-error')).textContent).toContain('Reopening failed');
       expect(screen.getByTestId('signup-risk-reopen-confirm-btn')).toBeTruthy();
     });
+  });
+
+  it('shows an advisory model verdict as a chip, coloring only an abuse verdict', () => {
+    m.useSignupRiskReviews.mockReturnValue(
+      queue([
+        row({
+          advisory: {
+            detectionId: 'd1',
+            detector: 'signupNetworkBurst',
+            result: 'abuse',
+            confidence: 0.82,
+            assessedAt: '2026-11-02T10:00:00.000Z',
+          },
+        }),
+        row({
+          userId: 'u2',
+          email: 'jane@example.org',
+          advisory: {
+            detectionId: 'd2',
+            detector: 'signupNetworkBurst',
+            result: 'legitimate_automation',
+            confidence: null,
+            assessedAt: '2026-11-02T10:00:00.000Z',
+          },
+        }),
+      ])
+    );
+    renderTab();
+
+    expect(screen.getByTestId('signup-risk-advisory-u1').textContent).toBe('Model: abuse');
+    expect(screen.getByTestId('signup-risk-advisory-u2').textContent).toBe('Model: automation');
+  });
+
+  it('shows no advisory chip on a row with no verdict', () => {
+    renderTab();
+
+    expect(screen.queryByTestId('signup-risk-advisory-u1')).toBeNull();
   });
 });

@@ -6,8 +6,10 @@ import {
   MAX_SIGNUP_RISK_REVIEW_BATCH,
   SIGNUP_RISK_REVIEW_LIST_LIMIT,
   SIGNUP_RISK_SIGNALS,
+  type AbuseAssessmentJudgment,
   type SignupRiskSignal,
 } from '@bike4mind/common';
+import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import {
   ADMIN_REASON_PRESETS,
   ActionDialog,
@@ -27,6 +29,7 @@ import { SIGNUP_RISK_REVIEW_SEARCH_KEYS } from './signupRiskReviewSearch';
 import BulkAbuseResponseModal from './Users/BulkAbuseResponseModal';
 import { SignupRiskAutoApprovals } from './SignupRiskAutoApprovals';
 import { useOpenUserProfile } from './Users/Profile/useOpenUserProfile';
+import { DETECTOR_LABELS } from './ShadowDetectionsTab';
 import {
   useSignupRiskReviewDecision,
   useSignupRiskReviews,
@@ -63,8 +66,34 @@ const SignupTime: React.FC<{ iso: string; now: number }> = ({ iso, now }) => {
   );
 };
 
-const Signals: React.FC<{ row: SignupRiskReviewRow }> = ({ row }) => (
+// Only an abuse verdict is colored: a model's "legitimate" must not read as a reason to approve.
+const ADVISORY_DISPLAY: Record<AbuseAssessmentJudgment, { label: string; tone: AdminStatusTone }> = {
+  abuse: { label: 'Model: abuse', tone: 'bad' },
+  legitimate_automation: { label: 'Model: automation', tone: 'neutral' },
+  insufficient_evidence: { label: 'Model: unsure', tone: 'neutral' },
+};
+
+const Advisory: React.FC<{ row: SignupRiskReviewRow; now: number }> = ({ row, now }) => {
+  const advisory = row.advisory;
+  if (!advisory) return null;
+  const confidence = advisory.confidence === null ? '' : `, ${Math.round(advisory.confidence * 100)}% confident`;
+  return (
+    <Tooltip
+      title={`Advisory verdict on a ${DETECTOR_LABELS[advisory.detector]} detection${confidence}, ${relativeTime(
+        new Date(advisory.assessedAt),
+        now
+      )}. It never approves or blocks an account.`}
+    >
+      <span tabIndex={0} data-testid={`signup-risk-advisory-${row.userId}`}>
+        <StatusChip tone={ADVISORY_DISPLAY[advisory.result].tone} label={ADVISORY_DISPLAY[advisory.result].label} />
+      </span>
+    </Tooltip>
+  );
+};
+
+const Signals: React.FC<{ row: SignupRiskReviewRow; now: number }> = ({ row, now }) => (
   <Stack direction="row" flexWrap="wrap" gap={0.5}>
+    <Advisory row={row} now={now} />
     {row.grantHeld && (
       <Tooltip title="The signup grant policy held this account's signup credits. Approving pays them.">
         <span tabIndex={0} data-testid={`signup-risk-grant-held-${row.userId}`}>
@@ -223,7 +252,7 @@ export const SignupRiskReviewTab: React.FC = () => {
       numeric: true,
       width: '8.5rem',
     },
-    { id: 'signals', label: 'Signals', render: row => <Signals row={row} /> },
+    { id: 'signals', label: 'Signals', render: row => <Signals row={row} now={now} /> },
     {
       id: 'createdAt',
       label: 'Signed up',

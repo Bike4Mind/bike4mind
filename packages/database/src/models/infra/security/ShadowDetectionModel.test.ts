@@ -243,6 +243,30 @@ describe('shadowDetectionRepository', () => {
     expect(filtered.map(item => item.id)).toEqual([older]);
   });
 
+  it('finds detections naming any of the users, newest first, up to the limit', async () => {
+    const older = await shadowDetectionRepository.record(
+      detection({ userIds: ['u1', 'u2'], detectedAt: new Date('2026-10-01T00:00:00Z') })
+    );
+    const newer = await shadowDetectionRepository.record(
+      detection({ userIds: ['u3'], detectedAt: new Date('2026-10-02T00:00:00Z') })
+    );
+    await shadowDetectionRepository.record(detection({ userIds: ['u9'] }));
+
+    const found = await shadowDetectionRepository.findForUsers(['u2', 'u3'], 10);
+
+    expect(found).toEqual([
+      { id: newer, detector: 'signupNetworkBurst', userIds: ['u3'], detectedAt: new Date('2026-10-02T00:00:00Z') },
+      {
+        id: older,
+        detector: 'signupNetworkBurst',
+        userIds: ['u1', 'u2'],
+        detectedAt: new Date('2026-10-01T00:00:00Z'),
+      },
+    ]);
+    await expect(shadowDetectionRepository.findForUsers(['u2', 'u3'], 1)).resolves.toHaveLength(1);
+    await expect(shadowDetectionRepository.findForUsers([], 10)).resolves.toEqual([]);
+  });
+
   it('declares the retention TTL on detectedAt', async () => {
     const ttl = ShadowDetectionModel.schema.indexes().find(([, options]) => options?.expireAfterSeconds !== undefined);
     expect(ttl).toEqual([{ detectedAt: 1 }, expect.objectContaining({ expireAfterSeconds: 365 * 24 * 60 * 60 })]);

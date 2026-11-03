@@ -132,6 +132,17 @@ export class AbuseAssessmentRepository {
       .lean<LeanAbuseAssessment[]>();
     return docs.map(toItem);
   }
+
+  /** The newest judged (not unknown) assessment of each detection; detections with none are absent. */
+  async findLatestJudgedForDetections(detectionIds: string[]): Promise<AbuseAssessmentItem[]> {
+    if (detectionIds.length === 0) return [];
+    const rows = await AbuseAssessmentModel.aggregate<{ doc: LeanAbuseAssessment }>([
+      { $match: { detectionId: { $in: detectionIds }, result: { $ne: 'unknown' } } },
+      { $sort: { assessedAt: -1, _id: -1 } },
+      { $group: { _id: '$detectionId', doc: { $first: '$$ROOT' } } },
+    ]);
+    return rows.map(row => toItem(row.doc));
+  }
 }
 
 export const abuseAssessmentRepository = new AbuseAssessmentRepository();
