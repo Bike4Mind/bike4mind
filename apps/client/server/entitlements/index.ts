@@ -59,7 +59,7 @@ export interface EntitlementUser {
   /** Granting a domain entitlement requires BOTH (verified-email gate). */
   email?: string | null;
   emailVerified?: boolean | null;
-  /** Set by a credit purchase only; unlocks `plan:paid` like a subscription (see paidStanding.ts). */
+  /** Set by a credit purchase, never by an admin grant alone; unlocks `plan:paid` (see paidStanding.ts). */
   lastCreditsPurchasedAt?: Date | null;
 }
 

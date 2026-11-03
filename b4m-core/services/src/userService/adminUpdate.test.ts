@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { adminUpdateUser, adminUpdateUserSchema } from './adminUpdate';
 import { checkStorageLimit } from '@bike4mind/utils';
+import { CreditHolderType } from '@bike4mind/common';
 
 vi.mock('../friendshipService/sendFriendRequest', () => ({ sendFriendRequest: vi.fn() }));
 
@@ -30,6 +31,8 @@ function makeAdapters(startingCredits: number) {
     return { id: TARGET_ID, currentCredits: target.currentCredits };
   });
   const update = vi.fn().mockResolvedValue(undefined);
+  // No purchase on the ledger unless a test says otherwise.
+  const findByOwnerWithFilters = vi.fn().mockResolvedValue([]);
 
   const db: any = {
     users: {
@@ -48,11 +51,12 @@ function makeAdapters(startingCredits: number) {
     friendship: {},
     userApiKeys: { deactivateAllByUserId: vi.fn().mockResolvedValue(undefined) },
     realtimeConnections: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
-    creditTransactions: { createTransaction },
+    creditTransactions: { createTransaction, findByOwnerWithFilters },
   };
   return {
     adapters: { db },
     createTransaction,
+    findByOwnerWithFilters,
     incrementCredits,
     update,
     target,
@@ -426,6 +430,33 @@ describe('adminUpdateUser - lastCreditsPurchasedAt', () => {
     await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 14500 }, adapters);
 
     // An admin credit grant confers no paid standing; only a purchase (addCredits type 'purchase') does.
+    expect('lastCreditsPurchasedAt' in update.mock.calls[0][0]).toBe(false);
+  });
+
+  it('re-stamps lastCreditsPurchasedAt when an admin grant repairs an account with a purchase row', async () => {
+    const { adapters, update, target, findByOwnerWithFilters } = makeAdapters(100);
+    target.lastCreditsPurchasedAt = PRIOR_PURCHASE;
+    findByOwnerWithFilters.mockResolvedValueOnce([{ id: 'purchase-row', type: 'purchase' }]);
+    const before = Date.now();
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: 5000, creditReason: 'repair' }, adapters);
+
+    expect(findByOwnerWithFilters).toHaveBeenCalledWith(TARGET_ID, CreditHolderType.User, {
+      transactionTypes: ['purchase'],
+      limit: 1,
+    });
+    // Newer than the row, so creditPurchaseReconciliation stops flagging the repaired purchase.
+    const stamp = update.mock.calls[0][0].lastCreditsPurchasedAt as Date;
+    expect(stamp.getTime()).toBeGreaterThanOrEqual(before);
+  });
+
+  it('does not read the ledger for a deduction, so a clawback never stamps a buyer', async () => {
+    const { adapters, update, findByOwnerWithFilters } = makeAdapters(12000);
+    findByOwnerWithFilters.mockResolvedValue([{ id: 'purchase-row', type: 'purchase' }]);
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: -2500 }, adapters);
+
+    expect(findByOwnerWithFilters).not.toHaveBeenCalled();
     expect('lastCreditsPurchasedAt' in update.mock.calls[0][0]).toBe(false);
   });
 

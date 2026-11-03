@@ -7,8 +7,9 @@ import { getEntitlingPlanByPriceId } from '@client/lib/userSubscriptions/utils';
  *
  * Sources: an active paid subscription the account holds (its own, an `admin_grant` comp row, or an org
  * plan it holds a seat on - `getActiveSubscriptionsForUser` resolves which orgs count), or a credit
- * purchase ever made. Only `addCredits` with type `purchase` stamps `lastCreditsPurchasedAt`; an admin
- * credit adjustment does not. Sticky: a refund or dispute does not clear the stamp.
+ * purchase ever made. `addCredits` with type `purchase` stamps `lastCreditsPurchasedAt`; an admin credit
+ * grant re-stamps only an account that already has a purchase row (adminUpdate.ts), so it never confers
+ * paid standing on its own. Sticky: a refund or dispute does not clear the stamp.
  */
 export interface PaidStandingUser {
   lastCreditsPurchasedAt?: Date | null;

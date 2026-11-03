@@ -222,11 +222,22 @@ export async function adminUpdateUser(
           }).limitMb,
         }
       : {};
+  // The stamp confers paid standing, which an admin comps with an `admin_grant` subscription, never
+  // with a credit adjustment alone. A net grant to an account with a purchase on the ledger re-stamps
+  // it: that is the repair for a purchase whose balance $inc (and so its stamp) never ran, which
+  // creditPurchaseReconciliation keeps flagging until the stamp is at least as new as the row.
+  const restoresPurchaseStamp =
+    creditDelta > 0 &&
+    (
+      await db.creditTransactions.findByOwnerWithFilters(params.id, CreditHolderType.User, {
+        transactionTypes: ['purchase'],
+        limit: 1,
+      })
+    ).length > 0;
   const builtParams = {
     ...baseParams,
     ...storageParams,
-    // No lastCreditsPurchasedAt: that stamp confers paid standing, which an admin comps with an
-    // `admin_grant` subscription, never with a credit adjustment.
+    ...(restoresPurchaseStamp ? { lastCreditsPurchasedAt: new Date() } : {}),
   };
   const builtUser = applyBaseUserUpdates(user, builtParams);
   // Persist ONLY the fields this request changed, never a spread of the read snapshot -
