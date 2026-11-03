@@ -209,13 +209,51 @@ describe('GenerationSettingsPicker', () => {
     expect(onChange).toHaveBeenLastCalledWith({ topP: 0.9, topK: 30 });
   });
 
-  it('puts the saved value back in a field whose save failed', async () => {
+  it('keeps a newer edit on its way when an older one fails', async () => {
+    let failFirst: (saved: boolean) => void = () => {};
+    onChange.mockImplementationOnce(() => new Promise<boolean>(resolve => (failFirst = resolve)));
+    onChange.mockImplementationOnce(() => new Promise<boolean>(() => {}));
+    await render(LOCAL);
+    await open();
+    await type('temperature', '0.5');
+    await type('topK', '30');
+    await act(async () => failFirst(false));
+    await type('minP', '0.1');
+    expect(onChange).toHaveBeenLastCalledWith({ temperature: 0.5, topK: 30, minP: 0.1 });
+  });
+
+  it('puts the saved value back in a field whose save failed, and saves it when typed again', async () => {
     onChange.mockResolvedValueOnce(false);
     await render(LOCAL, { temperature: 0.3 });
     await open();
     await type('temperature', '0.5');
     await act(async () => {});
     expect(input('temperature').value).toBe('0.3');
+    await type('temperature', '0.5');
+    expect(onChange).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the newer value in a field when an older save of it fails late', async () => {
+    let failFirst: (saved: boolean) => void = () => {};
+    onChange.mockImplementationOnce(() => new Promise<boolean>(resolve => (failFirst = resolve)));
+    onChange.mockResolvedValueOnce(true);
+    await render(LOCAL, { temperature: 0.3 });
+    await open();
+    await type('temperature', '0.5');
+    await type('temperature', '0.7');
+    await act(async () => failFirst(false));
+    expect(input('temperature').value).toBe('0.7');
+  });
+
+  it('saves a value again once the chat has gone back to the default', async () => {
+    onChange.mockResolvedValue(true);
+    await render(LOCAL);
+    await open();
+    await type('temperature', '0.5');
+    await render(LOCAL, { temperature: 0.5 });
+    await render(LOCAL, {});
+    await type('temperature', '0.5');
+    expect(onChange).toHaveBeenCalledTimes(2);
   });
 
   it('saves a typed value on blur, and once for Enter then blur', async () => {
