@@ -51,6 +51,26 @@ describe('emitSignupForSourceProducts', () => {
     expect(mockEmit.mock.calls[0][0].eventId).not.toBe(stableEventId('signup', 'widgets', 'u1'));
   });
 
+  it.each([
+    ['an internal account', { isInternal: true }, { internal: true }],
+    ['an admin', { isAdmin: true }, { internal: true }],
+    ['a customer', { isSynthetic: false, isInternal: false }, {}],
+    ['no account flags', undefined, {}],
+  ])('marks the credit of %s with its lane, and nothing for anyone else', async (_name, account, mark) => {
+    await emitSignupForSourceProducts({
+      userId: 'u1',
+      method: 'otc',
+      touches: { lastTouch: { source: 'widgets' } },
+      account,
+    });
+    expect(mockEmit.mock.calls[0][0].metadata).toEqual({
+      touch: 'last',
+      attribution: 'self-reported',
+      method: 'otc',
+      ...mark,
+    });
+  });
+
   it('sends to each of two distinct source products, marked with its own touch', async () => {
     await emitSignupForSourceProducts({
       userId: 'u1',
@@ -353,6 +373,42 @@ describe('emitBillingEvent', () => {
       bike4mind: { kind: 'subscription', userAction: false },
       widgets: { kind: 'subscription', touch: 'first', attribution: 'self-reported', userAction: false },
     });
+  });
+
+  it("marks every copy of an internal account's event internal, and a customer's not at all", async () => {
+    mockKeyFor.mockImplementation((p: string) => (p === 'widgets' || p === 'bike4mind' ? 'key' : undefined));
+    await emitBillingEvent({
+      user: { ...subscriber, isInternal: true },
+      event: 'subscription_ended',
+      occurrence: 'sub_1',
+      metadata: { reason: 'cancellation_requested' },
+    });
+    await emitPurchaseEvents({
+      user: { ...subscriber, isAdmin: true },
+      paymentId: 'in_9',
+      kind: 'credits',
+      amountMinor: 500,
+      currency: 'usd',
+    });
+    expect(mockEmit.mock.calls.map(([c]) => [c.event, c.productId, c.metadata.internal])).toEqual([
+      ['subscription_ended', 'bike4mind', true],
+      ['subscription_ended', 'widgets', true],
+      ['purchase', 'bike4mind', true],
+      ['purchase', 'widgets', true],
+    ]);
+
+    mockEmit.mockClear();
+    await emitBillingEvent({
+      user: subscriber,
+      event: 'payment_failed',
+      occurrence: 'in_1:1',
+      metadata: { kind: 'subscription', internal: true, lane: 'synthetic' },
+    });
+    // A caller's marks are dropped like its credit marks: the user record decides.
+    for (const [call] of mockEmit.mock.calls) {
+      expect(call.metadata).not.toHaveProperty('internal');
+      expect(call.metadata).not.toHaveProperty('lane');
+    }
   });
 
   it('sends nothing without an occurrence, for a synthetic user, or without a user', async () => {

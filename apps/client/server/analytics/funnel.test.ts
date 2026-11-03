@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const { mockEmit, mockGetSetting, mockLogEventSafe, mockUserUpdate, mockUpdateOne, mockRewardInviter } = vi.hoisted(
   () => ({
@@ -33,8 +33,8 @@ import {
   emitSignupFunnelEvents,
   recordFirstChatValue,
   recordFirstValue,
+  recordAccountLane,
   recordSignupAcquisition,
-  recordSyntheticIdentity,
   toUserAcquisition,
 } from './funnel';
 
@@ -44,11 +44,16 @@ const TOUCH_COOKIES = `b4m_app_first_touch=${enc({ source: 'reddit', campaign: '
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubEnv('NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS', 'staff.example');
   mockEmit.mockResolvedValue(undefined);
   mockGetSetting.mockResolvedValue('');
   mockLogEventSafe.mockResolvedValue(undefined);
   mockUserUpdate.mockResolvedValue(null);
   mockUpdateOne.mockResolvedValue({ modifiedCount: 1 });
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe('toUserAcquisition', () => {
@@ -114,7 +119,7 @@ describe('recordSignupAcquisition', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     await expect(
       recordSignupAcquisition({ req: reqWith(`${APP_DECISION_COOKIE}=granted; ${TOUCH_COOKIES}`), user, method: 'otc' })
-    ).resolves.toEqual({ isSynthetic: false });
+    ).resolves.toEqual({ isSynthetic: false, isInternal: false });
   });
 
   it('keeps a persona synthetic when the write fails, so it is not sent as a real signup', async () => {
@@ -126,12 +131,51 @@ describe('recordSignupAcquisition', () => {
         user: { id: 'u3', username: 'persona-qa', email: 'qa@real.example' },
         method: 'otc',
       })
-    ).resolves.toEqual({ isSynthetic: true });
+    ).resolves.toEqual({ isSynthetic: true, isInternal: false });
     expect(mockUserUpdate).toHaveBeenCalledWith({ id: 'u3', isSynthetic: true });
+  });
+
+  it('flags a staff-domain account as internal even without consent', async () => {
+    const out = await recordSignupAcquisition({
+      req: reqWith(''),
+      user: { id: 'u4', username: 'carol', email: 'Carol@Staff.Example' },
+      method: 'google',
+    });
+    expect(out).toEqual({ isSynthetic: false, isInternal: true });
+    expect(mockUserUpdate).toHaveBeenCalledWith({ id: 'u4', isInternal: true });
+  });
+
+  it('leaves a lookalike domain, and every account when no staff domain is configured, unflagged', async () => {
+    const lookalike = await recordSignupAcquisition({
+      req: reqWith(''),
+      user: { id: 'u5', username: 'dave', email: 'dave@notstaff.example' },
+      method: 'otc',
+    });
+    vi.stubEnv('NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS', '');
+    const unconfigured = await recordSignupAcquisition({
+      req: reqWith(''),
+      user: { id: 'u6', username: 'erin', email: 'erin@staff.example' },
+      method: 'otc',
+    });
+    expect([lookalike.isInternal, unconfigured.isInternal]).toEqual([false, false]);
+    expect(mockUserUpdate).not.toHaveBeenCalled();
+  });
+
+  it('stores both flags for a persona on a staff domain, and keeps the internal flag through a failed write', async () => {
+    mockUserUpdate.mockRejectedValue(new Error('db down'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await expect(
+      recordSignupAcquisition({
+        req: reqWith(''),
+        user: { id: 'u7', username: 'persona-staff', email: 'p@staff.example' },
+        method: 'otc',
+      })
+    ).resolves.toEqual({ isSynthetic: true, isInternal: true });
+    expect(mockUserUpdate).toHaveBeenCalledWith({ id: 'u7', isSynthetic: true, isInternal: true });
   });
 });
 
-describe('recordSyntheticIdentity', () => {
+describe('recordAccountLane', () => {
   it.each([
     [{ id: 'u1', username: 'persona-admin', email: 'a@real.example' }, ''],
     [{ id: 'u2', username: 'admin-seeded', email: 'a@test.example' }, 'test.example'],
@@ -140,15 +184,15 @@ describe('recordSyntheticIdentity', () => {
     async (user, domains) => {
       mockGetSetting.mockResolvedValue(domains);
 
-      const isSynthetic = await recordSyntheticIdentity(user);
+      const lane = await recordAccountLane(user);
       await emitSignupFunnelEvents({
-        user: { ...user, isSynthetic },
+        user: { ...user, ...lane },
         method: 'admin',
         emailVerified: false,
         creditsGranted: 50,
       });
 
-      expect(isSynthetic).toBe(true);
+      expect(lane).toEqual({ isSynthetic: true, isInternal: false });
       expect(mockUserUpdate).toHaveBeenCalledWith({ id: user.id, isSynthetic: true });
       // Both marks travel: the lane says it is a persona, and the admin mark still keeps it out
       // of DAU until its own first request.
@@ -158,6 +202,40 @@ describe('recordSyntheticIdentity', () => {
       ]);
     }
   );
+
+  it.each([
+    ['a staff-domain account', { id: 'u3', username: 'staffer', email: 'a@staff.example' }],
+    ['an admin an admin created', { id: 'u4', username: 'boss', email: 'b@customer.example', isAdmin: true }],
+  ])('persists %s as internal and sends its funnel stages marked internal', async (_name, user) => {
+    const lane = await recordAccountLane(user);
+    await emitSignupFunnelEvents({
+      user: { ...user, ...lane },
+      method: 'admin',
+      emailVerified: false,
+      creditsGranted: 0,
+    });
+
+    expect(lane).toEqual({ isSynthetic: false, isInternal: true });
+    expect(mockUserUpdate).toHaveBeenCalledWith({ id: user.id, isInternal: true });
+    expect(mockEmit.mock.calls.map(([event]) => event.metadata)).toEqual([
+      { method: 'admin', userAction: false, internal: true },
+    ]);
+  });
+
+  it('writes nothing for a customer account and keeps the decision through a failed write', async () => {
+    expect(await recordAccountLane({ id: 'u5', username: 'cust', email: 'c@customer.example' })).toEqual({
+      isSynthetic: false,
+      isInternal: false,
+    });
+    expect(mockUserUpdate).not.toHaveBeenCalled();
+
+    mockUserUpdate.mockRejectedValue(new Error('db down'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await recordAccountLane({ id: 'u6', username: 'staff2', email: 's@staff.example' })).toEqual({
+      isSynthetic: false,
+      isInternal: true,
+    });
+  });
 });
 
 describe('emitFunnelEvent', () => {
@@ -192,6 +270,25 @@ describe('emitFunnelEvent', () => {
       metadata: { lane: 'real' },
     });
     expect(mockEmit.mock.calls[0][0].metadata).toEqual({ lane: 'synthetic' });
+  });
+
+  it.each([
+    ['isInternal', { isInternal: true }],
+    ['an admin', { isAdmin: true }],
+  ])("sends an internal account's stage (%s) marked internal", async (_name, flags) => {
+    await emitFunnelEvent({ user: { id: 'u1', ...flags }, event: 'signup_completed', metadata: { method: 'otc' } });
+    expect(mockEmit.mock.calls[0][0].metadata).toEqual({ method: 'otc', internal: true });
+  });
+
+  it('marks a synthetic internal account synthetic only, and lets no caller metadata unmark either', async () => {
+    await emitFunnelEvent({ user: { id: 'u1', isSynthetic: true, isInternal: true }, event: 'signup_completed' });
+    await emitFunnelEvent({
+      user: { id: 'u2', isInternal: true },
+      event: 'signup_completed',
+      metadata: { internal: false },
+    });
+    expect(mockEmit.mock.calls[0][0].metadata).toEqual({ lane: 'synthetic' });
+    expect(mockEmit.mock.calls[1][0].metadata).toEqual({ internal: true });
   });
 
   it("leaves a real user's stage unmarked, and sends no empty metadata", async () => {
@@ -364,6 +461,16 @@ describe('recordFirstValue', () => {
   it('skips a pre-launch user without checking the inviter reward', async () => {
     await recordFirstValue({ user: { id: 'u1', createdAt: new Date('2026-10-10T23:59:59Z') }, feature: 'chat', now });
     expect(mockRewardInviter).not.toHaveBeenCalled();
+  });
+
+  it("emits an internal account's first_value marked internal", async () => {
+    expect(await recordFirstValue({ user: { ...user, isInternal: true }, feature: 'chat', now })).toBe(true);
+    expect(mockEmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'first_value',
+        metadata: { feature: 'chat', secondsSinceSignup: 100, internal: true },
+      })
+    );
   });
 
   it('records the stage and emits first_value marked with the synthetic lane for a synthetic user', async () => {

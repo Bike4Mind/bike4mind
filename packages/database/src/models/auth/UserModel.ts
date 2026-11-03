@@ -1523,6 +1523,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // Written by userService.refreshRiskEvidence - see IUser.riskEvidence.
     riskEvidence: { type: RiskEvidenceSchema, required: false, default: undefined },
     isSynthetic: { type: Boolean, required: false },
+    // See IUser.isInternal. No default, like isSynthetic: absent reads as "not marked".
+    isInternal: { type: Boolean, required: false },
     firstValueAt: { type: Date, required: false },
   },
   {

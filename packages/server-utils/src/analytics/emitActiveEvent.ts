@@ -89,6 +89,10 @@ export interface EmitOptions {
   userType: 'subscriber' | 'free';
   /** A test persona or test-domain account: its event is stamped with the synthetic lane (lane.ts). */
   isSynthetic?: boolean;
+  /** `User.isInternal`: the team's own account, stamped `internal: true` unless synthetic (lane.ts). */
+  isInternal?: boolean;
+  /** An admin, which lane.ts also reads as internal. */
+  isAdmin?: boolean;
   referrer?: string;
   utm?: OverwatchUtm;
 }
@@ -104,9 +108,10 @@ export interface VisitEmitOptions {
 }
 
 /**
- * One event per active user per day: the signal DAU is counted from. A synthetic user's is marked
- * with the synthetic lane rather than dropped, so persona activity can be told apart from real
- * activity instead of being counted as one.
+ * The signal DAU is counted from: once per active user per day (per visit for a marked user, see
+ * analyticsMiddleware). A synthetic user's is marked with the synthetic lane and an internal
+ * account's with `internal: true` rather than dropped, so persona and staff activity can be told
+ * apart from customers' instead of being counted as theirs.
  */
 export async function emitActiveEvent(opts: EmitOptions): Promise<void> {
   return postEvent({
@@ -128,7 +133,9 @@ export async function emitActiveEvent(opts: EmitOptions): Promise<void> {
  * visit were stored as different kinds of record, and the funnel's first stage would go
  * back to counting two different things. It also means the acquisition stage carries the
  * least data that can answer it: an id this server minted, the referrer's origin, the landing
- * path and the campaign cookie - no user, no user type.
+ * path and the campaign cookie - no user, no user type, and no lane (lane.ts): nothing on this
+ * request says whose visit it is, so a lane would have to come from what the visitor sends. A
+ * marked user's visit is set apart downstream through their marked `active` under the same id.
  */
 export async function emitVisitEvent(opts: VisitEmitOptions): Promise<void> {
   return postEvent({

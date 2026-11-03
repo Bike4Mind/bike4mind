@@ -396,6 +396,7 @@ describe('[strategy]/callback - signup credited to the source product', () => {
       userId: 'u-new',
       touches: { lastTouch: { source: 'widgets', medium: 'landing' } },
       method: 'github',
+      account: { isSynthetic: false },
     });
     expect(res._getRedirectUrl()).toMatch(/isNewUser=1/);
     expect(res._getRedirectUrl()).toContain('firstSignupSession=1');
@@ -433,6 +434,18 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     expect(mockRefreshSignupRiskScore.mock.calls.map(([userId]) => userId)).toEqual(['u-new']);
     expect(mockRecordSignupNetwork.mock.invocationCallOrder[0]).toBeLessThan(
       mockRefreshSignupRiskScore.mock.invocationCallOrder[0]
+    );
+  });
+
+  it("passes an internal new account's flag to its funnel stages and its product credit", async () => {
+    mockRecordSignupAcquisition.mockResolvedValueOnce({ isSynthetic: false, isInternal: true });
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, { cookie: touchCookie });
+
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'u-new', isSynthetic: false, isInternal: true }) })
+    );
+    expect(mockEmitSignup).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u-new', account: { isSynthetic: false, isInternal: true } })
     );
   });
 
@@ -495,6 +508,7 @@ describe('[strategy]/callback - signup credited to the source product', () => {
       userId: 'u-new',
       touches: { lastTouch: { source: 'widgets', medium: 'landing' } },
       method: 'github',
+      account: { isSynthetic: false },
     });
   });
 
@@ -506,7 +520,12 @@ describe('[strategy]/callback - signup credited to the source product', () => {
       cookie: `${touch}; b4m_consent=denied; b4m-consent-decision=granted`,
     });
 
-    expect(mockEmitSignup).toHaveBeenCalledWith({ userId: 'u-new', touches: {}, method: 'github' });
+    expect(mockEmitSignup).toHaveBeenCalledWith({
+      userId: 'u-new',
+      touches: {},
+      method: 'github',
+      account: { isSynthetic: false },
+    });
   });
 
   // The gate fails closed, so each of these is a separate way of NOT saying granted. Absent is
@@ -524,7 +543,12 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     // way: with no touches there is no source product, so this stream sends nothing at all for
     // a suppressed visitor. The account is recorded in Mongo by the REGISTER log above, which
     // is a different system.
-    expect(mockEmitSignup).toHaveBeenCalledWith({ userId: 'u-new', touches: {}, method: 'github' });
+    expect(mockEmitSignup).toHaveBeenCalledWith({
+      userId: 'u-new',
+      touches: {},
+      method: 'github',
+      account: { isSynthetic: false },
+    });
   });
 });
 

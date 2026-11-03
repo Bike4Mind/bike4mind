@@ -211,6 +211,7 @@ const handler = baseApi({ auth: false })
             id: user.id,
             acquisition: signupFunnel.acquisition,
             isSynthetic: isSyntheticSignup,
+            isInternal: signupFunnel.isInternal,
           };
           await emitSignupFunnelEvents({
             user: funnelUser,
@@ -226,6 +227,7 @@ const handler = baseApi({ auth: false })
               userId: user.id,
               touches: readConsentedAcquisitionTouches(req),
               method: strategy,
+              account: signupFunnel,
             });
           }
         }

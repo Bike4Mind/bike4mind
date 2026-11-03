@@ -631,6 +631,7 @@ const handler = baseApi({ auth: false })
         userId: newUser.id,
         touches: readConsentedAcquisitionTouches(req),
         method: 'otc',
+        account: signupFunnel,
       });
     }
     const funnelUser = { id: newUser.id, ...signupFunnel };

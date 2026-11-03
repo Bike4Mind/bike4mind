@@ -478,6 +478,24 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     );
   });
 
+  it("passes an internal account's flags to the product credit, so the credit carries its mark", async () => {
+    mockRecordSignupAcquisition.mockResolvedValueOnce({ isSynthetic: false, isInternal: true });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    (req as any).headers.cookie = `${firstTouch}; b4m-consent-decision=granted`;
+
+    await handler(req, res);
+
+    expect(mockEmitSignup).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1', account: { isSynthetic: false, isInternal: true } })
+    );
+    expect(mockEmitFunnelEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'signup_completed',
+        user: expect.objectContaining({ id: 'user-1', isInternal: true }),
+      })
+    );
+  });
+
   it("credits the new account's signup to the product in its touch cookies, as an otc signup", async () => {
     const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
     (req as any).headers.cookie = `${firstTouch}; b4m-consent-decision=granted`;
@@ -489,6 +507,7 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
       userId: 'user-1',
       touches: { firstTouch: { source: 'widgets' } },
       method: 'otc',
+      account: { isSynthetic: false },
     });
   });
 
@@ -700,7 +719,12 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(mockEmitSignup).toHaveBeenCalledWith({ userId: 'user-1', touches: {}, method: 'otc' });
+    expect(mockEmitSignup).toHaveBeenCalledWith({
+      userId: 'user-1',
+      touches: {},
+      method: 'otc',
+      account: { isSynthetic: false },
+    });
   });
 
   // The case SameSite=Lax exists for, and the one the first version of this gate suppressed: a
@@ -718,6 +742,7 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
       userId: 'user-1',
       touches: { firstTouch: { source: 'widgets' } },
       method: 'otc',
+      account: { isSynthetic: false },
     });
   });
 
@@ -730,7 +755,12 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(mockEmitSignup).toHaveBeenCalledWith({ userId: 'user-1', touches: {}, method: 'otc' });
+    expect(mockEmitSignup).toHaveBeenCalledWith({
+      userId: 'user-1',
+      touches: {},
+      method: 'otc',
+      account: { isSynthetic: false },
+    });
   });
 
   // The guard is structural, not conditional: the emit sits after the existingUser branch has
