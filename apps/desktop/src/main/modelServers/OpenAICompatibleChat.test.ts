@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FetchLike } from '@bike4mind/local-models';
 import type { CompletionStreamEvent } from '../chat/streamEvents';
 import { ServerCredentialsError, ServerForbiddenError } from './errors';
@@ -79,6 +79,67 @@ describe('OpenAICompatibleChat', () => {
     const fetch: FetchLike = async () => sse([delta({ content: 'cut' }, 'length'), '[DONE]']);
     const events = await collect(chat(fetch), { model: MODEL, messages: [{ role: 'user', content: 'hi' }] });
     expect(events.at(-1)).toEqual({ type: 'content', stopReason: 'max_tokens' });
+  });
+
+  it("reports llama-server's timings as the rate", async () => {
+    const fetch: FetchLike = async () =>
+      sse([
+        delta({ content: 'Hi' }, 'stop'),
+        {
+          choices: [],
+          usage: { prompt_tokens: 12, completion_tokens: 3 },
+          timings: { prompt_n: 12, prompt_ms: 30, predicted_n: 3, predicted_ms: 120, draft_n: 4, draft_n_accepted: 2 },
+        },
+        '[DONE]',
+      ]);
+    const events = await collect(chat(fetch), { model: MODEL, messages: [{ role: 'user', content: 'hi' }] });
+    expect(events.at(-1)).toEqual({
+      type: 'content',
+      stopReason: 'stop',
+      usage: { inputTokens: 12, outputTokens: 3 },
+      rate: { evalTokens: 3, evalMs: 120, promptTokens: 12, promptMs: 30, draftTokens: 4, draftAccepted: 2 },
+    });
+  });
+
+  describe('without server timings', () => {
+    const frames = (...chunks: object[]) => {
+      const encoder = new TextEncoder();
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const chunk of [...chunks, '[DONE]'])
+            controller.enqueue(
+              encoder.encode(`data: ${typeof chunk === 'string' ? chunk : JSON.stringify(chunk)}\n\n`)
+            );
+          controller.close();
+        },
+      });
+      return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    };
+
+    afterEach(() => vi.restoreAllMocks());
+
+    it('estimates from the first streamed token to the last, and says so', async () => {
+      vi.spyOn(performance, 'now').mockReturnValueOnce(1000).mockReturnValueOnce(1500).mockReturnValue(3000);
+      const fetch: FetchLike = async () =>
+        frames(delta({ content: 'a' }), delta({ content: 'b' }), delta({ content: 'c' }, 'stop'), {
+          choices: [],
+          usage: { prompt_tokens: 5, completion_tokens: 41 },
+        });
+      const events = await collect(chat(fetch, null), { model: MODEL, messages: [{ role: 'user', content: 'hi' }] });
+      expect(events.at(-1)).toEqual({
+        type: 'content',
+        stopReason: 'stop',
+        usage: { inputTokens: 5, outputTokens: 41 },
+        rate: { evalTokens: 40, evalMs: 2000, estimated: true },
+      });
+    });
+
+    it('estimates nothing from a reply that arrived in one read', async () => {
+      const fetch: FetchLike = async () =>
+        sse([delta({ content: 'abc' }, 'stop'), { choices: [], usage: { completion_tokens: 30 } }, '[DONE]']);
+      const events = await collect(chat(fetch, null), { model: MODEL, messages: [{ role: 'user', content: 'hi' }] });
+      expect(events.at(-1)).toEqual({ type: 'content', stopReason: 'stop', usage: { outputTokens: 30 } });
+    });
   });
 
   it('fails a reply that ends without finishing, naming the server', async () => {

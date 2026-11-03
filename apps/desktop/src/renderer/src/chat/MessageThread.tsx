@@ -29,6 +29,7 @@ import { callsIn, roundsOf } from './replyRounds';
 import { skillChipColor, skillSourceLabel } from './skillMenu';
 import { useShowDollarCosts } from './costDisplay';
 import { describeReplyCost, formatCreditsSpent } from './statusLine';
+import { describeTokenRate, formatTokenRate, useShowTokenRate } from './tokenRate';
 import { clampWindow, extendWindow, initialWindow, WINDOW_STEP, type ThreadWindow } from './threadWindow';
 import { ToolCallList, type MoveCallToBackground, type RespondToApproval } from './ToolCallList';
 import { OrphanVideoJobs } from './VideoJobCard';
@@ -224,11 +225,17 @@ const REPLY_COST_CLASS = 'b4m-reply-cost';
  *
  * Nothing at all when the server reported no credits. Absent is not zero - a turn that failed,
  * and every reply stored before this was captured, would otherwise claim to have been free.
+ * A self-hosted model's reply shows its generation speed in the same place instead.
  */
 function ReplyCost({ usage }: { usage?: ChatUsage }) {
   const showDollars = useShowDollarCosts();
+  const showRate = useShowTokenRate();
   const credits = formatCreditsSpent(usage);
-  if (!credits) return null;
+  const rate = showRate ? formatTokenRate(usage?.rate) : null;
+  if (!credits && !rate) return null;
+  const details = [describeReplyCost(usage, showDollars), rate ? describeTokenRate(usage?.rate) : null].filter(
+    (line): line is string => line !== null
+  );
 
   return (
     <Typography
@@ -237,11 +244,13 @@ function ReplyCost({ usage }: { usage?: ChatUsage }) {
       className={REPLY_COST_CLASS}
       // Native, like the turn status line's own split: a Joy tooltip per reply would mount a
       // popper for every turn in the thread to serve the one the pointer is over.
-      title={describeReplyCost(usage, showDollars) ?? undefined}
+      title={details.length > 0 ? details.join('\n') : undefined}
       sx={{ position: 'absolute', top: '100%', right: 0, mt: 0.5, whiteSpace: 'nowrap' }}
       data-testid="chat-message-cost"
     >
       {credits}
+      {credits && rate && ' · '}
+      {rate && <span data-testid="chat-message-rate">{rate}</span>}
     </Typography>
   );
 }

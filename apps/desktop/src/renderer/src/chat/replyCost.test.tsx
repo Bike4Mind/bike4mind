@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import type { ChatMessage } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MessageThread } from './MessageThread';
+import { setShowTokenRate } from './tokenRate';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -71,6 +72,30 @@ describe('the cost on a reply', () => {
     ]);
 
     expect(costs()).toHaveLength(0);
+  });
+
+  describe('on a self-hosted model reply', () => {
+    const usage = { inputTokens: 300, outputTokens: 48, rate: { evalTokens: 48, evalMs: 2000, loadMs: 1200 } };
+
+    afterEach(() => act(() => setShowTokenRate(true)));
+
+    it('shows the generation rate where credits would be, with details in the title', () => {
+      render([message('m1', { usage })]);
+
+      const row = costs()[0];
+      expect(row?.textContent).toBe('24.0 tok/s');
+      expect(row?.querySelector('[data-testid="chat-message-rate"]')).not.toBeNull();
+      expect(row?.getAttribute('title')).toBe(
+        '300 new input, 48 output\nGeneration: 24.0 tok/s (48 tokens in 2.0s)\nLoad: 1.2s'
+      );
+    });
+
+    it('shows nothing when the setting is off', () => {
+      act(() => setShowTokenRate(false));
+      render([message('m1', { usage })]);
+
+      expect(costs()).toHaveLength(0);
+    });
   });
 
   it('leaves the user, relay and system turns alone', () => {

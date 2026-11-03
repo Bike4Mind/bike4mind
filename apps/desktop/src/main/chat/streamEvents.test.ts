@@ -64,4 +64,28 @@ describe('addUsage', () => {
       usdCost: 0.75,
     });
   });
+
+  it('sums a local server rate beside the token counts', () => {
+    expect(
+      addUsage(
+        { outputTokens: 10, rate: { evalTokens: 10, evalMs: 500 } },
+        { outputTokens: 30, rate: { evalTokens: 30, evalMs: 1500, loadMs: 200 } }
+      )
+    ).toEqual({ outputTokens: 40, rate: { evalTokens: 40, evalMs: 2000, loadMs: 200 } });
+  });
+});
+
+describe('the local rate on a frame', () => {
+  it('survives parsing and folds into the usage', () => {
+    const event = parseStreamEvent({
+      type: 'content',
+      stopReason: 'stop',
+      usage: { outputTokens: 12 },
+      rate: { evalTokens: 12, evalMs: 600, estimated: true },
+    })!;
+    expect(foldUsage(undefined, event)).toEqual({
+      outputTokens: 12,
+      rate: { evalTokens: 12, evalMs: 600, estimated: true },
+    });
+  });
 });

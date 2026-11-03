@@ -17,6 +17,7 @@ import {
   type TurnActivity,
   type TurnProgress,
 } from './statusLine';
+import { formatTokenRate, useShowTokenRate } from './tokenRate';
 
 const pulse = keyframes({
   '0%, 100%': { opacity: 0.3 },
@@ -89,6 +90,7 @@ function ActivityDetailView({
  */
 export function TurnStatus({ turn, activity }: { turn: TurnProgress | null; activity: TurnActivity }) {
   const showDollars = useShowDollarCosts();
+  const showRate = useShowTokenRate();
   const [now, setNow] = useState(() => Date.now());
   const [open, setOpen] = useState(false);
   const detailId = useId();
@@ -115,6 +117,7 @@ export function TurnStatus({ turn, activity }: { turn: TurnProgress | null; acti
   const expandable = hasActivityDetail(live);
   // The one place a detail is ever built, and only while it is on screen.
   const detail = open && expandable ? activityDetail(live) : null;
+  const rate = showRate ? formatTokenRate(turn.usage?.rate) : null;
 
   // One line at any width. It truncates rather than wrapping now that the whole of it is one
   // click away: a second line here pushes the composer down every time a tool reports progress.
@@ -128,7 +131,7 @@ export function TurnStatus({ turn, activity }: { turn: TurnProgress | null; acti
       sx={{ minWidth: 0, display: 'block' }}
       data-testid="chat-turn-status-text"
     >
-      {statusFields(turn, now, live.label, showDollars).join(' \u00b7 ')}
+      {statusFields(turn, now, live.label, showDollars, rate).join(' \u00b7 ')}
     </Typography>
   );
 
