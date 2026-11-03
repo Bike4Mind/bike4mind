@@ -219,7 +219,7 @@ const LAUNCHERS: readonly (readonly string[])[] = [
   ['poetry', 'run'],
 ];
 const INTERPRETER =
-  /^(sh|bash|zsh|dash|ksh|fish|source|\.|node|nodejs|bun|deno|tsx|ts-node|python[\d.]*|ruby|perl|php|lua|Rscript|pwsh|osascript|make)$/;
+  /^(sh|bash|zsh|dash|ksh|fish|source|\.|node|nodejs|bun|deno|tsx|ts-node|python[\d.]*|ruby|perl|php|lua|rscript|pwsh|osascript|make)$/;
 const SHELLS = /^(sh|bash|zsh|dash|ksh)$/;
 const CONFIGURED_RUNNERS = new Set(['vitest', 'jest', 'pytest', 'py.test']);
 const TEST_RUNNERS = new Set(['npm', 'pnpm', 'yarn', 'vitest', 'jest', 'pytest', 'py.test']);

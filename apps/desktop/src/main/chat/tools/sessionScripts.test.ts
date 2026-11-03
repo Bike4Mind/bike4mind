@@ -31,6 +31,7 @@ const WRITTEN = [
   'Taskfile.yml',
   'cfg/custom.config.ts',
   'plugins/myplug.py',
+  'a.R',
 ];
 
 describe('sessionScriptRun', () => {
@@ -77,6 +78,8 @@ describe('sessionScriptRun', () => {
     ['env A=1 python3 tools/go.py', 'tools/go.py'],
     ['cd tools && python go.py', 'go.py'],
     ['bash < setup.sh', 'setup.sh'],
+    ['Rscript a.R', 'a.R'],
+    ['cat a.R | Rscript -', 'a.R'],
     ['cat setup.sh | sh', 'setup.sh'],
     ['bash -lc "bash setup.sh"', 'setup.sh'],
     ['echo ok; (bash setup.sh)', 'setup.sh'],
