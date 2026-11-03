@@ -273,10 +273,8 @@ describe('a Windows program run from a WSL project', () => {
     ['notepad.exe C:notes.txt', ['C:\\']],
     ["notepad.exe '..\\..\\notes.txt'", ['\\\\wsl.localhost\\Ubuntu\\home']],
     ["cmd.exe /c type '\\\\fileserver\\share\\notes.txt'", ['\\\\fileserver\\share\\']],
-    [
-      'notepad.exe //fileserver/share/notes.txt',
-      ['\\\\wsl.localhost\\Ubuntu\\fileserver\\share', '\\\\fileserver\\share\\'],
-    ],
+    ['notepad.exe //fileserver/share/notes.txt', ['\\\\fileserver\\share\\']],
+    ['notepad.exe //wsl.localhost/Ubuntu/etc/hosts', ['\\\\wsl.localhost\\Ubuntu\\etc']],
     ['notepad.exe C\\:\\\\Users\\\\me\\\\notes.txt', ['C:\\Users\\me']],
     ['cmd.exe /c type "C:\\Users\\me\\notes.txt"', ['C:\\Users\\me']],
     ['cmd.exe /c type C:\\Users\\me\\notes.txt', ['C:\\']],

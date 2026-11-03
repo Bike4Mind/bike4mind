@@ -79,11 +79,12 @@ export type OperandReader = 'shell' | 'program' | 'windows';
 /**
  * The places `operand` names for a command whose folder is `cwd`, each a share path with any `..`
  * left for the distro to apply; the first is where bash lands. bash reads a share path as a Linux
- * name, while a Windows program reads it, and with `windows` any operand, as Windows does.
+ * name, while a Windows program reads it, and with `windows` any operand, as Windows does. A UNC
+ * operand of a Windows program has only that Windows reading.
  */
 export function wslOperandPlaces(cwd: WslLocation, operand: string, reader: OperandReader = 'program'): string[] {
   const linux = operand.startsWith('/') ? operand : `${cwd.linuxPath.replace(/\/$/, '')}/${operand}`;
-  const places = [wslUncPath(cwd, linux)];
+  const places = reader === 'windows' && /^[\\/]{2}/.test(operand) ? [] : [wslUncPath(cwd, linux)];
   if (reader === 'windows' || (reader === 'program' && parseWslPath(operand))) {
     // A drive-relative `C:x` is relative to a per-drive folder no part of this app can see; its drive root stands in.
     const windows = operand.replace(/^([A-Za-z]:)(?![\\/])/, '$1\\');

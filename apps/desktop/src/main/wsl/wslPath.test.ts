@@ -125,6 +125,12 @@ describe('mapping between Linux and Windows paths', () => {
     ]);
   });
 
+  it('reads a UNC operand of a Windows program only as the share it names', () => {
+    expect(wslOperandPlaces(location, '//fileserver/share/x', 'windows')).toEqual(['\\\\fileserver\\share\\x']);
+    expect(wslOperandPlaces(location, '\\\\fileserver\\share\\x', 'windows')).toEqual(['\\\\fileserver\\share\\x']);
+    expect(wslOperandPlaces(location, '//fileserver/share/x')).toEqual(['\\\\wsl$\\Ubuntu\\fileserver\\share\\x']);
+  });
+
   it('maps a folder argument in the same distro, and nothing else', () => {
     expect(toLinuxArgument(location, '\\\\wsl.localhost\\ubuntu\\home\\me\\repo\\.b4m\\worktrees\\x')).toBe(
       '/home/me/repo/.b4m/worktrees/x'
