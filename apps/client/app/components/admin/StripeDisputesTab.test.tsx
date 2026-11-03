@@ -159,6 +159,17 @@ describe('StripeDisputesTab', () => {
     expect(screen.queryByTestId(`stripe-dispute-resolve-btn-${USER_DISPUTE_ID}`)).toBeNull();
   });
 
+  it('offers Resolve on a user dispute only when Stripe closed it without a won or lost outcome', () => {
+    const closedUser = (id: string, stripeStatus: string) =>
+      containedUserDispute({ id, stripeStatus, state: 'open', resolution: null, contain: null });
+    m.useStripeDisputes.mockReturnValue(
+      queryResult(list({ data: [closedUser('1'.repeat(24), 'lost'), closedUser('2'.repeat(24), 'warning_closed')] }))
+    );
+    renderTab();
+    expect(screen.queryByTestId(`stripe-dispute-resolve-btn-${'1'.repeat(24)}`)).toBeNull();
+    expect(screen.getByTestId(`stripe-dispute-resolve-btn-${'2'.repeat(24)}`)).toBeTruthy();
+  });
+
   it('offers Undo contain only while the containment is not undone', () => {
     m.useStripeDisputes.mockReturnValue(
       queryResult(
@@ -228,7 +239,7 @@ describe('StripeDisputesTab', () => {
     const preview = within(dialog).getByTestId('stripe-dispute-undo-preview').textContent ?? '';
     expect(preview).toContain('unsuspended');
     expect(preview).toContain('400 credits');
-    expect(preview).toContain('2 API keys');
+    expect(preview).toContain('2 revoked API keys stay revoked');
     expect(dialog.textContent).toContain('remains blocked until the flag is cleared');
 
     fireEvent.click(within(dialog).getByTestId('stripe-dispute-undo-dialog-reason-input-preset-0'));
