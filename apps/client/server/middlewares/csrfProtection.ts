@@ -40,10 +40,12 @@ export const csrfProtection = (): RequestHandler => {
     }
 
     // CSRF defends ambient (cookie) credentials. A request authenticated solely by an
-    // explicit bearer header cannot be forged cross-site, so first-party native clients
-    // (bearer JWT, no cookie jar) skip the origin checks. Any session cookie on the
-    // request keeps the checks on, since the cookie could be what authenticates it.
-    if (hasBearerJwt(req) && !hasSessionCookie(req)) {
+    // explicit bearer header cannot be forged cross-site, so first-party token-authenticated
+    // clients (bearer JWT, no cookie jar) skip the origin checks. Any session cookie on the
+    // request keeps the checks on, since the cookie could be what authenticates it. The
+    // header alone proves nothing: req.user is set only after the JWT verified, so a forged
+    // header on a route without an auth chain (auth: false) stays subject to the checks.
+    if (req.user && hasBearerJwt(req) && !hasSessionCookie(req)) {
       return next();
     }
 
