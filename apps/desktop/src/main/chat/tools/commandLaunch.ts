@@ -14,11 +14,10 @@ export const SANDBOX_SHELL_COMMANDS = false;
 export const COMMAND_ENV = 'B4M_DESKTOP_COMMAND';
 
 /**
- * Git Bash's MSYS runtime re-parses the Windows command line, unescaping backslashes and globbing
- * unquoted words, so the command travels in the environment and the argv stays fixed. The
- * expansion happens before `eval` runs, so the variable is gone before the command starts.
+ * Git Bash's MSYS runtime re-parses the Windows command line, so the command travels in the environment and the
+ * argv stays fixed. Un-exported rather than unset, so `eval` gets the command text alone and errors quote it as written.
  */
-export const WINDOWS_COMMAND_ARGS: readonly string[] = ['-c', `eval "unset ${COMMAND_ENV}; $${COMMAND_ENV}"`];
+export const WINDOWS_COMMAND_ARGS: readonly string[] = ['-c', `export -n ${COMMAND_ENV}; eval "$${COMMAND_ENV}"`];
 
 export async function launchCommand(
   command: string,
