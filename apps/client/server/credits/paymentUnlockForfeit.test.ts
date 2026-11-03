@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   findByPaymentIntentId: vi.fn(),
   retrieveCharge: vi.fn(),
   alertFraudBlock: vi.fn(),
+  reopenSettledPaymentApproval: vi.fn(),
 }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
@@ -16,6 +17,9 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', () => ({ userService: { forfeitPaymentUnlock: mocks.forfeitPaymentUnlock } }));
 vi.mock('@server/auth/signupProtection', () => ({ signupProtection: {} }));
 vi.mock('@server/billing/fraudBlockAlert', () => ({ alertFraudBlock: mocks.alertFraudBlock }));
+vi.mock('@server/security/riskReviewAutoApproval', () => ({
+  reopenSettledPaymentApproval: mocks.reopenSettledPaymentApproval,
+}));
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   stripe: { charges: { retrieve: mocks.retrieveCharge } },
 }));
@@ -28,6 +32,7 @@ describe('payment unlock forfeit helpers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.forfeitPaymentUnlock.mockResolvedValue({ outcome: 'cancelled' });
+    mocks.reopenSettledPaymentApproval.mockResolvedValue(false);
     mocks.findByStripeCustomerId.mockImplementation(async id => (id === 'cus_1' ? { id: 'user_1' } : null));
   });
 
@@ -96,6 +101,21 @@ describe('payment unlock forfeit helpers', () => {
       userId: 'user_1',
       details: ['*Cause:* payment refund'],
     });
+  });
+
+  it('reopens a settled-payment risk review approval for the same payer and cause, even with no unlock held', async () => {
+    mocks.forfeitPaymentUnlock.mockResolvedValue({ outcome: 'not_enrolled' });
+    mocks.reopenSettledPaymentApproval.mockResolvedValue(true);
+    await forfeitHeldUnlockForRefund({ customer: 'cus_1' }, logger);
+    expect(mocks.reopenSettledPaymentApproval).toHaveBeenCalledExactlyOnceWith('user_1', 'refund');
+    expect(logger.info).toHaveBeenCalledWith('Settled-payment risk review approval reopened after a payment refund', {
+      userId: 'user_1',
+    });
+  });
+
+  it('propagates a failed reopen so the webhook is retried', async () => {
+    mocks.reopenSettledPaymentApproval.mockRejectedValueOnce(new Error('audit down'));
+    await expect(forfeitHeldUnlockForRefund({ customer: 'cus_1' }, logger)).rejects.toThrow('audit down');
   });
 
   it('propagates a failed forfeit so the webhook is retried', async () => {

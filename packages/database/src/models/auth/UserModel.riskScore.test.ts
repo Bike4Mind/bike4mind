@@ -228,7 +228,9 @@ describe('UserRepository.autoApproveRiskReview', () => {
 });
 
 describe('UserRepository.findPendingRiskReviewIds', () => {
-  it('returns unbanned pending accounts in id order, paging after the given id', async () => {
+  const now = new Date('2026-11-03T12:00:00Z');
+
+  it('returns unbanned pending accounts, least recently evaluated first, skipping those evaluated since the cutoff', async () => {
     const ids = [
       await createUser(undefined, 'pending'),
       await createUser(undefined, 'pending'),
@@ -238,10 +240,28 @@ describe('UserRepository.findPendingRiskReviewIds', () => {
     await User.collection.updateOne({ _id: new mongoose.Types.ObjectId(banned) }, { $set: { isBanned: true } });
     await createUser(undefined, 'approved');
 
-    const first = await userRepository.findPendingRiskReviewIds({ limit: 2 });
-    const second = await userRepository.findPendingRiskReviewIds({ afterId: first[1], limit: 2 });
+    const first = await userRepository.findPendingRiskReviewIds({ checkedBefore: now, limit: 2 });
+    await userRepository.markRiskReviewAutoChecked(first, now);
+    const second = await userRepository.findPendingRiskReviewIds({ checkedBefore: now, limit: 2 });
 
-    expect([...first, ...second]).toEqual(ids);
+    expect(first).toEqual(ids.slice(0, 2));
+    expect(second).toEqual(ids.slice(2));
+  });
+
+  it('rotates a run cap through the queue across runs', async () => {
+    const ids = [
+      await createUser(undefined, 'pending'),
+      await createUser(undefined, 'pending'),
+      await createUser(undefined, 'pending'),
+    ];
+    const run = async (at: Date) => {
+      const page = await userRepository.findPendingRiskReviewIds({ checkedBefore: at, limit: 2 });
+      await userRepository.markRiskReviewAutoChecked(page, at);
+      return page;
+    };
+
+    expect(await run(new Date('2026-11-03T10:00:00Z'))).toEqual(ids.slice(0, 2));
+    expect(await run(new Date('2026-11-03T11:00:00Z'))).toEqual([ids[2], ids[0]]);
   });
 
   it('leaves out accounts that cannot be approved automatically', async () => {
@@ -253,7 +273,9 @@ describe('UserRepository.findPendingRiskReviewIds', () => {
     await set(await createUser(undefined, 'pending'), { 'moderation.status': 'suspended' });
     await set(await createUser(undefined, 'pending'), { 'signupGrant.unlockForfeited': { at: new Date() } });
 
-    await expect(userRepository.findPendingRiskReviewIds({ limit: 10 })).resolves.toEqual([eligible]);
+    await expect(userRepository.findPendingRiskReviewIds({ checkedBefore: now, limit: 10 })).resolves.toEqual([
+      eligible,
+    ]);
   });
 });
 
@@ -280,5 +302,32 @@ describe('UserRepository.findRiskAutoApprovals', () => {
     await User.collection.updateOne({ _id: new mongoose.Types.ObjectId(id) }, { $set: { isBanned: true } });
 
     await expect(userRepository.findRiskAutoApprovals({ since: new Date(0), limit: 10 })).resolves.toEqual([]);
+  });
+});
+
+describe('UserRepository.reopenRiskAutoApproval', () => {
+  const approval = { policy: 'settled_payment' as const, decidedAt: new Date('2026-11-01T00:00:00Z') };
+
+  it('moves an automatic approval under the policy back to pending and hands it to admins', async () => {
+    const id = await createUser(undefined, 'pending');
+    await userRepository.autoApproveRiskReview(id, approval);
+
+    await expect(userRepository.reopenRiskAutoApproval(id, 'settled_payment')).resolves.toBe(true);
+    const user = await User.findById(id).lean();
+    expect(user?.riskScore?.reviewState).toBe('pending');
+    expect(user?.riskReviewAutoApproval).toBeUndefined();
+    expect(user?.riskReviewReopenedAt).toBeInstanceOf(Date);
+    await expect(userRepository.autoApproveRiskReview(id, approval)).resolves.toBe(false);
+  });
+
+  it('leaves an approval under another policy, or by an admin, alone', async () => {
+    const quiet = await createUser(undefined, 'pending');
+    await userRepository.autoApproveRiskReview(quiet, { ...approval, policy: 'quiet_account' });
+    const byAdmin = await createUser(undefined, 'approved');
+
+    await expect(userRepository.reopenRiskAutoApproval(quiet, 'settled_payment')).resolves.toBe(false);
+    await expect(userRepository.reopenRiskAutoApproval(byAdmin, 'settled_payment')).resolves.toBe(false);
+    expect((await User.findById(quiet).lean())?.riskScore?.reviewState).toBe('approved');
+    expect((await User.findById(byAdmin).lean())?.riskScore?.reviewState).toBe('approved');
   });
 });

@@ -27,6 +27,7 @@ import {
   SIGNUP_RISK_AUTO_APPROVAL_POLICIES,
   SIGNUP_RISK_REVIEW_STATES,
   SIGNUP_RISK_SIGNALS,
+  type SignupRiskAutoApprovalPolicy,
   type SignupRiskReviewState,
   UserModerationStatus,
   MFA_MAX_FAILED_ATTEMPTS,
@@ -1144,26 +1145,45 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return result.modifiedCount === 1;
   }
 
-  async findPendingRiskReviewIds(options: { afterId?: string; limit: number }): Promise<string[]> {
+  async findPendingRiskReviewIds(options: { checkedBefore: Date; limit: number }): Promise<string[]> {
     const rows = await this.model
       .find(
         {
           'riskScore.reviewState': 'pending',
-          // Accounts autoApproveRiskReview can never approve stay out, or they crowd newer ones out of a capped sweep.
+          // Accounts autoApproveRiskReview can never approve stay out, so they do not spend a capped sweep's budget.
           riskReviewReopenedAt: null,
           isBanned: { $ne: true },
           disputePending: { $ne: true },
           'moderation.status': { $ne: 'suspended' },
           'signupGrant.unlockForfeited': null,
-          ...(options.afterId ? { _id: { $gt: new mongoose.Types.ObjectId(options.afterId) } } : {}),
+          // $not also matches a review never evaluated (no field), which sorts first.
+          riskReviewAutoCheckedAt: { $not: { $gte: options.checkedBefore } },
         },
         { _id: 1 }
       )
-      .sort({ _id: 1 })
+      .sort({ riskReviewAutoCheckedAt: 1, _id: 1 })
       .limit(options.limit)
       .lean<{ _id: mongoose.Types.ObjectId }[]>()
       .exec();
     return rows.map(row => row._id.toString());
+  }
+
+  async markRiskReviewAutoChecked(userIds: string[], at: Date): Promise<void> {
+    if (!userIds.length) return;
+    await this.model.updateMany({ _id: { $in: userIds } }, { $set: { riskReviewAutoCheckedAt: at } }).exec();
+  }
+
+  async reopenRiskAutoApproval(userId: string, policy: SignupRiskAutoApprovalPolicy): Promise<boolean> {
+    const result = await this.model
+      .updateOne(
+        { _id: userId, 'riskScore.reviewState': 'approved', 'riskReviewAutoApproval.policy': policy },
+        {
+          $set: { 'riskScore.reviewState': 'pending', riskReviewReopenedAt: new Date() },
+          $unset: { riskReviewAutoApproval: 1 },
+        }
+      )
+      .exec();
+    return result.modifiedCount === 1;
   }
 
   async findRiskAutoApprovals(options: { since: Date; limit: number }): Promise<IUserDocument[]> {
@@ -1766,8 +1786,10 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
       required: false,
       default: undefined,
     },
-    // Written by setRiskReviewState on an admin reopen - see IUser.riskReviewReopenedAt.
+    // Written by setRiskReviewState on an admin reopen and by reopenRiskAutoApproval - see IUser.riskReviewReopenedAt.
     riskReviewReopenedAt: { type: Date, required: false, default: undefined },
+    // Written by markRiskReviewAutoChecked - see IUser.riskReviewAutoCheckedAt.
+    riskReviewAutoCheckedAt: { type: Date, required: false, default: undefined },
     // Written by userService.refreshRiskEvidence - see IUser.riskEvidence.
     riskEvidence: { type: RiskEvidenceSchema, required: false, default: undefined },
     isSynthetic: { type: Boolean, required: false },

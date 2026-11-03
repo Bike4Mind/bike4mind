@@ -848,8 +848,14 @@ export interface IUser extends ICreditHolder {
   /** Set when the pending review was approved automatically; any admin review decision clears it. */
   riskReviewAutoApproval?: ISignupRiskAutoApproval | null;
 
-  /** Set when an admin reopens a decided review; the automatic approval rules never act on it again. */
+  /**
+   * Set when a decided review is reopened, by an admin or by a payment reversal after a settled-payment
+   * approval; the automatic approval rules never act on it again.
+   */
   riskReviewReopenedAt?: Date | null;
+
+  /** Last time the auto-approval sweep evaluated this pending review; the sweep visits the oldest first. */
+  riskReviewAutoCheckedAt?: Date | null;
 
   /**
    * Behavioral evidence and its refresh state (b4m-core/common/src/schemas/riskEvidence.ts).
@@ -1115,8 +1121,18 @@ export interface IUserRepository
    * it, or the account is banned, disputed, suspended or has forfeited its payment unlock.
    */
   autoApproveRiskReview: (userId: string, approval: ISignupRiskAutoApproval) => Promise<boolean>;
-  /** Ids of unbanned users whose review is pending, in id order; pass the last id back as `afterId`. */
-  findPendingRiskReviewIds: (options: { afterId?: string; limit: number }) => Promise<string[]>;
+  /**
+   * Ids of pending reviews the auto-approval rules can still act on and that were not evaluated since
+   * `checkedBefore`, least recently evaluated first.
+   */
+  findPendingRiskReviewIds: (options: { checkedBefore: Date; limit: number }) => Promise<string[]>;
+  /** Stamp riskReviewAutoCheckedAt, so the next sweep page and run move on to other accounts. */
+  markRiskReviewAutoChecked: (userIds: string[], at: Date) => Promise<void>;
+  /**
+   * Move an automatic approval made under `policy` back to pending and stamp riskReviewReopenedAt;
+   * false when the account is no longer approved under that policy.
+   */
+  reopenRiskAutoApproval: (userId: string, policy: SignupRiskAutoApprovalPolicy) => Promise<boolean>;
   /** Users still approved by an automatic approval decided at or after `since`, newest first. */
   findRiskAutoApprovals: (options: { since: Date; limit: number }) => Promise<IUserDocument[]>;
   /**

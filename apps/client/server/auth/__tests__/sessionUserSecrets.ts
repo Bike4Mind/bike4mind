@@ -69,6 +69,7 @@ export function secretUserFields() {
     riskEvidence: { summary: { trigger: SECRET_VALUE }, refresh: { lastFailure: SECRET_VALUE } },
     riskReviewAutoApproval: { policy: 'settled_payment', decidedAt: new Date(0) },
     riskReviewReopenedAt: new Date(0),
+    riskReviewAutoCheckedAt: new Date(0),
     notInSchema: SECRET_VALUE,
   } satisfies Record<(typeof USER_SECRET_FIELDS)[number] | 'passwordHash' | 'notInSchema', unknown>;
 }

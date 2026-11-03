@@ -71,6 +71,7 @@ describe('resolveFieldLimits', () => {
       riskEvidence: false,
       riskReviewAutoApproval: false,
       riskReviewReopenedAt: false,
+      riskReviewAutoCheckedAt: false,
       throttle: false,
       riskSignals: false,
       signupLanding: false,

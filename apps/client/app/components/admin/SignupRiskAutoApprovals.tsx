@@ -25,7 +25,8 @@ export const SignupRiskAutoApprovals: React.FC<{
   const [reopening, setReopening] = useState<SignupRiskAutoApprovalRow | null>(null);
   const [reopenError, setReopenError] = useState<string | null>(null);
 
-  if (rows.length === 0) return null;
+  // An open dialog outlives its row, so the skipped-decision message stays readable after the refresh drops it.
+  if (rows.length === 0 && reopening === null) return null;
 
   const columns: readonly DataColumn<SignupRiskAutoApprovalRow>[] = [
     {

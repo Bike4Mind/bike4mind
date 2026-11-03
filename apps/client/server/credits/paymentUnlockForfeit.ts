@@ -9,11 +9,13 @@ import { userService } from '@bike4mind/services';
 import { signupProtection } from '@server/auth/signupProtection';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { alertFraudBlock } from '@server/billing/fraudBlockAlert';
+import { reopenSettledPaymentApproval } from '@server/security/riskReviewAutoApproval';
 
 type ForfeitLogger = { info: (message: string, meta?: Record<string, unknown>) => void };
 
 /**
- * Cancels the account's held payment signup unlock after a dispute, refund or early fraud warning.
+ * Cancels the account's held payment signup unlock after a dispute, refund or early fraud warning,
+ * and reopens a risk review approved on settled payment evidence (riskReviewAutoApproval.ts).
  * Throws on failure so the webhook is retried; a replay is a no-op.
  */
 export async function forfeitSignupUnlock(userId: string, cause: SignupUnlockForfeitCause, logger: ForfeitLogger) {
@@ -33,6 +35,9 @@ export async function forfeitSignupUnlock(userId: string, cause: SignupUnlockFor
       userId,
       details: [`*Cause:* payment ${cause.replace(/_/g, ' ')}`],
     });
+  }
+  if (await reopenSettledPaymentApproval(userId, cause)) {
+    logger.info(`Settled-payment risk review approval reopened after a payment ${cause}`, { userId });
   }
   return result;
 }

@@ -5590,7 +5590,8 @@ export const settingsMap = {
       'minAccountAgeDays old, scoring at most maxScore, not rescored for minQuietDays and named in no open ' +
       'shadow detection. Neither applies to a banned, suspended or disputed account, one whose payment unlock ' +
       'was forfeited, one with a signup tranche held for review, or one an admin reopened. Each approval is ' +
-      'audited and listed in Risk review, where it can be reopened. A stored value that fails to parse turns ' +
+      'audited and listed in Risk review, where it can be reopened; a refund, dispute or early fraud warning ' +
+      'reopens a settledPayment approval automatically. A stored value that fails to parse turns ' +
       'both rules off.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',

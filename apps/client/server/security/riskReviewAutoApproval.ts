@@ -3,6 +3,7 @@ import {
   type IUserDocument,
   type SignupRiskAutoApproval,
   type SignupRiskAutoApprovalPolicy,
+  type SignupUnlockForfeitCause,
 } from '@bike4mind/common';
 import {
   adminAuditLogRepository,
@@ -23,7 +24,8 @@ import { systemAuditActor } from '@server/utils/adminAudit';
  * to approved (which an admin can reopen from the Risk review tab, after which these rules leave the
  * account to admins); never moves anything into pending, and no model verdict is evidence here. Rules and defaults: SignupRiskAutoApprovalSchema.
  * Triggers: the Stripe webhook after a payment succeeds, and an hourly sweep for windows and the
- * quiet-account rule (apps/workers/src/cron/signupGrantHeldRelease.ts).
+ * quiet-account rule (apps/workers/src/cron/signupGrantHeldRelease.ts). A refund, dispute or early
+ * fraud warning reopens a settled-payment approval (paymentUnlockForfeit.ts).
  */
 
 const HOUR_MS = 60 * 60_000;
@@ -177,7 +179,10 @@ export async function autoApproveRiskReviewAfterPayment(userId: string, logger: 
 
 export type RiskReviewAutoApprovalSweepResult = { scanned: number; approved: number; failed: number };
 
-/** Walks the pending queue in id order, at most `maxUsers` per run. A per-user failure is counted, not thrown. */
+/**
+ * Evaluates at most `maxUsers` pending reviews per run, least recently evaluated first, so a run cap
+ * rotates through a queue larger than it. A per-user failure is counted, not thrown.
+ */
 export async function sweepRiskReviewAutoApprovals(
   logger: Pick<Logger, 'error'>,
   { maxUsers, pageSize = 100, now = new Date() }: { maxUsers: number; pageSize?: number; now?: Date }
@@ -185,10 +190,9 @@ export async function sweepRiskReviewAutoApprovals(
   const result: RiskReviewAutoApprovalSweepResult = { scanned: 0, approved: 0, failed: 0 };
   const rules = await loadRiskReviewAutoApprovalRules();
   if (!anyRuleEnabled(rules)) return result;
-  let afterId: string | undefined;
   while (result.scanned < maxUsers) {
     const ids = await userRepository.findPendingRiskReviewIds({
-      afterId,
+      checkedBefore: now,
       limit: Math.min(pageSize, maxUsers - result.scanned),
     });
     if (!ids.length) break;
@@ -205,7 +209,40 @@ export async function sweepRiskReviewAutoApprovals(
         });
       }
     }
-    afterId = ids[ids.length - 1];
+    await userRepository.markRiskReviewAutoChecked(ids, now);
   }
   return result;
+}
+
+/**
+ * Sends a settled-payment approval back to the review queue after a refund, dispute or early fraud
+ * warning on the account, with a strict system-attributed audit entry, and leaves it to admins from
+ * then on. Throws on failure so the webhook is retried; a replay is a no-op.
+ */
+export async function reopenSettledPaymentApproval(
+  userId: string,
+  cause: SignupUnlockForfeitCause,
+  now: Date = new Date()
+): Promise<boolean> {
+  const user = await userRepository.findById(userId);
+  if (user?.riskScore?.reviewState !== 'approved' || user.riskReviewAutoApproval?.policy !== 'settled_payment')
+    return false;
+  return withTransaction(async () => {
+    if (!(await userRepository.reopenRiskAutoApproval(userId, 'settled_payment'))) return false;
+    await adminAuditService.recordAdminAction(
+      {
+        action: 'user.signup_risk.reopened',
+        actor: systemAuditActor(AUDIT_ACTOR),
+        target: { kind: 'user', id: userId, displayName: user.email ?? user.username ?? userId },
+        summary: 'reopened an automatic signup approval',
+        reason: `Payment ${cause.replace(/_/g, ' ')} after an approval on settled payment evidence`,
+        context: { source: 'worker', route: 'stripe/webhook' },
+        changes: [{ field: 'riskScore.reviewState', before: 'approved', after: 'pending' }],
+        details: { policy: 'settled_payment', cause },
+        occurredAt: now,
+      },
+      { db: { adminAuditLog: adminAuditLogRepository } }
+    );
+    return true;
+  });
 }

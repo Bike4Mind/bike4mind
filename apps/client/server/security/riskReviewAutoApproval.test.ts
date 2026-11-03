@@ -5,6 +5,8 @@ const h = vi.hoisted(() => ({
   findById: vi.fn(),
   autoApprove: vi.fn(),
   pendingIds: vi.fn(),
+  markChecked: vi.fn(),
+  reopenAuto: vi.fn(),
   attempts: vi.fn(),
   radarBlocked: vi.fn(),
   accountsForCard: vi.fn(),
@@ -22,6 +24,8 @@ vi.mock('@bike4mind/database', () => ({
     findById: h.findById,
     autoApproveRiskReview: h.autoApprove,
     findPendingRiskReviewIds: h.pendingIds,
+    markRiskReviewAutoChecked: h.markChecked,
+    reopenRiskAutoApproval: h.reopenAuto,
   },
   paymentAttemptRepository: {
     findByUser: h.attempts,
@@ -51,6 +55,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
 import {
   autoApproveRiskReview,
   autoApproveRiskReviewAfterPayment,
+  reopenSettledPaymentApproval,
   sweepRiskReviewAutoApprovals,
 } from './riskReviewAutoApproval';
 
@@ -93,6 +98,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.findById.mockResolvedValue(pendingUser());
   h.autoApprove.mockResolvedValue(true);
+  h.reopenAuto.mockResolvedValue(true);
   h.attempts.mockResolvedValue([payment()]);
   h.radarBlocked.mockResolvedValue({ account: 0, network: null });
   h.accountsForCard.mockResolvedValue(1);
@@ -313,7 +319,7 @@ describe('autoApproveRiskReviewAfterPayment', () => {
 });
 
 describe('sweepRiskReviewAutoApprovals', () => {
-  it('walks the pending queue in pages and counts approvals and failures', async () => {
+  it('walks the least recently evaluated reviews in pages, stamps each page, and counts approvals and failures', async () => {
     const other = '2'.repeat(24);
     h.pendingIds.mockResolvedValueOnce([USER_ID, other]).mockResolvedValueOnce([]);
     h.findById.mockImplementation(async (id: string) => pendingUser({ id }));
@@ -325,7 +331,21 @@ describe('sweepRiskReviewAutoApprovals', () => {
     const result = await sweepRiskReviewAutoApprovals(logger, { maxUsers: 10, pageSize: 2, now: NOW });
 
     expect(result).toEqual({ scanned: 2, approved: 1, failed: 1 });
-    expect(h.pendingIds).toHaveBeenNthCalledWith(2, { afterId: other, limit: 2 });
+    expect(h.pendingIds.mock.calls).toEqual([[{ checkedBefore: NOW, limit: 2 }], [{ checkedBefore: NOW, limit: 2 }]]);
+    expect(h.markChecked).toHaveBeenCalledExactlyOnceWith([USER_ID, other], NOW);
+  });
+
+  it('stops at maxUsers', async () => {
+    h.pendingIds.mockImplementation(async ({ limit }: { limit: number }) =>
+      Array.from({ length: limit }, (_, i) => String(i).padStart(24, '0'))
+    );
+    h.findById.mockImplementation(async (id: string) => pendingUser({ id }));
+    h.attempts.mockResolvedValue([]);
+
+    const result = await sweepRiskReviewAutoApprovals(logger, { maxUsers: 5, pageSize: 2, now: NOW });
+
+    expect(result).toEqual({ scanned: 5, approved: 0, failed: 0 });
+    expect(h.pendingIds.mock.calls.map(([options]) => options.limit)).toEqual([2, 2, 1]);
   });
 
   it('turns both rules off when the stored setting no longer parses', async () => {
@@ -353,5 +373,57 @@ describe('sweepRiskReviewAutoApprovals', () => {
 
     expect(result).toEqual({ scanned: 0, approved: 0, failed: 0 });
     expect(h.pendingIds).not.toHaveBeenCalled();
+  });
+});
+
+describe('reopenSettledPaymentApproval', () => {
+  const approvedUser = (policy: string) =>
+    pendingUser({
+      riskScore: { ...pendingUser().riskScore, reviewState: 'approved' },
+      riskReviewAutoApproval: { policy, decidedAt: NOW },
+    });
+
+  it('reopens a settled-payment approval with a strict system audit entry', async () => {
+    h.findById.mockResolvedValue(approvedUser('settled_payment'));
+
+    await expect(reopenSettledPaymentApproval(USER_ID, 'refund', NOW)).resolves.toBe(true);
+
+    expect(h.reopenAuto).toHaveBeenCalledWith(USER_ID, 'settled_payment');
+    expect(h.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'user.signup_risk.reopened',
+        actor: expect.objectContaining({ kind: 'system', name: 'signup-risk-auto-approval' }),
+        changes: [{ field: 'riskScore.reviewState', before: 'approved', after: 'pending' }],
+        details: { policy: 'settled_payment', cause: 'refund' },
+      }),
+      expect.anything()
+    );
+  });
+
+  it.each([
+    ['a quiet-account approval', approvedUser('quiet_account')],
+    ['an admin approval', pendingUser({ riskScore: { ...pendingUser().riskScore, reviewState: 'approved' } })],
+    ['a pending review', pendingUser()],
+  ])('leaves %s alone', async (_label, user) => {
+    h.findById.mockResolvedValue(user);
+
+    await expect(reopenSettledPaymentApproval(USER_ID, 'dispute', NOW)).resolves.toBe(false);
+    expect(h.reopenAuto).not.toHaveBeenCalled();
+    expect(h.record).not.toHaveBeenCalled();
+  });
+
+  it('writes no audit entry when the approval already moved', async () => {
+    h.findById.mockResolvedValue(approvedUser('settled_payment'));
+    h.reopenAuto.mockResolvedValue(false);
+
+    await expect(reopenSettledPaymentApproval(USER_ID, 'fraud_warning', NOW)).resolves.toBe(false);
+    expect(h.record).not.toHaveBeenCalled();
+  });
+
+  it('propagates an audit failure so the webhook is retried', async () => {
+    h.findById.mockResolvedValue(approvedUser('settled_payment'));
+    h.record.mockRejectedValue(new Error('audit down'));
+
+    await expect(reopenSettledPaymentApproval(USER_ID, 'refund', NOW)).rejects.toThrow('audit down');
   });
 });
