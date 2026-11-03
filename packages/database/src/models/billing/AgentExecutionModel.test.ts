@@ -128,6 +128,20 @@ describe('AgentExecutionRepository', () => {
       expect(await agentExecutionRepository.sumLoopCreditsForUser('u1', since)).toBe(10);
       expect(await agentExecutionRepository.sumLoopCreditsForUser('u1', new Date(Date.now() + 60_000))).toBe(0);
     });
+
+    it('reserves an in-flight run at its credit cap when asked', async () => {
+      const since = new Date(Date.now() - 60_000);
+      const run = (overrides: Parameters<typeof makeBaseExecution>[0]) =>
+        agentExecutionRepository.create(makeBaseExecution({ userId: 'u1', loopId: 'loopA', ...overrides }));
+      await run({ status: 'running', totalCreditsUsed: 1, creditCap: 20 });
+      await run({ status: 'awaiting_subagent', totalCreditsUsed: 25, creditCap: 20 });
+      await run({ status: 'running', totalCreditsUsed: 2 });
+      await run({ status: 'completed', totalCreditsUsed: 3, creditCap: 20 });
+
+      expect(await agentExecutionRepository.sumLoopCreditsForUser('u1', since)).toBe(31);
+      // 20 (reserved) + 25 (over its cap) + 2 (uncapped) + 3 (finished, at what it spent)
+      expect(await agentExecutionRepository.sumLoopCreditsForUser('u1', since, true)).toBe(50);
+    });
   });
 
   describe('listRecentForLoop', () => {

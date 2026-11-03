@@ -436,6 +436,10 @@ const IterationStream: FC<IterationStreamProps> = ({
         >
           {execution.failureReason === 'tool_denied' ? (
             (execution.errorMessage ?? 'Execution stopped: a tool call was denied.')
+          ) : execution.failureReason === 'insufficient_credits' ? (
+            'Stopped: out of credits'
+          ) : execution.failureReason === 'credit_cap' ? (
+            "Stopped: reached this run's credit cap"
           ) : !execution.failureReason ? (
             execution.errorMessage
           ) : (

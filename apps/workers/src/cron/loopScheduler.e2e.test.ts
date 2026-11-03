@@ -1026,6 +1026,38 @@ describe('runLoopSchedulerTick - safety and pacing', () => {
     expect(h.startAgentExecution.mock.calls[0][0].creditCap).toBeCloseTo(100 * (13 / 24) - 50);
   });
 
+  it("reserves in-flight capped runs at their cap, so a third dispatch only gets what's left", async () => {
+    settings({ LoopsDailyCreditsPerUser: 100 });
+    for (const id of ['exec-a', 'exec-b']) {
+      await agentExecutionRepository.create({
+        userId: 'user-1',
+        sessionId: 'session-x',
+        questId: 'quest-x',
+        loopId: `loop-${id}`,
+        query: 'q',
+        model: 'claude-sonnet-5',
+        status: 'running',
+        approvedTools: [],
+        deniedTools: [],
+        iterationBilling: [],
+        totalCreditsUsed: 1,
+        creditCap: 20,
+        lambdaInvocationCount: 1,
+        childExecutionIds: [],
+        createdAt: NOW,
+      } as never);
+      executions[id] = { status: 'running', updatedAt: NOW };
+      await createLoop({ activeExecutionId: id, nextRunAt: new Date(NOW.getTime() + 3_600_000) });
+    }
+    await createLoop();
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    // At 12:00 the all-loops allowance is 100 * 13/24 = 54.17; the two runs in flight reserve 20 each.
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+    expect(h.startAgentExecution.mock.calls[0][0].creditCap).toBeCloseTo(100 * (13 / 24) - 40);
+  });
+
   it('starts an uncapped run when no budget is set', async () => {
     await createLoop();
     await runLoopSchedulerTick(NOW, logger);

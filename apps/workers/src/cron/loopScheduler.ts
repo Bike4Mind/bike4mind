@@ -484,7 +484,7 @@ async function admit(loop: ILoop, now: Date, logger: Logger): Promise<{ creditCa
 
   const userCap = (await userLoopsDailyCap(loop.userId)).effective;
   if (userCap) {
-    const spent = await agentExecutionRepository.sumLoopCreditsForUser(loop.userId, today);
+    const spent = await agentExecutionRepository.sumLoopCreditsForUser(loop.userId, today, true);
     const remaining = userCap - spent;
     if (remaining < (await budgetPrice())) {
       const paused = await loopRepository.pauseAllLiveForUser(loop.userId, {

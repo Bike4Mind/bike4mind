@@ -1214,12 +1214,22 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
 
   /**
    * Credits over all of a user's top-level loop runs created since `since`. Served by the
-   * { userId, createdAt } index.
+   * { userId, createdAt } index. `reserveInFlight` counts a run still in flight at its `creditCap` when
+   * that is higher, so parallel capped runs cannot each be admitted against the same remaining budget.
    */
-  async sumLoopCreditsForUser(userId: string, since: Date): Promise<number> {
+  async sumLoopCreditsForUser(userId: string, since: Date, reserveInFlight = false): Promise<number> {
+    const credits = reserveInFlight
+      ? {
+          $cond: [
+            { $in: ['$status', [...ACTIVE_AGENT_EXECUTION_STATUSES]] },
+            { $max: ['$totalCreditsUsed', '$creditCap'] },
+            '$totalCreditsUsed',
+          ],
+        }
+      : '$totalCreditsUsed';
     const [row] = await this.model.aggregate<{ credits: number }>([
       { $match: { userId, createdAt: { $gte: since }, loopId: { $exists: true }, parentExecutionId: null } },
-      { $group: { _id: null, credits: { $sum: '$totalCreditsUsed' } } },
+      { $group: { _id: null, credits: { $sum: credits } } },
     ]);
     return row?.credits ?? 0;
   }
