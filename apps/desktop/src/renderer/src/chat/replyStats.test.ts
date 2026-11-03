@@ -8,6 +8,7 @@ import {
   generationRate,
   liveReplyStats,
   replyStats,
+  speakReplyStats,
   thinkingShare,
   withPhase,
 } from './replyStats';
@@ -231,6 +232,14 @@ describe('replyStats', () => {
 
     expect(text?.split('\n')[0]).toBe('Thinking time: ~2.0s (estimated from the wait before the first output)');
     expect(describeReplyStats([])).toBeNull();
+  });
+
+  it('speaks the rows as one sentence, an estimate read as about', () => {
+    const rows = replyStats({ stats: { ...base, reasoningMs: 2000, derived: ['reasoningMs'] } });
+
+    expect(speakReplyStats(rows.slice(0, 2), '3 credits')).toBe(
+      'Thinking time about 2.0s, estimated from the wait before the first output; Total time 20.0s; Cost 3 credits.'
+    );
   });
 
   it('says what the total takes in when tools ran', () => {

@@ -231,6 +231,17 @@ export function describeReplyStats(rows: readonly ReplyStat[]): string | null {
     .join('\n');
 }
 
+/** The rows as one sentence for a screen reader, a leading ~ read as "about". */
+export function speakReplyStats(rows: readonly ReplyStat[], credits: string | null): string {
+  const parts = rows.map(row => {
+    const detail = statDetail(row);
+    const value = row.value.startsWith('~') ? `about ${row.value.slice(1)}` : row.value;
+    return `${REPLY_STAT_TEXT[row.id].label} ${value}${detail ? `, ${detail}` : ''}`;
+  });
+  if (credits) parts.push(`Cost ${credits}`);
+  return `${parts.join('; ')}.`;
+}
+
 /**
  * What a reply in flight has measured so far, in the shape a settled one stores, on top of
  * `earlier`: a continued reply's stats from the runs before this one. Only the thinking time and
