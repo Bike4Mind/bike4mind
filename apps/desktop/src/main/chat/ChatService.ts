@@ -3204,8 +3204,8 @@ export class ChatService {
             // An empty split is either a bare thinking marker or text the filter is holding
             // back as a possible partial marker; only the first is a thinking frame.
             const marker = !split.text && !split.reasoning && THINK_MARKER.test(event.text);
-            if (split.reasoning || marker) timer.reasoning(!!split.reasoning);
-            if (split.text) timer.text();
+            if (split.reasoning || marker) timer.reasoning(split.reasoning);
+            if (split.text.trim()) timer.text();
             probe?.frame(split.text ? 'text' : split.reasoning ? 'reasoning' : marker ? 'marker' : 'text');
             if (split.text) setPhase(RESPONDING);
             else if (split.reasoning || marker) setPhase(THINKING);
@@ -3262,7 +3262,7 @@ export class ChatService {
               controller.signal
             );
         const held = splitThinking.flush();
-        if (held.text) timer.text();
+        if (held.text.trim()) timer.text();
         append(held);
         const timing = timer.end();
         if (probe) this.logRoundPhases(sessionId, session.model, roundIndex, probe.end());
