@@ -741,6 +741,21 @@ describe('registerViaOTC', () => {
     });
   });
 
+  it('leaves the credits pending when the caller defers the release until its transaction commits', async () => {
+    const result = await registerViaOTC(otcParams, { ...mockAdapters, deferFreeCreditRelease: true });
+
+    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(result.emailVerified).toBe(true);
+    expect(result.tags).toEqual(expect.arrayContaining(['Customer', PENDING_FREE_CREDITS_TAG]));
+    expect(mockAdapters.db.users.update).toHaveBeenLastCalledWith({
+      id: 'newUserId',
+      emailVerified: true,
+      emailVerifiedAt: expect.any(Date),
+      tags: expect.arrayContaining(['Customer', PENDING_FREE_CREDITS_TAG]),
+      pendingCreditGrant: null,
+    });
+  });
+
   it('registers an alias of an already-granted inbox but grants it nothing', async () => {
     mockAdapters.db.users.claimFreeCreditGrant.mockResolvedValue(false);
 
