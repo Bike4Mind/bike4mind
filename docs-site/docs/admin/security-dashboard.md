@@ -1,142 +1,112 @@
 ---
 title: Security Dashboard
-description: Monitor your platform security posture across code, web, cloud, packages, and secrets scanning categories
+description: Check whether signups, spend, firewall traffic and payments look normal, then review firewall traffic and scan results
 sidebar_position: 28
 tags: [admin, security, dashboard, monitoring]
 ---
 
 # Security Dashboard
 
-The Security Dashboard provides a centralized view of your platform's security posture across multiple domains. It aggregates results from automated security scans covering website vulnerabilities, code analysis, dependency auditing, secrets detection, and cloud infrastructure configuration. The dashboard includes an AI-powered security assessment that generates prioritized recommendations.
+The Security Dashboard is the first place to look when something seems wrong with signups, spend or payments. It answers one question quickly: does the platform look normal right now? From there you can move to the queues where you act, to live firewall traffic, or to the results of the security scans.
 
-## Dashboard Layout
+You open it from **Security** in the admin sidebar. A help button in the page header opens this article.
 
-The Security Dashboard is accessed from the General Ops section of the admin sidebar. It renders inside a wrapper component (`SecurityDashboardMock`) that hosts the full React-based dashboard.
+## Views
 
-The dashboard uses a tabbed interface with the following sections:
+The dashboard has three views. The one you pick is kept in the page address, so a link you share or bookmark opens the same view.
 
-| Tab | Icon | Description |
-|-----|------|-------------|
-| **Overview** | Home | Aggregated security score, check summaries, and AI assessment |
-| **Website Security** | Lock | OWASP ZAP scan results for web vulnerabilities |
-| **Code Analysis** | Code | Semgrep static analysis findings |
-| **Packages** | Package | Dependency audit for known vulnerabilities |
-| **Secrets** | Key | Detection of exposed API keys, tokens, and passwords |
-| **Cloud** | Cloud | AWS IAM, S3, and infrastructure configuration checks |
-| **Firewall / WAF** | Shield | Web Application Firewall status (coming soon) |
+| View | What it shows |
+|------|---------------|
+| **Incident** | The default view: key numbers, the defenses in force, the review queues, alarms, payments and signups |
+| **Firewall** | Live web application firewall traffic, rule activity and blocked requests |
+| **Scans** | The latest result of each security scan, with a panel for each scan type |
 
-## Overview Tab
+## Incident view
 
-The Overview tab displays three main areas:
+### Time range and freshness
 
-### Security Score
+A range control at the top switches the numbers between the last hour, the last 24 hours (the default) and the last 7 days. The line next to it shows how old the data is, for example "As of 2 minutes ago". Hover over it to see the exact time in UTC. The view refreshes itself every minute.
 
-A large circular score indicator (out of 100) with a label based on the score range:
+If the last hour shows a signup or API key spike, a banner appears above the numbers. **Review cluster** opens the user list filtered to that hour and grouped by email domain.
 
-| Score Range | Label |
-|-------------|-------|
-| 85 and above | Excellent |
-| 70 to 84 | Good |
-| 50 to 69 | Moderate |
-| Below 50 | At Risk |
+### Key numbers
 
-Below the score, summary metadata is shown:
+Five numbers sit at the top. Each has a help button that explains what it counts.
 
-- **Last Updated** -- timestamp of the most recent scan data
-- **Security Checks** -- number of passed checks vs. total checks (e.g., "5/6 Passed")
-- **Next Scan** -- time until the next scheduled scan
+| Number | What it counts | Second line |
+|--------|----------------|-------------|
+| **Signups** | Successful signups counted by the hourly census | How many of them received the full signup grant |
+| **Young-account spend** | Spend by accounts younger than seven days, estimated from the price table | Notes that it is a ledger estimate |
+| **WAF blocked** | Requests the firewall blocked | The total number of requests in the range |
+| **Alarms firing** | Alarms that are currently in the ALARM state | The total number of alarms |
+| **Payments 24h** | Card payments started in the last 24 hours | How many Stripe Radar blocked and how many it rated elevated risk |
 
-### AI Security Assessment
+The newest hour of signups can lag by up to two hours, because the census counts completed hours.
 
-A gradient card powered by Bike4Mind AI that provides:
+### Cards
 
-- An overall summary of the security posture
-- Up to three prioritized recommendations, each with a title, priority level, rationale, and suggested action
-- Timestamps for when the AI assessment was last generated and when the next analysis is scheduled
+Below the numbers, cards sit in two columns, or one column on a narrow screen.
 
-### Category Cards
+| Card | What it shows |
+|------|---------------|
+| **Defenses** | Whether the signup challenge is on and fails closed, each firewall block list with its size and whether it blocks or only counts, the runtime blocker, today's signup grant budget, the new-account spend cap, and the payment risk settings |
+| **Queues** | The number of items waiting in **Risk review**, **Held signup grants** and **Signup domain holds**, each with an **Open** button that takes you to that admin page |
+| **Alarms** | Every alarm that is firing, newest first, with how long ago it started |
+| **Payments** | Attempts, successes, failures, Stripe Radar blocks, elevated risk, payments from hosting networks and distinct cards, for the last 24 hours and the last 7 days |
+| **More signals** | Signup code sends, API key creations, refused social sign-in signups and challenge setup errors over the selected range |
 
-A grid of cards, one per security check category, each displaying:
+A **Signups** chart under the cards shows signups over time, split into likely legitimate and suspected accounts, with a band for the typical range. When the range is the last hour, the chart shows the last 24 hours so you can see that hour in context.
 
-| Field | Description |
-|-------|-------------|
-| **Label** | The security check name |
-| **Status** | Color-coded chip -- Passed (green), Review recommended (yellow), Issues detected (red), or Disabled (neutral) |
-| **Score** | Numeric score for the category |
-| **Summary** | Brief text summary of the check result |
-| **Last Checked** | Timestamp of the most recent scan |
+### Reading the values
 
-## Website Security Tab
+- A zero, an empty list or a setting that is off is shown in a neutral tone. Red is reserved for something that is failing or blocked.
+- When a value cannot be read, you see a dash with a short reason under it. The rest of the page keeps working.
+- When a whole data source fails, the cards that depend on it show the error with a **Try again** button.
 
-Displays results from automated OWASP ZAP scans of the live website.
+## Firewall view
 
-- **Findings summary** with total count and breakdown by severity (Critical, High, Medium, Low)
-- **Visual bar indicators** showing the relative count of each severity level
-- **Detailed findings list** with color-coded severity borders, titles, and descriptions
-- **Run Website Scan** button to trigger a new scan (subject to cooldown period)
+The Firewall view shows live traffic handled by the web application firewall. It has its own range control, with preset ranges and a custom start and end time.
 
-## Code Analysis Tab
+- **Traffic overview** with allowed, blocked and counted requests
+- **Top rules** that matched requests
+- **Logs insights** summarizing recent firewall activity
+- **Blocked requests** listing recent requests the firewall rejected
 
-Shows results from Semgrep static analysis of the source code.
+The firewall data loads only while this view is open.
 
-- **Issue summary** displaying counts by severity level (Critical, High, Medium, Low)
-- **Findings list** with individual findings showing title, description, and severity indicators
-- **Run Code Scan** button to trigger a new analysis (subject to cooldown period)
+## Scans view
 
-## Packages Tab
+### Summary
 
-Audits third-party dependencies for known vulnerabilities.
+A table at the top lists each scan type: **Website**, **Cloud baseline**, **Prowler** and **Active defense**. Each row shows:
 
-- **Vulnerability count** with severity breakdown
-- **Detailed findings** including package name, version, vulnerable range, recommended version, and advisory links
-- **Run Packages Scan** button to trigger a new audit (subject to cooldown period)
+| Column | Description |
+|--------|-------------|
+| **Status** | The result of the latest run, or "Not run" if the scan has never run |
+| **Last run** | How long ago the latest run happened, with the exact UTC time on hover |
+| **Findings** | Open findings by severity, for example "2 high, 5 medium" |
+| **Next run** | When the next scheduled run starts, or "Manual" if the scan only runs when you start it |
 
-## Secrets Tab
+Select a row to open that scan's panel below the table. You can also switch panels with the control above them. The open panel is kept in the page address.
 
-Detects exposed API keys, tokens, passwords, and other secrets in repositories.
+### Scan panels
 
-- **Exposed secrets count** with severity breakdown
-- **Findings** showing secret type, file location (path and line number), and remediation recommendations
-- Secret values are never displayed in the dashboard
-- **Run Secrets Scan** button to trigger a new scan (subject to cooldown period)
+| Panel | What it does |
+|-------|--------------|
+| **Website** | Results of the automated website vulnerability scan, with a button to run it and a weekly schedule switch |
+| **Cloud baseline** | Baseline checks of the cloud account configuration, with a button to run them and a weekly schedule switch |
+| **Prowler** | Results of a deeper cloud account audit. Results arrive about ten minutes after you start a run |
+| **Active defense** | Live probes against the platform, the findings they reproduce, and the history of runs |
 
-## Cloud Tab
+### Scan cooldowns
 
-Performs baseline checks for IAM, S3, and other AWS services to detect risky configurations.
+After a scan runs, its button is disabled for a cooldown period. A message tells you how long remains before you can run it again. Turning a weekly schedule on or off takes effect right away.
 
-- **Cloud security posture score** (out of 100) with severity breakdown
-- **Findings** with descriptions, recommendations, and links to guidance documentation
-- **Run Cloud Scan** button to trigger a new scan (subject to cooldown period)
+## Best practices
 
-## Firewall / WAF Tab
-
-This tab is a placeholder. The WAF React view is noted as "coming soon" in the interface.
-
-## Scan Cooldowns
-
-Each scan category has a cooldown period after a scan is triggered. During the cooldown:
-
-- The scan button is disabled
-- A message indicates how many hours remain before another scan can be run
-
-## Severity Levels
-
-All scan categories use a consistent four-level severity classification:
-
-| Severity | Color | Description |
-|----------|-------|-------------|
-| **Critical** | Red (danger) | Immediate action required |
-| **High** | Dark yellow (warning) | Address as soon as possible |
-| **Medium** | Yellow (warning) | Should be reviewed |
-| **Low** | Green (success) | Informational or minor |
-
-## Best Practices
-
-- Review the Overview tab regularly to monitor your overall security score trend.
-- Act on AI recommendations in priority order for the highest security impact.
-- Address Critical and High severity findings before Medium and Low.
-- Run scans after significant deployments or dependency updates to catch new issues early.
-- Keep secrets scan results clean by rotating credentials flagged as exposed.
+- Start with the Incident view when something seems off, and compare the selected range with the 7 day view before you act.
+- Work the review queues from the **Queues** card rather than searching for each admin page.
+- Run the website and cloud scans after significant deployments to catch new issues early.
 
 ---
 

@@ -281,51 +281,11 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
-    "SECOPS_CODE_INGEST_TOKEN": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
-    "SECOPS_CODE_INGEST_URL": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
-    "SECOPS_PACKAGES_DISPATCH_TOKEN": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
-    "SECOPS_PACKAGES_INGEST_TOKEN": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
-    "SECOPS_PACKAGES_INGEST_URL": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
     "SECOPS_PROWLER_INGEST_TOKEN": {
       "type": "sst.sst.Secret"
       "value": string
     }
     "SECOPS_PROWLER_WORKFLOW_TOKEN": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
-    "SECOPS_SECRETS_DISPATCH_TOKEN": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
-    "SECOPS_SECRETS_INGEST_TOKEN": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
-    "SECOPS_SECRETS_INGEST_URL": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
-    "SECOPS_WAF_DISTRIBUTION_ID": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
-    "SECOPS_WAF_WEBACL_ARN": {
       "type": "sst.sst.Secret"
       "value": string
     }
