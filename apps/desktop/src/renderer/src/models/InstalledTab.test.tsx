@@ -76,3 +76,32 @@ describe('InstalledTab on a vLLM server', () => {
     expect(within(row('sql-lora'), 'models-installed-context')).toBe('4K context');
   });
 });
+
+describe('InstalledTab embedding-only rows', () => {
+  it('says why an embedding-only model has no Use in chat button, and leaves chat models alone', async () => {
+    const models: LocalModelEntry[] = [
+      { ...bare, name: 'qwen3-embedding:0.6b', capabilities: { ...bare.capabilities, embeddings: true } },
+      { ...bare, name: 'llama3', capabilities: { ...bare.capabilities, completion: true } },
+    ];
+    await act(async () =>
+      root.render(
+        <CssVarsProvider theme={desktopTheme}>
+          <InstalledTab
+            status={null}
+            target={{ id: 'local', name: 'This computer', local: true, management: 'unsupported' }}
+            installed={{ ok: true, models }}
+            chatOn={name => (name === 'llama3' ? () => {} : null)}
+            onRetry={() => {}}
+            onExplore={() => {}}
+          />
+        </CssVarsProvider>
+      )
+    );
+    const note = row('qwen3-embedding:0.6b')?.querySelector('[data-testid="models-installed-embedding-note"]');
+    expect(note?.textContent).toBe('Embedding model, not for chat');
+    expect(note?.getAttribute('aria-label')).toBe('Embedding model, not for chat');
+    expect(within(row('qwen3-embedding:0.6b'), 'models-installed-use-btn')).toBeNull();
+    expect(within(row('llama3'), 'models-installed-embedding-note')).toBeNull();
+    expect(within(row('llama3'), 'models-installed-use-btn')).toBe('Use in chat');
+  });
+});
