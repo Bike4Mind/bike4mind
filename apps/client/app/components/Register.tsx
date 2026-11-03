@@ -24,7 +24,7 @@ import { useNavigate, useRouter } from '@tanstack/react-router';
 import Link from '@mui/joy/Link';
 import Image from 'next/image';
 import GitHubIcon from '@mui/icons-material/GitHub';
-import AppleIcon from '@mui/icons-material/Apple';
+import AppleSignInButton from './AppleSignInButton';
 import OktaIcon from './svgs/flags/OktaIcon';
 import GoogleColorIcon from './svgs/flags/GoogleColorIcon';
 import ErrorAlert from './common/ErrorAlert';
@@ -506,34 +506,12 @@ const Register: React.FC = () => {
                   </Button>
                 </Box>
                 {publicConfig?.appleSignInEnabled && (
-                  <Button
-                    className="apple-login-button"
+                  <AppleSignInButton
                     data-testid="register-apple-btn"
-                    type="button"
-                    variant="solid"
-                    fullWidth
-                    sx={{
-                      mt: '8px',
-                      minHeight: '40px',
-                      borderRadius: '8px',
-                      gap: '.4rem',
-                      color: '#fff',
-                      backgroundColor: '#000',
-                      '&:hover': { backgroundColor: '#1a1a1a' },
-                      '[data-joy-color-scheme="dark"] &': {
-                        color: '#000',
-                        backgroundColor: '#fff',
-                        '&:hover': { backgroundColor: '#e6e6e6' },
-                      },
-                    }}
+                    label="Sign up with Apple"
                     disabled={isSendingOTC}
                     onClick={() => handleSocialLogin('apple')}
-                  >
-                    <AppleIcon sx={{ width: '18px', height: '18px' }} />
-                    <Typography sx={{ color: 'inherit', fontWeight: '500', fontSize: '14px' }}>
-                      Sign up with Apple
-                    </Typography>
-                  </Button>
+                  />
                 )}
                 <Divider sx={dividerStyles}>or</Divider>
               </Box>
