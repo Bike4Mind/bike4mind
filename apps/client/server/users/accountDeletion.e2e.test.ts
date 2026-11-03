@@ -72,6 +72,14 @@ async function seedAccount() {
     emailVerified: true,
     currentCredits: 0,
     tokenVersion: 3,
+    blogIntegration: { apiKey: 'blog-key', baseUrl: 'https://blog.example.test' },
+    slackSettings: {
+      slackUserId: 'U123',
+      slackTeamId: 'T123',
+      slackUserToken: 'xoxp-test',
+      slackUserScopes: ['reminders:write'],
+      notebookNamePrefix: 'Kept Prefix',
+    },
   });
   const userId = user.id as string;
   const future = new Date(Date.now() + 86_400_000);
@@ -130,6 +138,22 @@ describe('requestAccountDeletion', () => {
     expect(h.purgeArtifacts).toHaveBeenCalledWith(userId, { deletedBy: userId, logger });
     expect(h.withdrawListings).toHaveBeenCalledWith(userId);
     expect(h.sendEmail).toHaveBeenCalledWith(expect.stringContaining('@example.test'), user!.deletion.scheduledFor);
+  });
+
+  it('clears the blog key and the Slack identity and token but keeps Slack preferences', async () => {
+    const userId = await seedAccount();
+
+    await requestAccountDeletion(requestFor(userId));
+
+    const user = await User.findById(userId)
+      .select('+slackSettings.slackUserToken')
+      .lean<{ blogIntegration: unknown; slackSettings: Record<string, unknown> }>();
+    expect(user!.blogIntegration).toBeNull();
+    expect(user!.slackSettings.slackUserId).toBeUndefined();
+    expect(user!.slackSettings.slackTeamId).toBeUndefined();
+    expect(user!.slackSettings.slackUserToken).toBeUndefined();
+    expect(user!.slackSettings.slackUserScopes).toBeUndefined();
+    expect(user!.slackSettings.notebookNamePrefix).toBe('Kept Prefix');
   });
 
   it('refuses an organization owner with the organizations to transfer, and changes nothing', async () => {

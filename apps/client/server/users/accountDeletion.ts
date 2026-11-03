@@ -92,7 +92,16 @@ export async function requestAccountDeletion(req: DeletionRequest, now = new Dat
       integrationGrants = await readUserIntegrationGrants(userId);
       await User.updateOne(
         { _id: userId },
-        { $set: { googleDrive: null, atlassianConnect: null, notionConnect: null } }
+        {
+          $set: { googleDrive: null, atlassianConnect: null, notionConnect: null, blogIntegration: null },
+          $unset: {
+            'slackSettings.slackUserId': 1,
+            'slackSettings.slackTeamId': 1,
+            'slackSettings.slackUserToken': 1,
+            'slackSettings.slackUserScopes': 1,
+            'slackSettings.githubNotifications': 1,
+          },
+        }
       );
       await McpServer.deleteMany({ userId });
       await mcpConnectionRepository.deleteAllForUser(userId);
