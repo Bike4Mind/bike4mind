@@ -8,34 +8,40 @@ import { toast } from 'sonner';
 export const useVoiceSamplePlayer = () => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
+  // toggle reads this, not activeId, so two clicks before a re-render still see the latest voice.
+  const activeIdRef = useRef<string | null>(null);
+  const setActive = useCallback((id: string | null) => {
+    activeIdRef.current = id;
+    setActiveId(id);
+  }, []);
 
   const stop = useCallback(() => {
     audioRef.current?.pause();
     audioRef.current = null;
-    setActiveId(null);
-  }, []);
+    setActive(null);
+  }, [setActive]);
 
   useEffect(() => stop, [stop]);
 
   const toggle = useCallback(
     async (id: string, url: string) => {
-      const wasActive = activeId === id;
+      const wasActive = activeIdRef.current === id;
       stop();
       if (wasActive) return;
 
       const audio = new Audio(url);
       audioRef.current = audio;
-      setActiveId(id);
+      setActive(id);
 
       // A stale element's events must not clear the voice that replaced it.
       const fail = (message: string) => {
         if (audioRef.current !== audio) return;
         audioRef.current = null;
-        setActiveId(null);
+        setActive(null);
         toast.error(message);
       };
       audio.onended = () => {
-        if (audioRef.current === audio) setActiveId(null);
+        if (audioRef.current === audio) setActive(null);
       };
       audio.onerror = () => fail('Could not play the voice sample');
       try {
@@ -45,7 +51,7 @@ export const useVoiceSamplePlayer = () => {
         fail(blocked ? 'Your browser blocked audio playback' : 'Could not play the voice sample');
       }
     },
-    [activeId, stop]
+    [setActive, stop]
   );
 
   return { activeId, toggle, stop };
