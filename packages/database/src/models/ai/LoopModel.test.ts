@@ -192,11 +192,15 @@ describe('LoopRepository', () => {
     await loopRepository.makeDueNow(loop.id, now);
     await loopRepository.makeDueNow(unscheduled.id, now);
 
-    expect(await loopRepository.findById(loop.id)).toMatchObject({ nextRunAt: earlier, idleStreak: 0 });
+    expect(await loopRepository.findById(loop.id)).toMatchObject({
+      nextRunAt: earlier,
+      idleStreak: 0,
+      idleResetAt: now,
+    });
     expect(await loopRepository.findById(unscheduled.id)).toMatchObject({ nextRunAt: now, idleStreak: 0 });
   });
 
-  it('endBackoff only touches a loop backing off, and never pushes its next run later', async () => {
+  it('endBackoff only moves a loop backing off, and never pushes its next run later', async () => {
     const now = new Date();
     const far = new Date(now.getTime() + 8 * 3_600_000);
     const soon = new Date(now.getTime() + 15 * 60_000);
@@ -208,7 +212,10 @@ describe('LoopRepository', () => {
     expect(await loopRepository.findById(paused.id)).toMatchObject({ idleStreak: 2, nextRunAt: far });
     expect(await loopRepository.findById(backingOff.id)).toMatchObject({ idleStreak: 0, nextRunAt: soon });
     expect(await loopRepository.findById(dueSooner.id)).toMatchObject({ idleStreak: 0, nextRunAt: now });
-    expect((await loopRepository.findById(steady.id))?.nextRunAt).toEqual(far);
+    expect(await loopRepository.findById(steady.id)).toMatchObject({ idleStreak: 0, nextRunAt: far });
+    // Stamped on every live loop, so a run in flight is not folded as idle; never on the paused one.
+    expect((await loopRepository.findById(steady.id))?.idleResetAt).toBeInstanceOf(Date);
+    expect((await loopRepository.findById(paused.id))?.idleResetAt).toBeUndefined();
   });
 
   it('claimDue skips the users it is told to', async () => {

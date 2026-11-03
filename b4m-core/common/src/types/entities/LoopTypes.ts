@@ -94,6 +94,8 @@ export interface ILoop {
   consecutiveFailures: number;
   /** Idle runs in a row (no ticket, memory unchanged, no ticket touched); each doubles the wait before the next. */
   idleStreak?: number;
+  /** Last Run now, owner edit, directive or ticket change; a run in flight across it is not idle. */
+  idleResetAt?: Date;
   /** Ids of the same owner's loops this loop oversees: its runs may read their state and send them directives. */
   oversees?: string[];
 

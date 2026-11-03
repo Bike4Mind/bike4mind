@@ -241,6 +241,7 @@ async function reconcileLoop(loop: ILoop, now: Date): Promise<void> {
     // fold (to now, not completedAt, so a ticket change since the run ended is not overwritten below).
     const idle =
       !ticket &&
+      !(loop.idleResetAt && new Date(loop.idleResetAt) > new Date(execution.createdAt)) &&
       memory.notes === (loop.memory?.notes ?? '') &&
       memory.nextAction === (loop.memory?.nextAction ?? '') &&
       (await workItemRepository.countTouchedForLoop(loop.userId, loop.id, new Date(execution.createdAt), now)) === 0;
@@ -264,15 +265,19 @@ async function reconcileLoop(loop: ILoop, now: Date): Promise<void> {
     return;
   }
 
-  if (execution?.failureReason === 'credit_cap') {
+  if (execution?.failureReason === 'credit_cap' || execution?.failureReason === 'spend_cap') {
     // Not the ticket's fault either, and not a failure. Not made due now: the interval and the pacing defer
-    // decide the next run, or a paced cap would turn into a one-iteration run every tick.
+    // decide the next run, or a paced cap would turn into a one-iteration run every tick. A new account's
+    // spend cap is a rolling window, so the next run past it simply goes ahead.
     if (ticket) await workItemRepository.foldTicketRun(ticket.id, executionId, { status: 'open' }, true);
     const cap = Math.round((execution.creditCap ?? 0) * 100) / 100;
     await loopRepository.foldRun(loop.id, executionId, {
       $set: {
         lastRunAt: execution.completedAt ?? now,
-        statusReason: `Last run stopped at its credit cap (${cap} credits)`,
+        statusReason:
+          execution.failureReason === 'credit_cap'
+            ? `Last run stopped at its credit cap (${cap} credits)`
+            : "Last run stopped at the new account's spend cap",
       },
     });
     return;

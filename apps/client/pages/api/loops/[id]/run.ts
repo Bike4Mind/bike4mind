@@ -20,7 +20,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const updated = await loopRepository.updateForUser(
       id,
       req.user!.id,
-      { nextRunAt: new Date(), idleStreak: 0 },
+      { nextRunAt: new Date(), idleStreak: 0, idleResetAt: new Date() },
       'live'
     );
     if (!updated) throw new ConflictError('Only a live loop can be run; set it live first');

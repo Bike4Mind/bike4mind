@@ -443,7 +443,7 @@ export interface IAgentExecution {
    * Schema is untyped at the Mongoose level so future variants can be added
    * without a migration; the TS union is the source of truth.
    */
-  failureReason?: 'abandoned' | 'insufficient_credits' | 'credit_cap';
+  failureReason?: 'abandoned' | 'insufficient_credits' | 'credit_cap' | 'spend_cap';
 
   /**
    * Set when the abandoned-sweep's post-abandonment quest settlement fails for

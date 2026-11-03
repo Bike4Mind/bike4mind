@@ -73,7 +73,7 @@ export interface IterationCreditGateArgs {
 export interface IterationCreditGateDeps {
   markFailed(
     executionId: string,
-    error: { message: string; failureReason?: 'insufficient_credits' | 'credit_cap' }
+    error: { message: string; failureReason?: 'insufficient_credits' | 'credit_cap' | 'spend_cap' }
   ): Promise<void>;
   sendWs(action: string, payload: Record<string, unknown>): Promise<void>;
   persistRunAsQuest(executionId: string, message: string): Promise<void>;
@@ -108,7 +108,11 @@ export async function stopUnfundedIteration(
   const spendCapMessage = await args.checkSpendCap(nextIterationCredits(args.modelInfo, args.lastInputTokens));
   if (spendCapMessage === null) return false;
   // Not insufficient_credits: the payer has credits; the new account's spend cap stopped the run.
-  await stopRun(args, deps, { message: spendCapMessage, stopped: `Stopped: ${spendCapMessage}` });
+  await stopRun(args, deps, {
+    message: spendCapMessage,
+    failureReason: 'spend_cap',
+    stopped: `Stopped: ${spendCapMessage}`,
+  });
   return true;
 }
 
@@ -178,16 +182,13 @@ export async function stopCappedIteration(args: IterationCapGateArgs, deps: Iter
 async function stopRun(
   args: Pick<IterationCreditGateArgs, 'executionId' | 'snapshot'>,
   deps: IterationCreditGateDeps,
-  stop: { message: string; failureReason?: 'insufficient_credits' | 'credit_cap'; stopped: string }
+  stop: { message: string; failureReason: 'insufficient_credits' | 'credit_cap' | 'spend_cap'; stopped: string }
 ): Promise<void> {
   const { steps, partialAnswer } = args.snapshot();
-  await deps.markFailed(
-    args.executionId,
-    stop.failureReason ? { message: stop.message, failureReason: stop.failureReason } : { message: stop.message }
-  );
+  await deps.markFailed(args.executionId, { message: stop.message, failureReason: stop.failureReason });
   await deps.sendWs('failed', {
     executionId: args.executionId,
-    reason: stop.failureReason ?? 'insufficient_credits',
+    reason: stop.failureReason === 'credit_cap' ? 'credit_cap' : 'insufficient_credits',
     partialResult: steps,
   });
   await deps.persistRunAsQuest(

@@ -437,7 +437,12 @@ describe('POST /api/loops/:id/run', () => {
   it('makes a live loop due now', async () => {
     repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'live', stages: ['todo', 'done'] }));
     await call('run', 'post', { query: { id: OID } }).result;
-    expect(repo.updateForUser).toHaveBeenCalledWith(OID, 'u1', { nextRunAt: expect.any(Date), idleStreak: 0 }, 'live');
+    expect(repo.updateForUser).toHaveBeenCalledWith(
+      OID,
+      'u1',
+      { nextRunAt: expect.any(Date), idleStreak: 0, idleResetAt: expect.any(Date) },
+      'live'
+    );
   });
 
   it('is a 409 when the loop stopped being live mid-request', async () => {
@@ -471,6 +476,8 @@ describe('PATCH /api/loops/:id idle back-off', () => {
     repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'live' }));
     await call('item', 'patch', { query: { id: OID }, body: { name: 'Renamed' } }).result;
     expect(repo.updateForUser.mock.calls[0][2]).not.toHaveProperty('idleStreak');
+    // Still stamped, so a run in flight across the edit is not folded as idle.
+    expect(repo.updateForUser.mock.calls[0][2]).toHaveProperty('idleResetAt', expect.any(Date));
   });
 });
 

@@ -443,7 +443,7 @@ const IterationStream: FC<IterationStreamProps> = ({
             'Stopped: out of credits'
           ) : execution.failureReason === 'credit_cap' ? (
             "Stopped: reached this run's credit cap"
-          ) : !execution.failureReason ? (
+          ) : !execution.failureReason || execution.failureReason === 'spend_cap' ? (
             execution.errorMessage
           ) : (
             <>

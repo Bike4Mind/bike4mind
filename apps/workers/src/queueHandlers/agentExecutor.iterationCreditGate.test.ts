@@ -115,7 +115,7 @@ describe('stopUnfundedIteration', () => {
     ).resolves.toBe(true);
 
     expect(checkSpendCap).toHaveBeenCalledWith(required(5_000));
-    expect(deps.markFailed).toHaveBeenCalledWith('exec-1', { message: capMessage });
+    expect(deps.markFailed).toHaveBeenCalledWith('exec-1', { message: capMessage, failureReason: 'spend_cap' });
     expect(deps.sendWs).toHaveBeenCalledWith('failed', {
       executionId: 'exec-1',
       reason: 'insufficient_credits',
