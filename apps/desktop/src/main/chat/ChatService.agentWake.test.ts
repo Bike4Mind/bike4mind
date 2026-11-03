@@ -5,6 +5,7 @@ import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatMessage, ChatSessionSummary } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AGENT_WAKES_PAUSED_NOTICE, type AgentWakeLedger, MAX_AGENT_WAKES_PER_PARENT } from './agentWake';
 import { ChatService } from './ChatService';
 import { MessageQueue } from './MessageQueue';
 import { SessionStore } from './SessionStore';
@@ -230,6 +231,63 @@ describe('ChatService waking an Orchestrate parent', () => {
     await settleTime();
     expect(await wakes(parent.id)).toHaveLength(0);
     expect(streamIndexesOf('go')).toHaveLength(2);
+  });
+
+  it('drops the news the user already answered, so their turn is not followed by a second one', async () => {
+    const parent = await idleParentWithAgents(2);
+    reply(await nthStreamOf('task a-0', 1), 'did a-0');
+    await vi.waitUntil(async () => (await reports(parent.id, 'a-0')).length === 1, WAIT);
+
+    await service.send(parent.id, 'how is it going?');
+    reply(await nthStreamOf('go', 3), 'a-0 is done, a-1 is still running.');
+    await idle(parent.id);
+    await settleTime();
+    expect(await wakes(parent.id)).toHaveLength(0);
+
+    reply(await nthStreamOf('task a-1', 1), 'did a-1');
+    const [wake] = await vi.waitUntil(async () => {
+      const found = await wakes(parent.id);
+      return found.length > 0 ? found : undefined;
+    }, WAIT);
+    expect(wake.content).toContain('"a-1"');
+    expect(wake.content).not.toContain('"a-0"');
+  });
+
+  it('says in the thread, once, that the cap paused the wakes, and starts no turn', async () => {
+    const parent = await idleParentWithAgents(1);
+    const ledger = (service as unknown as { agentWakes: AgentWakeLedger }).agentWakes;
+    for (let wake = 0; wake < MAX_AGENT_WAKES_PER_PARENT; wake++) {
+      ledger.record(parent.id, { sessionId: 'earlier', title: 'earlier', outcome: 'finished', lastReply: null });
+      const claim = ledger.claim(parent.id);
+      ledger.finish(parent.id, true, claim.ok ? claim.agents : []);
+    }
+
+    reply(await nthStreamOf('task a-0', 1), 'did a-0');
+    const notices = await vi.waitUntil(async () => {
+      const found = (await messagesOf(parent.id)).filter(message => message.content === AGENT_WAKES_PAUSED_NOTICE);
+      return found.length > 0 ? found : undefined;
+    }, WAIT);
+    expect(notices).toHaveLength(1);
+    expect(notices[0].system).toBe(true);
+    await settleTime();
+    expect(await wakes(parent.id)).toHaveLength(0);
+    expect(streamIndexesOf('go')).toHaveLength(2);
+  });
+
+  it('collects nothing for a parent while Orchestrate is off, to wake it for later', async () => {
+    const parent = await idleParentWithAgents(2);
+    await service.setSessionOrchestrate(parent.id, false);
+    reply(await nthStreamOf('task a-0', 1), 'did a-0');
+    await vi.waitUntil(async () => (await reports(parent.id, 'a-0')).length === 1, WAIT);
+
+    await service.setSessionOrchestrate(parent.id, true);
+    reply(await nthStreamOf('task a-1', 1), 'did a-1');
+    const [wake] = await vi.waitUntil(async () => {
+      const found = await wakes(parent.id);
+      return found.length > 0 ? found : undefined;
+    }, WAIT);
+    expect(wake.content).toContain('"a-1"');
+    expect(wake.content).not.toContain('"a-0"');
   });
 
   it('does not wake a parent without Orchestrate', async () => {

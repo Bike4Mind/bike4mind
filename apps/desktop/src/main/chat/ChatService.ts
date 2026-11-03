@@ -122,12 +122,20 @@ import {
   sweepSafeOrphans,
   prefetchBase,
   resolveWorkspace,
+  releaseBranchName,
   type SpareWorktrees,
   unusedBranchName,
   type WorkspaceOutcome,
 } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
-import { AgentWakeLedger, agentsSettledNotice, agentsSettledSummary, lastReplySnippet } from './agentWake';
+import {
+  AGENT_WAKES_PAUSED_NOTICE,
+  AgentWakeLedger,
+  agentsSettledNotice,
+  agentsSettledSummary,
+  lastReplySnippet,
+  type SettledAgent,
+} from './agentWake';
 import type { AttachmentStore } from './AttachmentStore';
 import type { SidebarSectionStore } from './SidebarSectionStore';
 import { childOutcomeDisplay, classifyChildOutcome } from './childOutcome';
@@ -2140,7 +2148,8 @@ export class ChatService {
     if (!released?.relay && !released?.automatic && seedHops === undefined) {
       this.attendedTurns.add(sessionId);
       this.wake?.attended(sessionId);
-      // The user typing here is what lifts a hold their stop put on agent wakes.
+      // The user typing here lifts a hold their stop put on agent wakes, restarts the wake cap,
+      // and answers any batch waiting: its reports are already in the transcript this turn reads.
       this.agentWakes.release(sessionId);
     } else {
       this.attendedTurns.delete(sessionId);
@@ -4658,9 +4667,15 @@ export class ChatService {
     placement: SpawnPlacement,
     onFailed?: (message: string) => Promise<void>
   ): Promise<SpawnOutcome> {
-    return this.withWorkspaceBindings(() =>
+    const outcome = await this.withWorkspaceBindings(() =>
       this.spawnSessionWithWorkspaceLease(parent, prompt, title, placement, onFailed)
     );
+    // A delegated name is reserved when picked (unusedBranchName); one that never reaches a cut
+    // gives it back here, and one that does is released by resolveWorkspace or launchSpawned.
+    if (!outcome.ok && placement.kind === 'worktree' && parent.project) {
+      releaseBranchName(parent.project.directory, placement.branch);
+    }
+    return outcome;
   }
 
   private async spawnSessionWithWorkspaceLease(
@@ -4819,6 +4834,7 @@ export class ChatService {
         this.deps.logger.warn(`CHAT: could not clean up ${child.id}: ${err instanceof Error ? err.message : err}`);
       });
     } finally {
+      if (worktree) releaseBranchName(projectDirectory, worktree.branch);
       this.launching.delete(child.id);
       this.deps.activity?.preparingEnded(child.id);
       if (!failure) this.flushQueue(child.id);
@@ -4899,7 +4915,12 @@ export class ChatService {
         display: `The session "${child.title}" could not start and ${outcome}. ${reason}`,
       });
       // The parent was told this agent started, so its failure counts as one of the batch.
-      this.agentWakes.record(parentId, { sessionId: child.id, title: child.title, outcome: 'failed', lastReply: null });
+      await this.recordAgentSettled(parentId, {
+        sessionId: child.id,
+        title: child.title,
+        outcome: 'failed',
+        lastReply: null,
+      });
     } finally {
       this.abandoning.delete(child.id);
     }
@@ -5008,7 +5029,7 @@ export class ChatService {
         display: childOutcomeDisplay(child),
       });
       const last = [...child.messages].reverse().find(message => message.role === 'assistant');
-      this.agentWakes.record(parentId, {
+      await this.recordAgentSettled(parentId, {
         sessionId,
         title: child.title,
         outcome: classifyChildOutcome(child),
@@ -5030,19 +5051,16 @@ export class ChatService {
    * caps wakes per parent, and a parent the user stopped is held until they type there again.
    */
   private async wakeParentForAgents(parentId: string): Promise<void> {
-    if (!this.agentWakes.hasPending(parentId) || this.hasTurnInFlight(parentId)) return;
-    if ((this.deps.queue?.list(parentId).length ?? 0) > 0) return;
+    if (!this.agentWakes.hasPending(parentId) || this.parentBusy(parentId) || this.agentRunningNow(parentId)) return;
     if (await this.agentStillRunning(parentId)) return;
     const parent = await this.deps.store.get(parentId);
     if (!parent || parent.archived || !orchestratesAgents(parent)) return;
-    // Re-read after the awaits: a turn that started in the gap ends by calling this again.
-    if (this.hasTurnInFlight(parentId) || (this.deps.queue?.list(parentId).length ?? 0) > 0) return;
+    // Re-read after the awaits: a turn or an agent that started in the gap calls this again.
+    if (this.parentBusy(parentId) || this.agentRunningNow(parentId)) return;
 
     const claim = this.agentWakes.claim(parentId);
     if (!claim.ok) {
-      if (claim.reason === 'cap') {
-        this.deps.logger.warn(`CHAT: not waking ${parentId} for its agents: too many automatic wakes`);
-      }
+      if (claim.reason === 'cap' && claim.announce) await this.announceAgentWakesPaused(parentId);
       return;
     }
     let started = false;
@@ -5059,14 +5077,45 @@ export class ChatService {
     }
   }
 
-  /** Whether any agent this parent started is still working, waiting on approval or has input waiting. */
-  private async agentStillRunning(parentId: string): Promise<boolean> {
+  /** Into the ledger only for an Orchestrate parent: no other parent is ever woken, so none collects a batch. */
+  private async recordAgentSettled(parentId: string, agent: SettledAgent): Promise<void> {
+    const parent = await this.deps.store.get(parentId);
+    if (parent && orchestratesAgents(parent)) this.agentWakes.record(parentId, agent);
+  }
+
+  /** Tell the user, once, that the wake cap has paused automatic turns until they reply. */
+  private async announceAgentWakesPaused(parentId: string): Promise<void> {
+    this.deps.logger.warn(`CHAT: not waking ${parentId} for its agents: too many automatic wakes`);
+    const message: ChatMessage = {
+      id: randomUUID(),
+      role: 'user',
+      content: AGENT_WAKES_PAUSED_NOTICE,
+      display: AGENT_WAKES_PAUSED_NOTICE,
+      createdAt: new Date().toISOString(),
+      system: true,
+    };
+    if (await this.deps.store.appendMessage(parentId, message))
+      this.emit({ type: 'message', sessionId: parentId, message });
+  }
+
+  private parentBusy(parentId: string): boolean {
+    return this.hasTurnInFlight(parentId) || (this.deps.queue?.list(parentId).length ?? 0) > 0;
+  }
+
+  /** The synchronous half of agentStillRunning: agents with a watched turn, or a report not yet recorded. */
+  private agentRunningNow(parentId: string): boolean {
     for (const watch of this.spawnWatch.values()) {
       if (watch.parentSessionId === parentId) return true;
     }
     for (const entry of this.agentsSettling.values()) {
       if (entry.parentId === parentId) return true;
     }
+    return false;
+  }
+
+  /** Whether any agent this parent started is still working, waiting on approval or has input waiting. */
+  private async agentStillRunning(parentId: string): Promise<boolean> {
+    if (this.agentRunningNow(parentId)) return true;
     const sessions = await this.deps.store.list();
     return sessions.some(
       entry =>
