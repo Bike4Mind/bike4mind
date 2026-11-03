@@ -22,6 +22,7 @@ import {
   ABUSE_ASSESSMENT_POLICY_VERSION,
   ABUSE_ASSESSMENT_SKIP_REASONS,
   RISK_EVIDENCE_VERSION,
+  SELF_ASSESSED_SHADOW_DETECTORS,
   abuseAssessmentGroupEvidenceSchema,
   type AbuseAssessmentConfig,
   type AbuseAssessmentFailureCode,
@@ -266,6 +267,7 @@ export async function assessShadowDetection({
     const model = await callableModel(resolved, logger);
     const detection = await shadowDetectionRepository.findById(detectionId);
     if (!detection) throw new AssessmentSkipped('detection_not_found');
+    if (SELF_ASSESSED_SHADOW_DETECTORS.includes(detection.detector)) throw new AssessmentSkipped('self_assessed');
 
     const summary = await summarizeDetection(detection, logger, deps);
     const hash = evidenceHash(summary);
@@ -361,7 +363,9 @@ export async function sweepAbuseAssessments({
   const { config } = settings;
   const since = new Date(now.getTime() - config.sweepLookbackHours * 60 * 60 * 1000);
   const candidates = (
-    await shadowDetectionRepository.listUnreviewedSince(since, config.maxAssessmentsPerSweep * 10)
+    await shadowDetectionRepository.listUnreviewedSince(since, config.maxAssessmentsPerSweep * 10, {
+      excludeDetectors: SELF_ASSESSED_SHADOW_DETECTORS,
+    })
   ).filter(detection => rolloutBucket(detection.id) < config.sweepRolloutPercent);
 
   const tally = { considered: 0, assessed: 0, cached: 0, errors: 0, skipped: {} as Record<string, number> };

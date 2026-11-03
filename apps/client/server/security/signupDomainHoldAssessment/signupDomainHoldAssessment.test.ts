@@ -81,10 +81,24 @@ type Store = Map<string, SignupDomainReview>;
  * Only the three writes the feature is allowed; any other repository method (or a status other than
  * `blocked`) fails the test, so a release path cannot exist unnoticed.
  */
+type PendingQuery = Parameters<SignupDomainHoldAssessmentDeps['holds']['listPendingForAssessment']>;
+
 const makeHolds = (store: Store): SignupDomainHoldAssessmentDeps['holds'] => {
   const allowed = {
-    listPendingForAssessment: vi.fn(async (prefix: string) =>
-      [...store.values()].filter(review => review.status === 'held_pending_review' && review.reason.startsWith(prefix))
+    // Applies the eligibility arguments the way the repository query does, so a wrong one shows.
+    listPendingForAssessment: vi.fn(
+      async (...[prefix, { policyVersion, maxAttempts, retryBefore }, limit]: PendingQuery) =>
+        [...store.values()]
+          .filter(review => review.status === 'held_pending_review' && review.reason.startsWith(prefix))
+          .filter(
+            ({ assessment }) =>
+              !assessment ||
+              assessment.policyVersion !== policyVersion ||
+              (assessment.outcome === 'failed' &&
+                assessment.attempts < maxAttempts &&
+                assessment.assessedAt <= retryBefore)
+          )
+          .slice(0, limit)
     ),
     recordAssessment: vi.fn(async (domain: string, assessment: SignupDomainHoldAssessment) => {
       const review = store.get(domain);
@@ -153,14 +167,25 @@ const makeDeps = (store: Store, overrides: Partial<SignupDomainHoldAssessmentDep
 
 const storeWith = (...reviews: SignupDomainReview[]): Store => new Map(reviews.map(review => [review.domain, review]));
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+// Fixed-window counters keyed like the cache, shared by the platform call cap and the per-domain cap.
+const counters = new Map<string, number>();
+const countCalls = async (key: string, limit: number) => {
+  const count = (counters.get(key) ?? 0) + 1;
+  if (count > limit) return { success: false, count: limit, expiresAt: new Date() };
+  counters.set(key, count);
+  return { success: true, count, expiresAt: new Date() };
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
+  counters.clear();
   settings = {
     enabled: true,
     config: SignupDomainHoldAssessmentConfigSchema.parse({ model: 'gpt-6-luna', dailyBudgetUsd: 1 }),
   };
   mocks.platformKey.mockResolvedValue('platform-key');
-  mocks.callCap.mockResolvedValue({ success: true, count: 1, expiresAt: new Date() });
+  mocks.callCap.mockImplementation(countCalls);
   mocks.spend.mockResolvedValue({ success: true, count: 1, expiresAt: new Date() });
   mocks.claimDedup.mockResolvedValue({ claimed: true });
   mocks.acquireLease.mockResolvedValue(true);
@@ -196,6 +221,23 @@ describe('runSignupDomainHoldAssessments', () => {
     expect(mocks.providerDecide.mock.calls[0][1]).toMatchObject({ apiKey: 'platform-key' });
   });
 
+  it('confirms at exactly the minimum confidence', async () => {
+    settings = {
+      enabled: true,
+      config: SignupDomainHoldAssessmentConfigSchema.parse({
+        model: 'gpt-6-luna',
+        dailyBudgetUsd: 1,
+        minConfirmConfidence: 0.625,
+      }),
+    };
+    // (3 * 0.75 - 1) / 2 = 0.625, exact in binary floating point.
+    mocks.providerDecide.mockResolvedValue(answer('abuse', 0.75));
+    const store = storeWith(hold());
+
+    expect(await runSignupDomainHoldAssessments(makeDeps(store))).toMatchObject({ confirmed: 1 });
+    expect(store.get('fresh.example')).toMatchObject({ status: 'blocked', assessment: { confidence: 0.625 } });
+  });
+
   it('rolls the confirm back when its audit entry fails', async () => {
     const store = storeWith(hold());
     const deps = makeDeps(store, { recordAudit: vi.fn().mockRejectedValue(new Error('audit down')) });
@@ -211,6 +253,7 @@ describe('runSignupDomainHoldAssessments', () => {
       () => mocks.providerDecide.mockResolvedValue(answer('insufficient_evidence', 0.97)),
       'insufficient_evidence',
     ],
+    // Confidence 0.85, below the 0.9 default.
     ['low-confidence abuse', () => mocks.providerDecide.mockResolvedValue(answer('abuse', 0.9)), 'abuse'],
   ])('leaves the hold pending on a %s verdict and stores it', async (_name, arrange, judgment) => {
     arrange();
@@ -259,6 +302,92 @@ describe('runSignupDomainHoldAssessments', () => {
     expect(deps.recordShadowDetection).not.toHaveBeenCalled();
   });
 
+  it('caps provider calls per domain even when every result rolls back unrecorded', async () => {
+    const store = storeWith(hold());
+    const deps = makeDeps(store, { recordAudit: vi.fn().mockRejectedValue(new Error('audit down')) });
+
+    for (let run = 0; run < 3; run += 1) {
+      expect(await runSignupDomainHoldAssessments(deps)).toMatchObject({ errors: 1 });
+    }
+    expect(await runSignupDomainHoldAssessments(deps)).toMatchObject({
+      status: 'ran',
+      errors: 0,
+      skipped: { domain_attempts_exhausted: 1 },
+    });
+
+    expect(mocks.providerDecide).toHaveBeenCalledTimes(3);
+    expect(mocks.callCap).toHaveBeenCalledWith('signupDomainHoldAssessment:domainCalls:fresh.example', 3, DAY_MS);
+    expect(store.get('fresh.example')?.assessment).toBeUndefined();
+  });
+
+  it.each([
+    [
+      'provider_overloaded',
+      () => mocks.providerDecide.mockRejectedValue(new DecisionProviderError('overloaded', 'busy', { status: 503 })),
+    ],
+    // The run starts with a key; it is gone by the time the call resolves one.
+    ['provider_not_configured', () => mocks.platformKey.mockResolvedValueOnce('platform-key').mockResolvedValue(null)],
+  ])('treats %s as run-level: stores nothing and stops the run', async (reason, arrange) => {
+    arrange();
+    const store = storeWith(hold(), hold({ domain: 'second.example' }));
+    const deps = makeDeps(store);
+
+    expect(await runSignupDomainHoldAssessments(deps)).toMatchObject({
+      status: 'stopped',
+      considered: 1,
+      failed: 0,
+      skipped: { [reason]: 1 },
+    });
+    expect([...store.values()].every(review => review.assessment === undefined)).toBe(true);
+    expect(deps.probeSite).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips a hold whose summary outlasts the timeout, without a call, and carries on', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const store = storeWith(
+        hold({ triggeredAt: new Date('2026-11-01T09:00:00Z') }),
+        hold({ domain: 'second.example' })
+      );
+      const deps = makeDeps(store, {
+        probeSite: vi.fn(async (domain: string) =>
+          domain === 'fresh.example' ? new Promise<never>(() => {}) : { resolves: true, hasContent: false }
+        ),
+      });
+
+      const running = runSignupDomainHoldAssessments(deps);
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      expect(await running).toMatchObject({
+        status: 'ran',
+        considered: 2,
+        confirmed: 1,
+        skipped: { summary_timeout: 1 },
+      });
+      expect(mocks.providerDecide).toHaveBeenCalledTimes(1);
+      expect(store.get('fresh.example')?.assessment).toBeUndefined();
+      expect(store.get('second.example')?.status).toBe('blocked');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['in_flight', () => mocks.claimDedup.mockResolvedValueOnce({ claimed: false })],
+    ['busy', () => mocks.acquireLease.mockResolvedValueOnce(false)],
+  ])('skips a hold on %s and carries on with the next', async (reason, arrange) => {
+    arrange();
+    const store = storeWith(hold(), hold({ domain: 'second.example' }));
+
+    expect(await runSignupDomainHoldAssessments(makeDeps(store))).toMatchObject({
+      status: 'ran',
+      considered: 2,
+      confirmed: 1,
+      skipped: { [reason]: 1 },
+    });
+    expect(mocks.providerDecide).toHaveBeenCalledTimes(1);
+  });
+
   it('counts attempts across failed retries of the same policy version', async () => {
     mocks.providerDecide.mockResolvedValue({ ...answer('abuse', 0.97), answers: [{ type: 'refusal' }] });
     const previous: SignupDomainHoldAssessment = {
@@ -305,15 +434,27 @@ describe('runSignupDomainHoldAssessments', () => {
     expect(store.get('fresh.example')?.assessment).toBeUndefined();
   });
 
-  it('stops the run when the platform budget is spent, storing nothing', async () => {
-    mocks.spend.mockResolvedValue({ success: false, count: 0, expiresAt: new Date() });
+  it.each([
+    ['budget_exhausted', () => mocks.spend.mockResolvedValue({ success: false, count: 0, expiresAt: new Date() })],
+    [
+      'call_cap_reached',
+      () =>
+        mocks.callCap.mockImplementation(async (key: string, limit: number) =>
+          key === 'signupDomainHoldAssessment:calls'
+            ? { success: false, count: limit, expiresAt: new Date() }
+            : countCalls(key, limit)
+        ),
+    ],
+  ])('stops the run on %s after at most one site probe, storing nothing', async (reason, arrange) => {
+    arrange();
     const store = storeWith(hold(), hold({ domain: 'second.example' }));
     const deps = makeDeps(store);
     expect(await runSignupDomainHoldAssessments(deps)).toMatchObject({
       status: 'stopped',
       considered: 1,
-      skipped: { budget_exhausted: 1 },
+      skipped: { [reason]: 1 },
     });
+    expect(deps.probeSite).toHaveBeenCalledTimes(1);
     expect(mocks.providerDecide).not.toHaveBeenCalled();
     expect([...store.values()].every(review => review.assessment === undefined)).toBe(true);
   });
@@ -361,7 +502,11 @@ describe('runSignupDomainHoldAssessments', () => {
     );
     const deps = makeDeps(store);
     expect(await runSignupDomainHoldAssessments(deps)).toMatchObject({ status: 'ran', considered: 0 });
-    expect(vi.mocked(deps.holds.listPendingForAssessment).mock.calls[0][0]).toBe('young-domain');
+    expect(deps.holds.listPendingForAssessment).toHaveBeenCalledWith(
+      'young-domain',
+      { policyVersion: 1, maxAttempts: 3, retryBefore: new Date(NOW.getTime() - 60 * 60 * 1000) },
+      20
+    );
     expect(mocks.providerDecide).not.toHaveBeenCalled();
   });
 

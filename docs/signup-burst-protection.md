@@ -88,8 +88,11 @@ timing, and how many distinct networks, ASNs and countries the accounts came fro
 text reaches the model. It only ever confirms: an `abuse` verdict at or above `minConfirmConfidence` (default 0.9)
 confirms the hold exactly like the rule (strict system audit entry, "Auto-confirmed by the advisory assessment").
 Every other outcome, including refusals and provider failures, leaves the hold pending with the verdict shown on the
-row; failures retry up to three times, an hour apart. Each judged hold is also recorded on the Detections page under
-the `signupDomainHold` detector so verdicts can be graded. Calls use the platform key under their own budget, call cap
+row; failures retry up to three times, an hour apart, and a domain gets at most three provider calls a day whatever was
+stored. An overloaded or unconfigured provider, a spent budget or a reached call cap ends the run without storing
+anything; a hold whose facts take over 20 seconds to gather is skipped for that run. Each judged hold is also recorded
+on the Detections page under the `signupDomainHold` detector so verdicts can be graded; verdicts that would not have
+confirmed are listed there but left out of precision, and the abuse assessment never re-judges them. Calls use the platform key under their own budget, call cap
 and concurrency (**Model and Limits**: no model and a zero budget by default, so nothing is called until an operator
 sets both). Admin Confirm and Release keep the stored verdict as history.
 

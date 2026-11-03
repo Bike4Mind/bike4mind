@@ -161,6 +161,7 @@ describe('shadowDetectionRepository', () => {
         detector: 'signupNetworkBurst',
         policyVersion: 2,
         recorded: 1,
+        noAction: 0,
         confirmedAbuse: 0,
         legitimateHuman: 0,
         legitimateAutomation: 0,
@@ -170,12 +171,62 @@ describe('shadowDetectionRepository', () => {
         detector: 'signupNetworkBurst',
         policyVersion: 1,
         recorded: 3,
+        noAction: 0,
         confirmedAbuse: 1,
         legitimateHuman: 1,
         legitimateAutomation: 0,
         insufficientEvidence: 0,
       },
     ]);
+  });
+
+  it('counts would-not-act records as recorded but keeps their verdicts out of precision', async () => {
+    const [acted, notActed] = await Promise.all([
+      shadowDetectionRepository.record(detection({ detector: 'signupDomainHold', wouldAction: 'confirmHold' })),
+      shadowDetectionRepository.record(detection({ detector: 'signupDomainHold', wouldAction: 'none' })),
+      shadowDetectionRepository.record(detection({ detector: 'signupDomainHold', wouldAction: 'none' })),
+    ]);
+    await grade(acted, 0, 'confirmed_abuse');
+    await grade(notActed, 0, 'legitimate_human');
+
+    await expect(shadowDetectionRepository.summarize()).resolves.toEqual([
+      {
+        detector: 'signupDomainHold',
+        policyVersion: 1,
+        recorded: 3,
+        noAction: 2,
+        confirmedAbuse: 1,
+        legitimateHuman: 0,
+        legitimateAutomation: 0,
+        insufficientEvidence: 0,
+      },
+    ]);
+    const listed = await shadowDetectionRepository.list({ detector: 'signupDomainHold', limit: 10 });
+    expect(listed.data).toHaveLength(3);
+  });
+
+  it('excludes detectors in the unreviewed query so they never take a slot from the limit', async () => {
+    const since = new Date('2026-09-01T00:00:00Z');
+    const older = await shadowDetectionRepository.record(detection({ detectedAt: new Date('2026-10-01T00:00:00Z') }));
+    await Promise.all(
+      [2, 3, 4].map(day =>
+        shadowDetectionRepository.record(
+          detection({
+            detector: 'signupDomainHold',
+            wouldAction: 'none',
+            detectedAt: new Date(`2026-10-0${day}T00:00:00Z`),
+          })
+        )
+      )
+    );
+
+    const unfiltered = await shadowDetectionRepository.listUnreviewedSince(since, 1);
+    expect(unfiltered[0]?.detector).toBe('signupDomainHold');
+
+    const filtered = await shadowDetectionRepository.listUnreviewedSince(since, 1, {
+      excludeDetectors: ['signupDomainHold'],
+    });
+    expect(filtered.map(item => item.id)).toEqual([older]);
   });
 
   it('declares the retention TTL on detectedAt', async () => {

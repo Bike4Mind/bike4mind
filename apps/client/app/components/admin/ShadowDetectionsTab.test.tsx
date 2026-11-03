@@ -80,6 +80,7 @@ const summaryRow = (over: Partial<ShadowDetectionSummaryRow> = {}): ShadowDetect
   detector: 'signupNetworkBurst',
   policyVersion: 1,
   recorded: 20,
+  noAction: 0,
   confirmedAbuse: 9,
   legitimateHuman: 2,
   legitimateAutomation: 1,
@@ -129,6 +130,22 @@ describe('ShadowDetectionsTab', () => {
     expect(within(strip).getByText('15')).toBeTruthy();
     expect(within(strip).getByText('2 human, 1 automation')).toBeTruthy();
     expect(screen.getByTestId('shadow-detection-precision-note')).toBeTruthy();
+  });
+
+  it('lists would-not-act records without counting them as unreviewed', () => {
+    m.useShadowDetections.mockReturnValue(
+      queryResult(
+        list({ summary: [summaryRow({ recorded: 26, noAction: 6 })], data: [detection({ wouldAction: 'none' })] })
+      )
+    );
+    renderTab();
+
+    const strip = screen.getByTestId('shadow-detection-summary-signupNetworkBurst-v1');
+    expect(within(strip).getByText('6 would not act')).toBeTruthy();
+    // 26 recorded - 6 no-action - 15 graded.
+    expect(within(strip).getByText('5 unreviewed')).toBeTruthy();
+    expect(screen.getByTestId('shadow-detection-summary-signupNetworkBurst-v1-precision').textContent).toBe('75%');
+    expect(within(screen.getByTestId(`shadow-detection-row-${DETECTION_ID}`)).getByText('None')).toBeTruthy();
   });
 
   it('reads the verdict and detector filters from the URL', () => {
