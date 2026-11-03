@@ -729,14 +729,22 @@ export function ChatShell({
         await shareInto(open, () => shareFolderTo(open, path));
         return;
       }
-      const seed = seedAtClick ?? seedInFlight.current;
-      const seeded = seed && (await settledWithin(seed, SEED_WAIT_MS));
+      const seeded = seedAtClick && (await settledWithin(seedAtClick, SEED_WAIT_MS));
       const joined = seeded && !deletedChats.current.has(seeded) ? seeded : null;
+      if (!joined && modeRef.current !== 'chat') return;
+      // A seed that lands after the wait opens empty; the chat made here replaces it.
+      let lateSeed: string | null = null;
+      if (seedAtClick && !seeded)
+        void seedAtClick.then(
+          id => (lateSeed = id),
+          () => undefined
+        );
       if (!joined) markSessionStart('new');
       const created = joined || (await create());
       void shareInto(created, () => shareFolderTo(created, path));
       // Opened in Code mode, a chat would be remembered as the session to reopen there.
-      if (modeRef.current === 'chat') setActiveId(current => current ?? created);
+      if (modeRef.current === 'chat')
+        setActiveId(current => (current === null || current === lateSeed ? created : current));
     } catch (error) {
       if (openChatId.current || modeRef.current !== 'chat') return;
       setAddFolderAlerts(current => ({
