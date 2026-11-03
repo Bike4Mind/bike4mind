@@ -56,6 +56,9 @@ const RESPONSE_FORMAT: ResponseFormat = {
 
 const RESULT = { name: 'Erik', age: 42 };
 
+const formatWithStrict = (strict: boolean | undefined) =>
+  ({ type: 'json_schema', json_schema: { ...RESPONSE_FORMAT.json_schema, strict } }) as ResponseFormat;
+
 function asyncIterable(events: unknown[]) {
   return {
     [Symbol.asyncIterator]: async function* () {
@@ -315,6 +318,30 @@ describe('AnthropicBackend json_schema on models without forced tool use', () =>
       format: { type: 'json_schema', schema: SCHEMA },
       effort: 'high',
     });
+  });
+
+  it("puts a caller's strict: false schema in the prompt instead of output_config.format", async () => {
+    const { backend, captured } = buildBackend(() => textResponse(JSON.stringify(RESULT)));
+    const warn = vi.spyOn((backend as unknown as { logger: { warn: (...a: unknown[]) => void } }).logger, 'warn');
+    const out = capture();
+    await run(backend, ChatModels.CLAUDE_5_5_OPUS, { stream: false, responseFormat: formatWithStrict(false) }, out.cb);
+
+    expectNoForcedChoice(captured[0]);
+    expect(captured[0]).not.toHaveProperty('output_config');
+    expect(captured[0]).not.toHaveProperty('tools');
+    expect(systemText(captured[0].system)).toContain('Schema name: extract_user');
+    expect(JSON.parse(out.text())).toEqual(RESULT);
+    expect(out.mode()).toBe('best-effort');
+    expect(warn.mock.calls.filter(([msg]) => String(msg).includes('not expressible'))).toHaveLength(0);
+  });
+
+  it.each([true, undefined])('still sends output_config.format when strict is %s', async strict => {
+    const { backend, captured } = buildBackend(() => textResponse(JSON.stringify(RESULT)));
+    const out = capture();
+    await run(backend, ChatModels.CLAUDE_5_5_OPUS, { stream: false, responseFormat: formatWithStrict(strict) }, out.cb);
+
+    expect(captured[0].output_config).toEqual({ format: { type: 'json_schema', schema: SCHEMA } });
+    expect(out.mode()).toBe('native');
   });
 
   it('tags every streamed JSON chunk with the native mode', async () => {
@@ -672,6 +699,23 @@ describe('AnthropicBackend caller tool_choice on models without forced tool use'
     expect(captured[0].tools?.[0]).not.toHaveProperty('strict');
   });
 
+  it.each([
+    [false, false],
+    [true, true],
+  ])('with the caller tool strict: %s, sends the named tool strict: %s', async (callerStrict, sentStrict) => {
+    const { backend, captured } = buildBackend(() => textResponse('ok'));
+    const tool = weatherTool(STRICT_PARAMS);
+    await run(backend, ChatModels.CLAUDE_5_5_OPUS, {
+      stream: false,
+      tools: [{ ...tool, toolSchema: { ...tool.toolSchema, strict: callerStrict } }],
+      tool_choice: { type: 'function', function: { name: 'get_weather' } },
+    });
+
+    expect(captured[0].tool_choice).toEqual({ type: 'auto' });
+    expect(captured[0].tools?.[0].strict === true).toBe(sentStrict);
+    expect(systemText(captured[0].system)).toContain(buildToolUseInstruction({ toolName: 'get_weather' }));
+  });
+
   it('keeps tools and system identical on the post-tool turn and warns once', async () => {
     const { backend, captured } = buildBackend((_params, turn) =>
       turn === 1 ? toolUseResponse('get_weather', { city: 'NYC' }) : textResponse('done')
@@ -791,6 +835,66 @@ describe('AnthropicBackend on models with forced tool use', () => {
 
     expect(captured[0].tools).toEqual([{ name: 'extract_user', input_schema: schema, strict: true }]);
     expect(captured[0].tool_choice).toEqual({ type: 'tool', name: 'extract_user', disable_parallel_tool_use: true });
+  });
+
+  it.each([
+    [false, false],
+    [true, true],
+  ])('with json_schema strict: %s, sends the forced tool strict: %s', async (callerStrict, sentStrict) => {
+    const openSchema = {
+      type: 'object',
+      properties: { name: { type: 'string' }, age: { type: 'integer', minimum: 0 } },
+      required: ['name'],
+    };
+    const { backend, captured } = buildBackend(() => toolUseResponse('extract_user', RESULT));
+    const out = capture();
+    await run(
+      backend,
+      ChatModels.CLAUDE_5_5_HAIKU,
+      {
+        stream: false,
+        responseFormat: {
+          type: 'json_schema',
+          json_schema: { name: 'extract_user', schema: openSchema, strict: callerStrict },
+        },
+      },
+      out.cb
+    );
+
+    expect(captured[0].tools).toEqual([
+      sentStrict
+        ? { name: 'extract_user', input_schema: buildStructuredOutputFormat(openSchema)?.schema, strict: true }
+        : { name: 'extract_user', input_schema: openSchema },
+    ]);
+    expect(captured[0].tool_choice).toEqual({ type: 'tool', name: 'extract_user', disable_parallel_tool_use: true });
+    expect(JSON.parse(out.text())).toEqual(RESULT);
+    expect(out.mode()).toBe('tool_use');
+  });
+
+  it.each([
+    [false, 'keeps the unconstrained forced tool'],
+    [true, 'moves to output_config.format'],
+  ])('with caller thinking and json_schema strict: %s, %s', async (callerStrict, _outcome) => {
+    const { backend, captured } = buildBackend(params =>
+      params.output_config ? textResponse(JSON.stringify(RESULT)) : toolUseResponse('extract_user', RESULT)
+    );
+    await run(backend, ChatModels.CLAUDE_5_5_HAIKU, {
+      stream: false,
+      responseFormat: formatWithStrict(callerStrict),
+      reasoningEffort: 'high',
+      explicitReasoning: true,
+    });
+
+    if (callerStrict) {
+      expect(captured[0].output_config).toMatchObject({ format: { type: 'json_schema', schema: SCHEMA } });
+      expectNoForcedChoice(captured[0]);
+    } else {
+      expect(captured[0]).not.toHaveProperty('output_config');
+      expect(captured[0].tools).toEqual([
+        { name: 'extract_user', description: 'Extract user info', input_schema: SCHEMA },
+      ]);
+      expect(captured[0].tool_choice).toEqual({ type: 'tool', name: 'extract_user', disable_parallel_tool_use: true });
+    }
   });
 
   it.each([
