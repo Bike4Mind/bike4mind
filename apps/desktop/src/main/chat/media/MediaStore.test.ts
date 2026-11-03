@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
-import { MAX_MEDIA_BYTES, MediaStore, parseMediaUrl } from './MediaStore';
+import { isSupportedMediaType, MAX_MEDIA_BYTES, MediaStore, parseMediaUrl } from './MediaStore';
 
 async function store(): Promise<{ store: MediaStore; base: string }> {
   const base = await mkdtemp(join(tmpdir(), 'b4m-media-'));
@@ -106,5 +106,17 @@ describe('MediaStore.saveStream', () => {
     const { store: media } = await store();
     expect(await media.locate(SESSION, 'video-jobs.json')).toBeNull();
     expect(await media.locate(SESSION, '../other/x.mp4')).toBeNull();
+  });
+
+  it('treats a type named like an Object member as unsupported', async () => {
+    const { store: media, base } = await store();
+    for (const type of ['constructor', 'toString', '__proto__']) {
+      expect(isSupportedMediaType(type), type).toBe(false);
+      await expect(media.save(SESSION, Buffer.from('x'), type), type).rejects.toThrow('Cannot display');
+      await expect(media.saveStream(SESSION, Readable.from([Buffer.from('x')]), type, 10), type).rejects.toThrow(
+        'Cannot display'
+      );
+    }
+    expect(await readdir(base)).toEqual([]);
   });
 });
