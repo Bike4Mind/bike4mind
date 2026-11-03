@@ -102,6 +102,15 @@ describe('mapping between Linux and Windows paths', () => {
     expect(toLinuxArgument(location, share)).toBe('/home/me/repo/a\\b/x?y');
   });
 
+  it('reads back each character the share spells as that character', () => {
+    const spelled = [...Array.from({ length: 31 }, (_, index) => String.fromCharCode(index + 1)), ...'"*:<>?\\|'];
+    for (const char of spelled) {
+      const share = wslUncPath(location, `/home/me/a${char}b`);
+      expect(share).toBe(`\\\\wsl$\\Ubuntu\\home\\me\\a${String.fromCharCode(0xf000 + char.charCodeAt(0))}b`);
+      expect(parseWslPath(share)?.linuxPath).toBe(`/home/me/a${char}b`);
+    }
+  });
+
   it('maps a folder argument in the same distro, and nothing else', () => {
     expect(toLinuxArgument(location, '\\\\wsl.localhost\\ubuntu\\home\\me\\repo\\.b4m\\worktrees\\x')).toBe(
       '/home/me/repo/.b4m/worktrees/x'

@@ -131,6 +131,22 @@ describe('names listed in a WSL folder, opened over the share', () => {
     expect(result).toContain('c\u{f03a}d.txt');
     expect(result).not.toContain('c:d.txt');
   });
+
+  it('filters what ripgrep found in the distro by the share spelling a listing shows', async () => {
+    ripgrepSearch.mockImplementation(async ({ onFile }) => {
+      onFile({ path: 'c:d.txt', matches: 1, lines: [{ number: 1, text: 'needle', match: true }] });
+      onFile({ path: 'e.txt', matches: 1, lines: [{ number: 1, text: 'needle', match: true }] });
+      return 'done';
+    });
+
+    const result = await grepSearch.run(
+      { pattern: 'needle', path: PROJECT, outputMode: 'files', include: 'c\u{f03a}*' },
+      context()
+    );
+
+    expect(result).toContain('c\u{f03a}d.txt');
+    expect(result).not.toContain('e.txt');
+  });
 });
 
 describe('names a listing gives for a folder', () => {
