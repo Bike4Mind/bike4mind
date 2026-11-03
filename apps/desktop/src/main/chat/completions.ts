@@ -122,6 +122,10 @@ export interface CompletionRequest {
  * an abort is a normal outcome here, since stopping a reply is a user action, not a failure.
  * Rejects on a pre-stream HTTP failure or a mid-stream socket error.
  *
+ * A connection that drops before the reply has produced anything is asked once more: nothing
+ * has reached the caller, so a second request cannot duplicate text. Never after an abort, and
+ * never once a content, tool or usage event has been delivered.
+ *
  * Callback-based rather than an async iterable because every consumer forwards straight to an
  * IPC push, which cannot exert backpressure anyway.
  */
@@ -130,7 +134,62 @@ export async function streamCompletion(
   endpoint: string,
   request: CompletionRequest,
   onEvent: (event: CompletionStreamEvent) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options: StreamOptions = {}
+): Promise<void> {
+  let delivered = false;
+  const forward = (event: CompletionStreamEvent) => {
+    if (event.type !== 'meta') delivered = true;
+    onEvent(event);
+  };
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await streamOnce(axiosInstance, endpoint, request, forward, signal, options);
+      return;
+    } catch (err) {
+      if (!isConnectionDrop(err)) throw err;
+      if (signal?.aborted) return;
+      if (attempt === 0 && !delivered) continue;
+      throw new Error(`The connection to the server dropped before the reply finished (${err.message}).`);
+    }
+  }
+}
+
+export interface StreamOptions {
+  /** How long the open stream may go without a byte before it is treated as dropped. In ms. */
+  idleTimeoutMs?: number;
+}
+
+/**
+ * The server writes a keepalive every 10s (HEARTBEAT_INTERVAL_MS in the client app's sseRoute),
+ * so this much silence is a dead connection. Generous on purpose: a busy machine can hold the
+ * event loop long enough that bytes already received look late.
+ */
+export const STREAM_IDLE_TIMEOUT_MS = 120_000;
+
+class StreamIdleError extends Error {
+  readonly code = 'ESTREAMIDLE';
+  constructor(ms: number) {
+    super(`no data for ${Math.round(ms / 1000)}s`);
+  }
+}
+
+const DROP_CODES = new Set(['ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'ESTREAMIDLE']);
+
+/** A transport failure of an open stream, as opposed to anything the server said. */
+function isConnectionDrop(err: unknown): err is Error {
+  if (!(err instanceof Error)) return false;
+  const code = (err as { code?: unknown }).code;
+  return typeof code === 'string' && DROP_CODES.has(code);
+}
+
+async function streamOnce(
+  axiosInstance: AxiosInstance,
+  endpoint: string,
+  request: CompletionRequest,
+  onEvent: (event: CompletionStreamEvent) => void,
+  signal: AbortSignal | undefined,
+  options: StreamOptions
 ): Promise<void> {
   if (signal?.aborted) return;
 
@@ -160,13 +219,38 @@ export async function streamCompletion(
     throw toRequestError(err, await readErrorBody(err));
   }
 
-  await readSseStream(response, onEvent, signal, { model: request.model, sessionId: request.sessionId });
+  releaseRequestTimeout(response);
+  await readSseStream(response, onEvent, signal, {
+    model: request.model,
+    sessionId: request.sessionId,
+    idleTimeoutMs: options.idleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS,
+  });
+}
+
+/**
+ * Lift the client's request timeout off the socket once the stream is open.
+ *
+ * axios hands its `timeout` to follow-redirects, which sets it as the SOCKET's idle timeout with
+ * `socket.destroy` as the handler, and clears only its own wall-clock timer when the response
+ * arrives. Left alone, any gap that long between bytes of a reply - or an event loop held that
+ * long - destroys the socket, and the stream fails with Node's bare "aborted". readSseStream's
+ * idle guard bounds the stream instead.
+ */
+function releaseRequestTimeout(response: AxiosResponse): void {
+  const request: unknown = response.request;
+  if (!request || typeof request !== 'object' || !('socket' in request)) return;
+  const socket: unknown = request.socket;
+  if (socket && typeof socket === 'object' && 'setTimeout' in socket && typeof socket.setTimeout === 'function') {
+    socket.setTimeout(0);
+  }
 }
 
 /** What the dev log tags this request's frames with. See logUpstream. */
 interface StreamContext {
   model: string;
   sessionId?: string;
+  /** See STREAM_IDLE_TIMEOUT_MS. In ms. */
+  idleTimeoutMs: number;
 }
 
 /**
@@ -214,7 +298,24 @@ function readSseStream(
     const stream = response.data as NodeJS.ReadableStream & { destroy(): void };
     let settled = false;
 
+    let lastByteAt = Date.now();
+    let idleTimer: NodeJS.Timeout | undefined;
+    // Checked from setImmediate, after the poll phase: bytes that arrived while the event loop
+    // was busy are read (and refresh lastByteAt) before the stream is judged idle.
+    const armIdle = (delay: number) => {
+      idleTimer = setTimeout(
+        () =>
+          setImmediate(() => {
+            if (settled) return;
+            const quiet = Date.now() - lastByteAt;
+            if (quiet >= context.idleTimeoutMs) fail(new StreamIdleError(quiet));
+            else armIdle(context.idleTimeoutMs - quiet);
+          }),
+        delay
+      );
+    };
     const cleanup = () => {
+      clearTimeout(idleTimer);
       signal?.removeEventListener('abort', onAbort);
       stream.off('data', onData);
       stream.off('end', onEnd);
@@ -263,6 +364,7 @@ function readSseStream(
     // turn both halves into U+FFFD.
     const decoder = new StringDecoder('utf8');
     const onData = (chunk: Buffer) => {
+      lastByteAt = Date.now();
       if (signal?.aborted) return;
       parser.feed(decoder.write(chunk));
     };
@@ -275,6 +377,7 @@ function readSseStream(
     stream.on('data', onData);
     stream.on('end', onEnd);
     stream.on('error', onError);
+    armIdle(context.idleTimeoutMs);
     if (signal) {
       if (signal.aborted) onAbort();
       else signal.addEventListener('abort', onAbort, { once: true });
