@@ -28,6 +28,7 @@ import { spendMonitorDeadLetter } from './spendMonitorDeadLetter';
 import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
 import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
+import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliationDeadLetter';
 import './businessMetricAlerts';
 import './imageModerationReviewSweep';
 
@@ -1233,6 +1234,44 @@ if (revenueSnapshotCron && revenueSnapshotDeadLetter) {
   revenueSnapshotDeadLetter.allowRules([$util.output(revenueSnapshotCron)]);
 }
 
+// Subscription Reconciliation -- records where subscriptions and org seats disagree with Stripe as
+// BillingMismatch findings. Read-only against Stripe; upserts findings, so retries are safe. Runs before
+// the 07:00 credit purchase reconciliation. A run that still fails lands in the DLQ.
+const subscriptionReconciliationCron =
+  runsScheduledJobs && subscriptionReconciliationDeadLetter
+    ? new sst.aws.Cron('subscriptionReconciliation', {
+        schedule: 'cron(30 6 * * ? *)', // Daily at 06:30 UTC
+        function: {
+          vpc: lambdaVpc,
+          handler: 'apps/workers/src/cron/subscriptionReconciliation.handler',
+          runtime: 'nodejs24.x',
+          timeout: '10 minutes',
+          link: [...allSecrets],
+          environment: {
+            ...DEFAULT_LAMBDA_ENVIRONMENT,
+          },
+          permissions: [
+            subscriptionReconciliationDeadLetter.sendPermission,
+            { actions: ['cloudwatch:PutMetricData'], resources: ['*'] },
+          ],
+          transform: subscriptionReconciliationDeadLetter.functionTarget,
+          logging: {
+            retention: '1 month',
+          },
+        },
+        transform: {
+          target: {
+            ...subscriptionReconciliationDeadLetter.ruleTarget.target,
+            input: undefined,
+          },
+        },
+      })
+    : undefined;
+
+if (subscriptionReconciliationCron && subscriptionReconciliationDeadLetter) {
+  subscriptionReconciliationDeadLetter.allowRules([$util.output(subscriptionReconciliationCron)]);
+}
+
 // Storage Reconciliation -- compares each user's currentStorageSize with the bytes their charged
 // files hold, records drift and alerts over threshold. Dry run unless STORAGE_RECONCILIATION_REPAIR
 // is 'true'; a daily pass resumes across hourly invocations.
@@ -1551,6 +1590,7 @@ export {
   providerUsagePollCron,
   creditPurchaseReconciliationCron,
   revenueSnapshotCron,
+  subscriptionReconciliationCron,
   storageReconciliationCron,
   driveLakeResyncPollCron,
   githubLakeReconcileCron,

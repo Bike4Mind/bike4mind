@@ -284,6 +284,7 @@ import EnsureSpendAlertIndexes from './20260921238300_ensure-spend-alert-indexes
 import GrantPackagesFromInvites from './20260921238400_grant-packages-from-invites';
 import EnsureGrantPackageIndexes from './20260921238500_ensure-grant-package-indexes';
 import EnsureReferralInviterIndexes from './20260921239500_ensure-referral-inviter-indexes';
+import EnsureBillingMismatchIndexes from './20260921239700_ensure-billing-mismatch-indexes';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -495,6 +496,7 @@ const coreMigrations: MigrationFile[] = [
   GrantPackagesFromInvites,
   EnsureGrantPackageIndexes,
   EnsureReferralInviterIndexes,
+  EnsureBillingMismatchIndexes,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];
