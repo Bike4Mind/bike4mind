@@ -16,6 +16,20 @@ export type WorkItemStatus = 'open' | 'in_progress' | 'blocked' | 'closed';
 
 export const WORK_ITEM_STATUSES: readonly WorkItemStatus[] = ['open', 'in_progress', 'blocked', 'closed'];
 
+/** A loop ticket's priority, p0 most urgent. The values sort lexically in priority order. */
+export const WORK_ITEM_PRIORITIES = ['p0', 'p1', 'p2', 'p3'] as const;
+export type WorkItemPriority = (typeof WORK_ITEM_PRIORITIES)[number];
+/** What a loop ticket without a `priority` reads as. The create paths and the scheduler's query share it. */
+export const DEFAULT_WORK_ITEM_PRIORITY: WorkItemPriority = 'p2';
+
+/** Sort key for a priority; a missing one ranks as the default. */
+export const workItemPriorityRank = (priority?: WorkItemPriority): number =>
+  WORK_ITEM_PRIORITIES.indexOf(priority ?? DEFAULT_WORK_ITEM_PRIORITY);
+
+/** Conditions the loop scheduler can test, so a ticket blocked on one reopens on its own once it holds. */
+export const WORK_ITEM_BLOCKERS = ['dependencies'] as const;
+export type WorkItemBlocker = (typeof WORK_ITEM_BLOCKERS)[number];
+
 export interface IWorkItem {
   id: string;
   userId: string;
@@ -40,6 +54,13 @@ export interface IWorkItem {
   statusReason?: string;
   /** Loop runs that claimed this ticket since its owner last moved it; the scheduler blocks it at its limit. */
   runCount?: number;
+  /** Loop tickets only; absent reads as DEFAULT_WORK_ITEM_PRIORITY. */
+  priority?: WorkItemPriority;
+  /**
+   * Set only while `blocked` on a condition the scheduler tests each tick; it reopens the ticket once the
+   * condition holds. A block without it is a human one and is never reopened automatically.
+   */
+  blockedOn?: WorkItemBlocker;
 
   createdAt: Date;
   updatedAt: Date;
@@ -63,6 +84,8 @@ export type WorkItemPatch = Partial<Pick<IWorkItem, 'title' | 'status' | 'depend
   stage?: string | null;
   statusReason?: string | null;
   executionId?: string | null;
+  priority?: WorkItemPriority | null;
+  blockedOn?: WorkItemBlocker | null;
 };
 
 export interface IWorkItemFilters {
@@ -164,7 +187,7 @@ export interface IWorkItemRepository extends IBaseRepository<IWorkItem> {
 
   /**
    * The loop's `open` tickets outside its last stage and `skipStages` (desktop stages) whose dependencies
-   * are all closed or gone, furthest stage first, then oldest first.
+   * are all closed or gone: highest priority first, then furthest stage, then oldest.
    */
   listReadyForLoop(userId: string, loopId: string, stages: string[], skipStages?: string[]): Promise<IWorkItem[]>;
 
@@ -211,7 +234,14 @@ export interface IWorkItemRepository extends IBaseRepository<IWorkItem> {
 
   softDeleteByLoop(userId: string, loopId: string): Promise<number>;
 
-  /** Live blocked tickets per loop id; loops with none are absent. */
+  /**
+   * Reopens up to `limit` tickets (across all users) parked with `blockedOn: 'dependencies'` whose dependencies
+   * are all closed or gone. Only status, statusReason and blockedOn change; runCount and executionId are kept.
+   * Returns the reopened tickets.
+   */
+  reopenSatisfiedBlocks(limit: number): Promise<IWorkItem[]>;
+
+  /** Live blocked tickets per loop id, minus those parked on a `blockedOn` condition; loops with none are absent. */
   countBlockedByLoop(userId: string, loopIds: string[]): Promise<Record<string, number>>;
 
   /**
