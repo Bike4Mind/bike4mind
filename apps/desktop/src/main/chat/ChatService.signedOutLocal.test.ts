@@ -336,6 +336,21 @@ describe('a conversation saved on a served-model alias', () => {
     expect(toolPromptOverflow({ ...served(true), contextWindow: 1 }, wire, tools, undefined)).toBeUndefined();
   });
 
+  it('keeps tools that fit with the usual reply room when a max output override is larger', () => {
+    const wire = [
+      { role: 'system' as const, content: 'You are Desktop. '.repeat(2000) },
+      { role: 'user' as const, content: 'Say hello.' },
+    ];
+    const tools = [{ toolSchema: { name: 'read_file', description: 'Reads a file.', parameters: { type: 'object' } } }];
+    const schemas = tools.map(tool => ({ type: 'function', function: tool.toolSchema }));
+    const window = estimateTokens(toMessages(wire), schemas) + 2_048;
+    const option = { ...served(true), contextWindow: window, contextFixed: true };
+    expect(Math.floor(window / 4)).toBeGreaterThan(2_048);
+    expect(toolPromptOverflow(option, wire, tools, undefined)).toBeUndefined();
+    expect(toolPromptOverflow(option, wire, tools, 16_384)).toBeUndefined();
+    expect(toolPromptOverflow(option, wire, tools, 1)).toBeUndefined();
+  });
+
   it.each(['device-local', 'signed-in'] as const)('%s: sends no tools when its primary has none', async mode => {
     const { service, stream, settled } = await fixture({ mode, local: [served(false)], last: [served(false)] });
     const session = await service.createSession();

@@ -66,6 +66,8 @@ import {
 } from '@shared/chat';
 import { AUTO_COMPACT_PERCENT, inputSide, occupiedTokens, shouldAutoCompact } from '@shared/contextLimit';
 import { estimateContextOverhead, type ContextSnapshot } from '@shared/contextBreakdown';
+import { requestGeneration, type GenerationSettings } from '@shared/generation';
+import type { ModelSettings } from '@shared/modelSettings';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { serverIdOfRuntime } from '@shared/modelServers';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
@@ -141,13 +143,21 @@ import {
 } from './completions';
 import { describeAlways } from './approvalScope';
 import { reasoningEffortFor, requestsThinking } from './reasoningEffort';
+import { auxiliaryGeneration, turnEffortSetting, turnGeneration, turnThinks } from '@shared/modelDefaults';
+import type { ModelSettingsStore } from './ModelSettingsStore';
 import { addUsage, foldUsage } from './streamEvents';
 import type { CompletionStreamEvent } from './streamEvents';
 import { LocalModelRemovedError, OllamaLocal, toMessages } from './OllamaLocal';
 import type { LocalChat } from './localChat';
 import { ServerCredentialsError } from '../modelServers/errors';
 import { holdsPrompt } from '@bike4mind/local-models/servers';
-import { ContextOverflowError, estimateTokens, localTranscriptChars, shrunkTranscriptChars } from './localContext';
+import {
+  ContextOverflowError,
+  estimateTokens,
+  localTranscriptChars,
+  shrunkTranscriptChars,
+  toolReplyReserve,
+} from './localContext';
 import type { LocalHistory } from './LocalHistory';
 import type { LocalHistoryResult } from '@shared/history';
 import { findStaleResults, historyRounds, sentHistory, toolResultContent } from './contextPruning';
@@ -453,6 +463,8 @@ export interface ChatServiceDeps {
    * leaves every session on whatever model it was created with.
    */
   models?: ModelCatalog;
+  /** Per-model defaults from the Models screen. Absent in tests that do not set any. */
+  modelSettings?: Pick<ModelSettingsStore, 'get'>;
   /** This build's default model: what a new conversation prefers when the user has picked nothing it can have. */
   preferredModel?: string;
   /** The user's last pick in the model picker. Absent in tests that do not exercise it. */
@@ -1449,6 +1461,11 @@ export class ChatService {
 
   setSessionPromptCacheTtl(sessionId: string, ttl: PromptCacheTtl): Promise<ChatSessionSummary | null> {
     return this.deps.store.setPromptCacheTtl(sessionId, ttl);
+  }
+
+  /** Replaces this conversation's overrides; an empty set clears them. */
+  setSessionGeneration(sessionId: string, generation: GenerationSettings): Promise<ChatSessionSummary | null> {
+    return this.deps.store.setGeneration(sessionId, generation);
   }
 
   setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null> {
@@ -2729,12 +2746,26 @@ export class ChatService {
         const reason = modelOption.unavailable.replace(/\.$/, '');
         throw new Error(`${reason}. Pick another model, or check the server under Settings, Model servers.`);
       }
-      const maxTokens = modelOption?.maxOutputTokens;
+      const modelDefaults = await this.modelDefaults(modelOption?.id ?? session.model);
       const thinkingToggle =
         modelOption?.thinkingToggle ??
         (catalog?.error ? this.deps.models?.lastKnownThinkingToggle(session.model) : undefined);
-      const askForThinking = requestsThinking(session.reasoningEffort, { thinkingToggle });
-      const effort = reasoningEffortFor(session.reasoningEffort, session.model);
+      const effortSetting = turnEffortSetting(session.reasoningEffort, modelDefaults, modelOption);
+      const effort = reasoningEffortFor(effortSetting, session.model, modelOption);
+      const thinkingOption = { ...modelOption, ...(thinkingToggle ? { thinkingToggle } : {}) };
+      const askForThinking = requestsThinking(effortSetting, thinkingOption, effort);
+      // Only what this model's controls list, so a setting made on another model is never sent here.
+      const { maxOutputTokens: outputOverride, ...overrides } = requestGeneration(
+        turnGeneration(
+          session.generation,
+          modelDefaults,
+          modelOption,
+          turnThinks(effortSetting, thinkingOption, effort)
+        ),
+        modelOption?.controls
+      );
+      const generationField = Object.keys(overrides).length > 0 ? { generation: overrides } : {};
+      const maxTokens = outputOverride ?? modelOption?.maxOutputTokens;
       const effortField = effort ? { reasoningEffort: effort } : {};
       // The server keeps 5 minutes for a model without the hour, but sending it there says nothing.
       const cacheTtl: PromptCacheTtl =
@@ -3143,6 +3174,7 @@ export class ChatService {
                 // Dev log only; never sent on the wire. See CompletionRequest.sessionId.
                 sessionId,
                 ...effortField,
+                ...generationField,
                 ...(maxTokens ? { maxTokens } : {}),
                 ...(toolPromptTokens !== undefined ? { toolPromptTokens } : {}),
               },
@@ -3162,6 +3194,7 @@ export class ChatService {
                 // Ties the turn's ledger row to this session. See CompletionRequest.sessionId.
                 sessionId,
                 ...effortField,
+                ...generationField,
                 ...cacheTtlField,
                 ...(maxTokens ? { maxTokens } : {}),
               },
@@ -5856,6 +5889,12 @@ export class ChatService {
     return resolveDefaultModel(models, [remembered, this.deps.preferredModel]);
   }
 
+  /** A device-side model's defaults from the Models screen; none for a hosted model, or when they cannot be read. */
+  private async modelDefaults(model: string): Promise<ModelSettings | undefined> {
+    if (!isLocalModel(model) || !this.deps.modelSettings) return undefined;
+    return this.deps.modelSettings.get(model).catch(() => undefined);
+  }
+
   /** Auxiliary generations honor the same device-local boundary as the main reply. */
   private async streamAuxiliary(
     api: AuthenticatedApiClient | null,
@@ -5865,8 +5904,11 @@ export class ChatService {
   ): Promise<void> {
     if (isLocalModel(request.model)) {
       const thinking = createThinkFilter();
+      const listed = this.deps.models?.lastLocal?.() ?? this.deps.models?.cached() ?? undefined;
+      const option = findModelOption(listed, request.model);
+      const sampling = auxiliaryGeneration(await this.modelDefaults(option?.id ?? request.model), option);
       await (this.deps.local ?? new OllamaLocal()).stream(
-        { ...request, thinking: false },
+        { ...request, thinking: false, ...(Object.keys(sampling).length > 0 ? { generation: sampling } : {}) },
         event =>
           onEvent({ ...event, ...('text' in event && event.text ? { text: thinking.push(event.text).text } : {}) }),
         signal
@@ -6133,7 +6175,7 @@ export function toolPromptOverflow(
   const toolPrompt = estimateTokens(toMessages(wire.filter(message => message.role === 'system')), schemas);
   const prompt = wire.findLast(message => message.role === 'user' && !message.continuesTurn);
   const promptTokens = prompt ? estimateTokens(toMessages([prompt])) : 0;
-  return holdsPrompt(window, toolPrompt + promptTokens, maxTokens) ? undefined : toolPrompt;
+  return holdsPrompt(window, toolPrompt + promptTokens, toolReplyReserve(maxTokens)) ? undefined : toolPrompt;
 }
 
 /**

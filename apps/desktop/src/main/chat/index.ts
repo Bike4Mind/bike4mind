@@ -63,6 +63,9 @@ import { ApprovalModePreference } from './ApprovalModePreference';
 import { PromptCacheTtlPreference } from './PromptCacheTtlPreference';
 import { LocalContextPreference } from './LocalContextPreference';
 import { createLateReload } from './lateReload';
+import { registerGenerationIpc } from './generationIpc';
+import { registerModelSettingsIpc } from './modelSettingsIpc';
+import { ModelSettingsStore } from './ModelSettingsStore';
 import { registerLocalContextIpc } from './localContextIpc';
 import { localContextSizing, localHardware } from './localContextSizing';
 import { SidebarSectionStore } from './SidebarSectionStore';
@@ -105,6 +108,7 @@ import { ModelServerStore } from '../modelServers/ModelServerStore';
 import { withEnteredSpecs } from '../models/enteredHardware';
 import { machineView } from '../models/fit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
+import type { CatalogSampling } from '@shared/generation';
 import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './sessionScope';
 import {
   branchCheckouts,
@@ -385,6 +389,8 @@ export function registerChat(
     cancelModelPull?(key: string): Promise<boolean>;
     /** The curated list's projector sizes, so chat sizes a vision model the way the Models screen does. */
     pinnedProjectors?(): ReadonlyMap<string, number>;
+    /** The curated family sampling for an installed Ollama model; see ModelHubService.catalogSampling. */
+    catalogSampling?(ollamaName: string): CatalogSampling | undefined;
   } = {}
 ): RegisteredChat {
   const logger = createMainLogger(VERBOSE);
@@ -511,12 +517,19 @@ export function registerChat(
   });
   localHardware.setOverride(probed => withEnteredSpecs(probed, modelServers.specs(LOCAL_SERVER_ID)));
   void modelServers.start().catch(error => logger.warn(`MODEL SERVERS: could not load: ${String(error)}`));
-  const local = new LocalModels(new OllamaLocal((url, init) => net.fetch(url, init), localSizing), modelServers);
+  const modelSettings = new ModelSettingsStore(join(userData, 'model-settings.json'), message => logger.warn(message));
+  const local = new LocalModels(
+    new OllamaLocal((url, init) => net.fetch(url, init), localSizing),
+    modelServers,
+    // Matched by name on every server; requestGeneration keeps each server to the fields it takes.
+    option => hooks.catalogSampling?.(option.name)
+  );
   const models = new ModelCatalog(
     {
       logger,
       getApiClient: () => auth.getApiClient(),
       getEnvironmentUrl: () => auth.getState().environment.url,
+      changed: () => send(IPC_CHANNELS.chatModelsChanged, null),
     },
     local
   );
@@ -657,6 +670,7 @@ export function registerChat(
     access,
     attachments,
     models,
+    modelSettings,
     logger,
     turnTiming: TURN_TIMING,
     preferredModel: PREFERRED_MODEL,
@@ -795,6 +809,8 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatSetSessionPromptCacheTtl, (_event, sessionId: string, ttl: unknown) =>
     isPromptCacheTtl(ttl) ? service.setSessionPromptCacheTtl(sessionId, ttl) : null
   );
+  registerGenerationIpc(ipcMain, service);
+  registerModelSettingsIpc(ipcMain, modelSettings);
   ipcMain.handle(IPC_CHANNELS.chatSetSessionPinned, (_event, sessionId: string, pinned: boolean) =>
     service.setSessionPinned(sessionId, pinned)
   );

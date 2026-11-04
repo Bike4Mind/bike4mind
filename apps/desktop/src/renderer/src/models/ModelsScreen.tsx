@@ -23,7 +23,7 @@ import { CuratedTab } from './CuratedTab';
 import { ExploreTab, rememberExploreRepo } from './ExploreTab';
 import { serverIdentity } from './installedCache';
 import { InstalledTab, type ModelsInUse } from './InstalledTab';
-import { manageNote, type ChatWith, type ModelTarget } from './modelTarget';
+import { manageNote, type ChatWith, type ModelTarget, type ModelWith } from './modelTarget';
 import { pullLabel, pullPercent } from './pullDisplay';
 import { ServerSwitcher } from './ServerSwitcher';
 import { useModelHub, useModelServers } from './useModelHub';
@@ -277,6 +277,7 @@ export function ModelsScreen({
   inUse,
   onOpenModelServers,
   chatWith,
+  modelWith,
   catalog,
   chatError,
   onDismissChatError,
@@ -286,6 +287,8 @@ export function ModelsScreen({
   /** Settings, Model servers: where a server on another machine is added. */
   onOpenModelServers?: () => void;
   chatWith?: ChatWith;
+  /** Chat's entry for an installed model, for its Settings dialog. */
+  modelWith?: ModelWith;
   /** The chat model catalog Use in chat resolves against; reloaded when the installed list outgrows it. */
   catalog?: { models: ChatModelOption[]; loading: boolean; reload: () => Promise<void> };
   /** Why the last Use in chat did not open a conversation. */
@@ -509,6 +512,7 @@ export function ModelsScreen({
               lastInstalled={hub.lastInstalled}
               inUse={inUse}
               chatOn={chatOn}
+              modelOn={name => modelWith?.(serverId, name) ?? null}
               onRetry={() => void hub.refresh()}
               onExplore={() => choose('explore')}
             />

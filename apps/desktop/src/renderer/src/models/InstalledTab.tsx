@@ -13,12 +13,14 @@ import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
+import type { ChatModelOption } from '@shared/chat';
 import { formatBytes, type InstalledModelsResult, type LocalModelEntry, type ModelRuntimeStatus } from '@shared/models';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
 import { TrashIcon } from '../chat/icons';
 import { FitBadge } from './FitBadge';
 import { installedCache, listedAtLabel, type LastInstalled } from './installedCache';
-import type { ChatOn, ModelTarget } from './modelTarget';
+import { hasModelDefaults, ModelDefaultsDialog } from './ModelDefaultsDialog';
+import type { ChatOn, ModelOn, ModelTarget } from './modelTarget';
 
 /** A device-side model a chat points at: its Ollama name and the server it runs on. */
 export interface ModelInUse {
@@ -75,11 +77,13 @@ function contextLabel(tokens: number): string {
 function InstalledRow({
   model,
   onUse,
+  onSettings,
   onRemove,
   removeBlocked,
 }: {
   model: LocalModelEntry;
   onUse: (() => void) | null;
+  onSettings: (() => void) | null;
   onRemove: (() => void) | null;
   /** Why Remove is shown disabled; null when it is usable. */
   removeBlocked: string | null;
@@ -145,6 +149,18 @@ function InstalledRow({
           Use in chat
         </Button>
       )}
+      {onSettings && (
+        <Button
+          size="sm"
+          variant="plain"
+          color="neutral"
+          onClick={onSettings}
+          aria-label={`Settings for ${model.name}`}
+          data-testid="models-installed-settings-btn"
+        >
+          Settings
+        </Button>
+      )}
       {!onUse && model.capabilities.embeddings && !model.capabilities.completion && (
         <Typography level="body-xs" textColor="text.tertiary" role="note" data-testid="models-installed-embedding-note">
           Embedding model, not for chat
@@ -195,6 +211,7 @@ export function InstalledTab({
   lastInstalled = null,
   inUse,
   chatOn,
+  modelOn,
   onRetry,
   onExplore,
 }: {
@@ -205,9 +222,12 @@ export function InstalledTab({
   lastInstalled?: LastInstalled | null;
   inUse?: ModelsInUse;
   chatOn?: ChatOn;
+  /** Chat's entry for an installed model, whose controls say which defaults it takes. */
+  modelOn?: ModelOn;
   onRetry: () => void;
   onExplore: () => void;
 }) {
+  const [settingsFor, setSettingsFor] = useState<ChatModelOption | null>(null);
   // The server is kept with the model, so a confirmation never acts on a server other than the one it named.
   const [confirmingOn, setConfirming] = useState<{ model: LocalModelEntry; serverId: string | undefined } | null>(null);
   const confirming = confirmingOn?.model ?? null;
@@ -350,19 +370,25 @@ export function InstalledTab({
             {target.local || total > 0 ? `, ${formatBytes(total)} on disk` : ''}
             {target.local ? '' : ` on ${target.name}`}
           </Typography>
-          {models.map(model => (
-            <InstalledRow
-              key={model.name}
-              model={model}
-              onUse={chatOn?.(model.name) ?? null}
-              onRemove={
-                canManage ? () => setConfirming({ model, serverId: target.local ? undefined : target.id }) : null
-              }
-              removeBlocked={last ? 'Available once the list refreshes' : null}
-            />
-          ))}
+          {models.map(model => {
+            const option = modelOn?.(model.name) ?? null;
+            return (
+              <InstalledRow
+                key={model.name}
+                model={model}
+                onUse={chatOn?.(model.name) ?? null}
+                onSettings={option && hasModelDefaults(option) ? () => setSettingsFor(option) : null}
+                onRemove={
+                  canManage ? () => setConfirming({ model, serverId: target.local ? undefined : target.id }) : null
+                }
+                removeBlocked={last ? 'Available once the list refreshes' : null}
+              />
+            );
+          })}
         </>
       )}
+
+      <ModelDefaultsDialog option={settingsFor} onClose={() => setSettingsFor(null)} />
 
       <Modal open={canManage && confirming !== null} onClose={() => !removing && setConfirming(null)}>
         <ModalDialog size="sm" role="alertdialog" data-testid="models-remove-dialog">
