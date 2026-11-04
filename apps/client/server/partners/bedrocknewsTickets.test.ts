@@ -65,6 +65,14 @@ describe('previewTicket', () => {
     expect(await previewTicket(TICKET)).toEqual({ ok: false, code, status });
   });
 
+  it.each([
+    [500, 'a body without a code', json(500, { error: 'boom' })],
+    [502, 'a non-JSON body', new Response('<html>bad gateway</html>', { status: 502 })],
+  ])('maps a %s reply with %s to BEDROCKNEWS_UNAVAILABLE', async (status, _label, reply) => {
+    mockFetch.mockResolvedValue(reply);
+    expect(await previewTicket(TICKET)).toEqual({ ok: false, code: 'BEDROCKNEWS_UNAVAILABLE', status });
+  });
+
   it('answers NOT_CONFIGURED without a request when settings are empty', async () => {
     mockGetSettingsMap.mockResolvedValue({});
     expect(await previewTicket(TICKET)).toEqual({ ok: false, code: 'NOT_CONFIGURED', status: 503 });
