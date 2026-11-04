@@ -70,7 +70,7 @@ export function classifySignupGrantAction(
  * the release itself applies.
  */
 function classifyReleaseHeld(user: ClassifiableUser): SignupGrantActionClass {
-  const held = user.signupGrantHeldReason === 'budget_exhausted' && !!user.tags?.includes(PENDING_FREE_CREDITS_TAG);
+  const held = !!user.signupGrantHeldReason && !!user.tags?.includes(PENDING_FREE_CREDITS_TAG);
   if (!held && !user.signupGrant) return refuse('no_grant');
   if (isSignupGrantBlocked(user)) return refuse('blocked');
   if (isSignupGrantHeldForReview(user)) return refuse('held_for_review');
