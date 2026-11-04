@@ -9,6 +9,7 @@
  * Headless loop runs pre-approve them in `startAgentExecution`. Stage rule: `@server/utils/loopTickets`.
  */
 import {
+  desktopStagesOf,
   LOOP_TICKET_TOOL_NAMES,
   WORK_ITEM_STATUSES,
   type ILoop,
@@ -19,7 +20,13 @@ import { loopEventRepository, loopRepository, workItemRepository } from '@bike4m
 import type { ToolDefinition } from '@bike4mind/services/llm';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ConflictError } from '@bike4mind/server-utils/utils/errors';
-import { makeDueIfReady, ticketMovePatch, UNSURE_PREFIX, unsureReason } from '@server/utils/loopTickets';
+import {
+  assertCloudRunMayChange,
+  makeDueIfReady,
+  ticketMovePatch,
+  UNSURE_PREFIX,
+  unsureReason,
+} from '@server/utils/loopTickets';
 import { assertDependenciesUsable } from '@server/utils/workItemDependencies';
 import {
   validateWorkItemDependencies,
@@ -66,7 +73,7 @@ export function resolveLoopTicketTools({
   };
 }
 
-const summarize = (ticket: IWorkItem) => ({
+const summarize = (ticket: IWorkItem, desktopStages: string[] = []) => ({
   id: ticket.id,
   loopId: ticket.loopId,
   title: ticket.title,
@@ -75,6 +82,7 @@ const summarize = (ticket: IWorkItem) => ({
   status: ticket.status,
   ...(ticket.statusReason && { statusReason: ticket.statusReason }),
   dependencies: ticket.dependencies,
+  ...(ticket.stage && desktopStages.includes(ticket.stage) && { desktopRunner: true }),
 });
 
 /** Validation and authz errors go back to the model as the tool result; anything else is a real failure. */
@@ -117,17 +125,21 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
             { page: 1, limit: LIST_LIMIT },
             { by: 'createdAt', direction: 'asc' }
           );
+          const desktopStages = desktopStagesOf(loop);
           return {
             loopId: loop.id,
             stages: loop.stages,
-            tickets: tickets.data.filter(t => !params.stage || t.stage === params.stage).map(summarize),
+            ...(desktopStages.length > 0 && { desktopStages }),
+            tickets: tickets.data
+              .filter(t => !params.stage || t.stage === params.stage)
+              .map(t => summarize(t, desktopStages)),
             hasMore: tickets.hasMore,
           };
         }),
       toolSchema: {
         name: 'loop_ticket_list',
         description:
-          "List the tickets of this loop (or another of the owner's loops by loopId), with their stage and status.",
+          "List the tickets of this loop (or another of the owner's loops by loopId), with their stage and status. Tickets marked desktopRunner sit in a stage the owner's desktop app works: never work, edit or move them.",
         parameters: {
           type: 'object',
           properties: {
@@ -231,7 +243,9 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
           if (!existing?.loopId) throw new NotFoundError(TICKET_NOT_FOUND);
 
           const movesLoop = params.loopId !== undefined && params.loopId !== existing.loopId;
-          const loop = await ownLoop(movesLoop ? params.loopId : existing.loopId);
+          const current = await ownLoop(existing.loopId);
+          assertCloudRunMayChange(current, existing);
+          const loop = movesLoop ? await ownLoop(params.loopId) : current;
           if (params.status !== undefined && !['open', 'blocked', 'closed'].includes(params.status as string)) {
             throw new BadRequestError('status must be one of: open, blocked, closed');
           }
@@ -257,7 +271,7 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
       toolSchema: {
         name: 'loop_ticket_update',
         description:
-          "Change a loop ticket: edit it, move it to another stage or another of the owner's loops, block it (with a reason) or close it. Moving a ticket to the last stage closes it.",
+          "Change a loop ticket: edit it, move it to another stage or another of the owner's loops, block it (with a reason) or close it. Moving a ticket to the last stage closes it. A ticket in a stage the owner's desktop app works cannot be changed.",
         parameters: {
           type: 'object',
           properties: {
@@ -293,6 +307,7 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
             return 'This ticket is already waiting on the owner. Their answer reaches your next run; do not ask again.';
           }
           const loop = await ownLoop(loopId);
+          assertCloudRunMayChange(loop, existing);
 
           // Event first: if the ticket write then fails, the question is still in the Log and answerable,
           // instead of a ticket blocked with nothing to resolve it from. An answer landing in the ms between the

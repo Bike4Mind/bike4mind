@@ -531,7 +531,8 @@ async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<boo
                 instructions: stage.instructions,
               }
             : undefined,
-          { directives, overseen: overseen.filter((watched): watched is ILoop => !!watched) }
+          { directives, overseen: overseen.filter((watched): watched is ILoop => !!watched) },
+          desktopStagesOf(loop)
         ),
         model,
         connectionId: HEADLESS_CONNECTION_ID,

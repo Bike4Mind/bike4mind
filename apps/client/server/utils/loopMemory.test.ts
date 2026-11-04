@@ -144,4 +144,12 @@ describe('buildLoopQuery', () => {
     expect(plain).not.toContain('Directives from loops');
     expect(plain).not.toContain('You oversee');
   });
+
+  it("tells a cloud run to leave the desktop stages' tickets alone, and says nothing without any", () => {
+    const memory = { notes: '', nextAction: '' };
+    expect(buildLoopQuery('Ship', memory, undefined, undefined, ['review'])).toContain(
+      `Tickets in the "review" stage(s) are worked by the\nowner's desktop app, not by this run`
+    );
+    expect(buildLoopQuery('Ship', memory)).not.toContain('desktop app');
+  });
 });
