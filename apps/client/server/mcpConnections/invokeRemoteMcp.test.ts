@@ -844,12 +844,15 @@ describe('resolveRemoteMcpRunner', () => {
     await expectInProcess();
   });
 
-  it.each(['production', 'test', '', undefined])('fails closed on a hosted runtime without the link (NODE_ENV=%j)', env => {
-    vi.stubEnv('B4M_SELF_HOST', 'false');
-    vi.stubEnv('IS_LOCAL', 'false');
-    vi.stubEnv('NODE_ENV', env);
-    expect(() => resolveRemoteMcpRunner()).toThrow(/not linked/);
-  });
+  it.each(['production', 'test', '', undefined])(
+    'fails closed on a hosted runtime without the link (NODE_ENV=%j)',
+    env => {
+      vi.stubEnv('B4M_SELF_HOST', 'false');
+      vi.stubEnv('IS_LOCAL', 'false');
+      vi.stubEnv('NODE_ENV', env);
+      expect(() => resolveRemoteMcpRunner()).toThrow(/not linked/);
+    }
+  );
 
   it('a failed invoke surfaces as an error and never runs in-process', async () => {
     state.resource.remoteMcpHandler = { name: 'remote-mcp-fn' };
