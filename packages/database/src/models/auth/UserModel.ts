@@ -1266,6 +1266,10 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
             ),
             default: undefined,
           },
+          blocked: {
+            type: new Schema({ at: { type: Date, required: true } }, { _id: false }),
+            default: undefined,
+          },
         },
         { _id: false }
       ),
