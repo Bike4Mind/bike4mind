@@ -15,7 +15,7 @@ import {
 } from '@mui/joy';
 import { toast } from 'sonner';
 import { AdminDialog, AdminPageHeader, StatusChip, formatUtc, relativeTime } from './shared';
-import { surfaceLabel } from './moderationIncidentLabels';
+import { VERDICT_EXPLANATIONS, formatConfidence, surfaceLabel } from './moderationIncidentLabels';
 import {
   useModerationIncidentVerdict,
   useModerationIncidentView,
@@ -39,6 +39,21 @@ const UNAVAILABLE_COPY: Record<'no_stored_image' | 'not_displayable', string> = 
     'No stored image exists for this incident. Generated and edited images are blocked before they are stored.',
   not_displayable: 'The stored file is not an image this page can display.',
 };
+
+const MetaItem: React.FC<{ label: string; children: React.ReactNode; testId?: string }> = ({
+  label,
+  children,
+  testId,
+}) => (
+  <Box data-testid={testId}>
+    <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+      {label}
+    </Typography>
+    <Typography level="body-sm" component="div">
+      {children}
+    </Typography>
+  </Box>
+);
 
 type Props = { incidentId: string; onBack: () => void };
 
@@ -157,6 +172,75 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
             </Box>
           </Stack>
 
+          <Stack gap={1} data-testid="moderation-incident-detection">
+            <Typography level="title-sm">What was detected</Typography>
+            {data.labels.length > 0 ? (
+              <Stack component="ul" gap={0.5} sx={{ m: 0, pl: 2.5 }}>
+                {[...data.labels]
+                  .sort((a, b) => b.confidence - a.confidence)
+                  .map(label => (
+                    <Typography
+                      component="li"
+                      level="body-sm"
+                      key={`${label.parentName}/${label.name}`}
+                      data-testid="moderation-incident-label"
+                    >
+                      {label.parentName ? `${label.parentName} / ${label.name}` : label.name}
+                      {' - '}
+                      {formatConfidence(label.confidence)} confidence
+                    </Typography>
+                  ))}
+              </Stack>
+            ) : (
+              <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }} data-testid="moderation-incident-no-labels">
+                No detection labels were stored for this incident.
+              </Typography>
+            )}
+            <Stack direction="row" gap={3} flexWrap="wrap">
+              <MetaItem label="Provider" testId="moderation-incident-provider">
+                {data.provider}
+              </MetaItem>
+              <MetaItem label="Model" testId="moderation-incident-model">
+                {data.model}
+              </MetaItem>
+            </Stack>
+          </Stack>
+
+          <Stack gap={1} data-testid="moderation-incident-trail">
+            <Typography level="title-sm">Review trail</Typography>
+            <Stack direction="row" gap={3} flexWrap="wrap">
+              <MetaItem label="Reviewer alert" testId="moderation-incident-alerted">
+                {data.alertedAt ? `Sent ${formatUtc(new Date(data.alertedAt))}` : 'No alert delivered yet'}
+              </MetaItem>
+              {data.lastReminderAt && (
+                <MetaItem label="Last reminder" testId="moderation-incident-reminded">
+                  {formatUtc(new Date(data.lastReminderAt))}
+                </MetaItem>
+              )}
+              {data.falsePositiveAt && (
+                <MetaItem label="Marked false positive" testId="moderation-incident-false-positive-at">
+                  {formatUtc(new Date(data.falsePositiveAt))}
+                </MetaItem>
+              )}
+              {data.reportedAt && (
+                <MetaItem label="Report recorded" testId="moderation-incident-reported-at">
+                  {formatUtc(new Date(data.reportedAt))}
+                  {data.reportChannel === 'manual' ? ' (filed on the web form)' : ''}
+                </MetaItem>
+              )}
+              {data.ncmecReportId && (
+                <MetaItem label="Report id" testId="moderation-incident-report-id">
+                  {data.ncmecReportId}
+                </MetaItem>
+              )}
+            </Stack>
+            {data.previousReviewStatus === 'false_positive' && (
+              <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="moderation-incident-overrode">
+                A report was recorded over an earlier false-positive verdict.
+              </Typography>
+            )}
+          </Stack>
+
           {data.image.availability === 'ready' ? (
             <Stack gap={1} data-testid="moderation-incident-image-panel">
               {imageFailed ? (
@@ -199,7 +283,7 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
             </Stack>
           ) : (
             <Alert color="neutral" data-testid="moderation-incident-image-unavailable">
-              {UNAVAILABLE_COPY[data.image.reason]}
+              {UNAVAILABLE_COPY[data.image.reason]} Decide from the detection and review details above.
             </Alert>
           )}
 
@@ -212,6 +296,15 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
                   : 'A verdict has already been recorded for this incident.'}
             </Alert>
           )}
+          <Stack gap={0.5} data-testid="moderation-incident-verdict-help">
+            <Typography level="title-sm">What each verdict does</Typography>
+            <Typography level="body-sm">
+              <strong>Mark false positive:</strong> {VERDICT_EXPLANATIONS.false_positive}
+            </Typography>
+            <Typography level="body-sm">
+              <strong>Record report:</strong> {VERDICT_EXPLANATIONS.confirmed}
+            </Typography>
+          </Stack>
           <Stack direction="row" gap={1} flexWrap="wrap">
             <Button
               variant="outlined"

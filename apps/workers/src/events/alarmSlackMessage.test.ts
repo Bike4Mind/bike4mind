@@ -407,6 +407,26 @@ describe('ALARM_CATALOG', () => {
     }
   });
 
+  it('links the moderation alarms to the page that fixes them', () => {
+    const buttonsFor = (suffix: string) =>
+      buttons(
+        formatAlarmSlackMessage({ ...sample, AlarmName: `bike4mind-production-${suffix}` }, 'production', {
+          appUrl: 'https://app.example.com',
+        })
+      );
+    for (const suffix of ['image-moderation-incident-unalerted', 'image-moderation-incident-unreviewed']) {
+      expect(buttonsFor(suffix)).toContainEqual({
+        label: 'Moderation review',
+        url: 'https://app.example.com/admin?tab=moderation-incidents',
+      });
+    }
+    expect(buttonsFor('image-moderation-no-reviewers')).toContainEqual({
+      label: 'Moderation settings',
+      url: 'https://app.example.com/admin?tab=admin-settings&section=security',
+    });
+    expect(buttonsFor('image-moderation-incident-unreviewed').map(b => b.label)).toContain('Open in CloudWatch');
+  });
+
   it('only names admin links that exist', () => {
     for (const entry of Object.values(ALARM_CATALOG)) {
       for (const key of entry.links ?? []) expect(ADMIN_LINKS[key]).toBeDefined();

@@ -1,4 +1,9 @@
-import type { IncidentReviewStatus, IncidentSurface } from '@bike4mind/common';
+import type {
+  IncidentReportChannel,
+  IncidentReviewStatus,
+  IncidentSurface,
+  ModerationLabelHit,
+} from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -13,6 +18,7 @@ type QueueIncidentJson = {
   createdAt: string;
   surface?: IncidentSurface;
   reviewStatus?: IncidentReviewStatus;
+  alertedAt?: string;
 };
 
 export type ModerationIncidentRow = {
@@ -21,6 +27,8 @@ export type ModerationIncidentRow = {
   surface?: IncidentSurface;
   /** A claim left in confirmed_csam after an unknown submission outcome; not resolvable from this page. */
   stuck: boolean;
+  /** Whether a reviewer alert was delivered for it. */
+  alerted: boolean;
 };
 
 const toRow = (incident: QueueIncidentJson, stuck: boolean): ModerationIncidentRow => ({
@@ -28,6 +36,7 @@ const toRow = (incident: QueueIncidentJson, stuck: boolean): ModerationIncidentR
   createdAt: incident.createdAt,
   surface: incident.surface,
   stuck,
+  alerted: Boolean(incident.alertedAt),
 });
 
 /** Unreviewed incidents plus stuck confirmed claims, oldest first. */
@@ -54,6 +63,19 @@ export type ModerationIncidentView = {
   createdAt: string;
   surface: IncidentSurface | null;
   reviewStatus: IncidentReviewStatus;
+  provider: string;
+  model: string;
+  /** What the detector flagged. Empty on a record that stored none. */
+  labels: ModerationLabelHit[];
+  /** Null when no reviewer alert was delivered. */
+  alertedAt: string | null;
+  lastReminderAt: string | null;
+  reportedAt: string | null;
+  ncmecReportId: string | null;
+  reportChannel: IncidentReportChannel | null;
+  falsePositiveAt: string | null;
+  /** Set when a report was recorded over an earlier false-positive verdict. */
+  previousReviewStatus: 'false_positive' | null;
   image:
     | { availability: 'ready'; url: string; expiresAt: string }
     | { availability: 'unavailable'; reason: 'no_stored_image' | 'not_displayable' };

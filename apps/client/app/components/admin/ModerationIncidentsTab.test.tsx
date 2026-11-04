@@ -31,8 +31,8 @@ const renderTab = () =>
   );
 
 const rows: ModerationIncidentRow[] = [
-  { id: 'inc-old', createdAt: '2026-10-01T10:00:00.000Z', surface: 'upload', stuck: false },
-  { id: 'inc-stuck', createdAt: '2026-10-02T10:00:00.000Z', surface: 'generation', stuck: true },
+  { id: 'inc-old', createdAt: '2026-10-01T10:00:00.000Z', surface: 'upload', stuck: false, alerted: true },
+  { id: 'inc-stuck', createdAt: '2026-10-02T10:00:00.000Z', surface: 'generation', stuck: true, alerted: false },
 ];
 const ready = (data: ModerationIncidentRow[], truncated = false) => ({
   data: { rows: data, truncated },
@@ -58,6 +58,8 @@ describe('ModerationIncidentsTab', () => {
     expect(first.textContent).toMatch(/1 Oct 2026/);
     expect(first.textContent).toMatch(/ago/);
     expect(second.textContent).toContain('Report stuck');
+    expect(first.textContent).toContain('Sent');
+    expect(second.textContent).toContain('Not sent');
     expect(screen.getByTestId('admin-page-header').textContent).toContain('(2)');
   });
 

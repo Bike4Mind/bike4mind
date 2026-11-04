@@ -58,6 +58,13 @@ export const ModerationIncidentsTab: React.FC = () => {
       width: '14rem',
     },
     {
+      id: 'alerted',
+      label: 'Reviewer alert',
+      render: row => <StatusChip tone={row.alerted ? 'neutral' : 'warn'} label={row.alerted ? 'Sent' : 'Not sent'} />,
+      sortValue: row => (row.alerted ? 1 : 0),
+      width: '10rem',
+    },
+    {
       id: 'age',
       label: 'Age',
       render: row => relativeTime(new Date(row.createdAt), now),

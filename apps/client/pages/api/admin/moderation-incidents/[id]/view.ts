@@ -7,7 +7,7 @@ import { signIncidentImage } from '@server/moderation/incidentImageLink';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 /**
- * One reviewer view of an image moderation incident: its metadata and, when a stored image exists,
+ * One reviewer view of an image moderation incident: its detection and review metadata and, when a stored image exists,
  * a link that works for five minutes. Full admins on a freshly verified session only. The view is
  * audited before the link is signed, so a view that cannot be recorded never yields an image, and
  * the response is never cached.
@@ -39,6 +39,18 @@ const handler = adminApi({
     createdAt: incident.createdAt,
     surface: incident.surface ?? null,
     reviewStatus: incident.reviewStatus ?? 'pending_review',
+    // What a reviewer needs when no image was stored. No user, session, quest or file references,
+    // and no reviewer ids: only what the detection and the review trail say.
+    provider: incident.provider,
+    model: incident.model,
+    labels: (incident.labels ?? []).map(({ name, parentName, confidence }) => ({ name, parentName, confidence })),
+    alertedAt: incident.alertedAt ?? null,
+    lastReminderAt: incident.lastReminderAt ?? null,
+    reportedAt: incident.reportedAt ?? null,
+    ncmecReportId: incident.ncmecReportId ?? null,
+    reportChannel: incident.reportChannel ?? null,
+    falsePositiveAt: incident.falsePositiveAt ?? null,
+    previousReviewStatus: incident.previousReviewStatus ?? null,
     image,
   });
 });

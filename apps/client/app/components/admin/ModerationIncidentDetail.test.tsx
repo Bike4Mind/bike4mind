@@ -34,6 +34,16 @@ const view = (over: Partial<ModerationIncidentView> = {}): ModerationIncidentVie
   createdAt: '2026-10-30T10:00:00.000Z',
   surface: 'upload',
   reviewStatus: 'pending_review',
+  provider: 'bfl',
+  model: 'flux-pro-1.1',
+  labels: [],
+  alertedAt: null,
+  lastReminderAt: null,
+  reportedAt: null,
+  ncmecReportId: null,
+  reportChannel: null,
+  falsePositiveAt: null,
+  previousReviewStatus: null,
   image: { availability: 'ready', url: 'https://signed.example/img', expiresAt: '2026-10-30T10:05:00.000Z' },
   ...over,
 });
@@ -127,6 +137,70 @@ describe('ModerationIncidentDetail', () => {
       { id: 'inc-1', verdict: { kind: 'confirmed', reportId: '12345-AB' } },
       expect.anything()
     );
+  });
+
+  it('lets a reviewer decide without an image: labels by confidence, model and alert time', () => {
+    m.view.mockReturnValue(
+      loaded(
+        view({
+          surface: 'generation',
+          labels: [
+            { name: 'Low one', parentName: '', confidence: 61.04 },
+            { name: 'Explicit Nudity', parentName: 'Explicit', confidence: 97.31 },
+          ],
+          alertedAt: '2026-10-30T10:01:00.000Z',
+          image: { availability: 'unavailable', reason: 'no_stored_image' },
+        })
+      )
+    );
+    renderDetail();
+    expect(screen.getByTestId('moderation-incident-image-unavailable').textContent).toContain(
+      'Decide from the detection and review details'
+    );
+    const labels = screen.getAllByTestId('moderation-incident-label').map(el => el.textContent);
+    expect(labels).toEqual(['Explicit / Explicit Nudity - 97.3% confidence', 'Low one - 61.0% confidence']);
+    expect(screen.getByTestId('moderation-incident-provider').textContent).toContain('bfl');
+    expect(screen.getByTestId('moderation-incident-model').textContent).toContain('flux-pro-1.1');
+    expect(screen.getByTestId('moderation-incident-alerted').textContent).toMatch(/Sent .*30 Oct 2026/);
+  });
+
+  it('says plainly when no labels were stored and no alert went out', () => {
+    renderDetail();
+    expect(screen.getByTestId('moderation-incident-no-labels')).toBeTruthy();
+    expect(screen.getByTestId('moderation-incident-alerted').textContent).toContain('No alert delivered yet');
+    expect(screen.queryByTestId('moderation-incident-reminded')).toBeNull();
+    expect(screen.queryByTestId('moderation-incident-report-id')).toBeNull();
+  });
+
+  it('shows the prior verdict and report id once recorded', () => {
+    m.view.mockReturnValue(
+      loaded(
+        view({
+          reviewStatus: 'reported',
+          reportedAt: '2026-10-31T09:00:00.000Z',
+          reportChannel: 'manual',
+          ncmecReportId: 'RPT-1',
+          falsePositiveAt: '2026-10-30T12:00:00.000Z',
+          previousReviewStatus: 'false_positive',
+          lastReminderAt: '2026-10-31T08:00:00.000Z',
+        })
+      )
+    );
+    renderDetail();
+    expect(screen.getByTestId('moderation-incident-report-id').textContent).toContain('RPT-1');
+    expect(screen.getByTestId('moderation-incident-reported-at').textContent).toContain('filed on the web form');
+    expect(screen.getByTestId('moderation-incident-false-positive-at')).toBeTruthy();
+    expect(screen.getByTestId('moderation-incident-reminded')).toBeTruthy();
+    expect(screen.getByTestId('moderation-incident-overrode')).toBeTruthy();
+  });
+
+  it('explains what each verdict does before the buttons', () => {
+    renderDetail();
+    const help = screen.getByTestId('moderation-incident-verdict-help').textContent ?? '';
+    expect(help).toContain('Mark false positive:');
+    expect(help).toContain('takes it out of the queue');
+    expect(help).toContain('Record report:');
+    expect(help).toContain('does not file a report for you');
   });
 
   it('disables both verdicts once the incident is not awaiting review', () => {

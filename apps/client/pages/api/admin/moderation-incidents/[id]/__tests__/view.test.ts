@@ -45,6 +45,14 @@ const INCIDENT = {
   surface: 'upload',
   reviewStatus: undefined,
   fabFileId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
+  sessionId: 'session-9',
+  questId: 'quest-9',
+  provider: 'bfl',
+  model: 'flux-pro-1.1',
+  labels: [{ name: 'Explicit', parentName: '', confidence: 97.31, _id: 'drop-me' }],
+  alertedAt: new Date('2026-10-30T10:01:00Z'),
+  reportedBy: 'admin-7',
+  falsePositiveBy: 'admin-8',
 };
 const READY = { availability: 'ready', url: 'https://signed.example/img', expiresAt: '2026-10-30T10:05:00.000Z' };
 
@@ -81,9 +89,51 @@ describe('admin/moderation-incidents/[id]/view', () => {
       createdAt: INCIDENT.createdAt,
       surface: 'upload',
       reviewStatus: 'pending_review',
+      provider: 'bfl',
+      model: 'flux-pro-1.1',
+      labels: [{ name: 'Explicit', parentName: '', confidence: 97.31 }],
+      alertedAt: INCIDENT.alertedAt,
+      lastReminderAt: null,
+      reportedAt: null,
+      ncmecReportId: null,
+      reportChannel: null,
+      falsePositiveAt: null,
+      previousReviewStatus: null,
       image: READY,
     });
-    expect(JSON.stringify((res.json as ReturnType<typeof vi.fn>).mock.calls[0][0])).not.toMatch(/user-1|fabFile|bbbb/);
+  });
+
+  it('never returns a user, session, quest, file or reviewer reference', async () => {
+    const res = makeRes();
+    await runHandler(makeReq(), res);
+    const body = JSON.stringify((res.json as ReturnType<typeof vi.fn>).mock.calls[0][0]);
+    expect(body).not.toMatch(/user-1|session-9|quest-9|fabFile|bbbb|admin-7|admin-8|drop-me/);
+  });
+
+  it('returns the prior verdict and report details once one is recorded', async () => {
+    const reportedAt = new Date('2026-10-31T09:00:00Z');
+    const falsePositiveAt = new Date('2026-10-30T12:00:00Z');
+    m.findById.mockResolvedValue({
+      ...INCIDENT,
+      reviewStatus: 'reported',
+      ncmecReportId: 'RPT-1',
+      reportChannel: 'manual',
+      reportedAt,
+      falsePositiveAt,
+      previousReviewStatus: 'false_positive',
+    });
+    const res = makeRes();
+    await runHandler(makeReq(), res);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reviewStatus: 'reported',
+        ncmecReportId: 'RPT-1',
+        reportChannel: 'manual',
+        reportedAt,
+        falsePositiveAt,
+        previousReviewStatus: 'false_positive',
+      })
+    );
   });
 
   it('accepts JWT sessions only, never an API key', () => {
