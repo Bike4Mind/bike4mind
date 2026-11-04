@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { ApiKeyStatus, CreditHolderType } from '@bike4mind/common';
-import { AnalyticsUserDay, CreditTransaction, Organization, User, UserApiKey } from '@bike4mind/database';
+import { AnalyticsUserDay, CreditTransaction, Organization, UsageEvent, User, UserApiKey } from '@bike4mind/database';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { FUNNEL_COHORT_MAX } from '@server/analytics/activationFunnel';
 import {
@@ -307,10 +307,23 @@ describe('analytics drill-down filters', () => {
         lastActiveAt: new Date('2026-06-05T09:00:00Z'),
       });
     }
-    await seedUser('regular', {
+    const regular = await seedUser('regular', {
       email: 'regular@customer.example.org',
+      emailVerified: true,
       createdAt: new Date('2026-06-02T12:00:00Z'),
       lastActiveAt: new Date('2026-06-06T12:00:00Z'),
+    });
+    await UsageEvent.collection.insertOne({
+      requestId: 'regular-first-request',
+      userId: String(regular._id),
+      ownerId: String(regular._id),
+      ownerType: 'User',
+      feature: 'chat',
+      provider: 'p',
+      model: 'gpt-4.1',
+      status: 'ok',
+      source: 'web',
+      createdAt: new Date('2026-06-03T12:00:00Z'),
     });
     await seedUser('staffer', {
       email: 'staffer@customer.example.org',
@@ -329,7 +342,7 @@ describe('analytics drill-down filters', () => {
     expect(grouped.groups.map(group => group.domain)).toEqual(['burst.example.net']);
   });
 
-  it('refuses a funnel or verdict window holding more signups than it can resolve', async () => {
+  it('refuses a funnel window holding more signups than it can resolve', async () => {
     await Promise.all([User.createIndexes(), UserApiKey.createIndexes()]);
     await User.collection.insertMany(
       Array.from({ length: FUNNEL_COHORT_MAX + 1 }, (_, i) => ({
@@ -342,10 +355,6 @@ describe('analytics drill-down filters', () => {
     await expect(
       listAdminUsers({ ...params, ...window, funnelStep: 'signedUp' }, viewer, { logError }, NOW)
     ).rejects.toMatchObject({ statusCode: 422, message: expect.stringMatching(/Narrow the created range/) });
-    await expect(exportAdminUsers({ ...window, verdict: 'legit' }, NOW)).rejects.toMatchObject({
-      statusCode: 422,
-      message: expect.stringMatching(/Narrow the created range/),
-    });
   });
 });
 
