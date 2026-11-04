@@ -583,6 +583,18 @@ describe('ModelCatalog', () => {
     });
   });
 
+  it('says so when the public list has more pages than it reads', async () => {
+    const warn = vi.fn();
+    catalog = new ModelCatalog(
+      { logger: { debug: vi.fn(), warn }, getApiClient: client, getEnvironmentUrl: () => environmentUrl },
+      { models: async () => [] } as never
+    );
+    effortsPage.mockResolvedValue({ data: [], next_cursor: 'more' });
+    await catalog.list();
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining('stopped at 5 pages')));
+    expect(effortsPage).toHaveBeenCalledTimes(5);
+  });
+
   it('lists without waiting for the effort levels, and updates the cached list when they land', async () => {
     const changed = vi.fn();
     catalog = new ModelCatalog(

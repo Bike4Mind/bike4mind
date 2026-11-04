@@ -233,6 +233,11 @@ export class ModelCatalog {
         cursor = read.nextCursor;
         if (!cursor) break;
       }
+      if (cursor) {
+        this.deps.logger.warn(
+          `CHAT: effort levels read stopped at ${PUBLIC_MODELS_MAX_PAGES} pages; later models keep the fallback levels`
+        );
+      }
     } catch (err) {
       this.deps.logger.debug(`CHAT: effort levels unavailable: ${err instanceof Error ? err.message : 'unknown'}`);
       return null;
