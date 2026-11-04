@@ -45,5 +45,6 @@ export function parseLocalContextSetting(value: unknown): LocalContextSetting {
 }
 
 export function contextSizeLabel(tokens: number): string {
-  return `${Math.round(tokens / 1024)}K tokens`;
+  const k = tokens / 1024;
+  return tokens >= 1024 && Number.isInteger(k * 10) ? `${k}K tokens` : `${tokens} tokens`;
 }

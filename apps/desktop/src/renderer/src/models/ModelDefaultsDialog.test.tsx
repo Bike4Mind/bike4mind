@@ -7,6 +7,7 @@ import type { ChatModelOption } from '@shared/chat';
 import type { ModelLoadOffer, ModelSettings } from '@shared/modelSettings';
 import type { LoadedModelState } from '@shared/models';
 import { desktopTheme } from '../theme';
+import { contextSizeLabel } from '@shared/localContextSetting';
 import { contextSent, hasModelDefaults, ModelDefaultsDialog, seedNote, seedsFor } from './ModelDefaultsDialog';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -443,6 +444,66 @@ describe('ModelDefaultsDialog load options', () => {
     expect(field.type).toBe('text');
     await click('model-defaults-save-btn');
     expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, {});
+  });
+
+  it('accepts leading zeros and surrounding spaces in the draft text and saves the number', async () => {
+    offer = OLLAMA_OFFER;
+    await render(QWEN);
+    for (const text of ['04', ' 4 ']) {
+      await fill('draft', text);
+      expect(input('draft').getAttribute('aria-invalid'), text).toBe('false');
+      await click('model-defaults-save-btn');
+      expect(setModelSettings).toHaveBeenLastCalledWith(QWEN.id, { draftTokens: 4 });
+    }
+  });
+
+  it('saves a cleared stored draft count as unset', async () => {
+    offer = OLLAMA_OFFER;
+    stored = { draftTokens: 6 };
+    await render(QWEN);
+    expect(input('draft').value).toBe('6');
+    await fill('draft', '');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, {});
+  });
+
+  it('loads a stored Auto cap and a bare Auto into the context choice', async () => {
+    offer = OLLAMA_OFFER;
+    stored = { context: { mode: 'auto', maxTokens: 32768 } };
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-select')?.textContent).toBe('Auto, up to 32K tokens');
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    offer = {
+      context: { kind: 'ollama', settings: 16384, sizes: [{ size: 16384, tokens: 16384, autoTokens: 16384 }] },
+    };
+    stored = { context: { mode: 'auto' } };
+    await render(GEMMA);
+    expect(byTestId('model-defaults-context-select')?.textContent).toBe('Auto');
+  });
+
+  it('warns about memory for a stored unlisted size that runs at a size that may not load', async () => {
+    offer = {
+      context: {
+        kind: 'ollama',
+        settings: 16384,
+        ceiling: 65536,
+        sizes: [{ size: 262144, tokens: 65536, autoTokens: 65536, loads: false }],
+      },
+    };
+    stored = { context: { mode: 'fixed', tokens: 262144 } };
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-note')?.textContent).toContain('May not load');
+  });
+
+  it('shows a stored size a budget server no longer lists, and labels sizes that are not whole K exactly', async () => {
+    offer = { context: { kind: 'budget', server: 65536, sizes: [16384] } };
+    stored = { context: { mode: 'fixed', tokens: 512 } };
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-select')?.textContent).toBe('512 tokens');
+    expect(contextSizeLabel(1536)).toBe('1.5K tokens');
+    expect(contextSizeLabel(40000)).toBe('40000 tokens');
+    expect(contextSizeLabel(2048)).toBe('2K tokens');
   });
 
   it('offers a model trained at 4096 its own size and keeps the choice', async () => {

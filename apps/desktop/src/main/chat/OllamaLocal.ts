@@ -506,7 +506,6 @@ export class OllamaLocal {
     return this.loadSettings(modelId).catch(() => ({}));
   }
 
-  /** The model's own context setting from the Models screen, else the Settings choice. */
   private async contextSetting(modelId: string): Promise<ModelContextSetting> {
     return (await this.load(modelId)).context ?? (await this.setting());
   }

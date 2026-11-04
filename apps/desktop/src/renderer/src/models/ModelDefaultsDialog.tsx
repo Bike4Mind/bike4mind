@@ -159,8 +159,8 @@ export function contextSent(offer: ModelLoadOffer, context: ModelContextSetting 
   return context.maxTokens === undefined ? offered.auto : size?.autoTokens;
 }
 
-/** The context Select values the dialog lists for an Ollama offer. */
-function listedContextValues(offered: Extract<NonNullable<ModelLoadOffer['context']>, { kind: 'ollama' }>): string[] {
+function listedContextValues(offered: NonNullable<ModelLoadOffer['context']>): string[] {
+  if (offered.kind === 'budget') return [SAME_AS_SETTINGS, ...offered.sizes.map(size => `fixed:${size}`)];
   const auto =
     offered.auto === undefined
       ? []
@@ -186,7 +186,7 @@ function draftOf(text: string, max: number): number | undefined {
 
 function storedContextLabel(context: ModelContextSetting): string {
   if (context.mode === 'fixed') return contextSizeLabel(context.tokens);
-  return `Auto, up to ${contextSizeLabel(context.maxTokens ?? 0)}`;
+  return context.maxTokens === undefined ? 'Auto' : `Auto, up to ${contextSizeLabel(context.maxTokens)}`;
 }
 
 const KEEP_ALIVE_LABELS: Record<KeepAliveSeconds, string> = {
@@ -582,7 +582,11 @@ function LoadOptionRows({
     !sameContext(context, saved?.context ?? null);
   const fixedSize = offered?.kind === 'ollama' && context?.mode === 'fixed' ? context.tokens : undefined;
   const tooLarge =
-    offered?.kind === 'ollama' && offered.sizes.find(candidate => capOf(candidate) === fixedSize)?.loads === false;
+    offered?.kind === 'ollama' &&
+    (
+      offered.sizes.find(candidate => capOf(candidate) === fixedSize) ??
+      offered.sizes.find(candidate => candidate.size === fixedSize)
+    )?.loads === false;
   return (
     <>
       <Divider sx={{ my: 1 }} />
@@ -672,7 +676,7 @@ function LoadOptionRows({
                   </Stack>
                 </Option>
               ))}
-            {offered.kind === 'ollama' && context && !listedContextValues(offered).includes(contextValue(context)) && (
+            {offered && context && !listedContextValues(offered).includes(contextValue(context)) && (
               <Option
                 value={contextValue(context)}
                 label={storedContextLabel(context)}
