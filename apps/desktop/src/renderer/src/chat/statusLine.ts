@@ -161,8 +161,11 @@ export function formatElapsed(ms: number): string {
 /** Compact counts: "820", "1.1k", "12k", "1.2M". One decimal only where it still carries meaning. */
 export function formatTokens(count: number): string {
   if (count < 1000) return String(count);
-  if (count < 10_000) return `${(count / 1000).toFixed(1)}k`;
-  if (count < 1_000_000) return `${Math.round(count / 1000)}k`;
+  // Rounded before the unit is picked, so 9999 reads "10k" and 999999 "1.0M".
+  const tenths = Math.round(count / 100);
+  if (tenths < 100) return `${(tenths / 10).toFixed(1)}k`;
+  const thousands = Math.round(count / 1000);
+  if (thousands < 1000) return `${thousands}k`;
   return `${(count / 1_000_000).toFixed(1)}M`;
 }
 

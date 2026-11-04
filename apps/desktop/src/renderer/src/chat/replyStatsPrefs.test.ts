@@ -160,6 +160,11 @@ describe('storage that throws', () => {
   };
 
   it('reads as the defaults when storage cannot be read', () => {
+    window.localStorage.setItem('b4m.chat.replyStats.rail', '0');
+    reloadReplyStatsPrefs();
+    const before = current();
+    expect(before.prefs()?.rail).toBe(false);
+    before.unmount();
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('denied');
     });

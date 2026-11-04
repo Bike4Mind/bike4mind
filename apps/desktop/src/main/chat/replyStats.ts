@@ -52,16 +52,24 @@ export function roundThinking(round: StatsRound, local = false): { ms: number; d
  * request itself, or where the span is too short to tell from latency: a tool call that arrives
  * whole, say, carries all its tokens in no time at all.
  */
-export function roundGeneration(round: StatsRound): { tokens: number; ms: number } | null {
+export function roundGeneration(round: StatsRound): { tokens: number; ms: number; untimedTokens: number } | null {
   const output = round.usage?.outputTokens;
   const { startedAt, firstTokenAt, endedAt } = round.timing;
   if (round.usage?.rate || output === undefined || firstTokenAt === undefined) return null;
   const hidden = roundThinking(round)?.derived === true;
   // From the first output, that token's own time is the prompt's. estimatedRate drops the whole
   // first read; a round records no read sizes, so this drops one token.
-  const tokens = hidden ? output : output - 1;
+  const untimedTokens = hidden ? 0 : 1;
+  const tokens = output - untimedTokens;
   const ms = endedAt - (hidden ? startedAt : firstTokenAt);
-  return tokens > 0 && ms >= MIN_ESTIMATE_SPAN_MS ? { tokens, ms } : null;
+  return tokens > 0 && ms >= MIN_ESTIMATE_SPAN_MS ? { tokens, ms, untimedTokens } : null;
+}
+
+/** A lone output token of a round roundGeneration cannot time: its time is the prompt's, so it is untimed by design. */
+function lonelyToken(round: StatsRound): number {
+  const { rate, outputTokens } = round.usage ?? {};
+  if (rate || outputTokens !== 1 || round.timing.firstTokenAt === undefined) return 0;
+  return roundThinking(round)?.derived === true ? 0 : 1;
 }
 
 /** The reply's stats from its rounds, folded onto a continued reply's earlier runs. */
@@ -73,6 +81,7 @@ export function buildReplyStats(input: ReplyStatsInput): ChatReplyStats {
   let reasoningMs = earlier?.reasoningMs;
   let firstTokenMs = earlier?.firstTokenMs;
   let generation = earlier?.generation;
+  let lonelyTokens = 0;
   // An earlier run's estimate stands in for the frames it was counted from.
   let reasoningFrames = earlier?.derived?.includes('reasoningTokens') ? (earlier.reasoningTokens ?? 0) : 0;
 
@@ -89,8 +98,17 @@ export function buildReplyStats(input: ReplyStatsInput): ChatReplyStats {
     // A self-hosted round is rated by its server, or by estimatedRate where its read guard trusts the stream.
     const generated = input.local ? null : roundGeneration(round);
     if (generated) {
-      generation = { tokens: (generation?.tokens ?? 0) + generated.tokens, ms: (generation?.ms ?? 0) + generated.ms };
+      generation = {
+        tokens: (generation?.tokens ?? 0) + generated.tokens,
+        ms: (generation?.ms ?? 0) + generated.ms,
+        untimedTokens: (generation?.untimedTokens ?? 0) + generated.untimedTokens,
+      };
+    } else if (!input.local) {
+      lonelyTokens += lonelyToken(round);
     }
+  }
+  if (generation && lonelyTokens > 0) {
+    generation = { ...generation, untimedTokens: (generation.untimedTokens ?? 0) + lonelyTokens };
   }
 
   let reasoningTokens = input.usage?.reasoningTokens;

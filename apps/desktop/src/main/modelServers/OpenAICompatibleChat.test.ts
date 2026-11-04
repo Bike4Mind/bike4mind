@@ -215,7 +215,7 @@ describe('OpenAICompatibleChat', () => {
         type: 'content',
         stopReason: 'stop',
         usage: { inputTokens: 5, outputTokens: 41 },
-        rate: { evalTokens: 40, evalMs: 2000, estimated: true },
+        rate: { evalTokens: 40, evalMs: 2000, estimated: true, untimedTokens: 1 },
       });
     });
 
@@ -275,7 +275,7 @@ describe('OpenAICompatibleChat', () => {
         type: 'content',
         stopReason: 'stop',
         usage: { inputTokens: 800, outputTokens: 41, cachedPromptTokens: 600 },
-        rate: { evalTokens: 40, evalMs: 2000, estimated: true },
+        rate: { evalTokens: 40, evalMs: 2000, estimated: true, untimedTokens: 1 },
       });
     });
 

@@ -1137,6 +1137,8 @@ export interface ChatTokenRate {
   draftAccepted?: number;
   /** Timed by this app from the first streamed token to the last, because the server reported no timings. */
   estimated?: boolean;
+  /** Output tokens an estimate left out of `evalTokens` on purpose: the first read's, whose time is the prompt's. */
+  untimedTokens?: number;
 }
 
 /** A ChatReplyStats figure that is an estimate rather than a measurement or a server's report. */
@@ -1167,7 +1169,7 @@ export interface ChatReplyStats {
    * where that time can be told apart from latency; see roundGeneration. A self-hosted reply's speed
    * is its usage's rate.
    */
-  generation?: { tokens: number; ms: number };
+  generation?: { tokens: number; ms: number; untimedTokens?: number };
   /** The figures above that are estimates; the thread marks them approximate. */
   derived?: ChatReplyStatsEstimate[];
 }

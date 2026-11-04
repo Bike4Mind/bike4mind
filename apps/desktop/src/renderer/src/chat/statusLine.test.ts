@@ -57,6 +57,16 @@ describe('formatTokens', () => {
     expect(formatTokens(12_300)).toBe('12k');
     expect(formatTokens(1_200_000)).toBe('1.2M');
   });
+
+  it('rounds before it picks the unit, so a count never reads as the next unit up in the wrong form', () => {
+    expect(formatTokens(999)).toBe('999');
+    expect(formatTokens(1000)).toBe('1.0k');
+    expect(formatTokens(9949)).toBe('9.9k');
+    expect(formatTokens(9999)).toBe('10k');
+    expect(formatTokens(10_000)).toBe('10k');
+    expect(formatTokens(999_499)).toBe('999k');
+    expect(formatTokens(999_999)).toBe('1.0M');
+  });
 });
 
 describe('totalTokens', () => {
