@@ -182,6 +182,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'integration.slack_app.reconnected': { category: 'settings', severity: 'critical', write: 'strict' },
   'integration.slack_app.manifest_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'integration.slack_workspace.deactivated': { category: 'settings', severity: 'critical', write: 'strict' },
+  // A channel's messages leave Slack as a file; recorded for both the direct download and the queued job.
+  'integration.slack_channel.exported': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'identity.sso_provider.created': { category: 'identity', severity: 'critical', write: 'strict' },
   'identity.sso_provider.updated': { category: 'identity', severity: 'critical', write: 'strict' },
   'identity.sso_provider.deleted': { category: 'identity', severity: 'critical', write: 'strict' },
@@ -283,6 +285,10 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'settings.voice_agent.updated': { category: 'settings', severity: 'info', write: 'bestEffort' },
   'settings.voice_agent.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
 
+  // Preference arena: the comparison pairs raters vote on
+  'settings.arena_pair.imported': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.arena_pair.retired': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.arena_pair.restored': { category: 'settings', severity: 'info', write: 'bestEffort' },
   // Handler coverage: signup and org access
   'org.partner_signup_rule.created': { category: 'access', severity: 'notice', write: 'strict' },
   'org.partner_signup_rule.updated': { category: 'access', severity: 'notice', write: 'strict' },
