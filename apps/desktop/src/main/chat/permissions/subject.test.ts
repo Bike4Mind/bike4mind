@@ -77,6 +77,16 @@ describe('everySessionRules', () => {
     ]);
   });
 
+  it('derives no rule for a command that reaches a distro no folder is in', () => {
+    const prompt = shellPrompt([{ text: 'cat x', pattern: 'cat *', coverable: true }]);
+    const unreachable = {
+      ...prompt,
+      always: { ...prompt.always!, ungranted: ['\\\\wsl.localhost\\Debian\\etc\\hosts'] },
+    };
+    expect(rulesFor('bash_execute', { command: 'cat x' }, prompt)).toEqual(['Bash(cat:*)']);
+    expect(rulesFor('bash_execute', { command: 'cat x' }, unreachable)).toEqual([]);
+  });
+
   it('derives the exact command for a program whose flags decide whether it sends data', () => {
     const prompt = shellPrompt([
       { text: 'curl -s http://localhost:3000', pattern: 'curl *', coverable: true },
