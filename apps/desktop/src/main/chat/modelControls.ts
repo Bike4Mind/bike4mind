@@ -11,7 +11,7 @@ import {
 } from '@bike4mind/common';
 import type { OpenAICompatibleProduct } from '@bike4mind/local-models';
 import { REASONING_EFFORT_SETTINGS, type ReasoningEffortSetting } from '@shared/chat';
-import type { ModelControls, NumericControl } from '@shared/generation';
+import { GENERATION_BOUNDS, type ModelControls, type NumericControl } from '@shared/generation';
 
 type Range = Pick<NumericControl, 'min' | 'max' | 'step'>;
 
@@ -41,9 +41,11 @@ function control(range: Range, value?: number): NumericControl {
   return { ...range, ...(value !== undefined ? { default: value } : {}), scope: 'request' };
 }
 
-function outputControl(min: number, max: number, value?: number, thinks = false): NumericControl | undefined {
+function outputControl(min: number, reported: number, value?: number, thinks = false): NumericControl | undefined {
+  const max = Math.min(reported, GENERATION_BOUNDS.maxOutputTokens.max);
   if (!Number.isFinite(max) || max <= min) return undefined;
-  return { ...control({ min, max, step: OUTPUT_STEP }, value), ...(thinks ? { includesThinking: true } : {}) };
+  const preset = value !== undefined ? Math.min(value, max) : undefined;
+  return { ...control({ min, max, step: OUTPUT_STEP }, preset), ...(thinks ? { includesThinking: true } : {}) };
 }
 
 /** The levels in `values` that name a setting, lowest first. */
@@ -107,7 +109,8 @@ export function ollamaControls(facts: OllamaModelFacts): ModelControls {
 export function withOllamaContext(controls: ModelControls, contextWindow: number): ModelControls {
   const { maxOutputTokens: output, ...rest } = controls;
   if (!output) return controls;
-  return contextWindow > output.min ? { ...rest, maxOutputTokens: { ...output, max: contextWindow } } : rest;
+  const max = Math.min(contextWindow, GENERATION_BOUNDS.maxOutputTokens.max);
+  return max > output.min ? { ...rest, maxOutputTokens: { ...output, max } } : rest;
 }
 
 /** Effort levels an OpenAI-compatible server's `reasoning_effort` takes for the gpt-oss templates. */

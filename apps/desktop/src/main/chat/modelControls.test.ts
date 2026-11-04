@@ -307,9 +307,12 @@ describe('every range', () => {
   it('stays inside the bounds the per-chat setter accepts', () => {
     const all = [
       ollamaControls({ inspected: true, contextWindow: 262_144, thinkingValues: ['low', 'high'] }),
-      ...(['llama-server', 'vllm', 'lmstudio', null] as const).map(product =>
-        openAICompatibleControls(product, { contextWindow: 1_048_576, effortLevels: true })
-      ),
+      ollamaControls({ inspected: true, contextWindow: 10_000_000 }),
+      withOllamaContext(ollamaControls({ inspected: true, contextWindow: 262_144 }), 10_000_000),
+      ...(['llama-server', 'vllm', 'lmstudio', null] as const).flatMap(product => [
+        openAICompatibleControls(product, { contextWindow: 1_048_576, effortLevels: true }),
+        openAICompatibleControls(product, { contextWindow: 10_000_000, effortLevels: true }),
+      ]),
       hostedControls(
         { id: ChatModels.CLAUDE_4_5_SONNET, backend: 'anthropic', canThink: true, maxOutputTokens: 64_000 },
         undefined,
