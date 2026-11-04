@@ -167,7 +167,7 @@ describe('BedrockNews claim routes', () => {
       mockPreview.mockResolvedValue({ ok: true, preview: { status: 'open', expiresAt: 'x', rungs: [] } });
       expect((await preview())._getJSONData()).toEqual({
         state: 'redeemed',
-        result: { claimed: [], total: 0, firstSolveCredits: 0, capped: 0 },
+        result: { claimed: [], total: 0, balance: null, firstSolveCredits: 0, capped: 0 },
       });
       expect(mockRungCredits).not.toHaveBeenCalled();
       expect(mockPayableRungCredits).not.toHaveBeenCalled();

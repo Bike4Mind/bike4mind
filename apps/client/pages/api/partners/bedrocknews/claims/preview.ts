@@ -9,9 +9,9 @@ import {
   malformedState,
   type PreviewState,
 } from '@server/partners/bedrocknewsClaimStates';
-import { previewTicket } from '@server/partners/bedrocknewsTickets';
+import { previewTicket, type ClaimResult } from '@server/partners/bedrocknewsTickets';
 
-const NOTHING_PAID = { claimed: [], total: 0, firstSolveCredits: 0, capped: 0 };
+const NOTHING_PAID: ClaimResult = { claimed: [], total: 0, balance: null, firstSolveCredits: 0, capped: 0 };
 
 export default baseApi({ auth: 'jwtOnly' })
   .use(csrfProtection())
