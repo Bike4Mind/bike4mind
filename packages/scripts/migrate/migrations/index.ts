@@ -275,6 +275,7 @@ import EnsureHeldCreditRewardIndexes from './20260921237600_ensure-heldcreditrew
 import BackfillUserLaneFlags from './20260921238100_backfill-user-lane-flags';
 import EnsureAnalyticsHopIndexes from './20260921238200_ensure-analytics-hop-indexes';
 import EnsureSpendAlertIndexes from './20260921238300_ensure-spend-alert-indexes';
+import EnsureReferralInviterIndexes from './20260921239500_ensure-referral-inviter-indexes';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -483,6 +484,7 @@ const coreMigrations: MigrationFile[] = [
   BackfillUserLaneFlags,
   EnsureAnalyticsHopIndexes,
   EnsureSpendAlertIndexes,
+  EnsureReferralInviterIndexes,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

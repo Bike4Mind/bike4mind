@@ -1682,6 +1682,8 @@ UserSchema.index(
     name: 'user_signupGrant_heldUnlock_releaseAt',
   }
 );
+// Serves the inviter's referral counts (invited, active). Built by the ensure-referral-inviter-indexes migration.
+UserSchema.index({ referredByUserId: 1 }, { name: 'user_referredByUserId' });
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
 
 // Add text index for fast user search in admin panel
