@@ -8,7 +8,7 @@ import { SELF_HOST_DOCS_URL } from '../../shared/selfHostDocs';
 
 export type StripeData = Extract<AdminSubscriptionStripe, { kind: 'stripe' }>;
 
-export const STRIPE_ERROR_MESSAGE = "Couldn't reach Stripe. The rest of this page is from our records.";
+export const STRIPE_ERROR_MESSAGE = 'Stripe request failed. The rest of this page is from our records.';
 
 const INVOICE_STATUS_TONES: Record<string, AdminStatusTone> = {
   paid: 'good',

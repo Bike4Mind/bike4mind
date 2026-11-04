@@ -157,7 +157,7 @@ describe('OverviewTab Payment card', () => {
   it('keeps every Mongo card when Stripe is down, and offers Try again', () => {
     const refetchFresh = vi.fn();
     setup(stripeDetail(), buildStripeState({ data: undefined, isError: true, refetchFresh }));
-    expect(screen.getByTestId('subscription-detail-payment-error')).toHaveTextContent("Couldn't reach Stripe");
+    expect(screen.getByTestId('subscription-detail-payment-error')).toHaveTextContent('Stripe request failed');
     expect(screen.getByTestId('subscription-detail-plan-card')).toBeInTheDocument();
     expect(screen.getByTestId('subscription-detail-credits-card')).toBeInTheDocument();
     expect(screen.getByTestId('subscription-detail-owner-card')).toBeInTheDocument();

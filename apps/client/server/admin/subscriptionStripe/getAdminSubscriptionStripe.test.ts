@@ -159,6 +159,16 @@ describe('getAdminSubscriptionStripe', () => {
     expect((result as { invoices: unknown[] }).invoices).toHaveLength(300);
   });
 
+  it('warns when a paid invoice comes back without expanded payments', async () => {
+    mocks.list.mockReturnValue(pages([invoice('in_1', { payments: undefined }), invoice('in_2')]));
+    const logger = { warn: vi.fn() } as unknown as Logger;
+    await getAdminSubscriptionStripe(ID, { fresh: true, logger });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('without payments'),
+      expect.objectContaining({ subscriptionId: 'sub_1', invoiceIds: ['in_1'] })
+    );
+  });
+
   it('keeps invoices when the upcoming preview fails, and skips it for a canceling subscription', async () => {
     mocks.createPreview.mockRejectedValue(new Error('preview down'));
     const logger = { warn: vi.fn() } as unknown as Logger;

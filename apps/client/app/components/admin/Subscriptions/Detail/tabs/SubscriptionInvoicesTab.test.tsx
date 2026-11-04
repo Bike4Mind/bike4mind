@@ -103,7 +103,7 @@ describe('SubscriptionInvoicesTab', () => {
   it('shows the Stripe error with Try again', () => {
     const refetchFresh = vi.fn();
     renderTab(buildStripeState({ data: undefined, isError: true, refetchFresh }));
-    expect(screen.getByTestId('subscription-invoices-error')).toHaveTextContent("Couldn't reach Stripe");
+    expect(screen.getByTestId('subscription-invoices-error')).toHaveTextContent('Stripe request failed');
     fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
     expect(refetchFresh).toHaveBeenCalled();
   });
