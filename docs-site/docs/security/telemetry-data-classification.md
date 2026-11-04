@@ -484,6 +484,8 @@ The ASN, country and hosting flag are also copied to Stripe as `signup_asn`, `si
 
 Signup grant assessments also emit one of the `signup-grant-assessed-full`, `signup-grant-assessed-reduced`, or `signup-grant-assessed-review` log markers after commit. These markers contain only the outcome band, without account identifiers, policy weights, network observations, or challenge tokens. CloudWatch metric filters count them for monitoring and an optional review-volume alarm. The markers follow the server log group's retention; metric counts follow CloudWatch retention. Emission is best effort, so counts are operational monitoring rather than an exact grant ledger.
 
+`signupGrantAssessment.signals` stores the numeric and boolean values the signup risk collector observed (for example a datacenter flag and recent signup counts from the same network), recorded once at email verification so candidate policies can be replayed offline. It holds no IP address or other free text, is visible only to admins, and is kept for the account lifetime and deleted with the account. It is absent when no collector ran or the collector failed.
+
 ## Waitlist signup network metadata
 
 A waitlist request (the public subscribe form, or a sign-up attempt while registration is closed) stores a smaller copy of the same network capture on the `Subscriber` row as `signupNetwork`. These people have no account yet, so the full IP is never stored: only its /24 (IPv4) or /48 (IPv6) prefix is kept. The daily `signupIpRetention` job clears the whole `signupNetwork` object once it is 90 days old. The waitlist row itself stays until an admin deletes it. The data is shown only to admins, in the network column of the Invite Center waitlist.
