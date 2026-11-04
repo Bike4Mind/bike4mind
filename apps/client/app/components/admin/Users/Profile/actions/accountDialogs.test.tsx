@@ -4,6 +4,7 @@ import {
   ApiKeyTrustDialog,
   DeleteUserDialog,
   EmailVerificationDialog,
+  InternalAccountDialog,
   LoginAsDialog,
   ResetMfaDialog,
   RestrictDialog,
@@ -328,6 +329,60 @@ describe('account dialogs', () => {
           reason: 'Known integration',
         })
       );
+    });
+  });
+
+  describe('InternalAccountDialog', () => {
+    it('marks a customer account internal with isInternal: true, and undoes it', async () => {
+      renderDialog((user, close) => <InternalAccountDialog user={user} onClose={close} />);
+
+      expect(screen.getByTestId('internal-account-dialog-preview-before')).toHaveTextContent('Customer');
+      expect(screen.getByTestId('internal-account-dialog-preview-after')).toHaveTextContent('Internal');
+      expect(confirmButton('internal-account-dialog')).toBeDisabled();
+      pickReason('internal-account-dialog');
+      fireEvent.click(confirmButton('internal-account-dialog'));
+
+      await waitFor(() =>
+        expect(mocks.apiPost).toHaveBeenCalledWith(`/api/admin/users/${USER_ID}/internal`, {
+          isInternal: true,
+          reason: 'Team member',
+        })
+      );
+      fireEvent.click(await screen.findByTestId('undo-toast-undo-btn'));
+      await waitFor(() =>
+        expect(mocks.apiPost).toHaveBeenLastCalledWith(`/api/admin/users/${USER_ID}/internal`, {
+          isInternal: false,
+          reason: 'Undo: Team member',
+        })
+      );
+    });
+
+    it('stops marking an internal account with isInternal: false', async () => {
+      renderDialog(
+        (user, close) => <InternalAccountDialog user={user} onClose={close} />,
+        buildProfile({ isInternal: true })
+      );
+
+      expect(screen.getByTestId('internal-account-dialog-preview-before')).toHaveTextContent('Internal');
+      expect(screen.getByTestId('internal-account-dialog-preview-after')).toHaveTextContent('Customer');
+      pickReason('internal-account-dialog');
+      fireEvent.click(confirmButton('internal-account-dialog'));
+
+      await waitFor(() =>
+        expect(mocks.apiPost).toHaveBeenCalledWith(`/api/admin/users/${USER_ID}/internal`, {
+          isInternal: false,
+          reason: 'Team member',
+        })
+      );
+    });
+    it('previews an admin as internal either way, since analytics counts an admin as internal', () => {
+      renderDialog(
+        (user, close) => <InternalAccountDialog user={user} onClose={close} />,
+        buildProfile({ isInternal: true, isAdmin: true })
+      );
+
+      expect(screen.getByTestId('internal-account-dialog-preview-before')).toHaveTextContent('Internal');
+      expect(screen.getByTestId('internal-account-dialog-preview-after')).toHaveTextContent('Internal (admin)');
     });
   });
 

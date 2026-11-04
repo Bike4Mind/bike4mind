@@ -8,7 +8,7 @@ vi.mock('../chat/tools/userPath', async importOriginal => ({
   hostProgram: async (name: string) => `C:\\Git\\cmd\\${name}.exe`,
 }));
 
-import { createRepositoryResolver } from './repository';
+import { createRepositoryResolver, gitRemoteSettings } from './repository';
 
 describe('fleet repository host overrides', () => {
   beforeEach(() => {
@@ -26,6 +26,20 @@ describe('fleet repository host overrides', () => {
       'config',
       '--get',
       'remote.origin.url',
+    ]);
+  });
+
+  it('reads every remote url and gh default under the same overrides', async () => {
+    execFile.mockImplementation((_cmd, _args, _opts, cb) => cb(null, 'remote.origin.url https://github.com/o/r.git\n'));
+
+    expect(await gitRemoteSettings('/repo')).toBe('remote.origin.url https://github.com/o/r.git');
+    expect(execFile.mock.calls[0][1]).toEqual([
+      ...HOST_GIT_CONFIG_ARGS,
+      '-C',
+      '/repo',
+      'config',
+      '--get-regexp',
+      '^remote\\..*\\.(url|gh-resolved)$',
     ]);
   });
 });

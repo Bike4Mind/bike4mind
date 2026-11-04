@@ -211,5 +211,6 @@ describe('SpendRollupRepository reads', () => {
     const series = await spendRollupRepository.windowSeries('User', ['a'], bucketStart, new Date(third.getTime() + 1));
 
     expect(series.get('a')?.map(doc => doc.bucketStart)).toEqual([bucketStart, second, third]);
+    expect(Object.keys(series.get('a')?.[0] ?? {}).sort()).toEqual(['bucketStart', 'costUsd', 'credits', 'scopeId']);
   });
 });

@@ -92,6 +92,9 @@ export const GenericCreditAddTransaction = BaseCreditTransaction.extend({
   transactionId: z.string().optional(),
 });
 
+// Reason on the generic_add ledger row of an inviter reward; the client chart and the server grants must agree on it.
+export const REFERRAL_REWARD_REASON = 'referral_reward';
+
 /**
  * Built-in reasons for generic credit deductions; they seed the registry below.
  * A package that needs a new reason registers it with registerGenericDeductReason

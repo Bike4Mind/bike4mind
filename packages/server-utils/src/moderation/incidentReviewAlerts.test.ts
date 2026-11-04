@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ImageModerationIncident } from '@bike4mind/common';
-import { withReviewerAlerts, type IncidentReviewAlertDeps, type RecordedIncident } from './incidentReviewAlerts';
+import {
+  renderIncidentReminderDigest,
+  withReviewerAlerts,
+  type IncidentReviewAlertDeps,
+  type RecordedIncident,
+} from './incidentReviewAlerts';
 
 const INPUT: ImageModerationIncident = {
   userId: 'user-7f3a',
@@ -248,5 +253,20 @@ describe('withReviewerAlerts', () => {
     expect(html).toContain('unknown');
     expect(html).toContain('incident-&lt;script&gt;&amp;');
     expect(html).not.toContain('<script>');
+  });
+});
+
+describe('renderIncidentReminderDigest', () => {
+  it('carries a count, an age and a link, and nothing about any incident', () => {
+    const email = renderIncidentReminderDigest(
+      { pendingCount: 3, oldestAgeMinutes: 61 },
+      'https://app.example/admin?a=1&b=2'
+    );
+
+    expect(email.subject).toBe('Moderation reviews still pending');
+    expect(email.html).toContain('>3<');
+    expect(email.html).toContain('1 hour<');
+    expect(email.html).toContain('https://app.example/admin?a=1&amp;b=2');
+    expect(email.html).not.toMatch(/incident-|user|label/i);
   });
 });

@@ -71,6 +71,8 @@ const ReferralSubscriptionRewardSchema = new Schema<ReferralSubscriptionRewardDo
 ReferralSubscriptionRewardSchema.index({ status: 1, releaseAt: 1 });
 ReferralSubscriptionRewardSchema.index({ paymentIntentId: 1 }, { sparse: true });
 ReferralSubscriptionRewardSchema.index({ payerId: 1 });
+// Serves the inviter's subscribed-friends count. Built by the ensure-referral-inviter-indexes migration.
+ReferralSubscriptionRewardSchema.index({ inviterId: 1 });
 ReferralSubscriptionRewardSchema.index({ stepKey: 1 }, { unique: true, sparse: true });
 
 type ReferralSubscriptionRewardModel = Model<ReferralSubscriptionRewardDocument>;
@@ -125,6 +127,12 @@ export class ReferralSubscriptionRewardRepository {
   async findByPaymentIntentId(paymentIntentId: string): Promise<ReferralSubscriptionReward | null> {
     const doc = await this.model.findOne({ paymentIntentId }).lean<ReferralSubscriptionRewardDocument>();
     return doc ? toReward(doc) : null;
+  }
+
+  /** Distinct friends of this inviter with a reward still standing (held or released), not refunded away. */
+  async countSubscribedFriends(inviterId: string): Promise<number> {
+    const payerIds = await this.model.distinct('payerId', { inviterId, status: { $in: ['pending', 'released'] } });
+    return payerIds.length;
   }
 
   /** Steps of this payer that are used: the 1st and 2nd payment each count once. */

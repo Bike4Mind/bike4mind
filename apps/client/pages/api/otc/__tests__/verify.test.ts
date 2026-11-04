@@ -128,6 +128,7 @@ const mockUserUpdate = vi.fn();
 const mockClearPending = vi.fn();
 const mockAddTagsToUser = vi.fn();
 const mockReleasePending = vi.fn();
+const mockFindUserById = vi.fn();
 const mockDomainEstablished = vi.fn(async (_domain: string, _verifiedBefore: Date) => false);
 // Default: this inbox has not claimed its free-credit grant anywhere else, so the domain grant pays.
 const mockClaimFreeCreditGrant = vi.fn(async (_userId: string) => true);
@@ -162,6 +163,7 @@ vi.mock('@bike4mind/database', () => ({
   creditLotRepository: {},
   userRepository: {
     findByEmail: (...a: unknown[]) => mockFindByEmail(...a),
+    findById: (...a: unknown[]) => mockFindUserById(...a),
     count: vi.fn(),
     update: (...a: unknown[]) => mockUserUpdate(...a),
     clearPendingFreeCreditGrant: (...a: unknown[]) => mockClearPending(...a),
@@ -544,6 +546,24 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     );
   });
 
+  it("passes an internal account's flags to the product credit, so the credit carries its mark", async () => {
+    mockRecordSignupAcquisition.mockResolvedValueOnce({ isSynthetic: false, isInternal: true });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    (req as any).headers.cookie = `${firstTouch}; b4m-consent-decision=granted`;
+
+    await handler(req, res);
+
+    expect(mockEmitSignup).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1', account: { isSynthetic: false, isInternal: true } })
+    );
+    expect(mockEmitFunnelEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'signup_completed',
+        user: expect.objectContaining({ id: 'user-1', isInternal: true }),
+      })
+    );
+  });
+
   it("credits the new account's signup to the product in its touch cookies, as an otc signup", async () => {
     const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
     (req as any).headers.cookie = `${firstTouch}; b4m-consent-decision=granted`;
@@ -555,6 +575,7 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
       userId: 'user-1',
       touches: { firstTouch: { source: 'widgets' } },
       method: 'otc',
+      account: { isSynthetic: false },
     });
   });
 
@@ -766,7 +787,12 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(mockEmitSignup).toHaveBeenCalledWith({ userId: 'user-1', touches: {}, method: 'otc' });
+    expect(mockEmitSignup).toHaveBeenCalledWith({
+      userId: 'user-1',
+      touches: {},
+      method: 'otc',
+      account: { isSynthetic: false },
+    });
   });
 
   // The case SameSite=Lax exists for, and the one the first version of this gate suppressed: a
@@ -784,6 +810,7 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
       userId: 'user-1',
       touches: { firstTouch: { source: 'widgets' } },
       method: 'otc',
+      account: { isSynthetic: false },
     });
   });
 
@@ -796,7 +823,12 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(mockEmitSignup).toHaveBeenCalledWith({ userId: 'user-1', touches: {}, method: 'otc' });
+    expect(mockEmitSignup).toHaveBeenCalledWith({
+      userId: 'user-1',
+      touches: {},
+      method: 'otc',
+      account: { isSynthetic: false },
+    });
   });
 
   // The guard is structural, not conditional: the emit sits after the existingUser branch has
@@ -1324,10 +1356,62 @@ describe('/api/otc/verify - partner-domain invite bypass', () => {
     mockFindByEmail.mockResolvedValue(null);
     mockRegisterViaOTC.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 0 });
     mockPartnerGrant.mockResolvedValue(noGrant);
+    mockReleasePending.mockResolvedValue({ released: false, creditsGranted: 0, currentCredits: null, patch: {} });
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it('releases the pending free credits only after the invite transaction has committed', async () => {
+    let committed = false;
+    mockWithTransaction.mockImplementationOnce(async callback => {
+      const result = await callback();
+      committed = true;
+      return result;
+    });
+    let releasedAfterCommit: boolean | null = null;
+    mockReleasePending.mockImplementation(async () => {
+      releasedAfterCommit = committed;
+      return { released: true, creditsGranted: 3000, currentCredits: 3000, patch: { tags: [] } };
+    });
+    mockClearPending.mockResolvedValue({ tags: [] });
+    mockFindUserById.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 3000 });
+    mockRegisterViaOTC.mockResolvedValue({
+      id: 'user-1',
+      tokenVersion: 0,
+      currentCredits: 0,
+      tags: ['Customer', PENDING_FREE_CREDITS_TAG],
+      pendingCreditGrant: 3000,
+    });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    req.body.inviteCode = 'INVITE123';
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRegisterViaOTC).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ deferFreeCreditRelease: true })
+    );
+    expect(mockReleasePending).toHaveBeenCalledTimes(1);
+    expect(mockReleasePending.mock.calls[0][0]).toEqual({
+      id: 'user-1',
+      tags: ['Customer', PENDING_FREE_CREDITS_TAG],
+      pendingCreditGrant: 3000,
+    });
+    expect(releasedAfterCommit).toBe(true);
+  });
+
+  it('leaves the credit release to registerViaOTC when there is no invite transaction', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRegisterViaOTC).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ deferFreeCreditRelease: false })
+    );
+    expect(mockReleasePending).not.toHaveBeenCalled();
   });
 
   it('forwards a validated invite without skipping the registration gate', async () => {

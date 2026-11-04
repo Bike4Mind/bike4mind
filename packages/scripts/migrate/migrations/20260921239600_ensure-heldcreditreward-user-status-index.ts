@@ -9,7 +9,7 @@ import { type MigrationFile } from './index';
  * Idempotent: createIndexes is a no-op for an index that already matches.
  */
 const migration: MigrationFile = {
-  id: 20260921238300,
+  id: 20260921239600,
   name: 'ensure heldcreditreward user status index',
 
   up: async () => {
