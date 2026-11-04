@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useNavigate, useSearch, Link } from '@tanstack/react-router';
 import {
@@ -10,7 +10,6 @@ import {
   CircularProgress,
   Link as JoyLink,
   List,
-  ListDivider,
   ListItem,
   Sheet,
   Typography,
@@ -384,24 +383,30 @@ const ReadyView = ({
         <Typography textColor="text.tertiary" sx={LABEL_SX}>
           Solved words ({rungs.length})
         </Typography>
-        <List sx={{ '--ListItem-paddingX': '0px', '--ListItem-minHeight': '38px', '--ListDivider-gap': '0px', py: 0 }}>
+        <List sx={{ '--ListItem-paddingX': '0px', '--ListItem-minHeight': '38px', py: 0 }}>
           {rungs.map((rung, index) => (
-            <Fragment key={`${rung.date}-${rung.length}`}>
-              {index > 0 && <ListDivider />}
-              <ListItem data-testid="claim-rung" sx={{ justifyContent: 'space-between', gap: 1.25 }}>
-                <Typography sx={{ fontSize: '14px' }}>
-                  <Typography component="span" textColor="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                    {rung.date}
-                  </Typography>
-                  {` \u00b7 ${rung.length}-letter word`}
+            <ListItem
+              key={`${rung.date}-${rung.length}`}
+              data-testid="claim-rung"
+              sx={{
+                justifyContent: 'space-between',
+                gap: 1.25,
+                borderTop: index > 0 ? '1px solid' : 'none',
+                borderColor: 'divider',
+              }}
+            >
+              <Typography sx={{ fontSize: '14px' }}>
+                <Typography component="span" textColor="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {rung.date}
                 </Typography>
-                {rung.hard && (
-                  <Chip size="sm" variant="soft" color="warning" sx={{ fontSize: '12px', fontWeight: 600 }}>
-                    Hard mode
-                  </Chip>
-                )}
-              </ListItem>
-            </Fragment>
+                {` \u00b7 ${rung.length}-letter word`}
+              </Typography>
+              {rung.hard && (
+                <Chip size="sm" variant="soft" color="warning" sx={{ fontSize: '12px', fontWeight: 600 }}>
+                  Hard mode
+                </Chip>
+              )}
+            </ListItem>
           ))}
         </List>
       </Box>
