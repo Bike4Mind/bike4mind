@@ -207,18 +207,15 @@ export const createInvite = async (
     const resolvedEmails = [...matchedByEmailOrName, ...byId]
       .map(u => u.email)
       .filter((email): email is string => Boolean(email));
-    // A Project invite may name someone with no account yet by exact address: they register with
+    // A Project or Organization invite may name someone with no account yet by exact address: they register with
     // that email and find the invite waiting. Stored lowercased; an SSO signup keeps the provider's
     // casing, which is why accept.ts and refuseWholeInvite.ts match pending case-insensitively.
     // Built the same whether or not the address belongs to an account, so the response reveals
     // nothing new (toSharerInviteViews lowercases typed addresses for the same reason).
     const resolvedLower = new Set(resolvedEmails.map(email => email.toLowerCase()));
-    const unregistered =
-      type === InviteType.Project
-        ? recipientsArray
-            .map(recipient => recipient.trim().toLowerCase())
-            .filter(recipient => z.email().safeParse(recipient).success && !resolvedLower.has(recipient))
-        : [];
+    const unregistered = recipientsArray
+      .map(recipient => recipient.trim().toLowerCase())
+      .filter(recipient => z.email().safeParse(recipient).success && !resolvedLower.has(recipient));
     pending = Array.from(new Set([...resolvedEmails, ...unregistered]));
     // An invite naming only unresolvable recipients can never be viewed or accepted by anyone now
     // that those gates key on `pending`, so fail loudly at mint time instead of persisting a row
@@ -306,7 +303,15 @@ const inviteToOrg = async (
   }
 
   const invites = await db.invites.findAllByDocumentId(organization.id);
-  const pending = invites?.map(invite => invite.recipients?.pending || []).flat().length;
+  const now = new Date();
+  const pending = invites
+    .filter(
+      invite =>
+        invite.type === InviteType.Organization &&
+        invite.remaining > 0 &&
+        (!invite.expiresAt || new Date(invite.expiresAt) > now)
+    )
+    .reduce((count, invite) => count + (invite.recipients?.pending?.length ?? 0), 0);
 
   if (totalUsers + pending + params.recipients.length > organization.seats) {
     throw new BadRequestError('Organization is full');

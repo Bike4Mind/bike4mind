@@ -236,7 +236,7 @@ describe('invite bonus', () => {
     expect((await User.findById(invited.id))?.signupGrant?.inviteBonusPaid).toBe(2000);
   });
 
-  it('pays no bonus on a reduced tranche or to an account held for review', async () => {
+  it('pays no bonus on a reduced tranche', async () => {
     const reduced = await createUser(1, true);
     await User.updateOne(
       { _id: reduced.id },
@@ -256,25 +256,37 @@ describe('invite bonus', () => {
     );
     await userService.releaseSignupTranche(reduced.id, adapters);
     expect(await creditsOf(reduced.id)).toBe(500);
-
-    config.signupGrantInviteBonusCredits = '0';
-    const held = await createUser(2, true);
-    await userService.releaseSignupTranche(held.id, adapters);
-    config.signupGrantInviteBonusCredits = '2000';
-    await User.updateOne({ _id: held.id }, { $set: { signupGrantHeldReason: 'risk_review' } });
-    expect((await userService.payInviteBonus(held.id, adapters)).creditsGranted).toBe(0);
     expect(await bonusRows()).toBe(0);
   });
 
+  it('pays no deferred bonus to an account held for review', async () => {
+    config.signupGrantSignupPoolDaily = '1000';
+    const held = await createUser(1, true);
+    await userService.releaseSignupTranche(held.id, adapters);
+    expect((await User.findById(held.id))?.signupGrant?.inviteBonusPaid).toBeUndefined();
+
+    config.signupGrantSignupPoolDaily = UNCAPPED;
+    await User.updateOne({ _id: held.id }, { $set: { signupGrantHeldReason: 'risk_review' } });
+    expect((await userService.payInviteBonus(held.id, adapters)).creditsGranted).toBe(0);
+    expect(await bonusRows()).toBe(0);
+    expect(await creditsOf(held.id)).toBe(1000);
+    expect(await spent('signup')).toBe(1000);
+    expect((await User.findById(held.id))?.signupGrant?.inviteBonusPaid).toBeUndefined();
+  });
+
   it('pays no bonus to an account an admin blocked from grants and rewards', async () => {
-    config.signupGrantInviteBonusCredits = '0';
+    config.signupGrantSignupPoolDaily = '1000';
     const blocked = await createUser(1, true);
     await userService.releaseSignupTranche(blocked.id, adapters);
-    config.signupGrantInviteBonusCredits = '2000';
+    expect((await User.findById(blocked.id))?.signupGrant?.inviteBonusPaid).toBeUndefined();
+
+    config.signupGrantSignupPoolDaily = UNCAPPED;
     await User.updateOne({ _id: blocked.id }, { $set: { 'signupGrant.blocked': { at: new Date() } } });
     expect((await userService.payInviteBonus(blocked.id, adapters)).creditsGranted).toBe(0);
     expect(await bonusRows()).toBe(0);
     expect(await creditsOf(blocked.id)).toBe(1000);
+    expect(await spent('signup')).toBe(1000);
+    expect((await User.findById(blocked.id))?.signupGrant?.inviteBonusPaid).toBeUndefined();
   });
 
   it('leaves the bonus unpaid on an exhausted signup pool and pays it on a later call', async () => {
@@ -289,6 +301,33 @@ describe('invite bonus', () => {
     expect((await userService.payInviteBonus(invited.id, adapters)).creditsGranted).toBe(2000);
     expect(await creditsOf(invited.id)).toBe(3000);
     expect(await spent('signup')).toBe(3000);
+  });
+
+  it('keeps the invite bonus metered when a payment unlock bypasses the held tranche budget', async () => {
+    config.signupGrantSignupPoolDaily = '0';
+    config.signupUnlockPaymentHoldHours = '0';
+    const invited = await createUser(1, true);
+    expect(await userService.releaseSignupTranche(invited.id, adapters)).toMatchObject({ withheld: true });
+    expect(await creditsOf(invited.id)).toBe(0);
+
+    await userService.unlockSignupGrant(invited.id, 'subscription', {
+      ...adapters,
+      validators: { subscription: async () => true },
+    });
+    expect(await creditsOf(invited.id)).toBe(10000);
+    expect((await User.findById(invited.id))?.signupGrant).toMatchObject({
+      stage: 'unlocked',
+      creditsReleased: 10000,
+    });
+    expect((await User.findById(invited.id))?.signupGrant?.inviteBonusPaid).toBeUndefined();
+    expect(await bonusRows()).toBe(0);
+    expect(await spent('signup')).toBe(0);
+
+    config.signupGrantSignupPoolDaily = UNCAPPED;
+    expect((await userService.payInviteBonus(invited.id, adapters)).creditsGranted).toBe(2000);
+    expect(await creditsOf(invited.id)).toBe(12000);
+    expect(await spent('signup')).toBe(2000);
+    expect(await bonusRows()).toBe(1);
   });
 
   it('pays once when calls race', async () => {

@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { InviteType, SIGNUP_UNLOCK_FORFEIT_CAUSES } from '@bike4mind/common';
+import { InviteType, Permission, SIGNUP_UNLOCK_FORFEIT_CAUSES } from '@bike4mind/common';
 import {
   AdminSettings,
   CreditTransaction,
@@ -361,4 +361,87 @@ describe('payOrgInviteBonus', () => {
     expect(await payOrgInviteBonus(user.id, invite.id)).toBe(0);
     expect(await CreditTransaction.countDocuments({})).toBe(0);
   });
+
+  async function addMembership(userId: string) {
+    await Organization.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(organizationId) },
+      { $set: { users: [{ userId, permissions: [Permission.read] }] } }
+    );
+  }
+
+  it('recovers missing attribution from an accepted invitation to the member inbox once', async () => {
+    await createOrganization(true);
+    const invite = await createInvite();
+    const user = await createUser('new', { ...released, email: 'New+offer@example.test' });
+    await Invite.collection.updateOne(
+      { _id: invite._id },
+      { $set: { 'recipients.accepted': ['NEW+OFFER@EXAMPLE.TEST'] } }
+    );
+    await addMembership(user.id);
+
+    expect(await retryOrgInviteBonus(user.id)).toBe(2000);
+    expect(await retryOrgInviteBonus(user.id)).toBe(0);
+
+    const stored = await User.findById(user.id).lean();
+    expect(stored?.signupInvite).toEqual({
+      source: 'organization',
+      inviteId: invite.id,
+      organizationId,
+      at: expect.any(Date),
+    });
+    expect(stored?.signupGrant?.inviteBonusPaid).toBe(2000);
+    expect(await CreditTransaction.countDocuments({ transactionId: `invite-bonus:${user.id}` })).toBe(1);
+  });
+
+  it('recovers after the initial standing lookup failed before attribution was written', async () => {
+    await createOrganization(true);
+    const invite = await createInvite();
+    const user = await createUser('new', released);
+    await addMembership(user.id);
+    vi.mocked(isPayingOrganization).mockRejectedValueOnce(new Error('standing unavailable'));
+
+    await expect(payOrgInviteBonus(user.id, invite.id)).rejects.toThrow('standing unavailable');
+    expect((await User.findById(user.id).lean())?.signupInvite).toBeUndefined();
+    expect(await retryOrgInviteBonus(user.id)).toBe(2000);
+    expect(await CreditTransaction.countDocuments({ transactionId: `invite-bonus:${user.id}` })).toBe(1);
+  });
+
+  it.each(['preexisting', 'pending', 'wrong-inbox', 'no-membership', 'unpaid', 'referral'] as const)(
+    'does not recover an organization bonus for %s accounts',
+    async scenario => {
+      await createOrganization(scenario !== 'unpaid');
+      const invite = await createInvite();
+      const user = await createUser('new', released);
+      if (scenario !== 'no-membership') await addMembership(user.id);
+      if (scenario === 'preexisting') {
+        await User.collection.updateOne({ _id: user._id }, { $set: { createdAt: new Date(0) } });
+      }
+      if (scenario === 'pending') {
+        await Invite.collection.updateOne(
+          { _id: invite._id },
+          { $set: { recipients: { pending: [user.email], accepted: [], refused: [] } } }
+        );
+      }
+      if (scenario === 'wrong-inbox') {
+        await Invite.collection.updateOne(
+          { _id: invite._id },
+          { $set: { 'recipients.accepted': ['other@example.test'] } }
+        );
+      }
+      const referral = { source: 'referral', inviteId: 'original-referral', at: new Date() };
+      if (scenario === 'referral') {
+        await User.collection.updateOne({ _id: user._id }, { $set: { signupInvite: referral } });
+      }
+
+      expect(await retryOrgInviteBonus(user.id)).toBe(0);
+      expect(await CreditTransaction.countDocuments({})).toBe(0);
+      const stored = await User.findById(user.id).lean();
+      if (scenario === 'referral') expect(stored?.signupInvite).toEqual(referral);
+      else expect(stored?.signupInvite).toBeUndefined();
+      expect(
+        (await Organization.collection.findOne({ _id: new mongoose.Types.ObjectId(organizationId) }))
+          ?.signupInviteBonusCount
+      ).toBeUndefined();
+    }
+  );
 });

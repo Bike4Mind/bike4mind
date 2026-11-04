@@ -14,7 +14,7 @@ import { reserveSignupGrantBudget, type SignupGrantBudgetReservation } from './s
 
 export type InviteBonusResult = { creditsGranted: number; budgetExhausted?: boolean };
 
-type InviteBonusAdapters = Pick<FreeCreditAdapters, 'db' | 'bypassBudget'> & {
+type InviteBonusAdapters = Pick<FreeCreditAdapters, 'db'> & {
   /**
    * Set only by a caller that just confirmed the organization still pays
    * (apps/client/server/credits/orgInviteBonus.ts); an organization invite's bonus is never paid without it.
@@ -67,13 +67,11 @@ export async function payInviteBonus(userId: string, adapters: InviteBonusAdapte
     const result = await inCallerTransaction<InviteBonusResult>(async () => {
       const user = await db.users.findById(userId);
       if (!isInviteBonusEligible(user, orgStandingVerified)) return { creditsGranted: 0 };
-      if (!adapters.bypassBudget) {
-        const reservation = await reserveSignupGrantBudget(db, transactionId, amount, { pool: 'signup' });
-        reservations.push(reservation);
-        if (reservation.outcome === 'exhausted') return { creditsGranted: 0, budgetExhausted: true };
-        // Another attempt may refund its draw. A transaction retry can reuse our own earlier draw.
-        if (reservation.outcome === 'reserved' && !reservations.some(held => held.fresh)) return { creditsGranted: 0 };
-      }
+      const reservation = await reserveSignupGrantBudget(db, transactionId, amount, { pool: 'signup' });
+      reservations.push(reservation);
+      if (reservation.outcome === 'exhausted') return { creditsGranted: 0, budgetExhausted: true };
+      // Another attempt may refund its draw. A transaction retry can reuse our own earlier draw.
+      if (reservation.outcome === 'reserved' && !reservations.some(held => held.fresh)) return { creditsGranted: 0 };
       if (user.signupInvite?.source === 'organization') {
         if (!adapters.reserveOrganizationBonusSeat)
           throw new Error('Organization invite bonus requires a transactional seat reservation');

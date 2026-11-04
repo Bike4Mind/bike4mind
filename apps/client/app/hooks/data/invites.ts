@@ -110,6 +110,8 @@ export function useAcceptDocument({
           toast.success('Successfully joined the project');
           break;
         case InviteType.Organization:
+          queryClient.invalidateQueries({ queryKey: ['organizations', result.documentId] });
+          queryClient.invalidateQueries({ queryKey: ['users', 'organization', result.documentId] });
           toast.success('Successfully joined the organization');
           break;
         default:

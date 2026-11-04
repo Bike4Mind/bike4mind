@@ -5,10 +5,12 @@ import {
   creditTransactionRepository,
   inviteRepository,
   Organization,
+  organizationRepository,
   User,
   userRepository,
 } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
+import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { signupProtection } from '@server/auth/signupProtection';
 import { isPayingOrganization } from '@server/entitlements/orgPaidStanding';
 
@@ -108,13 +110,32 @@ export async function payOrgInviteBonus(userId: string, inviteId: string): Promi
 }
 
 /**
- * Retries an organization invite bonus left unpaid at acceptance (an exhausted signup pool, a held
- * tranche), re-checking that the organization still pays. Returns the credits paid.
+ * Recovers missing attribution from accepted invites in current organizations and retries an unpaid
+ * bonus, re-checking that the organization still pays. Returns the credits paid.
  */
 export async function retryOrgInviteBonus(userId: string): Promise<number> {
   const user = await userRepository.findById(userId);
-  const signupInvite = user?.signupInvite;
-  if (signupInvite?.source !== 'organization' || !signupInvite.organizationId) return 0;
   if (!user?.signupGrant || user.signupGrant.inviteBonusPaid != null) return 0;
-  return payForPayingOrganization(userId, signupInvite.organizationId);
+  const signupInvite = user.signupInvite;
+  if (signupInvite) {
+    if (signupInvite.source !== 'organization' || !signupInvite.organizationId) return 0;
+    return payForPayingOrganization(userId, signupInvite.organizationId);
+  }
+  if (!user.email || !(user.createdAt instanceof Date)) return 0;
+
+  // Acceptance may commit before attribution fails, or arrive through an API key. Recover only
+  // from accepted invitations to this inbox in organizations the account still belongs to.
+  const organizationIds = await organizationRepository.findMembershipOrgIds(userId);
+  for (const organizationId of organizationIds.toSorted()) {
+    const invite = await inviteRepository.findOne({
+      type: InviteType.Organization,
+      documentId: organizationId,
+      createdAt: { $lte: user.createdAt },
+      'recipients.accepted': { $regex: `^${escapeRegex(user.email)}$`, $options: 'i' },
+    });
+    if (!invite) continue;
+    const credits = await payOrgInviteBonus(userId, invite.id);
+    if (credits > 0 || (await userRepository.findById(userId))?.signupInvite) return credits;
+  }
+  return 0;
 }
