@@ -41,7 +41,7 @@ beforeEach(() => {
 
 describe('McpOAuthCallbackPage', () => {
   it('posts the one-time parameters once and returns to Integrations', async () => {
-    h.boot = '?code=c1&state=s1&iss=https%3A%2F%2Fauth.example.com';
+    h.boot = '?code=c1&state=post-s1&iss=https%3A%2F%2Fauth.example.com';
     renderPage();
     await waitFor(() =>
       expect(h.navigate).toHaveBeenCalledWith({ to: '/integrations', search: { tab: 'integrations' }, replace: true })
@@ -49,45 +49,68 @@ describe('McpOAuthCallbackPage', () => {
     expect(h.post).toHaveBeenCalledTimes(1);
     expect(h.post).toHaveBeenCalledWith('/api/mcp-connections/oauth/callback', {
       code: 'c1',
-      state: 's1',
+      state: 'post-s1',
       iss: 'https://auth.example.com',
     });
   });
 
   it('posts the code exactly as the server sent it when it is all digits', async () => {
-    h.boot = '?code=0123456789012345678&state=s1';
+    h.boot = '?code=0123456789012345678&state=digits-s1';
     renderPage();
     await waitFor(() => expect(h.post).toHaveBeenCalledTimes(1));
     expect(h.post).toHaveBeenCalledWith('/api/mcp-connections/oauth/callback', {
       code: '0123456789012345678',
-      state: 's1',
+      state: 'digits-s1',
       iss: undefined,
     });
   });
 
   it('reads the raw address-bar query when there is no boot snapshot (after an SSO login)', async () => {
-    window.history.replaceState(null, '', '/integrations/mcp-oauth-callback?code=987654321&state=s1');
+    window.history.replaceState(null, '', '/integrations/mcp-oauth-callback?code=987654321&state=sso-s1');
     renderPage();
     await waitFor(() => expect(h.post).toHaveBeenCalledTimes(1));
     expect(h.post).toHaveBeenCalledWith('/api/mcp-connections/oauth/callback', {
       code: '987654321',
-      state: 's1',
+      state: 'sso-s1',
       iss: undefined,
     });
   });
 
-  it('does not post the spent code again when the page is mounted a second time', async () => {
-    h.boot = '?code=c1&state=s1';
+  it('does not post the spent code again when Back remounts the page at the callback URL', async () => {
+    h.boot = '?code=c1&state=spent-s1';
     const first = renderPage();
-    await waitFor(() => expect(h.navigate).toHaveBeenCalled());
+    await waitFor(() => expect(h.navigate).toHaveBeenCalledTimes(1));
     first.unmount();
+    // After a login hop there is no snapshot; the address bar still holds the spent query.
+    window.history.replaceState(null, '', '/integrations/mcp-oauth-callback?code=c1&state=spent-s1');
     renderPage();
-    expect(await screen.findByTestId('mcp-oauth-callback-error')).toBeInTheDocument();
+    await waitFor(() => expect(h.navigate).toHaveBeenCalledTimes(2));
+    expect(h.navigate).toHaveBeenLastCalledWith({
+      to: '/integrations',
+      search: { tab: 'integrations' },
+      replace: true,
+    });
     expect(h.post).toHaveBeenCalledTimes(1);
   });
 
+  it('does not show a failure when the exchange worked but navigation rejects', async () => {
+    h.boot = '?code=c1&state=nav-s1';
+    h.navigate.mockRejectedValueOnce(new Error('navigation failed'));
+    renderPage();
+    await waitFor(() => expect(h.navigate).toHaveBeenCalledTimes(1));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(screen.queryByTestId('mcp-oauth-callback-error')).not.toBeInTheDocument();
+  });
+
+  it('treats a provider error that also carries a code as failed without posting', async () => {
+    h.boot = '?error=access_denied&code=c1&state=err-s1';
+    renderPage();
+    expect(await screen.findByTestId('mcp-oauth-callback-error')).toBeInTheDocument();
+    expect(h.post).not.toHaveBeenCalled();
+  });
+
   it('posts once under StrictMode, which runs the effect twice', async () => {
-    h.boot = '?code=c1&state=s1';
+    h.boot = '?code=c1&state=strict-s1';
     render(
       <StrictMode>
         <CssVarsProvider theme={appTheme}>

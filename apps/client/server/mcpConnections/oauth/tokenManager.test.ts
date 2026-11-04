@@ -18,7 +18,10 @@ const h = vi.hoisted(() => ({
   loadClient: vi.fn(),
 }));
 
-vi.mock('@bike4mind/database', () => ({ mcpConnectionRepository: h.repo }));
+vi.mock('@bike4mind/database', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/database')>()),
+  mcpConnectionRepository: h.repo,
+}));
 vi.mock('@bike4mind/mcp/remote', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/mcp/remote')>()),
   refreshRemoteMcpTokens: h.refresh,
@@ -32,6 +35,7 @@ vi.mock('./oauthFetch', () => ({
   withOAuthFetch: (_n: unknown, _o: unknown, fn: (f: unknown) => Promise<unknown>) => fn(vi.fn()),
 }));
 
+import { MCP_REFRESH_LEASE_TTL_MS } from '@bike4mind/database';
 import {
   OAUTH_EXPIRY_SKEW_MS,
   OAuthGrantSupersededError,
@@ -241,6 +245,7 @@ describe('getOAuthAccessToken', () => {
       h.repo.findByIdWithCredentials.mockResolvedValue(connection());
       await expect(getOAuthAccessToken(connection(), options())).rejects.toBeInstanceOf(OAuthRefreshUnavailableError);
       expect(clock - NOW).toBeGreaterThanOrEqual(12_000);
+      expect(clock - NOW).toBeLessThan(MCP_REFRESH_LEASE_TTL_MS);
       expect(h.repo.setNeedsReconnectIfHolder).not.toHaveBeenCalled();
     });
 

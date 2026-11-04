@@ -293,6 +293,40 @@ describe('token endpoint failures', () => {
     ).rejects.toMatchObject({ code: 'token_failed' });
   });
 
+  it.each([
+    ['an HTML 429', 'rate_limited_html'],
+    ['a JSON 429', 'rate_limited_json'],
+    ['an HTML 408', 'request_timeout'],
+    ['a JSON temporarily_unavailable 400', 'temporarily_unavailable'],
+  ] as const)('reports %s on refresh as an outage, not a refused grant', async (_name, mode) => {
+    const f = await start();
+    const { discovery, client, tokens } = await signedIn(f);
+    f.setTokenMode(mode);
+    await expect(
+      refreshRemoteMcpTokens(discovery, { client, refreshToken: tokens.refreshToken ?? '', fetchFn: f.fetch })
+    ).rejects.toMatchObject({ code: 'token_unavailable' });
+  });
+
+  it('reports a 200 with an error body as the error it carries', async () => {
+    const f = await start();
+    const { discovery, client, tokens, code, codeVerifier } = await signedIn(f);
+    f.setTokenMode('ok_error_bad_refresh_token');
+    await expect(
+      refreshRemoteMcpTokens(discovery, { client, refreshToken: tokens.refreshToken ?? '', fetchFn: f.fetch })
+    ).rejects.toMatchObject({ code: 'token_failed' });
+    await expect(
+      exchangeRemoteMcpCode(discovery, { client, code, codeVerifier, redirectUri, fetchFn: f.fetch })
+    ).rejects.toMatchObject({ code: 'token_failed' });
+    f.setTokenMode('ok_error_invalid_grant');
+    await expect(
+      refreshRemoteMcpTokens(discovery, { client, refreshToken: tokens.refreshToken ?? '', fetchFn: f.fetch })
+    ).rejects.toBeInstanceOf(RemoteMcpInvalidGrantError);
+    f.setTokenMode('ok');
+    await expect(
+      refreshRemoteMcpTokens(discovery, { client, refreshToken: tokens.refreshToken ?? '', fetchFn: f.fetch })
+    ).resolves.toMatchObject({ accessToken: expect.any(String) });
+  });
+
   it('classifies a pinned-fetch timeout as unavailable and any other blocked request as refused', async () => {
     const f = await start();
     const { discovery, client, tokens } = await signedIn(f);
@@ -300,13 +334,38 @@ describe('token endpoint failures', () => {
     for (const [code, expected] of [
       ['timeout', 'token_unavailable'],
       ['ssrf_blocked', 'token_failed'],
-      ['size_cap', 'token_failed'],
+      ['size_cap', 'token_unavailable'],
     ] as const) {
       await expect(
         refreshRemoteMcpTokens(discovery, {
           client,
           refreshToken: tokens.refreshToken ?? '',
           fetchFn: (() => Promise.reject(pinned(code))) as unknown as typeof fetch,
+        })
+      ).rejects.toMatchObject({ code: expected });
+    }
+  });
+
+  it('keeps an oversized 5xx body an outage but an oversized 4xx a refusal', async () => {
+    const f = await start();
+    const { discovery, client, tokens } = await signedIn(f);
+    const oversized = (status: number) =>
+      (async () => {
+        const body = new ReadableStream({
+          start: controller =>
+            controller.error(Object.assign(new Error('size_cap'), { name: 'PinnedFetchError', code: 'size_cap' })),
+        });
+        return new Response(body, { status });
+      }) as unknown as typeof fetch;
+    for (const [status, expected] of [
+      [503, 'token_unavailable'],
+      [403, 'token_failed'],
+    ] as const) {
+      await expect(
+        refreshRemoteMcpTokens(discovery, {
+          client,
+          refreshToken: tokens.refreshToken ?? '',
+          fetchFn: oversized(status),
         })
       ).rejects.toMatchObject({ code: expected });
     }

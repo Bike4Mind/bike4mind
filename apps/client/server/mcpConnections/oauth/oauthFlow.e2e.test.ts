@@ -230,6 +230,24 @@ describe('OAuth sign-in against the fixture authorization server', () => {
     expect(latest).toMatchObject({ status: 'needs_reconnect', lastError: { code: 'invalid_grant' } });
   });
 
+  it.each([
+    ['ok_error_invalid_grant', 'auth_required'],
+    ['ok_error_bad_refresh_token', 'auth_failed'],
+  ] as const)(
+    'a token endpoint that answers 200 with %s ends the connection in needs_reconnect',
+    async (mode, code) => {
+      const { params } = await approve(id);
+      await complete(params);
+      await McpConnection.updateOne({ _id: id }, { $set: { 'auth.oauth.expiresAt': new Date(Date.now() - 1000) } });
+      fixture.setTokenMode(mode);
+      await expect(
+        invokeRemoteMcp({ action: 'listTools', connectionId: id, userId: user.id }, run())
+      ).rejects.toMatchObject({ code });
+      const latest = await mcpConnectionRepository.findByIdForOwner(id, owner);
+      expect(latest?.status).toBe('needs_reconnect');
+    }
+  );
+
   describe('a bad state is refused the same way and writes no tokens', () => {
     const expectRefused = async (promise: Promise<unknown>) => {
       await expect(promise).rejects.toMatchObject({ additionalInfo: { code: 'invalid_state' } });

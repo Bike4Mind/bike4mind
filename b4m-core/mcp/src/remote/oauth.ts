@@ -357,12 +357,30 @@ const DEFINITIVE_REFUSALS = new Set([
   'access_denied',
 ]);
 
-/** Wraps `fetchFn` to remember the last HTTP status: the SDK's error classes drop it when the body is JSON. */
+/**
+ * Wraps `fetchFn` to remember the last HTTP status: the SDK's error classes drop it when the body is JSON. A 2xx
+ * answer whose JSON body carries an `error` and no `access_token` (GitHub's style) is handed on as a 400 with the
+ * same body, because the SDK only parses error bodies on non-2xx and would otherwise fail on the schema.
+ */
 function withStatus(fetchFn: FetchLike): { fetchFn: FetchLike; status: () => number | undefined } {
   let status: number | undefined;
   return {
     fetchFn: async (url, init) => {
       const response = await fetchFn(url, init);
+      if (response.ok) {
+        const text = await response.clone().text();
+        let body: unknown;
+        try {
+          body = JSON.parse(text);
+        } catch {
+          // not JSON: left to the SDK
+        }
+        const record = body && typeof body === 'object' ? (body as Record<string, unknown>) : undefined;
+        if (typeof record?.error === 'string' && record.access_token === undefined) {
+          status = 400;
+          return new Response(text, { status: 400, headers: { 'content-type': 'application/json' } });
+        }
+      }
       status = response.status;
       return response;
     },
@@ -381,13 +399,15 @@ function tokenFailure(error: unknown, status: number | undefined): never {
   const errorCode = (error as { errorCode?: string } | undefined)?.errorCode;
   if (errorCode === 'invalid_grant') throw new RemoteMcpInvalidGrantError({ cause: error });
   const pinned = error instanceof Error && error.name === 'PinnedFetchError' ? (error as { code?: string }) : undefined;
-  const refused = pinned
-    ? pinned.code !== 'timeout'
-    : errorCode === 'temporarily_unavailable'
-      ? false
-      : status !== undefined
-        ? status >= 400 && status < 500 && status !== 429 && status !== 408
-        : errorCode !== undefined && DEFINITIVE_REFUSALS.has(errorCode);
+  // A size_cap says nothing about the answer: it falls through to the recorded status.
+  const refused =
+    pinned && pinned.code !== 'size_cap'
+      ? pinned.code !== 'timeout'
+      : errorCode === 'temporarily_unavailable'
+        ? false
+        : status !== undefined
+          ? status >= 400 && status < 500 && status !== 429 && status !== 408
+          : errorCode !== undefined && DEFINITIVE_REFUSALS.has(errorCode);
   if (refused) {
     throw new RemoteMcpOAuthError('token_failed', 'The authorization server refused the token request', {
       cause: error,

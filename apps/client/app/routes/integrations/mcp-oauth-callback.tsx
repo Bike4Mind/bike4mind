@@ -6,6 +6,10 @@ import { clearMcpOAuthCallbackBootSearch, getMcpOAuthCallbackBootSearch } from '
 
 type Outcome = 'working' | 'failed';
 
+// States whose code was already spent. Back can remount the page at the callback URL (through /login or
+// /auth/success), where the address bar still holds the spent code; every hop is in one document.
+const spentStates = new Set<string>();
+
 /**
  * Where a custom connector's authorization server sends the user back. It forwards the one-time
  * parameters to the authenticated exchange API and then returns to Integrations. The provider's own
@@ -27,16 +31,25 @@ const McpOAuthCallbackPage = () => {
   const started = useRef(false);
 
   useEffect(() => {
-    if (started.current || unusable) return;
+    if (started.current || unusable || !state) return;
     started.current = true;
-    api
-      .post('/api/mcp-connections/oauth/callback', { code, state, iss })
-      .then(() => {
-        // The code is spent: neither Back nor a remount may post it again.
+    const toIntegrations = () =>
+      // A navigation failure is not an exchange failure.
+      Promise.resolve(navigate({ to: '/integrations', search: { tab: 'integrations' }, replace: true })).catch(
+        () => undefined
+      );
+    if (spentStates.has(state)) {
+      void toIntegrations();
+      return;
+    }
+    api.post('/api/mcp-connections/oauth/callback', { code, state, iss }).then(
+      () => {
+        spentStates.add(state);
         clearMcpOAuthCallbackBootSearch();
-        return navigate({ to: '/integrations', search: { tab: 'integrations' }, replace: true });
-      })
-      .catch(() => setExchangeFailed(true));
+        void toIntegrations();
+      },
+      () => setExchangeFailed(true)
+    );
   }, [unusable, code, state, iss, navigate]);
 
   return (

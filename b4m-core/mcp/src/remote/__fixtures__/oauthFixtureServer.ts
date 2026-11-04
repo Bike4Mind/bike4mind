@@ -70,7 +70,17 @@ export interface OAuthFixtureServer {
   close(): Promise<void>;
 }
 
-type TokenMode = 'ok' | 'unavailable' | 'forbidden' | 'invalid_token';
+type TokenMode =
+  | 'ok'
+  | 'unavailable'
+  | 'forbidden'
+  | 'invalid_token'
+  | 'rate_limited_html'
+  | 'rate_limited_json'
+  | 'request_timeout'
+  | 'temporarily_unavailable'
+  | 'ok_error_bad_refresh_token'
+  | 'ok_error_invalid_grant';
 
 const sha256b64url = (value: string) => createHash('sha256').update(value).digest('base64url');
 const json = (res: ServerResponse, status: number, body: unknown) => {
@@ -221,6 +231,19 @@ export async function startOAuthFixtureServer(options: OAuthFixtureOptions = {})
         return res.end('<html>Forbidden</html>');
       }
       if (tokenMode === 'invalid_token') return json(res, 400, { error: 'invalid_token' });
+      if (tokenMode === 'rate_limited_html') {
+        res.writeHead(429, { 'content-type': 'text/html' });
+        return res.end('<html>Too Many Requests</html>');
+      }
+      if (tokenMode === 'rate_limited_json') return json(res, 429, { error: 'invalid_request' });
+      if (tokenMode === 'request_timeout') {
+        res.writeHead(408, { 'content-type': 'text/html' });
+        return res.end('<html>Request Timeout</html>');
+      }
+      if (tokenMode === 'temporarily_unavailable') return json(res, 400, { error: 'temporarily_unavailable' });
+      // Some providers (GitHub) report a failed token request with HTTP 200 and an `error` field.
+      if (tokenMode === 'ok_error_bad_refresh_token') return json(res, 200, { error: 'bad_refresh_token' });
+      if (tokenMode === 'ok_error_invalid_grant') return json(res, 200, { error: 'invalid_grant' });
       if (!clientAuthenticated(req, form)) return json(res, 401, { error: 'invalid_client' });
       if (options.tokenDelayMs) await new Promise(resolve => setTimeout(resolve, options.tokenDelayMs));
       fixture.tokenResources.push(form.get('resource'));
