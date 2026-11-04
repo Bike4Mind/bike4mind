@@ -914,3 +914,34 @@ describe('/api/auth/okta/callback - IdP error log level', () => {
     expect(Logger.error).toHaveBeenCalledWith('[Okta Callback] OAuth error from Okta:', expect.anything());
   });
 });
+
+describe('/api/auth/okta/callback - missing code or state log level', () => {
+  function runWith(query: Record<string, string>) {
+    const { req, res } = createMocks({
+      method: 'GET',
+      query,
+      headers: { host: 'localhost:3000', 'user-agent': 'vitest' },
+      url: '/api/auth/okta/callback',
+    });
+    Object.assign(req, { logger: reqLogger });
+    return { done: handler(req as any, res as any), res };
+  }
+
+  it('logs a callback with no state at warn', async () => {
+    const { done, res } = runWith({});
+    await done;
+
+    expect(res._getRedirectUrl()).toBe('/login?error=missing_state');
+    expect(Logger.warn).toHaveBeenCalledWith('[Okta Callback] Missing state parameter');
+    expect(Logger.error).not.toHaveBeenCalled();
+  });
+
+  it('logs a callback with no code at warn', async () => {
+    const { done, res } = runWith({ state: STATE });
+    await done;
+
+    expect(res._getRedirectUrl()).toBe('/login?error=missing_code');
+    expect(Logger.warn).toHaveBeenCalledWith('[Okta Callback] Missing authorization code');
+    expect(Logger.error).not.toHaveBeenCalled();
+  });
+});
