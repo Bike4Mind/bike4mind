@@ -1317,10 +1317,18 @@ describe('processExecution tool deps', () => {
     const premium = model('claude-sonnet-5', 'anthropic');
     const cheap = model('cheap-model', 'gemini');
 
-    async function runRestricted({ capReached = false, user = {} as Record<string, unknown> } = {}) {
+    async function runRestricted({
+      capReached = false,
+      user = {} as Record<string, unknown>,
+      requestedModel = undefined as string | undefined,
+      catalog = [premium, cheap] as unknown[],
+    } = {}) {
       const { getAvailableModels, getLlmByModel } = await import('@bike4mind/llm-adapters');
       const { User, cacheRepository, agentExecutionRepository } = await import('@bike4mind/database');
-      vi.mocked(getAvailableModels).mockResolvedValueOnce([premium, cheap] as never);
+      vi.mocked(getAvailableModels).mockResolvedValueOnce(catalog as never);
+      if (requestedModel) {
+        vi.mocked(agentExecutionRepository.findById).mockResolvedValue({ ...execDoc, model: requestedModel } as never);
+      }
       vi.mocked(User.findById).mockResolvedValueOnce({
         id: 'user-1',
         currentCredits: 100,
@@ -1334,6 +1342,7 @@ describe('processExecution tool deps', () => {
       } as never);
       const { handler } = await import('./agentExecutor');
       await handler(continuationEvent(), lambdaContext).catch(() => undefined);
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValue(execDoc as never);
       return {
         llmModels: vi
           .mocked(getLlmByModel)
@@ -1364,6 +1373,17 @@ describe('processExecution tool deps', () => {
 
       expect(toLedgerModel('cheap-model')).toBe('claude-sonnet-5');
       expect(toLedgerModel('gpt-4')).toBe('gpt-4');
+    });
+
+    it('passes the resolved id to toLedgerModel when the requested id is a deprecated alias', async () => {
+      const resolvedPremium = model('global.anthropic.claude-sonnet-4-6', 'anthropic');
+      await runRestricted({
+        requestedModel: 'us.anthropic.claude-3-7-sonnet-20250219-v1:0',
+        catalog: [resolvedPremium, cheap],
+      });
+      const { toLedgerModel } = buildSharedToolsMock.mock.calls[0][0] as { toLedgerModel: (id: string) => string };
+
+      expect(toLedgerModel('cheap-model')).toBe('global.anthropic.claude-sonnet-4-6');
     });
 
     it('has current_model_details report the requested model, not the substitute', async () => {

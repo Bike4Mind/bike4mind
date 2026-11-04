@@ -558,7 +558,7 @@ export class ServerSubagentOrchestrator {
     }
   }
 
-  /** Fills `totalCredits` from token usage when the agent did not report it (priced on `model`). */
+  /** Fills `totalCredits` from token usage when the agent did not report it (priced on the requested model for a substituted run, else `model`). */
   private priceCompletion(completionInfo: AgentResult['completionInfo'], effectiveModel: string): void {
     if (completionInfo.totalCredits === undefined) {
       const sub = this.deps.substituteIdentity;

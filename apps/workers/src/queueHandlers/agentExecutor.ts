@@ -1189,7 +1189,7 @@ async function processExecution(
     const runModelInfo = shadowModelInfo ?? modelInfo;
     const agentModel = shadowModelInfo ? shadowModelInfo.id : execution.model;
     // Subagents fall back to the parent backend, so their reported model is the substitute too.
-    const visibleModelId = (id: string) => (shadowModelInfo && id === shadowModelInfo.id ? execution.model : id);
+    const visibleModelId = (id: string) => (shadowModelInfo && id === shadowModelInfo.id ? resolvedModelId : id);
     const llm = getLlmByModel(apiKeyTable as ApiKeyTable, {
       modelInfo: runModelInfo,
       logger,

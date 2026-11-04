@@ -1580,4 +1580,51 @@ describe('billIteration (charged model)', () => {
     expect(spies.deductCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 105 }));
     expect(spies.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({ costUsd: 105, creditsCharged: 105 }));
   });
+
+  it('chains tool usage, media and billIteration into charged-price credits', async () => {
+    const pending: PendingToolUsage = {
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    };
+    addToolUsage(pending, {
+      costUsd: 5,
+      chargedCostUsd: 50,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
+    foldGeneratedMediaUsd({
+      phase: 'finish',
+      toolName: 'image_generation',
+      data: {},
+      models: [],
+      pending,
+      estimateUsd: () => 7,
+    });
+    const toolUsage = takeToolUsage(pending);
+    const counters = makeCounters();
+    const { effects, spies } = makeEffects();
+
+    await billIteration({
+      iterationIndex: 1,
+      checkpoint: checkpoint(100),
+      counters,
+      modelInfo: makeModelInfo(1000, 1),
+      chargedModelInfo: makeModelInfo(1000, 10),
+      model: 'test-model',
+      startTime: 0,
+      toolUsage,
+      effects,
+    });
+
+    // credits: turns 100 * 10 + tool charged 50 + media 7; cost: run 100 + tool 5 + media 7.
+    expect(spies.deductCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 1057 }));
+    expect(spies.recordUsageEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ costUsd: 112, creditsCharged: 1057 })
+    );
+  });
 });

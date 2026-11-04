@@ -1134,6 +1134,23 @@ describe('ServerSubagentOrchestrator', () => {
       } satisfies AgentResult);
     }
 
+    it('prices on the charged model without availableModels and does not warn', async () => {
+      stubRun();
+      const logger = makeLogger();
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm('cheap-model'),
+        logger,
+        parentTools: [],
+        substituteIdentity,
+      });
+
+      const result = await orchestrator.delegateToAgent({ task: 't', agentDef: makeAgentDef({ model: undefined }) });
+
+      expect(result.completionInfo.totalCredits).toBe(settledAtHalf(getTurnsCost(premium, turnUsage)));
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
     it('prices credits on the requested model while costUsd stays on the run model', async () => {
       stubRun();
       const orchestrator = new ServerSubagentOrchestrator({
