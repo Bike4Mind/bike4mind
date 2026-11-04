@@ -159,8 +159,9 @@ async function loadPaymentTimes(batch: CohortMember[], deadlineMs: number): Prom
 }
 
 /**
- * Ids of the active-eligible users (counted, not banned or AI-held, like the rollup) created in [start, end), old enough to judge at `now`, whose furthest funnel
- * step is `step`. A window holding more than FUNNEL_COHORT_MAX signups is refused.
+ * Ids of the active-eligible users (counted, not banned or AI-held, like the rollup) created in [start, end),
+ * old enough to judge at `now`, whose furthest funnel step is `step`. A window holding more than
+ * FUNNEL_COHORT_MAX signups is refused.
  */
 export async function funnelStepUserIds(
   { start, end, step }: { start: Date; end: Date; step: UserFunnelStep },
