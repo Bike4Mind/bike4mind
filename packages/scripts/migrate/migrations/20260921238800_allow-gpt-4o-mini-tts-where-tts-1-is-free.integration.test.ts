@@ -10,7 +10,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
-import migration from './20260921238400_allow-gpt-4o-mini-tts-where-tts-1-is-free';
+import migration from './20260921238800_allow-gpt-4o-mini-tts-where-tts-1-is-free';
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
 
