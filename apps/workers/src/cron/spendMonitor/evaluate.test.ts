@@ -496,6 +496,19 @@ describe('evaluateSpend', () => {
       expect(ceiling?.context).not.toHaveProperty('trusted');
     });
 
+    it('falls back to standard thresholds and still alerts when the trust lookup fails', async () => {
+      const fakes = createFakes();
+      fakes.findUsersByIds.mockRejectedValueOnce(new Error('users down'));
+      fakes.setRollups([...quietPlatformHistory(), ...windowBuckets('platform', 'all', 100), ...heavyUser('staff')]);
+
+      await run(fakes, trustedDomain);
+
+      const ceiling = fakes.alerts.find(alert => alert.rule === 'account_ceiling');
+      expect(ceiling).toMatchObject({ severity: 'critical' });
+      expect(ceiling?.context).not.toHaveProperty('trusted');
+      expect(fakes.deps.logger.error).toHaveBeenCalledWith('spend-monitor-trust-lookup-failed', expect.anything());
+    });
+
     it('loads the users behind every candidate scope in a single batch', async () => {
       const fakes = createFakes();
       fakes.setRollups([

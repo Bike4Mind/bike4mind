@@ -377,11 +377,15 @@ export async function evaluateSpend(
     perType.push(candidates);
     accountTotals.set(scopeType, candidates.totals);
   }
+  // Failing closed: if the lookup fails every account is held to the standard thresholds, so alerts still fire.
   const trustedKeys = await resolveTrustedScopes(
     perType.flatMap(({ scopeType, candidates }) => candidates.map(scopeId => ({ scopeType, scopeId }))),
     trust,
     deps.resolveScopeDeps
-  );
+  ).catch(error => {
+    deps.logger.error('spend-monitor-trust-lookup-failed', { error });
+    return new Set<string>();
+  });
   for (const candidates of perType) {
     breaches.push(...(await scopeBreaches(candidates, windowStart, trustedKeys, deps, thresholds)));
   }
