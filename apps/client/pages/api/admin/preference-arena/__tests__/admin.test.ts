@@ -5,7 +5,11 @@ type Handler = (req: unknown, res: unknown) => unknown;
 type Middleware = (req: unknown, res: unknown, next: () => void) => void;
 
 const captured = vi.hoisted(() => ({ middlewares: [] as Middleware[], handlers: {} as Record<string, Handler> }));
-const { mockImport, mockStats } = vi.hoisted(() => ({ mockImport: vi.fn(), mockStats: vi.fn() }));
+const { mockImport, mockStats, mockAudit } = vi.hoisted(() => ({
+  mockImport: vi.fn(),
+  mockStats: vi.fn(),
+  mockAudit: vi.fn(),
+}));
 
 // Keeps the real adminApi permission gate: it runs as a captured middleware ahead of the handler.
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -31,6 +35,8 @@ vi.mock('@server/preferenceArena', () => ({
   getArenaService: () => ({ importPairs: mockImport, getArenaStats: mockStats }),
 }));
 
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
+
 import { config } from '../pairs/index';
 
 const run = async (method: 'GET' | 'POST', user: Record<string, unknown>, body?: unknown) => {
@@ -54,6 +60,7 @@ const validPair = {
 describe('admin arena pairs route', () => {
   beforeEach(() => {
     mockImport.mockReset();
+    mockAudit.mockReset();
   });
 
   it('rejects a non-admin before the handler runs', async () => {
@@ -88,5 +95,16 @@ describe('admin arena pairs route', () => {
     const res = await run('POST', { id: 'admin1', isAdmin: true }, { pairs: [validPair] });
     expect(mockImport).toHaveBeenCalledWith('admin1', [validPair]);
     expect(res._getJSONData()).toEqual({ inserted: 1 });
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: 'settings.arena_pair.imported', details: { inserted: 1, submitted: 1 } })
+    );
+  });
+
+  it('writes no audit row when the import is rejected', async () => {
+    await expect(run('POST', { id: 'admin1', isAdmin: true }, { pairs: [] })).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 });

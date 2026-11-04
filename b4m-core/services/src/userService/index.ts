@@ -43,3 +43,4 @@ export * from './signupProtection';
 export * from './signupGrantBudget';
 export * from './domainIntelligence';
 export * from './heldSignupGrants';
+export * from './signupGrantAdminActions';

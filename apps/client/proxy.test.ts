@@ -96,6 +96,15 @@ describe('proxy CSP header', () => {
     expect(values).toContain('https://tile.openstreetmap.org');
   });
 
+  // ElevenLabs hosts voice preview clips on regional hosts (api.us.elevenlabs.io). connect-src as
+  // well, for the same service-worker re-fetch as the map tiles above.
+  it.each(['media-src', 'connect-src'])('%s allows the ElevenLabs hosts that serve voice previews', directive => {
+    const response = proxy(makeRequest('https://app.bike4mind.com/dashboard'));
+    const csp = response.headers.get('Content-Security-Policy') ?? '';
+    const values = (csp.match(new RegExp(`${directive} ([^;]*)`))?.[1] ?? '').split(/\s+/);
+    expect(values).toContain('https://*.elevenlabs.io');
+  });
+
   // Social post thumbnails load straight from each network's image CDN. connect-src as well, for
   // the same service-worker re-fetch as the map tiles above. video.cdn.bsky.app is where
   // video.bsky.app redirects every poster frame, and CSP checks each redirect hop.

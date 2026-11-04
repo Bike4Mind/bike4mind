@@ -4,6 +4,7 @@ import {
   CreditHolderType,
   ForbiddenError,
   isArenaVerifiedUser,
+  isSignupGrantBlocked,
   judgeArenaVote,
   NotFoundError,
   PREFERENCE_ARENA_REWARD_REASON,
@@ -35,7 +36,11 @@ import {
 } from '@bike4mind/services/userService/accountState';
 
 export type ArenaUser = ArenaEligibilityFields &
-  AccountStateFields & { isModerated?: boolean | null; riskScore?: { reviewState?: string | null } | null };
+  AccountStateFields & {
+    isModerated?: boolean | null;
+    riskScore?: { reviewState?: string | null } | null;
+    signupGrant?: { blocked?: { at: Date } } | null;
+  };
 
 type AddCredits = typeof creditService.addCreditsWithLedgerRow;
 
@@ -118,6 +123,7 @@ export function createArenaService(deps: ArenaServiceDeps) {
     const user = await deps.loadUser(userId);
     if (!user) return 'unverified';
     if (accountBlockReasons(user).length > 0 || user.moderation?.status === 'suspend_pending') return 'blocked';
+    if (isSignupGrantBlocked(user)) return 'blocked';
     if (isAiAccessRevoked(user) || user.riskScore?.reviewState === 'pending') return 'blocked';
     if (!isArenaVerifiedUser(user)) return 'unverified';
     return null;

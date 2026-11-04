@@ -324,12 +324,22 @@ describe('grantPuzzleReward', () => {
       ['has a chargeback pending', { ...eligibleUser, disputePending: true }],
       ['is suspended', { ...eligibleUser, moderation: { status: 'suspended' } }],
       ['is pending suspension', { ...eligibleUser, moderation: { status: 'suspend_pending' } }],
+      ['has a blocked signup grant', { ...eligibleUser, signupGrant: { blocked: { at: new Date() } } }],
     ])('is 403 when the user %s', async (_label, user) => {
       givenUser(user);
 
       await expect(grantPuzzleReward(INPUT)).resolves.toEqual({ ok: false, status: 403, code: 'USER_NOT_ELIGIBLE' });
       expect(mockGetSettingsMap).not.toHaveBeenCalled();
       expect(mockAddCredits).not.toHaveBeenCalled();
+    });
+
+    it('loads signupGrant.blocked so the block can be seen on the lean read', async () => {
+      const select = vi.fn(() => ({ lean: () => Promise.resolve(eligibleUser) }));
+      mockFindById.mockReturnValue({ select });
+
+      await grantPuzzleReward(INPUT);
+
+      expect(select).toHaveBeenCalledWith(expect.stringContaining('signupGrant.blocked'));
     });
 
     it('still pays a throttled user', async () => {

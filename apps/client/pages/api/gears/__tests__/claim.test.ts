@@ -105,8 +105,11 @@ vi.mock('@bike4mind/services', () => ({
       return { outcome: 'paid', creditTransactionId: 'tx1' };
     },
     // Stand-in for the payout gate catalog.evaluateGears mirrors (the real one is covered in creditReward.e2e).
-    isRewardPartyBlocked: (party: { isBanned?: boolean; moderation?: { status?: string } }) =>
-      !!party.isBanned || party.moderation?.status === 'suspend_pending',
+    isRewardRecipientBlocked: (party: {
+      isBanned?: boolean;
+      moderation?: { status?: string };
+      signupGrant?: { blocked?: unknown };
+    }) => !!party.isBanned || party.moderation?.status === 'suspend_pending' || !!party.signupGrant?.blocked,
   },
   userService: { refundBudgetOnFailure: (fn: () => Promise<unknown>) => mocks.refundBudgetOnFailure(fn) },
 }));
@@ -211,6 +214,7 @@ describe('POST /api/gears/claim', () => {
       moderation: 1,
       deletedAt: 1,
       isSynthetic: 1,
+      'signupGrant.blocked': 1,
     });
     expect(mocks.addCredits).toHaveBeenCalledTimes(1);
     expect(mocks.addCredits.mock.calls[0][0]).toMatchObject({

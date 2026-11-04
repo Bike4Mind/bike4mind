@@ -1,4 +1,4 @@
-import { CreditHolderType, settingsMap, type SettingKey } from '@bike4mind/common';
+import { CreditHolderType, isSignupGrantBlocked, settingsMap, type SettingKey } from '@bike4mind/common';
 import {
   adminSettingsRepository,
   CreditTransaction,
@@ -51,9 +51,11 @@ type RewardUser = {
   isSynthetic?: boolean | null;
   deletedAt?: Date | null;
   currentCredits?: number | null;
+  signupGrant?: { blocked?: { at: Date } } | null;
 } & AccountStateFields;
 
-const PAYABLE_FIELDS = 'emailVerified isSynthetic deletedAt isBanned disputePending moderation.status';
+const PAYABLE_FIELDS =
+  'emailVerified isSynthetic deletedAt isBanned disputePending moderation.status signupGrant.blocked';
 
 // suspend_pending is not an accountBlockReason; a money path refuses it too.
 const isPayable = (user: RewardUser) =>
@@ -61,6 +63,7 @@ const isPayable = (user: RewardUser) =>
   !user.isSynthetic &&
   !user.deletedAt &&
   accountBlockReasons(user).length === 0 &&
+  !isSignupGrantBlocked(user) &&
   user.moderation?.status !== 'suspend_pending';
 
 export async function findPayableUser(userId: string): Promise<{ email: string } | null> {
