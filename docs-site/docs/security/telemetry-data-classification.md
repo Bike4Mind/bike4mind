@@ -310,12 +310,14 @@ name another product as the source.
    `Referrer-Policy: strict-origin`, so the token is not sent as a Referer
    before the page removes it.
 
-| Data         | Storage                                                                                                                                                                                                                          | Lifetime                                   | Purpose                                         |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ | ----------------------------------------------- |
-| Hop record   | MongoDB `analytics_hops`: hop id, source product, destination, landing path, lane, minted and redeemed times; the source's session id and visitor hash when the source may send them; the visit it was redeemed in, with consent | 90 days after minting (TTL on `expiresAt`) | Single-use redeem; check counts against records |
-| Redeemed hop | App cookie `b4m_hop` holding the hop id, HttpOnly, `SameSite=Lax`, set only with consent                                                                                                                                         | 24 hours                                   | Lets a signup that follows find its hop         |
-| `hop_minted` | Overwatch event under the source product: hop id, destination, lane; the source's session id when sent                                                                                                                           | Overwatch retention                        | Hops minted, per source                         |
-| `hop`        | Overwatch event under this app: hop id, source, destination, `verified: true`, lane; the visit id with consent                                                                                                                   | Overwatch retention                        | Hops redeemed, joined to the visit              |
+| Data               | Storage                                                                                                                                                                                                                                                         | Lifetime                                                                           | Purpose                                                                      |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Hop record         | MongoDB `analytics_hops`: hop id, source product, destination, landing path, lane, minted and redeemed times; the source's session id and visitor hash when the source may send them; the visit it was redeemed in, with consent; when a signup was bound to it | 90 days after minting (TTL on `expiresAt`); no expiry once a signup is bound to it | Single-use redeem; check counts against records; evidence a payment may cite |
+| Redeemed hop       | App cookie `b4m_hop` holding the hop id, HttpOnly, `SameSite=Lax`, set only with consent                                                                                                                                                                        | 24 hours                                                                           | Lets a signup that follows find its hop                                      |
+| Verified touch     | User record `acquisition.verifiedTouch`: source product, hop id, redeem time                                                                                                                                                                                    | Account lifetime; deleted with the account                                         | Which product a new account came from, as that product proved                |
+| `hop_minted`       | Overwatch event under the source product: hop id, destination, lane; the source's session id when sent                                                                                                                                                          | Overwatch retention                                                                | Hops minted, per source                                                      |
+| `hop`              | Overwatch event under this app: hop id, source, destination, `verified: true`, lane; the visit id with consent                                                                                                                                                  | Overwatch retention                                                                | Hops redeemed, joined to the visit                                           |
+| `signup_completed` | Overwatch event under this app; for an account with a verified touch, also its `hopId` and `srcProductId`                                                                                                                                                       | Overwatch retention                                                                | Verified hop to signup                                                       |
 
 The cookie and every link between the hop and the visitor (the visit stored on
 the hop, and the `hop` event's session id) use the same server-side gate as
@@ -324,10 +326,34 @@ resolved decision just before the beacon that carries a token, so the server
 reads that page load's answer. Without consent the hop is still redeemed and
 the `hop` event is still sent, with no visit and no cookie: it is counted in
 aggregate only and links nothing. While the visitor is still being asked, the
-page holds the token and sends it with the beacon that follows the answer; a
-token held past its 10 minutes no longer redeems. The source follows the same
-rule on its side and sends no session id or visitor hash without its own
-visitor's consent.
+page holds the token and sends it with the beacon that follows the answer, or
+with the one it sends when the tab is hidden or closed first. A tab hidden
+before the answer (on a phone, switching apps while the banner is up) therefore
+redeems the hop with no visit and no cookie, and a grant given on returning
+cannot link it. A token held past its 10 minutes no longer redeems. The source
+follows the same rule on its side and sends no session id or visitor hash
+without its own visitor's consent.
+
+A new account gets a verified touch only when its signup happens in the same
+session as the hop's redeem. Concretely, the signup request carries:
+
+- the `b4m_hop` cookie naming the hop;
+- the visit id (`b4m_vid`) the hop was redeemed in, so a hop from an earlier
+  visit does not bind a later signup (a visit ends after 30 minutes without a
+  page load);
+- a granted consent decision, so a visitor who withdrew consent after landing is
+  not linked.
+
+The hop must also have been redeemed in the last 24 hours and never bound
+before. One hop binds at most one account, even when a browser signs up twice.
+The bind runs on every self-service signup: the OAuth, Okta and SAML callbacks
+and one-time-code verification. A SAML signup is usually not bound, because its
+IdP returns by a cross-site POST, which carries no Lax cookie. Accounts an admin
+creates never read the creator's cookies. A bound hop record has no expiry,
+because a payment may later cite it. The record names no account. What links it
+to one is the account's verified touch, deleted with the account, and the
+`hopId` on that account's `signup_completed` event, kept for that event's
+retention.
 
 The token is a bearer value. It is never rendered into a page, the app never
 logs it, and the recorded landing path never includes it. It is in the URL of
@@ -343,6 +369,13 @@ stamping are treated as money-path code.
 The Overwatch ingest route (`POST /api/overwatch/v1/events`) refuses
 `hop_minted` from every key, and `hop` from every key but the host app's own,
 event by event.
+
+The two events leave this app by different paths. The mint route puts
+`hop_minted` straight onto the Overwatch ingest queue, as the ingest route does,
+so only `OVERWATCH_INGEST_ENABLED` switches it off. The redeem sends `hop` the
+way the app sends its own product events, to `OVERWATCH_INGEST_URL`, so
+`B4M_ANALYTICS_ENABLED=false` also stops it. With the app's analytics switched
+off, mints are still counted and redeems are not.
 
 ### What a source site must do
 

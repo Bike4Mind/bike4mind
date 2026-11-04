@@ -12,7 +12,9 @@ import {
   loadsInMemory,
   localTranscriptChars,
   overflowTokens,
+  replyLimit,
   shrunkTranscriptChars,
+  toolReplyReserve,
   type LocalModelFootprint,
   type OllamaMessage,
 } from './localContext';
@@ -321,6 +323,22 @@ describe('grownContext', () => {
       const grown = growth.tokens ?? 0;
       expect(grown - Math.min(2048, Math.floor(grown / 4))).toBeGreaterThanOrEqual(measured);
     }
+  });
+});
+
+describe('replyLimit', () => {
+  it('lowers a limit to the room left after the prompt, its 10% margin and a minimum reply', () => {
+    expect(replyLimit(8192, 4096, 1000)).toBe(4096);
+    expect(replyLimit(8192, 8000, 1000)).toBe(8192 - 1000 - 100 - 256);
+    expect(replyLimit(8192, 8000, 7000)).toBeUndefined();
+    expect(replyLimit(undefined, 8000, 7000)).toBe(8000);
+    expect(replyLimit(8192, undefined, 1000)).toBeUndefined();
+  });
+
+  it('keeps no more than the usual reply room when deciding whether tools fit', () => {
+    expect(toolReplyReserve(1024)).toBe(1024);
+    expect(toolReplyReserve(64_000)).toBe(2048);
+    expect(toolReplyReserve(undefined)).toBeUndefined();
   });
 });
 

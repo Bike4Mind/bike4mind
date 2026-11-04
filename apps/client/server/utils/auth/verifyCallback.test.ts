@@ -47,6 +47,7 @@ vi.mock('@bike4mind/database', () => ({
   },
   creditTransactionRepository: {},
   creditLotRepository: {},
+  grantPackageRepository: {},
   organizationRepository: {},
   userRepository: {
     update: (...args: unknown[]) => mockUserRepositoryUpdate(...args),

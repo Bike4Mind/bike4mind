@@ -1,13 +1,18 @@
 import {
+  canonicalizeEmail,
+  GRANT_PACKAGE_INBOX_CLAIMED_MESSAGE,
+  grantPackageRefusalMessage,
   IAdminSettingsRepository,
   ICreditLotRepository,
+  type IGrantPackageDocument,
+  type IGrantPackageRepository,
   ICreditTransactionRepository,
   newSignupGrant,
   IUserDocument,
   IUserRepository,
   type SignupProtection,
 } from '@bike4mind/common';
-import { ISubscriberRepository } from '@bike4mind/common';
+import { ISubscriberRepository, RegInviteSource } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -86,6 +91,8 @@ interface RegisterUserAdapters {
     creditTransactions?: ICreditTransactionRepository;
     oauthClients?: OAuthSourceClientLookup;
     creditLots?: ICreditLotRepository;
+    /** Required to redeem an invite that names a grant package; such an invite is refused without it. */
+    grantPackages?: IGrantPackageRepository;
   };
   logger: Logger;
   /**
@@ -199,6 +206,10 @@ export const registerUser = async (
     ? await resolveRegistrationInvite(normalizedInviteCode, normalizedEmail, db.registrationInvites)
     : null;
   const invite = resolvedInvite?.invite ?? null;
+  let grantPackage: IGrantPackageDocument | null = null;
+  // A legacy package (migrated from an invite's own amounts) keeps the pre-package rules: subscriber
+  // amounts win, it never claims the inbox, and a 0 amount falls back to ReferralCreditsAmount.
+  let packageGrantsCredits = false;
   let freeCredits = 0;
   let storageLimitOverride: number | null = null;
 
@@ -231,20 +242,51 @@ export const registerUser = async (
       }
     }
 
-    // Invite code credits/storage (set when generating the code)
-    const inviteCredits = invite.startingCredits || 0;
-    const inviteStorage = invite.startingStorage || 0;
+    // Referral invites carry the inviter's own grant rules, so a package id on one is ignored.
+    if (invite.grantPackageId && invite.source !== RegInviteSource.referral) {
+      grantPackage = db.grantPackages ? await db.grantPackages.findById(invite.grantPackageId) : null;
+      if (!grantPackage) throw new BadRequestError('Invalid invite code');
+      if (!grantPackage.active) throw new BadRequestError(grantPackageRefusalMessage('inactive'));
+      packageGrantsCredits = !grantPackage.legacy;
+      // Early, readable refusal for an alias of an inbox that already took a signup grant. The
+      // authoritative claim is made when the grant is released (freeCredits.ts).
+      const claimEmail = canonicalizeEmail(normalizedEmail);
+      if (
+        packageGrantsCredits &&
+        grantPackage.credits > 0 &&
+        claimEmail &&
+        (await db.grantPackages!.isInboxClaimed(claimEmail))
+      ) {
+        throw new BadRequestError(GRANT_PACKAGE_INBOX_CLAIMED_MESSAGE);
+      }
+      if (grantPackage.tags && grantPackage.tags.length > 0) {
+        tags = [...new Set([...tags, ...grantPackage.tags])];
+      }
+    }
 
-    // Priority: subscriber > invite code > admin default
-    freeCredits =
-      subscriberCredits > 0
+    // Invite code credits/storage (set when generating the code)
+    const inviteCredits = (grantPackage?.legacy ? grantPackage.credits : invite.startingCredits) || 0;
+    const inviteStorage = (grantPackage?.legacy ? grantPackage.storageMb : invite.startingStorage) || 0;
+
+    // Priority: package > subscriber > invite code > admin default. A non-legacy package's amount is
+    // authoritative even at 0; a legacy package stands in for the invite's own amounts.
+    freeCredits = packageGrantsCredits
+      ? grantPackage!.credits
+      : subscriberCredits > 0
         ? subscriberCredits
         : inviteCredits > 0
           ? inviteCredits
           : (parseInt(referralCredits?.settingValue || '0', 10) ?? 0);
 
-    // Priority: subscriber > invite code > default (1000)
-    const signupStorage = subscriberStorageFound ? subscriberStorage : inviteStorage > 0 ? inviteStorage : null;
+    // Priority: non-legacy package > subscriber > invite code (or legacy package) > default (1000)
+    const signupStorage =
+      packageGrantsCredits && grantPackage!.storageMb
+        ? grantPackage!.storageMb
+        : subscriberStorageFound
+          ? subscriberStorage
+          : inviteStorage > 0
+            ? inviteStorage
+            : null;
     storageLimitOverride = signupStorage === DEFAULT_STORAGE_LIMIT_MB ? null : signupStorage;
   } else {
     // No invite code - only permitted when open registration is enabled or invite check is skipped
@@ -328,7 +370,9 @@ export const registerUser = async (
     planStorageLimit: null,
     currentStorageSize: 0,
     currentCredits: 0,
-    pendingCreditGrant: freeCredits > 0 && !referralGrant ? freeCredits : null,
+    // Stored even at 0 so a package grant is never mistaken for the default open-registration one.
+    pendingCreditGrant: packageGrantsCredits ? freeCredits : freeCredits > 0 && !referralGrant ? freeCredits : null,
+    ...(packageGrantsCredits ? { grantPackageId: grantPackage!.id } : {}),
     ...(signupMeta ? { signupMeta } : {}),
     ...(referralGrant ? { signupGrant: referralGrant } : {}),
     level: 'DemoUser',
@@ -389,25 +433,46 @@ export const registerUser = async (
 
   const inviteClaim = resolvedInvite ? await claimRegistrationInvite(resolvedInvite, db.registrationInvites) : null;
   if (resolvedInvite && !inviteClaim) throw new BadRequestError('Invite code already used');
+  // Inside a caller's transaction its rollback restores the claim; a release there would fail on the aborted session.
+  const releaseInviteClaim = async () => {
+    if (callerTransactionSession()) return;
+    await inviteClaim?.release().catch(() => {
+      logger.warn('Registration invite claim release failed; the code may remain claimed');
+    });
+  };
 
   let user: Awaited<ReturnType<typeof db.users.create>>;
   try {
     user = await db.users.create(buildUser);
   } catch (err: unknown) {
-    // Inside a caller's transaction its rollback restores the claim; a release there would fail on the aborted session.
-    if (!callerTransactionSession()) {
-      await inviteClaim?.release().catch(() => {
-        logger.warn('Registration invite claim release failed; the code may remain claimed');
-      });
-    }
+    await releaseInviteClaim();
     // E11000: concurrent registration race on the unique email index.
     if ((err as { code?: number }).code === 11000) {
       throw new BadRequestError('Email already in use');
     }
     throw err;
   }
-  if (resolvedInvite) {
-    await redeemRegistrationInvite(resolvedInvite, user.id, db.registrationInvites);
+
+  // Counted after the account exists so the redemption can be keyed by it. The invite path runs
+  // inside a transaction (otc/verify.ts), so a refusal here also rolls back the account.
+  let releaseRedemption: (() => Promise<void>) | null = null;
+  if (grantPackage) {
+    const reservation = await db.grantPackages!.reserveRedemption(grantPackage.id, user.id);
+    if (reservation.outcome === 'refused') {
+      logger.info(`Grant package ${grantPackage.id} refused a signup: ${reservation.reason}`);
+      await releaseInviteClaim();
+      throw new BadRequestError(grantPackageRefusalMessage(reservation.reason));
+    }
+    releaseRedemption = reservation.release;
+  }
+
+  try {
+    if (resolvedInvite) {
+      await redeemRegistrationInvite(resolvedInvite, user.id, db.registrationInvites);
+    }
+  } catch (err) {
+    if (releaseRedemption) await releaseRedemption();
+    throw err;
   }
 
   return user;
@@ -449,6 +514,7 @@ export const registerViaOTC = async (
         creditLots: db.creditLots,
         users: db.users,
         signupProtection: db.signupProtection,
+        grantPackages: db.grantPackages,
       },
       reason: 'OTC registration (email verified)',
       logger,

@@ -23,6 +23,8 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { update: mockUserUpdate },
   User: { updateOne: mockUpdateOne },
 }));
+const { mockBindSignupHop } = vi.hoisted(() => ({ mockBindSignupHop: vi.fn() }));
+vi.mock('./hops', () => ({ bindSignupHop: (...a: unknown[]) => mockBindSignupHop(...a) }));
 
 import { APP_DECISION_COOKIE } from '@bike4mind/server-utils/lib/consentCookies';
 import { pseudonymize } from '@bike4mind/server-utils/analytics/pseudonymize';
@@ -50,6 +52,97 @@ beforeEach(() => {
   mockLogEventSafe.mockResolvedValue(undefined);
   mockUserUpdate.mockResolvedValue(null);
   mockUpdateOne.mockResolvedValue({ modifiedCount: 1 });
+  mockBindSignupHop.mockResolvedValue(undefined);
+});
+
+const VERIFIED_TOUCH = {
+  srcProductId: 'source-product',
+  hopId: 'c'.repeat(32),
+  redeemedAt: new Date('2026-11-03T12:00:00Z'),
+};
+
+describe('a signup that followed a verified hop', () => {
+  it('stores the verified touch with the campaign touches', async () => {
+    mockBindSignupHop.mockResolvedValue(VERIFIED_TOUCH);
+    const req = reqWith(`${TOUCH_COOKIES}; ${APP_DECISION_COOKIE}=granted`);
+
+    const out = await recordSignupAcquisition({ req, user: { id: 'u1' }, method: 'otc' });
+
+    expect(mockBindSignupHop).toHaveBeenCalledWith(req);
+    expect(out.acquisition?.verifiedTouch).toEqual(VERIFIED_TOUCH);
+    expect(mockUserUpdate).toHaveBeenCalledWith({
+      id: 'u1',
+      acquisition: expect.objectContaining({
+        verifiedTouch: VERIFIED_TOUCH,
+        firstTouch: { source: 'reddit', campaign: 'launch' },
+        signupMethod: 'otc',
+      }),
+    });
+  });
+
+  it('stores the verified touch even with no campaign touch', async () => {
+    mockBindSignupHop.mockResolvedValue(VERIFIED_TOUCH);
+
+    const out = await recordSignupAcquisition({ req: reqWith(''), user: { id: 'u1' }, method: 'google' });
+
+    expect(out.acquisition).toEqual({
+      verifiedTouch: VERIFIED_TOUCH,
+      signupMethod: 'google',
+      capturedAt: expect.any(Date),
+    });
+    expect(mockUserUpdate).toHaveBeenCalledOnce();
+  });
+
+  it('stores none for a signup that followed no hop', async () => {
+    const out = await recordSignupAcquisition({
+      req: reqWith(`${TOUCH_COOKIES}; ${APP_DECISION_COOKIE}=granted`),
+      user: { id: 'u1' },
+      method: 'otc',
+    });
+    expect(out.acquisition).not.toHaveProperty('verifiedTouch');
+    expect(mockUserUpdate.mock.calls[0][0].acquisition).not.toHaveProperty('verifiedTouch');
+  });
+
+  it('puts the hop and its source on signup_completed, and on no other stage', async () => {
+    const user = {
+      id: 'u1',
+      acquisition: { firstTouch: { source: 'reddit' }, verifiedTouch: VERIFIED_TOUCH },
+    };
+    await emitSignupFunnelEvents({ user, method: 'otc', emailVerified: true, creditsGranted: 100 });
+
+    const byEvent = Object.fromEntries(mockEmit.mock.calls.map(([e]) => [e.event, e.metadata]));
+    expect(byEvent.signup_completed).toEqual({
+      method: 'otc',
+      hopId: VERIFIED_TOUCH.hopId,
+      srcProductId: 'source-product',
+    });
+    expect(byEvent.email_verified).not.toHaveProperty('hopId');
+    expect(byEvent.credits_granted).not.toHaveProperty('hopId');
+  });
+
+  it("prefers the account's stored touch to anything a caller passes", async () => {
+    await emitFunnelEvent({
+      user: { id: 'u1', acquisition: { verifiedTouch: VERIFIED_TOUCH } },
+      event: 'signup_completed',
+      metadata: { method: 'otc', hopId: 'forged', srcProductId: 'forged' },
+    });
+
+    expect(mockEmit.mock.calls[0][0].metadata).toMatchObject({
+      hopId: VERIFIED_TOUCH.hopId,
+      srcProductId: 'source-product',
+    });
+  });
+
+  it('sends no hop on the signup_completed of a signup that followed none', async () => {
+    await emitSignupFunnelEvents({
+      user: { id: 'u1', acquisition: { firstTouch: { source: 'reddit' } } },
+      method: 'otc',
+      emailVerified: false,
+      creditsGranted: 0,
+    });
+    const signup = mockEmit.mock.calls.find(([e]) => e.event === 'signup_completed')![0];
+    expect(signup.metadata).toEqual({ method: 'otc' });
+  });
 });
 
 afterEach(() => {

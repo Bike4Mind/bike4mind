@@ -216,6 +216,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.emergency_login.denied': { category: 'access', severity: 'notice', write: 'bestEffort' },
   'user.api_key.generated': { category: 'access', severity: 'critical', write: 'strict' },
   'user.subscription.removed': { category: 'credits', severity: 'critical', write: 'strict' },
+  // Written after a suspend, contain or delete commits, so it cannot be strict: the block already happened.
+  'user.subscriptions.canceled': { category: 'credits', severity: 'critical', write: 'bestEffort' },
   'user.api_key.rate_limit_updated': { category: 'access', severity: 'notice', write: 'bestEffort' },
   'user.api_key.rate_limit_reset': { category: 'access', severity: 'info', write: 'bestEffort' },
   'user.api_key.revoked': { category: 'access', severity: 'notice', write: 'strict' },
@@ -286,6 +288,9 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.partner_signup_rule.updated': { category: 'access', severity: 'notice', write: 'strict' },
   'org.partner_signup_rule.deleted': { category: 'access', severity: 'notice', write: 'strict' },
   'org.partner_signup_rule.backfilled': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  // No credits move when a package is defined, so these are not credit-grant actions.
+  'credits.grant_package.created': { category: 'credits', severity: 'notice', write: 'strict' },
+  'credits.grant_package.updated': { category: 'credits', severity: 'notice', write: 'strict' },
   'user.accounts.migrated': { category: 'account', severity: 'notice', write: 'bestEffort' },
   'user.reg_invite.updated': { category: 'access', severity: 'notice', write: 'strict' },
   'user.reg_invite.created': { category: 'access', severity: 'notice', write: 'strict' },

@@ -19,7 +19,7 @@ const LEGACY_SEED = `
 40f556547602 413f7c8082e4 419f21991350 41a8f5c2b662 41f918864b1c 42e07254368d 434a8e4932ed
 43d112295f48 46bd586deb06 49627b2c4d6b 49bddae03ab9 4b1fbd0505df 4b38e95bd3e3 4b56c2365175 4b7ce8871d5f
 4bd858496fa6 4bdf4b58eefe 4be8154314f1 4ca8d8bb3c82 4dc25ea3603f 4f71544360b9 5086931d9a00
-5104cfb8d929 5132413e8c42 51423d9e0878 516d279ce4f4 5171252d9a94 51947f2b1cdb 51cf666f59e7 53d06dab635c
+5104cfb8d929 51423d9e0878 516d279ce4f4 5171252d9a94 51947f2b1cdb 51cf666f59e7 53d06dab635c
 545593ba3989 548b1206f618 55b27aa4d619 5605b2684050 58e7cd021cb6 5931a8193ada 5a5583cb1274
 5d5074ebd89b 6061ef57218e 60ffb54be1c8 642b95025886 64bf2def6df8 64ecbfe8b19b 65a4fc3788a6 65e21f6e4e9c
 66a1f13bee09 66b8806c19b4 694c40e91bf8 6a032237a84b 6a4110961627 6cb4a83cf579 6cc07f5224fa 6d4d6131f033
@@ -295,7 +295,6 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/quests/[id]/check-timeout',
     '/api/quests/[id]/client-timing',
     '/api/reg-invites',
-    '/api/reg-invites/create',
     '/api/reg-invites/delete',
     '/api/reg-invites/migrate',
     '/api/reg-invites/refer',

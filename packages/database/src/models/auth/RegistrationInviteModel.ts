@@ -144,6 +144,10 @@ const RegistrationInviteSchema = new mongoose.Schema<IRegInviteDocument>(
       type: Number,
       required: false,
     },
+    grantPackageId: {
+      type: String,
+      required: false,
+    },
   },
   {
     timestamps: true,

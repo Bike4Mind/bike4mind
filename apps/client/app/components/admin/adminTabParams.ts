@@ -21,6 +21,7 @@ import {
   type AuditLogFilters,
 } from '@bike4mind/common';
 import { optionalStringSearchValue } from '@client/app/utils/optionalStringSearchValue';
+import { parseObjectId } from './adminSearchValues';
 import { FEEDBACK_SEARCH_PARSERS, FEEDBACK_TAB_PARAMS, type FeedbackSearch } from './Feedback/feedbackTabSearch';
 import { USERS_SEARCH_PARSERS, USERS_TAB_PARAMS, type UsersSearch } from './Users/usersTabSearch';
 import {
@@ -99,6 +100,12 @@ export const ADMIN_TAB_PARAMS = {
 type AdminTabParam = (typeof ADMIN_TAB_PARAMS)[keyof typeof ADMIN_TAB_PARAMS][number];
 type AdminSearchParam = (typeof ADMIN_GLOBAL_PARAMS)[number] | AdminTabParam;
 
+// Record ids a tab interpolates into an API path; anything else in the URL opens no record.
+const RECORD_ID_SEARCH_PARSERS = {
+  [AUDIT_ENTRY_ID_PARAM]: parseObjectId,
+  [MODERATION_INCIDENT_ID_PARAM]: parseObjectId,
+} as const;
+
 type TypedAdminSearch = UsersSearch &
   FeedbackSearch &
   WebhookAuditLogsSearch &
@@ -122,6 +129,7 @@ const TYPED_PARAM_PARSERS: ReadonlyMap<string, (value: unknown, search: Record<s
     ...SUBSCRIPTIONS_SEARCH_PARSERS,
     ...SECURITY_DASHBOARD_SEARCH_PARSERS,
     ...INVITE_CENTER_SEARCH_PARSERS,
+    ...RECORD_ID_SEARCH_PARSERS,
   })
 );
 

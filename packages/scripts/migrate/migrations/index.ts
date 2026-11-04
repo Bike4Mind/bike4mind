@@ -275,6 +275,14 @@ import EnsureHeldCreditRewardIndexes from './20260921237600_ensure-heldcreditrew
 import BackfillUserLaneFlags from './20260921238100_backfill-user-lane-flags';
 import EnsureAnalyticsHopIndexes from './20260921238200_ensure-analytics-hop-indexes';
 import EnsureSpendAlertIndexes from './20260921238300_ensure-spend-alert-indexes';
+// Renumbered from 20260921237500 (then 20260921238300) to 20260921238400 to resolve id collisions with
+// SeedSignupGrantPools and EnsureSpendAlertIndexes above, which merged into main first. Rerunning under
+// the new id is safe: invites that already have a package are skipped and packages are upserted by name.
+// Deploy note: an environment that ran this migration under an old id has that id marked done and will
+// skip the migration that now owns it. Delete that environment's stale `20260921237500` or
+// `20260921238300` row from the migrations collection.
+import GrantPackagesFromInvites from './20260921238400_grant-packages-from-invites';
+import EnsureGrantPackageIndexes from './20260921238500_ensure-grant-package-indexes';
 import EnsureReferralInviterIndexes from './20260921239500_ensure-referral-inviter-indexes';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
@@ -484,6 +492,8 @@ const coreMigrations: MigrationFile[] = [
   BackfillUserLaneFlags,
   EnsureAnalyticsHopIndexes,
   EnsureSpendAlertIndexes,
+  GrantPackagesFromInvites,
+  EnsureGrantPackageIndexes,
   EnsureReferralInviterIndexes,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,

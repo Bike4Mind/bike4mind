@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import { registerUser, registerViaOTC, RegisterUserParameters } from './register';
 import { BadRequestError } from '@bike4mind/utils';
 import {
@@ -142,6 +142,110 @@ describe('registerUser', () => {
     const limitedInvite = mockAdapters.db.registrationInvites.update.mock.calls[0][0];
     expect(limitedInvite.used).toBe(limitedInvite.usageHistory[0].usedAt);
     expect(mockAdapters.db.registrationInvites.update.mock.calls[0][1]).toBeUndefined();
+  });
+
+  describe('grant package invites', () => {
+    let grantPackages: Record<'findById' | 'reserveRedemption' | 'releaseRedemption' | 'isInboxClaimed', Mock>;
+    const pkg = {
+      id: 'pkg-1',
+      name: 'Synthetic package',
+      credits: 100,
+      storageMb: 2500,
+      tags: ['pkg-tag'],
+      totalCap: 1,
+      dailyCap: null,
+      redeemedTotal: 0,
+      capHits: 0,
+      active: true,
+      createdBy: 'synthetic-admin',
+    };
+    const release = vi.fn();
+
+    beforeEach(() => {
+      release.mockResolvedValue(undefined);
+      mockInvite.grantPackageId = 'pkg-1';
+      mockInvite.startingCredits = 7;
+      grantPackages = {
+        findById: vi.fn().mockResolvedValue({ ...pkg }),
+        reserveRedemption: vi.fn().mockResolvedValue({ outcome: 'reserved', release }),
+        releaseRedemption: vi.fn(),
+        isInboxClaimed: vi.fn().mockResolvedValue(false),
+      };
+      mockAdapters.db.grantPackages = grantPackages;
+    });
+
+    it('takes credits, storage and tags from the package and records the redemption', async () => {
+      await registerUser(baseParams, mockAdapters);
+      const created = mockAdapters.db.users.create.mock.calls[0][0];
+      expect(created.pendingCreditGrant).toBe(100);
+      expect(created.storageLimitOverride).toBe(2500);
+      expect(created.tags).toEqual(expect.arrayContaining(['pkg-tag', PENDING_FREE_CREDITS_TAG]));
+      expect(created.grantPackageId).toBe('pkg-1');
+      expect(grantPackages.reserveRedemption).toHaveBeenCalledWith('pkg-1', 'newUserId');
+      expect(grantPackages.isInboxClaimed).toHaveBeenCalledWith('test@example.com');
+    });
+
+    it('stores a 0-credit package amount instead of leaving it to the default grant', async () => {
+      grantPackages.findById.mockResolvedValue({ ...pkg, credits: 0 });
+      await registerUser(baseParams, mockAdapters);
+      const created = mockAdapters.db.users.create.mock.calls[0][0];
+      expect(created.pendingCreditGrant).toBe(0);
+      expect(created.tags).not.toContain(PENDING_FREE_CREDITS_TAG);
+    });
+
+    it('keeps the pre-package rules for a legacy package', async () => {
+      grantPackages.findById.mockResolvedValue({ ...pkg, credits: 7, legacy: true });
+      grantPackages.isInboxClaimed.mockResolvedValue(true);
+      await registerUser(baseParams, mockAdapters);
+      const created = mockAdapters.db.users.create.mock.calls[0][0];
+      expect(created.pendingCreditGrant).toBe(7);
+      expect(created.grantPackageId).toBeUndefined();
+      expect(grantPackages.isInboxClaimed).not.toHaveBeenCalled();
+      expect(grantPackages.reserveRedemption).toHaveBeenCalledWith('pkg-1', 'newUserId');
+    });
+
+    it.each([
+      ['total_cap', 'This invite code has reached its signup limit'],
+      ['daily_cap', 'This invite code has reached its signup limit for today, please try again tomorrow'],
+    ])('refuses the signup naming the %s cap and leaves the invite unused', async (reason, message) => {
+      grantPackages.reserveRedemption.mockResolvedValue({ outcome: 'refused', reason });
+      await expect(registerUser(baseParams, mockAdapters)).rejects.toThrow(new BadRequestError(message));
+      expect(mockAdapters.db.registrationInvites.update).not.toHaveBeenCalled();
+    });
+
+    it('refuses an alias of an inbox that already took a signup grant before creating the account', async () => {
+      grantPackages.isInboxClaimed.mockResolvedValue(true);
+      await expect(registerUser({ ...baseParams, email: 'Te.St+x@gmail.com' }, mockAdapters)).rejects.toThrow(
+        'This inbox has already received a signup grant'
+      );
+      expect(grantPackages.isInboxClaimed).toHaveBeenCalledWith('test@gmail.com');
+      expect(mockAdapters.db.users.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects an invite whose package is missing as an invalid code', async () => {
+      grantPackages.findById.mockResolvedValue(null);
+      await expect(registerUser(baseParams, mockAdapters)).rejects.toThrow('Invalid invite code');
+      expect(mockAdapters.db.users.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects an invite whose package was deactivated', async () => {
+      grantPackages.findById.mockResolvedValue({ ...pkg, active: false });
+      await expect(registerUser(baseParams, mockAdapters)).rejects.toThrow('This invite code is no longer active');
+    });
+
+    it('ignores a package id on a referral invite', async () => {
+      mockInvite.source = RegInviteSource.referral;
+      await registerUser(baseParams, mockAdapters);
+      expect(grantPackages.findById).not.toHaveBeenCalled();
+      expect(grantPackages.reserveRedemption).not.toHaveBeenCalled();
+      expect(mockAdapters.db.users.create.mock.calls[0][0].grantPackageId).toBeUndefined();
+    });
+
+    it('releases the redemption when marking the invite used throws', async () => {
+      mockAdapters.db.registrationInvites.update.mockRejectedValue(new Error('write failed'));
+      await expect(registerUser(baseParams, mockAdapters)).rejects.toThrow('write failed');
+      expect(release).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('invite-only OTC registration', () => {

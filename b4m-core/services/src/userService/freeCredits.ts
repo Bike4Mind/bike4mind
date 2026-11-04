@@ -2,6 +2,7 @@ import {
   CreditHolderType,
   IAdminSettingsRepository,
   ICreditLotRepository,
+  type IGrantPackageRepository,
   ICreditTransactionRepository,
   IUserRepository,
   type IUserDocument,
@@ -28,6 +29,8 @@ export type FreeCreditAdapters = {
     creditLots?: ICreditLotRepository;
     users: IUserRepository;
     signupProtection?: SignupProtection;
+    /** Frees a grant-package redemption whose inbox claim was lost; see grantFlatFreeCredits. */
+    grantPackages?: Pick<IGrantPackageRepository, 'releaseRedemption'>;
   };
   reason: string;
   /** Network signals for a staged grant's first assessment; without it only signupMeta is read. */
@@ -105,6 +108,7 @@ export const grantFreeCredits = async (
     user,
     { db, reason, bypassBudget },
     !!persisted?.referredByUserId,
+    persisted?.grantPackageId ?? null,
     persisted?.signupGrantHeldReason === 'budget_exhausted'
   );
   // Every outcome but a hold is final, so a held reason left from an earlier attempt must not outlive it.
@@ -117,6 +121,7 @@ async function grantFlatFreeCredits(
   user: Pick<FreeCreditUser, 'id' | 'pendingCreditGrant'>,
   { db, reason, bypassBudget }: Pick<FreeCreditAdapters, 'db' | 'reason' | 'bypassBudget'>,
   referred: boolean,
+  grantPackageId: string | null,
   alreadyHeld: boolean
 ): Promise<GrantFreeCreditsResult> {
   const amount = await resolveFreeCreditAmount(user.pendingCreditGrant, db.adminSettings);
@@ -149,8 +154,13 @@ async function grantFlatFreeCredits(
   //     decision; bound it with the invite's own limits, not with this claim.
   // Claiming here instead would be wrong: it would let a self-serve signup on an alias silently
   // consume the entitlement an operator meant for the invited account.
+  //
+  // A grant-package amount is the exception: a package is a shared, capped offer rather than a
+  // grant to one named account, so it claims the inbox like the default does. A lost claim frees
+  // the package slot for someone else.
   const isDefaultGrant = user.pendingCreditGrant === null || user.pendingCreditGrant === undefined;
-  if (isDefaultGrant && !(await db.users.claimFreeCreditGrant(user.id))) {
+  if ((isDefaultGrant || grantPackageId) && !(await db.users.claimFreeCreditGrant(user.id))) {
+    if (grantPackageId) await db.grantPackages?.releaseRedemption(grantPackageId, user.id);
     return { creditsGranted: 0, currentCredits: null };
   }
 
