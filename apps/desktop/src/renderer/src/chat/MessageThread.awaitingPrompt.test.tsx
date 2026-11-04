@@ -48,7 +48,16 @@ describe('awaitingApprovalKey', () => {
       call({ id: 'c2', status: 'done' }),
       call({ id: 'c3', status: 'awaiting-approval', approvalId: 'p3' }),
     ]);
-    expect(awaitingApprovalKey(message)).toBe('p1,p3');
+    expect(awaitingApprovalKey(message)).toBe('["p1","p3"]');
+  });
+
+  it('tells apart ids that would collide once joined', () => {
+    const one = reply([call({ status: 'awaiting-approval', approvalId: 'a,b' })]);
+    const two = reply([
+      call({ id: 'c1', status: 'awaiting-approval', approvalId: 'a' }),
+      call({ id: 'c2', status: 'awaiting-approval', approvalId: 'b' }),
+    ]);
+    expect(awaitingApprovalKey(one)).not.toBe(awaitingApprovalKey(two));
   });
 });
 

@@ -124,17 +124,18 @@ const SkillRow = memo(function SkillRow({
           </Button>
         )}
         {id && (
-          <IconButton
-            size="sm"
-            variant="plain"
-            color="neutral"
-            aria-label={`Open /${skill.name} on the web`}
-            title="Edit, share or delete on the web"
-            onClick={() => void window.b4m.skillMarket.openOnWeb({ kind: 'skill', id })}
-            data-testid="customize-skill-web-btn"
-          >
-            <ExternalLinkIcon />
-          </IconButton>
+          <Tooltip title="Edit, share or delete on the web" size="sm" variant="soft" placement="bottom-end">
+            <IconButton
+              size="sm"
+              variant="plain"
+              color="neutral"
+              aria-label={`Open /${skill.name} on the web`}
+              onClick={() => void window.b4m.skillMarket.openOnWeb({ kind: 'skill', id })}
+              data-testid="customize-skill-web-btn"
+            >
+              <ExternalLinkIcon />
+            </IconButton>
+          </Tooltip>
         )}
       </Stack>
     </ListItem>

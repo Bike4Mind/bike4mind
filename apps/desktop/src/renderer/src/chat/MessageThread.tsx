@@ -580,12 +580,16 @@ function EarlierMessages({ count, children }: { count: number; children: ReactNo
 
 const PIN_THRESHOLD_PX = 48;
 
-/** The prompts the last message is waiting on, as one comparable value; empty when there are none. */
+/**
+ * The prompts the last message is waiting on, as one comparable value; empty when there are none.
+ * JSON rather than a joined string, so no character an approval id might hold can make two sets
+ * of prompts compare equal.
+ */
 export function awaitingApprovalKey(message: ChatMessage | undefined): string {
-  return (message?.toolCalls ?? [])
+  const ids = (message?.toolCalls ?? [])
     .filter(call => call.status === 'awaiting-approval' && call.approvalId)
-    .map(call => call.approvalId)
-    .join(',');
+    .map(call => call.approvalId);
+  return ids.length > 0 ? JSON.stringify(ids) : '';
 }
 
 /**
