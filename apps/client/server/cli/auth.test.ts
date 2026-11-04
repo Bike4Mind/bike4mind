@@ -96,7 +96,7 @@ import {
 import { cacheService, userApiKeyService } from '@bike4mind/services';
 import { User } from '@bike4mind/database';
 import { checkApiKeyRateLimit, extractApiKeyFromHeaders } from '@server/utils/apiKeyRateLimitCheck';
-import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
+import { ACCOUNT_DELETION_PENDING_CODE, ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 
 const userId = 'user-abc';
 const key = `rate-limit:ws-auth:${userId}`;
@@ -321,6 +321,22 @@ describe('verifyJwtToken (P0-B policy consent gate)', () => {
   it('accepts a JWT for an account with a recorded version', async () => {
     vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1' }));
     await expect(verifyJwtToken(sign('u1'))).resolves.toMatchObject({ id: 'u1' });
+  });
+
+  it('refuses a deletion-pending account with the deletion-pending code', async () => {
+    vi.mocked(User.findById).mockResolvedValue(
+      mockUser({
+        aupAcceptedVersion: 'v1',
+        deletion: {
+          requestedAt: new Date('2026-11-01T00:00:00Z'),
+          scheduledFor: new Date('2026-12-01T00:00:00Z'),
+          source: 'self_serve',
+        },
+      })
+    );
+    await expect(verifyJwtToken(sign('u1'))).rejects.toMatchObject({
+      additionalInfo: { code: ACCOUNT_DELETION_PENDING_CODE },
+    });
   });
 
   it('accepts a grandfathered account (sentinel version passes the gate)', async () => {
