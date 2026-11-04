@@ -68,16 +68,21 @@ export const updateFeedbackOnServer = async (
   feedbackId: string,
   updatedFeedbackData: Partial<IFeedbackDocument>
 ): Promise<IFeedbackDocument> => {
-  const response = await api.put<IFeedbackDocument>(`/api/feedback/${feedbackId}/update`, updatedFeedbackData);
+  const response = await api.put<IFeedbackDocument>(
+    `/api/feedback/${encodeURIComponent(feedbackId)}/update`,
+    updatedFeedbackData
+  );
   return response.data;
 };
 
 export const deleteFeedbackFromServer = async (feedbackId: string): Promise<{ msg: string } | null> => {
-  const response = await api.delete(`/api/feedback/${feedbackId}/delete`);
+  const response = await api.delete(`/api/feedback/${encodeURIComponent(feedbackId)}/delete`);
   return response.data;
 };
 
 export const getFeedbackByIdFromServer = async (feedbackId: string): Promise<IExtendedFeedbackDocument | null> => {
-  const response = await api.get<IExtendedFeedbackDocument | null>(`/api/feedback/${feedbackId}/read`);
+  const response = await api.get<IExtendedFeedbackDocument | null>(
+    `/api/feedback/${encodeURIComponent(feedbackId)}/read`
+  );
   return response.data;
 };
