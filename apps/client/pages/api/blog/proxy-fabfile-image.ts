@@ -1,9 +1,8 @@
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
-import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { BadGatewayError, BadRequestError, NotFoundError, isImageServeable } from '@bike4mind/common';
 import { fabFileRepository } from '@bike4mind/database';
-import { isImageServeable } from '@bike4mind/common';
-import axios from 'axios';
+import axios, { type AxiosResponse } from 'axios';
 
 interface ProxyFabFileImageRequest {
   fabFileId: string;
@@ -29,63 +28,52 @@ const handler = baseApi().post<Request<unknown, ProxyFabFileImageResponse, Proxy
       throw new BadRequestError('FabFile ID is required');
     }
 
+    // Validation errors propagate to `errorHandler`, which answers 4xx and logs them at warn.
+    const fabFile = await fabFileRepository.findById(fabFileId);
+
+    // A file the caller cannot read answers exactly like a missing one, so the route never
+    // confirms that an id exists.
+    const canRead = fabFile && (fabFile.userId === userId || fabFile.public || fabFile.isGlobalRead);
+    // Refuse to serve a held/blocked image's bytes.
+    if (!fabFile || !canRead || !isImageServeable(fabFile)) {
+      throw new NotFoundError('FabFile not found');
+    }
+
+    if (!fabFile.mimeType?.startsWith('image/')) {
+      throw new BadRequestError('File is not an image');
+    }
+
+    const fileUrl = fabFile.fileUrl;
+    if (!fileUrl) {
+      throw new BadRequestError('File URL not available');
+    }
+
+    req.logger.info(`[Proxy FabFile] Downloading image: ${fabFile.fileName}`);
+    let imageResponse: AxiosResponse<ArrayBuffer>;
     try {
-      const fabFile = await fabFileRepository.findById(fabFileId);
-
-      if (!fabFile) {
-        throw new NotFoundError('FabFile not found');
-      }
-
-      if (fabFile.userId !== userId && !fabFile.public && !fabFile.isGlobalRead) {
-        throw new BadRequestError('You do not have access to this file');
-      }
-
-      if (!fabFile.mimeType?.startsWith('image/')) {
-        throw new BadRequestError('File is not an image');
-      }
-
-      // Refuse to serve a held/blocked image's bytes.
-      if (!isImageServeable(fabFile)) {
-        throw new NotFoundError('FabFile not found');
-      }
-
-      const fileUrl = fabFile.fileUrl;
-      if (!fileUrl) {
-        throw new BadRequestError('File URL not available');
-      }
-
-      req.logger.info(`[Proxy FabFile] Downloading image: ${fabFile.fileName}`);
-      const imageResponse = await axios.get(fileUrl, {
+      imageResponse = await axios.get<ArrayBuffer>(fileUrl, {
         responseType: 'arraybuffer',
         timeout: 30000,
       });
-
-      const imageBuffer = Buffer.from(imageResponse.data);
-      const contentType = fabFile.mimeType || imageResponse.headers['content-type'] || 'image/png';
-      const base64Image = `data:${contentType};base64,${imageBuffer.toString('base64')}`;
-
-      req.logger.info(`[Proxy FabFile] Converted to base64 (${Math.round(imageBuffer.length / 1024)}KB)`);
-
-      res.json({
-        success: true,
-        imageUrl: base64Image,
-        mimeType: contentType,
-      });
     } catch (error) {
-      req.logger.error('[Proxy FabFile] Error:', error);
-
-      let errorMessage = 'Failed to load image. Please try again.';
-      if (error instanceof Error) {
-        errorMessage = error.message;
-      }
-
-      res.status(500).json({
-        success: false,
-        imageUrl: '',
-        mimeType: '',
-        message: errorMessage,
-      });
+      // The upstream detail stays in the log; `errorHandler` records the 502 itself at error.
+      req.logger.warn(
+        `[Proxy FabFile] Image download failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+      throw new BadGatewayError('Failed to load image. Please try again.');
     }
+
+    const imageBuffer = Buffer.from(imageResponse.data);
+    const contentType = fabFile.mimeType || imageResponse.headers['content-type'] || 'image/png';
+    const base64Image = `data:${contentType};base64,${imageBuffer.toString('base64')}`;
+
+    req.logger.info(`[Proxy FabFile] Converted to base64 (${Math.round(imageBuffer.length / 1024)}KB)`);
+
+    res.json({
+      success: true,
+      imageUrl: base64Image,
+      mimeType: contentType,
+    });
   }
 );
 
