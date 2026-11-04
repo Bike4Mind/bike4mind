@@ -128,6 +128,11 @@ export function partsToStl(parts: ModelPartMesh[]): Uint8Array {
   return new Uint8Array(buffer);
 }
 
+/** The bake leaves scales a rounding error off 1 (0.9999999999999999); an engine would show that as a scaled node. */
+function snapUnitScale(scale: THREE.Vector3): void {
+  for (const axis of ['x', 'y', 'z'] as const) if (Math.abs(scale[axis] - 1) < 1e-9) scale[axis] = 1;
+}
+
 /**
  * Moves the unit scale and axis turn held by the root and its direct children into the geometry and
  * node positions below them, so every node in the file is in metres, Y-up and unscaled: what an
@@ -146,6 +151,7 @@ function bakeTopTransforms(root: THREE.Object3D): void {
       if (node === top) return;
       node.updateMatrix();
       bake.clone().multiply(node.matrix).multiply(unbake).decompose(node.position, node.quaternion, node.scale);
+      snapUnitScale(node.scale);
     });
     top.position.set(0, 0, 0);
     top.quaternion.identity();
@@ -163,7 +169,9 @@ export async function exportGlb(root: THREE.Object3D): Promise<Uint8Array> {
   if (copy.userData.units === 'mm') copy.scale.setScalar(0.001);
   bakeTopTransforms(copy);
   scene.add(copy);
-  const result = await new GLTFExporter().parseAsync(scene, { binary: true });
+  // TRS rather than a matrix: glTF forbids `matrix` on a node an animation targets, and these
+  // nodes exist so an engine can animate them.
+  const result = await new GLTFExporter().parseAsync(scene, { binary: true, trs: true });
   if (!(result instanceof ArrayBuffer)) throw new Error('The GLB exporter returned JSON instead of binary.');
   return new Uint8Array(result);
 }

@@ -119,6 +119,18 @@ describe('part pivots and parents', () => {
     });
   });
 
+  it('writes nodes as TRS with exact unit scale, as glTF requires for animated nodes', async () => {
+    const bytes = await exportGlb(buildModelObject(parts(), 'mm'));
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const json = JSON.parse(new TextDecoder().decode(bytes.subarray(20, 20 + view.getUint32(12, true)))) as {
+      nodes: { name?: string; matrix?: number[]; translation?: number[]; scale?: number[] }[];
+    };
+    expect(json.nodes.filter(node => node.matrix)).toEqual([]);
+    expect(json.nodes.filter(node => node.scale)).toEqual([]);
+    const lid = json.nodes.find(node => node.name === 'lid')!;
+    expect(lid.translation?.map(value => Number(value.toFixed(6)))).toEqual([0, 0.03, -0.04]);
+  });
+
   it('reports joints in the summary', () => {
     expect(summarizeParts(parts(), {}, 'mm').joints).toEqual(['lid: pivot (0, 40, 30), in body']);
   });

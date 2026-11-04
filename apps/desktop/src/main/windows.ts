@@ -23,3 +23,14 @@ export function appWindows(): BrowserWindow[] {
     window => !agentBrowserWindows.has(window) && !developerWindows.has(window)
   );
 }
+
+/**
+ * The window that should answer a renderer-side request: the focused one if it is an app window,
+ * else the first app window. `BrowserWindow.getFocusedWindow()` alone can return the developer log
+ * or an agent browser, which have no app listeners, so the request would go unanswered.
+ */
+export function focusedAppWindow(): BrowserWindow | undefined {
+  const windows = appWindows();
+  const focused = BrowserWindow.getFocusedWindow();
+  return windows.find(window => window === focused) ?? windows[0];
+}

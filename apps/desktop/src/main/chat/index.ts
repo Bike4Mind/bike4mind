@@ -154,7 +154,7 @@ import { XcodeSimulatorDriver } from './simulator/XcodeSimulatorDriver';
 import { devLog } from '../devlog/DevLogSink';
 import { registerPullRequests } from '../pr';
 import type { PrMonitor } from '../pr/PrMonitor';
-import { appWindows } from '../windows';
+import { appWindows, focusedAppWindow } from '../windows';
 import { registerClaudeImport } from '../claudeImport';
 import type { ClaudeImportService } from '../claudeImport/ClaudeImportService';
 
@@ -670,8 +670,8 @@ export function registerChat(
   const modelView = new ModelLiveView({
     state: state => send(IPC_CHANNELS.modelState, state),
     captureRequest: request => {
-      // The focused window renders, else the first one; one rendering is enough.
-      const target = BrowserWindow.getFocusedWindow() ?? appWindows()[0];
+      // One rendering is enough: the focused app window, else the first.
+      const target = focusedAppWindow();
       if (!target || target.isDestroyed()) return false;
       target.webContents.send(IPC_CHANNELS.modelCaptureRequest, request);
       return true;
