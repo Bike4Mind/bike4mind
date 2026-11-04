@@ -5,7 +5,7 @@ const h = vi.hoisted(() => ({
   config: null as unknown,
   run: vi.fn(),
   preview: vi.fn(),
-  findById: vi.fn(),
+  findTargets: vi.fn(),
   audit: vi.fn(),
   denySelf: vi.fn(),
   rewards: { pauseForUser: vi.fn(), resumeForUser: vi.fn() },
@@ -25,7 +25,7 @@ vi.mock('@server/middlewares/adminApi', () => ({
 }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
-  userRepository: { findById: h.findById },
+  userRepository: { findAdminTargetsByIds: h.findTargets },
   heldCreditRewardRepository: h.rewards,
 }));
 vi.mock('@bike4mind/services', () => ({
@@ -59,7 +59,10 @@ describe('admin bulk block signup grant', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.denySelf.mockRejectedValue(new Error('Admins cannot perform this action on their own account.'));
-    h.findById.mockResolvedValue({ id: 'user-1' });
+    h.findTargets.mockResolvedValue([
+      { id: id(1), email: 'one@example.com' },
+      { id: id(2), username: 'two' },
+    ]);
     h.run.mockResolvedValue({ dryRun: false, results: [], undoUserIds: [] });
     h.preview.mockResolvedValue({ dryRun: true, results: [], undoUserIds: [] });
   });
@@ -96,7 +99,7 @@ describe('admin bulk block signup grant', () => {
   });
 
   it('refuses the whole request when a delegated admin names an account with admin access', async () => {
-    h.findById.mockImplementation(async (userId: string) => ({ id: userId, isAdmin: userId === id(2) }));
+    h.findTargets.mockResolvedValue([{ id: id(1) }, { id: id(2), isAdmin: true }]);
     const delegate = { id: 'admin-2', isAdmin: false, adminPermissions: ['credits:adjust'] };
 
     await expect(h.handler!(request({ user: delegate }), { json: vi.fn() })).rejects.toThrow(
@@ -111,7 +114,7 @@ describe('admin bulk block signup grant', () => {
 
     expect(h.preview).toHaveBeenCalledExactlyOnceWith(
       { action: 'block', userIds: [id(1)] },
-      { users: { findById: h.findById } }
+      { users: { findAdminTargetsByIds: h.findTargets } }
     );
     expect(res.json).toHaveBeenCalledWith({ dryRun: true, results: [], undoUserIds: [] });
     expect(h.run).not.toHaveBeenCalled();
@@ -132,7 +135,7 @@ describe('admin bulk block signup grant', () => {
       expect.objectContaining({
         action: 'user.credits.grant_blocked',
         reason: 'Confirmed farming ring',
-        target: { kind: 'user', id: id(2), displayName: id(2) },
+        target: { kind: 'user', id: id(2), displayName: 'two' },
       })
     );
     expect(res.json).toHaveBeenCalledOnce();
