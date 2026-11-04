@@ -10676,6 +10676,7 @@ describe('ChatCompletionProcess', () => {
       disabledTools?: string[];
       surface?: string;
       extraModels?: Array<Record<string, unknown>>;
+      enableSlackTools?: boolean;
     }) => {
       // vi.spyOn on a prototype is idempotent across tests: the same underlying
       // mock survives, so `mock.calls` accumulates. Clear before each invocation
@@ -10728,6 +10729,7 @@ describe('ChatCompletionProcess', () => {
           ? { disableUserIntegrations: params.disableUserIntegrations }
           : {}),
         ...(params.mcpServers !== undefined ? { mcpServers: params.mcpServers } : {}),
+        ...(params.enableSlackTools !== undefined ? { enableSlackTools: params.enableSlackTools } : {}),
       };
       await service.process({ body, logger: mockLogger });
 
@@ -10977,6 +10979,21 @@ describe('ChatCompletionProcess', () => {
           expect(savedPendingActions().at(-1)?.params).toEqual({ title: 'different action' });
         } finally {
           clock.mockRestore();
+        }
+      });
+
+      it('offers no custom connector tools on a Slack turn, whose Confirm button cannot run them', async () => {
+        const buildMcpToolsSpy = vi
+          .spyOn(ToolBuilder.prototype, 'buildMcpTools')
+          .mockResolvedValue({ mcpToolsByServer: {}, serverAgentConfig: {}, customMcpToolNames: new Set() });
+        buildMcpToolsSpy.mockClear();
+        try {
+          mockSession.userId = 'user1';
+          await runWithBuildToolsSpy({ message: 'Create the thing', enableSlackTools: true });
+          expect(buildMcpToolsSpy).toHaveBeenCalledTimes(1);
+          expect(buildMcpToolsSpy.mock.calls[0]?.[0]?.onPendingAction).toBeUndefined();
+        } finally {
+          buildMcpToolsSpy.mockRestore();
         }
       });
 

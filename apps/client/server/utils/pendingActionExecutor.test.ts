@@ -110,6 +110,23 @@ describe('executePendingAction', () => {
     );
   });
 
+  it('never routes a custom connector action to a built-in server, even under a built-in tool name', async () => {
+    vi.mocked(Quest.findById).mockResolvedValue({
+      pendingAction: {
+        tool: 'create_issue',
+        params: { owner: 'o', repo: 'r', title: 't' },
+        ts,
+        customConnector: { connectionId: 'c1', slug: 'gitea', displayName: 'Gitea', urlHost: 'git.example.test' },
+      },
+    } as never);
+
+    const result = await executePendingAction(QUEST_ID, dbUser, logger, ts);
+
+    expect(result.success).toBe(false);
+    expect(Quest.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(invokeMcpHandler).not.toHaveBeenCalled();
+  });
+
   it('does not invoke the tool when the claim is lost to another click', async () => {
     vi.mocked(Quest.findOneAndUpdate).mockResolvedValue(null as never);
 

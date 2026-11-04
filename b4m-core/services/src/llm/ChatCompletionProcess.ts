@@ -3655,17 +3655,21 @@ export class ChatCompletionProcess {
         processStartTime,
         quest,
         disableUserIntegrations: userIntegrationsDisabled,
-        onPendingAction: async ({ toolName, args, ...customConnector }) => {
-          // The pending action is quest-scoped but the connection is the acting user's, and only the
-          // session owner may confirm: a teammate's write could never run and would show their connector.
-          if (session.userId !== this.user.id) {
-            throw new Error('Custom connector actions that need approval can only be run by the notebook owner.');
-          }
-          // Match the built-in MCP callback: a replaced card must never identify a newer action.
-          const ts = Math.max(Date.now(), (quest.pendingAction?.ts ?? 0) + 1);
-          quest.pendingAction = { tool: toolName, params: args, ts, customConnector };
-          await saveQuest(quest);
-        },
+        // Omitted on Slack turns, which withholds custom connector tools there: the Slack Confirm
+        // executor (pendingActionExecutor.ts) routes by built-in tool name only.
+        onPendingAction: parsedBody.enableSlackTools
+          ? undefined
+          : async ({ toolName, args, ...customConnector }) => {
+              // The pending action is quest-scoped but the connection is the acting user's, and only the
+              // session owner may confirm: a teammate's write could never run and would show their connector.
+              if (session.userId !== this.user.id) {
+                throw new Error('Custom connector actions that need approval can only be run by the notebook owner.');
+              }
+              // Match the built-in MCP callback: a replaced card must never identify a newer action.
+              const ts = Math.max(Date.now(), (quest.pendingAction?.ts ?? 0) + 1);
+              quest.pendingAction = { tool: toolName, params: args, ts, customConnector };
+              await saveQuest(quest);
+            },
       });
 
       // Construct per-request agent store with user-specific config (e.g., selected repositories)
