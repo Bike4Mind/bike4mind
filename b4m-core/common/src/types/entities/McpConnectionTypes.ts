@@ -736,6 +736,15 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
     ttlMs?: number
   ): Promise<McpRefreshLeaseResult>;
   releaseRefreshLease(id: string, holder: string): Promise<boolean>;
+  /**
+   * `needs_reconnect` with `lastError`, only while `holder` still holds the refresh lease; null otherwise, so
+   * a refresh that outlived its lease cannot overwrite a grant another holder just stored.
+   */
+  setNeedsReconnectIfHolder(
+    id: string,
+    holder: string,
+    lastError: McpConnectionLastErrorInput
+  ): Promise<IMcpConnectionDocument | null>;
   deleteForOwner(id: string, owner: McpConnectionOwner): Promise<boolean>;
 }
 
@@ -784,4 +793,11 @@ export interface IMcpOAuthClientRegistrationRepository extends IBaseRepository<I
   upsert(registration: IMcpOAuthClientRegistration): Promise<IMcpOAuthClientRegistrationDocument>;
   /** Includes `clientSecretEnc` and `registrationAccessTokenEnc`. */
   findByIssuerAndRedirect(issuer: string, redirectUri: string): Promise<IMcpOAuthClientRegistrationDocument | null>;
+  /** Includes `clientSecretEnc`; a registration whose secret has expired reads as a miss. */
+  findByIdWithCredentials(id: string): Promise<IMcpOAuthClientRegistrationDocument | null>;
+  /**
+   * Stores the registration unless (issuer, redirectUri) already has a live one, and returns the row that
+   * is stored either way, so racing first registrations converge on one client instead of overwriting.
+   */
+  registerIfAbsent(registration: IMcpOAuthClientRegistration): Promise<IMcpOAuthClientRegistrationDocument | null>;
 }

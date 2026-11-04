@@ -40,7 +40,7 @@ import mongoose, { Schema, Model, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 
 /** How long a refresh lease is held before another caller may take it over (design 4.7). */
-export const MCP_REFRESH_LEASE_TTL_MS = 15_000;
+export const MCP_REFRESH_LEASE_TTL_MS = 30_000;
 
 export class McpConnectionOwnerError extends Error {
   constructor(message: string) {
@@ -690,7 +690,14 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
       { $set, ...(Object.keys($unset).length > 0 ? { $unset } : {}) },
       { new: true, runValidators: true }
     );
-    return result?.toJSON() ?? null;
+    if (!result) return null;
+    // A `none` connection that was `connected` must not stay offered as usable once it is an OAuth one with no token.
+    const demoted = await this.model.findOneAndUpdate(
+      { _id: id, status: 'connected', 'auth.oauth.hasAccessToken': { $ne: true } },
+      { $set: { status: 'pending_auth' } },
+      { new: true }
+    );
+    return (demoted ?? result).toJSON();
   }
 
   async setPendingAuth(
@@ -851,7 +858,7 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
    * Take the refresh lease when it is free or expired. Atomic, so of N concurrent callers exactly
    * one wins. Uses the app clock for `now` and `until`: a pipeline update could use `$$NOW`, but
    * DOCUMENTDB_COMPATIBILITY_NOTES.md does not establish pipeline-update support, so instances are
-   * assumed NTP-synced and the 15 s TTL absorbs ordinary skew.
+   * assumed NTP-synced and the 30 s TTL absorbs ordinary skew.
    */
   async acquireRefreshLease(
     id: string,
@@ -885,6 +892,29 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
       { $unset: { refreshLease: 1 } }
     );
     return result.modifiedCount === 1;
+  }
+
+  async setNeedsReconnectIfHolder(
+    id: string,
+    holder: string,
+    lastError: McpConnectionLastErrorInput
+  ): Promise<IMcpConnectionDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    const result = await this.model.findOneAndUpdate(
+      { _id: id, 'auth.kind': 'oauth', 'refreshLease.holder': holder },
+      {
+        $set: {
+          status: 'needs_reconnect',
+          lastError: {
+            ...lastError,
+            message: lastError.message.slice(0, MCP_CONNECTION_LIMITS.lastErrorMessageLength),
+            at: new Date(),
+          },
+        },
+      },
+      { new: true }
+    );
+    return result?.toJSON() ?? null;
   }
 
   async deleteForOwner(id: string, owner: McpConnectionOwner): Promise<boolean> {

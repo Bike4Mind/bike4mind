@@ -15,12 +15,7 @@ const ModelName = 'CodeAgentEvent';
  * pathological session, add an on-insert count-cap pass here.
  */
 export type CodeAgentEventType =
-  | 'status'
-  | 'message'
-  | 'tool_use'
-  | 'tool_result'
-  | 'permission_request'
-  | 'permission_resolved';
+  'status' | 'message' | 'tool_use' | 'tool_result' | 'permission_request' | 'permission_resolved';
 
 export interface ICodeAgentEventDoc {
   _id: string;

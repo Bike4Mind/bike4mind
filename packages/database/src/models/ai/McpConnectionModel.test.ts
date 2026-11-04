@@ -13,7 +13,12 @@ import {
   type IMcpConnectionTool,
 } from '@bike4mind/common';
 import { createMongoServer } from '../../__test__/createMongoServer';
-import { McpConnection, mcpConnectionRepository, measureStoredMcpToolsBytes } from './McpConnectionModel';
+import {
+  McpConnection,
+  MCP_REFRESH_LEASE_TTL_MS,
+  mcpConnectionRepository,
+  measureStoredMcpToolsBytes,
+} from './McpConnectionModel';
 
 type CreateInput = Omit<IMcpConnectionDocument, 'id' | 'createdAt' | 'updatedAt'>;
 
@@ -1069,6 +1074,24 @@ describe('McpConnectionModel', () => {
       expect(withCreds?.auth.oauth).toMatchObject({ accessTokenEnc: 'enc:access-2', refreshTokenEnc: 'enc:refresh-2' });
     });
 
+    it('setNeedsReconnectIfHolder writes only while the caller holds the lease', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      await mcpConnectionRepository.acquireRefreshLease(created.id, OWNER, 'slow');
+      await McpConnection.updateOne({ _id: created.id }, { $set: { 'refreshLease.until': new Date(Date.now() - 1) } });
+      await mcpConnectionRepository.acquireRefreshLease(created.id, OWNER, 'successor');
+      const lastError = { code: 'invalid_grant', message: 'sign in again' };
+
+      expect(await mcpConnectionRepository.setNeedsReconnectIfHolder(created.id, 'slow', lastError)).toBeNull();
+      expect((await mcpConnectionRepository.findByIdForOwner(created.id, OWNER))?.status).not.toBe('needs_reconnect');
+
+      const done = await mcpConnectionRepository.setNeedsReconnectIfHolder(created.id, 'successor', lastError);
+      expect(done).toMatchObject({ status: 'needs_reconnect', lastError: { code: 'invalid_grant' } });
+    });
+
+    it('gives the lease clear headroom over an OAuth request timeout', () => {
+      expect(MCP_REFRESH_LEASE_TTL_MS).toBeGreaterThanOrEqual(2 * 10_000);
+    });
+
     it('a stale holder cannot write after a successor took the expired lease', async () => {
       const created = await mcpConnectionRepository.create(baseConnection());
       await mcpConnectionRepository.acquireRefreshLease(created.id, OWNER, 'slow');
@@ -1309,7 +1332,24 @@ describe('McpConnectionModel', () => {
         expect(await mcpConnectionRepository.setOAuthConfig(created.id, OTHER_USER_OWNER, config)).toBeNull();
         const updated = await mcpConnectionRepository.setOAuthConfig(created.id, OWNER, config);
         expect(updated?.auth).toMatchObject({ kind: 'oauth', oauth: { ...config } });
-        expect(updated?.status).toBe(created.status);
+        expect(updated?.status).toBe('pending_auth');
+      });
+
+      it('does not leave a connected none connection offered once it has no token', async () => {
+        const created = await mcpConnectionRepository.create(
+          baseConnection({ auth: { kind: 'none' }, slug: 'was_open' })
+        );
+        await McpConnection.updateOne({ _id: created.id }, { $set: { status: 'connected' } });
+        const updated = await mcpConnectionRepository.setOAuthConfig(created.id, OWNER, config);
+        expect(updated?.status).toBe('pending_auth');
+      });
+
+      it('keeps a connected OAuth connection with a token connected', async () => {
+        const created = await mcpConnectionRepository.create(baseConnection({ slug: 'keeps' }));
+        await mcpConnectionRepository.setInitialOAuthTokens(created.id, OWNER, { accessTokenEnc: 'enc:access' });
+        await McpConnection.updateOne({ _id: created.id }, { $set: { status: 'connected' } });
+        const updated = await mcpConnectionRepository.setOAuthConfig(created.id, OWNER, config);
+        expect(updated?.status).toBe('connected');
       });
 
       it('refuses an api_key connection', async () => {
