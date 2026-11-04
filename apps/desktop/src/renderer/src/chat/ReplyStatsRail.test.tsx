@@ -372,7 +372,7 @@ describe('the reply stats rail and its footer fallback', () => {
     });
 
     it('drops a rail that throws and keeps the thread', () => {
-      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       render([...thread.slice(0, 3), { ...settled[1]!, id: 'unreadable', content: 'Still here.' }], {
         statsRail: true,
       });
@@ -380,6 +380,7 @@ describe('the reply stats rail and its footer fallback', () => {
       expect(replies()[1]?.textContent).toContain('Still here.');
       expect(cellOf('a1')).not.toBeNull();
       expect(cellOf('unreadable')).toBeNull();
+      expect(logged).toHaveBeenCalledWith('Reply stats rail failed', expect.any(Error));
     });
 
     it('draws the rail again from the stored stats after it threw on a live frame', () => {
