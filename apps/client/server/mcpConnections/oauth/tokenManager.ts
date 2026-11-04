@@ -182,11 +182,7 @@ async function refreshWithLease(
 }
 
 /** The lease was lost (it expired, or the user reconnected or disconnected): use what is stored, never write over it. */
-async function tokenAfterLostLease(
-  id: string,
-  owner: Owner,
-  options: AccessTokenOptions
-): Promise<string | undefined> {
+async function tokenAfterLostLease(id: string, owner: Owner, options: AccessTokenOptions): Promise<string | undefined> {
   const latest = await mcpConnectionRepository.findByIdWithCredentials(id, owner);
   if (latest?.auth.oauth && isUnexpired(latest.auth.oauth, (options.now ?? Date.now)())) {
     return decryptToken(latest.auth.oauth.accessTokenEnc) ?? undefined;
