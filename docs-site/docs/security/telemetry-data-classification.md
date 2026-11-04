@@ -224,7 +224,10 @@ body and cookies the visitor controls, and a mark read from them would let anyon
 take a real visit out of the count. A visit is set apart downstream only when a
 marked event of its user arrives under the same visit id, which the per-visit
 `active` provides for every visit a marked account makes while signed in. A visit
-made signed out stays unmarked.
+made signed out stays unmarked. The verified-hop events below (`hop_minted` and
+`hop`) name no user either, so they carry no internal mark: a source declares only
+the synthetic lane, for a test persona's run, and with consent a `hop` names the
+visit it was redeemed in, so it joins that visit as described above.
 
 Because the touches were recorded with consent at signup, a purchase is credited
 from them even if the visitor later withdraws cookie consent: the webhook has no
