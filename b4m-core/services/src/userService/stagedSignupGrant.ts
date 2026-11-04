@@ -2,6 +2,7 @@ import {
   CreditHolderType,
   hasPaidSignupDrip,
   isPaymentUnlockReason,
+  isSignupGrantBlocked,
   PENDING_FREE_CREDITS_TAG,
   resolveSignupGrantSchedule,
   signupGrantDripOpen,
@@ -86,9 +87,23 @@ function isReleaseEligible(
   expected: SignupGrant['stage']
 ): user is IUserDocument & { signupGrant: SignupGrant } {
   if (!user?.signupGrant || accountBlockReasons(user).length || isAiAccessRevoked(user)) return false;
+  if (isSignupGrantBlocked(user)) return false;
   if (expected === 'pending_email') return user.signupGrant.stage === expected;
   // An unpaid tranche blocks every unlock; unlockSignupGrant pays a held tranche first on a card or subscription unlock.
   return user.signupGrant.stage !== 'pending_email';
+}
+
+/**
+ * A blocked account's pending tranche is withheld rather than a plain zero: releasePendingFreeCredits
+ * strips PENDING_FREE_CREDITS_TAG on a non-withheld zero, which would strand the tranche after an unblock.
+ */
+function ineligibleResult(
+  user: IUserDocument | null | undefined,
+  expected: SignupGrant['stage']
+): GrantFreeCreditsResult {
+  return expected === 'pending_email' && user && isSignupGrantBlocked(user)
+    ? { ...noGrant(), withheld: true }
+    : noGrant();
 }
 
 /** Whether the stored risk score alone keeps the account in review (refreshSignupRiskScore's needsReview). */
@@ -115,7 +130,7 @@ async function releaseStage(
   const { db, audit } = adapters;
   if (db.signupProtection) {
     const user = await db.users.findById(userId);
-    if (!isReleaseEligible(user, expected)) return noGrant();
+    if (!isReleaseEligible(user, expected)) return ineligibleResult(user, expected);
     if (!user.emailVerified) {
       if (expected === 'pending_email') throw new Error('Email verification required for signup grant');
       return noGrant();
@@ -133,7 +148,7 @@ async function releaseStage(
   try {
     const result = await withTransaction<AssessedGrantResult>(async () => {
       const user = await db.users.findById(userId);
-      if (!isReleaseEligible(user, expected)) return noGrant();
+      if (!isReleaseEligible(user, expected)) return ineligibleResult(user, expected);
       const grant = user.signupGrant;
       const evidence = await validate(user);
       if (!evidence) return noGrant();
@@ -394,6 +409,7 @@ export async function hasSignupBacklog(users: FreeCreditAdapters['db']['users'],
     isModerated: { $ne: true },
     disputePending: { $ne: true },
     'moderation.status': { $ne: 'suspended' },
+    'signupGrant.blocked': { $exists: false },
     deletedAt: { $exists: false },
     signupGrantHeldAt: { $lt: new Date(`${day}T00:00:00.000Z`) },
   });
