@@ -52,6 +52,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     ['cloudwatch:PutMetricData', 'cloudwatch:namespace', 'import:@aws-sdk/client-cloudwatch']
   ),
   broker(
+    'queue:infra/accountDeletionSweepDeadLetter.ts:accountDeletionSweepDlq',
+    '981813c22390623a538fe68a3b6bd1445b4a6aad7164a0485c95a687bad287a5'
+  ),
+  broker(
     'queue:infra/accountCreationAlarms.ts:AccountCreationMetricsDlq',
     'aa48c95e91e528e37c56987140eb2432dc050caa462b4c8f28e9043bf22d4a77'
   ),
@@ -1033,6 +1037,15 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
       source: 'apps/workers/src/selfhost/signupIpRetention.ts',
       symbol: 'registerSignupIpRetention',
       fingerprint: '0c313edef4ce27ecfa5a27f06f3eb3765dd6b22efd7cbe2d17278623b20deef4',
+    }
+  ),
+  wired(
+    'schedule:infra/cron.ts:accountDeletionSweep',
+    'bd85a9491af566894d7e83adec930f1a80472634d6a415571b3f729f05d17a93',
+    {
+      source: 'apps/workers/src/selfhost/accountDeletionSweep.ts',
+      symbol: 'registerAccountDeletionSweep',
+      fingerprint: 'd47912b4a94290136beeaa4844ae281be958dd0985d89d5eb766e6cae67971e6',
     }
   ),
   wired(

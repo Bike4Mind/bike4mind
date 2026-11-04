@@ -85,6 +85,7 @@ import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLe
 import { apiProbeDetectorDeadLetter } from './apiProbeDetectorDeadLetter';
 import { spendMonitorDeadLetter } from './spendMonitorDeadLetter';
 import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
+import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
 import { imageModerationReviewSweepDeadLetter } from './imageModerationReviewSweepDeadLetter';
 
@@ -644,6 +645,15 @@ if (isMonitoredStage) {
       displayName: 'Revenue Snapshot',
       application: 'Billing',
       queue: revenueSnapshotDeadLetter.queue,
+    });
+  }
+
+  if (accountDeletionSweepDeadLetter) {
+    createDlqAlarms({
+      label: 'account-deletion-sweep',
+      displayName: 'Account Deletion Sweep',
+      application: 'Account',
+      queue: accountDeletionSweepDeadLetter.queue,
     });
   }
 

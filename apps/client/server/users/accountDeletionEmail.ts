@@ -4,7 +4,7 @@ import { PURGED_USER_DATA } from '@server/services/purgeDeletedUserData';
 import { EmailEvents } from '@server/utils/eventBus';
 
 // The copy below describes what requestAccountDeletion and cancelAccountDeletion
-// (apps/client/server/users/accountDeletion.ts) do - keep in sync.
+// (apps/client/server/users/accountDeletion.ts) and completeAccountDeletion do - keep in sync.
 
 export const formatDeletionDate = (date: Date): string =>
   `${date.toLocaleDateString('en-US', { dateStyle: 'long', timeZone: 'UTC' })} (UTC)`;
@@ -108,9 +108,9 @@ export function accountDeletionCompleteEmailBody(
 }
 
 /**
- * Sent by the purge once the account is gone, to the address it read before the delete. Nothing
- * calls it yet: the purge job that deletes an account once `deletion.scheduledFor` passes is a
- * follow-up to the self-serve deletion request.
+ * Sent by completeAccountDeletion (./completeAccountDeletion.ts) once the account is gone, to the
+ * address it read before the delete. That runs from the daily sweep
+ * (apps/workers/src/cron/accountDeletionSweep.ts) once `deletion.scheduledFor` passes.
  */
 export async function sendAccountDeletionCompleteEmail(to: string): Promise<void> {
   await EmailEvents.Send.publish({
