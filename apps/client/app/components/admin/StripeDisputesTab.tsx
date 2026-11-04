@@ -181,7 +181,7 @@ const ResolveDialog: React.FC<DialogProps> = ({ row, onClose, onRowChange }) => 
         if (!mutation.isPending) onClose();
       }}
       title="Resolve dispute"
-      description="Resolving only closes this record. It does not change any account, flag or credits."
+      description="Resolving only closes this record. It does not change any account, flag or credits, so a user still flagged for this dispute stays blocked until the flag is cleared by hand."
       reasonPresets={ADMIN_REASON_PRESETS.stripeDisputeResolve}
       confirmLabel="Resolve dispute"
       // After a conflict the row is the server's current one, which may no longer take this action.
