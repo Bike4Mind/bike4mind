@@ -79,7 +79,7 @@ const ESTIMATES = {
 
 /** "820ms", "12.3s", "3m 7s"; rounded before the unit is picked, so 999.6ms reads "1.0s", not "1000ms". */
 export function formatDuration(ms: number): string {
-  // A corrupt stored duration reads as none rather than "NaNms".
+  // Callers drop a missing or non-finite duration; this only keeps one from printing "NaNms".
   const clamped = Number.isFinite(ms) ? Math.max(0, ms) : 0;
   if (Math.round(clamped) < 1000) return `${Math.round(clamped)}ms`;
   const tenths = Math.round(clamped / 100);
@@ -98,8 +98,10 @@ export function formatShare(share: number): string {
  * it; null when the reply did not think or the model took no time.
  */
 export function thinkingShare(stats: ChatReplyStats | undefined): number | null {
-  if (!stats || stats.reasoningMs === undefined || stats.modelMs <= 0) return null;
-  return Math.min(1, Math.max(0, stats.reasoningMs / stats.modelMs));
+  if (!stats || stats.reasoningMs === undefined) return null;
+  const { reasoningMs, modelMs } = stats;
+  if (!Number.isFinite(reasoningMs) || !Number.isFinite(modelMs) || modelMs <= 0) return null;
+  return Math.min(1, Math.max(0, reasoningMs / modelMs));
 }
 
 /**
@@ -109,14 +111,19 @@ export function thinkingShare(stats: ChatReplyStats | undefined): number | null 
 export function generationRate({
   stats,
   usage,
-}: ReplyStatsSource): { tokens: number; ms: number; estimated: boolean } | null {
+}: ReplyStatsSource): { tokens: number; ms: number; estimated: boolean; untimedTokens?: number } | null {
   const rate = usage?.rate;
   if (rate && rate.evalTokens > 0 && rate.evalMs > 0) {
-    return { tokens: rate.evalTokens, ms: rate.evalMs, estimated: rate.estimated === true };
+    return {
+      tokens: rate.evalTokens,
+      ms: rate.evalMs,
+      estimated: rate.estimated === true,
+      untimedTokens: rate.untimedTokens,
+    };
   }
   const timed = stats?.generation;
   if (!timed || timed.tokens <= 0 || timed.ms <= 0) return null;
-  return { tokens: timed.tokens, ms: timed.ms, estimated: true };
+  return { tokens: timed.tokens, ms: timed.ms, estimated: true, untimedTokens: timed.untimedTokens };
 }
 
 /**
@@ -159,7 +166,8 @@ function stat(id: ReplyStatId, value: string | null, estimate?: string | false, 
 export function replyStats(source: ReplyStatsSource, { live = false }: { live?: boolean } = {}): ReplyStat[] {
   const { stats, usage } = source;
   const derived = new Set<string>(stats?.derived ?? []);
-  const duration = live ? formatElapsed : formatDuration;
+  const format = live ? formatElapsed : formatDuration;
+  const duration = (ms: number | undefined) => (ms !== undefined && Number.isFinite(ms) ? format(ms) : null);
   const thinkingEstimate = derived.has('reasoningMs') && ESTIMATES.thinking;
   const share = live ? null : thinkingShare(stats);
   const generation = live ? null : generationRate(source);
@@ -170,12 +178,12 @@ export function replyStats(source: ReplyStatsSource, { live = false }: { live?: 
   const reasoningTokens = usage?.reasoningTokens ?? stats?.reasoningTokens;
 
   const all: Record<ReplyStatId, ReplyStat | null> = {
-    thinking: stat('thinking', stats?.reasoningMs !== undefined ? duration(stats.reasoningMs) : null, thinkingEstimate),
+    thinking: stat('thinking', duration(stats?.reasoningMs), thinkingEstimate),
     total: stat(
       'total',
       stats && !live ? duration(stats.totalMs) : null,
       false,
-      stats && stats.toolMs > 0
+      stats && Number.isFinite(stats.toolMs) && stats.toolMs > 0
         ? `includes ${formatDuration(stats.toolMs)} running tools and waiting for approval`
         : undefined
     ),
@@ -195,8 +203,7 @@ export function replyStats(source: ReplyStatsSource, { live = false }: { live?: 
       'speed',
       generation && formatTokenRate({ evalTokens: generation.tokens, evalMs: generation.ms }),
       generation?.estimated && ESTIMATES.speed,
-      // A hosted turn leaves each round's first token untimed by design, so the gap says nothing there.
-      (generation && usage?.rate && untimedOutputNote(generation.tokens, usage.outputTokens)) || undefined
+      (generation && untimedOutputNote(generation.tokens, usage?.outputTokens, generation.untimedTokens)) || undefined
     ),
     cacheShare: stat('cacheShare', cached !== null ? formatShare(cached) : null),
     promptSpeed: stat(
@@ -205,8 +212,13 @@ export function replyStats(source: ReplyStatsSource, { live = false }: { live?: 
         ? formatTokenRate({ evalTokens: rate.promptTokens, evalMs: rate.promptMs })
         : null
     ),
-    firstToken: stat('firstToken', stats?.firstTokenMs !== undefined ? formatDuration(stats.firstTokenMs) : null),
-    load: stat('load', rate?.loadMs !== undefined ? formatDuration(rate.loadMs) : null),
+    firstToken: stat(
+      'firstToken',
+      stats?.firstTokenMs !== undefined && Number.isFinite(stats.firstTokenMs)
+        ? formatDuration(stats.firstTokenMs)
+        : null
+    ),
+    load: stat('load', rate?.loadMs !== undefined && Number.isFinite(rate.loadMs) ? formatDuration(rate.loadMs) : null),
     draft: stat(
       'draft',
       rate?.draftTokens && rate.draftAccepted !== undefined

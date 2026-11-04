@@ -49,6 +49,15 @@ describe('describeTokenRate', () => {
     expect(describeTokenRate({ evalTokens: 40, evalMs: 2000 }, 40)).toBe('Generation: 20.0 tok/s (40 tokens in 2.0s)');
   });
 
+  it('leaves out the tokens left untimed by design, and a count that rounds like the output', () => {
+    expect(describeTokenRate({ evalTokens: 199, evalMs: 4000, untimedTokens: 1 }, 200)).toBe(
+      'Generation: 49.8 tok/s (199 tokens in 4.0s)'
+    );
+    expect(describeTokenRate({ evalTokens: 9999, evalMs: 4000 }, 10_000)).toBe(
+      'Generation: 2500 tok/s (10k tokens in 4.0s)'
+    );
+  });
+
   it('says an estimate was timed by the app', () => {
     expect(describeTokenRate({ evalTokens: 40, evalMs: 2000, estimated: true })).toBe(
       'Generation: ~20.0 tok/s (40 tokens in 2.0s)\nEstimated from stream timing; the server reported no timings'

@@ -141,7 +141,7 @@ describe('roundGeneration', () => {
       roundGeneration(
         round({ startedAt: 0, firstTokenAt: 800, firstTextAt: 800, endedAt: 2_800 }, { usage: { outputTokens: 101 } })
       )
-    ).toEqual({ tokens: 100, ms: 2_000 });
+    ).toEqual({ tokens: 100, ms: 2_000, untimedTokens: 1 });
   });
 
   it('times thinking the server never streamed from the request, since it came before the first output', () => {
@@ -152,7 +152,7 @@ describe('roundGeneration', () => {
           { usage: { outputTokens: 2_000, reasoningTokens: 1_900 } }
         )
       )
-    ).toEqual({ tokens: 2_000, ms: 20_306 });
+    ).toEqual({ tokens: 2_000, ms: 20_306, untimedTokens: 0 });
   });
 
   it('keeps a hosted round whose single thinking frame spans nothing as an estimate', () => {
@@ -170,7 +170,7 @@ describe('roundGeneration', () => {
           { reasoningFrames: 1, reasoning: 'Hm.', usage: { outputTokens: 500 } }
         )
       )
-    ).toEqual({ tokens: 500, ms: 4_100 });
+    ).toEqual({ tokens: 500, ms: 4_100, untimedTokens: 0 });
   });
 
   it('leaves out a tool call that arrived whole, whose tokens took no measurable time', () => {
@@ -207,7 +207,7 @@ describe('buildReplyStats', () => {
       usage: { outputTokens: 3_020 },
       local: false,
     });
-    expect(stats.generation).toEqual({ tokens: 19, ms: 300 });
+    expect(stats.generation).toEqual({ tokens: 19, ms: 300, untimedTokens: 1 });
   });
 
   it('rates a tool round from the call starting when the server announced it', () => {
@@ -224,7 +224,7 @@ describe('buildReplyStats', () => {
       usage: { outputTokens: 3_020 },
       local: false,
     });
-    expect(stats.generation).toEqual({ tokens: 3_018, ms: 29_800 });
+    expect(stats.generation).toEqual({ tokens: 3_018, ms: 29_800, untimedTokens: 2 });
   });
 
   it("rates from the rounds' own usage, leaving out what a sub-agent spent", () => {
@@ -237,7 +237,41 @@ describe('buildReplyStats', () => {
       usage: { outputTokens: 9_201 },
       local: false,
     });
-    expect(stats.generation).toEqual({ tokens: 200, ms: 2_000 });
+    expect(stats.generation).toEqual({ tokens: 200, ms: 2_000, untimedTokens: 1 });
+  });
+
+  it('counts a hosted round of a single token as left out by design, not as a gap', () => {
+    const stats = buildReplyStats({
+      endedAt: 4_000,
+      rounds: [
+        round({ startedAt: 0, firstTokenAt: 500, firstTextAt: 500, endedAt: 600 }, { usage: { outputTokens: 1 } }),
+        round(
+          { startedAt: 1_000, firstTokenAt: 1_500, firstTextAt: 1_500, endedAt: 3_500 },
+          { usage: { outputTokens: 101 } }
+        ),
+      ],
+      toolMs: 0,
+      usage: { outputTokens: 102 },
+      local: false,
+    });
+    expect(stats.generation).toEqual({ tokens: 100, ms: 2_000, untimedTokens: 2 });
+  });
+
+  it('keeps a round that arrived whole within the span floor as a real gap', () => {
+    const stats = buildReplyStats({
+      endedAt: 4_000,
+      rounds: [
+        round({ startedAt: 0, firstTokenAt: 990, endedAt: 1_000 }, { usage: { outputTokens: 50 } }),
+        round(
+          { startedAt: 1_000, firstTokenAt: 1_500, firstTextAt: 1_500, endedAt: 3_500 },
+          { usage: { outputTokens: 101 } }
+        ),
+      ],
+      toolMs: 0,
+      usage: { outputTokens: 151 },
+      local: false,
+    });
+    expect(stats.generation).toEqual({ tokens: 100, ms: 2_000, untimedTokens: 1 });
   });
 
   it('adds a continued run to the earlier generation, and has none when no round could be timed', () => {
@@ -252,7 +286,11 @@ describe('buildReplyStats', () => {
       { usage: { outputTokens: 101 } }
     );
     const base = { endedAt: 103_000, toolMs: 0, local: false };
-    expect(buildReplyStats({ ...base, rounds: [next], earlier }).generation).toEqual({ tokens: 500, ms: 10_000 });
+    expect(buildReplyStats({ ...base, rounds: [next], earlier }).generation).toEqual({
+      tokens: 500,
+      ms: 10_000,
+      untimedTokens: 1,
+    });
     expect(buildReplyStats({ ...base, rounds: [round(next.timing)] }).generation).toBeUndefined();
   });
 
@@ -263,7 +301,7 @@ describe('buildReplyStats', () => {
     ];
     const base = { endedAt: 1_400, rounds, toolMs: 0, usage: { outputTokens: 50 } };
     expect(buildReplyStats({ ...base, local: true }).generation).toBeUndefined();
-    expect(buildReplyStats({ ...base, local: false }).generation).toEqual({ tokens: 49, ms: 300 });
+    expect(buildReplyStats({ ...base, local: false }).generation).toEqual({ tokens: 49, ms: 300, untimedTokens: 1 });
   });
 
   it("leaves the reply's first token to a Continue when the earlier runs streamed nothing", () => {

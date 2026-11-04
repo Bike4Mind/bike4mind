@@ -28,6 +28,13 @@ describe('thinkingShare', () => {
     expect(thinkingShare(undefined)).toBeNull();
   });
 
+  it('is absent when either time is missing or not finite', () => {
+    expect(thinkingShare({ ...base, reasoningMs: Number.NaN })).toBeNull();
+    expect(thinkingShare({ ...base, modelMs: Number.NaN, reasoningMs: 10 })).toBeNull();
+    expect(thinkingShare({ ...base, reasoningMs: Infinity })).toBeNull();
+    expect(thinkingShare({ ...base, modelMs: Infinity, reasoningMs: 10 })).toBeNull();
+  });
+
   it('never claims more than the whole', () => {
     expect(thinkingShare({ ...base, reasoningMs: 30_000 })).toBe(1);
   });
@@ -137,9 +144,20 @@ describe('formatting', () => {
     expect(formatDuration(187_000)).toBe('3m 7s');
   });
 
-  it('reads a duration that is not a number as none', () => {
+  it('never prints NaN for a duration that is not a number', () => {
     expect(formatDuration(Number.NaN)).toBe('0ms');
     expect(formatDuration(Number.POSITIVE_INFINITY)).toBe('0ms');
+  });
+
+  it('drops the row of a missing or non-finite duration', () => {
+    const ids = (stats: Partial<ChatReplyStats>) =>
+      replyStats({ stats: { ...base, ...stats } as ChatReplyStats }).map(row => row.id);
+
+    expect(ids({ totalMs: Number.NaN })).not.toContain('total');
+    expect(ids({ totalMs: undefined })).not.toContain('total');
+    expect(ids({ reasoningMs: Number.POSITIVE_INFINITY })).not.toContain('thinking');
+    expect(ids({ firstTokenMs: Number.NaN })).not.toContain('firstToken');
+    expect(ids({})).toContain('total');
   });
 
   it('rounds before picking the unit, so no edge reads as the next unit up', () => {
@@ -199,11 +217,12 @@ describe('replyStats', () => {
 
   it('marks a hosted speed as timed by the app', () => {
     const rows = replyStats({
-      stats: { ...base, generation: { tokens: 200, ms: 4000 } },
+      stats: { ...base, generation: { tokens: 200, ms: 4000, untimedTokens: 1 } },
       usage: { inputTokens: 100, outputTokens: 201, cacheReadInputTokens: 900, reasoningTokens: 50 },
     });
 
     expect(rows.find(row => row.id === 'speed')).toMatchObject({ value: '~50.0 tok/s' });
+    expect(rows.find(row => row.id === 'speed')?.note).toBeUndefined();
     expect(rows.find(row => row.id === 'cacheShare')?.value).toBe('90%');
     expect(rows.find(row => row.id === 'thinkingTokens')?.value).toBe('50');
   });
@@ -217,13 +236,40 @@ describe('replyStats', () => {
     expect(note(3000, 3000)).toBeUndefined();
   });
 
-  it('does not note untimed tokens on a hosted reply, whose first token per round is never timed', () => {
-    const row = replyStats({
-      stats: { ...base, generation: { tokens: 2999, ms: 10_000 } },
-      usage: { outputTokens: 3000 },
-    }).find(r => r.id === 'speed');
+  it('notes untimed tokens on a hosted reply only when the gap shows at the displayed precision', () => {
+    const note = (timed: number, output: number, rated = false, untimedTokens?: number) =>
+      replyStats({
+        stats: { ...base, generation: { tokens: timed, ms: 10_000, untimedTokens } },
+        usage: { outputTokens: output, ...(rated ? { rate: { evalTokens: timed, evalMs: 10_000 } } : {}) },
+      }).find(r => r.id === 'speed')?.note;
 
-    expect(row?.note).toBeUndefined();
+    expect(note(19, 3020)).toBe('timed 19 of 3.0k output tokens');
+    expect(note(19, 3020, false, 1)).toBe('timed 19 of 3.0k output tokens');
+    expect(note(2999, 3000)).toBeUndefined();
+    expect(note(2999, 3000, true)).toBeUndefined();
+  });
+
+  it('does not note the token a hosted round leaves out of its timing by design', () => {
+    const note = (output: number, untimedTokens: number, timed = output - untimedTokens) =>
+      replyStats({
+        stats: { ...base, generation: { tokens: timed, ms: 10_000, untimedTokens } },
+        usage: { outputTokens: output },
+      }).find(r => r.id === 'speed')?.note;
+
+    expect(note(200, 1)).toBeUndefined();
+    expect(note(500, 3)).toBeUndefined();
+    expect(note(3020, 1, 19)).toBe('timed 19 of 3.0k output tokens');
+    expect(note(3000, 1, 2000)).toBe('timed 2.0k of 3.0k output tokens');
+  });
+
+  it('does not note the first read an estimated self-hosted rate leaves out', () => {
+    const note = (untimedTokens: number | undefined) =>
+      replyStats({
+        usage: { outputTokens: 200, rate: { evalTokens: 199, evalMs: 5000, estimated: true, untimedTokens } },
+      }).find(r => r.id === 'speed')?.note;
+
+    expect(note(1)).toBeUndefined();
+    expect(note(undefined)).toBe('timed 199 of 200 output tokens');
   });
 
   // Both as main stores them: a 3000-token call that arrived whole, then a 20-token answer
@@ -290,6 +336,13 @@ describe('replyStats', () => {
 
     expect(describeReplyStats(rows)).toBe('Total time: 9.0s (includes 3.1s running tools and waiting for approval)');
     expect(replyStats({ stats: base })[0]?.note).toBeUndefined();
+  });
+
+  it('leaves out a tool time and a load time that are not finite', () => {
+    const total = replyStats({ stats: { ...base, toolMs: Infinity } }).find(row => row.id === 'total');
+    expect(total?.note).toBeUndefined();
+    const rows = replyStats({ usage: { outputTokens: 10, rate: { evalTokens: 10, evalMs: 500, loadMs: Infinity } } });
+    expect(rows.find(row => row.id === 'load')).toBeUndefined();
   });
 });
 

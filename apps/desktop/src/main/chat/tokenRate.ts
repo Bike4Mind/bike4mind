@@ -82,9 +82,10 @@ export function estimatedRate(outputTokens: number | undefined, timing: StreamTi
   if (outputTokens === undefined || firstAt === undefined || lastAt === undefined) return undefined;
   const evalMs = lastAt - firstAt;
   if (reads < MIN_ESTIMATE_READS || evalMs < MIN_ESTIMATE_SPAN_MS) return undefined;
-  const evalTokens = outputTokens - Math.max(1, firstReadDeltas ?? 1);
+  const untimedTokens = Math.max(1, firstReadDeltas ?? 1);
+  const evalTokens = outputTokens - untimedTokens;
   if (evalTokens < 1) return undefined;
-  return { evalTokens, evalMs, estimated: true };
+  return { evalTokens, evalMs, estimated: true, untimedTokens };
 }
 
 const RATE_FIELDS = [
@@ -97,6 +98,7 @@ const RATE_FIELDS = [
   'cachedPromptTokens',
   'draftTokens',
   'draftAccepted',
+  'untimedTokens',
 ] as const satisfies readonly (keyof ChatTokenRate)[];
 
 /**
