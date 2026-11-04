@@ -5263,7 +5263,7 @@ export const settingsMap = {
     int: true,
     min: 0,
     description:
-      'How far past its balance one chat answer may run for a paid account or an organization. Each answer is capped so its worst-case cost fits the balance plus this allowance, and it stops once it reaches that limit. Accounts without a paid plan get no allowance: their answers always fit their balance. Set to 0 to give paid accounts no allowance either.',
+      'How far past its balance one chat answer may run for a personal account on a paid plan. Each answer is capped so its worst-case cost fits the balance plus this allowance, and it stops once it reaches that limit. Accounts without a paid plan get no allowance, and organizations always stop at their balance. Applies to chat turns only; agent runs ignore it. Set to 0 to give paid accounts no allowance either.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
