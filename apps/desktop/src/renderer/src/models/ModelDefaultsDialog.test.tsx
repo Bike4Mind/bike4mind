@@ -98,13 +98,15 @@ afterEach(async () => {
 });
 
 const onClose = vi.fn();
+const onSaved = vi.fn();
 
 async function render(option: ChatModelOption | null) {
   onClose.mockReset();
+  onSaved.mockReset();
   await act(async () =>
     root.render(
       <CssVarsProvider theme={desktopTheme}>
-        <ModelDefaultsDialog option={option} onClose={onClose} />
+        <ModelDefaultsDialog option={option} onClose={onClose} onSaved={onSaved} />
       </CssVarsProvider>
     )
   );
@@ -324,7 +326,7 @@ describe('ModelDefaultsDialog load options', () => {
     await render(QWEN);
     expect(byTestId('model-defaults-context-select')?.textContent).toBe('Same as Settings');
     expect(byTestId('model-defaults-context-note')?.textContent).toBe('Runs at 64K tokens.');
-    expect(byTestId('model-defaults-draft-note')?.textContent).toMatch(/^Model default: 0\. 0 turns MTP off/);
+    expect(byTestId('model-defaults-draft-note')?.textContent).toMatch(/^Model default: 0\. 0 turns drafting off/);
     expect(byTestId('model-defaults-keep-alive-select')?.textContent).toBe('Server default');
     await click('model-defaults-context-select');
     expect(byTestId('model-defaults-context-option-262144-note')?.textContent).toMatch(/May not load/);
@@ -355,7 +357,7 @@ describe('ModelDefaultsDialog load options', () => {
     expect(input('draft').value).toBe('3');
     await pick('context', '131072');
     await pick('keep-alive', '-1');
-    await fill('draft', '40');
+    await fill('draft', '16');
     await click('model-defaults-save-btn');
     expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, {
       generation: { temperature: 0.6 },
@@ -363,6 +365,38 @@ describe('ModelDefaultsDialog load options', () => {
       draftTokens: 16,
       keepAlive: -1,
     });
+  });
+
+  it.each(['40', '1.5', '-1'])('marks a draft count of %s invalid and does not save it', async text => {
+    offer = OLLAMA_OFFER;
+    await render(QWEN);
+    await fill('draft', text);
+    expect(input('draft').getAttribute('aria-invalid')).toBe('true');
+    expect(byTestId('model-defaults-draft-note')?.textContent).toBe('Enter a whole number from 0 to 16.');
+    expect(byTestId<HTMLButtonElement>('model-defaults-save-btn')?.disabled).toBe(true);
+    await fill('draft', '2');
+    expect(input('draft').getAttribute('aria-invalid')).toBe('false');
+    expect(byTestId<HTMLButtonElement>('model-defaults-save-btn')?.disabled).toBe(false);
+  });
+
+  it('labels the default of a saved Ollama server by the context it gets, not the Settings choice', async () => {
+    offer = {
+      context: { kind: 'ollama', settings: 16384, sizes: [{ size: 16384, tokens: 16384, autoTokens: 16384 }] },
+    };
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-select')?.textContent).toBe('Server default (16K tokens)');
+  });
+
+  it('calls onSaved after a successful save, and not after a failed one', async () => {
+    await render(QWEN);
+    await fill('temperature', '0.5');
+    await click('model-defaults-save-btn');
+    expect(onSaved).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledOnce();
+
+    setModelSettings.mockResolvedValueOnce(null);
+    await click('model-defaults-save-btn');
+    expect(onSaved).toHaveBeenCalledOnce();
   });
 
   it('rates the sizes again for the draft count typed', async () => {

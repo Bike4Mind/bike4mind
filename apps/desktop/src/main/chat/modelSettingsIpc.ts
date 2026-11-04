@@ -1,11 +1,6 @@
 import type { IpcMain } from 'electron';
 import { IPC_CHANNELS } from '@shared/ipc';
-import {
-  isModelSettingsId,
-  MAX_DRAFT_TOKENS,
-  parseModelSettingsInput,
-  type ModelLoadOffer,
-} from '@shared/modelSettings';
+import { isModelSettingsId, isDraftTokens, parseModelSettingsInput, type ModelLoadOffer } from '@shared/modelSettings';
 import type { ModelSettingsStore } from './ModelSettingsStore';
 
 export interface ModelSettingsIpcHooks {
@@ -15,10 +10,17 @@ export interface ModelSettingsIpcHooks {
   changed?(modelId: string): void;
 }
 
-function draftArg(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= MAX_DRAFT_TOKENS
-    ? value
-    : undefined;
+/** The `changed` hook for a save: forget the model's sized context, refresh the model list, tell the renderer. */
+export function modelSettingsChanged(effects: {
+  forgetContext(modelId: string): void;
+  refreshModels(): void;
+  announce(): void;
+}): (modelId: string) => void {
+  return modelId => {
+    effects.forgetContext(modelId);
+    effects.refreshModels();
+    effects.announce();
+  };
 }
 
 export function registerModelSettingsIpc(
@@ -38,6 +40,8 @@ export function registerModelSettingsIpc(
     return saved;
   });
   ipc.handle(IPC_CHANNELS.chatGetModelLoadOffer, async (_event, modelId: unknown, draftTokens: unknown) =>
-    isModelSettingsId(modelId) && hooks.offer ? hooks.offer(modelId, draftArg(draftTokens)) : null
+    isModelSettingsId(modelId) && hooks.offer
+      ? hooks.offer(modelId, isDraftTokens(draftTokens) ? draftTokens : undefined)
+      : null
   );
 }

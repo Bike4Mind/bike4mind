@@ -70,8 +70,8 @@ const OLLAMA_SINGLE_SLOT_ARCHS = new Set([
   'nemotron_h_moe',
   'nemotron_h_omni',
 ]);
-// Ollama 0.40.11 passes --spec-draft-n-max 2 for a model that ships a draft unless the Modelfile sets one.
-const OLLAMA_DEFAULT_DRAFT_MAX = 2;
+/** Ollama's draft count for a model with a DRAFT layer unless the Modelfile or request sets one; an embedded MTP head defaults to 0 (off). */
+export const OLLAMA_DRAFT_LAYER_DEFAULT = 4;
 
 const ROLE_MODE: Record<HubRole, FitMode> = { chat: 'chat', code: 'code', vision: 'chat', embeddings: 'embeddings' };
 const VERDICT_RANK: Record<FitResult['verdict'], number> = { fast: 0, tight: 1, slow: 2, 'too-large': 3 };
@@ -137,8 +137,9 @@ function fitInputs(entry: HubEntry, build: HubBuild, runtime: HubRuntime, option
     const source = build.ollama;
     const library = source?.kind === 'library';
     const hasDraft = build.draft !== undefined || entry.arch.mtpLayers > 0;
+    const draftLayer = build.draft !== undefined && build.draft.kind !== 'mtp-embedded';
     const draftNumPredict = source && source.kind !== 'library' ? source.modelfile.draftNumPredict : undefined;
-    const draftMax = hasDraft ? (draftNumPredict ?? OLLAMA_DEFAULT_DRAFT_MAX) : 0;
+    const draftMax = hasDraft ? (draftNumPredict ?? (draftLayer ? OLLAMA_DRAFT_LAYER_DEFAULT : 0)) : 0;
     // Ollama loads a model's projector whenever it has one.
     const model: FitModel = {
       arch: entry.arch,

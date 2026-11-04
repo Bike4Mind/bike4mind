@@ -64,7 +64,7 @@ import { PromptCacheTtlPreference } from './PromptCacheTtlPreference';
 import { LocalContextPreference } from './LocalContextPreference';
 import { createLateReload } from './lateReload';
 import { registerGenerationIpc } from './generationIpc';
-import { registerModelSettingsIpc } from './modelSettingsIpc';
+import { modelSettingsChanged, registerModelSettingsIpc } from './modelSettingsIpc';
 import { ModelSettingsStore } from './ModelSettingsStore';
 import { registerLocalContextIpc } from './localContextIpc';
 import { localContextSizing, localHardware } from './localContextSizing';
@@ -816,11 +816,11 @@ export function registerChat(
   registerGenerationIpc(ipcMain, service);
   registerModelSettingsIpc(ipcMain, modelSettings, {
     offer: (modelId, draftTokens) => local.loadOffer(modelId, draftTokens),
-    changed: modelId => {
-      forgetLocalContextOf(modelId);
-      models.forgetLocal();
-      send(IPC_CHANNELS.chatModelsChanged, undefined);
-    },
+    changed: modelSettingsChanged({
+      forgetContext: forgetLocalContextOf,
+      refreshModels: () => models.forgetLocal(),
+      announce: () => send(IPC_CHANNELS.chatModelsChanged, undefined),
+    }),
   });
   ipcMain.handle(IPC_CHANNELS.chatSetSessionPinned, (_event, sessionId: string, pinned: boolean) =>
     service.setSessionPinned(sessionId, pinned)

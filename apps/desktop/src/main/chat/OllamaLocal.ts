@@ -549,11 +549,7 @@ export class OllamaLocal {
     return (await this.grow(modelId, inspection, tokens, undefined, current)).tokens;
   }
 
-  /**
-   * The load-time options this model takes, each context size rated for the draft count `draftTokens`
-   * (undefined: the model's own). Auto is offered only where Desktop measures the model, which a
-   * saved server it is not.
-   */
+  /** The load-time options this model takes, each size rated for `draftTokens` (undefined: the model's own). */
   async loadOffer(modelId: string, draftTokens?: number): Promise<ModelLoadOffer> {
     const name = ollamaModelName(modelId, this.runtimeId);
     const inspection = await this.chatInspection(name);
@@ -564,7 +560,10 @@ export class OllamaLocal {
     const { limit, configured } = contextBounds(inspection);
     const sized = (setting: ModelContextSetting) =>
       chatContextTokens({ setting, footprint, modelLimit: limit, configured });
-    const sizes = LOCAL_CONTEXT_SIZES.filter((size, index) => index === 0 || limit === undefined || size <= limit);
+    // The first size past the trained length stays, clamped to it, so a 40K model can run at all of it.
+    const sizes = LOCAL_CONTEXT_SIZES.filter(
+      (size, index) => index === 0 || limit === undefined || size <= limit || LOCAL_CONTEXT_SIZES[index - 1] < limit
+    );
     const measured = this.sizing !== undefined;
     return {
       context: {

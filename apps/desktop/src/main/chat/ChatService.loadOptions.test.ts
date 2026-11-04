@@ -12,8 +12,6 @@ import { SessionStore } from './SessionStore';
 import { TITLE_INSTRUCTION } from './sessionTitle';
 import type { AccessStore } from './tools/AccessStore';
 
-/** A model's load settings ride every request for it, so chat, titles, suggestions and summaries never reload it. */
-
 const services: ChatService[] = [];
 const roots: string[] = [];
 afterEach(async () => {

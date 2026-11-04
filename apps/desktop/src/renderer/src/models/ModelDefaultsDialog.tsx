@@ -150,11 +150,10 @@ function sameContext(a: ModelContextSetting | null, b: ModelContextSetting | nul
   return contextValue(a) === contextValue(b);
 }
 
-/** A draft count as typed, within its range; undefined for a blank field. */
+/** A draft count as typed; undefined for a blank field or a value that is not a whole number within range. */
 function draftOf(text: string, max: number): number | undefined {
   const value = Number(text.trim());
-  if (!text.trim() || !Number.isFinite(value)) return undefined;
-  return Math.min(max, Math.max(0, Math.round(value)));
+  return text.trim() && Number.isInteger(value) && value >= 0 && value <= max ? value : undefined;
 }
 
 const KEEP_ALIVE_LABELS: Record<KeepAliveSeconds, string> = {
@@ -165,12 +164,7 @@ const KEEP_ALIVE_LABELS: Record<KeepAliveSeconds, string> = {
   [-1]: 'Until Ollama stops',
 };
 
-/**
- * One model's defaults: the per-request options its controls list. A blank field stores nothing,
- * so a turn sends the catalog's sampling for a reviewed build, else nothing and the model's own
- * default applies. A conversation's own settings override these. Below them, the load-time options
- * main offers for the model, which no conversation overrides.
- */
+/** One model's defaults: the per-request options its controls list, then the load-time options main offers. */
 export function ModelDefaultsDialog({
   option,
   onClose,
@@ -214,6 +208,7 @@ function ModelDefaultsForm({
   const [error, setError] = useState<string | null>(null);
   const modelId = option?.id ?? null;
   const draftTokens = draftOf(draftText, offer?.draft?.max ?? MAX_DRAFT_TOKENS);
+  const draftInvalid = draftText.trim() !== '' && draftTokens === undefined;
 
   useEffect(() => {
     setLoaded(null);
@@ -442,6 +437,7 @@ function ModelDefaultsForm({
                   onContext={setContext}
                   draftText={draftText}
                   onDraftText={setDraftText}
+                  draftInvalid={draftInvalid}
                   keepAlive={keepAlive}
                   onKeepAlive={setKeepAlive}
                   loadedContext={loadedContext}
@@ -454,7 +450,7 @@ function ModelDefaultsForm({
         <DialogActions>
           <Button
             loading={saving}
-            disabled={loaded === null || readFailed}
+            disabled={loaded === null || readFailed || draftInvalid}
             onClick={() => void save()}
             data-testid="model-defaults-save-btn"
           >
@@ -524,6 +520,7 @@ function LoadOptionRows({
   onContext,
   draftText,
   onDraftText,
+  draftInvalid,
   keepAlive,
   onKeepAlive,
   loadedContext,
@@ -535,6 +532,7 @@ function LoadOptionRows({
   onContext: (context: ModelContextSetting | null) => void;
   draftText: string;
   onDraftText: (text: string) => void;
+  draftInvalid: boolean;
   keepAlive: KeepAliveSeconds | null;
   onKeepAlive: (keepAlive: KeepAliveSeconds | null) => void;
   /** The num_ctx `/api/ps` says the model is loaded with now; undefined when it is not loaded or unknown. */
@@ -555,7 +553,9 @@ function LoadOptionRows({
     <>
       <Divider sx={{ my: 1 }} />
       <Typography level="body-xs" textColor="text.tertiary" data-testid="model-defaults-load-section">
-        Sent by every request to this model, from chats, titles and summaries alike, and not set per chat.
+        {offered?.kind === 'budget'
+          ? 'Applies on this computer only.'
+          : 'Sent by every request to this model, from chats, titles and summaries alike, and not set per chat.'}
       </Typography>
       {offered && (
         <OptionRow
@@ -592,7 +592,11 @@ function LoadOptionRows({
             }}
           >
             <Option value={SAME_AS_SETTINGS} data-testid="model-defaults-context-option-settings">
-              {offered.kind === 'budget' ? `Server's ${contextSizeLabel(offered.server)}` : 'Same as Settings'}
+              {offered.kind === 'budget'
+                ? `Server's ${contextSizeLabel(offered.server)}`
+                : offered.auto === undefined
+                  ? `Server default (${contextSizeLabel(offered.settings)})`
+                  : 'Same as Settings'}
             </Option>
             {offered.kind === 'ollama' && offered.auto !== undefined && (
               <Option value="auto" data-testid="model-defaults-context-option-auto">
@@ -601,13 +605,13 @@ function LoadOptionRows({
             )}
             {offered.kind === 'ollama' &&
               offered.auto !== undefined &&
-              offered.sizes.map(({ size }) => (
+              offered.sizes.map(({ size, tokens }) => (
                 <Option
                   key={`auto:${size}`}
                   value={`auto:${size}`}
                   data-testid={`model-defaults-context-option-auto-${size}`}
                 >
-                  {`Auto, up to ${contextSizeLabel(size)}`}
+                  {`Auto, up to ${contextSizeLabel(Math.min(size, tokens))}`}
                 </Option>
               ))}
             {offered.kind === 'ollama' &&
@@ -643,9 +647,13 @@ function LoadOptionRows({
       )}
       {offer.draft && (
         <OptionRow
-          label="MTP draft tokens"
+          label="Draft tokens"
           testId="model-defaults-draft"
-          note={`Model default: ${offer.draft.modelDefault}. 0 turns MTP off; a change reloads the model.`}
+          note={
+            draftInvalid
+              ? `Enter a whole number from 0 to ${offer.draft.max}.`
+              : `Model default: ${offer.draft.modelDefault}. 0 turns drafting off; a change reloads the model.`
+          }
         >
           <Input
             size="sm"
@@ -653,6 +661,7 @@ function LoadOptionRows({
             value={draftText}
             placeholder={String(offer.draft.modelDefault)}
             disabled={disabled}
+            color={draftInvalid ? 'danger' : 'neutral'}
             onChange={event => onDraftText(event.target.value)}
             sx={{ width: 112, flexShrink: 0, '& input::placeholder': { fontStyle: 'italic' } }}
             slotProps={{
@@ -660,7 +669,8 @@ function LoadOptionRows({
                 min: 0,
                 max: offer.draft.max,
                 step: 1,
-                'aria-label': 'MTP draft tokens',
+                'aria-label': 'Draft tokens',
+                'aria-invalid': draftInvalid,
                 'aria-describedby': 'model-defaults-draft-note',
                 'data-testid': 'model-defaults-draft-input',
               },

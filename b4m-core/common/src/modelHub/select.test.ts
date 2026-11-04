@@ -4,6 +4,7 @@ import { fixtureManifest, machine, OLD_PINS, ownEval, PINS, sha } from './__fixt
 import { DECODE_CONSTANTS } from './decode';
 import { computeBufferBytes, type HardwareProfile } from './fit';
 import {
+  OLLAMA_DRAFT_LAYER_DEFAULT,
   ollamaBuildBytes,
   pickForMachine,
   SLOW_DECODE_TOKENS_PER_SEC,
@@ -185,7 +186,10 @@ describe('pickForMachine decode speed', () => {
     const gemmaOnly = (draft: boolean) =>
       withManifest(m => {
         m.entries = m.entries.filter(e => e.id === 'gemma-12b');
-        if (draft) m.entries[0].builds[0].draft = { kind: 'mtp-embedded', layers: 1 };
+        if (draft) {
+          const build = m.entries[0].builds[0];
+          build.draft = { kind: 'mtp-sidecar', file: build.weights[0] };
+        }
       });
     const rate = (manifest: HubManifestInput) => {
       const { best } = pick('mac-64', 'chat', { manifest, hardware: withBandwidth(400) });
@@ -632,17 +636,18 @@ describe('pickForMachine runtimes', () => {
   });
 
   it("prices Ollama's draft snapshots of recurrent state, from the Modelfile or Ollama's default", () => {
-    const withDraft = (draftNumPredict?: number) =>
+    const withDraft = (draftNumPredict?: number, sidecar = true) =>
       withManifest(m => {
         const iq3 = m.entries.find(e => e.id === 'hybrid-27b')!.builds[2];
-        iq3.draft = { kind: 'mtp-embedded', layers: 1 };
+        iq3.draft = sidecar ? { kind: 'mtp-sidecar', file: iq3.weights[0] } : { kind: 'mtp-embedded', layers: 1 };
         iq3.ollama = { kind: 'create', modelfile: { draftNumPredict } };
       });
     const ollamaOnly = { ollama: { version: '0.40.11' } };
     const recurrent = (manifest: HubManifestInput) =>
       pick('nv-24+64', 'code', { manifest, runtimes: ollamaOnly }).alternates[0].fit.memory.recurrentBytes;
-    expect(recurrent(withDraft())).toBe(150 * 1024 ** 2 * 3);
-    expect(recurrent(withDraft(4))).toBe(150 * 1024 ** 2 * 5);
+    expect(recurrent(withDraft())).toBe(150 * 1024 ** 2 * (1 + OLLAMA_DRAFT_LAYER_DEFAULT));
+    expect(recurrent(withDraft(2))).toBe(150 * 1024 ** 2 * 3);
+    expect(recurrent(withDraft(undefined, false))).toBe(150 * 1024 ** 2);
   });
 
   it('offers a quantized cache under flash attention auto only for KV types a smoke loaded', () => {

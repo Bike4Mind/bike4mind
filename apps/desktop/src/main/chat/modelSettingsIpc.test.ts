@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '@shared/ipc';
-import { registerModelSettingsIpc } from './modelSettingsIpc';
+import { modelSettingsChanged, registerModelSettingsIpc } from './modelSettingsIpc';
 import { ModelSettingsStore } from './ModelSettingsStore';
 
 vi.mock('node:fs/promises', async importOriginal => {
@@ -125,5 +125,17 @@ describe('registerModelSettingsIpc load options', () => {
     expect(offer).toHaveBeenLastCalledWith(QWEN, undefined);
     expect(await getOffer('gpt-5', 3)).toBeNull();
     expect(offer).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('modelSettingsChanged', () => {
+  it('forgets the sized context, refreshes the model list and tells the renderer', () => {
+    const calls: string[] = [];
+    modelSettingsChanged({
+      forgetContext: modelId => calls.push(`forget ${modelId}`),
+      refreshModels: () => calls.push('refresh'),
+      announce: () => calls.push('announce'),
+    })(QWEN);
+    expect(calls).toEqual([`forget ${QWEN}`, 'refresh', 'announce']);
   });
 });

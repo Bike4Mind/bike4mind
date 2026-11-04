@@ -24,11 +24,16 @@ import {
   type OllamaRegistryLayers,
   type PullOptions,
 } from '@bike4mind/local-models';
-import { ollamaBuildBytes, type HubBuild, type HubManifest } from '@bike4mind/common';
+import { estimateFit, ollamaBuildBytes, type HubBuild, type HubManifest } from '@bike4mind/common';
 import { AUTO_LOCAL_CONTEXT, type LocalContextSetting } from '@shared/localContextSetting';
 import { pullKey, type ModelPull } from '@shared/models';
 import type { ModelServerSpecs } from '@shared/modelServers';
 import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('@bike4mind/common', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/common')>();
+  return { ...actual, estimateFit: vi.fn(actual.estimateFit) };
+});
 import { LOCAL_CONTEXT_TARGET_TOKENS } from '../chat/localContext';
 import { fitFromArch } from './fit';
 import { ServerUnreachableError } from '../modelServers/errors';
@@ -1318,6 +1323,22 @@ describe('ModelHubService fit', () => {
       ['long:latest', 16384],
       ['small:latest', 16384],
     ]);
+  });
+
+  it('rates an installed model at its own draft count', async () => {
+    const { service, runtime } = harness({
+      deps: {
+        modelSettings: async (modelId: string) => (modelId === 'local:ollama:mtp:latest' ? { draftTokens: 3 } : {}),
+      },
+    });
+    runtime.list.mockResolvedValue([installed({ name: 'mtp:latest' })]);
+    const base = await runtime.inspect('x');
+    runtime.inspect.mockResolvedValue({ ...base, arch: { ...SMALL_ARCH, mtpLayers: 1 } });
+    vi.mocked(estimateFit).mockClear();
+    await service.installed();
+    const runtimes = vi.mocked(estimateFit).mock.calls.map(([input]) => input.runtime);
+    expect(runtimes.length).toBeGreaterThan(0);
+    expect(runtimes.every(fit => fit.draftMax === 3 && fit.speculative)).toBe(true);
   });
 
   it('rates an installed model at its own context from the Models screen, and the rest at the Settings one', async () => {

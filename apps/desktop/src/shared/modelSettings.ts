@@ -22,11 +22,7 @@ export interface ModelSettings {
   generation?: GenerationSettings;
   /** Sent while the conversation's effort is `default`, on a model whose controls list effort levels. */
   effort?: ModelEffort;
-  /**
-   * The rest are load-time: a change reloads the runner, so they are set per model only and every
-   * request for the model (chat, titles, suggestions, compaction) sends the same. Absent: the
-   * Settings context choice, and nothing sent for the others.
-   */
+  /** The rest are load-time, set per model only and sent on every request for it. Absent: nothing sent. */
   context?: ModelContextSetting;
   /** Ollama `draft_num_predict` for a model with an MTP or draft layer; 0 turns speculation off. */
   draftTokens?: number;
@@ -75,7 +71,7 @@ function isModelEffort(value: unknown): value is ModelEffort {
   return value !== 'default' && REASONING_EFFORT_SETTINGS.some(setting => setting === value);
 }
 
-function isDraftTokens(value: unknown): value is number {
+export function isDraftTokens(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= MAX_DRAFT_TOKENS;
 }
 

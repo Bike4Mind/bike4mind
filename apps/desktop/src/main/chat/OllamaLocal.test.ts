@@ -1821,6 +1821,16 @@ describe('OllamaLocal context sizing', () => {
       });
     });
 
+    it('keeps the first size past the trained length, clamped to it, and adds nothing for an exact size', async () => {
+      ollama(trainedFor(40960));
+      const offer = await new OllamaLocal().loadOffer('local:ollama:llama');
+      expect(offer.context?.kind === 'ollama' && offer.context.sizes).toEqual([
+        { size: 16384, tokens: 16384, autoTokens: 16384 },
+        { size: 32768, tokens: 32768, autoTokens: 16384 },
+        { size: 65536, tokens: 40960, autoTokens: 16384 },
+      ]);
+    });
+
     it('rates the sizes for the draft count the dialog asks about', async () => {
       ollama(mtp(131072));
       const local = new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, 13));

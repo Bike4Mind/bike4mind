@@ -1,9 +1,7 @@
+import { OLLAMA_DRAFT_LAYER_DEFAULT } from '@bike4mind/common';
 import { modelBlobsOf } from '@bike4mind/local-models';
 import type { ModelLoadSettings } from '@shared/modelSettings';
 import { modelfileParameter } from './modelControls';
-
-/** Ollama's draft_num_predict when neither request nor Modelfile sets one and the model has a DRAFT layer. */
-const OLLAMA_DRAFT_LAYER_DEFAULT = 4;
 
 export interface DraftFacts {
   /** `<arch>.nextn_predict_layers`: an embedded MTP head. */
@@ -45,11 +43,7 @@ export function draftTokensOf(load: ModelLoadSettings, facts: DraftFacts): numbe
   return draft ? (load.draftTokens ?? draft.modelDefault) : 0;
 }
 
-/**
- * What an Ollama request carries for the model's load settings. The same on every request for the
- * model, since a draft count that differs from the loaded one reloads the runner, and a request
- * without keep_alive puts the server's own default back.
- */
+/** What an Ollama request carries for the load settings; the same on every request, or the runner reloads. */
 export function ollamaLoadFields(
   load: ModelLoadSettings,
   facts: DraftFacts
