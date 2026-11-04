@@ -2,7 +2,7 @@ import {
   SUBSCRIPTION_STATUS_FILTERS,
   type AdminSubscriptionsSummary,
   type SubscriptionStatusFilter,
-} from '@client/app/utils/adminSubscriptionsFilter';
+} from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import { matchSavedView, type SavedViewValues } from '../shared/matchSavedView';
 import {
   CLEARED_FILTER_PARAMS,

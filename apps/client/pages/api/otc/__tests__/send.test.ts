@@ -35,7 +35,9 @@ const mockRecipientRefusal = vi.hoisted(() => vi.fn());
 vi.mock('@server/utils/otcRecipient', () => ({
   otcRecipientRefusal: (...a: unknown[]) => mockRecipientRefusal(...a),
 }));
-vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn(() => Promise.resolve()) } } }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
+  EmailEvents: { Send: { publish: vi.fn(() => Promise.resolve()) } },
+}));
 vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', () => ({ getLogoUrl: () => undefined }));
 const mockJwtSign = vi.hoisted(() => vi.fn((_payload: Record<string, unknown>) => 'signed-pending-token'));
 vi.mock('jsonwebtoken', () => ({ default: { sign: mockJwtSign } }));
@@ -115,7 +117,7 @@ vi.mock('@bike4mind/services', () => ({
 import handler from '@pages/api/otc/send';
 import { getSettingsMap } from '@bike4mind/utils';
 import { OTC_LIMITS, otcEmailKey } from '@server/utils/otcLimits';
-import { EmailEvents } from '@server/utils/eventBus';
+import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { recordTurnstileVerification } from '@server/auth/signupChallenge';
 
 const EMAIL = 'someone@example.com';

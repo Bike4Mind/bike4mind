@@ -37,8 +37,8 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
 // Keep parseAdminActionReason real so the 400 is the production one.
-vi.mock('@server/utils/adminAudit', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
   recordAdminActionFromRequest: audit,
   loadCreditGrantPolicy: async () => ({
     singleGrantCredits: 50_000,

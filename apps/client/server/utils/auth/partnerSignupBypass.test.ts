@@ -16,7 +16,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-import { invalidatePartnerRuleCache } from '@server/entitlements/partnerRules';
+import { invalidatePartnerRuleCache } from '@bike4mind/server-utils/entitlements/partnerRules';
 import { signupCreditsForEmail } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { isPartnerDomainSignupAllowed } from './partnerSignupBypass';
 

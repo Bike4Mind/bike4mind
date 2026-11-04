@@ -49,7 +49,7 @@ const h = vi.hoisted(() => ({
   getEmbedding: vi.fn(),
 }));
 
-vi.mock('@server/managers/fabFileManager', () => ({ getVector: h.getVector }));
+vi.mock('@bike4mind/server-utils/managers/fabFileManager', () => ({ getVector: h.getVector }));
 // fabFilesService is real (via importOriginal): stampChunkEmbeddingModel must actually commit
 // vectorized:true against the real repls set for this test's post-attempt-2 assertions to mean
 // anything - only the LLM-calling services below are mocked.

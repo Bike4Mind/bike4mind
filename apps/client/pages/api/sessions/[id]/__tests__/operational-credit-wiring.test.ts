@@ -35,7 +35,7 @@ vi.mock('@bike4mind/database/auth', () => ({
   },
 }));
 vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => ({}) }) }));
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   SessionEvents: { Tag: { publish: mockPublishTag }, Summarize: { publish: mockPublishSummarize } },
 }));
 // Only the pre-flight itself is mocked. OPERATIONS_PER_SUMMARIZE_WITH_TAGGING lives in its own

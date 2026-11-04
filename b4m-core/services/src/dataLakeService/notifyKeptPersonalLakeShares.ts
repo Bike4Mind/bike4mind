@@ -89,7 +89,7 @@ export async function notifyKeptPersonalLakeShares(
         ];
       })
     );
-    // MailService (apps/client/server/utils/mailer) resolves false on a send failure and a truthy
+    // MailService (packages/server-utils/src/utils/mailer) resolves false on a send failure and a truthy
     // send result otherwise, never throwing. Treat anything falsy as failed so that contract moving
     // cannot quietly hold this at zero.
     const failed = results.filter(result => !result).length;

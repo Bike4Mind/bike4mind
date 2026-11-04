@@ -4,7 +4,7 @@ import { Logger } from '@bike4mind/observability';
 import { contextToLogs } from '@bike4mind/server-utils/utils/logger';
 import { Context } from 'aws-lambda';
 import { Resource } from 'sst';
-import { EmailEvents } from '@server/utils/eventBus';
+import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 
 interface IUserData {

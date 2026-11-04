@@ -9,7 +9,7 @@ import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { meterCompletionBackend } from '@bike4mind/services';
 import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 
 const handler = baseApi()
   .use((req, res, next) => {

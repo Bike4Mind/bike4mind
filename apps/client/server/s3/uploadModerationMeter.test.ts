@@ -17,7 +17,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/services', () => ({ recordOperationalUsage: h.record }));
 vi.mock('@bike4mind/utils/imageModeration', () => ({ REKOGNITION_MODERATION_USD_PER_CALL: 0.5 }));
-vi.mock('@server/entitlements/activeSubscriptions', () => ({ activePlanResolver: { name: 'activePlans' } }));
+vi.mock('@bike4mind/server-utils/entitlements/activeSubscriptions', () => ({ activePlanResolver: { name: 'activePlans' } }));
 vi.mock('@server/s3/imageModerationBudget', () => ({ reserveImageModerationCalls: h.reserve }));
 
 import { buildUploadModerationMeter } from './uploadModerationMeter';

@@ -55,7 +55,7 @@ vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({
 vi.mock('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient', () => ({
   getGitHubLakeAppConfig: h.getGitHubLakeAppConfig,
 }));
-vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection', () => ({
   buildGitHubLakeAuthorizeUrl: h.buildGitHubLakeAuthorizeUrl,
   requestGitHubLakeDisconnect: h.requestGitHubLakeDisconnect,
   requireGitHubLakeAppConfig: h.requireGitHubLakeAppConfig,

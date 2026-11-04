@@ -32,7 +32,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test' } } }));
 
 vi.mock('@server/files/fileUploadBudget', () => ({ consumeFileUploadBudget: h.consumeFileUploadBudget }));
-vi.mock('@server/managers/fabFileManager', () => ({ getFabFileById: h.getFabFileById }));
+vi.mock('@bike4mind/server-utils/managers/fabFileManager', () => ({ getFabFileById: h.getFabFileById }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: h.sendToClient }));
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));

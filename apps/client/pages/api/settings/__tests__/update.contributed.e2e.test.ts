@@ -37,7 +37,9 @@ vi.mock('@bike4mind/database', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/database')>()),
   withTransaction: (fn: () => unknown) => fn(),
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
+}));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'a'.repeat(64) } }));
 vi.mock('@server/utils/publicSettingsArtifact', () => ({
   materializePublicSettingsArtifactSafe: vi.fn(() => Promise.resolve()),

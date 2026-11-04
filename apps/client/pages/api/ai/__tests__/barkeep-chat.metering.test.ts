@@ -42,7 +42,7 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@bike4mind/server-utils/utils/errors', () => ({ ensureTavernAccess: vi.fn() }));
-vi.mock('@server/auth/assertAiAccessAllowed', () => ({ assertAiAccessAllowed: vi.fn() }));
+vi.mock('@bike4mind/server-utils/auth/assertAiAccessAllowed', () => ({ assertAiAccessAllowed: vi.fn() }));
 vi.mock('@bike4mind/database', async () => ({
   ...(await import('@server/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
   apiKeyRepository: {},

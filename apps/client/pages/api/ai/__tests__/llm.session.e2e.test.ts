@@ -8,7 +8,7 @@ import {
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
 import { Session, User } from '@bike4mind/database';
 import type { IUserDocument } from '@bike4mind/database';
-import defineAbilitiesFor from '@server/auth/ability';
+import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
 import { __resetResolvedPromptCache } from '@bike4mind/server-utils/utils/sessionSystemPromptResolver';
 
 /**

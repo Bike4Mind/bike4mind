@@ -32,7 +32,7 @@ vi.mock('@server/services/hardDeleteUser', () => ({ hardDeleteUser: h.hardDelete
 vi.mock('./purgeAccountFiles', () => ({ purgeAccountFiles: h.purgeFiles }));
 vi.mock('./purgeAccountContent', () => ({ purgeAccountContent: h.purgeContent }));
 vi.mock('./accountDeletionEmail', () => ({ sendAccountDeletionCompleteEmail: h.sendComplete }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   systemAuditActor: (name: string) => ({ kind: 'system', scope: 'platform', name, wasAdmin: false }),
 }));
 

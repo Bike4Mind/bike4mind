@@ -1,7 +1,7 @@
 import { createHash } from 'crypto';
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { generateModelPriceSeed, modelPriceRepository, SEED_NOTE, withTransaction } from '@bike4mind/database';
 import { ApiKeyScope, DISCOVERY_PRICE_NOTE_PREFIX, MODEL_PRICE_UNITS, ModelPriceTier } from '@bike4mind/common';
 import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';

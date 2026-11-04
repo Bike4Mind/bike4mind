@@ -51,7 +51,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...(a as [])) }));
-vi.mock('@server/managers/fabFileManager', () => ({ getVector: h.getVector }));
+vi.mock('@bike4mind/server-utils/managers/fabFileManager', () => ({ getVector: h.getVector }));
 vi.mock('@bike4mind/services', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/services')>();
   return {

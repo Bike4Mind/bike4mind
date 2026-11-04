@@ -59,7 +59,7 @@ vi.mock('@bike4mind/server-utils/integrations/github/sreWebhookDispatch', () => 
 }));
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: () => 'sre-queue-url' }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import { GitHubService } from '@bike4mind/server-utils/services/githubService';
 import { dispatchIssueToSre } from '@bike4mind/server-utils/integrations/github/sreWebhookDispatch';

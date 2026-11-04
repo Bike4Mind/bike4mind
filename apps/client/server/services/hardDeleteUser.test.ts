@@ -23,7 +23,7 @@ vi.mock('@server/services/purgeDeletedUserData', () => ({
   readUserIntegrationGrants: h.readGrants,
   purgeDeletedUserData: h.purge,
 }));
-vi.mock('@server/analytics/signupEvents', () => ({ emitBillingEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({ emitBillingEvent: vi.fn() }));
 vi.mock('@server/analytics/billingEventDetails', () => ({ wholeDaysBetween: vi.fn() }));
 vi.mock('@server/analytics/resolveUserType', () => ({ resolveUserType: vi.fn() }));
 vi.mock('@bike4mind/server-utils/analytics/pseudonymize', () => ({ pseudonymizeUserId: vi.fn() }));

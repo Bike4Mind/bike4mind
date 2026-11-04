@@ -55,17 +55,17 @@ import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { recordFirstChatValue } from '@server/analytics/funnel';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { getUserEntitlements } from '@server/entitlements';
-import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
-import { operationalBillingAdapters } from '@server/billing/operationalBilling';
+import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
+import { operationalBillingAdapters } from '@bike4mind/server-utils/billing/operationalBilling';
 import { accessibleBy } from '@casl/mongoose';
 import { IUserDocument, Permission } from '@bike4mind/common';
-import { LLMEvents, SessionEvents } from '@server/utils/eventBus';
+import { LLMEvents, SessionEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { getSharedTokenizer, publishTelemetryAlertCallback } from '../utils/chatCompletionDefaults';
 import { recallMementosV2 } from '@bike4mind/server-utils/memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '@bike4mind/server-utils/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@bike4mind/server-utils/utils/sessionSystemPromptResolver';
 import { slackToolDefinitions, createPendingActionToolDefs } from '@bike4mind/slack';
-import { cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
+import { cancelPendingActionOnQuest } from '@bike4mind/server-utils/utils/pendingActionExecutor';
 import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
 import { buildMusicToolConfig } from '@bike4mind/server-utils/musicGenerations/buildMusicToolConfig';
 import {
@@ -74,10 +74,10 @@ import {
   getMusicJobDeps,
   getVideoJobDeps,
 } from '@server/generationJobs/wiring';
-import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
+import { getMcpClientAdapter } from '@bike4mind/server-utils/utils/getMcpClientAdapter';
 import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { checkFreeTierDailySpendCap, isFreeTierDailyCapError } from '@server/billing/freeTierDailyCapGate';
-import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 
 // Cache static ChatCompletion options (DB repos, storage clients, config) across invocations;
 // dynamic per-request properties (user, sessionId, logger) are added below. Tokenizer is a

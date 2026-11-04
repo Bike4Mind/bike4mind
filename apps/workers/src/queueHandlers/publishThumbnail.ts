@@ -11,7 +11,7 @@ import {
   publishThumbnailKey,
   type PublishThumbnailJob,
 } from '@bike4mind/server-utils/utils/publishThumbnails';
-import { PUBLISH_HOST } from '@server/services/publish/validateBundle';
+import { PUBLISH_HOST } from '@bike4mind/server-utils/services/publish/validateBundle';
 import { invokeThumbnailRenderer, ThumbnailRendererError } from '@workers/media/invokeThumbnailRenderer';
 import {
   MAX_THUMBNAIL_DOCUMENT_BYTES,

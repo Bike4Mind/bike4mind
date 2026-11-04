@@ -1,5 +1,5 @@
 import { Permission } from '@bike4mind/common';
-import { getFabFileById } from '@server/managers/fabFileManager';
+import { getFabFileById } from '@bike4mind/server-utils/managers/fabFileManager';
 import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';

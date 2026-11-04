@@ -1,8 +1,8 @@
 import React from 'react';
 import { Box, Stack } from '@mui/joy';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import type { RevenueTrendPoint } from '@client/app/utils/adminRevenue';
-import { MRR_CURRENCY } from '@client/app/utils/adminSubscriptionsFilter';
+import type { RevenueTrendPoint } from '@bike4mind/server-utils/app/utils/adminRevenue';
+import { MRR_CURRENCY } from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import { formatMoney } from '../shared/formatMoney';
 import { ACCENT, AXIS_TICK, BORDER, COMPARISON_OPACITY, ChartLegend, ChartTooltipBox, INK_MUTED } from './chartParts';
 import { formatTrendDay } from './revenueFormat';

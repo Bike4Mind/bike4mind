@@ -12,7 +12,7 @@ const loadModules = async () => {
   vi.resetModules();
   const [catalog, plans, orgPlan, credits] = await Promise.all([
     import('./checkoutCatalog'),
-    import('./userSubscriptions/constants'),
+    import('@bike4mind/server-utils/lib/userSubscriptions/constants'),
     import('@bike4mind/server-utils/lib/subscriptions/constants'),
     import('./credits/utils'),
   ]);

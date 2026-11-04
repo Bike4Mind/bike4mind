@@ -1,4 +1,4 @@
-import { releaseDueSubscriptionRewards } from '@server/referrals/subscriptionReward';
+import { releaseDueSubscriptionRewards } from '@bike4mind/server-utils/referrals/subscriptionReward';
 import type { SelfHostWorker } from './selfHostWorker';
 
 /** Matches the hosted referralRewardRelease cron's rate(1 hour) in infra/cron.ts; keep them in step. */

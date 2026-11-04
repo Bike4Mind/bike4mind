@@ -28,7 +28,7 @@ vi.mock('@casl/mongoose', () => ({
   },
 }));
 
-vi.mock('@server/auth/ability', () => ({ default: vi.fn(() => ({})) }));
+vi.mock('@bike4mind/server-utils/auth/ability', () => ({ default: vi.fn(() => ({})) }));
 
 vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   NotFoundError: class NotFoundError extends Error {},

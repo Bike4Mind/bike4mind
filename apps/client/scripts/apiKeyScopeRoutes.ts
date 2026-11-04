@@ -18,7 +18,7 @@ import path from 'node:path';
 import { ApiKeyScope, CONTRACTS, isBuiltInApiKeyScope } from '@bike4mind/common';
 import * as agentScopes from '@server/agents/agentScopes';
 import * as dataLakeScopes from '@server/dataLakes/dataLakeScopes';
-import * as fileScopes from '@server/files/fileScopes';
+import * as fileScopes from '@bike4mind/server-utils/files/fileScopes';
 import * as projectScopes from '@server/projects/projectScopes';
 
 export const CLIENT_DIR = path.resolve(__dirname, '..');

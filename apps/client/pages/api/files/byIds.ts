@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { FILES_READ_SCOPES } from '@server/files/fileScopes';
+import { FILES_READ_SCOPES } from '@bike4mind/server-utils/files/fileScopes';
 import { listFilesByIds } from '@server/files/listFilesByIds';
 import { Request } from 'express';
 import qs from 'qs';

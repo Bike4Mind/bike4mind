@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiKeyScope, BadRequestError, CliCompletionChunkAction, CreditHolderType } from '@bike4mind/common';
-import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
+import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 
 const mockExecuteCompletion = vi.fn();
 const mockLogCompletionAnalytics = vi.fn();
@@ -19,7 +19,7 @@ vi.mock('@server/billing/freeTierDailyCapGate', () => ({
   checkFreeTierDailySpendCap: mockCheckFreeTierDailySpendCap,
 }));
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
-vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn() }));
 vi.mock('@bike4mind/services/cliCompletions', () => ({
   executeCompletion: (...args: unknown[]) => mockExecuteCompletion(...args),
 }));

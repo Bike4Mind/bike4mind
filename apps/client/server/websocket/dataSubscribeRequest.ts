@@ -36,7 +36,7 @@ import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import crypto from 'crypto';
 import pickBy from 'lodash/pickBy';
 import pLimit from 'p-limit';
-import ability from '../auth/ability';
+import ability from '@bike4mind/server-utils/auth/ability';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { Resource } from 'sst';
 import { findWithheldFilterPaths, resolveFieldLimits } from './dataSubscribeFieldLimits';

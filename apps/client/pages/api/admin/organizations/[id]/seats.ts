@@ -4,8 +4,12 @@ import { ApiKeyScope, TEAM_PLAN_SEATS_HARD_LIMIT } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
-import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { pickPrimarySubscription, resolveSubscriptionSource, setSeats } from '@server/services/organizationService';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import {
+  pickPrimarySubscription,
+  resolveSubscriptionSource,
+  setSeats,
+} from '@bike4mind/server-utils/services/organizationService';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { z } from 'zod';

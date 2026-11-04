@@ -1,5 +1,5 @@
 import { withEventContext } from '@workers/utils/eventContext';
-import { SessionEvents } from '@server/utils/eventBus';
+import { SessionEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { Quest, Session, sessionRepository, userRepository } from '@bike4mind/database';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { ChatModelName, IMessage, MessageContentObject } from '@bike4mind/common';

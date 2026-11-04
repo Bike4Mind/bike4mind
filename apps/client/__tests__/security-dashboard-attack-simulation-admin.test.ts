@@ -57,7 +57,7 @@ vi.mock('@aws-sdk/client-lambda', () => ({
 }));
 
 const mockRecordAdminAction = vi.hoisted(() => vi.fn().mockResolvedValue(null));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockRecordAdminAction }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockRecordAdminAction }));
 
 vi.mock('@bike4mind/observability', () => ({
   Logger: vi.fn(function () {

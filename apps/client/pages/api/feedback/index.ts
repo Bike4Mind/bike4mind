@@ -22,7 +22,7 @@ import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { escapeRegex, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { EmailEvents } from '@server/utils/eventBus';
+import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { postFeedbackToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';

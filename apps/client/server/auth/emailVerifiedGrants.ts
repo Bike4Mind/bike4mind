@@ -1,4 +1,4 @@
-import { signupProtection } from '@server/auth/signupProtection';
+import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection';
 import {
   adminSettingsRepository,
   creditLotRepository,
@@ -10,7 +10,7 @@ import type { INetworkMeta } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { userService } from '@bike4mind/services';
 import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
-import { requestRiskEvidenceRefresh } from '@server/auth/riskEvidence';
+import { requestRiskEvidenceRefresh } from '@bike4mind/server-utils/auth/riskEvidence';
 import { applySignupDomainGrant, type SignupDomainGrantResult } from '@server/entitlements/signupDomainGrant';
 import type { SeatCeilingRaiseTrigger } from '@server/organizations/notifySeatCeilingRaised';
 import { createSignupGrantRiskCollector } from '@bike4mind/server-utils/auth/signupGrantRisk';

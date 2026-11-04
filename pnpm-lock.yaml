@@ -2663,6 +2663,9 @@ importers:
       '@aws-sdk/client-ec2':
         specifier: ^3.1150.0
         version: 3.1151.0
+      '@aws-sdk/client-eventbridge':
+        specifier: ^3.1150.0
+        version: 3.1151.0
       '@aws-sdk/client-iam':
         specifier: ^3.1150.0
         version: 3.1151.0
@@ -2723,6 +2726,12 @@ importers:
       '@bike4mind/utils':
         specifier: workspace:*
         version: link:../../b4m-core/utils
+      '@casl/ability':
+        specifier: ^6.8.1
+        version: 6.8.1
+      '@casl/mongoose':
+        specifier: ^8.0.5
+        version: 8.0.5(@casl/ability@6.8.1)(mongoose@8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6))
       '@googleapis/drive':
         specifier: ^22.0.0
         version: 22.0.0
@@ -2741,6 +2750,9 @@ importers:
       axios-retry:
         specifier: ^4.5.0
         version: 4.5.0(axios@1.20.0)
+      cheerio:
+        specifier: 1.2.0
+        version: 1.2.0
       dayjs:
         specifier: ^1.11.23
         version: 1.11.23
@@ -2759,6 +2771,9 @@ importers:
       mongoose:
         specifier: ^8.24.1
         version: 8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
+      nodemailer:
+        specifier: ^10.2.1
+        version: 10.2.1
       openai:
         specifier: ^6.46.0
         version: 6.47.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/signature-v4@5.7.4)(ws@8.21.3)(zod@4.6.6)
@@ -2790,9 +2805,15 @@ importers:
       '@types/node':
         specifier: ^24.0.0
         version: 24.12.3
+      '@types/nodemailer':
+        specifier: ^8.0.2
+        version: 8.0.2
       aws-sdk-client-mock:
         specifier: ^4.1.0
         version: 4.1.0
+      jsdom:
+        specifier: ^29.1.1
+        version: 29.1.1(@noble/hashes@2.4.0)(canvas@3.2.1)
       mongodb-memory-server:
         specifier: ^11.3.0
         version: 11.3.0(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)

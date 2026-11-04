@@ -113,7 +113,7 @@ const handler = handlerImpl as unknown as (req: NextApiRequest, res: NextApiResp
 import { FabFile } from '@bike4mind/database';
 import { createTempFile, zipFiles } from '@server/utils/files';
 import { getContentFromFabfile } from '@client/app/utils/fabFileUtils';
-import defineAbilitiesFor from '@server/auth/ability';
+import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
 import type { IUserDocument } from '@bike4mind/common';
 
 const makeUser = (overrides: Partial<IUserDocument> = {}): IUserDocument =>

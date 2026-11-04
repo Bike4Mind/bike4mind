@@ -52,7 +52,7 @@ const RATE_LIMIT_HEADERS = {
 };
 
 // --- AWS edges (mocked) ---
-vi.mock('@server/utils/apiKeyTrust', () => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
   resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
     rateLimit: key.rateLimit,
     ownerUntrusted: false,
@@ -73,7 +73,7 @@ vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn()
 // The real apiKeyRateLimit middleware runs; only its Mongo-backed counter check
 // is stubbed (otherwise the query buffers forever against the stubbed connectDB).
 // Overridable per-test (see the 429 case) via mockRateLimit.
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it now; only
   // checkApiKeyRateLimit is stubbed.
   ...(await orig<Record<string, unknown>>()),

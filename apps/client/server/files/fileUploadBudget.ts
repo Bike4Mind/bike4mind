@@ -8,7 +8,7 @@ import { adminSettingsRepository, cacheRepository } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { isDevelopment } from '@bike4mind/server-utils/utils/config';
 import { Logger } from '@bike4mind/observability';
-import type { ActiveSubscriptionsRequest } from '@server/entitlements/activeSubscriptions';
+import type { ActiveSubscriptionsRequest } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
 import { resolveUserRateTier, type RateTierUser, type UserRateTier } from '@server/utils/userRateTier';
 
 /**

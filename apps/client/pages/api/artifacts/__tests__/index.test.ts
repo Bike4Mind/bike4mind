@@ -52,7 +52,7 @@ vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({
   },
 }));
 
-vi.mock('@server/utils/artifactSourceRefsGuards', () => {
+vi.mock('@bike4mind/server-utils/utils/artifactSourceRefsGuards', () => {
   const sharedGuard = vi.fn();
   return {
     sharedGuard,
@@ -273,7 +273,7 @@ describe('POST /api/artifacts organization scope', () => {
 describe('POST /api/artifacts reference guard', () => {
   it('hands the service the shared-access guard, not the owner-only one', async () => {
     mockRefs.settings = { EnableArtifacts: true, EnableArtifactsDefault: true };
-    const guards = await import('@server/utils/artifactSourceRefsGuards');
+    const guards = await import('@bike4mind/server-utils/utils/artifactSourceRefsGuards');
     const { req, res } = invokePost({ type: 'html', title: 'Page', content: '<html></html>' });
 
     await mockRefs.postHandler!(req, res);

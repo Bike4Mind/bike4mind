@@ -23,7 +23,7 @@ import {
 } from '@server/utils/creditPreflight';
 import { saveGeneratedAssetToFiles } from '@bike4mind/server-utils/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 
 /**
  * Unified, multi-provider Text-to-Speech endpoint (#724).

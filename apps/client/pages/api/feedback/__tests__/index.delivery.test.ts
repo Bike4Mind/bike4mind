@@ -68,7 +68,7 @@ vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
 }));
 
 const mockEmailPublish = vi.fn();
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   EmailEvents: { Send: { publish: (...args: unknown[]) => mockEmailPublish(...args) } },
 }));
 

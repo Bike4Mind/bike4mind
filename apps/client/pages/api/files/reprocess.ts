@@ -3,7 +3,7 @@ import { dataLakeAccessGrantRepository, dataLakeRepository, fabFileRepository } 
 import { dataLakeService } from '@bike4mind/services';
 import { assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { getFabFileById } from '@server/managers/fabFileManager';
+import { getFabFileById } from '@bike4mind/server-utils/managers/fabFileManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';
@@ -11,7 +11,7 @@ import { BadRequestError, NotFoundError, parseOrBadRequest } from '@bike4mind/se
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
-import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
+import { FILES_WRITE_SCOPES } from '@bike4mind/server-utils/files/fileScopes';
 import { Request } from 'express';
 import { Resource } from 'sst';
 import { z } from 'zod';

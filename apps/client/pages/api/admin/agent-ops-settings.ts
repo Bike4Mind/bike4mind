@@ -5,7 +5,7 @@ import { agentOpsSettingsRepository, apiKeyRepository, adminSettingsRepository }
 import { apiKeyService } from '@bike4mind/services';
 import { buildApiKeyTable, getAvailableModels } from '@bike4mind/llm-adapters';
 import { ForbiddenError, BadRequestError, InternalServerError, getSettingsByNames } from '@bike4mind/utils';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { agentOpsModelRejection } from '@client/app/utils/agentOpsModels';
 import { modelCatalogListingOptions } from '@client/server/utils/modelCatalogOptions';
 

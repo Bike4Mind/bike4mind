@@ -5,7 +5,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
-import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 interface RequestQuery {
   userId: string;

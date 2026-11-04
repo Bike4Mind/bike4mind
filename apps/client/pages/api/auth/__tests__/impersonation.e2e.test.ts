@@ -12,7 +12,7 @@ const h = vi.hoisted(() => ({
   audit: vi.fn(),
   escalate: undefined as ((req: Request, res: import('express').Response) => Promise<unknown>) | undefined,
 }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionForActor: h.audit,
   recordAdminActionFromRequest: h.audit,
   parseAdminActionReason: (reason: string) => reason,
@@ -27,7 +27,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     }),
   }),
 }));
-import { endImpersonation } from '@server/auth/impersonation';
+import { endImpersonation } from '@bike4mind/server-utils/auth/impersonation';
 import '../impersonation';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });

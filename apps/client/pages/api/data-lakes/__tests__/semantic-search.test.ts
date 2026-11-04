@@ -57,7 +57,7 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
 vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: async () => 10 }));
 vi.mock('@server/dataLakes/resolveRetrievalLakeScope', () => ({ resolveRetrievalLakeScope: mockResolveScope }));
 // Paying by default, so the toggle tests below are not changed by the free-tier carve-out.
-vi.mock('@server/entitlements/activeSubscriptions', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/activeSubscriptions', () => ({
   activePlanResolver: { hasActivePlan: async () => true },
 }));
 // getProviderFromModel is stubbed so a test can choose the provider, but resolveEmbeddingConfig

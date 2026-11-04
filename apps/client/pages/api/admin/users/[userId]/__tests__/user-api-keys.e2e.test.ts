@@ -8,7 +8,7 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../../../packages/database/src/__test__/createMongoServer';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
-import { checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
+import { checkApiKeyRateLimit } from '@bike4mind/server-utils/utils/apiKeyRateLimitCheck';
 import { ApiKeyScope } from '@bike4mind/common';
 
 /**

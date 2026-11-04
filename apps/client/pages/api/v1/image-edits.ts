@@ -15,7 +15,7 @@ import { editImageContract } from '@bike4mind/common';
 import { armGenerationCallback, resolveGenerationCallback } from '@server/generationCallback/armGenerationCallback';
 import { assertReferenceImagesSupported } from '@server/utils/assertReferenceImagesSupported';
 import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 
 const handler = nextRouteForContract(editImageContract).post(async (req, res) => {
   assertAiAccessAllowed(req.user);

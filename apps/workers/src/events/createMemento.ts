@@ -1,5 +1,5 @@
 import { withEventContext } from '@workers/utils/eventContext';
-import { LLMEvents } from '@server/utils/eventBus';
+import { LLMEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { apiKeyRepository, adminSettingsRepository, Memento } from '@bike4mind/database';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';

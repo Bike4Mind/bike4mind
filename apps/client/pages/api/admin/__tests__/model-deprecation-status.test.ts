@@ -72,7 +72,7 @@ vi.mock('@bike4mind/services', async importOriginal => ({
   apiKeyService: { getEffectiveLLMApiKeys: async () => ({}) },
 }));
 
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
 
 import handler from '../model-deprecation-status';
 

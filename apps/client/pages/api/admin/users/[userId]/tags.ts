@@ -10,7 +10,7 @@ import { isManagedTag } from '@client/lib/entitlements/managedUserTags';
 import { normalizeTag } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { adminApi } from '@server/middlewares/adminApi';
 import { noteSubject } from '@server/users/adminUserNotes';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PATCH: 'settings:manage' } }).patch(
   async (req, res) => {

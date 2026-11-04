@@ -18,7 +18,11 @@ import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscript
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
-import { isSelfOrImpersonator, parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import {
+  isSelfOrImpersonator,
+  parseAdminActionReason,
+  recordAdminActionFromRequest,
+} from '@bike4mind/server-utils/utils/adminAudit';
 import { dayjs } from '@bike4mind/common';
 import { z } from 'zod';
 import { Resource } from 'sst';

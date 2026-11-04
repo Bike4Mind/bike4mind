@@ -1,4 +1,4 @@
-import type { SandboxAsset } from './renderSandboxedBundle';
+import type { SandboxAsset } from '@bike4mind/server-utils/services/publish/renderSandboxedBundle';
 
 /**
  * Publish - gated-asset collector for the sandboxed viewer.

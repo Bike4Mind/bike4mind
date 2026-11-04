@@ -18,7 +18,7 @@ import {
 
 // Domain-burst protection is covered by its own suites; it is off unless a test installs a hold.
 const protection = vi.hoisted(() => ({ current: undefined as unknown }));
-vi.mock('@server/auth/signupProtection', () => ({
+vi.mock('@bike4mind/server-utils/auth/signupProtection', () => ({
   get signupProtection() {
     return protection.current;
   },

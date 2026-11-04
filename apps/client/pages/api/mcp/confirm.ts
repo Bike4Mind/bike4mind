@@ -9,7 +9,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler';
-import { claimPendingAction } from '@server/utils/pendingActionExecutor';
+import { claimPendingAction } from '@bike4mind/server-utils/utils/pendingActionExecutor';
 import { loadFabFileAttachment, resolvePendingActionTarget } from '@bike4mind/server-utils/utils/pendingActionTarget';
 import { downloadAttachmentUrl } from '@bike4mind/server-utils/utils/downloadAttachmentUrl';
 import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';

@@ -1,4 +1,4 @@
-import { Ability } from '@server/auth/ability';
+import { Ability } from '@bike4mind/server-utils/auth/ability';
 import {
   ApiKeyBillingOwnerType,
   ApiKeyCompletionSource,

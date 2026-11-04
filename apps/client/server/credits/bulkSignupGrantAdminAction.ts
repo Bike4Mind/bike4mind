@@ -4,7 +4,7 @@ import { assertCanActOnAdminTarget, ForbiddenError, type AdminAuditAction } from
 import { userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { BadRequestError } from '@bike4mind/utils';
-import { denySelfAdminAction, isSelfOrImpersonator, parseAdminActionReason } from '@server/utils/adminAudit';
+import { denySelfAdminAction, isSelfOrImpersonator, parseAdminActionReason } from '@bike4mind/server-utils/utils/adminAudit';
 import { signupGrantAuditTarget, type SignupGrantAuditTarget } from './signupGrantAdminAction';
 
 const bodySchema = z.object({

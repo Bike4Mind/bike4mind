@@ -45,8 +45,8 @@ const findById = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: { findById } }));
 
 const resetApiKeyRateLimit = vi.hoisted(() => vi.fn());
-vi.mock('@server/utils/apiKeyRateLimitCheck', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/utils/apiKeyRateLimitCheck')>();
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/utils/apiKeyRateLimitCheck')>();
   return { ...actual, resetApiKeyRateLimit };
 });
 
@@ -64,7 +64,7 @@ const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe }));
 
 const recordAdminActionFromRequest = vi.hoisted(() => vi.fn().mockResolvedValue(null));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
 
 import '@pages/api/admin/user-api-keys/[id]/reset-rate-limit';
 

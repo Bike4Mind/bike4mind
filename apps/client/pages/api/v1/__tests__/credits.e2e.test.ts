@@ -16,7 +16,7 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
 
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: vi.fn().mockResolvedValue({ allowed: true, retryAfter: undefined, headers: {} }),
 }));

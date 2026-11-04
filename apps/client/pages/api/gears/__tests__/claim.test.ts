@@ -113,7 +113,7 @@ vi.mock('@bike4mind/services', () => ({
   },
   userService: { refundBudgetOnFailure: (fn: () => Promise<unknown>) => mocks.refundBudgetOnFailure(fn) },
 }));
-vi.mock('@server/credits/creditRewardAdapters', () => ({
+vi.mock('@bike4mind/server-utils/credits/creditRewardAdapters', () => ({
   buildCreditRewardAdapters: (...a: unknown[]) => mocks.buildAdapters(...a),
 }));
 

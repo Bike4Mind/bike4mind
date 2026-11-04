@@ -15,12 +15,12 @@ import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { EmailEvents } from '@server/utils/eventBus';
+import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { getLogoUrl, buildEmailLogoImg, escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import { emitSignupFunnelEvents, recordAccountLane } from '@server/analytics/funnel';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const AUDITED_USER_ID_LIMIT = 100;
 

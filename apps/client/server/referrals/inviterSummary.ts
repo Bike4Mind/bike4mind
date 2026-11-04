@@ -7,7 +7,7 @@ import {
   User,
 } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { REFERRAL_REWARD_REASON } from './firstAnswerReward';
+import { REFERRAL_REWARD_REASON } from '@bike4mind/server-utils/referrals/firstAnswerReward';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 

@@ -21,16 +21,18 @@ vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown)
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({ userRepository: { findById: h.findById, update: h.update } }));
 vi.mock('@bike4mind/services', () => ({ userService: { cancelEmailChange: vi.fn() } }));
-vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
 vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/mailer/emailHelpers')>()),
   generateVerificationLink: () => 'http://x/verify-email?t=1',
   getLogoUrl: () => 'logo',
   buildEmailLogoImg: () => '',
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
+}));
 
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 await import('../resend-email-change');
 

@@ -117,7 +117,7 @@ vi.mock('@server/cli/auth', () => ({
   verifyEmbedKeyById: vi.fn(async () => auth.info),
 }));
 vi.mock('@server/embed/embedSessionToken', () => ({ verifyEmbedSessionToken: vi.fn() }));
-vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', () => ({
   checkApiKeyRateLimit: vi.fn(async () => ({ allowed: true })),
 }));
 vi.mock('@server/utils/embedSessionRateLimit', () => ({

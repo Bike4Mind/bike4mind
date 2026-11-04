@@ -1,5 +1,5 @@
 import type { IIntegrationHealthCheckDocument } from '@bike4mind/database';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 type AuditRequest = Parameters<typeof recordAdminActionFromRequest>[0];
 type ProbeResult = Pick<IIntegrationHealthCheckDocument, 'integration' | 'status'>;

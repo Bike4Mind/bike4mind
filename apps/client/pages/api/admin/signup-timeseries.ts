@@ -3,7 +3,7 @@ import {
   SIGNUP_TIMESERIES_RANGES,
   SIGNUP_TZ_OFFSET_MESSAGE,
   signupTzOffsetSchema,
-} from '@client/app/utils/signupSignals';
+} from '@bike4mind/server-utils/app/utils/signupSignals';
 import { baseApi } from '@server/middlewares/baseApi';
 import { getSignupTimeseries } from '@server/users/signupTimeseries';
 

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { AdminSubscriptionRow } from './adminSubscriptionsFilter';
+import type { AdminSubscriptionRow } from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 
 export type { AdminSubscriptionRow };
 

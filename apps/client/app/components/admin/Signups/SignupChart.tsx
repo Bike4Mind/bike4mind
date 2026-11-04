@@ -12,7 +12,11 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { SIGNUP_SIGNAL_LABELS, SIGNUP_SIGNALS, type SignupTimeseries } from '@client/app/utils/signupSignals';
+import {
+  SIGNUP_SIGNAL_LABELS,
+  SIGNUP_SIGNALS,
+  type SignupTimeseries,
+} from '@bike4mind/server-utils/app/utils/signupSignals';
 import { formatBucketLabel } from './useSignupTimeseries';
 
 export type SignupChartMode = 'status' | 'signals';

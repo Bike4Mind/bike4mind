@@ -18,7 +18,7 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { providerBusyHttpError } from '@server/utils/providerBusyHttpError';
 import { saveGeneratedAssetToFiles } from '@bike4mind/server-utils/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
-import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
+import { resolveRequestUsageSource } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
 import { AUDIO_VENDOR_API_KEY_TYPE } from '@server/utils/audioVendorApiKeyType';
 
 // Each vendor's output-format check. Run before the reservation: an unmapped codec would be generated and

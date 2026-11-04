@@ -11,7 +11,7 @@ import {
 import { AdminUserNoteModel, AdminUserNoteRevisionModel, AdminAuditLogModel, User } from '@bike4mind/database';
 import { listAdminUserNotes, writeAdminUserNote } from './adminUserNotes';
 import { listUserTimeline } from '../utils/userTimeline';
-import { recordAdminActionFromRequest } from '../utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const routes = vi.hoisted(() => ({
   patch: undefined as undefined | ((req: Request, res: Response) => Promise<unknown>),
@@ -31,8 +31,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
 await import('../../pages/api/admin/users/[userId]/tags');
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
-vi.mock('../utils/adminAudit', async importOriginal => {
-  const original = await importOriginal<typeof import('../utils/adminAudit')>();
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => {
+  const original = await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>();
   return { ...original, recordAdminActionFromRequest: vi.fn(original.recordAdminActionFromRequest) };
 });
 const USER = '650000000000000000000001';

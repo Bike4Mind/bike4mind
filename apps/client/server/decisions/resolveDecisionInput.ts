@@ -3,7 +3,7 @@ import type { Logger } from '@bike4mind/observability';
 import { NotFoundError } from '@bike4mind/utils';
 import type { ResolvedDecisionInput, ResolvedDecisionInputPart } from '@bike4mind/utils/decisionProviders';
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
-import { assertFilesReadScope } from '@server/files/fileScopes';
+import { assertFilesReadScope } from '@bike4mind/server-utils/files/fileScopes';
 import { loadAccessibleFabFile, type FabFileAccessRequest } from '@server/files/loadAccessibleFabFile';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { isValidObjectId } from 'mongoose';

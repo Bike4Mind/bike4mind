@@ -52,7 +52,7 @@ vi.mock('@bike4mind/database/social', () => ({
     findByIdAndUpdate: (...args: unknown[]) => ({ lean: () => h.findByIdAndUpdate(...args) }),
   },
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import handler from '../variants';
 

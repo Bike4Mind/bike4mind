@@ -42,7 +42,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
+}));
 
 import handler from '../reembed-ledger';
 

@@ -13,7 +13,7 @@ import {
   resetOrgCustomMcpPolicy,
   setOrgCustomMcpPolicy,
 } from '@server/mcpConnections/orgPolicy';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
 import type { Request } from 'express';
 

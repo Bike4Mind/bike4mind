@@ -5,7 +5,7 @@ import {
   AdminRevenueQuerySchema,
   type AdminRevenueResponse,
   type AdminRevenueTrendResponse,
-} from '@client/app/utils/adminRevenue';
+} from '@bike4mind/server-utils/app/utils/adminRevenue';
 import { adminRevenue, adminRevenueTrend } from '@server/admin/revenue/adminRevenue';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';

@@ -18,7 +18,7 @@ import { assertSessionAccess } from '@bike4mind/server-utils/utils/sessionAccess
 import { ChatModels, NotFoundError, getQuestErrorCode } from '@bike4mind/common';
 import { Resource } from 'sst';
 import { z } from 'zod';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 
 // 4,000 chars (~1k tokens): the 50-token ack only needs the gist of the request, and the UI sends the

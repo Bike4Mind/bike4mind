@@ -6,7 +6,7 @@ import { handler as sessionSummarizationHandler } from '@workers/events/sessionS
 import { handler as sessionContextSummarizationHandler } from '@workers/events/sessionContextSummarization';
 import { handler as sessionTaggingHandler } from '@workers/events/sessionTagging';
 import { handler as notebookCurationHandler } from '@workers/events/notebookCuration';
-import { requestRiskEvidenceRefresh } from '@server/auth/riskEvidence';
+import { requestRiskEvidenceRefresh } from '@bike4mind/server-utils/auth/riskEvidence';
 
 /**
  * Self-host event routing.

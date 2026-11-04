@@ -1,6 +1,6 @@
 import { withEventContext } from '@workers/utils/eventContext';
-import { EmailEvents } from '@server/utils/eventBus';
-import mailer from '@server/utils/mailer';
+import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
+import mailer from '@bike4mind/server-utils/utils/mailer/index';
 
 export const handler = withEventContext(async (event, logger) => {
   const { to, subject, body, attachments, category } = EmailEvents.Send.schema.parse(event.properties);

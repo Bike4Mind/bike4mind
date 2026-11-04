@@ -6,7 +6,7 @@ import { getGitHubLakeAppConfig } from '@bike4mind/server-utils/integrations/git
 import {
   listGitHubLakeRepositoryChoices,
   requireGitHubLakeAppConfig,
-} from '@server/integrations/github/dataLake/githubLakeConnection';
+} from '@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection';
 import { Request } from 'express';
 
 /**

@@ -5,9 +5,9 @@ import {
   isBundlePagePath,
   renderSandboxedBundle,
   resolveBundlePath,
-} from '@server/services/publish/renderSandboxedBundle';
+} from '@bike4mind/server-utils/services/publish/renderSandboxedBundle';
 import { isStreamedFile } from '@server/services/publish/signedFiles';
-import { PUBLISH_HOST } from '@server/services/publish/validateBundle';
+import { PUBLISH_HOST } from '@bike4mind/server-utils/services/publish/validateBundle';
 
 /**
  * Publish - the self-contained document an owner-only thumbnail is rendered from

@@ -15,7 +15,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { clearSecretCache, resolveSecret } from '@server/managers/systemSecretsManager';
 import { Logger } from '@bike4mind/observability';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 /**
  * Mask a secret value for display (show only last 4 chars).

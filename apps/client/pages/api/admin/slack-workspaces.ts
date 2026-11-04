@@ -4,7 +4,7 @@ import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 /**
  * Admin API for managing Slack OAuth workspaces

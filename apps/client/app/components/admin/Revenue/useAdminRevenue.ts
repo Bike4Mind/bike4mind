@@ -1,6 +1,6 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
-import type { AdminRevenueResponse, AdminRevenueTrendResponse, RevenueRange } from '@client/app/utils/adminRevenue';
+import type { AdminRevenueResponse, AdminRevenueTrendResponse, RevenueRange } from '@bike4mind/server-utils/app/utils/adminRevenue';
 
 export const ADMIN_REVENUE_PATH = '/api/admin/revenue';
 

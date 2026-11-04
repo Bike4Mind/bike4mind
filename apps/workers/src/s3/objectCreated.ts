@@ -14,9 +14,9 @@ import {
 } from '@server/s3/moderationScan';
 import { chargeUploadedObject } from '@bike4mind/server-utils/s3/storageCharge';
 import { admitLandedUpload } from '@bike4mind/server-utils/s3/uploadSizeGate';
-import { recordRejectedUploadBatch } from '@server/s3/recordRejectedUploadBatch';
+import { recordRejectedUploadBatch } from '@bike4mind/server-utils/s3/recordRejectedUploadBatch';
 import { recomputeStatsForUploadedFile } from '@bike4mind/server-utils/dataLakes/recomputeStatsForUploadedFile';
-import { completedBatchStatus, finalizeBatchIfComplete } from '@server/dataLakes/dataLakeBatchProgress';
+import { completedBatchStatus, finalizeBatchIfComplete } from '@bike4mind/server-utils/dataLakes/dataLakeBatchProgress';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';

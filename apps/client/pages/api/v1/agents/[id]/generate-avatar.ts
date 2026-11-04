@@ -12,7 +12,7 @@ import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompl
 import { AUTHORING_RATE_LIMIT_BUCKET, findOwnedAgent } from '@server/agents/v1AgentRoute';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { toV1AuthoringError } from '@server/agents/v1AgentErrors';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAllowed';
 import { type ContractRequest, nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';

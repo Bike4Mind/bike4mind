@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ADMIN_ACTION_REASON_MAX_LENGTH } from '@bike4mind/common';
-import { parseAdminActionReason } from '@server/utils/adminAudit';
+import { parseAdminActionReason } from '@bike4mind/server-utils/utils/adminAudit';
 import { ADMIN_REASON_PRESETS, composeAdminReason, undoAdminReason } from './adminReason';
 
 describe('undoAdminReason', () => {

@@ -34,7 +34,7 @@ import {
 } from '@bike4mind/server-utils/utils/accountDataExport';
 import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
 import { createLedgerMemoryStore } from '@bike4mind/server-utils/memory/ledgerMemoryStore';
-import { EmailEvents } from '@server/utils/eventBus';
+import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { buildAccountDataExportReadyEmail } from '@server/utils/mailer/accountDataExportEmail';
 
 const { NotebookExportService } = notebookExportService;

@@ -36,7 +36,7 @@ import {
   recordChunkRescueSweep,
   type ChunkRescueOutcome,
 } from '@bike4mind/server-utils/utils/cloudwatch';
-import { enqueueTaxonomyAnalysisIfWanted } from '@server/dataLakes/dataLakeBatchProgress';
+import { enqueueTaxonomyAnalysisIfWanted } from '@bike4mind/server-utils/dataLakes/dataLakeBatchProgress';
 import { runChunkRescueSweep } from '@workers/s3/chunkRescueSweep';
 import { runModerationRescueSweep } from '@workers/s3/moderationRescueSweep';
 import {

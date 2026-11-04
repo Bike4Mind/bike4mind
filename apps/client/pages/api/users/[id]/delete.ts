@@ -4,7 +4,7 @@ import { adminSettingsRepository, userRepository, realtimeConnectionRepository }
 import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { userService } from '@bike4mind/services';
 import { escapeHtml } from '@client/app/utils/htmlEscape';
-import { EmailEvents } from '@server/utils/eventBus';
+import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { hardDeleteUser } from '@server/services/hardDeleteUser';
 import { toSafeUser, UnauthorizedError, type IUserDocument } from '@bike4mind/common';
 import {
@@ -12,7 +12,7 @@ import {
   isSelfOrImpersonator,
   parseAdminActionReason,
   recordAdminActionFromRequest,
-} from '@server/utils/adminAudit';
+} from '@bike4mind/server-utils/utils/adminAudit';
 import {
   subscriptionCancellationAudit,
   subscriptionCancellationResponse,

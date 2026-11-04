@@ -50,7 +50,7 @@ vi.mock('@bike4mind/database', () => {
     withTransaction: (fn: () => Promise<unknown>) => fn(),
   };
 });
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: recordAudit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: recordAudit }));
 vi.mock('@server/auth/emailVerifiedGrants', () => ({
   isEligibleForFreeCredits: eligible,
   releaseVerifiedPendingFreeCredits: release,

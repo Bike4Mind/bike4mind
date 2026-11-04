@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { emptySignalCounts, type SignupTimeseries } from '@client/app/utils/signupSignals';
+import { emptySignalCounts, type SignupTimeseries } from '@bike4mind/server-utils/app/utils/signupSignals';
 
 const mocks = vi.hoisted(() => ({ useSignupTimeseries: vi.fn() }));
 vi.mock('./useSignupTimeseries', async importOriginal => ({

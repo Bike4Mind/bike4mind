@@ -4,7 +4,7 @@ import { adminApi } from '@server/middlewares/adminApi';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const handler = adminApi({
   adminPermissions: { POST: 'settings:manage' },

@@ -2,7 +2,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@client/server/middlewares/adminApi';
 import { agentOpsSettingsRepository } from '@bike4mind/database';
 import { AgentOpsSettings } from '@bike4mind/database';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const handler = adminApi({
   adminPermissions: { POST: 'settings:manage' },

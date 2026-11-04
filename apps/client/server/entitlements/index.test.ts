@@ -62,7 +62,7 @@ vi.mock('@bike4mind/server-utils/lib/entitlements/registry', async () => {
 
 // Plan price ids are env-dependent, so the ladder read is a fixture; the real mapping is covered by
 // lib/userSubscriptions/utils.test.ts.
-vi.mock('@client/lib/userSubscriptions/utils', () => ({
+vi.mock('@bike4mind/server-utils/lib/userSubscriptions/utils', () => ({
   getEntitlingPlanByPriceId: (priceId: string) =>
     ({ price_ladder_pro: { tier: 2 }, price_ladder_basic: { tier: 1 }, price_standalone: {} })[priceId],
 }));
@@ -71,7 +71,7 @@ vi.mock('@client/lib/userSubscriptions/utils', () => ({
 // the resolver test stays a pure unit (no DB); the module's own behavior is covered by
 // partnerRules.test.ts. Default: no partner keys, so existing cases are unaffected.
 const mockPartnerEntitlements = vi.fn();
-vi.mock('@server/entitlements/partnerRules', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/partnerRules', () => ({
   partnerEntitlementsForEmail: (...args: unknown[]) => mockPartnerEntitlements(...args),
 }));
 

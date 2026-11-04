@@ -31,7 +31,7 @@ vi.mock('@bike4mind/services', () => ({
   userService: { MAX_BULK_RELEASE: 100, bulkReleaseHeldGrants: release, previewSignupGrantAction: preview },
 }));
 vi.mock('@bike4mind/database', () => ({ userRepository: { repo: true } }));
-vi.mock('@server/credits/heldSignupGrantAdapters', () => ({
+vi.mock('@bike4mind/server-utils/credits/heldSignupGrantAdapters', () => ({
   buildHeldGrantAdapters: () => ({ grant: {} }),
   heldGrantBatches: { batches: true },
 }));
@@ -39,7 +39,7 @@ const audit = vi.hoisted(() => ({
   record: vi.fn(),
   deny: vi.fn(),
 }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   isSelfOrImpersonator: (user: { id: string; impersonatedBy?: string }, targetId: string) =>
     [user.id, user.impersonatedBy].some(id => id?.toLowerCase() === targetId.toLowerCase()),
   denySelfAdminAction: audit.deny,

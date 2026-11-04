@@ -1,7 +1,7 @@
 import type { TeamPlanSettings } from '@bike4mind/common';
 import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
 import type { CreditPackageId } from '@client/lib/credits/types';
-import { SUBSCRIPTION_PLANS, TEAM_PLAN } from '@client/lib/userSubscriptions/constants';
+import { SUBSCRIPTION_PLANS, TEAM_PLAN } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import type { SubscriptionPlanInterval } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 
 /**

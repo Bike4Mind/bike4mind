@@ -40,8 +40,8 @@ vi.mock('@bike4mind/database', () => ({
     listTemplates: vi.fn(),
   },
 }));
-vi.mock('@server/utils/mailer', () => ({ default: { sendEmail: h.sendEmail } }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/mailer/index', () => ({ default: { sendEmail: h.sendEmail } }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: h.audit,
   definedKeys: (data: Record<string, unknown>) => Object.keys(data).filter(key => data[key] !== undefined),
 }));

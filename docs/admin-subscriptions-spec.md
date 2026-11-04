@@ -29,7 +29,7 @@ There is no admin page for invoices, refunds, coupons, MRR/revenue, past due, tr
 
 - **Subscription** (`apps/client/server/models/Subscription.ts`) mirrors Stripe. The webhook worker overwrites status, period, canceledAt, priceId and quantity on every `customer.subscription.updated`. Mongo is the source of truth only for admin grants (`source: admin_grant`, `subscriptionId: admin_grant_<uuid>`), `customCreditsPerCycle` and the dunning-notice claims.
 - **Not stored in Mongo, Stripe only:** unit amount, currency, `cancel_at_period_end` (inferred from `canceledAt`), `trial_end`, payment method, invoices, discounts, pause state.
-- **Plans** are code constants (`apps/client/lib/userSubscriptions/constants.ts`, team plan in `packages/server-utils/src/lib/subscriptions/constants`), with price ids from env and **no amounts**. So MRR cannot be computed from our data today.
+- **Plans** are code constants (`packages/server-utils/src/lib/userSubscriptions/constants.ts`, team plan in `packages/server-utils/src/lib/subscriptions/constants`), with price ids from env and **no amounts**. So MRR cannot be computed from our data today.
 - **Seats** are kept in three copies: `organization.seats`, `Subscription.quantity`, and the Stripe item quantity. When they disagree, the `customer.subscription.updated` worker makes Stripe win.
 - **Webhook** (`pages/api/stripe/webhook.ts`):
   - Handles pack payments, `invoice.payment_succeeded` (through the worker: plan credit grants), `customer.subscription.updated/deleted`, `invoice.payment_failed` (marks past_due and sends a dunning email), `charge.refunded` and disputes (credit clawback), and `customer.deleted`.

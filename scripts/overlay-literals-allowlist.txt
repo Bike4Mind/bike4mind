@@ -63,7 +63,7 @@ apps/client/scripts/resolve-highs-wasm.mjs
 apps/client/server/dataLakes/resolveAccessibleLakes.test.ts
 apps/client/server/dataLakes/resolveRetrievalLakeScope.test.ts
 apps/client/server/entitlements/apiKeyScopeAccess.ts
-apps/client/server/entitlements/partnerRules.test.ts
+packages/server-utils/src/entitlements/partnerRules.test.ts
 apps/client/server/entitlements/signupDomainGrant.test.ts
 apps/client/server/files/loadAccessibleFabFile.ts
 apps/client/server/middlewares/apiKeyAuth.test.ts

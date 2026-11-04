@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
 import { mergeManifest, extractBaseUrl } from '@bike4mind/slack';
 import { isSlackUserValidationError } from '@bike4mind/server-utils/integrations/slack/slackExportErrors';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 /**
  * POST /api/admin/slack-app/update-manifest

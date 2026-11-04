@@ -16,8 +16,8 @@ import {
 import { logAuthAudit } from '@server/utils/authAudit';
 import { respond } from '@server/utils/respond';
 import { selfSessionResponseSchema } from '@server/auth/selfSessionResponseSchema';
-import { toUserActor } from '@server/utils/adminAudit';
-import { endImpersonation } from '@server/auth/impersonation';
+import { toUserActor } from '@bike4mind/server-utils/utils/adminAudit';
+import { endImpersonation } from '@bike4mind/server-utils/auth/impersonation';
 
 /**
  * End an impersonation and restore the admin's own session ("Return to safety").

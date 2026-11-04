@@ -53,7 +53,7 @@ import {
   cancelPendingActionOnQuest,
   isPendingActionRequester,
   MCP_DISABLED_MESSAGE,
-} from '@server/utils/pendingActionExecutor';
+} from '@bike4mind/server-utils/utils/pendingActionExecutor';
 import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';

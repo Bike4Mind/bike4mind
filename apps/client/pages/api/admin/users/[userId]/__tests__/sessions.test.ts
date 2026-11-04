@@ -41,7 +41,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: (...a: unknown[]) => mocks.logAuthAudit(...a) }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: (...a: unknown[]) => mocks.record(...a),
   parseAdminActionReason: (value: unknown) => {
     if (typeof value !== 'string' || value.length < 3) throw Object.assign(new Error('reason'), { statusCode: 400 });

@@ -17,7 +17,11 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { adjustOwnerStorageInSession } from '@bike4mind/server-utils/s3/storageCharge';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { getGeneratedCopyStore } from '@server/files/generatedCopyStore';
-import { assertFilesReadScope, assertFilesWriteScope, FILES_READ_OR_WRITE_SCOPES } from '@server/files/fileScopes';
+import {
+  assertFilesReadScope,
+  assertFilesWriteScope,
+  FILES_READ_OR_WRITE_SCOPES,
+} from '@bike4mind/server-utils/files/fileScopes';
 import qs from 'qs';
 
 // baseApi's scope gate is per route, so it admits either files scope and each method asserts its own.

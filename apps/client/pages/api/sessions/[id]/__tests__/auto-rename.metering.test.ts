@@ -30,7 +30,7 @@ vi.mock('@server/utils/withRequestCompletionQuota', () => ({
       fn(req, res, { track: <T>(p: T) => p }),
 }));
 vi.mock('@bike4mind/server-utils/utils/sessionAccess', () => ({ assertSessionAccess: vi.fn() }));
-vi.mock('@server/auth/assertAiAccessAllowed', () => ({ assertAiAccessAllowed: vi.fn() }));
+vi.mock('@bike4mind/server-utils/auth/assertAiAccessAllowed', () => ({ assertAiAccessAllowed: vi.fn() }));
 vi.mock('@bike4mind/database', async () => ({
   ...(await import('@server/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
   questRepository: {},

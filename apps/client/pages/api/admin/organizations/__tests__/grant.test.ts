@@ -64,8 +64,8 @@ vi.mock('@bike4mind/server-utils/services/teamPlanSettings', () => ({
 }));
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn() }));
 // parseAdminActionReason stays real so the reason 400s come from the route itself.
-vi.mock('@server/utils/adminAudit', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
   recordAdminActionFromRequest: vi.fn(async () => {
     insideTransactionAtAudit = inTransaction;
     return null;
@@ -74,7 +74,7 @@ vi.mock('@server/utils/adminAudit', async importOriginal => ({
 vi.mock('@server/entitlements/paidStanding', () => ({ priceAffectsEntitlements: vi.fn(() => true) }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { priceAffectsEntitlements } from '@server/entitlements/paidStanding';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import handler from '../grant';

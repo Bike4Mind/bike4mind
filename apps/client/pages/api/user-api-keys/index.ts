@@ -10,7 +10,7 @@ import {
 } from '@server/entitlements/embedKeyEntitlement';
 import { EMBED_WHITELABEL_ENTITLEMENT_KEY } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
-import { resolveApiKeyTrust } from '@server/utils/apiKeyTrust';
+import { resolveApiKeyTrust } from '@bike4mind/server-utils/utils/apiKeyTrust';
 import {
   ApiKeyScope,
   CreditHolderType,
@@ -28,7 +28,7 @@ import {
 import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
 import { assertApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
 import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
-import { requestRiskEvidenceRefresh } from '@server/auth/riskEvidence';
+import { requestRiskEvidenceRefresh } from '@bike4mind/server-utils/auth/riskEvidence';
 import { Request } from 'express';
 
 interface CreateApiKeyRequest {

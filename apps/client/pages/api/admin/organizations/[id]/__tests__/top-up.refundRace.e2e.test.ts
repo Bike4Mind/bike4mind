@@ -33,13 +33,13 @@ vi.mock('@server/utils/errors', () => ({
 
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn() }));
 // parseAdminActionReason stays real so the route's required-reason check runs here too.
-vi.mock('@server/utils/adminAudit', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
   recordAdminActionFromRequest: vi.fn(async () => null),
 }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
-const mockAudit = vi.mocked((await import('@server/utils/adminAudit')).recordAdminActionFromRequest);
+const mockAudit = vi.mocked((await import('@bike4mind/server-utils/utils/adminAudit')).recordAdminActionFromRequest);
 
 // The database, the credit service and withTransaction are REAL here: the whole point is the
 // behaviour of a duplicate refund against a replica set. Only the HTTP plumbing and the audit

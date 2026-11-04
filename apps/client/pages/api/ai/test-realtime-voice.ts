@@ -12,7 +12,7 @@ import {
 } from '@server/utils/creditPreflight';
 import { createModelAdmission, isCreditsEnforced } from '@server/billing/meterPlatformCompletion';
 import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrgId';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 
 const TTS_MODEL = 'tts-1-hd';
 

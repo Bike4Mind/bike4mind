@@ -1,6 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { gearOverrideRepository, GearOverride } from '@bike4mind/database';
 import { GEAR_PRESENTATION } from '@client/lib/gears/presentation';
 import { GEAR_DEFAULTS, GEAR_CREDITS_SCALE } from '@server/services/gears/catalog';

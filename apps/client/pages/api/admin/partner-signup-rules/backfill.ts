@@ -14,7 +14,7 @@ import { assertOrganizationExists } from '@server/entitlements/assertOrganizatio
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { auditSeatCeilingRaised } from '@server/organizations/notifySeatCeilingRaised';
 import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { z } from 'zod';
 
 /**

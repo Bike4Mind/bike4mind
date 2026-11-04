@@ -16,7 +16,7 @@ vi.mock('@bike4mind/database', async importOriginal => ({
 }));
 vi.mock('@bike4mind/database/infra', () => ({}));
 vi.mock('@bike4mind/server-utils/services/githubService', () => ({ GitHubService: {} }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn() }));
 vi.mock('@bike4mind/server-utils/integrations/github/sreWebhookDispatch', () => ({}));
 
 const cases: AdminPermissionCase[] = [

@@ -2,7 +2,7 @@ import passport from 'passport';
 // TODO Bring back after we fix facebook secrets
 // import { Strategy as FacebookStrategy } from 'passport-facebook';
 import { ACCOUNT_DELETION_PENDING_CODE, AuthStrategy, type IUserDocument } from '@bike4mind/common';
-import ability from '@server/auth/ability';
+import ability from '@bike4mind/server-utils/auth/ability';
 import { User } from '@bike4mind/database';
 import { selfServeVerifyCallback, verifyCallback } from '@server/utils/auth/verifyCallback';
 import { Config } from '@bike4mind/server-utils/utils/config';

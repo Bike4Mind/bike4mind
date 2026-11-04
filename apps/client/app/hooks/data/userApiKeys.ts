@@ -10,7 +10,7 @@ import {
   type AdminApiKeyRequestCounts,
 } from '@bike4mind/common';
 import type { ApiKeyEligibilityResponse } from '@client/pages/api/user-api-keys/eligibility';
-import type { CounterLockoutState } from '@server/utils/apiKeyRateLimitCheck';
+import type { CounterLockoutState } from '@bike4mind/server-utils/utils/apiKeyRateLimitCheck';
 import { toast } from 'sonner';
 
 function parseValidationError(error: any): string {

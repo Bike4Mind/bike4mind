@@ -7,7 +7,7 @@ import type { RequestHandler } from 'express';
 import { isE2EEnabled } from '@bike4mind/server-utils/utils/config';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { ipBucket as otcIpBucket } from '@bike4mind/server-utils/utils/ipBucket';
-import { deliveryMailbox } from './deliveryMailbox';
+import { deliveryMailbox } from '@bike4mind/server-utils/utils/deliveryMailbox';
 
 export { otcIpBucket };
 

@@ -5,7 +5,7 @@ import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/erro
 import { organizationRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { groupRepository } from '@bike4mind/database/social';
 import { organizationService } from '@bike4mind/services';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { z } from 'zod';
 
 /**

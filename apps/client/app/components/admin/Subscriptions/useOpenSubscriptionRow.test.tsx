@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AdminSubscriptionRow } from '@client/app/utils/adminSubscriptionsFilter';
+import type { AdminSubscriptionRow } from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 
 const navigate = vi.hoisted(() => vi.fn());
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }));

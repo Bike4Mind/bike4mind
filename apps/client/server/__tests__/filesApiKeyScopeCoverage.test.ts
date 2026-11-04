@@ -60,7 +60,10 @@ describe('every /api/files door gates API keys on a files scope', () => {
   it.each(routes)('%s', (relPath, file) => {
     const rawSource = readFileSync(file, 'utf8');
     const gate = extractRequiredScopesGate(rawSource, 'FILES');
-    expect(gate, 'declare baseApi({ requiredScopes: FILES_*_SCOPES }) from @server/files/fileScopes').toBeDefined();
+    expect(
+      gate,
+      'declare baseApi({ requiredScopes: FILES_*_SCOPES }) from @bike4mind/server-utils/files/fileScopes'
+    ).toBeDefined();
 
     const expectedGate = EXPECTED_GATES[relPath];
     expect(

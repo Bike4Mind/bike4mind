@@ -25,7 +25,9 @@ vi.mock('@aws-sdk/client-s3', () => ({
   },
 }));
 vi.mock('@aws-sdk/s3-request-presigner', () => ({ getSignedUrl: vi.fn(async () => 'https://s3.test/put') }));
-vi.mock('@server/managers/fabFileManager', () => ({ createFabFile: (...a: unknown[]) => mockCreateFabFile(...a) }));
+vi.mock('@bike4mind/server-utils/managers/fabFileManager', () => ({
+  createFabFile: (...a: unknown[]) => mockCreateFabFile(...a),
+}));
 vi.mock('@server/dataLakes/toAccessContext', () => ({
   toAccessContext: vi.fn(async (req: { user: { id: string } }) => ({
     userId: req.user.id,
@@ -36,7 +38,7 @@ vi.mock('@server/dataLakes/toAccessContext', () => ({
   })),
 }));
 
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
 }));

@@ -25,7 +25,7 @@ import {
   isSelfOrImpersonator,
   parseAdminActionReason,
   recordAdminActionFromRequest,
-} from '@server/utils/adminAudit';
+} from '@bike4mind/server-utils/utils/adminAudit';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';
 

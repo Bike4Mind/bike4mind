@@ -11,7 +11,7 @@ import { sendDecisionError } from '@server/decisions/decisionErrors';
 import { runDecision } from '@server/decisions/runDecision';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
+import { resolveRequestUsageSource } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
 import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
 
 /**

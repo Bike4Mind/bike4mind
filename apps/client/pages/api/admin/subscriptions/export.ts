@@ -8,7 +8,7 @@ import {
   planIntervalLabel,
   type AdminSubscriptionMrr,
   type AdminSubscriptionRow,
-} from '@client/app/utils/adminSubscriptionsFilter';
+} from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import { escapeCsvCell } from '@client/app/utils/csv';
 import {
   adminSubscriptionsExportPage,

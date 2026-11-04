@@ -28,8 +28,8 @@ vi.mock('@bike4mind/services', async importOriginal => {
   };
 });
 
-vi.mock('@server/utils/adminAudit', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
   recordAdminActionFromRequest: vi.fn(async () => null),
   denySelfAdminAction: vi.fn(async () => {
     throw Object.assign(new Error('self'), { statusCode: 403 });
@@ -37,7 +37,7 @@ vi.mock('@server/utils/adminAudit', async importOriginal => ({
 }));
 
 import { abuseService } from '@bike4mind/services';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { verifyBulkAbusePreviewToken } from '@server/admin/bulkAbuse/previewToken';
 import handler from '../bulk-preview';
 
@@ -107,12 +107,15 @@ describe('POST /api/admin/abuse/bulk-preview', () => {
     expect(res._getJSONData().blocksDomain).toBeNull();
   });
 
-  it.each(['github.io', 'co.uk', 'gmail.com', 'outlook.com', 'fastmail.com'])('refuses %s as a domain target', async domain => {
-    await expect(call({ target: { kind: 'domain', domain }, actions: ALL_ACTIONS })).rejects.toMatchObject({
-      statusCode: 400,
-    });
-    expect(mockResolve).not.toHaveBeenCalled();
-  });
+  it.each(['github.io', 'co.uk', 'gmail.com', 'outlook.com', 'fastmail.com'])(
+    'refuses %s as a domain target',
+    async domain => {
+      await expect(call({ target: { kind: 'domain', domain }, actions: ALL_ACTIONS })).rejects.toMatchObject({
+        statusCode: 400,
+      });
+      expect(mockResolve).not.toHaveBeenCalled();
+    }
+  );
 
   it('writes no audit entry', async () => {
     await call({ target: { kind: 'users', userIds: [USER_ID] }, actions: ALL_ACTIONS });

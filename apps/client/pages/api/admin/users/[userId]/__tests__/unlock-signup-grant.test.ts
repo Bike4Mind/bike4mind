@@ -10,7 +10,7 @@ const h = vi.hoisted(() => ({
   selfOrImpersonator: vi.fn(),
   protection: { repository: {} },
 }));
-vi.mock('@server/auth/signupProtection', () => ({ signupProtection: h.protection }));
+vi.mock('@bike4mind/server-utils/auth/signupProtection', () => ({ signupProtection: h.protection }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (config: unknown) => {
     h.config = config;
@@ -32,7 +32,7 @@ vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: {},
 }));
 vi.mock('@bike4mind/services', () => ({ userService: { releaseRemainingSignupGrant: h.unlock } }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   denySelfAdminAction: h.denySelf,
   isSelfOrImpersonator: h.selfOrImpersonator,
   parseAdminActionReason: (reason: string) => {

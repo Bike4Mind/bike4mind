@@ -9,7 +9,7 @@ import * as z from 'zod';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { InboxEvents } from '@bike4mind/common';
 import { Resource } from 'sst';
-import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const handler = baseApi().post(
   asyncHandler(async (req, res) => {

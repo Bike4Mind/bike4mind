@@ -10,7 +10,7 @@ import { ClientMessageSender } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { ActivityType } from '@bike4mind/server-utils/config/activityType';
-import { Ability } from '@server/auth/ability';
+import { Ability } from '@bike4mind/server-utils/auth/ability';
 import { Resource } from 'sst';
 
 /**
@@ -115,7 +115,7 @@ export async function publishSummarizeSession(
   payerId: string
 ): Promise<void> {
   // Imported lazily to publish to EventBridge instead of SQS.
-  const { SessionEvents } = await import('@server/utils/eventBus');
+  const { SessionEvents } = await import('@bike4mind/server-utils/utils/eventBus');
   await SessionEvents.Summarize.publish({
     sessionId,
     callTagging: true,
@@ -131,6 +131,6 @@ export async function publishContextSummarizeSession(
   sessionId: string,
   verbatimWindowStartQuestId: string
 ): Promise<void> {
-  const { SessionEvents } = await import('@server/utils/eventBus');
+  const { SessionEvents } = await import('@bike4mind/server-utils/utils/eventBus');
   await SessionEvents.ContextSummarize.publish({ sessionId, verbatimWindowStartQuestId });
 }

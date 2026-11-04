@@ -33,9 +33,9 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: h.withTransaction,
 }));
 vi.mock('@bike4mind/services', () => ({ userService: { requestEmailChange: h.requestEmailChange } }));
-vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
 // logAuditEvent writes a CounterLog row; an own email change must never reach it.
-vi.mock('@server/utils/auditLog', () => ({ logAuditEvent: h.logAuditEvent }));
+vi.mock('@bike4mind/server-utils/utils/auditLog', () => ({ logAuditEvent: h.logAuditEvent }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: h.logAuthAudit }));
 
 process.env.APP_URL = 'https://app.test';

@@ -13,7 +13,7 @@ import {
   type AdminSubscriptionsFilter,
   type AdminSubscriptionsSortField,
   type SubscriptionStatusFilter,
-} from '@client/app/utils/adminSubscriptionsFilter';
+} from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import { oneOf, parsePage, parseStringList, toNumber } from '../adminSearchValues';
 
 /**

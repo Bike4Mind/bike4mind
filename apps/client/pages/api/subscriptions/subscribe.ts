@@ -1,7 +1,7 @@
 import { adminSettingsRepository, userRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
 import { subscriptionCheckoutSchema } from '@bike4mind/server-utils/lib/userSubscriptions/schemas';
-import { findSubscriptionPlan } from '@client/lib/userSubscriptions/constants';
+import { findSubscriptionPlan } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
 import { refuseBlockedAccount } from '@server/middlewares/refuseBlockedAccount';
@@ -10,7 +10,7 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { USD_CHECKOUT_SESSION_PARAMS } from '@server/integrations/stripe/checkoutCurrency';
 import { appendSuccessParams, isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
-import { checkoutAcquisitionMetadata } from '@server/analytics/acquisition';
+import { checkoutAcquisitionMetadata } from '@bike4mind/server-utils/analytics/acquisition';
 import { recordCheckoutVisit } from '@server/analytics/billingEventDetails';
 import { readVisitId } from '@server/analytics/visitSession';
 import { firstPurchaseCardOptions } from '@server/integrations/stripe/threeDSecure';

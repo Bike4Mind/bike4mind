@@ -52,7 +52,7 @@ vi.mock('@bike4mind/server-utils/utils/systemPrompts/defaults', () => ({
 }));
 
 const mockAudit = vi.fn();
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: (...args: unknown[]) => mockAudit(...args),
 }));
 

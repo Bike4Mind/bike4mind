@@ -16,7 +16,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://%STAGE%' } }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics }));
-vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh }));
+vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh }));
 vi.mock('@workers/queueHandlers/riskEvidence', () => ({
   RISK_EVIDENCE_NAMESPACE: 'test',
   RiskEvidenceMetrics: { REQUESTS: 'Requests' },

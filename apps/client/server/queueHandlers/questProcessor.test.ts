@@ -34,7 +34,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
   }),
 }));
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   LLMEvents: { CompletionCompleted: { publish: vi.fn() } },
   SessionEvents: { AutoName: { publish: vi.fn() } },
 }));
@@ -131,7 +131,7 @@ describe('questProcessor getMusicToolConfigResolver', () => {
 describe('questProcessor getStaticOptions', () => {
   it('wires the shared operational billing adapter into tool execution', async () => {
     const { getStaticOptions } = await import('./questProcessor');
-    const { operationalBillingAdapters } = await import('@server/billing/operationalBilling');
+    const { operationalBillingAdapters } = await import('@bike4mind/server-utils/billing/operationalBilling');
 
     expect(getStaticOptions().db.operationalBilling).toBe(operationalBillingAdapters);
   }, 120_000);

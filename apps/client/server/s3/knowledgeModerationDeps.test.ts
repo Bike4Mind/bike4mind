@@ -8,7 +8,7 @@ vi.mock('@bike4mind/services/llm/imageModerationGate', () => ({ moderateImageOrT
 vi.mock('@bike4mind/utils/imageModeration', () => ({ RekognitionImageModerationService: class {} }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({}) }));
 vi.mock('@bike4mind/server-utils/s3/moderateUploadedFile', () => ({ moderateUploadedFile: vi.fn() }));
-vi.mock('@server/moderation/imageModerationIncidents', () => ({ imageModerationIncidents: {} }));
+vi.mock('@bike4mind/server-utils/moderation/imageModerationIncidents', () => ({ imageModerationIncidents: {} }));
 
 import { buildKnowledgeModerationDeps } from './knowledgeModerationDeps';
 

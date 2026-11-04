@@ -56,7 +56,7 @@ vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAcces
 vi.mock('@bike4mind/server-utils/integrations/google/drive/common', () => ({
   disableDriveConnectionForLake: h.disableDriveConnectionForLake,
 }));
-vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection', () => ({
   disableGitHubConnectionForLake: h.disableGitHubConnectionForLake,
 }));
 vi.mock('@bike4mind/services', () => ({

@@ -1,5 +1,8 @@
 import { Stack, Typography } from '@mui/joy';
-import { MRR_CURRENCY, type AdminSubscriptionsMrrTotal } from '@client/app/utils/adminSubscriptionsFilter';
+import {
+  MRR_CURRENCY,
+  type AdminSubscriptionsMrrTotal,
+} from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import { AnalyticsTermHelp } from '../EventMetrics/components/AnalyticsTermHelp';
 import { formatMoney } from '../shared/formatMoney';
 

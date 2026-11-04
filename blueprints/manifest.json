@@ -75,11 +75,11 @@
       "appliedAt": "2026-08-30T16:29:13Z",
       "generatedFiles": [
         "apps/client/pages/api/publish/serve/[...path].ts",
-        "apps/client/server/services/publish/renderSandboxedBundle.ts",
+        "packages/server-utils/src/services/publish/renderSandboxedBundle.ts",
         "apps/client/server/services/publish/renderBundleLoaderShell.ts",
-        "apps/client/server/services/publish/viewerSecurity.ts",
+        "packages/server-utils/src/services/publish/viewerSecurity.ts",
         "apps/client/server/services/publish/collectInlineAssets.ts",
-        "apps/client/server/services/publish/fragmentNav.ts"
+        "packages/server-utils/src/services/publish/fragmentNav.ts"
       ],
       "notes": "Satisfied by the existing origin-isolation implementation. Verified against the advisory's own checklist rather than assumed: a distinct bundle-origin host helper paired with a wrapper-host predicate that excludes it, an opaque-origin srcdoc sandbox carrying no allow-same-origin on the gated path, no nonce anywhere in the serve path, an argument-free bootstrap shell, and no credentialed CORS grant reflecting bundle origins. The cross-origin src path does carry allow-same-origin, which is correct rather than a violation: the frame's origin there is the isolated per-artifact host, not the app's, so same-origin means same as the isolated origin. A naive repo-wide grep for allow-same-origin reads as a failure here and is the wrong test; the advisory's criterion is scoped to the gated path."
     },

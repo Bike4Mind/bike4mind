@@ -35,7 +35,7 @@ vi.mock('@server/preferenceArena', () => ({
   getArenaService: () => ({ importPairs: mockImport, getArenaStats: mockStats }),
 }));
 
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
 
 import { config } from '../pairs/index';
 

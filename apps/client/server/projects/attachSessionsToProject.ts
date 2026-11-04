@@ -11,7 +11,7 @@ import { aiAccessDeniedMessage, type AiAccessStateFields } from '@bike4mind/serv
 import type { Logger } from '@bike4mind/observability';
 import { NotFoundError, ProjectEvents, type ISessionDocument } from '@bike4mind/common';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
-import { SessionEvents } from '@server/utils/eventBus';
+import { SessionEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { filterSessionIdsByOperationalCredits } from '@server/utils/sessionOperationalCreditPreflight';
 import { OPERATIONS_PER_SUMMARIZE_WITH_TAGGING } from '@server/utils/sessionOperationCounts';
 

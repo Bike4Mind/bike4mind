@@ -9,7 +9,7 @@ import { createMocks } from 'node-mocks-http';
 
 const { mockList, mockGetToken } = vi.hoisted(() => ({ mockList: vi.fn(), mockGetToken: vi.fn() }));
 
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: vi.fn().mockResolvedValue({ allowed: true, headers: {} }),
 }));

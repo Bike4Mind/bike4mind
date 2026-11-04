@@ -36,7 +36,7 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: (...args: unknown[]) => getSettingsMapMock(...(args as [])),
   getSettingsValue: (key: string, settings: Record<string, string>) => getSettingsValueMock(key, settings),
 }));
-vi.mock('@client/lib/userSubscriptions/constants', () => ({
+vi.mock('@bike4mind/server-utils/lib/userSubscriptions/constants', () => ({
   SUBSCRIPTION_PLANS: [],
   SUBSCRIPTION_PLANS_MAP: {
     price_basic: { tier: 1 },

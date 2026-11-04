@@ -18,7 +18,7 @@ const publishMock = vi.fn();
 vi.mock('@bike4mind/server-utils/utils/resolveExecutionMementoGates', () => ({
   resolveExecutionMementoGates: (...args: unknown[]) => resolveExecutionMementoGatesMock(...args),
 }));
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   LLMEvents: { CompletionCompleted: { publish: (...args: unknown[]) => publishMock(...args) } },
 }));
 

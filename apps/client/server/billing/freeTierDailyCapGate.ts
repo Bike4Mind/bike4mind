@@ -3,7 +3,7 @@ import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, TooManyRequestsError } from '@bike
 import { adminSettingsRepository } from '@bike4mind/database';
 import type { ILogger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import type { ActiveSubscriptionsRequest } from '@server/entitlements/activeSubscriptions';
+import type { ActiveSubscriptionsRequest } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
 import { persistedIsAdmin } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { recordUserLimitEvent } from '@server/billing/userLimitEvents';
 

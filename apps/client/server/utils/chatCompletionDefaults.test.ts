@@ -361,7 +361,7 @@ describe('getDefaultChatCompletionOptions', () => {
 
   it('wires the shared operational billing adapter into tool execution', async () => {
     const { getDefaultChatCompletionOptions } = await import('./chatCompletionDefaults');
-    const { operationalBillingAdapters } = await import('@server/billing/operationalBilling');
+    const { operationalBillingAdapters } = await import('@bike4mind/server-utils/billing/operationalBilling');
 
     expect(getDefaultChatCompletionOptions().db.operationalBilling).toBe(operationalBillingAdapters);
   }, 20000);

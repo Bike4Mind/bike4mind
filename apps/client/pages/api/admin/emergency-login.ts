@@ -11,7 +11,7 @@ import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { z } from 'zod';
 import { Resource } from 'sst';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
-import { recordAdminActionForActor, systemAuditActor, toUserActor } from '@server/utils/adminAudit';
+import { recordAdminActionForActor, systemAuditActor, toUserActor } from '@bike4mind/server-utils/utils/adminAudit';
 
 const EmergencyLoginSchema = z.object({
   username: z.string().min(1).max(200),

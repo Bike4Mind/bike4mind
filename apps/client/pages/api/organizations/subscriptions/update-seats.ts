@@ -14,7 +14,7 @@ import {
   countPendingOrganizationInvites,
   validateSeatChange,
   resolveSubscriptionSource,
-} from '@server/services/organizationService';
+} from '@bike4mind/server-utils/services/organizationService';
 import { assertSeatsWithinPlan, getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 
 const UpdateSeatsSchema = z.object({

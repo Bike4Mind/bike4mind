@@ -73,7 +73,7 @@ vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn()
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));
 
 const mockEmitSignup = vi.fn().mockResolvedValue([]);
-vi.mock('@server/analytics/signupEvents', () => ({
+vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({
   emitSignupForSourceProducts: (...a: unknown[]) => mockEmitSignup(...a),
 }));
 const mockRecordSignupAcquisition = vi.fn().mockResolvedValue({ isSynthetic: false });
@@ -89,7 +89,9 @@ vi.mock('@server/auth/networkMeta', () => ({
 }));
 
 const mockRefreshSignupRiskScore = vi.fn().mockResolvedValue(undefined);
-vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
+vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
+  requestRiskEvidenceRefresh: vi.fn(async () => 'queued'),
+}));
 vi.mock('@server/auth/signupRiskScore', () => ({
   refreshSignupRiskScore: (...a: unknown[]) => mockRefreshSignupRiskScore(...a),
 }));

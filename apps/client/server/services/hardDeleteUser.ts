@@ -2,7 +2,7 @@ import { userRepository, withTransaction } from '@bike4mind/database';
 import type { IUserDocument, IUserRepository } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
-import { emitBillingEvent } from '@server/analytics/signupEvents';
+import { emitBillingEvent } from '@bike4mind/server-utils/analytics/signupEvents';
 import { wholeDaysBetween } from '@server/analytics/billingEventDetails';
 import { resolveUserType } from '@server/analytics/resolveUserType';
 import {

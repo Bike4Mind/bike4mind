@@ -40,7 +40,7 @@ import {
 } from '@bike4mind/database';
 import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
 import { recordUserLimitEvent } from '@server/billing/userLimitEvents';
-import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { NotFoundError, registerLambdaErrorHandlers } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
@@ -49,8 +49,8 @@ import { Logger } from '@bike4mind/observability';
 registerLambdaErrorHandlers();
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { getUserEntitlements } from '@server/entitlements';
-import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
-import { operationalBillingAdapters } from '@server/billing/operationalBilling';
+import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
+import { operationalBillingAdapters } from '@bike4mind/server-utils/billing/operationalBilling';
 import { z } from 'zod';
 import { QuestStartBodySchema, ChatCompletionProcess } from '@bike4mind/services/llm';
 import type { ToolDefinition } from '@bike4mind/services/llm/tools';
@@ -65,8 +65,8 @@ import { summarizeSession, contextSummarizeSession } from '@server/managers/sess
 import { accessibleBy } from '@casl/mongoose';
 import { isTerminalCreditRefusal, IUserDocument, Permission, stripSearchResultCardFences } from '@bike4mind/common';
 import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
-import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
-import { LLMEvents, SessionEvents } from '@server/utils/eventBus';
+import { getMcpClientAdapter } from '@bike4mind/server-utils/utils/getMcpClientAdapter';
+import { LLMEvents, SessionEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { withEventContext } from '@workers/utils/eventContext';
 import {
   slackToolDefinitions,
@@ -76,7 +76,7 @@ import {
   processMarkdownForSlack,
   splitTextIntoBlocks,
 } from '@bike4mind/slack';
-import { cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
+import { cancelPendingActionOnQuest } from '@bike4mind/server-utils/utils/pendingActionExecutor';
 import { buildPendingActionButtons } from '@bike4mind/server-utils/integrations/slack/pendingActionButtons';
 import { getSharedTokenizer, publishTelemetryAlertCallback } from '@server/utils/chatCompletionDefaults';
 import { recallMementosV2 } from '@bike4mind/server-utils/memory/recallMementosV2';

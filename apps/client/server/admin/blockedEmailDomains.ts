@@ -2,7 +2,7 @@ import { isDomainInDomains, partitionDomainList, settingsMap } from '@bike4mind/
 import { withTransaction } from '@bike4mind/database';
 import { AdminSettings } from '@bike4mind/database/infra';
 import { invalidateSettingsCache } from '@bike4mind/utils';
-import type { AdminAuditWriter } from '@server/utils/adminAudit';
+import type { AdminAuditWriter } from '@bike4mind/server-utils/utils/adminAudit';
 import { recordAdminSettingChangeWith } from '@server/utils/adminSettingsAudit';
 import { assertOwnedDomain } from './bulkAbuse/assertOwnedDomain';
 

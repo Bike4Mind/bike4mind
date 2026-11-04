@@ -6,13 +6,13 @@ import { BadRequestError, NotFoundError, ensureAdmin } from '@bike4mind/server-u
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { heldGrantBatches } from '@server/credits/heldSignupGrantAdapters';
+import { heldGrantBatches } from '@bike4mind/server-utils/credits/heldSignupGrantAdapters';
 import {
   denySelfAdminAction,
   isSelfOrImpersonator,
   loadCreditGrantPolicy,
   recordAdminActionFromRequest,
-} from '@server/utils/adminAudit';
+} from '@bike4mind/server-utils/utils/adminAudit';
 
 const bodySchema = z.object({ batchId: z.string().regex(/^[a-f0-9]{24}$/i) });
 

@@ -27,7 +27,7 @@ import { accessibleBy } from '@casl/mongoose';
 const makeUser = (overrides: Partial<IUserDocument> = {}): IUserDocument =>
   ({ id: 'u1', isAdmin: false, tags: [], groups: [], email: 'user@example.com', ...overrides }) as IUserDocument;
 
-// Mirrors the HTTP ability (apps/client/server/auth/ability.ts) - both must gate
+// Mirrors the HTTP ability (packages/server-utils/src/auth/ability.ts) - both must gate
 // Prompt writes on admin-or-developer and stay in sync (the two definitions
 // diverging on the retired 'Analyst' tag is exactly what this guards against).
 describe('db-core defineAbilitiesFor - Prompt library', () => {
@@ -69,7 +69,7 @@ describe('db-core defineAbilitiesFor - Prompt library', () => {
 // Org Groups (#1172): the db-core ability is the copy the quest/slack processors and the
 // image/video generators compile into a Mongo query via accessibleBy - the path where a
 // cross-element group match actually bites. Must stay in sync with the HTTP ability
-// (apps/client/server/auth/ability.ts); these mirror that file's group tests exactly.
+// (packages/server-utils/src/auth/ability.ts); these mirror that file's group tests exactly.
 describe('db-core defineAbilitiesFor - Modal management', () => {
   const canManageModals = (a: ReturnType<typeof defineAbilitiesFor>) =>
     a.can('create', ModalModel) && a.can('update', ModalModel) && a.can('delete', ModalModel);
@@ -136,7 +136,7 @@ describe('db-core defineAbilitiesFor - group-shared document access', () => {
   });
 });
 
-// Mirrors the HTTP ability's Feedback block (apps/client/server/auth/ability.ts). Both grant a
+// Mirrors the HTTP ability's Feedback block (packages/server-utils/src/auth/ability.ts). Both grant a
 // reporter { userId }-scoped read and delete; if one side drops the condition, that side hands
 // every logged-in user the admin view, so both are pinned separately.
 describe('db-core defineAbilitiesFor - Feedback read/delete scoping', () => {
@@ -249,7 +249,7 @@ describe('db-core defineAbilitiesFor - user-shared document access', () => {
   });
 });
 
-// Mirrors the HTTP ability's FabFile export block (apps/client/server/auth/ability.ts). The
+// Mirrors the HTTP ability's FabFile export block (packages/server-utils/src/auth/ability.ts). The
 // knowledge-files export route compiles this into a Mongo query via accessibleBy, so a missing
 // rule here empties the archive exactly as a missing rule there does.
 describe('db-core defineAbilitiesFor - FabFile export scoping', () => {
@@ -275,7 +275,7 @@ describe('db-core defineAbilitiesFor - FabFile export scoping', () => {
   });
 });
 
-// The user/group share arm used to be hand-copied into apps/client/server/auth/ability.ts, and the
+// The user/group share arm used to be hand-copied into packages/server-utils/src/auth/ability.ts, and the
 // copies drifted twice: a dotted cross-entry over-grant, and a missing Project resource. The BODY
 // is now one exported function both builders call, so it cannot drift and the behavioural tests
 // above cover the HTTP ability too. The resource LIST still lives with each caller - each builder
@@ -284,7 +284,7 @@ describe('db-core defineAbilitiesFor - FabFile export scoping', () => {
 describe('shared shareable arm', () => {
   const dbCoreSource = fs.readFileSync(path.resolve(__dirname, './ability.ts'), 'utf-8');
   const clientSource = fs.readFileSync(
-    path.resolve(__dirname, '../../../../apps/client/server/auth/ability.ts'),
+    path.resolve(__dirname, '../../../../packages/server-utils/src/auth/ability.ts'),
     'utf-8'
   );
 

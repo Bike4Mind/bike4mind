@@ -16,7 +16,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (h: unknown) => h }));
 vi.mock('@server/billing/meterPlatformCompletion', () => ({ assertRequestCanAfford: m.assertRequestCanAfford }));
-vi.mock('@server/utils/eventBus', () => ({ NotebookCurationEvents: { Start: { publish: m.publish } } }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
+  NotebookCurationEvents: { Start: { publish: m.publish } },
+}));
 vi.mock('@bike4mind/database', () => ({
   sessionRepository: { findById: async (id: string) => ({ id, userId: 'u1' }) },
 }));

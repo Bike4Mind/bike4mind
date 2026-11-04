@@ -1,7 +1,7 @@
 import { SupportAccess } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensureAdmin, BadRequestError } from '@server/utils/errors';
-import { customerSupportAccess } from '@server/auth/impersonation';
+import { customerSupportAccess } from '@bike4mind/server-utils/auth/impersonation';
 import { ApiKeyScope } from '@bike4mind/common';
 
 const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {

@@ -33,8 +33,8 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: () => unknown) => fn(),
 }));
 // parseAdminActionReason and isSameUserId stay real; the audit write needs a database, so it is stubbed.
-vi.mock('@server/utils/adminAudit', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
   recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
 }));
 

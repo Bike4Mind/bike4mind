@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
-import type { SignupTimeseries } from '@client/app/utils/signupSignals';
+import type { SignupTimeseries } from '@bike4mind/server-utils/app/utils/signupSignals';
 import type { IncidentRange, IncidentSignals, IncidentState } from './incidentTypes';
 
 const mocks = vi.hoisted(() => ({

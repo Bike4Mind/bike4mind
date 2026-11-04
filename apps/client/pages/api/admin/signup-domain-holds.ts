@@ -13,7 +13,7 @@ import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/erro
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { isEligibleForFreeCredits, releaseVerifiedPendingFreeCredits } from '@server/auth/emailVerifiedGrants';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const decisionSchema = z.object({
   domain: z.string().min(1).max(253),

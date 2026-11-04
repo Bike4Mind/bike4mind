@@ -183,7 +183,7 @@ vi.mock('@server/credits/paymentUnlockForfeit', () => ({
 // (server/billing/earlyFraudWarning.test.ts, linkedAccounts.test.ts); here only the wiring.
 const mockRespondToEarlyFraudWarning = vi.fn();
 const mockPropagateAccountRisk = vi.fn();
-vi.mock('@server/referrals/subscriptionReward', () => ({ reverseSubscriptionRewardForRefund: vi.fn() }));
+vi.mock('@bike4mind/server-utils/referrals/subscriptionReward', () => ({ reverseSubscriptionRewardForRefund: vi.fn() }));
 const mockReversePurchaseStanding = vi.fn();
 vi.mock('@server/billing/purchaseReversal', () => ({
   reversePurchaseStanding: (...args: unknown[]) => mockReversePurchaseStanding(...args),
@@ -219,7 +219,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
   isDevelopment: vi.fn().mockReturnValue(true),
 }));
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   StripeEvents: { InvoicePaymentSucceeded: { publish: vi.fn() } },
 }));
 
@@ -249,7 +249,7 @@ vi.mock('@bike4mind/common', async importOriginal => {
 
 // Imports after mocks
 import { CreditPurchaseEvents, CreditPurchaseStatus } from '@bike4mind/common';
-import { stableEventId } from '@server/analytics/signupEvents';
+import { stableEventId } from '@bike4mind/server-utils/analytics/signupEvents';
 
 // Load the module to trigger mock capture
 // This import triggers `baseApi().post(handler)` which populates capturedHandler

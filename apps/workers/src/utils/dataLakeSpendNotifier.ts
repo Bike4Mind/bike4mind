@@ -7,7 +7,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
-import mailer from '@server/utils/mailer';
+import mailer from '@bike4mind/server-utils/utils/mailer/index';
 
 /**
  * Assembles the real db/mailer ports for `enforceEmbeddingSpendGate`'s `notify` port.

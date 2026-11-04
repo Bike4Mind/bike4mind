@@ -1,7 +1,7 @@
 import { ADMIN_AUDIT_CREDIT_GRANT_ACTIONS } from '@bike4mind/common';
 import { adminAuditLogRepository } from '@bike4mind/database';
 import { adminAuditService } from '@bike4mind/services';
-import { loadCreditGrantPolicy, systemAuditActor, type AdminAuditWriter } from './adminAudit';
+import { loadCreditGrantPolicy, systemAuditActor, type AdminAuditWriter } from '@bike4mind/server-utils/utils/adminAudit';
 
 /**
  * The writer for a job acting on its own authority: a system actor named `name`, and `route` as the

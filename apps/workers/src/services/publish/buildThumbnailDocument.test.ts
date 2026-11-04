@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { BLESSED_SCRIPT_PATHS } from '@bike4mind/common';
 import { buildThumbnailDocument } from './buildThumbnailDocument';
-import { PUBLISH_HOST } from '@server/services/publish/validateBundle';
+import { PUBLISH_HOST } from '@bike4mind/server-utils/services/publish/validateBundle';
 
 const sha = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
 

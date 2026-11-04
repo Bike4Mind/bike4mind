@@ -2,11 +2,11 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sessionRepository } from '@bike4mind/database/auth';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { SpiderEvents } from '@server/utils/eventBus';
+import { SpiderEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { v4 as uuidv4 } from 'uuid';
 import { assertSessionOperationalCredits } from '@server/utils/sessionOperationalCreditPreflight';
 import { ApiKeyScope, HTTPError } from '@bike4mind/common';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 type SpiderOperation = 'messageCount' | 'curation' | 'summarize' | 'tags' | 'embeddings';
 

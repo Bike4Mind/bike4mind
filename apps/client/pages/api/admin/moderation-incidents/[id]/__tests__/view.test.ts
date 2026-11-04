@@ -22,7 +22,7 @@ vi.mock('@server/middlewares/adminApi', () => ({
   },
 }));
 vi.mock('@server/auth/stepUp', () => ({ requireStepUp: m.requireStepUp }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: m.record }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: m.record }));
 vi.mock('@server/moderation/incidentImageLink', () => ({ signIncidentImage: m.sign }));
 
 import handler from '../view';

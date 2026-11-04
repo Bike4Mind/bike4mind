@@ -5,7 +5,7 @@ import {
   EMBED_ORIGINS_MAX,
   type IEmbedBranding,
 } from '@bike4mind/common';
-import { PUBLISH_HOST } from './validateBundle';
+import { PUBLISH_HOST } from '@bike4mind/server-utils/services/publish/validateBundle';
 
 export type EmbedOriginsResult = { ok: true; value: string[] } | { ok: false; error: string; code: string };
 

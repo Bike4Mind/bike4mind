@@ -19,7 +19,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeAccessGrantRepository: h.dataLakeAccessGrants,
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: h.users }));
-vi.mock('./mailer', () => ({ default: { kind: 'mailer' } }));
+vi.mock('@bike4mind/server-utils/utils/mailer/index', () => ({ default: { kind: 'mailer' } }));
 
 import { reportAndNotifyKeptPersonalLakeShares } from './keptPersonalLakeSharesNotifier';
 

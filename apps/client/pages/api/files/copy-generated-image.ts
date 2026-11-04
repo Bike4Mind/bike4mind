@@ -24,7 +24,7 @@ import { respond } from '@server/utils/respond';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { userCanAccessGeneratedImage } from '@bike4mind/server-utils/utils/generatedImageAccess';
-import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
+import { FILES_WRITE_SCOPES } from '@bike4mind/server-utils/files/fileScopes';
 import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';
 import { z } from 'zod';
 import { requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';

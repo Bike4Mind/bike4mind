@@ -20,7 +20,7 @@ import { getTurnstileStepUpPolicy } from '@server/utils/auth/turnstile';
 import { wasTurnstileVerified } from '@server/auth/signupChallenge';
 import type { Request } from 'express';
 import { TURNSTILE_ACTION_OTC_SEND, emailDomainOf } from '@bike4mind/common';
-import { EmailEvents } from '@server/utils/eventBus';
+import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { evaluateSignupSignals } from '@server/utils/signupBotChecks';
 import { getLogoUrl } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { Config, isE2EEnabled } from '@bike4mind/server-utils/utils/config';

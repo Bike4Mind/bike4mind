@@ -55,7 +55,7 @@ vi.mock('@server/services/publish/parsePublishPath', () => ({
   parsePublishPath: (...a: unknown[]) =>
     mocks.parse(...a) ?? { kind: 'bundle', tier: 'user', scopeId: 'scope', slug: 'slug', assetPath: null },
 }));
-vi.mock('@server/services/publish/publishGateToken', () => ({
+vi.mock('@bike4mind/server-utils/services/publish/publishGateToken', () => ({
   setGateProofCookie: (...a: unknown[]) => mocks.setCookie(...a),
 }));
 

@@ -5,7 +5,7 @@ import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { readBulkSignupGrantAction } from '@server/credits/bulkSignupGrantAdminAction';
 import { signupGrantAuditTarget } from '@server/credits/signupGrantAdminAction';
 import { rerunDomainGrantAfterUnblock } from '@server/credits/rerunDomainGrantAfterUnblock';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 // Each re-run is a handful of reads and an idempotent grant, so a small fan-out keeps 100 ids from running serially.
 const RERUN_CONCURRENCY = 5;

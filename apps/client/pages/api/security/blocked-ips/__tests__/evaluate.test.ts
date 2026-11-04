@@ -43,7 +43,7 @@ vi.mock('@bike4mind/database', () => ({
     }
   },
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: audit.record }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: audit.record }));
 
 import '@pages/api/security/blocked-ips/evaluate';
 

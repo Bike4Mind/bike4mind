@@ -14,7 +14,7 @@ import {
 import { Logger } from '@bike4mind/observability';
 import { parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { adminApi } from '@server/middlewares/adminApi';
-import { isSameUserId, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { isSameUserId, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const OBJECT_ID_PATTERN = /^[a-f0-9]{24}$/;
 

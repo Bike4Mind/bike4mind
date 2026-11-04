@@ -24,7 +24,7 @@ vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
 }));
 
 import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
-import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
+import { SUBSCRIPTION_PLANS } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import { grantIndividualAdminSubscription } from './grantIndividualAdminSubscription';
 
 const plan = SUBSCRIPTION_PLANS[0];

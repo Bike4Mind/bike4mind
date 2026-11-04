@@ -37,7 +37,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: Handler) => fn }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 vi.mock('@server/utils/telemetryProjection', () => ({ TELEMETRY_SAFE_PROJECTION: 'promptMeta.contextTelemetry' }));
 vi.mock('@bike4mind/database', () => ({
   Quest: { findById: h.findById, updateOne: h.updateOne },
@@ -63,7 +63,7 @@ vi.mock('@bike4mind/server-utils/utils/telemetryAnalysis', () => ({
     sloContextUtilizationPercent: 1,
   },
 }));
-vi.mock('@server/utils/telemetryIssueCreator', () => ({
+vi.mock('@bike4mind/server-utils/utils/telemetryIssueCreator', () => ({
   createTelemetryIssue: h.createIssue,
   getFallbackPriority: () => 'p2',
   fetchExistingTelemetryIssues: vi.fn(),

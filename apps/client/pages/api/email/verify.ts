@@ -7,7 +7,7 @@ import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { emitEmailVerifiedFunnelEvents } from '@server/analytics/funnel';
 import { AuthEvents } from '@bike4mind/common';
-import { logAuditEvent, EmailAuditEvents, calculateTokenAge } from '@server/utils/auditLog';
+import { logAuditEvent, EmailAuditEvents, calculateTokenAge } from '@bike4mind/server-utils/utils/auditLog';
 import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
 import { z } from 'zod';
 

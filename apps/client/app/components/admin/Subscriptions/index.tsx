@@ -4,8 +4,8 @@ import DownloadIcon from '@mui/icons-material/Download';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import { toast } from 'sonner';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
-import { REVENUE_SPARKLINE_DAYS } from '@client/app/utils/adminRevenue';
-import type { AdminSubscriptionRow } from '@client/app/utils/adminSubscriptionsFilter';
+import { REVENUE_SPARKLINE_DAYS } from '@bike4mind/server-utils/app/utils/adminRevenue';
+import type { AdminSubscriptionRow } from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import { downloadData } from '@client/app/utils/download';
 import { AdminTab } from '../adminSidebarConfig';
 import {

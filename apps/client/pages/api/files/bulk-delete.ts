@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { bulkDeleteFilesForUser } from '@server/files/bulkDeleteFilesForUser';
 import { Request } from 'express';
 import { z } from 'zod';
-import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
+import { FILES_WRITE_SCOPES } from '@bike4mind/server-utils/files/fileScopes';
 const BulkDeleteFilesSchema = z.object({
   fileIds: z.array(z.string()).min(1, 'At least one file ID is required'),
 });

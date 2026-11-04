@@ -10,7 +10,7 @@ import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { getServerErrorField } from '@client/app/utils/error';
 import type { AdminUsersListRow } from '@client/app/utils/adminUsersFilter';
 import type { AdminUsersBulkActionType, AdminUsersBulkTarget } from '@client/app/utils/adminUsersBulk';
-import type { SignupTimeseriesRange } from '@client/app/utils/signupSignals';
+import type { SignupTimeseriesRange } from '@bike4mind/server-utils/app/utils/signupSignals';
 import {
   AdminPageHeader,
   DataTable,

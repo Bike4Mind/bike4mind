@@ -6,13 +6,13 @@ import {
   type RevenuePlanRow,
   type RevenueRange,
   type RevenueTrendPoint,
-} from '@client/app/utils/adminRevenue';
+} from '@bike4mind/server-utils/app/utils/adminRevenue';
 import {
   MRR_CURRENCY,
   UNKNOWN_PLAN_FILTER,
   type AdminSubscriptionRow,
   type AdminSubscriptionsMrrTotal,
-} from '@client/app/utils/adminSubscriptionsFilter';
+} from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import { AnalyticsTermHelp } from '../EventMetrics/components/AnalyticsTermHelp';
 import {
   AdminPageHeader,

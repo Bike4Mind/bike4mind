@@ -23,7 +23,7 @@ vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', () => ({
   buildEmailLogoImg: () => '',
 }));
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: vi.fn() }));
-vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: async () => ({}),
   getSettingsValue: (key: string) => key === 'EnableReferralToEmail',
@@ -35,7 +35,7 @@ vi.mock('@bike4mind/database', async () => {
 });
 
 import handler from '../refer';
-import { EmailEvents } from '@server/utils/eventBus';
+import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 let server: Awaited<ReturnType<typeof createMongoServer>>;

@@ -17,7 +17,7 @@ import {
   type PublishActionReceipt,
 } from '@server/services/publish';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { meterCompletionBackend, type CompletionMeter } from '@bike4mind/services';
 import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 

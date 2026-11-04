@@ -13,7 +13,7 @@ import {
 import { areCreditsEnforced, creditService, isOperationalBillingEnabled } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
 import { checkFreeTierDailySpendCap, isFreeTierDailyCapError } from '@server/billing/freeTierDailyCapGate';
-import { activePlanResolver } from '@server/entitlements/activeSubscriptions';
+import { activePlanResolver } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
 
 /**
  * What one queued operational call is priced at for gating purposes. Deliberately a nominal

@@ -3,7 +3,7 @@ import { adminSettingsRepository, FabFile } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { isDevelopment } from '@bike4mind/server-utils/utils/config';
 import { Logger } from '@bike4mind/observability';
-import type { ActiveSubscriptionsRequest } from '@server/entitlements/activeSubscriptions';
+import type { ActiveSubscriptionsRequest } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
 import { resolveUserRateTier, type RateTierUser } from '@server/utils/userRateTier';
 
 // ms. The presigned PUT lives 10 minutes; the rest is slack for a slow PUT or a late S3 event.

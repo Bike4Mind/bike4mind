@@ -1,6 +1,6 @@
 import { internalTeamMemberRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { definedKeys, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { definedKeys, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import {
   ApiKeyScope,

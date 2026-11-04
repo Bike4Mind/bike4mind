@@ -2,7 +2,7 @@ import { questRepository, sessionRepository, userRepository } from '@bike4mind/d
 import { IMessage } from '@bike4mind/common';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { withEventContext } from '@workers/utils/eventContext';
-import { SessionEvents } from '@server/utils/eventBus';
+import { SessionEvents } from '@bike4mind/server-utils/utils/eventBus';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
 import { payerCanFundSessionOperation } from '@workers/events/sessionOperationalCreditGate';

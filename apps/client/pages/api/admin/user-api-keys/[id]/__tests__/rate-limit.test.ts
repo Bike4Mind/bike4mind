@@ -55,7 +55,7 @@ const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe }));
 
 const recordAdminActionFromRequest = vi.hoisted(() => vi.fn().mockResolvedValue(null));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
 
 import '@pages/api/admin/user-api-keys/[id]/rate-limit';
 

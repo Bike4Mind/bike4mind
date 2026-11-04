@@ -36,7 +36,7 @@ vi.mock('@client/app/hooks/data/settings', () => ({
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useSubscribePlan: () => mocks.subscribe,
 }));
-vi.mock('@client/lib/userSubscriptions/constants', () => ({
+vi.mock('@bike4mind/server-utils/lib/userSubscriptions/constants', () => ({
   SUBSCRIPTION_PLANS_MAP: { price_known: { priceId: 'price_known' } },
 }));
 

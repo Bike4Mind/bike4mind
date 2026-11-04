@@ -18,7 +18,7 @@ vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: { create: () => ({ success: vi.fn(), failure: vi.fn() }) },
 }));
 vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({ decryptToken: () => 'xoxb-test' }));
-vi.mock('@server/utils/pendingActionExecutor', () => ({
+vi.mock('@bike4mind/server-utils/utils/pendingActionExecutor', () => ({
   executePendingAction: vi.fn(),
   cancelPendingActionOnQuest: vi.fn(),
   isPendingActionRequester: vi.fn(),
@@ -62,7 +62,7 @@ import {
   cancelPendingActionOnQuest,
   executePendingAction,
   isPendingActionRequester,
-} from '@server/utils/pendingActionExecutor';
+} from '@bike4mind/server-utils/utils/pendingActionExecutor';
 import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler';
 import { cleanupConfluencePageContent } from '@server/integrations/atlassian/confluenceAttachmentCleanup';

@@ -5,7 +5,7 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import { SubscriptionOwnerType, type ISubscription } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { detectSubscriptionChanges } from '@bike4mind/server-utils/lib/subscriptions/subscriptionChanges';
 import { planChangeDirection, planDetails, type PlanChangeDirection } from '@server/analytics/billingEventDetails';
-import { minorUnitsPerMajor } from '@server/integrations/stripe/currency';
+import { minorUnitsPerMajor } from '@bike4mind/server-utils/integrations/stripe/currency';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 

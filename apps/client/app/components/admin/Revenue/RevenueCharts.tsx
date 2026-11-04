@@ -14,8 +14,8 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import type { RevenueTrendPoint } from '@client/app/utils/adminRevenue';
-import { MRR_CURRENCY } from '@client/app/utils/adminSubscriptionsFilter';
+import type { RevenueTrendPoint } from '@bike4mind/server-utils/app/utils/adminRevenue';
+import { MRR_CURRENCY } from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import { formatMoney } from '../shared/formatMoney';
 import {
   ACCENT,

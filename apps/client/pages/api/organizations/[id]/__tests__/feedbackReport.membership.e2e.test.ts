@@ -56,7 +56,7 @@ vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   postFeedbackToSlack: vi.fn().mockResolvedValue({ outcome: 'skipped', reason: 'disabled' }),
 }));
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   EmailEvents: { Send: { publish: vi.fn().mockResolvedValue(undefined) } },
 }));
 

@@ -40,7 +40,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 const mockAudit = vi.hoisted(() => vi.fn().mockResolvedValue(null));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
 
 // User.find(...).sort().skip().limit().lean() - chainable query that resolves to the staged docs.
 let usersBatch: Array<{ _id: { toString: () => string }; createdAt: unknown }> = [];

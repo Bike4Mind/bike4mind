@@ -8,7 +8,7 @@ const h = vi.hoisted(() => ({
   revokeGitHubLakeConnection: vi.fn(),
 }));
 
-vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection', () => ({
   revokeGitHubLakeConnection: h.revokeGitHubLakeConnection,
 }));
 

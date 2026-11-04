@@ -1,5 +1,5 @@
-import type { RevenueTrendPoint } from '@client/app/utils/adminRevenue';
-import { MRR_CURRENCY } from '@client/app/utils/adminSubscriptionsFilter';
+import type { RevenueTrendPoint } from '@bike4mind/server-utils/app/utils/adminRevenue';
+import { MRR_CURRENCY } from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import { formatMoney } from '../shared/formatMoney';
 
 // Snapshot days are UTC calendar days, so they are shown in UTC whatever the browser's zone.

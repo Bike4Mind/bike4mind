@@ -1,7 +1,7 @@
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useGetUserSubscriptions, useGrantSubscription } from '@client/app/hooks/data/subscriptions';
-import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
+import { SUBSCRIPTION_PLANS } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import { useTeamCreditsPerSeat, useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
 import { Typography, Stack, FormControl, FormLabel, Select, Option, Input, IconButton, Box } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';

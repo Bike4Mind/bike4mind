@@ -8,7 +8,7 @@ import type {
   AdminSubscriptionRow,
   AdminSubscriptionsListResponse,
   AdminSubscriptionsSummary,
-} from '@client/app/utils/adminSubscriptionsFilter';
+} from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 vi.mock('@tanstack/react-router', async () => (await import('../__tests__/fakeAdminRouter')).fakeRouterModule);

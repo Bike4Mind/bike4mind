@@ -45,7 +45,7 @@ vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatu
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordReconcilerForcedTerminal: vi.fn().mockResolvedValue(undefined),
 }));
-vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/dataLakeBatchProgress', () => ({
   enqueueTaxonomyAnalysisIfWanted: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@bike4mind/database', async importOriginal => {

@@ -39,7 +39,7 @@ vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
 }));
 
 // Two plans: one gated behind an availability flag, one always-purchasable.
-vi.mock('@client/lib/userSubscriptions/constants', () => {
+vi.mock('@bike4mind/server-utils/lib/userSubscriptions/constants', () => {
   const plans = [
     {
       priceId: 'price_gated',

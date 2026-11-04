@@ -1,6 +1,6 @@
 import { Config } from '@bike4mind/server-utils/utils/config';
 import mongoose from 'mongoose';
-import { MailService, type EmailConfigStatus } from '@server/utils/mailer';
+import { MailService, type EmailConfigStatus } from '@bike4mind/server-utils/utils/mailer/index';
 import { getOktaConfigStatus } from '@server/auth/oktaOidcClient';
 import { validateEncryptionKey, validateJwtSecret } from '@server/security/tier1SecretValidators';
 

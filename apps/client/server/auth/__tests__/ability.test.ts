@@ -36,7 +36,7 @@ vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   Subscription: class Subscription {},
 }));
 
-import defineAbilitiesFor from '../ability';
+import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
 import { Prompt, FabFile, FeedbackModel, Organization, ModalModel, User, AdminSettings } from '@bike4mind/database';
 import { accessibleBy } from '@casl/mongoose';
 

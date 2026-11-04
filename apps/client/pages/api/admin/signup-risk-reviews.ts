@@ -33,7 +33,7 @@ import {
   parseAdminActionReason,
   recordAdminActionFromRequest,
   userAuditTarget,
-} from '@server/utils/adminAudit';
+} from '@bike4mind/server-utils/utils/adminAudit';
 import { respond } from '@server/utils/respond';
 
 const ONE_MINUTE_MS = 60_000;

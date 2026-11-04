@@ -38,8 +38,8 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { update: h.userWrite, updateOne: h.userWrite, setRiskReviewState: h.userWrite },
   userApiKeyRepository: { update: h.userWrite },
 }));
-vi.mock('@server/utils/adminAudit', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
   recordAdminActionFromRequest: h.record,
 }));
 

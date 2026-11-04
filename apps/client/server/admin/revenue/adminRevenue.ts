@@ -16,8 +16,8 @@ import {
   type RevenueRange,
   type RevenueTrendPlan,
   type RevenueTrendPoint,
-} from '@client/app/utils/adminRevenue';
-import { MRR_CURRENCY } from '@client/app/utils/adminSubscriptionsFilter';
+} from '@bike4mind/server-utils/app/utils/adminRevenue';
+import { MRR_CURRENCY } from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { planOf, subscriptionPlanCatalog, type PlanCatalog } from '../subscriptionsList/adminSubscriptionsQuery';
 import { toAdminSubscriptionRows, type SubscriptionDoc } from '../subscriptionsList/listAdminSubscriptions';
@@ -27,8 +27,8 @@ import {
   mrrTotal,
   subscriptionMrr,
   type MrrGroup,
-} from '../subscriptionsList/subscriptionMrr';
-import { cancelCondition, viewConditions } from '../subscriptionsList/subscriptionViewConditions';
+} from '@bike4mind/server-utils/admin/subscriptionsList/subscriptionMrr';
+import { cancelCondition, viewConditions } from '@bike4mind/server-utils/admin/subscriptionsList/subscriptionViewConditions';
 import { computeRevenueTotals } from './revenueSnapshot';
 
 // ms
