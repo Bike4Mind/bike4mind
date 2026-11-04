@@ -2,6 +2,7 @@ import { signupProtection } from '@server/auth/signupProtection';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
 import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
+import { grantPackageRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 
 const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
@@ -12,6 +13,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   creditLotRepository: {},
   creditTransactionRepository: {},
+  grantPackageRepository: { releaseRedemption: vi.fn() },
   userRepository: { clearPendingFreeCreditGrant: (...a: unknown[]) => mockClearPending(...a) },
 }));
 
@@ -170,6 +172,8 @@ describe('emailVerifiedGrants', () => {
         expect.objectContaining({ reason: 'verify test' })
       );
       expect(mockReleasePending.mock.calls[0][1].db.signupProtection).toBe(signupProtection);
+      // Without it a lost inbox claim on a package grant would keep the package slot.
+      expect(mockReleasePending.mock.calls[0][1].db.grantPackages).toBe(grantPackageRepository);
     });
 
     it('sums the credits and prefers the domain grant balance', async () => {

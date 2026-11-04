@@ -73,6 +73,7 @@ export enum AuthStrategy {
   Google = 'google',
   Facebook = 'facebook',
   Github = 'github',
+  Apple = 'apple',
   Okta = 'okta',
   SAML = 'saml',
 }
@@ -217,6 +218,7 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   lastCreditGrantAt: true,
   acquisition: true,
   isSynthetic: true,
+  isInternal: true,
   firstValueAt: true,
   currentCredits: true,
   lastCreditsPurchasedAt: true,

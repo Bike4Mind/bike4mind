@@ -3,6 +3,7 @@ import {
   parseInternalStaffDomains,
   internalStaffEmailRegex,
   parseInternalOrgDisplayNames,
+  isInternalIdentity,
 } from '../utils/internalStaffDomains';
 
 describe('parseInternalStaffDomains', () => {
@@ -58,6 +59,32 @@ describe('internalStaffEmailRegex', () => {
 
   it('returns null when no domains are configured (caller skips matching)', () => {
     expect(internalStaffEmailRegex([])).toBeNull();
+  });
+});
+
+describe('isInternalIdentity', () => {
+  const domains = ['staff.example', 'team.example'];
+
+  it('marks an email on any staff domain, whatever its case', () => {
+    expect(isInternalIdentity({ email: 'a@staff.example' }, domains)).toBe(true);
+    expect(isInternalIdentity({ email: 'B@Team.Example' }, domains)).toBe(true);
+  });
+
+  it('matches the whole domain only', () => {
+    expect(isInternalIdentity({ email: 'a@notstaff.example' }, domains)).toBe(false);
+    expect(isInternalIdentity({ email: 'a@sub.staff.example' }, domains)).toBe(false);
+    expect(isInternalIdentity({ email: 'a@staff.example.evil' }, domains)).toBe(false);
+  });
+
+  it('marks an admin on any domain, and with no domains configured', () => {
+    expect(isInternalIdentity({ email: 'a@customer.example', isAdmin: true }, domains)).toBe(true);
+    expect(isInternalIdentity({ isAdmin: true }, [])).toBe(true);
+  });
+
+  it('marks no one else: a customer, a missing email, an empty domain list', () => {
+    expect(isInternalIdentity({ email: 'a@customer.example', isAdmin: false }, domains)).toBe(false);
+    expect(isInternalIdentity({ email: null }, domains)).toBe(false);
+    expect(isInternalIdentity({ email: 'a@staff.example' }, [])).toBe(false);
   });
 });
 

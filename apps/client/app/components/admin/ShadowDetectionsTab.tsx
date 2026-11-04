@@ -43,11 +43,13 @@ import {
   type CampaignGroupRow,
   type ShadowDetectionRow,
 } from '@client/app/hooks/data/shadowDetections';
+import { ShadowDetectionAssessmentPanel } from './ShadowDetectionAssessmentPanel';
 import { getErrorMessage } from '@client/app/utils/error';
 
 export const DETECTOR_LABELS: Record<ShadowDetector, string> = {
   signupNetworkBurst: 'Signup network burst',
   accountCampaign: 'Account campaign',
+  youngAccountSpend: 'Young-account spend',
 };
 
 const RELATIONSHIP_LABELS: Record<AccountCampaignRelationship, string> = {
@@ -453,6 +455,7 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({ row, now, onClose, onRowC
         </RadioGroup>
       </FormControl>
       <SignalList row={row} />
+      <ShadowDetectionAssessmentPanel detectionId={row.id} enabled />
       <VerdictHistory row={row} now={now} />
     </ActionDialog>
   );

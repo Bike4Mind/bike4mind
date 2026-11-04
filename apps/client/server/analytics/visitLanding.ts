@@ -6,7 +6,8 @@
  * The browser therefore sends `document.referrer` and the landing path in the beacon's body,
  * and only with consent (see visitBeacon.ts). Anyone can post to the beacon, so both values are
  * checked here and reduced to the least that answers the question: the referrer to its origin,
- * the landing path to its path, with anything shaped like a secret replaced.
+ * the landing path to its path, with anything shaped like a secret replaced. The page beacon
+ * (pages/api/analytics/page.ts) cleans each later page of a visit with the same check.
  */
 
 /** The longest landing path kept, in characters. visitBeacon.ts cuts to the same cap before sending. */
@@ -48,10 +49,10 @@ export function referrerOrigin(raw: unknown): string | undefined {
 }
 
 /**
- * A landing path fit to keep: the path alone, cut at any `?` or `#`, with each secret-shaped
- * run replaced and at most {@link MAX_LANDING_PATH} characters. Undefined when the value is not
- * a path a browser could send, or when it holds an address (`@`, or `%40` encoded), which is
- * never sent at all.
+ * A landing path, or a later page's path, fit to keep: the path alone, cut at any `?` or `#`,
+ * with each secret-shaped run replaced and at most {@link MAX_LANDING_PATH} characters.
+ * Undefined when the value is not a path a browser could send, or when it holds an address
+ * (`@`, or `%40` encoded), which is never sent at all.
  */
 export function cleanLandingPath(raw: unknown): string | undefined {
   if (typeof raw !== 'string') return undefined;

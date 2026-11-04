@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { MODEL_LOGS_MAX_PAGE } from '@client/shared/modelLogs';
-import { DEFAULT_PRESET_DAYS, getActivePreset } from './Analytics/dateRange';
+import { DEFAULT_PRESET_DAYS, getActivePreset } from './EventMetrics/UserActivity/dateRange';
 import {
   MODEL_LOGS_SEARCH_PARSERS,
   defaultModelLogsView,

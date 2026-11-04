@@ -109,6 +109,11 @@ describe('parseRule', () => {
       'WebSearch(x)',
       'not a rule!',
       'mcp__x(y)',
+      'constructor',
+      'toString(x)',
+      '__proto__',
+      'valueOf',
+      'hasOwnProperty(x)',
     ]) {
       const result = parseRule(bad);
       expect(result.ok, bad).toBe(false);
@@ -253,6 +258,17 @@ describe('PermissionRuleSet', () => {
     expect(decide(set({ allow: ['Bash(ls:*)'] }), outside)).toBeNull();
     expect(decide(set({ allow: ['Bash(ls:*)', 'Read(//srv/**)'] }), outside)).toBe('allow');
     expect(decide(set({ allow: ['Bash(ls:*)', 'Edit(//srv/data)'] }), outside)).toBe('allow');
+  });
+
+  it('leaves a call that reaches a distro no folder is in to ask, whatever allow rule names the command', () => {
+    const reach = ['\\\\wsl.localhost\\Debian\\root\\.ssh\\id_rsa'];
+    const base = shell('cat x', ['cat x']);
+    const subject: PermissionSubject = { ...base, shell: { ...base.shell!, ungranted: reach } };
+    expect(decide(set({ allow: ['Bash(cat:*)'] }), base)).toBe('allow');
+    expect(decide(set({ allow: ['Bash(cat:*)'] }), subject)).toBeNull();
+    expect(decide(set({ allow: ['Bash'] }), subject)).toBeNull();
+    expect(decide(set({ allow: ['Bash(cat x)'] }), subject)).toBeNull();
+    expect(decide(set({ allow: ['Bash(cat:*)'], ask: ['Bash(cat:*)'] }), subject)).toBe('ask');
   });
 
   it('never lets an allow rule reach a permission file', () => {

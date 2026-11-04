@@ -20,6 +20,8 @@ import CloseFullscreenIcon from '@mui/icons-material/CloseFullscreen';
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 import HourglassBottomIcon from '@mui/icons-material/HourglassBottom';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import { useQueryClient } from '@tanstack/react-query';
+import { GRANT_PACKAGES_QUERY_KEY } from '@client/app/utils/grantPackageAPICalls';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { RegInviteStatusType } from '@bike4mind/common';
 import {
@@ -167,11 +169,13 @@ const RegistrationInvitesTab: React.FC = () => {
     setOpenDeleteWarning,
   } = useRegistrationInvitesStore();
 
+  const queryClient = useQueryClient();
   const query = useGetRegInvites();
   const regInviteCreate = useCreateRegInvites({
     onSuccess: () => {
       setOpenCreate(false);
       query.refetch();
+      void queryClient.invalidateQueries({ queryKey: [GRANT_PACKAGES_QUERY_KEY] });
     },
   });
   const regInviteUpdate = useUpdateRegInvites({

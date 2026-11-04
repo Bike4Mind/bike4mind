@@ -12,6 +12,7 @@ import { adminSettingsRepository } from '@bike4mind/database';
 import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 import { encryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 import { buildMcpToolCacheUpdate } from '@bike4mind/services/llm';
+import { oauthProviderErrorCode } from '@server/utils/auth/oauthProviderErrorCode';
 
 function getJwtSecret(): string {
   // Never fall back to a hardcoded secret. Fail closed.
@@ -46,16 +47,26 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   );
 
   try {
-    const { code, state } = req.query;
+    const { code, state, error: providerError } = req.query;
+
+    // warn, not error: a provider error (the user declined consent) or a code-less hit on this public
+    // URL is an expected outcome, and error-level lines raise production alerts.
+    if (providerError) {
+      const providerErrorCode = oauthProviderErrorCode(providerError);
+      req.logger.warn('GitHub authorization not completed', { error: providerErrorCode });
+      auditLogger.failure('oauth_error');
+      const uiError = providerErrorCode === 'access_denied' ? 'access_denied' : 'callback_failed';
+      return res.redirect(`/profile?tab=integrations&github_oauth=error&error=${uiError}#github-integration`);
+    }
 
     if (!code || typeof code !== 'string') {
-      req.logger.error('Missing or invalid code parameter');
+      req.logger.warn('Missing or invalid code parameter');
       auditLogger.failure('missing_code');
       return res.redirect('/profile?tab=integrations&github_oauth=error&error=missing_code#github-integration');
     }
 
     if (!state || typeof state !== 'string') {
-      req.logger.error('Missing or invalid state parameter');
+      req.logger.warn('Missing or invalid state parameter');
       auditLogger.failure('missing_state');
       return res.redirect('/profile?tab=integrations&github_oauth=error&error=missing_state#github-integration');
     }

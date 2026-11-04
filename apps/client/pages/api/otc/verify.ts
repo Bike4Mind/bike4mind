@@ -17,6 +17,7 @@ import {
   subscriberRepository,
   creditTransactionRepository,
   creditLotRepository,
+  grantPackageRepository,
   pendingOtcTokenRepository,
   authSessionRepository,
   oauthClientRepository,
@@ -34,7 +35,7 @@ import {
   releaseBootstrapAdminClaim,
   resolveBootstrapAdmin,
 } from '@server/utils/auth/bootstrapAdmin';
-import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
+import { applyEmailVerifiedGrants, releaseVerifiedPendingFreeCredits } from '@server/auth/emailVerifiedGrants';
 import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
@@ -491,8 +492,10 @@ const handler = baseApi({ auth: false })
               creditTransactions: creditTransactionRepository,
               oauthClients: oauthClientRepository,
               creditLots: creditLotRepository,
+              grantPackages: grantPackageRepository,
             },
             logger: req.logger,
+            deferFreeCreditRelease: Boolean(inviteCode),
             skipInviteCheck: bootstrapClaimId !== null || partnerDomainAllowed,
             signupMeta: {
               ...signupNetwork,
@@ -548,6 +551,21 @@ const handler = baseApi({ auth: false })
       // login branch and self-heals. Log the real cause; surface only a generic message.
       req.logger.error('OTC inline registration failed', err);
       throw new InternalServerError('Registration failed. Please try again.', { pendingToken: reissuedToken });
+    }
+
+    // With an invite code registerViaOTC ran inside a transaction, so it left the credits pending: the
+    // staged grant's own transaction cannot see an account that is not committed yet. Release now.
+    if (inviteCode) {
+      const release = await releaseVerifiedPendingFreeCredits(
+        { id: newUser.id, tags: newUser.tags, pendingCreditGrant: newUser.pendingCreditGrant },
+        'OTC registration (email verified)',
+        req.logger,
+        readNetworkMeta(req)
+      );
+      if (release.tags !== null || release.creditsGranted > 0) {
+        const refreshed = await userRepository.findById(newUser.id);
+        if (refreshed) newUser = refreshed;
+      }
     }
 
     const isBootstrapUser = bootstrapClaimId !== null;
@@ -645,6 +663,7 @@ const handler = baseApi({ auth: false })
         userId: newUser.id,
         touches: readConsentedAcquisitionTouches(req),
         method: 'otc',
+        account: signupFunnel,
       });
     }
     const funnelUser = { id: newUser.id, ...signupFunnel };

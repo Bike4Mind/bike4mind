@@ -94,6 +94,10 @@ export type BulkAbuseUserResult = {
   steps: Record<BulkAbuseAction, BulkAbuseStepOutcome>;
   revokedApiKeys: number;
   clawedBackCredits: number;
+  /** Stripe subscriptions canceled after the ban committed; Stripe cannot reinstate them. */
+  canceledSubscriptions: string[];
+  /** Set when Stripe would not cancel one; the ban itself still stands. */
+  subscriptionCancelError?: string;
   error?: string;
 };
 

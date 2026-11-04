@@ -25,6 +25,7 @@ import {
 } from '@shared/models';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
+import { installedCache } from './installedCache';
 import { FOCUS_RELOAD_MIN_MS } from '../chat/useChat';
 import type { ModelsInUse } from './InstalledTab';
 import { ModelsScreen } from './ModelsScreen';
@@ -341,6 +342,7 @@ beforeEach(() => {
   };
   for (const fn of Object.values(calls)) fn.mockReset();
   window.localStorage.clear();
+  installedCache.clear();
   calls.getHfToken.mockImplementation(async () => bridge.token);
   calls.pull.mockResolvedValue({ ok: true, ref: `hf.co/${REPO}:Q4_K_M` });
   calls.resumePull.mockResolvedValue({ ok: true, ref: `hf.co/${REPO}:Q4_K_M` });
@@ -1984,6 +1986,253 @@ describe('ModelsScreen servers', () => {
     expect(q('models-runtime-status')?.dataset.state).toBe('running');
   });
 
+  describe('last known list', () => {
+    const llama = { ...qwen, name: 'llama3.2:3b' };
+    const rowNames = () => all('models-installed-row').map(row => row.textContent ?? '');
+
+    async function visitGpuThenLeave() {
+      await mount();
+      await pickServer('gpu');
+      expect(all('models-installed-row')).toHaveLength(1);
+      await pickServer('local');
+    }
+
+    it('shows the last list at once while it refreshes, then replaces it', async () => {
+      await visitGpuThenLeave();
+      bridge.remote.gpu.installed = { ok: true, models: [llama, qwen] };
+      let release = () => {};
+      bridge.installedGate = new Promise(resolve => (release = resolve));
+      await click(q('models-server-select'));
+      act(() => q('models-server-option-gpu')?.click());
+
+      expect(rowNames()).toHaveLength(1);
+      expect(rowNames()[0]).toContain('qwen2.5:0.5b');
+      expect(q('models-installed-tab')?.textContent).toBe('Installed (1)');
+      expect(q('models-installed-refreshing')).not.toBeNull();
+      const blocked = q('models-installed-remove-btn');
+      expect(blocked?.getAttribute('aria-disabled')).toBe('true');
+      expect(blocked?.hasAttribute('disabled')).toBe(false);
+      act(() => blocked?.click());
+      expect(q('models-remove-dialog')).toBeNull();
+      const described = blocked?.getAttribute('aria-describedby');
+      expect(described && document.getElementById(described)?.textContent).toBe('Available once the list refreshes');
+      const reason = described ? document.getElementById(described) : null;
+      expect(reason && getComputedStyle(reason).width).toBe('1px');
+
+      await act(async () => release());
+      await flush();
+      expect(rowNames()).toHaveLength(2);
+      expect(q('models-installed-tab')?.textContent).toBe('Installed (2)');
+      expect(q('models-installed-refreshing')).toBeNull();
+      expect(q('models-installed-remove-btn')?.hasAttribute('aria-disabled')).toBe(false);
+    });
+
+    it('drops a model removed through the app from the last list', async () => {
+      bridge.remote.gpu.installed = { ok: true, models: [llama, qwen] };
+      await mount();
+      await pickServer('gpu');
+      expect(rowNames()).toHaveLength(2);
+      const row = all('models-installed-row').find(candidate => candidate.dataset.name === 'qwen2.5:0.5b');
+      await click(row?.querySelector<HTMLElement>('[data-testid="models-installed-remove-btn"]') ?? null);
+      await click(q('models-remove-dialog-confirm-btn'));
+      expect(calls.remove).toHaveBeenCalledWith('qwen2.5:0.5b', 'gpu');
+      await pickServer('local');
+
+      let release = () => {};
+      bridge.installedGate = new Promise(resolve => (release = resolve));
+      await click(q('models-server-select'));
+      act(() => q('models-server-option-gpu')?.click());
+      expect(rowNames()).toHaveLength(1);
+      expect(rowNames()[0]).toContain('llama3.2:3b');
+      await act(async () => release());
+    });
+
+    it('does not cache a removed model again from a listing that started before the removal', async () => {
+      bridge.remote.gpu.installed = { ok: true, models: [llama, qwen] };
+      await mount();
+      await pickServer('gpu');
+      let releaseListing = () => {};
+      bridge.installedGate = new Promise(resolve => (releaseListing = resolve));
+      await act(async () => pushInstalled('gpu'));
+      const row = all('models-installed-row').find(candidate => candidate.dataset.name === 'qwen2.5:0.5b');
+      await click(row?.querySelector<HTMLElement>('[data-testid="models-installed-remove-btn"]') ?? null);
+      await click(q('models-remove-dialog-confirm-btn'));
+      expect(calls.remove).toHaveBeenCalledWith('qwen2.5:0.5b', 'gpu');
+      await act(async () => releaseListing());
+      await flush();
+      await pickServer('local');
+
+      let release = () => {};
+      bridge.installedGate = new Promise(resolve => (release = resolve));
+      await click(q('models-server-select'));
+      act(() => q('models-server-option-gpu')?.click());
+      expect(rowNames()).toHaveLength(1);
+      expect(rowNames()[0]).toContain('llama3.2:3b');
+      await act(async () => release());
+    });
+
+    it('does not cache a listing the server answered between the remove click and the delete', async () => {
+      bridge.remote.gpu.installed = { ok: true, models: [llama, qwen] };
+      await mount();
+      await pickServer('gpu');
+      let releaseListing = () => {};
+      calls.remove.mockImplementation(async () => {
+        bridge.installedGate = new Promise(resolve => (releaseListing = resolve));
+        pushInstalled('gpu');
+        bridge.remote.gpu.installed = { ok: true, models: [llama] };
+        return { ok: true };
+      });
+      const row = all('models-installed-row').find(candidate => candidate.dataset.name === 'qwen2.5:0.5b');
+      await click(row?.querySelector<HTMLElement>('[data-testid="models-installed-remove-btn"]') ?? null);
+      await click(q('models-remove-dialog-confirm-btn'));
+      expect(calls.remove).toHaveBeenCalledWith('qwen2.5:0.5b', 'gpu');
+      await act(async () => releaseListing());
+      await flush();
+      await pickServer('local');
+
+      let release = () => {};
+      bridge.installedGate = new Promise(resolve => (release = resolve));
+      await click(q('models-server-select'));
+      act(() => q('models-server-option-gpu')?.click());
+      expect(rowNames()).toHaveLength(1);
+      expect(rowNames()[0]).toContain('llama3.2:3b');
+      await act(async () => release());
+    });
+
+    it('does not cache a check and listing that started before a removal', async () => {
+      bridge.remote.gpu.installed = { ok: true, models: [llama, qwen] };
+      await mount();
+      await pickServer('gpu');
+      const listings = calls.listInstalled.mock.calls.length;
+      let releaseListing = () => {};
+      bridge.installedGate = new Promise(resolve => (releaseListing = resolve));
+      act(() =>
+        pushPulls([
+          {
+            key: `gpu/${REPO}#q`,
+            serverId: 'gpu',
+            serverName: 'gpu box',
+            repo: REPO,
+            buildId: 'q',
+            label: 'Q4_K_M',
+            ref: null,
+            phase: 'failed',
+            completedBytes: 0,
+            totalBytes: null,
+            expectedBytes: 1,
+            error: { kind: 'connection-lost', message: 'Lost the connection to gpu box.' },
+          },
+        ])
+      );
+      await flush();
+      expect(calls.listInstalled).toHaveBeenCalledTimes(listings + 1);
+      const row = all('models-installed-row').find(candidate => candidate.dataset.name === 'qwen2.5:0.5b');
+      await click(row?.querySelector<HTMLElement>('[data-testid="models-installed-remove-btn"]') ?? null);
+      await click(q('models-remove-dialog-confirm-btn'));
+      expect(calls.remove).toHaveBeenCalledWith('qwen2.5:0.5b', 'gpu');
+      await act(async () => releaseListing());
+      await flush();
+      await pickServer('local');
+
+      let release = () => {};
+      bridge.installedGate = new Promise(resolve => (release = resolve));
+      await click(q('models-server-select'));
+      act(() => q('models-server-option-gpu')?.click());
+      expect(rowNames()).toHaveLength(1);
+      expect(rowNames()[0]).toContain('llama3.2:3b');
+      await act(async () => release());
+    });
+
+    it('keeps the last list with the reason when the server is down, and checks again on request', async () => {
+      await visitGpuThenLeave();
+      bridge.remote.gpu.status = remoteStatus(GPU_BOX, {
+        reachable: false,
+        version: null,
+        error: 'Could not reach gpu box: connection refused',
+      });
+      await pickServer('gpu');
+
+      expect(q('models-installed-runtime-down')).toBeNull();
+      expect(rowNames()).toHaveLength(1);
+      expect(q('models-installed-stale-reason')?.textContent).toBe('Could not reach gpu box: connection refused');
+      expect(q('models-installed-stale')?.textContent).toContain('Showing the list from');
+
+      const checks = calls.getStatus.mock.calls.length;
+      await click(q('models-installed-stale-retry-btn'));
+      expect(calls.getStatus).toHaveBeenCalledTimes(checks + 1);
+      expect(calls.getStatus).toHaveBeenLastCalledWith('gpu');
+    });
+
+    it('keeps the last list with the reason when listing fails', async () => {
+      await visitGpuThenLeave();
+      bridge.remote.gpu.installed = { ok: false, error: { kind: 'failed', message: 'Listing timed out' } };
+      await pickServer('gpu');
+
+      expect(q('models-installed-error')).toBeNull();
+      expect(rowNames()).toHaveLength(1);
+      expect(q('models-installed-stale-reason')?.textContent).toBe('Listing timed out');
+    });
+
+    it('caches no listing that lands after the screen moved to another server', async () => {
+      await mount();
+      let release = () => {};
+      bridge.installedGate = new Promise(resolve => (release = resolve));
+      await pickServer('gpu');
+      expect(rowNames()).toHaveLength(0);
+      await pickServer('local');
+      await act(async () => release());
+      await flush();
+
+      bridge.installedGate = new Promise(() => {});
+      await click(q('models-server-select'));
+      act(() => q('models-server-option-gpu')?.click());
+      await flush();
+      expect(rowNames()).toHaveLength(0);
+      expect(q('models-installed-refreshing')).toBeNull();
+    });
+
+    async function moveGpu(address: string) {
+      bridge.servers = [THIS_COMPUTER, { ...GPU_BOX, address }, SHARED_BOX];
+      act(() => pushServers(bridge.servers));
+      await flush();
+    }
+
+    it('forgets the list when the server is saved at another address', async () => {
+      await visitGpuThenLeave();
+      await moveGpu('http://192.168.1.50:11434');
+      bridge.installedGate = new Promise(() => {});
+      await click(q('models-server-select'));
+      act(() => q('models-server-option-gpu')?.click());
+      await flush();
+
+      expect(rowNames()).toHaveLength(0);
+      expect(q('models-installed-refreshing')).toBeNull();
+    });
+
+    it('does not bring the list back when the server returns to its old address', async () => {
+      await visitGpuThenLeave();
+      await moveGpu('http://192.168.1.50:11434');
+      await moveGpu(GPU_BOX.address);
+      bridge.installedGate = new Promise(() => {});
+      await click(q('models-server-select'));
+      act(() => q('models-server-option-gpu')?.click());
+      await flush();
+
+      expect(rowNames()).toHaveLength(0);
+    });
+
+    it('lists the shown server again when it is saved at another address', async () => {
+      await mount();
+      await pickServer('gpu');
+      const checks = calls.getStatus.mock.calls.length;
+      await moveGpu('http://192.168.1.50:11434');
+
+      expect(calls.getStatus).toHaveBeenCalledTimes(checks + 1);
+      expect(calls.getStatus).toHaveBeenLastCalledWith('gpu');
+      expect(rowNames()).toHaveLength(1);
+    });
+  });
+
   it('shows a pull to a server as paused with Resume, and asks to keep the app open while it runs', async () => {
     await mount();
     const remotePull: ModelPull = {
@@ -2460,7 +2709,9 @@ describe('ModelsScreen catalog refresh', () => {
     });
 
     it('does not reload for a missing embeddings-only model', async () => {
-      expect(await reloadsFor([{ ...installedModel('embed'), capabilities: { ...noFlags, embeddings: true } }])).toBe(0);
+      expect(await reloadsFor([{ ...installedModel('embed'), capabilities: { ...noFlags, embeddings: true } }])).toBe(
+        0
+      );
     });
   });
 

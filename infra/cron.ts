@@ -29,6 +29,7 @@ import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
 import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
 import './businessMetricAlerts';
+import './imageModerationReviewSweep';
 
 const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
   schedule: 'rate(5 minutes)',
@@ -110,6 +111,26 @@ const signupBaselineReport = runsScheduledJobs
         },
         logging: {
           retention: '1 week',
+        },
+      },
+    })
+  : undefined;
+
+// Auto-confirms Signup Domain Holds that need no judgment (it never releases one). A failed hold
+// throws so signupDomainHoldTriageLambdaErrors in alarms.ts sees it; the next run retries.
+const signupDomainHoldTriageCron = runsScheduledJobs
+  ? new sst.aws.Cron('signupDomainHoldTriage', {
+      schedule: 'rate(10 minutes)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/signupDomainHoldTriage.handler',
+        runtime: 'nodejs24.x',
+        timeout: '2 minutes',
+        memory: '512 MB',
+        retries: 0,
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
         },
       },
     })
@@ -299,6 +320,27 @@ const usagePatternSignals = runsScheduledJobs
       function: {
         vpc: lambdaVpc,
         handler: 'apps/workers/src/cron/usagePatternSignals.handler',
+        runtime: 'nodejs24.x',
+        timeout: '10 minutes',
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+        logging: {
+          retention: '1 week',
+        },
+      },
+    })
+  : undefined;
+
+// Advisory abuse assessments of unreviewed shadow detections; a no-op until an operator enables
+// abuseAssessmentEnabled and the sweep in abuseAssessmentConfig.
+const abuseAssessmentSweep = runsScheduledJobs
+  ? new sst.aws.Cron('abuseAssessmentSweep', {
+      schedule: 'rate(1 hour)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/abuseAssessmentSweep.handler',
         runtime: 'nodejs24.x',
         timeout: '10 minutes',
         link: [...allSecrets],
@@ -1463,6 +1505,7 @@ export {
   oauthAbuseAutoBlockCron,
   signupGrantHeldRelease,
   disposableDomainRefreshCron,
+  signupDomainHoldTriageCron,
   dataLakeVectorIndexKeepWarmCron,
   modelDiscoveryCronEnabled,
   dailyUserActivityReport,
@@ -1474,6 +1517,7 @@ export {
   scheduleTaskCron,
   apiKeyBaselineCalculation,
   usagePatternSignals,
+  abuseAssessmentSweep,
   agentProactiveMessageCron,
   emailCampaignSchedulerCron,
   liveopsTriageDispatcherCron,

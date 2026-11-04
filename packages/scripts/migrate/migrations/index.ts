@@ -192,6 +192,8 @@ import ReplaceCreditTransactionOwnerIndex from './20260921235957_replace-credit-
 import EnsureFabFileOwnedKeysetIndex from './20260921235994_ensure-fabfile-owned-keyset-index';
 import EnsureFabFileFilePathIndex from './20260921235981_ensure-fabfile-filepath-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import EncryptSensitiveAdminSettings from './20260921235955_encrypt-sensitive-admin-settings';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import EnsureFabFileDerivedFromIndex from './20260921235976_ensure-fabfile-derived-from-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import UnsetStoredDefaultForcedRetrievalFloor from './20260921235999_unset-stored-default-forced-retrieval-floor';
@@ -267,6 +269,21 @@ import EnsureReferralSubscriptionRewardIndexes from './20260921237000_ensure-ref
 import EnsureRevenueSnapshotIndex from './20260921237100_ensure-revenue-snapshot-index';
 import EnsureSpendRollupIndexes from './20260921237200_ensure-spend-rollup-indexes';
 import QueueHeldSignupGrantsForRiskReview from './20260921237300_queue-held-signup-grants-for-risk-review';
+import SeedSignupGrantSchedule from './20260921237400_seed-signup-grant-schedule';
+import SeedSignupGrantPools from './20260921237500_seed-signup-grant-pools';
+import EnsureHeldCreditRewardIndexes from './20260921237600_ensure-heldcreditreward-indexes';
+import BackfillUserLaneFlags from './20260921238100_backfill-user-lane-flags';
+import EnsureAnalyticsHopIndexes from './20260921238200_ensure-analytics-hop-indexes';
+import EnsureSpendAlertIndexes from './20260921238300_ensure-spend-alert-indexes';
+// Renumbered from 20260921237500 (then 20260921238300) to 20260921238400 to resolve id collisions with
+// SeedSignupGrantPools and EnsureSpendAlertIndexes above, which merged into main first. Rerunning under
+// the new id is safe: invites that already have a package are skipped and packages are upserted by name.
+// Deploy note: an environment that ran this migration under an old id has that id marked done and will
+// skip the migration that now owns it. Delete that environment's stale `20260921237500` or
+// `20260921238300` row from the migrations collection.
+import GrantPackagesFromInvites from './20260921238400_grant-packages-from-invites';
+import EnsureGrantPackageIndexes from './20260921238500_ensure-grant-package-indexes';
+import EnsureReferralInviterIndexes from './20260921239500_ensure-referral-inviter-indexes';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -413,6 +430,7 @@ const coreMigrations: MigrationFile[] = [
   ReplaceCreditTransactionOwnerIndex,
   EnsureFabFileOwnedKeysetIndex,
   EnsureFabFileFilePathIndex,
+  EncryptSensitiveAdminSettings,
   EnsureFabFileDerivedFromIndex,
   UnsetStoredDefaultForcedRetrievalFloor,
   EnsureArtifactOwnedKeysetIndex,
@@ -468,6 +486,15 @@ const coreMigrations: MigrationFile[] = [
   EnsureRevenueSnapshotIndex,
   EnsureSpendRollupIndexes,
   QueueHeldSignupGrantsForRiskReview,
+  SeedSignupGrantSchedule,
+  SeedSignupGrantPools,
+  EnsureHeldCreditRewardIndexes,
+  BackfillUserLaneFlags,
+  EnsureAnalyticsHopIndexes,
+  EnsureSpendAlertIndexes,
+  GrantPackagesFromInvites,
+  EnsureGrantPackageIndexes,
+  EnsureReferralInviterIndexes,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

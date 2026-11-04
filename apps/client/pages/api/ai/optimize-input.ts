@@ -3,6 +3,21 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { blockedAtZeroTierLimit } from '@server/middlewares/perUserRateLimit';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { meterCompletionBackend } from '@bike4mind/services';
+import { UnprocessableEntityError } from '@bike4mind/common';
+import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { z } from 'zod';
+
+// 16,000 chars (~4k tokens), matching PROMPT_TEXT_MAX in common. The chat box has no character cap of its
+// own (only the model's context window), so this is a server-chosen ceiling; the 800-token output cap
+// makes a longer input a lossy rewrite anyway.
+const OPTIMIZE_INPUT_MAX_CHARS = 16_000;
+
+const optimizeInputSchema = z.object({
+  text: z.string().max(OPTIMIZE_INPUT_MAX_CHARS).optional(),
+  style: z.enum(['optimized', 'concise', 'professional', 'casual']).optional(),
+  maxLength: z.number().int().positive().optional(),
+});
 
 export interface RephraseRequest {
   text: string;
@@ -16,7 +31,7 @@ export interface RephraseResponse {
   optimizedLength: number;
 }
 
-// SPA-only and not credit-metered, so it stays off the API-key surface.
+// SPA-only, so it stays off the API-key surface.
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(
     rateLimit({
@@ -26,7 +41,13 @@ const handler = baseApi({ auth: 'jwtOnly' })
   )
   .post(async (req: any, res) => {
     assertAiAccessAllowed(req.user);
-    const { text, style = 'optimized', maxLength }: RephraseRequest = req.body;
+    const parsed = optimizeInputSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join(', '),
+      });
+    }
+    const { text, style = 'optimized', maxLength } = parsed.data;
 
     if (!text || !text.trim()) {
       return res.status(400).json({
@@ -35,7 +56,13 @@ const handler = baseApi({ auth: 'jwtOnly' })
     }
 
     try {
-      const { modelId, llm } = await OperationsModelService.getOperationsModel();
+      const operations = await OperationsModelService.getOperationsModel();
+      const { modelId, modelInfo } = operations;
+      const llm = meterCompletionBackend(
+        operations.llm,
+        createRequestCompletionMeter(req, 'prompt optimization', { systemModel: true }),
+        modelInfo
+      );
 
       const styleDescriptions: Record<NonNullable<RephraseRequest['style']>, string> = {
         optimized:
@@ -97,6 +124,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
 
       return res.json(responsePayload);
     } catch (error) {
+      // Insufficient credits must surface (422) instead of degrading to a generic 500.
+      if (error instanceof UnprocessableEntityError) throw error;
       req.logger?.error?.('Optimize Input API error:', error);
       return res.status(500).json({
         error: 'Failed to optimize input. Please try again.',

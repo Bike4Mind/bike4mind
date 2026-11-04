@@ -128,6 +128,12 @@ vi.mock('@server/billing/grantCreditPurchase', () => ({
   grantCreditPurchase: (...args: unknown[]) => mockGrantCreditPurchase(...args),
 }));
 
+// The release itself is covered in server/credits/paymentUnlockHold.e2e.test.ts; here only the wiring.
+const mockUnlockFromCreditPurchase = vi.fn();
+vi.mock('@server/credits/creditPurchaseUnlock', () => ({
+  unlockSignupGrantFromCreditPurchase: (...args: unknown[]) => mockUnlockFromCreditPurchase(...args),
+}));
+
 // The screening itself has its own suite (server/billing/paymentRisk.test.ts); here only the wiring.
 const mockAlertStripeRiskEvent = vi.fn();
 const mockScreenPaymentOutcome = vi.fn();
@@ -149,6 +155,7 @@ vi.mock('@server/credits/paymentUnlockForfeit', () => ({
 // (server/billing/earlyFraudWarning.test.ts, linkedAccounts.test.ts); here only the wiring.
 const mockRespondToEarlyFraudWarning = vi.fn();
 const mockPropagateAccountRisk = vi.fn();
+vi.mock('@server/referrals/subscriptionReward', () => ({ reverseSubscriptionRewardForRefund: vi.fn() }));
 vi.mock('@server/billing/earlyFraudWarning', () => ({
   respondToEarlyFraudWarning: (...args: unknown[]) => mockRespondToEarlyFraudWarning(...args),
 }));
@@ -291,6 +298,7 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
     mockStampCreditLot.mockResolvedValue(undefined);
     mockAddCredits.mockResolvedValue(undefined);
     mockGrantCreditPurchase.mockResolvedValue('granted');
+    mockUnlockFromCreditPurchase.mockResolvedValue({ creditsGranted: 0, currentCredits: null });
     mockClawbackCreditLotsByStripeRef.mockResolvedValue(undefined);
     mockVoidOpenSubscriptionInvoices.mockResolvedValue({ voided: [], failed: [] });
     mockEmitProductEvent.mockResolvedValue(undefined);
@@ -488,6 +496,46 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
       );
     });
 
+    it.each(['granted', 'already_granted'])(
+      'releases the signup schedule for the buyer on a %s delivery',
+      async outcome => {
+        mockFindByStripeCustomerId.mockResolvedValue({ ...mockUser });
+        mockGrantCreditPurchase.mockResolvedValue(outcome);
+        mockUnlockFromCreditPurchase.mockResolvedValue({ creditsGranted: 6500, currentCredits: 7000 });
+
+        const { req, res } = await invokeWebhookWithEvent(packEvent);
+
+        expect(mockUnlockFromCreditPurchase).toHaveBeenCalledWith('user123', expect.anything());
+        expect(req.logger!.info).toHaveBeenCalledWith(
+          expect.stringContaining('Signup grant released'),
+          expect.objectContaining({ step: 'signup_unlock', creditsGranted: 6500, paymentIntentId: 'pi_pack' })
+        );
+        expect(res.status).toHaveBeenCalledWith(200);
+      }
+    );
+
+    it('fails the delivery so Stripe retries when the signup release throws', async () => {
+      mockFindByStripeCustomerId.mockResolvedValue({ ...mockUser });
+      mockUnlockFromCreditPurchase.mockRejectedValue(new Error('release write failed'));
+
+      await expect(invokeWebhookWithEvent(packEvent)).rejects.toThrow('release write failed');
+      // The first-grant-only work already ran; the retry lands on already_granted and skips it.
+      expect(mockScreenPaymentOutcome).toHaveBeenCalledOnce();
+      expect(mockLogEventSafe).toHaveBeenCalledWith(
+        expect.objectContaining({ type: CreditPurchaseEvents.CREDITS_GRANTED }),
+        undefined,
+        expect.anything()
+      );
+    });
+
+    it('does not release the signup schedule when the grant rolls back', async () => {
+      mockFindByStripeCustomerId.mockResolvedValue({ ...mockUser });
+      mockGrantCreditPurchase.mockRejectedValue(new Error('balance write failed'));
+
+      await expect(invokeWebhookWithEvent(packEvent)).rejects.toThrow('balance write failed');
+      expect(mockUnlockFromCreditPurchase).not.toHaveBeenCalled();
+    });
+
     it('fails the delivery so Stripe retries when the grant rolls back', async () => {
       mockFindByStripeCustomerId.mockResolvedValue({ ...mockUser });
       mockGrantCreditPurchase.mockRejectedValue(new Error('balance write failed'));
@@ -603,6 +651,7 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
       const { req, res } = await invokeWebhookWithEvent(packEvent);
 
       expect(mockGrantCreditPurchase).not.toHaveBeenCalled();
+      expect(mockUnlockFromCreditPurchase).not.toHaveBeenCalled();
       expect(req.logger!.error).toHaveBeenCalledWith(
         expect.stringContaining('[CreditPurchase]'),
         expect.objectContaining({ step: 'grant_failed', paymentIntentId: 'pi_pack' })
@@ -634,6 +683,7 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
 
       expect(mockFindByStripeCustomerId).not.toHaveBeenCalled();
       expect(mockGrantCreditPurchase).not.toHaveBeenCalled();
+      expect(mockUnlockFromCreditPurchase).not.toHaveBeenCalled();
     });
 
     describe('credit to the source product', () => {

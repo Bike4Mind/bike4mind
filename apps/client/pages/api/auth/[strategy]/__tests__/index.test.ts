@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   turnstile: vi.fn(),
   fixedLimitOptions: [] as unknown[],
   used: [] as unknown[],
+  getAppleConfig: vi.fn(),
   getHandler: null as null | ((req: Request, res: Response, next: NextFunction) => unknown),
 }));
 
@@ -62,16 +63,17 @@ vi.mock('@server/utils/auth/oauthStartTurnstile', () => ({
     next();
   },
 }));
+vi.mock('@bike4mind/server-utils/auth/appleConfig', () => ({ getAppleConfig: () => h.getAppleConfig() }));
 vi.mock('@server/utils/validators', () => ({ isLocalAppUrl: () => false }));
 
 import '@pages/api/auth/[strategy]/index';
 
-function run() {
+function run(strategy = 'google') {
   const { req, res } = createMocks<Request, Response>({
     method: 'GET',
-    query: { strategy: 'google' },
+    query: { strategy },
     headers: { host: 'localhost:3000' },
-    url: '/api/auth/google',
+    url: `/api/auth/${strategy}`,
   });
   return { req, res };
 }
@@ -108,6 +110,23 @@ describe('GET /api/auth/[strategy] initiation', () => {
     await h.getHandler!(req, res, vi.fn());
     expect(h.turnstile).toHaveBeenCalledTimes(1);
     expect(h.authenticate).toHaveBeenCalledWith('google', expect.objectContaining({ scope: ['profile', 'email'] }));
+  });
+
+  it('rejects apple as an invalid request when Apple is not configured', async () => {
+    h.isBlocked.mockResolvedValue(null);
+    h.getAppleConfig.mockReturnValue(null);
+    const { req, res } = run('apple');
+    await h.getHandler!(req, res, vi.fn());
+    expect(res._getStatusCode()).toBe(400);
+    expect(h.authenticate).not.toHaveBeenCalled();
+  });
+
+  it('starts the apple flow when Apple is configured', async () => {
+    h.isBlocked.mockResolvedValue(null);
+    h.getAppleConfig.mockReturnValue({ clientId: 'c', teamId: 't', keyId: 'k', privateKey: 'p' });
+    const { req, res } = run('apple');
+    await h.getHandler!(req, res, vi.fn());
+    expect(h.authenticate).toHaveBeenCalledWith('apple', expect.objectContaining({ scope: ['name', 'email'] }));
   });
 
   it('keeps the fixed per-IP burst limit in one bucket shared by every provider', () => {

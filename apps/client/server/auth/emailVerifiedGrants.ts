@@ -3,6 +3,7 @@ import {
   adminSettingsRepository,
   creditLotRepository,
   creditTransactionRepository,
+  grantPackageRepository,
   userRepository,
 } from '@bike4mind/database';
 import type { INetworkMeta } from '@bike4mind/common';
@@ -86,6 +87,7 @@ export async function releaseVerifiedPendingFreeCredits(
           creditLots: creditLotRepository,
           users: userRepository,
           signupProtection,
+          grantPackages: grantPackageRepository,
         },
         reason,
         logger,

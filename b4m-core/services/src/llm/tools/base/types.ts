@@ -65,8 +65,8 @@ export interface KbScope {
  * than re-pricing the tokens at some other model's rate.
  *
  * The agent executor accumulates these into `ToolUsageTotals`
- * (apps/workers/src/queueHandlers/agentExecutor.billing.ts) - same five fields, kept in
- * sync by hand. Keep both in step on a rename.
+ * (apps/workers/src/queueHandlers/agentExecutor.billing.ts) - same fields minus `model`,
+ * kept in sync by hand. Keep both in step on a rename.
  */
 export type ToolLlmUsage = {
   model: string;
@@ -75,6 +75,8 @@ export type ToolLlmUsage = {
   cacheReadTokens: number;
   cacheWriteTokens: number;
   costUsd: number;
+  /** USD priced on the ledger-named model; equals `costUsd` unless the call ran on a substitute. */
+  chargedCostUsd?: number;
 };
 
 export type { DecisionToolRequest } from '../implementation/decide/request';

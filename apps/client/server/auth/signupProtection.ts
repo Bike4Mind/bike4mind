@@ -1,6 +1,10 @@
 import { Resource } from 'sst';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { signupGrantBudgetRepository, signupProtectionRepository } from '@bike4mind/database';
+import {
+  heldCreditRewardRepository,
+  signupGrantBudgetRepository,
+  signupProtectionRepository,
+} from '@bike4mind/database';
 import type { SignupProtection } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { escapeSlackText } from '@bike4mind/services';
@@ -18,12 +22,19 @@ export const signupProtection: SignupProtection = {
     get repository() {
       return signupGrantBudgetRepository;
     },
+    get heldRewards() {
+      return heldCreditRewardRepository;
+    },
     async notify(alert) {
       try {
+        const pool = `${alert.pool === 'signup' ? 'Signup' : 'Trickle'} pool`;
+        const paid = `${alert.spent.toLocaleString('en-US')} of ${alert.budget.toLocaleString('en-US')} credits paid`;
         const outcome = await postMessageToSlackWithOutcome(
-          alert.threshold === 100
-            ? `Signup grant budget exhausted for ${alert.day}: ${alert.spent.toLocaleString('en-US')} of ${alert.budget.toLocaleString('en-US')} credits paid; new grants are held.`
-            : `Signup grant budget at ${alert.threshold}% for ${alert.day}: ${alert.spent.toLocaleString('en-US')} of ${alert.budget.toLocaleString('en-US')} credits paid.`,
+          alert.threshold === 'missing'
+            ? `${pool} setting is missing or invalid for ${alert.day}; its free grants are paused until it is set.`
+            : alert.threshold === 100
+              ? `${pool} exhausted for ${alert.day}: ${paid}; new grants are held.`
+              : `${pool} at ${alert.threshold}% for ${alert.day}: ${paid}.`,
           'SlackSecurityAlertsWebhookUrl',
           { timeoutMs: 3000 }
         );
@@ -34,6 +45,13 @@ export const signupProtection: SignupProtection = {
         Logger.globalInstance.error('Signup grant budget alert failed', error);
       }
     },
+  },
+  async notifyConfig(alert) {
+    const message = `Signup grant drip cap (${alert.setting}) is unset; paying from the default of ${alert.fallback.toLocaleString('en-US')} credits. Set it in Admin Settings.`;
+    Logger.globalInstance.error(message);
+    // Rejecting on an undelivered post keeps the caller from marking the day alerted.
+    const outcome = await postMessageToSlackWithOutcome(message, 'SlackLiveopsWebhookUrl', { timeoutMs: 3000 });
+    if (outcome === 'failed') throw new Error('Signup grant config alert was not delivered');
   },
   async notifyHold(review) {
     try {

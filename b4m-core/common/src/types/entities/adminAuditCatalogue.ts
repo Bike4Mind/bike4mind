@@ -117,6 +117,10 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.api_key_trust.revoked': { category: 'identity', severity: 'notice', write: 'bestEffort' },
   'user.new_account_spend_cap.lifted': { category: 'identity', severity: 'notice', write: 'strict' },
   'user.new_account_spend_cap.restored': { category: 'identity', severity: 'notice', write: 'bestEffort' },
+  // Analytics classification (User.isInternal): grants nothing, but decides whether an account
+  // counts as a customer, so both directions keep a record.
+  'user.internal.marked': { category: 'account', severity: 'notice', write: 'strict' },
+  'user.internal.unmarked': { category: 'account', severity: 'notice', write: 'strict' },
   'user.email.unverified': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.verification_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.change_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
@@ -137,6 +141,12 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.signup_risk.approved': { category: 'access', severity: 'notice', write: 'strict' },
   'user.signup_risk.reopened': { category: 'access', severity: 'notice', write: 'strict' },
   'user.signup_risk.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  // Signup domain holds: one strict entry per decision, written in the same transaction as the status
+  // change. confirmed/released come from admins (apps/client/pages/api/admin/signup-domain-holds.ts);
+  // auto_confirmed from the triage job (apps/workers/src/cron/signupDomainHoldTriage.ts).
+  'signup_domain_hold.confirmed': { category: 'access', severity: 'notice', write: 'strict' },
+  'signup_domain_hold.released': { category: 'credits', severity: 'notice', write: 'strict' },
+  'signup_domain_hold.auto_confirmed': { category: 'access', severity: 'notice', write: 'strict' },
   // Users-list bulk actions (apps/client/pages/api/admin/users/bulk/*): one strict entry per changed
   // user, written in that user's transaction, plus a bestEffort summary per batch.
   'user.bulk.executed': { category: 'account', severity: 'notice', write: 'bestEffort' },
@@ -206,6 +216,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.emergency_login.denied': { category: 'access', severity: 'notice', write: 'bestEffort' },
   'user.api_key.generated': { category: 'access', severity: 'critical', write: 'strict' },
   'user.subscription.removed': { category: 'credits', severity: 'critical', write: 'strict' },
+  // Written after a suspend, contain or delete commits, so it cannot be strict: the block already happened.
+  'user.subscriptions.canceled': { category: 'credits', severity: 'critical', write: 'bestEffort' },
   'user.api_key.rate_limit_updated': { category: 'access', severity: 'notice', write: 'bestEffort' },
   'user.api_key.rate_limit_reset': { category: 'access', severity: 'info', write: 'bestEffort' },
   'user.api_key.revoked': { category: 'access', severity: 'notice', write: 'strict' },
@@ -276,6 +288,9 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.partner_signup_rule.updated': { category: 'access', severity: 'notice', write: 'strict' },
   'org.partner_signup_rule.deleted': { category: 'access', severity: 'notice', write: 'strict' },
   'org.partner_signup_rule.backfilled': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  // No credits move when a package is defined, so these are not credit-grant actions.
+  'credits.grant_package.created': { category: 'credits', severity: 'notice', write: 'strict' },
+  'credits.grant_package.updated': { category: 'credits', severity: 'notice', write: 'strict' },
   'user.accounts.migrated': { category: 'account', severity: 'notice', write: 'bestEffort' },
   'user.reg_invite.updated': { category: 'access', severity: 'notice', write: 'strict' },
   'user.reg_invite.created': { category: 'access', severity: 'notice', write: 'strict' },
@@ -299,6 +314,10 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'security.blocked_ip.auto_added': { category: 'access', severity: 'notice', write: 'strict' },
   // bestEffort: the verdict history on the ShadowDetection record is the source of truth; grading never acts.
   'security.detection.reviewed': { category: 'access', severity: 'info', write: 'bestEffort' },
+  // bestEffort: the AbuseAssessment record is the source of truth; an advisory assessment never acts.
+  'security.detection.assessed': { category: 'access', severity: 'info', write: 'bestEffort' },
+  'security.detection.replayed': { category: 'access', severity: 'info', write: 'bestEffort' },
+  'moderation.incident.viewed': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.incident.verdict_recorded': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.published_artifact.taken_down': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.published_artifact.takedown_reverted': { category: 'support', severity: 'notice', write: 'strict' },

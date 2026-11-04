@@ -41,6 +41,7 @@ vi.mock('@client/app/components/referrals/ReferralModal', () => ({
   default: () => null,
   ReferralInviteType: { referral: 'referral', userInvitation: 'userInvitation' },
 }));
+vi.mock('@client/app/components/referrals/ReferralRewardNotice', () => ({ default: () => null }));
 vi.mock('@client/app/components/HelpModal', () => ({ default: () => null }));
 vi.mock('@client/app/components/Session/PromptMetaInspector', () => ({ default: () => null }));
 vi.mock('../components/Files/Browser', () => ({ default: () => null }));

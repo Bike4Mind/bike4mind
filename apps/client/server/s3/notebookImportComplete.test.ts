@@ -90,7 +90,7 @@ vi.mock('@bike4mind/server-utils/s3/storageCharge', () => ({
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ delete: h.deleteFile, upload: vi.fn(), getContentAsBuffer: vi.fn() }),
 }));
-vi.mock('@server/utils/importHistoryProgress', () => ({
+vi.mock('@bike4mind/server-utils/utils/importHistoryProgress', () => ({
   updateImportProgress: vi.fn(),
   markImportComplete: vi.fn(),
   markImportFailed: vi.fn(),
@@ -99,7 +99,7 @@ vi.mock('uuid', () => ({ v4: () => 'test-uuid' }));
 
 import { dispatch, discardUploadedKnowledgeFiles } from './notebookImportComplete';
 import { moderateImportedKnowledgeFiles } from '@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles';
-import { markImportComplete } from '@server/utils/importHistoryProgress';
+import { markImportComplete } from '@bike4mind/server-utils/utils/importHistoryProgress';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 

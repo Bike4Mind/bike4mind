@@ -1,3 +1,4 @@
+import type Stripe from 'stripe';
 import { stripe } from './stripe';
 
 export interface VoidOpenInvoicesResult {
@@ -13,6 +14,15 @@ export interface VoidOpenInvoicesOptions {
    * created strictly before this instant are voided.
    */
   createdBefore?: number | null;
+  /** Per Stripe request timeout (ms); the client default applies when unset. */
+  timeoutMs?: number;
+  /**
+   * Epoch ms. Each Stripe request's timeout is capped to the time left, and once it passes the
+   * invoices not yet voided are reported in `failed` without a call.
+   */
+  deadline?: number;
+  /** Per Stripe request retry cap; the client default applies when unset. */
+  maxNetworkRetries?: number;
 }
 
 /**
@@ -42,19 +52,40 @@ export async function voidOpenSubscriptionInvoices(
   subscriptionId: string,
   options: VoidOpenInvoicesOptions = {}
 ): Promise<VoidOpenInvoicesResult> {
-  const open = await stripe.invoices.list({
+  const params: Stripe.InvoiceListParams = {
     subscription: subscriptionId,
     status: 'open',
     limit: 100,
     ...(options.createdBefore ? { created: { lt: options.createdBefore } } : {}),
-  });
+  };
+  const requestOptionsNow = () => {
+    const timeout =
+      options.deadline === undefined
+        ? options.timeoutMs
+        : Math.max(1, Math.min(options.timeoutMs ?? Infinity, options.deadline - Date.now()));
+    return timeout || options.maxNetworkRetries !== undefined
+      ? {
+          ...(timeout ? { timeout } : {}),
+          ...(options.maxNetworkRetries !== undefined ? { maxNetworkRetries: options.maxNetworkRetries } : {}),
+        }
+      : undefined;
+  };
+  const listOptions = requestOptionsNow();
+  const open = await (listOptions ? stripe.invoices.list(params, listOptions) : stripe.invoices.list(params));
 
   const voided: string[] = [];
   const failed: string[] = [];
 
   for (const invoice of open.data) {
+    if (options.deadline !== undefined && Date.now() >= options.deadline) {
+      failed.push(invoice.id);
+      continue;
+    }
     try {
-      await stripe.invoices.voidInvoice(invoice.id);
+      const requestOptions = requestOptionsNow();
+      await (requestOptions
+        ? stripe.invoices.voidInvoice(invoice.id, undefined, requestOptions)
+        : stripe.invoices.voidInvoice(invoice.id));
       voided.push(invoice.id);
     } catch {
       failed.push(invoice.id);

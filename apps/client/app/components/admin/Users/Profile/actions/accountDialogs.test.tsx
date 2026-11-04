@@ -4,6 +4,7 @@ import {
   ApiKeyTrustDialog,
   DeleteUserDialog,
   EmailVerificationDialog,
+  InternalAccountDialog,
   LoginAsDialog,
   ResetMfaDialog,
   RestrictDialog,
@@ -27,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   sendMessage: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
+  toastWarning: vi.fn(),
   currentUser: null as CurrentUser,
 }));
 
@@ -43,7 +45,7 @@ vi.mock('@client/app/hooks/data/user', () => ({
 }));
 vi.mock('@client/app/hooks/data/mfa', () => ({ useForceResetMFA: () => ({ mutateAsync: mocks.resetMfa }) }));
 vi.mock('@client/app/hooks/data/inbox', () => ({ useSendSystemMessage: () => ({ mutateAsync: mocks.sendMessage }) }));
-vi.mock('sonner', () => ({ toast: { error: mocks.toastError, success: mocks.toastSuccess } }));
+vi.mock('sonner', () => ({ toast: { error: mocks.toastError, success: mocks.toastSuccess, warning: mocks.toastWarning } }));
 
 const renderDialog = (
   ui: (user: AdminUserProfile, onClose: () => void) => React.ReactElement,
@@ -331,6 +333,60 @@ describe('account dialogs', () => {
     });
   });
 
+  describe('InternalAccountDialog', () => {
+    it('marks a customer account internal with isInternal: true, and undoes it', async () => {
+      renderDialog((user, close) => <InternalAccountDialog user={user} onClose={close} />);
+
+      expect(screen.getByTestId('internal-account-dialog-preview-before')).toHaveTextContent('Customer');
+      expect(screen.getByTestId('internal-account-dialog-preview-after')).toHaveTextContent('Internal');
+      expect(confirmButton('internal-account-dialog')).toBeDisabled();
+      pickReason('internal-account-dialog');
+      fireEvent.click(confirmButton('internal-account-dialog'));
+
+      await waitFor(() =>
+        expect(mocks.apiPost).toHaveBeenCalledWith(`/api/admin/users/${USER_ID}/internal`, {
+          isInternal: true,
+          reason: 'Team member',
+        })
+      );
+      fireEvent.click(await screen.findByTestId('undo-toast-undo-btn'));
+      await waitFor(() =>
+        expect(mocks.apiPost).toHaveBeenLastCalledWith(`/api/admin/users/${USER_ID}/internal`, {
+          isInternal: false,
+          reason: 'Undo: Team member',
+        })
+      );
+    });
+
+    it('stops marking an internal account with isInternal: false', async () => {
+      renderDialog(
+        (user, close) => <InternalAccountDialog user={user} onClose={close} />,
+        buildProfile({ isInternal: true })
+      );
+
+      expect(screen.getByTestId('internal-account-dialog-preview-before')).toHaveTextContent('Internal');
+      expect(screen.getByTestId('internal-account-dialog-preview-after')).toHaveTextContent('Customer');
+      pickReason('internal-account-dialog');
+      fireEvent.click(confirmButton('internal-account-dialog'));
+
+      await waitFor(() =>
+        expect(mocks.apiPost).toHaveBeenCalledWith(`/api/admin/users/${USER_ID}/internal`, {
+          isInternal: false,
+          reason: 'Team member',
+        })
+      );
+    });
+    it('previews an admin as internal either way, since analytics counts an admin as internal', () => {
+      renderDialog(
+        (user, close) => <InternalAccountDialog user={user} onClose={close} />,
+        buildProfile({ isInternal: true, isAdmin: true })
+      );
+
+      expect(screen.getByTestId('internal-account-dialog-preview-before')).toHaveTextContent('Internal');
+      expect(screen.getByTestId('internal-account-dialog-preview-after')).toHaveTextContent('Internal (admin)');
+    });
+  });
+
   describe('ResetMfaDialog', () => {
     it('previews the authenticator going away and sends the reason with the user id', async () => {
       const { onClose } = renderDialog((user, close) => <ResetMfaDialog user={user} onClose={close} />);
@@ -395,6 +451,37 @@ describe('account dialogs', () => {
       );
       expect(onClose).toHaveBeenCalled();
       expect(onDeleted).toHaveBeenCalled();
+    });
+
+    it('warns when the delete could not cancel every subscription', async () => {
+      mocks.deleteUser.mockResolvedValue({
+        subscriptionCancellation: {
+          canceled: [],
+          failed: [{ customerId: 'cus_1', subscriptionId: null, reason: 'stripe down' }],
+        },
+      });
+      const { onDeleted } = renderDelete();
+      pickReason('delete-user-dialog');
+      fireEvent.change(screen.getByTestId('delete-user-dialog-typed-input'), { target: { value: 'ada@example.com' } });
+
+      fireEvent.click(confirmButton('delete-user-dialog'));
+
+      await waitFor(() => expect(onDeleted).toHaveBeenCalled());
+      expect(mocks.toastWarning).toHaveBeenCalledWith(
+        'Could not cancel 1 Stripe subscription(s) of this account. Cancel them in Stripe.'
+      );
+    });
+
+    it('shows no subscription warning for a plain delete', async () => {
+      mocks.deleteUser.mockResolvedValue({ id: USER_ID });
+      const { onDeleted } = renderDelete();
+      pickReason('delete-user-dialog');
+      fireEvent.change(screen.getByTestId('delete-user-dialog-typed-input'), { target: { value: 'ada@example.com' } });
+
+      fireEvent.click(confirmButton('delete-user-dialog'));
+
+      await waitFor(() => expect(onDeleted).toHaveBeenCalled());
+      expect(mocks.toastWarning).not.toHaveBeenCalled();
     });
 
     it('asks for the user id when the account has no email', () => {
@@ -462,7 +549,7 @@ describe('account dialogs', () => {
       fireEvent.click(screen.getByTestId('login-as-dialog-setup-mfa-btn'));
 
       expect(onClose).toHaveBeenCalled();
-      expect(mocks.navigate).toHaveBeenCalledWith({ to: '/profile', search: { tab: 'settings', section: 'security' } });
+      expect(mocks.navigate).toHaveBeenCalledWith({ to: '/profile', search: { tab: 'security' } });
     });
   });
 

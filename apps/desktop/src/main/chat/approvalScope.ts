@@ -1,6 +1,7 @@
 import { homedir } from 'node:os';
 import { isAbsolute, relative, sep } from 'node:path';
 import type { ApprovalAlways } from './tools/types';
+import { shownPath } from '../wsl/wslPath';
 
 /**
  * What an "always allow" on a shell card will cover, in the words the card shows.
@@ -46,11 +47,14 @@ export function describeAlways(
   workingDirectory?: string,
   home: string = homedir()
 ): AlwaysScope | undefined {
+  if (always.ungranted?.length) return undefined;
   const patterns = [...new Set(always.commands.map(command => command.pattern))].map(pattern => `\`${pattern}\``);
   if (patterns.length === 0 && always.directories.length === 0) return undefined;
-  const short = always.directories.map(directory => `${shortenDirectory(directory, workingDirectory, home)}${sep}*`);
+  const short = always.directories.map(
+    directory => `${shownPath(shortenDirectory(directory, workingDirectory, home))}${sep}*`
+  );
   return {
     shown: [...capped(patterns), ...capped(short)].join(', '),
-    full: [...patterns, ...always.directories.map(directory => `${directory}${sep}*`)].join(', '),
+    full: [...patterns, ...always.directories.map(directory => `${shownPath(directory)}${sep}*`)].join(', '),
   };
 }

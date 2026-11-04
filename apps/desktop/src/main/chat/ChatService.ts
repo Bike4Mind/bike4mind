@@ -66,7 +66,10 @@ import {
 } from '@shared/chat';
 import { AUTO_COMPACT_PERCENT, inputSide, occupiedTokens, shouldAutoCompact } from '@shared/contextLimit';
 import { estimateContextOverhead, type ContextSnapshot } from '@shared/contextBreakdown';
+import { requestGeneration, type GenerationSettings } from '@shared/generation';
+import type { ModelSettings } from '@shared/modelSettings';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
+import { serverIdOfRuntime } from '@shared/modelServers';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
 import type { AppWorktree } from '@shared/worktreeRemoval';
 import { ASK_USER_TOOL_NAME, parseQuestions, sanitizeAnswers, type ChatQuestionOutcome } from '@shared/questions';
@@ -140,13 +143,21 @@ import {
 } from './completions';
 import { describeAlways } from './approvalScope';
 import { reasoningEffortFor, requestsThinking } from './reasoningEffort';
+import { auxiliaryGeneration, turnEffortSetting, turnGeneration, turnThinks } from '@shared/modelDefaults';
+import type { ModelSettingsStore } from './ModelSettingsStore';
 import { addUsage, foldUsage } from './streamEvents';
 import type { CompletionStreamEvent } from './streamEvents';
 import { LocalModelRemovedError, OllamaLocal, toMessages } from './OllamaLocal';
 import type { LocalChat } from './localChat';
 import { ServerCredentialsError } from '../modelServers/errors';
 import { holdsPrompt } from '@bike4mind/local-models/servers';
-import { ContextOverflowError, estimateTokens, localTranscriptChars, shrunkTranscriptChars } from './localContext';
+import {
+  ContextOverflowError,
+  estimateTokens,
+  localTranscriptChars,
+  shrunkTranscriptChars,
+  toolReplyReserve,
+} from './localContext';
 import type { LocalHistory } from './LocalHistory';
 import type { LocalHistoryResult } from '@shared/history';
 import { findStaleResults, historyRounds, sentHistory, toolResultContent } from './contextPruning';
@@ -452,6 +463,8 @@ export interface ChatServiceDeps {
    * leaves every session on whatever model it was created with.
    */
   models?: ModelCatalog;
+  /** Per-model defaults from the Models screen. Absent in tests that do not set any. */
+  modelSettings?: Pick<ModelSettingsStore, 'get'>;
   /** This build's default model: what a new conversation prefers when the user has picked nothing it can have. */
   preferredModel?: string;
   /** The user's last pick in the model picker. Absent in tests that do not exercise it. */
@@ -1450,6 +1463,11 @@ export class ChatService {
     return this.deps.store.setPromptCacheTtl(sessionId, ttl);
   }
 
+  /** Replaces this conversation's overrides; an empty set clears them. */
+  setSessionGeneration(sessionId: string, generation: GenerationSettings): Promise<ChatSessionSummary | null> {
+    return this.deps.store.setGeneration(sessionId, generation);
+  }
+
   setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null> {
     return this.deps.store.setPinned(sessionId, pinned);
   }
@@ -1467,7 +1485,8 @@ export class ChatService {
   }
 
   /**
-   * Share a folder the user named - from the chip's picker or `/add-dir` - with this conversation.
+   * Share a folder the user named - from a picker (the Code chip or the Chat composer's Add folder)
+   * or `/add-dir` - with this conversation, before its first message too.
    *
    * Any time, a running turn included: only the folder, branch and worktree decide where commands
    * run, and those stay locked once the session has run (see describeChipRow). A context folder is
@@ -2538,13 +2557,18 @@ export class ChatService {
   }
 
   /**
-   * The last local list when it still has `model`, so a turn costs Ollama no discovery; otherwise one forced
-   * read. A model removed outside the app since that list fails its turn, which forgets the list.
+   * The last local list while its row for `model` is ready; otherwise one forced read, which for a turn waits out
+   * its own server's listing. A row listed while its server was down or still listing lacks the model's settings.
    */
-  private async localModelsFor(model: string): Promise<ChatModelOption[]> {
+  private async localModelsFor(model: string, turn = false): Promise<ChatModelOption[]> {
     const last = this.deps.models?.lastLocal?.();
-    if (last && findModelOption(last, model)) return last;
-    return (await this.deps.models?.listLocal?.(true)) ?? [];
+    const cached = findModelOption(last ?? undefined, model);
+    if (last && cached && cached.unavailable === undefined) return last;
+    const runtimeId = parseLocalModelId(model)?.runtimeId;
+    const serverId = turn && runtimeId ? serverIdOfRuntime(runtimeId) : null;
+    const models = this.deps.models;
+    const listed = serverId ? models?.listLocal?.(true, { untilListed: serverId }) : models?.listLocal?.(true);
+    return (await listed) ?? [];
   }
 
   /** Saves the model a send would use, so the picker shows it before the user sends. Null when nothing changed. */
@@ -2707,16 +2731,41 @@ export class ChatService {
       let mcpServers = (await this.deps.mcp?.state())?.servers ?? [];
       const catalog =
         localTurn && this.deps.models?.listLocal
-          ? { models: await this.localModelsFor(session.model) }
+          ? {
+              models: controller.signal.aborted
+                ? []
+                : await unlessStopped(this.localModelsFor(session.model, true), controller.signal, []),
+            }
           : await this.deps.models?.list();
       const cacheable = supportsPromptCache(catalog?.models ?? [], session.model);
       const modelOption = findModelOption(catalog?.models, session.model);
-      const maxTokens = modelOption?.maxOutputTokens;
+      if (localTurn && modelOption?.unavailable !== undefined) {
+        if (modelOption.wantsCredentials && modelOption.server) {
+          throw new ServerCredentialsError(modelOption.server.name, modelOption.wantsCredentials === 'rejected');
+        }
+        const reason = modelOption.unavailable.replace(/\.$/, '');
+        throw new Error(`${reason}. Pick another model, or check the server under Settings, Model servers.`);
+      }
+      const modelDefaults = await this.modelDefaults(modelOption?.id ?? session.model);
       const thinkingToggle =
         modelOption?.thinkingToggle ??
         (catalog?.error ? this.deps.models?.lastKnownThinkingToggle(session.model) : undefined);
-      const askForThinking = requestsThinking(session.reasoningEffort, { thinkingToggle });
-      const effort = reasoningEffortFor(session.reasoningEffort, session.model);
+      const effortSetting = turnEffortSetting(session.reasoningEffort, modelDefaults, modelOption);
+      const effort = reasoningEffortFor(effortSetting, session.model, modelOption);
+      const thinkingOption = { ...modelOption, ...(thinkingToggle ? { thinkingToggle } : {}) };
+      const askForThinking = requestsThinking(effortSetting, thinkingOption, effort);
+      // Only what this model's controls list, so a setting made on another model is never sent here.
+      const { maxOutputTokens: outputOverride, ...overrides } = requestGeneration(
+        turnGeneration(
+          session.generation,
+          modelDefaults,
+          modelOption,
+          turnThinks(effortSetting, thinkingOption, effort)
+        ),
+        modelOption?.controls
+      );
+      const generationField = Object.keys(overrides).length > 0 ? { generation: overrides } : {};
+      const maxTokens = outputOverride ?? modelOption?.maxOutputTokens;
       const effortField = effort ? { reasoningEffort: effort } : {};
       // The server keeps 5 minutes for a model without the hour, but sending it there says nothing.
       const cacheTtl: PromptCacheTtl =
@@ -3029,6 +3078,7 @@ export class ChatService {
       const screenshotTurns: number[] = [];
 
       for (let roundIndex = 0; roundIndex < limits.rounds; roundIndex++) {
+        if (controller.signal.aborted) break;
         if (liveState && roundIndex > 0) {
           const next = toolState();
           if (!sameToolState(liveState, next)) {
@@ -3124,6 +3174,7 @@ export class ChatService {
                 // Dev log only; never sent on the wire. See CompletionRequest.sessionId.
                 sessionId,
                 ...effortField,
+                ...generationField,
                 ...(maxTokens ? { maxTokens } : {}),
                 ...(toolPromptTokens !== undefined ? { toolPromptTokens } : {}),
               },
@@ -3143,6 +3194,7 @@ export class ChatService {
                 // Ties the turn's ledger row to this session. See CompletionRequest.sessionId.
                 sessionId,
                 ...effortField,
+                ...generationField,
                 ...cacheTtlField,
                 ...(maxTokens ? { maxTokens } : {}),
               },
@@ -5262,7 +5314,7 @@ export class ChatService {
     // is keyed on what a call WOULD do, and for something with no undo that is not a good
     // enough reason to skip asking. The gate refuses to record one for these either.
     const standingAnswer = (): ChatApprovalAnswer | null => {
-      if (prompt.irreversible || stuck || askedByRule) return null;
+      if (prompt.irreversible || prompt.allowOnce || stuck || askedByRule) return null;
       const currentlyTainted = mode === 'auto' && sendsOut(call.name) && !prompt.contained && !!directories.untrusted;
       const standing = gate.isStanding(
         sessionId,
@@ -5350,6 +5402,7 @@ export class ChatService {
             ...(prompt.diff ? { approvalDiff: prompt.diff } : {}),
             ...(prompt.diffs ? { approvalDiffs: prompt.diffs } : {}),
             ...(prompt.irreversible ? { approvalIrreversible: true } : {}),
+            ...(prompt.allowOnce ? { approvalOnceOnly: true } : {}),
             ...(alwaysScope
               ? {
                   approvalAlways: alwaysScope.shown,
@@ -5362,7 +5415,7 @@ export class ChatService {
         });
       },
       {
-        remember: !prompt.irreversible,
+        remember: !prompt.irreversible && !prompt.allowOnce,
         tainted: !!tainted,
         // Another card's "always", or a rule saved from it, may cover this one while it waits.
         recheck: async () => {
@@ -5378,7 +5431,7 @@ export class ChatService {
               coveredBy = ruleDecider(freshVerdict.rule);
               return { decision: 'deny' };
             }
-            if (prompt.irreversible || stuck || askedByRule || decision === 'ask') return null;
+            if (prompt.irreversible || prompt.allowOnce || stuck || askedByRule || decision === 'ask') return null;
             if (freshVerdict?.decision === 'allow') {
               coveredBy = ruleDecider(freshVerdict.rule);
               return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };
@@ -5836,6 +5889,12 @@ export class ChatService {
     return resolveDefaultModel(models, [remembered, this.deps.preferredModel]);
   }
 
+  /** A device-side model's defaults from the Models screen; none for a hosted model, or when they cannot be read. */
+  private async modelDefaults(model: string): Promise<ModelSettings | undefined> {
+    if (!isLocalModel(model) || !this.deps.modelSettings) return undefined;
+    return this.deps.modelSettings.get(model).catch(() => undefined);
+  }
+
   /** Auxiliary generations honor the same device-local boundary as the main reply. */
   private async streamAuxiliary(
     api: AuthenticatedApiClient | null,
@@ -5845,8 +5904,11 @@ export class ChatService {
   ): Promise<void> {
     if (isLocalModel(request.model)) {
       const thinking = createThinkFilter();
+      const listed = this.deps.models?.lastLocal?.() ?? this.deps.models?.cached() ?? undefined;
+      const option = findModelOption(listed, request.model);
+      const sampling = auxiliaryGeneration(await this.modelDefaults(option?.id ?? request.model), option);
       await (this.deps.local ?? new OllamaLocal()).stream(
-        { ...request, thinking: false },
+        { ...request, thinking: false, ...(Object.keys(sampling).length > 0 ? { generation: sampling } : {}) },
         event =>
           onEvent({ ...event, ...('text' in event && event.text ? { text: thinking.push(event.text).text } : {}) }),
         signal
@@ -6113,7 +6175,7 @@ export function toolPromptOverflow(
   const toolPrompt = estimateTokens(toMessages(wire.filter(message => message.role === 'system')), schemas);
   const prompt = wire.findLast(message => message.role === 'user' && !message.continuesTurn);
   const promptTokens = prompt ? estimateTokens(toMessages([prompt])) : 0;
-  return holdsPrompt(window, toolPrompt + promptTokens, maxTokens) ? undefined : toolPrompt;
+  return holdsPrompt(window, toolPrompt + promptTokens, toolReplyReserve(maxTokens)) ? undefined : toolPrompt;
 }
 
 /**
@@ -7027,6 +7089,13 @@ interface DirectoryTurn {
 function resumedUntrusted(calls: readonly ChatToolCall[]): { untrusted?: string } {
   const source = calls.find(call => call.status !== 'denied' && !call.ownContent && readsUntrusted(call.name));
   return source ? { untrusted: source.name } : {};
+}
+
+/** `work`'s result, or `stopped` once `signal` aborts; a later result or rejection then goes nowhere. */
+async function unlessStopped<T>(work: Promise<T>, signal: AbortSignal, stopped: T): Promise<T> {
+  const outcome = await untilStopped(work, signal, () => false, 0);
+  if (outcome.kind === 'threw') throw outcome.error;
+  return outcome.kind === 'returned' ? outcome.value : stopped;
 }
 
 function untrustedReason(tool: string): string {

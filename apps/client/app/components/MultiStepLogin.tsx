@@ -21,6 +21,7 @@ import {
   Typography,
 } from '@mui/joy';
 import GitHubIcon from '@mui/icons-material/GitHub';
+import AppleSignInButton from './AppleSignInButton';
 import Image from 'next/image';
 import Link from '@mui/joy/Link';
 import OktaIcon from './svgs/flags/OktaIcon';
@@ -61,6 +62,8 @@ interface MultiStepLoginProps {
   enableSocials?: boolean;
   enableGithubAuth?: boolean;
   enableOktaAuth?: boolean;
+  /** Sign in with Apple; off unless the server has Apple credentials configured. */
+  enableAppleAuth?: boolean;
 }
 
 type LoginStep = 'email' | 'otc' | 'register-username' | 'redirect';
@@ -78,6 +81,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   enableSocials = true,
   enableGithubAuth = true,
   enableOktaAuth = true,
+  enableAppleAuth = false,
 }) => {
   const { setCurrentUser, currentUser } = useUser();
   const { mutate: logEvent } = useLogEvent();
@@ -478,7 +482,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
     }
   };
 
-  const handleSocialLogin = (provider: 'google' | 'github' | 'okta') => {
+  const handleSocialLogin = (provider: 'google' | 'github' | 'okta' | 'apple') => {
     startOAuthSignIn(`/api/auth/${provider}`).catch((error: unknown) => {
       toast.error(error instanceof Error ? error.message : 'Sign-in could not start. Please try again.');
     });
@@ -704,6 +708,15 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                     </Button>
                   )}
                 </Box>
+
+                {enableAppleAuth && (
+                  <AppleSignInButton
+                    data-testid="login-apple-btn"
+                    label="Sign in with Apple"
+                    disabled={isCheckingStrategy || isSendingOTC}
+                    onClick={() => handleSocialLogin('apple')}
+                  />
+                )}
 
                 <Divider sx={dividerStyles}>or</Divider>
 

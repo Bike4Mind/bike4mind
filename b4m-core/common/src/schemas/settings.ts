@@ -51,6 +51,7 @@ import {
   TEAM_PLAN_SEATS_HARD_LIMIT,
 } from '../constants/organization';
 import { CHAT_MODELS, ChatModels } from '../models';
+import { DECISION_MODEL_IDS } from '../decisions/catalog';
 import {
   BedrockEmbeddingModel,
   defaultEmbeddingModelForEnv,
@@ -286,6 +287,7 @@ export const SettingKeySchema = z.enum([
   'typesafeApiKey',
   'FirecrawlApiKey',
   'FirecrawlApiUrl',
+  'FirecrawlFetchCostUsd',
   'PerplexityApiKey',
   'EnableDeepResearch',
   'EnableDeepResearchDefault',
@@ -404,6 +406,7 @@ export const SettingKeySchema = z.enum([
   'SerperKey',
   'SearxngUrl',
   'WebSearchProvider',
+  'SerpApiSearchCostUsd',
   'WolframAlphaKey',
   'FmpApiKey',
   'EnableFmpFinancialData',
@@ -462,6 +465,8 @@ export const SettingKeySchema = z.enum([
   'gearRewardMinAccountAgeDays',
   'usagePatternSignalsEnabled',
   'usagePatternSignalsConfig',
+  'abuseAssessmentEnabled',
+  'abuseAssessmentConfig',
   'thinkingVisibilityFree',
   'thinkingVisibilityPaid',
   'otcLimitSendPerEmailPerIp',
@@ -485,6 +490,7 @@ export const SettingKeySchema = z.enum([
   'signupBotChecksEnabled',
   'enableDomainIntelligence',
   'holdSignupsFromDomainsYoungerThanDays',
+  'autoConfirmDisposableAggregateHolds',
   'domainIntelligenceTimeoutMs',
   'paymentRiskAlertsEnabled',
   'paymentRiskYoungAccountMinutes',
@@ -524,6 +530,8 @@ export const SettingKeySchema = z.enum([
   'signupGrantCredits',
   'verifiedUnlockCredits',
   'signupGrantDailyBudget',
+  'signupGrantSignupPoolDaily',
+  'signupGrantTricklePoolDaily',
   'signupGrantRiskPolicy',
   'signupGrantActivityEnabled',
   'signupGrantOrgInviteEnabled',
@@ -534,6 +542,10 @@ export const SettingKeySchema = z.enum([
   'signupGrantActivityMaxCredits',
   'signupGrantActivityPreviewTestMode',
   'signupUnlockPaymentHoldHours',
+  'signupGrantInitialCredits',
+  'signupGrantDailyCredits',
+  'signupGrantDripCap',
+  'signupGrantInviteBonusCredits',
   'maxSignupsPerIpPerDay',
   'maxSignupsPerAsnPerHour',
   'teamPlanMinSeats',
@@ -1262,6 +1274,10 @@ export const DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_INDIVIDUAL_DEFAULT = 1;
 export const DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_ORGANIZATION_DEFAULT = 5;
 export const DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_MAX = 100;
 
+/** Public list prices, in USD per call, of the paid providers behind web_search and web_fetch. */
+export const SERPAPI_SEARCH_COST_USD_DEFAULT = 0.015;
+export const FIRECRAWL_FETCH_COST_USD_DEFAULT = 0.002;
+
 function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: number; int?: boolean } & BaseSetting) {
   let numberSchema = z.coerce.number();
   // Opt-in, not the factory default: several settings are genuine fractions (see
@@ -1407,6 +1423,32 @@ export const UsagePatternSignalsConfigSchema = z.object({
 });
 
 export type UsagePatternSignalsConfig = z.infer<typeof UsagePatternSignalsConfigSchema>;
+
+/**
+ * Operator limits for advisory abuse assessments (apps/client/server/security/abuseAssessment/abuseAssessment.ts).
+ * Every default spends nothing: no model, a zero budget and the sweep off. `abuseAssessmentEnabled`
+ * gates all provider egress on top of this.
+ */
+export const AbuseAssessmentConfigSchema = z.object({
+  /** Decisions model to ask; must be served here and have a platform key. Null means no calls. */
+  model: z.enum(DECISION_MODEL_IDS).nullable().prefault(null),
+  /** Platform spend per 24h window (opened by the first call), in USD, at each call's worst-case cost. */
+  dailyBudgetUsd: z.number().min(0).max(1000).prefault(0),
+  /** Provider calls per 24h window (opened by the first call), across admin, sweep and replay runs. */
+  maxCallsPerDay: z.number().int().min(0).max(10_000).prefault(100),
+  /** Provider calls in flight at once, across all instances. */
+  maxConcurrency: z.number().int().min(1).max(10).prefault(2),
+  /** Lets the hourly sweep assess unreviewed shadow detections; the admin button works without it. */
+  sweepEnabled: z.boolean().prefault(false),
+  /** Share (0-100) of unreviewed detections the sweep assesses, chosen by a stable hash of the detection. */
+  sweepRolloutPercent: z.number().int().min(0).max(100).prefault(0),
+  /** Detections assessed per sweep run. */
+  maxAssessmentsPerSweep: z.number().int().min(1).max(500).prefault(20),
+  /** How far back the sweep looks for unreviewed detections. */
+  sweepLookbackHours: z.number().int().min(1).max(720).prefault(24),
+});
+
+export type AbuseAssessmentConfig = z.infer<typeof AbuseAssessmentConfigSchema>;
 
 export enum ServerStatusEnum {
   Live = 'live',
@@ -2145,6 +2187,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'WolframAlphaKey', order: 4 },
       { key: 'FmpApiKey', order: 5 },
       { key: 'PotionQuestApiKey', order: 6 },
+      { key: 'SerpApiSearchCostUsd', order: 7 },
     ],
   },
   FEEDBACK: {
@@ -2282,6 +2325,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'signupGrantCredits', order: 5 },
       { key: 'verifiedUnlockCredits', order: 6 },
       { key: 'signupGrantDailyBudget', order: 7 },
+      { key: 'signupGrantSignupPoolDaily', order: 7.1 },
+      { key: 'signupGrantTricklePoolDaily', order: 7.2 },
       { key: 'signupGrantRiskPolicy', order: 8 },
       { key: 'signupGrantActivityEnabled', order: 9 },
       { key: 'signupGrantOrgInviteEnabled', order: 10 },
@@ -2292,6 +2337,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'signupGrantActivityMaxCredits', order: 14 },
       { key: 'signupGrantActivityPreviewTestMode', order: 14.5 },
       { key: 'signupUnlockPaymentHoldHours', order: 14.6 },
+      { key: 'signupGrantInitialCredits', order: 14.7 },
+      { key: 'signupGrantDailyCredits', order: 14.8 },
+      { key: 'signupGrantDripCap', order: 14.9 },
+      { key: 'signupGrantInviteBonusCredits', order: 14.95 },
       { key: 'maxSignupsPerIpPerDay', order: 15 },
       { key: 'maxSignupsPerAsnPerHour', order: 16 },
       { key: 'freeTierDailySpendCapCredits', order: 17 },
@@ -2321,6 +2370,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'signupAnomaly', order: 28 },
       { key: 'enableDomainIntelligence', order: 29 },
       { key: 'holdSignupsFromDomainsYoungerThanDays', order: 30 },
+      { key: 'autoConfirmDisposableAggregateHolds', order: 30.5 },
       { key: 'domainIntelligenceTimeoutMs', order: 31 },
       { key: 'paymentRiskAlertsEnabled', order: 32 },
       { key: 'paymentRiskYoungAccountMinutes', order: 33 },
@@ -2575,6 +2625,16 @@ export const API_SERVICE_GROUPS = {
     settings: [
       { key: 'usagePatternSignalsEnabled', order: 1 },
       { key: 'usagePatternSignalsConfig', order: 2 },
+    ],
+  },
+  ABUSE_ASSESSMENT: {
+    id: 'abuseAssessmentService',
+    name: 'Advisory Abuse Assessment',
+    description: 'Bounded model calls that add an advisory judgment to shadow detections for admin review',
+    icon: 'Security',
+    settings: [
+      { key: 'abuseAssessmentEnabled', order: 1 },
+      { key: 'abuseAssessmentConfig', order: 2 },
     ],
   },
   // Note: CONTEXT_TELEMETRY settings are managed in the Context Inspector tab (Admin UI)
@@ -4395,6 +4455,28 @@ export const settingsMap = {
     dependsOn: 'usagePatternSignalsEnabled',
     schema: UsagePatternSignalsConfigSchema,
   }),
+  abuseAssessmentEnabled: makeBooleanSetting({
+    key: 'abuseAssessmentEnabled',
+    name: 'Advisory Abuse Assessment',
+    defaultValue: false,
+    description:
+      'Lets a Decisions model add an advisory judgment (abuse, legitimate automation or insufficient evidence) to shadow detections, from a pseudonymous summary of counts and flags. Paid from the platform key and budget, never from the assessed account. Advisory only: it never changes an account, its access, its credits or its review state. Off means no provider calls.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.ABUSE_ASSESSMENT.id,
+    order: 1,
+  }),
+  abuseAssessmentConfig: makeObjectSetting({
+    key: 'abuseAssessmentConfig',
+    name: 'Advisory Abuse Assessment: Model and Limits',
+    defaultValue: AbuseAssessmentConfigSchema.parse({}),
+    description:
+      'The Decisions model to ask (it must have a platform key), the daily USD budget and call cap, concurrent calls, and the hourly sweep (on/off, rollout percent of unreviewed detections, detections per run, lookback hours). The defaults make no calls. Prefer a pinned model id (jev-1.13.0 over jev-latest): judgments are cached per model id, so an alias that moves keeps serving older judgments until the evidence changes.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.ABUSE_ASSESSMENT.id,
+    order: 2,
+    dependsOn: 'abuseAssessmentEnabled',
+    schema: AbuseAssessmentConfigSchema,
+  }),
   // Enforced by createModelAdmission (b4m-core/services/src/llm/modelAdmission.ts) and mirrored in
   // the model picker (apps/client/server/utils/callerModelList.ts).
   freeTierModelGateEnabled: makeBooleanSetting({
@@ -4677,7 +4759,7 @@ export const settingsMap = {
     defaultValue: false,
     userReadable: true,
     description:
-      'Enroll new self-serve accounts in staged grants. Existing accounts and explicit invite grants are unchanged.',
+      'Legacy fallback: every new signup is enrolled in a staged grant regardless of this switch. It only decides which older keys apply while Signup Grant Initial Credits or Signup Grant Drip Cap is unset (OFF keeps the flat grant: Default Free Credits, nothing locked).',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4707,12 +4789,34 @@ export const settingsMap = {
   }),
   signupGrantDailyBudget: makeNumberSetting({
     key: 'signupGrantDailyBudget',
-    name: 'Signup Grant Daily Budget',
+    name: 'Signup Grant Daily Budget (deprecated)',
+    defaultValue: 0,
+    min: 0,
+    int: true,
+    description: 'Deprecated: replaced by the signup and trickle pools; no longer read.',
+    hideOnProductionStages: true,
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupGrantSignupPoolDaily: makeNumberSetting({
+    key: 'signupGrantSignupPoolDaily',
+    name: 'Signup Pool (credits per day)',
     defaultValue: 0,
     min: 0,
     int: true,
     description:
-      'Maximum free signup credits paid out per UTC day across all new accounts. Grants past the budget are held until a later day. 0 disables the budget.',
+      'Absolute free credits paid per UTC day for initial signup grants, invite bonuses and no-card unlocks. Grants past it are held until a later day. 0 pauses these grants; there is no unlimited mode, and a missing or invalid value also pauses them and alerts.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupGrantTricklePoolDaily: makeNumberSetting({
+    key: 'signupGrantTricklePoolDaily',
+    name: 'Trickle Pool (credits per day)',
+    defaultValue: 0,
+    min: 0,
+    int: true,
+    description:
+      'Absolute free credits paid per UTC day for daily activity grants and gear and referral rewards. Activity grants past it are skipped for the day; rewards past it are queued and paid oldest first on a later day. 0 pauses all of them; there is no unlimited mode, and a missing or invalid value also pauses them and alerts.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4732,7 +4836,7 @@ export const settingsMap = {
     defaultValue: false,
     userReadable: true,
     description:
-      'Allow enrolled accounts to request an unlock once they keep the app open and in use for the minimum active time in a UTC day.',
+      'Legacy fallback: only read while Signup Grant Daily Credits is unset, where ON applies Signup Activity Daily Credits as the daily drip and OFF pays no drip. Set Signup Grant Daily Credits instead.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4794,7 +4898,7 @@ export const settingsMap = {
     int: true,
     userReadable: true,
     description:
-      'Credits released for each UTC day of qualifying active time. Pays only from the unlock pool (Verified Unlock Credits) and pays nothing while that is 0. Zero disables the activity drip.',
+      'Legacy fallback: the daily drip amount while Signup Grant Daily Credits is unset and Signup Grant Activity Unlock is ON. Set Signup Grant Daily Credits instead.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4805,7 +4909,10 @@ export const settingsMap = {
     min: 0,
     max: 1000000,
     int: true,
-    description: 'Total credits the activity drip may release per account. Zero disables the activity drip.',
+    // The client resolves the legacy drip cap from it while signupGrantDripCap is unset.
+    userReadable: true,
+    description:
+      'Legacy fallback: while Signup Grant Drip Cap is unset and Staged Signup Grants is ON, the drip cap is the smaller of this and Verified Unlock Credits (an unset Verified Unlock Credits counts as 0, so nothing drips). With staging OFF the cap is 0. Set Signup Grant Drip Cap instead.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4827,7 +4934,54 @@ export const settingsMap = {
     max: 720,
     int: true,
     description:
-      'Hours a subscription or card payment must settle before it releases the locked signup credits. A dispute, refund or early fraud warning in that window cancels the release. Zero releases them on payment.',
+      'Hours a subscription, credit pack or card payment must settle before it releases the locked signup credits. A dispute, refund or early fraud warning in that window cancels the release. Zero releases them on payment.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupGrantInitialCredits: makeNumberSetting({
+    key: 'signupGrantInitialCredits',
+    name: 'Signup Grant Initial Credits',
+    defaultValue: 0,
+    min: 0,
+    int: true,
+    userReadable: true,
+    description:
+      'Credits a new account receives after email verification. While unset, Signup Grant Credits applies if staged signup grants are enabled, then the default free credits.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupGrantDailyCredits: makeNumberSetting({
+    key: 'signupGrantDailyCredits',
+    name: 'Signup Grant Daily Credits',
+    defaultValue: 0,
+    min: 0,
+    int: true,
+    userReadable: true,
+    description:
+      'Credits paid for each day of qualifying activity until the drip cap is reached. Zero disables the drip. While unset, Signup Activity Daily Credits applies if the activity drip is enabled, else 0.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupGrantDripCap: makeNumberSetting({
+    key: 'signupGrantDripCap',
+    name: 'Signup Grant Drip Cap',
+    defaultValue: 9000,
+    min: 0,
+    int: true,
+    userReadable: true,
+    description:
+      'Total credits the daily drip may pay per account. Changes apply to enrolled accounts on their next drip, including accounts the drip already completed, but not accounts a verification unlock completed. Zero disables the drip. While unset, the smaller of Signup Activity Maximum Credits (9000 when unset) and Verified Unlock Credits (0 when unset) applies, or 0 while staged signup grants are off.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupGrantInviteBonusCredits: makeNumberSetting({
+    key: 'signupGrantInviteBonusCredits',
+    name: 'Signup Grant Invite Bonus Credits',
+    defaultValue: 0,
+    min: 0,
+    int: true,
+    userReadable: true,
+    description: 'Reserved for an invite bonus; not read yet.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4862,7 +5016,7 @@ export const settingsMap = {
     name: 'Default Free Credits',
     defaultValue: 0,
     description:
-      'Flat credits granted after email verification to a user who registers WITHOUT an invite code and is not enrolled in staged grants (Staged Signup Grants OFF, or the account has no staged grant). Includes eligible partner signups when Allow Open Registration is OFF; partner-rule credits are added on top. Does not set the staged amount: that is Signup Grant Credits, which was copied from this value once and is edited separately. 0 grants nothing. An unverified account receives no credits.',
+      'Legacy fallback: the credits a signup WITHOUT an invite code receives after email verification while Signup Grant Initial Credits is unset and either Staged Signup Grants is OFF or Signup Grant Credits is unset. Once Signup Grant Initial Credits is set, editing this no longer changes open-signup grants. Includes eligible partner signups when Allow Open Registration is OFF; partner-rule credits are added on top. 0 grants nothing. An unverified account receives no credits.',
     category: 'Users',
   }),
   noCardUnlockEnabled: makeBooleanSetting({
@@ -5365,6 +5519,15 @@ export const settingsMap = {
     description:
       'Registration age (from RDAP) below which a signup domain is held for review. 0 turns the age check off.',
   }),
+  autoConfirmDisposableAggregateHolds: makeBooleanSetting({
+    key: 'autoConfirmDisposableAggregateHolds',
+    name: 'Auto-Confirm Disposable-List Domain Holds',
+    defaultValue: true,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Confirm Signup Domain Holds whose reason is disposable-aggregate without waiting for an admin, keeping their free credits held. Runs every 10 minutes on stages with scheduled jobs. Each one is recorded in the Admin Audit Log as a system action, and an admin can still Release it from Signup Domain Holds.',
+  }),
   domainIntelligenceTimeoutMs: makeNumberSetting({
     key: 'domainIntelligenceTimeoutMs',
     name: 'Domain Lookup Timeout (ms)',
@@ -5757,6 +5920,18 @@ export const settingsMap = {
     category: 'Tools',
     group: API_SERVICE_GROUPS.SEARCH.id,
     order: 2,
+  }),
+  SerpApiSearchCostUsd: makeNumberSetting({
+    key: 'SerpApiSearchCostUsd',
+    name: 'Web Search Cost per Call (USD)',
+    defaultValue: SERPAPI_SEARCH_COST_USD_DEFAULT,
+    min: 0,
+    max: 1,
+    description:
+      "Provider cost in USD of one web search served by the Serp Search API. The credits a user is charged per search are this cost times the platform credits-per-USD rate, rounded up. The default is the public list price; set it to your plan's real per-search cost. 0 makes SerpAPI searches free. Searches served by SearXNG or from cache are never charged.",
+    category: 'Tools',
+    group: API_SERVICE_GROUPS.SEARCH.id,
+    order: 7,
   }),
   SearxngUrl: makeStringSetting({
     key: 'SearxngUrl',
@@ -6719,6 +6894,16 @@ export const settingsMap = {
     description:
       'Base URL for a self-hosted Firecrawl instance (e.g. http://firecrawl:3002). Leave blank to use the hosted Firecrawl cloud with the API key above.',
     defaultValue: '',
+    category: 'AI',
+  }),
+  FirecrawlFetchCostUsd: makeNumberSetting({
+    key: 'FirecrawlFetchCostUsd',
+    name: 'Web Fetch Cost per Call (USD)',
+    defaultValue: FIRECRAWL_FETCH_COST_USD_DEFAULT,
+    min: 0,
+    max: 1,
+    description:
+      "Provider cost in USD of one web page fetch through hosted Firecrawl. The credits a user is charged per fetch are this cost times the platform credits-per-USD rate, rounded up. The default is the public list price; set it to your plan's real per-fetch cost. 0 makes fetches free. Fetches through a self-hosted Firecrawl URL or the keyless direct fetch are never charged.",
     category: 'AI',
   }),
   PerplexityApiKey: makeStringSetting({

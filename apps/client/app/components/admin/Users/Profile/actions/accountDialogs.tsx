@@ -11,6 +11,7 @@ import { useForceResetMFA } from '@client/app/hooks/data/mfa';
 import { useSendSystemMessage } from '@client/app/hooks/data/inbox';
 import { ActionDialog, ADMIN_REASON_PRESETS, ChangePreview, undoAdminReason, useUndoToast } from '../../../shared';
 import { useAdminUserUpdate, adminUpdateErrorMessage } from './useAdminUserUpdate';
+import { warnSubscriptionCancelFailures } from './warnSubscriptionCancelFailures';
 import type { ProfileDialogProps } from './profileActions';
 import { accountStatus, displayName } from '../userProfileModel';
 
@@ -260,6 +261,53 @@ export const NewAccountSpendCapDialog: React.FC<ProfileDialogProps> = ({ user, o
   );
 };
 
+/**
+ * Marks the account as the team's own, or stops marking it (`isInternal`): its activity is then left
+ * out of customer counts in analytics. An admin counts as internal whatever this says.
+ */
+export const InternalAccountDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onAudit }) => {
+  const post = useAdminUserPost(user.id, 'The internal mark was not changed.');
+  const showUndo = useUndoToast();
+  const marking = !user.isInternal;
+  const label = (internal: boolean) => {
+    if (internal) return 'Internal';
+    return user.isAdmin ? 'Internal (admin)' : 'Customer';
+  };
+
+  const handleConfirm = async (reason: string) => {
+    await post('internal', { isInternal: marking, reason });
+    onClose();
+    showUndo({
+      message: marking ? 'Marked as internal' : 'No longer marked as internal',
+      onUndo: () => post('internal', { isInternal: !marking, reason: undoAdminReason(reason) }),
+      onViewAudit: onAudit,
+    });
+  };
+
+  return (
+    <ActionDialog
+      open
+      onClose={onClose}
+      title={marking ? 'Mark as an internal account' : 'Stop marking as internal'}
+      description={
+        marking
+          ? "Their activity is counted as the team's own and left out of customer numbers in analytics. Nothing about their access changes."
+          : "Their activity counts as a customer's again in analytics, unless they are an admin or on a staff email domain."
+      }
+      reasonPresets={ADMIN_REASON_PRESETS.internalAccount}
+      confirmLabel={marking ? 'Mark internal' : 'Stop marking'}
+      onConfirm={handleConfirm}
+      data-testid="internal-account-dialog"
+    >
+      <ChangePreview
+        before={label(!!user.isInternal)}
+        after={label(marking)}
+        data-testid="internal-account-dialog-preview"
+      />
+    </ActionDialog>
+  );
+};
+
 /** No undo: the user re-enrols their authenticator. */
 export const ResetMfaDialog: React.FC<ProfileDialogProps> = ({ user, onClose }) => {
   const resetMfa = useForceResetMFA();
@@ -303,8 +351,9 @@ export const DeleteUserDialog: React.FC<ProfileDialogProps & { onDeleted: () => 
   const deleteUser = useDeleteUser();
 
   const handleConfirm = async (reason: string) => {
-    await deleteUser.mutateAsync({ id: user.id, reason });
+    const response = await deleteUser.mutateAsync({ id: user.id, reason });
     onClose();
+    warnSubscriptionCancelFailures(response);
     onDeleted();
   };
 
@@ -313,7 +362,7 @@ export const DeleteUserDialog: React.FC<ProfileDialogProps & { onDeleted: () => 
       open
       onClose={onClose}
       title={`Delete ${displayName(user)}`}
-      description="Permanently removes this user and all their data. There is no undo; suspend them instead if you might need to restore access."
+      description="Permanently removes this user and all their data. Their live Stripe subscriptions, including those of organizations they own, are canceled with no refund. There is no undo; suspend them instead if you might need to restore access."
       reasonPresets={ADMIN_REASON_PRESETS.userDeletion}
       typedConfirm={
         user.email ? { expected: user.email, noun: 'email address' } : { expected: user.id, noun: 'user ID' }
@@ -379,7 +428,7 @@ export const LoginAsDialog: React.FC<ProfileDialogProps> = ({ user, onClose }) =
             type="button"
             onClick={() => {
               onClose();
-              void navigate({ to: '/profile', search: { tab: 'settings', section: 'security' } });
+              void navigate({ to: '/profile', search: { tab: 'security' } });
             }}
             sx={{ color: 'admin.link', bgcolor: 'transparent', border: 0, p: 0, cursor: 'pointer', font: 'inherit' }}
             data-testid="login-as-dialog-setup-mfa-btn"

@@ -1,4 +1,4 @@
-import { Box, Button, Chip, CircularProgress, Sheet, Stack, Switch, Typography, useTheme } from '@mui/joy';
+import { Box, Button, Chip, Sheet, Stack, Switch, Typography, useTheme } from '@mui/joy';
 import { useState } from 'react';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useSecurityScanCooldown } from '@client/app/hooks/useSecurityScanCooldown';
@@ -20,7 +20,16 @@ import { IncidentView } from './SecurityDashboard/IncidentView';
 import { ScanSummaryTable } from './SecurityDashboard/ScanSummaryTable';
 import { useSecurityDashboardSearch } from './SecurityDashboard/useSecurityDashboardSearch';
 import { SECURITY_VIEWS, type SecurityScan, type SecurityView } from './securityDashboardSearch';
-import { AdminPageHeader, ErrorState, SegmentedControl, ViewTabs, type SegmentedOption, type ViewTab } from './shared';
+import {
+  AdminPageHeader,
+  ErrorState,
+  LoadingState,
+  SegmentedControl,
+  UpdatingBar,
+  ViewTabs,
+  type SegmentedOption,
+  type ViewTab,
+} from './shared';
 import { SecurityFindingsTable } from './SecurityDashboard/SecurityFindingsTable';
 
 const statusColorMap: Record<SecurityCheckStatus, 'success' | 'warning' | 'danger' | 'neutral'> = {
@@ -66,18 +75,14 @@ const countBySeverity = (findings: Array<{ severity: SeverityLevel }>) => {
 };
 
 const SecurityWebTab = () => {
-  const { data: snapshot, isLoading, isError, refetch } = useSecurityDashboardWeb();
+  const { data: snapshot, isLoading, isFetching, isError, refetch } = useSecurityDashboardWeb();
   const runWebScan = useRunWebSecurityScan();
   const { cooldownActive, hoursRemaining } = useSecurityScanCooldown(snapshot?.checkedAt);
   const { data: schedule } = useSecurityScanSchedule('web');
   const updateSchedule = useUpdateSecurityScanSchedule('web');
 
   if (isLoading && !snapshot) {
-    return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight={200}>
-        <CircularProgress size="sm" />
-      </Box>
-    );
+    return <LoadingState label="Loading website scan" testId="security-scans-web-loading" />;
   }
 
   if (!snapshot && isError) {
@@ -154,6 +159,7 @@ const SecurityWebTab = () => {
 
   return (
     <Stack spacing={3} data-testid="security-dashboard-web-tab">
+      <UpdatingBar active={isFetching} testId="security-scans-web-updating" />
       <Stack direction="row" justifyContent="space-between" alignItems="center">
         <Box>
           <Typography level="title-lg">Website Security Scan</Typography>
@@ -577,7 +583,7 @@ const CloudFindingCard = ({
 };
 
 const InfrastructureBaselineSubTab = ({ initialSnapshot }: { initialSnapshot?: SecurityDashboardCloudSnapshot }) => {
-  const { data: liveSnapshot, isLoading, refetch } = useSecurityDashboardCloud();
+  const { data: liveSnapshot, isLoading, isFetching, refetch } = useSecurityDashboardCloud();
   const snapshot = liveSnapshot ?? initialSnapshot;
   const runCloudScan = useRunCloudSecurityScan();
   const { cooldownActive, hoursRemaining } = useSecurityScanCooldown(snapshot?.checkedAt);
@@ -585,11 +591,7 @@ const InfrastructureBaselineSubTab = ({ initialSnapshot }: { initialSnapshot?: S
   const updateSchedule = useUpdateSecurityScanSchedule('cloud');
 
   if (isLoading && !snapshot) {
-    return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight={200}>
-        <CircularProgress size="sm" />
-      </Box>
-    );
+    return <LoadingState label="Loading cloud baseline" testId="security-scans-cloud-loading" />;
   }
 
   if (!snapshot) {
@@ -656,6 +658,7 @@ const InfrastructureBaselineSubTab = ({ initialSnapshot }: { initialSnapshot?: S
 
   return (
     <Stack spacing={3}>
+      <UpdatingBar active={isFetching} testId="security-scans-cloud-updating" />
       <Stack direction="row" justifyContent="space-between" alignItems="center">
         <Typography level="body-sm" sx={{ color: 'neutral.600' }}>
           7 baseline checks across IAM, S3, CloudTrail, EC2, and Secrets Manager.
@@ -755,7 +758,7 @@ const InfrastructureBaselineSubTab = ({ initialSnapshot }: { initialSnapshot?: S
 };
 
 const ProwlerAuditSubTab = () => {
-  const { data: snapshot, isLoading, isError, refetch } = useSecurityDashboardProwler();
+  const { data: snapshot, isLoading, isFetching, isError, refetch } = useSecurityDashboardProwler();
   const runProwler = useRunProwlerScan();
   const { cooldownActive, hoursRemaining } = useSecurityScanCooldown(snapshot?.checkedAt);
   const [showAll, setShowAll] = useState(false);
@@ -773,11 +776,7 @@ const ProwlerAuditSubTab = () => {
   };
 
   if (isLoading) {
-    return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight={200}>
-        <CircularProgress size="sm" />
-      </Box>
-    );
+    return <LoadingState label="Loading Prowler audit" testId="security-scans-prowler-loading" />;
   }
 
   if (!snapshot && isError) {
@@ -834,6 +833,7 @@ const ProwlerAuditSubTab = () => {
 
   return (
     <Stack spacing={3}>
+      <UpdatingBar active={isFetching} testId="security-scans-prowler-updating" />
       <Stack direction="row" justifyContent="space-between" alignItems="center">
         <Typography level="body-sm" sx={{ color: 'neutral.600' }}>
           Deep AWS audit via Prowler — 300+ checks across IAM, S3, EC2, GuardDuty, and more.

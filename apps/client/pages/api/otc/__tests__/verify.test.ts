@@ -118,6 +118,8 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 }));
 vi.mock('@server/entitlements/invalidate', () => ({ pushEntitlementInvalidation: vi.fn() }));
 
+// Distinct identity so a test can prove the repository itself reaches the grant adapters.
+const grantPackageRepositoryStub = vi.hoisted(() => ({ marker: 'grant-package-repository' }));
 const mockFindByEmail = vi.fn();
 const mockFindSetting = vi.fn();
 const mockClaimOnce = vi.fn();
@@ -128,6 +130,7 @@ const mockUserUpdate = vi.fn();
 const mockClearPending = vi.fn();
 const mockAddTagsToUser = vi.fn();
 const mockReleasePending = vi.fn();
+const mockFindUserById = vi.fn();
 const mockDomainEstablished = vi.fn(async (_domain: string, _verifiedBefore: Date) => false);
 // Default: this inbox has not claimed its free-credit grant anywhere else, so the domain grant pays.
 const mockClaimFreeCreditGrant = vi.fn(async (_userId: string) => true);
@@ -160,8 +163,10 @@ vi.mock('@bike4mind/database', () => ({
   subscriberRepository: {},
   creditTransactionRepository: {},
   creditLotRepository: {},
+  grantPackageRepository: grantPackageRepositoryStub,
   userRepository: {
     findByEmail: (...a: unknown[]) => mockFindByEmail(...a),
+    findById: (...a: unknown[]) => mockFindUserById(...a),
     count: vi.fn(),
     update: (...a: unknown[]) => mockUserUpdate(...a),
     clearPendingFreeCreditGrant: (...a: unknown[]) => mockClearPending(...a),
@@ -542,6 +547,24 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     );
   });
 
+  it("passes an internal account's flags to the product credit, so the credit carries its mark", async () => {
+    mockRecordSignupAcquisition.mockResolvedValueOnce({ isSynthetic: false, isInternal: true });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    (req as any).headers.cookie = `${firstTouch}; b4m-consent-decision=granted`;
+
+    await handler(req, res);
+
+    expect(mockEmitSignup).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1', account: { isSynthetic: false, isInternal: true } })
+    );
+    expect(mockEmitFunnelEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'signup_completed',
+        user: expect.objectContaining({ id: 'user-1', isInternal: true }),
+      })
+    );
+  });
+
   it("credits the new account's signup to the product in its touch cookies, as an otc signup", async () => {
     const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
     (req as any).headers.cookie = `${firstTouch}; b4m-consent-decision=granted`;
@@ -553,6 +576,7 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
       userId: 'user-1',
       touches: { firstTouch: { source: 'widgets' } },
       method: 'otc',
+      account: { isSynthetic: false },
     });
   });
 
@@ -570,6 +594,16 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     const body = res._getJSONData();
     expect(body.accessToken).toBe('a');
     expectSelfUserStripped(body.user, body, 'user-1');
+  });
+
+  it('wires the grant package repository into the registration adapters', async () => {
+    mockRegisterViaOTC.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 1000 });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    const adapters = mockRegisterViaOTC.mock.calls[0][1] as { db: { grantPackages?: unknown } };
+    expect(adapters.db.grantPackages).toBe(grantPackageRepositoryStub);
   });
 
   it('persists the signup touches and reports email_verified and credits_granted for the new user', async () => {
@@ -700,6 +734,22 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     expect(mockEmitSignup).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', method: 'otc' }));
   });
 
+  it("carries a verified hop, read from the verify request's cookies, to signup_completed", async () => {
+    const hopId = 'c'.repeat(32);
+    const verifiedTouch = { srcProductId: 'source-product', hopId, redeemedAt: new Date() };
+    const acquisition = { verifiedTouch, signupMethod: 'otc', capturedAt: new Date() };
+    mockRecordSignupAcquisition.mockResolvedValueOnce({ acquisition, isSynthetic: false });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    // Verify is a same-origin request, so the browser's hop and visit cookies arrive on it.
+    (req as any).headers.cookie = `b4m_vid=${'d'.repeat(32)}; b4m_hop=${hopId}`;
+
+    await handler(req, res);
+
+    expect(mockRecordSignupAcquisition.mock.calls[0][0].req.headers.cookie).toContain(`b4m_hop=${hopId}`);
+    const signup = mockEmitFunnelEvent.mock.calls.find(([c]) => c.event === 'signup_completed')?.[0];
+    expect(signup.user).toEqual(expect.objectContaining({ id: 'user-1', acquisition }));
+  });
+
   it('ties every signup stage to the visit the code was entered in', async () => {
     const visitId = 'c'.repeat(32);
     const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
@@ -764,7 +814,12 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(mockEmitSignup).toHaveBeenCalledWith({ userId: 'user-1', touches: {}, method: 'otc' });
+    expect(mockEmitSignup).toHaveBeenCalledWith({
+      userId: 'user-1',
+      touches: {},
+      method: 'otc',
+      account: { isSynthetic: false },
+    });
   });
 
   // The case SameSite=Lax exists for, and the one the first version of this gate suppressed: a
@@ -782,6 +837,7 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
       userId: 'user-1',
       touches: { firstTouch: { source: 'widgets' } },
       method: 'otc',
+      account: { isSynthetic: false },
     });
   });
 
@@ -794,7 +850,12 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(mockEmitSignup).toHaveBeenCalledWith({ userId: 'user-1', touches: {}, method: 'otc' });
+    expect(mockEmitSignup).toHaveBeenCalledWith({
+      userId: 'user-1',
+      touches: {},
+      method: 'otc',
+      account: { isSynthetic: false },
+    });
   });
 
   // The guard is structural, not conditional: the emit sits after the existingUser branch has
@@ -1190,6 +1251,18 @@ describe('/api/otc/verify - existing user verification and pending free credits'
     expect(res._getJSONData()).toMatchObject({ tags: ['Customer'], pendingCreditGrant: null });
   });
 
+  it('wires the grant package repository into the held-grant release adapters', async () => {
+    mockFindByEmail.mockResolvedValue(pendingUser({ pendingCreditGrant: 250 }));
+    mockReleasePending.mockResolvedValue({ released: false, creditsGranted: 0, currentCredits: null, patch: {} });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(mockReleasePending).toHaveBeenCalledTimes(1);
+    const adapters = mockReleasePending.mock.calls[0][1] as { db: { grantPackages?: unknown } };
+    expect(adapters.db.grantPackages).toBe(grantPackageRepositoryStub);
+  });
+
   it('reports email_verified and the summed credits on the first verifying login', async () => {
     mockFindByEmail.mockResolvedValue(pendingUser({ pendingCreditGrant: 250 }));
     mockReleasePending.mockResolvedValue({
@@ -1322,10 +1395,62 @@ describe('/api/otc/verify - partner-domain invite bypass', () => {
     mockFindByEmail.mockResolvedValue(null);
     mockRegisterViaOTC.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 0 });
     mockPartnerGrant.mockResolvedValue(noGrant);
+    mockReleasePending.mockResolvedValue({ released: false, creditsGranted: 0, currentCredits: null, patch: {} });
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it('releases the pending free credits only after the invite transaction has committed', async () => {
+    let committed = false;
+    mockWithTransaction.mockImplementationOnce(async callback => {
+      const result = await callback();
+      committed = true;
+      return result;
+    });
+    let releasedAfterCommit: boolean | null = null;
+    mockReleasePending.mockImplementation(async () => {
+      releasedAfterCommit = committed;
+      return { released: true, creditsGranted: 3000, currentCredits: 3000, patch: { tags: [] } };
+    });
+    mockClearPending.mockResolvedValue({ tags: [] });
+    mockFindUserById.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 3000 });
+    mockRegisterViaOTC.mockResolvedValue({
+      id: 'user-1',
+      tokenVersion: 0,
+      currentCredits: 0,
+      tags: ['Customer', PENDING_FREE_CREDITS_TAG],
+      pendingCreditGrant: 3000,
+    });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    req.body.inviteCode = 'INVITE123';
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRegisterViaOTC).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ deferFreeCreditRelease: true })
+    );
+    expect(mockReleasePending).toHaveBeenCalledTimes(1);
+    expect(mockReleasePending.mock.calls[0][0]).toEqual({
+      id: 'user-1',
+      tags: ['Customer', PENDING_FREE_CREDITS_TAG],
+      pendingCreditGrant: 3000,
+    });
+    expect(releasedAfterCommit).toBe(true);
+  });
+
+  it('leaves the credit release to registerViaOTC when there is no invite transaction', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRegisterViaOTC).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ deferFreeCreditRelease: false })
+    );
+    expect(mockReleasePending).not.toHaveBeenCalled();
   });
 
   it('forwards a validated invite without skipping the registration gate', async () => {

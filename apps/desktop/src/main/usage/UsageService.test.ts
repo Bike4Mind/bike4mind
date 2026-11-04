@@ -1,6 +1,6 @@
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { describe, expect, it, vi } from 'vitest';
-import { UsageService } from './UsageService';
+import { isUsageWindow, UsageService } from './UsageService';
 
 const NOW = Date.parse('2026-10-07T12:00:00.000Z');
 
@@ -134,5 +134,11 @@ describe('UsageService', () => {
     const get = vi.fn((url: string) => (url.startsWith('/api/credits') ? { error: 'nope' } : USAGE_BODY));
     const result = await service(get).history('last-24-hours');
     expect(result.ok).toBe(false);
+  });
+
+  it('accepts only its own window names from the renderer', () => {
+    expect(isUsageWindow('last-24-hours')).toBe(true);
+    for (const name of ['constructor', 'toString', '__proto__', 'hasOwnProperty'])
+      expect(isUsageWindow(name)).toBe(false);
   });
 });

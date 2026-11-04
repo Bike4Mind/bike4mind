@@ -20,7 +20,7 @@
 
 import { secrets } from './secrets';
 import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
-import { chatCompletionLogGroupName } from './chatCompletionLogGroup';
+import { llmSpendLogSources } from './llmSpendLogGroups';
 import { businessMetricAlertsDLQ } from './businessMetricAlerts';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import {
@@ -86,6 +86,7 @@ import { apiProbeDetectorDeadLetter } from './apiProbeDetectorDeadLetter';
 import { spendMonitorDeadLetter } from './spendMonitorDeadLetter';
 import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
+import { imageModerationReviewSweepDeadLetter } from './imageModerationReviewSweepDeadLetter';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
@@ -130,10 +131,15 @@ if (isMonitoredStage) {
   });
 
   const mentionArgs = alarmSlackMentionFunctionArgs();
-  // The young-account spend alarms list the accounts behind a breach by querying the ChatCompletion
-  // log group their metric is filtered from (apps/workers/src/events/youngAccountSpendDetail.ts).
-  // The lookup's arn drops the API's trailing stream wildcard, so the policy names both forms.
-  const spendLogGroupArn = aws.cloudwatch.getLogGroupOutput({ name: chatCompletionLogGroupName }).arn;
+  // The young-account spend alarms list the accounts behind a breach by querying the log groups
+  // their metric is filtered from (apps/workers/src/events/youngAccountSpendDetail.ts).
+  // A log group arn drops the API's trailing stream wildcard, so the policy names both forms.
+  const spendLogSources = llmSpendLogSources();
+  const spendLogGroupNames = spendLogSources.map(source => source.logGroupName);
+  const spendLogGroupArns = spendLogSources.flatMap(({ logGroupName, logGroupArn }) => {
+    const arn = logGroupArn ?? aws.cloudwatch.getLogGroupOutput({ name: logGroupName }).arn;
+    return [arn, $interpolate`${arn}:*`];
+  });
   dlqAlarmTopic!.subscribe(
     {
       handler: 'apps/workers/src/events/dlqAlarmToSlack.handler',
@@ -147,11 +153,11 @@ if (isMonitoredStage) {
       environment: {
         ...DEFAULT_LAMBDA_ENVIRONMENT,
         ...mentionArgs.environment,
-        LLM_SPEND_LOG_GROUP: chatCompletionLogGroupName,
+        LLM_SPEND_LOG_GROUPS: $util.all(spendLogGroupNames).apply(names => names.join(',')),
       },
       permissions: [
         ...mentionArgs.permissions,
-        { actions: ['logs:StartQuery'], resources: [spendLogGroupArn, $interpolate`${spendLogGroupArn}:*`] },
+        { actions: ['logs:StartQuery'], resources: spendLogGroupArns },
         { actions: ['logs:GetQueryResults', 'logs:StopQuery'], resources: ['*'] },
       ],
     },
@@ -602,6 +608,15 @@ if (isMonitoredStage) {
       displayName: 'API Probe Detector',
       application: 'Security',
       queue: apiProbeDetectorDeadLetter.queue,
+    });
+  }
+
+  if (imageModerationReviewSweepDeadLetter) {
+    createDlqAlarms({
+      label: 'image-moderation-review-sweep',
+      displayName: 'Image Moderation Review Sweep',
+      application: 'Moderation',
+      queue: imageModerationReviewSweepDeadLetter.queue,
     });
   }
 

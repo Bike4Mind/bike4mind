@@ -93,16 +93,22 @@ export function isConnectionLostError(error: unknown): boolean {
   return name === 'MongooseError' && typeof message === 'string' && message.includes('buffering timed out');
 }
 
-// A failed socket is already invalidated by the driver, so an immediate re-ping lands on a fresh
+// A failed socket is already invalidated by the driver, so an immediate retry lands on a fresh
 // one. A server-selection timeout has already waited serverSelectionTimeoutMS, so retrying it only
 // doubles the failure latency.
-const PING_RETRY_ERROR_NAMES = CONNECTION_LOST_ERROR_NAMES.filter(name => name !== 'MongoServerSelectionError');
+const NETWORK_RETRY_ERROR_NAMES = CONNECTION_LOST_ERROR_NAMES.filter(name => name !== 'MongoServerSelectionError');
 
-const isRetryablePingError = (error: unknown): boolean => {
+/**
+ * True when an operation died on its socket (reset, or no reply within socketTimeoutMS) - the case
+ * where retrying once on a fresh connection is worth it. Excludes server selection, which has
+ * already waited its full timeout. Matched by name because more than one copy of the driver can
+ * be installed.
+ */
+export function isMongoNetworkError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const { name } = error as { name?: unknown };
-  return typeof name === 'string' && PING_RETRY_ERROR_NAMES.includes(name);
-};
+  return typeof name === 'string' && NETWORK_RETRY_ERROR_NAMES.includes(name);
+}
 
 const pingServer = () => mongoose.connection.getClient().db().command({ ping: 1 });
 
@@ -131,7 +137,7 @@ const checkWarmConnection = async (logger: Logger): Promise<void> => {
   try {
     await pingServer();
   } catch (error) {
-    if (!isRetryablePingError(error)) throw error;
+    if (!isMongoNetworkError(error)) throw error;
     // The driver invalidates failed network connections. Re-select without closing other requests' sockets.
     logger.warn('Database ping failed after inactivity, retrying on a healthy connection', {
       error: error instanceof Error ? error.message : String(error),

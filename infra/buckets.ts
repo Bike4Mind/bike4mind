@@ -372,7 +372,7 @@ const appFilesBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('appFi
 
 // Create Lambda functions separately so they can be linked to other resources
 const uploadCompleteFunction = new sst.aws.Function('HistoryUploadCompleteFunction', {
-  handler: 'apps/client/server/s3/historyUploadComplete.dispatch',
+  handler: 'apps/workers/src/s3/historyUploadComplete.dispatch',
   runtime: 'nodejs24.x',
   link: [...allSecrets, historyImportBucket, websocketApi],
   vpc: lambdaVpc,

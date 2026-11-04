@@ -59,6 +59,8 @@ import type {
   UpdateProjectRequest,
   UpdateProjectResult,
 } from './chat';
+import type { GenerationSettings } from './generation';
+import type { ModelSettings } from './modelSettings';
 import type { DevLogRecord, DevLogSnapshot } from './devLog';
 import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
@@ -151,6 +153,8 @@ export const IPC_CHANNELS = {
   /** main -> renderer push of the integration's state; never carries the key. */
   fleetStateChanged: 'fleet:state-changed',
   chatListModels: 'chat:list-models',
+  /** main -> renderer: a model server's slow listing finished, or late effort levels rebuilt the hosted list. */
+  chatModelsChanged: 'chat:models-changed',
   chatListSuggestionModels: 'chat:list-suggestion-models',
   chatGetLocalContext: 'chat:get-local-context',
   chatSetLocalContext: 'chat:set-local-context',
@@ -165,6 +169,9 @@ export const IPC_CHANNELS = {
   chatHistoryChanged: 'chat:history-changed',
   chatSetSessionReasoningEffort: 'chat:set-session-reasoning-effort',
   chatSetSessionPromptCacheTtl: 'chat:set-session-prompt-cache-ttl',
+  chatSetSessionGeneration: 'chat:set-session-generation',
+  chatGetModelSettings: 'chat:get-model-settings',
+  chatSetModelSettings: 'chat:set-model-settings',
   chatSetSessionPinned: 'chat:set-session-pinned',
   /**
    * The one way an approval mode changes. Renderer -> main only, driven by the composer pill:
@@ -717,6 +724,11 @@ export interface DesktopApi {
      * device and server models but keeps the cached hosted list.
      */
     listModels(force?: boolean | 'local'): Promise<ChatModelCatalog>;
+    /**
+     * A model server's listing finished, or a model's effort levels arrived, after the list was read; read it again
+     * without forcing.
+     */
+    onModelsChanged(listener: () => void): () => void;
     /** The models Settings may pin the next-prompt hint to: small hosted ones, then local ones. */
     listSuggestionModels(): Promise<ChatModelCatalog>;
     /** How local models size their context window; see @shared/localContextSetting. */
@@ -739,6 +751,12 @@ export interface DesktopApi {
     setSessionReasoningEffort(sessionId: string, effort: ReasoningEffortSetting): Promise<ChatSessionSummary | null>;
     /** How long this conversation's prompt cache lives. Null when the session is gone. */
     setSessionPromptCacheTtl(sessionId: string, ttl: PromptCacheTtl): Promise<ChatSessionSummary | null>;
+    /** Replace this conversation's sampling and output overrides; `{}` clears them. Null when the session is gone. */
+    setSessionGeneration(sessionId: string, generation: GenerationSettings): Promise<ChatSessionSummary | null>;
+    /** A device-side model's defaults from the Models screen; `{}` when none are set, null for an id that is not one. */
+    getModelSettings(modelId: string): Promise<ModelSettings | null>;
+    /** Replace a device-side model's defaults; `{}` clears them. Null when the id or set is not valid. */
+    setModelSettings(modelId: string, settings: ModelSettings): Promise<ModelSettings | null>;
     /** Pin a conversation to the top of the sidebar. Null when the session is gone. */
     setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null>;
     /**

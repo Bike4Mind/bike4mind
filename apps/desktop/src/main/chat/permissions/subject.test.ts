@@ -77,6 +77,16 @@ describe('everySessionRules', () => {
     ]);
   });
 
+  it('derives no rule for a command that reaches a distro no folder is in', () => {
+    const prompt = shellPrompt([{ text: 'cat x', pattern: 'cat *', coverable: true }]);
+    const unreachable = {
+      ...prompt,
+      always: { ...prompt.always!, ungranted: ['\\\\wsl.localhost\\Debian\\etc\\hosts'] },
+    };
+    expect(rulesFor('bash_execute', { command: 'cat x' }, prompt)).toEqual(['Bash(cat:*)']);
+    expect(rulesFor('bash_execute', { command: 'cat x' }, unreachable)).toEqual([]);
+  });
+
   it('derives the exact command for a program whose flags decide whether it sends data', () => {
     const prompt = shellPrompt([
       { text: 'curl -s http://localhost:3000', pattern: 'curl *', coverable: true },
@@ -178,6 +188,12 @@ describe('everySessionRules', () => {
       rulesFor('web_fetch', { url: 'https://x.test/' }, { detail: '', key: 'k', choice: { options: [] } })
     ).toEqual([]);
     expect(rulesFor('browser_evaluate', {}, { detail: '', key: 'k', askInFull: true })).toEqual([]);
+  });
+
+  it('derives nothing for a card that allows one run only', () => {
+    expect(
+      rulesFor('session_send', { session_id: 's', message: 'hi' }, { detail: '', key: 'k', allowOnce: true })
+    ).toEqual([]);
   });
 
   it('derives the bare tool name for a desktop tool, which parses as a native rule', () => {

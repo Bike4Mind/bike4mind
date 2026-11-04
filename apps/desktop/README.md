@@ -22,6 +22,16 @@ No Node.js, pnpm, or source checkout is required.
    Windows and installs the build native to the PC. It is not code signed yet,
    so SmartScreen shows a warning on first run. In-app updates work on Windows. Shell commands
    run in Git Bash, so Code projects need [Git for Windows](https://git-scm.com/download/win).
+   A project opened from `\\wsl.localhost\<distro>\...` (or `\\wsl$\<distro>\...`) runs git,
+   shell commands, search and the terminal inside that WSL distro instead, with the distro's own
+   git and toolchain and the PATH of the user's login shell there; such a project does not need
+   Git for Windows, but the distro needs bash and GNU coreutils (a path check uses `realpath -z`),
+   so a minimal distro such as Alpine denies every path. File search lists the folder with
+   `find -printf`, which needs GNU findutils; with busybox `find` it walks the share from
+   Windows instead, which is slower. `gh` still runs on Windows, so finding a project's open
+   pull request by branch needs `gh` installed and signed in on the Windows side;
+   it is pointed at the repository gh would pick from the distro's remotes (the one
+   `gh repo set-default` marked, else `upstream`, else `origin`), so it needs no git on Windows.
    The rest of the local tool layer (file access, sandboxing) is not yet verified on Windows.
 
 New distribution releases require Developer ID signing and notarization. Legacy unsigned
@@ -332,7 +342,7 @@ Local testing can build with `B4M_CURATED_DEV_KEYS=1` in the shell and use the r
 The override is ignored in packaged apps and builds without test keys. Test-key
 builds use a separate cache directory and are rejected by `curated:check-build`;
 never enable the dev flag for a release.
-The same `B4M_CURATED_MANIFEST_URL` and `CURATED_PUBLIC_URL` variables also configure every npm CLI release and feature-branch snapshot publish: they bake the URL into the CLI, and the release gate checks `packages/cli/dist` the same way.
+The same `B4M_CURATED_MANIFEST_URL` and `CURATED_PUBLIC_URL` variables also configure every npm CLI release: they bake the URL into the CLI, and the release gate checks `packages/cli/dist` the same way.
 A dev build that cached a list under the old signature format drops it on next start, and a republish at a lower sequence is refused until the `curated-test-keys/` directory is deleted.
 
 The validation job generates `latest-mac.yml`, `latest-linux.yml` and `latest.yml` (Windows) from the actual

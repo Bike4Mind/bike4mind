@@ -36,9 +36,6 @@ vi.mock('@server/middlewares/baseApi', () => {
 vi.mock('@bike4mind/database', () => ({
   CounterLog: { collection: { name: 'counterlogs' }, aggregate: vi.fn().mockResolvedValue([]) },
   User: { collection: { name: 'users' } },
-  DailyReport: { find: vi.fn().mockResolvedValue([]) },
-  dailyReportRepository: { upsertReport: vi.fn() },
-  weeklyReportRepository: { findByDateRange: vi.fn(), upsertReport: vi.fn() },
   counterLogRepository: {},
   cacheRepository: {
     findByKey: vi.fn(async (key: string) => {

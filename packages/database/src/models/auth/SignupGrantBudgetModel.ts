@@ -7,6 +7,7 @@ type SignupGrantBudgetDay = {
   reservedIds: string[];
   alerted50: boolean;
   alerted100: boolean;
+  alertedMissing: boolean;
   createdAt?: Date;
 };
 
@@ -17,11 +18,12 @@ const budgetDaySchema = new Schema<SignupGrantBudgetDay>(
     reservedIds: { type: [String], default: [] },
     alerted50: { type: Boolean, default: false },
     alerted100: { type: Boolean, default: false },
+    alertedMissing: { type: Boolean, default: false },
   },
   { versionKey: false, timestamps: { createdAt: true, updatedAt: false } }
 );
 
-// Days are kept 90 days for reporting.
+// _id is `<pool>:<YYYY-MM-DD>`. Days are kept 90 days for reporting.
 budgetDaySchema.index({ createdAt: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 });
 
 export const SignupGrantBudgetDayModel =
@@ -35,6 +37,31 @@ const isDuplicate = (error: unknown): boolean =>
 // caller's payout transaction (session: null opts out of the ambient one), or concurrent payouts
 // would write-conflict on it. Callers refund a reservation whose payout aborts.
 const detached = { session: null } as const;
+
+/**
+ * Moves today's spend on the pre-pool counter (keyed by the bare day) onto the pool counters, signup pool
+ * first, so the day the pools go live cannot pay the retired cap again on top of what it already paid.
+ * The `<pool>:<day>` key must match signupGrantBudgetKey (b4m-core/services userService/signupGrantBudget.ts).
+ */
+export async function carryLegacyGrantBudgetSpend(
+  caps: { signup: number; trickle: number },
+  now: Date = new Date()
+): Promise<void> {
+  const day = now.toISOString().slice(0, 10);
+  const legacy = await SignupGrantBudgetDayModel.findById(day, { spent: 1 }, detached).lean();
+  if (!legacy?.spent) return;
+  const signup = Math.min(legacy.spent, caps.signup);
+  const shares = { signup, trickle: legacy.spent - signup };
+  for (const pool of ['signup', 'trickle'] as const) {
+    if (shares[pool] <= 0) continue;
+    // $max, not $set: draws the new code already made on the pool counter are kept.
+    await SignupGrantBudgetDayModel.updateOne(
+      { _id: `${pool}:${day}` },
+      { $max: { spent: shares[pool] } },
+      { upsert: true }
+    );
+  }
+}
 
 export const signupGrantBudgetRepository: SignupGrantBudgetRepository = {
   async reserve(day, transactionId, amount, budget) {
@@ -71,7 +98,7 @@ export const signupGrantBudgetRepository: SignupGrantBudgetRepository = {
     return row?.spent ?? 0;
   },
   async markAlerted(day, threshold) {
-    const flag = threshold === 50 ? 'alerted50' : 'alerted100';
+    const flag = threshold === 50 ? 'alerted50' : threshold === 100 ? 'alerted100' : 'alertedMissing';
     const result = await SignupGrantBudgetDayModel.updateOne(
       { _id: day, [flag]: { $ne: true } },
       { $set: { [flag]: true } },

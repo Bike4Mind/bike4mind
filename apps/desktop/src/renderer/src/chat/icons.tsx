@@ -135,6 +135,14 @@ export function FolderPlusIcon() {
   );
 }
 
+export function PaperclipIcon() {
+  return (
+    <Glyph>
+      <path d="M13 7.6l-5 5a3.2 3.2 0 01-4.5-4.5l5.4-5.4a2.1 2.1 0 013 3l-5.3 5.3a1 1 0 01-1.5-1.5l4.8-4.8" />
+    </Glyph>
+  );
+}
+
 /** Which b4m backend answers. A server, not a laptop: this app's agent always runs here. */
 export function ServerIcon({ size }: { size?: number } = {}) {
   return (

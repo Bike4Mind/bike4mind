@@ -44,6 +44,7 @@ vi.mock('@client/app/hooks/data/sessions', () => ({
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({
   useGetSettingsValue: (key: string) => (key === 'enforceCredits' ? state.enforceCredits : undefined),
+  useSettingsFromServer: () => ({ data: undefined }),
 }));
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({
   useEffectiveCredits: (options?: { live?: boolean }) =>

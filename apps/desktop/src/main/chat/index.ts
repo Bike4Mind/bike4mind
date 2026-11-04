@@ -62,6 +62,10 @@ import { createMainLogger } from '../logger';
 import { ApprovalModePreference } from './ApprovalModePreference';
 import { PromptCacheTtlPreference } from './PromptCacheTtlPreference';
 import { LocalContextPreference } from './LocalContextPreference';
+import { createLateReload } from './lateReload';
+import { registerGenerationIpc } from './generationIpc';
+import { registerModelSettingsIpc } from './modelSettingsIpc';
+import { ModelSettingsStore } from './ModelSettingsStore';
 import { registerLocalContextIpc } from './localContextIpc';
 import { localContextSizing, localHardware } from './localContextSizing';
 import { SidebarSectionStore } from './SidebarSectionStore';
@@ -104,6 +108,7 @@ import { ModelServerStore } from '../modelServers/ModelServerStore';
 import { withEnteredSpecs } from '../models/enteredHardware';
 import { machineView } from '../models/fit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
+import type { CatalogSampling } from '@shared/generation';
 import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './sessionScope';
 import {
   branchCheckouts,
@@ -187,6 +192,9 @@ const DEFERRED_TOOLS_OVERRIDE = parseDeferredToolsOverride(
 
 /** How much of a background process's output the panel asks for when it rejoins after a reload. */
 const PANEL_TAIL_CHARS = 20_000;
+
+/** Window (ms) that gathers late server listings into one chat model list reload; see lateReload.ts. */
+const LATE_RELOAD_DEBOUNCE_MS = 250;
 
 /** Re-encode quality for a downscaled screenshot. Text in a UI stays legible well below this. */
 const SHRUNK_JPEG_QUALITY = 82;
@@ -293,6 +301,8 @@ export interface RegisteredChat {
   spareWorktrees: SpareWorktrees;
   /** Saved model servers, which the Models screen also pulls to and removes from. */
   modelServers: ModelServerRegistry;
+  /** Stops their health checks and any pending model list reload, on quit. */
+  stopModelServers(): void;
   /** The Settings choice of local model context, which the Models screen's fit badges also plan for. */
   localContext: LocalContextPreference;
   /** The capability ledger, which the Models screen records approved downloads in. */
@@ -379,6 +389,8 @@ export function registerChat(
     cancelModelPull?(key: string): Promise<boolean>;
     /** The curated list's projector sizes, so chat sizes a vision model the way the Models screen does. */
     pinnedProjectors?(): ReadonlyMap<string, number>;
+    /** The curated family sampling for an installed Ollama model; see ModelHubService.catalogSampling. */
+    catalogSampling?(ollamaName: string): CatalogSampling | undefined;
   } = {}
 ): RegisteredChat {
   const logger = createMainLogger(VERBOSE);
@@ -483,14 +495,20 @@ export function registerChat(
     setting: () => localContext.read(),
     pinnedProjectors: () => hooks.pinnedProjectors?.() ?? new Map(),
   });
+  const lateReload = createLateReload(() => {
+    models.forgetLocal();
+    send(IPC_CHANNELS.chatModelsChanged, undefined);
+  }, LATE_RELOAD_DEBOUNCE_MS);
   // safeStorage like the MCP secrets: a server's token or header value never goes to plain JSON.
   const modelServers = new ModelServerRegistry({
     store: new ModelServerStore(safeStorage, privateFile(join(userData, 'model-servers.json')), logger),
     logger,
     changed: servers => {
-      models.forgetLocal();
+      models.expireLocal();
       send(IPC_CHANNELS.modelServersChanged, servers);
     },
+    edited: () => models.forgetLocal(),
+    listedLate: lateReload.notify,
     localSpecsChanged: () => {
       forgetLocalContexts();
       localSizing.forget?.();
@@ -499,12 +517,19 @@ export function registerChat(
   });
   localHardware.setOverride(probed => withEnteredSpecs(probed, modelServers.specs(LOCAL_SERVER_ID)));
   void modelServers.start().catch(error => logger.warn(`MODEL SERVERS: could not load: ${String(error)}`));
-  const local = new LocalModels(new OllamaLocal((url, init) => net.fetch(url, init), localSizing), modelServers);
+  const modelSettings = new ModelSettingsStore(join(userData, 'model-settings.json'), message => logger.warn(message));
+  const local = new LocalModels(
+    new OllamaLocal((url, init) => net.fetch(url, init), localSizing),
+    modelServers,
+    // Matched by name on every server; requestGeneration keeps each server to the fields it takes.
+    option => hooks.catalogSampling?.(option.name)
+  );
   const models = new ModelCatalog(
     {
       logger,
       getApiClient: () => auth.getApiClient(),
       getEnvironmentUrl: () => auth.getState().environment.url,
+      changed: () => send(IPC_CHANNELS.chatModelsChanged, null),
     },
     local
   );
@@ -645,6 +670,7 @@ export function registerChat(
     access,
     attachments,
     models,
+    modelSettings,
     logger,
     turnTiming: TURN_TIMING,
     preferredModel: PREFERRED_MODEL,
@@ -783,6 +809,8 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatSetSessionPromptCacheTtl, (_event, sessionId: string, ttl: unknown) =>
     isPromptCacheTtl(ttl) ? service.setSessionPromptCacheTtl(sessionId, ttl) : null
   );
+  registerGenerationIpc(ipcMain, service);
+  registerModelSettingsIpc(ipcMain, modelSettings);
   ipcMain.handle(IPC_CHANNELS.chatSetSessionPinned, (_event, sessionId: string, pinned: boolean) =>
     service.setSessionPinned(sessionId, pinned)
   );
@@ -1389,6 +1417,10 @@ export function registerChat(
     claudeImport,
     spareWorktrees,
     modelServers,
+    stopModelServers: () => {
+      lateReload.stop();
+      modelServers.stop();
+    },
     localContext,
     capabilityLedger,
   };

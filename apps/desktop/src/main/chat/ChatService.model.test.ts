@@ -1,10 +1,10 @@
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatModelOption } from '@shared/chat';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import type { ModelCatalog } from './ModelCatalog';
 import type { ModelMemory } from './ModelPreference';
@@ -34,8 +34,12 @@ describe('ChatService model selection', () => {
   let service: ChatService;
   let remembered: string | null;
   let memory: ModelMemory & { record: ReturnType<typeof vi.fn<ModelMemory['record']>> };
+  let directory: string;
+
+  afterEach(() => rm(directory, { recursive: true, force: true }));
 
   beforeEach(async () => {
+    directory = await mkdtemp(join(tmpdir(), 'b4m-model-'));
     remembered = null;
     memory = {
       read: async () => remembered,
@@ -43,7 +47,7 @@ describe('ChatService model selection', () => {
         remembered = model;
       }),
     };
-    store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-model-')), 'preferred-model');
+    store = new SessionStore(directory, 'preferred-model');
     available = HOSTED;
     const boundPost = vi.fn().mockResolvedValue({ data: new PassThrough(), status: 200 });
     post = boundPost;
@@ -166,7 +170,10 @@ describe('ChatService model selection', () => {
       thinkingToggle: true,
     };
 
-    async function turnOptions(model: string, effort?: 'default' | 'minimal'): Promise<Record<string, unknown>> {
+    async function turnOptions(
+      model: string,
+      effort?: 'default' | 'minimal' | 'none'
+    ): Promise<Record<string, unknown>> {
       const { id } = await service.createSession();
       await service.setSessionModel(id, model);
       if (effort) await service.setSessionReasoningEffort(id, effort);
@@ -177,7 +184,17 @@ describe('ChatService model selection', () => {
 
     it('leaves thinking out when the switch is Off, so the server tells Ollama think:false', async () => {
       available = [LOCAL_THINKER];
+      expect(await turnOptions('qwen3:8b', 'none')).not.toHaveProperty('thinking');
+    });
+
+    it('still reads the Minimal that Off was stored as before as Off', async () => {
+      available = [LOCAL_THINKER];
       expect(await turnOptions('qwen3:8b', 'minimal')).not.toHaveProperty('thinking');
+    });
+
+    it('keeps thinking for an older Minimal on a model where that was an ignored effort', async () => {
+      available = [{ ...LOCAL_THINKER, minimalThinks: true }];
+      expect((await turnOptions('qwen3:8b', 'minimal')).thinking).toEqual({ enabled: true });
     });
 
     it('still asks for thinking when the switch is On', async () => {

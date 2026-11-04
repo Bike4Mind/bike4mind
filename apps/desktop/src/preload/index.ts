@@ -22,6 +22,8 @@ import type {
 import type { CookieImportRequest, CookieImportState } from '@shared/browserCookies';
 import type { ClaudeImportState } from '@shared/claudeImport';
 import type { DevLogRecord } from '@shared/devLog';
+import type { GenerationSettings } from '@shared/generation';
+import type { ModelSettings } from '@shared/modelSettings';
 import type { McpServerInput, McpServersState } from '@shared/mcp';
 import type {
   ModelServerAddInput,
@@ -148,6 +150,11 @@ const api: DesktopApi = {
   },
   chat: {
     listModels: (force?: boolean | 'local') => ipcRenderer.invoke(IPC_CHANNELS.chatListModels, force ?? false),
+    onModelsChanged: listener => {
+      const handler = () => listener();
+      ipcRenderer.on(IPC_CHANNELS.chatModelsChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.chatModelsChanged, handler);
+    },
     listSuggestionModels: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSuggestionModels),
     getLocalContext: () => ipcRenderer.invoke(IPC_CHANNELS.chatGetLocalContext),
     setLocalContext: setting => ipcRenderer.invoke(IPC_CHANNELS.chatSetLocalContext, setting),
@@ -170,6 +177,11 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionReasoningEffort, sessionId, effort),
     setSessionPromptCacheTtl: (sessionId: string, ttl: PromptCacheTtl) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionPromptCacheTtl, sessionId, ttl),
+    setSessionGeneration: (sessionId: string, generation: GenerationSettings) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionGeneration, sessionId, generation),
+    getModelSettings: (modelId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetModelSettings, modelId),
+    setModelSettings: (modelId: string, settings: ModelSettings) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSetModelSettings, modelId, settings),
     setSessionPinned: (sessionId: string, pinned: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionPinned, sessionId, pinned),
     setApprovalMode: (sessionId: string, mode: ChatApprovalMode) =>

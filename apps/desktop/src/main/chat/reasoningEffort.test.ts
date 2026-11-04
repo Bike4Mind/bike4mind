@@ -1,4 +1,5 @@
 import { ChatModels } from '@bike4mind/common';
+import type { ChatModelOption, ReasoningEffortSetting } from '@shared/chat';
 import { describe, expect, it } from 'vitest';
 import {
   parseReasoningEffortSetting,
@@ -14,6 +15,8 @@ describe('parseReasoningEffortSetting', () => {
     expect(parseReasoningEffortSetting('low')).toBe('low');
     expect(parseReasoningEffortSetting('medium')).toBe('medium');
     expect(parseReasoningEffortSetting('HIGH')).toBe('high');
+    expect(parseReasoningEffortSetting('none')).toBe('none');
+    expect(parseReasoningEffortSetting('xhigh')).toBe('xhigh');
   });
 
   it('falls back to default for unset, blank and unknown values', () => {
@@ -39,6 +42,34 @@ describe('reasoningEffortFor', () => {
 
   it('never sends it to a Claude model that predates effort', () => {
     expect(reasoningEffortFor('low', ChatModels.CLAUDE_4_5_SONNET)).toBeUndefined();
+  });
+
+  it('sends only a level the model lists once its controls are known', () => {
+    const option: Pick<ChatModelOption, 'controls'> = {
+      controls: { effort: { levels: ['none', 'low', 'xhigh'], scope: 'request' } },
+    };
+    expect(reasoningEffortFor('none', ChatModels.GPT5, option)).toBe('none');
+    expect(reasoningEffortFor('xhigh', ChatModels.GPT5, option)).toBe('xhigh');
+    expect(reasoningEffortFor('default', ChatModels.GPT5, option)).toBeUndefined();
+    expect(reasoningEffortFor('high', ChatModels.GPT5, { controls: {} })).toBeUndefined();
+  });
+
+  it('sends the nearest listed level for a stored one the model no longer lists', () => {
+    const listed = (...levels: ReasoningEffortSetting[]): Pick<ChatModelOption, 'controls'> => ({
+      controls: { effort: { levels, scope: 'request' } },
+    });
+    expect(reasoningEffortFor('minimal', ChatModels.GPT5, listed('low', 'medium', 'high'))).toBe('low');
+    expect(reasoningEffortFor('xhigh', ChatModels.GPT5, listed('low', 'medium', 'high'))).toBe('high');
+    expect(reasoningEffortFor('medium', ChatModels.GPT5, listed('low', 'high'))).toBe('low');
+    expect(reasoningEffortFor('minimal', ChatModels.GPT5, listed('none', 'low', 'xhigh'))).toBe('low');
+    expect(reasoningEffortFor('none', ChatModels.GPT5, listed('low', 'high'))).toBe('low');
+    expect(reasoningEffortFor('low', ChatModels.GPT5, listed('none'))).toBeUndefined();
+  });
+
+  it('keeps none and xhigh off a model whose levels are unknown, at the nearest of the old four', () => {
+    expect(reasoningEffortFor('none', ChatModels.GPT5)).toBe('minimal');
+    expect(reasoningEffortFor('xhigh', ChatModels.GPT5)).toBe('high');
+    expect(reasoningEffortFor('minimal', ChatModels.GPT5)).toBe('minimal');
   });
 });
 
@@ -67,18 +98,39 @@ describe('supportsReasoningEffort', () => {
 describe('requestsThinking', () => {
   const local = { thinkingToggle: true };
 
-  it('turns thinking off only for a local thinking model switched Off', () => {
+  it('turns thinking off only for a local thinking model switched Off, as Off is stored now and was before', () => {
+    expect(requestsThinking('none', local)).toBe(false);
     expect(requestsThinking('minimal', local)).toBe(false);
   });
 
   it('thinks on every other setting of that model, including none stored', () => {
-    for (const setting of ['default', 'low', 'medium', 'high', undefined] as const) {
+    for (const setting of ['default', 'low', 'medium', 'high', 'xhigh', undefined] as const) {
       expect(requestsThinking(setting, local)).toBe(true);
     }
+  });
+
+  it('keeps an older Minimal thinking where it was an effort the server ignored', () => {
+    const learned = { thinkingToggle: true, minimalThinks: true as const };
+    expect(requestsThinking('minimal', learned)).toBe(true);
+    expect(requestsThinking('none', learned)).toBe(false);
+  });
+
+  it('has no switch on a model that lists effort levels, which thinks at the nearest one', () => {
+    const gptOss: Pick<ChatModelOption, 'thinkingToggle' | 'controls'> = {
+      thinkingToggle: true,
+      controls: { effort: { levels: ['low', 'high'], scope: 'request' } },
+    };
+    expect(requestsThinking('minimal', gptOss, 'low')).toBe(true);
+    expect(requestsThinking('none', gptOss, 'low')).toBe(true);
   });
 
   it('thinks on a model without the switch, or one the catalog does not know', () => {
     expect(requestsThinking('minimal', {})).toBe(true);
     expect(requestsThinking('minimal', undefined)).toBe(true);
+  });
+
+  it('does not think at an effort of none', () => {
+    expect(requestsThinking('none', {}, 'none')).toBe(false);
+    expect(requestsThinking('low', {}, 'low')).toBe(true);
   });
 });

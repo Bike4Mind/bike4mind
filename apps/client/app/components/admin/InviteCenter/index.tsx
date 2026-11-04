@@ -2,12 +2,14 @@ import { useState } from 'react';
 import { Box, Sheet, Tab, TabList, TabPanel, Tabs, Typography } from '@mui/joy';
 import EmailIcon from '@mui/icons-material/Email';
 import VpnKeyIcon from '@mui/icons-material/VpnKey';
+import RedeemIcon from '@mui/icons-material/Redeem';
 import InviteCenterQuickActions from './InviteCenterQuickActions';
 import BulkInviteTab from './BulkInvite/BulkInviteTab';
 import InviteCodesTab from './InviteCodes/InviteCodesTab';
+import GrantPackagesTab from './Packages/GrantPackagesTab';
 import { APP_NAME } from '@client/config/general'; // brand externalized
 
-type InviteCenterTab = 'bulk' | 'codes';
+type InviteCenterTab = 'bulk' | 'codes' | 'packages';
 
 const InviteCenter = () => {
   const [activeTab, setActiveTab] = useState<InviteCenterTab>('bulk');
@@ -63,6 +65,10 @@ const InviteCenter = () => {
             <VpnKeyIcon sx={{ mr: 0.5, fontSize: '1rem' }} />
             Invite Codes
           </Tab>
+          <Tab value="packages" data-testid="invite-center-packages-tab">
+            <RedeemIcon sx={{ mr: 0.5, fontSize: '1rem' }} />
+            Packages
+          </Tab>
         </TabList>
 
         <TabPanel value="bulk" sx={{ flex: 1, minHeight: 0, overflow: 'auto', px: 0 }}>
@@ -71,6 +77,10 @@ const InviteCenter = () => {
 
         <TabPanel value="codes" sx={{ flex: 1, minHeight: 0, overflow: 'auto', px: 0 }}>
           {activeTab === 'codes' && <InviteCodesTab quickAction={quickAction} />}
+        </TabPanel>
+
+        <TabPanel value="packages" sx={{ flex: 1, minHeight: 0, overflow: 'auto', px: 0 }}>
+          {activeTab === 'packages' && <GrantPackagesTab />}
         </TabPanel>
       </Tabs>
     </Sheet>

@@ -71,6 +71,13 @@ describe('scanShell writes', () => {
     ['env LC_ALL=C sed -i -e s/a/b/ a.sh', ['a.sh']],
     ['timeout 5 patch -p1 -i fix.diff', ['x.sh']],
     ['echo x | sudo tee a.sh', ['a.sh']],
+    ['echo x | sudo -uroot tee .git/hooks/pre-commit', ['.git/hooks/pre-commit']],
+    ["sudo -gdocker sed -i 's/a/b/' a.sh", ['a.sh']],
+    ["sudo -Eu root sed -i 's/a/b/' a.sh", ['a.sh']],
+    ["xargs -Id sed -i 's/a/b/' a.sh", ['a.sh']],
+    ['echo x | time -ofoo tee a.sh', ['a.sh']],
+    ['echo x | time X=1 tee a.sh', ['a.sh']],
+    ["time X=1 sed -i 's/a/b/' a.sh", ['a.sh']],
   ])('records what %s writes', async (command, expected) => {
     // A copy into what may be a folder also records the file it would create there.
     expect(await writes(command)).toEqual(expect.arrayContaining(expected.map(path => join(root, path))));

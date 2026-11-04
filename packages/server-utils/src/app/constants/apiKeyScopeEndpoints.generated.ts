@@ -174,7 +174,7 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'POST /api/v1/agents/:id/generate-system-prompt',
   ],
   [ApiKeyScope.ME_READ]: ['GET /api/v1/credits', 'GET /api/v1/credits/transactions', 'GET /api/v1/me'],
-  [ApiKeyScope.OVERWATCH_INGEST_WRITE]: ['POST /api/overwatch/v1/events'],
+  [ApiKeyScope.OVERWATCH_INGEST_WRITE]: ['POST /api/overwatch/v1/events', 'POST /api/overwatch/v1/hops'],
   [ApiKeyScope.REWARDS_GRANT]: ['POST /api/partners/rewards/grant'],
   [ApiKeyScope.EMBED_CHAT]: [
     'GET /api/embed/branding',
