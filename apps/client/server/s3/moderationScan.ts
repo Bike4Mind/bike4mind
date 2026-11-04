@@ -4,7 +4,7 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { generateUploadConstraintFor } from '@bike4mind/server-utils/files/generateUploadMarker';
-import { moderateUploadedFile } from '@bike4mind/server-utils/s3/moderateUploadedFile';
+import { moderateUploadedFile, type ModerationVerdict } from '@bike4mind/server-utils/s3/moderateUploadedFile';
 import type { ClientSession, Types } from 'mongoose';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
@@ -23,7 +23,7 @@ export type ModerationVerdictPatch = {
 type FabFileKey = Types.ObjectId | string;
 
 /** The verdict fields of a scan result; the byte-sniffed mimeType is applied by each caller. */
-export const toVerdictPatch = (result: Awaited<ReturnType<typeof moderateUploadedFile>>): ModerationVerdictPatch => ({
+export const toVerdictPatch = (result: ModerationVerdict): ModerationVerdictPatch => ({
   moderationStatus: result.moderationStatus,
   ...(result.blockReason ? { blockReason: result.blockReason } : {}),
 });
@@ -142,19 +142,27 @@ export const writeModerationVerdict = async (
  * ours. The S3 event (if it has not fired yet) or the rescue sweep can then claim the file; an S3
  * event that already lost the claim to this caller exited normally and is not redelivered, so after
  * that only the sweep recovers it. The attempt bookkeeping is what the sweep's fairness sort and
- * backoff read, matching knowledgeModerationDeps.release.
+ * backoff read, matching knowledgeModerationDeps.release. A scan deferred by the moderation
+ * allowance passes `countAttempt: false`: it did not fail, so it must not climb the route's attempt cap.
  */
-export const releaseModerationClaim = (fabFileId: FabFileKey, claimedAt: Date) =>
+export const releaseModerationClaim = (
+  fabFileId: FabFileKey,
+  claimedAt: Date,
+  { countAttempt = true }: { countAttempt?: boolean } = {}
+) =>
   FabFile.updateOne(
     { _id: fabFileId, moderationStatus: 'scanning', moderationClaimedAt: claimedAt },
     {
       $set: { moderationStatus: 'pending', moderationLastAttemptAt: new Date() },
-      $inc: { moderationAttempts: 1 },
+      ...(countAttempt ? { $inc: { moderationAttempts: 1 } } : {}),
       $unset: { moderationClaimedAt: 1 },
     }
   );
 
-/** Runs the byte scan for an uploaded object with the production detector and storage wiring. */
+/**
+ * Runs the byte scan for an uploaded object with the production detector and storage wiring, spending
+ * the uploader's moderation allowance (a deferral comes back as `moderationStatus: 'pending'`).
+ */
 export const scanUploadedObject = async (args: {
   fabFile: { id: string; userId: string; mimeType?: string | null; sourceMetadata?: unknown };
   objectKey: string;
@@ -162,6 +170,8 @@ export const scanUploadedObject = async (args: {
 }) => {
   const { fabFile, objectKey, logger } = args;
   const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+  // Loaded on use: this module's other exports (e.g. normalizeETag) do not need its billing imports.
+  const { buildUploadModerationMeter } = await import('@server/s3/uploadModerationMeter');
   return moderateUploadedFile({
     userId: fabFile.userId,
     fabFileId: fabFile.id,
@@ -177,5 +187,6 @@ export const scanUploadedObject = async (args: {
     downloadPartialBytes: length => getFilesStorage().downloadRange(objectKey, length),
     moderateImageOrThrow,
     logger,
+    ...buildUploadModerationMeter({ userId: fabFile.userId, fabFileId: fabFile.id, logger }),
   });
 };
