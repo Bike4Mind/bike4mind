@@ -1,8 +1,8 @@
 import { CreditHolderType, resolveSignupGrantSchedule, type IUserDocument, type SignupGrant } from '@bike4mind/common';
-import { withTransaction } from '@bike4mind/db-core';
 import { addCreditsWithLedgerRow, DuplicateCreditTransactionError } from '../creditService';
 import type { FreeCreditAdapters } from './freeCredits';
 import { accountBlockReasons, isAiAccessRevoked } from './accountState';
+import { inCallerTransaction } from './callerTransaction';
 import { isSignupGrantHeldForReview } from './signupRisk';
 import { reserveSignupGrantBudget, type SignupGrantBudgetReservation } from './signupGrantBudget';
 
@@ -55,7 +55,7 @@ export async function payInviteBonus(userId: string, adapters: InviteBonusAdapte
   const reservations: SignupGrantBudgetReservation[] = [];
   const releaseReservations = () => Promise.all(reservations.map(held => held.release()));
   try {
-    const result = await withTransaction<InviteBonusResult>(async () => {
+    const result = await inCallerTransaction<InviteBonusResult>(async () => {
       const user = await db.users.findById(userId);
       if (!isInviteBonusEligible(user, orgStandingVerified)) return { creditsGranted: 0 };
       if (!adapters.bypassBudget) {

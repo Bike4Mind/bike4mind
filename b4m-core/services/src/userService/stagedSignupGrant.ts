@@ -29,6 +29,7 @@ import {
 import { accountBlockReasons, isAiAccessRevoked } from './accountState';
 import { protectSignupCredits } from './signupProtection';
 import { payInviteBonus } from './inviteBonus';
+import { inCallerTransaction } from './callerTransaction';
 import {
   queueHeadBlocks,
   reserveSignupGrantBudget,
@@ -138,7 +139,7 @@ async function releaseStage(
   const reservations: SignupGrantBudgetReservation[] = [];
   const releaseReservations = () => Promise.all(reservations.map(held => held.release()));
   try {
-    const result = await withTransaction<AssessedGrantResult>(async () => {
+    const result = await inCallerTransaction<AssessedGrantResult>(async () => {
       const user = await db.users.findById(userId);
       if (!isReleaseEligible(user, expected) || isForfeitedRelease(user.signupGrant, reason)) return noGrant();
       const grant = user.signupGrant;
