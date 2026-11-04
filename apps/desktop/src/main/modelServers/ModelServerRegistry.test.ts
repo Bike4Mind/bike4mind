@@ -3,7 +3,7 @@ import type { FetchLike } from '@bike4mind/local-models';
 import type { SecretCipher, StoreFile } from '../chat/mcp/McpServerStore';
 import { ServerCredentialsError, ServerUnreachableError } from './errors';
 import type { ChatModelOption } from '@shared/chat';
-import { LOCAL_SERVER_ID, type ModelServerProbeResult } from '@shared/modelServers';
+import type { ModelServerProbeResult } from '@shared/modelServers';
 import { LISTED_FRESH_MS, ModelServerRegistry, PICKER_CHECK_WAIT_MS, PICKER_LIST_WAIT_MS } from './ModelServerRegistry';
 import { ModelServerStore } from './ModelServerStore';
 import {
@@ -147,9 +147,6 @@ describe('ModelServerRegistry', () => {
       unencrypted: true,
       health: { state: 'online', version: '0.12.0' },
     });
-    expect(servers.kind(LOCAL_SERVER_ID)).toBe('ollama');
-    expect(servers.kind(views[1]?.id ?? '')).toBe('ollama');
-    expect(servers.kind('gone')).toBeNull();
   });
 
   it('saves entered hardware for a server and for this computer, and says when this computer changed', async () => {

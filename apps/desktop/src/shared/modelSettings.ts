@@ -65,10 +65,10 @@ export function parseModelSettingsInput(raw: unknown): ModelSettings | null {
   return !known && Object.keys(raw).length > 0 ? null : settings;
 }
 
-/** The file's entries that are still valid; anything else, a corrupt file included, is dropped. */
-export function parseModelSettingsFile(raw: unknown): Map<string, ModelSettings> {
+/** The file's entries that are still valid, invalid ones dropped; null when it is not a settings file at all. */
+export function parseModelSettingsFile(raw: unknown): Map<string, ModelSettings> | null {
+  if (!isRecord(raw) || !isRecord(raw.models)) return null;
   const parsed = new Map<string, ModelSettings>();
-  if (!isRecord(raw) || !isRecord(raw.models)) return parsed;
   for (const [id, entry] of Object.entries(raw.models)) {
     const settings = isModelSettingsId(id) ? normalizeModelSettings(entry) : undefined;
     if (settings) parsed.set(id, settings);

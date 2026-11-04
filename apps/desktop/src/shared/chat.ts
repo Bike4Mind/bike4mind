@@ -982,7 +982,7 @@ export interface ChatModelOption {
   pricing?: Record<number, { input: number; output: number; cache_read?: number; cache_write?: number }>;
   /** The generation settings this model takes, built in main; see shared/generation.ts. */
   controls?: ModelControls;
-  /** An Ollama model installed from a reviewed curated build: its family's recommended sampling. */
+  /** A local model whose name matches a reviewed curated build, on any local server: its family's recommended sampling. */
   catalogSampling?: CatalogSampling;
 }
 

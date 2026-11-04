@@ -998,7 +998,7 @@ export class ModelHubService {
     return pinnedProjectorSizes(this.#deps.curated());
   }
 
-  /** The curated family sampling for an installed Ollama model, when it is a reviewed build; chat sends it as a seed. */
+  /** The curated family sampling for a local model matched by name on any local server; chat sends it as a seed. */
   catalogSampling(ollamaName: string): CatalogSampling | undefined {
     return catalogSampling(this.#deps.curated(), ollamaName);
   }

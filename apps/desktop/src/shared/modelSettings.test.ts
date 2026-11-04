@@ -20,11 +20,18 @@ describe('parseModelSettingsFile', () => {
         'local:ollama:empty': { generation: { temperature: 99 } },
       },
     });
-    expect([...parsed.entries()]).toEqual([[QWEN, { generation: { temperature: 0.6 }, effort: 'high' }]]);
+    expect([...(parsed ?? [])]).toEqual([[QWEN, { generation: { temperature: 0.6 }, effort: 'high' }]]);
   });
 
-  it.each([null, 'text', [], { models: [] }, { models: 'x' }, {}])('reads %j as no defaults', raw => {
-    expect(parseModelSettingsFile(raw).size).toBe(0);
+  it.each([null, 'text', [], { models: [] }, { models: 'x' }, {}, { model: {} }])(
+    'does not take %j for a file',
+    raw => {
+      expect(parseModelSettingsFile(raw)).toBeNull();
+    }
+  );
+
+  it('reads a file with no models as no defaults', () => {
+    expect(parseModelSettingsFile({ models: {} })?.size).toBe(0);
   });
 });
 

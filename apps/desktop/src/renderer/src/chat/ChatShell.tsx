@@ -404,17 +404,17 @@ export function ChatShell({
    * that handle them - the same reasoning the model picker applies to an unreadable list.
    */
   const modelOption = findModelOption(catalog.models, conversation.session?.model);
-  const [defaultEffort, setDefaultEffort] = useState<ModelEffort | null>(null);
+  const [storedEffort, setStoredEffort] = useState<{ modelId: string; effort: ModelEffort | null } | null>(null);
   const defaultsModelId = modelOption && isLocalModel(modelOption.id) ? modelOption.id : null;
+  const defaultEffort = storedEffort && storedEffort.modelId === defaultsModelId ? storedEffort.effort : null;
   // Re-read on returning from the Models screen, where the defaults are edited.
   useEffect(() => {
-    setDefaultEffort(null);
     if (!defaultsModelId || screen !== 'conversation') return;
     let live = true;
     void Promise.resolve()
       .then(() => window.b4m.chat.getModelSettings(defaultsModelId))
       .then(
-        settings => live && setDefaultEffort(settings?.effort ?? null),
+        settings => live && setStoredEffort({ modelId: defaultsModelId, effort: settings?.effort ?? null }),
         () => undefined
       );
     return () => {

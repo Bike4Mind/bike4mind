@@ -27,7 +27,9 @@ export class ModelSettingsStore {
     const loading: Promise<Map<string, ModelSettings>> = readFile(this.filePath, 'utf8').then(
       text => {
         try {
-          return parseModelSettingsFile(JSON.parse(text));
+          const parsed = parseModelSettingsFile(JSON.parse(text));
+          if (!parsed) throw new Error('not a model settings file');
+          return parsed;
         } catch (error) {
           this.warn(`MODEL SETTINGS: ignoring an unreadable ${this.filePath}: ${String(error)}`);
           this.corrupt = true;
@@ -45,8 +47,16 @@ export class ModelSettingsStore {
     return loading;
   }
 
+  /** For chat turns: a file that cannot be read or parsed holds no defaults. */
   async get(modelId: string): Promise<ModelSettings> {
     return (await this.read().catch(() => new Map<string, ModelSettings>())).get(modelId) ?? {};
+  }
+
+  /** For the Models screen: rejects on an unreadable or corrupt file so it can say so instead of showing blanks. */
+  async getStrict(modelId: string): Promise<ModelSettings> {
+    const settings = await this.read();
+    if (this.corrupt) throw new Error(`${this.filePath} is not a valid model settings file`);
+    return settings.get(modelId) ?? {};
   }
 
   /** Replaces one model's defaults; an empty set removes them. Writes run one at a time. */
@@ -57,7 +67,7 @@ export class ModelSettingsStore {
       else updated.set(modelId, settings);
       await mkdir(dirname(this.filePath), { recursive: true });
       if (this.corrupt) {
-        await rename(this.filePath, `${this.filePath}.corrupt`).catch(() => undefined);
+        await rename(this.filePath, `${this.filePath}.corrupt`);
         this.corrupt = false;
       }
       const temporary = `${this.filePath}.${randomUUID()}.tmp`;
