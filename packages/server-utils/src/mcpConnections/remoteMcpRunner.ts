@@ -161,6 +161,8 @@ export async function runForLambda(
   }
 }
 
+const FAILED_MESSAGE = 'Remote MCP handler invocation failed';
+
 /**
  * Runs the operation in the `remoteMcpHandler` Lambda (RequestResponse). Any failure other than a
  * typed `ok:false` body is a plain Error with fixed text: the Lambda's error payload can carry
@@ -171,21 +173,28 @@ export function createLambdaRemoteMcpRunner(
   send: (command: InvokeCommand) => Promise<{ FunctionError?: string; Payload?: Uint8Array }> = command =>
     new LambdaClient({}).send(command)
 ): RemoteMcpRunner {
-  const failed = () => new Error('Remote MCP handler invocation failed');
+  // The cause is kept for operators (error name only, never payload or body); the message stays fixed.
+  const failed = (cause?: unknown) => new Error(FAILED_MESSAGE, { cause });
   return async payload => {
-    let body: unknown;
+    let reply: { FunctionError?: string; Payload?: Uint8Array };
     try {
-      const response = await send(
+      reply = await send(
         new InvokeCommand({
           FunctionName: functionName,
           InvocationType: 'RequestResponse',
           Payload: Buffer.from(JSON.stringify(payload)),
         })
       );
-      if (response.FunctionError || !response.Payload) throw failed();
-      body = JSON.parse(Buffer.from(response.Payload).toString('utf8'));
-    } catch {
-      throw failed();
+    } catch (error) {
+      throw failed(error instanceof Error ? error.name : 'unknown');
+    }
+    if (reply.FunctionError) throw failed(`FunctionError: ${reply.FunctionError}`);
+    let body: unknown;
+    try {
+      body = JSON.parse(Buffer.from(reply.Payload as Uint8Array).toString('utf8'));
+    } catch (error) {
+      // A missing Payload lands here too (Buffer.from throws a TypeError).
+      throw failed(error instanceof Error ? error.name : 'unknown');
     }
     const response = body as Partial<RemoteMcpLambdaResponse> | null;
     if (response?.ok === false) {

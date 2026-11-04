@@ -23,8 +23,10 @@ describe('remoteMcpHandler isolation', () => {
 
   it('has no VPC and links no resources', () => {
     expect(source).not.toMatch(/\bvpc\b/i);
-    expect(source).not.toMatch(/\blink\s*:/);
+    expect(source).not.toMatch(/\blink\b/);
     expect(source).not.toMatch(/\bsecrets\b/);
+    expect(source).not.toMatch(/\bpermissions\s*:/);
+    expect(source).toMatch(/environment:\s*\{\s*\.\.\.DEFAULT_LAMBDA_ENVIRONMENT\s*\}/);
   });
 
   it('is linked from web so it can be invoked', () => {

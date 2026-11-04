@@ -210,6 +210,7 @@ beforeEach(() => {
   for (const key of Object.keys(answers)) delete answers[key];
   for (const key of Object.keys(state.resource)) delete state.resource[key];
   vi.clearAllMocks();
+  lambda.send.mockReset();
   vi.spyOn(dns, 'lookup').mockImplementation(fakeLookup as unknown as typeof dns.lookup);
 });
 
@@ -812,18 +813,41 @@ describe('resolveRemoteMcpRunner', () => {
     });
   });
 
-  it('runs in-process when unlinked on self-host or in local development', () => {
+  // An IP-literal URL is rejected before any network call, so the in-process runner answers
+  // invalid_url while a Lambda runner would have called lambda.send.
+  const expectInProcess = async () => {
+    const runner = resolveRemoteMcpRunner();
+    expect(runner).toBe(resolveRemoteMcpRunner());
+    await expect(runner({ ...listPayload, url: 'https://127.0.0.1/mcp' })).rejects.toMatchObject({
+      code: 'invalid_url',
+    });
+    expect(lambda.send).not.toHaveBeenCalled();
+  };
+
+  it('runs in-process when unlinked on self-host', async () => {
     vi.stubEnv('B4M_SELF_HOST', 'true');
-    expect(typeof resolveRemoteMcpRunner()).toBe('function');
-    vi.stubEnv('B4M_SELF_HOST', 'false');
-    vi.stubEnv('IS_LOCAL', 'true');
-    expect(typeof resolveRemoteMcpRunner()).toBe('function');
+    vi.stubEnv('NODE_ENV', 'production');
+    await expectInProcess();
   });
 
-  it('fails closed on a hosted runtime without the link', () => {
+  it('runs in-process when unlinked in local development', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'false');
+    vi.stubEnv('IS_LOCAL', 'true');
+    vi.stubEnv('NODE_ENV', 'production');
+    await expectInProcess();
+  });
+
+  it('runs in-process when unlinked under NODE_ENV=development', async () => {
     vi.stubEnv('B4M_SELF_HOST', 'false');
     vi.stubEnv('IS_LOCAL', 'false');
-    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('NODE_ENV', 'development');
+    await expectInProcess();
+  });
+
+  it.each(['production', 'test', ''])('fails closed on a hosted runtime without the link (NODE_ENV=%j)', env => {
+    vi.stubEnv('B4M_SELF_HOST', 'false');
+    vi.stubEnv('IS_LOCAL', 'false');
+    vi.stubEnv('NODE_ENV', env);
     expect(() => resolveRemoteMcpRunner()).toThrow(/not linked/);
   });
 
@@ -835,7 +859,7 @@ describe('resolveRemoteMcpRunner', () => {
     await expect(
       invokeRemoteMcp({ action: 'listTools', connectionId: id, userId: 'user-1' }, { context: context() })
     ).rejects.toThrow('Remote MCP handler invocation failed');
-    expect(fixture.requests).toHaveLength(0);
+    expect(lambda.send).toHaveBeenCalledTimes(1);
     expect(state.audits[0]).toMatchObject({ outcome: 'failure', errorCode: 'internal_error' });
   });
 
@@ -852,6 +876,7 @@ describe('resolveRemoteMcpRunner', () => {
       expect(error).toBeInstanceOf(RemoteMcpAuthFailedError);
       expect(error).toMatchObject({ scope: 'tools.read' });
     }
+    expect(lambda.send).toHaveBeenCalledTimes(8);
   });
 
   it('a Lambda ssrf_blocked is still masked on hosted, with the real code audited', async () => {

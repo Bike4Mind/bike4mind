@@ -3,7 +3,7 @@ import {
   deserializeRemoteMcpError,
   type RemoteMcpRunPayload,
 } from '@bike4mind/server-utils/mcpConnections/remoteMcpRunner';
-import { createHandler } from './remoteMcpCall';
+import { createHandler, handler } from './remoteMcpCall';
 
 const event: RemoteMcpRunPayload = {
   url: 'https://mcp.example.com/mcp',
@@ -15,6 +15,13 @@ const event: RemoteMcpRunPayload = {
 const run = { action: 'listTools', result: { tools: [], dropped: [], detectedTransport: 'streamable-http' } } as const;
 
 describe('remoteMcpHandler', () => {
+  it('the exported handler runs the in-process runner (no network for an IP-literal URL)', async () => {
+    await expect(handler({ ...event, url: 'https://127.0.0.1/mcp' })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'invalid_url' },
+    });
+  });
+
   it('returns the run for a valid event', async () => {
     await expect(createHandler(async () => run)(event)).resolves.toEqual({ ok: true, run });
   });

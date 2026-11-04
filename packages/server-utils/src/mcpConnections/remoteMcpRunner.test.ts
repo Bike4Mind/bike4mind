@@ -82,9 +82,15 @@ describe('createLambdaRemoteMcpRunner', () => {
   });
 
   it.each([
-    ['a FunctionError', async () => ({ FunctionError: 'Unhandled', Payload: bytes({ errorMessage: 'LEAK-1' }) })],
+    [
+      'a FunctionError',
+      async () => ({
+        FunctionError: 'Unhandled',
+        Payload: bytes({ ok: true, run: { action: 'listTools', result: listed } }),
+      }),
+    ],
     ['unparsable JSON', async () => ({ Payload: bytes('LEAK-2 {not json') })],
-    ['no payload', async () => ({})],
+    ['no payload', async () => ({ FunctionError: undefined, Payload: undefined })],
     ['a send failure', async () => Promise.reject(new Error('LEAK-3'))],
     ['an unknown error code', async () => ({ Payload: bytes({ ok: false, error: { code: 'LEAK-4', message: 'x' } }) })],
     [
@@ -96,5 +102,21 @@ describe('createLambdaRemoteMcpRunner', () => {
     expect(error).toBeInstanceOf(Error);
     expect(error).not.toBeInstanceOf(RemoteMcpError);
     expect((error as Error).message).toBe('Remote MCP handler invocation failed');
+  });
+
+  it('keeps the invoke failure name as the cause, never its message', async () => {
+    const send = async () => Promise.reject(Object.assign(new Error('LEAK-6'), { name: 'ThrottlingException' }));
+    const error = (await createLambdaRemoteMcpRunner('fn', send)(payload).catch((e: unknown) => e)) as Error;
+    expect(error.message).toBe('Remote MCP handler invocation failed');
+    expect(error.cause).toBe('ThrottlingException');
+  });
+
+  it('records the FunctionError type as the cause', async () => {
+    const send = async () => ({
+      FunctionError: 'Unhandled',
+      Payload: bytes({ ok: true, run: { action: 'listTools', result: listed } }),
+    });
+    const error = (await createLambdaRemoteMcpRunner('fn', send)(payload).catch((e: unknown) => e)) as Error;
+    expect(error.cause).toBe('FunctionError: Unhandled');
   });
 });
