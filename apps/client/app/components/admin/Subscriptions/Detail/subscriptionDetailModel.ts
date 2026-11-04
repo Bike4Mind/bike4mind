@@ -67,7 +67,7 @@ export const subscriptionActionAvailability = (
     stripeResume: live && scheduled && periodRunning,
     compActions: isCompSubscription(subscription) && !terminal,
     editCredits: { visible: !terminal, disabledReason: noActor },
-    remove: { disabledReason: isLiveStripeSubscription(subscription) ? REMOVE_LIVE_STRIPE_REASON : noActor },
+    remove: { disabledReason: live ? REMOVE_LIVE_STRIPE_REASON : noActor },
   };
 };
 

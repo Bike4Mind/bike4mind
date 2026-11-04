@@ -37,12 +37,15 @@ const STRIPE_MAX_NETWORK_RETRIES = 1;
 const LIVE_KEY_PREFIXES = ['sk_live_', 'rk_live_'];
 
 /**
- * True when Stripe may have applied the write although the call failed: a connection error or timeout, or a 5xx.
- * A 4xx (invalid request, card, rate limit) is a definite rejection.
+ * True when Stripe may have applied the write although the call failed: a connection error or timeout, a 5xx, or a
+ * 409 (the same key is still being processed). Any other 4xx (invalid request, card, rate limit) is a definite rejection.
  */
 export const isUnknownStripeOutcome = (error: unknown): boolean => {
   const { type, statusCode } = (error ?? {}) as { type?: string; statusCode?: number };
-  return type === 'StripeConnectionError' || (type === 'StripeAPIError' && (statusCode ?? 500) >= 500);
+  return (
+    type === 'StripeConnectionError' ||
+    (type === 'StripeAPIError' && ((statusCode ?? 500) >= 500 || statusCode === 409))
+  );
 };
 
 export type AdminStripeWriteAction = 'billing.subscription.cancel_scheduled' | 'billing.subscription.resumed';
@@ -177,7 +180,7 @@ export const runAdminStripeWrite = async ({
     before: ISubscription;
   };
   // A holder, not a `let`: TS cannot see the catch block's reads of an assignment made inside the try.
-  const progress: { stripeDone: AuditChange[] | null } = { stripeDone: null };
+  const progress: { stripeDone: AuditChange[] | null; audited: boolean } = { stripeDone: null, audited: false };
   let recovered: StripeSent | null = null;
   const requestParams = params(subscription);
   const claimData = {
@@ -247,6 +250,7 @@ export const runAdminStripeWrite = async ({
         },
       });
     });
+    progress.audited = true;
 
     await notifyOwner(req, owner);
     const { row, doc } = await readRow(id);
@@ -256,6 +260,9 @@ export const runAdminStripeWrite = async ({
       .catch((error: unknown) => req.logger.error('Failed to store an admin Stripe write for replay', error));
     return response;
   } catch (error) {
+    // The audit already committed: parking would let a same-key retry audit the same write twice. Leave the claim
+    // pending; the retry gets a 409 until it expires, and a new dialog mints a new key.
+    if (progress.audited) throw error;
     const park = progress.stripeDone || recovered || isUnknownStripeOutcome(error);
     const settle = park
       ? cacheRepository.casUpdateDedup(claimKey, 'token', token, {

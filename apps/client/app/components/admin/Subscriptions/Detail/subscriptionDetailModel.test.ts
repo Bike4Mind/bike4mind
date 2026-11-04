@@ -73,6 +73,7 @@ describe('subscriptionActionAvailability', () => {
       buildDetail({ subscription: { ...STRIPE_ROW, source: 'stripe', subscriptionId: 'admin_granted_1' } })
     );
     expect([legacyComp.stripeCancel, legacyComp.stripeResume]).toEqual([false, false]);
+    expect(legacyComp.remove.disabledReason).not.toBe(REMOVE_LIVE_STRIPE_REASON);
   });
 
   it('reads a period-end schedule from the mirror flag when the row has no cancel date', () => {

@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const dedup = new Map<string, Record<string, unknown>>();
+const claimTtls: Array<number | undefined> = [];
+const updateTtls: Array<number | undefined> = [];
 const mockUserFindById = vi.fn();
 const mockOrgFindById = vi.fn();
 vi.mock('@bike4mind/database', () => ({
@@ -8,13 +10,21 @@ vi.mock('@bike4mind/database', () => ({
   organizationRepository: { findById: (...a: unknown[]) => mockOrgFindById(...a) },
   withTransaction: async (fn: () => Promise<unknown>) => fn(),
   cacheRepository: {
-    claimDedup: async (key: string, data: Record<string, unknown>) => {
+    claimDedup: async (key: string, data: Record<string, unknown>, ttlMs?: number) => {
+      claimTtls.push(ttlMs);
       const existing = dedup.get(key);
       if (existing) return { claimed: false, existingData: existing };
       dedup.set(key, data);
       return { claimed: true };
     },
-    casUpdateDedup: async (key: string, field: string, value: string, data: Record<string, unknown>) => {
+    casUpdateDedup: async (
+      key: string,
+      field: string,
+      value: string,
+      data: Record<string, unknown>,
+      ttlMs?: number
+    ) => {
+      updateTtls.push(ttlMs);
       if (dedup.get(key)?.[field] !== value) return false;
       dedup.set(key, data);
       return true;
@@ -152,6 +162,8 @@ describe('runAdminStripeWrite', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     dedup.clear();
+    claimTtls.length = 0;
+    updateTtls.length = 0;
     production = true;
     mockFindById.mockResolvedValue(baseRow);
     mockUserFindById.mockResolvedValue({ id: 'u1', email: 'u1@example.com' });
@@ -295,8 +307,8 @@ describe('runAdminStripeWrite', () => {
       mockRecordAdminAction.mockRejectedValueOnce(new Error('audit down'));
       await expect(runFlip()).rejects.toThrow('audit down');
       webhookLanded();
-      mockStripeUpdate.mockRejectedValueOnce(stripeError('StripeAPIError', 500));
-      await expect(runFlip()).rejects.toThrow('StripeAPIError');
+      mockStripeUpdate.mockRejectedValueOnce(stripeError('StripeRateLimitError', 429));
+      await expect(runFlip()).rejects.toThrow('StripeRateLimitError');
       expect(dedup.get(`admin-stripe-write:admin-1:${ID}:billing.subscription.cancel_scheduled:${KEY}`)).toMatchObject({
         state: 'stripe_done',
       });
@@ -309,9 +321,43 @@ describe('runAdminStripeWrite', () => {
       expect(auditCalls()[1][1].changes).toEqual([{ field: 'cancelAtPeriodEnd', before: false, after: true }]);
     });
 
+    it('carries the pre-write row across a failed recovery, so the audit never diffs the post-webhook row', async () => {
+      mockStripeUpdate.mockRejectedValueOnce(stripeError('StripeAPIError', 503));
+      await expect(runFlip()).rejects.toThrow();
+      webhookLanded();
+      mockStripeUpdate.mockRejectedValueOnce(stripeError('StripeRateLimitError', 429));
+      await expect(runFlip()).rejects.toThrow('StripeRateLimitError');
+      await runFlip();
+
+      expect(auditCalls()).toHaveLength(1);
+      expect(auditCalls()[0][1].changes).toEqual([{ field: 'cancelAtPeriodEnd', before: false, after: true }]);
+    });
+
+    it('does not park once the audit committed, so a same-key retry never audits twice', async () => {
+      mockModelFindById.mockRejectedValueOnce(new Error('read down'));
+      await expect(runFlip()).rejects.toThrow();
+      webhookLanded();
+      await expect(runFlip()).rejects.toMatchObject({ statusCode: 409 });
+
+      expect(auditCalls()).toHaveLength(1);
+      expect(mockStripeUpdate).toHaveBeenCalledTimes(1);
+    });
+
+    it('sets the claim TTL once and never extends it on a rewrite', async () => {
+      mockRecordAdminAction.mockRejectedValueOnce(new Error('audit down'));
+      await expect(run(makeReq())).rejects.toThrow('audit down');
+      webhookLanded();
+      await run(makeReq());
+
+      expect(claimTtls).toEqual([24 * 60 * 60 * 1000, 24 * 60 * 60 * 1000]);
+      expect(updateTtls.length).toBeGreaterThanOrEqual(3);
+      expect(updateTtls.every(ttl => ttl === undefined)).toBe(true);
+    });
+
     it.each([
       ['a timeout or connection error', stripeError('StripeConnectionError')],
       ['a 5xx', stripeError('StripeAPIError', 503)],
+      ['a 409 (same key still in progress)', stripeError('StripeAPIError', 409)],
     ])('parks the claim on %s, then audits on a same-key retry after the webhook', async (_name, error) => {
       mockStripeUpdate.mockRejectedValueOnce(error);
       await expect(runFlip()).rejects.toThrow();
@@ -327,6 +373,7 @@ describe('runAdminStripeWrite', () => {
     it.each([
       ['a 4xx invalid request', stripeError('StripeInvalidRequestError', 400)],
       ['a rate limit', stripeError('StripeRateLimitError', 429)],
+      ['a 4xx API error', stripeError('StripeAPIError', 400)],
     ])('releases the claim on %s', async (_name, error) => {
       mockStripeUpdate.mockRejectedValueOnce(error);
       await expect(runFlip()).rejects.toThrow();
