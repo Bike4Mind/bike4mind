@@ -301,6 +301,55 @@ describe('queued rewards while blocked', () => {
     expect(await balance(user.id)).toBe(0);
   });
 
+  it('pays nothing when the block lands between the up-front check and the payout write', async () => {
+    const user = await makeGrantUser();
+    let reads = 0;
+    const racingUsers = new Proxy(userRepository, {
+      get(target, key) {
+        if (key !== 'findById') return Reflect.get(target, key, target);
+        return async (id: string) => {
+          // The first read is the up-front check; the second is the payout's own read.
+          if (++reads === 2) await userService.blockSignupGrant(id, blockAdapters);
+          return userRepository.findById(id);
+        };
+      },
+    });
+
+    const result = await creditService.payCreditReward(reward(user.id, 'projects'), {
+      ...rewardAdapters,
+      users: racingUsers,
+    });
+
+    expect(result.outcome).toBe('blocked');
+    expect(await balance(user.id)).toBe(0);
+    expect(await CreditTransaction.countDocuments({ ownerId: user.id })).toBe(0);
+    expect(await HeldCreditRewardModel.countDocuments({ userId: user.id })).toBe(0);
+  });
+
+  it('pauses a reward queued in the same instant the block landed, so no held row is left behind', async () => {
+    config.signupGrantTricklePoolDaily = '0';
+    const user = await makeGrantUser();
+    const racingRewards = new Proxy(heldCreditRewardRepository, {
+      get(target, key) {
+        if (key !== 'hold') return Reflect.get(target, key, target);
+        // The block commits and pauses before the row exists, so its pause has nothing to move.
+        return async (input: Parameters<typeof heldCreditRewardRepository.hold>[0]) => {
+          await userService.blockSignupGrant(user.id, blockAdapters);
+          return heldCreditRewardRepository.hold(input);
+        };
+      },
+    });
+
+    const result = await creditService.payCreditReward(reward(user.id, 'projects'), {
+      ...rewardAdapters,
+      heldRewards: racingRewards,
+    });
+
+    expect(result.outcome).toBe('blocked');
+    expect(await HeldCreditRewardModel.findOne({ userId: user.id }).lean()).toMatchObject({ status: 'paused' });
+    expect(await HeldCreditRewardModel.countDocuments({ userId: user.id, status: 'held' })).toBe(0);
+  });
+
   it('still pays an inviter whose invited friend is blocked, since the block follows the recipient only', async () => {
     const inviter = await makeUser();
     const friend = await makeGrantUser();
