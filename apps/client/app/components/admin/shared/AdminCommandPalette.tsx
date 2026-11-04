@@ -3,6 +3,8 @@ import { Box, Button, Input, Modal, ModalClose, ModalDialog, Stack, Typography }
 import { useNavigate } from '@tanstack/react-router';
 import { AdminTab } from '../adminSidebarConfig';
 import { adminTabToSlug } from '../adminTabSlugs';
+import { adminOrganizationHref } from '../organizationsTabSearch';
+import { useAdminEntitySearch } from './useAdminEntitySearch';
 import { parseUserId } from '../Users/usersTabSearch';
 import { adminFocusScope, adminSurface } from './adminStyles';
 import { focusAdminSearch, isAdminChordEvent, isAdminOverlayOpen, isAdminShortcutEvent } from './adminKeyboard';
@@ -27,17 +29,34 @@ const shortcuts = [
   ['?', 'Show keyboard shortcuts'],
 ];
 
-export function AdminCommandPalette({
+type PaletteProps = {
+  commands?: AdminCommand[];
+  onNavigate?: (tab: AdminTab) => void;
+  canOpenTab?: (tab: AdminTab) => boolean;
+  onOpenHelp?: () => void;
+  enableEntitySearch?: boolean;
+};
+
+export function AdminCommandPalette(props: PaletteProps) {
+  return props.enableEntitySearch ? <ConnectedPalette {...props} /> : <CommandPalette {...props} />;
+}
+
+function ConnectedPalette(props: PaletteProps) {
+  const [searchQuery, setSearchQuery] = useState('');
+  const search = useAdminEntitySearch(searchQuery);
+  return <CommandPalette {...props} entitySearch={search} onSearchQuery={setSearchQuery} />;
+}
+
+function CommandPalette({
   commands = [],
   onNavigate,
   canOpenTab = () => true,
   onOpenHelp,
-}: {
-  commands?: AdminCommand[];
-  onNavigate?: (tab: AdminTab) => void;
-  /** Drops navigation to tabs this user may not open (a delegated admin's permissions). */
-  canOpenTab?: (tab: AdminTab) => boolean;
-  onOpenHelp?: () => void;
+  entitySearch,
+  onSearchQuery,
+}: PaletteProps & {
+  entitySearch?: ReturnType<typeof useAdminEntitySearch>;
+  onSearchQuery?: (query: string) => void;
 }) {
   const navigate = useNavigate();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -47,6 +66,9 @@ export function AdminCommandPalette({
   const [help, setHelp] = useState(false);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
+  useEffect(() => {
+    onSearchQuery?.(open ? query : '');
+  }, [open, query, onSearchQuery]);
   const go = (tab: AdminTab) =>
     onNavigate ? onNavigate(tab) : navigate({ to: '/admin', search: { tab: adminTabToSlug(tab) } });
   const tabNavigation = [
@@ -63,8 +85,21 @@ export function AdminCommandPalette({
   ];
   // A user profile belongs to the Users tab.
   const userId = canOpenTab(AdminTab.Users) ? parseUserId(query.trim()) : undefined;
+  const entityCommands: AdminCommand[] = (entitySearch?.results ?? []).map(result => ({
+    id: `${result.type}-${result.id}`,
+    label: `${result.type === 'user' ? 'Users' : result.type === 'key' ? 'API keys' : 'Organizations'}: ${result.displayName} - ${result.secondary}`,
+    run: () =>
+      result.type === 'organization'
+        ? navigate({ to: adminOrganizationHref(result.id) })
+        : navigate({
+            to: '/admin/users/$userId',
+            params: { userId: result.userId ?? result.id },
+            search: result.type === 'key' ? { tab: 'keys' } : {},
+          }),
+  }));
   const results: AdminCommand[] = [
-    ...(userId
+    ...entityCommands,
+    ...(userId && !entitySearch
       ? [
           {
             id: 'user-id',
@@ -174,7 +209,7 @@ export function AdminCommandPalette({
             Admin commands
           </Typography>
           <Typography id="admin-command-description" level="body-sm">
-            Navigate or open a current-record action. Paste a user ID to open its profile.
+            Search by email, user or organization ID, key prefix, IP, billing customer ID or exact organization name.
           </Typography>
           <Input
             autoFocus
@@ -186,7 +221,7 @@ export function AdminCommandPalette({
             slotProps={{
               input: {
                 role: 'combobox',
-                'aria-label': 'Search admin commands or user ID',
+                'aria-label': 'Search admin commands and identifiers',
                 'aria-expanded': true,
                 'aria-autocomplete': 'list',
                 'aria-controls': 'admin-command-results',
@@ -231,13 +266,12 @@ export function AdminCommandPalette({
               </Button>
             ))}
           </Box>
-          {!results.length && (
-            <Typography role="status">No matching commands. Use the Users or Organizations page search.</Typography>
+          {entitySearch?.loading && <Typography role="status">Searching identifiers...</Typography>}
+          {entitySearch?.error && <Typography role="alert">Search failed. Edit the query to try again.</Typography>}
+          {entitySearch?.validationError && <Typography role="alert">{entitySearch.validationError}</Typography>}
+          {!results.length && !entitySearch?.loading && (
+            <Typography role="status">No matches. Check the identifier or use an exact organization name.</Typography>
           )}
-          <Typography level="body-xs">
-            Name, email, organization ID and key-prefix lookup require the global admin search backend, which is not
-            available yet. No entity search is sent from this palette.
-          </Typography>
         </ModalDialog>
       </Modal>
       <Modal open={help} onClose={() => setHelp(false)}>

@@ -340,3 +340,18 @@ describe('buildErrorBody', () => {
     expect(buildErrorBody({ error: 'x', requestId: 'r', name: 'BadRequestError' }).name).toBe('BadRequestError');
   });
 });
+
+describe('admin search error logging', () => {
+  it('omits identifier queries for rejected requests', () => {
+    const { req, res } = makeReqRes();
+    const secret = 'b4m_live_' + 'a'.repeat(32);
+    req.method = 'GET';
+    req.url = `/api/admin/search?q=${secret}`;
+    errorHandler(new BadRequestError('Use only the displayed API key prefix'), req, res);
+    expect(JSON.stringify(req.logger.warn.mock.calls)).not.toContain(secret);
+    expect(JSON.stringify(req.logger.error.mock.calls)).not.toContain(secret);
+    expect(JSON.stringify([...req.logger.warn.mock.calls, ...req.logger.error.mock.calls])).toContain(
+      '/api/admin/search'
+    );
+  });
+});

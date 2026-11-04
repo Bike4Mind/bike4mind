@@ -11,6 +11,7 @@
  */
 
 // 2. Import the file here:
+import EnsureAdminSearchIndexes from './20260921239980_ensure-admin-search-indexes';
 // Backdated so the fail-closed OAuth backfill cannot block these indexes.
 import EnsureAdminUserNoteIndexes from './20260921235898_ensure-admin-user-note-indexes';
 // Backdated below the fail-closed OAuth backfill; $setOnInsert makes an old-id rerun safe.
@@ -539,6 +540,7 @@ const coreMigrations: MigrationFile[] = [
   DropRetiredGrantSettings,
   EnsureUserLimitEventIndexes,
   EnsureBillingEventIndexes,
+  EnsureAdminSearchIndexes,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

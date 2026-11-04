@@ -145,7 +145,12 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   return (
     <UndoToastProvider>
       <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-        <AdminCommandPalette onNavigate={setActiveTab} canOpenTab={isAdminTabRenderable} onOpenHelp={openHelpPanel} />
+        <AdminCommandPalette
+          enableEntitySearch={!!currentUser?.isAdmin}
+          onNavigate={setActiveTab}
+          canOpenTab={isAdminTabRenderable}
+          onOpenHelp={openHelpPanel}
+        />
         <Tabs
           aria-label="Admin tabs"
           value={activeTab}

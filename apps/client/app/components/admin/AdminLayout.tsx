@@ -18,6 +18,7 @@ import { AdminTab } from './adminSidebarConfig';
 import { canEnterAdminConsole, canOpenAdminTab } from './adminTabPermissions';
 import { environmentChipLabel, resolveCurrentEnvironment } from './environmentBanner';
 import { adminTabToSlug } from './adminTabSlugs';
+import { AdminCommandPalette } from './shared/AdminCommandPalette';
 import { adminFocus, adminScrollGutter } from './shared/adminStyles';
 import { useNewSubscriptionsDot } from './Subscriptions/subscriptionsLastSeen';
 import { useAdminModal } from './useAdminModal';
@@ -137,6 +138,9 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
             data-testid="admin-layout-content"
             sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
           >
+            {isAdminSubscriptionDetailPath(pathname) && (
+              <AdminCommandPalette enableEntitySearch={isAdmin} canOpenTab={canOpenTab} onNavigate={selectTab} />
+            )}
             <Box
               sx={{
                 display: { xs: 'flex', md: 'none' },

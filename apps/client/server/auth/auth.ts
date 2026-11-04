@@ -1,3 +1,4 @@
+import { requestLogUrl } from '../middlewares/requestLogUrl';
 import passport from 'passport';
 // TODO Bring back after we fix facebook secrets
 // import { Strategy as FacebookStrategy } from 'passport-facebook';
@@ -97,7 +98,7 @@ async function mfaEnrollmentGate(req: Request, res: Response, next: (err?: unkno
   } catch (err) {
     return next(err);
   }
-  req.logger?.info(`[AUTH] Blocked ${req.url} for user ${user.id}: MFA enrollment required.`);
+  req.logger?.info(`[AUTH] Blocked ${requestLogUrl(req.url)} for user ${user.id}: MFA enrollment required.`);
   res.status(403).json({
     error: MFA_ENROLLMENT_REQUIRED_MESSAGE,
     error_description: 'Multi-factor authentication is required. Set it up to continue.',
@@ -132,7 +133,9 @@ export const auth = handler
     // Block access if mfaPending is true and not an allowed endpoint
     if (req.user && (req.user as any).mfaPending) {
       if (!MFA_PENDING_ALLOWED_PATHS.has(req.url.split('?')[0])) {
-        req.logger?.info(`[AUTH] Blocked request to ${req.url} for user ${req.user.id} due to mfaPending.`);
+        req.logger?.info(
+          `[AUTH] Blocked request to ${requestLogUrl(req.url)} for user ${req.user.id} due to mfaPending.`
+        );
         return res.status(401).json({
           error: 'MFA setup or verification required.',
           mfaPending: true,
@@ -162,7 +165,9 @@ export const auth = handler
       !(req.user as { mfaPending?: boolean } | undefined)?.mfaPending &&
       isPolicyConsentRequired(req.user as ConsentGateUser | undefined, req.url, req.method)
     ) {
-      req.logger?.info(`[AUTH] Blocked ${req.url} for user ${req.user!.id} — AUP/ToS acceptance required.`);
+      req.logger?.info(
+        `[AUTH] Blocked ${requestLogUrl(req.url)} for user ${req.user!.id} - AUP/ToS acceptance required.`
+      );
       return res.status(403).json({
         error: 'Policy acceptance required.',
         // Included so any client that surfaces error_description (e.g. the device-activation page)
