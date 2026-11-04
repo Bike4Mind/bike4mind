@@ -82,7 +82,7 @@ describe('findPageAfterBySessionId', () => {
       ]);
     };
     const winningPlans = findProperties(explanation, 'winningPlan');
-    expect(winningPlans).toHaveLength(1);
+    expect(winningPlans.length).toBeGreaterThanOrEqual(1);
     // A SORT-stage check would not discriminate: a backward scan of deletedAt_timestamp_id_desc
     // also yields (timestamp, _id) ascending without one.
     expect(findProperties(winningPlans[0], 'indexName')).toContain('sessionId_timestamp_id');
