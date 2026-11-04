@@ -78,11 +78,20 @@ describe('GenerationSettingsPicker', () => {
   let container: HTMLDivElement;
   const onChange = vi.fn<(generation: GenerationSettings) => Promise<boolean> | void>();
 
-  async function render(model: ChatModelOption | undefined, generation?: GenerationSettings) {
+  async function render(
+    model: ChatModelOption | undefined,
+    generation?: GenerationSettings,
+    modelDefaults?: GenerationSettings
+  ) {
     await act(async () =>
       root.render(
         <CssVarsProvider>
-          <GenerationSettingsPicker model={model} generation={generation} onChange={onChange} />
+          <GenerationSettingsPicker
+            model={model}
+            generation={generation}
+            modelDefaults={modelDefaults}
+            onChange={onChange}
+          />
         </CssVarsProvider>
       )
     );
@@ -165,6 +174,15 @@ describe('GenerationSettingsPicker', () => {
     expect(input('temperature').placeholder).toBe('0.6');
     expect(input('maxOutputTokens').placeholder).toBe('No limit');
     expect(byTestId('generation-settings-reset-all-btn')).toBeNull();
+  });
+
+  it('shows the Models-screen default a blank field sends in place of the catalog one', async () => {
+    await render(LOCAL, undefined, { temperature: 0.4, maxOutputTokens: 99_999 });
+    await open();
+    expect(note('temperature')).toBe('Model default: 0.4.');
+    expect(input('temperature').placeholder).toBe('0.4');
+    expect(note('topP')).toBe('Model default: 0.95.');
+    expect(note('maxOutputTokens')).toBe('Model default: 16,384. Thinking counts toward it.');
   });
 
   it('shows a hosted model its own fields, with temperature locked and nothing to reset', async () => {

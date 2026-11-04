@@ -15,7 +15,7 @@ import { findModelOption, isLocalBackend, isLocalModel, SESSION_TITLE_MAX_LENGTH
 import { composerBlock, isLocalMode, noLocalModels } from './noLocalModels';
 import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
-import type { ModelEffort } from '@shared/modelSettings';
+import type { ModelSettings } from '@shared/modelSettings';
 import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
 import { BlankChat, BlankChatGreeting } from './BlankChat';
@@ -443,9 +443,12 @@ export function ChatShell({
    * that handle them - the same reasoning the model picker applies to an unreadable list.
    */
   const modelOption = findModelOption(catalog.models, conversation.session?.model);
-  const [storedEffort, setStoredEffort] = useState<{ modelId: string; effort: ModelEffort | null } | null>(null);
+  const [storedDefaults, setStoredDefaults] = useState<{ modelId: string; settings: ModelSettings | null } | null>(
+    null
+  );
   const defaultsModelId = modelOption && isLocalModel(modelOption.id) ? modelOption.id : null;
-  const defaultEffort = storedEffort && storedEffort.modelId === defaultsModelId ? storedEffort.effort : null;
+  const modelDefaults = storedDefaults && storedDefaults.modelId === defaultsModelId ? storedDefaults.settings : null;
+  const defaultEffort = modelDefaults?.effort ?? null;
   // Re-read on returning from the Models screen, where the defaults are edited.
   useEffect(() => {
     if (!defaultsModelId || screen !== 'conversation') return;
@@ -453,7 +456,7 @@ export function ChatShell({
     void Promise.resolve()
       .then(() => window.b4m.chat.getModelSettings(defaultsModelId))
       .then(
-        settings => live && setStoredEffort({ modelId: defaultsModelId, effort: settings?.effort ?? null }),
+        settings => live && setStoredDefaults({ modelId: defaultsModelId, settings: settings ?? null }),
         () => undefined
       );
     return () => {
@@ -1605,6 +1608,7 @@ export function ChatShell({
                   key={activeId ?? ''}
                   model={modelOption}
                   generation={conversation.session?.generation}
+                  modelDefaults={modelDefaults?.generation}
                   disabled={!activeId}
                   onChange={conversation.setGeneration}
                 />

@@ -25,15 +25,20 @@ function shown(value: number | undefined): string {
   return value === undefined ? '' : String(value);
 }
 
-function defaultText(control: NumericControl): string {
-  if (control.default !== undefined) return `Model default: ${numberFormat.format(control.default)}`;
+function defaultText(control: NumericControl, fallback: number | undefined): string {
+  if (fallback !== undefined) return `Model default: ${numberFormat.format(fallback)}`;
   return control.unlimitedDefault ? 'Model default: no limit' : 'Model default';
 }
 
 /** The line under a field: its default or lock, a stored value this model adjusts, and whether thinking counts. */
-function noteFor(control: NumericControl, stored: number | undefined, sent: number | undefined): string {
+function noteFor(
+  control: NumericControl,
+  fallback: number | undefined,
+  stored: number | undefined,
+  sent: number | undefined
+): string {
   if (control.locked) return control.locked.reason;
-  const parts = [defaultText(control)];
+  const parts = [defaultText(control, fallback)];
   if (stored !== undefined && sent !== undefined && sent !== stored) {
     parts.push(`Saved as ${numberFormat.format(stored)}, sent as ${numberFormat.format(sent)} on this model`);
   }
@@ -48,6 +53,7 @@ function noteFor(control: NumericControl, stored: number | undefined, sent: numb
 function FieldRow({
   field,
   control,
+  fallback,
   stored,
   sent,
   autoFocus,
@@ -56,6 +62,8 @@ function FieldRow({
 }: {
   field: GenerationField;
   control: NumericControl;
+  /** What a blank field sends: the Models-screen default, else the control's own. */
+  fallback: number | undefined;
   stored: number | undefined;
   sent: number | undefined;
   autoFocus: boolean;
@@ -117,7 +125,7 @@ function FieldRow({
         <Typography level="body-sm">{GENERATION_LABELS[field]}</Typography>
         <Typography level="body-xs" textColor="text.tertiary" sx={{ maxWidth: 200 }}>
           <span id={noteId} data-testid={`generation-settings-${field}-default`}>
-            {noteFor(control, stored, sent)}
+            {noteFor(control, fallback, stored, sent)}
           </span>
           {!locked && stored !== undefined && (
             <Link
@@ -139,9 +147,7 @@ function FieldRow({
         type="number"
         variant={locked ? 'soft' : 'outlined'}
         value={locked ? String(locked.value) : draft}
-        placeholder={
-          control.default !== undefined ? String(control.default) : control.unlimitedDefault ? 'No limit' : 'Default'
-        }
+        placeholder={fallback !== undefined ? String(fallback) : control.unlimitedDefault ? 'No limit' : 'Default'}
         disabled={disabled}
         readOnly={locked !== undefined}
         autoFocus={autoFocus}
@@ -178,16 +184,19 @@ function FieldRow({
  * This conversation's sampling and output overrides, beside the effort picker: a button that opens
  * a dialog of the fields the model's `controls` list. The button and every field show what the next
  * turn sends, which across a model switch can differ from what is stored (see requestGeneration).
+ * `modelDefaults` are the model's defaults from the Models screen, which a blank field sends.
  * `onChange` answers false when the set was not saved.
  */
 export function GenerationSettingsPicker({
   model,
   generation,
+  modelDefaults,
   disabled,
   onChange,
 }: {
   model: ChatModelOption | undefined;
   generation: GenerationSettings | undefined;
+  modelDefaults?: GenerationSettings;
   disabled?: boolean;
   onChange: (generation: GenerationSettings) => Promise<boolean> | void;
 }) {
@@ -209,6 +218,7 @@ export function GenerationSettingsPicker({
   if (fields.length === 0) return null;
 
   const sent = requestGeneration(generation, controls);
+  const fallbacks = requestGeneration(modelDefaults, controls);
   const applied = fields.filter(({ field }) => generation?.[field] !== undefined && sent[field] !== undefined).length;
   const resettable = fields.some(({ field, control }) => !control.locked && generation?.[field] !== undefined);
   const firstEditable = fields.find(({ control }) => !control.locked)?.field;
@@ -298,6 +308,7 @@ export function GenerationSettingsPicker({
               key={field}
               field={field}
               control={control}
+              fallback={fallbacks[field] ?? control.default}
               stored={generation?.[field]}
               sent={sent[field]}
               autoFocus={field === firstEditable}
