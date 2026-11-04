@@ -304,6 +304,17 @@ describe('POST /api/fabfiles/{id}/edit metering', () => {
       );
     });
 
+    it('clamps max output to the substitute limit, and keeps 4000 for an unrestricted caller', async () => {
+      m.substitute.mockResolvedValue({ ...cheap, max_tokens: 1500 });
+      await call(false, 'premium');
+      expect(m.complete.mock.calls[0][2]).toMatchObject({ maxTokens: 1500 });
+
+      m.complete.mockClear();
+      m.substitute.mockResolvedValue(undefined);
+      await call(false, 'premium');
+      expect(m.complete.mock.calls[0][2]).toMatchObject({ maxTokens: 4000 });
+    });
+
     it('admits the requested model, not the substitute', async () => {
       m.substitute.mockResolvedValue(cheap);
       m.denied.add('cheap');

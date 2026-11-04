@@ -291,7 +291,9 @@ Return only the edited content without any markdown code blocks or explanations.
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userPrompt },
           ];
-          const maxTokens = 4000;
+          // A derived max_tokens is a default, not a real ceiling, so only a declared limit clamps.
+          const runOutputLimit = runModelInfo.maxOutputTokensDerived ? undefined : runModelInfo.max_tokens;
+          const maxTokens = runOutputLimit ? Math.min(4000, runOutputLimit) : 4000;
           // Refuse an edit whose worst-case result cannot fit before paying for it: the rewrite is at
           // most the full output (plus the Office container it is written back into).
           if (applyImmediately) {
