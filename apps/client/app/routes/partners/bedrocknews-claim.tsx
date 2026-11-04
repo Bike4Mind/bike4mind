@@ -152,7 +152,7 @@ const ClaimShell = ({ logoUrl, busy, children }: { logoUrl: string; busy?: boole
       bgcolor: 'background.body',
     }}
   >
-    <Box component="img" src={logoUrl} alt="Bike4Mind" sx={{ height: 34, width: 'auto', objectFit: 'contain' }} />
+    <Box component="img" src={logoUrl} alt="Bike4Mind" sx={{ height: 60, width: 'auto', objectFit: 'contain' }} />
     <Sheet
       component="main"
       variant="outlined"
@@ -164,7 +164,6 @@ const ClaimShell = ({ logoUrl, busy, children }: { logoUrl: string; busy?: boole
         boxSizing: 'border-box',
         overflowWrap: 'anywhere',
         borderRadius: 'lg',
-        boxShadow: 'sm',
         p: { xs: '20px', sm: '28px' },
         display: 'flex',
         flexDirection: 'column',
@@ -326,7 +325,7 @@ const ReadyView = ({
           startDecorator={
             <Box aria-hidden sx={{ width: 16, height: 16, borderRadius: '4px', bgcolor: 'success.solidBg' }} />
           }
-          sx={{ fontSize: '12px', fontWeight: 600 }}
+          sx={{ fontSize: '12px', fontWeight: 600, p: 0 }}
         >
           From BedrockNews Headword
         </Chip>
