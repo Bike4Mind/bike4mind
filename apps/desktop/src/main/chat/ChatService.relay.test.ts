@@ -4,10 +4,16 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import type { ChatQueueEvent, ChatRelayOrigin, ChatSessionSummary, ChatStreamEvent } from '@shared/chat';
+import type {
+  ChatMessageSkill,
+  ChatQueueEvent,
+  ChatRelayOrigin,
+  ChatSessionSummary,
+  ChatStreamEvent,
+} from '@shared/chat';
 import { formatSessionMention } from '@shared/sessionMention';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ChatService } from './ChatService';
+import { ChatService, RUN_HERE_PREAMBLE } from './ChatService';
 import { MessageQueue } from './MessageQueue';
 import { SessionActivity } from './SessionActivity';
 import { SessionStore } from './SessionStore';
@@ -912,7 +918,7 @@ describe('ChatService session_send', () => {
       type Seed = (
         targetId: string,
         thirdId: string
-      ) => { content: string; system?: boolean; seed?: true; relay?: ChatRelayOrigin };
+      ) => { content: string; system?: boolean; seed?: true; relay?: ChatRelayOrigin; skill?: ChatMessageSkill };
       const mention = (targetId: string) => formatSessionMention(targetId, 'Elsewhere');
 
       async function readAfterSeeding(seed: Seed) {
@@ -944,6 +950,21 @@ describe('ChatService session_send', () => {
         ],
         ['a mention inside an automatic notice', target => ({ content: `see ${mention(target)}`, system: true })],
         ['a mention inside a spawn seed prompt', target => ({ content: `read ${mention(target)}`, seed: true })],
+        [
+          'a mention inside a suggestion run here',
+          target => ({ content: `${RUN_HERE_PREAMBLE}\n\nsummarise ${mention(target)}` }),
+        ],
+        [
+          "a mention inside a skill's expanded body",
+          target => ({ content: `Review ${mention(target)}`, skill: { name: 'review', source: 'project' } }),
+        ],
+        [
+          "a mention inside a skill's arguments",
+          target => ({
+            content: `Review ${mention(target)}`,
+            skill: { name: 'review', args: mention(target), source: 'global' },
+          }),
+        ],
       ])('does not grant read for %s', async (_name, seed) => {
         expect((await readAfterSeeding(seed))?.error).toMatch(/another project/);
       });

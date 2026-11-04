@@ -4894,8 +4894,10 @@ export class ChatService {
 
   /**
    * Whether `callerId`'s transcript traces `targetId` back to something its user did: a mention
-   * they typed (not a spawn's model-written seed), or a message that conversation sent here (which they could read in the thread).
-   * Read fresh, because the mention is usually in the very turn asking about it.
+   * they typed, or a message that conversation sent here (which they could read in the thread).
+   * A spawn's seed, a run-here suggestion and a skill's expanded body are model- or file-written,
+   * so a mention in them does not count. Read fresh, because the mention is usually in the very
+   * turn asking about it.
    */
   private async knownTo(callerId: string, targetId: string): Promise<boolean> {
     const caller = await this.deps.store.get(callerId);
@@ -4905,6 +4907,9 @@ export class ChatService {
         (message.role === 'user' &&
           !message.system &&
           !message.seed &&
+          !message.skill &&
+          // Content, not a flag: a run-here task can merge into a queued typed message on its way in.
+          !message.content.includes(RUN_HERE_PREAMBLE) &&
           findSessionMentions(message.content).some(mention => mention.sessionId === targetId))
     );
   }
