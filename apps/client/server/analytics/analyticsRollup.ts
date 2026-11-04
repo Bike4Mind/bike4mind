@@ -5,13 +5,12 @@ import {
   analyticsDailyRepository,
   analyticsUserDayRepository,
   UsageEvent,
-  User,
   type IAnalyticsDailySignups,
   type IAnalyticsUserDay,
 } from '@bike4mind/database';
-import { INTERNAL_ACCOUNT_FLAGS, UNCLASSIFIED_SOURCE } from '@bike4mind/common';
-import { signupVerdictOf } from '../users/signupClassifier';
-import { classifySignupWindow, currentStaffRegex, isCountedUser, loadUserFlags } from './signupCohort';
+import { ACTIVE_SOURCES, UNCLASSIFIED_SOURCE } from '@bike4mind/common';
+import { classifyRealSignups } from './realSignup';
+import { classifySignupWindow, isActiveEligible, loadCountingContext, loadUserFlags } from './signupCohort';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const QUERY_DEADLINE_MS = 120_000;
@@ -53,44 +52,30 @@ export async function classifyCohort(
   { now = new Date(), logger = console, maxTimeMS = QUERY_DEADLINE_MS }: RollupOptions
 ): Promise<CohortResult> {
   const { start, end } = dayBounds(day);
-  const { counted, signalsById, truncated } = await classifySignupWindow(start, end, {
-    now,
-    deadlineMs: maxTimeMS,
-  });
+  const [{ legitIds, suspectedIds }, { counted, signalsById, truncated }] = await Promise.all([
+    classifyRealSignups(start, end, { deadlineMs: maxTimeMS }),
+    classifySignupWindow(start, end, { now, deadlineMs: maxTimeMS }),
+  ]);
+  // The scan only feeds bySignal now, so a truncated one no longer changes the real/suspected counts.
   if (truncated) logger.warn(`analytics rollup: signup candidate scan truncated for ${day}`);
 
-  const staffRegex = currentStaffRegex();
-  const total = truncated
-    ? await User.countDocuments({
-        createdAt: { $gte: start, $lt: end },
-        $nor: [
-          ...INTERNAL_ACCOUNT_FLAGS.map(flag => ({ [flag]: true })),
-          ...(staffRegex ? [{ email: staffRegex }] : []),
-        ],
-      }).maxTimeMS(maxTimeMS)
-    : counted.length;
-
   const signups: IAnalyticsDailySignups = {
-    legit: 0,
-    suspected: 0,
-    unclassified: Math.max(0, total - counted.length),
+    legit: legitIds.length,
+    suspected: suspectedIds.length,
+    unclassified: 0,
     bySignal: {},
   };
-  const suspectedIds: string[] = [];
   for (const candidate of counted) {
-    const signals = signalsById.get(candidate.id) ?? [];
-    for (const signal of signals) signups.bySignal[signal] = (signups.bySignal[signal] ?? 0) + 1;
-    const verdict = signupVerdictOf(signals, candidate.createdAt, now);
-    signups[verdict] += 1;
-    if (verdict === 'suspected') suspectedIds.push(candidate.id);
+    for (const signal of signalsById.get(candidate.id) ?? []) {
+      signups.bySignal[signal] = (signups.bySignal[signal] ?? 0) + 1;
+    }
   }
-  return { signups, classifiedIds: counted.map(candidate => candidate.id), suspectedIds };
+  return { signups, classifiedIds: [...legitIds, ...suspectedIds], suspectedIds };
 }
 
 /**
  * Classifies the accounts created on `day` and writes the result back: the `suspected` flag on
- * that cohort's user-day rows and the signup counts on the day's analytics_daily row. Unclassified
- * covers unscanned accounts and accounts too young for dormancy; it never counts as legit.
+ * that cohort's user-day rows and the signup counts on the day's analytics_daily row.
  */
 export async function evaluateSignupDay(day: string, options: RollupOptions = {}) {
   const { signups, classifiedIds, suspectedIds } = await classifyCohort(day, options);
@@ -145,16 +130,24 @@ async function refreshLaterWindows(day: string) {
     .maxTimeMS(QUERY_DEADLINE_MS)
     .lean();
   for (const { day: laterDay } of later) {
-    const [wau, mau] = await windowCounts(laterDay);
-    await AnalyticsDaily.updateOne({ day: laterDay }, { $set: { wau, mau } }).maxTimeMS(QUERY_DEADLINE_MS);
+    const { wau, mau, api } = await windowCounts(laterDay);
+    await AnalyticsDaily.updateOne({ day: laterDay }, { $set: { wau, mau, 'api.wau': api.wau, 'api.mau': api.mau } }).maxTimeMS(
+      QUERY_DEADLINE_MS
+    );
   }
 }
 
-const windowCounts = (day: string) =>
-  Promise.all([
-    analyticsUserDayRepository.countDistinctUsers(shiftDay(day, -(WAU_WINDOW_DAYS - 1)), day),
-    analyticsUserDayRepository.countDistinctUsers(shiftDay(day, -(MAU_WINDOW_DAYS - 1)), day),
+const windowCounts = async (day: string) => {
+  const week = [shiftDay(day, -(WAU_WINDOW_DAYS - 1)), day] as const;
+  const month = [shiftDay(day, -(MAU_WINDOW_DAYS - 1)), day] as const;
+  const [wau, mau, apiWau, apiMau] = await Promise.all([
+    analyticsUserDayRepository.countDistinctUsers(...week, { active: true }),
+    analyticsUserDayRepository.countDistinctUsers(...month, { active: true }),
+    analyticsUserDayRepository.countDistinctUsers(...week, { sources: 'api' }),
+    analyticsUserDayRepository.countDistinctUsers(...month, { sources: 'api' }),
   ]);
+  return { wau, mau, api: { wau: apiWau, mau: apiMau } };
+};
 
 type EventGroup = {
   _id: {
@@ -172,18 +165,22 @@ type EventGroup = {
 type DayUsageAcc = {
   requests: number;
   credits: number;
+  /** A first-party request that day: the user counts toward DAU/WAU/MAU. */
+  active: boolean;
   features: Set<string>;
   sources: Set<string>;
   byOwner: Map<string, { ownerType: IAnalyticsUserDay['ownerType']; ownerId: string; requests: number }>;
 };
 
 /**
- * Counted users' usage on one UTC day, grouped the way rollupDay stores it. Read-only, so the
- * admin overview reuses it for the live slice of today and its numbers match the rollup.
+ * Eligible users' usage on one UTC day, grouped the way rollupDay stores it. Read-only, so the
+ * admin overview reuses it for the live slice of today and its numbers match the rollup. A user is
+ * active on a first-party request (ACTIVE_SOURCES, or a legacy event with no source); `api` users are
+ * kept in `perUser` for the separate API series; `system` traffic is dropped.
  */
 export async function collectDayUsage(day: string, { maxTimeMS = QUERY_DEADLINE_MS }: RollupOptions = {}) {
   const { start, end } = dayBounds(day);
-  const staffRegex = currentStaffRegex();
+  const ctx = await loadCountingContext();
 
   const groups = await UsageEvent.aggregate<EventGroup>([
     { $match: { status: 'ok', createdAt: { $gte: start, $lt: end } } },
@@ -215,8 +212,9 @@ export async function collectDayUsage(day: string, { maxTimeMS = QUERY_DEADLINE_
 
   for (const group of groups) {
     const { userId, ownerType, ownerId, feature, source, model } = group._id;
-    if (!isCountedUser(users.get(userId), staffRegex)) continue;
+    if (source === 'system' || !isActiveEligible(users.get(userId), ctx)) continue;
     const acc: DayUsageAcc = perUser.get(userId) ?? {
+      active: false,
       requests: 0,
       credits: 0,
       features: new Set(),
@@ -224,6 +222,7 @@ export async function collectDayUsage(day: string, { maxTimeMS = QUERY_DEADLINE_
       byOwner: new Map(),
     };
     perUser.set(userId, acc);
+    if (!source || (ACTIVE_SOURCES as readonly string[]).includes(source)) acc.active = true;
     acc.requests += group.requests;
     acc.credits += group.credits;
     acc.features.add(feature);
@@ -237,7 +236,10 @@ export async function collectDayUsage(day: string, { maxTimeMS = QUERY_DEADLINE_
     bump(byModel, model, group.requests);
     creditsConsumed += group.credits;
   }
-  return { users, perUser, byFeature, bySource, byModel, creditsConsumed };
+  const accs = [...perUser.values()];
+  const activeCount = accs.filter(acc => acc.active).length;
+  const apiCount = accs.filter(acc => acc.sources.has('api')).length;
+  return { users, perUser, activeCount, apiCount, byFeature, bySource, byModel, creditsConsumed };
 }
 
 /**
@@ -246,7 +248,7 @@ export async function collectDayUsage(day: string, { maxTimeMS = QUERY_DEADLINE_
  */
 export async function rollupDay(day: string, options: RollupOptions = {}) {
   const computedAt = options.now ?? new Date();
-  const { users, perUser, byFeature, bySource, byModel, creditsConsumed } = await collectDayUsage(day, options);
+  const { users, perUser, activeCount, apiCount, byFeature, bySource, byModel, creditsConsumed } = await collectDayUsage(day, options);
 
   const suspectedUsers = await resolveSuspected(
     [...perUser.keys()].map(userId => {
@@ -275,6 +277,7 @@ export async function rollupDay(day: string, options: RollupOptions = {}) {
             sources: [...acc.sources].sort(),
             signupDay: user?.createdAt ? formatDay(new Date(user.createdAt)) : undefined,
             suspected: suspectedUsers.has(userId),
+            active: acc.active,
           },
         },
         upsert: true,
@@ -293,21 +296,22 @@ export async function rollupDay(day: string, options: RollupOptions = {}) {
   }
 
   const signups = await evaluateSignupDay(day, options);
-  const [wau, mau] = await windowCounts(day);
+  const { wau, mau, api } = await windowCounts(day);
   // The daily row is the backfill completion marker; leave it absent until all dependent windows refresh.
   await refreshLaterWindows(day);
   await analyticsDailyRepository.upsertDay(day, {
     signups,
-    dau: perUser.size,
+    dau: activeCount,
     wau,
     mau,
+    api: { dau: apiCount, wau: api.wau, mau: api.mau },
     requestsByFeature: toRecord(byFeature),
     requestsBySource: toRecord(bySource),
     requestsByModel: toRecord(byModel, ANALYTICS_BY_MODEL_LIMIT),
     creditsConsumed,
     computedAt,
   });
-  return { day, dau: perUser.size, wau, mau };
+  return { day, dau: activeCount, wau, mau, api: { dau: apiCount, ...api } };
 }
 
 /** Re-runs signup classification for the trailing days so late signals (dormancy, API use) land. */

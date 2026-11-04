@@ -33,14 +33,12 @@ export function SignupsSection({ data, loading, error, onRetry, onShowDefaultRan
   const bucket = data?.window.bucket ?? 'day';
   const buckets = useMemo(() => data?.signups.buckets ?? [], [data]);
   const rows = useMemo(() => buckets.map(b => ({ ...b, label: formatDayLabel(b.start, bucket) })), [buckets, bucket]);
-  const totals = data?.signups.totals ?? { legit: 0, suspected: 0, unclassified: 0 };
+  const totals = data?.signups.totals ?? { legit: 0, suspected: 0 };
   const signals = data?.signups.bySignal ?? [];
   const maxSignal = Math.max(0, ...signals.map(row => row.count));
-  const empty = totals.legit + totals.suspected + totals.unclassified === 0;
+  const empty = totals.legit + totals.suspected === 0;
 
-  const caption = `${formatCount(totals.legit)} likely legit, ${formatCount(totals.suspected)} suspected, ${formatCount(
-    totals.unclassified
-  )} not classified yet. Bars are ${BUCKET_UNIT[bucket]}; click one to list its accounts.`;
+  const caption = `${formatCount(totals.legit)} real, ${formatCount(totals.suspected)} suspected. Bars are ${BUCKET_UNIT[bucket]}; click one to list its accounts.`;
   const axisTick = { fontSize: 12, fill: admin.inkMuted };
 
   // Bar entries carry the row they were drawn from, so the click resolves the bucket without tooltip state.
@@ -49,11 +47,11 @@ export function SignupsSection({ data, loading, error, onRetry, onShowDefaultRan
     if (picked) onSelectWindow(toWindow(picked));
   };
 
-  const partialCell = (entry: SignupBucket, fill: string, baseOpacity = 1) => (
+  const partialCell = (entry: SignupBucket, fill: string) => (
     <Cell
       key={entry.start}
       fill={fill}
-      fillOpacity={entry.partial ? baseOpacity * 0.45 : baseOpacity}
+      fillOpacity={entry.partial ? 0.45 : 1}
       stroke={entry.partial ? fill : admin.surface}
       strokeDasharray={entry.partial ? '3 2' : undefined}
     />
@@ -62,7 +60,7 @@ export function SignupsSection({ data, loading, error, onRetry, onShowDefaultRan
   const chart = (
     <Box
       role="img"
-      aria-label={`Stacked bar chart of signups per bucket, likely legit versus suspected. ${caption}`}
+      aria-label={`Stacked bar chart of signups per bucket, real versus suspected. ${caption}`}
       data-testid="analytics-signups-chart"
       sx={{ cursor: 'pointer' }}
     >
@@ -86,7 +84,7 @@ export function SignupsSection({ data, loading, error, onRetry, onShowDefaultRan
           <Legend wrapperStyle={{ fontSize: 12, color: admin.inkSecondary }} />
           <Bar
             dataKey="legit"
-            name="Likely legit"
+            name="Real"
             stackId="signups"
             fill={colors.likelyLegit}
             isAnimationActive={false}
@@ -103,17 +101,6 @@ export function SignupsSection({ data, loading, error, onRetry, onShowDefaultRan
             onClick={selectBar}
           >
             {rows.map(entry => partialCell(entry, colors.suspected))}
-          </Bar>
-          <Bar
-            dataKey="unclassified"
-            name="Not classified"
-            stackId="signups"
-            fill={admin.inkMuted}
-            fillOpacity={0.4}
-            isAnimationActive={false}
-            onClick={selectBar}
-          >
-            {rows.map(entry => partialCell(entry, admin.inkMuted, 0.4))}
           </Bar>
         </BarChart>
       </ResponsiveContainer>
@@ -135,9 +122,8 @@ export function SignupsSection({ data, loading, error, onRetry, onShowDefaultRan
         </Button>
       ),
     },
-    { id: 'legit', label: 'Likely legit', numeric: true, render: row => formatCount(row.legit) },
+    { id: 'legit', label: 'Real', numeric: true, render: row => formatCount(row.legit) },
     { id: 'suspected', label: 'Suspected', numeric: true, render: row => formatCount(row.suspected) },
-    { id: 'unclassified', label: 'Not classified', numeric: true, render: row => formatCount(row.unclassified) },
   ];
   const table = (
     <DataTable

@@ -77,6 +77,7 @@ export function ActiveUsersSection({ data, loading, error, onRetry, onShowDefaul
           mau: day.partial ? null : day.mau,
           wau: day.partial ? null : day.wau,
           dau: day.partial ? null : day.dau,
+          apiDau: day.apiDau,
           mauPartial: day.partial || joinsPartial ? day.mau : null,
           wauPartial: day.partial || joinsPartial ? day.wau : null,
           dauPartial: day.partial || joinsPartial ? day.dau : null,
@@ -192,6 +193,16 @@ export function ActiveUsersSection({ data, loading, error, onRetry, onShowDefaul
               dot={isolatedDot('mau', admin.accent)}
               isAnimationActive={false}
             />
+            <Line
+              dataKey="apiDau"
+              name="API users (not counted)"
+              stroke={admin.inkMuted}
+              strokeOpacity={0.6}
+              strokeDasharray="1 3"
+              strokeWidth={1.5}
+              dot={isolatedDot('apiDau', admin.inkMuted)}
+              isAnimationActive={false}
+            />
             {(['dau', 'wau', 'mau'] as const).map(key => (
               <Line
                 key={key}
@@ -255,6 +266,7 @@ export function ActiveUsersSection({ data, loading, error, onRetry, onShowDefaul
     { id: 'dau', label: 'DAU', numeric: true, render: row => formatCount(row.dau) },
     { id: 'wau', label: 'WAU', numeric: true, render: row => formatCount(row.wau) },
     { id: 'mau', label: 'MAU', numeric: true, render: row => formatCount(row.mau) },
+    { id: 'apiDau', label: 'API users (not counted)', numeric: true, render: row => formatCount(row.apiDau) },
     ...(compare
       ? [
           {

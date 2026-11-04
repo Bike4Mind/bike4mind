@@ -32,7 +32,7 @@ const COMPARE_OPTIONS = [
   { value: 'off', label: 'Off' },
 ] as const;
 const SIGNUPS_OPTIONS = [
-  { value: 'legit', label: 'Legit only' },
+  { value: 'legit', label: 'Real only' },
   { value: 'all', label: 'All' },
 ] as const;
 
@@ -57,7 +57,7 @@ function StatTiles({ data }: { data: AnalyticsOverview }) {
   const days = data.activeUsers.days.filter(day => !day.partial);
   const line = (value: number | null, previous: number | null, unit?: 'points') =>
     compare ? comparisonLine(value, previous, window.completeDays, unit) : undefined;
-  const signupsLabel = data.signupsMode === 'legit' ? 'New signups (legit)' : 'New signups (all)';
+  const signupsLabel = data.signupsMode === 'legit' ? 'New signups (real)' : 'New signups (all)';
   const signupSeries = data.signups.buckets
     .filter(bucket => !bucket.partial)
     .map(bucket =>
@@ -65,7 +65,7 @@ function StatTiles({ data }: { data: AnalyticsOverview }) {
         ? null
         : data.signupsMode === 'legit'
           ? bucket.legit
-          : bucket.legit + (bucket.suspected ?? 0) + (bucket.unclassified ?? 0)
+          : bucket.legit + (bucket.suspected ?? 0)
     );
   const stickinessSeries = days.map(day => (day.dau !== null && day.mau ? (day.dau / day.mau) * 100 : null));
 
@@ -292,7 +292,7 @@ const AnalyticsTab = () => {
       </Box>
 
       <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="analytics-footer">
-        Counts exclude admin, system, flagged test and staff-domain accounts. Days are UTC.
+        Active users: an AI request that UTC day from the web app, CLI or Desktop. Counts exclude admin, Developer-tagged, test, banned and AI-held accounts. API users are shown separately and not counted. Days are UTC.
       </Typography>
     </Stack>
   );

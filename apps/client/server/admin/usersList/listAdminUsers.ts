@@ -20,7 +20,7 @@ import type {
 import { withSafeOrganization } from '@server/utils/toSafeOrganizationSubdocument';
 import { getDomainGroups, SIGNUP_SCAN_LIMIT } from '@server/users/signupAnomaly';
 import { funnelStepUserIds } from '@server/analytics/activationFunnel';
-import { signupVerdictUserIds } from '@server/analytics/signupCohort';
+import { signupVerdictUserIds } from '@server/analytics/realSignup';
 import { LIVE_API_KEY_STATUS, adminUsersSort, buildAdminUsersMatch, organizationNamesOf } from './adminUsersQuery';
 
 // ms. A list read that runs past this is a filter the indexes cannot serve; fail it rather than queue.

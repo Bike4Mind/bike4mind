@@ -45,6 +45,8 @@ export type ActiveUsersDay = {
   dau: number | null;
   wau: number | null;
   mau: number | null;
+  /** Public API users that day. Shown beside the active users but never counted in them. */
+  apiDau: number | null;
   /** Today, computed live and still filling up. */
   partial: boolean;
   /** The same position in the previous period, when compare is on. */
@@ -60,7 +62,6 @@ export type SignupBucket = {
   end: string;
   legit: number | null;
   suspected: number | null;
-  unclassified: number | null;
   partial: boolean;
 };
 
@@ -94,7 +95,7 @@ export type AnalyticsOverview = {
   activeUsers: { days: ActiveUsersDay[]; bySource: RequestsBySourceDay[]; sources: string[] };
   signups: {
     buckets: SignupBucket[];
-    totals: { legit: number; suspected: number; unclassified: number };
+    totals: { legit: number; suspected: number };
     bySignal: { signal: SignupSignal | string; count: number }[];
   };
 };

@@ -22,6 +22,12 @@ export type CompletionSource = 'web' | 'cli' | 'desktop' | 'api' | 'agent' | 'sy
 
 export const COMPLETION_SOURCES = ['web', 'cli', 'desktop', 'api', 'agent', 'system'] as const;
 
+/**
+ * Sources that count toward active users: first-party surfaces (and agent runs). `api` is third-party and
+ * shown as its own series; `system` is background work. Must stay in sync with COMPLETION_SOURCES.
+ */
+export const ACTIVE_SOURCES = ['web', 'cli', 'desktop', 'agent'] as const satisfies readonly CompletionSource[];
+
 /** The sources an API-key-authed request can carry - see {@link resolveApiCompletionSource}. */
 export const API_KEY_COMPLETION_SOURCES = ['api', 'cli', 'desktop'] as const satisfies readonly CompletionSource[];
 

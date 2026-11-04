@@ -10,6 +10,13 @@ export interface IAnalyticsDailySignups {
   bySignal: Record<string, number>;
 }
 
+/** Public API users: counted separately and never part of dau/wau/mau. */
+export interface IAnalyticsDailyApiUsers {
+  dau: number;
+  wau: number;
+  mau: number;
+}
+
 /** One row per UTC day: platform-wide activity and signup totals derived from analytics_user_days. */
 export interface IAnalyticsDaily {
   day: string; // YYYY-MM-DD (UTC)
@@ -17,6 +24,7 @@ export interface IAnalyticsDaily {
   dau: number;
   wau: number;
   mau: number;
+  api?: IAnalyticsDailyApiUsers;
   requestsByFeature: Record<string, number>;
   requestsBySource: Record<string, number>;
   requestsByModel: Record<string, number>;
@@ -48,6 +56,17 @@ const AnalyticsDailySchema = new Schema<IAnalyticsDailyDocument>(
     dau: { type: Number, required: true, default: 0 },
     wau: { type: Number, required: true, default: 0 },
     mau: { type: Number, required: true, default: 0 },
+    api: {
+      type: new Schema(
+        {
+          dau: { type: Number, required: true, default: 0 },
+          wau: { type: Number, required: true, default: 0 },
+          mau: { type: Number, required: true, default: 0 },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
     requestsByFeature: { type: Schema.Types.Mixed, default: {} },
     requestsBySource: { type: Schema.Types.Mixed, default: {} },
     requestsByModel: { type: Schema.Types.Mixed, default: {} },

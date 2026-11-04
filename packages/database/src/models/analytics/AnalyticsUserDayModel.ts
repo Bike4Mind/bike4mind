@@ -16,6 +16,8 @@ export interface IAnalyticsUserDay {
   sources: string[];
   signupDay?: string; // YYYY-MM-DD (UTC) of the user's account creation
   suspected: boolean;
+  /** At least one first-party request that day (see ACTIVE_SOURCES); the DAU/WAU/MAU rows. */
+  active: boolean;
 }
 
 export type IAnalyticsUserDayDocument = IAnalyticsUserDay & IMongoDocument;
@@ -32,6 +34,7 @@ const AnalyticsUserDaySchema = new Schema<IAnalyticsUserDayDocument>(
     sources: { type: [String], default: [] },
     signupDay: { type: String, required: false, match: ANALYTICS_DAY_PATTERN },
     suspected: { type: Boolean, required: true, default: false },
+    active: { type: Boolean, required: true, default: false },
   },
   { timestamps: true, collection: 'analytics_user_days' }
 );
@@ -39,6 +42,7 @@ const AnalyticsUserDaySchema = new Schema<IAnalyticsUserDayDocument>(
 AnalyticsUserDaySchema.index({ day: 1, userId: 1 }, { unique: true });
 AnalyticsUserDaySchema.index({ userId: 1, day: 1 });
 AnalyticsUserDaySchema.index({ signupDay: 1, day: 1 });
+AnalyticsUserDaySchema.index({ day: 1, active: 1, userId: 1 });
 
 export type IAnalyticsUserDayModel = Model<IAnalyticsUserDayDocument>;
 
@@ -47,9 +51,15 @@ export class AnalyticsUserDayRepository extends BaseRepository<IAnalyticsUserDay
     super(model);
   }
 
-  /** Distinct users active in the inclusive [fromDay, toDay] range. */
-  async countDistinctUsers(fromDay: string, toDay: string): Promise<number> {
-    const rows = await this.model.distinct('userId', { day: { $gte: fromDay, $lte: toDay } }).maxTimeMS(60_000);
+  /** Distinct users with a row in the inclusive [fromDay, toDay] range that also matches `filter`. */
+  async countDistinctUsers(
+    fromDay: string,
+    toDay: string,
+    filter: { active: true } | { sources: string } = { active: true }
+  ): Promise<number> {
+    const rows = await this.model
+      .distinct('userId', { day: { $gte: fromDay, $lte: toDay }, ...filter })
+      .maxTimeMS(60_000);
     return rows.length;
   }
 }
