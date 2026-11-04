@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope } from '@bike4mind/common';
 
 const rateLimitOptions = vi.hoisted(() => [] as unknown[]);
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -71,8 +70,6 @@ vi.mock('@server/utils/adminAudit', async importOriginal => {
   const actual = await importOriginal<typeof import('@server/utils/adminAudit')>();
   return { ...actual, recordAdminActionFromRequest: (...a: unknown[]) => mockRecordAdminAction(...a) };
 });
-
-import { ADMIN_ACTION_REASON_MISSING_MESSAGE } from '@server/utils/adminAudit';
 import cancelHandler from '../cancel';
 import handler from '../resume';
 
