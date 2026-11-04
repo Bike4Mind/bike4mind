@@ -94,32 +94,34 @@ describe('getAnalyticsOverview', () => {
     await seedEvent(users.a, `${TODAY}T09:00:00Z`);
     await seedEvent(users.admin, `${TODAY}T09:30:00Z`);
     await seedEvent(users.fresh, `${TODAY}T10:00:00Z`, { source: 'system' });
+    await seedEvent(users.b, `${TODAY}T09:45:00Z`, { source: 'api' });
 
     const overview = await getAnalyticsOverview({ range: '28d', compare: 'prev', signups: 'all' }, NOW);
     const today = overview.activeUsers.days.at(-1);
-    expect(today).toMatchObject({ day: TODAY, partial: true, dau: 3, wau: 3, mau: 4 });
-    expect(overview.activeUsers.bySource.at(-1)?.counts).toEqual({ web: 1, cli: 1 });
+    expect(today).toMatchObject({ day: TODAY, partial: true, dau: 2, wau: 2, mau: 3, apiDau: 1 });
+    expect(overview.activeUsers.bySource.at(-1)?.counts).toEqual({ web: 1, cli: 1, api: 1 });
     expect(overview.activeUsers.days.find(day => day.day === '2026-06-10')).toMatchObject({ dau: 1, partial: false });
     expect(overview.missingDays).toHaveLength(25);
 
     await rollupDay(TODAY, { now: NOW });
     const nightly = await AnalyticsDaily.findOne({ day: TODAY }).lean();
-    expect({ dau: today?.dau, wau: today?.wau, mau: today?.mau }).toEqual({
+    expect({ dau: today?.dau, wau: today?.wau, mau: today?.mau, apiDau: today?.apiDau }).toEqual({
       dau: nightly?.dau,
       wau: nightly?.wau,
       mau: nightly?.mau,
+      apiDau: nightly?.api?.dau,
     });
+    expect(nightly?.api).toEqual({ dau: 1, wau: 1, mau: 1 });
     const liveSignups = overview.signups.buckets.at(-1);
     expect({
       legit: liveSignups?.legit,
       suspected: liveSignups?.suspected,
-      unclassified: liveSignups?.unclassified,
     }).toEqual({
       legit: nightly?.signups.legit,
       suspected: nightly?.signups.suspected,
-      unclassified: nightly?.signups.unclassified,
     });
-    expect((liveSignups?.legit ?? 0) + (liveSignups?.suspected ?? 0) + (liveSignups?.unclassified ?? 0)).toBe(1);
+    expect((liveSignups?.legit ?? 0) + (liveSignups?.suspected ?? 0)).toBe(1);
+    expect(nightly?.signups.unclassified).toBe(0);
   });
 
   it("counts yesterday's users in today's WAU/MAU before the nightly rollup has written yesterday", async () => {
@@ -143,7 +145,7 @@ describe('getAnalyticsOverview', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     const overview = await getAnalyticsOverview({ range: '7d', compare: 'off', signups: 'legit' }, NOW);
-    expect(overview.activeUsers.days.at(-1)).toEqual({ day: TODAY, dau: null, wau: null, mau: null, partial: true });
+    expect(overview.activeUsers.days.at(-1)).toEqual({ day: TODAY, dau: null, wau: null, mau: null, apiDau: null, partial: true });
     expect(overview.activeUsers.days.find(day => day.day === '2026-06-10')).toMatchObject({ dau: 1 });
     expect(warn).toHaveBeenCalledWith('analytics overview: live slice for today failed', liveFailure.error);
     warn.mockRestore();
@@ -160,8 +162,8 @@ describe('getAnalyticsOverview', () => {
     );
     expect(overview.window).toMatchObject({ partialDay: null, completeDays: 2, previous: null });
     expect(overview.activeUsers.days).toEqual([
-      { day: '2026-06-01', dau: 1, wau: 1, mau: 1, partial: false },
-      { day: '2026-06-02', dau: null, wau: null, mau: null, partial: false },
+      { day: '2026-06-01', dau: 1, wau: 1, mau: 1, apiDau: 0, partial: false },
+      { day: '2026-06-02', dau: null, wau: null, mau: null, apiDau: null, partial: false },
     ]);
     expect(overview.missingDays).toEqual(['2026-06-02']);
     expect(overview.lastUpdated).toBe(NOW.toISOString());

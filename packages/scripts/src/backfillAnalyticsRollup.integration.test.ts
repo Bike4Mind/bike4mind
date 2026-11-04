@@ -22,7 +22,7 @@ const silent = () => undefined;
 const userA = new mongoose.Types.ObjectId();
 const userB = new mongoose.Types.ObjectId();
 
-const seedEvent = (userId: mongoose.Types.ObjectId, at: string) =>
+const seedEvent = (userId: mongoose.Types.ObjectId, at: string, source = 'web') =>
   UsageEvent.collection.insertOne({
     requestId: String(new mongoose.Types.ObjectId()),
     userId: String(userId),
@@ -34,7 +34,7 @@ const seedEvent = (userId: mongoose.Types.ObjectId, at: string) =>
     costUsd: 0.01,
     creditsCharged: 2,
     status: 'ok',
-    source: 'web',
+    source,
     createdAt: new Date(at),
   });
 
@@ -113,6 +113,39 @@ describe('backfillAnalyticsRollup', () => {
     expect(await snapshot()).toEqual(before);
   });
 
+  it('force rewrites legacy rows with the active flag, the API series and no unclassified signups', async () => {
+    await AnalyticsUserDay.collection.insertOne({
+      day: '2026-06-01',
+      userId: String(userA),
+      ownerType: 'User',
+      requests: 1,
+      creditsCharged: 2,
+      features: ['chat'],
+      sources: ['web'],
+      suspected: false,
+    });
+    await AnalyticsDaily.collection.insertOne({
+      day: '2026-06-01',
+      signups: { legit: 0, suspected: 0, unclassified: 3, bySignal: {} },
+      dau: 7,
+      wau: 7,
+      mau: 7,
+      computedAt: new Date('2026-06-02T04:00:00Z'),
+    });
+    await seedEvent(userB, '2026-06-01T12:00:00.000Z', 'api');
+
+    await backfillAnalyticsRollup({ dryRun: false, force: true, from: '2026-06-01', to: '2026-06-01', now: NOW, log: silent });
+
+    expect(await AnalyticsDaily.findOne({ day: '2026-06-01' }).lean()).toMatchObject({
+      dau: 1,
+      api: { dau: 1, wau: 1, mau: 1 },
+      signups: { unclassified: 0 },
+    });
+    expect(await AnalyticsUserDay.find({ day: '2026-06-01' }).sort({ userId: 1 }).lean()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ userId: String(userA), active: true })])
+    );
+  });
+
   it('rejects malformed or inverted ranges', async () => {
     await expect(backfillAnalyticsRollup({ dryRun: true, from: '06/01/2026', log: silent })).rejects.toThrow('--from');
     await expect(
@@ -142,6 +175,8 @@ describe('backfillAnalyticsRollup', () => {
       .spyOn(analyticsUserDayRepository, 'countDistinctUsers')
       .mockResolvedValueOnce(2)
       .mockResolvedValueOnce(2)
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(0)
       .mockRejectedValueOnce(new Error('window refresh failed'));
     await expect(
       backfillAnalyticsRollup({

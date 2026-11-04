@@ -55,8 +55,8 @@ const overview = (patch: Partial<AnalyticsOverview> = {}): AnalyticsOverview => 
   },
   activeUsers: {
     days: [
-      { day: '2026-06-14', dau: 20, wau: 60, mau: 112, partial: false, previousMau: 100 },
-      { day: '2026-06-15', dau: 4, wau: 61, mau: 113, partial: true, previousMau: 101 },
+      { day: '2026-06-14', dau: 20, wau: 60, mau: 112, apiDau: 5, partial: false, previousMau: 100 },
+      { day: '2026-06-15', dau: 4, wau: 61, mau: 113, apiDau: 1, partial: true, previousMau: 101 },
     ],
     bySource: [
       { day: '2026-06-14', partial: false, counts: { web: 30 } },
@@ -66,10 +66,10 @@ const overview = (patch: Partial<AnalyticsOverview> = {}): AnalyticsOverview => 
   },
   signups: {
     buckets: [
-      { start: '2026-06-14', end: '2026-06-15', legit: 3, suspected: 1, unclassified: 0, partial: false },
-      { start: '2026-06-15', end: '2026-06-16', legit: 0, suspected: 0, unclassified: 2, partial: true },
+      { start: '2026-06-14', end: '2026-06-15', legit: 3, suspected: 1, partial: false },
+      { start: '2026-06-15', end: '2026-06-16', legit: 0, suspected: 2, partial: true },
     ],
-    totals: { legit: 3, suspected: 1, unclassified: 2 },
+    totals: { legit: 3, suspected: 3 },
     bySignal: [{ signal: 'domainBurst', count: 1 }],
   },
   ...patch,
@@ -181,7 +181,7 @@ describe('AnalyticsTab', () => {
     expect(within(strip).getByText('Coming soon')).toBeInTheDocument();
     expect(screen.getByTestId('analytics-last-updated')).toHaveTextContent('Last updated');
     expect(screen.getByTestId('analytics-footer')).toHaveTextContent(
-      'Counts exclude admin, system, flagged test and staff-domain accounts. Days are UTC.'
+      'Active users: an AI request that UTC day from the web app, CLI or Desktop. Counts exclude admin, Developer-tagged, test, banned and AI-held accounts. API users are shown separately and not counted. Days are UTC.'
     );
     expect(screen.getByTestId('analytics-active-users-chart')).toHaveAttribute('aria-label');
   });
@@ -206,7 +206,7 @@ describe('AnalyticsTab', () => {
   it('offers the last 90 days when the range is empty', async () => {
     const empty = overview();
     empty.activeUsers.days = empty.activeUsers.days.map(day => ({ ...day, dau: 0 }));
-    empty.signups.totals = { legit: 0, suspected: 0, unclassified: 0 };
+    empty.signups.totals = { legit: 0, suspected: 0 };
     mocks.get.mockResolvedValue({ data: empty });
     const router = await renderPage('/admin?tab=analytics');
     expect(await screen.findAllByText('No activity in this range')).toHaveLength(2);
@@ -248,7 +248,7 @@ describe('AnalyticsTab', () => {
       expect(found.length).toBeGreaterThan(1);
       return found;
     });
-    // Rectangles render per series in bucket order: legit (06-14), suspected (06-14), unclassified (06-15).
+    // Rectangles render per series in bucket order: real (06-14, 06-15), then suspected (06-14, 06-15).
     const lastBar = bars[bars.length - 1];
     fireEvent.mouseMove(bars[0]);
     fireEvent.click(lastBar);
@@ -259,6 +259,16 @@ describe('AnalyticsTab', () => {
         createdTo: '2026-06-16T00:00:00.000Z',
       })
     );
+  });
+
+  it('labels signups Real and Suspected with no unclassified series, and shows the API line', async () => {
+    await renderPage('/admin?tab=analytics');
+    expect(await screen.findByTestId('analytics-signups-chart')).toBeInTheDocument();
+    expect(screen.getByTestId('analytics-signups')).not.toHaveTextContent('Not classified');
+    expect(screen.getByTestId('analytics-signups')).toHaveTextContent('3 real, 3 suspected');
+    expect(screen.getByTestId('analytics-signups-mode-legit')).toHaveTextContent('Real only');
+    fireEvent.click(screen.getByTestId('analytics-active-users-table-toggle-btn'));
+    expect(await screen.findByTestId('analytics-active-users-table')).toHaveTextContent('API users (not counted)');
   });
 
   it('lists the signup signals as inline bars', async () => {
@@ -273,8 +283,8 @@ describe('AnalyticsTab', () => {
       overview({
         activeUsers: {
           days: [
-            { day: '2026-06-14', dau: null, wau: null, mau: null, partial: false, previousMau: null },
-            { day: '2026-06-15', dau: 1, wau: 1, mau: 1, partial: true, previousMau: null },
+            { day: '2026-06-14', dau: null, wau: null, mau: null, apiDau: null, partial: false, previousMau: null },
+            { day: '2026-06-15', dau: 1, wau: 1, mau: 1, apiDau: 0, partial: true, previousMau: null },
           ],
           bySource: [
             { day: '2026-06-14', partial: false, counts: null },

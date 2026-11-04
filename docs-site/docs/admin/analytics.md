@@ -9,7 +9,7 @@ tags: [admin, analytics]
 
 The Analytics page (**Overview > Analytics**) shows who uses Bike4Mind, how often, and whether they come back. It is a trend page: the Dashboard answers "is anything wrong right now?", Analytics answers "are we growing?".
 
-All days are UTC days, and every chart says so. Counts exclude admin accounts, system accounts, accounts flagged as automated test accounts, and accounts on your internal staff email domains. Every other account is counted, including a test account that carries none of those flags.
+All days are UTC days, and every chart says so. Counts exclude admin accounts, system accounts, accounts flagged as automated test accounts, accounts on your internal staff email domains, accounts tagged Developer, and test personas (a `persona-` username or an email on a configured test domain). Active users and real signups also exclude banned accounts and accounts whose AI access is held (moderated, awaiting review, suspended or under a payment dispute). Every other account is counted.
 
 ## Toolbar
 
@@ -17,7 +17,7 @@ All days are UTC days, and every chart says so. Counts exclude admin accounts, s
 |---------|---------|---------|
 | **Range** | 7d, 28d, 90d, 12m, Custom | 28d |
 | **Compare** | Previous period, Off | Previous period |
-| **Signups** | Legit only, All | Legit only |
+| **Signups** | Real only, All | Real only |
 
 **Custom** shows two date inputs. Both days are included, and the range can cover at most 366 days.
 
@@ -32,22 +32,22 @@ The toolbar is kept in the page URL (`range`, `start`, `end`, `compare`, `signup
 | **Active users (MAU)** | Users active in the 28 days ending on the last complete day of the range |
 | **Daily active (avg)** | The average number of users active per day |
 | **Stickiness** | Average daily active users as a share of MAU |
-| **New signups** | Signups in the range (legit only, or all, per the Signups toggle), with the number of suspected signups underneath |
+| **New signups** | Signups in the range (real only, or all, per the Signups toggle), with the number of suspected signups underneath |
 | **Activation rate** | Not available yet |
 
-A user is active on a day when they make at least one successful AI request that UTC day, from any source. That includes requests made through the public API and internal system traffic, so a user active only through the API still counts toward daily, weekly and monthly active users.
+A user is active on a day when they make at least one successful AI request that UTC day, from the web app, the CLI, Desktop or an agent run. Requests made through the public API and internal system traffic do not make a user active, so a user active only through the API is not counted in daily, weekly or monthly active users.
 
 The tiles cover complete days only. When the range ends today, today is still counting, so it is left out of the tiles and comparisons. With **Compare** on, each tile compares against the same number of days right before the range.
 
 ## Active users
 
-A line chart of daily, weekly and monthly active users per day. With **Compare** on, a faint dashed line shows MAU for the previous period. Today is drawn dashed because it is not finished.
+A line chart of daily, weekly and monthly active users per day. With **Compare** on, a faint dashed line shows MAU for the previous period. Today is drawn dashed because it is not finished. A separate **API users (not counted)** line shows how many people used the public API each day; it is never part of the active user numbers.
 
 Switch to **By surface** to see AI requests per day stacked by surface as bars. Internal system traffic is not shown.
 
 ## Signups: real vs suspected
 
-Stacked bars of likely legit, suspected and not-yet-classified signups. Bars are days for 7d and 28d, ISO weeks (starting Monday) for 90d, and months for 12m.
+Stacked bars of real and suspected signups. A signup is real when the account has a verified email, is not banned or held, and made a successful AI request within 7 days of signing up (system traffic does not count). Every other signup is suspected, so there is no unclassified bucket; a signup moves from suspected to real when its first request lands inside the 7 days, which the nightly job re-checks for 14 days. Bars are days for 7d and 28d, ISO weeks (starting Monday) for 90d, and months for 12m.
 
 Click a bar to open the Users list filtered to the accounts created in that bar's window. Below the chart, the signals that marked accounts in the range are listed with their counts.
 

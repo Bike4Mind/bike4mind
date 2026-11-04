@@ -22,7 +22,7 @@ const row = (day: string, patch: Partial<OverviewDailyRow> = {}): OverviewDailyR
   dau: 10,
   wau: 20,
   mau: 40,
-  signups: { legit: 2, suspected: 1, unclassified: 0, bySignal: { domainBurst: 1 } },
+  signups: { legit: 2, suspected: 1, bySignal: { domainBurst: 1 } },
   requestsBySource: { web: 5, cli: 1, system: 9 },
   computedAt: new Date('2026-06-15T04:00:00.000Z'),
   ...patch,
@@ -32,7 +32,8 @@ const live: LiveDay = {
   dau: 3,
   wau: 25,
   mau: 45,
-  signups: { legit: 0, suspected: 0, unclassified: 4, bySignal: {} },
+  signups: { legit: 0, suspected: 4, bySignal: {} },
+  api: { dau: 2, wau: 3, mau: 4 },
   requestsBySource: { web: 2 },
 };
 
@@ -133,7 +134,17 @@ describe('buildOverview', () => {
     const today = overview.activeUsers.days.at(-1);
     expect(today).toMatchObject({ day: '2026-06-15', dau: 3, wau: 25, mau: 45, partial: true });
     expect(overview.activeUsers.days.filter(day => day.partial)).toHaveLength(1);
-    expect(overview.signups.buckets.at(-1)).toMatchObject({ start: '2026-06-15', unclassified: 4, partial: true });
+    expect(overview.signups.buckets.at(-1)).toMatchObject({ start: '2026-06-15', suspected: 4, partial: true });
+  });
+
+  it('passes the API series through, leaves it a gap for a row without one, and keeps it out of the counts', () => {
+    const overview = build(query(), [
+      ...rowsFor('2026-06-09', '2026-06-13', () => ({ api: { dau: 7, wau: 8, mau: 9 } })),
+      row('2026-06-14'),
+    ]);
+    expect(overview.activeUsers.days.map(day => day.apiDau)).toEqual([7, 7, 7, 7, 7, null, 2]);
+    expect(overview.stats.avgDau.value).toBe(10);
+    expect(overview.signups.totals).toEqual({ legit: 12, suspected: 6 });
   });
 
   it('leaves a missing rollup day as a gap, never zero, and lists it', () => {
@@ -173,10 +184,10 @@ describe('buildOverview', () => {
 
   it('counts legit signups by default and every signup in all mode', () => {
     const rows = rowsFor('2026-06-09', '2026-06-14', () => ({
-      signups: { legit: 2, suspected: 1, unclassified: 3, bySignal: {} },
+      signups: { legit: 2, suspected: 1, bySignal: {} },
     }));
     expect(build(query(), rows).stats.newSignups.value).toBe(12);
-    expect(build(query({ signups: 'all' }), rows).stats.newSignups.value).toBe(36);
+    expect(build(query({ signups: 'all' }), rows).stats.newSignups.value).toBe(18);
     expect(build(query({ signups: 'all' }), rows).stats.newSignups.suspected).toBe(6);
   });
 
@@ -225,7 +236,6 @@ describe('buildOverview', () => {
       signups: {
         legit: 1,
         suspected: 1,
-        unclassified: 0,
         bySignal: day === '2026-06-09' ? { signupSpike: 4, domainBurst: 1 } : { domainBurst: 1, wafBotSignal: 0 },
       },
     }));
