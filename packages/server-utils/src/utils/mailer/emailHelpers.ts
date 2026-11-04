@@ -2,6 +2,12 @@
  * Email verification helper utilities
  */
 import { requireEnv } from '@bike4mind/common';
+import { escapeHtml } from '@bike4mind/utils/escapeHtml';
+
+// Re-exported so the ~13 email builders that import their escaper from here keep working;
+// the implementation is shared monorepo-wide. Apply it to anything a user or operator can
+// influence (usernames, names, emails, org and file names); never to a plain-text subject.
+export { escapeHtml };
 
 /**
  * Generates a verification link for email verification
@@ -22,20 +28,6 @@ export const generateVerificationLink = (token: string): string => {
 export const getLogoUrl = (): string => {
   return process.env.LOGO_URL ?? '';
 };
-
-/**
- * HTML escaper for every value interpolated into a transactional-email body: escapes & < > " ',
- * so the result is safe both as element text and inside a quoted attribute. Apply it to anything
- * a user or operator can influence (usernames, names, emails, org and file names); never to a
- * plain-text subject, which is not HTML.
- */
-export const escapeHtml = (value: string): string =>
-  value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 
 /**
  * Build the brand logo `<img>` for transactional emails, with both `alt` and `src` HTML-escaped.
