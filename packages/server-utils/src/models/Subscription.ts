@@ -269,6 +269,17 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
     return this.model.findOneAndUpdate({ subscriptionId }, data, { new: false }).lean({ virtuals: true });
   }
 
+  /**
+   * Every non-terminal Stripe-sourced row, for the nightly reconciliation to match against Stripe's
+   * own listing. Admin grants have no Stripe subscription and are left out.
+   */
+  async findNonTerminalStripeRows(): Promise<(ISubscription & IMongoDocument)[]> {
+    const rows = await this.model
+      .find({ status: { $nin: [...TERMINAL_SUBSCRIPTION_STATUSES] } })
+      .lean({ virtuals: true });
+    return rows.filter(row => row.subscriptionId && resolveSubscriptionSource(row) === SubscriptionSource.Stripe);
+  }
+
   markPastDue(subscriptionId: string): Promise<ISubscription | null> {
     if (!subscriptionId) return Promise.resolve(null);
     return this.model
