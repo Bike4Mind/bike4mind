@@ -98,6 +98,7 @@ describe('young-account spend shadow detection evidence', () => {
       ],
       windowMinutes: 60,
       group: null,
+      payment: null,
       detectedAt: window.end,
     });
     // The record must satisfy the shared contract the Detections page parses.
