@@ -28,9 +28,9 @@ export default function LoopActions({ loop, onDeleted }: { loop: ILoop; onDelete
           variant="soft"
           loading={updateLoop.isPending}
           onClick={act(() => updateLoop.mutate({ id: loop.id, status: 'live' }))}
-          data-testid="loop-set-live-btn"
+          data-testid={loop.status === 'error' ? 'loop-restart-btn' : 'loop-set-live-btn'}
         >
-          Set live
+          {loop.status === 'error' ? 'Restart' : 'Set live'}
         </Button>
       )}
       {canPause(loop) && (

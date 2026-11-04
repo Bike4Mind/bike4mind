@@ -6,7 +6,9 @@ import {
   loopStatusNeedsOwner,
   type B4MLLMTools,
   type ILoop,
+  type ILoopHold,
   type ILoopWithUsage,
+  type LoopHoldKind,
   type LoopStatus,
 } from '@bike4mind/common';
 import type { ToolAvailability } from '@pages/api/settings/serverConfig';
@@ -67,9 +69,32 @@ export function backoffLabel(
   return `Backing off: next run in ${minutes} min, nothing changed in the last ${runs}`;
 }
 
-/** The owner rule the inbox notice sweep uses (`loopStatusNeedsOwner`), plus blocked tickets. */
-export const loopNeedsOwner = (loop: Pick<ILoopWithUsage, 'status' | 'statusReason' | 'blockedTickets'>) =>
-  loopStatusNeedsOwner(loop) || loop.blockedTickets > 0;
+const HOLD_LABELS: Record<LoopHoldKind, (hold: ILoopHold) => string> = {
+  pacing: hold =>
+    `Paced: next run at ${new Date(hold.until!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} to spread the daily budget`,
+  capacity: () => 'Waiting for a free run slot (server-wide limit)',
+};
+
+/**
+ * Why a live loop is held back on purpose: the scheduler's pacing or run-cap hold (`ILoop.hold`, set in
+ * apps/workers/src/cron/loopScheduler.ts), else its idle back-off. Null when nothing holds it.
+ */
+export function holdLabel(
+  loop: Pick<ILoop, 'status' | 'idleStreak' | 'nextRunAt' | 'activeExecutionId' | 'hold'>,
+  now = Date.now()
+): string | null {
+  if (loop.status !== 'live' || loop.activeExecutionId) return null;
+  const { hold } = loop;
+  // A pacing hold lapses once its deferred run is due.
+  if (hold && (hold.kind !== 'pacing' || (hold.until && new Date(hold.until).getTime() > now))) {
+    return HOLD_LABELS[hold.kind](hold);
+  }
+  return backoffLabel(loop, now);
+}
+
+/** The owner rule the inbox notice sweep uses (`loopStatusNeedsOwner`), plus blocked tickets and liveness alarms. */
+export const loopNeedsOwner = (loop: Pick<ILoopWithUsage, 'status' | 'statusReason' | 'blockedTickets' | 'alarm'>) =>
+  loopStatusNeedsOwner(loop) || loop.blockedTickets > 0 || !!loop.alarm;
 
 export const formatCredits = (credits: number) => `${Math.round(credits).toLocaleString()} credits`;
 
@@ -78,7 +103,7 @@ export const formatSpendToday = (loop: Pick<ILoopWithUsage, 'creditsToday' | 'bu
     ? formatCredits(loop.creditsToday)
     : `${Math.round(loop.creditsToday).toLocaleString()} / ${loop.budgetCreditsPerDay.toLocaleString()} credits`;
 
-export function LoopStatusChip({ loop }: { loop: Pick<ILoop, 'status' | 'statusReason'> }) {
+export function LoopStatusChip({ loop }: { loop: Pick<ILoop, 'status' | 'statusReason' | 'alarm'> }) {
   return (
     <Stack sx={{ alignItems: 'flex-start', gap: 0.25 }}>
       <Chip size="sm" variant="soft" color={STATUS_COLOR[loop.status]} data-testid="loop-status-chip">
@@ -87,6 +112,11 @@ export function LoopStatusChip({ loop }: { loop: Pick<ILoop, 'status' | 'statusR
       {loop.statusReason && (
         <Typography level="body-xs" color={STATUS_COLOR[loop.status]} data-testid="loop-status-reason">
           {loop.statusReason}
+        </Typography>
+      )}
+      {loop.alarm && (
+        <Typography level="body-xs" color="warning" data-testid="loop-alarm-reason">
+          {loop.alarm.reason}
         </Typography>
       )}
     </Stack>

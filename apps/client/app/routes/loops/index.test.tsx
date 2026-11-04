@@ -132,7 +132,7 @@ describe('LoopsPage', () => {
     loopsState.data = [loop({ status: 'error', statusReason: 'Out of credits' })];
     renderPage();
     expect(row().getByTestId('loop-status-reason')).toHaveTextContent('Out of credits');
-    expect(row().getByTestId('loop-set-live-btn')).toBeInTheDocument();
+    expect(row().getByTestId('loop-restart-btn')).toHaveTextContent('Restart');
   });
 
   it('confirms before deleting: cancel keeps the loop, confirm deletes it', () => {
@@ -178,6 +178,23 @@ describe('LoopsPage', () => {
     // Its status chip already says "Needs you".
     expect(row('parked').queryByTestId('loops-row-needs-you')).toBeNull();
     expect(row('owner').queryByTestId('loops-row-needs-you')).toBeNull();
+  });
+
+  it('marks an alarmed live loop as needing the owner, and says why a held loop waits', () => {
+    loopsState.data = [
+      loop({
+        id: 'idle',
+        status: 'live',
+        alarm: { kind: 'idle_with_work', reason: 'Ready tickets waiting', since: new Date() },
+      }),
+      loop({ id: 'held', status: 'live', hold: { kind: 'capacity', at: new Date() } }),
+    ];
+    renderPage();
+    expect(screen.getByTestId('loops-needs-you-count')).toHaveTextContent('1 loop needs you');
+    expect(row('idle').getByTestId('loops-row-needs-you')).toHaveTextContent('Needs you');
+    expect(row('idle').getByTestId('loop-alarm-reason')).toHaveTextContent('Ready tickets waiting');
+    expect(row('held').getByTestId('loop-hold-reason')).toHaveTextContent('Waiting for a free run slot');
+    expect(row('held').queryByTestId('loops-row-needs-you')).toBeNull();
   });
 
   it('hides the count when nothing needs the owner', () => {

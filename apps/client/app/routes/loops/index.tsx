@@ -7,7 +7,7 @@ import LoopActions from '@client/app/components/Loops/LoopActions';
 import LoopFormModal from '@client/app/components/Loops/LoopFormModal';
 import LoopsBudgetBar from '@client/app/components/Loops/LoopsBudgetBar';
 import {
-  backoffLabel,
+  holdLabel,
   formatCredits,
   formatSpendToday,
   formatInterval,
@@ -110,9 +110,9 @@ export default function LoopsPage() {
                   <td>{lastRunLabel(loop)}</td>
                   <td data-testid="loops-row-next-run">
                     {nextRunLabel(loop)}
-                    {backoffLabel(loop) && (
+                    {holdLabel(loop) && (
                       <Typography level="body-xs" color="neutral" data-testid="loops-row-backoff">
-                        {backoffLabel(loop)}
+                        <span data-testid="loop-hold-reason">{holdLabel(loop)}</span>
                       </Typography>
                     )}
                   </td>

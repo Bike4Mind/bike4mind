@@ -175,6 +175,29 @@ describe('LoopDetailPage run drawer', () => {
     expect(navigate).toHaveBeenLastCalledWith(expect.objectContaining({ search: { run: 'last-run' } }));
   });
 
+  it('links an errored loop to its failed run, and only an errored loop', () => {
+    loopState.data = loop({ status: 'error', statusReason: 'Run failed' });
+    const { unmount } = renderPage();
+    expect(screen.getByTestId('loop-status-reason').textContent).toBe('Run failed');
+    fireEvent.click(screen.getByTestId('loop-last-error-run-link'));
+    expect(navigate).toHaveBeenLastCalledWith(expect.objectContaining({ search: { run: 'last-run' } }));
+    unmount();
+
+    loopState.data = loop();
+    renderPage();
+    expect(screen.queryByTestId('loop-last-error-run-link')).toBeNull();
+  });
+
+  it('says why a live loop is held back, and shows its alarm', () => {
+    loopState.data = loop({
+      hold: { kind: 'capacity', at: new Date() },
+      alarm: { kind: 'idle_with_work', reason: 'Ready tickets waiting', since: new Date() },
+    });
+    renderPage();
+    expect(screen.getByTestId('loop-hold-reason').textContent).toBe('Waiting for a free run slot (server-wide limit)');
+    expect(screen.getByTestId('loop-alarm-reason').textContent).toBe('Ready tickets waiting');
+  });
+
   it('renders the viewer for ?run= and clears the param on close', () => {
     search.run = 'ticket-run';
     renderPage();

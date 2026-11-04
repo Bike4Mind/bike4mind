@@ -87,6 +87,9 @@ export default function LoopEventLog({
               />
             );
           case 'directive':
+            if (event.action) {
+              return <ActionRow key={event.id} event={event} onViewRun={onViewRun} loops={loops} />;
+            }
             return (
               <DirectiveRow
                 key={event.id}
@@ -316,6 +319,37 @@ function DirectiveRow({
           </Stack>
         )
       )}
+    </Stack>
+  );
+}
+
+/** An action an overseer took on a worker (loop_run_now, loop_resume): logged done, so no state or buttons. */
+function ActionRow({
+  event,
+  onViewRun,
+  loops,
+}: Pick<LoopEventLogProps, 'onViewRun' | 'loops'> & { event: ILoopDirectiveRow }) {
+  const worker = loops?.find(loop => loop.id === event.loopId)?.name ?? 'another loop';
+  const verb = event.action === 'resume' ? `resumed ${worker}` : `ran ${worker} now`;
+  return (
+    <Stack gap={0.5} data-testid="loop-log-action-row">
+      <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
+        <Typography level="title-sm" sx={{ flex: 1, minWidth: 0 }} data-testid="loop-log-action-text">
+          {event.fromLoopName} {verb}
+        </Typography>
+        <Typography level="body-xs">{relativeTimeFormat(new Date(event.createdAt))}</Typography>
+        <Button
+          size="sm"
+          variant="plain"
+          onClick={() => onViewRun(event.executionId)}
+          data-testid="loop-log-action-view-run-btn"
+        >
+          View run
+        </Button>
+      </Stack>
+      <LoopMarkdown testId="loop-log-action-reason" level="body-xs">
+        {event.reason}
+      </LoopMarkdown>
     </Stack>
   );
 }

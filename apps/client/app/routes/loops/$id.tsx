@@ -27,7 +27,7 @@ import {
   lastRunLabel,
   LoopMarkdown,
   LoopStatusChip,
-  backoffLabel,
+  holdLabel,
   nextRunLabel,
   unavailableTools,
   unavailableToolsMessage,
@@ -90,6 +90,17 @@ export default function LoopDetailPage() {
       <Stack gap={2} sx={{ p: 2 }}>
         <Stack direction="row" gap={2} alignItems="flex-start" flexWrap="wrap" data-testid="loop-detail-summary">
           <LoopStatusChip loop={loop} />
+          {loop.status === 'error' && loop.lastExecutionId && (
+            <Link
+              component="button"
+              level="body-sm"
+              color="danger"
+              onClick={() => setRun(loop.lastExecutionId)}
+              data-testid="loop-last-error-run-link"
+            >
+              View failed run
+            </Link>
+          )}
           {needsYou > 0 && (
             <Chip size="sm" variant="soft" color="warning" data-testid="loop-detail-needs-you">
               {needsYou} need you
@@ -111,9 +122,9 @@ export default function LoopDetailPage() {
             </Link>
           )}
         </Stack>
-        {backoffLabel(loop) && (
+        {holdLabel(loop) && (
           <Typography level="body-sm" color="neutral" data-testid="loop-detail-backoff">
-            {backoffLabel(loop)}
+            <span data-testid="loop-hold-reason">{holdLabel(loop)}</span>
           </Typography>
         )}
         {missingTools.length > 0 && (

@@ -304,3 +304,42 @@ describe('LoopEventLog directives', () => {
     expect(screen.getByTestId('loop-log-directive-reply-note').querySelector('strong')).toHaveTextContent('now');
   });
 });
+
+describe('LoopEventLog overseer actions', () => {
+  const loops = [
+    { id: OVERSEER, name: 'Lead' },
+    { id: WORKER, name: 'Closer' },
+  ];
+  const renderActions = (data: ILoopEventRow[], loopId: string, onViewRun = vi.fn()) =>
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <LoopEventLog data={data} loopId={loopId} loops={loops} onOverride={vi.fn()} onViewRun={onViewRun} />
+      </CssVarsProvider>
+    );
+
+  it.each([
+    ['run_now', 'Lead ran Closer now'],
+    ['resume', 'Lead resumed Closer'],
+  ] as const)('renders a %s action with its reason and run, and no state or owner buttons', (action, text) => {
+    const onViewRun = vi.fn();
+    renderActions(
+      [directive({ action, state: 'done', instruction: 'Run now', reason: 'Ready **tickets** waiting' })],
+      WORKER,
+      onViewRun
+    );
+    expect(screen.getByTestId('loop-log-action-row')).toBeTruthy();
+    expect(screen.getByTestId('loop-log-action-text').textContent).toBe(text);
+    expect(screen.getByTestId('loop-log-action-reason').querySelector('strong')?.textContent).toBe('tickets');
+    expect(screen.queryByTestId('loop-log-directive-row')).toBeNull();
+    expect(screen.queryByTestId('loop-log-directive-state')).toBeNull();
+    expect(screen.queryByTestId('loop-log-directive-withdraw-btn')).toBeNull();
+    expect(screen.queryByTestId('loop-log-directive-overrule-btn')).toBeNull();
+    fireEvent.click(screen.getByTestId('loop-log-action-view-run-btn'));
+    expect(onViewRun).toHaveBeenCalledWith('exec-lead');
+  });
+
+  it("reads the same in the overseer's log", () => {
+    renderActions([directive({ action: 'run_now', state: 'done' })], OVERSEER);
+    expect(screen.getByTestId('loop-log-action-text').textContent).toBe('Lead ran Closer now');
+  });
+});

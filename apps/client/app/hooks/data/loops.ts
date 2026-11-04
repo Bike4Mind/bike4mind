@@ -51,7 +51,7 @@ export type ILoopUnsureRow = Pick<
 /** A directive the loop sent or received, as the same route serves it. */
 export type ILoopDirectiveRow = Pick<
   ILoopDirective,
-  'id' | 'loopId' | 'fromLoopId' | 'fromLoopName' | 'executionId' | 'instruction' | 'reason' | 'state'
+  'id' | 'loopId' | 'fromLoopId' | 'fromLoopName' | 'executionId' | 'instruction' | 'reason' | 'state' | 'action'
 > & {
   kind: 'directive';
   replies: (Omit<ILoopDirectiveReply, 'at' | 'userId'> & { at: string; executionId?: string })[];
