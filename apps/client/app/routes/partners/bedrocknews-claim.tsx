@@ -189,12 +189,18 @@ const BackLink = ({ href }: { href?: string }) =>
     </JoyLink>
   ) : null;
 
-const BackButton = ({ href }: { href?: string }) =>
-  href ? (
-    <Button component="a" href={href} startDecorator={<ArrowBackRounded />} sx={ACTION_SX}>
-      Back to Headword
+const BackButton = ({ href }: { href?: string }) => (
+  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+    {href && (
+      <Button component="a" href={href} startDecorator={<ArrowBackRounded />} sx={{ ...ACTION_SX, flex: '1 1 180px' }}>
+        Back to Headword
+      </Button>
+    )}
+    <Button component={Link} to="/" variant="outlined" color="neutral" sx={{ ...ACTION_SX, flex: '1 1 180px' }}>
+      Open Bike4Mind
     </Button>
-  ) : null;
+  </Box>
+);
 
 const ToneCircle = ({ tone, children }: { tone: ColorPaletteProp; children: ReactNode }) => (
   <Sheet

@@ -360,6 +360,14 @@ describe('BedrockNewsClaimPage', () => {
     renderPage();
     expect(await screen.findByText(/This claim link expired/)).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Back to Headword' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Bike4Mind' })).toHaveAttribute('href', '/');
+  });
+
+  it('offers Open Bike4Mind next to Back to Headword', async () => {
+    mockPost.mockResolvedValue({ data: { state: 'expired' } });
+    renderPage();
+    expect(await screen.findByRole('link', { name: 'Back to Headword' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Bike4Mind' })).toHaveAttribute('href', '/');
   });
 
   it('treats a 400 from the server as the state it carries', async () => {
