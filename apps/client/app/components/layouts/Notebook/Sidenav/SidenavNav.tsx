@@ -101,9 +101,8 @@ type NavItem = {
  * Primary sidebar navigation - a vertical icon list (New Chat, Files Manager, Agents, Loops, Projects,
  * OptiHashi, Tavern). OptiHashi/Tavern keep the same entitlement gating as the footer menu, Agents
  * follows the `enableAgents` flag and Loops the admin `EnableLoops` setting. The active row is
- * highlighted by route (Files Manager by the file-browser drawer's open state, since it isn't a
- * route). Past MAX_NAV_ROWS rows, the lowest-priority ones fold into a trailing More menu; the
- * pinned rows never fold.
+ * highlighted by route (Files Manager by the file-browser drawer's open state, since it isn't a route).
+ * Past MAX_NAV_ROWS rows, the lowest-priority ones fold into a trailing More menu; the pinned rows never fold.
  */
 const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all' }) => {
   const theme = useTheme();
@@ -322,7 +321,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       ? [
           {
             key: 'loops',
-            priority: 3,
+            priority: 1,
             label: t('loops.title'),
             icon: (
               <NavIcon>

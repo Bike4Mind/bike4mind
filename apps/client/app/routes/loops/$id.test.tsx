@@ -4,7 +4,21 @@ import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
-const { navigate, search, loopState, actions, eventsState, loopsState, overrideDirective } = vi.hoisted(() => ({
+const {
+  navigate,
+  search,
+  loopState,
+  actions,
+  eventsState,
+  loopsState,
+  overrideDirective,
+  resolveUnsure,
+  config,
+  toast,
+} = vi.hoisted(() => ({
+  toast: { info: vi.fn() },
+  resolveUnsure: { mutate: vi.fn(), isPending: false, variables: undefined },
+  config: { toolAvailability: undefined as Record<string, boolean> | undefined },
   navigate: vi.fn(),
   loopsState: { data: [] as unknown[] },
   overrideDirective: { mutate: vi.fn() },
@@ -19,6 +33,7 @@ vi.mock('@tanstack/react-router', () => ({
   useParams: () => ({ id: 'l1' }),
   useSearch: () => search,
 }));
+vi.mock('sonner', () => ({ toast }));
 vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: () => {} }));
 vi.mock('@client/app/components/Agent/AgentPageHeader', () => ({
   default: ({ rightActions }: { rightActions?: React.ReactNode }) => <div>{rightActions}</div>,
@@ -44,7 +59,9 @@ vi.mock('@client/app/hooks/data/loops', async importOriginal => ({
   useLoopEvents: () => eventsState,
   useLoops: () => loopsState,
   useOverrideDirective: () => overrideDirective,
+  useResolveUnsure: () => resolveUnsure,
 }));
+vi.mock('@client/app/hooks/data/settings', () => ({ useConfig: () => ({ data: config }) }));
 
 import LoopDetailPage from './$id';
 
@@ -63,6 +80,7 @@ const loop = (overrides: Record<string, unknown> = {}) => ({
   sessionId: 's1',
   intervalMinutes: 30,
   stages: ['todo', 'done'],
+  tools: ['web_search', 'github__create_issue'],
   status: 'live',
   memory: { notes: '', nextAction: '' },
   runCount: 2,
@@ -79,6 +97,7 @@ beforeEach(() => {
   loopState.error = null;
   eventsState.data = undefined;
   loopsState.data = [];
+  config.toolAvailability = undefined;
 });
 
 describe('LoopDetailPage states', () => {
@@ -86,6 +105,30 @@ describe('LoopDetailPage states', () => {
     loopState.data = loop({ creditsToday: 5, budgetCreditsPerDay: 10 });
     renderPage();
     expect(screen.getByTestId('loop-detail-spend-today')).toHaveTextContent('5 / 10 credits today');
+  });
+
+  it('names the loop tools this server cannot run, and shows nothing when all are available', () => {
+    config.toolAvailability = { web_search: true };
+    const { unmount } = renderPage();
+    expect(screen.queryByTestId('loop-detail-unavailable-tools')).not.toBeInTheDocument();
+    unmount();
+
+    config.toolAvailability = { web_search: false };
+    renderPage();
+    expect(screen.getByTestId('loop-detail-unavailable-tools')).toHaveTextContent(
+      "Web Search isn't available on this server, so runs skip it."
+    );
+  });
+
+  it('renders the memory as markdown', () => {
+    loopState.data = loop({
+      memory: { notes: '**done** - a\n\n- one\n- two', nextAction: 'check [x](https://e.com)' },
+    });
+    renderPage();
+    const notes = screen.getByTestId('loop-detail-memory-notes');
+    expect(notes.querySelector('strong')).toHaveTextContent('done');
+    expect(notes.querySelectorAll('li')).toHaveLength(2);
+    expect(screen.getByTestId('loop-detail-memory-next-action').querySelector('a')).toHaveAttribute('target', '_blank');
   });
 
   it('says not found on a 404 and links back to the list', () => {
@@ -212,5 +255,34 @@ describe('LoopDetailPage oversight', () => {
     fireEvent.click(screen.getByTestId('loop-log-directive-withdraw-btn'));
     fireEvent.click(screen.getByTestId('loop-log-directive-confirm-btn'));
     expect(overrideDirective.mutate).toHaveBeenCalledWith({ loopId: 'l1', eventId: 'd1', action: 'withdraw' });
+  });
+
+  it('tells the owner when their answer was saved but the ticket had moved on', () => {
+    eventsState.data = [
+      {
+        id: 'u1',
+        kind: 'unsure',
+        source: 'asked',
+        executionId: 'x',
+        workItemId: 't1',
+        ticketTitle: 'Pick a region',
+        reason: 'EU or US?',
+        createdAt: '2026-10-29T10:00:00.000Z',
+      },
+    ];
+    renderPage();
+    fireEvent.change(screen.getByTestId('loop-log-unsure-answer-input'), {
+      target: { value: 'EU' },
+    });
+    fireEvent.click(screen.getByTestId('loop-log-unsure-resume-btn'));
+    expect(resolveUnsure.mutate).toHaveBeenCalledWith(
+      { loopId: 'l1', eventId: 'u1', outcome: 'resumed', note: 'EU' },
+      expect.any(Object)
+    );
+    const { onSuccess } = resolveUnsure.mutate.mock.calls[0][1];
+    onSuccess({});
+    expect(toast.info).not.toHaveBeenCalled();
+    onSuccess({ ticketSkipped: true });
+    expect(toast.info).toHaveBeenCalledWith(expect.stringContaining('left as it is'));
   });
 });

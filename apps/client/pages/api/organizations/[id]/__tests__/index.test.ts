@@ -63,10 +63,12 @@ const credits = vi.hoisted(() => ({
   subtractCreditsWithLedgerRow: vi.fn(async () => ({ creditHolder: {}, creditTransactionId: 'tx-sub' })),
   recordAdminAction: vi.fn(async () => null),
   withTransaction: vi.fn(async (fn: () => Promise<unknown>) => fn()),
+  updateOrg: vi.fn(async () => null),
 }));
 vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class BadRequestError extends Error {},
   NotFoundError: class NotFoundError extends Error {},
+  ForbiddenError: class ForbiddenError extends Error {},
 }));
 vi.mock('@bike4mind/services', () => ({
   organizationService: { get, update },
@@ -75,7 +77,9 @@ vi.mock('@bike4mind/services', () => ({
     subtractCreditsWithLedgerRow: credits.subtractCreditsWithLedgerRow,
   },
 }));
-vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { findById: credits.findById } }));
+vi.mock('@bike4mind/database/infra', () => ({
+  organizationRepository: { findById: credits.findById, update: credits.updateOrg },
+}));
 vi.mock('@bike4mind/database', () => ({
   creditLotRepository: {},
   creditTransactionRepository: {},
@@ -100,7 +104,7 @@ vi.mock('@bike4mind/server-utils/lib/subscriptions/types', () => ({
 }));
 
 import '@pages/api/organizations/[id]/index';
-import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
 function mocks(user: unknown, method: 'GET' | 'PUT' = 'GET') {
   const { req, res } = createMocks({ method, query: { id: 'org1' } });
@@ -253,6 +257,66 @@ describe('PUT /api/organizations/[id] - admin credit edit', () => {
     expect(credits.withTransaction).not.toHaveBeenCalled();
     expect(credits.addCreditsWithLedgerRow).not.toHaveBeenCalled();
     expect(credits.subtractCreditsWithLedgerRow).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe('PUT /api/organizations/[id] - loopsGreenCiMergeDisabled', () => {
+  const org = {
+    id: 'org1',
+    name: 'Acme',
+    userId: 'owner1',
+    adminUserIds: ['manager2'],
+    users: [
+      { userId: 'manager2', permissions: ['read'] },
+      { userId: 'member3', permissions: ['read'] },
+    ],
+  };
+  beforeEach(() => {
+    update.mockClear();
+    credits.updateOrg.mockClear();
+    credits.findById.mockResolvedValue(org as never);
+  });
+
+  it('refuses an org member with a 403 and writes nothing', async () => {
+    const { req, res } = mocks({ id: 'member3', isAdmin: false }, 'PUT');
+    (req as any).body = { loopsGreenCiMergeDisabled: true, name: 'renamed' };
+    await expect(mockRefs.putHandler!(req, res)).rejects.toBeInstanceOf(ForbiddenError);
+    expect(credits.updateOrg).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('answers a non-member and a missing org alike with a 404', async () => {
+    const outsider = mocks({ id: 'stranger', isAdmin: false }, 'PUT');
+    (outsider.req as any).body = { loopsGreenCiMergeDisabled: true };
+    await expect(mockRefs.putHandler!(outsider.req, outsider.res)).rejects.toBeInstanceOf(NotFoundError);
+
+    credits.findById.mockResolvedValueOnce(null as never);
+    const missing = mocks({ id: 'staff', isAdmin: true }, 'PUT');
+    (missing.req as any).body = { loopsGreenCiMergeDisabled: true };
+    await expect(mockRefs.putHandler!(missing.req, missing.res)).rejects.toBeInstanceOf(NotFoundError);
+    expect(credits.updateOrg).not.toHaveBeenCalled();
+  });
+
+  it('also applies a profile field sent with it', async () => {
+    const { req, res } = mocks({ id: 'owner1', isAdmin: false }, 'PUT');
+    (req as any).body = { loopsGreenCiMergeDisabled: false, name: 'renamed' };
+    await mockRefs.putHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(update).toHaveBeenCalled();
+    expect(credits.updateOrg).toHaveBeenCalledWith({ id: 'org1', loopsGreenCiMergeDisabled: false });
+  });
+
+  it.each([
+    ['the billing owner', { id: 'owner1', isAdmin: false }],
+    ['an appointed org admin', { id: 'manager2', isAdmin: false }],
+    ['a platform admin', { id: 'staff', isAdmin: true }],
+  ])('lets %s set it, without a profile update when nothing else was sent', async (_who, user) => {
+    const { req, res } = mocks(user, 'PUT');
+    (req as any).body = { loopsGreenCiMergeDisabled: true };
+    await mockRefs.putHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(credits.updateOrg).toHaveBeenCalledWith({ id: 'org1', loopsGreenCiMergeDisabled: true });
     expect(update).not.toHaveBeenCalled();
   });
 });

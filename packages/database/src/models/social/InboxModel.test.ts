@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { InboxType } from '@bike4mind/common';
 import { User } from '../auth/UserModel';
@@ -126,6 +126,19 @@ describe('InboxModel keyed notices', () => {
     expect(await Inbox.countDocuments({ sourceKey: 'loop:a:status:error' })).toBe(1);
     const open = await inboxRepository.listKeyed('loop:');
     expect(open.map(n => n.sourceKey)).toEqual(['loop:a:status:error']);
+  });
+
+  it('listKeyed reads through the partial sourceKey index', async () => {
+    await inboxRepository.createKeyedNotice(notice('loop:a:status:error'));
+    const find = vi.spyOn(Inbox, 'find');
+    await inboxRepository.listKeyed('loop:');
+    const filter = find.mock.calls[0][0] as Record<string, unknown>;
+    find.mockRestore();
+
+    expect(filter).toMatchObject({ sourceKey: { $exists: true } });
+    const plan = JSON.stringify(await Inbox.collection.find(filter).explain('queryPlanner'));
+    expect(plan).toContain('IXSCAN');
+    expect(plan).not.toContain('COLLSCAN');
   });
 
   it('resolve soft-deletes and frees the key for a recurrence', async () => {

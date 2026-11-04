@@ -7,7 +7,7 @@ import {
   workItemRepository,
 } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { ILoop, ILoopWithUsage, startOfUtcDay } from '@bike4mind/common';
+import { DEFAULT_LOOP_STAGES, ILoop, ILoopWithUsage, startOfUtcDay } from '@bike4mind/common';
 import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 import { resolveDefaultChatModel } from '@server/utils/chatCompletionDefaults';
 import { getOrCreateSession } from '@server/managers/sessionCrud';
@@ -23,6 +23,7 @@ import {
   validateLoopName,
   validateLoopOrganizationId,
   validateLoopOversees,
+  validateLoopStageConfig,
   validateLoopStages,
   validateLoopTools,
 } from '@server/utils/loopValidation';
@@ -57,6 +58,10 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const intervalMinutes = validateLoopInterval(body.intervalMinutes);
     const tools = body.tools === undefined ? [] : validateLoopTools(body.tools);
     const stages = body.stages === undefined ? undefined : validateLoopStages(body.stages);
+    const stageConfig =
+      body.stageConfig === undefined || body.stageConfig === null
+        ? undefined
+        : validateLoopStageConfig(body.stageConfig, stages ?? DEFAULT_LOOP_STAGES);
     const agentId = body.agentId === undefined ? undefined : validateLoopAgentId(body.agentId);
     const budgetCreditsPerDay =
       body.budgetCreditsPerDay === undefined ? undefined : validateLoopBudget(body.budgetCreditsPerDay);
@@ -93,6 +98,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
       intervalMinutes,
       tools,
       ...(stages && { stages }),
+      ...(stageConfig?.length && { stageConfig }),
       ...(agentId && { agentId }),
       ...(budgetCreditsPerDay !== undefined && { budgetCreditsPerDay }),
       ...(oversees && { oversees }),

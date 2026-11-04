@@ -6,6 +6,7 @@ import type {
   ILoopDirective,
   ILoopDirectiveReply,
   ILoopEvent,
+  ILoopsBudget,
   ILoopWithUsage,
   LoopDirectiveOwnerAction,
   LoopGateOutcome,
@@ -25,7 +26,9 @@ export interface ILoopTicket {
   statusReason?: string;
   dependencies: string[];
   executionId?: string;
-  /** Open with every dependency closed: the scheduler works the oldest of these next. */
+  /** Runs that claimed it since its owner last moved it; the loop blocks it at `runLimit`. */
+  runCount: number;
+  /** Open with every dependency closed: the scheduler works the furthest-along, then oldest, next. */
   ready: boolean;
   createdAt: string;
   updatedAt: string;
@@ -34,9 +37,9 @@ export interface ILoopTicket {
 /** An unsure event as served by GET /api/loops/:id/events (apps/client/pages/api/loops/[id]/events.ts). */
 export type ILoopUnsureRow = Pick<
   ILoopEvent,
-  'id' | 'kind' | 'executionId' | 'workItemId' | 'ticketTitle' | 'iteration' | 'confidence' | 'reason'
+  'id' | 'kind' | 'source' | 'executionId' | 'workItemId' | 'ticketTitle' | 'iteration' | 'confidence' | 'reason'
 > & {
-  resolution?: { outcome: LoopGateOutcome; by?: string; at: string };
+  resolution?: { outcome: LoopGateOutcome; by?: string; at: string; note?: string };
   createdAt: string;
 };
 
@@ -58,6 +61,9 @@ export const countNeedsYou = (events: ILoopEventRow[] = []) =>
 
 export interface ILoopTicketsResponse {
   stages: { stage: string; tickets: ILoopTicket[] }[];
+  runLimit: number;
+  /** The owner's desktop runner, as last reported; null when the loop has no desktop stage. */
+  runner?: { online: boolean; lanesFree: number; waitingReason?: string } | null;
 }
 
 /** Every loops query shares the `['loops']` prefix, so one invalidation refreshes list, detail, tickets and events. */
@@ -66,12 +72,14 @@ export const loopKeys = {
   detail: (id: string) => ['loops', id] as const,
   tickets: (id: string) => ['loops', id, 'tickets'] as const,
   events: (id: string) => ['loops', id, 'events'] as const,
+  budget: ['loops', 'budget'] as const,
 };
 
 export type LoopFormPayload = Pick<ILoop, 'name' | 'goal' | 'intervalMinutes' | 'tools' | 'stages'> & {
   agentId?: string | null;
   oversees?: string[] | null;
   budgetCreditsPerDay?: number | null;
+  stageConfig?: ILoop['stageConfig'];
 };
 
 const LIST_POLL_MS = 30_000;
@@ -87,7 +95,7 @@ function onLoopError(queryClient: QueryClient) {
   };
 }
 
-function useLoopMutation<TVars>(fn: (vars: TVars) => Promise<unknown>, onSuccess?: () => void) {
+function useLoopMutation<TVars, TData = unknown>(fn: (vars: TVars) => Promise<TData>, onSuccess?: () => void) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: fn,
@@ -130,6 +138,19 @@ export const useLoopEvents = (id: string) =>
     refetchInterval: DETAIL_POLL_MS,
   });
 
+export const useLoopsBudget = () =>
+  useQuery({
+    queryKey: loopKeys.budget,
+    queryFn: async () => (await api.get<ILoopsBudget>('/api/loops/budget')).data,
+    refetchInterval: LIST_POLL_MS,
+  });
+
+/** Sets the caller's all-loops daily cap; null clears it. */
+export const useSetLoopsBudget = () =>
+  useLoopMutation(
+    async (dailyCredits: number | null) => (await api.put<ILoopsBudget>('/api/loops/budget', { dailyCredits })).data
+  );
+
 export const useCreateLoop = () =>
   useLoopMutation(async (payload: LoopFormPayload) => (await api.post<ILoop>('/api/loops', payload)).data);
 
@@ -139,7 +160,21 @@ export const useUpdateLoop = () =>
       (await api.patch<ILoop>(`/api/loops/${id}`, patch)).data
   );
 
-export const useDeleteLoop = () => useLoopMutation((id: string) => api.delete(`/api/loops/${id}`));
+/**
+ * Unlike the other mutations this must not refetch the deleted loop: its detail, tickets and events queries
+ * are still mounted until the caller navigates away, and refetching them is three 404s.
+ */
+export const useDeleteLoop = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/api/loops/${id}`),
+    onSuccess: async (_data, id) => {
+      await queryClient.cancelQueries({ queryKey: loopKeys.detail(id) });
+      return queryClient.invalidateQueries({ queryKey: loopKeys.all, predicate: query => query.queryKey[1] !== id });
+    },
+    onError: onLoopError(queryClient),
+  });
+};
 
 export const useRunLoop = () =>
   useLoopMutation(
@@ -169,4 +204,26 @@ export const useOverrideDirective = () =>
       action: LoopDirectiveOwnerAction;
       note?: string;
     }) => api.post(`/api/loops/${loopId}/events/${eventId}/override`, { action, ...(note && { note }) })
+  );
+
+/** The owner's answer to a question a run asked with loop_ticket_unsure; a resume needs the answer as `note`. */
+export const useResolveUnsure = () =>
+  useLoopMutation(
+    async ({
+      loopId,
+      eventId,
+      outcome,
+      note,
+    }: {
+      loopId: string;
+      eventId: string;
+      outcome: LoopGateOutcome;
+      note?: string;
+    }) =>
+      (
+        await api.post<ILoopUnsureRow & { ticketSkipped?: boolean }>(`/api/loops/${loopId}/events/${eventId}/resolve`, {
+          outcome,
+          ...(note && { note }),
+        })
+      ).data
   );

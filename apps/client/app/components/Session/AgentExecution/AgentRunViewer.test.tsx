@@ -86,6 +86,40 @@ describe('AgentRunViewer', () => {
     renderViewer();
     act(() => useAgentExecutionStore.getState().setViewed('run-1', 'not_found'));
     expect(screen.getByTestId('agent-run-viewer-not-found').textContent).toBe('Run not found');
+    expect(screen.queryByTestId('agent-run-viewer-history-link')).toBeNull();
+  });
+
+  it('shows "Loading run..." for a found run with no steps yet, and the history link', () => {
+    renderViewer();
+    seed({ status: 'running', iterations: [] });
+    expect(screen.getByTestId('agent-run-viewer-loading').textContent).toContain('Loading run...');
+    expect(screen.getByTestId('agent-run-viewer-history-link')).toBeTruthy();
+  });
+
+  it('drops the loader once a step arrives, and never shows it for a finished run', () => {
+    renderViewer();
+    seed({
+      status: 'running',
+      iterations: [
+        {
+          iteration: 0,
+          step: { type: 'thought', content: 'Looking', metadata: { timestamp: 1, iteration: 0 } },
+          isComplete: false,
+          receivedAt: 1,
+        },
+      ],
+    });
+    expect(screen.queryByTestId('agent-run-viewer-loading')).toBeNull();
+    seed({ status: 'completed', answer: 'Done' });
+    expect(screen.queryByTestId('agent-run-viewer-loading')).toBeNull();
+  });
+
+  it('strips reasoning tags from the final answer, and shows no box for a reasoning-only answer', () => {
+    renderViewer();
+    seed({ status: 'completed', answer: '<think></think>Hello' });
+    expect(screen.getByTestId('iteration-stream-run-1-final-answer').textContent).toBe('Hello');
+    seed({ status: 'completed', answer: '<think></think>' });
+    expect(screen.queryByTestId('iteration-stream-run-1-final-answer')).toBeNull();
   });
 
   it('renders streamed steps of a running run', () => {

@@ -584,6 +584,8 @@ interface ResumedReply {
   artifacts: ChatArtifact[];
   usage?: ChatUsage;
   contextSnapshot?: ContextSnapshot;
+  /** The model the reply started on, which a resumed run keeps stamping it with. */
+  model?: string;
 }
 
 /** One round as it is produced, before its artifact markup is parsed out of the text. */
@@ -2203,15 +2205,24 @@ export class ChatService {
 
     // Reached only from the Continue button, so whoever clicked it is there to answer a card.
     this.attendedTurns.add(sessionId);
+    // A reply stored before it was stamped still says what it started on in its context snapshot.
+    const startedOn = last.model ?? last.contextSnapshot?.model;
     const replyId = this.startReply(session, api, historyScope, {
       id: last.id,
       content: last.content,
       // A message stored before rounds were recorded resumes as one round holding everything it
       // said and everything it ran, which is the most the flat shape supports: the turn carries
       // on correctly, and only the ordering of what came BEFORE stays unrecoverable.
-      rounds: last.rounds ?? [{ text: last.content, toolCallIds: (last.toolCalls ?? []).map(call => call.id) }],
+      rounds: last.rounds ?? [
+        {
+          text: last.content,
+          toolCallIds: (last.toolCalls ?? []).map(call => call.id),
+          ...(startedOn ? { model: startedOn } : {}),
+        },
+      ],
       toolCalls: last.toolCalls ?? [],
       artifacts: last.artifacts ?? [],
+      ...(startedOn ? { model: startedOn } : {}),
       ...(last.usage ? { usage: last.usage } : {}),
       ...(last.contextSnapshot ? { contextSnapshot: last.contextSnapshot } : {}),
     });
@@ -2971,22 +2982,15 @@ export class ChatService {
 
         const rounds = [
           ...(resume?.rounds ?? []),
-          ...parsed
-            // Trimmed so the join below lands exactly one blank line between rounds, and so a
-            // round does not draw a gap under itself where the model happened to end on newlines.
-            .map(entry => ({
-              text: entry.content.trim(),
-              toolCallIds: entry.round.toolCallIds,
-              timing: entry.round.timing,
-              ...(entry.round.usage ? { usage: entry.round.usage } : {}),
-              ...(entry.round.reasoning.trim() ? { reasoning: entry.round.reasoning.trim() } : {}),
-              sent: entry.round.sent,
-            }))
-            // A round with only usage is kept: it is the measured size of a trimmed round stopped early.
-            .filter(round => round.text.length > 0 || round.toolCallIds.length > 0 || round.reasoning || round.usage),
+          ...storedRounds(
+            parsed.map(entry => ({ round: entry.round, text: entry.content })),
+            session.model
+          ),
         ];
-        // A plain reply keeps no rounds, but one that reasoned needs them to carry the reasoning.
-        const keepRounds = toolCalls.length > 0 || rounds.some(round => round.reasoning);
+        // A plain reply keeps no rounds, but one that reasoned needs them to carry the reasoning,
+        // and one continued on another model needs them to say which model spent what.
+        const continuedOnOther = resume?.model !== undefined && resume.model !== session.model;
+        const keepRounds = toolCalls.length > 0 || continuedOnOther || rounds.some(round => round.reasoning);
         const finalContent = joinRounds(rounds.map(round => round.text));
         const lastTiming = produced[produced.length - 1]?.timing;
         const promptCache: ChatPromptCacheStamp | undefined =
@@ -2999,6 +3003,7 @@ export class ChatService {
           role: 'assistant',
           content: finalContent,
           createdAt: new Date().toISOString(),
+          model: resume ? resume.model : session.model,
           stopReason,
           ...(toolCalls.length > 0 ? { toolCalls } : {}),
           ...(keepRounds ? { rounds } : {}),
@@ -3482,8 +3487,23 @@ export class ChatService {
         role: 'assistant',
         content,
         createdAt: new Date().toISOString(),
+        model: resume ? resume.model : session.model,
         error: message,
         ...stop,
+        // A resumed reply is rewritten in place, so whatever it already held must be passed back
+        // or the write clears it: its artifact markup is long gone from `content`.
+        ...(resume
+          ? {
+              rounds: [
+                ...resume.rounds,
+                ...storedRounds(
+                  produced.map(round => ({ round, text: round.text })),
+                  session.model
+                ),
+              ],
+              ...(resume.artifacts.length > 0 ? { artifacts: resume.artifacts } : {}),
+            }
+          : {}),
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
         ...(usage ? { usage } : {}),
         ...(contextSnapshot ? { contextSnapshot } : {}),
@@ -3567,6 +3587,7 @@ export class ChatService {
     // must clear the budget stop the previous one left behind, and `Partial` would keep it.
     const updated = await this.deps.store.updateMessage(sessionId, message.id, {
       content: message.content,
+      model: message.model,
       stopReason: message.stopReason,
       error: message.error,
       toolCalls: message.toolCalls,
@@ -7196,6 +7217,26 @@ function sentRounds(message: ChatMessage): CompletionMessage[] | undefined {
     });
   }
   return out;
+}
+
+/** Stored rounds from a run's raw ones; `text` is whatever prose the caller stores, artifact markup included or not. */
+function storedRounds(runs: { round: RawRound; text: string }[], model: string): ChatReplyRound[] {
+  return (
+    runs
+      // Trimmed so the join lands exactly one blank line between rounds, and so a round does not
+      // draw a gap under itself where the model happened to end on newlines.
+      .map(({ round, text }) => ({
+        text: text.trim(),
+        toolCallIds: round.toolCallIds,
+        timing: round.timing,
+        ...(round.usage ? { usage: round.usage } : {}),
+        model,
+        ...(round.reasoning.trim() ? { reasoning: round.reasoning.trim() } : {}),
+        sent: round.sent,
+      }))
+      // A round with only usage is kept: it is the measured size of a trimmed round stopped early.
+      .filter(round => round.text.length > 0 || round.toolCallIds.length > 0 || round.reasoning || round.usage)
+  );
 }
 
 /** The rounds minus `sent`, which only replay reads, for the renderer: it roughly doubles a tool turn. */

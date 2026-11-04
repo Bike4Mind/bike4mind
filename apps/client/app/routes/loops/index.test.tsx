@@ -19,6 +19,9 @@ vi.mock('@client/app/components/Agent/AgentPageHeader', () => ({
   default: ({ rightActions }: { rightActions?: React.ReactNode }) => <div>{rightActions}</div>,
 }));
 vi.mock('@client/app/components/Loops/LoopFormModal', () => ({ default: () => <div data-testid="loop-form-modal" /> }));
+vi.mock('@client/app/components/Loops/LoopsBudgetBar', () => ({
+  default: () => <div data-testid="loops-budget-bar" />,
+}));
 vi.mock('@client/app/hooks/data/loops', () => ({
   useLoops: () => loopsState,
   useUpdateLoop: () => mutations.update,

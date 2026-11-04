@@ -1,4 +1,12 @@
-import type { ILoop, IWorkItem, LoopUnsureFields, WorkItemPatch, WorkItemStatus } from '@bike4mind/common';
+import {
+  desktopStagesOf,
+  type ILoop,
+  type ILoopEvent,
+  type IWorkItem,
+  type LoopUnsureFields,
+  type WorkItemPatch,
+  type WorkItemStatus,
+} from '@bike4mind/common';
 import { loopRepository, workItemRepository, type IPendingGate } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLoopsEnabled } from './loopValidation';
@@ -11,6 +19,10 @@ import { assertLoopsEnabled } from './loopValidation';
 
 /** Closed tickets returned per loop by the tickets route; older ones stay in the DB. */
 export const LOOP_TICKET_CLOSED_WINDOW = 50;
+
+/** Runs a ticket gets per stage it moves through before the loop scheduler blocks it for its owner. */
+export const TICKET_RUNS_PER_STAGE = 3;
+export const ticketRunLimit = (stages: string[]): number => TICKET_RUNS_PER_STAGE * (stages.length - 1);
 
 export const lastStageOf = (loop: Pick<ILoop, 'stages'>): string => loop.stages.at(-1) ?? '';
 
@@ -71,6 +83,18 @@ export function ticketMovePatch(
   };
 }
 
+/**
+ * A cloud loop run (its `loop_ticket_*` tools) never changes a ticket in a desktop stage: only the desktop
+ * runner (`loopRunner.ts` claim/complete) and the owner (work-items routes) do. Moving a ticket into one is fine.
+ */
+export function assertCloudRunMayChange(loop: Pick<ILoop, 'stageConfig'>, ticket: Pick<IWorkItem, 'stage'>): void {
+  if (ticket.stage && desktopStagesOf(loop).includes(ticket.stage)) {
+    throw new BadRequestError(
+      `this ticket is in the "${ticket.stage}" stage, which the owner's desktop app works; do not work, edit or move it`
+    );
+  }
+}
+
 /** A completed run moves its ticket one stage on; reaching the last stage closes it. */
 export function advancePatch(loop: Pick<ILoop, 'stages'>, ticket: Pick<IWorkItem, 'stage'>): WorkItemPatch {
   const index = Math.max(loop.stages.indexOf(ticket.stage ?? ''), 0);
@@ -100,10 +124,13 @@ export async function assertLoopTicketAccess(
   return loop;
 }
 
-/** Makes a live loop due now when it has a ticket ready to work, so a new ticket does not wait out the interval. */
+/**
+ * Makes a live loop due now when it has a ticket ready for a cloud run, so a new ticket does not wait out the
+ * interval. Desktop-stage tickets never make it due: the cloud run would not work them.
+ */
 export async function makeDueIfReady(loop: ILoop, now = new Date()): Promise<void> {
   if (loop.status !== 'live') return;
-  const ready = await workItemRepository.findNextReadyForLoop(loop.userId, loop.id, lastStageOf(loop));
+  const ready = await workItemRepository.findNextReadyForLoop(loop.userId, loop.id, loop.stages, desktopStagesOf(loop));
   if (ready) await loopRepository.makeDueNow(loop.id, now);
 }
 
@@ -111,6 +138,21 @@ export async function makeDueIfReady(loop: ILoop, now = new Date()): Promise<voi
 export const UNSURE_PREFIX = 'Unsure';
 export const unsureReason = (gateReason?: string): string =>
   (gateReason ? `${UNSURE_PREFIX}: ${gateReason}` : UNSURE_PREFIX).slice(0, 1000);
+
+/** An unsure/auto-resumed event as the events API returns it (no `userId`). */
+export const unsureRow = (event: ILoopEvent) => ({
+  id: event.id,
+  kind: event.kind,
+  source: event.source,
+  executionId: event.executionId,
+  workItemId: event.workItemId,
+  ticketTitle: event.ticketTitle,
+  iteration: event.iteration,
+  confidence: event.confidence,
+  reason: event.reason,
+  resolution: event.resolution,
+  createdAt: event.createdAt,
+});
 
 /**
  * The `unsure` loop event for a gate. Written by the loop scheduler (on detach) and by `gate_response`

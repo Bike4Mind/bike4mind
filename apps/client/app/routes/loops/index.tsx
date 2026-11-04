@@ -5,7 +5,9 @@ import AutorenewOutlinedIcon from '@mui/icons-material/AutorenewOutlined';
 import AgentPageHeader from '@client/app/components/Agent/AgentPageHeader';
 import LoopActions from '@client/app/components/Loops/LoopActions';
 import LoopFormModal from '@client/app/components/Loops/LoopFormModal';
+import LoopsBudgetBar from '@client/app/components/Loops/LoopsBudgetBar';
 import {
+  backoffLabel,
   formatCredits,
   formatSpendToday,
   formatInterval,
@@ -40,6 +42,7 @@ export default function LoopsPage() {
         rightActions={newLoopButton}
       />
       <Box sx={{ p: 2 }}>
+        <LoopsBudgetBar />
         {needsYou > 0 && (
           <Typography level="title-sm" color="warning" sx={{ mb: 1 }} data-testid="loops-needs-you-count">
             {needsYou} {needsYou === 1 ? 'loop needs' : 'loops need'} you
@@ -105,7 +108,14 @@ export default function LoopsPage() {
                   </td>
                   <td>{formatInterval(loop.intervalMinutes)}</td>
                   <td>{lastRunLabel(loop)}</td>
-                  <td data-testid="loops-row-next-run">{nextRunLabel(loop)}</td>
+                  <td data-testid="loops-row-next-run">
+                    {nextRunLabel(loop)}
+                    {backoffLabel(loop) && (
+                      <Typography level="body-xs" color="neutral" data-testid="loops-row-backoff">
+                        {backoffLabel(loop)}
+                      </Typography>
+                    )}
+                  </td>
                   <td>{loop.runCount}</td>
                   <td data-testid="loops-row-spend-today">{formatSpendToday(loop)}</td>
                   <td>{formatCredits(loop.creditsUsed)}</td>

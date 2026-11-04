@@ -2,6 +2,8 @@ import { Context } from 'aws-lambda';
 import { randomUUID } from 'crypto';
 import {
   ACTIVE_AGENT_EXECUTION_STATUSES,
+  desktopStagesOf,
+  stageConfigOf,
   startOfUtcDay,
   type ILoop,
   type ILoopEvent,
@@ -11,21 +13,15 @@ import {
 import {
   adminSettingsRepository,
   agentExecutionRepository,
-  apiKeyRepository,
   connectDB,
   loopDirectiveRepository,
   loopEventRepository,
   loopRepository,
-  organizationRepository,
-  userRepository,
   workItemRepository,
   type IAgentExecution,
   type IPendingGate,
 } from '@bike4mind/database';
-import { getAvailableModels, resolveDeprecatedModelId, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
-import { apiKeyService, creditService } from '@bike4mind/services';
-import { getSettingsByNames } from '@bike4mind/utils';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
@@ -33,30 +29,51 @@ import { STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import { toCallerSafeError } from '@server/utils/loadAgentExecutionTrace';
 import {
   advancePatch,
-  lastStageOf,
   makeDueIfReady,
+  ticketRunLimit,
   unsureEventFields,
   unsureReason,
   UNSURE_PREFIX,
 } from '@server/utils/loopTickets';
 import { Resource } from 'sst';
-import { buildLoopQuery, parseLoopMemory } from './loopMemory';
-import { syncLoopNotices } from './loopNotices';
-import { nextIterationCredits } from '../queueHandlers/agentExecutor.billing';
+import { canPayAgain, iterationPrice, loopAdmission } from '@server/utils/loopBudget';
+import { releaseExpiredRunnerLeases } from '@server/utils/loopRunner';
+import { buildLoopQuery, LOOP_PROMPT_ANSWERS, LOOP_PROMPT_DIRECTIVES, parseLoopMemory } from '@server/utils/loopMemory';
+import { syncLoopNotices, USER_BUDGET_PAUSE_REASON } from './loopNotices';
 
 /** Claim lease; covers one dispatch, after which `activeExecutionId` keeps the loop from overlapping. */
 export const LOOP_LEASE_MS = 5 * 60 * 1000;
 export const MAX_DISPATCH_PER_TICK = 25;
-/** Open directives shown to a run, oldest first; the rest wait for a later run. */
-export const LOOP_PROMPT_DIRECTIVES = 10;
 /** Non-credit failures in a row before a loop stops at `error`. */
 export const MAX_CONSECUTIVE_FAILURES = 3;
 /** Resumed unsure runs folded per tick; the rest wait for the next one. */
 export const MAX_RESUMED_FOLDS_PER_TICK = 100;
+/**
+ * Loop runs in flight at once across all users. Loop and interactive runs share the AgentExecutor's
+ * `reserved` concurrency (infra/agentExecutor.ts); keep this well below it so interactive runs keep most slots.
+ */
+export const MAX_ACTIVE_LOOP_RUNS = 4;
+/** Due loops claimed per tick, started or not (a deferred or paused loop does not use a run slot). */
+export const MAX_CLAIMS_PER_TICK = 100;
+/** Ceiling on the idle back-off, as a multiple of the loop's interval (and never past a day). */
+export const MAX_BACKOFF_FACTOR = 8;
 
 const MINUTE_MS = 60 * 1000;
-const DAY_MS = 24 * 60 * MINUTE_MS;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
 export const BUDGET_PAUSE_REASON = 'Daily budget reached; resumes 00:00 UTC';
+export { USER_BUDGET_PAUSE_REASON };
+export { TICKET_RUNS_PER_STAGE, ticketRunLimit } from '@server/utils/loopTickets';
+export { pacedAllowance, pacedReadyAt, runCreditCap } from '@server/utils/loopBudget';
+export { LOOP_PROMPT_ANSWERS, LOOP_PROMPT_DIRECTIVES } from '@server/utils/loopMemory';
+
+/** Minutes until the next run after `idleStreak` idle runs in a row: doubling, capped at 8x and at a day. */
+export function backoffMinutes(intervalMinutes: number, idleStreak: number): number {
+  return Math.max(
+    intervalMinutes,
+    Math.min(intervalMinutes * 2 ** idleStreak, MAX_BACKOFF_FACTOR * intervalMinutes, 24 * 60)
+  );
+}
 
 /**
  * Loop scheduler (5-minute cron). Each tick first folds finished runs back into their
@@ -81,6 +98,11 @@ export async function runLoopSchedulerTick(now: Date, logger: Logger): Promise<v
     logger.info('[Loops] EnableLoops is off; skipping tick');
     return;
   }
+
+  // First, so a ticket whose desktop runner died is open again before this tick's folds and claims.
+  await releaseExpiredRunnerLeases(now, logger).catch(error =>
+    logger.error('[Loops] Desktop lease sweep failed', error as Error)
+  );
 
   for (const loop of await loopRepository.listAutoPaused()) {
     try {
@@ -108,22 +130,38 @@ export async function runLoopSchedulerTick(now: Date, logger: Logger): Promise<v
     }
   }
 
-  // A loop not started this tick (lease released) is still due; skipping it keeps it from being
-  // re-claimed in a hot loop and starving every other due loop.
+  const allowance = Math.min(MAX_DISPATCH_PER_TICK, MAX_ACTIVE_LOOP_RUNS - (await loopRepository.countInFlight()));
+  if (allowance > 0) await dispatchDue(now, allowance, logger);
+
+  // Last, so notices reflect this tick's state changes.
+  await syncLoopNotices(logger).catch(error => logger.error('[Loops] Notice sync failed', error as Error));
+}
+
+/**
+ * Starts up to `allowance` due loops, round-robin by owner: each pass claims at most one loop per user, so
+ * one user's many due loops cannot keep another user's loop out of the tick. A loop not started (deferred,
+ * paused, lease released) is still skipped for the rest of the tick so it is not re-claimed in a hot loop,
+ * and does not use up the allowance.
+ */
+async function dispatchDue(now: Date, allowance: number, logger: Logger): Promise<void> {
   const claimed: string[] = [];
-  for (let dispatched = 0; dispatched < MAX_DISPATCH_PER_TICK; dispatched++) {
-    const loop = await loopRepository.claimDue(now, LOOP_LEASE_MS, claimed);
-    if (!loop) break;
+  let served: string[] = [];
+  let started = 0;
+  while (started < allowance && claimed.length < MAX_CLAIMS_PER_TICK) {
+    const loop = await loopRepository.claimDue(now, LOOP_LEASE_MS, claimed, served);
+    if (!loop) {
+      if (served.length === 0) break;
+      served = [];
+      continue;
+    }
     claimed.push(loop.id);
+    served.push(loop.userId);
     try {
-      await dispatchLoop(loop, now, logger);
+      if (await dispatchLoop(loop, now, logger)) started++;
     } catch (error) {
       logger.error(`[Loops] Failed to dispatch loop ${loop.id}`, error as Error);
     }
   }
-
-  // Last, so notices reflect this tick's state changes.
-  await syncLoopNotices(logger).catch(error => logger.error('[Loops] Notice sync failed', error as Error));
 }
 
 /** Parents waiting on children legitimately idle for hours; the executor's own stale sweep skips them too. */
@@ -174,11 +212,27 @@ async function reconcileLoop(loop: ILoop, now: Date): Promise<void> {
     if (ticket) await workItemRepository.foldTicketRun(ticket.id, executionId, advancePatch(loop, ticket));
     const answer = (execution.result as { answer?: unknown } | undefined)?.answer;
     const memory = parseLoopMemory(typeof answer === 'string' ? answer : '', loop.memory);
+    const lastRunAt = execution.completedAt ?? now;
+    // Idle: no ticket, memory unchanged, and no ticket of the loop touched from the run's start to this
+    // fold (to now, not completedAt, so a ticket change since the run ended is not overwritten below).
+    const idle =
+      !ticket &&
+      !(loop.idleResetAt && new Date(loop.idleResetAt) > new Date(execution.createdAt)) &&
+      memory.notes === (loop.memory?.notes ?? '') &&
+      memory.nextAction === (loop.memory?.nextAction ?? '') &&
+      (await workItemRepository.countTouchedForLoop(loop.userId, loop.id, new Date(execution.createdAt), now)) === 0;
+    const idleStreak = idle ? (loop.idleStreak ?? 0) + 1 : 0;
     await loopRepository.foldRun(loop.id, executionId, {
       $set: {
         memory: { ...memory, updatedAt: now },
-        lastRunAt: execution.completedAt ?? now,
+        lastRunAt,
         consecutiveFailures: 0,
+        idleStreak,
+        ...(idle && {
+          nextRunAt: new Date(
+            new Date(lastRunAt).getTime() + backoffMinutes(loop.intervalMinutes, idleStreak) * MINUTE_MS
+          ),
+        }),
       },
       $inc: { runCount: 1 },
       $unset: { statusReason: '' },
@@ -187,9 +241,27 @@ async function reconcileLoop(loop: ILoop, now: Date): Promise<void> {
     return;
   }
 
+  if (execution?.failureReason === 'credit_cap' || execution?.failureReason === 'spend_cap') {
+    // Not the ticket's fault either, and not a failure. Not made due now: the interval and the pacing defer
+    // decide the next run, or a paced cap would turn into a one-iteration run every tick. A new account's
+    // spend cap is a rolling window, so the next run past it simply goes ahead.
+    if (ticket) await workItemRepository.foldTicketRun(ticket.id, executionId, { status: 'open' }, true);
+    const cap = Math.round((execution.creditCap ?? 0) * 100) / 100;
+    await loopRepository.foldRun(loop.id, executionId, {
+      $set: {
+        lastRunAt: execution.completedAt ?? now,
+        statusReason:
+          execution.failureReason === 'credit_cap'
+            ? `Last run stopped at its credit cap (${cap} credits)`
+            : "Last run stopped at the new account's spend cap",
+      },
+    });
+    return;
+  }
+
   if (execution?.failureReason === 'insufficient_credits') {
-    // Not the ticket's fault: it goes back to open, and the loop pauses.
-    if (ticket) await workItemRepository.foldTicketRun(ticket.id, executionId, { status: 'open' });
+    // Not the ticket's fault: it goes back to open (uncounted), and the loop pauses.
+    if (ticket) await workItemRepository.foldTicketRun(ticket.id, executionId, { status: 'open' }, true);
     const folded = await loopRepository.foldRun(loop.id, executionId, {
       $set: { lastRunAt: execution.completedAt ?? now },
     });
@@ -311,7 +383,9 @@ async function foldResumedRun(event: ILoopEvent, now: Date): Promise<void> {
  */
 async function resumeIfDue(loop: ILoop, now: Date): Promise<void> {
   const kind = loop.autoResume!;
-  if (kind === 'budget' ? !loop.nextRunAt || new Date(loop.nextRunAt) > now : !(await canPayAgain(loop))) return;
+  // Priced like admit, on the model the next run will use, so a stage-model loop does not resume only to re-pause.
+  const canPay = () => canPayAgain(loop, async () => iterationPrice(loop, await nextRunModel(loop)));
+  if (kind === 'budget' ? !loop.nextRunAt || new Date(loop.nextRunAt) > now : !(await canPay())) return;
   if (!(await loopRepository.resumeAutoPaused(loop.id, kind, now)) || !loop.lastExecutionId) return;
   await loopEventRepository.recordAutoResumed({
     loopId: loop.id,
@@ -322,64 +396,96 @@ async function resumeIfDue(loop: ILoop, now: Date): Promise<void> {
   });
 }
 
-/**
- * Whether the account the executor bills can pay for the loop's first iteration, by the executor's own
- * admission rule (agentExecutor.ts pre-flight credit check): a positive balance that covers
- * `nextIterationCredits` when `enforceCredits` is on, and for an org, the member under its cap.
- */
-async function canPayAgain(loop: ILoop): Promise<boolean> {
-  const org = loop.organizationId ? await organizationRepository.findById(loop.organizationId) : null;
-  const payer = loop.organizationId ? org : await userRepository.findById(loop.userId);
-  const balance = payer?.currentCredits ?? 0;
-  if (balance <= 0 || (org && creditService.isMemberAtOrOverCap(org, loop.userId))) return false;
-  return balance >= (await firstIterationCredits(loop));
-}
-
-async function firstIterationCredits(loop: ILoop): Promise<number> {
-  if ((await adminSettingsRepository.getSettingsValue('enforceCredits')) !== true) return 0;
-  const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(loop.userId, {
-    db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
-    getSettingsByNames,
-  });
-  const models = await getAvailableModels(apiKeyTable as ApiKeyTable);
-  const modelId = resolveDeprecatedModelId(loop.model, 'loopScheduler');
-  const modelInfo = models.find((m: { id: string }) => m.id === modelId);
-  return modelInfo ? nextIterationCredits(modelInfo, 0) : 0;
-}
-
-/**
- * Pauses a loop whose runs started today have spent its daily budget, until the next UTC midnight.
- * ponytail: checked before each run with one run in flight per loop, so a run can overshoot the budget
- * by at most its own cost.
- */
-async function pausedForBudget(loop: ILoop, now: Date, logger: Logger): Promise<boolean> {
-  if (!loop.budgetCreditsPerDay) return false;
-  const today = startOfUtcDay(now);
-  const spent = await agentExecutionRepository.sumCreditsByLoop([loop.id], [loop.sessionId], today);
-  if ((spent[loop.id] ?? 0) < loop.budgetCreditsPerDay) return false;
-
+/** Pauses a claimed loop until its owner (or the scheduler, by `autoResume`) sets it live again. */
+async function pauseClaimed(loop: ILoop, patch: Record<string, unknown>): Promise<boolean> {
   // Conditional on 'live' so an owner's pause landing mid-dispatch is not overwritten.
   const paused = await loopRepository.updateForUser(
     loop.id,
     loop.userId,
-    {
-      status: 'paused',
-      autoResume: 'budget',
-      statusReason: BUDGET_PAUSE_REASON,
-      nextRunAt: new Date(today.getTime() + DAY_MS),
-      leaseUntil: null,
-    },
+    { status: 'paused', ...patch, leaseUntil: null },
     'live'
   );
   if (!paused) await loopRepository.releaseLease(loop.id);
-  else logger.info(`[Loops] Loop ${loop.id} reached its daily budget`);
-  return true;
+  return !!paused;
 }
 
-/** Claims the loop's next ready ticket for this run; null means a plain goal run. */
+/**
+ * Admission before a run (`loopAdmission`), acting on a refusal: an out-of-credits payer pauses the loop
+ * for credits (no execution created), a spent loop budget or all-loops budget pauses until 00:00 UTC, and
+ * a short paced allowance defers the loop, staying live, to when it covers one iteration. Returns the
+ * run's credit cap (undefined: none), or null when it did not admit.
+ */
+async function admit(loop: ILoop, model: string, now: Date, logger: Logger): Promise<{ creditCap?: number } | null> {
+  const admission = await loopAdmission(loop, model, now);
+  if (admission.ok) return { creditCap: admission.creditCap };
+  const tomorrow = new Date(startOfUtcDay(now).getTime() + DAY_MS);
+  switch (admission.kind) {
+    case 'credits':
+      await pauseClaimed(loop, { statusReason: 'Out of credits', autoResume: 'credits' });
+      logger.info(`[Loops] Loop ${loop.id} not started: its payer is out of credits`);
+      break;
+    case 'loop_budget':
+      if (await pauseClaimed(loop, { autoResume: 'budget', statusReason: BUDGET_PAUSE_REASON, nextRunAt: tomorrow })) {
+        logger.info(`[Loops] Loop ${loop.id} reached its daily budget`);
+      }
+      break;
+    case 'user_budget': {
+      const paused = await loopRepository.pauseAllLiveForUser(loop.userId, {
+        statusReason: USER_BUDGET_PAUSE_REASON,
+        autoResume: 'budget',
+        nextRunAt: tomorrow,
+      });
+      await loopRepository.releaseLease(loop.id);
+      logger.info(`[Loops] User ${loop.userId} reached the all-loops daily budget; paused ${paused} loops`);
+      break;
+    }
+    case 'paced':
+      await loopRepository.deferUntil(loop.id, admission.readyAt);
+      logger.info(`[Loops] Loop ${loop.id} deferred by pacing until ${admission.readyAt.toISOString()}`);
+      break;
+  }
+  return null;
+}
+
+/**
+ * The model the loop's next run will use: the stage model of the ticket `claimNextTicket` would claim, else
+ * the loop's. Read-only, so pricing a run that does not start writes nothing.
+ */
+async function nextRunModel(loop: ILoop): Promise<string> {
+  if (!loop.stageConfig?.some(entry => entry.model)) return loop.model;
+  const limit = ticketRunLimit(loop.stages);
+  const ready = await workItemRepository.listReadyForLoop(loop.userId, loop.id, loop.stages, desktopStagesOf(loop));
+  const next = ready.find(ticket => (ticket.runCount ?? 0) < limit);
+  return (next && stageConfigOf(loop, next.stage).model) ?? loop.model;
+}
+
+/**
+ * Claims the loop's next ready ticket for this run, never one in a desktop stage; null means a plain goal
+ * run. A ticket that has used up its runs (`ticketRunLimit`) is blocked for its owner instead, and the next
+ * one is tried.
+ */
 async function claimNextTicket(loop: ILoop): Promise<IWorkItem | null> {
-  const next = await workItemRepository.findNextReadyForLoop(loop.userId, loop.id, lastStageOf(loop));
-  return next && workItemRepository.claimForRun(next.id, loop.id);
+  const limit = ticketRunLimit(loop.stages);
+  for (const next of await workItemRepository.listReadyForLoop(
+    loop.userId,
+    loop.id,
+    loop.stages,
+    desktopStagesOf(loop)
+  )) {
+    const runs = next.runCount ?? 0;
+    if (runs >= limit) {
+      await workItemRepository.updateForUser(
+        next.id,
+        loop.userId,
+        { status: 'blocked', statusReason: `Ran ${runs} times without finishing` },
+        'open'
+      );
+      continue;
+    }
+    const claimed = await workItemRepository.claimForRun(next.id, loop.id);
+    if (claimed) return claimed;
+  }
+  return null;
 }
 
 /** Best effort: a failed release must not hide the dispatch error or skip the lease release. */
@@ -389,34 +495,53 @@ async function releaseTicket(ticket: IWorkItem, logger: Logger): Promise<void> {
     .catch(error => logger.warn(`[Loops] Could not release ticket ${ticket.id}`, { error }));
 }
 
-async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<void> {
+/** Returns whether an execution now holds a run slot for the loop. */
+async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<boolean> {
   // ponytail: a crash between this claim and setExecution strands the ticket in_progress with no run;
   // the owner moves it back by hand. Add a sweep if that is ever seen.
   let ticket: IWorkItem | null = null;
   let result: Awaited<ReturnType<typeof startAgentExecution>>;
   try {
-    if (await pausedForBudget(loop, now, logger)) return;
+    // ponytail: priced on the ticket nextRunModel peeks at; an owner edit landing between the peek and the
+    // claim can start a run on a differently priced model. Claim first and release on refusal if that bites.
+    const admission = await admit(loop, await nextRunModel(loop), now, logger);
+    if (!admission) return false;
     ticket = await claimNextTicket(loop);
-    const [directives, overseen] = await Promise.all([
+    // The stage's settings apply only to a run working a ticket in it; a plain goal run uses the loop's.
+    const stage = ticket ? stageConfigOf(loop, ticket.stage) : {};
+    const model = stage.model ?? loop.model;
+    const [directives, overseen, answered] = await Promise.all([
       loopDirectiveRepository.listOpenForLoop(loop.userId, loop.id, LOOP_PROMPT_DIRECTIVES),
       Promise.all((loop.oversees ?? []).map(id => loopRepository.findByIdAndUserId(id, loop.userId))),
+      ticket ? loopEventRepository.listAnsweredForTicket(loop.userId, ticket.id, LOOP_PROMPT_ANSWERS) : [],
     ]);
     result = await startAgentExecution(
       {
         userId: loop.userId,
         sessionId: loop.sessionId,
         questId: loop.sessionId,
-        query: buildLoopQuery(loop.goal, loop.memory, ticket ? { item: ticket, stages: loop.stages } : undefined, {
-          directives,
-          overseen: overseen.filter((watched): watched is ILoop => !!watched),
-        }),
-        model: loop.model,
+        query: buildLoopQuery(
+          loop.goal,
+          loop.memory,
+          ticket
+            ? {
+                item: ticket,
+                stages: loop.stages,
+                answers: answered.map(event => ({ question: event.reason, note: event.resolution?.note ?? '' })),
+                instructions: stage.instructions,
+              }
+            : undefined,
+          { directives, overseen: overseen.filter((watched): watched is ILoop => !!watched) },
+          desktopStagesOf(loop)
+        ),
+        model,
         connectionId: HEADLESS_CONNECTION_ID,
         apiKeyInfo: undefined,
         ...(loop.organizationId && { organizationId: loop.organizationId }),
         ...(loop.agentId && { agentId: loop.agentId }),
-        enabledTools: loop.tools,
+        enabledTools: stage.tools?.length ? stage.tools : loop.tools,
         loopId: loop.id,
+        ...(admission.creditCap !== undefined && { creditCap: admission.creditCap }),
       },
       logger
     );
@@ -440,7 +565,7 @@ async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<voi
     // Linked after markDispatched so a failure here can't leave the loop free for an overlapping run.
     if (ticket) await workItemRepository.setExecution(ticket.id, result.executionId);
     logger.info(`[Loops] Dispatched loop ${loop.id}`, { executionId: result.executionId });
-    return;
+    return true;
   }
 
   if (result.reason === 'dispatch_failed' && result.executionId) {
@@ -450,13 +575,13 @@ async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<voi
     await loopRepository.markDispatched(loop.id, result.executionId, now);
     if (ticket) await workItemRepository.setExecution(ticket.id, result.executionId);
     logger.warn(`[Loops] Dispatch of loop ${loop.id} unconfirmed; tracking ${result.executionId}`);
-    return;
+    return true;
   }
 
   if (result.reason === 'concurrent_limit' || result.reason === 'dispatch_failed') {
     await loopRepository.releaseLease(loop.id);
     logger.info(`[Loops] Loop ${loop.id} not started (${result.reason}); retrying next tick`);
-    return;
+    return false;
   }
 
   // Conditional on 'live' so an owner's pause landing mid-dispatch is not overwritten.
@@ -468,4 +593,5 @@ async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<voi
   );
   if (!parked) await loopRepository.releaseLease(loop.id);
   logger.warn(`[Loops] Loop ${loop.id} needs its owner: ${result.reason}`);
+  return false;
 }

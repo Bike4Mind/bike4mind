@@ -20,7 +20,7 @@ import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import ReplayOutlinedIcon from '@mui/icons-material/ReplayOutlined';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
-import type { IAgentStep } from '@bike4mind/common';
+import { visibleReplyText, type IAgentStep } from '@bike4mind/common';
 
 interface IterationStepProps {
   step: IAgentStep;
@@ -66,6 +66,11 @@ const IterationStep: FC<IterationStepProps> = ({ step, recovered = true }) => {
   // stable, unconditional hook order.
   if (isErrorObservation(step)) {
     return <ErrorObservation step={step} toolName={toolName} recovered={recovered} />;
+  }
+  if (step.type === 'final_answer') {
+    // Reasoning-model answers can carry `<think>` blocks; an answer that is only reasoning renders nothing.
+    const content = visibleReplyText(step.content).trim();
+    return content ? <StandardStep step={{ ...step, content }} toolName={toolName} /> : null;
   }
   return <StandardStep step={step} toolName={toolName} />;
 };

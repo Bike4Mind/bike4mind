@@ -44,8 +44,8 @@ import {
   mcpServerRepository,
   scopedSettingsRepository,
   cacheRepository,
-  newAccountSpendCapAdapters,
 } from '@bike4mind/database';
+import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import {
@@ -211,6 +211,7 @@ import {
   refusesUnrunnableModel,
   shouldGateIteration,
   stopBlockedAccountIteration,
+  stopCappedIteration,
   stopUnfundedIteration,
 } from './agentExecutor.iterationCreditGate';
 import { buildAgentVideoToolConfig, getAgentVideoToolConfigDeps } from './agentExecutor.videoToolConfig';
@@ -240,6 +241,7 @@ import { enforceCheckpointDepth } from './agentExecutor.checkpointDepth';
 import { createInflightStepPersister } from './agentExecutor.inflightSteps';
 import { runIterationWithDeadlineGuard } from './agentExecutor.iterationDeadline';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { isGoneError } from '@bike4mind/server-utils/websocket/goneError';
 import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
 import { admitAgentDefinitions } from './agentExecutor.modelAdmission';
 import {
@@ -359,11 +361,6 @@ const sqsClient = new SQSClient({});
 const VIEWER_CACHE_MS = 2_000;
 const VIEWER_CACHED_ACTIONS = new Set(['agent_text_delta', 'subagent_text_delta', 'progress', 'subagent_progress']);
 
-function isGoneError(err: unknown): boolean {
-  const e = err as { name?: string; $metadata?: { httpStatusCode?: number } } | undefined;
-  return e?.name === 'GoneException' || e?.$metadata?.httpStatusCode === 410;
-}
-
 /**
  * Exported for `agentExecutor.headless.test.ts` and `agentExecutor.viewers.test.ts`: the
  * headless short-circuit below is the only thing standing between a REST-started run and
@@ -373,6 +370,8 @@ function isGoneError(err: unknown): boolean {
  * With `viewerExecutionId`, every frame is also sent to that execution's
  * `viewerConnectionIds` (the WS `subscribe` command in `apps/client/server/websocket/agentExecute.ts`),
  * even on a headless run. Viewers never change `connectionId` or `hasApprover`.
+ * A desktop loop run's frames reach viewers through relayToViewers (apps/client/server/utils/relayToViewers.ts)
+ * instead: keep the frame shapes in sync.
  */
 export function createWsSender(connectionId: string, logger: Logger, viewerExecutionId?: string) {
   // A REST-dispatched run has no WebSocket peer. Sending to the sentinel id would fail
@@ -2238,6 +2237,7 @@ async function processExecution(
       loopId: execution.loopId,
       loopsEnabled,
       userId: execution.userId,
+      executionId,
     });
     const { loopDirectiveEnabledTools, loopDirectiveExternalTools } = await resolveLoopDirectiveTools({
       loopId: execution.loopId,
@@ -3060,8 +3060,34 @@ async function processExecution(
                   billedToOrganization: Boolean(organization),
                   logger,
                 },
-                newAccountSpendCapAdapters
+                newAccountSpendCapAdaptersWithAlert
               ),
+            snapshot: () => {
+              const checkpoint = agent.toCheckpoint();
+              return { steps: checkpoint.steps, partialAnswer: extractFinalAnswer(checkpoint.steps) };
+            },
+          },
+          {
+            markFailed: (id, error) => agentExecutionRepository.markFailed(id, error),
+            sendWs,
+            persistRunAsQuest: (id, message) =>
+              persistRunAsQuest(id, message, logger, generatedImages, undefined, allSideEffects, retrievalSummary),
+            logger,
+          }
+        );
+        if (stopped) return;
+      }
+
+      // A loop run's own spend ceiling (set by the loop scheduler), checked whether or not credits are enforced.
+      if (execution.creditCap != null && iterationIndex !== aggregationWakeStartIteration) {
+        const stopped = await stopCappedIteration(
+          {
+            executionId,
+            iterationIndex,
+            modelInfo,
+            lastInputTokens,
+            creditCap: execution.creditCap,
+            readSpent: async () => (await agentExecutionRepository.findById(executionId))?.totalCreditsUsed ?? 0,
             snapshot: () => {
               const checkpoint = agent.toCheckpoint();
               return { steps: checkpoint.steps, partialAnswer: extractFinalAnswer(checkpoint.steps) };

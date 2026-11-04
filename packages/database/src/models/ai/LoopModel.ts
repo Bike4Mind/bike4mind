@@ -3,7 +3,10 @@ import {
   DEFAULT_LOOP_STAGES,
   ILoop,
   ILoopRepository,
+  ILoopMemory,
   LOOP_AUTO_RESUME_KINDS,
+  LOOP_MERGE_POLICIES,
+  LOOP_STAGE_RUNNERS,
   LOOP_STATUSES,
   LoopAutoResume,
   LoopStatus,
@@ -35,7 +38,8 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     id: string,
     userId: string,
     patch: Record<string, unknown>,
-    expectedStatus?: LoopStatus
+    expectedStatus?: LoopStatus,
+    guard?: { stages?: string[] }
   ): Promise<ILoop | null> {
     if (!mongoose.isValidObjectId(id)) return null;
     const set: Record<string, unknown> = {};
@@ -45,7 +49,12 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
       else if (value !== undefined) set[key] = value;
     }
     const result = await this.loopModel.findOneAndUpdate(
-      { _id: id, userId, ...(expectedStatus && { status: expectedStatus }) },
+      {
+        _id: id,
+        userId,
+        ...(expectedStatus && { status: expectedStatus }),
+        ...(guard?.stages && { stages: guard.stages }),
+      },
       {
         ...(Object.keys(set).length > 0 && { $set: set }),
         ...(Object.keys(unset).length > 0 && { $unset: unset }),
@@ -61,10 +70,16 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     return result.deletedCount > 0;
   }
 
-  async claimDue(now: Date, leaseMs: number, skipIds: string[] = []): Promise<ILoop | null> {
+  async claimDue(
+    now: Date,
+    leaseMs: number,
+    skipIds: string[] = [],
+    skipUserIds: string[] = []
+  ): Promise<ILoop | null> {
     const result = await this.loopModel.findOneAndUpdate(
       {
         ...(skipIds.length > 0 && { _id: { $nin: skipIds } }),
+        ...(skipUserIds.length > 0 && { userId: { $nin: skipUserIds } }),
         status: 'live',
         nextRunAt: { $lte: now },
         activeExecutionId: { $exists: false },
@@ -90,6 +105,34 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     );
   }
 
+  /** Pushes a claimed live loop's next run out without pausing it, and releases the claim. */
+  async deferUntil(id: string, nextRunAt: Date): Promise<void> {
+    const result = await this.loopModel.updateOne(
+      { _id: id, status: 'live' },
+      { $set: { nextRunAt }, $unset: { leaseUntil: '' } }
+    );
+    if (result.matchedCount === 0) await this.releaseLease(id);
+  }
+
+  /**
+   * Pauses every live loop of a user; conditional on `live`, so an owner pause is never overwritten. A loop
+   * with a run in flight is left live (its fold would rewrite the pause); admission pauses it on its next claim.
+   */
+  async pauseAllLiveForUser(
+    userId: string,
+    patch: { statusReason: string; autoResume: LoopAutoResume; nextRunAt: Date }
+  ): Promise<number> {
+    const result = await this.loopModel.updateMany(
+      { userId, status: 'live', activeExecutionId: { $exists: false } },
+      { $set: { status: 'paused', ...patch }, $unset: { leaseUntil: '' } }
+    );
+    return result.modifiedCount;
+  }
+
+  async countInFlight(): Promise<number> {
+    return this.loopModel.countDocuments({ activeExecutionId: { $exists: true } });
+  }
+
   async listInFlight(): Promise<ILoop[]> {
     const results = await this.loopModel.find({ activeExecutionId: { $exists: true } });
     return results.map(doc => doc.toJSON());
@@ -107,11 +150,27 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     return result.modifiedCount > 0;
   }
 
+  /** Also ends an idle back-off: something changed, so the loop has work worth a run again. */
   async makeDueNow(id: string, now: Date): Promise<void> {
-    await this.loopModel.updateOne(
-      { _id: id, status: 'live', $or: [{ nextRunAt: { $exists: false } }, { nextRunAt: { $gt: now } }] },
-      { $set: { nextRunAt: now } }
-    );
+    // $min over a missing nextRunAt yields `now` (aggregation $min ignores missing values).
+    await this.loopModel.updateOne({ _id: id, status: 'live' }, [
+      { $set: { nextRunAt: { $min: ['$nextRunAt', now] }, idleStreak: 0, idleResetAt: now } },
+    ]);
+  }
+
+  /** Ends a live loop's idle back-off without making it due now: it next runs by `nextRunAt` at the latest. */
+  async endBackoff(id: string, nextRunAt: Date): Promise<void> {
+    // Conditional on 'live': a paused loop's nextRunAt is its auto-resume time.
+    // Stamped even when not backing off, so a run in flight is not folded as idle (see idleResetAt).
+    await this.loopModel.updateOne({ _id: id, status: 'live' }, [
+      {
+        $set: {
+          nextRunAt: { $cond: [{ $gt: ['$idleStreak', 0] }, { $min: ['$nextRunAt', nextRunAt] }, '$nextRunAt'] },
+          idleStreak: 0,
+          idleResetAt: '$$NOW',
+        },
+      },
+    ]);
   }
 
   async markErroredIfFailing(id: string, maxFailures: number): Promise<void> {
@@ -137,6 +196,10 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     );
     return result.modifiedCount > 0;
   }
+
+  async foldRunnerRun(id: string, userId: string, memory: ILoopMemory, lastRunAt: Date): Promise<void> {
+    await this.loopModel.updateOne({ _id: id, userId }, { $set: { memory, lastRunAt }, $inc: { runCount: 1 } });
+  }
 }
 
 export const LoopSchema = new Schema<ILoop, ILoopModel>(
@@ -156,6 +219,27 @@ export const LoopSchema = new Schema<ILoop, ILoopModel>(
     },
     tools: { type: [String], default: [] },
     stages: { type: [String], default: () => [...DEFAULT_LOOP_STAGES] },
+    // Kept in sync with validateLoopStageConfig (apps/client/server/utils/loopValidation.ts).
+    stageConfig: {
+      type: [
+        new Schema(
+          {
+            stage: { type: String, required: true },
+            instructions: { type: String },
+            model: { type: String },
+            tools: { type: [String], default: undefined },
+            runner: { type: String, enum: LOOP_STAGE_RUNNERS },
+            repoHint: { type: String },
+            mergePolicy: { type: String, enum: LOOP_MERGE_POLICIES },
+            deployWorkflow: { type: String },
+            smoke: { type: new Schema({ url: { type: String }, command: { type: String } }, { _id: false }) },
+            holdLabels: { type: [String], default: undefined },
+          },
+          { _id: false }
+        ),
+      ],
+      default: undefined,
+    },
     // Kept in sync with validateLoopBudget (apps/client/server/utils/loopValidation.ts).
     budgetCreditsPerDay: {
       type: Number,
@@ -178,6 +262,8 @@ export const LoopSchema = new Schema<ILoop, ILoopModel>(
     leaseUntil: { type: Date },
     runCount: { type: Number, default: 0 },
     consecutiveFailures: { type: Number, default: 0 },
+    idleStreak: { type: Number, default: 0 },
+    idleResetAt: { type: Date },
     oversees: { type: [String], default: undefined },
   },
   {

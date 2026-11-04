@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
@@ -28,7 +28,14 @@ vi.mock('@client/app/hooks/data/mcpServers', () => ({
   }),
 }));
 vi.mock('@client/app/hooks/data/agents', () => ({ useGetAgents: () => ({ data: [{ id: 'a1', name: 'Alpha' }] }) }));
-vi.mock('@client/app/components/Agent/OrchestrationSection', () => ({ PICKABLE_TOOLS: ['web_search'] }));
+vi.mock('@client/app/components/Agent/OrchestrationSection', () => ({
+  PICKABLE_TOOLS: ['web_search', 'weather_info'],
+}));
+vi.mock('@client/app/hooks/useAccessibleModels', () => ({
+  useAccessibleModels: () => ({ accessibleTextModels: [{ id: 'm2', name: 'Model Two' }] }),
+}));
+const config = vi.hoisted(() => ({ toolAvailability: undefined as Record<string, boolean> | undefined }));
+vi.mock('@client/app/hooks/data/settings', () => ({ useConfig: () => ({ data: config }) }));
 
 import LoopFormModal, { validateLoopForm, type LoopFormValues } from './LoopFormModal';
 
@@ -44,6 +51,7 @@ const values = (overrides: Partial<LoopFormValues> = {}): LoopFormValues => ({
   agentId: '',
   oversees: [],
   budget: '',
+  stageConfig: {},
   ...overrides,
 });
 
@@ -104,6 +112,72 @@ describe('validateLoopForm', () => {
   });
 });
 
+describe('validateLoopForm stageConfig', () => {
+  it('sends set fields of non-last stages only, and clears with null on edit', () => {
+    const { payload } = validateLoopForm(
+      values({
+        stages: ['todo', 'doing', 'done'],
+        stageConfig: {
+          todo: { model: 'm2', tools: [], instructions: '  ' },
+          doing: { runner: 'desktop', instructions: ' Review only ' },
+          done: { model: 'm3' },
+          removed: { model: 'm4' },
+        },
+      }),
+      'create'
+    );
+    expect(payload?.stageConfig).toEqual([
+      { stage: 'todo', model: 'm2' },
+      { stage: 'doing', runner: 'desktop', instructions: 'Review only' },
+    ]);
+    expect(validateLoopForm(values(), 'create').payload).not.toHaveProperty('stageConfig');
+    expect(validateLoopForm(values(), 'edit').payload?.stageConfig).toBeNull();
+  });
+
+  it('sends the desktop guards only for a desktop stage', () => {
+    const guards = {
+      repoHint: ' acme/app ',
+      mergePolicy: 'green-ci' as const,
+      deployWorkflow: 'deploy.yml',
+      smoke: 'https://app.example/health',
+      holdLabels: 'hold, , do-not-merge',
+    };
+    const { payload } = validateLoopForm(
+      values({
+        stages: ['todo', 'doing', 'review', 'done'],
+        stageConfig: {
+          todo: { model: 'm2', ...guards },
+          doing: { runner: 'desktop', ...guards },
+          review: { runner: 'desktop', smoke: 'pnpm smoke' },
+        },
+      }),
+      'create'
+    );
+    expect(payload?.stageConfig).toEqual([
+      { stage: 'todo', model: 'm2' },
+      {
+        stage: 'doing',
+        runner: 'desktop',
+        repoHint: 'acme/app',
+        mergePolicy: 'green-ci',
+        deployWorkflow: 'deploy.yml',
+        smoke: { url: 'https://app.example/health' },
+        holdLabels: ['hold', 'do-not-merge'],
+      },
+      { stage: 'review', runner: 'desktop', smoke: { command: 'pnpm smoke' } },
+    ]);
+  });
+
+  it('caps instructions at 4000 characters and tools at 50 per stage', () => {
+    expect(
+      validateLoopForm(values({ stageConfig: { todo: { instructions: 'x'.repeat(4001) } } }), 'create').errors
+        .stageConfig
+    ).toMatch(/4000/);
+    const tools = Array.from({ length: 51 }, (_, i) => `t${i}`);
+    expect(validateLoopForm(values({ stageConfig: { todo: { tools } } }), 'create').errors.stageConfig).toMatch(/50/);
+  });
+});
+
 describe('LoopFormModal', () => {
   const renderForm = (loop?: Parameters<typeof LoopFormModal>[0]['loop']) =>
     render(
@@ -112,7 +186,47 @@ describe('LoopFormModal', () => {
       </CssVarsProvider>
     );
 
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    config.toolAvailability = undefined;
+  });
+
+  const openTools = () => fireEvent.click(screen.getByRole('combobox', { name: /tools/i }));
+
+  it('lists every tool while availability is loading, and hides an unavailable one once it is known', () => {
+    const { unmount } = renderForm();
+    openTools();
+    expect(screen.getByRole('option', { name: 'Web Search' })).toBeInTheDocument();
+    unmount();
+
+    config.toolAvailability = { web_search: false, weather_info: true };
+    renderForm();
+    openTools();
+    expect(screen.queryByRole('option', { name: /Web Search/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Weather/ })).toBeInTheDocument();
+    expect(screen.queryByTestId('loop-form-tools-unavailable-warning')).not.toBeInTheDocument();
+  });
+
+  it('keeps a saved unavailable tool selected and labelled, warns about it, and clears the warning once removed', () => {
+    config.toolAvailability = { web_search: false };
+    renderForm({
+      id: 'l1',
+      name: 'Digest',
+      goal: 'Summarize',
+      intervalMinutes: 30,
+      tools: ['web_search'],
+      stages: ['todo', 'done'],
+    } as never);
+    expect(screen.getByTestId('loop-form-tools-unavailable-warning')).toHaveTextContent(
+      "Web Search isn't available on this server, so runs skip it."
+    );
+    openTools();
+    const option = screen.getByRole('option', { name: 'Web Search (unavailable)' });
+    expect(option).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.click(option);
+    expect(screen.queryByTestId('loop-form-tools-unavailable-warning')).not.toBeInTheDocument();
+  });
 
   it('shows inline errors and submits nothing when invalid', () => {
     renderForm();
@@ -217,6 +331,106 @@ describe('LoopFormModal', () => {
     fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
     expect(updateLoop.mutate).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'l1', oversees: ['l2'] }),
+      expect.anything()
+    );
+  });
+});
+
+describe('LoopFormModal stage settings', () => {
+  const renderForm = (loop?: Parameters<typeof LoopFormModal>[0]['loop']) =>
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <LoopFormModal open onClose={vi.fn()} loop={loop} />
+      </CssVarsProvider>
+    );
+  const pick = (testId: string, option: string) => {
+    fireEvent.click(within(screen.getByTestId(testId)).getByRole('combobox'));
+    fireEvent.click(screen.getByRole('option', { name: option }));
+  };
+  const saved = {
+    id: 'l1',
+    name: 'Digest',
+    goal: 'Summarize',
+    intervalMinutes: 30,
+    tools: [],
+    stages: ['todo', 'review', 'done'],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    config.toolAvailability = undefined;
+  });
+
+  it('is collapsed by default and has no panel for the last stage', () => {
+    renderForm();
+    const summary = within(screen.getByTestId('loop-form-stage-settings')).getByRole('button', {
+      name: 'Stage settings',
+    });
+    expect(summary).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(summary);
+    expect(summary).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('loop-form-stage-panel-0')).toBeInTheDocument();
+    expect(screen.getByTestId('loop-form-stage-panel-1')).toBeInTheDocument();
+    expect(screen.queryByTestId('loop-form-stage-panel-2')).not.toBeInTheDocument();
+  });
+
+  it('hides an unavailable tool from the stage tools picker, keeping a saved one labelled', () => {
+    config.toolAvailability = { web_search: false, weather_info: true };
+    renderForm(saved as never);
+    fireEvent.click(screen.getByTestId('loop-form-stage-settings-toggle'));
+    fireEvent.click(within(screen.getByTestId('loop-form-stage-tools-0')).getByRole('combobox'));
+    expect(screen.queryByRole('option', { name: /Web Search/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Weather/ })).toBeInTheDocument();
+  });
+
+  it('keeps a stage tool saved before it became unavailable, labelled', () => {
+    config.toolAvailability = { web_search: false };
+    renderForm({ ...saved, stageConfig: [{ stage: 'todo', tools: ['web_search'] }] } as never);
+    fireEvent.click(screen.getByTestId('loop-form-stage-settings-toggle'));
+    fireEvent.click(within(screen.getByTestId('loop-form-stage-tools-0')).getByRole('combobox'));
+    expect(screen.getByRole('option', { name: 'Web Search (unavailable)' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it("sends a stage's runner, model, tools and instructions", () => {
+    renderForm(saved as never);
+    fireEvent.click(screen.getByTestId('loop-form-stage-settings-toggle'));
+    pick('loop-form-stage-runner-1', 'Desktop');
+    expect(screen.getByText('Tickets in this stage wait for your Desktop app to pick them up.')).toBeInTheDocument();
+    pick('loop-form-stage-model-1', 'Model Two');
+    pick('loop-form-stage-tools-1', 'GitHub: create_issue');
+    fireEvent.change(screen.getByTestId('loop-form-stage-instructions-1'), { target: { value: 'Review only' } });
+    fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
+    expect(updateLoop.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stageConfig: [
+          {
+            stage: 'review',
+            runner: 'desktop',
+            model: 'm2',
+            tools: ['github__create_issue'],
+            instructions: 'Review only',
+          },
+        ],
+      }),
+      expect.anything()
+    );
+  });
+
+  it('shows the saved config and drops it when its stage is removed', () => {
+    renderForm({
+      ...saved,
+      stageConfig: [{ stage: 'review', runner: 'desktop', instructions: 'Review only' }],
+    } as never);
+    fireEvent.click(screen.getByTestId('loop-form-stage-settings-toggle'));
+    expect(screen.getByTestId('loop-form-stage-instructions-1')).toHaveValue('Review only');
+    expect(within(screen.getByTestId('loop-form-stage-panel-1')).getByText('desktop')).toBeInTheDocument();
+    expect(screen.getByTestId('loop-form-stage-repo-1')).toBeInTheDocument();
+    expect(screen.queryByTestId('loop-form-stage-repo-0')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('loop-form-stage-remove-1'));
+    fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
+    expect(updateLoop.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ stages: ['todo', 'done'], stageConfig: null }),
       expect.anything()
     );
   });

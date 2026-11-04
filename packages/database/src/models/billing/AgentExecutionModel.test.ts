@@ -112,6 +112,38 @@ describe('AgentExecutionRepository', () => {
     });
   });
 
+  describe('sumLoopCreditsForUser', () => {
+    it("sums the user's top-level loop runs since the given time, across loops", async () => {
+      const since = new Date(Date.now() - 60_000);
+      const parent = await agentExecutionRepository.create(
+        makeBaseExecution({ userId: 'u1', loopId: 'loopA', totalCreditsUsed: 4 })
+      );
+      await agentExecutionRepository.create(makeBaseExecution({ userId: 'u1', loopId: 'loopB', totalCreditsUsed: 6 }));
+      await agentExecutionRepository.create(
+        makeBaseExecution({ userId: 'u1', loopId: 'loopA', parentExecutionId: parent.id, totalCreditsUsed: 99 })
+      );
+      await agentExecutionRepository.create(makeBaseExecution({ userId: 'u1', totalCreditsUsed: 50 }));
+      await agentExecutionRepository.create(makeBaseExecution({ userId: 'u2', loopId: 'loopC', totalCreditsUsed: 70 }));
+
+      expect(await agentExecutionRepository.sumLoopCreditsForUser('u1', since)).toBe(10);
+      expect(await agentExecutionRepository.sumLoopCreditsForUser('u1', new Date(Date.now() + 60_000))).toBe(0);
+    });
+
+    it('reserves an in-flight run at its credit cap when asked', async () => {
+      const since = new Date(Date.now() - 60_000);
+      const run = (overrides: Parameters<typeof makeBaseExecution>[0]) =>
+        agentExecutionRepository.create(makeBaseExecution({ userId: 'u1', loopId: 'loopA', ...overrides }));
+      await run({ status: 'running', totalCreditsUsed: 1, creditCap: 20 });
+      await run({ status: 'awaiting_subagent', totalCreditsUsed: 25, creditCap: 20 });
+      await run({ status: 'running', totalCreditsUsed: 2 });
+      await run({ status: 'completed', totalCreditsUsed: 3, creditCap: 20 });
+
+      expect(await agentExecutionRepository.sumLoopCreditsForUser('u1', since)).toBe(31);
+      // 20 (reserved) + 25 (over its cap) + 2 (uncapped) + 3 (finished, at what it spent)
+      expect(await agentExecutionRepository.sumLoopCreditsForUser('u1', since, true)).toBe(50);
+    });
+  });
+
   describe('listRecentForLoop', () => {
     it("returns a loop's newest top-level runs", async () => {
       const older = await agentExecutionRepository.create(
@@ -2036,6 +2068,107 @@ describe('AgentExecutionRepository', () => {
       const reloaded = await agentExecutionRepository.findById(execution.id);
       expect(reloaded?.status).toBe('failed');
       expect(reloaded?.pendingPermission).toBeUndefined();
+    });
+  });
+
+  describe('desktop runner runs', () => {
+    const NOW = new Date('2026-11-04T12:00:00Z');
+    const LATER = new Date(NOW.getTime() + 120_000);
+
+    const createRun = async (overrides: Record<string, unknown> = {}) => {
+      const id = new mongoose.Types.ObjectId().toString();
+      const base = makeBaseExecution({ status: 'running' });
+      await agentExecutionRepository.createRunnerRun(id, {
+        ...base,
+        checkpoint: { steps: [], iteration: 0, seq: 0 },
+        runnerLeaseUntil: LATER,
+        ...overrides,
+      });
+      return { id, userId: (overrides.userId as string | undefined) ?? base.userId };
+    };
+
+    it('leaves desktop runs out of the interactive slot count and counts them on their own', async () => {
+      const { userId } = await createRun();
+      await agentExecutionRepository.create(makeBaseExecution({ userId, status: 'running' }));
+
+      expect(await agentExecutionRepository.countActiveByUserId(userId)).toBe(1);
+      expect(await agentExecutionRepository.countActiveDesktopByUserId(userId)).toBe(1);
+    });
+
+    it("renews a live lease, but not a lapsed one, a finished run, or another user's", async () => {
+      const { id, userId } = await createRun();
+      const until = new Date(LATER.getTime() + 60_000);
+
+      expect((await agentExecutionRepository.renewRunnerLease(id, userId, NOW, until))?.runnerLeaseUntil).toEqual(
+        until
+      );
+      expect(await agentExecutionRepository.renewRunnerLease(id, 'someone-else', NOW, until)).toBeNull();
+      expect(
+        await agentExecutionRepository.renewRunnerLease(id, userId, new Date(until.getTime() + 1), until)
+      ).toBeNull();
+
+      expect(await agentExecutionRepository.finishRunnerRun(id, userId, { status: 'completed' })).toBe(true);
+      expect(await agentExecutionRepository.renewRunnerLease(id, userId, NOW, until)).toBeNull();
+      expect(await agentExecutionRepository.finishRunnerRun(id, userId, { status: 'completed' })).toBe(false);
+    });
+
+    it('appends steps under a compare-and-set on the append sequence, keeping the last 500', async () => {
+      const { id, userId } = await createRun();
+      const steps = Array.from({ length: 501 }, (_, i) => ({ type: 'thought', content: `s${i}` }));
+      const next = { steps, iteration: 1, pendingText: 'tail', leaseUntil: LATER };
+      // A text-only batch leaves the iteration where it was; the sequence still serializes it.
+      const textOnly = { steps: [], iteration: 0, pendingText: 'x', leaseUntil: LATER };
+
+      expect(await agentExecutionRepository.appendRunnerSteps(id, userId, NOW, { seq: 0 }, textOnly)).toBe(true);
+      expect(await agentExecutionRepository.appendRunnerSteps(id, userId, NOW, { seq: 0 }, textOnly)).toBe(false);
+      expect(await agentExecutionRepository.appendRunnerSteps(id, userId, NOW, { seq: 1 }, next)).toBe(true);
+
+      const checkpoint = (await agentExecutionRepository.findRunnerRun(id, userId))?.checkpoint as {
+        steps: Array<{ content: string }>;
+        iteration: number;
+        pendingText: string;
+      };
+      expect(checkpoint.steps).toHaveLength(500);
+      expect(checkpoint.steps[0].content).toBe('s1');
+      expect(checkpoint).toMatchObject({ iteration: 1, pendingText: 'tail' });
+    });
+
+    it('tallies credits on a run that already ended', async () => {
+      const { id, userId } = await createRun();
+      await agentExecutionRepository.finishRunnerRun(id, userId, { status: 'completed' });
+
+      expect((await agentExecutionRepository.addRunnerCredits(id, userId, 2))?.totalCreditsUsed).toBe(2);
+      expect(await agentExecutionRepository.addRunnerCredits(id, 'someone-else', 2)).toBeNull();
+    });
+
+    it("reserves an in-flight run's cap in a loop's daily sum only when asked", async () => {
+      const loopId = new mongoose.Types.ObjectId().toString();
+      const { userId } = await createRun({ loopId, sessionId: 'loop-notebook', creditCap: 10, totalCreditsUsed: 1 });
+      await createRun({ userId, loopId, sessionId: 'loop-notebook', status: 'completed', totalCreditsUsed: 3 });
+
+      expect(await agentExecutionRepository.sumCreditsByLoop([loopId], ['loop-notebook'])).toEqual({ [loopId]: 4 });
+      expect(await agentExecutionRepository.sumCreditsByLoop([loopId], ['loop-notebook'], undefined, true)).toEqual({
+        [loopId]: 13,
+      });
+    });
+
+    it('is never swept by the stale-execution sweeps (its lease ends it)', async () => {
+      const { id, userId } = await createRun();
+      await (agentExecutionRepository as unknown as { model: mongoose.Model<unknown> }).model.updateOne(
+        { _id: id },
+        { $set: { updatedAt: new Date(Date.now() - 24 * 3600_000) } },
+        { timestamps: false }
+      );
+
+      expect(await agentExecutionRepository.cleanupStaleActive(userId, 60_000)).toEqual([]);
+      expect(await agentExecutionRepository.findStaleActiveIds({ olderThan: new Date() })).not.toContain(id);
+    });
+
+    it('lists active runs whose lease lapsed', async () => {
+      const lapsed = await createRun({ runnerLeaseUntil: new Date(NOW.getTime() - 1) });
+      await createRun();
+
+      expect((await agentExecutionRepository.listExpiredRunnerRuns(NOW, 10)).map(run => run.id)).toEqual([lapsed.id]);
     });
   });
 });

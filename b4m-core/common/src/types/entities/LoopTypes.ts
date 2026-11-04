@@ -23,7 +23,12 @@ export const loopStatusNeedsOwner = (loop: Pick<ILoop, 'status' | 'statusReason'
  * Server agent tools offered only on loop runs (`apps/workers/src/queueHandlers/agentExecutor.loopTicketTools.ts`).
  * Pre-approved on headless loop runs in `startAgentExecution`.
  */
-export const LOOP_TICKET_TOOL_NAMES = ['loop_ticket_list', 'loop_ticket_create', 'loop_ticket_update'] as const;
+export const LOOP_TICKET_TOOL_NAMES = [
+  'loop_ticket_list',
+  'loop_ticket_create',
+  'loop_ticket_update',
+  'loop_ticket_unsure',
+] as const;
 
 /**
  * Directive tools (`apps/workers/src/queueHandlers/agentExecutor.loopDirectiveTools.ts`): every loop run can
@@ -42,6 +47,112 @@ export const startOfUtcDay = (now: Date): Date =>
   new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 
 export const DEFAULT_LOOP_STAGES: readonly string[] = ['todo', 'doing', 'done'];
+
+export const LOOP_STAGE_RUNNERS = ['cloud', 'desktop'] as const;
+
+export type LoopStageRunner = (typeof LOOP_STAGE_RUNNERS)[number];
+
+/** Per-stage overrides for runs that work a ticket in `stage`. Unset fields fall back to the loop's own. */
+export interface ILoopStageConfig {
+  /** One of the loop's `stages`, never the last. */
+  stage: string;
+  /** Owner-written; added to the prompt of runs working a ticket in this stage. */
+  instructions?: string;
+  /** Replaces the loop's `model`. */
+  model?: string;
+  /** Replaces the loop's `tools`; empty or absent inherits them. */
+  tools?: string[];
+  /**
+   * Absent means `cloud`. The cloud scheduler never claims a ticket in a `desktop` stage; a desktop runner
+   * does.
+   */
+  runner?: LoopStageRunner;
+  /** Desktop stages only, from here down: the guards a desktop runner applies to the ticket's work. `owner/name`. */
+  repoHint?: string;
+  /** Absent means `review`; served as `effectiveMergePolicy`. */
+  mergePolicy?: LoopMergePolicy;
+  deployWorkflow?: string;
+  smoke?: LoopSmokeCheck;
+  holdLabels?: string[];
+}
+
+export const LOOP_MERGE_POLICIES = ['review', 'green-ci', 'never'] as const;
+export type LoopMergePolicy = (typeof LOOP_MERGE_POLICIES)[number];
+export type LoopSmokeCheck = { url: string } | { command: string };
+
+/** The merge policy a desktop runner applies: `review` when unset, and when the org turned `green-ci` merges off. */
+export const effectiveMergePolicy = (
+  policy: LoopMergePolicy | undefined,
+  orgGreenCiDisabled?: boolean
+): LoopMergePolicy => (!policy || (policy === 'green-ci' && orgGreenCiDisabled) ? 'review' : policy);
+
+/** Header a desktop runner sends on its completion calls so their credits count toward the run's loop budgets. */
+export const LOOP_RUN_HEADER = 'X-B4M-Loop-Run';
+/** A desktop run's lease (ms); heartbeat and progress renew it, and the scheduler reopens the ticket once it lapses. */
+export const RUNNER_LEASE_MS = 2 * 60_000;
+/** A runner's presence counts as online this long (ms) after its last post. */
+export const RUNNER_PRESENCE_FRESH_MS = 2 * 60_000;
+/** Desktop runs a user may have active at once: the desktop app's lane cap. */
+export const MAX_DESKTOP_RUNS_PER_USER = 4;
+
+/** Desktop runner API shapes (apps/client/pages/api/loops/runner); the desktop app mirrors them. */
+export interface RunnerTicket {
+  ticketId: string;
+  title: string;
+  loopId: string;
+  loopName: string;
+  stage: string;
+  repoHint?: string;
+}
+
+export interface RunnerClaim {
+  ticket: RunnerTicket;
+  runId: string;
+  leaseExpiresAt: string;
+  /** The same prompt a cloud run of this ticket gets. */
+  prompt: string;
+  model?: string;
+  tools?: string[];
+  stage: {
+    mergePolicy: LoopMergePolicy;
+    guards?: { deployWorkflow?: string; smoke?: LoopSmokeCheck; holdLabels?: string[] };
+  };
+}
+
+export type LoopProgressFrame =
+  | { type: 'text'; text: string }
+  | { type: 'tool-start'; callId: string; name: string; input: string }
+  | { type: 'tool-end'; callId: string; name: string; status: string; error?: string; preview?: string }
+  | { type: 'usage'; usage: unknown };
+
+export type RunnerOutcome =
+  | { outcome: 'advanced'; answer: string; durationMs: number }
+  | { outcome: 'blocked'; reason: string; answer?: string; durationMs: number }
+  | { outcome: 'failed'; reason: string; durationMs: number }
+  | { outcome: 'released'; reason?: string; durationMs: number };
+
+/** A user's desktop runner, as last reported. One row per user: with two machines the last post wins. */
+export interface ILoopRunnerPresence {
+  id: string;
+  userId: string;
+  seenAt: Date;
+  lanesBusy: number;
+  lanesFree: number;
+  waitingReason?: string;
+}
+
+export interface ILoopRunnerPresenceRepository {
+  upsertForUser(userId: string, fields: Omit<ILoopRunnerPresence, 'id' | 'userId'>): Promise<void>;
+  findByUserId(userId: string): Promise<ILoopRunnerPresence | null>;
+}
+
+/** The config for a stage; {} when it has none. */
+export const stageConfigOf = (loop: Pick<ILoop, 'stageConfig'>, stage?: string): Omit<ILoopStageConfig, 'stage'> =>
+  (loop.stageConfig ?? []).find(entry => entry.stage === stage) ?? {};
+
+/** Stages whose tickets wait for a desktop runner. */
+export const desktopStagesOf = (loop: Pick<ILoop, 'stageConfig'>): string[] =>
+  (loop.stageConfig ?? []).filter(entry => entry.runner === 'desktop').map(entry => entry.stage);
 
 /** State carried from one run to the next. */
 export interface ILoopMemory {
@@ -70,6 +181,8 @@ export interface ILoop {
   /** Tool allowlist, passed as the run's `enabledTools`. Built-in names or `<lowercased server>__<tool>` for MCP tools. */
   tools: string[];
   stages: string[];
+  /** Sparse list keyed by `stage` (one of `stages`, never the last); see `stageConfigOf`. */
+  stageConfig?: ILoopStageConfig[] | null;
   /** Enforced at dispatch per UTC day (`startOfUtcDay`); one run can overshoot it. */
   budgetCreditsPerDay?: number;
   status: LoopStatus;
@@ -87,11 +200,26 @@ export interface ILoop {
   runCount: number;
   /** Non-credit failures in a row; the loop moves to `error` at the scheduler's limit. */
   consecutiveFailures: number;
+  /** Idle runs in a row (no ticket, memory unchanged, no ticket touched); each doubles the wait before the next. */
+  idleStreak?: number;
+  /** Last Run now, owner edit, directive or ticket change; a run in flight across it is not idle. */
+  idleResetAt?: Date;
   /** Ids of the same owner's loops this loop oversees: its runs may read their state and send them directives. */
   oversees?: string[];
 
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * GET /api/loops/budget: what all of the caller's loops spent today (since `startOfUtcDay`) against the
+ * all-loops cap. `effectiveCap` is the lower of the admin and user caps; each is absent when unset.
+ */
+export interface ILoopsBudget {
+  creditsToday: number;
+  userDailyCredits?: number;
+  adminDailyCredits?: number;
+  effectiveCap?: number;
 }
 
 /**
@@ -105,17 +233,19 @@ export interface ILoopRepository extends IBaseRepository<ILoop> {
   findByIdAndUserId(id: string, userId: string): Promise<ILoop | null>;
   /**
    * Scoped update - a `null` in `patch` unsets the field. With `expectedStatus` it only applies while
-   * the loop still has that status. Returns null when nothing matched.
+   * the loop still has that status, and with `guard.stages` only while its stages are exactly those.
+   * Returns null when nothing matched.
    */
   updateForUser(
     id: string,
     userId: string,
     patch: Record<string, unknown>,
-    expectedStatus?: LoopStatus
+    expectedStatus?: LoopStatus,
+    guard?: { stages?: string[] }
   ): Promise<ILoop | null>;
   deleteForUser(id: string, userId: string): Promise<boolean>;
   /** Atomically leases one due `live` loop with no run in flight and not in `skipIds`, or returns null. */
-  claimDue(now: Date, leaseMs: number, skipIds?: string[]): Promise<ILoop | null>;
+  claimDue(now: Date, leaseMs: number, skipIds?: string[], skipUserIds?: string[]): Promise<ILoop | null>;
   releaseLease(id: string): Promise<void>;
   markDispatched(id: string, executionId: string, nextRunAt: Date): Promise<void>;
   listInFlight(): Promise<ILoop[]>;
@@ -129,7 +259,7 @@ export interface ILoopRepository extends IBaseRepository<ILoop> {
     executionId: string,
     update: { $set?: Record<string, unknown>; $inc?: Record<string, number>; $unset?: Record<string, ''> }
   ): Promise<boolean>;
-  /** Pulls a `live` loop's `nextRunAt` forward to `now`; used when one of its tickets becomes ready. */
+  /** Pulls a `live` loop's `nextRunAt` forward to `now` and ends its idle back-off; used when one of its tickets becomes ready. */
   makeDueNow(id: string, now: Date): Promise<void>;
   /** Moves a still-`live` loop to `error` once it has `maxFailures` failures in a row. */
   markErroredIfFailing(id: string, maxFailures: number): Promise<void>;
@@ -142,6 +272,11 @@ export interface ILoopRepository extends IBaseRepository<ILoop> {
    * `statusReason`. Conditional on both, so an owner's edit landing first wins. False when nothing matched.
    */
   resumeAutoPaused(id: string, kind: LoopAutoResume, now: Date): Promise<boolean>;
+  /**
+   * Folds a finished desktop run into its loop: the new memory and `lastRunAt`, and one more `runCount`.
+   * Never touches `activeExecutionId`, which only cloud runs hold.
+   */
+  foldRunnerRun(id: string, userId: string, memory: ILoopMemory, lastRunAt: Date): Promise<void>;
 }
 
 /**
@@ -162,33 +297,43 @@ export interface ILoopEvent {
   loopId: string;
   userId: string;
   kind: LoopEventKind;
+  /**
+   * `unsure` only: `gate` (absent on older rows) is a run paused at the confidence gate, resolved through its
+   * gate card; `asked` is a run asking the owner with `loop_ticket_unsure`, resolved from the Log.
+   */
+  source?: 'gate' | 'asked';
   executionId: string;
   workItemId?: string;
   ticketTitle?: string;
-  /** Set on `unsure` only. */
+  /** Set on gate `unsure` only. */
   iteration?: number;
-  /** Set on `unsure` only. */
+  /** Set on gate `unsure` only. */
   confidence?: number;
   reason: string;
   /** The gate's `requestedAt`; with `executionId` it identifies the event. */
   requestedAt: Date;
-  resolution?: { outcome: LoopGateOutcome; by?: string; at: Date };
+  /** `note` is the owner's answer to an `asked` event. */
+  resolution?: { outcome: LoopGateOutcome; by?: string; at: Date; note?: string };
   /** Set once the scheduler has folded a resumed run back into its ticket. */
   foldedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
 
-export type LoopUnsureFields = Omit<
+type LoopUnsureBase = Omit<
   ILoopEvent,
-  'id' | 'kind' | 'iteration' | 'confidence' | 'resolution' | 'foldedAt' | 'createdAt' | 'updatedAt'
-> & { iteration: number; confidence: number };
+  'id' | 'kind' | 'source' | 'iteration' | 'confidence' | 'resolution' | 'foldedAt' | 'createdAt' | 'updatedAt'
+>;
+
+export type LoopUnsureFields = LoopUnsureBase & { source?: 'gate'; iteration: number; confidence: number };
+
+export type LoopAskedFields = LoopUnsureBase & { source: 'asked' };
 
 export type LoopAutoResumedFields = Pick<ILoopEvent, 'loopId' | 'userId' | 'executionId' | 'reason' | 'requestedAt'>;
 
 export interface ILoopEventRepository extends IBaseRepository<ILoopEvent> {
   /** Records an unsure event once per gate (`executionId` + `requestedAt`); a repeat is a no-op. */
-  recordUnsure(fields: LoopUnsureFields): Promise<void>;
+  recordUnsure(fields: LoopUnsureFields | LoopAskedFields): Promise<void>;
   recordAutoResumed(fields: LoopAutoResumedFields): Promise<void>;
   /** Records the event if missing, then its resolution. The first resolution wins. */
   resolveUnsure(
@@ -200,6 +345,20 @@ export interface ILoopEventRepository extends IBaseRepository<ILoopEvent> {
   /** Resumed events whose run the scheduler has not folded yet. */
   listResumedUnfolded(limit: number): Promise<ILoopEvent[]>;
   markFolded(id: string, now: Date): Promise<void>;
+  /**
+   * Resolves an unresolved `asked` event and marks it folded in the same write, so the scheduler's resumed-run
+   * fold never picks it up (the asking run already ended). Null when no such event matched.
+   */
+  resolveAsked(
+    id: string,
+    userId: string,
+    loopId: string,
+    resolution: NonNullable<ILoopEvent['resolution']>
+  ): Promise<ILoopEvent | null>;
+  /** Undoes a `resolveAsked` written at `at` (when its ticket write failed), so the owner can answer again. */
+  reopenAsked(id: string, at: Date): Promise<void>;
+  /** A ticket's resumed `asked` events that carry the owner's answer, newest first. */
+  listAnsweredForTicket(userId: string, workItemId: string, limit: number): Promise<ILoopEvent[]>;
   deleteManyForLoop(userId: string, loopId: string): Promise<number>;
 }
 

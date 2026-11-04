@@ -127,6 +127,7 @@ const EXTERNAL_REGISTRY_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
   loop_ticket_list: 'none',
   loop_ticket_create: 'external',
   loop_ticket_update: 'external',
+  loop_ticket_unsure: 'external',
   loop_oversee_status: 'none',
   loop_directive_issue: 'external',
   loop_directive_respond: 'external',

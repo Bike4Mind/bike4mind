@@ -97,4 +97,90 @@ describe('LoopEventRepository', () => {
     expect(await loopEventRepository.deleteManyForLoop(USER, LOOP)).toBe(1);
     expect(await loopEventRepository.listForLoop(USER, 'loop-2', 10)).toHaveLength(1);
   });
+
+  describe('asked events', () => {
+    const asked = (overrides: Record<string, unknown> = {}) => ({
+      source: 'asked' as const,
+      loopId: LOOP,
+      userId: USER,
+      executionId: 'exec-ask',
+      workItemId: 'ticket-1',
+      ticketTitle: 'Research X',
+      reason: 'Which region?',
+      requestedAt: new Date(1000),
+      ...overrides,
+    });
+
+    it('validates without iteration or confidence, and a legacy event without source still validates', async () => {
+      await expect(LoopEvent.create({ ...asked(), kind: 'unsure' })).resolves.toBeDefined();
+      await expect(
+        LoopEvent.create({ ...fields({ executionId: 'exec-legacy' }), kind: 'unsure' })
+      ).resolves.toBeDefined();
+      await expect(
+        LoopEvent.create({
+          ...fields({ executionId: 'exec-gate' }),
+          source: 'gate',
+          confidence: undefined,
+          kind: 'unsure',
+        })
+      ).rejects.toThrow(/confidence/);
+    });
+
+    it('resolveAsked resolves once, marks it folded, and refuses gate events', async () => {
+      await loopEventRepository.recordUnsure(asked());
+      await loopEventRepository.recordUnsure(fields());
+      const [askedEvent, gateEvent] = await LoopEvent.find({}).sort({ executionId: -1 });
+
+      const at = new Date(2000);
+      const resolved = await loopEventRepository.resolveAsked(askedEvent.id, USER, LOOP, {
+        outcome: 'resumed',
+        by: USER,
+        at,
+        note: 'EU',
+      });
+      expect(resolved).toMatchObject({ resolution: { outcome: 'resumed', note: 'EU' }, foldedAt: at });
+      expect(await loopEventRepository.resolveAsked(askedEvent.id, USER, LOOP, { outcome: 'rejected', at })).toBeNull();
+      expect(await loopEventRepository.resolveAsked(gateEvent.id, USER, LOOP, { outcome: 'rejected', at })).toBeNull();
+      expect(await loopEventRepository.resolveAsked('not-an-id', USER, LOOP, { outcome: 'rejected', at })).toBeNull();
+      expect(await loopEventRepository.listResumedUnfolded(10)).toEqual([]);
+    });
+
+    it('reopenAsked undoes only the resolution written at that time', async () => {
+      await loopEventRepository.recordUnsure(asked());
+      const event = await LoopEvent.findOne({});
+      const at = new Date(4000);
+      await loopEventRepository.resolveAsked(event!.id, USER, LOOP, { outcome: 'resumed', at, note: 'EU' });
+
+      await loopEventRepository.reopenAsked(event!.id, new Date(5000));
+      expect((await LoopEvent.findById(event!.id))!.resolution?.outcome).toBe('resumed');
+
+      await loopEventRepository.reopenAsked(event!.id, at);
+      const reopened = (await LoopEvent.findById(event!.id))!.toJSON();
+      expect(reopened.resolution).toBeUndefined();
+      expect(reopened.foldedAt).toBeUndefined();
+      expect(await loopEventRepository.resolveAsked(event!.id, USER, LOOP, { outcome: 'rejected', at })).not.toBeNull();
+    });
+
+    it("listAnsweredForTicket returns the ticket's answered asks, newest first", async () => {
+      const at = new Date(3000);
+      for (const [executionId, note] of [
+        ['exec-a', 'first'],
+        ['exec-b', 'second'],
+        ['exec-c', undefined],
+      ] as const) {
+        await loopEventRepository.recordUnsure(asked({ executionId }));
+        const event = await LoopEvent.findOne({ executionId });
+        await loopEventRepository.resolveAsked(event!.id, USER, LOOP, {
+          outcome: note ? 'resumed' : 'rejected',
+          at,
+          ...(note && { note }),
+        });
+      }
+      await loopEventRepository.recordUnsure(asked({ executionId: 'exec-d', workItemId: 'ticket-2' }));
+
+      const answered = await loopEventRepository.listAnsweredForTicket(USER, 'ticket-1', 5);
+      expect(answered.map(event => event.resolution?.note)).toEqual(['second', 'first']);
+      expect(await loopEventRepository.listAnsweredForTicket('user-2', 'ticket-1', 5)).toEqual([]);
+    });
+  });
 });

@@ -93,7 +93,9 @@ import {
   buildToolUseInstruction,
   downgradeForcedToolChoice,
   hasCitationsEnabled,
+  isStrictSchemaRejection,
   markToolStrict,
+  withStrictOff,
 } from './forcedToolChoice';
 import { buildJsonSchemaInstruction } from './responseFormatHelpers';
 import { logToolRound, summarizeToolOutcomes } from './toolRoundTiming';
@@ -1257,15 +1259,18 @@ export class AnthropicBackend implements ICompletionBackend {
     // precedence; mixing forced-tool with executable tools can deadlock).
     const responseFormat = options.responseFormat;
     const wantsJsonSchema = responseFormat?.type === 'json_schema' && !hasCallerTools;
-    // Structured outputs close every object, so a schema that explicitly keeps one open stays on the
-    // unconstrained forced tool, where extra keys still come through.
+    // Structured outputs close every object, so a schema that explicitly keeps one open skips them for the
+    // unconstrained forced tool, or the prompt on a model without forced tool use, where extra keys come through.
     const schemaDeclaresOpenObject =
       responseFormat?.type === 'json_schema' && declaresOpenObject(responseFormat.json_schema.schema);
+    // A caller's `strict: false` keeps the schema off native structured outputs and the strict tool alike.
+    const callerOptsOutOfStrict = responseFormat?.type === 'json_schema' && responseFormat.json_schema.strict === false;
     // The forced tool cannot run alongside thinking, so a caller's own request for adaptive thinking
     // (not a route default, and not `none`) moves json_schema to native structured outputs.
     const callerWantsThinking =
       options.explicitReasoning === true &&
       !schemaDeclaresOpenObject &&
+      !callerOptsOutOfStrict &&
       currentModelInfo?.can_think === true &&
       supportsAnthropicEffort(model, currentModelInfo) &&
       (options.thinking?.enabled === true ||
@@ -1275,11 +1280,15 @@ export class AnthropicBackend implements ICompletionBackend {
             'adaptive'));
     const wantsNativeFormat = wantsJsonSchema && (!forcedToolChoiceSupported || callerWantsThinking);
     // Native structured outputs replace the synthesized tool unless a document asks for citations (that
-    // pairing is a 400) or the schema is one structured outputs reject. Then a model with forced tool
-    // use keeps the tool, and one without puts the schema in the prompt.
+    // pairing is a 400), the schema declares an open object, or it is one structured outputs reject. Then a
+    // model with forced tool use keeps the tool, and one without puts the schema in the prompt.
     const citationsBlockFormat = wantsNativeFormat && hasCitationsEnabled(apiParams.messages);
     const nativeFormat =
-      wantsNativeFormat && !citationsBlockFormat && responseFormat.type === 'json_schema'
+      wantsNativeFormat &&
+      !citationsBlockFormat &&
+      !callerOptsOutOfStrict &&
+      !schemaDeclaresOpenObject &&
+      responseFormat.type === 'json_schema'
         ? buildStructuredOutputFormat(responseFormat.json_schema.schema)
         : null;
     const usingResponseFormatNative = nativeFormat !== null;
@@ -1292,7 +1301,7 @@ export class AnthropicBackend implements ICompletionBackend {
         `[AnthropicBackend] response_format received: type=${responseFormat.type}, synthesizingToolUse=${usingResponseFormatToolUse}, nativeFormat=${usingResponseFormatNative}, callerTools=${options.tools?.length ?? 0}`
       );
     }
-    if (usingResponseFormatPrompt && !citationsBlockFormat) {
+    if (usingResponseFormatPrompt && !citationsBlockFormat && !callerOptsOutOfStrict) {
       this.logger.warn(
         '[AnthropicBackend] json_schema not expressible as structured outputs; using prompt instruction',
         {
@@ -1310,11 +1319,12 @@ export class AnthropicBackend implements ICompletionBackend {
     }
     if (usingResponseFormatToolUse && responseFormat.type === 'json_schema') {
       // Unconstrained, the model can emit a nested object as a JSON string. Strict mode needs the
-      // closed structured-outputs form of the schema; one that has none, or that declares an open
-      // object, goes as-is, unconstrained.
-      const strictFormat = schemaDeclaresOpenObject
-        ? null
-        : buildStructuredOutputFormat(responseFormat.json_schema.schema);
+      // closed structured-outputs form of the schema; one that has none, that declares an open
+      // object, or whose caller set `strict: false`, goes as-is, unconstrained.
+      const strictFormat =
+        schemaDeclaresOpenObject || callerOptsOutOfStrict
+          ? null
+          : buildStructuredOutputFormat(responseFormat.json_schema.schema);
       const schemaTool: Tool = {
         name: responseFormat.json_schema.name,
         ...(responseFormat.json_schema.description ? { description: responseFormat.json_schema.description } : {}),
@@ -1334,8 +1344,10 @@ export class AnthropicBackend implements ICompletionBackend {
 
       if (downgradedToolChoice) {
         apiParams.tool_choice = { type: 'auto' };
-        if (downgradedToolChoice.toolName) {
-          apiParams.tools = markToolStrict(apiParams.tools, downgradedToolChoice.toolName);
+        const { toolName } = downgradedToolChoice;
+        const namedTool = options.tools?.find(tool => tool.toolSchema.name === toolName);
+        if (toolName && namedTool?.toolSchema.strict !== false) {
+          apiParams.tools = markToolStrict(apiParams.tools, toolName);
         }
         apiParams.system = appendSystemText(apiParams.system, buildToolUseInstruction(downgradedToolChoice));
       } else if (options.tool_choice) {
@@ -1514,6 +1526,9 @@ export class AnthropicBackend implements ICompletionBackend {
     }
     applyAnthropicOutputCeiling(apiParams, options.outputTokenCeiling);
 
+    // Set once the provider accepts this round's request; only an error before that can be a schema rejection.
+    let requestAccepted = false;
+
     // Setup the actual API call with API-specific options
     try {
       const func: { name?: string; id?: string; parameters?: string }[] = [];
@@ -1687,6 +1702,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
                 }
               ).then(r => r.result);
+              requestAccepted = true;
 
               // Clear request timeout once stream is created (connection established)
               if (requestTimeout) clearTimeout(requestTimeout);
@@ -2747,6 +2763,7 @@ export class AnthropicBackend implements ICompletionBackend {
               onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
             }
           ).then(r => r.result);
+          requestAccepted = true;
         } finally {
           release?.();
         }
@@ -3195,6 +3212,31 @@ export class AnthropicBackend implements ICompletionBackend {
         }
       }
     } catch (error) {
+      // Strict mode can reject a schema the unconstrained path accepts. Retried once with strict off; the
+      // retry's own error surfaces as-is.
+      const sentStrictSchema =
+        !!apiParams.output_config?.format || !!apiParams.tools?.some(tool => 'strict' in tool && tool.strict === true);
+      if (
+        toolCallCount === 0 &&
+        !requestAccepted &&
+        !options._internal?.strictSchemaRetried &&
+        sentStrictSchema &&
+        isStrictSchemaRejection(error)
+      ) {
+        this.logger.warn('[AnthropicBackend] Schema rejected under strict mode; retrying once with strict off', {
+          model,
+          anthropicMessage: error instanceof Error ? error.message : undefined,
+        });
+        const relaxed = withStrictOff(options);
+        await this.complete(
+          model,
+          messages,
+          { ...relaxed, _internal: { ...relaxed._internal, strictSchemaRetried: true } },
+          cb,
+          toolsUsed
+        );
+        return;
+      }
       // Emit CloudWatch metric for rate limit errors (after SDK exhausts retries)
       if (error instanceof RateLimitError) {
         // Determine feature area and request type for ops visibility
@@ -3254,7 +3296,8 @@ export class AnthropicBackend implements ICompletionBackend {
     const customTools = sortToolsForStableCacheKey(tools).map(tool => {
       const { parameters, ...rest } = tool.toolSchema;
       // A caller's `strict` (usually an OpenAI flag) is dropped: Anthropic 400s strict on any object not
-      // closed with additionalProperties: false. markToolStrict re-adds it where the schema qualifies.
+      // closed with additionalProperties: false. markToolStrict re-adds it where the schema qualifies and
+      // the caller did not set it false.
       delete rest.strict;
       return {
         ...rest,

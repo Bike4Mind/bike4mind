@@ -20,13 +20,14 @@ import {
   Typography,
   type ColorPaletteProp,
 } from '@mui/joy';
-import type { ILoop, WorkItemStatus } from '@bike4mind/common';
+import { desktopStagesOf, type ILoop, type WorkItemStatus } from '@bike4mind/common';
 import {
   useCreateLoopTicket,
   useMoveLoopTicket,
   type ILoopTicket,
   type ILoopTicketsResponse,
 } from '@client/app/hooks/data/loops';
+import { LoopMarkdown } from './loopUi';
 
 const TITLE_MAX = 300;
 const DESCRIPTION_MAX = 10_000;
@@ -48,10 +49,17 @@ const STATUS_LABEL: Record<WorkItemStatus, string> = {
 function TicketCard({
   ticket,
   stages,
+  desktop,
+  runner,
+  runLimit,
   onViewRun,
 }: {
   ticket: ILoopTicket;
   stages: string[];
+  /** The ticket's stage is worked by a desktop runner, never by a cloud run. */
+  desktop: boolean;
+  runner?: ILoopTicketsResponse['runner'];
+  runLimit?: number;
   onViewRun: (executionId: string) => void;
 }) {
   const moveTicket = useMoveLoopTicket();
@@ -62,9 +70,25 @@ function TicketCard({
         <Chip size="sm" variant="soft" color={STATUS_COLOR[ticket.status]}>
           {STATUS_LABEL[ticket.status]}
         </Chip>
+        {desktop && ticket.status === 'open' && (
+          <Chip
+            size="sm"
+            variant="outlined"
+            color="neutral"
+            title={runner?.online ? runner.waitingReason : undefined}
+            data-testid="loop-ticket-waiting-desktop"
+          >
+            {runner?.online ? 'Queued for desktop' : 'Waiting on: desktop offline'}
+          </Chip>
+        )}
         {ticket.dependencies.length > 0 && (
           <Typography level="body-xs">
             {ticket.dependencies.length} {ticket.dependencies.length === 1 ? 'dep' : 'deps'}
+          </Typography>
+        )}
+        {ticket.runCount > 0 && runLimit !== undefined && (
+          <Typography level="body-xs" data-testid="loop-ticket-run-count">
+            Run {ticket.runCount} of {runLimit}
           </Typography>
         )}
         {ticket.executionId && (
@@ -79,8 +103,10 @@ function TicketCard({
         )}
       </Stack>
       {ticket.status === 'blocked' && ticket.statusReason && (
-        <Typography level="body-xs" color="danger" data-testid="loop-ticket-blocked-reason">
-          {ticket.statusReason}
+        <Typography level="body-xs" color="danger" component="div">
+          <LoopMarkdown level="body-xs" testId="loop-ticket-blocked-reason">
+            {ticket.statusReason}
+          </LoopMarkdown>
         </Typography>
       )}
       <Select
@@ -203,9 +229,13 @@ export default function LoopTicketBoard({
   onViewRun: (executionId: string) => void;
 }) {
   const [adding, setAdding] = useState(false);
+  const desktopStages = new Set(desktopStagesOf(loop));
   const all = data?.stages.flatMap(group => group.tickets) ?? [];
-  // Same order the scheduler picks in (WorkItemModel.findNextReadyForLoop): oldest created first.
-  const ready = all.filter(t => t.ready).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  // Same order the scheduler picks in (WorkItemModel.listReadyForLoop): furthest stage first, then oldest.
+  const stageIndex = (t: ILoopTicket) => loop.stages.indexOf(t.stage ?? '');
+  const ready = all
+    .filter(t => t.ready)
+    .sort((a, b) => stageIndex(b) - stageIndex(a) || a.createdAt.localeCompare(b.createdAt));
 
   return (
     <Stack gap={2}>
@@ -232,11 +262,26 @@ export default function LoopTicketBoard({
             sx={{ minWidth: 260, width: 260, flexShrink: 0 }}
             data-testid={`loop-stage-column-${group.stage}`}
           >
-            <Typography level="title-sm">
-              {group.stage} ({group.tickets.length})
-            </Typography>
+            <Stack direction="row" gap={1} alignItems="center">
+              <Typography level="title-sm">
+                {group.stage} ({group.tickets.length})
+              </Typography>
+              {desktopStages.has(group.stage) && (
+                <Chip size="sm" variant="soft" data-testid={`loop-board-stage-desktop-${group.stage}`}>
+                  Desktop
+                </Chip>
+              )}
+            </Stack>
             {group.tickets.map(ticket => (
-              <TicketCard key={ticket.id} ticket={ticket} stages={loop.stages} onViewRun={onViewRun} />
+              <TicketCard
+                key={ticket.id}
+                ticket={ticket}
+                stages={loop.stages}
+                desktop={!!ticket.stage && desktopStages.has(ticket.stage)}
+                runner={data?.runner}
+                runLimit={data?.runLimit}
+                onViewRun={onViewRun}
+              />
             ))}
           </Stack>
         ))}

@@ -15,6 +15,7 @@ import {
   LOOP_RATE_WINDOW_MS,
   nextRunAtFor,
   nextStatusPatch,
+  pruneStageConfig,
   validateLoopAgentId,
   validateLoopBudget,
   validateLoopGoal,
@@ -22,6 +23,7 @@ import {
   validateLoopModel,
   validateLoopName,
   validateLoopOversees,
+  validateLoopStageConfig,
   validateLoopStages,
   validateLoopTools,
 } from '@server/utils/loopValidation';
@@ -68,6 +70,14 @@ const handler = baseApi({ auth: 'jwtOnly' })
     if (body.intervalMinutes !== undefined) patch.intervalMinutes = validateLoopInterval(body.intervalMinutes);
     if (body.tools !== undefined) patch.tools = validateLoopTools(body.tools);
     if (body.stages !== undefined) patch.stages = validateLoopStages(body.stages);
+    const stages = (patch.stages as string[] | undefined) ?? existing.stages;
+    if (body.stageConfig !== undefined) {
+      const stageConfig = validateLoopStageConfig(body.stageConfig, stages);
+      patch.stageConfig = stageConfig?.length ? stageConfig : null;
+    } else if (patch.stages && existing.stageConfig) {
+      const pruned = pruneStageConfig(existing.stageConfig, stages);
+      patch.stageConfig = pruned.length ? pruned : null;
+    }
     if (body.agentId !== undefined) patch.agentId = body.agentId === null ? null : validateLoopAgentId(body.agentId);
     if (body.budgetCreditsPerDay !== undefined) {
       patch.budgetCreditsPerDay =
@@ -89,9 +99,23 @@ const handler = baseApi({ auth: 'jwtOnly' })
     ) {
       patch.nextRunAt = nextRunAtFor({ lastRunAt: existing.lastRunAt, intervalMinutes }, now);
     }
+    // An owner edit ends an idle back-off: the loop is back on its plain interval. The stamp keeps a run in
+    // flight from folding as idle and backing it off again.
+    if (existing.status === 'live') patch.idleResetAt = now;
+    if (existing.idleStreak) {
+      patch.idleStreak = 0;
+      if (existing.status === 'live' && patch.nextRunAt === undefined) {
+        patch.nextRunAt = nextRunAtFor(
+          { lastRunAt: existing.lastRunAt, intervalMinutes: intervalMinutes ?? existing.intervalMinutes },
+          now
+        );
+      }
+    }
 
-    // Conditional on the status the patch was computed from, so a scheduler write in between is not lost.
-    const updated = await loopRepository.updateForUser(id, req.user!.id, patch, existing.status);
+    // Conditional on the status the patch was computed from, so a scheduler write in between is not lost, and
+    // on the stages stageConfig was checked against, so a concurrent stage edit can't leave orphan config.
+    const guard = patch.stageConfig !== undefined ? { stages: existing.stages } : undefined;
+    const updated = await loopRepository.updateForUser(id, req.user!.id, patch, existing.status, guard);
     if (!updated) throw new ConflictError('Loop changed while saving; reload and try again');
     res.json(updated);
   })

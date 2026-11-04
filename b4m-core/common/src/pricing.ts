@@ -1,5 +1,6 @@
 import {
   CACHE_READ_MULTIPLIER,
+  getTurnsCost,
   ModelBackend,
   PUBLISHED_CACHE_READ_BACKENDS,
   pricingTierForTokens,
@@ -273,6 +274,18 @@ export const reservationOutputTokens = (requestedMaxTokens: number, reasonsWithi
     requestedMaxTokens,
     reasonsWithinOutputBudget ? PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS : PREFLIGHT_RESERVATION_OUTPUT_TOKENS
   );
+
+/**
+ * Credits the next iteration can cost: a request as large as the last one the run sent, priced
+ * uncached, plus a reservation-sized reply. The executor checks the payer's live balance against
+ * it before every iteration (and at admission), so a run stops before an iteration it cannot pay
+ * for instead of settling the balance below zero. Loop admission (apps/client/server/utils/loopBudget.ts)
+ * prices a loop's first iteration with it too.
+ */
+export function nextIterationCredits(modelInfo: ModelInfo, inputTokens: number): number {
+  const outputTokens = reservationOutputTokens(modelInfo.max_tokens);
+  return usdToCredits(getTurnsCost(modelInfo, [{ inputTokens, outputTokens }]));
+}
 
 const TOKENS_PER_MILLION = 1_000_000;
 

@@ -73,3 +73,18 @@ describe('IterationStep - tool-error observation', () => {
     expect(screen.queryByText('Tool error')).toBeNull();
   });
 });
+
+describe('final_answer reasoning tags', () => {
+  it('strips an empty think block and renders the visible answer', () => {
+    render(<IterationStep step={step({ type: 'final_answer', content: '<think></think>Hello' })} />, {
+      wrapper: Wrapper,
+    });
+    expect(screen.getByTestId('iteration-step-final_answer')).toHaveTextContent('Hello');
+    expect(screen.getByTestId('iteration-step-final_answer').textContent).not.toContain('<think>');
+  });
+
+  it('renders no answer box for an answer that is only reasoning', () => {
+    render(<IterationStep step={step({ type: 'final_answer', content: '<think></think>' })} />, { wrapper: Wrapper });
+    expect(screen.queryByTestId('iteration-step-final_answer')).not.toBeInTheDocument();
+  });
+});

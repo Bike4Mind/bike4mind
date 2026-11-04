@@ -163,6 +163,7 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   adminPermissions: true,
   storageLimit: true,
   storageLimitOverride: true,
+  loopsDailyCredits: true,
   planStorageLimit: true,
   currentStorageSize: true,
   tags: true,

@@ -72,7 +72,11 @@ vi.mock('@bike4mind/services/llm', async () => {
 
 const mockConnectDB = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const dbConnection = vi.hoisted(() => ({ readyState: 1 }));
+const mockAddRunnerCredits = vi.hoisted(() => vi.fn());
+const mockResolveLoopRunTag = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/loopRunner', () => ({ resolveLoopRunTag: mockResolveLoopRunTag }));
 vi.mock('@bike4mind/database', () => ({
+  agentExecutionRepository: { addRunnerCredits: mockAddRunnerCredits },
   connectDB: mockConnectDB,
   mongoose: { connection: dbConnection },
   adminSettingsRepository: {},
@@ -1274,5 +1278,54 @@ describe('daily cap billing target', () => {
     expect(mockExecuteCompletion).toHaveBeenCalledWith(
       expect.objectContaining({ billingOrganizationId: organizationId })
     );
+  });
+});
+
+describe('POST /api/ai/v1/completions - loop run credits', () => {
+  const tagged = () => postAs({ authorization: 'Bearer jwt', 'x-b4m-loop-run': 'run-1' });
+  beforeEach(() => {
+    mockResolveContractAuth.mockResolvedValue({ method: 'jwt', userId: 'u1' });
+    mockAddRunnerCredits.mockReset().mockResolvedValue(null);
+    mockResolveLoopRunTag.mockReset();
+    mockExecuteCompletion.mockImplementation(async (params: ExecuteParams) => {
+      await params.onReady?.();
+      await params.onChunk(['', 'hello'], { outputTokens: 5, creditsUsed: 7 });
+    });
+  });
+
+  it("adds a tagged call's credits to the caller's desktop run once the stream succeeds", async () => {
+    mockResolveLoopRunTag.mockResolvedValue('run-1');
+    const res = await tagged();
+    expect(await res.text()).toContain('[DONE]');
+    expect(mockResolveLoopRunTag).toHaveBeenCalledWith('run-1', 'u1', false, expect.anything());
+    expect(mockAddRunnerCredits).toHaveBeenCalledWith('run-1', 'u1', 7);
+  });
+
+  it('streams as usual for a tag that is not an active run of the caller, crediting nothing', async () => {
+    mockResolveLoopRunTag.mockResolvedValue(undefined);
+    const res = await tagged();
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('[DONE]');
+    expect(mockAddRunnerCredits).not.toHaveBeenCalled();
+  });
+
+  it('tells the tag resolver an API-key caller is one, so it never credits a run', async () => {
+    mockResolveContractAuth.mockResolvedValue({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1' },
+    });
+    mockResolveLoopRunTag.mockResolvedValue(undefined);
+    await (await postAs({ 'x-api-key': 'b4m_live_test', 'x-b4m-loop-run': 'run-1' })).text();
+    expect(mockResolveLoopRunTag).toHaveBeenCalledWith('run-1', 'user-1', true, expect.anything());
+  });
+
+  it('refuses a call for a run at its credit cap with a JSON 422 insufficient_credits, before streaming', async () => {
+    mockResolveLoopRunTag.mockRejectedValue(
+      new HTTPError(422, 'This loop run reached its credit cap', { errorCode: 'insufficient_credits' })
+    );
+    const body = await expectJsonError(await tagged(), 422);
+    expect(body).toMatchObject({ error: 'This loop run reached its credit cap', errorCode: 'insufficient_credits' });
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 });

@@ -543,6 +543,95 @@ describe('firecrawlFetch fresh', () => {
   });
 });
 
+describe('firecrawlFetch screenshot', () => {
+  // The params object scrapeUrl was called with on the nth call.
+  const paramsOfCall = (n: number) => (scrapeUrl.mock.calls[n] as unknown[])[1];
+  const SHOT = 'https://storage.example.com/shot.png';
+  const withShot = () => scrapeUrl.mockResolvedValueOnce({ markdown: 'x'.repeat(100), screenshot: SHOT } as never);
+
+  it('sends exactly the same params and returns no screenshot key when not asked', async () => {
+    scrapeMarkdown = 'x'.repeat(100);
+    // Even if Firecrawl volunteered one, a caller that did not ask never sees it.
+    scrapeUrl.mockResolvedValueOnce({ markdown: scrapeMarkdown, screenshot: SHOT } as never);
+    const res = await firecrawlFetch(adapters, 'https://example.com/doc');
+    expect(paramsOfCall(0)).toEqual({
+      formats: ['markdown'],
+      timeout: 60_000,
+      actions: [{ type: 'wait', milliseconds: 1000 }],
+    });
+    expect(res).not.toHaveProperty('screenshot');
+    expect(Object.keys(res).sort()).toEqual(
+      [
+        'cap',
+        'durationMs',
+        'extractedChars',
+        'llmsTxtUrl',
+        'markdown',
+        'offset',
+        'originalChars',
+        'title',
+        'truncated',
+      ].sort()
+    );
+  });
+
+  it('screenshot: false and mobile alone change nothing', async () => {
+    scrapeMarkdown = 'x'.repeat(100);
+    await firecrawlFetch(adapters, 'https://example.com/doc', { screenshot: false, mobile: true });
+    expect(paramsOfCall(0)).toEqual({
+      formats: ['markdown'],
+      timeout: 60_000,
+      actions: [{ type: 'wait', milliseconds: 1000 }],
+    });
+  });
+
+  it('asks for the viewport screenshot (not full page) on desktop and returns it', async () => {
+    withShot();
+    const res = await firecrawlFetch(adapters, 'https://example.com/doc', { screenshot: true });
+    expect(paramsOfCall(0)).toEqual({
+      formats: ['markdown', 'screenshot'],
+      timeout: 60_000,
+      actions: [{ type: 'wait', milliseconds: 1000 }],
+    });
+    expect(paramsOfCall(0)).not.toHaveProperty('mobile');
+    expect(res.screenshot).toBe(SHOT);
+  });
+
+  it('adds mobile: true for a phone screenshot and returns it', async () => {
+    withShot();
+    const res = await firecrawlFetch(adapters, 'https://example.com/doc', { screenshot: true, mobile: true });
+    expect(paramsOfCall(0)).toMatchObject({ formats: ['markdown', 'screenshot'], mobile: true });
+    expect(res.screenshot).toBe(SHOT);
+  });
+
+  it('keeps the screenshot request on the no-actions retry', async () => {
+    scrapeUrl.mockRejectedValueOnce(new Error('Actions are not supported'));
+    withShot();
+    const res = await firecrawlFetch(adapters, 'https://example.com/doc', { screenshot: true, mobile: true });
+    expect(paramsOfCall(1)).toMatchObject({ formats: ['markdown', 'screenshot'], mobile: true });
+    expect(res.screenshot).toBe(SHOT);
+  });
+
+  it('has no screenshot field when Firecrawl returns none', async () => {
+    scrapeMarkdown = 'x'.repeat(100);
+    const res = await firecrawlFetch(adapters, 'https://example.com/doc', { screenshot: true });
+    expect(res).not.toHaveProperty('screenshot');
+  });
+
+  it('never asks for a screenshot of a PDF', async () => {
+    scrapeMarkdown = 'x'.repeat(100);
+    const res = await firecrawlFetch(adapters, 'https://example.com/doc.pdf', { screenshot: true, mobile: true });
+    expect(paramsOfCall(0)).toEqual({ formats: ['markdown'], timeout: 90_000 });
+    expect(res).not.toHaveProperty('screenshot');
+  });
+
+  it('gives the keyless plain-fetch fallback no screenshot', async () => {
+    mockCreateApp.mockReturnValueOnce(null);
+    const res = await firecrawlFetch(adapters, 'https://example.com/doc', { screenshot: true });
+    expect(res).not.toHaveProperty('screenshot');
+  });
+});
+
 describe('firecrawlFetch keyless plain-fetch fallback', () => {
   it('falls back to plainFetchScrape when Firecrawl is not configured', async () => {
     mockCreateApp.mockReturnValueOnce(null);

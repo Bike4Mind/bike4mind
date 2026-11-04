@@ -50,6 +50,13 @@ describe('LoopRepository', () => {
     });
   });
 
+  it('loads a loop with no stageConfig and rejects an unknown runner', async () => {
+    expect((await create()).stageConfig).toBeUndefined();
+    const withConfig = await create({ stageConfig: [{ stage: 'doing', runner: 'desktop', tools: ['web_search'] }] });
+    expect(withConfig.stageConfig).toEqual([{ stage: 'doing', runner: 'desktop', tools: ['web_search'] }]);
+    await expect(create({ stageConfig: [{ stage: 'doing', runner: 'laptop' }] })).rejects.toThrow(/runner/);
+  });
+
   it('rejects an interval under 5 minutes or a fractional one', async () => {
     await expect(create({ intervalMinutes: 4 })).rejects.toThrow(/intervalMinutes/);
     await expect(create({ intervalMinutes: 5.5 })).rejects.toThrow(/intervalMinutes/);
@@ -181,6 +188,86 @@ describe('LoopRepository', () => {
     expect((await loopRepository.findByIdAndUserId(live.id, USER))?.nextRunAt).toEqual(now);
     expect((await loopRepository.findByIdAndUserId(paused.id, USER))?.nextRunAt).toEqual(later);
     expect((await loopRepository.findByIdAndUserId(alreadyDue.id, USER))?.nextRunAt).toEqual(earlier);
+  });
+
+  it('makeDueNow ends an idle back-off even when the loop is already due', async () => {
+    const now = new Date();
+    const earlier = new Date(now.getTime() - 60_000);
+    const loop = await create({ status: 'live', nextRunAt: earlier, idleStreak: 3 });
+    const unscheduled = await create({ status: 'live', idleStreak: 1 });
+
+    await loopRepository.makeDueNow(loop.id, now);
+    await loopRepository.makeDueNow(unscheduled.id, now);
+
+    expect(await loopRepository.findById(loop.id)).toMatchObject({
+      nextRunAt: earlier,
+      idleStreak: 0,
+      idleResetAt: now,
+    });
+    expect(await loopRepository.findById(unscheduled.id)).toMatchObject({ nextRunAt: now, idleStreak: 0 });
+  });
+
+  it('endBackoff only moves a loop backing off, and never pushes its next run later', async () => {
+    const now = new Date();
+    const far = new Date(now.getTime() + 8 * 3_600_000);
+    const soon = new Date(now.getTime() + 15 * 60_000);
+    const backingOff = await create({ status: 'live', nextRunAt: far, idleStreak: 3 });
+    const dueSooner = await create({ status: 'live', nextRunAt: now, idleStreak: 1 });
+    const steady = await create({ status: 'live', nextRunAt: far });
+    const paused = await create({ status: 'paused', autoResume: 'budget', nextRunAt: far, idleStreak: 2 });
+    for (const loop of [backingOff, dueSooner, steady, paused]) await loopRepository.endBackoff(loop.id, soon);
+    expect(await loopRepository.findById(paused.id)).toMatchObject({ idleStreak: 2, nextRunAt: far });
+    expect(await loopRepository.findById(backingOff.id)).toMatchObject({ idleStreak: 0, nextRunAt: soon });
+    expect(await loopRepository.findById(dueSooner.id)).toMatchObject({ idleStreak: 0, nextRunAt: now });
+    expect(await loopRepository.findById(steady.id)).toMatchObject({ idleStreak: 0, nextRunAt: far });
+    // Stamped on every live loop, so a run in flight is not folded as idle; never on the paused one.
+    expect((await loopRepository.findById(steady.id))?.idleResetAt).toBeInstanceOf(Date);
+    expect((await loopRepository.findById(paused.id))?.idleResetAt).toBeUndefined();
+  });
+
+  it('claimDue skips the users it is told to', async () => {
+    const now = new Date();
+    const past = new Date(now.getTime() - 60_000);
+    await create({ status: 'live', nextRunAt: past });
+    const theirs = await create({ status: 'live', nextRunAt: new Date(now.getTime() - 1000), userId: 'user-2' });
+    expect((await loopRepository.claimDue(now, 60_000, [], [USER]))?.id).toBe(theirs.id);
+    expect(await loopRepository.claimDue(now, 60_000, [], [USER, 'user-2'])).toBeNull();
+  });
+
+  it('countInFlight counts loops with a run in flight', async () => {
+    await create({ activeExecutionId: 'e1' });
+    await create({ activeExecutionId: 'e2' });
+    await create();
+    expect(await loopRepository.countInFlight()).toBe(2);
+  });
+
+  it('deferUntil moves a live loop on and releases the lease; a non-live loop keeps its time', async () => {
+    const now = new Date();
+    const later = new Date(now.getTime() + 3_600_000);
+    const lease = new Date(now.getTime() + 60_000);
+    const live = await create({ status: 'live', nextRunAt: now, leaseUntil: lease });
+    const paused = await create({ status: 'paused', nextRunAt: now, leaseUntil: lease });
+    await loopRepository.deferUntil(live.id, later);
+    await loopRepository.deferUntil(paused.id, later);
+    const [l, p] = [await loopRepository.findById(live.id), await loopRepository.findById(paused.id)];
+    expect(l).toMatchObject({ status: 'live', nextRunAt: later });
+    expect(l?.leaseUntil).toBeUndefined();
+    expect(p?.nextRunAt).toEqual(now);
+    expect(p?.leaseUntil).toBeUndefined();
+  });
+
+  it("pauseAllLiveForUser pauses only that user's live loops", async () => {
+    const at = new Date();
+    const live = await create({ status: 'live' });
+    const owned = await create({ status: 'paused' });
+    const theirs = await create({ status: 'live', userId: 'user-2' });
+    const running = await create({ status: 'live', activeExecutionId: 'exec-1' });
+    const patch = { statusReason: 'r', autoResume: 'budget' as const, nextRunAt: at };
+    expect(await loopRepository.pauseAllLiveForUser(USER, patch)).toBe(1);
+    expect((await loopRepository.findById(running.id))?.status).toBe('live');
+    expect(await loopRepository.findById(live.id)).toMatchObject({ status: 'paused', ...patch });
+    expect((await loopRepository.findById(owned.id))?.autoResume).toBeUndefined();
+    expect((await loopRepository.findById(theirs.id))?.status).toBe('live');
   });
 
   it("removeFromOversees pulls a deleted loop from the owner's other loops only", async () => {
