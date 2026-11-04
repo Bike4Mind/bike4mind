@@ -37,6 +37,12 @@ describe('TableView', () => {
     agentFixture('c', 'working', { usdCost: 1, pr: { number: 7, state: 'open' } }),
   ];
 
+  it('labels a preparing agent Preparing and a plain working one Working', async () => {
+    await renderTable([agentFixture('a', 'working', { preparing: true }), agentFixture('b')]);
+    expect(el('orchestrator-state-chip-preparing').textContent).toBe('Preparing');
+    expect(el('orchestrator-state-chip-working').textContent).toBe('Working');
+  });
+
   it('renders a row per agent in roster order', async () => {
     await renderTable(agents);
     expect(rowIds()).toEqual(['a', 'b', 'c']);

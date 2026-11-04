@@ -299,7 +299,7 @@ export function ChatShell({
   const noLocal = localMode ? noLocalModels(catalog) : null;
   const modelServers = useModelServers();
   const savedServers = useMemo(() => modelServers?.filter(server => !server.local), [modelServers]);
-  const { statuses, loaded: statusesLoaded } = useSessionStatusFeed();
+  const { statuses, preparing, loaded: statusesLoaded } = useSessionStatusFeed();
   const prSummaries = usePrSummaries();
   const [collapsed, setCollapsed] = useState(false);
   const [screen, setScreen] = useState<ChatScreen>('conversation');
@@ -1325,6 +1325,7 @@ export function ChatShell({
                   rootId={activeId}
                   sessions={sessions}
                   statuses={statuses}
+                  preparing={preparing}
                   prSummaries={prSummaries}
                   view={orchestratorView}
                   onViewChange={changeOrchestratorView}

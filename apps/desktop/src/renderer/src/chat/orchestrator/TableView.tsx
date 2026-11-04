@@ -111,7 +111,7 @@ export function TableView({ agents, onSelect, selectedId }: OrchestratorViewProp
               aria-selected={agent.id === selectedId}
             >
               <td>
-                <AgentStateChip state={agent.state} />
+                <AgentStateChip state={agent.state} preparing={agent.preparing} />
               </td>
               <td title={agent.seedPrompt}>
                 <Typography level="body-sm" sx={{ ...clamp, pl: `${(agent.depth - 1) * INDENT_PX}px` }}>

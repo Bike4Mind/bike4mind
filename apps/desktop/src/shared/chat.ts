@@ -1504,6 +1504,8 @@ export type ChatSessionStatus = 'processing' | 'needs-action' | 'done';
 export interface ChatSessionStatusEvent {
   sessionId: string;
   status: ChatSessionStatus;
+  /** A 'processing' session that is still being prepared (worktree, held first turn), not yet replying. */
+  preparing?: true;
 }
 
 export interface SendMessageRequest {

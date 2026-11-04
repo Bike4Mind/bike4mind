@@ -35,6 +35,8 @@ export interface AgentView {
   updatedAt: string;
   model: string;
   state: AgentState;
+  /** Working, but still being prepared (worktree, held first turn); stays 'working' for every count. */
+  preparing?: boolean;
   outcome?: ChildOutcome;
   activity?: AgentActivity;
   lastSnippet?: string;
@@ -133,11 +135,12 @@ export function agentStates(
 export function buildRoster(input: {
   sessions: readonly ChatSessionSummary[];
   statuses: ReadonlyMap<string, ChatSessionStatus>;
+  preparing?: ReadonlySet<string>;
   activity: ReadonlyMap<string, AgentActivity>;
   prSummaries: ReadonlyMap<string, PrSummary>;
   rootId: string;
 }): AgentView[] {
-  const { sessions, statuses, activity, prSummaries, rootId } = input;
+  const { sessions, statuses, preparing, activity, prSummaries, rootId } = input;
   const views: AgentView[] = [];
 
   for (const { session, depth } of descendantsOf(sessions, rootId)) {
@@ -152,6 +155,7 @@ export function buildRoster(input: {
       updatedAt: session.updatedAt,
       model: session.model,
       state,
+      ...(state === 'working' && preparing?.has(session.id) && { preparing: true }),
       outcome: session.lastOutcome,
       activity: state === 'working' ? activity.get(session.id) : undefined,
       lastSnippet: session.lastSnippet,

@@ -88,7 +88,8 @@ export function useOrchestratorRoster(
   rootId: string | null,
   sessions: readonly ChatSessionSummary[],
   statuses: ReadonlyMap<string, ChatSessionStatus>,
-  prSummaries: ReadonlyMap<string, PrSummary>
+  prSummaries: ReadonlyMap<string, PrSummary>,
+  preparing?: ReadonlySet<string>
 ): OrchestratorScene {
   const trackedIds = useMemo(() => {
     const ids = descendantIds(sessions, rootId);
@@ -97,8 +98,8 @@ export function useOrchestratorRoster(
   }, [sessions, rootId]);
   const activity = useAgentActivity(trackedIds);
   const agents = useMemo(
-    () => (rootId === null ? [] : buildRoster({ sessions, statuses, activity, prSummaries, rootId })),
-    [rootId, sessions, statuses, activity, prSummaries]
+    () => (rootId === null ? [] : buildRoster({ sessions, statuses, preparing, activity, prSummaries, rootId })),
+    [rootId, sessions, statuses, preparing, activity, prSummaries]
   );
   const status = rootId === null ? undefined : statuses.get(rootId);
   const rootActivity = rootId === null ? undefined : activity.get(rootId);

@@ -80,6 +80,7 @@ const truncate = (text: string, max: number) => (text.length > max ? `${text.sli
 
 function bubbleText(agent: AgentView): string | undefined {
   if (agent.state === 'needs-you') return 'Needs you!';
+  if (agent.state === 'working' && agent.preparing) return 'Preparing\u2026';
   if (agent.state === 'working' && agent.activity) return truncate(activityLabel(agent.activity), BUBBLE_MAX);
   return undefined;
 }
@@ -288,7 +289,7 @@ function Sprite({
           [NO_MOTION]: { animation: 'none' },
         }}
       />
-      {agent.state === 'working' && <Spark kind={sparkKind(agent)} />}
+      {agent.state === 'working' && !agent.preparing && <Spark kind={sparkKind(agent)} />}
       {bubble && (
         <Bubble testId={`orchestrator-tavern-bubble-${agent.id}`} text={bubble} urgent={agent.state === 'needs-you'} />
       )}

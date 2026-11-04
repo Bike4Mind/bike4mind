@@ -28,7 +28,7 @@ import { forgetSessionPrefs } from './orchestrator/orchestratorPrefs';
 import { describeReturn } from './queuedMessages';
 import { applyLiveEvent, coalesceLiveEvents, startReply, type LiveReplyEvent } from '@shared/liveReply';
 import { applyReplyDone } from './replyDone';
-import { applyStatusEvents } from './sessionStatus';
+import { applyPreparingEvents, applyStatusEvents } from './sessionStatus';
 import { EVENT_STAMP_RESOLUTION_MS, REASONING_TAIL_CHARS, totalTokens, type TurnProgress } from './statusLine';
 import { applyWorkspaceEvent, preparingOnSend, type WorkspaceProgress } from './workspaceProgress';
 import { canHoldWorktree, worktreeByDefault } from './worktreeDefault';
@@ -264,13 +264,19 @@ export function useSessionStatuses(): ReadonlyMap<string, ChatSessionStatus> {
 
 export interface SessionStatusFeed {
   statuses: ReadonlyMap<string, ChatSessionStatus>;
+  /** Busy sessions still being prepared; a subset of the 'processing' ones in `statuses`. */
+  preparing: ReadonlySet<string>;
   /** True once the first snapshot has been folded in, so `statuses` is a baseline rather than a gap. */
   loaded: boolean;
 }
 
 /** `useSessionStatuses` plus whether the initial snapshot has arrived; see that hook for the model. */
 export function useSessionStatusFeed(): SessionStatusFeed {
-  const [feed, setFeed] = useState<SessionStatusFeed>(() => ({ statuses: new Map(), loaded: false }));
+  const [feed, setFeed] = useState<SessionStatusFeed>(() => ({
+    statuses: new Map(),
+    preparing: new Set(),
+    loaded: false,
+  }));
 
   useEffect(() => {
     let live = true;
@@ -281,17 +287,20 @@ export function useSessionStatusFeed(): SessionStatusFeed {
 
     const unsubscribe = window.b4m.chat.onSessionStatus(event => {
       pushed.add(event.sessionId);
-      setFeed(current => ({ ...current, statuses: applyStatusEvents(current.statuses, [event]) }));
+      setFeed(current => ({
+        ...current,
+        statuses: applyStatusEvents(current.statuses, [event]),
+        preparing: applyPreparingEvents(current.preparing, [event]),
+      }));
     });
 
     void window.b4m.chat.getSessionStatuses().then(snapshot => {
       if (!live) return;
+      const unspoken = snapshot.filter(entry => !pushed.has(entry.sessionId));
       setFeed(current => ({
         loaded: true,
-        statuses: applyStatusEvents(
-          current.statuses,
-          snapshot.filter(entry => !pushed.has(entry.sessionId))
-        ),
+        statuses: applyStatusEvents(current.statuses, unspoken),
+        preparing: applyPreparingEvents(current.preparing, unspoken),
       }));
     });
 

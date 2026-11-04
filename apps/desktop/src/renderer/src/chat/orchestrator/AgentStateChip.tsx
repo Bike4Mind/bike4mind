@@ -11,7 +11,22 @@ const STATE_COLOR: Record<AgentState, ColorPaletteProp> = {
   idle: 'neutral',
 };
 
-export function AgentStateChip({ state, muted = false }: { state: AgentState; muted?: boolean }) {
+export function AgentStateChip({
+  state,
+  preparing = false,
+  muted = false,
+}: {
+  state: AgentState;
+  preparing?: boolean;
+  muted?: boolean;
+}) {
+  if (state === 'working' && preparing) {
+    return (
+      <Chip size="sm" color={STATE_COLOR.working} variant="outlined" data-testid="orchestrator-state-chip-preparing">
+        Preparing
+      </Chip>
+    );
+  }
   return (
     <Chip
       size="sm"

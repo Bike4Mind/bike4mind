@@ -79,6 +79,26 @@ describe('labels and priority', () => {
 });
 
 describe('buildRoster', () => {
+  it('flags preparing only on a working agent in the preparing set', () => {
+    const sessions = [summary('root', undefined), summary('a', 'root'), summary('b', 'root'), summary('c', 'root')];
+    const statuses = new Map<string, ChatSessionStatus>([
+      ['a', 'processing'],
+      ['b', 'processing'],
+    ]);
+    const roster = buildRoster({
+      sessions,
+      rootId: 'root',
+      ...noInput,
+      statuses,
+      preparing: new Set(['a', 'c']),
+    });
+    const byId = Object.fromEntries(roster.map(agent => [agent.id, agent]));
+
+    expect(byId.a).toMatchObject({ state: 'working', preparing: true });
+    expect(byId.b.preparing).toBeUndefined();
+    expect(byId.c.preparing).toBeUndefined();
+  });
+
   it('returns children and grandchildren with depth, excluding the root, archived and unrelated sessions', () => {
     const sessions = [
       summary('root', undefined),

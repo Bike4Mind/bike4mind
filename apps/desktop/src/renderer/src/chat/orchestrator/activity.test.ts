@@ -2,6 +2,7 @@ import type { ChatStreamEvent, ChatToolCall } from '@shared/chat';
 import { describe, expect, it } from 'vitest';
 import {
   activityLabel,
+  agentNowText,
   bufferUntrackedActivity,
   describeToolInput,
   foldActivity,
@@ -227,5 +228,24 @@ describe('activityLabel', () => {
     expect(activityLabel({ kind: 'phase', phase: 'thinking' })).toBe('Thinking');
     expect(activityLabel({ kind: 'phase', phase: 'responding' })).toBe('Writing a reply');
     expect(activityLabel({ kind: 'phase', phase: 'writing-tool', tool: 'file_write' })).toBe('Preparing file_write');
+  });
+});
+
+describe('agentNowText', () => {
+  it('says the workspace is being prepared ahead of any activity or snippet', () => {
+    expect(
+      agentNowText({
+        state: 'working',
+        preparing: true,
+        activity: { kind: 'phase', phase: 'thinking' },
+        lastSnippet: 'old',
+      })
+    ).toBe('Preparing its workspace');
+  });
+
+  it('falls back to the activity label once no longer preparing', () => {
+    expect(agentNowText({ state: 'working', activity: { kind: 'phase', phase: 'thinking' } })).toBe(
+      activityLabel({ kind: 'phase', phase: 'thinking' })
+    );
   });
 });

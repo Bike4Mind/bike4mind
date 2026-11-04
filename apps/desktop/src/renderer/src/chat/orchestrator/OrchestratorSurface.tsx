@@ -7,6 +7,7 @@ interface OrchestratorSurfaceProps extends Omit<OrchestratorStageProps, 'agents'
   rootId: string;
   sessions: readonly ChatSessionSummary[];
   statuses: ReadonlyMap<string, ChatSessionStatus>;
+  preparing?: ReadonlySet<string>;
   prSummaries: ReadonlyMap<string, PrSummary>;
 }
 
@@ -18,9 +19,10 @@ export function OrchestratorSurface({
   rootId,
   sessions,
   statuses,
+  preparing,
   prSummaries,
   ...stageProps
 }: OrchestratorSurfaceProps) {
-  const { agents, parent } = useOrchestratorRoster(rootId, sessions, statuses, prSummaries);
+  const { agents, parent } = useOrchestratorRoster(rootId, sessions, statuses, prSummaries, preparing);
   return <OrchestratorStage agents={agents} parent={parent} rootId={rootId} {...stageProps} />;
 }

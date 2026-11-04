@@ -41,7 +41,7 @@ export class SessionActivity {
     const events: ChatSessionStatusEvent[] = [];
     for (const sessionId of ids) {
       const status = this.statusOf(sessionId);
-      if (status !== 'done') events.push({ sessionId, status });
+      if (status !== 'done') events.push(this.eventFor(sessionId, status));
     }
     return events;
   }
@@ -88,12 +88,25 @@ export class SessionActivity {
     this.awaiting.delete(sessionId);
   }
 
+  /** Still being prepared: held by the worktree or first-turn hold, with no reply streaming yet. */
+  private isPreparing(sessionId: string, status: ChatSessionStatus): boolean {
+    return status === 'processing' && this.preparing.has(sessionId) && !this.replying.has(sessionId);
+  }
+
+  private eventFor(sessionId: string, status: ChatSessionStatus): ChatSessionStatusEvent {
+    return this.isPreparing(sessionId, status) ? { sessionId, status, preparing: true } : { sessionId, status };
+  }
+
   private transition(sessionId: string, mutate: () => void): void {
     const before = this.statusOf(sessionId);
+    const preparingBefore = this.isPreparing(sessionId, before);
     mutate();
     const after = this.statusOf(sessionId);
     // Only a real change goes out: a turn running four tools would otherwise push four
     // identical 'needs-action' events, and every open window would re-render on each one.
-    if (after !== before) this.onChange({ sessionId, status: after });
+    // The preparing flag counts as a change: preparing -> replying keeps 'processing'.
+    if (after !== before || this.isPreparing(sessionId, after) !== preparingBefore) {
+      this.onChange(this.eventFor(sessionId, after));
+    }
   }
 }

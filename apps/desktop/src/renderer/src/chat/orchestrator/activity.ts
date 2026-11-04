@@ -130,7 +130,10 @@ export function activityLabel(activity: AgentActivity): string {
 }
 
 /** The "Now" text shared by the table and board: live activity while working, else the last snippet. */
-export function agentNowText(agent: Pick<AgentView, 'state' | 'activity' | 'lastSnippet'>): string | undefined {
+export function agentNowText(
+  agent: Pick<AgentView, 'state' | 'preparing' | 'activity' | 'lastSnippet'>
+): string | undefined {
+  if (agent.state === 'working' && agent.preparing) return 'Preparing its workspace';
   if (agent.state === 'working' && agent.activity) return activityLabel(agent.activity);
   return agent.lastSnippet || undefined;
 }
