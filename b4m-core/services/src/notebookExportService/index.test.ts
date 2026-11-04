@@ -750,6 +750,22 @@ describe('notebook export - knowledge file bytes', () => {
     expect(knowledge.contentUrl).toBeUndefined();
   });
 
+  it('does not inline an unsized file when the size limit is 0', async () => {
+    const { adapters, uploaded } = makeAdapters({
+      sessionRepository: { find: vi.fn().mockResolvedValue([{ ...SESSION, knowledgeIds: [GOOD] }]) },
+      knowledgeRepository: {
+        findAccessibleInIds: vi.fn().mockResolvedValue([{ ...PDF_FILE, fileSize: undefined }]),
+        findOne: vi.fn().mockResolvedValue(null),
+      },
+      fileStorageService: { getFileContent: vi.fn().mockResolvedValue(PDF_BYTES) },
+    });
+    await new NotebookExportService(adapters).exportNotebooks('user-1', { ...OPTIONS, maxFileSize: 0 });
+
+    const [knowledge] = JSON.parse(uploaded[0]).notebooks[0].knowledge;
+    expect(knowledge.content).toBeUndefined();
+    expect(adapters.fileStorageService.getFileContent).not.toHaveBeenCalled();
+  });
+
   it('embeds a UTF-8 text file unchanged', async () => {
     const payload = await exportWithKnowledge(TEXT_BYTES, TEXT_FILE);
     const [knowledge] = payload.notebooks[0].knowledge;

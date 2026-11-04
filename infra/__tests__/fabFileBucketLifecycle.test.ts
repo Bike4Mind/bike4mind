@@ -15,6 +15,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { ACCOUNT_DATA_EXPORT_TTL_MS } from '../../packages/server-utils/src/utils/accountDataExport';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (file: string) => readFileSync(path.join(REPO_ROOT, file), 'utf8');
@@ -102,6 +103,12 @@ describe('fab-file bucket notebook export lifecycle', () => {
     expect(ruleDays).toBe(1);
     expect(signedUrlSeconds).toBeGreaterThan(0);
     expect(ruleDays * 86400).toBeGreaterThan(signedUrlSeconds);
+  });
+
+  it('keeps the account data export TTL within what the 1 day rule can guarantee', () => {
+    expect(ruleDays).toBe(1);
+    // S3 rounds expiry up to the next UTC midnight, so an object can outlive the rule by a day.
+    expect(ACCOUNT_DATA_EXPORT_TTL_MS).toBeLessThanOrEqual(2 * 86400000);
   });
 
   // Audit exports hold actor emails and IPs, so they must land somewhere this rule reaps.

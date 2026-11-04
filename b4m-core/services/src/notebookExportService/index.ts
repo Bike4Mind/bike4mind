@@ -464,7 +464,7 @@ export class NotebookExportService {
             fileId: file.id,
             moderationStatus: file.moderationStatus,
           });
-        } else if ((exportedFile.size || 0) <= options.maxFileSize) {
+        } else if (options.maxFileSize > 0 && (exportedFile.size || 0) <= options.maxFileSize) {
           try {
             const storagePath = file.filePath;
             if (storagePath) {

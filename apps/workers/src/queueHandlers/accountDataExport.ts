@@ -47,6 +47,19 @@ const AccountDataExportPayload = z.object({
 export const MAX_FILE_BYTES = 3 * 1024 ** 3;
 // Left for the upload and the email once the file copy stops.
 const UPLOAD_RESERVE_MS = 5 * 60 * 1000;
+// Aborts, timeouts and network resets are retried by SQS; any other per-object error omits that object.
+const isTransientError = (error: unknown) => {
+  const { name, code } = (error ?? {}) as { name?: string; code?: string };
+  return (
+    name === 'AbortError' ||
+    name === 'TimeoutError' ||
+    code === 'ECONNRESET' ||
+    code === 'ETIMEDOUT' ||
+    code === 'EPIPE' ||
+    code === 'ECONNABORTED'
+  );
+};
+
 // Notebooks stop once two thirds of the time past the upload reserve is used, so files and
 // artifacts keep a share on both the 15-minute Lambda and the shorter self-host budget.
 const notebookReserveMs = (startingMs: number) => UPLOAD_RESERVE_MS + Math.max(0, startingMs - UPLOAD_RESERVE_MS) / 3;
@@ -233,8 +246,11 @@ async function writeNotebooks(
           ref = { path: zipPath };
         }
       } catch (error) {
-        if (!isMissingObjectError(error)) throw error;
-        logger.warn('Account data export: generated image missing', { key });
+        if (isTransientError(error)) throw error;
+        logger.warn('Account data export: generated image unavailable', {
+          key,
+          error: error instanceof Error ? error.message : String(error),
+        });
         ref = { key, omitted: 'unavailable' };
       }
     }
@@ -321,7 +337,7 @@ async function writeFiles(
       try {
         const streamed = await appendStream(archive, await storage.getContent(file.filePath), zipPath);
         entry.path = zipPath;
-        budget.copiedBytes += file.fileSize ?? streamed;
+        budget.copiedBytes += streamed;
       } catch (error) {
         if (!isMissingObjectError(error)) throw error;
         logger.warn('Account data export: file object missing', { fileId: file.id });
@@ -488,7 +504,8 @@ projects.json      Projects you own.
 
 Deleted items, other data shared with you by others, and credentials (passwords, API keys, tokens,
 two-factor secrets and connected-app grants) are not included. The exception is notebooks, which also
-include the artifacts and files attached to them that others shared with you.
+include artifacts and files attached to them that others shared with you or made public, and messages
+and images that other participants added to a shared notebook.
 `;
 
 async function buildArchive(
@@ -564,7 +581,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
   // A redelivery after the upload only re-sends the email.
   const existing = await existingExport(storage, key);
-  let builtAt = existing?.lastModified ?? null;
+  const fresh = existing?.lastModified && Date.now() - existing.lastModified.getTime() < ACCOUNT_DATA_EXPORT_TTL_MS;
+  let builtAt = fresh ? existing.lastModified : null;
   if (!builtAt) {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'account-data-export-'));
     try {

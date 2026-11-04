@@ -69,6 +69,7 @@ vi.mock('@bike4mind/server-utils/memory/ledgerMemoryStore', () => ({
 }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
 
+import { ACCOUNT_DATA_EXPORT_TTL_MS } from '@bike4mind/server-utils/utils/accountDataExport';
 import { dispatch, MAX_FILE_BYTES } from './accountDataExport';
 
 const logger = { updateMetadata: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -265,6 +266,29 @@ describe('account data export worker', () => {
       expect([...entries.keys()].some(k => k.startsWith('images/'))).toBe(false);
     });
 
+    it('marks an image whose key the store rejects as unavailable and still ships the export', async () => {
+      h.genMetadata.mockRejectedValue(Object.assign(new Error('Invalid key'), { name: 'InvalidObjectState' }));
+      h.notebooks = [chat(['generated/../bad key.png'])];
+
+      await run();
+
+      expect((await notebookImages()).images).toEqual([[{ key: 'generated/../bad key.png', omitted: 'unavailable' }]]);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ key: 'generated/../bad key.png', error: 'Invalid key' })
+      );
+      expect(h.uploadFile).toHaveBeenCalledOnce();
+      expect(h.publish).toHaveBeenCalledOnce();
+    });
+
+    it('rethrows a transient network error so the job is retried', async () => {
+      h.genMetadata.mockRejectedValue(Object.assign(new Error('reset'), { code: 'ECONNRESET' }));
+      h.notebooks = [chat(['generated/a.png'])];
+
+      await expect(run()).rejects.toThrow('reset');
+      expect(h.publish).not.toHaveBeenCalled();
+    });
+
     it('marks an image over the shared byte budget as size_limit', async () => {
       h.genMetadata.mockResolvedValue({ size: MAX_FILE_BYTES + 1 });
       h.notebooks = [chat(['generated/big.png'])];
@@ -348,6 +372,43 @@ describe('account data export worker', () => {
     expect(h.uploadFile).not.toHaveBeenCalled();
     expect(h.fabFind).not.toHaveBeenCalled();
     expect(h.publish).toHaveBeenCalledOnce();
+  });
+
+  it('rebuilds instead of re-sending when the existing export is older than the TTL', async () => {
+    h.getMetadata.mockResolvedValue({ lastModified: new Date(Date.now() - ACCOUNT_DATA_EXPORT_TTL_MS - 60_000) });
+
+    await run();
+
+    expect(h.uploadFile).toHaveBeenCalledOnce();
+    expect(h.publish).toHaveBeenCalledOnce();
+  });
+
+  it('counts the bytes actually streamed toward the cap, not the declared size', async () => {
+    h.fabFind.mockResolvedValue([
+      {
+        id: 'a',
+        fileName: 'a.bin',
+        fileSize: 1,
+        mimeType: 'text/plain',
+        filePath: 'u/a.bin',
+        moderationStatus: 'clean',
+      },
+      {
+        id: 'b',
+        fileName: 'b.bin',
+        fileSize: MAX_FILE_BYTES - 5,
+        mimeType: 'text/plain',
+        filePath: 'u/b.bin',
+        moderationStatus: 'clean',
+      },
+    ]);
+
+    await run();
+
+    const index = JSON.parse((await unzip(h.uploaded!)).get('files/index.json')!);
+    expect(index.find((f: { id: string }) => f.id === 'a').path).toBeDefined();
+    expect(index.find((f: { id: string }) => f.id === 'b')).toMatchObject({ omitted: 'size_limit' });
+    expect(h.getContent).toHaveBeenCalledTimes(1);
   });
 
   it('retries rather than rebuilding when the existence check itself fails', async () => {
