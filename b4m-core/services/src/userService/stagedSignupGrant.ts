@@ -62,6 +62,7 @@ const SIGNUP_UNLOCK_DESCRIPTIONS: Readonly<Record<SignupGrantUnlockReason, strin
   work_email_verified: 'work email verified',
   activity_drip: 'daily activity',
   subscription: 'paid subscription started',
+  credit_purchase: 'credit pack purchased',
 };
 
 const grantClock = (db: GrantAdapters['db']) => db.signupProtection?.grantBudget?.now?.() ?? new Date();
@@ -72,10 +73,11 @@ function withoutHeldUnlock(grant: SignupGrant): SignupGrant {
   return rest;
 }
 
-/** Card verification, subscription and admin releases are never throttled by the daily signup grant budget. */
+/** Payment and admin releases are never throttled by the daily signup grant budget. */
 const BUDGET_EXEMPT_REASONS: ReadonlySet<SignupGrantUnlockReason | undefined> = new Set([
   'card_verified',
   'subscription',
+  'credit_purchase',
   'admin',
 ]);
 
@@ -420,7 +422,7 @@ type UnlockAdapters = GrantAdapters & {
 
 /**
  * Validators are server-owned integrations, never request payloads. Missing integrations fail closed.
- * A payment unlock (card or subscription) is held for `signupUnlockPaymentHoldHours` so a stolen card
+ * A payment unlock (card, subscription or credit pack) is held for `signupUnlockPaymentHoldHours` so a stolen card
  * cannot cash out the remainder before its dispute or early fraud warning arrives.
  */
 export const unlockSignupGrant = (userId: string, reason: SignupGrantUnlockReason, adapters: UnlockAdapters) => {

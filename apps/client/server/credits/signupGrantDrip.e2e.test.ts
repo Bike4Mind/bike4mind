@@ -19,6 +19,7 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import { unlockSignupGrantFromSubscription } from './subscriptionUnlock';
+import { unlockSignupGrantFromCreditPurchase } from './creditPurchaseUnlock';
 
 vi.mock('@server/integrations/slack/slack', () => ({ postMessageToSlackWithOutcome: vi.fn() }));
 
@@ -91,6 +92,7 @@ beforeEach(async () => {
   config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = UNCAPPED;
   config.signupGrantActivityDailyCredits = '1000';
   config.signupGrantActivityMaxCredits = '9000';
+  config.signupGrantCredits = '1000';
   config.verifiedUnlockCredits = '9000';
   delete config.signupGrantRiskPolicy;
   delete config.signupGrantDailyCredits;
@@ -382,6 +384,34 @@ describe('signup activity drip', () => {
     config.signupGrantTricklePoolDaily = '1000';
     clock = new Date(`${day(1)}T09:00:00Z`);
     expect(await drip(dripper.id, 1)).toMatchObject({ creditsGranted: 1000 });
+  });
+
+  it('pays a credit pack buyer the rest of the schedule under the default cap, even with the pools at 0', async () => {
+    config.signupGrantCredits = '0';
+    config.signupGrantDailyCredits = '500';
+    const user = await createSignupStageUser();
+    for (let n = 0; n < 5; n++) expect((await drip(user.id, n)).creditsGranted).toBe(500);
+    // The release reads the real settings collection: no drip cap set, so the 9000 default applies.
+    await AdminSettings.create([
+      { settingName: 'signupUnlockPaymentHoldHours', settingValue: '0' },
+      { settingName: 'signupGrantSignupPoolDaily', settingValue: '0' },
+      { settingName: 'signupGrantTricklePoolDaily', settingValue: '0' },
+    ]);
+    await User.updateOne({ _id: user.id }, { $inc: { currentCredits: 1000 } });
+
+    expect((await unlockSignupGrantFromCreditPurchase(user.id)).creditsGranted).toBe(6500);
+    expect(await creditsOf(user.id)).toBe(2500 + 1000 + 6500);
+    expect((await User.findById(user.id))?.signupGrant).toMatchObject({
+      stage: 'unlocked',
+      unlockedBy: 'credit_purchase',
+      creditsReleased: 9000,
+      dripCredits: 2500,
+    });
+    expect(await CreditTransaction.countDocuments({ reason: 'signup_unlock:credit_purchase' })).toBe(1);
+
+    expect((await unlockSignupGrantFromCreditPurchase(user.id)).creditsGranted).toBe(0);
+    expect((await drip(user.id, 5)).creditsGranted).toBe(0);
+    expect(await creditsOf(user.id)).toBe(10000);
   });
 
   it('pays no free grant with both pools at 0', async () => {

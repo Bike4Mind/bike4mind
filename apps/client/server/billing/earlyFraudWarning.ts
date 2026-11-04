@@ -133,14 +133,18 @@ async function attemptRefund(
 }
 
 /**
- * Takes back the signup credits a subscription payment released, when the warned charge is that
- * kind of payment. Capped at the balance, like the bulk abuse clawback. At most once per warning.
+ * Takes back the signup credits a subscription or credit pack payment released, when the warned charge
+ * is that kind of payment. Capped at the balance, like the bulk abuse clawback. At most once per warning.
  */
-async function clawbackSubscriptionUnlock(key: string, userId: string): Promise<number> {
+async function clawbackPaymentUnlock(
+  key: string,
+  userId: string,
+  unlockedBy: 'subscription' | 'credit_purchase'
+): Promise<number> {
   const user = await userRepository.findById(userId);
   const grant = user?.signupGrant;
   // unlockedBy is set only once the bonus is paid out; a bonus still held is never clawed back here.
-  if (!user || grant?.unlockedBy !== 'subscription' || !grant.unlockCredits) return 0;
+  if (!user || grant?.unlockedBy !== unlockedBy || !grant.unlockCredits) return 0;
   const credits = Math.max(0, Math.min(user.currentCredits ?? 0, grant.unlockCredits));
   if (credits === 0) return 0;
   if (!(await paymentRiskActionRepository.claimStep(key, 'signupClawback', userId))) return 0;
@@ -152,7 +156,9 @@ async function clawbackSubscriptionUnlock(key: string, userId: string): Promise<
       ownerType: CreditHolderType.User,
       credits,
       reason: 'abuse_clawback',
-      description: 'Signup credits unlocked by a subscription payment that Stripe flagged as fraudulent',
+      description: `Signup credits unlocked by a ${
+        unlockedBy === 'subscription' ? 'subscription payment' : 'credit pack purchase'
+      } that Stripe flagged as fraudulent`,
     },
     { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository }
   );
@@ -282,8 +288,11 @@ export async function respondToEarlyFraudWarning(
     { sourceUserId: userId, trigger: 'early fraud warning', key: `${key}:linked` },
     logger
   );
-  // A credit pack never unlocks the signup grant; a subscription payment can.
-  const signupClawback = purchasedCredits === null ? await clawbackSubscriptionUnlock(key, userId) : 0;
+  const signupClawback = await clawbackPaymentUnlock(
+    key,
+    userId,
+    purchasedCredits === null ? 'subscription' : 'credit_purchase'
+  );
 
   const { refund, refundError } = shouldRefund(unspent, settings.minUnspentPercent)
     ? await attemptRefund({ warningId: warning.id, charge, paymentIntentId, userId, purchasedCredits })

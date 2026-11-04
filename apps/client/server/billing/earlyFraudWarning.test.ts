@@ -141,7 +141,7 @@ describe('respondToEarlyFraudWarning', () => {
       { sourceUserId: 'u1', trigger: 'early fraud warning', key: 'efw:issfr_1:linked' },
       logger
     );
-    // A credit pack never unlocks the signup grant.
+    // This account has no signup unlock to claw back.
     expect(mocks.subtractCredits).not.toHaveBeenCalled();
     expect(mocks.postMessageToSlack).toHaveBeenCalledTimes(1);
     const [message] = mocks.postMessageToSlack.mock.calls[0];
@@ -238,6 +238,30 @@ describe('respondToEarlyFraudWarning', () => {
     const [message] = mocks.postMessageToSlack.mock.calls[0];
     expect(message).toContain('25000 unlocked signup credits clawed back');
     expect(message).toContain('cancelled `sub_same`');
+  });
+
+  it('on a credit pack charge, claws back only the signup credits a credit pack unlocked', async () => {
+    mocks.findById.mockResolvedValue({
+      ...user,
+      currentCredits: 200_000,
+      signupGrant: { unlockedBy: 'credit_purchase', unlockCredits: 6_500 },
+    });
+
+    await respondToEarlyFraudWarning(warningEvent, logger);
+
+    expect(mocks.subtractCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerId: 'u1', credits: 6_500, reason: 'abuse_clawback' }),
+      expect.anything()
+    );
+    expect(mocks.subtractCredits.mock.calls[0][0].description).toContain('credit pack purchase');
+  });
+
+  it('on a credit pack charge, leaves a subscription-released unlock alone', async () => {
+    mocks.findById.mockResolvedValue({ ...user, signupGrant: { unlockedBy: 'subscription', unlockCredits: 25_000 } });
+
+    await respondToEarlyFraudWarning(warningEvent, logger);
+
+    expect(mocks.subtractCredits).not.toHaveBeenCalled();
   });
 
   it('claws the signup credits back at most once across retries', async () => {

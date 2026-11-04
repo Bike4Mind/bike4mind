@@ -11,12 +11,13 @@ export const SIGNUP_GRANT_UNLOCK_REASONS = [
   'work_email_verified',
   'activity_drip',
   'subscription',
+  'credit_purchase',
 ] as const;
 
 export type SignupGrantUnlockReason = (typeof SIGNUP_GRANT_UNLOCK_REASONS)[number];
 
 /** Unlocks bought with a payment, which a stolen card can fake until the payment settles. */
-export const PAYMENT_UNLOCK_REASONS = ['card_verified', 'subscription'] as const;
+export const PAYMENT_UNLOCK_REASONS = ['card_verified', 'subscription', 'credit_purchase'] as const;
 export type PaymentUnlockReason = (typeof PAYMENT_UNLOCK_REASONS)[number];
 
 export const isPaymentUnlockReason = (reason: unknown): reason is PaymentUnlockReason =>

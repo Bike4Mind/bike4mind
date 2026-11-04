@@ -34,6 +34,7 @@ import {
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { creditService, userService } from '@bike4mind/services';
 import { grantCreditPurchase } from '@server/billing/grantCreditPurchase';
+import { unlockSignupGrantFromCreditPurchase } from '@server/credits/creditPurchaseUnlock';
 import { alertStripeRiskEvent, radarRiskLine, screenPaymentOutcome } from '@server/billing/paymentRisk';
 import {
   forfeitHeldUnlockForFraudWarning,
@@ -206,6 +207,19 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         currency: intent.currency,
         visitId: await purchaseVisitId(intent.id),
       });
+
+      // Runs on a redelivery too, so a delivery that crashed after the grant still releases the signup
+      // schedule. A failure throws so Stripe retries; the ledger id and heldUnlock make that a no-op.
+      const signupUnlock = await unlockSignupGrantFromCreditPurchase(user.id, req.logger);
+      if (signupUnlock.creditsGranted > 0 || signupUnlock.heldUntil) {
+        req.logger.info('[CreditPurchase] Signup grant released by purchase', {
+          step: 'signup_unlock',
+          userId: user.id,
+          creditsGranted: signupUnlock.creditsGranted,
+          heldUntil: signupUnlock.heldUntil,
+          ...trace,
+        });
+      }
 
       if (outcome === 'already_granted') {
         req.logger.info('[CreditPurchase] Credits already granted for intent', {
