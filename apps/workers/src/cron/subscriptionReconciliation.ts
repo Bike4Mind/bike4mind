@@ -43,7 +43,7 @@ const BUDGET_MARGIN_MS = 60 * 1000;
 const ORPHAN_STATUSES = new Set(['active', 'trialing', 'past_due']);
 
 // Derived rather than imported: the stripe package is a dependency of apps/client, not of workers.
-type StripeSubscription = Awaited<ReturnType<typeof stripe.subscriptions.retrieve>>;
+type StripeSubscription = Omit<Awaited<ReturnType<typeof stripe.subscriptions.retrieve>>, 'lastResponse'>;
 
 export interface SubscriptionReconciliationResult {
   checked: number;
