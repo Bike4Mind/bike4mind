@@ -42,6 +42,8 @@ export interface HeldCreditRewardRepository {
   /** Oldest held rewards first; `maxCredits` leaves out rewards larger than that (a whole day's pool). */
   listHeld(limit: number, maxCredits?: number): Promise<HeldCreditRewardRow[]>;
   settle(transactionId: string, status: 'paid' | 'void'): Promise<void>;
+  /** Moves a user's held rewards out of the queue; returns how many moved. */
+  pauseForUser(userId: string): Promise<number>;
 }
 
 export type RewardPartyFields = AccountStateFields & {
@@ -110,7 +112,7 @@ async function partiesBlock(reward: HeldCreditRewardInput, adapters: PayCreditRe
 }
 
 type PayNowResult =
-  { status: 'paid'; creditTransactionId: string } | { status: 'exhausted' | 'contended' | 'duplicate' };
+  { status: 'paid'; creditTransactionId: string } | { status: 'exhausted' | 'contended' | 'duplicate' | 'blocked' };
 
 async function payNow(reward: HeldCreditRewardInput, adapters: PayCreditRewardAdapters): Promise<PayNowResult> {
   const reservation = await reserveSignupGrantBudget(adapters, reward.transactionId, reward.credits, {
@@ -125,8 +127,11 @@ async function payNow(reward: HeldCreditRewardInput, adapters: PayCreditRewardAd
   const creditAdapters: AddCreditsAdapters = withTransaction
     ? { ...adapters, duplicateTransactionId: 'throw' }
     : adapters;
-  const credit = () =>
-    addCreditsWithLedgerRow(
+  const credit = async () => {
+    // Read inside the payout transaction: a block that commits after the caller's check conflicts with this
+    // write, and the retry then sees the flag. Without an owned transaction this narrows the window only.
+    if (isSignupGrantBlocked((await adapters.users.findById(reward.userId)) ?? {})) return null;
+    return addCreditsWithLedgerRow(
       {
         ownerId: reward.userId,
         ownerType: CreditHolderType.User,
@@ -139,8 +144,14 @@ async function payNow(reward: HeldCreditRewardInput, adapters: PayCreditRewardAd
       },
       creditAdapters
     );
+  };
   try {
-    const { creditTransactionId } = withTransaction ? await withTransaction(credit) : await credit();
+    const credited = withTransaction ? await withTransaction(credit) : await credit();
+    if (!credited) {
+      await reservation.release();
+      return { status: 'blocked' };
+    }
+    const { creditTransactionId } = credited;
     if (!creditTransactionId) {
       await reservation.release();
       return { status: 'duplicate' };
@@ -195,10 +206,17 @@ export async function payCreditReward(
     const paid = await payNow(reward, adapters);
     if (paid.status === 'paid') return { outcome: 'paid', creditTransactionId: paid.creditTransactionId };
     if (paid.status === 'duplicate') return { outcome: 'duplicate' };
+    if (paid.status === 'blocked') return { outcome: 'blocked' };
     // 'contended': another attempt holds today's draw and may still fail or have died before paying, so
     // queue rather than answer duplicate; the release settles the row once that attempt's ledger row exists.
   }
   await adapters.heldRewards.hold(reward);
+  // A block can commit between the check above and this insert, after its pause already ran; the flag is
+  // read again once the row exists, so either that pause or this one takes it out of the queue.
+  if (isSignupGrantBlocked((await adapters.users.findById(reward.userId)) ?? {})) {
+    await adapters.heldRewards.pauseForUser(reward.userId);
+    return { outcome: 'blocked' };
+  }
   return { outcome: 'queued' };
 }
 
@@ -260,6 +278,11 @@ export async function releaseHeldCreditRewards(
       }
       // Another attempt owns today's draw; it settles the row, or a later run retries.
       if (paid.status === 'contended') continue;
+      // Blocked after the check above; the row stays queued like any other transient block.
+      if (paid.status === 'blocked') {
+        result.deferred++;
+        continue;
+      }
       await adapters.heldRewards.settle(reward.transactionId, 'paid');
       if (paid.status === 'paid') {
         result.paid++;
