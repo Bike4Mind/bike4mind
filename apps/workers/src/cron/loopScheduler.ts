@@ -55,6 +55,8 @@ export const MAX_RESUMED_FOLDS_PER_TICK = 100;
 export const MAX_ACTIVE_LOOP_RUNS = 4;
 /** Due loops claimed per tick, started or not (a deferred or paused loop does not use a run slot). */
 export const MAX_CLAIMS_PER_TICK = 100;
+/** ponytail: tickets parked on dependencies reopened per tick across all users; the rest wait for later ticks. */
+export const MAX_REOPENS_PER_TICK = 200;
 /** Ceiling on the idle back-off, as a multiple of the loop's interval (and never past a day). */
 export const MAX_BACKOFF_FACTOR = 8;
 
@@ -130,11 +132,28 @@ export async function runLoopSchedulerTick(now: Date, logger: Logger): Promise<v
     }
   }
 
+  // Before dispatch, so a reopened ticket at the top of its loop runs this tick.
+  await reopenParkedTickets(now, logger).catch(error => logger.error('[Loops] Reopen sweep failed', error as Error));
+
   const allowance = Math.min(MAX_DISPATCH_PER_TICK, MAX_ACTIVE_LOOP_RUNS - (await loopRepository.countInFlight()));
   if (allowance > 0) await dispatchDue(now, allowance, logger);
 
   // Last, so notices reflect this tick's state changes.
   await syncLoopNotices(logger).catch(error => logger.error('[Loops] Notice sync failed', error as Error));
+}
+
+/** Reopens tickets whose `blockedOn` condition now holds, and makes their loops due. Never touches a plain block. */
+async function reopenParkedTickets(now: Date, logger: Logger): Promise<void> {
+  const reopened = await workItemRepository.reopenSatisfiedBlocks(MAX_REOPENS_PER_TICK);
+  const loopIds = [...new Set(reopened.map(ticket => ticket.loopId!))];
+  if (loopIds.length === 0) return;
+  for (const loop of await loopRepository.find({ _id: { $in: loopIds } })) {
+    try {
+      await makeDueIfReady(loop, now);
+    } catch (error) {
+      logger.error(`[Loops] Failed to make loop ${loop.id} due after a reopen`, error as Error);
+    }
+  }
 }
 
 /**

@@ -99,7 +99,12 @@ export function desiredLoopNotices(
 export async function syncLoopNotices(logger: Logger): Promise<void> {
   const [candidates, tickets, held] = await Promise.all([
     loopRepository.find({ status: { $in: ['needs_you', 'error', 'paused'] } }),
-    workItemRepository.find({ loopId: { $exists: true }, deletedAt: null, status: 'blocked' }),
+    workItemRepository.find({
+      loopId: { $exists: true },
+      deletedAt: null,
+      status: 'blocked',
+      blockedOn: { $exists: false },
+    }),
     inboxRepository.listKeyed(KEY_PREFIX),
   ]);
   const loopsById = new Map(candidates.map(loop => [loop.id, loop]));

@@ -502,6 +502,52 @@ describe('runLoopSchedulerTick - tickets', () => {
     expect(after.executionId).toBeUndefined();
     expect(after.runCount).toBe(0);
   });
+
+  it('reopens a ticket parked on a dependency that closed, and runs it in the same tick', async () => {
+    const loop = await createLoop({ nextRunAt: LATER });
+    const dep = await createTicket(loop.id, { stage: 'done', status: 'closed', closedAt: PAST });
+    const parked = await createTicket(loop.id, {
+      status: 'blocked',
+      blockedOn: 'dependencies',
+      statusReason: 'Waiting on dependencies',
+      dependencies: [dep.id],
+      runCount: 1,
+    });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+    expect(h.startAgentExecution.mock.calls[0][0].query).toContain(`Ticket id: ${parked.id}`);
+    const after = await ticketOf(parked.id);
+    // The claim counts this run on top of the earlier one: a reopen is not an owner move.
+    expect(after).toMatchObject({ status: 'in_progress', executionId: 'exec-1', runCount: 2 });
+    expect(after.blockedOn).toBeUndefined();
+  });
+
+  it('claims a p0 ticket before an older p2 one', async () => {
+    const loop = await createLoop();
+    await createTicket(loop.id, { title: 'Older', priority: 'p2' });
+    const urgent = await createTicket(loop.id, { title: 'Urgent', priority: 'p0' });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution.mock.calls[0][0].query).toContain(`Ticket id: ${urgent.id}`);
+  });
+
+  it('never reopens an unsure or run-limit block, even with every dependency closed', async () => {
+    const loop = await createLoop({ nextRunAt: LATER });
+    const dep = await createTicket(loop.id, { stage: 'done', status: 'closed', closedAt: PAST });
+    const held = await Promise.all(
+      ['Unsure: which repo?', 'Ran 6 times without finishing'].map(statusReason =>
+        createTicket(loop.id, { status: 'blocked', statusReason, dependencies: [dep.id] })
+      )
+    );
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
+    for (const ticket of held) expect(await ticketOf(ticket.id)).toMatchObject({ status: 'blocked' });
+  });
 });
 
 describe('runLoopSchedulerTick - unsure', () => {
