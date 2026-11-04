@@ -5,6 +5,7 @@ import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscript
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
+import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 
 export type BillingEventOwner = { ownerType: BillingEventOwnerType; ownerId: string };
 
@@ -194,18 +195,21 @@ const toOwner = (row: { ownerType: string; ownerId: string }): BillingEventOwner
 });
 
 /**
- * The owner this stage knows for the event, from local rows only (no Stripe calls): the subscription row,
- * then the customer's user or organization.
+ * Resolve ownership from local rows. Disputes and fraud warnings omit the customer,
+ * so resolve their charge reference before checking this stage's customer records.
  */
 const resolveLocalOwner = async (projection: BillingEventProjection): Promise<BillingEventOwner | null> => {
   if (projection.subscriptionId) {
     const row = await subscriptionRepository.findByStripeSubscriptionId(projection.subscriptionId);
     if (row) return toOwner(row);
   }
-  if (projection.customerId) {
-    const user = await userRepository.findByStripeCustomerId(projection.customerId);
+  const customerId =
+    projection.customerId ??
+    (projection.data.chargeId ? idOf((await stripe.charges.retrieve(projection.data.chargeId)).customer) : undefined);
+  if (customerId) {
+    const user = await userRepository.findByStripeCustomerId(customerId);
     if (user) return { ownerType: 'user', ownerId: user.id };
-    const organization = await organizationRepository.findByStripeCustomerId(projection.customerId);
+    const organization = await organizationRepository.findByStripeCustomerId(customerId);
     if (organization) return { ownerType: 'organization', ownerId: organization.id };
   }
   return null;

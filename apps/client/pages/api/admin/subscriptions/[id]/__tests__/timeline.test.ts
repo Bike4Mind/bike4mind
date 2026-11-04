@@ -49,6 +49,8 @@ vi.mock('@bike4mind/database', () => {
 });
 
 import { encodeAuditCursor } from '@server/utils/adminAuditQuery';
+import { mergeSubscriptionTimelinePages } from '@server/utils/subscriptionTimeline';
+import type { SubscriptionTimelineItem } from '@bike4mind/common';
 import handler from '../timeline';
 
 const ADMIN = { id: 'a'.repeat(24), isAdmin: true };
@@ -163,6 +165,26 @@ describe('GET /api/admin/subscriptions/[id]/timeline', () => {
     expect(mocks.findCredits).not.toHaveBeenCalled();
   });
 
+  it('uses the canonical subscription id for audit matching when the URL id is uppercase', async () => {
+    await call({ kind: 'admin' }, ADMIN, ID.toUpperCase());
+    expect(mocks.listAdmin).toHaveBeenCalledWith(
+      { owner: { kind: 'user', id: 'u1' }, subscriptionIds: ['sub_1', ID] },
+      { limit: 100, cursor: undefined }
+    );
+  });
+
+  it.each(['billing', 'admin', 'credit'] as const)('rejects the whole page when the %s source fails', async kind => {
+    if (kind === 'credit') {
+      mocks.findCredits.mockImplementationOnce(() => {
+        throw new Error('source unavailable');
+      });
+    } else {
+      const source = kind === 'billing' ? mocks.listBilling : mocks.listAdmin;
+      source.mockRejectedValueOnce(new Error('source unavailable'));
+    }
+    await expect(call()).rejects.toThrow('source unavailable');
+  });
+
   it('asks a comp for no owner-level Stripe events', async () => {
     mocks.findById.mockResolvedValue({ id: ID, ownerType: 'User', ownerId: 'u1', subscriptionId: 'admin_grant_x' });
     await call({ kind: 'billing' });
@@ -178,6 +200,70 @@ describe('GET /api/admin/subscriptions/[id]/timeline', () => {
 
     await call({ cursor: nextCursor });
     expect(mocks.listBilling.mock.calls[1][1].cursor).toEqual({ occurredAt: day(3), id: objectId('1') });
+  });
+
+  it('merges tied timestamps across sources without losing the remaining rows between pages', () => {
+    const item = (digit: string): SubscriptionTimelineItem => ({
+      kind: 'credit',
+      id: objectId(digit),
+      occurredAt: day(3),
+      type: 'subscription',
+      summary: 'Plan credits granted',
+      credits: 100,
+    });
+    const sourceItems = [
+      [item('6'), item('1')],
+      [item('5'), item('2')],
+      [item('4'), item('3')],
+    ];
+    const first = mergeSubscriptionTimelinePages(
+      sourceItems.map(items => ({ items, hasMore: false })),
+      2
+    );
+    expect(first.items.map(row => row.id)).toEqual([objectId('6'), objectId('5')]);
+    expect(first.nextCursor).toEqual({ occurredAt: day(3), id: objectId('5') });
+
+    const second = mergeSubscriptionTimelinePages(
+      sourceItems.map(items => ({
+        items: items.filter(row => row.id < objectId('5')),
+        hasMore: false,
+      })),
+      2
+    );
+    expect(second.items.map(row => row.id)).toEqual([objectId('4'), objectId('3')]);
+    expect(second.nextCursor).toEqual({ occurredAt: day(3), id: objectId('3') });
+
+    const last = mergeSubscriptionTimelinePages(
+      sourceItems.map(items => ({
+        items: items.filter(row => row.id < objectId('3')),
+        hasMore: false,
+      })),
+      2
+    );
+    expect(last.items.map(row => row.id)).toEqual([objectId('2'), objectId('1')]);
+    expect(last.nextCursor).toBeNull();
+  });
+
+  it('keeps a cursor when the merged page fits but one source has more rows', () => {
+    const result = mergeSubscriptionTimelinePages(
+      [
+        {
+          items: [
+            {
+              kind: 'credit',
+              id: objectId('1'),
+              occurredAt: day(3),
+              type: 'subscription',
+              summary: 'Plan credits granted',
+              credits: 100,
+            },
+          ],
+          hasMore: true,
+        },
+      ],
+      1
+    );
+    expect(result.nextCursor).toEqual({ occurredAt: day(3), id: objectId('1') });
   });
 
   it('400s on a bad kind, limit or cursor', async () => {

@@ -104,11 +104,6 @@ export interface IAdminAuditLogRepository {
     scope: { owner: { kind: 'user' | 'organization'; id: string }; subscriptionIds: string[] },
     page: { limit: number; cursor?: AuditLogCursor }
   ): Promise<{ entries: AuditEntry[]; nextCursor: AuditLogCursor | null }>;
-  /** Entries about one subscription or anything else about its owner, newest first (the subscription Timeline). */
-  listForSubscriptionOrOwner(
-    scope: { owner: { kind: 'user' | 'organization'; id: string }; subscriptionIds: string[] },
-    page: { limit: number; cursor?: AuditLogCursor }
-  ): Promise<{ entries: AuditEntry[]; nextCursor: AuditLogCursor | null }>;
   findById(id: string): Promise<AuditEntry | null>;
   /** One round trip; ids that are not ObjectId hex or match nothing are left out. */
   findByIds(ids: string[]): Promise<AuditEntry[]>;
@@ -122,6 +117,14 @@ export interface IAdminAuditLogRepository {
   /** Total credits one actor granted with occurredAt at or after `since`. */
   sumCreditsGranted(actorUserId: string, since: Date): Promise<number>;
 }
+
+/** The subscription Timeline read capability, without extending the base repository's required contract. */
+export type SubscriptionTimelineAuditLogRepository = IAdminAuditLogRepository & {
+  listForSubscriptionOrOwner(
+    scope: { owner: { kind: 'user' | 'organization'; id: string }; subscriptionIds: string[] },
+    page: { limit: number; cursor?: AuditLogCursor }
+  ): Promise<{ entries: AuditEntry[]; nextCursor: AuditLogCursor | null }>;
+};
 
 /** An actor whose credit-grant burst has already alerted; it stays open while grants keep coming. */
 export type AdminAuditOpenBurst = { actorUserId: string; lastGrantAt: Date };

@@ -37,7 +37,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'support:re
 
     const { items, nextCursor } = await listSubscriptionTimeline(
       {
-        id,
+        id: subscription.id,
         stripeSubscriptionId: subscription.subscriptionId ?? null,
         owner: {
           kind: subscription.ownerType === 'User' ? 'user' : 'organization',

@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   findOrgByStripeCustomerId: vi.fn(),
   findByStripeSubscriptionId: vi.fn(),
   emitMetric: vi.fn(),
+  retrieveCharge: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -19,6 +20,9 @@ vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { STAGE: 'test' } }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: mocks.emitMetric }));
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
+  stripe: { charges: { retrieve: mocks.retrieveCharge } },
+}));
 
 import { projectStripeEvent, recordBillingEvent, type StripeEventLike } from './billingEventStore';
 
@@ -54,6 +58,7 @@ beforeEach(() => {
   mocks.findByStripeSubscriptionId.mockResolvedValue(null);
   mocks.findUserByStripeCustomerId.mockResolvedValue(null);
   mocks.findOrgByStripeCustomerId.mockResolvedValue(null);
+  mocks.retrieveCharge.mockResolvedValue({ customer: 'cus_1' });
 });
 
 describe('recordBillingEvent', () => {
@@ -133,6 +138,7 @@ describe('recordBillingEvent', () => {
     await recordBillingEvent(dispute, { owner: { ownerType: 'user', ownerId: 'user_1' } }, logger);
 
     expect(mocks.findUserByStripeCustomerId).not.toHaveBeenCalled();
+    expect(mocks.retrieveCharge).not.toHaveBeenCalled();
     expect(mocks.record).toHaveBeenCalledWith(
       expect.objectContaining({
         ownerType: 'user',
@@ -154,6 +160,65 @@ describe('recordBillingEvent', () => {
   it('reports a redelivered event as a duplicate', async () => {
     mocks.record.mockResolvedValue(false);
     await expect(recordBillingEvent(subscriptionUpdated(), {}, logger)).resolves.toBe('duplicate');
+  });
+
+  it.each([
+    ['charge.dispute.closed', 'dispute', 'lost', 'user'],
+    ['charge.dispute.closed', 'dispute', 'won', 'organization'],
+    ['radar.early_fraud_warning.created', 'radar.early_fraud_warning', undefined, 'user'],
+  ] as const)('resolves %s (%s, %s) through the charge to its %s owner', async (type, object, status, ownerType) => {
+    if (ownerType === 'user') mocks.findUserByStripeCustomerId.mockResolvedValue({ id: 'owner_1' });
+    else mocks.findOrgByStripeCustomerId.mockResolvedValue({ id: 'owner_1' });
+
+    await expect(
+      recordBillingEvent(
+        {
+          id: 'evt_charge_linked',
+          type,
+          created: CREATED,
+          data: { object: { id: 'obj_1', object, charge: 'ch_1', status } },
+        },
+        {},
+        logger
+      )
+    ).resolves.toBe('recorded');
+
+    expect(mocks.retrieveCharge).toHaveBeenCalledExactlyOnceWith('ch_1');
+    expect(mocks.record).toHaveBeenCalledWith(expect.objectContaining({ ownerType, ownerId: 'owner_1' }));
+  });
+
+  it('does not store a charge-linked event with no owner in this stage', async () => {
+    await expect(
+      recordBillingEvent(
+        {
+          id: 'evt_foreign_dispute',
+          type: 'charge.dispute.closed',
+          created: CREATED,
+          data: { object: { id: 'dp_1', object: 'dispute', charge: 'ch_1', status: 'lost' } },
+        },
+        {},
+        logger
+      )
+    ).resolves.toBe('unowned');
+    expect(mocks.record).not.toHaveBeenCalled();
+  });
+
+  it('logs charge lookup failures without failing the webhook delivery', async () => {
+    mocks.retrieveCharge.mockRejectedValueOnce(new Error('Stripe unavailable'));
+    await expect(
+      recordBillingEvent(
+        {
+          id: 'evt_lookup_failed',
+          type: 'charge.dispute.closed',
+          created: CREATED,
+          data: { object: { id: 'dp_1', object: 'dispute', charge: 'ch_1', status: 'lost' } },
+        },
+        {},
+        logger
+      )
+    ).resolves.toBe('failed');
+    expect(logger.error).toHaveBeenCalledWith('Failed to store billing event evt_lookup_failed', expect.anything());
+    expect(mocks.record).not.toHaveBeenCalled();
   });
 
   it('never throws when the write fails, and alerts on it', async () => {

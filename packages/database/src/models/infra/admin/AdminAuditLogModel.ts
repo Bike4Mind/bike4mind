@@ -10,7 +10,7 @@ import {
   type AuditReviewQueueEntry,
   type AuditReviewQueueQuery,
   type AuditSummary,
-  type IAdminAuditLogRepository,
+  type SubscriptionTimelineAuditLogRepository,
   type NewAdminAuditEntry,
 } from '@bike4mind/common';
 import { AdminAuditReviewModel, toAuditReview } from './AdminAuditReviewModel';
@@ -272,7 +272,7 @@ const writeErrorCode = (writeError: unknown): unknown => {
   return undefined;
 };
 
-class AdminAuditLogRepository implements IAdminAuditLogRepository {
+class AdminAuditLogRepository implements SubscriptionTimelineAuditLogRepository {
   constructor(private readonly auditLogModel: Model<AdminAuditLogRecord>) {}
 
   async append(entry: NewAdminAuditEntry): Promise<AuditEntry> {
@@ -517,4 +517,6 @@ class AdminAuditLogRepository implements IAdminAuditLogRepository {
   }
 }
 
-export const adminAuditLogRepository: IAdminAuditLogRepository = new AdminAuditLogRepository(AdminAuditLogModel);
+export const adminAuditLogRepository: SubscriptionTimelineAuditLogRepository = new AdminAuditLogRepository(
+  AdminAuditLogModel
+);
