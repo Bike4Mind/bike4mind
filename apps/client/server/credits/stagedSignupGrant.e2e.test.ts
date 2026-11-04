@@ -399,6 +399,7 @@ describe('staged signup ledger', () => {
       expect(collectRiskSignals).not.toHaveBeenCalled();
       const persisted = await User.findById(user.id);
       expect(persisted?.signupGrantAssessment?.status).toBe('unavailable');
+      expect(persisted?.signupGrantAssessment).not.toHaveProperty('signals');
       expect(persisted?.signupGrant?.stage).toBe('signup');
       expect(await CreditTransaction.countDocuments({})).toBe(0);
       expect((await userService.releaseSignupTranche(user.id, adapters)).creditsGranted).toBe(0);
@@ -553,6 +554,24 @@ describe('staged signup ledger', () => {
     const assessment = (await User.findById(user.id))?.signupGrantAssessment;
     expect(assessment).toMatchObject({ band: 'full', status: 'disabled', credits: 12 });
     expect(assessment?.signals).toEqual({ datacenter: true, ipSignups: 4, challengeVerified: null });
+  });
+
+  it('records no signals when no collector ran', async () => {
+    const user = await createUser();
+    expect((await userService.releaseSignupTranche(user.id, adapters)).creditsGranted).toBe(12);
+    expect((await User.findById(user.id))?.signupGrantAssessment).not.toHaveProperty('signals');
+  });
+
+  it('does not wait on a stalled shadow collection under a disabled policy', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const stalledCollector = vi.fn(() => new Promise<never>(() => undefined));
+    const user = await createUser();
+    expect(
+      (await userService.releaseSignupTranche(user.id, { ...adapters, collectRiskSignals: stalledCollector }))
+        .creditsGranted
+    ).toBe(12);
+    expect((await User.findById(user.id))?.signupGrantAssessment).not.toHaveProperty('signals');
+    expect(warning).toHaveBeenCalledWith('[signup-risk] Shadow observation collection failed; signals not recorded');
   });
 
   it('grants in full and records no signals when shadow collection fails under a disabled policy', async () => {

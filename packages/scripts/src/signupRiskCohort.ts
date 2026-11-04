@@ -1,9 +1,7 @@
 import { INTERNAL_ACCOUNT_FLAGS } from '@bike4mind/common';
 import { UsageEvent, User } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
-
-/** Must match replaySignupRisk's sample cap, so every file this writes is one the replay accepts. */
-export const MAX_COHORT_SAMPLES = 100_000;
+import { MAX_REPLAY_SAMPLES } from './replaySignupRisk';
 
 export type CohortSample = {
   cohort: 'suspected' | 'legitimate';
@@ -14,9 +12,9 @@ export type CohortSample = {
 export type CohortSkips = {
   /** Assessed before signal values were recorded, so there is nothing to replay. */
   noRecordedSignals: number;
-  /** The 7-day activation window is still open with no verdict yet. */
+  /** The 7-day activation window is still open, so a later ban or first request could change the label. */
   undecided: number;
-  /** Staff-domain accounts; admin, system and synthetic accounts are excluded in the query. */
+  /** Staff-domain and test-pattern emails; admin, system and synthetic accounts are excluded in the query. */
   internal: number;
 };
 
@@ -41,7 +39,12 @@ export function replayableSignals(recorded: unknown): userService.SignupRiskSign
 
 async function firstAiRequestAt(userId: string, signedUpAt: Date): Promise<Date | null> {
   const windowEnd = new Date(signedUpAt.getTime() + userService.SIGNUP_ACTIVATION_WINDOW_MS);
-  const event = await UsageEvent.findOne({ userId, status: 'ok', createdAt: { $gte: signedUpAt, $lt: windowEnd } })
+  const event = await UsageEvent.findOne({
+    userId,
+    status: 'ok',
+    feature: { $in: userService.SIGNUP_AI_REQUEST_FEATURES },
+    createdAt: { $gte: signedUpAt, $lt: windowEnd },
+  })
     .sort({ createdAt: 1 })
     .select('createdAt')
     .lean<{ createdAt: Date } | null>();
@@ -57,9 +60,10 @@ export async function buildSignupRiskCohort(options: {
   since: Date;
   until: Date;
   now: Date;
-  staffRegex: RegExp | null;
+  /** Emails matching any of these (staff domains, test accounts) are skipped as internal. */
+  internalEmails: RegExp[];
 }): Promise<SignupRiskCohort> {
-  const { since, until, now, staffRegex } = options;
+  const { since, until, now, internalEmails } = options;
   const skipped: CohortSkips = { noRecordedSignals: 0, undecided: 0, internal: 0 };
   const samples: CohortSample[] = [];
   const cursor = User.find({
@@ -76,7 +80,8 @@ export async function buildSignupRiskCohort(options: {
     .cursor();
 
   for await (const user of cursor) {
-    if (staffRegex && user.email && staffRegex.test(user.email)) {
+    const email = user.email ?? '';
+    if (internalEmails.some(pattern => pattern.test(email))) {
       skipped.internal += 1;
       continue;
     }
@@ -87,13 +92,18 @@ export async function buildSignupRiskCohort(options: {
       continue;
     }
     const signedUpAt = new Date(user.createdAt);
+    // Only closed windows are labeled: inside one, a later ban could still flip an early `legitimate`.
+    if (now.getTime() < signedUpAt.getTime() + userService.SIGNUP_ACTIVATION_WINDOW_MS) {
+      skipped.undecided += 1;
+      continue;
+    }
     const outcome = userService.classifySignupOutcome(user, await firstAiRequestAt(String(user._id), signedUpAt), now);
     if (outcome === 'undecided') {
       skipped.undecided += 1;
       continue;
     }
-    if (samples.length >= MAX_COHORT_SAMPLES) {
-      throw new Error(`More than ${MAX_COHORT_SAMPLES} labeled signups; narrow --since/--until`);
+    if (samples.length >= MAX_REPLAY_SAMPLES) {
+      throw new Error(`More than ${MAX_REPLAY_SAMPLES} labeled signups; narrow --since/--until`);
     }
     samples.push({ cohort: outcome, signupCredits, signals });
   }

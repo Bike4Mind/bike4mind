@@ -44,7 +44,25 @@ type GrantAdapters = FreeCreditAdapters & {
 
 type AssessedGrantResult = GrantFreeCreditsResult & { assessedBand?: SignupRiskBand };
 
+/** Bounds shadow collection under a disabled policy; it must never stall a grant it cannot change. */
+const SHADOW_COLLECTION_TIMEOUT_MS = 2_000;
+
+async function withShadowTimeout<T>(work: Promise<T>): Promise<T> {
+  // A collector that rejects after the timeout won must not surface as an unhandled rejection.
+  work.catch(() => undefined);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('Shadow collection timed out')), SHADOW_COLLECTION_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** `unlockedOrgId` releases the full remainder and records the org that vouched for the account. */
+
 export type SignupGrantValidator = (
   user: IUserDocument
 ) => Promise<boolean | { cumulativeCredits: number } | { unlockedOrgId: string }>;
@@ -198,10 +216,11 @@ async function releaseStage(
             policy = undefined;
           }
           const parsedPolicy = signupRiskPolicySchema.safeParse(policy);
-          let recordSignals = true;
+          let collected = false;
           if (adapters.collectRiskSignals && parsedPolicy.success && parsedPolicy.data.enabled) {
             try {
               signals = await adapters.collectRiskSignals(user);
+              collected = true;
             } catch {
               // Infrastructure failures are retryable, unlike a completed review decision.
               // Do not log collector contents: they can contain private signup observations.
@@ -210,17 +229,20 @@ async function releaseStage(
             }
           } else if (adapters.collectRiskSignals && parsedPolicy.success) {
             // Shadow collection under a disabled policy: the values only feed offline replay of candidate
-            // policies (replaySignupRisk), so a failure records nothing rather than delaying the grant.
+            // policies (replaySignupRisk), so a failure or a slow lookup records nothing rather than
+            // delaying the grant on the user-facing verification path.
             try {
-              signals = await adapters.collectRiskSignals(user);
+              signals = await withShadowTimeout(adapters.collectRiskSignals(user));
+              collected = true;
             } catch {
-              recordSignals = false;
               console.warn('[signup-risk] Shadow observation collection failed; signals not recorded');
             }
           }
+          // Only collector output is recorded: the signupMeta fallback alone would read as an observed
+          // sample with every other signal missing.
           assessment = {
             ...evaluateSignupRisk(policy, signals, grant.signupCredits),
-            ...(recordSignals ? { signals } : {}),
+            ...(collected ? { signals } : {}),
           };
           assessedBand = assessment.band;
           if (assessment.status === 'unavailable') {

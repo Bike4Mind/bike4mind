@@ -60,8 +60,8 @@ async function insertSignup(overrides: Record<string, unknown> = {}, signals: un
   return _id;
 }
 
-async function insertRequest(userId: mongoose.Types.ObjectId, createdAt: Date, status = 'ok') {
-  await UsageEvent.collection.insertOne({ userId: String(userId), status, createdAt });
+async function insertRequest(userId: mongoose.Types.ObjectId, createdAt: Date, status = 'ok', feature = 'chat') {
+  await UsageEvent.collection.insertOne({ userId: String(userId), status, feature, createdAt });
 }
 
 describe('buildSignupRiskCohort', () => {
@@ -75,8 +75,11 @@ describe('buildSignupRiskCohort', () => {
     await insertRequest(late, new Date(since.getTime() + 9 * DAY_MS)); // after the 7-day window
     const failed = await insertSignup({}, { datacenter: false });
     await insertRequest(failed, new Date(since.getTime() + 2 * DAY_MS), 'error');
+    const uploadOnly = await insertSignup({}, { datacenter: true });
+    await insertRequest(uploadOnly, new Date(since.getTime() + 2 * DAY_MS), 'ok', 'embedding');
+    await insertRequest(uploadOnly, new Date(since.getTime() + 2 * DAY_MS), 'ok', 'operations');
 
-    const { samples, skipped } = await buildSignupRiskCohort({ since, until, now, staffRegex: null });
+    const { samples, skipped } = await buildSignupRiskCohort({ since, until, now, internalEmails: [] });
 
     expect(skipped).toEqual({ noRecordedSignals: 0, undecided: 0, internal: 0 });
     expect(samples).toEqual([
@@ -85,6 +88,7 @@ describe('buildSignupRiskCohort', () => {
       { cohort: 'suspected', signupCredits: 10, signals: { datacenter: true, ipSignups: 9 } },
       { cohort: 'suspected', signupCredits: 10, signals: { datacenter: false, ipSignups: 0 } },
       { cohort: 'suspected', signupCredits: 10, signals: { datacenter: false } },
+      { cohort: 'suspected', signupCredits: 10, signals: { datacenter: true } },
     ]);
   });
 
@@ -102,7 +106,7 @@ describe('buildSignupRiskCohort', () => {
       since,
       until: now,
       now,
-      staffRegex: /@staff\.example$/,
+      internalEmails: [/@staff\.example$/],
     });
 
     expect(samples).toEqual([{ cohort: 'suspected', signupCredits: 10, signals: { datacenter: false } }]);
@@ -113,7 +117,7 @@ describe('buildSignupRiskCohort', () => {
     const active = await insertSignup({}, { datacenter: false, ipSignups: 0, unknownSignal: true });
     await insertRequest(active, new Date(since.getTime() + DAY_MS + 1000));
     await insertSignup({}, { datacenter: true, ipSignups: 5 });
-    const { samples } = await buildSignupRiskCohort({ since, until, now, staffRegex: null });
+    const { samples } = await buildSignupRiskCohort({ since, until, now, internalEmails: [] });
     const policy = {
       enabled: true,
       version: 'candidate',

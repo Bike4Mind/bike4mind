@@ -1,8 +1,17 @@
-import type { IUserDocument } from '@bike4mind/common';
+import { USAGE_EVENT_FEATURES, type IUserDocument, type UsageEventFeature } from '@bike4mind/common';
 import { isSignupGrantHeldForReview } from './signupRisk';
 
 /** How long a new account has to make its first AI request before it can count as a real signup. */
 export const SIGNUP_ACTIVATION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Usage features that are a request the user made of an AI model. Operational spend (auto-naming,
+ * summarization) and embeddings (including file ingestion) are incurred on the user's behalf, so an
+ * account that only uploaded files does not count as active.
+ */
+export const SIGNUP_AI_REQUEST_FEATURES: readonly UsageEventFeature[] = USAGE_EVENT_FEATURES.filter(
+  feature => feature !== 'operations' && feature !== 'embedding'
+);
 
 /**
  * `undecided` means the activation window is still open with no request yet, so the account cannot be
@@ -33,8 +42,11 @@ const heldBySignupReview = (user: SignupOutcomeUser): boolean =>
  * AI request within 7 days of signup. Everything else is suspected. The signup analytics dashboard's
  * heuristic `signupVerdictOf` is a different classifier, so calibrate against this one, not that.
  *
- * `firstAiRequestAt` is the earliest successful AI request inside the activation window, or null when
- * there is none; a request outside the window must not be passed in.
+ * `firstAiRequestAt` is the earliest successful request with a SIGNUP_AI_REQUEST_FEATURES feature inside
+ * the activation window, or null when there is none; a request outside the window must not be passed in.
+ * The verdict reads the account's current flags, so a later ban can still flip `legitimate`: label only
+ * signups whose window has closed. Once a policy is enabled, its own review holds count as suspected, so
+ * calibrate a candidate against signups the evaluated policy did not hold, or the label repeats its bands.
  */
 export function classifySignupOutcome(
   user: SignupOutcomeUser,
