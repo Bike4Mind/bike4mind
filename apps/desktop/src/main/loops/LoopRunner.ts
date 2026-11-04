@@ -148,8 +148,9 @@ export class LoopRunner {
 
   /** Start polling. Safe to call again; a second call only polls sooner. */
   start(): void {
+    // Turning the runner on is the user's retry after a credit stop; an auth refresh re-calling start is not.
+    if (!this.running) this.creditStops.clear();
     this.running = true;
-    this.creditStops.clear();
     this.gcTimer ??= setInterval(() => void this.collectWorktrees(), RUNNER_MS.gcEvery);
     void this.collectWorktrees();
     this.schedule(0);
