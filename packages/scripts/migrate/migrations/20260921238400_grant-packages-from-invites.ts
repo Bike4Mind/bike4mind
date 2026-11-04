@@ -15,7 +15,7 @@ export const legacyPackageName = (credits: number, storageMb: number | null) =>
  * invite that already has a grantPackageId is skipped and packages are upserted by name.
  */
 const migration: MigrationFile = {
-  id: 20260921238300,
+  id: 20260921238400,
   name: 'grant-packages-from-invites',
 
   up: async () => {

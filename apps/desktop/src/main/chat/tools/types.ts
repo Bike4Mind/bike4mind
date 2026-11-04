@@ -653,6 +653,8 @@ export interface ApprovalAlways {
   directories: readonly string[];
   /** Physical paths named by a shell command, used to protect permission files even through aliases. */
   paths?: readonly string[];
+  /** Paths in a WSL distro no root is in: asked each time, never covered by a rule, grant or saved answer. */
+  ungranted?: readonly string[];
 }
 
 /** See ChatApprovalOption: this is that, plus what main does with the answer. */

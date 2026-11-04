@@ -25,7 +25,7 @@ import {
 
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
-import migration from './20260921238300_grant-packages-from-invites';
+import migration from './20260921238400_grant-packages-from-invites';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 let server: Awaited<ReturnType<typeof createMongoReplSet>>;

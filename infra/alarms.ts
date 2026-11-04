@@ -17,6 +17,7 @@ import {
   modelDiscoveryFunction,
   modelDiscoveryStalenessFunction,
   signupDomainHoldTriageCron,
+  spendMonitor,
   voiceHoldSweepCron,
 } from './cron';
 import { whatsNewGenerationQueueSubscription, webhookDeliveryQueueSubscription } from './queues';
@@ -1931,6 +1932,56 @@ if (isMonitoredStage) {
       alarmActions: [dlqAlarmTopic.arn],
       tags: {
         Application: 'Voice',
+        Severity: 'High',
+      },
+    });
+  }
+
+  /**
+   * Alarm: Spend monitor heartbeat
+   *
+   * The 5-minute cron is the only thing that rolls up and evaluates credit spend, so a silent stop
+   * means spikes go unreported. No invocations for 3 consecutive periods (15 minutes) breaches;
+   * missing data counts as breaching because a stopped schedule publishes no datapoints at all.
+   */
+  // The cron only exists on scheduled stages; an ENABLE_MONITORING preview has no Lambda to watch.
+  if (spendMonitor) {
+    new aws.cloudwatch.MetricAlarm('spendMonitorHeartbeat', {
+      name: `${$app.name}-${$app.stage}-spend-monitor-heartbeat`,
+      alarmDescription: 'The spend monitor cron has not run for 15 minutes; credit spend alerting is stalled',
+      comparisonOperator: 'LessThanThreshold',
+      evaluationPeriods: 3,
+      metricName: 'Invocations',
+      namespace: 'AWS/Lambda',
+      period: 300,
+      statistic: 'Sum',
+      threshold: 1,
+      treatMissingData: 'breaching',
+      dimensions: { FunctionName: spendMonitor.nodes.function.name },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'SpendMonitor',
+        Severity: 'High',
+      },
+    });
+
+    // A failed invocation still counts as an Invocation, so the heartbeat stays green while every run
+    // throws (missing thresholds, DB or rollup errors). Three failing runs in a row filters a one-off retry.
+    new aws.cloudwatch.MetricAlarm('spendMonitorLambdaErrors', {
+      name: `${$app.name}-${$app.stage}-spend-monitor-lambda-errors`,
+      alarmDescription: 'The spend monitor cron is erroring; credit spend alerting is stalled',
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 3,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 300, // 5 minutes, the run cadence
+      statistic: 'Sum',
+      threshold: 1,
+      treatMissingData: 'notBreaching',
+      dimensions: { FunctionName: spendMonitor.nodes.function.name },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'SpendMonitor',
         Severity: 'High',
       },
     });
