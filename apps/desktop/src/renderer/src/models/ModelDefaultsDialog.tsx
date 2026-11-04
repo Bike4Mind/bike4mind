@@ -137,7 +137,7 @@ function contextOf(value: string): ModelContextSetting | null {
 }
 
 /** What a size stores: the size, or the trained length when that is less. */
-function capOf({ size, tokens }: ContextSizeOffer): number {
+function capOf({ size, tokens }: Pick<ContextSizeOffer, 'size' | 'tokens'>): number {
   return Math.min(size, tokens);
 }
 
@@ -653,7 +653,7 @@ function LoadOptionRows({
               offered.sizes.map(({ size, tokens, loads }) => (
                 <Option
                   key={`fixed:${size}`}
-                  value={`fixed:${Math.min(size, tokens)}`}
+                  value={`fixed:${capOf({ size, tokens })}`}
                   label={contextSizeLabel(tokens)}
                   data-testid={`model-defaults-context-option-${size}`}
                 >
