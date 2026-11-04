@@ -4124,9 +4124,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // resolution itself is what threw) - a retrieval that threw must not look identical to one
       // that never ran.
       recordRetrieval('failed', attemptedDataLakeTags);
-      // A network failure that survived the page retry is infrastructure, and the turn still answers
-      // (with the abstention below), so warn with the name only - the driver message carries the
-      // database host. Anything else is a bug in this path and stays at error with the full error.
+      // A Mongo network failure anywhere in this path (the chunk page read has already been retried
+      // once) is infrastructure, and the turn still answers (with the abstention below), so warn with
+      // the name only - the driver message carries the database host. Anything else is a bug in this
+      // path and stays at error with the full error.
       if (isMongoNetworkError(error)) {
         this.logger.warn(`\u{1F512} Forced retrieval failed: ${(error as Error).name}`);
       } else {
