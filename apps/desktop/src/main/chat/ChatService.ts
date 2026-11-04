@@ -260,6 +260,8 @@ import {
   type ImageContext,
   type ScreenCapturer,
   type ScreenContext,
+  type ModelContext,
+  type ModelViewPort,
   type SimulatorContext,
   type SimulatorDriver,
   type ToolContext,
@@ -543,6 +545,8 @@ export interface ChatServiceDeps {
    * The iOS Simulator and the user's live view of it. Wired on macOS only, so on any other
    * platform (and in tests that do not exercise it) the simulator tools are not declared.
    */
+  /** The 3D model pane's open file (main/chat/model3d/ModelLiveView.ts). Absent in tests that do not exercise it. */
+  model?: ModelViewPort;
   simulator?: {
     driver: SimulatorDriver;
     view: { attach(udid: string): Promise<unknown>; detach(): void; attachedUdid(): string | undefined };
@@ -2943,6 +2947,12 @@ export class ChatService {
             detach: () => simulatorDeps.view.detach(),
           }
         : undefined;
+      // Code sessions only: the model file and the GLB written beside it live in the project.
+      const modelDeps = this.deps.model;
+      const model: ModelContext | undefined =
+        modelDeps && workingDirectory
+          ? { view: modelDeps, keepScreenshot: (bytes, caption) => this.keepScreenshot(sessionId, bytes, caption) }
+          : undefined;
       const offerExplore = shouldOfferExplore(catalog?.models ?? [], session.model);
       const exploreFor = (granted: readonly string[]): ExploreContext | undefined =>
         api && !localTurn && granted.length > 0 && offerExplore
@@ -2990,6 +3000,7 @@ export class ChatService {
               browser: !!browser,
               screen: !!screen,
               simulator: !!simulator,
+              model: !!model,
               memory: !!memory,
               skills: !!skills,
               web: !!web,
@@ -3056,6 +3067,7 @@ export class ChatService {
           ask,
           screen: !!screen,
           simulator: !!simulator,
+          model: !!model,
         }),
       });
       const schemaFor = (name: string): ToolSchema | undefined =>
@@ -3468,6 +3480,7 @@ export class ChatService {
                 browser,
                 screen,
                 simulator,
+                model,
                 images,
                 memory,
                 skills,
@@ -4063,6 +4076,7 @@ export class ChatService {
       browser: BrowserContext | undefined;
       screen: ScreenContext | undefined;
       simulator: SimulatorContext | undefined;
+      model: ModelContext | undefined;
       images: ImageContext | undefined;
       memory: MemoryStore | undefined;
       skills: SkillContext | undefined;
@@ -4098,6 +4112,7 @@ export class ChatService {
       browser,
       screen,
       simulator,
+      model,
       images,
       memory,
       skills,
@@ -4250,6 +4265,7 @@ export class ChatService {
           ...(browser ? { browser } : {}),
           ...(screen ? { screen } : {}),
           ...(simulator ? { simulator } : {}),
+          ...(model ? { model } : {}),
           ...(images ? { images } : {}),
           ...(memory ? { memory } : {}),
           ...(skills ? { skills } : {}),
@@ -7185,6 +7201,7 @@ export function buildToolStateText(state: {
   ask: boolean;
   screen: boolean;
   simulator?: boolean;
+  model?: boolean;
 }): string {
   const { roots, ask, mcpServers } = state;
   const mcp = mcpServers ? (ask ? 'manage' : 'read') : null;
@@ -7203,6 +7220,7 @@ export function buildToolStateText(state: {
     ...(state.browser ? BROWSER_GUIDANCE : []),
     ...(state.screen ? SCREEN_GUIDANCE : []),
     ...(state.simulator ? SIMULATOR_GUIDANCE : []),
+    ...(state.model ? MODEL_GUIDANCE : []),
     ...(state.media ? MEDIA_GUIDANCE : []),
     ...(state.host ? HOST_GUIDANCE : []),
     ...(state.memory ? MEMORY_GUIDANCE : []),
@@ -7316,6 +7334,14 @@ const SIMULATOR_GUIDANCE: readonly string[] = [
   'points, so read tap coordinates straight off it for simulator_input. Each device asks the user',
   'once. A failure that names a Fix (no Xcode, an unaccepted license, the wrong xcode-select, a',
   'missing runtime or AXe) is for the user to run: tell them the exact fix and do not retry.',
+];
+
+const MODEL_GUIDANCE: readonly string[] = [
+  'The model_* tools make 3D models as code. When the user asks for a 3D model or game asset, write',
+  'a <name>.model.js file (contract in the model_view description) with the file tools, call',
+  'model_view to open it in their live pane and build it, fix any build error it reports, then check',
+  'it with model_screenshot from several angles before saying it is done. Each good build also writes',
+  '<name>.glb beside it, ready for three.js or Unity (via glTFast); wire it into their game if asked.',
 ];
 
 const WEB_GUIDANCE: readonly string[] = [

@@ -31,6 +31,7 @@ import { setSessionPullRequest } from './pullRequestTool';
 import { requestDirectory } from './requestDirectoryTool';
 import { screenCapture } from './screenTools';
 import { bashExecute } from './shellTools';
+import { MODEL_TOOLS } from './modelTools';
 import { SIMULATOR_TOOLS } from './simulatorTools';
 import { skillTool } from './skillTool';
 import { todoWrite } from './todoTool';
@@ -149,6 +150,7 @@ const BY_NAME = new Map(
     ...BROWSER_TOOLS,
     screenCapture,
     ...SIMULATOR_TOOLS,
+    ...MODEL_TOOLS,
     ...MEMORY_TOOLS,
     ...SKILL_TOOLS,
     askUser,
@@ -222,6 +224,11 @@ export function toolsForRequest(options: {
    * resolves its project inside the granted roots and refuses without one.
    */
   simulator?: boolean;
+  /**
+   * The 3D model pane. Code sessions with a working directory only: a model and the GLB written
+   * beside it live in the project.
+   */
+  model?: boolean;
   /** A resolved memory store. Needs a project, which is what the store is keyed on. */
   memory?: boolean;
   /** A skill catalog for this session. No folder grant needed; a global skill is the user's own file. */
@@ -271,6 +278,7 @@ export function toolsForRequest(options: {
     ...(options.browser ? BROWSER_TOOLS : []),
     ...(options.screen ? [screenCapture] : []),
     ...(options.simulator ? SIMULATOR_TOOLS : []),
+    ...(options.model && options.roots.length > 0 ? MODEL_TOOLS : []),
     ...(options.memory ? MEMORY_TOOLS : []),
     ...(options.skills ? SKILL_TOOLS : []),
     ...(options.web ? WEB_TOOLS : []),

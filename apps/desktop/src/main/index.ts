@@ -15,6 +15,7 @@ import { attachDevLogShortcut, closeDevLogWindow, registerDevLog } from './devlo
 import { registerFleet } from './fleet';
 import { registerModels } from './models';
 import { registerArtifactScheme } from './chat/artifacts/sandboxProtocol';
+import { registerModelScheme } from './chat/model3d/engineProtocol';
 import { registerMediaScheme } from './chat/media/protocol';
 import { isExternallyOpenable } from '@shared/externalLinks';
 import { persistConsoleWarnings } from './logFile';
@@ -31,6 +32,7 @@ const rendererDevUrl = process.env.ELECTRON_RENDERER_URL;
 // the handlers that serve them are installed later, in registerChat.
 registerMediaScheme();
 registerArtifactScheme();
+registerModelScheme();
 
 function buildAppInfo(): AppInfo {
   return {
@@ -137,6 +139,7 @@ void app.whenReady().then(async () => {
     mcp,
     browser,
     simulatorView,
+    modelView,
     pullRequests,
     claudeImport,
     spareWorktrees,
@@ -250,6 +253,7 @@ void app.whenReady().then(async () => {
     terminals.shutdownSync();
     browser.closeAll();
     simulatorView.dispose();
+    modelView.dispose();
   });
 
   // Ctrl-C in a dev terminal, or a `kill` of the app. Children other than WSL commands lead their own

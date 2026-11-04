@@ -1,0 +1,236 @@
+import * as THREE from 'three';
+import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
+import type { ModelKind, ModelParam, ModelPartMesh, ModelSummary, ModelUnits, ModelView } from '@shared/model3d';
+
+/**
+ * three.js side of the model pane: meshes from the sandboxed engine become a scene, exports and
+ * screenshots. Models are Z-up (CAD and print convention); the scene and glTF are Y-up, so a model
+ * is wrapped in a group rotated -90 degrees about X. STL export skips that wrapper and stays Z-up.
+ */
+
+export const DEFAULT_PART_COLOR = '#b0b7c3';
+
+/** The object the viewer, exports and screenshots share. `userData.units` records the model units. */
+export function buildModelObject(parts: ModelPartMesh[], units: ModelUnits): THREE.Group {
+  const model = new THREE.Group();
+  model.name = 'model';
+  for (const part of parts) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(part.positions, 3));
+    geometry.setIndex(new THREE.BufferAttribute(part.indices, 1));
+    geometry.computeVertexNormals();
+    const material = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(part.color || DEFAULT_PART_COLOR),
+      flatShading: true,
+      roughness: 0.75,
+      metalness: 0.05,
+    });
+    material.name = part.name;
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.name = part.name;
+    model.add(mesh);
+  }
+  model.rotation.x = -Math.PI / 2;
+  const root = new THREE.Group();
+  root.name = 'root';
+  root.userData.units = units;
+  root.add(model);
+  return root;
+}
+
+/** Size and triangle count in model axes (x, y, z with z up). */
+export function summarizeParts(
+  parts: ModelPartMesh[],
+  params: Record<string, ModelParam>,
+  units: ModelUnits
+): ModelSummary {
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  let triangles = 0;
+  for (const part of parts) {
+    triangles += part.indices.length / 3;
+    for (let index = 0; index < part.positions.length; index += 3) {
+      for (let axis = 0; axis < 3; axis += 1) {
+        const value = part.positions[index + axis];
+        if (value < min[axis]) min[axis] = value;
+        if (value > max[axis]) max[axis] = value;
+      }
+    }
+  }
+  const size = min.map((low, axis) => (Number.isFinite(low) ? max[axis] - low : 0)) as [number, number, number];
+  return {
+    parts: parts.map(part => part.name),
+    size,
+    units,
+    triangles,
+    params: Object.fromEntries(Object.entries(params).map(([key, param]) => [key, param.value])),
+  };
+}
+
+/** Binary STL of every part, in model units and Z-up, as slicers expect. */
+export function partsToStl(parts: ModelPartMesh[]): Uint8Array {
+  const triangles = parts.reduce((total, part) => total + part.indices.length / 3, 0);
+  const buffer = new ArrayBuffer(84 + triangles * 50);
+  const view = new DataView(buffer);
+  view.setUint32(80, triangles, true);
+  let offset = 84;
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  const c = new THREE.Vector3();
+  const normal = new THREE.Vector3();
+  for (const part of parts) {
+    const { positions, indices } = part;
+    for (let index = 0; index < indices.length; index += 3) {
+      a.fromArray(positions, indices[index] * 3);
+      b.fromArray(positions, indices[index + 1] * 3);
+      c.fromArray(positions, indices[index + 2] * 3);
+      normal.subVectors(c, b).cross(new THREE.Vector3().subVectors(a, b)).normalize();
+      for (const vector of [normal, a, b, c]) {
+        view.setFloat32(offset, vector.x, true);
+        view.setFloat32(offset + 4, vector.y, true);
+        view.setFloat32(offset + 8, vector.z, true);
+        offset += 12;
+      }
+      offset += 2;
+    }
+  }
+  return new Uint8Array(buffer);
+}
+
+/** GLB in metres (glTF's unit), keeping one material per part. */
+export async function exportGlb(root: THREE.Object3D): Promise<Uint8Array> {
+  const scene = new THREE.Scene();
+  const copy = root.clone(true);
+  if (copy.userData.units === 'mm') copy.scale.setScalar(0.001);
+  scene.add(copy);
+  const result = await new GLTFExporter().parseAsync(scene, { binary: true });
+  if (!(result instanceof ArrayBuffer)) throw new Error('The GLB exporter returned JSON instead of binary.');
+  return new Uint8Array(result);
+}
+
+/** A viewable object from an existing asset. glTF is metres; STL carries no unit and is assumed mm, Z-up. */
+export async function loadAsset(kind: Exclude<ModelKind, 'model'>, bytes: Uint8Array): Promise<THREE.Group> {
+  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  const root = new THREE.Group();
+  root.name = 'root';
+  if (kind === 'stl') {
+    const geometry = new STLLoader().parse(buffer);
+    geometry.computeVertexNormals();
+    const mesh = new THREE.Mesh(
+      geometry,
+      new THREE.MeshStandardMaterial({ color: DEFAULT_PART_COLOR, flatShading: true, roughness: 0.75 })
+    );
+    const model = new THREE.Group();
+    model.rotation.x = -Math.PI / 2;
+    model.add(mesh);
+    root.add(model);
+    root.userData.units = 'mm';
+    return root;
+  }
+  const gltf = await new GLTFLoader().parseAsync(buffer, '');
+  root.add(gltf.scene);
+  root.userData.units = 'm';
+  return root;
+}
+
+/** Summary for a loaded asset, from its world bounding box, reported in model axes (z up). */
+export function summarizeObject(root: THREE.Object3D): ModelSummary {
+  root.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(root);
+  const size = box.isEmpty() ? new THREE.Vector3() : box.getSize(new THREE.Vector3());
+  let triangles = 0;
+  const parts: string[] = [];
+  root.traverse(child => {
+    if (child instanceof THREE.Mesh) {
+      const geometry = child.geometry as THREE.BufferGeometry;
+      triangles += (geometry.index ? geometry.index.count : geometry.getAttribute('position').count) / 3;
+      parts.push(child.name || `part${parts.length + 1}`);
+    }
+  });
+  return { parts, size: [size.x, size.z, size.y], units: String(root.userData.units ?? 'mm'), triangles, params: {} };
+}
+
+/** Camera directions in scene (Y-up) space; "front" looks at the model's -Y face, which faces +Z here. */
+const VIEW_DIRECTIONS: Record<ModelView, [number, number, number]> = {
+  front: [0, 0, 1],
+  back: [0, 0, -1],
+  left: [-1, 0, 0],
+  right: [1, 0, 0],
+  top: [0, 1, 0.0001],
+  iso: [1, 0.8, 1],
+};
+
+export function frameCamera(
+  camera: THREE.PerspectiveCamera,
+  root: THREE.Object3D,
+  direction: [number, number, number] = VIEW_DIRECTIONS.iso
+): THREE.Vector3 {
+  root.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(root);
+  const sphere = box.isEmpty() ? new THREE.Sphere(new THREE.Vector3(), 1) : box.getBoundingSphere(new THREE.Sphere());
+  const radius = Math.max(sphere.radius, 1e-3);
+  const distance = (radius / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2))) * 1.1;
+  const offset = new THREE.Vector3(...direction).normalize().multiplyScalar(distance);
+  camera.position.copy(sphere.center).add(offset);
+  camera.near = distance / 100;
+  camera.far = distance * 100;
+  camera.lookAt(sphere.center);
+  camera.updateProjectionMatrix();
+  return sphere.center.clone();
+}
+
+export function addLights(scene: THREE.Scene): void {
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x444455, 1.6));
+  const key = new THREE.DirectionalLight(0xffffff, 2.2);
+  key.position.set(3, 5, 4);
+  scene.add(key);
+  const fill = new THREE.DirectionalLight(0xffffff, 0.6);
+  fill.position.set(-4, 2, -3);
+  scene.add(fill);
+}
+
+const TILE = 512;
+
+/**
+ * One labelled tile per view, laid out in a grid, as a PNG. Rendered off screen with a renderer of
+ * its own, so it works whether or not the pane is visible.
+ */
+export async function renderContactSheet(root: THREE.Object3D, views: ModelView[], dark: boolean): Promise<Uint8Array> {
+  const columns = views.length <= 2 ? views.length : views.length <= 4 ? 2 : 3;
+  const rows = Math.ceil(views.length / columns);
+  const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+  try {
+    renderer.setPixelRatio(1);
+    renderer.setSize(TILE, TILE, false);
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(dark ? '#1f2329' : '#f4f5f7');
+    addLights(scene);
+    scene.add(root.clone(true));
+    const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 1000);
+    const sheet = document.createElement('canvas');
+    sheet.width = columns * TILE;
+    sheet.height = rows * TILE;
+    const context = sheet.getContext('2d');
+    if (!context) throw new Error('No 2D canvas available for the screenshot.');
+    views.forEach((view, index) => {
+      frameCamera(camera, root, VIEW_DIRECTIONS[view]);
+      renderer.render(scene, camera);
+      const x = (index % columns) * TILE;
+      const y = Math.floor(index / columns) * TILE;
+      context.drawImage(renderer.domElement, x, y);
+      context.font = 'bold 22px sans-serif';
+      context.fillStyle = dark ? '#e6e8eb' : '#22262b';
+      context.fillText(view.toUpperCase(), x + 14, y + 32);
+      context.strokeStyle = dark ? '#3a4048' : '#d5d8dd';
+      context.strokeRect(x + 0.5, y + 0.5, TILE - 1, TILE - 1);
+    });
+    const blob = await new Promise<Blob | null>(resolve => sheet.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('The screenshot could not be encoded.');
+    return new Uint8Array(await blob.arrayBuffer());
+  } finally {
+    renderer.dispose();
+    renderer.forceContextLoss();
+  }
+}

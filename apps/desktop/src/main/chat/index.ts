@@ -82,6 +82,9 @@ import { SkillMarket } from './skills/SkillMarket';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { SharePublisher } from './artifacts/SharePublisher';
 import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
+import { registerModelProtocol } from './model3d/engineProtocol';
+import { ModelLiveView } from './model3d/ModelLiveView';
+import { modelIpcHandlers } from './model3d/modelIpc';
 import { ChatService, sessionForRenderer, type ChatServiceDeps } from './ChatService';
 import { DeferredToolsSetting, parseDeferredToolsOverride } from './DeferredToolsSetting';
 import { CHAT_STREAM_TAG } from './devLogTag';
@@ -294,6 +297,8 @@ export interface RegisteredChat {
   browser: BrowserManager;
   /** The live iOS Simulator view, whose stream is stopped on quit. */
   simulatorView: SimulatorLiveView;
+  /** The 3D model pane's open file, whose watcher is stopped on quit. */
+  modelView: ModelLiveView;
   /** Each conversation's pull request, and the timers that watch it. */
   pullRequests: PrMonitor;
   /** Import from Claude; started once the window is up so it never delays launch. */
@@ -479,6 +484,7 @@ export function registerChat(
   const media = new MediaStore(join(userData, 'media'));
   registerMediaProtocol(media);
   registerArtifactProtocol();
+  registerModelProtocol();
   const artifacts = new ArtifactPublisher(() => auth.getApiClient(), logger);
   const artifactLibrary = new ArtifactLibrary(() => auth.getApiClient(), logger);
   const skillMarket = new SkillMarket({
@@ -661,6 +667,17 @@ export function registerChat(
       })
   );
 
+  const modelView = new ModelLiveView({
+    state: state => send(IPC_CHANNELS.modelState, state),
+    captureRequest: request => {
+      // The focused window renders, else the first one; one rendering is enough.
+      const target = BrowserWindow.getFocusedWindow() ?? appWindows()[0];
+      if (!target || target.isDestroyed()) return false;
+      target.webContents.send(IPC_CHANNELS.modelCaptureRequest, request);
+      return true;
+    },
+  });
+
   const simulatorDriver = new XcodeSimulatorDriver();
   const simulatorView = new SimulatorLiveView(
     simulatorDriver,
@@ -710,6 +727,7 @@ export function registerChat(
     pullRequests,
     screen: desktopScreenCapturer(app.getName()),
     ...(process.platform === 'darwin' ? { simulator: { driver: simulatorDriver, view: simulatorView } } : {}),
+    model: modelView,
     prepareImage: prepareToolImage,
     history,
     local,
@@ -1233,6 +1251,7 @@ export function registerChat(
     return mcp.state();
   });
 
+  modelIpcHandlers(modelView);
   ipcMain.handle(IPC_CHANNELS.simulatorGetState, () => simulatorView.current());
   ipcMain.handle(IPC_CHANNELS.simulatorListDevices, async () =>
     process.platform === 'darwin' ? (await simulatorDriver.devices()).devices : []
@@ -1439,6 +1458,7 @@ export function registerChat(
     mcp,
     browser,
     simulatorView,
+    modelView,
     pullRequests,
     claudeImport,
     spareWorktrees,

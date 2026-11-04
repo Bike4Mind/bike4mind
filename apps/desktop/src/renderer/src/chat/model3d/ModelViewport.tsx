@@ -1,0 +1,115 @@
+import Box from '@mui/joy/Box';
+import { useEffect, useRef } from 'react';
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { addLights, frameCamera } from './modelScene';
+
+type Props = {
+  object: THREE.Group | null;
+  wireframe: boolean;
+  dark: boolean;
+  /** Dims the model while its latest build has failed. */
+  dimmed: boolean;
+  /** The camera re-frames when this changes (a different file), not on every rebuild. */
+  frameKey: string | null;
+};
+
+type Viewer = {
+  renderer: THREE.WebGLRenderer;
+  scene: THREE.Scene;
+  camera: THREE.PerspectiveCamera;
+  controls: OrbitControls;
+  content: THREE.Group;
+  render: () => void;
+};
+
+function gridFor(object: THREE.Object3D, dark: boolean): THREE.GridHelper {
+  const box = new THREE.Box3().setFromObject(object);
+  const size = box.isEmpty() ? 1 : Math.max(box.max.x - box.min.x, box.max.z - box.min.z);
+  // A grid a few times the footprint, rounded up to a power of ten per cell, so its squares read as units.
+  const cell = 10 ** Math.floor(Math.log10(Math.max(size, 1e-3) / 2));
+  const extent = Math.ceil((size * 3) / cell) * cell;
+  const grid = new THREE.GridHelper(
+    extent,
+    Math.round(extent / cell),
+    dark ? 0x59606b : 0xa9afb8,
+    dark ? 0x353a42 : 0xd9dce1
+  );
+  grid.position.set((box.min.x + box.max.x) / 2 || 0, box.isEmpty() ? 0 : box.min.y, (box.min.z + box.max.z) / 2 || 0);
+  grid.name = 'grid';
+  return grid;
+}
+
+/** The interactive three.js view: orbit (drag), zoom (wheel) and pan (right drag), rendered on demand. */
+export function ModelViewport({ object, wireframe, dark, dimmed, frameKey }: Props) {
+  const host = useRef<HTMLDivElement>(null);
+  const viewer = useRef<Viewer | null>(null);
+  const framedFor = useRef<string | null>(null);
+
+  useEffect(() => {
+    const element = host.current;
+    if (!element) return;
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    element.appendChild(renderer.domElement);
+    renderer.domElement.dataset.testid = 'model-pane-canvas';
+    const scene = new THREE.Scene();
+    addLights(scene);
+    const content = new THREE.Group();
+    scene.add(content);
+    const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 1000);
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = false;
+    const render = () => renderer.render(scene, camera);
+    controls.addEventListener('change', render);
+    const resize = () => {
+      const { clientWidth, clientHeight } = element;
+      if (!clientWidth || !clientHeight) return;
+      renderer.setSize(clientWidth, clientHeight);
+      camera.aspect = clientWidth / clientHeight;
+      camera.updateProjectionMatrix();
+      render();
+    };
+    const observer = new ResizeObserver(resize);
+    observer.observe(element);
+    viewer.current = { renderer, scene, camera, controls, content, render };
+    resize();
+    return () => {
+      observer.disconnect();
+      controls.dispose();
+      renderer.dispose();
+      renderer.domElement.remove();
+      viewer.current = null;
+      framedFor.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const current = viewer.current;
+    if (!current) return;
+    current.scene.background = new THREE.Color(dark ? '#1b1e23' : '#f4f5f7');
+    current.content.clear();
+    if (object) {
+      const shown = object.clone(true);
+      shown.traverse(child => {
+        if (child instanceof THREE.Mesh) {
+          const material = (child.material as THREE.MeshStandardMaterial).clone();
+          material.wireframe = wireframe;
+          material.transparent = dimmed;
+          material.opacity = dimmed ? 0.35 : 1;
+          child.material = material;
+        }
+      });
+      current.content.add(shown, gridFor(object, dark));
+      // Re-frame only when a different model opens, so a rebuild keeps the user's camera.
+      if (framedFor.current !== frameKey) {
+        current.controls.target.copy(frameCamera(current.camera, object));
+        framedFor.current = frameKey;
+      }
+      current.controls.update();
+    }
+    current.render();
+  }, [object, wireframe, dark, dimmed, frameKey]);
+
+  return <Box ref={host} sx={{ position: 'absolute', inset: 0 }} data-testid="model-pane-viewport" />;
+}
