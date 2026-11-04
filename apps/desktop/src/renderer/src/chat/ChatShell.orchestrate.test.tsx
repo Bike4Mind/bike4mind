@@ -364,7 +364,7 @@ describe('orchestrate mode in the chat shell', () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     listed = [...SESSIONS, CODE];
     await openParent(CODE.title, 'code');
-    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('Orchestrate');
+    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('Agents');
 
     await act(async () => el('chat-surface-toggle-orchestrate').click());
     expect(setSessionOrchestrate).toHaveBeenCalledWith(CODE.id, true);
@@ -388,7 +388,7 @@ describe('orchestrate mode in the chat shell', () => {
     expect(setSessionOrchestrate).toHaveBeenLastCalledWith(CODE.id, false);
     // Off with no agents, the stage has nothing to show and falls back to the conversation.
     expect(query('orchestrator-stage')).toBeNull();
-    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('Orchestrate');
+    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('Agents');
   });
 
   it('reopens an empty code session on the conversation when its surface was left on orchestrate but the flag is off', async () => {
@@ -397,7 +397,7 @@ describe('orchestrate mode in the chat shell', () => {
     await openParent(CODE.title, 'code');
     expect(query('orchestrator-stage')).toBeNull();
     expect(query('chat-thread-empty-host')).not.toBeNull();
-    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('Orchestrate');
+    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('Agents');
   });
 
   it('keeps the empty stage for a code session whose flag is on', async () => {
@@ -447,7 +447,7 @@ describe('orchestrate mode in the chat shell', () => {
     listed = [...SESSIONS, CODE, shallow];
     await openParent(shallow.title, 'code');
     expect(el('chat-session-title').textContent).toBe(shallow.title);
-    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('Orchestrate');
+    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('Agents');
   });
 
   it('leaves the delegate switch out of a chat session stage', async () => {

@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { OrchestrateToggle } from './OrchestrateToggle';
+import { isMac } from '../platform';
+import { OrchestrateToggle, describeAgentStates, isSurfaceToggleKey } from './OrchestrateToggle';
 import type { SessionSurface } from './orchestratorPrefs';
 import type { AgentState } from './roster';
 import { createThemedMount, el, query } from './testUtils';
@@ -36,7 +37,7 @@ describe('OrchestrateToggle', () => {
   it('shows the segmented control on the chat surface of an agentless code session, and starting turns Orchestrate on', async () => {
     await renderToggle([], 'chat', true);
     expect(el('chat-surface-toggle-chat')).not.toBeNull();
-    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('Orchestrate');
+    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('Agents');
     expect(query('chat-orchestrate-count')).toBeNull();
     act(() => el('chat-surface-toggle-orchestrate').click());
     expect(onStart).toHaveBeenCalledTimes(1);
@@ -58,24 +59,40 @@ describe('OrchestrateToggle', () => {
     expect(onStart).not.toHaveBeenCalled();
   });
 
-  it('badges the agent count on the Orchestrate segment', async () => {
-    await renderToggle(['done', 'failed', 'idle']);
+  it('badges the agent count on the Agents segment, neutral when nothing needs attention', async () => {
+    await renderToggle(['done', 'idle', 'stopped']);
     expect(el('chat-orchestrate-count').textContent).toBe('3');
-    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('Orchestrate3');
+    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('Agents3');
+    expect(el('chat-orchestrate-count').dataset.tone).toBe('neutral');
     expect(query('chat-orchestrate-working')).toBeNull();
-    expect(query('chat-orchestrate-needs-you')).toBeNull();
   });
 
-  it('shows the working indicator while any agent is working', async () => {
+  it('shows the working dot while any agent is working', async () => {
     await renderToggle(['working', 'done']);
     expect(query('chat-orchestrate-working')).not.toBeNull();
-    expect(query('chat-orchestrate-needs-you')).toBeNull();
+    expect(el('chat-orchestrate-count').dataset.tone).toBe('neutral');
   });
 
-  it('flags an agent that needs you, taking over from the working indicator', async () => {
-    await renderToggle(['working', 'needs-you']);
-    expect(query('chat-orchestrate-needs-you')).not.toBeNull();
+  it('turns the badge red for a failed agent and orange for one that needs you, which wins', async () => {
+    await renderToggle(['working', 'failed']);
+    expect(el('chat-orchestrate-count').dataset.tone).toBe('danger');
     expect(query('chat-orchestrate-working')).toBeNull();
+
+    await renderToggle(['failed', 'needs-you']);
+    expect(el('chat-orchestrate-count').dataset.tone).toBe('warning');
+  });
+
+  it('describes the agents in the badge label, most urgent first', async () => {
+    await renderToggle(['done', 'working', 'needs-you', 'idle']);
+    expect(el('chat-orchestrate-count').getAttribute('aria-label')).toBe('4 agents: 1 needs you, 1 working, 2 done');
+    expect(describeAgentStates(['failed'])).toBe('1 agent: 1 failed');
+    expect(describeAgentStates([])).toBe('No agents yet');
+  });
+
+  it('marks the shown surface as pressed', async () => {
+    await renderToggle(['done'], 'orchestrate');
+    expect(el('chat-surface-toggle-orchestrate').getAttribute('aria-pressed')).toBe('true');
+    expect(el('chat-surface-toggle-chat').getAttribute('aria-pressed')).toBe('false');
   });
 
   it('keeps the same control, with the count, on the orchestrate surface', async () => {
@@ -83,5 +100,38 @@ describe('OrchestrateToggle', () => {
     expect(el('chat-orchestrate-count').textContent).toBe('1');
     act(() => el('chat-surface-toggle-chat').click());
     expect(onSurfaceChange).toHaveBeenCalledWith('chat');
+  });
+
+  describe('Mod+Shift+O', () => {
+    const chord = (extra: Partial<KeyboardEventInit> = {}) =>
+      new KeyboardEvent('keydown', { code: 'KeyO', shiftKey: true, metaKey: isMac, ctrlKey: !isMac, ...extra });
+    const press = (extra?: Partial<KeyboardEventInit>) => act(() => void window.dispatchEvent(chord(extra)));
+
+    it('matches only the full chord', () => {
+      expect(isSurfaceToggleKey(chord())).toBe(true);
+      expect(isSurfaceToggleKey(chord({ shiftKey: false }))).toBe(false);
+      expect(isSurfaceToggleKey(chord({ altKey: true }))).toBe(false);
+      expect(isSurfaceToggleKey(chord({ code: 'KeyP' }))).toBe(false);
+    });
+
+    it('flips between the conversation and the agents', async () => {
+      await renderToggle(['done'], 'chat');
+      press();
+      expect(onSurfaceChange).toHaveBeenLastCalledWith('orchestrate');
+      await renderToggle(['done'], 'orchestrate');
+      press();
+      expect(onSurfaceChange).toHaveBeenLastCalledWith('chat');
+    });
+
+    it('starts Orchestrate on an agentless code session, and does nothing where the switch is absent', async () => {
+      await renderToggle([], 'chat', true);
+      press();
+      expect(onStart).toHaveBeenCalledTimes(1);
+
+      await renderToggle([], 'chat', false);
+      press();
+      expect(onStart).toHaveBeenCalledTimes(1);
+      expect(onSurfaceChange).not.toHaveBeenCalled();
+    });
   });
 });
