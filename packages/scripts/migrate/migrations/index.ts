@@ -293,7 +293,7 @@ import EnsureHeldCreditRewardUserStatusIndex from './20260921239600_ensure-heldc
 import DropRetiredUnlockSettings from './20260921239700_drop-retired-unlock-settings';
 import EnsureOverwatchUserDayInternalIndex from './20260921239900_ensure-overwatch-user-day-internal-index';
 import EnsureUserDeletionScheduledForIndex from './20260921239970_ensure-user-deletion-scheduledfor-index';
-import EnsureStripeDisputeIndexes from './20260921238400_ensure-stripe-dispute-indexes';
+import EnsureStripeDisputeIndexes from './20260921239700_ensure-stripe-dispute-indexes';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
