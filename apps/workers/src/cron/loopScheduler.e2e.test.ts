@@ -1563,3 +1563,292 @@ describe('runLoopSchedulerTick - safety and pacing', () => {
     expect((await reload(loop.id)).idleStreak).toBe(0);
   });
 });
+
+describe('runLoopSchedulerTick - liveness', () => {
+  const createTicket = async (loopId: string, overrides: Record<string, unknown> = {}) =>
+    (
+      await WorkItem.create({
+        userId: 'user-1',
+        loopId,
+        title: 'Write the summary',
+        stage: 'todo',
+        status: 'open',
+        dependencies: [],
+        ...overrides,
+      })
+    ).toJSON();
+  const ticketOf = async (id: string) => (await WorkItem.findById(id))!.toJSON();
+  const minutesAgo = (minutes: number) => new Date(NOW.getTime() - minutes * 60_000);
+  // 3 x 15 min interval = 45 min past due; 50 is over it.
+  const LONG_DUE = minutesAgo(50);
+  const LATER = new Date(NOW.getTime() + 60 * 60_000);
+  const keys = async () => (await Inbox.find({ deletedAt: null }).lean()).map(notice => notice.sourceKey);
+  /** A loop the scheduler cannot start this tick (the user's concurrent-run limit), so it stays due. */
+  const refuseStarts = () =>
+    h.startAgentExecution.mockResolvedValue({ ok: false, reason: 'concurrent_limit', message: 'busy' });
+
+  describe('idle with work', () => {
+    it('flags a live loop far past due with a ready ticket, then clears it and its notice once it runs', async () => {
+      refuseStarts();
+      const loop = await createLoop({ nextRunAt: LONG_DUE });
+      await createTicket(loop.id);
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      const flagged = await reload(loop.id);
+      expect(flagged.alarm).toMatchObject({
+        kind: 'idle_with_work',
+        reason: 'Ready tickets waiting, but no run for 50 min past its schedule',
+        since: NOW,
+      });
+      expect(await keys()).toEqual([`loop:${loop.id}:alarm:idle_with_work`]);
+      const notice = await Inbox.findOne({ sourceKey: `loop:${loop.id}:alarm:idle_with_work` }).lean();
+      expect(notice).toMatchObject({ title: 'Loop "Digest" is idle with ready tickets', link: `/loops/${loop.id}` });
+
+      // Still stuck a tick later: the alarm keeps its start.
+      await runLoopSchedulerTick(new Date(NOW.getTime() + 5 * 60_000), logger);
+      expect((await reload(loop.id)).alarm?.since).toEqual(NOW);
+
+      h.startAgentExecution.mockResolvedValue({ ok: true, executionId: 'exec-1' });
+      await runLoopSchedulerTick(new Date(NOW.getTime() + 10 * 60_000), logger);
+      expect((await reload(loop.id)).alarm).toBeUndefined();
+      expect(await keys()).toEqual([]);
+    });
+
+    it('clears the alarm once the loop is paused by its owner', async () => {
+      const loop = await createLoop({
+        status: 'paused',
+        nextRunAt: LONG_DUE,
+        alarm: { kind: 'idle_with_work', reason: 'idle', since: PAST },
+      });
+      await createTicket(loop.id);
+      await runLoopSchedulerTick(NOW, logger);
+      expect((await reload(loop.id)).alarm).toBeUndefined();
+    });
+
+    it('does not flag a loop held back on purpose, or one with no ready ticket', async () => {
+      refuseStarts();
+      const ids: Record<string, string> = {};
+      const make = async (name: string, overrides: Record<string, unknown>, ticket = true) => {
+        const loop = await createLoop({ name, nextRunAt: LONG_DUE, ...overrides });
+        if (ticket) await createTicket(loop.id);
+        ids[name] = loop.id;
+      };
+      await make('backoff', { idleStreak: 2 });
+      await make('budget', { status: 'paused', autoResume: 'budget', statusReason: BUDGET_PAUSE_REASON });
+      await make('credits', { status: 'paused', autoResume: 'credits', statusReason: 'Out of credits' });
+      await make('allBudget', { status: 'paused', autoResume: 'budget', statusReason: USER_BUDGET_PAUSE_REASON });
+      await make('owner', { status: 'paused' });
+      await make('noTicket', {}, false);
+      await make('closedOnly', {}, false);
+      await createTicket(ids.closedOnly, { status: 'closed' });
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      for (const id of Object.values(ids)) expect((await reload(id)).alarm).toBeUndefined();
+    });
+
+    it('marks a pacing defer as a pacing hold, never an alarm', async () => {
+      vi.spyOn(agentExecutionRepository, 'sumCreditsByLoop').mockImplementation((async (ids: string[]) =>
+        Object.fromEntries(ids.map(id => [id, 5]))) as never);
+      const early = new Date('2026-10-29T02:30:00Z');
+      const loop = await createLoop({ budgetCreditsPerDay: 24, nextRunAt: new Date(early.getTime() - 50 * 60_000) });
+      await createTicket(loop.id);
+
+      await runLoopSchedulerTick(early, logger);
+
+      const deferred = await reload(loop.id);
+      expect(deferred.hold).toMatchObject({ kind: 'pacing', until: deferred.nextRunAt, at: early });
+      expect(deferred.alarm).toBeUndefined();
+
+      await runLoopSchedulerTick(deferred.nextRunAt!, logger);
+      expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+      expect((await reload(loop.id)).hold).toBeUndefined();
+    });
+
+    it('marks loops left out by the global run cap as capacity holds, recomputed each tick', async () => {
+      for (let i = 0; i < 4; i++) {
+        await createLoop({ activeExecutionId: `busy-${i}`, nextRunAt: LATER });
+        executions[`busy-${i}`] = { status: 'running', updatedAt: NOW, createdAt: NOW };
+      }
+      const waiting = await createLoop({ nextRunAt: LONG_DUE });
+      await createTicket(waiting.id);
+
+      await runLoopSchedulerTick(NOW, logger);
+      expect(h.startAgentExecution).not.toHaveBeenCalled();
+      expect(await reload(waiting.id)).toMatchObject({ hold: { kind: 'capacity', at: NOW } });
+      expect((await reload(waiting.id)).alarm).toBeUndefined();
+
+      await Loop.updateMany({ activeExecutionId: 'busy-0' }, { $unset: { activeExecutionId: '' } });
+      await runLoopSchedulerTick(NOW, logger);
+      const started = await reload(waiting.id);
+      expect(started.activeExecutionId).toBe('exec-1');
+      expect(started.hold).toBeUndefined();
+    });
+
+    it('a loop made due with a spent budget is still paused by admission', async () => {
+      vi.spyOn(agentExecutionRepository, 'sumCreditsByLoop').mockImplementation((async (ids: string[]) =>
+        Object.fromEntries(ids.map(id => [id, 10]))) as never);
+      const loop = await createLoop({ budgetCreditsPerDay: 10, nextRunAt: LATER, idleStreak: 2 });
+      await loopRepository.makeDueNow(loop.id, NOW);
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      expect(h.startAgentExecution).not.toHaveBeenCalled();
+      expect(await reload(loop.id)).toMatchObject({ status: 'paused', autoResume: 'budget' });
+    });
+  });
+
+  describe('long run', () => {
+    const completedRun = (id: string, minutes: number) => ({
+      id,
+      status: 'completed',
+      createdAt: new Date(0),
+      completedAt: new Date(minutes * 60_000),
+    });
+    const startLong = async (ageMinutes: number, overrides: Record<string, unknown> = {}) => {
+      const loop = await createLoop({ activeExecutionId: 'exec-long', nextRunAt: LATER });
+      executions['exec-long'] = {
+        id: 'exec-long',
+        userId: 'user-1',
+        status: 'running',
+        updatedAt: NOW,
+        createdAt: minutesAgo(ageMinutes),
+        ...overrides,
+      };
+      return loop;
+    };
+
+    it('flags a run past 3x the median of recent runs, links the notice to it, and the fold clears it', async () => {
+      vi.spyOn(agentExecutionRepository, 'listRecentForLoop').mockResolvedValue([
+        { id: 'exec-long', status: 'running', createdAt: minutesAgo(100) },
+        completedRun('a', 20),
+        completedRun('b', 30),
+        completedRun('c', 40),
+        { id: 'd', status: 'failed', createdAt: new Date(0) },
+      ] as never);
+      const loop = await startLong(100);
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      expect((await reload(loop.id)).alarm).toEqual({
+        kind: 'long_run',
+        reason: 'Run going for 100 min, about 3x longer than usual',
+        since: NOW,
+        executionId: 'exec-long',
+      });
+      const notice = await Inbox.findOne({ sourceKey: `loop:${loop.id}:alarm:long_run` }).lean();
+      expect(notice).toMatchObject({
+        title: 'Loop "Digest": run going much longer than usual',
+        link: `/loops/${loop.id}?run=exec-long`,
+      });
+
+      executions['exec-long'] = { ...executions['exec-long'], status: 'completed', result: { answer: 'done' } };
+      await runLoopSchedulerTick(NOW, logger);
+      expect((await reload(loop.id)).alarm).toBeUndefined();
+      expect(await keys()).toEqual([]);
+    });
+
+    it('uses the 60 min floor alone with too few completed runs', async () => {
+      vi.spyOn(agentExecutionRepository, 'listRecentForLoop').mockResolvedValue([completedRun('a', 1)] as never);
+      const under = await startLong(59);
+      await runLoopSchedulerTick(NOW, logger);
+      expect((await reload(under.id)).alarm).toBeUndefined();
+
+      executions['exec-long'].createdAt = minutesAgo(61);
+      await runLoopSchedulerTick(NOW, logger);
+      expect((await reload(under.id)).alarm).toMatchObject({ kind: 'long_run', reason: 'Run going for 61 min' });
+    });
+
+    it('does not flag a run under 3x the median, waiting on children, or gate-paused', async () => {
+      vi.spyOn(agentExecutionRepository, 'listRecentForLoop').mockResolvedValue([
+        completedRun('a', 40),
+        completedRun('b', 40),
+        completedRun('c', 40),
+      ] as never);
+      const under = await startLong(110);
+      await runLoopSchedulerTick(NOW, logger);
+      expect((await reload(under.id)).alarm).toBeUndefined();
+
+      executions['exec-long'] = { ...executions['exec-long'], status: 'awaiting_subagent', createdAt: minutesAgo(500) };
+      await runLoopSchedulerTick(NOW, logger);
+      expect((await reload(under.id)).alarm).toBeUndefined();
+
+      executions['exec-long'] = { ...executions['exec-long'], status: 'paused', createdAt: minutesAgo(500) };
+      await runLoopSchedulerTick(NOW, logger);
+      expect((await reload(under.id)).alarm).toBeUndefined();
+    });
+  });
+
+  describe('stranded tickets', () => {
+    const age = (id: string, at: Date) =>
+      WorkItem.collection.updateOne({ _id: new mongoose.Types.ObjectId(id) }, { $set: { updatedAt: at } });
+
+    it('reopens a claim with no run once it is older than a lease, uncounted, and makes the loop due', async () => {
+      const loop = await createLoop({ nextRunAt: LATER });
+      const stale = await createTicket(loop.id, { status: 'in_progress', runCount: 1 });
+      const fresh = await createTicket(loop.id, { status: 'in_progress', runCount: 1 });
+      await age(stale.id, new Date(NOW.getTime() - LOOP_LEASE_MS - 1000));
+      await age(fresh.id, new Date(NOW.getTime() - LOOP_LEASE_MS + 60_000));
+      refuseStarts();
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      expect(await ticketOf(stale.id)).toMatchObject({ status: 'open', runCount: 0 });
+      expect(await ticketOf(fresh.id)).toMatchObject({ status: 'in_progress', runCount: 1 });
+      expect((await reload(loop.id)).nextRunAt).toEqual(NOW);
+    });
+
+    it('waits while the loop has a run in flight that could still link the claim', async () => {
+      const loop = await createLoop({ activeExecutionId: 'exec-a', nextRunAt: LATER });
+      executions['exec-a'] = { status: 'running', updatedAt: NOW, createdAt: NOW };
+      const unlinked = await createTicket(loop.id, { status: 'in_progress' });
+      await age(unlinked.id, minutesAgo(60));
+
+      await runLoopSchedulerTick(NOW, logger);
+      expect(await ticketOf(unlinked.id)).toMatchObject({ status: 'in_progress' });
+    });
+
+    it('reopens a ticket whose run is gone or finished; leaves the active, resumed and desktop runs alone', async () => {
+      const loop = await createLoop({ activeExecutionId: 'exec-active', nextRunAt: LATER });
+      executions['exec-active'] = { status: 'running', updatedAt: NOW, createdAt: NOW };
+      executions['exec-done'] = { status: 'completed' };
+      executions['exec-resumed'] = { status: 'completed' };
+      executions['exec-desktop'] = { status: 'completed', runner: 'desktop' };
+      executions['exec-live'] = { status: 'running', updatedAt: NOW };
+      const ticket = (executionId: string) =>
+        createTicket(loop.id, { status: 'in_progress', executionId, runCount: 1 });
+      const missing = await ticket('exec-missing');
+      const done = await ticket('exec-done');
+      const active = await ticket('exec-active');
+      const resumed = await ticket('exec-resumed');
+      const desktop = await ticket('exec-desktop');
+      const live = await ticket('exec-live');
+      await loopEventRepository.resolveUnsure(
+        {
+          loopId: loop.id,
+          userId: 'user-1',
+          executionId: 'exec-resumed',
+          iteration: 1,
+          confidence: 0.2,
+          reason: 'thin',
+          requestedAt: new Date(1000),
+        } as never,
+        { outcome: 'resumed', at: NOW }
+      );
+      // Keep the resumed fold from running this tick, so only the sweep could touch its ticket.
+      vi.spyOn(loopEventRepository, 'listResumedUnfolded').mockResolvedValue([]);
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      for (const t of [missing, done]) {
+        const after = await ticketOf(t.id);
+        expect(after).toMatchObject({ status: 'open', runCount: 0 });
+        expect(after.executionId).toBeUndefined();
+      }
+      for (const t of [active, resumed, desktop, live]) {
+        expect(await ticketOf(t.id)).toMatchObject({ status: 'in_progress', runCount: 1 });
+      }
+    });
+  });
+});

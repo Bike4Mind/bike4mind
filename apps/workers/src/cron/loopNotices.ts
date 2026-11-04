@@ -1,4 +1,11 @@
-import { InboxType, loopStatusNeedsOwner, type ILoop, type IWorkItem, type LoopStatus } from '@bike4mind/common';
+import {
+  InboxType,
+  loopStatusNeedsOwner,
+  type ILoop,
+  type IWorkItem,
+  type LoopAlarmKind,
+  type LoopStatus,
+} from '@bike4mind/common';
 import { inboxRepository, loopRepository, usableObjectIds, workItemRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 
@@ -30,13 +37,24 @@ const NEXT_STEP: Record<NonNullable<ILoop['autoResume']> | 'owner', string> = {
   owner: 'Open the loop and set it live again once fixed.',
 };
 
+const ALARM_TITLES: Record<LoopAlarmKind, string> = {
+  idle_with_work: 'is idle with ready tickets',
+  long_run: 'run going much longer than usual',
+};
+
+const ALARM_NEXT_STEP: Record<LoopAlarmKind, string> = {
+  idle_with_work: 'Open the loop to see why it is not running.',
+  long_run: 'Open the run to check on it; abort it there if it is stuck.',
+};
+
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 3)}...` : text);
 
 /**
  * The notices that should be open right now: one per loop whose status needs its owner
  * (`loopStatusNeedsOwner`, shared with the loop list marker) and one per blocked ticket of a loop
  * that still exists. The status is part of the key, so `paused` -> `error` replaces the notice.
- * Loops paused by their owner's all-loops budget share one notice per user instead.
+ * Loops paused by their owner's all-loops budget share one notice per user instead. A loop with a
+ * liveness alarm (set by the scheduler) gets one more, keyed by the alarm kind.
  */
 export function desiredLoopNotices(
   loops: ILoop[],
@@ -66,6 +84,23 @@ export function desiredLoopNotices(
     }));
   notices.push(...perLoop);
 
+  for (const loop of loops) {
+    if (!loop.alarm) continue;
+    const { kind, reason, executionId } = loop.alarm;
+    notices.push({
+      sourceKey: `${KEY_PREFIX}${loop.id}:alarm:${kind}`,
+      receiverId: loop.userId,
+      title: clip(
+        kind === 'idle_with_work'
+          ? `Loop "${loop.name}" ${ALARM_TITLES[kind]}`
+          : `Loop "${loop.name}": ${ALARM_TITLES[kind]}`,
+        TITLE_CHARS
+      ),
+      message: clip(`${reason}\n${ALARM_NEXT_STEP[kind]}`, MESSAGE_CHARS),
+      link: kind === 'long_run' && executionId ? `/loops/${loop.id}?run=${executionId}` : `/loops/${loop.id}`,
+    });
+  }
+
   for (const ticket of tickets) {
     const loop = loopsById.get(ticket.loopId!);
     if (!loop) continue;
@@ -92,12 +127,13 @@ export function desiredLoopNotices(
  *
  * Global, but bounded by what currently needs an owner rather than by all loops: each query reads
  * through an index and returns only loops in needs_you/error/paused ({status, nextRunAt}), blocked loop
- * tickets (the partial {status, loopId} index, entered at status 'blocked') and held `loop:` notices (the partial
+ * tickets (the partial {status, loopId} index, entered at status 'blocked'), alarmed loops (the partial
+ * {alarm.kind} index) and held `loop:` notices (the partial
  * unique sourceKey index, which `listKeyed` states `$exists` for). Live loops and open or closed tickets
  * are never read.
  */
 export async function syncLoopNotices(logger: Logger): Promise<void> {
-  const [candidates, tickets, held] = await Promise.all([
+  const [statusLoops, tickets, held, alarmed] = await Promise.all([
     loopRepository.find({ status: { $in: ['needs_you', 'error', 'paused'] } }),
     workItemRepository.find({
       loopId: { $exists: true },
@@ -106,7 +142,9 @@ export async function syncLoopNotices(logger: Logger): Promise<void> {
       blockedOn: { $exists: false },
     }),
     inboxRepository.listKeyed(KEY_PREFIX),
+    loopRepository.listAlarmed(),
   ]);
+  const candidates = [...new Map([...statusLoops, ...alarmed].map(loop => [loop.id, loop])).values()];
   const loopsById = new Map(candidates.map(loop => [loop.id, loop]));
   const missing = [...new Set(tickets.map(ticket => ticket.loopId!))].filter(id => !loopsById.has(id));
   const loopIds = usableObjectIds(missing, 'loopNotices', logger);

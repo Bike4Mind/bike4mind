@@ -59,6 +59,16 @@ export const MAX_CLAIMS_PER_TICK = 100;
 export const MAX_REOPENS_PER_TICK = 200;
 /** Ceiling on the idle back-off, as a multiple of the loop's interval (and never past a day). */
 export const MAX_BACKOFF_FACTOR = 8;
+/** A live loop past due by this many intervals (and at least the floor, in minutes) with ready tickets is flagged. */
+export const LOOP_IDLE_ALARM_INTERVALS = 3;
+export const LOOP_IDLE_ALARM_FLOOR_MIN = 30;
+/** A cloud run older than the floor and this many times the loop's median run (last few completed) is flagged. */
+export const LOOP_LONG_RUN_FLOOR_MS = 60 * 60 * 1000;
+export const LOOP_LONG_RUN_FACTOR = 3;
+const LOOP_LONG_RUN_SAMPLE = 5;
+const LOOP_LONG_RUN_MIN_SAMPLES = 3;
+/** ponytail: loops or tickets each liveness sweep reads per tick, oldest first; the rest wait for later ticks. */
+export const MAX_LIVENESS_SWEEP = 100;
 
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -68,6 +78,41 @@ export { USER_BUDGET_PAUSE_REASON };
 export { TICKET_RUNS_PER_STAGE, ticketRunLimit } from '@server/utils/loopTickets';
 export { pacedAllowance, pacedReadyAt, runCreditCap } from '@server/utils/loopBudget';
 export { LOOP_PROMPT_ANSWERS, LOOP_PROMPT_DIRECTIVES } from '@server/utils/loopMemory';
+
+export const median = (values: number[]): number => {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+};
+
+/** Run age past which a run is flagged as long: the floor alone until the loop has a few completed runs. */
+export const longRunThresholdMs = (durationsMs: number[]): number =>
+  durationsMs.length < LOOP_LONG_RUN_MIN_SAMPLES
+    ? LOOP_LONG_RUN_FLOOR_MS
+    : Math.max(LOOP_LONG_RUN_FLOOR_MS, LOOP_LONG_RUN_FACTOR * median(durationsMs));
+
+export const idleAlarmThresholdMin = (intervalMinutes: number): number =>
+  Math.max(LOOP_IDLE_ALARM_INTERVALS * intervalMinutes, LOOP_IDLE_ALARM_FLOOR_MIN);
+
+/**
+ * The idle-with-work rule minus the ready-ticket lookup: a live loop with no run in flight and no claim, held
+ * back by nothing deliberate (no pacing or capacity hold, no idle back-off), and far past its due time.
+ * Paused, needs_you and error loops never match.
+ */
+export function idleAlarmCandidate(
+  loop: Pick<
+    ILoop,
+    'status' | 'activeExecutionId' | 'leaseUntil' | 'hold' | 'idleStreak' | 'nextRunAt' | 'intervalMinutes'
+  >,
+  now: Date
+): boolean {
+  if (loop.status !== 'live' || loop.activeExecutionId || !loop.nextRunAt) return false;
+  if (loop.leaseUntil && new Date(loop.leaseUntil) > now) return false;
+  // A capacity hold is rewritten every tick; a pacing hold lapses once its deferred run is due.
+  if (loop.hold?.kind === 'capacity' || (loop.hold?.until && new Date(loop.hold.until) > now)) return false;
+  if (loop.idleStreak) return false;
+  return new Date(loop.nextRunAt).getTime() <= now.getTime() - idleAlarmThresholdMin(loop.intervalMinutes) * MINUTE_MS;
+}
 
 /** Minutes until the next run after `idleStreak` idle runs in a row: doubling, capped at 8x and at a day. */
 export function backoffMinutes(intervalMinutes: number, idleStreak: number): number {
@@ -134,9 +179,24 @@ export async function runLoopSchedulerTick(now: Date, logger: Logger): Promise<v
 
   // Before dispatch, so a reopened ticket at the top of its loop runs this tick.
   await reopenParkedTickets(now, logger).catch(error => logger.error('[Loops] Reopen sweep failed', error as Error));
+  await recoverStrandedTickets(now, logger).catch(error =>
+    logger.error('[Loops] Stranded ticket sweep failed', error as Error)
+  );
 
+  // Capacity holds are recomputed every tick: only loops the run cap kept out of this tick carry one.
+  await loopRepository
+    .clearCapacityHolds()
+    .catch(error => logger.error('[Loops] Clearing capacity holds failed', error as Error));
   const allowance = Math.min(MAX_DISPATCH_PER_TICK, MAX_ACTIVE_LOOP_RUNS - (await loopRepository.countInFlight()));
-  if (allowance > 0) await dispatchDue(now, allowance, logger);
+  const { claimed, capped } = allowance > 0 ? await dispatchDue(now, allowance, logger) : { claimed: [], capped: true };
+  if (capped) {
+    await loopRepository
+      .setCapacityHolds(now, claimed)
+      .catch(error => logger.error('[Loops] Setting capacity holds failed', error as Error));
+  }
+
+  // After the capacity holds, which it reads.
+  await raiseIdleAlarms(now, logger).catch(error => logger.error('[Loops] Idle alarm sweep failed', error as Error));
 
   // Last, so notices reflect this tick's state changes.
   await syncLoopNotices(logger).catch(error => logger.error('[Loops] Notice sync failed', error as Error));
@@ -162,7 +222,11 @@ async function reopenParkedTickets(now: Date, logger: Logger): Promise<void> {
  * paused, lease released) is still skipped for the rest of the tick so it is not re-claimed in a hot loop,
  * and does not use up the allowance.
  */
-async function dispatchDue(now: Date, allowance: number, logger: Logger): Promise<void> {
+async function dispatchDue(
+  now: Date,
+  allowance: number,
+  logger: Logger
+): Promise<{ claimed: string[]; capped: boolean }> {
   const claimed: string[] = [];
   let served: string[] = [];
   let started = 0;
@@ -181,6 +245,106 @@ async function dispatchDue(now: Date, allowance: number, logger: Logger): Promis
       logger.error(`[Loops] Failed to dispatch loop ${loop.id}`, error as Error);
     }
   }
+  // Stopping at MAX_CLAIMS_PER_TICK is not the run cap, so it does not count as capped.
+  return { claimed, capped: started >= allowance };
+}
+
+/**
+ * Reopens loop tickets left `in_progress` with no run working them: (a) claimed but never linked to a run
+ * (a crash between claim and `setExecution`), once the claim is older than a lease and the loop has no run
+ * in flight that could still link it; (b) linked to a cloud run that is gone or finished and is not the
+ * loop's active run, with no resumed event waiting to fold it. Desktop runs belong to the runner lease sweep.
+ */
+async function recoverStrandedTickets(now: Date, logger: Logger): Promise<void> {
+  const loops = new Map<string, ILoop | null>();
+  for (const ticket of await workItemRepository.listInProgressForLoops(MAX_LIVENESS_SWEEP)) {
+    try {
+      const loopId = ticket.loopId!;
+      if (!loops.has(loopId)) loops.set(loopId, await loopRepository.findById(loopId));
+      const loop = loops.get(loopId);
+      if (!loop || !(await isStranded(ticket, loop, now))) continue;
+      if (!(await workItemRepository.releaseStranded(ticket.id, ticket.executionId))) continue;
+      await makeDueIfReady(loop, now);
+      logger.warn(`[Loops] Reopened stranded ticket ${ticket.id} of loop ${loop.id}`, {
+        executionId: ticket.executionId,
+      });
+    } catch (error) {
+      logger.error(`[Loops] Failed to check ticket ${ticket.id} for a stranded claim`, error as Error);
+    }
+  }
+}
+
+async function isStranded(ticket: IWorkItem, loop: ILoop, now: Date): Promise<boolean> {
+  if (!ticket.executionId) {
+    return !loop.activeExecutionId && new Date(ticket.updatedAt).getTime() < now.getTime() - LOOP_LEASE_MS;
+  }
+  if (ticket.executionId === loop.activeExecutionId) return false;
+  const execution = await agentExecutionRepository.findById(ticket.executionId);
+  if (execution && (execution.runner === 'desktop' || ACTIVE_AGENT_EXECUTION_STATUSES.includes(execution.status))) {
+    return false;
+  }
+  return !(await loopEventRepository.hasUnfolded(ticket.executionId));
+}
+
+/**
+ * Flags live loops that should be running ready tickets but are not (`idleAlarmCandidate` plus a ready
+ * ticket), and clears the flag once that stops holding. No self-heal: such a loop is already due, so
+ * something outside the scheduler's holds keeps it from running and its owner should look.
+ */
+async function raiseIdleAlarms(now: Date, logger: Logger): Promise<void> {
+  const [pastDue, alarmed] = await Promise.all([
+    loopRepository.listPastDueLive(new Date(now.getTime() - LOOP_IDLE_ALARM_FLOOR_MIN * MINUTE_MS), MAX_LIVENESS_SWEEP),
+    loopRepository.listAlarmed(['idle_with_work']),
+  ]);
+  const candidates = new Map([...alarmed, ...pastDue].map(loop => [loop.id, loop]));
+  for (const loop of candidates.values()) {
+    try {
+      const ready =
+        idleAlarmCandidate(loop, now) &&
+        (await workItemRepository.findNextReadyForLoop(loop.userId, loop.id, loop.stages, desktopStagesOf(loop)));
+      if (ready) {
+        const minutes = Math.round((now.getTime() - new Date(loop.nextRunAt!).getTime()) / MINUTE_MS);
+        await loopRepository.setAlarm(loop.id, {
+          kind: 'idle_with_work',
+          reason: `Ready tickets waiting, but no run for ${minutes} min past its schedule`,
+          since: now,
+        });
+      } else if (loop.alarm?.kind === 'idle_with_work') {
+        await loopRepository.clearAlarm(loop.id, 'idle_with_work');
+      }
+    } catch (error) {
+      logger.error(`[Loops] Failed to check loop ${loop.id} for idling`, error as Error);
+    }
+  }
+}
+
+/**
+ * Flags the loop's active cloud run once it has gone far longer than its usual runs. Raised, never aborted:
+ * the heartbeat rule already folds a dead run and the credit cap bounds spend, so a long live run is the
+ * owner's call. The fold clears the alarm (`foldRun`).
+ */
+async function raiseLongRun(loop: ILoop, execution: IAgentExecution, executionId: string, now: Date): Promise<void> {
+  if (execution.status === 'paused' || execution.runner === 'desktop') return;
+  const ageMs = now.getTime() - new Date(execution.createdAt).getTime();
+  if (ageMs <= LOOP_LONG_RUN_FLOOR_MS) return;
+  const durations = (
+    await agentExecutionRepository.listRecentForLoop(loop.id, loop.sessionId, LOOP_LONG_RUN_SAMPLE + 1)
+  )
+    .filter(run => run.id !== executionId && run.status === 'completed' && run.completedAt && run.createdAt)
+    .slice(0, LOOP_LONG_RUN_SAMPLE)
+    .map(run => new Date(run.completedAt!).getTime() - new Date(run.createdAt).getTime());
+  if (ageMs <= longRunThresholdMs(durations)) return;
+  const usual = durations.length >= LOOP_LONG_RUN_MIN_SAMPLES ? median(durations) : 0;
+  const minutes = Math.round(ageMs / MINUTE_MS);
+  await loopRepository.setAlarm(loop.id, {
+    kind: 'long_run',
+    reason:
+      usual > 0
+        ? `Run going for ${minutes} min, about ${Math.round(ageMs / usual)}x longer than usual`
+        : `Run going for ${minutes} min`,
+    since: now,
+    executionId,
+  });
 }
 
 /** Parents waiting on children legitimately idle for hours; the executor's own stale sweep skips them too. */
@@ -204,7 +368,9 @@ async function reconcileLoop(loop: ILoop, now: Date): Promise<void> {
     if (WAITING_ON_CHILDREN.includes(execution.status)) return;
     // ponytail: updatedAt heuristic, same threshold and statuses as the start-time stale sweep, which
     // aborts the doc on the owner's next start. A legitimately long-quiet run is folded as failed here.
-    if (now.getTime() - new Date(execution.updatedAt).getTime() < STALE_ACTIVE_MS) return;
+    if (now.getTime() - new Date(execution.updatedAt).getTime() < STALE_ACTIVE_MS) {
+      return raiseLongRun(loop, execution, executionId, now);
+    }
   }
 
   // The ticket this run worked, if any. Its fold is conditional on it still being in_progress under this
@@ -459,7 +625,7 @@ async function admit(loop: ILoop, model: string, now: Date, logger: Logger): Pro
       break;
     }
     case 'paced':
-      await loopRepository.deferUntil(loop.id, admission.readyAt);
+      await loopRepository.deferUntil(loop.id, admission.readyAt, now);
       logger.info(`[Loops] Loop ${loop.id} deferred by pacing until ${admission.readyAt.toISOString()}`);
       break;
   }
@@ -516,8 +682,6 @@ async function releaseTicket(ticket: IWorkItem, logger: Logger): Promise<void> {
 
 /** Returns whether an execution now holds a run slot for the loop. */
 async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<boolean> {
-  // ponytail: a crash between this claim and setExecution strands the ticket in_progress with no run;
-  // the owner moves it back by hand. Add a sweep if that is ever seen.
   let ticket: IWorkItem | null = null;
   let result: Awaited<ReturnType<typeof startAgentExecution>>;
   try {
