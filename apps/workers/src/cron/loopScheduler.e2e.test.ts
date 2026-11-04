@@ -1087,6 +1087,51 @@ describe('runLoopSchedulerTick - stage config', () => {
     });
   });
 
+  it('first releases desktop runs whose lease lapsed, reopening their tickets, and leaves a fresh one', async () => {
+    const loop = await createLoop({
+      stages: STAGES,
+      stageConfig: [{ stage: 'review', runner: 'desktop' }],
+      nextRunAt: new Date(NOW.getTime() + 60 * 60_000),
+    });
+    const AgentExecution = mongoose.model('AgentExecution');
+    const desktopRun = async (leaseUntil: Date) => {
+      const id = new mongoose.Types.ObjectId().toString();
+      const ticket = await createTicket(loop.id, {
+        stage: 'review',
+        status: 'in_progress',
+        executionId: id,
+        runCount: 1,
+      });
+      await AgentExecution.create({
+        _id: id,
+        userId: 'user-1',
+        sessionId: 'session-1',
+        questId: 'session-1',
+        query: 'q',
+        model: 'm',
+        status: 'running',
+        loopId: loop.id,
+        runner: 'desktop',
+        runnerLeaseUntil: leaseUntil,
+      });
+      return { id, ticket };
+    };
+    const lapsed = await desktopRun(new Date(NOW.getTime() - 1000));
+    const fresh = await desktopRun(new Date(NOW.getTime() + 60_000));
+    vi.mocked(agentExecutionRepository.findById).mockRestore();
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(await ticketOf(lapsed.ticket.id)).toMatchObject({ status: 'open', runCount: 1 });
+    expect((await AgentExecution.findById(lapsed.id))!.toObject()).toMatchObject({
+      status: 'failed',
+      failureReason: 'abandoned',
+    });
+    expect(await ticketOf(fresh.ticket.id)).toMatchObject({ status: 'in_progress' });
+    expect((await AgentExecution.findById(fresh.id))!.toObject()).toMatchObject({ status: 'running' });
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
+  });
+
   it('never claims a desktop-stage ticket: an older one is skipped for a newer cloud one', async () => {
     const loop = await createLoop({ stages: STAGES, stageConfig: [{ stage: 'review', runner: 'desktop' }] });
     const desktop = await createTicket(loop.id, { stage: 'review' });

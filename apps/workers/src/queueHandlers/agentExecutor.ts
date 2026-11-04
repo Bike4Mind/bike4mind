@@ -370,6 +370,8 @@ const VIEWER_CACHED_ACTIONS = new Set(['agent_text_delta', 'subagent_text_delta'
  * With `viewerExecutionId`, every frame is also sent to that execution's
  * `viewerConnectionIds` (the WS `subscribe` command in `apps/client/server/websocket/agentExecute.ts`),
  * even on a headless run. Viewers never change `connectionId` or `hasApprover`.
+ * A desktop loop run's frames reach viewers through relayToViewers (apps/client/server/utils/relayToViewers.ts)
+ * instead: keep the frame shapes in sync.
  */
 export function createWsSender(connectionId: string, logger: Logger, viewerExecutionId?: string) {
   // A REST-dispatched run has no WebSocket peer. Sending to the sentinel id would fail

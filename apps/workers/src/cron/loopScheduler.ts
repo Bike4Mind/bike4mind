@@ -37,6 +37,7 @@ import {
 } from '@server/utils/loopTickets';
 import { Resource } from 'sst';
 import { canPayAgain, loopAdmission } from '@server/utils/loopBudget';
+import { releaseExpiredRunnerLeases } from '@server/utils/loopRunner';
 import { buildLoopQuery, LOOP_PROMPT_ANSWERS, LOOP_PROMPT_DIRECTIVES, parseLoopMemory } from '@server/utils/loopMemory';
 import { syncLoopNotices, USER_BUDGET_PAUSE_REASON } from './loopNotices';
 
@@ -97,6 +98,11 @@ export async function runLoopSchedulerTick(now: Date, logger: Logger): Promise<v
     logger.info('[Loops] EnableLoops is off; skipping tick');
     return;
   }
+
+  // First, so a ticket whose desktop runner died is open again before this tick's folds and claims.
+  await releaseExpiredRunnerLeases(now, logger).catch(error =>
+    logger.error('[Loops] Desktop lease sweep failed', error as Error)
+  );
 
   for (const loop of await loopRepository.listAutoPaused()) {
     try {
