@@ -11,6 +11,7 @@ import {
   McpRefreshLeaseResult,
   McpConnectionStatus,
   McpDiscoveryUpdate,
+  McpOAuthConfigUpdate,
   McpOAuthTokenUpdate,
   McpToolSettingsUpdate,
   McpToolVersionConflictError,
@@ -357,6 +358,24 @@ function oauthTokenWrite(
   return { $set, $unset };
 }
 
+/** Every `auth.oauth` field `setOAuthConfig` owns; the token fields are written only by the token writers. */
+const OAUTH_CONFIG_FIELDS = [
+  'resource',
+  'resourceMetadataUrl',
+  'issuer',
+  'authorizationServerUrl',
+  'tokenEndpoint',
+  'revocationEndpoint',
+  'registrationEndpoint',
+  'tokenEndpointAuthMethod',
+  'issParameterSupported',
+  'scopes',
+  'clientMode',
+  'clientRegistrationId',
+  'manualClientIdEnc',
+  'manualClientSecretEnc',
+] as const satisfies readonly (keyof McpOAuthConfigUpdate)[];
+
 // A probe or refresh that finishes after a disconnect must not re-offer an OAuth connection with no token.
 const CONNECTABLE_FILTER = { $or: [{ 'auth.kind': { $ne: 'oauth' } }, { 'auth.oauth.hasAccessToken': true }] };
 
@@ -649,6 +668,26 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
           'auth.apiKey.last4': apiKey.last4,
         },
       },
+      { new: true, runValidators: true }
+    );
+    return result?.toJSON() ?? null;
+  }
+
+  async setOAuthConfig(
+    id: string,
+    owner: McpConnectionOwner,
+    config: McpOAuthConfigUpdate
+  ): Promise<IMcpConnectionDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id) || owner.ownerType !== 'user') return null;
+    const $set: Record<string, unknown> = { 'auth.kind': 'oauth' };
+    const $unset: Record<string, 1> = {};
+    for (const field of OAUTH_CONFIG_FIELDS) {
+      if (config[field] === undefined) $unset[`auth.oauth.${field}`] = 1;
+      else $set[`auth.oauth.${field}`] = config[field];
+    }
+    const result = await this.model.findOneAndUpdate(
+      { _id: id, ownerType: 'user', ownerKey: owner.ownerKey, 'auth.kind': { $in: ['none', 'oauth'] } },
+      { $set, ...(Object.keys($unset).length > 0 ? { $unset } : {}) },
       { new: true, runValidators: true }
     );
     return result?.toJSON() ?? null;

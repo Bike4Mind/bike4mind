@@ -119,6 +119,8 @@ export function deriveMcpConnectionSlug(displayName: string, urlHost: string): s
 
 function buildAuth(body: McpConnectionCreateBody['auth']): IMcpConnectionAuth {
   if (body.kind === 'none') return { kind: 'none' };
+  // No `oauth` subdocument yet: the start route discovers and writes it, and the 401 probe records the challenge.
+  if (body.kind === 'oauth') return { kind: 'oauth' };
   const valueEnc = encryptToken(body.value);
   if (!valueEnc) throw new Error('API key encryption returned nothing');
   return {
