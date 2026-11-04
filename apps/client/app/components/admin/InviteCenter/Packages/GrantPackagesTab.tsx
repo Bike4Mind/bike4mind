@@ -99,6 +99,7 @@ const columns: DataColumn<GrantPackageRow>[] = [
   {
     id: 'status',
     label: 'Status',
+    width: '10rem',
     render: row => {
       const cap = capState(row);
       return (
@@ -158,6 +159,7 @@ const GrantPackagesTab = ({ embedded = false }: { embedded?: boolean }) => {
         columns={columns}
         getRowId={row => row.id}
         label="Grant packages"
+        minWidth="68rem"
         loading={isPending}
         error={error ? getErrorMessage(error) : undefined}
         onRetry={() => void refetch()}
