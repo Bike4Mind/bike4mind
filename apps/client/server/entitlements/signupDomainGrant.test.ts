@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Logger } from '@bike4mind/observability';
 
-const { creditLotRepository, mockAddTagsToUser, mockClaimFreeCreditGrant } = vi.hoisted(() => ({
+const { creditLotRepository, mockAddTagsToUser, mockClaimFreeCreditGrant, mockFindUserById } = vi.hoisted(() => ({
   creditLotRepository: { id: 'lots' },
   mockAddTagsToUser: vi.fn(),
   mockClaimFreeCreditGrant: vi.fn(),
+  mockFindUserById: vi.fn(),
 }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
@@ -14,6 +15,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {
     addTagsToUser: (...a: unknown[]) => mockAddTagsToUser(...a),
     claimFreeCreditGrant: (...a: unknown[]) => mockClaimFreeCreditGrant(...a),
+    findById: (...a: unknown[]) => mockFindUserById(...a),
   },
 }));
 
@@ -86,6 +88,7 @@ describe('applySignupDomainGrant', () => {
     });
     mockAddTagsToUser.mockResolvedValue(undefined);
     mockClaimFreeCreditGrant.mockResolvedValue(true);
+    mockFindUserById.mockResolvedValue({ id: 'user-1' });
     mockGrantSubscription.mockResolvedValue({ status: 'granted', credits: 3000, currentCredits: 4100 });
     premiumPartnerSignupHooks.length = 0;
     mockAddCredits.mockResolvedValue({ currentCredits: 1100 });
@@ -378,6 +381,28 @@ describe('applySignupDomainGrant', () => {
         subscriptionGranted: true,
       });
       expect(mockPushInvalidation).toHaveBeenCalledWith('user-1', expect.anything());
+    });
+
+    it('withholds the credits and never spends the inbox claim for a blocked signup grant', async () => {
+      mockFindUserById.mockResolvedValue({ id: 'user-1', signupGrant: { blocked: { at: new Date() } } });
+
+      const result = await run();
+
+      expect(mockClaimFreeCreditGrant).not.toHaveBeenCalled();
+      expect(mockAddCredits).not.toHaveBeenCalled();
+      expect(result.creditsGranted).toBe(0);
+    });
+
+    it('still applies membership and tags when a blocked signup grant withholds the credits', async () => {
+      mockFindUserById.mockResolvedValue({ id: 'user-1', signupGrant: { blocked: { at: new Date() } } });
+
+      const result = await run();
+
+      expect(result).toMatchObject({
+        creditsGranted: 0,
+        joinedOrganizationId: 'org-1',
+        tagsApplied: ['Partner', 'cohort-a'],
+      });
     });
 
     it('treats a withheld grant as a normal outcome, so the partner hooks still run', async () => {
