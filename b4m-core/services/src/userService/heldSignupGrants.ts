@@ -8,6 +8,7 @@ import {
 import type { FreeCreditAdapters } from './freeCredits';
 import { releasePendingFreeCredits } from './freeCredits';
 import { accountBlockReasons, isAiAccessRevoked } from './accountState';
+import { isSignupGrantHeldForReview } from './signupRisk';
 
 export const MAX_BULK_RELEASE = 100;
 
@@ -50,7 +51,8 @@ async function releaseHeldGrant(
       !user.emailVerified ||
       accountBlockReasons(user).length ||
       isAiAccessRevoked(user) ||
-      isSignupGrantBlocked(user)
+      isSignupGrantBlocked(user) ||
+      isSignupGrantHeldForReview(user)
     )
       return none('withheld');
     const result = await releasePendingFreeCredits(
