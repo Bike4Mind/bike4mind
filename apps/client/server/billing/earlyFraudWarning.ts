@@ -133,14 +133,19 @@ async function attemptRefund(
 }
 
 /**
- * Takes back the signup credits a subscription payment released, when the warned charge is that
- * kind of payment. Capped at the balance, like the bulk abuse clawback. At most once per warning.
+ * Takes back the signup credits a subscription or credit pack payment released, when the warned charge
+ * is that kind of payment. Capped at the balance, like the bulk abuse clawback. At most once per warning.
  */
-async function clawbackSubscriptionUnlock(key: string, userId: string): Promise<number> {
+async function clawbackPaymentUnlock(
+  key: string,
+  userId: string,
+  unlockedBy: 'subscription' | 'credit_purchase'
+): Promise<number> {
   const user = await userRepository.findById(userId);
   const grant = user?.signupGrant;
   // unlockedBy is set only once the bonus is paid out; a bonus still held is never clawed back here.
-  if (!user || grant?.unlockedBy !== 'subscription' || !grant.unlockCredits) return 0;
+  // The grant stores no payment id, so a warning on any later charge of the same kind also claws it back.
+  if (!user || grant?.unlockedBy !== unlockedBy || !grant.unlockCredits) return 0;
   const credits = Math.max(0, Math.min(user.currentCredits ?? 0, grant.unlockCredits));
   if (credits === 0) return 0;
   if (!(await paymentRiskActionRepository.claimStep(key, 'signupClawback', userId))) return 0;
@@ -152,7 +157,9 @@ async function clawbackSubscriptionUnlock(key: string, userId: string): Promise<
       ownerType: CreditHolderType.User,
       credits,
       reason: 'abuse_clawback',
-      description: 'Signup credits unlocked by a subscription payment that Stripe flagged as fraudulent',
+      description: `Signup credits unlocked by a ${
+        unlockedBy === 'subscription' ? 'subscription payment' : 'credit pack purchase'
+      } that Stripe flagged as fraudulent`,
     },
     { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository }
   );
@@ -228,12 +235,19 @@ export function formatFraudWarningAlert(input: {
 async function resolvePurchaser(
   charge: Stripe.Charge,
   paymentIntentId: string | null
-): Promise<{ userId: string; purchasedCredits: number | null } | null> {
+): Promise<{ userId: string; purchasedCredits: number | null; unlockKind: 'subscription' | 'credit_purchase' } | null> {
   const purchase = paymentIntentId ? await creditTransactionRepository.findByPaymentIntentId(paymentIntentId) : null;
-  if (purchase) return { userId: purchase.ownerId, purchasedCredits: purchase.credits };
+  // A subscription invoice's credit row shares the payment-intent key, so the row type tells the two apart.
+  if (purchase) {
+    return {
+      userId: purchase.ownerId,
+      purchasedCredits: purchase.credits,
+      unlockKind: purchase.type === 'purchase' ? 'credit_purchase' : 'subscription',
+    };
+  }
   const customerId = idOf(charge.customer);
   const customer = customerId ? await userRepository.findByStripeCustomerId(customerId) : null;
-  return customer ? { userId: customer.id, purchasedCredits: null } : null;
+  return customer ? { userId: customer.id, purchasedCredits: null, unlockKind: 'subscription' } : null;
 }
 
 export async function respondToEarlyFraudWarning(
@@ -267,7 +281,7 @@ export async function respondToEarlyFraudWarning(
     await paymentRiskActionRepository.markCompleted(key, null);
     return;
   }
-  const { userId, purchasedCredits } = purchaser;
+  const { userId, purchasedCredits, unlockKind } = purchaser;
   const user = await userRepository.findById(userId);
   if (!user) throw new Error(`User ${userId} for early fraud warning ${warning.id} not found`);
 
@@ -282,8 +296,7 @@ export async function respondToEarlyFraudWarning(
     { sourceUserId: userId, trigger: 'early fraud warning', key: `${key}:linked` },
     logger
   );
-  // A credit pack never unlocks the signup grant; a subscription payment can.
-  const signupClawback = purchasedCredits === null ? await clawbackSubscriptionUnlock(key, userId) : 0;
+  const signupClawback = await clawbackPaymentUnlock(key, userId, unlockKind);
 
   const { refund, refundError } = shouldRefund(unspent, settings.minUnspentPercent)
     ? await attemptRefund({ warningId: warning.id, charge, paymentIntentId, userId, purchasedCredits })

@@ -11,18 +11,19 @@ export const SIGNUP_GRANT_UNLOCK_REASONS = [
   'work_email_verified',
   'activity_drip',
   'subscription',
+  'credit_purchase',
 ] as const;
 
 export type SignupGrantUnlockReason = (typeof SIGNUP_GRANT_UNLOCK_REASONS)[number];
 
 /** Unlocks bought with a payment, which a stolen card can fake until the payment settles. */
-export const PAYMENT_UNLOCK_REASONS = ['card_verified', 'subscription'] as const;
+export const PAYMENT_UNLOCK_REASONS = ['card_verified', 'subscription', 'credit_purchase'] as const;
 export type PaymentUnlockReason = (typeof PAYMENT_UNLOCK_REASONS)[number];
 
 export const isPaymentUnlockReason = (reason: unknown): reason is PaymentUnlockReason =>
   (PAYMENT_UNLOCK_REASONS as readonly unknown[]).includes(reason);
 
-/** Payment events that cancel a held payment unlock and close payment unlocks for the account. */
+/** Payment events that cancel a held payment unlock and close every non-admin signup release for the account. */
 export const SIGNUP_UNLOCK_FORFEIT_CAUSES = ['dispute', 'refund', 'fraud_warning'] as const;
 export type SignupUnlockForfeitCause = (typeof SIGNUP_UNLOCK_FORFEIT_CAUSES)[number];
 
@@ -55,7 +56,7 @@ export interface SignupGrant {
   activity?: { day: string; ms: number; lastAt: Date; period?: string };
   /** A payment unlock waiting for its payment to settle; the held-release job pays it from `releaseAt`. */
   heldUnlock?: { reason: PaymentUnlockReason; heldAt: Date; releaseAt: Date };
-  /** A disputed, refunded or fraud-warned payment: no later payment can unlock the remainder. */
+  /** A disputed, refunded or fraud-warned payment: only an admin can release more of the grant. */
   unlockForfeited?: { cause: SignupUnlockForfeitCause; at: Date };
 }
 
@@ -147,8 +148,9 @@ export interface SignupGrantLegacyToggles {
 
 export const isStoredToggleOn = (value: unknown) => value === true || value === 'true';
 
-/** The drip may still pay: the grant is mid-drip, or a drip completed it and a raised cap can reopen it. */
-export function signupGrantDripOpen(grant: Pick<SignupGrant, 'stage' | 'unlockedBy'>): boolean {
+/** The drip may still pay: the grant is mid-drip, or a drip completed it and a raised cap can reopen it. A forfeited grant never pays. */
+export function signupGrantDripOpen(grant: Pick<SignupGrant, 'stage' | 'unlockedBy' | 'unlockForfeited'>): boolean {
+  if (grant.unlockForfeited) return false;
   return grant.stage === 'signup' || (grant.stage === 'unlocked' && grant.unlockedBy === 'activity_drip');
 }
 
