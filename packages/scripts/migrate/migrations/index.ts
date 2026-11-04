@@ -271,7 +271,7 @@ import SeedSignupGrantSchedule from './20260921237400_seed-signup-grant-schedule
 import SeedSignupGrantPools from './20260921237500_seed-signup-grant-pools';
 import EnsureHeldCreditRewardIndexes from './20260921237600_ensure-heldcreditreward-indexes';
 import EnsureAnalyticsHopIndexes from './20260921238200_ensure-analytics-hop-indexes';
-import EnsureReferralInviterIndexes from './20260921238300_ensure-referral-inviter-indexes';
+import EnsureReferralInviterIndexes from './20260921239500_ensure-referral-inviter-indexes';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
