@@ -5,7 +5,8 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 
 const TICKET_PATTERN = /^[A-Za-z0-9_-]{22}$/;
 const TIMEOUT_MS = 20_000;
-const LABEL_MAX = 80;
+// BedrockNews keeps up to 254 characters, the longest an email can be.
+const LABEL_MAX = 254;
 const SETTING_NAMES = ['BedrockNewsApiUrl', 'BedrockNewsPartnerKey'] as const satisfies readonly SettingKey[];
 
 export type ClaimResult = {
@@ -26,14 +27,6 @@ export type TicketPreview = {
 };
 
 type Failure = { ok: false; code: string; status: number };
-
-export function maskEmail(email: string): string {
-  const at = email.lastIndexOf('@');
-  const local = at === -1 ? email : email.slice(0, at);
-  const domain = at === -1 ? '' : email.slice(at);
-  const kept = local.length <= 3 ? local : local.slice(0, 3);
-  return `${kept}…${domain}`.slice(0, LABEL_MAX);
-}
 
 async function partnerConfig(): Promise<{ baseUrl: string; partnerKey: string } | null> {
   const settings = await getSettingsMap(
@@ -100,7 +93,7 @@ export async function redeemTicket(
 ): Promise<{ ok: true; result: ClaimResult } | Failure> {
   const res = await call<ClaimResult>(ticket, '/redeem', {
     method: 'POST',
-    body: { b4mUserId: user.id, b4mAccountLabel: maskEmail(user.email) },
+    body: { b4mUserId: user.id, b4mAccountLabel: user.email.slice(0, LABEL_MAX) },
   });
   return res.ok ? { ok: true, result: res.body } : res;
 }

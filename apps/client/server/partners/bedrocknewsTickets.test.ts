@@ -10,7 +10,7 @@ vi.mock('@bike4mind/utils', async orig => ({
   getSettingsMap: mockGetSettingsMap,
 }));
 
-import { maskEmail, previewTicket, redeemTicket } from './bedrocknewsTickets';
+import { previewTicket, redeemTicket } from './bedrocknewsTickets';
 
 const TICKET = 'abcdefghijklmnopqrstuv';
 const BASE = 'https://api.example.com';
@@ -24,18 +24,6 @@ beforeEach(() => {
   vi.stubGlobal('fetch', mockFetch);
 });
 afterEach(() => vi.unstubAllGlobals());
-
-describe('maskEmail', () => {
-  it('keeps three characters of the local part', () => {
-    expect(maskEmail('victor@bike4mind.com')).toBe('vic…@bike4mind.com');
-  });
-  it('keeps a short local part whole', () => {
-    expect(maskEmail('ab@x.io')).toBe('ab…@x.io');
-  });
-  it('stays within 80 characters', () => {
-    expect(maskEmail(`a@${'d'.repeat(200)}.com`).length).toBeLessThanOrEqual(80);
-  });
-});
 
 describe('previewTicket', () => {
   it('sends the partner key and returns the preview', async () => {
@@ -139,7 +127,7 @@ describe('redeemTicket', () => {
     expect(url).toBe(`${BASE}/api/headword/partner/tickets/${TICKET}/redeem`);
     expect(init.method).toBe('POST');
     expect(init.headers['X-Partner-Key']).toBe('secret-key');
-    expect(JSON.parse(init.body)).toEqual({ b4mUserId: user.id, b4mAccountLabel: 'vic…@bike4mind.com' });
+    expect(JSON.parse(init.body)).toEqual({ b4mUserId: user.id, b4mAccountLabel: user.email });
   });
 
   it.each([
