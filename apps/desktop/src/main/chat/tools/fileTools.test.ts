@@ -259,6 +259,115 @@ describe('file tools', () => {
       await expect(globFiles.run({ pattern: '*' }, context)).resolves.toContain('Folders:\n  sub/ (1 file)');
     });
 
+    it('finds a folder by name, with its file count, at any depth', async () => {
+      await mkdir(join(root, 'sub', 'inner'), { recursive: true });
+      await writeFile(join(root, 'sub', 'inner', 'a.txt'), 'a', 'utf8');
+      await writeFile(join(root, 'sub', 'inner', 'b.txt'), 'b', 'utf8');
+      const result = await globFiles.run({ pattern: '**/inner' }, context);
+      expect(result).toContain('Folders matching **/inner:\n  sub/inner/ (2 files)');
+      expect(result).not.toContain('No files matched');
+      await expect(globFiles.run({ pattern: 'sub' }, context)).resolves.toContain('  sub/ (3 files)');
+    });
+
+    it('does not list a folder that only holds a match deeper down', async () => {
+      await expect(globFiles.run({ pattern: '**/deep.txt' }, context)).resolves.not.toContain('Folders matching');
+    });
+
+    it('does not add a folder section to a plain "*"', async () => {
+      const result = await globFiles.run({ pattern: '*' }, context);
+      expect(result).toContain('Folders:\n  sub/ (1 file)');
+      expect(result).not.toContain('Folders matching');
+    });
+
+    it.each(['**', '**/*', 'src/**', 'src/**/*'])(
+      'keeps the file-only output for the match-all pattern %s',
+      async pattern => {
+        await mkdir(join(root, 'src', 'a'), { recursive: true });
+        await writeFile(join(root, 'src', 'a', 'x.ts'), 'x', 'utf8');
+        const result = await globFiles.run({ pattern }, context);
+        expect(result).toContain('x.ts');
+        expect(result).not.toContain('Folders matching');
+      }
+    );
+
+    it('does not open its header with a file count when only folders matched', async () => {
+      await mkdir(join(root, 'sub', 'inner'), { recursive: true });
+      await writeFile(join(root, 'sub', 'inner', 'a.txt'), 'a', 'utf8');
+      const result = await globFiles.run({ pattern: '**/inner' }, context);
+      expect(result.split('\n')[0]).not.toMatch(/^0 file/);
+      expect(result.split('\n')[0]).toContain('Only folders matched');
+    });
+
+    it('finds a folder when the pattern ends in a slash', async () => {
+      await mkdir(join(root, 'sub', 'inner'), { recursive: true });
+      await writeFile(join(root, 'sub', 'inner', 'a.txt'), 'a', 'utf8');
+      await expect(globFiles.run({ pattern: '**/inner/' }, context)).resolves.toContain('  sub/inner/ (1 file)');
+    });
+
+    describe('a folder that exists but lists no files', () => {
+      it('says the folder exists instead of "No files matched"', async () => {
+        await mkdir(join(root, 'empty'), { recursive: true });
+        const result = await globFiles.run({ pattern: 'empty' }, context);
+        expect(result).toContain('empty is a folder');
+        expect(result).toContain('no listed files');
+        expect(result).not.toContain('No files matched');
+        await expect(globFiles.run({ pattern: 'empty/' }, context)).resolves.toContain('no listed files');
+      });
+
+      it('says so for a folder holding only ignored files', async () => {
+        execFileSync('git', ['init', '-q'], { cwd: root });
+        await writeFile(join(root, '.gitignore'), 'build/\n', 'utf8');
+        await mkdir(join(root, 'build'), { recursive: true });
+        await writeFile(join(root, 'build', 'out.js'), 'x', 'utf8');
+        await expect(globFiles.run({ pattern: 'build' }, context)).resolves.toContain('build is a folder');
+      });
+
+      it('says so for a dependency folder the walk skips', async () => {
+        await mkdir(join(root, 'node_modules', 'pkg'), { recursive: true });
+        await expect(globFiles.run({ pattern: 'node_modules' }, context)).resolves.toContain(
+          'node_modules is a folder'
+        );
+      });
+
+      it.skipIf(process.platform === 'win32')(
+        'does not report a folder reached through a link out of the base',
+        async () => {
+          const outside = await realpath(await mkdtemp(join(tmpdir(), 'b4m-outside-')));
+          await mkdir(join(outside, 'secret'));
+          await symlink(outside, join(root, 'link'));
+          await expect(globFiles.run({ pattern: 'link/secret' }, context)).resolves.toContain('No files matched');
+          await expect(globFiles.run({ pattern: 'link/nope' }, context)).resolves.toContain('No files matched');
+        }
+      );
+
+      it.skipIf(process.platform === 'win32')('reports a folder reached through a link inside the base', async () => {
+        await mkdir(join(root, 'real', 'inner'), { recursive: true });
+        await symlink(join(root, 'real'), join(root, 'alias'));
+        await expect(globFiles.run({ pattern: 'alias/inner' }, context)).resolves.toContain('is a folder');
+      });
+
+      it('does not stat outside the searched folder', async () => {
+        await expect(globFiles.run({ pattern: '..' }, context)).resolves.toContain('No files matched');
+        await mkdir(join(root, root), { recursive: true });
+        await expect(globFiles.run({ pattern: root }, context)).resolves.toContain('No files matched');
+      });
+
+      it('leaves a pattern with glob characters alone', async () => {
+        await mkdir(join(root, 'emp*'), { recursive: true });
+        await expect(globFiles.run({ pattern: 'emp*' }, context)).resolves.toContain('No files matched');
+      });
+    });
+
+    it('caps the folders it lists like it caps files', async () => {
+      for (let index = 0; index < 320; index++) {
+        await mkdir(join(root, 'many', `d${index}`), { recursive: true });
+        await writeFile(join(root, 'many', `d${index}`, 'f.txt'), 'x', 'utf8');
+      }
+      const result = await globFiles.run({ pattern: 'many/*' }, context);
+      expect(result.match(/^ {2}many\/d\d+\/ \(1 file\)$/gm)).toHaveLength(300);
+      expect(result).toContain('showing the first 300 folders');
+    });
+
     it('suggests "**/" when a top-level pattern misses files that exist deeper', async () => {
       await expect(globFiles.run({ pattern: 'deep.txt' }, context)).resolves.toContain('try "**/deep.txt"');
       await expect(globFiles.run({ pattern: '**/deep.txt' }, context)).resolves.toContain(join('sub', 'deep.txt'));
