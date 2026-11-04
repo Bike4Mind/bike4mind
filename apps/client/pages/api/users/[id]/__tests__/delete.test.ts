@@ -10,7 +10,9 @@ const {
   mockRecord,
   mockDeny,
   mockWithTransaction,
+  mockCancelSubscriptions,
 } = vi.hoisted(() => ({
+  mockCancelSubscriptions: vi.fn(),
   mockRecord: vi.fn(),
   mockDeny: vi.fn(),
   mockWithTransaction: vi.fn(),
@@ -59,6 +61,11 @@ vi.mock('@server/services/purgeDeletedUserData', () => ({
   readUserIntegrationGrants: (...a: unknown[]) => mockReadGrants(...a),
 }));
 
+vi.mock('@server/billing/cancelAccountSubscriptions', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/billing/cancelAccountSubscriptions')>()),
+  cancelAccountSubscriptions: (...a: unknown[]) => mockCancelSubscriptions(...a),
+}));
+
 import { USER_SECRET_FIELDS, ForbiddenError } from '@bike4mind/common';
 import handler from '../delete';
 
@@ -73,7 +80,7 @@ async function run(options: { user?: { id: string; isAdmin: boolean }; body?: un
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   Object.assign(req, { user: options.user ?? { id: 'admin1', isAdmin: true }, logger });
   const call = (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
-  return { res, call };
+  return { res, call, logger };
 }
 
 beforeEach(() => {
@@ -85,6 +92,7 @@ beforeEach(() => {
   mockRecord.mockReset().mockResolvedValue(null);
   mockEmitBillingEvent.mockReset().mockResolvedValue([]);
   mockWithTransaction.mockReset().mockImplementation((fn: () => unknown) => fn());
+  mockCancelSubscriptions.mockReset().mockResolvedValue({ canceled: [], failed: [] });
   mockDeny.mockReset().mockImplementation(async () => {
     throw new ForbiddenError('Admins cannot perform this action on their own account.');
   });
@@ -325,6 +333,111 @@ describe('DELETE /api/users/[id]/delete', () => {
           reason: 'Confirmed duplicate account',
         })
       );
+    });
+
+    it('cancels the Stripe subscriptions before the row goes, and records them on user.deleted', async () => {
+      const order: string[] = [];
+      mockCancelSubscriptions.mockImplementation(async () => {
+        order.push('cancel');
+        return {
+          canceled: ['sub_a'],
+          failed: [{ customerId: 'cus_org', subscriptionId: null, reason: 'stripe down' }],
+        };
+      });
+      mockRepoDelete.mockImplementation(async () => {
+        order.push('delete');
+        return { deletedCount: 1 };
+      });
+      mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
+        await db.users.delete('u1');
+        return { id: 'u1' };
+      });
+
+      const { call } = await run();
+      await call;
+
+      expect(order).toEqual(['cancel', 'delete']);
+      expect(mockCancelSubscriptions).toHaveBeenCalledWith(
+        { userId: 'u1', reason: 'account_deleted', deadline: expect.any(Number) },
+        expect.anything()
+      );
+      expect(mockRecord).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: 'user.deleted',
+          summary: expect.stringContaining('canceled 1 Stripe subscription(s)'),
+          details: {
+            canceledSubscriptions: ['sub_a'],
+            failedSubscriptions: [{ customerId: 'cus_org', subscriptionId: null, reason: 'stripe down' }],
+          },
+        })
+      );
+      // A Stripe failure never blocks the delete.
+      expect(mockPurge).toHaveBeenCalled();
+    });
+
+    it('returns what the cancel did only when it canceled or failed something', async () => {
+      mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
+        await db.users.delete('u1');
+        return { id: 'u1' };
+      });
+      const failed = { customerId: 'cus_org', subscriptionId: 'sub_b', reason: 'stripe down' };
+      mockCancelSubscriptions.mockResolvedValue({ canceled: ['sub_a'], failed: [failed] });
+
+      const withCancel = await run();
+      await withCancel.call;
+      expect(withCancel.res._getJSONData()).toMatchObject({
+        id: 'u1',
+        subscriptionCancellation: { canceled: ['sub_a'], failed: [failed] },
+      });
+
+      mockCancelSubscriptions.mockResolvedValue({ canceled: [], failed: [] });
+      const quiet = await run();
+      await quiet.call;
+      expect(quiet.res._getJSONData().subscriptionCancellation).toBeUndefined();
+    });
+
+    it('records the cancel on its own entry when the delete transaction fails after it', async () => {
+      mockCancelSubscriptions.mockResolvedValue({ canceled: ['sub_a'], failed: [] });
+      mockRepoDelete.mockRejectedValue(new Error('delete failed'));
+      mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
+        await db.users.delete('u1');
+        return { id: 'u1' };
+      });
+
+      const { call } = await run();
+
+      await expect(call).rejects.toThrow('delete failed');
+      expect(mockRecord).toHaveBeenCalledTimes(1);
+      expect(mockRecord).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: 'user.subscriptions.canceled',
+          target: expect.objectContaining({ kind: 'user', id: 'u1' }),
+          details: { canceledSubscriptions: ['sub_a'], failedSubscriptions: [] },
+        })
+      );
+      expect(mockPurge).not.toHaveBeenCalled();
+    });
+
+    it('cancels nothing when the delete is refused', async () => {
+      const { call } = await run({ user: { id: 'u1', isAdmin: true }, id: 'u1' });
+      await expect(call).rejects.toThrow(ForbiddenError);
+      expect(mockCancelSubscriptions).not.toHaveBeenCalled();
+    });
+
+    it('rethrows the original error when the fallback cancellation audit also fails', async () => {
+      mockCancelSubscriptions.mockResolvedValue({ canceled: ['sub_a'], failed: [] });
+      mockRecord.mockRejectedValueOnce(new Error('tx failed')).mockRejectedValueOnce(new Error('audit down'));
+      mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
+        await db.users.delete('u1');
+        return { id: 'u1' };
+      });
+
+      const { call, logger } = await run();
+
+      await expect(call).rejects.toThrow('tx failed');
+      expect(logger.error).toHaveBeenCalled();
     });
 
     it('does not purge when the audit write aborts the delete transaction', async () => {

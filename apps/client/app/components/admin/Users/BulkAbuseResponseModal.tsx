@@ -275,6 +275,12 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({
                   }}
                 />
               ))}
+              {effectiveActions.ban && (
+                <Typography level="body-xs" data-testid="bulk-abuse-ban-subscriptions-note">
+                  Banning cancels their live Stripe subscriptions, including those of organizations they own, with no
+                  refund. They stay canceled if the ban is lifted.
+                </Typography>
+              )}
             </Stack>
           </>
         )}
@@ -384,33 +390,53 @@ const PreviewSummary: React.FC<{ preview: BulkAbusePreview; actions: BulkAbuseAc
   </Stack>
 );
 
-const ExecuteSummary: React.FC<{ result: BulkAbuseExecuteResult }> = ({ result }) => (
-  <Stack spacing={1} data-testid="bulk-abuse-result-summary">
-    <Alert color={result.failedCount ? 'warning' : 'success'}>
-      {result.succeededCount} succeeded, {result.failedCount} failed, {result.excluded.length} skipped.
-    </Alert>
-    <Typography level="body-sm">
-      {result.bannedCount} banned, {result.revokedApiKeyCount} API keys revoked, {result.clawedBackCredits} credits
-      clawed back.
-      {result.blockedDomain ? ` ${result.blockedDomain} added to the blocked email domains.` : ''}
-    </Typography>
-    {result.failedCount > 0 && (
-      <List size="sm" data-testid="bulk-abuse-failures">
-        {result.results
-          .filter(entry => entry.status === 'failed')
-          .map(entry => (
-            <ListItem key={entry.userId}>
-              {entry.email ?? entry.userId}: {entry.error ?? 'failed'}
-            </ListItem>
-          ))}
-      </List>
-    )}
-    {result.hasMore && (
-      <Typography level="body-sm" data-testid="bulk-abuse-has-more">
-        More users match this domain. Preview the next batch to continue.
+const ExecuteSummary: React.FC<{ result: BulkAbuseExecuteResult }> = ({ result }) => {
+  const canceledSubscriptions = result.results.reduce((sum, entry) => sum + entry.canceledSubscriptions.length, 0);
+  const cancelFailures = result.results.filter(entry => entry.subscriptionCancelError);
+  return (
+    <Stack spacing={1} data-testid="bulk-abuse-result-summary">
+      <Alert color={result.failedCount ? 'warning' : 'success'}>
+        {result.succeededCount} succeeded, {result.failedCount} failed, {result.excluded.length} skipped.
+      </Alert>
+      <Typography level="body-sm">
+        {result.bannedCount} banned, {result.revokedApiKeyCount} API keys revoked, {result.clawedBackCredits} credits
+        clawed back, {canceledSubscriptions} Stripe subscription(s) canceled.
+        {result.blockedDomain ? ` ${result.blockedDomain} added to the blocked email domains.` : ''}
       </Typography>
-    )}
-  </Stack>
-);
+      {cancelFailures.length > 0 && (
+        <Alert color="warning" data-testid="bulk-abuse-subscription-cancel-failures">
+          <Stack spacing={0.5}>
+            <Typography level="body-sm">
+              Stripe would not cancel the subscriptions of these users, so they keep renewing. Cancel them in Stripe.
+            </Typography>
+            <List size="sm">
+              {cancelFailures.map(entry => (
+                <ListItem key={entry.userId}>
+                  {entry.email ?? entry.userId}: {entry.subscriptionCancelError}
+                </ListItem>
+              ))}
+            </List>
+          </Stack>
+        </Alert>
+      )}
+      {result.failedCount > 0 && (
+        <List size="sm" data-testid="bulk-abuse-failures">
+          {result.results
+            .filter(entry => entry.status === 'failed')
+            .map(entry => (
+              <ListItem key={entry.userId}>
+                {entry.email ?? entry.userId}: {entry.error ?? 'failed'}
+              </ListItem>
+            ))}
+        </List>
+      )}
+      {result.hasMore && (
+        <Typography level="body-sm" data-testid="bulk-abuse-has-more">
+          More users match this domain. Preview the next batch to continue.
+        </Typography>
+      )}
+    </Stack>
+  );
+};
 
 export default BulkAbuseResponseModal;
