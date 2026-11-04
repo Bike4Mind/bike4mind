@@ -9,11 +9,7 @@ import {
 } from '@bike4mind/common';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import type { SignupSignal } from '@client/app/utils/signupSignals';
-import {
-  classifySignups,
-  SPIKE_BASELINE_HOURS,
-  type SignupCandidate,
-} from '../users/signupClassifier';
+import { classifySignups, SPIKE_BASELINE_HOURS, type SignupCandidate } from '../users/signupClassifier';
 import { countByBucket, loadCandidates } from '../users/signupTimeseries';
 
 const DAY_MS = 24 * 60 * 60 * 1000;

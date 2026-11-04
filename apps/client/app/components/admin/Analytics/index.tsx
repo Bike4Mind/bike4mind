@@ -292,7 +292,9 @@ const AnalyticsTab = () => {
       </Box>
 
       <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="analytics-footer">
-        Active users: an AI request that UTC day from the web app, CLI or Desktop. Counts exclude admin, Developer-tagged, test, banned and AI-held accounts. API users are shown separately and not counted. Days are UTC.
+        Active users: an AI request that UTC day from the web app, CLI or Desktop. Counts exclude admin,
+        Developer-tagged, test, banned and AI-held accounts. API users are shown separately and not counted. Days are
+        UTC.
       </Typography>
     </Stack>
   );

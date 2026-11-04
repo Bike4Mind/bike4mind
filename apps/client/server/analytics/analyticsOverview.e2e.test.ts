@@ -145,7 +145,14 @@ describe('getAnalyticsOverview', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     const overview = await getAnalyticsOverview({ range: '7d', compare: 'off', signups: 'legit' }, NOW);
-    expect(overview.activeUsers.days.at(-1)).toEqual({ day: TODAY, dau: null, wau: null, mau: null, apiDau: null, partial: true });
+    expect(overview.activeUsers.days.at(-1)).toEqual({
+      day: TODAY,
+      dau: null,
+      wau: null,
+      mau: null,
+      apiDau: null,
+      partial: true,
+    });
     expect(overview.activeUsers.days.find(day => day.day === '2026-06-10')).toMatchObject({ dau: 1 });
     expect(warn).toHaveBeenCalledWith('analytics overview: live slice for today failed', liveFailure.error);
     warn.mockRestore();

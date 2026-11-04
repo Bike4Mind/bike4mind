@@ -131,9 +131,10 @@ async function refreshLaterWindows(day: string) {
     .lean();
   for (const { day: laterDay } of later) {
     const { wau, mau, api } = await windowCounts(laterDay);
-    await AnalyticsDaily.updateOne({ day: laterDay }, { $set: { wau, mau, 'api.wau': api.wau, 'api.mau': api.mau } }).maxTimeMS(
-      QUERY_DEADLINE_MS
-    );
+    await AnalyticsDaily.updateOne(
+      { day: laterDay },
+      { $set: { wau, mau, 'api.wau': api.wau, 'api.mau': api.mau } }
+    ).maxTimeMS(QUERY_DEADLINE_MS);
   }
 }
 
@@ -248,7 +249,8 @@ export async function collectDayUsage(day: string, { maxTimeMS = QUERY_DEADLINE_
  */
 export async function rollupDay(day: string, options: RollupOptions = {}) {
   const computedAt = options.now ?? new Date();
-  const { users, perUser, activeCount, apiCount, byFeature, bySource, byModel, creditsConsumed } = await collectDayUsage(day, options);
+  const { users, perUser, activeCount, apiCount, byFeature, bySource, byModel, creditsConsumed } =
+    await collectDayUsage(day, options);
 
   const suspectedUsers = await resolveSuspected(
     [...perUser.keys()].map(userId => {

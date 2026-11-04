@@ -134,7 +134,14 @@ describe('backfillAnalyticsRollup', () => {
     });
     await seedEvent(userB, '2026-06-01T12:00:00.000Z', 'api');
 
-    await backfillAnalyticsRollup({ dryRun: false, force: true, from: '2026-06-01', to: '2026-06-01', now: NOW, log: silent });
+    await backfillAnalyticsRollup({
+      dryRun: false,
+      force: true,
+      from: '2026-06-01',
+      to: '2026-06-01',
+      now: NOW,
+      log: silent,
+    });
 
     expect(await AnalyticsDaily.findOne({ day: '2026-06-01' }).lean()).toMatchObject({
       dau: 2,

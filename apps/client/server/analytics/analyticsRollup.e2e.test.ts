@@ -305,7 +305,11 @@ describe('rollupDay', () => {
     const at = new Date(`${DAY}T00:00:00Z`);
     const ids = { real: oid(), system: oid(), failed: oid(), late: oid(), unverified: oid(), banned: oid() };
     for (const [key, id] of Object.entries(ids)) {
-      await seedUser(id, { createdAt: at, emailVerified: key !== 'unverified', ...(key === 'banned' ? { isBanned: true } : {}) });
+      await seedUser(id, {
+        createdAt: at,
+        emailVerified: key !== 'unverified',
+        ...(key === 'banned' ? { isBanned: true } : {}),
+      });
     }
     await seedEvent(ids.real, '2026-06-07T23:59:00Z');
     await seedEvent(ids.system, `${DAY}T10:00:00Z`, { source: 'system' });
