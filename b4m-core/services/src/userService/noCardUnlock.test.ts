@@ -1,6 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { resolveNoCardUnlockSettings } from '@bike4mind/common';
-import { GithubApiError, githubValidator, workEmailValidator, type GithubClient } from './noCardUnlock';
+import {
+  GithubApiError,
+  githubValidator,
+  grantNoCardUnlock,
+  workEmailValidator,
+  type GithubClient,
+  type GrantNoCardUnlockAdapters,
+} from './noCardUnlock';
 
 const NOW = new Date('2030-01-01T00:00:00Z');
 const daysAgo = (n: number) => new Date(NOW.getTime() - n * 86_400_000).toISOString();
@@ -228,5 +235,52 @@ describe('workEmailValidator', () => {
     });
     const check = await full.run(user);
     expect(check.ok ? await check.commit?.() : null).toEqual({ ok: false, refusal: 'domain_cap_reached' });
+  });
+});
+
+describe('grantNoCardUnlock signup grant block', () => {
+  const verifiedUser = (over: Record<string, unknown> = {}) => ({
+    id: 'u1',
+    email: 'dev@acme-corp.test',
+    emailVerified: true,
+    ...over,
+  });
+  const blockedUser = () => verifiedUser({ signupGrant: { blocked: { at: new Date('2029-12-01T00:00:00Z') } } });
+
+  const harness = (findById: ReturnType<typeof vi.fn>) => {
+    const createTransaction = vi.fn(async () => ({ id: 'tx1' }));
+    const validator = vi.fn(async () => ({ ok: true as const }));
+    const db = {
+      adminSettings: { findBySettingName: vi.fn(async () => null), findBySettingNames: vi.fn(async () => []) },
+      creditTransactions: { findOne: vi.fn(async () => null), createTransaction },
+      creditLots: {},
+      users: { findById, incrementCredits: vi.fn() },
+    };
+    const run = () =>
+      grantNoCardUnlock('u1', 'github_verified', {
+        db: db as unknown as GrantNoCardUnlockAdapters['db'],
+        validators: { github_verified: validator, work_email: validator },
+        withTransaction: fn => fn(),
+        settings: settings({ noCardUnlockGithubCredits: 100, noCardUnlockMaxCredits: 200 }),
+      });
+    return { run, createTransaction, validator };
+  };
+
+  it('refuses a verified user whose signup grant is blocked before any validator or credit write', async () => {
+    const { run, createTransaction, validator } = harness(vi.fn(async () => blockedUser()));
+
+    expect(await run()).toEqual({ granted: false, refusal: 'disabled' });
+    expect(validator).not.toHaveBeenCalled();
+    expect(createTransaction).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the block lands between the first read and the in-transaction re-read', async () => {
+    const findById = vi.fn().mockResolvedValueOnce(verifiedUser()).mockResolvedValue(blockedUser());
+    const { run, createTransaction, validator } = harness(findById);
+
+    expect(await run()).toEqual({ granted: false, refusal: 'disabled' });
+    expect(validator).toHaveBeenCalledTimes(1);
+    expect(findById).toHaveBeenCalledTimes(2);
+    expect(createTransaction).not.toHaveBeenCalled();
   });
 });
