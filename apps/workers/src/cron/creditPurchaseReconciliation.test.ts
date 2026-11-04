@@ -338,6 +338,44 @@ describe('creditPurchaseReconciliation cron', () => {
     expect(mockConnectDB).not.toHaveBeenCalled();
   });
 
+  it('the run itself skips without touching Stripe, the database, metrics or Slack when Stripe is not configured', async () => {
+    mockIsStripeConfigured.mockReturnValue(false);
+
+    const result = await runCreditPurchaseReconciliation(undefined, NOW);
+
+    expect(result).toEqual({ checked: 0, ungranted: [], ownerDeleted: 0, truncated: false, skipped: true });
+    expect(mockList).not.toHaveBeenCalled();
+    expect(mockFindByPaymentIntentId).not.toHaveBeenCalled();
+    expect(mockEmitMetric).not.toHaveBeenCalled();
+    expect(mockPostMessageToSlack).not.toHaveBeenCalled();
+  });
+
+  it('emitMetrics: false suppresses only the metric', async () => {
+    mockList.mockResolvedValue({ data: [intent('pi_missing')], has_more: false });
+    mockFindByPaymentIntentId.mockResolvedValue(null);
+
+    const result = await runCreditPurchaseReconciliation(undefined, NOW, { emitMetrics: false });
+
+    expect(result.ungranted).toHaveLength(1);
+    expect(mockEmitMetric).not.toHaveBeenCalled();
+    expect(mockLoggerError).toHaveBeenCalled();
+    expect(mockPostMessageToSlack).toHaveBeenCalledTimes(1);
+  });
+
+  it('the stage option decides which intents count', async () => {
+    mockList.mockResolvedValue({
+      data: [intent('pi_selfhost', {}, { environment: 'selfhost' })],
+      has_more: false,
+    });
+    mockFindByPaymentIntentId.mockResolvedValue(null);
+
+    expect((await runCreditPurchaseReconciliation(undefined, NOW)).checked).toBe(0);
+    const result = await runCreditPurchaseReconciliation(undefined, NOW, { stage: 'selfhost' });
+
+    expect(result.checked).toBe(1);
+    expect(result.ungranted.map(p => p.paymentIntentId)).toEqual(['pi_selfhost']);
+  });
+
   it('connects to this stage database and reports the counts when configured', async () => {
     mockList.mockResolvedValue({ data: [intent('pi_granted'), intent('pi_missing')], has_more: false });
     mockFindByPaymentIntentId.mockImplementation(async (id: string) => (id === 'pi_granted' ? purchaseRow() : null));

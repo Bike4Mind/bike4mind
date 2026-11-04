@@ -26,7 +26,10 @@ const mockPostMessageToSlack = vi.fn();
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   postMessageToSlack: (...args: unknown[]) => mockPostMessageToSlack(...args),
 }));
-vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: vi.fn() }));
+const mockEmitMetric = vi.fn();
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
+  emitMetric: (...args: unknown[]) => mockEmitMetric(...args),
+}));
 
 import { runCreditPurchaseReconciliation } from './creditPurchaseReconciliation';
 
@@ -58,6 +61,10 @@ const purchase = (userId: string, paymentIntentId: string) =>
   );
 
 function stripeReturns(userId: string, ...ids: string[]) {
+  stripeReturnsForStage('test', userId, ...ids);
+}
+
+function stripeReturnsForStage(stage: string, userId: string, ...ids: string[]) {
   mockList.mockResolvedValue({
     data: ids.map(id => ({
       id,
@@ -65,7 +72,7 @@ function stripeReturns(userId: string, ...ids: string[]) {
       amount: 1000,
       currency: 'usd',
       created: Math.floor(Date.now() / 1000),
-      metadata: { environment: 'test', credits: '5000', userId },
+      metadata: { environment: stage, credits: '5000', userId },
     })),
     has_more: false,
   });
@@ -99,6 +106,22 @@ describe('credit purchase reconciliation against the real ledger', () => {
       expect.objectContaining({ paymentIntentId: 'pi_drifted', reason: 'balance_not_applied', userId }),
     ]);
     expect(mockPostMessageToSlack.mock.calls[0][0]).toContain('transaction recorded but balance never credited');
+  });
+
+  it('flags exactly one seeded ungranted purchase on the self-host call path', async () => {
+    const userId = await seedUser();
+    vi.spyOn(userRepository, 'incrementCredits').mockRejectedValueOnce(new Error('fixture increment failure'));
+    await expect(purchase(userId, 'pi_selfhost_ungranted')).rejects.toThrow('fixture increment failure');
+    await purchase(await seedUser(), 'pi_selfhost_granted');
+
+    stripeReturnsForStage('selfhost', userId, 'pi_selfhost_ungranted', 'pi_selfhost_granted');
+    const result = await runCreditPurchaseReconciliation(undefined, new Date(), {
+      stage: 'selfhost',
+      emitMetrics: false,
+    });
+
+    expect(result.ungranted.map(p => p.paymentIntentId)).toEqual(['pi_selfhost_ungranted']);
+    expect(mockEmitMetric).not.toHaveBeenCalled();
   });
 
   it('does not flag a purchase whose balance was credited', async () => {
