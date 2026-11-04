@@ -12,6 +12,7 @@ import type { ClientSession, Types } from 'mongoose';
  * b4m-core/services/src/fabFileService/rewriteStorage.ts), so a rewrite's event and its commit add up
  * to the new size in either order. Returns null when the claim lost, else the delta and the row's
  * owner as of the claim (storageOwnerOf), so the bytes land on the counter the refund will later debit.
+ * A `storageExempt` row is never claimed: it stays uncharged everywhere `isStorageCharged` reads it.
  *
  * `statusBeforeUpload` is the row's status as the event handler read it, before it marked the row
  * `complete`: the charge rule reads `status`, so judging the pre-image by the handler's own flip would
@@ -25,7 +26,11 @@ export const claimStorageCharge = async (
   session?: ClientSession
 ): Promise<{ delta: number; owner: StorageOwner } | null> => {
   const pre = await FabFile.findOneAndUpdate(
-    { _id: fabFileId, $or: [{ storageChargedAt: null }, { storageChargedAt: { $lt: uploadedAt } }] },
+    {
+      _id: fabFileId,
+      storageExempt: { $ne: true },
+      $or: [{ storageChargedAt: null }, { storageChargedAt: { $lt: uploadedAt } }],
+    },
     { $set: { storageChargedAt: uploadedAt, fileSize: size } },
     {
       new: false,

@@ -78,6 +78,12 @@ export enum FabFileSourceType {
    * remove (see generatedCopyKeyOf).
    */
   TOOL_GENERATED = 'tool_generated',
+  /**
+   * A markdown file converted from a legacy QuestMaster plan or graph. `sourceMetadata` is
+   * `{ sourceKind: 'quest-plan' | 'quest-graph', sourceId, sourceUpdatedAt }`; (userId, sourceId)
+   * keys the conversion's idempotency. Rows carry `storageExempt`.
+   */
+  QUESTMASTER_ARCHIVE = 'questmaster_archive',
 }
 
 /**
@@ -512,6 +518,13 @@ export interface IFabFile {
    * (common/src/storageCharge.ts), which also covers the pre-stamp legacy rows.
    */
   storageChargedAt?: Date;
+
+  /**
+   * Never charged to the owner's quota: `claimStorageCharge` skips the row, so it stays uncharged
+   * wherever `isStorageCharged` is read. Server-stamped only, via the `storageExempt` adapter of
+   * createFabFile; it is not a field of any request schema.
+   */
+  storageExempt?: boolean;
 
   /**
    * How many moderation scan attempts have been made on this row and failed without reaching a

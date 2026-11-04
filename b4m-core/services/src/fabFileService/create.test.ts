@@ -838,3 +838,58 @@ describe('createFabFile - organization storage limit lookup', () => {
     );
   });
 });
+
+describe('createFabFile storageExempt', () => {
+  const mockUserId = 'user-123';
+  let fabFilesCreate: Mock;
+  let mockAdapters: CreateFabFileAdapters;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    invalidateSettingsCache();
+    fabFilesCreate = vi.fn().mockImplementation(async data => ({ id: 'fab-1', ...data }));
+    mockAdapters = {
+      db: {
+        fabFiles: { create: fabFilesCreate },
+        adminSettings: {
+          findAll: vi.fn().mockResolvedValue([]),
+          findBySettingNames: vi.fn().mockResolvedValue([]),
+        },
+        users: {
+          // 1 MB limit, already over it.
+          findById: vi.fn().mockResolvedValue({ id: mockUserId, storageLimit: 1, currentStorageSize: 5_000_000 }),
+        },
+      },
+      storage: {
+        generateSignedUrl: vi.fn().mockResolvedValue('https://s3.example.com/signed-url'),
+        upload: vi.fn().mockResolvedValue(undefined),
+      },
+    } as unknown as CreateFabFileAdapters;
+  });
+
+  afterEach(() => invalidateSettingsCache());
+
+  const params = { fileName: 'notes.md', mimeType: 'text/markdown', fileSize: 10, type: KnowledgeType.FILE as const };
+
+  it('refuses an over-quota owner without the flag', async () => {
+    await expect(createFabFile(mockUserId, params, mockAdapters)).rejects.toSatisfy(isStorageLimitError);
+  });
+
+  it('creates the file for an over-quota owner and stamps the row exempt', async () => {
+    await createFabFile(mockUserId, params, { ...mockAdapters, storageExempt: true });
+    expect(fabFilesCreate.mock.calls[0][0]).toMatchObject({ storageExempt: true });
+  });
+
+  it('still enforces MaxFileSize on an exempt file', async () => {
+    const limit = settingsMap.MaxFileSize.defaultValue! * 1024 * 1024;
+    await expect(
+      createFabFile(mockUserId, { ...params, fileSize: limit + 1 }, { ...mockAdapters, storageExempt: true })
+    ).rejects.toMatchObject({ info: { errorCode: 'file_too_large' } });
+  });
+
+  it('cannot be set through the request parameters', async () => {
+    await expect(
+      createFabFile(mockUserId, { ...params, storageExempt: true } as typeof params, mockAdapters)
+    ).rejects.toSatisfy(isStorageLimitError);
+  });
+});
