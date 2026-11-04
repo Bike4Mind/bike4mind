@@ -36,7 +36,7 @@ import {
   UNSURE_PREFIX,
 } from '@server/utils/loopTickets';
 import { Resource } from 'sst';
-import { canPayAgain, loopAdmission } from '@server/utils/loopBudget';
+import { canPayAgain, iterationPrice, loopAdmission } from '@server/utils/loopBudget';
 import { releaseExpiredRunnerLeases } from '@server/utils/loopRunner';
 import { buildLoopQuery, LOOP_PROMPT_ANSWERS, LOOP_PROMPT_DIRECTIVES, parseLoopMemory } from '@server/utils/loopMemory';
 import { syncLoopNotices, USER_BUDGET_PAUSE_REASON } from './loopNotices';
