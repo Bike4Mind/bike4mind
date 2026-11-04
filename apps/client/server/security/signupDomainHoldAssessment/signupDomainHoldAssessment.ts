@@ -320,6 +320,7 @@ const buildShadowDetection = (
   summary: `Advisory assessment of the ${hold.domain} hold: ${assessment.judgment} (${Math.round(assessment.confidence * 100)}% confidence)${confirmed ? ', hold confirmed' : ''}`,
   userIds: hold.cohortUserIds.slice(0, COHORT_SAMPLE_LIMIT),
   network: null,
+  group: null,
   signals: [
     {
       key: 'confidence',
