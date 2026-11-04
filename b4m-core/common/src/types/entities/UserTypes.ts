@@ -924,6 +924,16 @@ export interface IUserRepository
   findByIds: (
     ids: string[]
   ) => Promise<Pick<IUserDocument, 'id' | 'name' | 'email' | 'username' | 'lastActiveAt' | 'isOnline' | 'photoUrl'>[]>;
+  /**
+   * Who each id is for an admin action on it: the admin flags an actor-outranks-target guard reads, plus the
+   * email or username an audit entry shows. Ids that are not ObjectId-shaped are dropped. Never return this
+   * to a client: it carries admin permissions.
+   */
+  findAdminTargetsByIds: (
+    ids: string[]
+  ) => Promise<
+    Array<{ id: string; email?: string; username?: string; isAdmin?: boolean; adminPermissions?: string[] }>
+  >;
   /** Active (non-soft-deleted), emailed users among `ids` - for a notification addressee resolver. */
   findActiveEmailsByIds: (ids: string[]) => Promise<Array<{ id: string; email: string }>>;
   searchCollections: (
