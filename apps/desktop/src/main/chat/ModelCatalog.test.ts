@@ -617,6 +617,32 @@ describe('ModelCatalog', () => {
     expect(changed).toHaveBeenCalledTimes(1);
   });
 
+  it('says nothing when a later read lists the same effort levels in another order', async () => {
+    const changed = vi.fn();
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: client,
+        getEnvironmentUrl: () => environmentUrl,
+        changed,
+      },
+      { models: async () => [] } as never
+    );
+    get.mockResolvedValue({ models: [wireModel({ id: ChatModels.GPT5, backend: 'openai' })] });
+    const first = { id: ChatModels.GPT5, reasoning_efforts: ['low', 'high'] };
+    const second = { id: 'other', reasoning_efforts: ['medium'] };
+    effortsPage.mockResolvedValueOnce({ data: [first, second], next_cursor: null });
+    await catalog.list();
+    await vi.waitFor(() => expect(catalog.cached()?.[0]?.controls?.effort?.levels).toEqual(['low', 'high']));
+    const before = changed.mock.calls.length;
+
+    effortsPage.mockResolvedValueOnce({ data: [second, first], next_cursor: null });
+    await catalog.list(true);
+    await vi.waitFor(() => expect(effortsPage).toHaveBeenCalledTimes(2));
+    await Promise.resolve();
+    expect(changed).toHaveBeenCalledTimes(before);
+  });
+
   it('reads the effort levels once while a read is already on its way', async () => {
     get.mockResolvedValue({ models: [wireModel({ id: ChatModels.GPT5, backend: 'openai' })] });
     let land: (page: unknown) => void = () => {};

@@ -68,6 +68,12 @@ const PUBLIC_MODELS_PAGE = 100;
 const PUBLIC_MODELS_MAX_PAGES = 5;
 const PUBLIC_MODELS_TIMEOUT_MS = 5_000;
 
+/** Whether two reads hold the same rows, in whatever order the pages listed them. */
+function sameReasoning(a: HostedReasoningById, b: HostedReasoningById): boolean {
+  const key = (byId: HostedReasoningById) => JSON.stringify([...byId].sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0)));
+  return a.size === b.size && key(a) === key(b);
+}
+
 /** How a model reasons, as one `/api/v1/models` row states it; a field the row lacks is absent. */
 export interface HostedReasoning {
   efforts?: readonly ReasoningEffort[];
@@ -199,7 +205,7 @@ export class ModelCatalog {
       if (!byId || environmentUrl !== this.deps.getEnvironmentUrl()) return;
       const previous = this.reasoning?.environmentUrl === environmentUrl ? this.reasoning.byId : undefined;
       this.reasoning = { environmentUrl, byId };
-      if (previous && JSON.stringify([...previous]) === JSON.stringify([...byId])) return;
+      if (previous && sameReasoning(previous, byId)) return;
       const entry = this.cache;
       if (entry?.environmentUrl !== environmentUrl) return;
       this.cache = { ...entry, models: selectUsableModels(entry.wire, byId) };
