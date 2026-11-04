@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { handlers, repo, audit } = vi.hoisted(() => ({
+const { handlers, repo, audit, usageRepos } = vi.hoisted(() => ({
   handlers: {} as Record<string, (req: unknown, res: unknown) => unknown>,
+  usageRepos: { usageByGrantPackage: vi.fn(), countByGrantPackage: vi.fn() },
   repo: { listPackages: vi.fn(), create: vi.fn(), findById: vi.fn(), updatePackage: vi.fn() },
   audit: vi.fn(),
 }));
@@ -31,6 +32,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   grantPackageRepository: repo,
+  registrationInviteRepository: { usageByGrantPackage: usageRepos.usageByGrantPackage },
+  partnerSignupRuleRepository: { countByGrantPackage: usageRepos.countByGrantPackage },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
 // Keep parseAdminActionReason real so the 400 is the production one.
@@ -120,12 +123,60 @@ describe('/api/admin/grant-packages (POST)', () => {
 });
 
 describe('/api/admin/grant-packages (GET)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it('returns the page with the live reason thresholds', async () => {
     repo.listPackages.mockResolvedValue({ data: [], meta: { currentPage: 1, totalPages: 0, total: 0 } });
     const { req, res } = makeReqRes('GET', { query: { page: '2' } });
     await handlers.get(req, res);
     expect(repo.listPackages).toHaveBeenCalledWith({ page: 2, limit: 25 });
     expect(res._getJSONData().reasonPolicy).toEqual({ singleGrantCredits: 50_000, dailyTotalCredits: 200_000 });
+    expect(usageRepos.usageByGrantPackage).not.toHaveBeenCalled();
+    expect(usageRepos.countByGrantPackage).not.toHaveBeenCalled();
+  });
+
+  it('merges linked-code and partner-domain usage per row only when usage=1', async () => {
+    repo.listPackages.mockResolvedValue({
+      data: [
+        { id: 'a', name: 'A' },
+        { id: 'b', name: 'B' },
+      ],
+      meta: { currentPage: 1, totalPages: 1, total: 2 },
+    });
+    usageRepos.usageByGrantPackage.mockResolvedValue(
+      new Map([['a', { codes: 3, activeCodes: 2, nextExpiry: new Date('2026-07-01T00:00:00Z') }]])
+    );
+    usageRepos.countByGrantPackage.mockResolvedValue(new Map([['a', { domains: 2, enabledDomains: 1 }]]));
+
+    const { req, res } = makeReqRes('GET', { query: { usage: '1' } });
+    await handlers.get(req, res);
+
+    expect(repo.listPackages).toHaveBeenCalledWith({ page: 1, limit: 25 });
+    expect(usageRepos.usageByGrantPackage).toHaveBeenCalledWith(['a', 'b']);
+    expect(usageRepos.countByGrantPackage).toHaveBeenCalledWith(['a', 'b']);
+    const [a, b] = res._getJSONData().data;
+    expect(a.usage).toEqual({
+      codes: 3,
+      activeCodes: 2,
+      nextCodeExpiry: '2026-07-01T00:00:00.000Z',
+      partnerDomains: 2,
+      enabledPartnerDomains: 1,
+    });
+    expect(b.usage).toEqual({
+      codes: 0,
+      activeCodes: 0,
+      nextCodeExpiry: null,
+      partnerDomains: 0,
+      enabledPartnerDomains: 0,
+    });
+  });
+
+  it.each(['0', 'false', 'true'])('rejects usage=%s with a 400', async value => {
+    const { req, res } = makeReqRes('GET', { query: { usage: value } });
+    await expect(handlers.get(req, res)).rejects.toThrow(/usage:/);
+    expect(repo.listPackages).not.toHaveBeenCalled();
   });
 });
 
