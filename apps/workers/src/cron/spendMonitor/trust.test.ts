@@ -123,6 +123,27 @@ describe('resolveTrustedScopes', () => {
     expect(deps.findOrganizationsByIds).not.toHaveBeenCalled();
   });
 
+  it('trusts an org-billed key through a listed org, and not through its owner', async () => {
+    const deps = createDeps({
+      findApiKeysByIds: vi.fn(async () => [
+        {
+          id: 'key-org-billed',
+          name: 'k',
+          userId: 'staff-1',
+          billingOwnerType: CreditHolderType.Organization,
+          organizationId: 'org-plain',
+        },
+      ]),
+    });
+    const keys = [{ scopeType: 'apiKey' as const, scopeId: 'key-org-billed' }];
+
+    const viaOrg = await resolveTrustedScopes(keys, parseSpendTrustConfig('', 'org-plain'), deps);
+    expect([...viaOrg]).toEqual(['apiKey:key-org-billed']);
+
+    const viaOwner = await resolveTrustedScopes(keys, parseSpendTrustConfig('example.com', ''), deps);
+    expect([...viaOwner]).toEqual([]);
+  });
+
   it('runs no query when no trust is configured', async () => {
     const deps = createDeps();
     const trusted = await resolveTrustedScopes([{ scopeType: 'User', scopeId: 'staff-1' }], NO_TRUST, deps);
