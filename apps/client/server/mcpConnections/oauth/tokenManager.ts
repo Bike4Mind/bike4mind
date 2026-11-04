@@ -15,7 +15,6 @@ import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { RemoteMcpNetworkOptions } from '../customMcpAccess';
 import { loadConnectionClient } from './clientIdentity';
 import { withOAuthFetch } from './oauthFetch';
-import { redirectUri } from './redirectUri';
 
 /** A token that expires within this window is refreshed before use. */
 export const OAUTH_EXPIRY_SKEW_MS = 60_000;
@@ -45,17 +44,21 @@ export interface AccessTokenOptions {
 
 type Owner = { ownerType: 'user'; ownerKey: string };
 
-const isFresh = (oauth: NonNullable<IMcpConnectionDocument['auth']['oauth']>, now: number): boolean =>
-  Boolean(oauth.accessTokenEnc) &&
-  (!oauth.expiresAt || new Date(oauth.expiresAt).getTime() - now > OAUTH_EXPIRY_SKEW_MS);
+type OAuthState = NonNullable<IMcpConnectionDocument['auth']['oauth']>;
 
-async function markReconnect(connection: IMcpConnectionDocument): Promise<never> {
-  await mcpConnectionRepository.setStatus(connection.id, 'needs_reconnect', {
-    code: 'invalid_grant',
-    message: 'Your sign-in expired; reconnect to continue',
-  });
-  throw new OAuthReconnectRequiredError();
-}
+const remainingMs = (oauth: OAuthState, now: number): number =>
+  oauth.expiresAt ? new Date(oauth.expiresAt).getTime() - now : Infinity;
+
+/** Worth using for a new request without refreshing first. */
+const isFresh = (oauth: OAuthState, now: number): boolean =>
+  Boolean(oauth.accessTokenEnc) && remainingMs(oauth, now) > OAUTH_EXPIRY_SKEW_MS;
+
+/**
+ * A token someone else just stored: any unexpired one, however short its life. The skew only decides when
+ * to refresh; applying it here would make a token of 60 s or less look stale to the very caller that got it.
+ */
+const isUnexpired = (oauth: OAuthState, now: number): boolean =>
+  Boolean(oauth.accessTokenEnc) && remainingMs(oauth, now) > 0;
 
 /**
  * The bearer token for an OAuth connection, refreshed lazily. At most one caller refreshes at a time:
@@ -92,7 +95,7 @@ export async function getOAuthAccessToken(
         throw new RemoteMcpAuthRequiredError({});
       }
       // Someone refreshed between our read and the lease: use theirs instead of spending the refresh token.
-      if (currentOauth.accessTokenEnc !== staleAccessTokenEnc && isFresh(currentOauth, now())) {
+      if (currentOauth.accessTokenEnc !== staleAccessTokenEnc && isUnexpired(currentOauth, now())) {
         await mcpConnectionRepository.releaseRefreshLease(connection.id, holder);
         return decryptToken(currentOauth.accessTokenEnc) ?? undefined;
       }
@@ -105,7 +108,7 @@ export async function getOAuthAccessToken(
     const latestOauth = latest?.auth.oauth;
     if (!latest || !latestOauth) throw new RemoteMcpAuthRequiredError({});
     if (latest.status === 'needs_reconnect') throw new OAuthReconnectRequiredError();
-    if (latestOauth.accessTokenEnc !== staleAccessTokenEnc && isFresh(latestOauth, now())) {
+    if (latestOauth.accessTokenEnc !== staleAccessTokenEnc && isUnexpired(latestOauth, now())) {
       return decryptToken(latestOauth.accessTokenEnc) ?? undefined;
     }
     // A crashed holder's lease outlives this window; a timeout is transient, not a reason to sign in again.
@@ -122,7 +125,7 @@ async function refreshWithLease(
   const oauth = connection.auth.oauth;
   try {
     const refreshToken = decryptToken(oauth?.refreshTokenEnc);
-    const client = oauth && (await loadConnectionClient(connection, redirectUri()));
+    const client = oauth && (await loadConnectionClient(connection));
     if (!oauth || !refreshToken || !client || !oauth.tokenEndpoint) throw new RemoteMcpAuthRequiredError({});
 
     const tokens = await withOAuthFetch(options.network, options.fetchFn, fetchFn =>
@@ -141,15 +144,21 @@ async function refreshWithLease(
     const completed = await mcpConnectionRepository.completeRefresh(connection.id, holder, update);
     if (completed) return tokens.accessToken;
 
-    // The lease was lost (it expired, or the user disconnected): never retry the write over a newer grant.
-    const latest = await mcpConnectionRepository.findByIdWithCredentials(connection.id, owner);
-    if (latest?.auth.oauth && isFresh(latest.auth.oauth, (options.now ?? Date.now)())) {
-      return decryptToken(latest.auth.oauth.accessTokenEnc) ?? undefined;
-    }
-    throw new RemoteMcpAuthRequiredError({});
+    return await tokenAfterLostLease(connection.id, owner, options);
   } catch (error) {
-    if (error instanceof RemoteMcpInvalidGrantError) return await markReconnect(connection);
+    if (error instanceof RemoteMcpInvalidGrantError) {
+      // Only the current holder may say the grant is gone: a late answer must not overwrite what a successor stored.
+      const marked = await mcpConnectionRepository.setNeedsReconnectIfHolder(connection.id, holder, {
+        code: 'invalid_grant',
+        message: 'Your sign-in expired; reconnect to continue',
+      });
+      if (marked) throw new OAuthReconnectRequiredError();
+      return await tokenAfterLostLease(connection.id, owner, options);
+    }
     if (error instanceof RemoteMcpOAuthError) {
+      if (error.code === 'token_unavailable') {
+        throw new RemoteMcpTimeoutError('The authorization server did not answer', { cause: error });
+      }
       throw new RemoteMcpAuthFailedError('The authorization server refused the refresh');
     }
     if (error instanceof RemoteMcpError) throw error;
@@ -159,4 +168,17 @@ async function refreshWithLease(
     // A no-op once completeRefresh cleared it; frees the lease on every failure path.
     await mcpConnectionRepository.releaseRefreshLease(connection.id, holder);
   }
+}
+
+/** The lease was lost (it expired, or the user reconnected or disconnected): use what is stored, never write over it. */
+async function tokenAfterLostLease(
+  id: string,
+  owner: Owner,
+  options: AccessTokenOptions
+): Promise<string | undefined> {
+  const latest = await mcpConnectionRepository.findByIdWithCredentials(id, owner);
+  if (latest?.auth.oauth && isUnexpired(latest.auth.oauth, (options.now ?? Date.now)())) {
+    return decryptToken(latest.auth.oauth.accessTokenEnc) ?? undefined;
+  }
+  throw new RemoteMcpAuthRequiredError({});
 }

@@ -2,6 +2,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import { Box, Button, LinearProgress, Typography } from '@mui/joy';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
+import { getMcpOAuthCallbackBootSearch } from '@client/app/utils/mcpOAuthCallback';
 
 type Outcome = 'working' | 'failed';
 
@@ -13,11 +14,20 @@ type Outcome = 'working' | 'failed';
 const McpOAuthCallbackPage = () => {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
-  const text = (key: string) => (typeof search[key] === 'string' ? (search[key] as string) : undefined);
+  // The boot snapshot is the query as the server sent it; the router's parsed copy turns a numeric `code` into a number.
+  const boot = getMcpOAuthCallbackBootSearch();
+  const bootParams = new URLSearchParams(boot ?? '');
+  const text = (key: string) =>
+    boot !== null
+      ? (bootParams.get(key) ?? undefined)
+      : typeof search[key] === 'string'
+        ? (search[key] as string)
+        : undefined;
   const code = text('code');
   const state = text('state');
   const iss = text('iss');
-  const unusable = Boolean(search.error) || !code || !state;
+  const providerError = boot !== null ? bootParams.get('error') : search.error;
+  const unusable = Boolean(providerError) || !code || !state;
   const [exchangeFailed, setExchangeFailed] = useState(false);
   const outcome: Outcome = unusable || exchangeFailed ? 'failed' : 'working';
   // The code is single use: a second run (StrictMode, a re-render) would only burn it.

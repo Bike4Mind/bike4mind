@@ -15,6 +15,7 @@ import { cleanScope } from '../invokeRemoteMcp';
 import { loadConnectionClient, resolveOAuthClient, type ManualOAuthClient } from './clientIdentity';
 import { withOAuthFetch } from './oauthFetch';
 import { redirectUri } from './redirectUri';
+import { revokeConnectionGrant } from './revoke';
 
 export const sha256Hex = (value: string): string => createHash('sha256').update(value, 'utf8').digest('hex');
 
@@ -55,10 +56,10 @@ export async function startUserConnectionOAuth(
   try {
     const serverUrl = decryptToken(connection.urlEnc) ?? '';
     const callback = redirectUri();
-    const storedManual =
-      !options.manual && connection.auth.oauth?.clientMode === 'manual'
-        ? await loadConnectionClient(connection, callback)
-        : undefined;
+    const stored = connection.auth.oauth;
+    const hadGrant = Boolean(stored?.accessTokenEnc || stored?.refreshTokenEnc);
+    const previous = stored ? await loadConnectionClient(connection) : undefined;
+    const storedManual = !options.manual && stored?.clientMode === 'manual' ? previous : undefined;
 
     const { discovery, resolved, scopes, authorization } = await withOAuthFetch(
       context.network,
@@ -91,6 +92,19 @@ export async function startUserConnectionOAuth(
         return { discovery: found, resolved: client, scopes: chosen, authorization: { ...built, state } };
       }
     );
+
+    if (
+      hadGrant &&
+      (stored?.issuer !== discovery.issuer ||
+        stored?.clientMode !== resolved.mode ||
+        stored?.clientRegistrationId !== resolved.clientRegistrationId ||
+        previous?.clientId !== resolved.client.clientId)
+    ) {
+      // The stored grant belongs to another server or client, and the new configuration would pair it with
+      // the wrong one on the next refresh or revoke. End it now rather than leave that for an abandoned sign-in.
+      await revokeConnectionGrant(connection, context.network, options.fetchFn);
+      await mcpConnectionRepository.clearOAuthTokens(id, owner);
+    }
 
     const configured = await mcpConnectionRepository.setOAuthConfig(id, owner, {
       resource: discovery.resource,

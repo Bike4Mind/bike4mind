@@ -513,8 +513,15 @@ export async function invokeRemoteMcp(
         } catch (error) {
           // The server rejected a token we thought was valid (revoked, or rotated early): refresh once and retry.
           if (!(error instanceof RemoteMcpAuthRequiredError) || !connection.auth.oauth?.hasAccessToken) throw error;
-          const retry = { ...payload, headers: await buildAuthHeaders(connection, context.network, true) };
-          return { ok: true as const, run: await runner(retry) };
+          // A refresh that fails (a slow authorization server, a held lease) is not the MCP server being down.
+          let headers: Record<string, string>;
+          try {
+            headers = await buildAuthHeaders(connection, context.network, true);
+          } catch (refreshError) {
+            if (refreshError instanceof RemoteMcpError) return { ok: false as const, error: refreshError };
+            throw refreshError;
+          }
+          return { ok: true as const, run: await runner({ ...payload, headers }) };
         }
       } catch (error) {
         if (error instanceof RemoteMcpError && !OUTAGE_CODES.has(error.code)) return { ok: false as const, error };

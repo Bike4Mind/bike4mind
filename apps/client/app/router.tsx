@@ -5,6 +5,7 @@ import { beaconPage, startPageBeacon } from '@client/app/utils/pageBeacon';
 import type { GitHubLakeCallbackSearch } from '@client/app/utils/githubLakeCallbackStep';
 import { captureGitHubLakeCallbackSearch, GITHUB_LAKE_CALLBACK_PATH } from '@client/app/utils/githubLakeCallbackSearch';
 import { requireGitHubLakeCallbackSession } from '@client/app/utils/githubLakeCallbackGuard';
+import { captureMcpOAuthCallbackSearch, requireMcpOAuthCallbackSession } from '@client/app/utils/mcpOAuthCallback';
 import {
   createRouter,
   createRoute,
@@ -1003,6 +1004,7 @@ const googleDriveCallbackRoute = createRoute({
 const mcpOAuthCallbackRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/integrations/mcp-oauth-callback',
+  beforeLoad: ({ location }) => requireMcpOAuthCallbackSession(location),
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
       <McpOAuthCallbackPage />
@@ -1423,6 +1425,7 @@ captureUtmParams();
 
 // Same constraint for the data-lake GitHub App return: the router's first resolve rewrites its query.
 captureGitHubLakeCallbackSearch();
+captureMcpOAuthCallbackSearch();
 
 // Then tell the server a visit is happening. Order matters: the beacon is the request the
 // server reads the campaign cookie from, so it has to follow the line above. It also takes a

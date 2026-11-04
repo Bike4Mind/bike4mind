@@ -44,13 +44,16 @@ export async function completeUserConnectionOAuth(
   const auditEntry = audit(actor, 'oauth_completed', connection);
 
   // RFC 9207: an `iss` that is present must match, and one the server promised must be present.
+  // Known residual risk: with a server that sends no `iss`, nothing ties the response to the server the state
+  // was issued for, because every server shares one redirect URI. A per-issuer redirect URI would close it but
+  // also changes the client metadata document and the registrations keyed by redirect, so it is left out.
   if ((params.iss !== undefined && params.iss !== oauth.issuer) || (oauth.issParameterSupported && !params.iss)) {
     auditEntry.failure('issuer_mismatch');
     throw invalidState();
   }
 
   try {
-    const client = await loadConnectionClient(connection, pending.redirectUri);
+    const client = await loadConnectionClient(connection);
     const codeVerifier = decryptToken(pending.codeVerifierEnc);
     if (!client || !codeVerifier || !oauth.tokenEndpoint) {
       auditEntry.failure('client_unavailable');
@@ -87,7 +90,9 @@ export async function completeUserConnectionOAuth(
   } catch (error) {
     if (error instanceof RemoteMcpOAuthError) {
       auditEntry.failure(error.code);
-      throw new BadGatewayError('The server did not accept the sign-in', { code: 'oauth_exchange_failed' });
+      throw new BadGatewayError('The server did not accept the sign-in', {
+        code: error.code === 'token_unavailable' ? 'oauth_token_unavailable' : 'oauth_exchange_failed',
+      });
     }
     if (!(error instanceof BadRequestError)) auditEntry.failure('internal_error');
     throw error;

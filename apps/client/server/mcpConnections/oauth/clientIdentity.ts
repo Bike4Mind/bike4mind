@@ -6,6 +6,7 @@ import {
 } from '@bike4mind/common';
 import { adminSettingsRepository, mcpOAuthClientRegistrationRepository } from '@bike4mind/database';
 import {
+  chooseClientAuthMethod,
   registerRemoteMcpClient,
   type RemoteMcpOAuthClient,
   type RemoteMcpOAuthDiscovery,
@@ -30,13 +31,13 @@ export interface ResolvedOAuthClient {
   manualClientSecretEnc?: string;
 }
 
-const confidential = (clientId: string, clientSecret?: string): RemoteMcpOAuthClient => ({
+const confidential = (clientId: string, clientSecret: string | undefined, supportedMethods: string[]) => ({
   clientId,
   clientSecret,
-  tokenEndpointAuthMethod: clientSecret ? 'client_secret_post' : 'none',
+  tokenEndpointAuthMethod: chooseClientAuthMethod(supportedMethods, Boolean(clientSecret)),
 });
 
-/** The admin-registered client for a catalog preset, if any. A malformed setting is logged, never silent. */
+/** The admin-registered client for a catalog preset, if any. A malformed setting is logged, never silent, and never quoted. */
 export async function presetClientFor(presetId: string | undefined): Promise<ManualOAuthClient | undefined> {
   if (!presetId) return undefined;
   const raw = getSettingsValue(
@@ -45,7 +46,8 @@ export async function presetClientFor(presetId: string | undefined): Promise<Man
     ''
   );
   const parsed = parseCustomMcpPresetClients(raw);
-  if (!parsed.ok) console.warn(`[mcpOAuth] customMcpPresetClients is unusable: ${parsed.error}`);
+  // The parser message can quote the value around the error, which holds client secrets: never log it.
+  if (!parsed.ok) console.warn('[mcpOAuth] customMcpPresetClients is unusable (invalid JSON or shape)');
   return parsed.clients[presetId];
 }
 
@@ -69,14 +71,17 @@ export async function resolveOAuthClient(options: {
 }): Promise<ResolvedOAuthClient> {
   const { discovery, connection } = options;
   const preset = await presetClientFor(connection.presetId);
-  if (preset) return { mode: 'preregistered', client: confidential(preset.clientId, preset.clientSecret) };
+  const supported = discovery.tokenEndpointAuthMethodsSupported;
+  if (preset) {
+    return { mode: 'preregistered', client: confidential(preset.clientId, preset.clientSecret, supported) };
+  }
 
   if (options.manual) {
     const manualClientIdEnc = encryptToken(options.manual.clientId);
     if (!manualClientIdEnc) throw new Error('Client id encryption returned nothing');
     return {
       mode: 'manual',
-      client: confidential(options.manual.clientId, options.manual.clientSecret),
+      client: confidential(options.manual.clientId, options.manual.clientSecret, supported),
       manualClientIdEnc,
       manualClientSecretEnc: encryptToken(options.manual.clientSecret) ?? undefined,
     };
@@ -110,7 +115,8 @@ export async function resolveOAuthClient(options: {
     scope: options.scope,
     fetchFn: options.fetchFn,
   });
-  const row = await mcpOAuthClientRegistrationRepository.upsert({
+  // Insert-if-absent: of two first starts that both registered, the stored row wins and both use it.
+  const row = await mcpOAuthClientRegistrationRepository.registerIfAbsent({
     issuer: discovery.issuer,
     redirectUri: options.redirectUri,
     clientId: registered.clientId,
@@ -118,33 +124,49 @@ export async function resolveOAuthClient(options: {
     ...(registered.clientSecretExpiresAt ? { clientSecretExpiresAt: registered.clientSecretExpiresAt } : {}),
     tokenEndpointAuthMethod: registered.tokenEndpointAuthMethod,
   });
+  if (!row) throw new Error('The client registration was not stored');
   return {
     mode: 'dcr',
-    client: { ...registered, clientSecret: registered.clientSecret },
+    client: {
+      clientId: row.clientId,
+      clientSecret: decryptToken(row.clientSecretEnc) ?? undefined,
+      tokenEndpointAuthMethod: row.tokenEndpointAuthMethod,
+    },
     clientRegistrationId: row.id,
   };
 }
 
+/** The method chosen at sign-in and stored with the connection; derived the same way if an older row has none. */
+const storedMethod = (clientId: string, clientSecret: string | undefined, method: string | undefined) => ({
+  clientId,
+  clientSecret,
+  tokenEndpointAuthMethod: method ?? chooseClientAuthMethod([], Boolean(clientSecret)),
+});
+
 /** The client a connection signed in with, rebuilt from what it stored, for exchange, refresh and revoke. */
 export async function loadConnectionClient(
-  connection: Pick<IMcpConnectionDocument, 'presetId' | 'auth'>,
-  redirect: string
+  connection: Pick<IMcpConnectionDocument, 'presetId' | 'auth'>
 ): Promise<RemoteMcpOAuthClient | undefined> {
   const oauth = connection.auth.oauth;
   if (!oauth) return undefined;
   switch (oauth.clientMode) {
     case 'preregistered': {
       const preset = await presetClientFor(connection.presetId);
-      return preset && confidential(preset.clientId, preset.clientSecret);
+      return preset && storedMethod(preset.clientId, preset.clientSecret, oauth.tokenEndpointAuthMethod);
     }
     case 'manual': {
       const clientId = decryptToken(oauth.manualClientIdEnc);
-      return clientId ? confidential(clientId, decryptToken(oauth.manualClientSecretEnc) ?? undefined) : undefined;
+      return clientId
+        ? storedMethod(clientId, decryptToken(oauth.manualClientSecretEnc) ?? undefined, oauth.tokenEndpointAuthMethod)
+        : undefined;
     }
     case 'cimd':
       return { clientId: clientMetadataUrl(), tokenEndpointAuthMethod: 'none' };
     case 'dcr': {
-      const row = await mcpOAuthClientRegistrationRepository.findByIssuerAndRedirect(oauth.issuer, redirect);
+      // By the id this connection signed in with: a later re-registration must not swap its client.
+      const row = oauth.clientRegistrationId
+        ? await mcpOAuthClientRegistrationRepository.findByIdWithCredentials(oauth.clientRegistrationId)
+        : null;
       return row
         ? {
             clientId: row.clientId,
