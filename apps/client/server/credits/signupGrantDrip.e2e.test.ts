@@ -434,7 +434,7 @@ describe('signup activity drip', () => {
     expect(await CreditTransaction.countDocuments({})).toBe(0);
   });
 
-  it.each(['refund', 'dispute'] as const)(
+  it.each(['refund', 'dispute', 'fraud_warning'] as const)(
     'after a %s forfeit, pays no drip or non-admin unlock but still honors an admin release',
     async cause => {
       const user = await createSignupStageUser();
