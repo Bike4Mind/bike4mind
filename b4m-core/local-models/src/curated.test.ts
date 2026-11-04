@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import type { HardwareProfile, HubBuild, HubEntry, HubManifest } from '@bike4mind/common/modelHub';
 import { describe, expect, it } from 'vitest';
 import {
+  curatedBuildForInstalled,
   curatedBuildForRef,
   curatedEntryForRef,
   curatedLibrary,
@@ -168,6 +169,83 @@ describe('curatedBuildForRef', () => {
     const ref = curatedSource(entry.builds[0]).ollamaRef;
     entry.flags.abliterated = true;
     expect(curatedBuildForRef(list, ref)).toBeNull();
+  });
+});
+
+describe('curatedBuildForInstalled', () => {
+  const builds = (list: HubManifest, id: string) => {
+    const entry = entryOf(list, id);
+    return entry.builds.map(build => ({ entry, build }));
+  };
+
+  it('finds a library build copied or tagged under another name by its weights digest', () => {
+    const list = manifest();
+    for (const { entry, build } of builds(list, 'qwen3-5-4b')) {
+      const modelBlob = curatedLibrary(build)?.digest;
+      const found = { entry, build, via: 'digest' };
+      expect(curatedBuildForInstalled(list, { name: 'my-copy:latest', modelBlob })).toEqual(found);
+      expect(curatedBuildForInstalled(list, { name: 'my-copy', modelBlob: modelBlob?.toUpperCase() })).toEqual(found);
+    }
+  });
+
+  it('finds an hf.co build by its pull ref, by its file digest under another name and by its GGUF file name', () => {
+    const list = manifest();
+    for (const { entry, build } of builds(list, 'qwen3-8-27b-gsq')) {
+      const file = build.weights[0];
+      expect(curatedBuildForInstalled(list, { name: curatedSource(build).ollamaRef })).toEqual({
+        entry,
+        build,
+        via: 'ref',
+      });
+      expect(curatedBuildForInstalled(list, { name: 'gsq:latest', modelBlob: file.sha256 })).toEqual({
+        entry,
+        build,
+        via: 'digest',
+      });
+      for (const name of [file.path, `/models/${file.path}`, `C:\\models\\${file.path.toUpperCase()}`])
+        expect(curatedBuildForInstalled(list, { name })).toEqual({ entry, build, via: 'file' });
+    }
+  });
+
+  it('lets the weights digest decide over a name that pulls another build', () => {
+    const list = manifest();
+    const [small] = builds(list, 'qwen3-5-0-8b');
+    const [large] = builds(list, 'qwen3-8-27b');
+    const modelBlob = curatedLibrary(large.build)?.digest;
+    expect(curatedBuildForInstalled(list, { name: curatedSource(small.build).ollamaRef, modelBlob })).toEqual({
+      ...large,
+      via: 'digest',
+    });
+    expect(curatedBuildForInstalled(list, { name: curatedSource(small.build).ollamaRef, modelBlob: null })).toEqual({
+      ...small,
+      via: 'ref',
+    });
+  });
+
+  it('does not keep a name once its weights are other than the build pins, unless the build pins none', () => {
+    const list = manifest();
+    const [{ entry, build }] = builds(list, 'qwen3-5-4b');
+    const name = curatedSource(build).ollamaRef;
+    const gsq = builds(list, 'qwen3-8-27b-gsq')[0];
+    const file = gsq.build.weights[0];
+    const other = 'f'.repeat(64);
+    expect(curatedBuildForInstalled(list, { name, modelBlob: other })).toBeNull();
+    expect(curatedBuildForInstalled(list, { name: `/models/${file.path}`, modelBlob: other })).toBeNull();
+    if (build.ollama?.kind === 'library') delete (build.ollama as { digest?: string }).digest;
+    expect(curatedBuildForInstalled(list, { name, modelBlob: other })).toEqual({ entry, build, via: 'ref' });
+  });
+
+  it('finds nothing for other weights, names or files, or for an entry Curated does not list', () => {
+    const list = manifest();
+    const other = 'f'.repeat(64);
+    expect(curatedBuildForInstalled(list, { name: 'my-copy:latest', modelBlob: other })).toBeNull();
+    expect(curatedBuildForInstalled(list, { name: 'qwen2.5:0.5b' })).toBeNull();
+    expect(curatedBuildForInstalled(list, { name: '/models/Qwen3.8-27B-Q4_K_M.gguf' })).toBeNull();
+    const [{ entry, build }] = builds(list, 'qwen3-8-27b-gsq');
+    expect(curatedBuildForInstalled(list, { name: build.weights[0].path.replace(/\.gguf$/i, '') })).toBeNull();
+    entry.flags.abliterated = true;
+    expect(curatedBuildForInstalled(list, { name: 'gsq:latest', modelBlob: build.weights[0].sha256 })).toBeNull();
+    expect(curatedBuildForInstalled(list, { name: build.weights[0].path })).toBeNull();
   });
 });
 

@@ -181,6 +181,52 @@ export function curatedBuildForRef(manifest: HubManifest, ref: string): { entry:
   return null;
 }
 
+/** What a server reports about an installed model that can tie it to a curated build. */
+export interface InstalledModelKey {
+  /** The name the server lists it by. */
+  name: string;
+  /** The sha256 of its weights blob, as the FROM line of Ollama's /api/show names it. */
+  modelBlob?: string | null;
+}
+
+/** How an installed model was tied to its build: by weights digest, by pull ref, or by GGUF file name. */
+export type InstalledMatch = 'digest' | 'ref' | 'file';
+
+/**
+ * The listed entry and build whose weights an installed model carries, for family data such as sampling;
+ * installedReviewed decides whether it is the reviewed build.
+ */
+export function curatedBuildForInstalled(
+  manifest: HubManifest,
+  model: InstalledModelKey
+): { entry: HubEntry; build: HubBuild; via: InstalledMatch } | null {
+  const listed = manifest.entries
+    .filter(entry => isCuratedListable(entry, manifest))
+    .flatMap(entry => entry.builds.map(build => ({ entry, build })));
+  const blob = model.modelBlob?.toLowerCase();
+  const byDigest = blob ? listed.find(({ build }) => reviewedDigest(build) === blob) : undefined;
+  if (byDigest) return { ...byDigest, via: 'digest' };
+  // A known blob that matched no build is other weights: a name whose build pins a digest no longer holds.
+  const namesOtherWeights = ({ build }: { build: HubBuild }) => !!blob && !!reviewedDigest(build);
+  const byRef = curatedBuildForRef(manifest, model.name);
+  if (byRef && !namesOtherWeights(byRef)) return { ...byRef, via: 'ref' };
+  const file = ggufFileName(model.name);
+  const byFile = file
+    ? listed.find(
+        candidate =>
+          !!candidate.build.weights[0] &&
+          ggufFileName(candidate.build.weights[0].path) === file &&
+          !namesOtherWeights(candidate)
+      )
+    : undefined;
+  return byFile ? { ...byFile, via: 'file' } : null;
+}
+
+function ggufFileName(path: string): string | null {
+  const name = path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1).toLowerCase();
+  return name.endsWith('.gguf') ? name : null;
+}
+
 // One spelling for every name Ollama pulls the same model by: `library/x`, `x` and `x:latest`, hf.co and huggingface.co.
 function pullRefKey(ref: string): string {
   const name = ollamaModelKey(ref.replace(/^library\//i, ''));

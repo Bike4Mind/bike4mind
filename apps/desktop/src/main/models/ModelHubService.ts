@@ -998,9 +998,9 @@ export class ModelHubService {
     return pinnedProjectorSizes(this.#deps.curated());
   }
 
-  /** The curated family sampling for a local model matched by name on any local server; chat sends it as a seed. */
-  catalogSampling(ollamaName: string): CatalogSampling | undefined {
-    return catalogSampling(this.#deps.curated(), ollamaName);
+  /** The curated family sampling for a local model on any local server; chat sends it as a seed. */
+  catalogSampling(name: string, modelBlob?: string, parameters?: string): CatalogSampling | undefined {
+    return catalogSampling(this.#deps.curated(), name, modelBlob, parameters);
   }
 
   /**

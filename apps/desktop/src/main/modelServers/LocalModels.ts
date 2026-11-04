@@ -7,6 +7,18 @@ import type { OllamaLocal } from '../chat/OllamaLocal';
 import type { CompletionStreamEvent } from '../chat/streamEvents';
 import type { ModelListOptions, ModelServerRegistry } from './ModelServerRegistry';
 
+/** The curated family sampling for an installed local model; see ModelHubService.catalogSampling. */
+export type CatalogSamplingHook = (
+  name: string,
+  modelBlob: string | undefined,
+  parameters: string | undefined
+) => CatalogSampling | undefined;
+
+/** Matched on every server; requestGeneration keeps each server to the fields it takes. */
+export function optionCatalogSampling(hook: CatalogSamplingHook | undefined) {
+  return (option: ChatModelOption) => hook?.(option.name, option.modelBlob, option.modelParameters);
+}
+
 /**
  * Every device-side model: this computer's Ollama, then each saved server's. A `local:srv-<id>:...`
  * model goes to that server's client; every other local id to this computer, as before.
