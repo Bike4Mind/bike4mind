@@ -25,8 +25,10 @@ vi.mock('@bike4mind/server-utils/auth/oauthFlowCookie', () => ({
   clearStateNonce: vi.fn(),
 }));
 
+const mockAuditFailure = vi.hoisted(() => vi.fn());
+
 vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
-  IntegrationAuditLogger: { create: () => ({ setUserId: vi.fn(), success: vi.fn(), failure: vi.fn() }) },
+  IntegrationAuditLogger: { create: () => ({ setUserId: vi.fn(), success: vi.fn(), failure: mockAuditFailure }) },
 }));
 
 const encryptEnvVariables = vi.hoisted(() => vi.fn(() => [{ key: 'GITHUB_ACCESS_TOKEN', value: 'encrypted' }]));
@@ -347,6 +349,7 @@ describe('/api/auth/github/mcp-callback - authorization not completed', () => {
     const { req, res } = createMocks({ method: 'GET', query });
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     (req as any).logger = logger;
+    mockAuditFailure.mockClear();
     await handler(req, res);
     return { res, logger };
   }
@@ -359,6 +362,7 @@ describe('/api/auth/github/mcp-callback - authorization not completed', () => {
     );
     expect(logger.warn).toHaveBeenCalledWith('GitHub authorization not completed', { error: 'access_denied' });
     expect(logger.error).not.toHaveBeenCalled();
+    expect(mockAuditFailure).toHaveBeenCalledWith('oauth_error');
   });
 
   it('maps any other provider error to the generic failure without echoing it', async () => {
@@ -366,6 +370,7 @@ describe('/api/auth/github/mcp-callback - authorization not completed', () => {
 
     expect(res._getRedirectUrl()).toContain('error=callback_failed');
     expect(logger.warn).toHaveBeenCalledWith('GitHub authorization not completed', { error: 'unrecognized' });
+    expect(logger.error).not.toHaveBeenCalled();
   });
 
   it('logs a callback with no code at all at warn', async () => {
@@ -374,5 +379,15 @@ describe('/api/auth/github/mcp-callback - authorization not completed', () => {
     expect(res._getRedirectUrl()).toContain('error=missing_code');
     expect(logger.warn).toHaveBeenCalledWith('Missing or invalid code parameter');
     expect(logger.error).not.toHaveBeenCalled();
+    expect(mockAuditFailure).toHaveBeenCalledWith('missing_code');
+  });
+
+  it('logs a callback with a code but no state at warn', async () => {
+    const { res, logger } = await runWith({ code: 'c' });
+
+    expect(res._getRedirectUrl()).toContain('error=missing_state');
+    expect(logger.warn).toHaveBeenCalledWith('Missing or invalid state parameter');
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(mockAuditFailure).toHaveBeenCalledWith('missing_state');
   });
 });
