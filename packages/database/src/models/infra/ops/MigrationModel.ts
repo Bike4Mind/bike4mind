@@ -7,7 +7,8 @@ import mongoose from 'mongoose';
 export interface MigrationFile {
   id: number;
   name: string;
-  up: () => Promise<void>;
+  /** `startedAt` is when the migrator run began, for migrations that budget against its timeout. */
+  up: (ctx?: { startedAt: Date }) => Promise<void>;
   down: () => Promise<void>;
 }
 

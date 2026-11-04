@@ -223,11 +223,12 @@ describe('convertLegacyQuestPlans', () => {
   it('skips a graph with no owner, and a plan whose owner account is gone', async () => {
     const owner = await insertUser();
     await insertGraph(owner, { userId: null });
+    await insertGraph(owner, { userId: String(new Types.ObjectId()) });
     await insertPlan({ userId: String(new Types.ObjectId()) });
 
     const { plans: p, graphs: g } = await run();
 
-    expect(g).toMatchObject({ skippedNoOwner: 1, created: 0, failed: 0 });
+    expect(g).toMatchObject({ skippedNoOwner: 2, created: 0, failed: 0 });
     expect(p).toMatchObject({ skippedNoOwner: 1, created: 0, failed: 0 });
     expect(await archives()).toHaveLength(0);
   });
@@ -260,17 +261,24 @@ describe('convertLegacyQuestPlans', () => {
 
   it('stops taking pages once the deadline has passed and reports it', async () => {
     const owner = await insertUser();
-    for (let i = 0; i < 5; i++) await insertPlan({ userId: owner, goal: `Plan ${i}` });
+    const planIds: string[] = [];
+    for (let i = 0; i < 5; i++) planIds.push(await insertPlan({ userId: owner, goal: `Plan ${i}` }));
+    const graphId = await insertGraph(owner);
+    const sourceIds = async () => (await archives()).map(f => f.sourceMetadata?.sourceId as string).sort();
 
     const first = await run(2, new Date(0));
 
     expect(first.stoppedEarly).toBe(true);
     expect(first.plans.created).toBe(2);
     expect(first.graphs.live).toBe(0);
+    expect(first.graphs.created).toBe(0);
+    expect(await sourceIds()).toEqual(planIds.slice(0, 2).sort());
 
     const rest = await run();
     expect(rest.stoppedEarly).toBe(false);
-    expect(await archives()).toHaveLength(5);
+    expect(rest.plans).toMatchObject({ created: 3, unchanged: 2 });
+    expect(rest.graphs.created).toBe(1);
+    expect(await sourceIds()).toEqual([...planIds, graphId].sort());
   });
 
   it('leaves a file the user rewrote alone', async () => {

@@ -34,7 +34,7 @@ vi.mock('@bike4mind/database', () => ({
 interface FakeMigrationFile {
   id: number;
   name: string;
-  up: () => Promise<void>;
+  up: (ctx?: { startedAt: Date }) => Promise<void>;
   down: () => Promise<void>;
 }
 
@@ -130,6 +130,19 @@ describe('MigrationManager - applied-set selection (M0)', () => {
     expect(m2.up).toHaveBeenCalledOnce();
     expect(m3.up).not.toHaveBeenCalled();
     expect(migrationDocs.map(d => d.id).sort()).toEqual([1, 2, 3]);
+  });
+
+  it('up() hands every migration the same startedAt', async () => {
+    const m1 = migration(1);
+    const m2 = migration(2);
+    fakeAvailableMigrations = [m1, m2];
+
+    await new MigrationManager(new Logger()).up(null);
+
+    const [a] = (m1.up as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [b] = (m2.up as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(a.startedAt).toBeInstanceOf(Date);
+    expect(b.startedAt).toBe(a.startedAt);
   });
 
   it('up() runs nothing when every migration is already applied, regardless of id order', async () => {

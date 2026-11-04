@@ -36,7 +36,9 @@ import { fabFilesService } from '@bike4mind/services';
  */
 
 // Under the migrator Lambda's 15-minute timeout, leaving room for the steps that run after `up()`.
-const DEFAULT_RUN_MS = 12 * 60 * 1000;
+// Counts from the start of the migrator run (earlier migrations share the Lambda), so callers pass
+// `deadline = startedAt + DEFAULT_RUN_MS`.
+export const DEFAULT_RUN_MS = 12 * 60 * 1000;
 const BATCH_SIZE = 200;
 const CONCURRENCY = 8;
 const MAX_SAMPLES = 20;

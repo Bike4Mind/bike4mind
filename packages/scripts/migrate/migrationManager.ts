@@ -57,6 +57,7 @@ export class MigrationManager {
     this.logger.log(`Migrations to run: ${migrations.length}`);
     this.logger.log('');
 
+    const startedAt = new Date();
     for (const migration of migrations) {
       const logger = this.logger.withMetadata({
         migrationId: migration.id,
@@ -65,7 +66,7 @@ export class MigrationManager {
 
       logger.log(`Running migration ${migration.id}: ${migration.name}`);
       try {
-        await migration.up();
+        await migration.up({ startedAt });
         await Migration.create({ id: migration.id, name: migration.name });
         logger.log(`Migration ${migration.id} ${migration.name} completed`);
       } catch (error: unknown) {
