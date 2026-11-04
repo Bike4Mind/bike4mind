@@ -168,6 +168,13 @@ export async function getAdminSubscriptionStripe(
     listInvoices(stripe, doc.subscriptionId),
     upcomingOf(stripe, subscription, logger),
   ]);
+  // A paid invoice with no expanded payments would silently read as "no grant found", so make it visible.
+  const unexpanded = invoices.filter(i => i.status === 'paid' && i.amount_paid > 0 && !i.payments?.data.length);
+  if (unexpanded.length)
+    logger?.warn('Admin subscription paid invoices came back without payments; credits join may miss grants', {
+      subscriptionId: doc.subscriptionId,
+      invoiceIds: unexpanded.map(i => i.id),
+    });
   const keys = invoices.flatMap(invoice => [invoicePaymentKey(invoice), invoice.id]);
   const credits = await creditsByKey(doc, [...new Set(keys)]);
 
