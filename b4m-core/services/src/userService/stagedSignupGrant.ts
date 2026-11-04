@@ -53,6 +53,15 @@ type DripEvidence = { drip: { day: string; dailyCredits: number; dripCap: number
 
 const noGrant = (): GrantFreeCreditsResult => ({ creditsGranted: 0, currentCredits: null });
 
+/**
+ * The tranche is paid right after its caller read the account, so a missing one is a transaction that cannot
+ * see it (or a deleted account): fail loudly so releasePendingFreeCredits keeps the pending tag for a retry.
+ */
+function assertTrancheAccountVisible<U>(user: U | null | undefined, expected: SignupGrant['stage']) {
+  if (!user && expected === 'pending_email') throw new Error('Signup grant account not found');
+  return user;
+}
+
 /** The ledger description of an unlock tranche; the row's `reason` carries the machine label. */
 const SIGNUP_UNLOCK_DESCRIPTIONS: Readonly<Record<SignupGrantUnlockReason, string>> = {
   card_verified: 'card verified',
@@ -122,7 +131,7 @@ async function releaseStage(
 ): Promise<GrantFreeCreditsResult> {
   const { db, audit } = adapters;
   if (db.signupProtection) {
-    const user = await db.users.findById(userId);
+    const user = assertTrancheAccountVisible(await db.users.findById(userId), expected);
     if (!isReleaseEligible(user, expected) || isForfeitedRelease(user.signupGrant, reason)) return noGrant();
     if (!user.emailVerified) {
       if (expected === 'pending_email') throw new Error('Email verification required for signup grant');
@@ -140,7 +149,7 @@ async function releaseStage(
   const releaseReservations = () => Promise.all(reservations.map(held => held.release()));
   try {
     const result = await inCallerTransaction<AssessedGrantResult>(async () => {
-      const user = await db.users.findById(userId);
+      const user = assertTrancheAccountVisible(await db.users.findById(userId), expected);
       if (!isReleaseEligible(user, expected) || isForfeitedRelease(user.signupGrant, reason)) return noGrant();
       const grant = user.signupGrant;
       const evidence = await validate(user);

@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { withTransaction } from '@bike4mind/db-core';
 import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { userService } from '@bike4mind/services';
 import { CURRENT_POLICY_VERSION, newSignupGrant, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
@@ -298,6 +300,31 @@ describe('staged signup ledger', () => {
     });
     expect((await userService.grantFreeCredits({ id: flatAlias.id }, legacyAdapters)).creditsGranted).toBe(0);
     expect(await CreditTransaction.countDocuments({})).toBe(2);
+  });
+
+  it('pays nothing to an alias inside a caller transaction and still commits it', async () => {
+    expect(
+      (await userService.releaseSignupTranche((await createAlias('joined@gmail.com')).id, adapters)).creditsGranted
+    ).toBe(12);
+    const alias = await withTransaction(async () => {
+      const created = await createAlias('j.o.i.n.e.d+alias@googlemail.com');
+      expect((await userService.releaseSignupTranche(created.id, adapters)).creditsGranted).toBe(0);
+      return created;
+    });
+    expect((await User.findById(alias.id))?.signupGrant?.stage).toBe('pending_email');
+    expect(await CreditTransaction.countDocuments({})).toBe(1);
+  });
+
+  it('fails loudly when the payout cannot see the account its caller is creating', async () => {
+    const als = (mongoose as unknown as { transactionAsyncLocalStorage: AsyncLocalStorage<unknown> })
+      .transactionAsyncLocalStorage;
+    await withTransaction(async () => {
+      const created = await createAlias('unseen@example.test');
+      await expect(als.exit(() => userService.releaseSignupTranche(created.id, adapters))).rejects.toThrow(
+        'Signup grant account not found'
+      );
+    });
+    expect(await CreditTransaction.countDocuments({})).toBe(0);
   });
 
   it('allows only one staged alias payout when claims race', async () => {
