@@ -49,6 +49,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
     write: 'strict',
     escalatesAboveGrantThreshold: true,
   },
+  'user.credits.grant_blocked': { category: 'credits', severity: 'notice', write: 'strict' },
+  'user.credits.grant_unblocked': { category: 'credits', severity: 'notice', write: 'strict' },
   'user.credits.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
   'user.subscription.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
   'billing.comp.changed': { category: 'credits', severity: 'notice', write: 'strict' },
