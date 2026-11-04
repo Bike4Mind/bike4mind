@@ -702,7 +702,8 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
 
   async setPendingAuth(
     id: string,
-    challenge: { resourceMetadataUrl?: string; scope?: string; message: string }
+    challenge: { resourceMetadataUrl?: string; scope?: string; message: string },
+    expectedAccessTokenEnc?: string | null
   ): Promise<IMcpConnectionDocument | null> {
     if (!mongoose.isObjectIdOrHexString(id)) return null;
     const now = new Date();
@@ -713,8 +714,11 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
       challenge.resourceMetadataUrl.length <= MCP_CONNECTION_LIMITS.authChallengeUrlLength
         ? challenge.resourceMetadataUrl
         : undefined;
-    const result = await this.model.findByIdAndUpdate(
-      id,
+    const result = await this.model.findOneAndUpdate(
+      {
+        _id: id,
+        ...(expectedAccessTokenEnc !== undefined ? { 'auth.oauth.accessTokenEnc': expectedAccessTokenEnc } : {}),
+      },
       {
         $set: {
           status: 'pending_auth',
@@ -755,13 +759,15 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     id: string,
     status: 'error' | 'needs_reconnect',
     lastError: McpConnectionLastErrorInput,
-    expectedApiKeyValueEnc?: string | null
+    expectedApiKeyValueEnc?: string | null,
+    expectedAccessTokenEnc?: string | null
   ): Promise<IMcpConnectionDocument | null>;
   async setStatus(
     id: string,
     status: McpConnectionStatus,
     lastError?: McpConnectionLastErrorInput,
-    expectedApiKeyValueEnc?: string | null
+    expectedApiKeyValueEnc?: string | null,
+    expectedAccessTokenEnc?: string | null
   ): Promise<IMcpConnectionDocument | null> {
     if ((status === 'error' || status === 'needs_reconnect') && !lastError) {
       throw new Error(`setStatus(${status}) requires a lastError`);
@@ -790,6 +796,7 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
       ...(expectedApiKeyValueEnc !== undefined
         ? { 'auth.kind': 'api_key', 'auth.apiKey.valueEnc': expectedApiKeyValueEnc }
         : {}),
+      ...(expectedAccessTokenEnc !== undefined ? { 'auth.oauth.accessTokenEnc': expectedAccessTokenEnc } : {}),
     };
     const result = await this.model.findOneAndUpdate(filter, update, { new: true, runValidators: true });
     return result?.toJSON() ?? null;

@@ -7,6 +7,7 @@ const h = vi.hoisted(() => ({
   register: vi.fn(),
   registerIfAbsent: vi.fn(),
   byId: vi.fn(),
+  remove: vi.fn(async () => undefined),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -15,6 +16,7 @@ vi.mock('@bike4mind/database', () => ({
     findByIssuerAndRedirect: vi.fn(async () => h.rows[0] ?? null),
     findByIdWithCredentials: h.byId,
     registerIfAbsent: h.registerIfAbsent,
+    delete: h.remove,
   },
 }));
 vi.mock('@bike4mind/utils', () => ({
@@ -30,7 +32,7 @@ vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   decryptToken: (value?: string | null) => (value ? value.replace(/^enc:/, '') : null),
 }));
 
-import { loadConnectionClient, resolveOAuthClient } from './clientIdentity';
+import { dropRejectedRegistration, loadConnectionClient, resolveOAuthClient } from './clientIdentity';
 
 const discovery = (overrides: Partial<RemoteMcpOAuthDiscovery> = {}) =>
   ({
@@ -221,5 +223,25 @@ describe('loadConnectionClient', () => {
       auth: { kind: 'oauth', oauth: { clientMode: 'dcr', clientRegistrationId: 'reg-7', issuer: 'i' } },
     } as never);
     expect(client).toBeUndefined();
+  });
+});
+
+describe('dropRejectedRegistration', () => {
+  beforeEach(() => h.remove.mockClear());
+  const dcr = { auth: { kind: 'oauth', oauth: { clientMode: 'dcr', clientRegistrationId: 'reg-7' } } } as never;
+  const refused = (errorCode: string) => ({ cause: { errorCode } });
+
+  it('drops the shared row when the server no longer knows the client', async () => {
+    await dropRejectedRegistration(dcr, refused('invalid_client'));
+    expect(h.remove).toHaveBeenCalledWith('reg-7');
+  });
+
+  it('keeps it for any other failure, and for a client that is not dynamically registered', async () => {
+    await dropRejectedRegistration(dcr, refused('invalid_scope'));
+    await dropRejectedRegistration(
+      { auth: { kind: 'oauth', oauth: { clientMode: 'manual', clientRegistrationId: 'reg-7' } } } as never,
+      refused('invalid_client')
+    );
+    expect(h.remove).not.toHaveBeenCalled();
   });
 });

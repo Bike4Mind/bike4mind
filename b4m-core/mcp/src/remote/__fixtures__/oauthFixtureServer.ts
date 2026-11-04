@@ -13,6 +13,8 @@ export interface OAuthFixtureOptions {
   metadataStyle?: 'oauth' | 'oidc';
   /** Advertise PKCE S256 (default true). */
   s256?: boolean;
+  /** `scopes_supported` in the protected-resource document; the authorization server always lists read and write. */
+  prmScopes?: string[];
   /** Name a different resource in the protected-resource document. */
   resourceMismatch?: boolean;
   /** Advertise `client_id_metadata_document_supported`. */
@@ -295,6 +297,7 @@ export async function startOAuthFixtureServer(options: OAuthFixtureOptions = {})
     resource: options.resourceMismatch ? 'https://other.example/mcp' : `${origin}/mcp`,
     authorization_servers: [origin],
     bearer_methods_supported: ['header'],
+    ...(options.prmScopes && { scopes_supported: options.prmScopes }),
   });
 
   const server: Server = createServer((req, res) => {

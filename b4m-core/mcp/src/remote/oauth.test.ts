@@ -37,7 +37,7 @@ describe('discoverRemoteMcpOAuth', () => {
     ['root well-known', { prmLocation: 'root' as const }, false],
     ['challenge header URL', { prmLocation: 'header' as const }, true],
   ])('finds the authorization server through the %s', async (_name, options, useHeader) => {
-    const f = await start(options);
+    const f = await start({ ...options, prmScopes: ['read', 'write'] });
     const found = await discover(f, useHeader ? f.resourceMetadataUrl : undefined);
     expect(found).toMatchObject({
       resource: f.resourceUrl,
@@ -48,6 +48,11 @@ describe('discoverRemoteMcpOAuth', () => {
       scopesSupported: ['read', 'write'],
       issParameterSupported: false,
     });
+  });
+
+  it('takes default scopes from the protected resource, never the authorization server', async () => {
+    const f = await start();
+    expect((await discover(f)).scopesSupported).toEqual([]);
   });
 
   it('keeps the revocation endpoint and the RFC 9207 flag on the OIDC-only path', async () => {
@@ -378,6 +383,25 @@ describe('token endpoint failures', () => {
         })
       ).rejects.toMatchObject({ code: expected });
     }
+  });
+
+  it.each([
+    ['a schema-invalid 200', 200],
+    ['a 302', 302],
+  ])('reports %s from the token endpoint as token_failed', async (_name, status) => {
+    const f = await start();
+    const { discovery, client, tokens } = await signedIn(f);
+    await expect(
+      refreshRemoteMcpTokens(discovery, {
+        client,
+        refreshToken: tokens.refreshToken ?? '',
+        fetchFn: (async () =>
+          new Response(status === 200 ? '{}' : '', {
+            status,
+            headers: status === 200 ? { 'content-type': 'application/json' } : { location: 'https://other.example/' },
+          })) as unknown as typeof fetch,
+      })
+    ).rejects.toMatchObject({ code: 'token_failed' });
   });
 
   it('reports a network error and a timeout as unavailable', async () => {

@@ -26,7 +26,7 @@ export interface StartOAuthOptions {
   fetchFn?: FetchLike;
 }
 
-/** Scopes from the 401 challenge, else what the server advertises, each cleaned and capped. */
+/** Scopes from the 401 challenge, else what the protected resource advertises (nothing if neither), each cleaned and capped. */
 function chooseScopes(challengeScope: string | undefined, supported: string[]): string[] {
   const requested = challengeScope?.split(/\s+/).filter(Boolean) ?? supported;
   const cleaned = requested.map(scope => cleanScope(scope)).filter((scope): scope is string => Boolean(scope));

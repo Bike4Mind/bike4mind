@@ -7,7 +7,7 @@ import { assertPolicyAllows, audit, toPublicView, userOwner, type ConnectionActo
 import type { CustomMcpContext } from '../customMcpAccess';
 import { discoverConnectionTools } from '../discovery';
 import type { InvokeRemoteMcpOptions } from '../invokeRemoteMcp';
-import { loadConnectionClient } from './clientIdentity';
+import { dropRejectedRegistration, loadConnectionClient } from './clientIdentity';
 import { withOAuthFetch } from './oauthFetch';
 import { sha256Hex } from './startOAuth';
 
@@ -86,6 +86,7 @@ export async function completeUserConnectionOAuth(
     return toPublicView(context, reloaded);
   } catch (error) {
     if (error instanceof RemoteMcpOAuthError) {
+      await dropRejectedRegistration(connection, error);
       auditEntry.failure(error.code);
       throw new BadGatewayError('The server did not accept the sign-in', {
         code: error.code === 'token_unavailable' ? 'oauth_token_unavailable' : 'oauth_exchange_failed',

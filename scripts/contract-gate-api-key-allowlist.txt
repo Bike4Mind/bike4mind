@@ -818,3 +818,4 @@ apps/client/pages/api/work-items/[id]/index.ts
 apps/client/pages/api/work-items/graph.ts
 apps/client/pages/api/work-items/index.ts
 apps/client/pages/api/work-items/ready.ts
+apps/client/pages/api/mcp-connections/oauth/client-metadata.ts # public OAuth client metadata document fetched by authorization servers

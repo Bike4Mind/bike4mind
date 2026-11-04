@@ -38,9 +38,17 @@ const repo = vi.hoisted(() => ({
     return doc && doc.ownerKey === owner.ownerKey ? structuredClone(doc) : null;
   }),
   setStatus: vi.fn(
-    async (id: string, status: string, lastError?: Record<string, unknown>, expectedApiKeyValueEnc?: string | null) => {
+    async (
+      id: string,
+      status: string,
+      lastError?: Record<string, unknown>,
+      expectedApiKeyValueEnc?: string | null,
+      expectedAccessTokenEnc?: string | null
+    ) => {
       const doc = state.connections.get(id);
       const auth = doc?.auth as IMcpConnectionDocument['auth'] | undefined;
+      if (expectedAccessTokenEnc !== undefined && (auth?.oauth?.accessTokenEnc ?? null) !== expectedAccessTokenEnc)
+        return null;
       if (
         expectedApiKeyValueEnc !== undefined &&
         (auth?.kind !== 'api_key' || (auth.apiKey?.valueEnc ?? null) !== expectedApiKeyValueEnc)
@@ -50,11 +58,16 @@ const repo = vi.hoisted(() => ({
       return doc ?? null;
     }
   ),
-  setPendingAuth: vi.fn(async (id: string, challenge: Record<string, unknown>) => {
-    const doc = state.connections.get(id);
-    if (doc) Object.assign(doc, { status: 'pending_auth', authChallenge: challenge });
-    return doc ?? null;
-  }),
+  setPendingAuth: vi.fn(
+    async (id: string, challenge: Record<string, unknown>, expectedAccessTokenEnc?: string | null) => {
+      const doc = state.connections.get(id);
+      const auth = doc?.auth as IMcpConnectionDocument['auth'] | undefined;
+      if (expectedAccessTokenEnc !== undefined && (auth?.oauth?.accessTokenEnc ?? null) !== expectedAccessTokenEnc)
+        return null;
+      if (doc) Object.assign(doc, { status: 'pending_auth', authChallenge: challenge });
+      return doc ?? null;
+    }
+  ),
   markUsed: vi.fn(async (_id: string) => undefined),
   update: vi.fn(async (data: Record<string, unknown>) => {
     const doc = state.connections.get(String(data.id));
@@ -291,11 +304,15 @@ describe('invokeRemoteMcp - round trips against the fixture', () => {
     );
     // The fixture advertises metadata on another domain, so only the scope is kept.
     expect(FIXTURE_RESOURCE_METADATA_URL).toMatch(/^https:\/\/auth\.fixture\.example\//);
-    expect(repo.setPendingAuth).toHaveBeenCalledWith(id, {
-      resourceMetadataUrl: undefined,
-      scope: 'tools.read',
-      message: 'The server requires sign-in',
-    });
+    expect(repo.setPendingAuth).toHaveBeenCalledWith(
+      id,
+      {
+        resourceMetadataUrl: undefined,
+        scope: 'tools.read',
+        message: 'The server requires sign-in',
+      },
+      null
+    );
     expect(state.audits[0]).toMatchObject({ outcome: 'failure', errorCode: 'auth_required' });
   });
 
@@ -381,7 +398,8 @@ describe('invokeRemoteMcp - round trips against the fixture', () => {
     );
     expect(repo.setPendingAuth).toHaveBeenCalledWith(
       pending,
-      expect.objectContaining({ scope: 'tools.read grant all' })
+      expect.objectContaining({ scope: 'tools.read grant all' }),
+      null
     );
 
     const keyed = seed('/mcp', {
@@ -526,7 +544,12 @@ describe('invokeRemoteMcp - round trips against the fixture', () => {
 
     it('a second 401 after the refresh leaves the connection needing reconnect', async () => {
       const id = seed('/mcp', { auth: oauthAuth(true) });
-      tokenManager.getOAuthAccessToken.mockResolvedValue('tok');
+      tokenManager.getOAuthAccessToken.mockImplementation(
+        async (_c: unknown, o: { onIssued?: (enc: string) => void }) => {
+          o.onIssued?.('enc:sent');
+          return 'tok';
+        }
+      );
       const rejecting = vi.fn(async () => {
         throw new RemoteMcpAuthRequiredError({});
       });
@@ -541,7 +564,51 @@ describe('invokeRemoteMcp - round trips against the fixture', () => {
       expect(repo.setStatus).toHaveBeenCalledWith(
         id,
         'needs_reconnect',
-        expect.objectContaining({ code: 'auth_required' })
+        expect.objectContaining({ code: 'auth_required' }),
+        undefined,
+        'enc:sent'
+      );
+    });
+
+    it('a 401 that lands after a reconnect does not overwrite the new sign-in', async () => {
+      const id = seed('/mcp', { auth: oauthAuth(true) });
+      tokenManager.getOAuthAccessToken.mockImplementation(
+        async (_c: unknown, o: { onIssued?: (enc: string) => void }) => {
+          o.onIssued?.('enc:sent');
+          return 'tok';
+        }
+      );
+      const reconnecting = vi.fn(async () => {
+        const doc = state.connections.get(id) as { auth: { oauth: Record<string, unknown> } };
+        doc.auth.oauth.accessTokenEnc = 'enc:fresh';
+        throw new RemoteMcpAuthRequiredError({});
+      });
+      await expectRemoteCode(
+        invokeRemoteMcp(
+          { action: 'listTools', connectionId: id, userId: 'user-1' },
+          { runner: reconnecting, context: context() }
+        ),
+        'auth_required'
+      );
+      expect(state.connections.get(id)).not.toMatchObject({ status: 'needs_reconnect' });
+    });
+
+    it('retries a 401 with the bearer that was sent as the rejected one', async () => {
+      const id = seed('/mcp', { auth: oauthAuth(true) });
+      tokenManager.getOAuthAccessToken.mockResolvedValue('tok');
+      const rejecting = vi.fn(async () => {
+        throw new RemoteMcpAuthRequiredError({});
+      });
+      await expectRemoteCode(
+        invokeRemoteMcp(
+          { action: 'listTools', connectionId: id, userId: 'user-1' },
+          { runner: rejecting, context: context() }
+        ),
+        'auth_required'
+      );
+      expect(tokenManager.getOAuthAccessToken).toHaveBeenLastCalledWith(
+        expect.anything(),
+        expect.objectContaining({ force: true, rejectedToken: 'tok' })
       );
     });
 
@@ -564,7 +631,8 @@ describe('invokeRemoteMcp - round trips against the fixture', () => {
       expect(challenged).toHaveBeenCalledTimes(1);
       expect(repo.setPendingAuth).toHaveBeenCalledWith(
         id,
-        expect.objectContaining({ message: 'The server requires sign-in' })
+        expect.objectContaining({ message: 'The server requires sign-in' }),
+        null
       );
     });
 
@@ -605,10 +673,16 @@ describe('invokeRemoteMcp - round trips against the fixture', () => {
       ),
       'timeout'
     );
-    expect(repo.setStatus).toHaveBeenCalledWith(listId, 'error', {
-      code: 'timeout',
-      message: 'The server did not answer in time',
-    });
+    expect(repo.setStatus).toHaveBeenCalledWith(
+      listId,
+      'error',
+      {
+        code: 'timeout',
+        message: 'The server did not answer in time',
+      },
+      undefined,
+      null
+    );
   });
 
   it('on self-host, surfaces ssrf_blocked for a private address, and records it even on a call', async () => {
@@ -623,10 +697,16 @@ describe('invokeRemoteMcp - round trips against the fixture', () => {
       'ssrf_blocked'
     );
     expect(fixture.requests).toHaveLength(0);
-    expect(repo.setStatus).toHaveBeenCalledWith(id, 'error', {
-      code: 'ssrf_blocked',
-      message: 'The server address resolves to a private or blocked network',
-    });
+    expect(repo.setStatus).toHaveBeenCalledWith(
+      id,
+      'error',
+      {
+        code: 'ssrf_blocked',
+        message: 'The server address resolves to a private or blocked network',
+      },
+      undefined,
+      null
+    );
     expect(state.audits[0]).toMatchObject({ outcome: 'failure', errorCode: 'ssrf_blocked' });
   });
 
@@ -638,10 +718,16 @@ describe('invokeRemoteMcp - round trips against the fixture', () => {
       { runner, context: context() }
     ).catch((e: unknown) => e as RemoteMcpError);
     expect(error).toMatchObject({ code: 'protocol', message: 'The server did not respond as an MCP server' });
-    expect(repo.setStatus).toHaveBeenCalledWith(id, 'error', {
-      code: 'protocol',
-      message: 'The server did not respond as an MCP server',
-    });
+    expect(repo.setStatus).toHaveBeenCalledWith(
+      id,
+      'error',
+      {
+        code: 'protocol',
+        message: 'The server did not respond as an MCP server',
+      },
+      undefined,
+      null
+    );
     expect(state.audits[0]).toMatchObject({ outcome: 'failure', errorCode: 'ssrf_blocked' });
   });
 

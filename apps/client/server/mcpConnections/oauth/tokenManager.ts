@@ -13,7 +13,7 @@ import {
 import { decryptToken, encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { RemoteMcpNetworkOptions } from '../customMcpAccess';
-import { loadConnectionClient } from './clientIdentity';
+import { dropRejectedRegistration, loadConnectionClient } from './clientIdentity';
 import { withOAuthFetch } from './oauthFetch';
 
 /** A token that expires within this window is refreshed before use. */
@@ -59,6 +59,13 @@ export interface AccessTokenOptions {
   network: RemoteMcpNetworkOptions;
   /** Refresh even if the stored token looks valid (the server just rejected it). */
   force?: boolean;
+  /**
+   * The bearer the server just rejected. A stored token that differs from it is someone else's refresh and is
+   * reused; without it the token read with `connection` is the marker, which misses a refresh made after that read.
+   */
+  rejectedToken?: string;
+  /** Called with the encrypted access token that the returned bearer came from, so a failure can be pinned to it. */
+  onIssued?: (accessTokenEnc: string | undefined) => void;
   fetchFn?: FetchLike;
   /** Test seams. */
   sleep?: (ms: number) => Promise<void>;
@@ -93,16 +100,34 @@ export async function getOAuthAccessToken(
   connection: IMcpConnectionDocument,
   options: AccessTokenOptions
 ): Promise<string | undefined> {
+  const issued = await resolveAccessToken(connection, options);
+  options.onIssued?.(issued?.enc);
+  return issued?.token;
+}
+
+interface Issued {
+  token: string | undefined;
+  enc: string | undefined;
+}
+
+const issuedFrom = (enc: string | undefined): Issued => ({ token: decryptToken(enc) ?? undefined, enc });
+
+async function resolveAccessToken(
+  connection: IMcpConnectionDocument,
+  options: AccessTokenOptions
+): Promise<Issued | undefined> {
   const oauth = connection.auth.oauth;
   const now = options.now ?? Date.now;
   if (!oauth || (!oauth.accessTokenEnc && !oauth.refreshTokenEnc)) return undefined;
-  if (!options.force && isFresh(oauth, now())) return decryptToken(oauth.accessTokenEnc) ?? undefined;
+  if (!options.force && isFresh(oauth, now())) return issuedFrom(oauth.accessTokenEnc);
   // An expired access token with nothing to refresh it, or a rejected one that cannot be replaced.
   if (!oauth.refreshTokenEnc) throw new RemoteMcpAuthRequiredError({});
 
   const owner: Owner = { ownerType: 'user', ownerKey: connection.ownerKey };
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
   const staleAccessTokenEnc = oauth.accessTokenEnc;
+  const isStale = (enc: string | undefined) =>
+    options.rejectedToken !== undefined ? decryptToken(enc) === options.rejectedToken : enc === staleAccessTokenEnc;
   const deadline = now() + HELD_POLL_MAX_MS;
 
   for (;;) {
@@ -118,9 +143,9 @@ export async function getOAuthAccessToken(
         throw new RemoteMcpAuthRequiredError({});
       }
       // Someone refreshed between our read and the lease: use theirs instead of spending the refresh token.
-      if (currentOauth.accessTokenEnc !== staleAccessTokenEnc && isUnexpired(currentOauth, now())) {
+      if (!isStale(currentOauth.accessTokenEnc) && isUnexpired(currentOauth, now())) {
         await mcpConnectionRepository.releaseRefreshLease(connection.id, holder);
-        return decryptToken(currentOauth.accessTokenEnc) ?? undefined;
+        return issuedFrom(currentOauth.accessTokenEnc);
       }
       return refreshWithLease(current, owner, holder, options);
     }
@@ -131,8 +156,8 @@ export async function getOAuthAccessToken(
     const latestOauth = latest?.auth.oauth;
     if (!latest || !latestOauth) throw new RemoteMcpAuthRequiredError({});
     if (latest.status === 'needs_reconnect') throw new OAuthReconnectRequiredError();
-    if (latestOauth.accessTokenEnc !== staleAccessTokenEnc && isUnexpired(latestOauth, now())) {
-      return decryptToken(latestOauth.accessTokenEnc) ?? undefined;
+    if (!isStale(latestOauth.accessTokenEnc) && isUnexpired(latestOauth, now())) {
+      return issuedFrom(latestOauth.accessTokenEnc);
     }
     // A crashed holder's lease outlives this window; a timeout is transient, not a reason to sign in again.
     if (now() >= deadline) throw new OAuthRefreshUnavailableError('Another request is refreshing the sign-in');
@@ -144,7 +169,7 @@ async function refreshWithLease(
   owner: Owner,
   holder: string,
   options: AccessTokenOptions
-): Promise<string | undefined> {
+): Promise<Issued | undefined> {
   const oauth = connection.auth.oauth;
   try {
     const refreshToken = decryptToken(oauth?.refreshTokenEnc);
@@ -156,16 +181,30 @@ async function refreshWithLease(
     );
     const accessTokenEnc = encryptToken(tokens.accessToken);
     if (!accessTokenEnc) throw new Error('Access token encryption returned nothing');
+    // The authorization server has already rotated the refresh token: keeping the old one would strand the grant.
+    const refreshTokenEnc = tokens.refreshToken ? encryptToken(tokens.refreshToken) : undefined;
+    if (tokens.refreshToken && !refreshTokenEnc) throw new Error('Refresh token encryption returned nothing');
     const update: McpOAuthTokenUpdate = {
       accessTokenEnc,
-      ...(tokens.refreshToken ? { refreshTokenEnc: encryptToken(tokens.refreshToken) ?? undefined } : {}),
+      ...(refreshTokenEnc ? { refreshTokenEnc } : {}),
       ...(tokens.expiresInSeconds
         ? { expiresAt: new Date((options.now ?? Date.now)() + tokens.expiresInSeconds * 1000) }
         : {}),
       ...(tokens.scope ? { grantedScope: tokens.scope.slice(0, 1024) } : {}),
     };
-    const completed = await mcpConnectionRepository.completeRefresh(connection.id, holder, update);
-    if (completed) return tokens.accessToken;
+    const write = () => mcpConnectionRepository.completeRefresh(connection.id, holder, update);
+    let completed: Awaited<ReturnType<typeof write>>;
+    try {
+      completed = await write();
+    } catch {
+      try {
+        completed = await write();
+      } catch {
+        // The answer is already spent at the server; this call can still use its token even though it was not stored.
+        return { token: tokens.accessToken, enc: accessTokenEnc };
+      }
+    }
+    if (completed) return { token: tokens.accessToken, enc: accessTokenEnc };
 
     return await tokenAfterLostLease(connection.id, owner, options);
   } catch (error) {
@@ -182,6 +221,7 @@ async function refreshWithLease(
       if (error.code === 'token_unavailable') {
         throw new OAuthRefreshUnavailableError('The authorization server did not answer', { cause: error });
       }
+      await dropRejectedRegistration(connection, error);
       // A definitive refusal other than invalid_grant: same holder guard, so a late answer cannot clobber a successor.
       const marked = await mcpConnectionRepository.setNeedsReconnectIfHolder(connection.id, holder, {
         code: 'auth_failed',
@@ -200,10 +240,10 @@ async function refreshWithLease(
 }
 
 /** The lease was lost (it expired, or the user reconnected or disconnected): use what is stored, never write over it. */
-async function tokenAfterLostLease(id: string, owner: Owner, options: AccessTokenOptions): Promise<string | undefined> {
+async function tokenAfterLostLease(id: string, owner: Owner, options: AccessTokenOptions): Promise<Issued | undefined> {
   const latest = await mcpConnectionRepository.findByIdWithCredentials(id, owner);
   if (latest?.auth.oauth && isUnexpired(latest.auth.oauth, (options.now ?? Date.now)())) {
-    return decryptToken(latest.auth.oauth.accessTokenEnc) ?? undefined;
+    return issuedFrom(latest.auth.oauth.accessTokenEnc);
   }
   throw new OAuthGrantSupersededError();
 }

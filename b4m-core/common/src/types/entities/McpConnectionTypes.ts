@@ -642,7 +642,8 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
   /** The probe met a 401: `pending_auth`, the challenge kept for OAuth, `lastError` saying why. */
   setPendingAuth(
     id: string,
-    challenge: { resourceMetadataUrl?: string; scope?: string; message: string }
+    challenge: { resourceMetadataUrl?: string; scope?: string; message: string },
+    expectedAccessTokenEnc?: string | null
   ): Promise<IMcpConnectionDocument | null>;
   findByIdForOwner(id: string, owner: McpConnectionOwner): Promise<IMcpConnectionDocument | null>;
   /** Includes the `*Enc` fields. Only for the token manager and the call path, never a response. */
@@ -703,12 +704,16 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
    * `pending_auth` leaves `lastError` as the reason to reconnect (clearOAuthTokens is the exception).
    */
   setStatus(id: string, status: 'connected' | 'pending_auth'): Promise<IMcpConnectionDocument | null>;
-  /** A failure status records why; an API-key snapshot prevents stale requests undoing rotation. */
+  /**
+   * A failure status records why; an API-key or access-token snapshot (null: none stored) prevents a stale request
+   * overwriting a rotation or a reconnect.
+   */
   setStatus(
     id: string,
     status: 'error' | 'needs_reconnect',
     lastError: McpConnectionLastErrorInput,
-    expectedApiKeyValueEnc?: string | null
+    expectedApiKeyValueEnc?: string | null,
+    expectedAccessTokenEnc?: string | null
   ): Promise<IMcpConnectionDocument | null>;
   /**
    * Store refreshed tokens and drop the lease in one write, only while `holder` still owns it.

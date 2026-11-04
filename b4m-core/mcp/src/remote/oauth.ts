@@ -19,8 +19,10 @@ import type {
   OAuthClientInformationMixed,
 } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { checkResourceAllowed } from '@modelcontextprotocol/sdk/shared/auth-utils.js';
-import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { validateRemoteMcpUrl, type ValidateRemoteMcpUrlOptions } from './validateRemoteMcpUrl';
+
+/** Structurally the SDK's `FetchLike`, declared here because its d.ts needs DOM types a Node-only consumer lacks. */
+type FetchLike = (url: string | URL, init?: RequestInit) => Promise<Response>;
 
 /** `token_unavailable`: the token endpoint could not be reached or answered with a server fault. Retry, never reconnect. */
 export type RemoteMcpOAuthErrorCode = 'discovery_failed' | 'invalid_grant' | 'token_failed' | 'token_unavailable';
@@ -215,7 +217,6 @@ export async function discoverRemoteMcpOAuth(
     client_id_metadata_document_supported?: boolean;
     revocation_endpoint?: string;
     registration_endpoint?: string;
-    scopes_supported?: string[];
     token_endpoint_auth_methods_supported?: string[];
   };
   if (extra.revocation_endpoint === undefined || extra.authorization_response_iss_parameter_supported === undefined) {
@@ -240,9 +241,7 @@ export async function discoverRemoteMcpOAuth(
     registrationEndpoint: optional(extra.registration_endpoint, 'registration endpoint'),
     issParameterSupported: extra.authorization_response_iss_parameter_supported === true,
     cimdSupported: extra.client_id_metadata_document_supported === true,
-    scopesSupported: Array.isArray(extra.scopes_supported)
-      ? extra.scopes_supported.filter(s => typeof s === 'string')
-      : [],
+    scopesSupported: Array.isArray(prm.scopes_supported) ? prm.scopes_supported.filter(s => typeof s === 'string') : [],
     tokenEndpointAuthMethodsSupported: extra.token_endpoint_auth_methods_supported ?? [],
     metadata,
   };
@@ -406,7 +405,7 @@ function tokenFailure(error: unknown, status: number | undefined): never {
       : errorCode === 'temporarily_unavailable'
         ? false
         : status !== undefined
-          ? status >= 400 && status < 500 && status !== 429 && status !== 408
+          ? status !== 429 && status !== 408 && status < 500
           : errorCode !== undefined && DEFINITIVE_REFUSALS.has(errorCode);
   if (refused) {
     throw new RemoteMcpOAuthError('token_failed', 'The authorization server refused the token request', {

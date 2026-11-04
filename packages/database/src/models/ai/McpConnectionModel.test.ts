@@ -343,6 +343,19 @@ describe('McpConnectionModel', () => {
       expect(await mcpConnectionRepository.setStatus(key.id, 'connected')).toMatchObject({ status: 'connected' });
     });
 
+    it('a failure status and a pending challenge are pinned to the access token the call went out on', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      await mcpConnectionRepository.setInitialOAuthTokens(created.id, OWNER, { accessTokenEnc: 'enc:new' });
+      const failure = { code: 'auth_required', message: 'rejected' };
+      expect(
+        await mcpConnectionRepository.setStatus(created.id, 'needs_reconnect', failure, undefined, 'enc:old')
+      ).toBeNull();
+      expect(await mcpConnectionRepository.setPendingAuth(created.id, { message: 'sign in' }, 'enc:old')).toBeNull();
+      expect(
+        await mcpConnectionRepository.setStatus(created.id, 'needs_reconnect', failure, undefined, 'enc:new')
+      ).toMatchObject({ status: 'needs_reconnect' });
+    });
+
     it('still requires the URL and API key ciphertext on write', async () => {
       await expect(mcpConnectionRepository.create(baseConnection({ urlEnc: undefined }))).rejects.toThrow(/urlEnc/);
       await expect(

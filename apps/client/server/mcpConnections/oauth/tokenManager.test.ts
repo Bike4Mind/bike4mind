@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   },
   refresh: vi.fn(),
   loadClient: vi.fn(),
+  dropRegistration: vi.fn(async () => undefined),
 }));
 
 vi.mock('@bike4mind/database', async importOriginal => ({
@@ -25,7 +26,10 @@ vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptToken: (value?: string | null) => (value ? `enc:${value}` : null),
   decryptToken: (value?: string | null) => (value ? value.replace(/^enc:/, '') : null),
 }));
-vi.mock('./clientIdentity', () => ({ loadConnectionClient: h.loadClient }));
+vi.mock('./clientIdentity', () => ({
+  loadConnectionClient: h.loadClient,
+  dropRejectedRegistration: h.dropRegistration,
+}));
 vi.mock('./oauthFetch', () => ({
   withOAuthFetch: (_n: unknown, _o: unknown, fn: (f: unknown) => Promise<unknown>) => fn(vi.fn()),
 }));
@@ -102,6 +106,55 @@ describe('getOAuthAccessToken', () => {
     const conn = connection({ expiresAt: new Date(NOW + 3_600_000) });
     acquired(conn);
     expect(await getOAuthAccessToken(conn, options({ force: true }))).toBe('new-access');
+  });
+
+  it('refreshes when the stored token is the one the server just rejected, even if it differs from the one read', async () => {
+    const fresh = { accessTokenEnc: 'enc:t2', expiresAt: new Date(NOW + 3_600_000) };
+    acquired(connection(fresh));
+    const token = await getOAuthAccessToken(connection(), options({ force: true, rejectedToken: 't2' }));
+    expect(token).toBe('new-access');
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('reuses a stored token that differs from the rejected one without refreshing', async () => {
+    acquired(connection({ accessTokenEnc: 'enc:t3', expiresAt: new Date(NOW + 3_600_000) }));
+    const token = await getOAuthAccessToken(connection(), options({ force: true, rejectedToken: 't2' }));
+    expect(token).toBe('t3');
+    expect(h.refresh).not.toHaveBeenCalled();
+  });
+
+  it('reports the encrypted token the bearer came from', async () => {
+    const conn = connection();
+    acquired(conn);
+    const onIssued = vi.fn();
+    await getOAuthAccessToken(conn, options({ onIssued }));
+    expect(onIssued).toHaveBeenCalledWith('enc:new-access');
+  });
+
+  it('retries a failed write once and still returns the rotated token when it keeps failing', async () => {
+    const conn = connection();
+    acquired(conn);
+    h.repo.completeRefresh.mockRejectedValue(new Error('db down'));
+    expect(await getOAuthAccessToken(conn, options())).toBe('new-access');
+    expect(h.repo.completeRefresh).toHaveBeenCalledTimes(2);
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    expect(h.repo.setNeedsReconnectIfHolder).not.toHaveBeenCalled();
+  });
+
+  it('retries a failed write once and stores on the second try', async () => {
+    const conn = connection();
+    acquired(conn);
+    h.repo.completeRefresh.mockRejectedValueOnce(new Error('blip')).mockResolvedValueOnce({ id: 'c1' });
+    expect(await getOAuthAccessToken(conn, options())).toBe('new-access');
+    expect(h.repo.completeRefresh).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops a shared registration the server refused as an unknown client', async () => {
+    const conn = connection();
+    acquired(conn);
+    h.refresh.mockRejectedValue(new RemoteMcpOAuthError('token_failed', 'refused'));
+    await expect(getOAuthAccessToken(conn, options())).rejects.toBeInstanceOf(OAuthReconnectRequiredError);
+    expect(h.dropRegistration).toHaveBeenCalledWith(conn, expect.any(RemoteMcpOAuthError));
   });
 
   it('asks for sign-in when the token expired and there is no refresh token', async () => {

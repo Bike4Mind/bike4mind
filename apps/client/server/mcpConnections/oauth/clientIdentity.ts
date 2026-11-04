@@ -31,6 +31,20 @@ export interface ResolvedOAuthClient {
   manualClientSecretEnc?: string;
 }
 
+/**
+ * A dynamically registered client the server answered `invalid_client` for is gone there: drop the shared row so the
+ * next sign-in for that issuer registers afresh instead of reusing it forever.
+ */
+export async function dropRejectedRegistration(
+  connection: Pick<IMcpConnectionDocument, 'auth'>,
+  error: unknown
+): Promise<void> {
+  const oauth = connection.auth.oauth;
+  const code = (error as { cause?: { errorCode?: string } } | undefined)?.cause?.errorCode;
+  if (oauth?.clientMode !== 'dcr' || !oauth.clientRegistrationId || code !== 'invalid_client') return;
+  await mcpOAuthClientRegistrationRepository.delete(oauth.clientRegistrationId).catch(() => undefined);
+}
+
 const confidential = (clientId: string, clientSecret: string | undefined, supportedMethods: string[]) => ({
   clientId,
   clientSecret,

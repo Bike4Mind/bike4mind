@@ -288,12 +288,14 @@ async function recordFailure(
   action: RemoteMcpAction,
   error: RemoteMcpError,
   shown: RemoteMcpError,
-  network: RemoteMcpNetworkOptions
+  network: RemoteMcpNetworkOptions,
+  sentAccessTokenEnc: string | null
 ): Promise<void> {
   const message = describeRemoteMcpError(shown, connection.auth.kind);
   const setFailureStatus = (status: 'error' | 'needs_reconnect', failure: McpConnectionLastErrorInput) => {
+    // A call that went out on an old token must not overwrite a sign-in made since.
     if (connection.auth.kind !== 'api_key') {
-      return mcpConnectionRepository.setStatus(connection.id, status, failure);
+      return mcpConnectionRepository.setStatus(connection.id, status, failure, undefined, sentAccessTokenEnc);
     }
     return mcpConnectionRepository.setStatus(connection.id, status, failure, connection.auth.apiKey?.valueEnc ?? null);
   };
@@ -311,11 +313,15 @@ async function recordFailure(
       connection.auth.kind === 'none' ||
       (connection.auth.kind === 'oauth' && !connection.auth.oauth?.hasAccessToken)
     ) {
-      await mcpConnectionRepository.setPendingAuth(connection.id, {
-        resourceMetadataUrl: trustedResourceMetadataUrl(error.resourceMetadataUrl, connection, network),
-        scope: cleanScope(error.scope),
-        message,
-      });
+      await mcpConnectionRepository.setPendingAuth(
+        connection.id,
+        {
+          resourceMetadataUrl: trustedResourceMetadataUrl(error.resourceMetadataUrl, connection, network),
+          scope: cleanScope(error.scope),
+          message,
+        },
+        sentAccessTokenEnc
+      );
       return;
     }
     await setFailureStatus('needs_reconnect', {
@@ -354,7 +360,8 @@ async function recordFailure(
 async function buildAuthHeaders(
   connection: IMcpConnectionDocument,
   network: RemoteMcpNetworkOptions,
-  forceRefresh = false
+  rejected?: { token?: string },
+  onIssued?: (accessTokenEnc: string | undefined) => void
 ): Promise<Record<string, string>> {
   const { auth } = connection;
   if (auth.kind === 'none') return {};
@@ -366,7 +373,12 @@ async function buildAuthHeaders(
     }
     return { [apiKey.headerName]: apiKey.scheme === 'raw' ? value : `Bearer ${value}` };
   }
-  const token = await getOAuthAccessToken(connection, { network, force: forceRefresh });
+  const token = await getOAuthAccessToken(connection, {
+    network,
+    force: rejected !== undefined,
+    rejectedToken: rejected?.token,
+    onIssued,
+  });
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
@@ -505,11 +517,16 @@ export async function invokeRemoteMcp(
     `custom:${connection.id}`,
     operationTypeFor(connection, request)
   );
+  // The access token the calls went out on, which a failure status is pinned to.
+  let sentAccessTokenEnc: string | null = connection.auth.oauth?.accessTokenEnc ?? null;
+  const onIssued = (enc: string | undefined) => {
+    sentAccessTokenEnc = enc ?? null;
+  };
   try {
     const payload: RemoteMcpRunPayload = {
       url: decryptToken(connection.urlEnc) ?? '',
       transport: transportFor(connection, request.action),
-      headers: await buildAuthHeaders(connection, context.network),
+      headers: await buildAuthHeaders(connection, context.network, undefined, onIssued),
       action: request.action,
       ...(request.action === 'callTool' ? { toolName: request.toolName, args } : {}),
       limits: clampLimits(request.limits),
@@ -528,7 +545,12 @@ export async function invokeRemoteMcp(
           // A refresh that fails (a slow authorization server, a held lease) is not the MCP server being down.
           let headers: Record<string, string>;
           try {
-            headers = await buildAuthHeaders(connection, context.network, true);
+            headers = await buildAuthHeaders(
+              connection,
+              context.network,
+              { token: payload.headers.Authorization?.replace(/^Bearer /, '') },
+              onIssued
+            );
           } catch (refreshError) {
             if (refreshError instanceof RemoteMcpError) return { ok: false as const, error: refreshError };
             throw refreshError;
@@ -560,7 +582,7 @@ export async function invokeRemoteMcp(
     if (error instanceof RemoteMcpError) {
       audit.failure(error.code);
       const shown = userFacingRemoteMcpError(error);
-      await recordFailure(connection, request.action, error, shown, context.network);
+      await recordFailure(connection, request.action, error, shown, context.network, sentAccessTokenEnc);
       throw shown;
     }
     audit.failure('internal_error');
