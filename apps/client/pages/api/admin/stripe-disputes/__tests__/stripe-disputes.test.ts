@@ -162,7 +162,7 @@ describe('GET /api/admin/stripe-disputes', () => {
 });
 
 describe('POST /api/admin/stripe-disputes/resolve', () => {
-  it('is gated on the credits permission', () => {
+  it('is session-only and gated on the moderation permission', () => {
     expect(h.optionsByRoute.resolve).toEqual({
       auth: 'jwtOnly',
       requiredScopes: [ApiKeyScope.ADMIN],
@@ -243,7 +243,7 @@ describe('POST /api/admin/stripe-disputes/undo-contain', () => {
       },
     });
 
-  it('is session-only and gated on the moderation permission', () => {
+  it('is session-only and gated on the credits permission', () => {
     expect(h.optionsByRoute.undo).toEqual({
       auth: 'jwtOnly',
       requiredScopes: [ApiKeyScope.ADMIN],
