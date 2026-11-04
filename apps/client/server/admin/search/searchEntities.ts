@@ -13,6 +13,8 @@ const maskEmail = (email: string | null | undefined) => {
 
 export async function searchAdminEntities(query: string): Promise<AdminSearchResult[]> {
   const kind = classifyAdminQuery(query);
+  // Stored client IPs are lowercase; isIP also accepts uppercase IPv6.
+  const ip = query.toLowerCase();
   const prefix = new RegExp(`^${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
   const keyFilter = kind === 'keyPrefix' ? { keyPrefix: prefix } : kind === 'id' ? { _id: query } : null;
   const keys = keyFilter
@@ -27,14 +29,14 @@ export async function searchAdminEntities(query: string): Promise<AdminSearchRes
   const ipRows =
     kind === 'ip'
       ? await Promise.all([
-          AuthSessionModel.find({ 'device.ip': query })
+          AuthSessionModel.find({ 'device.ip': ip })
             .hint('auth_session_ip_search')
             .select('userId -_id')
             .sort({ lastUsedAt: -1 })
             .limit(100)
             .maxTimeMS(QUERY_TIMEOUT_MS)
             .lean(),
-          ApiKeyUsageLog.find({ ipAddress: query })
+          ApiKeyUsageLog.find({ ipAddress: ip })
             .hint('api_usage_ip_search')
             .select('userId -_id')
             .sort({ timestamp: -1 })
