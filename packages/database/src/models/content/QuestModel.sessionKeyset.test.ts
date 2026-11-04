@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../__test__/createMongoServer';
-import { Quest, questRepository } from './QuestModel';
+import { Quest, questRepository, sessionKeysetFilter } from './QuestModel';
 
 let mongod: MongoMemoryServer;
 
@@ -60,15 +60,10 @@ describe('findPageAfterBySessionId', () => {
     expect(seen).toHaveLength(300);
 
     // Mid-session cursor: the keyset must bound the scan to about one page, not the rest of the session.
-    // Mirrors the filter findPageAfterBySessionId builds; keep the two in sync.
+    // Explains the filter findPageAfterBySessionId runs, so a dropped $gte bound fails here too.
     const mid = await Quest.collection.findOne({ _id: new mongoose.Types.ObjectId(expected[150]) });
     const explanation: unknown = await Quest.collection
-      .find({
-        sessionId: SESSION,
-        deletedAt: null,
-        timestamp: { $gte: mid!.timestamp },
-        $or: [{ timestamp: { $gt: mid!.timestamp } }, { timestamp: mid!.timestamp, _id: { $gt: mid!._id } }],
-      })
+      .find(sessionKeysetFilter(SESSION, { timestamp: mid!.timestamp, id: String(mid!._id) }))
       .sort({ timestamp: 1, _id: 1 })
       .limit(25)
       .explain('executionStats');
@@ -89,9 +84,8 @@ describe('findPageAfterBySessionId', () => {
     const [docsExamined] = findProperties(explanation, 'totalDocsExamined');
     expect(docsExamined).toBeLessThanOrEqual(30);
 
-    // The explain above pins the plan, but it runs a copy of the filter, so it cannot see the
-    // $gte bound going missing from findPageAfterBySessionId itself. Profile the real call too:
-    // without that bound the planner falls back to a SORT_MERGE at ~49 docs examined.
+    // The explain above shares the method's filter but not its sort and limit, so profile the
+    // real call too: without the $gte bound the planner falls back to a SORT_MERGE at ~49 docs.
     const db = mongoose.connection.db!;
     await db.command({ profile: 2 });
     await questRepository.findPageAfterBySessionId(SESSION, {

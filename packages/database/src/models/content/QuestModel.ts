@@ -938,6 +938,23 @@ function staleCallbackDispatchFilter({
   };
 }
 
+/**
+ * The filter findPageAfterBySessionId runs. Exported so its index test explains this filter
+ * rather than a hand-written copy that could drift from it.
+ */
+export function sessionKeysetFilter(sessionId: string, after?: { timestamp: Date; id: string }) {
+  const filter: Record<string, unknown> = { sessionId, deletedAt: null };
+  if (after) {
+    // The $gte bound is implied by the $or but lets the planner range-scan sessionId_timestamp_id.
+    filter.timestamp = { $gte: after.timestamp };
+    filter.$or = [
+      { timestamp: { $gt: after.timestamp } },
+      { timestamp: after.timestamp, _id: { $gt: convertId(after.id) } },
+    ];
+  }
+  return filter;
+}
+
 const AGENT_GENERATION_SLOT_FIELDS = {
   video: 'agentVideoClipsClaimed',
   music: 'agentMusicTracksClaimed',
@@ -1077,17 +1094,8 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     options: { limit: number; after?: { timestamp: Date; id: string } }
   ): Promise<IChatHistoryItemDocument[]> {
     const { limit, after } = options;
-    const filter: Record<string, unknown> = { sessionId, deletedAt: null };
-    if (after) {
-      // The $gte bound is implied by the $or but lets the planner range-scan sessionId_timestamp_id.
-      filter.timestamp = { $gte: after.timestamp };
-      filter.$or = [
-        { timestamp: { $gt: after.timestamp } },
-        { timestamp: after.timestamp, _id: { $gt: convertId(after.id) } },
-      ];
-    }
     const rows = await this.model
-      .find(filter)
+      .find(sessionKeysetFilter(sessionId, after))
       .select(`${SESSION_PAGE_FIELDS} createdAt pendingAction`)
       .sort({ timestamp: 1, _id: 1 })
       .limit(limit);
