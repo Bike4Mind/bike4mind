@@ -66,8 +66,13 @@ export interface LoopRunnerDeps {
 }
 
 export const RUNNER_MS = {
+  /**
+   * While a lane is free and there is work or a window has focus. The one knob to retire once the
+   * server pushes loop changes over a socket (Desktop has no socket client yet).
+   */
+  claimPoll: 10_000,
+  /** Every lane busy: presence only; a lane freeing runs a claim pass at once. */
   busyPoll: 15_000,
-  activePoll: 30_000,
   idlePollMax: 5 * 60_000,
   heartbeat: 45_000,
   /** Worktrees older than this are removed even with a PR still open. */
@@ -127,11 +132,13 @@ export class LoopRunner {
   private readonly lanes = new Map<string, Lane>();
   private timer: ReturnType<typeof setTimeout> | undefined;
   private gcTimer: ReturnType<typeof setInterval> | undefined;
-  private idleDelay: number = RUNNER_MS.activePoll;
+  private idleDelay: number = RUNNER_MS.claimPoll;
   private previous: MachineSample | undefined;
   private blocker: number | null = null;
   private running = false;
   private ticking = false;
+  /** A claim pass was asked for while one was running; run another as soon as it ends. */
+  private again = false;
   private waitingReason: string | undefined;
   /** loopId -> until when its tickets are not claimed, after a run stopped at its credit cap. */
   private readonly creditStops = new Map<string, number>();
@@ -178,9 +185,13 @@ export class LoopRunner {
 
   /** One poll: presence, budget, then claim what the budget admits. Exposed for tests. */
   async tick(): Promise<void> {
-    if (this.ticking) return;
+    if (this.ticking) {
+      this.again = true;
+      return;
+    }
     this.ticking = true;
-    let next: number = RUNNER_MS.activePoll;
+    this.again = false;
+    let next: number = RUNNER_MS.claimPoll;
     try {
       next = await this.poll();
       this.error = undefined;
@@ -191,7 +202,7 @@ export class LoopRunner {
     } finally {
       this.ticking = false;
       this.deps.onChange();
-      if (this.running) this.schedule(next);
+      if (this.running) this.schedule(this.again ? 0 : next);
     }
   }
 
@@ -255,10 +266,10 @@ export class LoopRunner {
       })
       .catch(() => undefined);
 
-    if (this.lanes.size > 0) return RUNNER_MS.busyPoll;
-    if (tickets.length > 0 || this.deps.focused()) {
-      this.idleDelay = RUNNER_MS.activePoll;
-      return RUNNER_MS.activePoll;
+    if (this.lanes.size >= this.cap) return RUNNER_MS.busyPoll;
+    if (this.lanes.size > 0 || tickets.length > 0 || this.deps.focused()) {
+      this.idleDelay = RUNNER_MS.claimPoll;
+      return RUNNER_MS.claimPoll;
     }
     this.idleDelay = Math.min(this.idleDelay * 2, RUNNER_MS.idlePollMax);
     return this.idleDelay;
@@ -450,9 +461,7 @@ export class LoopRunner {
     await lane.batcher.flush();
     lane.batcher.dispose();
     await this.report(lane.claim.runId, lane.startedAt, outcome);
-    this.lanes.delete(lane.claim.runId);
-    this.updateBlocker();
-    this.deps.onChange();
+    this.laneFreed(lane);
     await this.retire(lane).catch(err => this.deps.logger.warn(`LOOPS: cleanup failed: ${String(err)}`));
   }
 
@@ -473,9 +482,7 @@ export class LoopRunner {
     clearInterval(lane.heartbeat);
     lane.batcher.dispose();
     await this.stopSessions(lane.claim.runId);
-    this.lanes.delete(lane.claim.runId);
-    this.updateBlocker();
-    this.deps.onChange();
+    this.laneFreed(lane);
     await this.retire(lane).catch(() => undefined);
   }
 
@@ -507,6 +514,14 @@ export class LoopRunner {
     }
     this.lanes.clear();
     this.updateBlocker();
+  }
+
+  /** Drop the lane and take the next ticket now rather than at the next poll. */
+  private laneFreed(lane: Lane): void {
+    this.lanes.delete(lane.claim.runId);
+    this.updateBlocker();
+    this.deps.onChange();
+    if (this.running) void this.tick();
   }
 
   private updateBlocker(): void {

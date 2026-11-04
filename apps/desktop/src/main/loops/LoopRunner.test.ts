@@ -4,7 +4,7 @@ import type { LoopStageGuards } from '@shared/loopRunner';
 import { check, snapshot } from '../pr/prTestSupport';
 import type { MachineSample } from './budget';
 import { LoopPolicyStore } from './LoopPolicyStore';
-import { LoopRunner, type LoopRunnerDeps } from './LoopRunner';
+import { LoopRunner, RUNNER_MS, type LoopRunnerDeps } from './LoopRunner';
 import {
   LeaseLost,
   type ClaimRefused,
@@ -461,6 +461,47 @@ describe('LoopRunner merges', () => {
       outcome: 'blocked',
       reason: expect.stringMatching(/post-merge check failed/),
     });
+  });
+});
+
+describe('LoopRunner pacing', () => {
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    h = harness();
+    await h.approve();
+  });
+
+  it('runs a claim pass as soon as a lane frees, not at the next poll', async () => {
+    h.runner.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.client.claim).toHaveBeenCalledTimes(1);
+    h.done();
+    await vi.waitFor(() => expect(h.client.claim).toHaveBeenCalledTimes(2));
+    expect(h.completed).toHaveLength(1);
+  });
+
+  it(`polls every ${RUNNER_MS.claimPoll / 1000}s with a free lane, and backs off when idle`, async () => {
+    h.runner.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.runner.busy).toBe(1);
+    await vi.advanceTimersByTimeAsync(RUNNER_MS.claimPoll);
+    expect(h.client.listTickets).toHaveBeenCalledTimes(2);
+
+    await h.runner.releaseAll();
+    h.tickets.length = 0;
+    vi.mocked(h.client.listTickets).mockClear();
+    h.runner.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.client.listTickets).toHaveBeenCalledTimes(1);
+    // Nothing to claim and no focus: 20s, then 40s.
+    await vi.advanceTimersByTimeAsync(RUNNER_MS.claimPoll);
+    expect(h.client.listTickets).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(RUNNER_MS.claimPoll);
+    expect(h.client.listTickets).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(3 * RUNNER_MS.claimPoll);
+    expect(h.client.listTickets).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(RUNNER_MS.claimPoll);
+    expect(h.client.listTickets).toHaveBeenCalledTimes(3);
   });
 });
 
