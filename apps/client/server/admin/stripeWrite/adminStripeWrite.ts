@@ -124,12 +124,14 @@ const notifyOwner = async (req: GuardRequest, ids: { notifyUserId: string | null
  * critical audit entry.
  *
  * A definite failure before or at the Stripe call (a 4xx, a failed check) releases the claim. Failure after Stripe
- * applied the write, or a Stripe error whose outcome is unknown (connection, timeout, 5xx), parks the claim as
+ * applied the write and before the audit commits, or a Stripe error whose outcome is unknown (connection, timeout,
+ * 5xx, or a 409 meaning the same key is still in progress), parks the claim as
  * `stripe_done` with the request params, the audit changes (when known) and the pre-write row; a same-key retry
  * takes it over, skips the state check and precheck (our own webhook has changed the row by then), replays the
  * identical request under the same Stripe key, and writes the audit row. A recovered attempt does not write the
  * mirror: Stripe replays its snapshot from the first attempt, which may be older than the webhook state, so the
- * webhook owns the mirror. A failed recovery attempt re-parks the record. What a hard function kill still loses:
+ * webhook owns the mirror. A failed recovery attempt re-parks the record. A failure after the audit has committed
+ * is not re-parked (that would audit twice on retry); the claim stays `pending`. What a hard function kill still loses:
  * the claim stays `pending` until its 24h expiry (retries get "already in progress"), and the write is never audited.
  * The 10 writes/admin/minute limit is the routes' `rateLimit` middleware.
  */
