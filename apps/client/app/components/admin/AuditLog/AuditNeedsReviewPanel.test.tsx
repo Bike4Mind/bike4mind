@@ -67,9 +67,9 @@ const renderPanel = (onSelectEntry = vi.fn()) => {
   return { onSelectEntry };
 };
 
-const setQueue = (entries: ReturnType<typeof makeReviewQueueEntry>[]) => {
+const setQueue = (entries: ReturnType<typeof makeReviewQueueEntry>[], total = entries.length) => {
   mocks.toReview = entries;
-  mocks.toReviewTotal = entries.length;
+  mocks.toReviewTotal = total;
 };
 
 describe('AuditNeedsReviewPanel', () => {
@@ -87,8 +87,9 @@ describe('AuditNeedsReviewPanel', () => {
   });
 
   it('shows how many entries wait for review, with the hint', () => {
+    setQueue([makeReviewQueueEntry({ id: 'c1' }), makeReviewQueueEntry({ id: 'c2' })], 57);
     renderPanel();
-    expect(screen.getByTestId('audit-needs-review-count').textContent).toBe('2 to review');
+    expect(screen.getByTestId('audit-needs-review-count').textContent).toBe('57 to review');
     expect(screen.getByTestId('audit-needs-review-hint').textContent).toContain('second pair of eyes');
     expect(screen.getByTestId('audit-needs-review-panel').textContent).toContain('above 50,000 credits');
   });
@@ -126,13 +127,13 @@ describe('AuditNeedsReviewPanel', () => {
   });
 
   it('undoes a review by unmarking exactly the reviewed ids, and reports skipped entries', async () => {
-    mocks.markAsync.mockResolvedValue({
-      reviewed: ['c1'],
+    mocks.markAsync.mockImplementation(async ({ entryIds }: { entryIds: string[] }) => ({
+      reviewed: entryIds,
       skipped: [
         { id: 'c2', reason: 'already_reviewed' },
         { id: 'c3', reason: 'already_reviewed' },
       ],
-    });
+    }));
     renderPanel();
     fireEvent.click(
       within(screen.getByTestId('audit-needs-review-table-row-c1')).getByTestId('audit-needs-review-row-mark-btn')
@@ -143,6 +144,30 @@ describe('AuditNeedsReviewPanel', () => {
     );
     fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
     await waitFor(() => expect(mocks.unmarkAsync).toHaveBeenCalledWith({ entryIds: ['c1'] }));
+  });
+
+  it('words every skip reason in the toast, including entries about the viewer', async () => {
+    mocks.markAsync.mockImplementation(async ({ entryIds }: { entryIds: string[] }) => ({
+      reviewed: [],
+      skipped: [
+        { id: entryIds[0], reason: 'about_you' },
+        { id: 'x1', reason: 'about_you' },
+        { id: 'x2', reason: 'own_action' },
+      ],
+    }));
+    renderPanel();
+    fireEvent.click(
+      within(screen.getByTestId('audit-needs-review-table-row-c1')).getByTestId('audit-needs-review-row-mark-btn')
+    );
+
+    expect((await screen.findByTestId('undo-toast-message')).textContent).toBe(
+      'Nothing was marked as reviewed. 2 were about your own account, 1 was your own action.'
+    );
+  });
+
+  it('says suspensions are critical in the rules copy', () => {
+    renderPanel();
+    expect(screen.getByTestId('audit-needs-review-panel').textContent).toContain('suspensions');
   });
 
   it('hides selection, bulk bar and row action for admins who cannot sign off', () => {
@@ -169,6 +194,7 @@ describe('AuditNeedsReviewPanel', () => {
         actor: { kind: 'user', scope: 'platform', userId: 'me', name: 'Me', wasAdmin: true },
       }),
       makeReviewQueueEntry({ id: 'n1' }),
+      makeReviewQueueEntry({ id: 'a1', target: { kind: 'user', id: 'ME', displayName: 'Me' } }),
     ];
     renderPanel();
     fireEvent.click(screen.getByTestId('audit-needs-review-view-all'));
@@ -178,6 +204,7 @@ describe('AuditNeedsReviewPanel', () => {
     expect(screen.getByTestId('audit-needs-review-status-b1').textContent).toBe('Baselined');
     expect(screen.getByTestId('audit-needs-review-status-m1').textContent).toBe('Your action');
     expect(screen.getByTestId('audit-needs-review-status-n1').textContent).toBe('Not reviewed');
+    expect(screen.getByTestId('audit-needs-review-status-a1').textContent).toBe('About you');
     expect(screen.queryByTestId('audit-needs-review-row-mark-btn')).toBeNull();
     expect(
       mocks.queueCalls.some(call => call.status === 'all' && call.options.from === '2026-09-19T00:00:00.000Z')

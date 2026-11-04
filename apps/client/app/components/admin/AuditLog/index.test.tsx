@@ -248,4 +248,20 @@ describe('AuditLogPage', () => {
     render(<AuditLogPage />, { wrapper: TestWrapper });
     expect(screen.queryByTestId('audit-review-mark-btn')).toBeNull();
   });
+
+  it('resets the review note when the drawer switches to another entry', () => {
+    mocks.entries = [
+      makeAuditEntry({ id: 'e1', severity: 'critical' }),
+      makeAuditEntry({ id: 'e2', severity: 'critical' }),
+    ];
+    mocks.entryId = 'e1';
+    const { rerender } = render(<AuditLogPage />, { wrapper: TestWrapper });
+    fireEvent.change(screen.getByTestId('audit-review-note-input'), { target: { value: 'draft for e1' } });
+    expect((screen.getByTestId('audit-review-note-input') as HTMLTextAreaElement).value).toBe('draft for e1');
+
+    mocks.entryId = 'e2';
+    rerender(<AuditLogPage />);
+
+    expect((screen.getByTestId('audit-review-note-input') as HTMLTextAreaElement).value).toBe('');
+  });
 });

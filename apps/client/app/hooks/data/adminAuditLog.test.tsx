@@ -219,4 +219,55 @@ describe('review queue hooks', () => {
 
     expect(del).toHaveBeenCalledWith('/api/admin/audit-log/reviews', { data: { entryIds: ['e1'] } });
   });
+
+  describe.each([
+    [
+      'marking',
+      () => useMarkAuditReviewed(),
+      () => post.mockResolvedValue({ data: { reviewed: ['e1'], skipped: [] } }),
+    ],
+    [
+      'unmarking',
+      () => useUnmarkAuditReviewed(),
+      () => del.mockResolvedValue({ data: { unreviewed: ['e1'], skipped: [] } }),
+    ],
+  ])('%s a review', (_label, useMutationHook, mockSuccess) => {
+    it('invalidates the queue pages, the unreviewed count and the per-entry review', async () => {
+      mockSuccess();
+      const { wrapper, queryClient } = makeWrapper();
+      const keys = {
+        queue: ['admin', 'audit-log', 'review-queue', 'unreviewed', undefined, 50],
+        count: ['admin', 'audit-log', 'review-queue', 'count'],
+        review: ['admin', 'audit-log', 'review', 'e1'],
+      };
+      Object.values(keys).forEach(queryKey => queryClient.setQueryData(queryKey, { seeded: true }));
+      queryClient.setQueryData(['unrelated'], { seeded: true });
+
+      const { result } = renderHook(() => useMutationHook(), { wrapper });
+      await act(async () => {
+        await result.current.mutateAsync({ entryIds: ['e1'] });
+      });
+
+      expect(queryClient.getQueryState(keys.queue)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(keys.count)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(keys.review)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(['unrelated'])?.isInvalidated).toBe(false);
+    });
+  });
+
+  it('keeps the real queue and count hooks under the invalidated audit-log prefix', async () => {
+    get.mockResolvedValue({ data: { entries: [], nextCursor: null, total: 1 } });
+    const { wrapper, queryClient } = makeWrapper();
+    renderHook(() => useAuditReviewQueue('unreviewed'), { wrapper });
+    renderHook(() => useUnreviewedAuditCount({ enabled: true }), { wrapper });
+    await waitFor(() =>
+      expect(queryClient.getQueryCache().findAll({ queryKey: ['admin', 'audit-log'] })).toHaveLength(2)
+    );
+    expect(
+      queryClient
+        .getQueryCache()
+        .findAll({ queryKey: ['admin', 'audit-log'] })
+        .every(query => query.state.status === 'success' || query.state.fetchStatus === 'fetching')
+    ).toBe(true);
+  });
 });

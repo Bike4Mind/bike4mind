@@ -1,6 +1,6 @@
 import { adminAuditLogRepository, adminAuditReviewRepository } from '@bike4mind/database';
 import {
-  ApiKeyScope,
+  auditReviewConflict,
   BadRequestError,
   ForbiddenError,
   MarkAuditReviewedRequestSchema,
@@ -32,7 +32,8 @@ const reviewerName = (user: ReviewingUser): string => user.name || user.username
 
 const handler = adminApi({
   adminPermissions: { GET: 'support:read', POST: 'support:read', DELETE: 'support:read' },
-  requiredScopes: [ApiKeyScope.ADMIN],
+  // Sign-off is a person's act, so API keys are refused outright.
+  auth: 'jwtOnly',
 })
   .get(async (req, res) => {
     const { entryId } = req.query;
@@ -61,7 +62,8 @@ const handler = adminApi({
       const skip = (reason: MarkAuditReviewedSkipReason) => skipped.push({ id, reason });
       if (!entry) return skip('not_found');
       if (entry.severity !== 'critical') return skip('not_critical');
-      if (entry.actor.userId && isSameUserId(entry.actor.userId, req.user.id)) return skip('own_action');
+      const conflict = auditReviewConflict(entry, req.user.id);
+      if (conflict) return skip(conflict);
       if (alreadyReviewed.has(id)) return skip('already_reviewed');
       eligible.push(id);
     });

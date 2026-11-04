@@ -73,6 +73,21 @@ describe('AuditEntryReviewSection', () => {
     expect(screen.queryByTestId('audit-review-mark-btn')).toBeNull();
   });
 
+  it('tells the viewer another admin needs to review an entry about their own account', () => {
+    renderSection(
+      makeAuditEntry({
+        id: 'e1',
+        severity: 'critical',
+        target: { kind: 'user', id: 'ME', displayName: 'Me' },
+      })
+    );
+    expect(screen.getByTestId('audit-review-about-you').textContent).toBe(
+      'This entry is about your account. Another admin needs to review it.'
+    );
+    expect(screen.queryByTestId('audit-review-own-action')).toBeNull();
+    expect(screen.queryByTestId('audit-review-mark-btn')).toBeNull();
+  });
+
   it('says only full admins can sign off when the viewer is not one', () => {
     mocks.currentUser = { id: 'me', isAdmin: false, adminPermissions: ['support:read'] };
     renderSection();

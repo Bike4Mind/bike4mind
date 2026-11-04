@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope } from '@bike4mind/common';
 
 const { mockListReviewQueue } = vi.hoisted(() => ({ mockListReviewQueue: vi.fn() }));
 
@@ -35,7 +34,7 @@ const call = (query: Record<string, string | string[]> = {}, user: unknown = { i
   return { req, res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
 };
 
-const scopesOf = () => (handler as unknown as { _config?: { requiredScopes?: string[] } })._config?.requiredScopes;
+const configOf = () => (handler as unknown as { _config?: { auth?: unknown; requiredScopes?: string[] } })._config;
 
 const CURSOR_ID = 'a'.repeat(24);
 
@@ -44,8 +43,9 @@ beforeEach(() => {
 });
 
 describe('GET /api/admin/audit-log/review-queue', () => {
-  it('declares requiredScopes [ApiKeyScope.ADMIN]', () => {
-    expect(scopesOf()).toEqual([ApiKeyScope.ADMIN]);
+  it('refuses API keys: jwtOnly and no requiredScopes', () => {
+    expect(configOf()?.auth).toBe('jwtOnly');
+    expect(configOf()?.requiredScopes).toBeUndefined();
   });
 
   it('rejects a user without admin access with 403', async () => {

@@ -7,6 +7,7 @@ import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import {
   AUDIT_REVIEW_BATCH_MAX,
+  auditReviewConflict,
   isFullAdmin,
   type AuditAlertStatus,
   type AuditEntry,
@@ -46,7 +47,7 @@ const describeCriticalRules = (alertStatus: AuditAlertStatus | undefined): strin
     ? `credit grants above ${formatCredits(alertStatus.singleGrantCredits)} credits or past ` +
       `${formatCredits(alertStatus.dailyGrantCredits)} credits per admin in 24 hours`
     : 'credit grants above the configured thresholds';
-  return `Critical entries: admin role changes, impersonation, deletions, denied self-actions, and ${grants}.`;
+  return `Critical entries: admin role changes, impersonation, suspensions, deletions, denied self-actions, and ${grants}.`;
 };
 
 type AuditNeedsReviewPanelProps = {
@@ -67,6 +68,8 @@ const describeSkips = (skipped: MarkAuditReviewedResult['skipped']): string => {
         return `${count} ${verb} already reviewed`;
       case 'own_action':
         return `${count} ${verb} your own ${pluralize(count, 'action', 'actions')}`;
+      case 'about_you':
+        return `${count} ${verb} about your own account`;
       case 'not_critical':
         return `${count} ${verb} not critical`;
       case 'not_found':
@@ -102,10 +105,11 @@ const ReviewStatusCell: React.FC<{ entry: AuditReviewQueueEntry; currentUserId: 
         </Typography>
       </Stack>
     );
-  if (currentUserId && entry.actor.userId === currentUserId)
+  const conflict = currentUserId ? auditReviewConflict(entry, currentUserId) : null;
+  if (conflict)
     return (
       <Chip size="sm" variant="outlined" data-testid={testId}>
-        Your action
+        {conflict === 'own_action' ? 'Your action' : 'About you'}
       </Chip>
     );
   return (
@@ -116,7 +120,8 @@ const ReviewStatusCell: React.FC<{ entry: AuditReviewQueueEntry; currentUserId: 
 };
 
 /**
- * Review queue for critical entries. "To review" is every unreviewed critical entry another admin performed;
+ * Review queue for critical entries. "To review" is every unreviewed critical entry another admin performed
+ * that is not about the viewer;
  * "All critical" is the summary window with each entry's sign-off state.
  */
 export const AuditNeedsReviewPanel: React.FC<AuditNeedsReviewPanelProps> = ({

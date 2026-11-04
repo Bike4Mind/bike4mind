@@ -17,7 +17,7 @@ const BASELINE_REVIEW = { userId: null, name: 'Baseline' } as const;
  * Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001), which must stay last.
  */
 const migration: MigrationFile = {
-  id: 20260921238300,
+  id: 20260921239100,
   name: 'ensure adminauditreview indexes and baseline',
 
   up: async () => {

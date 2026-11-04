@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope } from '@bike4mind/common';
 
 const { mockFindById, mockFindByEntryIds, mockCreateMany, mockDeleteByReviewer } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
@@ -60,13 +59,14 @@ const call = (
   return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
 };
 
-const entry = (id: string, overrides: { severity?: string; userId?: string } = {}) => ({
+const entry = (id: string, overrides: { severity?: string; userId?: string; target?: unknown } = {}) => ({
   id,
   severity: overrides.severity ?? 'critical',
   actor: { kind: 'user', userId: overrides.userId ?? 'someone-else', name: 'Other' },
+  target: overrides.target ?? { kind: 'organization', id: 'org-1' },
 });
 
-const scopesOf = () => (handler as unknown as { _config?: { requiredScopes?: string[] } })._config?.requiredScopes;
+const configOf = () => (handler as unknown as { _config?: { auth?: unknown; requiredScopes?: string[] } })._config;
 
 beforeEach(() => {
   mockFindById.mockReset().mockImplementation(async (id: string) => entry(id));
@@ -78,8 +78,9 @@ beforeEach(() => {
 });
 
 describe('/api/admin/audit-log/reviews', () => {
-  it('declares requiredScopes [ApiKeyScope.ADMIN]', () => {
-    expect(scopesOf()).toEqual([ApiKeyScope.ADMIN]);
+  it('refuses API keys: jwtOnly and no requiredScopes', () => {
+    expect(configOf()?.auth).toBe('jwtOnly');
+    expect(configOf()?.requiredScopes).toBeUndefined();
   });
 
   describe('GET', () => {
@@ -142,6 +143,32 @@ describe('/api/admin/audit-log/reviews', () => {
           { id: ID_D, reason: 'already_reviewed' },
         ],
       });
+    });
+
+    it('skips an entry about the reviewer own account as about_you and creates no review', async () => {
+      mockFindById.mockImplementation(async (id: string) =>
+        id === ID_A
+          ? entry(id, { target: { kind: 'user', id: 'ADMIN1' } })
+          : entry(id, { target: { kind: 'organization', id: 'admin1' } })
+      );
+
+      const { res, promise } = call('POST', { body: { entryIds: [ID_A, ID_B] } });
+      await promise;
+
+      expect(mockCreateMany).toHaveBeenCalledWith([
+        { auditEntryId: ID_B, reviewer: { userId: 'admin1', name: 'Ada' } },
+      ]);
+      expect(res._getJSONData()).toEqual({ reviewed: [ID_B], skipped: [{ id: ID_A, reason: 'about_you' }] });
+    });
+
+    it('does not create any review when every entry is about the reviewer', async () => {
+      mockFindById.mockImplementation(async (id: string) => entry(id, { target: { kind: 'user', id: 'admin1' } }));
+
+      const { res, promise } = call('POST', { body: { entryIds: [ID_A] } });
+      await promise;
+
+      expect(mockCreateMany.mock.calls.flatMap(([reviews]) => reviews as unknown[])).toEqual([]);
+      expect(res._getJSONData()).toEqual({ reviewed: [], skipped: [{ id: ID_A, reason: 'about_you' }] });
     });
 
     it('omits an empty note and never uses the email as the reviewer name', async () => {

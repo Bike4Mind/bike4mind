@@ -29,7 +29,7 @@ export type AuditReview = {
 export type NewAuditReview = Omit<AuditReview, 'reviewedAt'>;
 
 /**
- * `unreviewed`: every critical entry with no review that the viewer did not perform, any age.
+ * `unreviewed`: every critical entry with no review that the viewer did not perform and is not about, any age.
  * `all`: every critical entry since `from`, reviewed or not, the viewer's own included.
  */
 export const AuditReviewQueueStatusSchema = z.enum(['unreviewed', 'all']);
@@ -53,7 +53,21 @@ export const MarkAuditReviewedRequestSchema = z.object({
 });
 export type MarkAuditReviewedRequest = z.infer<typeof MarkAuditReviewedRequestSchema>;
 
-export type MarkAuditReviewedSkipReason = 'not_found' | 'not_critical' | 'own_action' | 'already_reviewed';
+/** Why an admin may not sign off an entry: they performed it, or it is about their own account. */
+export type AuditReviewConflict = 'own_action' | 'about_you';
+
+/** Returns why `userId` may not review `entry`, or null when they may. Ids compare case-insensitively. */
+export const auditReviewConflict = (
+  entry: Pick<AuditEntry, 'actor' | 'target'>,
+  userId: string
+): AuditReviewConflict | null => {
+  const same = (id: string | null | undefined) => !!id && id.toLowerCase() === userId.toLowerCase();
+  if (same(entry.actor.userId)) return 'own_action';
+  if (entry.target.kind === 'user' && same(entry.target.id)) return 'about_you';
+  return null;
+};
+
+export type MarkAuditReviewedSkipReason = 'not_found' | 'not_critical' | AuditReviewConflict | 'already_reviewed';
 
 /** POST /api/admin/audit-log/reviews */
 export type MarkAuditReviewedResult = {
@@ -76,7 +90,7 @@ export type AuditReviewQueueQuery = {
   status: AuditReviewQueueStatus;
   /** Required for `all`; ignored for `unreviewed`. */
   from?: Date;
-  /** The viewer; `unreviewed` leaves out entries they performed. */
+  /** The viewer; `unreviewed` leaves out entries they performed or that target their account. */
   viewerUserId: string;
 };
 

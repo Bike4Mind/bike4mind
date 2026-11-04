@@ -146,6 +146,46 @@ describe('AdminAuditLogRepository.listReviewQueue', () => {
     expect([old.id, recent.id]).toEqual(expect.arrayContaining([page.entries[1]?.id, page.entries[2]?.id]));
   });
 
+  it('unreviewed leaves out entries about the viewer account but all keeps them', async () => {
+    await AdminAuditReviewModel.createIndexes();
+    const aboutViewer = await adminAuditLogRepository.append(
+      critical(
+        {
+          ...byOther,
+          summary: 'about viewer',
+          target: { kind: 'user', id: VIEWER, displayName: 'viewer@example.com' },
+        },
+        new Date('2026-03-01T00:00:00Z')
+      )
+    );
+    await adminAuditLogRepository.append(
+      critical(
+        { ...byOther, summary: 'about someone', target: { kind: 'user', id: USER_ID, displayName: 'x@example.com' } },
+        new Date('2026-03-02T00:00:00Z')
+      )
+    );
+    await adminAuditLogRepository.append(
+      critical(
+        { ...byOther, summary: 'org same id', target: { kind: 'organization', id: VIEWER, displayName: 'Org' } },
+        new Date('2026-03-03T00:00:00Z')
+      )
+    );
+
+    const unreviewed = await adminAuditLogRepository.listReviewQueue(
+      { status: 'unreviewed', viewerUserId: VIEWER },
+      { limit: 10 }
+    );
+    expect(unreviewed.entries.map(item => item.summary)).toEqual(['org same id', 'about someone']);
+    expect(unreviewed.total).toBe(2);
+
+    const all = await adminAuditLogRepository.listReviewQueue(
+      { status: 'all', from: new Date('2026-01-01T00:00:00Z'), viewerUserId: VIEWER },
+      { limit: 10 }
+    );
+    expect(all.entries.map(item => item.id)).toContain(aboutViewer.id);
+    expect(all.total).toBe(3);
+  });
+
   it('pages with a cursor and keeps total independent of it', async () => {
     for (let day = 1; day <= 5; day += 1) {
       await adminAuditLogRepository.append(

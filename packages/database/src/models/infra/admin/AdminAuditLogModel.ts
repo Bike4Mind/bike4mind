@@ -323,7 +323,12 @@ class AdminAuditLogRepository implements IAdminAuditLogRepository {
 
     // Unreviewed has no date bound: an old entry nobody signed off is exactly what the queue is for.
     const match: FilterClause = unreviewed
-      ? { severity: 'critical', 'actor.userId': { $ne: query.viewerUserId } }
+      ? {
+          severity: 'critical',
+          'actor.userId': { $ne: query.viewerUserId },
+          // Must stay in sync with auditReviewConflict: nobody signs off an entry about their own account.
+          $nor: [{ 'target.kind': 'user', 'target.id': query.viewerUserId }],
+        }
       : { severity: 'critical', occurredAt: { $gte: query.from } };
 
     const [facets] = await this.auditLogModel

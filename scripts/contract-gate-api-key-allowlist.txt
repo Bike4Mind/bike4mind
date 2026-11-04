@@ -34,8 +34,6 @@ apps/client/pages/api/admin/audit-log/[id].ts
 apps/client/pages/api/admin/audit-log/alert-status.ts
 apps/client/pages/api/admin/audit-log/export.ts
 apps/client/pages/api/admin/audit-log/index.ts
-apps/client/pages/api/admin/audit-log/review-queue.ts
-apps/client/pages/api/admin/audit-log/reviews.ts
 apps/client/pages/api/admin/audit-log/summary.ts
 apps/client/pages/api/admin/bulk-create-users.ts
 apps/client/pages/api/admin/context-telemetry.ts

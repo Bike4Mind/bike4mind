@@ -1,12 +1,13 @@
 import { adminAuditLogRepository } from '@bike4mind/database';
-import { ApiKeyScope, type AuditReviewQueuePage } from '@bike4mind/common';
+import type { AuditReviewQueuePage } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { adminApi } from '@server/middlewares/adminApi';
 import { encodeAuditCursor, parseAuditReviewQueueQuery } from '@server/utils/adminAuditQuery';
 
 const handler = adminApi({
   adminPermissions: { GET: 'support:read' },
-  requiredScopes: [ApiKeyScope.ADMIN],
+  // The review queue is worked by people; API keys are refused outright.
+  auth: 'jwtOnly',
 }).get(async (req, res) => {
   const { status, from, limit, cursor } = parseAuditReviewQueueQuery(req.query);
   // Under impersonation req.user is the impersonated account; the queue hides the real admin's own actions.

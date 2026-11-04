@@ -284,7 +284,7 @@ import EnsureSpendAlertIndexes from './20260921238300_ensure-spend-alert-indexes
 import GrantPackagesFromInvites from './20260921238400_grant-packages-from-invites';
 import EnsureGrantPackageIndexes from './20260921238500_ensure-grant-package-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
-import EnsureAdminAuditReviewIndexesAndBaseline from './20260921238300_ensure-adminauditreview-indexes-and-baseline';
+import EnsureAdminAuditReviewIndexesAndBaseline from './20260921239100_ensure-adminauditreview-indexes-and-baseline';
 import EnsureReferralInviterIndexes from './20260921239500_ensure-referral-inviter-indexes';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
