@@ -32,6 +32,17 @@ export class OAuthReconnectRequiredError extends RemoteMcpAuthRequiredError {
   }
 }
 
+/**
+ * The authorization server (or a refresh already in flight) did not deliver a token in time. A timeout to the
+ * caller, but nothing about the grant or the MCP server is known, so no status is recorded for it.
+ */
+export class OAuthRefreshUnavailableError extends RemoteMcpTimeoutError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'OAuthRefreshUnavailableError';
+  }
+}
+
 export interface AccessTokenOptions {
   network: RemoteMcpNetworkOptions;
   /** Refresh even if the stored token looks valid (the server just rejected it). */
@@ -112,7 +123,7 @@ export async function getOAuthAccessToken(
       return decryptToken(latestOauth.accessTokenEnc) ?? undefined;
     }
     // A crashed holder's lease outlives this window; a timeout is transient, not a reason to sign in again.
-    if (now() >= deadline) throw new RemoteMcpTimeoutError('Another request is refreshing the sign-in');
+    if (now() >= deadline) throw new OAuthRefreshUnavailableError('Another request is refreshing the sign-in');
   }
 }
 
@@ -157,13 +168,13 @@ async function refreshWithLease(
     }
     if (error instanceof RemoteMcpOAuthError) {
       if (error.code === 'token_unavailable') {
-        throw new RemoteMcpTimeoutError('The authorization server did not answer', { cause: error });
+        throw new OAuthRefreshUnavailableError('The authorization server did not answer', { cause: error });
       }
       throw new RemoteMcpAuthFailedError('The authorization server refused the refresh');
     }
     if (error instanceof RemoteMcpError) throw error;
     // A network or storage failure: transient, and no reason to ask the user to sign in again.
-    throw new RemoteMcpTimeoutError('The authorization server did not answer', { cause: error });
+    throw new OAuthRefreshUnavailableError('The authorization server did not answer', { cause: error });
   } finally {
     // A no-op once completeRefresh cleared it; frees the lease on every failure path.
     await mcpConnectionRepository.releaseRefreshLease(connection.id, holder);

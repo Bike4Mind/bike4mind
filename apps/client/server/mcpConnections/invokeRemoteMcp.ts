@@ -49,7 +49,7 @@ import {
   type CustomMcpContext,
   type RemoteMcpNetworkOptions,
 } from './customMcpAccess';
-import { OAuthReconnectRequiredError, getOAuthAccessToken } from './oauth/tokenManager';
+import { OAuthReconnectRequiredError, OAuthRefreshUnavailableError, getOAuthAccessToken } from './oauth/tokenManager';
 
 /**
  * The one way the app talks to a custom remote MCP server (design #4845 sections 5, 8, 11, 12).
@@ -293,7 +293,8 @@ async function recordFailure(
     return mcpConnectionRepository.setStatus(connection.id, status, failure, connection.auth.apiKey?.valueEnc ?? null);
   };
   // The token manager already stored why the grant is gone.
-  if (error instanceof OAuthReconnectRequiredError) return;
+  // Nor does a refresh the authorization server could not answer say anything about the connection.
+  if (error instanceof OAuthReconnectRequiredError || error instanceof OAuthRefreshUnavailableError) return;
   if (error instanceof RemoteMcpAuthRequiredError) {
     if (
       connection.auth.kind === 'none' ||

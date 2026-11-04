@@ -5,21 +5,26 @@ const h = vi.hoisted(() => ({
   settings: '' as string,
   rows: [] as Array<Record<string, unknown>>,
   register: vi.fn(),
-  upsert: vi.fn(),
+  registerIfAbsent: vi.fn(),
+  byId: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   mcpOAuthClientRegistrationRepository: {
     findByIssuerAndRedirect: vi.fn(async () => h.rows[0] ?? null),
-    upsert: h.upsert,
+    findByIdWithCredentials: h.byId,
+    registerIfAbsent: h.registerIfAbsent,
   },
 }));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: async () => ({}),
   getSettingsValue: () => h.settings,
 }));
-vi.mock('@bike4mind/mcp/remote', () => ({ registerRemoteMcpClient: h.register }));
+vi.mock('@bike4mind/mcp/remote', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/mcp/remote')>()),
+  registerRemoteMcpClient: h.register,
+}));
 vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptToken: (value?: string | null) => (value ? `enc:${value}` : null),
   decryptToken: (value?: string | null) => (value ? value.replace(/^enc:/, '') : null),
@@ -32,6 +37,7 @@ const discovery = (overrides: Partial<RemoteMcpOAuthDiscovery> = {}) =>
     issuer: 'https://auth.example.com',
     cimdSupported: false,
     registrationEndpoint: 'https://auth.example.com/register',
+    tokenEndpointAuthMethodsSupported: [],
     ...overrides,
   }) as RemoteMcpOAuthDiscovery;
 
@@ -49,7 +55,8 @@ beforeEach(() => {
   h.settings = '';
   h.rows = [];
   h.register.mockReset().mockResolvedValue({ clientId: 'dcr-client', tokenEndpointAuthMethod: 'none' });
-  h.upsert.mockReset().mockImplementation(async (row: Record<string, unknown>) => ({ ...row, id: 'reg-1' }));
+  h.registerIfAbsent.mockReset().mockImplementation(async (row: Record<string, unknown>) => ({ ...row, id: 'reg-1' }));
+  h.byId.mockReset().mockResolvedValue(null);
   vi.stubEnv('APP_URL', 'https://app.example.com');
   vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 });
@@ -64,9 +71,26 @@ describe('resolveOAuthClient', () => {
     });
     expect(resolved).toMatchObject({
       mode: 'preregistered',
-      client: { clientId: 'preset-id', clientSecret: 's3cret', tokenEndpointAuthMethod: 'client_secret_post' },
+      client: { clientId: 'preset-id', clientSecret: 's3cret', tokenEndpointAuthMethod: 'client_secret_basic' },
     });
     expect(h.register).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['says nothing', [], 'client_secret_basic'],
+    ['lists basic', ['client_secret_post', 'client_secret_basic'], 'client_secret_basic'],
+    ['lists only post', ['client_secret_post'], 'client_secret_post'],
+  ])('picks the token auth method for a typed client when the server %s', async (_name, supported, expected) => {
+    const resolved = await resolve({
+      discovery: discovery({ tokenEndpointAuthMethodsSupported: supported }),
+      manual: { clientId: 'typed', clientSecret: 'shh' },
+    });
+    expect(resolved.client.tokenEndpointAuthMethod).toBe(expected);
+  });
+
+  it('uses no client authentication for a typed client without a secret', async () => {
+    const resolved = await resolve({ manual: { clientId: 'typed' } });
+    expect(resolved.client.tokenEndpointAuthMethod).toBe('none');
   });
 
   it('uses a client the user typed, storing it encrypted', async () => {
@@ -116,6 +140,20 @@ describe('resolveOAuthClient', () => {
     expect(h.register).toHaveBeenCalledTimes(1);
   });
 
+  it('converges on the stored registration when another start registered first', async () => {
+    h.registerIfAbsent.mockResolvedValue({
+      id: 'reg-winner',
+      clientId: 'winner-client',
+      clientSecretEnc: 'enc:w',
+      tokenEndpointAuthMethod: 'client_secret_basic',
+    });
+    const resolved = await resolve();
+    expect(resolved).toMatchObject({
+      clientRegistrationId: 'reg-winner',
+      client: { clientId: 'winner-client', clientSecret: 'w', tokenEndpointAuthMethod: 'client_secret_basic' },
+    });
+  });
+
   it('asks for a client id when nothing else is available', async () => {
     await expect(resolve({ discovery: discovery({ registrationEndpoint: undefined }) })).rejects.toMatchObject({
       additionalInfo: { code: 'client_required' },
@@ -127,27 +165,61 @@ describe('resolveOAuthClient', () => {
     await resolve({ connection: { presetId: 'linear' as never } });
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('customMcpPresetClients is unusable'));
   });
+
+  it('never logs part of a client secret from a malformed preset setting', async () => {
+    h.settings = '{"linear":{"clientId":"a","clientSecret":ABCDEFGHIJKLMNOPQRSTUV}}';
+    await resolve({ connection: { presetId: 'linear' as never } });
+    expect(console.warn).toHaveBeenCalled();
+    const logged = vi.mocked(console.warn).mock.calls.flat().join(' ');
+    expect(logged).not.toMatch(/ABCDE|clientSecret/);
+  });
 });
 
 describe('loadConnectionClient', () => {
   it('rebuilds a manual client from its stored ciphertext', async () => {
-    const client = await loadConnectionClient(
-      {
-        auth: {
-          kind: 'oauth',
-          oauth: { clientMode: 'manual', manualClientIdEnc: 'enc:id', manualClientSecretEnc: 'enc:sec', issuer: 'i' },
+    const client = await loadConnectionClient({
+      auth: {
+        kind: 'oauth',
+        oauth: { clientMode: 'manual', manualClientIdEnc: 'enc:id', manualClientSecretEnc: 'enc:sec', issuer: 'i' },
+      },
+    } as never);
+    expect(client).toMatchObject({
+      clientId: 'id',
+      clientSecret: 'sec',
+      tokenEndpointAuthMethod: 'client_secret_basic',
+    });
+  });
+
+  it('uses the auth method stored at sign-in rather than recomputing it', async () => {
+    const client = await loadConnectionClient({
+      auth: {
+        kind: 'oauth',
+        oauth: {
+          clientMode: 'manual',
+          manualClientIdEnc: 'enc:id',
+          manualClientSecretEnc: 'enc:sec',
+          tokenEndpointAuthMethod: 'client_secret_post',
+          issuer: 'i',
         },
-      } as never,
-      'https://app.example.com/cb'
-    );
-    expect(client).toMatchObject({ clientId: 'id', clientSecret: 'sec' });
+      },
+    } as never);
+    expect(client?.tokenEndpointAuthMethod).toBe('client_secret_post');
+  });
+
+  it('loads a registered client by the id the connection stored, not by issuer', async () => {
+    h.rows = [{ id: 'other', clientId: 'someone-elses', tokenEndpointAuthMethod: 'none' }];
+    h.byId.mockResolvedValue({ id: 'reg-7', clientId: 'mine', tokenEndpointAuthMethod: 'none' });
+    const client = await loadConnectionClient({
+      auth: { kind: 'oauth', oauth: { clientMode: 'dcr', clientRegistrationId: 'reg-7', issuer: 'i' } },
+    } as never);
+    expect(h.byId).toHaveBeenCalledWith('reg-7');
+    expect(client).toMatchObject({ clientId: 'mine' });
   });
 
   it('is undefined when the registration has gone', async () => {
-    const client = await loadConnectionClient(
-      { auth: { kind: 'oauth', oauth: { clientMode: 'dcr', issuer: 'i' } } } as never,
-      'https://app.example.com/cb'
-    );
+    const client = await loadConnectionClient({
+      auth: { kind: 'oauth', oauth: { clientMode: 'dcr', clientRegistrationId: 'reg-7', issuer: 'i' } },
+    } as never);
     expect(client).toBeUndefined();
   });
 });
