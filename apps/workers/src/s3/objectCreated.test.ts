@@ -57,6 +57,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ download: vi.fn(), downloadRange: vi.fn() }),
 }));
 vi.mock('@bike4mind/server-utils/s3/moderateUploadedFile', () => ({ moderateUploadedFile: h.moderateUploadedFile }));
+vi.mock('@server/s3/uploadModerationMeter', () => ({ buildUploadModerationMeter: () => ({}) }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@bike4mind/server-utils/s3/uploadSizeGate', () => ({ admitLandedUpload: h.admit }));
 vi.mock('@server/s3/recordRejectedUploadBatch', () => ({ recordRejectedUploadBatch: h.recordRejectedUploadBatch }));
@@ -447,6 +448,59 @@ describe('objectCreated - moderation claim identity', () => {
       expect.objectContaining({ action: 'image_moderation_status', moderationStatus: 'pending' })
     );
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('superseded'));
+  });
+});
+
+describe('objectCreated - scan deferred by the moderation allowance', () => {
+  const deferral = { moderationStatus: 'pending', deferReason: 'moderation_budget', correctedMimeType: 'image/gif' };
+  let file: ReturnType<typeof metadata>;
+  const claimStamp = () => h.findOneAndUpdate.mock.calls[0][1].$set.moderationClaimedAt;
+  const isClaimWrite = (call: unknown[]) => 'moderationClaimedAt' in (call[0] as Record<string, unknown>);
+
+  beforeEach(() => {
+    file = metadata({ status: 'complete', moderationStatus: 'pending', mimeType: 'image/png' });
+    h.findOne.mockResolvedValue(file);
+    h.findOneAndUpdate.mockResolvedValue({ ...file, moderationStatus: 'scanning' });
+    h.moderateUploadedFile.mockResolvedValue(deferral);
+  });
+
+  it('leaves the row pending, hands the claim back without counting an attempt, and does not rethrow', async () => {
+    await expect(run()).resolves.toBeUndefined();
+
+    const claimWrites = h.updateOne.mock.calls.filter(isClaimWrite);
+    expect(claimWrites).toHaveLength(1);
+    const [filter, update] = claimWrites[0];
+    expect(filter).toEqual({ _id: 'ff1', moderationStatus: 'scanning', moderationClaimedAt: claimStamp() });
+    expect(update.$set).toMatchObject({ moderationStatus: 'pending' });
+    expect(update.$inc).toBeUndefined();
+    expect(file.mimeType).toBe('image/gif');
+    expect(h.sendToClient).toHaveBeenCalledWith(
+      'u1',
+      'wss://test',
+      expect.objectContaining({ action: 'image_moderation_status', moderationStatus: 'pending' })
+    );
+  });
+
+  it('does not scan again when the transaction retries after a deferral', async () => {
+    h.withTransaction.mockImplementation(async (fn: (session: unknown) => Promise<unknown>) => {
+      await fn(undefined);
+      return fn(undefined);
+    });
+
+    await run();
+
+    expect(h.moderateUploadedFile).toHaveBeenCalledTimes(1);
+    expect(h.updateOne.mock.calls.filter(isClaimWrite)).toHaveLength(1);
+  });
+
+  it('logs and carries on when the deferred claim cannot be handed back', async () => {
+    h.updateOne.mockImplementation(async (filter: Record<string, unknown>) => {
+      if ('moderationClaimedAt' in filter) throw new Error('mongo down');
+      return { matchedCount: 1, modifiedCount: 1 };
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('could not release deferred moderation claim'));
   });
 });
 

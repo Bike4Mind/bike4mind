@@ -284,6 +284,18 @@ describe('POST /api/files/[id]/moderate', () => {
     expect(res.body).toEqual({ moderationStatus: 'pending' });
   });
 
+  it('holds a file deferred by the moderation allowance pending, releasing the claim without counting an attempt', async () => {
+    h.scan.mockResolvedValue({ moderationStatus: 'pending', deferReason: 'moderation_budget' });
+    const res = makeRes();
+    await handler(makeReq(), res);
+
+    expect(h.scan).toHaveBeenCalledTimes(1);
+    expect(h.writeVerdict).not.toHaveBeenCalled();
+    expect(h.release).toHaveBeenCalledWith('oid1', h.claim.mock.calls[0][1], { countAttempt: false });
+    expect(h.sendToClient).not.toHaveBeenCalled();
+    expect(res.body).toEqual({ moderationStatus: 'pending' });
+  });
+
   it('reports pending when the claim was superseded before the verdict landed', async () => {
     h.writeVerdict.mockResolvedValue(false);
     const res = makeRes();

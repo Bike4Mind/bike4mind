@@ -6,6 +6,8 @@ const h = vi.hoisted(() => ({
   sort: vi.fn(),
   lean: vi.fn(),
   moderate: vi.fn(),
+  buildMeter: vi.fn(),
+  limit: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -15,6 +17,7 @@ vi.mock('@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles', () => ({
   moderateImportedKnowledgeFiles: h.moderate,
 }));
 vi.mock('@server/s3/knowledgeModerationDeps', () => ({ buildKnowledgeModerationDeps: () => ({ marker: 'deps' }) }));
+vi.mock('@server/s3/uploadModerationMeter', () => ({ buildUploadModerationMeter: h.buildMeter }));
 
 import { runModerationRescueSweep } from './moderationRescueSweep';
 
@@ -25,7 +28,7 @@ beforeEach(() => {
   h.updateMany.mockResolvedValue({});
   h.moderate.mockResolvedValue({ scanned: 1 });
   // find(...).sort(...).limit(...).lean()
-  h.find.mockReturnValue({ sort: h.sort.mockReturnValue({ limit: vi.fn().mockReturnValue({ lean: h.lean }) }) });
+  h.find.mockReturnValue({ sort: h.sort.mockReturnValue({ limit: h.limit.mockReturnValue({ lean: h.lean }) }) });
 });
 
 describe('runModerationRescueSweep', () => {
@@ -143,5 +146,62 @@ describe('runModerationRescueSweep', () => {
     expect(h.updateMany).not.toHaveBeenCalled();
     expect(h.find).not.toHaveBeenCalled();
     expect(h.moderate).not.toHaveBeenCalled();
+  });
+
+  describe('moderation allowance on upload rows', () => {
+    const upload = (id: string, userId: string) => ({ _id: id, filePath: `${id}.png`, userId });
+    const knowledge = (id: string, userId: string) => ({ _id: id, filePath: `knowledge/${userId}/${id}`, userId });
+
+    it('meters ordinary uploads against their owner and leaves imports unmetered', async () => {
+      h.lean.mockResolvedValueOnce([knowledge('k1', 'u1'), upload('f1', 'u2')]).mockResolvedValue([]);
+      h.buildMeter.mockReturnValue({ marker: 'meter' });
+
+      await runModerationRescueSweep({ enabled: true, limit: 50, logger });
+
+      const [importCall, uploadCall] = h.moderate.mock.calls.map(([args]) => args);
+      expect(importCall.meterFor).toBeUndefined();
+      expect(uploadCall.meterFor('ff1')).toEqual({ marker: 'meter' });
+      expect(h.buildMeter).toHaveBeenCalledWith({ userId: 'u2', fabFileId: 'ff1', logger });
+    });
+
+    it("skips a refused user's other uploads and refills the window with other users' files", async () => {
+      h.lean
+        .mockResolvedValueOnce([upload('a1', 'ua'), upload('a2', 'ua'), knowledge('k1', 'ua')])
+        .mockResolvedValueOnce([upload('b1', 'ub')])
+        .mockResolvedValue([]);
+      h.moderate.mockImplementation(async ({ userId }: { userId: string }) =>
+        userId === 'ua' ? { scanned: 0, deferred: 1 } : { scanned: 1, deferred: 0 }
+      );
+
+      const res = await runModerationRescueSweep({ enabled: true, limit: 3, logger });
+
+      expect(h.moderate.mock.calls.map(([args]) => args.filePaths[0])).toEqual(['a1.png', 'knowledge/ua/k1', 'b1.png']);
+      expect(res).toEqual({ rescanned: 1 });
+      expect(h.limit.mock.calls.map(([size]) => size)).toEqual([3, 1]);
+      const refill = h.find.mock.calls[1][0];
+      expect(refill.$nor).toEqual([{ userId: { $in: ['ua'] }, filePath: { $not: expect.any(RegExp) } }]);
+      expect(refill.$nor[0].filePath.$not.test('knowledge/ua/k1')).toBe(true);
+      expect(refill._id).toEqual({ $nin: ['a1', 'a2', 'k1'] });
+    });
+
+    it('hands each of two rows sharing a path to the scan', async () => {
+      h.lean
+        .mockResolvedValueOnce([upload('a1', 'ua'), { ...upload('a2', 'ua'), filePath: 'a1.png' }])
+        .mockResolvedValue([]);
+
+      await runModerationRescueSweep({ enabled: true, limit: 5, logger });
+
+      expect(h.moderate.mock.calls.map(([args]) => args.filePaths[0])).toEqual(['a1.png', 'a1.png']);
+    });
+
+    it('stops once a refill returns only rows it has already seen', async () => {
+      h.lean.mockResolvedValue([upload('a1', 'ua')]);
+      h.moderate.mockResolvedValue({ scanned: 0, deferred: 1 });
+
+      await runModerationRescueSweep({ enabled: true, limit: 5, logger });
+
+      expect(h.moderate).toHaveBeenCalledTimes(1);
+      expect(h.find).toHaveBeenCalledTimes(2);
+    });
   });
 });

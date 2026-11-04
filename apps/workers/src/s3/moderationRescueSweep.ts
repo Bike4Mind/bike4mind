@@ -2,6 +2,7 @@ import { FabFile } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { moderateImportedKnowledgeFiles } from '@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles';
 import { buildKnowledgeModerationDeps } from '@server/s3/knowledgeModerationDeps';
+import { buildUploadModerationMeter } from '@server/s3/uploadModerationMeter';
 
 // A scan finishes in seconds, so a row still awaiting moderation past this is stranded, not
 // in-flight. Mirrors the chunk sweep's stale-claim threshold.
@@ -127,54 +128,80 @@ export async function runModerationRescueSweep({
   // ordinary upload whose scan crashed). An abandoned presigned row (status still 'pending', bare key,
   // no bytes) matches neither arm and is skipped, so it cannot recirculate and starve real strands.
   // filePath must exist and be non-empty (it is optional on the schema, and drives the claim/download).
-  const stuck = await FabFile.find(
-    {
-      moderationStatus: 'pending',
-      deletedAt: null, // matches missing-or-null; a soft-deleted upload is not stranded, skip it
-      createdAt: { $lt: cutoff },
-      filePath: { $exists: true, $ne: '' },
-      // Two independent $ors, so they have to share an $and rather than one duplicate key.
-      $and: [
-        { $or: [{ filePath: KNOWLEDGE_KEY_PREFIX }, { status: 'complete' }] },
-        // Backoff arm. `null` matches missing-or-null, so a row that has never failed is always
-        // eligible; a $lt alone would exclude it, since $lt does not match across BSON type
-        // brackets.
-        { $or: [{ moderationLastAttemptAt: null }, { moderationLastAttemptAt: { $lt: retryAfter } }] },
-      ],
-    },
-    { filePath: 1, userId: 1 }
-  )
-    // Fairness: never-attempted rows first (an unset count sorts before any number), then the
-    // least-retried, oldest first. This is what makes starvation by a failing cluster impossible
-    // rather than merely unlikely. Matches the leading keys of the sweep's index so the planner
-    // streams in this order and stops at `limit`.
-    .sort({ moderationAttempts: 1, createdAt: 1 })
-    .limit(limit)
-    .lean<Array<{ filePath: string; userId: string }>>();
+  const selectBatch = (size: number, excludedUsers: string[], seenIds: unknown[]) =>
+    FabFile.find(
+      {
+        moderationStatus: 'pending',
+        deletedAt: null, // matches missing-or-null; a soft-deleted upload is not stranded, skip it
+        createdAt: { $lt: cutoff },
+        filePath: { $exists: true, $ne: '' },
+        // Two independent $ors, so they have to share an $and rather than one duplicate key.
+        $and: [
+          { $or: [{ filePath: KNOWLEDGE_KEY_PREFIX }, { status: 'complete' }] },
+          // Backoff arm. `null` matches missing-or-null, so a row that has never failed is always
+          // eligible; a $lt alone would exclude it, since $lt does not match across BSON type
+          // brackets.
+          { $or: [{ moderationLastAttemptAt: null }, { moderationLastAttemptAt: { $lt: retryAfter } }] },
+        ],
+        // Upload rows of users whose allowance was refused this run; their imports stay eligible.
+        ...(excludedUsers.length
+          ? { $nor: [{ userId: { $in: excludedUsers }, filePath: { $not: KNOWLEDGE_KEY_PREFIX } }] }
+          : {}),
+        ...(seenIds.length ? { _id: { $nin: seenIds } } : {}),
+      },
+      { filePath: 1, userId: 1 }
+    )
+      // Fairness: never-attempted rows first (an unset count sorts before any number), then the
+      // least-retried, oldest first. This is what makes starvation by a failing cluster impossible
+      // rather than merely unlikely. Matches the leading keys of the sweep's index so the planner
+      // streams in this order and stops at `limit`.
+      .sort({ moderationAttempts: 1, createdAt: 1 })
+      .limit(size)
+      .lean<Array<{ _id: unknown; filePath: string; userId: string }>>();
 
-  if (!stuck.length) return { rescanned: 0 };
-
-  const deps = buildKnowledgeModerationDeps(logger);
-  // Sequential and per file: each row carries its own owner, the set is small (a rare recovery),
-  // and moderateImportedKnowledgeFiles never throws - a single bad file cannot abort the sweep.
+  let deps: ReturnType<typeof buildKnowledgeModerationDeps> | undefined;
+  // Ordinary uploads are scanned through the uploader's moderation allowance. Once a user's is refused,
+  // the rest of their upload rows are skipped and the batch refilled, so they cannot take other users' slots.
+  const refusedUsers = new Set<string>();
+  const seenIds = new Map<string, unknown>();
   let rescanned = 0;
-  for (const file of stuck) {
-    // terminalOnMissingObject only for `knowledge/` keys: a swept import row past the age floor whose
-    // object is gone is a permanent orphan, so soft-delete it (a storage-cleanup outcome, NOT a
-    // content-policy block). A selected ordinary row is status: 'complete' - its bytes DID land - so a
-    // missing read there is a storage blip; release it as transient rather than retire.
-    const { scanned } = await moderateImportedKnowledgeFiles({
-      filePaths: [file.filePath],
-      userId: file.userId,
-      enabled,
-      terminalOnMissingObject: KNOWLEDGE_KEY_PREFIX.test(file.filePath),
-      ...deps,
-    });
-    rescanned += scanned;
+  let selected = 0;
+  while (selected < limit) {
+    const batch = (await selectBatch(limit - selected, [...refusedUsers], [...seenIds.values()])).filter(
+      file => !seenIds.has(String(file._id))
+    );
+    if (!batch.length) break;
+    deps ??= buildKnowledgeModerationDeps(logger);
+    // Sequential and per file: each row carries its own owner, the set is small (a rare recovery),
+    // and moderateImportedKnowledgeFiles never throws - a single bad file cannot abort the sweep.
+    for (const file of batch) {
+      seenIds.set(String(file._id), file._id);
+      const isImport = KNOWLEDGE_KEY_PREFIX.test(file.filePath);
+      if (!isImport && refusedUsers.has(file.userId)) continue;
+      selected++;
+      // terminalOnMissingObject only for `knowledge/` keys: a swept import row past the age floor whose
+      // object is gone is a permanent orphan, so soft-delete it (a storage-cleanup outcome, NOT a
+      // content-policy block). A selected ordinary row is status: 'complete' - its bytes DID land - so a
+      // missing read there is a storage blip; release it as transient rather than retire.
+      const { scanned, deferred } = await moderateImportedKnowledgeFiles({
+        filePaths: [file.filePath],
+        userId: file.userId,
+        enabled,
+        terminalOnMissingObject: isImport,
+        ...deps,
+        ...(isImport
+          ? {}
+          : { meterFor: fabFileId => buildUploadModerationMeter({ userId: file.userId, fabFileId, logger }) }),
+      });
+      rescanned += scanned;
+      if (deferred) refusedUsers.add(file.userId);
+    }
   }
+
+  if (!selected) return { rescanned: 0 };
 
   // rescanned counts files actually resolved to a terminal verdict this run, not merely selected:
   // a row skipped (claim lost to a concurrent scan) or released (transient failure) is not progress.
-  logger.info('[ModerationRescueSweep] re-scanned stranded files', { rescanned, selected: stuck.length });
+  logger.info('[ModerationRescueSweep] re-scanned stranded files', { rescanned, selected });
   return { rescanned };
 }
