@@ -22,6 +22,7 @@ import {
   type RunnerOutcome,
   type RunnerTicket,
   type WorkItemPatch,
+  workItemPriorityRank,
 } from '@bike4mind/common';
 import {
   adminSettingsRepository,
@@ -62,20 +63,26 @@ const isLive = (run: IAgentExecution) => ACTIVE.has(run.status);
 const leaseFrom = (now: Date) => new Date(now.getTime() + RUNNER_LEASE_MS);
 const clip = (reason: string) => reason.slice(0, REASON_MAX);
 
-/** The open, ready tickets in the desktop stages of the user's live loops that pass admission, finish first. */
+/**
+ * The open, ready tickets in the desktop stages of the user's live loops that pass admission: highest priority
+ * across loops, then each loop's own order (finish first).
+ */
 export async function listRunnerTickets(userId: string, now: Date): Promise<RunnerTicket[]> {
   const loops = (await loopRepository.listForUser(userId)).filter(
     loop => loop.status === 'live' && desktopStagesOf(loop).length > 0
   );
-  const tickets: RunnerTicket[] = [];
+  const ready: { loop: ILoop; ticket: IWorkItem }[] = [];
   for (const loop of loops) {
-    if (tickets.length >= RUNNER_LIST_LIMIT) break;
     // ponytail: priced on the loop's model; the claim re-checks on the stage's model.
     if (!(await loopAdmission(loop, loop.model, now)).ok) continue;
-    const ready = await workItemRepository.listReadyInStages(userId, loop.id, loop.stages, desktopStagesOf(loop));
-    tickets.push(...ready.map(ticket => runnerTicket(loop, ticket)));
+    const tickets = await workItemRepository.listReadyInStages(userId, loop.id, loop.stages, desktopStagesOf(loop));
+    ready.push(...tickets.map(ticket => ({ loop, ticket })));
   }
-  return tickets.slice(0, RUNNER_LIST_LIMIT);
+  // Array.prototype.sort is stable, so equal priorities keep each loop's order.
+  return ready
+    .sort((a, b) => workItemPriorityRank(a.ticket.priority) - workItemPriorityRank(b.ticket.priority))
+    .slice(0, RUNNER_LIST_LIMIT)
+    .map(({ loop, ticket }) => runnerTicket(loop, ticket));
 }
 
 const runnerTicket = (loop: ILoop, ticket: IWorkItem): RunnerTicket => {
@@ -421,6 +428,11 @@ export async function completeRunnerRun(
   const run = await agentExecutionRepository.findRunnerRun(runId, userId);
   if (!run) return refuse(404, 'not_found', 'Run not found');
   if (!isLive(run)) return refuse(410, 'run_ended', 'The run is no longer active');
+  // A web Stop wins over whatever the runner reports after it.
+  if (run.abortedAt) {
+    await stopAborted(run, logger);
+    return refuse(410, 'aborted', 'The run was stopped');
+  }
   const loop = run.loopId ? await loopRepository.findByIdAndUserId(run.loopId, userId) : null;
   const ticket = await workItemRepository.findByExecutionId(run.id);
   if (ticket?.status === 'in_progress' && loop) {
@@ -484,6 +496,10 @@ export async function completeRunnerRun(
 export async function releaseExpiredRunnerLeases(now: Date, logger: Logger): Promise<void> {
   for (const run of await agentExecutionRepository.listExpiredRunnerRuns(now, RUNNER_SWEEP_LIMIT)) {
     try {
+      if (run.abortedAt) {
+        await stopAborted(run, logger);
+        continue;
+      }
       const message = 'The desktop runner stopped responding';
       await foldRunTicket(run.id, { status: 'open', executionId: null });
       const failed = await agentExecutionRepository.finishRunnerRun(run.id, run.userId, {
