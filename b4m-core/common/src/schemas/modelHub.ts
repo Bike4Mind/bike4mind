@@ -219,6 +219,9 @@ const OllamaLayersSchema = z
     installedTemplate: Sha256Schema.optional(),
   })
   .refine(layers => layers.params !== null || layers.numCtx === null, { message: 'numCtx needs a params layer' })
+  .refine(layers => layers.params !== null || layers.draftNumPredict === undefined, {
+    message: 'draftNumPredict needs a params layer',
+  })
   .refine(layers => layers.projector !== null || layers.projectorBytes === undefined, {
     message: 'projectorBytes needs a projector layer',
   });

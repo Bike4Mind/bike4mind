@@ -130,12 +130,11 @@ export function ollamaBuildBytes(build: HubBuild): { weightsBytes: number; mmpro
 export function ollamaBuildDraftMax(entry: Pick<HubEntry, 'arch'>, build: HubBuild): number {
   const source = build.ollama;
   const layers = source && source.kind !== 'create' ? source.layers : undefined;
-  const hasDraft = build.draft !== undefined || entry.arch.mtpLayers > 0 || !!layers?.draft;
-  // Ollama installs only what the pull carries: a sidecar draft file or a Modelfile count the pull never applies is ignored.
+  // A pull installs no sidecar file and ignores a Modelfile count; only the served layers and the MTP head count.
   const pulled = source?.kind === 'library' || source?.kind === 'hf-pull';
-  const draftLayer = pulled
-    ? !!layers?.draft
-    : (build.draft !== undefined && build.draft.kind !== 'mtp-embedded') || !!layers?.draft;
+  const sidecar = build.draft !== undefined && build.draft.kind !== 'mtp-embedded';
+  const hasDraft = (build.draft !== undefined && !(pulled && sidecar)) || entry.arch.mtpLayers > 0 || !!layers?.draft;
+  const draftLayer = pulled ? !!layers?.draft : sidecar || !!layers?.draft;
   const draftNumPredict = pulled
     ? layers?.draftNumPredict
     : (layers?.draftNumPredict ?? source?.modelfile.draftNumPredict);
@@ -151,13 +150,13 @@ function fitInputs(entry: HubEntry, build: HubBuild, runtime: HubRuntime, option
     const ollama = options.runtimes.ollama;
     const family = options.manifest.families[entry.family];
     const source = build.ollama;
-    const library = source?.kind === 'library';
+    const pulled = source?.kind === 'library' || source?.kind === 'hf-pull';
     const draftMax = ollamaBuildDraftMax(entry, build);
     // Ollama loads a model's projector whenever it has one.
     const model: FitModel = {
       arch: entry.arch,
       ...ollamaBuildBytes(build),
-      draftBytes: library ? 0 : (draftFile?.sizeBytes ?? 0),
+      draftBytes: pulled ? 0 : (draftFile?.sizeBytes ?? 0),
       expertBytesPerLayer,
       activeParamsFraction: activeShare,
     };

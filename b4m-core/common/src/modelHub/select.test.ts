@@ -665,7 +665,7 @@ describe('pickForMachine runtimes', () => {
           ref: 'hybrid:27b',
           sizeBytes: iq3.weights[0].sizeBytes,
           digest: sha(7),
-          layers: { template: null, params: null, license: null, numCtx: null, draft, draftNumPredict },
+          layers: { template: null, params: sha(9), license: null, numCtx: null, draft, draftNumPredict },
         };
       });
     const ollamaOnly = { ollama: { version: '0.40.11' } };
@@ -685,7 +685,7 @@ describe('pickForMachine runtimes', () => {
           modelfile: { dropStops: [], draftNumPredict: modelfilePredict },
           layers: {
             template: null,
-            params: null,
+            params: sha(9),
             license: null,
             numCtx: null,
             projector: null,
@@ -701,6 +701,35 @@ describe('pickForMachine runtimes', () => {
     expect(recurrent(pulled(2, 5))).toBe(150 * 1024 ** 2 * 3);
     expect(recurrent(pulled(undefined, 3))).toBe(150 * 1024 ** 2 * (1 + OLLAMA_DRAFT_LAYER_DEFAULT));
     expect(recurrent(pulled(0))).toBe(150 * 1024 ** 2);
+  });
+
+  it('plans no drafts and no sidecar bytes for an hf-pull build whose sidecar Ollama never installs', () => {
+    const plan = (sidecar: boolean) => {
+      const manifest = withManifest(m => {
+        const iq3 = m.entries.find(e => e.id === 'hybrid-27b')!.builds[2];
+        if (sidecar) iq3.draft = { kind: 'mtp-sidecar', file: { ...iq3.weights[0], sizeBytes: 2e9 } };
+        iq3.ollama = {
+          kind: 'hf-pull',
+          modelfile: { dropStops: [] },
+          layers: {
+            template: null,
+            params: sha(4),
+            license: null,
+            numCtx: null,
+            projector: null,
+            draft: null,
+            draftNumPredict: 4,
+          },
+        };
+      });
+      return pick('nv-24+64', 'code', { manifest, runtimes: { ollama: { version: '0.40.11' } } }).alternates[0].fit
+        .memory;
+    };
+    const without = plan(false);
+    const memory = plan(true);
+    expect(memory.recurrentBytes).toBe(150 * 1024 ** 2);
+    expect(memory.recurrentBytes).toBe(without.recurrentBytes);
+    expect(memory.totalBytes).toBe(without.totalBytes);
   });
 
   it('offers a quantized cache under flash attention auto only for KV types a smoke loaded', () => {
