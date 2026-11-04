@@ -65,6 +65,8 @@ vi.mock('@bike4mind/database', () => ({
     // The domain grant claims the one-grant-per-inbox entitlement before crediting; these tests
     // are about the handler, so the inbox is always free here.
     claimFreeCreditGrant: (...a: any[]) => mockClaimFreeCreditGrant(...a),
+    // The domain grant also checks the account has not been blocked from grants; none is blocked here.
+    findById: async () => null,
   },
   withTransaction: (fn: any) => fn(),
   adminSettingsRepository: { findBySettingName: (...a: any[]) => mockFindBySettingName(...a) },
