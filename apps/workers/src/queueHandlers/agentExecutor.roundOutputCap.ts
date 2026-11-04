@@ -20,6 +20,9 @@ import {
 
 /** Thrown from inside the agent's model call when the balance cannot buy even a short answer. */
 export class UnaffordableRoundError extends Error {
+  /** Read by ReActAgent, which logs a marked error at warn instead of error. */
+  readonly expected = true;
+
   constructor(
     readonly balance: number,
     readonly minimumCredits: number
