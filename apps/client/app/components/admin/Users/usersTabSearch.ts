@@ -1,4 +1,4 @@
-import { USER_ID_PARAM } from '@bike4mind/common';
+import { ADMIN_TAB_PARAM, ADMIN_USERS_TAB_SLUG, USER_ID_PARAM } from '@bike4mind/common';
 import {
   ADMIN_USERS_PAGE_SIZES,
   ADMIN_USERS_SORT_FIELDS,
@@ -153,9 +153,12 @@ export const parseUserId = (value: unknown): string | undefined =>
 
 // A view param that fails to parse still asked for a view. Keeping the default page stops
 // `validateSearch` from reducing `?sort=bogus` to a bare visit that restores the saved view.
+// Other tabs get no fallback: Users owns bare names like `status`, which another tab's link may carry.
 const parseUsersPage = (value: unknown, search: Record<string, unknown> = {}): number | undefined =>
   parsePage(value) ??
-  (USERS_VIEW_PARAMS.some(key => search[key] !== undefined) ? DEFAULT_USERS_PARAMS.page : undefined);
+  (search[ADMIN_TAB_PARAM] === ADMIN_USERS_TAB_SLUG && USERS_VIEW_PARAMS.some(key => search[key] !== undefined)
+    ? DEFAULT_USERS_PARAMS.page
+    : undefined);
 
 /**
  * Per-key coercion for the route's `validateSearch`, given the whole raw search as well; anything

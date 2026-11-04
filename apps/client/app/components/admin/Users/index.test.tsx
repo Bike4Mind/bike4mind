@@ -94,6 +94,29 @@ beforeEach(() => {
 });
 
 describe('UsersTab', () => {
+  it('clears a stored search at once, without writing the old term back while the debounce settles', async () => {
+    apiGet.mockImplementation(async (url: string) => ({
+      data: url === '/api/admin/users' ? { users: [], totalUsers: 0, page: 1, totalPages: 0 } : respond(url),
+    }));
+    act(() => useUsersTab.setState({ params: { ...DEFAULT_USERS_PARAMS, search: 'ada' } }));
+    renderTab();
+    const clearButton = await screen.findByTestId('admin-users-empty-clear-btn');
+
+    const searches: string[] = [];
+    const unsubscribe = useUsersTab.subscribe(state => searches.push(state.params.search));
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(clearButton);
+      act(() => vi.advanceTimersByTime(1000));
+    } finally {
+      vi.useRealTimers();
+      unsubscribe();
+    }
+
+    expect(searches).not.toContain('ada');
+    expect(useUsersTab.getState().params.search).toBe('');
+  });
+
   it('renders the summary, the rows and one footer pager', async () => {
     renderTab();
     expect(await screen.findByTestId('admin-users-row-u1')).toBeTruthy();

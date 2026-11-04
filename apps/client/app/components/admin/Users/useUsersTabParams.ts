@@ -1,5 +1,5 @@
 import { ADMIN_TAB_PARAM, ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
-import { useNavigate, useSearch } from '@tanstack/react-router';
+import { useNavigate, useRouter, useSearch } from '@tanstack/react-router';
 import { useCallback, useEffect, useMemo } from 'react';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
@@ -56,6 +56,7 @@ const touchesView = (patch: Partial<UsersListParams>) => VIEW_KEYS.some(key => k
  */
 export const useUsersParams = (): readonly [UsersListParams, (patch: Partial<UsersListParams>) => void] => {
   const [storedParams, setStoredParams] = useUsersTab(useShallow(state => [state.params, state.setParams]));
+  const router = useRouter();
   const search = useSearch({ strict: false }) as SearchRecord;
   const navigate = useNavigate();
   const urlView = useMemo(() => usersViewFromSearch(search), [search]);
@@ -66,6 +67,9 @@ export const useUsersParams = (): readonly [UsersListParams, (patch: Partial<Use
     (patch: Partial<UsersListParams>) => {
       setStoredParams(patch);
       if (!touchesView(patch)) return;
+      // The debounced search can land after the tab unmounts; never write this view onto another tab.
+      const { pathname, search: current } = router.state.location;
+      if (pathname !== ADMIN_PATH || (current as SearchRecord)[ADMIN_TAB_PARAM] !== ADMIN_USERS_TAB_SLUG) return;
       // Written from the store, which useUsersTabUrlSync keeps level with the URL and which already
       // holds this patch merged into the full view, so the URL always carries a complete view.
       navigate({
@@ -74,7 +78,7 @@ export const useUsersParams = (): readonly [UsersListParams, (patch: Partial<Use
         replace: true,
       });
     },
-    [navigate, setStoredParams]
+    [navigate, router, setStoredParams]
   );
 
   return [params, setParams] as const;
