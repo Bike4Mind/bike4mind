@@ -8,6 +8,10 @@
  * file or through a relative / `@server` / `@client` / `@bike4mind/server-utils` import, and searched
  * the same way, until a call to one of AUDIT_WRITERS is found. Package barrels (`@bike4mind/services`,
  * `@bike4mind/database`) are not followed; a service that audits internally needs an exemption entry.
+ *
+ * Reachability, not control flow: a writer call anywhere in a referenced function counts, including one
+ * only in a catch branch, and a method counts when its class is referenced. Reviewers still own whether
+ * the row is written on the success path.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
