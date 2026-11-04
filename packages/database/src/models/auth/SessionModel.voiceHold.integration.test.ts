@@ -80,7 +80,7 @@ describe('sessionRepository voice holds', () => {
       sessionRepository.claimVoiceHold(id, startedAt),
     ]);
 
-    expect(results.filter(Boolean)).toEqual([{ billedCredits: null, payerId: null }]);
+    expect(results.filter(Boolean)).toEqual([{ billedCredits: null, payerId: null, apiKeyId: null }]);
     const after = await Session.findById(id).lean();
     expect(after).toMatchObject({ voiceReservedCredits: null, voiceSessionStartedAt: null });
   });
@@ -99,6 +99,7 @@ describe('sessionRepository voice holds', () => {
     expect(await sessionRepository.claimVoiceHold(realtime, startedAt, { realtimeOnly: true })).toEqual({
       billedCredits: 30,
       payerId: null,
+      apiKeyId: null,
     });
     expect(await Session.findById(realtime).lean()).toMatchObject({
       voiceReservedCredits: null,
@@ -211,8 +212,56 @@ describe('sessionRepository voice holds', () => {
     });
     expect(await Session.findById(id).lean()).toMatchObject({ voiceHoldUserId: 'payer-1' });
 
-    expect(await sessionRepository.claimVoiceHold(id, startedAt)).toEqual({ billedCredits: null, payerId: 'payer-1' });
+    expect(await sessionRepository.claimVoiceHold(id, startedAt)).toEqual({
+      billedCredits: null,
+      payerId: 'payer-1',
+      apiKeyId: null,
+    });
     expect(await Session.findById(id).lean()).not.toHaveProperty('voiceHoldUserId');
+  });
+
+  it('records the API key that opened a hold, and hands it to the one claim that settles it', async () => {
+    const id = await seed('call', null, null);
+    const startedAt = minutesAgo(0);
+
+    await sessionRepository.openVoiceHold(id, null, {
+      voiceReservedCredits: 100,
+      voiceSessionStartedAt: startedAt,
+      realtime: true,
+      payerId: 'payer-1',
+      apiKeyId: 'key-1',
+    });
+    expect(await Session.findById(id).lean()).toMatchObject({ voiceHoldApiKeyId: 'key-1' });
+
+    expect(await sessionRepository.claimVoiceHold(id, startedAt)).toEqual({
+      billedCredits: 0,
+      payerId: 'payer-1',
+      apiKeyId: 'key-1',
+    });
+    expect(await Session.findById(id).lean()).not.toHaveProperty('voiceHoldApiKeyId');
+  });
+
+  it('drops the key of an unclaimed hold when a JWT call opens over it', async () => {
+    const id = await seed('call', null, null);
+    const first = minutesAgo(1);
+    // No reserve (credits off), so the key-opened hold is never claimed before the next call.
+    await sessionRepository.openVoiceHold(id, null, {
+      voiceReservedCredits: null,
+      voiceSessionStartedAt: first,
+      realtime: false,
+      payerId: 'payer-1',
+      apiKeyId: 'key-1',
+    });
+
+    expect(
+      await sessionRepository.openVoiceHold(id, first, {
+        voiceReservedCredits: null,
+        voiceSessionStartedAt: minutesAgo(0),
+        realtime: false,
+        payerId: 'payer-1',
+      })
+    ).toBe(true);
+    expect(await Session.findById(id).lean()).not.toHaveProperty('voiceHoldApiKeyId');
   });
 
   it('marks a hold connected once and keeps its latest activity', async () => {

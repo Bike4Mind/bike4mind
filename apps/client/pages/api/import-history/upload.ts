@@ -34,10 +34,11 @@ const parseDeclaredSize = (raw: unknown): number | null => {
 };
 
 /**
- * The storage key IS the identity record for this upload: server/s3/historyUploadComplete.ts
- * splits userId and source back out of it to decide whose history is being imported. It is
- * therefore always computed from the authenticated request and never from anything the client
- * sends - there is no owning DB row to check a client-supplied key against.
+ * The storage key IS the identity record for this upload:
+ * packages/server-utils/src/s3/historyUploadComplete.ts splits userId and source back out of it
+ * to decide whose history is being imported. It is therefore always computed from the
+ * authenticated request and never from anything the client sends - there is no owning DB row to
+ * check a client-supplied key against.
  */
 const historyImportKey = (userId: string, source: string): string => `${userId}/${source}/${Date.now()}.zip`;
 

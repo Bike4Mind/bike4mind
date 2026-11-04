@@ -51,7 +51,13 @@ import {
   type RuntimeCheck,
   type RuntimeHealth,
 } from '@bike4mind/local-models';
-import { ollamaBuildBytes, type HubBuild, type HubEntry, type HubManifest } from '@bike4mind/common';
+import {
+  activeParamsFraction,
+  ollamaBuildBytes,
+  type HubBuild,
+  type HubEntry,
+  type HubManifest,
+} from '@bike4mind/common';
 import {
   licenseKind,
   pullKey,
@@ -71,6 +77,7 @@ import {
   type HubSearchRequest,
   type HubSearchResult,
   type InstalledModelsResult,
+  type LoadedModelState,
   type ModelFit,
   type ModelHubError,
   type ModelHubErrorKind,
@@ -90,7 +97,10 @@ import { ServerCredentialsError, ServerUnreachableError } from '../modelServers/
 import { ServerRedirectError, ServerTransportError } from '@bike4mind/local-models/servers';
 import { serverHardware, withEnteredSpecs } from './enteredHardware';
 import { fitFromArch, fitFromSize, machineView, type FitWhere } from './fit';
+import { loadedStateOf, loadedStateTarget } from './loadedState';
 import { installedProjectorBytes, pinnedProjectorSizes } from './projectorBytes';
+import { catalogSampling } from './catalogSampling';
+import type { CatalogSampling } from '@shared/generation';
 
 export interface ModelRuntimePort {
   readonly baseUrl: string;
@@ -645,7 +655,12 @@ function reviewedFit(entry: HubEntry, build: HubBuild, sizing: Sizing): ModelFit
     configured: pinsOf(build)?.numCtx ?? undefined,
     projectorBytes: mmprojBytes,
   });
-  return fitFromArch(entry.arch, weightsBytes, sizing.hardware, context, { mmprojBytes, where: sizing.where });
+  return fitFromArch(entry.arch, weightsBytes, sizing.hardware, context, {
+    mmprojBytes,
+    where: sizing.where,
+    expertBytesPerLayer: build.tensorStats?.expertBytesPerLayer,
+    activeParamsFraction: activeParamsFraction(entry.params),
+  });
 }
 
 /**
@@ -671,6 +686,7 @@ export class ModelHubService {
       parameters: string | null;
       contextLength: number | null;
       projectorBytes: number;
+      expertBytesPerLayer: number | undefined;
     } | null>
   >();
   /** Model folders read from a runtime, by server id; a guessed default is never kept. */
@@ -743,6 +759,7 @@ export class ModelHubService {
             pinned: this.pinnedProjectors(),
             onThisComputer: target.local,
           }),
+          expertBytesPerLayer: inspection.tensorStats?.expertBytesPerLayer,
         }))
         .catch(() => {
           // A busy daemon can time out once; read it again next time instead of rating by size for the session.
@@ -763,7 +780,11 @@ export class ModelHubService {
     });
     const { where } = sizing;
     return arch
-      ? fitFromArch(arch, model.sizeBytes - projector, hardware, context, { mmprojBytes: projector, where })
+      ? fitFromArch(arch, model.sizeBytes - projector, hardware, context, {
+          mmprojBytes: projector,
+          expertBytesPerLayer: inspection?.expertBytesPerLayer,
+          where,
+        })
       : fitFromSize(model.sizeBytes, hardware, context, { limitKnown: limit !== undefined, where });
   }
 
@@ -975,6 +996,11 @@ export class ModelHubService {
   /** Projector sizes the curated list pins, by blob digest; chat sizes installed models from the same map. */
   pinnedProjectors(): ReadonlyMap<string, number> {
     return pinnedProjectorSizes(this.#deps.curated());
+  }
+
+  /** The curated family sampling for a local model matched by name on any local server; chat sends it as a seed. */
+  catalogSampling(ollamaName: string): CatalogSampling | undefined {
+    return catalogSampling(this.#deps.curated(), ollamaName);
   }
 
   /**
@@ -1264,6 +1290,18 @@ export class ModelHubService {
       };
     } catch (error) {
       return { ok: false, error: toModelHubError(error) };
+    }
+  }
+
+  /** Polled by the composer while idle on a local model, so any failure is `unknown` rather than an error. */
+  async loadedState(modelId: string): Promise<LoadedModelState> {
+    const where = loadedStateTarget(modelId);
+    const target = where ? this.#target(where.serverId) : null;
+    if (!where || !target || target.management === 'unsupported') return { kind: 'unsupported' };
+    try {
+      return loadedStateOf(await target.runtime.loaded(), where.model);
+    } catch {
+      return { kind: 'unknown' };
     }
   }
 

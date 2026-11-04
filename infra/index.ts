@@ -30,11 +30,13 @@ export * from './dlqAlarms';
 export * from './mailAlarms';
 export * from './signupAlarms';
 export * from './turnstileAlarms';
+export * from './imageModerationReviewAlarms';
 export * from './accountCreationAlarms';
 export * from './analyticsRollup';
 export * from './llmSpend';
 export * from './providerSpend';
 export * from './authAbuseAlarms';
+export * from './apiProbeDetector';
 // serviceHealthAlarms must come after subscriberFanout + chatCompletion (it alarms on both)
 export * from './serviceHealthAlarms';
 export * from './emailMarketing';

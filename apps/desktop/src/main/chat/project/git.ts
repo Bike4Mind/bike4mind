@@ -1,9 +1,11 @@
 import { execFile } from 'node:child_process';
-import { realpath, stat } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { BranchCheckout } from '@shared/chat';
-import { hostGitArgs, hostNetworkGitArgs } from '../../git/hostGitArgs';
+import { gitCommand, gitCommandEnv, hostGitArgs, hostNetworkGitArgs } from '../../git/hostGitArgs';
+import { toWindowsPath, wslLocation } from '../../wsl/wslPath';
+import { hostRealpath } from '../tools/paths';
 
 const execFileAsync = promisify(execFile);
 
@@ -45,7 +47,13 @@ export function readableGitMessage(stderr: string): string {
 }
 
 export function git(directory: string, args: readonly string[]): Promise<string> {
-  return runGit(directory, args, hostGitArgs(args));
+  return runGit(directory, args, hostGitArgs(args, directory));
+}
+
+/** A path git printed for `directory`, as this host reaches it: git in a WSL folder prints Linux paths. */
+export function gitPath(directory: string, path: string, platform: NodeJS.Platform = process.platform): string {
+  const location = wslLocation(directory, platform);
+  return location ? toWindowsPath(location, path) : path;
 }
 
 /** For calls that reach a remote, which can run configured credential, ssh and askpass commands. */
@@ -55,9 +63,14 @@ function gitNetwork(directory: string, args: readonly string[]): Promise<string>
 
 async function runGit(directory: string, args: readonly string[], fullArgs: readonly string[]): Promise<string> {
   try {
-    const { stdout } = await execFileAsync('git', [...fullArgs], {
-      cwd: directory,
+    const command = await gitCommand(directory, fullArgs);
+    if (!command) throw new Error('git is not installed');
+    const env = await gitCommandEnv(directory);
+    const { stdout } = await execFileAsync(command.file, command.args, {
+      cwd: command.cwd,
+      env,
       timeout: GIT_TIMEOUT_MS,
+      windowsHide: true,
       maxBuffer: MAX_GIT_OUTPUT_BYTES,
     });
     return stdout;
@@ -132,7 +145,7 @@ export async function branchExists(directory: string, branch: string): Promise<b
 export async function containerDirectory(directory: string): Promise<string> {
   const common = (await git(directory, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim();
   if (!common) throw new GitError(['rev-parse', '--git-common-dir'], 'git named no common directory');
-  return dirname(common);
+  return dirname(gitPath(directory, common));
 }
 
 /**
@@ -216,8 +229,21 @@ export async function isGitDirectory(path: string): Promise<boolean> {
  * tools, and with core.bare unset in a shared config git lists it with a `branch` line, which
  * made it win a lookup for the branch the main worktree actually holds.
  */
+async function worktreeRecords(directory: string): Promise<PorcelainWorktree[]> {
+  return worktreeRecordsFrom(directory, await git(directory, ['worktree', 'list', '--porcelain']));
+}
+
+/** The records of a porcelain listing git printed in `directory`, their paths as this host reaches them. */
+export function worktreeRecordsFrom(
+  directory: string,
+  porcelain: string,
+  platform: NodeJS.Platform = process.platform
+): PorcelainWorktree[] {
+  return parseWorktreePorcelain(porcelain).map(entry => ({ ...entry, path: gitPath(directory, entry.path, platform) }));
+}
+
 export async function listWorktrees(directory: string): Promise<WorktreeEntry[]> {
-  const entries = parseWorktreePorcelain(await git(directory, ['worktree', 'list', '--porcelain']));
+  const entries = await worktreeRecords(directory);
   const checkouts: WorktreeEntry[] = [];
   for (const { path, branch, bare } of entries) {
     if (bare || (await isGitDirectory(path))) continue;
@@ -235,7 +261,7 @@ export async function listWorktrees(directory: string): Promise<WorktreeEntry[]>
  * the main worktree - or the bare repo standing in for it - first.
  */
 export async function branchCheckouts(directory: string): Promise<Record<string, BranchCheckout>> {
-  const entries = parseWorktreePorcelain(await git(directory, ['worktree', 'list', '--porcelain']));
+  const entries = await worktreeRecords(directory);
   const own = await samePathAs(directory);
   const checkouts: [string, BranchCheckout][] = [];
   for (const [index, entry] of entries.entries()) {
@@ -254,7 +280,7 @@ export async function branchCheckouts(directory: string): Promise<Record<string,
 async function samePathAs(directory: string): Promise<(path: string) => boolean> {
   const names = new Set([resolve(directory)]);
   try {
-    names.add(await realpath(directory));
+    names.add(resolve(await hostRealpath(directory)));
   } catch {
     // Gone or unreadable: the plain resolve is all there is to match on.
   }

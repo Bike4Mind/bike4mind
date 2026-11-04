@@ -116,13 +116,14 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       return res.redirect(`/login?error=${encodeURIComponent(userMessage)}`);
     }
 
+    // warn: a code- or state-less hit on this public URL is caller input, not a server fault.
     if (!state) {
-      Logger.error('[Okta Callback] Missing state parameter');
+      Logger.warn('[Okta Callback] Missing state parameter');
       return res.redirect('/login?error=missing_state');
     }
 
     if (!code) {
-      Logger.error('[Okta Callback] Missing authorization code');
+      Logger.warn('[Okta Callback] Missing authorization code');
       return res.redirect('/login?error=missing_code');
     }
 

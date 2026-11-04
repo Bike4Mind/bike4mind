@@ -1,10 +1,11 @@
 import type { LocalContextFit } from '@shared/localContextSetting';
 import { parseLocalModelId, type ChatModelOption } from '@shared/chat';
+import type { CatalogSampling } from '@shared/generation';
 import type { CompletionRequest } from '../chat/completions';
 import type { LocalChat } from '../chat/localChat';
 import type { OllamaLocal } from '../chat/OllamaLocal';
 import type { CompletionStreamEvent } from '../chat/streamEvents';
-import type { ModelServerRegistry } from './ModelServerRegistry';
+import type { ModelListOptions, ModelServerRegistry } from './ModelServerRegistry';
 
 /**
  * Every device-side model: this computer's Ollama, then each saved server's. A `local:srv-<id>:...`
@@ -13,12 +14,17 @@ import type { ModelServerRegistry } from './ModelServerRegistry';
 export class LocalModels implements LocalChat {
   constructor(
     private readonly computer: OllamaLocal,
-    private readonly servers: Pick<ModelServerRegistry, 'models' | 'chatFor'>
+    private readonly servers: Pick<ModelServerRegistry, 'models' | 'chatFor'>,
+    /** The curated catalog's sampling for a listed model; see main/models/catalogSampling.ts. */
+    private readonly catalogSampling?: (option: ChatModelOption) => CatalogSampling | undefined
   ) {}
 
-  async models(): Promise<ChatModelOption[]> {
-    const [own, remote] = await Promise.all([this.computer.models(), this.servers.models().catch(() => [])]);
-    return [...own, ...remote];
+  async models(options?: ModelListOptions): Promise<ChatModelOption[]> {
+    const [own, remote] = await Promise.all([this.computer.models(), this.servers.models(options).catch(() => [])]);
+    return [...own, ...remote].map(option => {
+      const sampling = this.catalogSampling?.(option);
+      return sampling ? { ...option, catalogSampling: sampling } : option;
+    });
   }
 
   contextFit(): Promise<LocalContextFit> {

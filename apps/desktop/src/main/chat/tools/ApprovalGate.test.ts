@@ -358,6 +358,19 @@ describe('ApprovalGate', () => {
       expect(gate.uncoveredDirectories('s', ['/etc', '/etc/ssl', '/etcetera', '/var'])).toEqual(['/etcetera', '/var']);
     });
 
+    it('keeps no standing answer for a call that reaches a distro no folder is in', async () => {
+      const gate = new ApprovalGate();
+      const unreachable = { ...always(['cat *'], ['cat x']), ungranted: ['\\\\wsl.localhost\\Debian\\etc\\hosts'] };
+      const controller = new AbortController();
+      let approvalId = '';
+      const answer = gate.request('s', 'key', controller.signal, id => (approvalId = id), { always: unreachable });
+      gate.resolve(approvalId, { decision: 'always' });
+
+      await expect(answer).resolves.toMatchObject({ decision: 'once' });
+      expect(gate.isStanding('s', 'key')).toBeNull();
+      expect(gate.coversCommands('s', unreachable)).toBe(false);
+    });
+
     it('forgets everything when the conversation is deleted', async () => {
       const gate = new ApprovalGate();
       await allow(gate, always(['ls *'], ['ls']));

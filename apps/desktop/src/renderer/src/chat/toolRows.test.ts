@@ -34,6 +34,14 @@ describe('toolRowLabel', () => {
     expect(toolRowLabel(call('2', 'bash_list'))).toBe('Listed background processes');
   });
 
+  it('labels a tool named like an Object member as an unknown tool', () => {
+    for (const name of ['constructor', 'toString']) {
+      expect(toolRowLabel(call('1', name, { path: 'a.ts' })), name).toBe(
+        toolRowLabel(call('1', 'no_such_tool', { path: 'a.ts' })).replace('no_such_tool', name)
+      );
+    }
+  });
+
   it('leaves a generation prompt out of the label rather than reciting it', () => {
     expect(toolRowLabel(call('1', 'generate_image', { prompt: 'a red bicycle at dusk' }))).toBe('Generated an image');
   });

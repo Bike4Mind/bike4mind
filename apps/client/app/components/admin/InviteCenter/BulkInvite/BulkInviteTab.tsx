@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
   Box,
@@ -21,11 +22,13 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import LocalOfferIcon from '@mui/icons-material/LocalOffer';
 import { api } from '@client/app/contexts/ApiContext';
+import { GRANT_PACKAGES_QUERY_KEY } from '@client/app/utils/grantPackageAPICalls';
 import { PREDEFINED_USER_TAGS } from '@bike4mind/common';
 import { APP_NAME } from '@client/config/general'; // brand externalized
 import { toast } from 'sonner';
 import CopyButton from '../shared/CopyButton';
 import { getTagColor } from '../shared/tagColors';
+import GrantPackageSelect, { useSelectedGrantPackage } from '../shared/GrantPackageSelect';
 
 // --- Types ---
 
@@ -514,6 +517,9 @@ const BulkInviteTab = ({ quickAction }: BulkInviteTabProps) => {
   const [rows, setRows] = useState<DraftRow[]>([createEmptyRow()]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [sending, setSending] = useState(false);
+  const queryClient = useQueryClient();
+  const [grantPackageId, setGrantPackageId] = useState<string | null>(null);
+  const selectedPackage = useSelectedGrantPackage(grantPackageId);
   const [showCsvPanel, setShowCsvPanel] = useState(false);
   const [results, setResults] = useState<ImportResult[] | null>(null);
   const [sendProgress, setSendProgress] = useState<{ completed: number; total: number } | null>(null);
@@ -635,6 +641,7 @@ const BulkInviteTab = ({ quickAction }: BulkInviteTabProps) => {
       try {
         const response = await api.post<{ success: boolean; results: ImportResult[] }>('/api/admin/bulk-create-users', {
           users,
+          ...(grantPackageId ? { grantPackageId } : {}),
         });
 
         const apiResults = response.data.results;
@@ -654,6 +661,8 @@ const BulkInviteTab = ({ quickAction }: BulkInviteTabProps) => {
           })
         );
 
+        if (grantPackageId) void queryClient.invalidateQueries({ queryKey: [GRANT_PACKAGES_QUERY_KEY] });
+
         const succeeded = apiResults.filter(r => r.success).length;
         const failed = apiResults.filter(r => !r.success).length;
         if (failed === 0) {
@@ -670,7 +679,7 @@ const BulkInviteTab = ({ quickAction }: BulkInviteTabProps) => {
         setSelectedIds(new Set());
       }
     },
-    [draftRows, rows]
+    [draftRows, rows, grantPackageId, queryClient]
   );
 
   const toggleSelect = useCallback((id: string) => {
@@ -849,20 +858,24 @@ const BulkInviteTab = ({ quickAction }: BulkInviteTabProps) => {
                   size="sm"
                   variant="plain"
                   placeholder="0"
-                  value={row.credits}
+                  value={selectedPackage ? String(selectedPackage.credits) : row.credits}
                   onChange={e => updateRow(row.id, 'credits', e.target.value)}
-                  disabled={isSent}
-                  slotProps={{ input: { type: 'number', min: 0, step: 1 } }}
+                  disabled={isSent || grantPackageId !== null}
+                  slotProps={{
+                    input: { type: 'number', min: 0, step: 1, 'data-testid': 'bulk-invite-row-credits-input' },
+                  }}
                   sx={{ fontSize: '0.8rem' }}
                 />
                 <Input
                   size="sm"
                   variant="plain"
                   placeholder="1000"
-                  value={row.storage}
+                  value={selectedPackage?.storageMb != null ? String(selectedPackage.storageMb) : row.storage}
                   onChange={e => updateRow(row.id, 'storage', e.target.value)}
-                  disabled={isSent}
-                  slotProps={{ input: { type: 'number', min: 0, step: 1 } }}
+                  disabled={isSent || selectedPackage?.storageMb != null}
+                  slotProps={{
+                    input: { type: 'number', min: 0, step: 1, 'data-testid': 'bulk-invite-row-storage-input' },
+                  }}
                   sx={{ fontSize: '0.8rem' }}
                 />
                 <TagsCell
@@ -906,6 +919,16 @@ const BulkInviteTab = ({ quickAction }: BulkInviteTabProps) => {
             );
           })}
         </Box>
+      </Box>
+
+      <Box sx={{ mt: 2, maxWidth: 480 }}>
+        <GrantPackageSelect
+          value={grantPackageId}
+          onChange={setGrantPackageId}
+          disabled={sending}
+          testId="bulk-invite-grant-package-select"
+          helperText="When set, every created user gets the package's credits and storage instead of the row amounts."
+        />
       </Box>
 
       {/* Send All button */}

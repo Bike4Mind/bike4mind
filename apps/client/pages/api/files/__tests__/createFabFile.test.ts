@@ -584,6 +584,15 @@ describe('POST /api/files/createFabFile - admin modal video', () => {
     expect(schema.safeParse({ landscapeUrl: sent.mediaUrl }).success).toBe(true);
   });
 
+  it('returns a mediaUrl for a settings:manage delegate, who may edit modals', async () => {
+    const { res, json } = makeRes();
+    await run(mp4(), res, { user: { id: 'u1', isAdmin: false, adminPermissions: ['settings:manage'] } });
+
+    const sent = json.mock.calls[0][0] as { mediaUrl: string; filePath: string };
+    expect(sent.filePath).toMatch(/^modals\//);
+    expect(sent.mediaUrl.endsWith(sent.filePath)).toBe(true);
+  });
+
   it('omits mediaUrl for a normal upload', async () => {
     const { res, json } = makeRes();
     await run(body(), res, asAdmin);
@@ -593,6 +602,11 @@ describe('POST /api/files/createFabFile - admin modal video', () => {
 
   it.each([
     ['a non-admin', mp4(), { user: { id: 'u1', isAdmin: false } }],
+    [
+      'a delegate without settings:manage',
+      mp4(),
+      { user: { id: 'u1', isAdmin: false, adminPermissions: ['support:read'] } },
+    ],
     ['an admin naming the prefix instead of the purpose', mp4({ purpose: undefined, prefix: 'modals' }), asAdmin],
     ['an admin claiming another video type', mp4({ mimeType: 'video/quicktime' }), asAdmin],
     ['an admin with a non-mp4 name', mp4({ fileName: 'demo.mov' }), asAdmin],

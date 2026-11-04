@@ -164,6 +164,23 @@ describe('paymentNetworkOf', () => {
 });
 
 describe('recordPaymentStart', () => {
+  it('records the visit the payment started in, or null without one', async () => {
+    mocks.recordStart.mockResolvedValue(undefined);
+    const network = { ip: '203.0.113.7', isDatacenter: true } as Parameters<typeof recordPaymentStart>[0]['network'];
+    const visitId = 'a'.repeat(32);
+
+    await recordPaymentStart(
+      { paymentIntentId: 'pi_1', userId: 'u1', amount: 100, currency: 'usd', network, visitId },
+      logger
+    );
+    await recordPaymentStart({ paymentIntentId: 'pi_2', userId: 'u1', amount: 100, currency: 'usd', network }, logger);
+
+    expect(mocks.recordStart.mock.calls.map(([c]) => [c.paymentIntentId, c.visitId])).toEqual([
+      ['pi_1', visitId],
+      ['pi_2', null],
+    ]);
+  });
+
   it('logs instead of throwing when the write fails', async () => {
     mocks.recordStart.mockRejectedValue(new Error('db down'));
     const network = { ip: '203.0.113.7', isDatacenter: true } as Parameters<typeof recordPaymentStart>[0]['network'];

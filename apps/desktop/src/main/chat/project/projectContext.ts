@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { git } from './git';
 import { type InstructionBlock, defaultUserInstructionsRoot, loadInstructions } from './instructions';
 import { memoryStoreFor } from './memory';
+import { shareRelativePath, wslLocation } from '../../wsl/wslPath';
 
 export { MAX_INSTRUCTIONS_BYTES } from './instructions';
 export const MAX_TREE_LINES = 150;
@@ -17,7 +18,9 @@ const MAX_TOP_LEVEL_FILES = 40;
 async function listFiles(directory: string): Promise<string[]> {
   try {
     const out = await git(directory, ['ls-files', '-z', '--cached', '--others', '--exclude-standard']);
-    return out.split('\0').filter(Boolean);
+    const listed = out.split('\0').filter(Boolean);
+    // Git in the distro prints Linux names; the walk, glob and grep show them as the share spells them.
+    return wslLocation(directory) ? listed.flatMap(path => shareRelativePath(path) ?? []) : listed;
   } catch {
     return walk(directory);
   }

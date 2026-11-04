@@ -4,6 +4,7 @@ import {
   embedConversationRepository,
   hideDeletedAuthorAnnotations,
   integrationRequestRepository,
+  shadowDetectionRepository,
 } from '@bike4mind/database';
 import type { IUserDocument } from '@bike4mind/common';
 import { retainDeletedSignupTraces } from '@server/auth/signupNetworkLimits';
@@ -99,6 +100,15 @@ export async function purgeDeletedUserData(
     logger.info(`Deleted ${deleted} auth event(s) of deleted user ${userId}`);
   } catch (err) {
     logger.error(`Failed to delete auth events for deleted user ${userId}: ${String(err)}`);
+  }
+
+  // Shadow detections name the account (and a signup-burst one holds its raw IP): the user leaves every
+  // record, and a record left with no one to grade goes with them.
+  try {
+    const deleted = await shadowDetectionRepository.removeUser(userId);
+    logger.info(`Removed deleted user ${userId} from shadow detections (${deleted} record(s) deleted)`);
+  } catch (err) {
+    logger.error(`Failed to remove deleted user ${userId} from shadow detections: ${String(err)}`);
   }
 
   // Last: the revokes call out to the providers, and a slow provider must not cost the local steps above.

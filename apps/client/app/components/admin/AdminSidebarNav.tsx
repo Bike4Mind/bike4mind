@@ -40,6 +40,8 @@ export type SidebarNavProps = {
   /** A Stripe-billed subscription started since this browser last opened the Subscriptions tab. */
   newSubscriptions?: boolean;
   hiddenNotifications: string[];
+  /** Hides the tabs this user may not open (a delegated admin's permissions). Omit to list all. */
+  canOpenTab?: (tab: AdminTab) => boolean;
   onTabSelect: (tab: AdminTab) => void;
   account?: SidebarAccount;
   /** Folds the nav to an icon rail. */
@@ -274,6 +276,7 @@ export const SidebarNav = ({
   waitingSubscribersCount,
   newSubscriptions = false,
   hiddenNotifications,
+  canOpenTab,
   onTabSelect,
   account,
   collapsed = false,
@@ -294,7 +297,7 @@ export const SidebarNav = ({
     liveOpsTriage: showLiveOpsTriageTab,
   };
   // The rail has no filter box to show or clear a query, so it always lists every section.
-  const visibleSections = filterSidebarSections(SIDEBAR_SECTIONS, gates, collapsed ? '' : query);
+  const visibleSections = filterSidebarSections(SIDEBAR_SECTIONS, gates, collapsed ? '' : query, canOpenTab);
   const filtering = query.trim() !== '';
   const activeSectionKey = findSectionKeyForTab(activeTab);
 

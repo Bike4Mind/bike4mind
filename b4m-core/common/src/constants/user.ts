@@ -77,15 +77,15 @@ export const TURNSTILE_OAUTH_TOKEN_PARAM = 'turnstileToken';
  * Providers whose sign-in is open to anyone and so run the challenge before the provider
  * redirect. Enterprise SSO (Okta, SAML) is configured per organisation and stays unchallenged.
  */
-export const TURNSTILE_OAUTH_PROVIDERS = ['google', 'github', 'facebook'] as const;
+export const TURNSTILE_OAUTH_PROVIDERS = ['google', 'github', 'facebook', 'apple'] as const;
 export type TurnstileOAuthProvider = (typeof TURNSTILE_OAUTH_PROVIDERS)[number];
 export const isTurnstileOAuthProvider = (provider: unknown): provider is TurnstileOAuthProvider =>
   typeof provider === 'string' && (TURNSTILE_OAUTH_PROVIDERS as readonly string[]).includes(provider);
 
 /**
- * Entitlement key held by a user with an active paid ladder plan (Basic or Pro, org seats included)
- * or a credit purchase (`lastCreditsPurchasedAt`). Derived only from those in
- * apps/client/server/entitlements/index.ts, never from a tag,
+ * Entitlement key held by a user with paid standing: an active paid plan, ladder or standalone (org
+ * seats included), or a credit purchase (`lastCreditsPurchasedAt`). Derived only from
+ * holdsPaidStanding (apps/client/server/entitlements/paidStanding.ts), never from a tag,
  * partner rule or contribution (reserved in isReservedContributionKey). The free-tier model gate in
  * b4m-core/services/src/llm/modelAdmission.ts reads it.
  */

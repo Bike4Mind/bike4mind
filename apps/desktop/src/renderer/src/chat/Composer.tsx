@@ -13,7 +13,12 @@ import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import CircularProgress from '@mui/joy/CircularProgress';
+import Dropdown from '@mui/joy/Dropdown';
 import IconButton from '@mui/joy/IconButton';
+import ListItemDecorator from '@mui/joy/ListItemDecorator';
+import Menu from '@mui/joy/Menu';
+import MenuButton from '@mui/joy/MenuButton';
+import MenuItem from '@mui/joy/MenuItem';
 import Stack from '@mui/joy/Stack';
 import Textarea from '@mui/joy/Textarea';
 import Tooltip from '@mui/joy/Tooltip';
@@ -35,7 +40,7 @@ import {
   shownSuggestion,
 } from './composerInput';
 import { useShowDollarCosts } from './costDisplay';
-import { ArrowUpIcon, StopIcon } from './icons';
+import { ArrowUpIcon, FolderPlusIcon, PaperclipIcon, StopIcon } from './icons';
 import { contentColumnSx } from './layout';
 import { isMac } from './platform';
 import { QueuedMessageList } from './QueuedMessageList';
@@ -76,6 +81,7 @@ export function Composer({
   blockedAction,
   notReady,
   usage,
+  contextStatus,
   placeholder = 'Send a message...',
   disabledPlaceholder,
   onSend,
@@ -95,6 +101,7 @@ export function Composer({
   suggestion,
   onSuggestionDismissed,
   onBrowseSkillMarket,
+  addFolder,
 }: {
   sessionId: string | null;
   disabled: boolean;
@@ -123,6 +130,8 @@ export function Composer({
    * need to act on, and those still win.
    */
   usage?: ComposerUsage | null;
+  /** The context ring, left of the credits ring; hidden while `disabled` or `notReady`, as that ring is. */
+  contextStatus?: ReactNode;
   /**
    * What the placeholder says while `disabled` holds - the step that IS open, named by the
    * owner, which is the only side that knows whether there is no session, or one being made.
@@ -140,6 +149,11 @@ export function Composer({
   onRunCommand?: (name: string, args: string) => void;
   /** Opens the Skill Market, offered from the `/` menu when there are no skills to pick. */
   onBrowseSkillMarket?: () => void;
+  /**
+   * "Add folder" in the "+" menu. Omitted, "+" stays the plain attach button. Its own `disabled`,
+   * because a Chat with no conversation yet can still start one from here.
+   */
+  addFolder?: { onClick: () => void; disabled?: boolean } | null;
   /** Decides which commands are offered: some act only on a Code session. */
   sessionMode?: ChatSessionMode;
   /** Typed ahead of the live turn, waiting to be sent. Drawn above the input. */
@@ -440,8 +454,9 @@ export function Composer({
   };
 
   // Read inside the window listener so it is bound once, not rebuilt on every draft keystroke.
-  const attach = useRef({ blocked: disabled || attachments.busy, pick: attachments.pick });
-  attach.current = { blocked: disabled || attachments.busy, pick: attachments.pick };
+  const attachBlocked = disabled || attachments.busy;
+  const attach = useRef({ blocked: attachBlocked, pick: attachments.pick });
+  attach.current = { blocked: attachBlocked, pick: attachments.pick };
 
   /**
    * Cmd/Ctrl+U opens the picker wherever focus is on the conversation screen - the draft, a
@@ -665,28 +680,73 @@ export function Composer({
         {/* No correction of its own: its box goes on the content edge like every other control
             in the column, and the '+' rides inside it. Pulling the box left so the glyph alone
             sat on the line is what used to send its hover surface outside the column. */}
-        <Tooltip title={`Attach a file (${ATTACH_SHORTCUT.label})`} size="sm" variant="soft" placement="top">
-          <Box component="span" sx={{ display: 'inline-flex' }}>
-            <IconButton
-              size="sm"
-              variant="plain"
-              color="neutral"
-              disabled={disabled || attachments.busy}
-              onClick={() => void attachments.pick()}
-              aria-label="Attach a file"
-              aria-keyshortcuts={ATTACH_SHORTCUT.aria}
-              data-testid="composer-attach-btn"
+        {addFolder ? (
+          <Dropdown>
+            <MenuButton
+              slots={{ root: IconButton }}
+              slotProps={{
+                root: { size: 'sm', variant: 'plain', color: 'neutral', 'data-testid': 'composer-plus-btn' },
+              }}
+              disabled={attachBlocked && !!addFolder.disabled}
+              aria-label="Attach a file or add a folder"
             >
               <Typography level="body-lg">+</Typography>
-            </IconButton>
-          </Box>
-        </Tooltip>
+            </MenuButton>
+            <Menu size="sm" placement="top-start" data-testid="composer-plus-menu">
+              <MenuItem
+                disabled={attachBlocked}
+                onClick={() => void attachments.pick()}
+                aria-keyshortcuts={ATTACH_SHORTCUT.aria}
+                data-testid="composer-attach-item"
+              >
+                <ListItemDecorator>
+                  <PaperclipIcon />
+                </ListItemDecorator>
+                <Typography level="body-sm" textColor="inherit" sx={{ flex: 1 }}>
+                  Attach a file
+                </Typography>
+                <Typography level="body-xs" textColor="text.tertiary" sx={{ pl: 2 }}>
+                  {ATTACH_SHORTCUT.label}
+                </Typography>
+              </MenuItem>
+              <MenuItem
+                disabled={addFolder.disabled}
+                onClick={addFolder.onClick}
+                data-testid="composer-add-folder-item"
+              >
+                <ListItemDecorator>
+                  <FolderPlusIcon />
+                </ListItemDecorator>
+                Add folder...
+              </MenuItem>
+            </Menu>
+          </Dropdown>
+        ) : (
+          <Tooltip title={`Attach a file (${ATTACH_SHORTCUT.label})`} size="sm" variant="soft" placement="top">
+            <Box component="span" sx={{ display: 'inline-flex' }}>
+              <IconButton
+                size="sm"
+                variant="plain"
+                color="neutral"
+                disabled={attachBlocked}
+                onClick={() => void attachments.pick()}
+                aria-label="Attach a file"
+                aria-keyshortcuts={ATTACH_SHORTCUT.aria}
+                data-testid="composer-attach-btn"
+              >
+                <Typography level="body-lg">+</Typography>
+              </IconButton>
+            </Box>
+          </Tooltip>
+        )}
 
         {leading}
 
         <Box sx={{ flex: 1 }} />
 
         {footer}
+
+        {!disabled && !notReady && contextStatus}
 
         {shownUsage && (
           <Tooltip

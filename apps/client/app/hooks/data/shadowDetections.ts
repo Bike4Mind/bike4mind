@@ -1,6 +1,10 @@
 import {
+  abuseAssessmentStoredItemSchema,
+  accountCampaignGroupSchema,
+  accountCampaignMemberSchema,
   shadowDetectionItemSchema,
   shadowDetectionVerdictEntrySchema,
+  type AbuseAssessmentRunResponse,
   type ShadowDetectionList,
   type ShadowDetectionListQuery,
   type ShadowDetectionVerdictRequest,
@@ -13,9 +17,18 @@ import { z } from 'zod';
 const ENDPOINT = '/api/admin/shadow-detections';
 export const SHADOW_DETECTIONS_QUERY_KEY = ['admin-shadow-detections'];
 
+const campaignGroupRowSchema = accountCampaignGroupSchema.extend({
+  window: z.object({ from: z.string(), to: z.string() }),
+  firstObservedAt: z.string(),
+  lastObservedAt: z.string(),
+  members: z.array(accountCampaignMemberSchema.extend({ signedUpAt: z.string() })),
+});
+export type CampaignGroupRow = z.infer<typeof campaignGroupRowSchema>;
+
 /** A detection as it arrives over JSON: the dates are ISO strings. */
 export const shadowDetectionRowSchema = shadowDetectionItemSchema.extend({
   detectedAt: z.string(),
+  group: campaignGroupRowSchema.nullable(),
   verdicts: z.array(shadowDetectionVerdictEntrySchema.extend({ reviewedAt: z.string() })),
 });
 export type ShadowDetectionRow = z.infer<typeof shadowDetectionRowSchema>;
@@ -58,5 +71,36 @@ export function useShadowDetectionVerdict() {
     },
     // A conflict also means the list is stale.
     onSettled: () => queryClient.invalidateQueries({ queryKey: SHADOW_DETECTIONS_QUERY_KEY }),
+  });
+}
+
+const ASSESSMENTS_ENDPOINT = `${ENDPOINT}/assessments`;
+const ASSESSMENTS_QUERY_KEY = ['admin-shadow-detection-assessments'];
+
+/** An assessment as it arrives over JSON: the date is an ISO string. */
+export const abuseAssessmentRowSchema = abuseAssessmentStoredItemSchema.extend({ assessedAt: z.string() });
+export type AbuseAssessmentRow = z.infer<typeof abuseAssessmentRowSchema>;
+
+export type AbuseAssessmentRunResult =
+  | { status: 'assessed'; cached: boolean; item: AbuseAssessmentRow }
+  | Extract<AbuseAssessmentRunResponse, { status: 'skipped' }>;
+
+/** Advisory assessments of one detection, newest first. Only fetched while `enabled`. */
+export function useAbuseAssessments(detectionId: string, { enabled }: { enabled: boolean }) {
+  return useQuery({
+    queryKey: [...ASSESSMENTS_QUERY_KEY, detectionId],
+    queryFn: async () =>
+      (await api.get<{ data: AbuseAssessmentRow[] }>(ASSESSMENTS_ENDPOINT, { params: { detectionId } })).data.data,
+    enabled,
+  });
+}
+
+export function useRequestAbuseAssessment() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (detectionId: string): Promise<AbuseAssessmentRunResult> =>
+      (await api.post<AbuseAssessmentRunResult>(ASSESSMENTS_ENDPOINT, { detectionId })).data,
+    onSuccess: (_result, detectionId) =>
+      queryClient.invalidateQueries({ queryKey: [...ASSESSMENTS_QUERY_KEY, detectionId] }),
   });
 }

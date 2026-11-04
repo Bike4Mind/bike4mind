@@ -821,7 +821,7 @@ describe('PUT /api/users/:id/update - ends sessions on credential and account-st
 
     expect(mockCancelAccountSubscriptions).toHaveBeenCalledTimes(1);
     expect(mockCancelAccountSubscriptions).toHaveBeenCalledWith(
-      { userId: 'target', reason: 'suspended' },
+      { userId: 'target', reason: 'suspended', deadline: expect.any(Number) },
       expect.anything()
     );
     expect(mockRecord).toHaveBeenCalledWith(

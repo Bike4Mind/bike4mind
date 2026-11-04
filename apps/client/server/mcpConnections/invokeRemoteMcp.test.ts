@@ -631,6 +631,17 @@ describe('invokeRemoteMcp - checks before any network', () => {
     expect(state.audits.map(a => a.errorCode)).toEqual(['policy_blocked', 'policy_blocked', 'policy_blocked']);
   });
 
+  it('keeps presets_only closed for a stored preset id whose connection points at another host', async () => {
+    const id = seed('/mcp', { presetId: 'linear' });
+    await expect(
+      invokeRemoteMcp(
+        { action: 'listTools', connectionId: id, userId: 'user-1' },
+        { runner, context: context({ policies: [CustomMcpPolicySchema.parse({ mode: 'presets_only' })] }) }
+      )
+    ).rejects.toMatchObject({ additionalInfo: { code: 'policy_blocked', reason: 'presets_only' } });
+    expect(fixture.requests).toHaveLength(0);
+  });
+
   it('fails closed with the typed reason when the platform blocklist is unusable', async () => {
     const id = seed('/mcp');
     await expect(

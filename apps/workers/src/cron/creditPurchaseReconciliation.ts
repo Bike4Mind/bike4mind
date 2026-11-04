@@ -10,8 +10,8 @@
  * $inc. apps/client/server/billing/grantCreditPurchase.ts now wraps both in one transaction, but rows
  * written before that, or by any purchase grant that bypasses it, can hold no balance behind them.
  * The $inc stamps the user's lastCreditsPurchasedAt in the same update, so a stamp older than the
- * row (beyond a small tolerance) means the increment never ran. A later purchase or admin grant
- * overwrites the stamp, so this can miss a failed increment; it is tuned not to flag an applied one.
+ * row (beyond a small tolerance) means the increment never ran. A later purchase, or an admin grant to
+ * an account with a purchase row (adminUpdate.ts), overwrites the stamp, so this can miss a failed increment; it is tuned not to flag an applied one.
  * A row repaired by packages/scripts/src/auditPartialCreditPurchases.ts carries metadata.balanceBackfilledAt
  * (that script does not stamp the user), so it is treated as applied.
  *

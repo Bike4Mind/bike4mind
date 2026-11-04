@@ -429,11 +429,6 @@
       "count": 3
     }
   },
-  "apps/client/pages/api/security/user-summary.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/settings/update.ts": {
     "b4m/no-raw-entity-response": {
       "count": 4

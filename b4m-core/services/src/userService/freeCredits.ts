@@ -2,6 +2,7 @@ import {
   CreditHolderType,
   IAdminSettingsRepository,
   ICreditLotRepository,
+  type IGrantPackageRepository,
   ICreditTransactionRepository,
   IUserRepository,
   type IUserDocument,
@@ -11,9 +12,9 @@ import {
 } from '@bike4mind/common';
 import { addCredits, DuplicateCreditTransactionError } from '../creditService';
 import type { SignupRiskBand, SignupRiskSignals } from './signupRisk';
-import { releaseSignupTranche } from './stagedSignupGrant';
+import { dropBudgetHold, hasSignupBacklog, releaseSignupTranche } from './stagedSignupGrant';
 import { protectSignupCredits } from './signupProtection';
-import { reserveSignupGrantBudget } from './signupGrantBudget';
+import { reserveSignupGrantBudget, signupGrantBudgetDay } from './signupGrantBudget';
 
 type FreeCreditUser = {
   id: string;
@@ -28,6 +29,8 @@ export type FreeCreditAdapters = {
     creditLots?: ICreditLotRepository;
     users: IUserRepository;
     signupProtection?: SignupProtection;
+    /** Frees a grant-package redemption whose inbox claim was lost; see grantFlatFreeCredits. */
+    grantPackages?: Pick<IGrantPackageRepository, 'releaseRedemption'>;
   };
   reason: string;
   /** Network signals for a staged grant's first assessment; without it only signupMeta is read. */
@@ -98,9 +101,16 @@ export const grantFreeCredits = async (
       transactionId: { $in: [`verify-grant:${user.id}`, legacyOtcRegisterTransactionId(user.id)] },
     });
     if (!alreadyGranted) await db.users.addTagsToUser(user.id, [PENDING_FREE_CREDITS_TAG]);
+    await dropBudgetHold(db.users, user.id, persisted?.signupGrantHeldReason);
     return { creditsGranted: 0, currentCredits: null, withheld: true };
   }
-  const result = await grantFlatFreeCredits(user, { db, reason, bypassBudget }, !!persisted?.referredByUserId);
+  const result = await grantFlatFreeCredits(
+    user,
+    { db, reason, bypassBudget },
+    !!persisted?.referredByUserId,
+    persisted?.grantPackageId ?? null,
+    persisted?.signupGrantHeldReason === 'budget_exhausted'
+  );
   // Every outcome but a hold is final, so a held reason left from an earlier attempt must not outlive it.
   if (!result.withheld && persisted?.signupGrantHeldReason)
     await db.users.update({ id: user.id, signupGrantHeldReason: null });
@@ -110,7 +120,9 @@ export const grantFreeCredits = async (
 async function grantFlatFreeCredits(
   user: Pick<FreeCreditUser, 'id' | 'pendingCreditGrant'>,
   { db, reason, bypassBudget }: Pick<FreeCreditAdapters, 'db' | 'reason' | 'bypassBudget'>,
-  referred: boolean
+  referred: boolean,
+  grantPackageId: string | null,
+  alreadyHeld: boolean
 ): Promise<GrantFreeCreditsResult> {
   const amount = await resolveFreeCreditAmount(user.pendingCreditGrant, db.adminSettings);
   if (amount <= 0) return { creditsGranted: 0, currentCredits: null };
@@ -142,8 +154,13 @@ async function grantFlatFreeCredits(
   //     decision; bound it with the invite's own limits, not with this claim.
   // Claiming here instead would be wrong: it would let a self-serve signup on an alias silently
   // consume the entitlement an operator meant for the invited account.
+  //
+  // A grant-package amount is the exception: a package is a shared, capped offer rather than a
+  // grant to one named account, so it claims the inbox like the default does. A lost claim frees
+  // the package slot for someone else.
   const isDefaultGrant = user.pendingCreditGrant === null || user.pendingCreditGrant === undefined;
-  if (isDefaultGrant && !(await db.users.claimFreeCreditGrant(user.id))) {
+  if ((isDefaultGrant || grantPackageId) && !(await db.users.claimFreeCreditGrant(user.id))) {
+    if (grantPackageId) await db.grantPackages?.releaseRedemption(grantPackageId, user.id);
     return { creditsGranted: 0, currentCredits: null };
   }
 
@@ -153,10 +170,18 @@ async function grantFlatFreeCredits(
   const budget =
     bypassBudget || isExplicitGrant
       ? { outcome: 'unmetered' as const, release: async () => {} }
-      : await reserveSignupGrantBudget(db, transactionId, amount);
+      : !alreadyHeld &&
+          db.signupProtection?.grantBudget &&
+          (await hasSignupBacklog(db.users, signupGrantBudgetDay(db.signupProtection?.grantBudget?.now?.())))
+        ? { outcome: 'exhausted' as const, release: async () => {} }
+        : await reserveSignupGrantBudget(db, transactionId, amount, { pool: 'signup' });
   if (budget.outcome === 'exhausted') {
     await db.users.addTagsToUser(user.id, [PENDING_FREE_CREDITS_TAG]);
-    await db.users.update({ id: user.id, signupGrantHeldReason: 'budget_exhausted' });
+    await db.users.update({
+      id: user.id,
+      signupGrantHeldReason: 'budget_exhausted',
+      ...(alreadyHeld ? {} : { signupGrantHeldAt: db.signupProtection?.grantBudget?.now?.() ?? new Date() }),
+    });
     return { creditsGranted: 0, currentCredits: null, withheld: true, budgetExhausted: true };
   }
 

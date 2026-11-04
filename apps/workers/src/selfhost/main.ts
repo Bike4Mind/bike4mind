@@ -1,5 +1,11 @@
 import type { SQSEvent } from 'aws-lambda';
-import { adminSettingsRepository, connectDB } from '@bike4mind/database';
+import {
+  AdminSettings,
+  adminSettingsRepository,
+  connectDB,
+  runSeedOnce,
+  seedSignupGrantPools,
+} from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
@@ -112,6 +118,11 @@ async function main() {
 
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), bootLogger);
   bootLogger.info('MongoDB connected');
+  // Self-host runs no packages/scripts migrations, so the pool seed the hosted migration
+  // writes happens here, once; on failure the pools read as missing (paused, admin alerted).
+  await runSeedOnce('signupGrantPools', () => seedSignupGrantPools(AdminSettings)).catch(err =>
+    bootLogger.error(`Could not seed the signup-grant pool settings; free signup grants stay paused: ${err}`)
+  );
 
   const worker = new SelfHostWorker(bootLogger);
   registerAbandonedExecutionSweep(worker);

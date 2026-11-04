@@ -8,8 +8,10 @@ import type { ChatApprovalMode, ChatStreamEvent, ChatToolCall } from '@shared/ch
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
+import { PermissionRuleSet } from './permissions/rules';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
+import * as sessionScripts from './tools/sessionScripts';
 import { bashExecute } from './tools/shellTools';
 
 function frame(payload: unknown): string {
@@ -22,10 +24,13 @@ function toolTurn(id: string, name: string, input: Record<string, unknown>): str
 
 type Round = [string, Record<string, unknown>];
 
-// Tool stubs first on PATH. These tests check approval decisions; spawning real git or package
-// runners can outlast the 5 s settle wait on a loaded CI machine.
+// Tool stubs first on PATH. These tests check approval decisions; a real git, package runner or
+// curl can outlast the 5 s settle wait (curl hangs where a closed loopback port drops the SYN).
 const stub = vi.hoisted(() => ({ bin: '' }));
-vi.mock('./tools/userPath', () => ({ resolveUserPath: async () => `${stub.bin}:${process.env.PATH ?? ''}` }));
+vi.mock('./tools/userPath', async importOriginal => ({
+  ...(await importOriginal<typeof import('./tools/userPath')>()),
+  resolveUserPath: async () => `${stub.bin}:${process.env.PATH ?? ''}`,
+}));
 
 describe('ChatService running a script written in the same session', () => {
   let service: ChatService;
@@ -33,6 +38,7 @@ describe('ChatService running a script written in the same session', () => {
   let events: ChatStreamEvent[];
   let streams: PassThrough[];
   let root: string;
+  let rememberAllows: ReturnType<typeof vi.fn<(rules: readonly string[]) => Promise<void>>>;
 
   const calls = (name: string, status: ChatToolCall['status']): ChatToolCall[] =>
     events
@@ -50,7 +56,7 @@ describe('ChatService running a script written in the same session', () => {
 
   beforeAll(async () => {
     stub.bin = await realpath(await mkdtemp(join(tmpdir(), 'b4m-scripts-bin-')));
-    for (const tool of ['git', 'npm', 'npx']) {
+    for (const tool of ['git', 'npm', 'npx', 'curl']) {
       await writeFile(join(stub.bin, tool), '#!/bin/sh\nexit 0\n', 'utf8');
       await chmod(join(stub.bin, tool), 0o755);
     }
@@ -62,6 +68,7 @@ describe('ChatService running a script written in the same session', () => {
     await writeFile(join(root, 'run.sh'), 'echo old\n', 'utf8');
     await writeFile(join(root, 'package.json'), '{"name":"x","scripts":{"build":"echo build"}}\n', 'utf8');
     approvals = new ApprovalGate();
+    rememberAllows = vi.fn<(rules: readonly string[]) => Promise<void>>().mockResolvedValue(undefined);
     const testEvents: ChatStreamEvent[] = [];
     const testStreams: PassThrough[] = [];
     events = testEvents;
@@ -76,6 +83,7 @@ describe('ChatService running a script written in the same session', () => {
       store: new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-scripts-sessions-')), 'test-model'),
       access: { list: async () => [root] } as unknown as AccessStore,
       approvals,
+      permissions: { rulesFor: async () => new PermissionRuleSet([]), rememberAllows, invalidate: vi.fn() },
       logger: { debug: vi.fn(), warn: vi.fn() },
       getApiClient: () =>
         ({
@@ -400,6 +408,61 @@ describe('ChatService running a script written in the same session', () => {
 
     const asked = await awaitCall('bash_execute', 'awaiting-approval');
     expect(asked.approvalDetail).not.toContain('written in this session');
+  });
+
+  it('asks again after an "always" on a run whose script check failed', async () => {
+    vi.spyOn(sessionScripts, 'sessionScriptRun').mockRejectedValue(new Error('unreadable'));
+    const id = await session('auto');
+    await reply(id, [shell('bash run.sh')]);
+    const first = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(first.approvalDetail).toContain('Could not check');
+    expect(first.approvalRules).toBeUndefined();
+    expect(first.approvalOnceOnly).toBe(true);
+    approvals.resolve(first.approvalId!, { decision: 'always' });
+    await settled('bash_execute');
+    expect(rememberAllows).not.toHaveBeenCalled();
+    expect(calls('bash_execute', 'done')[0].approval?.decidedBy).toEqual({ kind: 'user', answer: 'once' });
+
+    events.length = 0;
+    const next = streams.length;
+    streams[next - 1].write(toolTurn('again', 'bash_execute', { command: 'bash run.sh', cwd: root }));
+    streams[next - 1].write(frame('[DONE]'));
+    await awaitCall('bash_execute', 'awaiting-approval');
+  });
+
+  it('asks in ask mode after an "always" on a failed script check, once the check succeeds', async () => {
+    const check = vi.spyOn(sessionScripts, 'sessionScriptRun').mockRejectedValue(new Error('unreadable'));
+    const id = await session('auto');
+    await reply(id, [shell('bash run.sh')]);
+    const first = await awaitCall('bash_execute', 'awaiting-approval');
+    approvals.resolve(first.approvalId!, { decision: 'always' });
+    await settled('bash_execute');
+
+    check.mockRestore();
+    await service.setApprovalMode(id, 'ask');
+    events.length = 0;
+    const next = streams.length;
+    streams[next - 1].write(toolTurn('again', 'bash_execute', { command: 'bash run.sh', cwd: root }));
+    streams[next - 1].write(frame('[DONE]'));
+    await awaitCall('bash_execute', 'awaiting-approval');
+  });
+
+  it('saves no rule when a failed script check is answered "always" everywhere', async () => {
+    vi.spyOn(sessionScripts, 'sessionScriptRun').mockRejectedValue(new Error('unreadable'));
+    const id = await session('auto');
+    await reply(id, [shell('bash run.sh')]);
+    const first = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(first.approvalRules).toBeUndefined();
+    approvals.resolve(first.approvalId!, { decision: 'always', everywhere: true });
+    await settled('bash_execute');
+    expect(rememberAllows).not.toHaveBeenCalled();
+    expect(calls('bash_execute', 'done')[0].approval?.decidedBy).toEqual({ kind: 'user', answer: 'once' });
+
+    events.length = 0;
+    const next = streams.length;
+    streams[next - 1].write(toolTurn('again', 'bash_execute', { command: 'bash run.sh', cwd: root }));
+    streams[next - 1].write(frame('[DONE]'));
+    await awaitCall('bash_execute', 'awaiting-approval');
   });
 
   it('lets an exact "always" stand only until the script is written again', async () => {

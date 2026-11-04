@@ -125,6 +125,23 @@ describe('AdminCommandPalette', () => {
     expect(screen.queryByTestId('admin-search-input')).not.toBeInTheDocument();
   });
 
+  it.each([
+    ['offers', true],
+    ['leaves out', false],
+  ])('%s navigation to tabs by whether the user may open them, user profiles included', (_case, canOpen) => {
+    render(
+      <CssVarsProvider theme={theme}>
+        <AdminCommandPalette canOpenTab={() => canOpen} />
+      </CssVarsProvider>
+    );
+    fireEvent.keyDown(document.body, { key: 'k', metaKey: true });
+    const input = screen.getByTestId('admin-search-input');
+    expect(screen.queryByText('Find users') !== null).toBe(canOpen);
+    expect(screen.queryByText('Open audit log') !== null).toBe(canOpen);
+    fireEvent.change(input, { target: { value: '0123456789abcdef01234567' } });
+    expect(screen.queryByText(/Open user/) !== null).toBe(canOpen);
+  });
+
   it('routes section commands through onNavigate instead of the router when provided', async () => {
     navigate.mockClear();
     const onNavigate = vi.fn();

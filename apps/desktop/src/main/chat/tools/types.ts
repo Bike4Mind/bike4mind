@@ -264,6 +264,72 @@ export interface ScreenContext {
   keepScreenshot(bytes: Buffer, caption: string): Promise<ChatMedia | undefined>;
 }
 
+/** One simulator device, as `xcrun simctl list` reports it. */
+export interface SimulatorDevice {
+  udid: string;
+  name: string;
+  /** "iOS 27.0", from the runtime identifier. */
+  runtime: string;
+  /** simctl's own word: Booted, Shutdown, Booting, Shutting Down. */
+  state: string;
+}
+
+/** A screen size in points, the unit every input coordinate is given in. */
+export interface SimulatorScreen {
+  width: number;
+  height: number;
+  /** Pixels per point: a screenshot is `width * scale` pixels wide. */
+  scale: number;
+}
+
+export type SimulatorButton = 'home' | 'lock' | 'side-button' | 'siri' | 'apple-pay';
+export type SimulatorKey = 'return' | 'delete' | 'tab' | 'escape' | 'space' | 'up' | 'down' | 'left' | 'right';
+
+export interface SimulatorBuildRequest {
+  /** Absolute path to a .xcodeproj or .xcworkspace. */
+  container: string;
+  scheme: string;
+  udid: string;
+  configuration?: string;
+}
+
+/**
+ * The iOS Simulator on this Mac: simctl for lifecycle and screens, AXe for touch and keys. A
+ * fake in tests. Every failure the user has to fix (no Xcode, licence, missing AXe) throws a
+ * SimulatorSetupError naming the exact fix; see simulator/toolchain.ts.
+ */
+export interface SimulatorDriver {
+  devices(): Promise<{ devices: SimulatorDevice[]; runtimes: string[] }>;
+  boot(udid: string): Promise<void>;
+  /** Returns the built .app's path and the tail of the build log. */
+  build(request: SimulatorBuildRequest, signal: AbortSignal): Promise<{ appPath: string; log: string }>;
+  /** Installs the bundle and returns its bundle identifier. */
+  install(udid: string, appPath: string): Promise<string>;
+  launch(udid: string, bundleId: string): Promise<void>;
+  /** A PNG scaled to the screen's size in points, so pixel coordinates in it are tap coordinates. */
+  screenshot(udid: string): Promise<{ png: Buffer; screen: SimulatorScreen }>;
+  tap(udid: string, x: number, y: number, duration?: number): Promise<void>;
+  swipe(udid: string, from: { x: number; y: number }, to: { x: number; y: number }, duration?: number): Promise<void>;
+  type(udid: string, text: string): Promise<void>;
+  key(udid: string, key: SimulatorKey): Promise<void>;
+  button(udid: string, button: SimulatorButton, duration?: number): Promise<void>;
+  openUrl(udid: string, url: string): Promise<void>;
+  appearance(udid: string): Promise<string>;
+  setAppearance(udid: string, mode: 'light' | 'dark'): Promise<void>;
+  rotate(udid: string, direction: 'left' | 'right'): Promise<void>;
+}
+
+export interface SimulatorContext {
+  driver: SimulatorDriver;
+  /** Keep a screenshot for the transcript, as BrowserContext.keepScreenshot does. */
+  keepScreenshot(bytes: Buffer, caption: string): Promise<ChatMedia | undefined>;
+  /** The device this session's live view shows, if any; input defaults to it. */
+  attached(): string | undefined;
+  /** Opens the user's live view on this device. */
+  attach(udid: string): Promise<void>;
+  detach(): void;
+}
+
 /**
  * Everything a tool may use. Narrow by default: no api client and no token, except for the
  * server-backed generation tools, which get exactly {@link MediaContext}, and the web tools,
@@ -321,6 +387,8 @@ export interface ToolContext {
   browser?: BrowserContext;
   /** Absent in a build without desktopCapturer; screen_capture is then not declared at all. */
   screen?: ScreenContext;
+  /** Absent off macOS and in tests; the simulator tools are then not declared at all. */
+  simulator?: SimulatorContext;
   /** Absent outside the chat loop, where an image has nowhere to go; file_read then describes it in text. */
   images?: ImageContext;
   /**
@@ -546,6 +614,8 @@ export interface ApprovalPrompt {
    * project, a read of a `.env` file, or a command that can send data out.
    */
   askInAuto?: true;
+  /** An "always" on this card allows this call only and is never recorded. */
+  allowOnce?: true;
   /**
    * Proven by the shell scan to keep to this computer or only read from GitHub (see
    * shellScan's `containedCommand`), so untrusted content read earlier in the reply is no reason
@@ -585,6 +655,8 @@ export interface ApprovalAlways {
   directories: readonly string[];
   /** Physical paths named by a shell command, used to protect permission files even through aliases. */
   paths?: readonly string[];
+  /** Paths in a WSL distro no root is in: asked each time, never covered by a rule, grant or saved answer. */
+  ungranted?: readonly string[];
 }
 
 /** See ChatApprovalOption: this is that, plus what main does with the answer. */

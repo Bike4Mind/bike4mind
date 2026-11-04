@@ -28,6 +28,7 @@ import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymi
 import { resolveUserType } from '@server/analytics/resolveUserType';
 import {
   cancelAccountSubscriptions,
+  SINGLE_USER_CANCEL_BUDGET_MS,
   subscriptionCancellationAudit,
   subscriptionCancellationResponse,
   type AccountSubscriptionCancellation,
@@ -95,7 +96,10 @@ const handler = baseApi().delete(
           deletedAccount = target;
           // Before the delete: the Stripe customer ids live on the row. A deleted account must never
           // renew, but a Stripe failure must not block the delete, so it is reported in the entry below.
-          const cancellation = await cancelAccountSubscriptions({ userId: id, reason: 'account_deleted' }, req.logger);
+          const cancellation = await cancelAccountSubscriptions(
+            { userId: id, reason: 'account_deleted', deadline: Date.now() + SINGLE_USER_CANCEL_BUDGET_MS },
+            req.logger
+          );
           subscriptionCancellation = cancellation;
           const canceledEntry = subscriptionCancellationAudit(cancellation, 'account_deleted');
           // The delete and its audit entry commit together; cascades and notifications run after.
@@ -115,11 +119,15 @@ const handler = baseApi().delete(
           } catch (error) {
             // The cancel already happened and cannot roll back, so record it on its own (best-effort).
             if (canceledEntry) {
-              await recordAdminActionFromRequest(req, {
-                ...canceledEntry,
-                target: deletedUserTarget(id, target),
-                reason,
-              });
+              try {
+                await recordAdminActionFromRequest(req, {
+                  ...canceledEntry,
+                  target: deletedUserTarget(id, target),
+                  reason,
+                });
+              } catch (auditError) {
+                req.logger.error('Failed to record the subscription cancellation after a failed delete', auditError);
+              }
             }
             throw error;
           }

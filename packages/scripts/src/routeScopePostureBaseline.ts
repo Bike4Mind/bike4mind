@@ -19,7 +19,7 @@ const LEGACY_SEED = `
 40f556547602 413f7c8082e4 419f21991350 41a8f5c2b662 41f918864b1c 42e07254368d 434a8e4932ed
 43d112295f48 46bd586deb06 49627b2c4d6b 49bddae03ab9 4b1fbd0505df 4b38e95bd3e3 4b56c2365175 4b7ce8871d5f
 4bd858496fa6 4bdf4b58eefe 4be8154314f1 4ca8d8bb3c82 4dc25ea3603f 4f71544360b9 5086931d9a00
-5104cfb8d929 5132413e8c42 51423d9e0878 516d279ce4f4 5171252d9a94 51947f2b1cdb 51cf666f59e7 53d06dab635c
+5104cfb8d929 51423d9e0878 516d279ce4f4 5171252d9a94 51947f2b1cdb 51cf666f59e7 53d06dab635c
 545593ba3989 548b1206f618 55b27aa4d619 5605b2684050 58e7cd021cb6 5931a8193ada 5a5583cb1274
 5d5074ebd89b 6061ef57218e 60ffb54be1c8 642b95025886 64bf2def6df8 64ecbfe8b19b 65a4fc3788a6 65e21f6e4e9c
 66a1f13bee09 66b8806c19b4 694c40e91bf8 6a032237a84b 6a4110961627 6cb4a83cf579 6cc07f5224fa 6d4d6131f033
@@ -28,8 +28,8 @@ const LEGACY_SEED = `
 76467e0ca19b 7754cd457960 777dd2c3b707 77d0050dc89d 792b8f3b724e 793331087f34 795061ea8886 7962d46a3446
 79b8cbfc6191 79ea94f9b88b 7a0b85223940 7a50ea2ea194 7ce094888133 7f05fda4b2fa
 7f7d74a5303c 80c347fac5c3 83165b5eba40 87151090a57a 887df910134d 888d16d5150f 8a6e6e9471e0 8ad42d260760
-8c0e1bee2b84 8c2e191d863d 8cba600510be 8f30f4df4e00 9010936ef52e 9055466fcd66 915da41cefea 915f3bafe4aa
-91e15aa96b03 91e44cbba12e 924aaf9417c9 9254086e6ed4 94bbfbdc2d93 964d26f17aa0 96d197f8efc4
+8c0e1bee2b84 8cba600510be 8f30f4df4e00 9010936ef52e 9055466fcd66 915da41cefea 915f3bafe4aa
+91e44cbba12e 924aaf9417c9 9254086e6ed4 94bbfbdc2d93 964d26f17aa0 96d197f8efc4
 9753176e5bb6 979461b1272f 983d9ce4696f 98fb4183f353 99069dcdd917 994a7f7c9794
 99fa0c084e36 9a026e700cfa 9a1ff7e1d12e 9a4341780250 9cfe2eb5678c 9e33e2f983fb 9e52b5b6346b 9edad7f1553a
 9f37736e6fd4 9f3c722a7f67 9f3d3f1ad7fd 9fe9a48f4854 a16323739af9 a18d2ff783bc a280c00afed4 a2a7c12f14d5
@@ -295,7 +295,6 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/quests/[id]/check-timeout',
     '/api/quests/[id]/client-timing',
     '/api/reg-invites',
-    '/api/reg-invites/create',
     '/api/reg-invites/delete',
     '/api/reg-invites/migrate',
     '/api/reg-invites/refer',
@@ -310,11 +309,9 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/research/data/files',
     '/api/roll',
     '/api/security/api-usage',
-    '/api/security/behavioral-summary',
     '/api/security/blocked-ips',
     '/api/security/blocked-ips/evaluate',
     '/api/security/user-recent',
-    '/api/security/user-summary',
     '/api/sessions',
     '/api/sessions/[id]/agents',
     '/api/sessions/[id]/agents/[agentId]/config',

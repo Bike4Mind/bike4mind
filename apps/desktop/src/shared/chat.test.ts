@@ -24,6 +24,14 @@ describe('pickLocalModel', () => {
   it('keeps the remembered model while it is usable', () => {
     expect(pickLocalModel([{ id: 'a' }, { id: 'b' }], 'b')).toBe('b');
   });
+
+  it('keeps a remembered model whose server is still listing, but never falls back to one', () => {
+    const slow = { id: 'local:srv-abc123:qwen', unavailable: 'gpu box is still listing its models', pending: true };
+    const up = { id: 'local:ollama:qwen' };
+    expect(pickLocalModel([slow, up], slow.id)).toBe(slow.id);
+    expect(pickLocalModel([slow, up])).toBe(up.id);
+    expect(pickLocalModel([slow])).toBeNull();
+  });
 });
 
 describe('local model ids', () => {

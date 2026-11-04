@@ -9,7 +9,10 @@ import { BackgroundProcessRegistry } from './BackgroundProcessRegistry';
 import type { OutputStream } from './outputBuffer';
 import { resolveUserPath } from './userPath';
 
-vi.mock('./userPath', () => ({ resolveUserPath: vi.fn(async () => process.env.PATH ?? '') }));
+vi.mock('./userPath', async importOriginal => ({
+  ...(await importOriginal<typeof import('./userPath')>()),
+  resolveUserPath: vi.fn(async () => process.env.PATH ?? ''),
+}));
 
 const run = promisify(execFile);
 

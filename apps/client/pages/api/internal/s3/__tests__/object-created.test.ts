@@ -76,7 +76,7 @@ vi.mock('sst', () => ({
     historyImportBucket: { name: 'b4m-history-import' },
   },
 }));
-vi.mock('@server/s3/historyUploadComplete', () => ({ dispatch: historyDispatchMock }));
+vi.mock('@bike4mind/server-utils/s3/historyUploadComplete', () => ({ dispatch: historyDispatchMock }));
 vi.mock('@server/s3/notebookImportComplete', () => ({ dispatch: notebookDispatchMock }));
 vi.mock('@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles', () => ({
   moderateImportedKnowledgeFiles: moderateFilesMock,

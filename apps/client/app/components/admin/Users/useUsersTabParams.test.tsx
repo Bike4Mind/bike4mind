@@ -153,4 +153,27 @@ describe('Users tab URL precedence', () => {
 
     expect(fakeAdminRouter.search).toEqual({ tab: 'users', page: 1, limit: 50, order: 'asc' });
   });
+
+  it('keeps a late callback from writing onto another tab', () => {
+    act(() => fakeAdminRouter.reset({ tab: 'users', page: 3 }));
+    const { result } = renderUsersTab();
+
+    act(() => fakeAdminRouter.reset({ tab: 'feedback' }));
+    act(() => result.current[1]({ search: 'other@example.com', page: 1 }));
+
+    expect(fakeAdminRouter.navigate).not.toHaveBeenCalled();
+    expect(fakeAdminRouter.search).toEqual({ tab: 'feedback' });
+    expect(useUsersTab.getState().params.search).toBe('other@example.com');
+  });
+
+  it('keeps a late callback from navigating back to admin', () => {
+    act(() => fakeAdminRouter.reset({ tab: 'users', page: 3 }));
+    const { result } = renderUsersTab();
+
+    act(() => fakeAdminRouter.reset({}, '/chat'));
+    act(() => result.current[1]({ search: 'other@example.com', page: 1 }));
+
+    expect(fakeAdminRouter.navigate).not.toHaveBeenCalled();
+    expect(fakeAdminRouter.search).toEqual({});
+  });
 });

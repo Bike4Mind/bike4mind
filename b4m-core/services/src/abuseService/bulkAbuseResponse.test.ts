@@ -591,10 +591,25 @@ describe('executeBulkAbuse', () => {
     const { adapters } = executeAdapters([banned, other], []);
 
     await executeBulkAbuse([banned], ONLY('ban'), ACTOR_ID, adapters);
-    expect(adapters.cancelSubscriptions).toHaveBeenCalledWith(expect.objectContaining({ id: id(1) }));
+    expect(adapters.cancelSubscriptions).toHaveBeenCalledWith(
+      expect.objectContaining({ id: id(1) }),
+      expect.any(Number)
+    );
 
     vi.mocked(adapters.cancelSubscriptions).mockClear();
     await executeBulkAbuse([other], ONLY('revokeSessions'), ACTOR_ID, adapters);
     expect(adapters.cancelSubscriptions).not.toHaveBeenCalled();
+  });
+
+  it('starts no new chunk past the time budget and reports its users as failed', async () => {
+    const users = Array.from({ length: 9 }, (_, index) => makeUser(index + 1));
+    const { adapters, store } = executeAdapters(users, []);
+
+    const results = await executeBulkAbuse(users, ONLY('ban'), ACTOR_ID, adapters, { budgetMs: 0 });
+
+    expect(results.slice(0, 8).every(result => result.status === 'succeeded')).toBe(true);
+    expect(results[8]).toMatchObject({ userId: id(9), status: 'failed', error: 'time budget exhausted' });
+    expect(store.get(id(9))?.isBanned).toBeFalsy();
+    expect(adapters.cancelSubscriptions).toHaveBeenCalledTimes(8);
   });
 });

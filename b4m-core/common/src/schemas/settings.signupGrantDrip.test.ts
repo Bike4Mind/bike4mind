@@ -31,6 +31,24 @@ describe('signup activity drip settings', () => {
   });
 });
 
+describe('signup grant schedule settings', () => {
+  it.each([
+    ['signupGrantInitialCredits', 0],
+    ['signupGrantDailyCredits', 0],
+    ['signupGrantDripCap', 9000],
+    ['signupGrantInviteBonusCredits', 0],
+  ] as const)('registers %s as a user-readable credits setting defaulting to %s', (key, fallback) => {
+    const setting = settingsMap[key];
+    expect(setting.schema.parse(undefined)).toBe(fallback);
+    expect(setting.schema.parse('0')).toBe(0);
+    expect(setting.schema.safeParse(-1).success).toBe(false);
+    expect(setting.schema.safeParse(1.5).success).toBe(false);
+    expect(setting.userReadable).toBe(true);
+    expect(SettingKeySchema.parse(key)).toBe(key);
+    expect(API_SERVICE_GROUPS.CREDITS.settings).toContainEqual(expect.objectContaining({ key }));
+  });
+});
+
 describe('signup grant drip state on the self user schema', () => {
   const base = {
     stage: 'signup',

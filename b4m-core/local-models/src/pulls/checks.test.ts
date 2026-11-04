@@ -1,7 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { curatedLibrary } from '../curated';
 import { curatedPick, installedAs, servedLayers } from '../__test__/pullFixtures';
-import { checkInstalledDigest, checkReviewedLayers, checkRuntime, licensesChanged, manifestChange } from './checks';
+import {
+  checkInstalledBlob,
+  checkInstalledDigest,
+  checkReviewedLayers,
+  checkRuntime,
+  licensesChanged,
+  manifestChange,
+} from './checks';
 
 describe('checkRuntime', () => {
   it('refuses an unreachable runtime with its error, curated or not', () => {
@@ -112,6 +119,39 @@ describe('checkInstalledDigest', () => {
       ok: false,
       outcome: 'remove-failed',
     });
+  });
+});
+
+describe('checkInstalledBlob', () => {
+  const sha = 'a'.repeat(64);
+  const installed = (modelBlob: string | null, adapterBlobs: string[] = []) => ({
+    ...installedAs(curatedPick('hf').build),
+    contents: { template: null, license: null, modelBlob, adapterBlobs },
+  });
+
+  it('passes weights with the approved sha256 and nothing layered on them', async () => {
+    const remove = vi.fn(async () => {});
+    expect(await checkInstalledBlob(installed(sha), sha, { hadTag: false, remove })).toEqual({ ok: true });
+    expect(await checkInstalledBlob(installed(sha, ['b'.repeat(64)]), sha, { hadTag: true, remove })).toEqual({
+      ok: false,
+      outcome: 'left-in-place',
+      hadTag: true,
+    });
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('removes other weights only when the tag was absent before', async () => {
+    const remove = vi.fn(async () => {});
+    expect(await checkInstalledBlob(installed('f'.repeat(64)), sha, { hadTag: false, remove })).toEqual({
+      ok: false,
+      outcome: 'removed',
+    });
+    expect(await checkInstalledBlob(installed(null), sha, { hadTag: null, remove })).toEqual({
+      ok: false,
+      outcome: 'left-in-place',
+      hadTag: null,
+    });
+    expect(remove).toHaveBeenCalledTimes(1);
   });
 });
 

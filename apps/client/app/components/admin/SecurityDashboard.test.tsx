@@ -7,7 +7,7 @@ import type { SecurityScan } from './securityDashboardSearch';
 vi.mock('@tanstack/react-router', async () => (await import('./__tests__/fakeAdminRouter')).fakeRouterModule);
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
 const mocks = vi.hoisted(() => ({
-  query: { data: undefined as unknown, isLoading: false, isError: false, refetch: vi.fn() },
+  query: { data: undefined as unknown, isLoading: false, isFetching: false, isError: false, refetch: vi.fn() },
 }));
 vi.mock('@client/app/hooks/data/admin', () => {
   const query = mocks.query;
@@ -59,7 +59,7 @@ const renderPage = () =>
 
 describe('SecurityDashboard views', () => {
   beforeEach(() => {
-    Object.assign(mocks.query, { data: undefined, isLoading: false, isError: false });
+    Object.assign(mocks.query, { data: undefined, isLoading: false, isFetching: false, isError: false });
     mocks.query.refetch.mockClear();
     fakeAdminRouter.reset({ tab: 'security-dashboard' });
   });
@@ -144,5 +144,31 @@ describe('SecurityDashboard views', () => {
     renderPage();
     expect(screen.getByTestId('admin-error-state')).toHaveTextContent('Could not load the Prowler audit.');
     expect(screen.queryByText(/No Prowler audit data found/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['web', 'Loading website scan'],
+    ['cloud', 'Loading cloud baseline'],
+    ['prowler', 'Loading Prowler audit'],
+  ] as const)('shows a labelled loading state on first load of the %s scan', (scan, label) => {
+    fakeAdminRouter.reset({ tab: 'security-dashboard', securityView: 'scans', securityScan: scan });
+    mocks.query.isLoading = true;
+    mocks.query.isFetching = true;
+    renderPage();
+    expect(screen.getByTestId(`security-scans-${scan}-loading`)).toHaveTextContent(label);
+    expect(screen.queryByTestId(`security-scans-${scan}-updating`)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['web', { status: 'pass', findings: [], checkedAt: '2026-11-02T10:00:00.000Z' }],
+    ['cloud', { status: 'pass', findings: [], checkedAt: '2026-11-02T10:00:00.000Z' }],
+    ['prowler', { status: 'pass', findings: [], checkedAt: '2026-11-02T10:00:00.000Z' }],
+  ] as const)('shows an updating bar over the %s scan while it refetches', (scan, snapshot) => {
+    fakeAdminRouter.reset({ tab: 'security-dashboard', securityView: 'scans', securityScan: scan });
+    mocks.query.data = snapshot;
+    mocks.query.isFetching = true;
+    renderPage();
+    expect(screen.getByTestId(`security-scans-${scan}-updating`)).toHaveTextContent('Updating');
+    expect(screen.queryByTestId(`security-scans-${scan}-loading`)).not.toBeInTheDocument();
   });
 });

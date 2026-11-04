@@ -329,10 +329,10 @@ export function useAccountDataExportDownload(jobId: string) {
   });
 }
 
-const ACTIVE_SESSIONS_KEY = ['users', 'me', 'sessions'] as const;
+export const ACTIVE_SESSIONS_KEY = ['users', 'me', 'sessions'] as const;
 
 /** The caller's own active auth sessions (devices), newest-active first. Powers the
- *  Active Sessions list in Settings -> Security. */
+ *  Active Sessions list in the profile Security tab. */
 export function useGetActiveSessions() {
   return useQuery({
     queryKey: ACTIVE_SESSIONS_KEY,

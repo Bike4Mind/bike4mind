@@ -56,6 +56,7 @@ export const ADMIN_USER_LIST_FIELDS = [
   'emailVerified',
   'apiKeyTrustApproved',
   'newAccountSpendCapLifted',
+  'isInternal',
 ] as const satisfies readonly (keyof IUserDocument)[];
 
 export const ADMIN_USER_PROJECTION: Record<string, 1> = {

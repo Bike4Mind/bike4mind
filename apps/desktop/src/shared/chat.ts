@@ -11,6 +11,7 @@
 
 import type { GenerationJobState, PromptCacheTtl, ValidationViolation } from '@bike4mind/common';
 import type { ChatImportOrigin } from './claudeImport';
+import type { CatalogSampling, GenerationSettings, ModelControls } from './generation';
 import type { ChatQuestionAnswer } from './questions';
 import type { SkillSource } from './skills';
 
@@ -177,6 +178,8 @@ export interface ChatToolCall {
    * against it however the user answered an earlier identical call.
    */
   approvalIrreversible?: boolean;
+  /** Set with `approvalId` when main will honour only an allow-once, so the card offers no "always". */
+  approvalOnceOnly?: boolean;
   /**
    * Set with `approvalId` when what is being allowed is unusually broad - a request for the whole
    * home folder or a system directory. Drawn on the card as a warning; it never blocks the answer.
@@ -397,7 +400,7 @@ export interface ChatApprovalAnswer {
 
 /**
  * What the user attached to a turn: an image the model looks at, or a text file inlined into
- * the prompt.
+ * the prompt. A PDF is stored whole but reaches the model as its extracted text.
  *
  * Deliberately NOT the same thing as the file tools. The tools are the model going and looking
  * for something; an attachment is the user handing something over - "here is the screenshot of
@@ -407,7 +410,7 @@ export interface ChatApprovalAnswer {
  * because this descriptor is what gets persisted into the session JSON, and that file is read
  * in full every time the sidebar lists conversations.
  */
-export type ChatAttachmentKind = 'image' | 'text';
+export type ChatAttachmentKind = 'image' | 'text' | 'pdf';
 
 export interface ChatAttachment {
   id: string;
@@ -421,6 +424,8 @@ export interface ChatAttachment {
   sourceBytes: number;
   /** Set when the file was too big to send whole; the model is told so in the attachment itself. */
   truncated?: boolean;
+  /** Page count, for a PDF. */
+  pages?: number;
 }
 
 /**
@@ -663,6 +668,8 @@ export interface ChatMessage {
    * ordering was never captured for those and cannot be recovered.
    */
   rounds?: ChatReplyRound[];
+  /** The model an assistant reply started on; a continuation on another model does not change it. Absent on older replies. */
+  model?: string;
   /** What the whole reply cost, summed over its requests, on assistant messages. Never sent to the model. */
   usage?: ChatUsage;
   /** When the reply's last request refreshed the server's prompt cache, and for how long; see ChatPromptCacheStamp. */
@@ -893,13 +900,17 @@ export function findModelOption<T extends { id: string; aliasIds?: readonly stri
   return models.find(model => model.id === id) ?? models.find(model => model.aliasIds?.includes(id));
 }
 
-/** The device-local model a conversation moves to: the remembered pick if listed, else the first. */
+/**
+ * The device-local model a conversation moves to: the remembered pick if listed, else the first ready one. A
+ * remembered pick on a server still listing is kept; the fallback never lands on such a model unasked.
+ */
 export function pickLocalModel(
-  models: readonly { id: string; aliasIds?: readonly string[]; unavailable?: string }[],
+  models: readonly { id: string; aliasIds?: readonly string[]; unavailable?: string; pending?: boolean }[],
   remembered?: string | null
 ): string | null {
   const usable = models.filter(model => !model.unavailable);
-  if (remembered && findModelOption(usable, remembered)) return remembered;
+  const remembers = models.filter(model => !model.unavailable || model.pending);
+  if (remembered && findModelOption(remembers, remembered)) return remembered;
   return usable[0]?.id ?? null;
 }
 
@@ -939,13 +950,18 @@ export interface ChatModelOption {
   /** A direct-Anthropic model the server will cache for an hour on request (supportsOneHourPromptCache). */
   supportsOneHourCache?: boolean;
   /**
-   * A local Ollama model that can think. Its server takes no effort, only thinking on or off,
-   * so the effort picker becomes that switch, stored as `default` (on) and
-   * THINKING_OFF_SETTING (off).
+   * A local model that can think. Its server takes no effort, only thinking on or off, so the
+   * effort picker becomes that switch, stored as `default` (on) and THINKING_OFF_SETTING (off);
+   * see thinkingSwitchedOff.
    */
   thinkingToggle?: boolean;
   /** A `thinkingToggle` model whose template always thinks, so the switch shows Off as unavailable. */
   thinkingAlwaysOn?: boolean;
+  /**
+   * A `thinkingToggle` model a stored `minimal` leaves thinking: a saved OpenAI-compatible server's,
+   * where that was an effort the server ignored before the switch existed.
+   */
+  minimalThinks?: true;
   /** Local models can remain useful without tool-call support. */
   supportsTools?: boolean;
   /** A saved model server's model, grouped under it in the picker. Absent for hosted models and this computer's. */
@@ -958,12 +974,35 @@ export interface ChatModelOption {
   aliasIds?: string[];
   /** Why it cannot be picked now (its server is down or wants credentials); listed disabled. */
   unavailable?: string;
+  /** Set with `unavailable` while its server is still listing models: not picked yet, but not down either. */
+  pending?: boolean;
+  /** Set with `unavailable` when its server wants credentials: `rejected` when it turned down the ones Desktop sent. */
+  wantsCredentials?: 'missing' | 'rejected';
+  /** Listed by the server but refused at call time (ModelInfo.disabled); the picker prefers an enabled route of it. */
+  disabled?: boolean;
   /** USD per token by context tier, as the server's catalog publishes it. Absent when unpriced. */
   pricing?: Record<number, { input: number; output: number; cache_read?: number; cache_write?: number }>;
+  /** The generation settings this model takes, built in main; see shared/generation.ts. */
+  controls?: ModelControls;
+  /** A local model whose name matches a reviewed curated build, on any local server: its family's recommended sampling. */
+  catalogSampling?: CatalogSampling;
 }
 
-/** The setting a `thinkingToggle` model's "Off" is stored as; any other setting thinks. */
-export const THINKING_OFF_SETTING = 'minimal' satisfies ReasoningEffortSetting;
+/** The setting a `thinkingToggle` model's "Off" is stored as. */
+export const THINKING_OFF_SETTING = 'none' satisfies ReasoningEffortSetting;
+
+/**
+ * Whether a stored setting switches a `thinkingToggle` model's thinking off, which a model listing
+ * effort levels has no switch for. `minimal` does too unless `minimalThinks`, since Off was stored
+ * that way before `none` existed. Every other setting thinks.
+ */
+export function thinkingSwitchedOff(
+  setting: ReasoningEffortSetting | undefined,
+  option: Pick<ChatModelOption, 'thinkingToggle' | 'minimalThinks' | 'controls'> | undefined
+): boolean {
+  if (!option?.thinkingToggle || option.controls?.effort) return false;
+  return setting === THINKING_OFF_SETTING || (setting === 'minimal' && !option.minimalThinks);
+}
 
 /**
  * How hard a model that reasons thinks before answering.
@@ -972,15 +1011,17 @@ export const THINKING_OFF_SETTING = 'minimal' satisfies ReasoningEffortSetting;
  * conversation did before the setting existed. It is a real choice in the picker rather than
  * an empty state, because "let the provider decide" is a different instruction from "low".
  */
-export type ReasoningEffortSetting = 'default' | 'minimal' | 'low' | 'medium' | 'high';
+export type ReasoningEffortSetting = 'default' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
 /** Ascending, which is the order the picker lists them in. */
 export const REASONING_EFFORT_SETTINGS: readonly ReasoningEffortSetting[] = [
   'default',
+  'none',
   'minimal',
   'low',
   'medium',
   'high',
+  'xhigh',
 ];
 
 /**
@@ -1006,7 +1047,8 @@ export interface CreationTool {
 }
 
 /**
- * Token counts the SERVER reported, never a client-side estimate.
+ * Token counts the SERVER reported, never a client-side estimate. `rate` is the one exception,
+ * and says so when its timing is this app's own.
  *
  * The completions endpoint reports usage per request, so an agent turn - which makes one
  * request per tool round trip - produces several of these, and the turn's cost is their sum.
@@ -1023,6 +1065,28 @@ export interface ChatUsage {
   /** Credits the server charged for these requests. */
   creditsUsed?: number;
   usdCost?: number;
+  /** Generation speed, from self-hosted model servers only; see ChatTokenRate. */
+  rate?: ChatTokenRate;
+}
+
+/**
+ * How fast a self-hosted model server ran these requests, as token counts paired with the time
+ * they took, so requests sum and the rate is always tokens over time. Each pair is present only
+ * when the server reported it.
+ */
+export interface ChatTokenRate {
+  /** Generated tokens timed by `evalMs`. */
+  evalTokens: number;
+  evalMs: number;
+  promptTokens?: number;
+  promptMs?: number;
+  /** Time spent loading the model into memory before the request ran. */
+  loadMs?: number;
+  /** Speculative decoding: tokens the draft proposed and how many the model accepted. */
+  draftTokens?: number;
+  draftAccepted?: number;
+  /** Timed by this app from the first streamed token to the last, because the server reported no timings. */
+  estimated?: boolean;
 }
 
 /**
@@ -1161,9 +1225,9 @@ interface ChatSessionMeta {
    * careful one is a thing to do WITHIN one app, and reopening a thread should resume the
    * effort it was held at rather than whatever the last conversation was set to.
    *
-   * Only a model in the catalog's reasoning set is actually sent one - see
-   * `ChatModelOption.supportsReasoningEffort`. For a model with `thinkingToggle`, `minimal`
-   * instead turns thinking off and every other setting turns it on. Otherwise this is inert.
+   * Only a level the model's `controls.effort` lists is actually sent. For a model with
+   * `thinkingToggle`, it turns thinking off or on instead; see thinkingSwitchedOff. Otherwise
+   * this is inert.
    */
   reasoningEffort: ReasoningEffortSetting;
   /**
@@ -1172,6 +1236,12 @@ interface ChatSessionMeta {
    * takes the 1-hour TTL; see `ChatModelOption.supportsOneHourCache`.
    */
   promptCacheTtl?: PromptCacheTtl;
+  /**
+   * Overrides of the model's sampling and output defaults, absent until one is set. Kept across
+   * a model switch; each turn sends only what the current model's `controls` list. Titles,
+   * suggestions and compaction never carry them.
+   */
+  generation?: GenerationSettings;
   /**
    * Set on Code sessions that have been pointed at a directory. Absent on a Chat session, and
    * on a Code session nobody has chosen a folder for yet - which is a usable state, not a
@@ -1242,6 +1312,12 @@ export interface ChatSession extends ChatSessionMeta {
   replyInFlight?: { messageId: string; startedAt: number };
   /** The worktree being cut right now, added the same way; see the 'workspace' stream event. */
   preparingWorkspace?: WorkspacePreparation;
+}
+
+/** What exporting a conversation did; `saved` is false when the user dismissed the save dialog. */
+export interface ChatSessionExportResult {
+  saved: boolean;
+  path?: string;
 }
 
 /** A worktree being cut ahead of a session's first turn. `since` is epoch ms. */
@@ -1799,6 +1875,8 @@ export interface ChatReplyRound {
   timing?: ChatRoundTiming;
   /** What this round's request cost, as the server reported it. Never sent to the model. */
   usage?: ChatUsage;
+  /** The model this round's request went to; a continued reply's rounds can differ. Absent on older rounds. */
+  model?: string;
   /**
    * The model's readable reasoning before this round's prose, drawn in the transcript as a row
    * that is closed by default (ReasoningRow) and never drawn for the round still streaming -

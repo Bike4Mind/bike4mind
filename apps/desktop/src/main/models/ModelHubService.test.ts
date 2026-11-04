@@ -30,6 +30,7 @@ import { pullKey, type ModelPull } from '@shared/models';
 import type { ModelServerSpecs } from '@shared/modelServers';
 import { describe, expect, it, vi } from 'vitest';
 import { LOCAL_CONTEXT_TARGET_TOKENS } from '../chat/localContext';
+import { fitFromArch } from './fit';
 import { ServerUnreachableError } from '../modelServers/errors';
 import { HuggingFaceTokenStore } from './HuggingFaceTokenStore';
 import {
@@ -1142,6 +1143,28 @@ describe('ModelHubService entered hardware', () => {
     expect(list.rating).toBe('probe');
     expect(list.machine).toMatchObject({ memoryKind: 'cpu', totalMemoryBytes: 62 * GIB });
   });
+
+  const curatedFit = (list: Awaited<ReturnType<ModelHubService['curated']>>, entryId: string) =>
+    list.entries.find(entry => entry.id === entryId)?.builds[0].fit;
+
+  it("adds a reply speed from this computer's entered bandwidth, sizing MoE reads by the active share", async () => {
+    const { service } = rated({ local: { ramGiB: null, gpuMemoryGiB: null, bandwidthGBps: 256, unified: false } });
+    const list = await service.curated();
+    // 256 GB/s at 0.8 efficiency, over library weights less the pinned projector. MoE: 14.44 GB * (3.8 / 25.2) * 2 reads
+    // 4.35 GB, so 204.8 / 4.35 is 47. Dense: 16.81 GB gives 12.2.
+    expect(curatedFit(list, 'gemma-4-26b')?.detail).toContain('Replies at about 47 tokens/s early in a chat.');
+    expect(curatedFit(list, 'qwen3-8-27b')?.detail).toContain('Replies at about 12 tokens/s early in a chat.');
+    const unrated = await rated({}).service.curated();
+    expect(curatedFit(unrated, 'gemma-4-26b')?.detail).not.toContain('Replies');
+  });
+
+  it("adds a reply speed from a saved server's entered bandwidth only for a model that loads whole", async () => {
+    const list = await rated({ a: GPU_16 }).service.curated('a');
+    // 448 GB/s at 0.8 efficiency over the 7.15 GB layer less its 0.18 GB projector: 358.4 / 6.98 is 51.
+    expect(curatedFit(list, 'gemma-4-12b')?.detail).toContain('Replies at about 51 tokens/s early in a chat.');
+    expect(curatedFit(list, 'gemma-4-26b')?.detail).toContain('system RAM');
+    expect(curatedFit(list, 'gemma-4-26b')?.detail).not.toContain('Replies');
+  });
 });
 
 const GSQ_REPO = 'ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF';
@@ -1200,6 +1223,37 @@ describe('ModelHubService fit', () => {
     runtime.list.mockResolvedValue([installed({ modifiedAt: '2026-10-02T00:00:00Z' })]);
     await service.installed();
     expect(runtime.inspect).toHaveBeenCalledTimes(2);
+  });
+
+  it('sizes an installed MoE model without layer widths from the expert tensor stats Ollama reports', async () => {
+    const MOE_ARCH: ModelArch = {
+      contextMax: 131072,
+      blockCount: 48,
+      headCount: 32,
+      full: { layers: 48, kvHeads: 4, keyLength: 128, valueLength: 128 },
+      moe: { experts: 128, used: 8, moeLayers: 48 },
+      mtpLayers: 0,
+    };
+    const sizeBytes = 18 * GIB;
+    const expertBytesPerLayer = 0.33 * GIB;
+    const hardware = { ...machine('unified', 64), platform: 'darwin', arch: 'arm64', chip: 'Apple M4 Pro' };
+    const fitWith = async (tensorStats: ModelInspection['tensorStats']) => {
+      const { service, runtime } = harness({ hardware });
+      runtime.list.mockResolvedValue([installed({ name: 'moe:latest', sizeBytes })]);
+      const base = await runtime.inspect('x');
+      runtime.inspect.mockResolvedValue({ ...base, arch: MOE_ARCH, tensorStats });
+      const result = await service.installed();
+      return result.ok ? result.models[0].fit : null;
+    };
+
+    const withStats = await fitWith({ expertBytesPerLayer, nonExpertBytes: sizeBytes - 48 * expertBytesPerLayer });
+    const without = await fitWith(null);
+    expect(withStats).toEqual(fitFromArch(MOE_ARCH, sizeBytes, hardware, withStats!.context, { expertBytesPerLayer }));
+    expect(without).toEqual(fitFromArch(MOE_ARCH, sizeBytes, hardware, without!.context));
+    // The stats size both the compute buffer, in place of the widths, and the weights one decode step reads.
+    expect(withStats?.detail).toContain('Replies at about');
+    expect(without?.detail).not.toContain('Replies');
+    expect(withStats?.detail.split(' Replies')[0]).not.toBe(without?.detail);
   });
 
   it('reads only a few installed models from Ollama at once', async () => {

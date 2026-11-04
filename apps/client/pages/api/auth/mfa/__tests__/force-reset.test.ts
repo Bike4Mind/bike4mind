@@ -91,7 +91,7 @@ describe('POST /api/auth/mfa/force-reset', () => {
       expect.objectContaining({
         action: 'user.mfa.denied',
         attempted: 'user.mfa.reset',
-        message: 'Use Profile > Settings > Security to turn off your own MFA.',
+        message: 'Use Profile > Security to turn off your own MFA.',
       })
     );
     expect(mockForceResetMFA).not.toHaveBeenCalled();

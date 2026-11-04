@@ -51,6 +51,25 @@ describe('streamCompletion reasoning effort', () => {
     expect(await sentOptions({ ...REQUEST, cacheTtl: '1h' })).toMatchObject({ cacheTtl: '1h' });
     expect(await sentOptions(REQUEST)).not.toHaveProperty('cacheTtl');
   });
+
+  it('sends a temperature override under options, and none without one', async () => {
+    expect(await sentOptions({ ...REQUEST, generation: { temperature: 0.3 } })).toMatchObject({ temperature: 0.3 });
+    expect(await sentOptions({ ...REQUEST, thinking: true })).not.toHaveProperty('temperature');
+  });
+
+  it('puts a thinking budget on the thinking request, and nothing when thinking is off', async () => {
+    const budget = { ...REQUEST, generation: { thinkingBudgetTokens: 8192 } };
+    expect((await sentOptions({ ...budget, thinking: true })).thinking).toEqual({ enabled: true, budget_tokens: 8192 });
+    expect(await sentOptions(budget)).not.toHaveProperty('thinking');
+  });
+
+  it('never sends sampling fields the hosted API does not take', async () => {
+    const options = await sentOptions({
+      ...REQUEST,
+      generation: { topP: 0.5, topK: 10, minP: 0.1, repeatPenalty: 1.2 },
+    });
+    expect(Object.keys(options).sort()).toEqual(['stream', 'tools']);
+  });
 });
 
 describe('streamCompletion', () => {
@@ -68,6 +87,30 @@ describe('streamCompletion', () => {
     await done;
 
     expect(events.map(event => ('text' in event ? event.text : event.type))).toEqual(['meta', 'Hel', 'lo']);
+  });
+
+  it('drops a generation rate from a hosted stream, keeping its usage and credits', async () => {
+    const stream = new PassThrough();
+    const { instance } = fakeAxios(stream);
+    const events: CompletionStreamEvent[] = [];
+
+    const done = streamCompletion(instance, '/c', REQUEST, event => events.push(event));
+
+    stream.write(
+      frame({
+        type: 'content',
+        stopReason: 'end_turn',
+        usage: { outputTokens: 12 },
+        credits: { used: 3 },
+        rate: { evalTokens: 12, evalMs: 500 },
+      })
+    );
+    stream.write(frame('[DONE]'));
+    await done;
+
+    expect(events).toEqual([
+      { type: 'content', stopReason: 'end_turn', usage: { outputTokens: 12 }, credits: { used: 3 } },
+    ]);
   });
 
   it('reassembles a frame split across chunk boundaries', async () => {

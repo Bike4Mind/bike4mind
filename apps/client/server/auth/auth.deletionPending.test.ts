@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
 import { EventEmitter } from 'events';
 import { createMocks, type RequestMethod } from 'node-mocks-http';
@@ -21,8 +21,9 @@ vi.mock('@server/auth/ability', () => ({ default: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { GOOGLE_CLIENT_ID: '', GITHUB_CLIENT_ID: '', JWT_SECRET: 'test-secret' },
 }));
+const mockIsMfaEnrollmentOwed = vi.hoisted(() => vi.fn(async (): Promise<boolean> => false));
 vi.mock('@bike4mind/server-utils/auth/mfaEnforcement', () => ({
-  isMfaEnrollmentOwed: async () => false,
+  isMfaEnrollmentOwed: mockIsMfaEnrollmentOwed,
   MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
 }));
 
@@ -53,6 +54,10 @@ async function call(method: RequestMethod, url: string, user: Record<string, unk
 }
 
 describe('auth middleware: account in its deletion grace period', () => {
+  beforeEach(() => {
+    mockIsMfaEnrollmentOwed.mockReset().mockResolvedValue(false);
+  });
+
   it.each([
     ['GET', '/api/quests'],
     ['POST', '/api/ai/v1/completions'],
@@ -88,5 +93,24 @@ describe('auth middleware: account in its deletion grace period', () => {
     const { status, body } = await call('POST', '/api/auth/mfa/verify', frozen({ mfaPending: true }));
     expect(status).toBe(200);
     expect(body?.code).toBeUndefined();
+  });
+
+  describe('when the account also owes MFA enrollment', () => {
+    beforeEach(() => {
+      mockIsMfaEnrollmentOwed.mockResolvedValue(true);
+    });
+
+    it('still lets it cancel the deletion', async () => {
+      const { reached, status } = await call('DELETE', '/api/account/deletion', frozen());
+      expect(reached).toBe(true);
+      expect(status).toBe(200);
+    });
+
+    it('still refuses every other route as deletion-pending', async () => {
+      const { reached, status, body } = await call('GET', '/api/quests', frozen());
+      expect(reached).toBe(false);
+      expect(status).toBe(403);
+      expect(body.code).toBe(ACCOUNT_DELETION_PENDING_CODE);
+    });
   });
 });

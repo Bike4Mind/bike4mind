@@ -1,5 +1,7 @@
 import type { AdminAssistantToolName } from '@bike4mind/common';
 import type { ToolDefinition } from '@bike4mind/services/llm/tools';
+import { getOrgTool } from './tools/getOrg';
+import { getOrgUsageTool } from './tools/getOrgUsage';
 import { getUserTool } from './tools/getUser';
 import { getUsageSignalsTool } from './tools/getUsageSignals';
 import { getUserActivityTool } from './tools/getUserActivity';
@@ -13,6 +15,8 @@ type AdminToolRegistry = Partial<Record<AdminAssistantToolName, ToolDefinition>>
 
 // Each admin tool registers itself here.
 const ADMIN_TOOL_REGISTRY: AdminToolRegistry = {
+  admin_get_org: getOrgTool,
+  admin_get_org_usage: getOrgUsageTool,
   admin_get_usage_signals: getUsageSignalsTool,
   admin_get_user: getUserTool,
   admin_get_user_activity: getUserActivityTool,

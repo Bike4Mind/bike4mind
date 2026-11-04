@@ -118,7 +118,7 @@ import { allSecrets } from './secrets';
 import { migratorInvocation } from './database';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
-import { wafQueryWebAclArn, wafReadPermissions, wafStageWebAcl, wafWebAclArn } from './waf';
+import { wafLabelForwarding, wafQueryWebAclArn, wafReadPermissions, wafWebAclArn } from './waf';
 
 // SQS queue URLs bundled as Linkable resources. Stored in resource.enc at deploy
 // time — no IAM statements generated, no env var size concerns. The wildcard SQS
@@ -455,8 +455,8 @@ export const web = new sst.aws.Nextjs(
       ...(!$dev && process.env.DISABLE_ORIGIN_VERIFY !== 'true'
         ? { ORIGIN_VERIFY_SECRET: originVerifySecret.result }
         : {}),
-      // Only the stage-owned ACL carries the label-forward rules; an externally managed ACL does not.
-      ...(wafStageWebAcl ? { WAF_LABEL_FORWARDING: 'true' } : {}),
+      // Set only when the attached ACL inserts the label headers (see resolveWafLabelForwarding).
+      ...(wafLabelForwarding ? { WAF_LABEL_FORWARDING: 'true' } : {}),
       // Kill-switch for in-handler response gzip (apps/client/server/utils/sendMaybeGzip.ts).
       // Declared here so the lever is greppable from infra and survives a redeploy; set to
       // 'true' to fall back to plain res.json on every route using the helper.

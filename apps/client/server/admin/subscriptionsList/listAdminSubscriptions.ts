@@ -149,7 +149,7 @@ export async function adminSubscriptionsMatch(
 const toObjectIds = (ids: string[]) =>
   ids.filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id));
 
-const USER_OWNER_FIELDS = 'name username email stripeCustomerId isBanned disputePending moderation.status';
+const USER_OWNER_FIELDS = 'name username email stripeCustomerId isBanned moderation.status';
 
 type OwnerLookup = {
   owners: Map<string, AdminSubscriptionOwner>;
@@ -181,7 +181,7 @@ async function ownersOf(docs: SubscriptionDoc[]): Promise<OwnerLookup> {
   const billingOwners =
     billingOwnerIds.length > 0
       ? await User.find({ _id: { $in: toObjectIds(billingOwnerIds) } })
-          .select('isBanned disputePending moderation.status')
+          .select('isBanned moderation.status')
           .lean()
       : [];
   for (const account of [...users, ...billingOwners]) {

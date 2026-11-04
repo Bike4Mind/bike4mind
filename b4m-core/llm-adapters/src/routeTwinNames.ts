@@ -1,7 +1,8 @@
 import { ModelBackend, type ModelInfo } from '@bike4mind/common';
 import { AnthropicBackend } from './anthropicBackend';
 
-// Must stay in sync with BEDROCK_PROFILE_PREFIX in apps/client/app/utils/pickerModelDedupe.ts.
+// Must stay in sync with BEDROCK_PROFILE_PREFIX in apps/client/app/utils/pickerModelDedupe.ts and
+// apps/desktop/src/renderer/src/chat/modelRouteVariants.ts.
 const BEDROCK_PROFILE_PREFIX = /^(global|us-gov|us|eu|apac|jp|au|ca)\./;
 const BEDROCK_VERSION_SUFFIX = /-v\d+(?::\d+)?$/;
 

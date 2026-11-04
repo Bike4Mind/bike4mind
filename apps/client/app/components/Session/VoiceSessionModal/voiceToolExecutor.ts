@@ -7,6 +7,7 @@
 
 import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
+import { getInsufficientCreditsMessage } from '@client/app/utils/error';
 import { ACCOUNT_TRUST_REQUIRED_ERROR_CODE, type IMessageDataToClient } from '@bike4mind/common';
 
 interface ToolExecutionResult {
@@ -98,6 +99,11 @@ export async function executeVoiceTool(
 }
 
 function getToolErrorMessage(error: unknown): string {
+  // web_search and web_fetch are billed per call; the model relays this to the user as speech.
+  const outOfCredits = getInsufficientCreditsMessage(error);
+  if (outOfCredits) {
+    return `That tool was not run because the account is out of credits. Tell the user to add credits, then try again. ${outOfCredits}`;
+  }
   if (isAxiosError(error)) {
     const data: unknown = error.response?.data;
     if (data && typeof data === 'object') {

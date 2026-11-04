@@ -125,27 +125,14 @@ You can also delete an individual notebook or file from its own menu. For accoun
 
 ## Security Tab
 
-### Security Overview
+The Security tab is one page that collects everything about how your account is signed in to and used. Every signed-in user can open it. Use **Refresh** at the top to reload every section.
 
-See your account's security status at a glance:
-- **Security Score** - AI-assessed risk level
-- **Threat Level** - Low/Medium/High indicator
-- **Recommendations** - Steps to improve security
-
-### Security Metrics
-
-Monitor security-relevant activity:
-- Suspicious login attempts
-- Failed logins (last 24 hours)
-- API key status
-- Phishing test results
-
-### Multi-Factor Authentication (MFA)
+### Two-Factor Authentication
 
 Protect your account with two-factor authentication:
 
 **Setting Up MFA:**
-1. Click **Enable MFA**
+1. Click **Enable**
 2. Scan QR code with authenticator app (Google Authenticator, Authy, etc.)
 3. Enter verification code
 4. Save backup codes securely
@@ -155,9 +142,13 @@ Protect your account with two-factor authentication:
 - Use if you lose your authenticator
 - Regenerate codes anytime
 
-### Active Sessions
+Once two-factor is on, two more lists appear in this section:
+- **Passkeys** - use Face ID, Touch ID, Windows Hello or a security key instead of typing an authenticator code. Click **Add a passkey** to register one, or **Remove** to drop it.
+- **Trusted devices** - devices that skip the authenticator code when you sign in, added with the **Remember this device** option at sign-in. Remove any device you no longer use or recognize, or remove them all at once.
 
-Found in the **Security** area of your settings, this lists every device currently signed in to your account.
+### Signed-in Devices
+
+The **Signed-in devices** section lists every device currently signed in to your account.
 
 - **See your devices** - each entry shows the browser and operating system, its last-active time, and its IP address. The device you're using is marked **This device**.
 - **Sign out one device** - click **Sign out** next to any other device to end just that session (for example, a public computer you forgot to log out of). Your other devices stay signed in.
@@ -167,18 +158,30 @@ Signing out of the current device (the normal **Log out** in the profile menu) n
 
 **Troubleshooting:** when you sign out another device (individually or via **Log out of all other devices**), that device can stay active for up to 30 minutes (one access-token lifetime) before it's fully locked out, though it can no longer stay signed in past that window. If you need a device cut off instantly, an administrator can force-log-out your account from every device.
 
-### Blocked IPs
+### Sign-in Attempts
 
-View and manage automatically blocked IP addresses:
-- See block reason and timestamp
-- Unblock IPs if needed
+Lists failed sign-ins and suspicious sign-in patterns against your account from the last 7 days, newest first. Each entry shows when it happened and the IP address involved. If the list is empty, nobody has failed to sign in as you in that window.
 
-### Recent Activity
+### Support Access
 
-Review security events:
-- Failed login attempts
-- Suspicious patterns
-- API key alerts
+Shows each time support signed in to your account, when it started and how long it lasted. A visit that is still open is marked **(in progress)**.
+
+### Approved Apps
+
+Lists the third-party apps you have authorized through the consent screen, with the date you approved each one and the access it holds. Click **Revoke** to stop an app from renewing its access; a session it already holds may continue for up to 30 minutes before it expires.
+
+### API Keys
+
+Shows each of your API keys with live usage against its rate limit:
+- Requests this minute and today, and when each window resets
+- When the key was last used
+- Alerts on unusual use, such as a sudden jump in request rate or a new IP address
+
+To create or revoke keys, use the [API Keys Tab](#api-keys-tab).
+
+### Blocked IP Addresses
+
+Administrators also see the system-wide list of blocked IP addresses and ranges, including automatic sign-in lockouts. From here an administrator can block an address or range and unblock an entry. Other users do not see this section.
 
 ---
 
@@ -441,7 +444,7 @@ Manage email-to-notebook functionality.
 
 1. **Enable MFA** - Significantly improves account security
 2. **Use strong passwords** - Unique, complex passwords
-3. **Review activity** - Check security tab regularly
+3. **Review activity** - Check the Security tab regularly
 4. **Rotate API keys** - Periodically refresh keys
 
 ### Integrations

@@ -790,7 +790,7 @@ describe('webSearchTool - hedged backup and cache', () => {
 
     const result = await performWebSearch(mockAdapters, { query: 'q' });
 
-    expect(result).toEqual({ formattedResults: WEB_SEARCH_UNAVAILABLE_MSG, citables: [] });
+    expect(result).toEqual({ formattedResults: WEB_SEARCH_UNAVAILABLE_MSG, citables: [], servedBy: 'searxng' });
   });
 
   it('returns no results when both providers answer empty', async () => {
@@ -815,7 +815,11 @@ describe('webSearchTool - hedged backup and cache', () => {
 
     const result = await performWebSearch(mockAdapters, { query: 'genuinely obscure query' });
 
-    expect(result).toEqual({ formattedResults: 'No results found from web search.', citables: [] });
+    expect(result).toEqual({
+      formattedResults: 'No results found from web search.',
+      citables: [],
+      servedBy: 'serpapi',
+    });
   });
 
   it('returns no results when the SearXNG lead failed and the SerpAPI backup answered empty', async () => {
@@ -827,7 +831,11 @@ describe('webSearchTool - hedged backup and cache', () => {
 
     const result = await performWebSearch(mockAdapters, { query: 'another genuinely obscure query' });
 
-    expect(result).toEqual({ formattedResults: 'No results found from web search.', citables: [] });
+    expect(result).toEqual({
+      formattedResults: 'No results found from web search.',
+      citables: [],
+      servedBy: 'serpapi',
+    });
   });
 
   it('does not cache an empty answer, so a retry searches again', async () => {
@@ -983,6 +991,18 @@ describe('webSearchTool - hedged backup and cache', () => {
     await toolFn({ query: 'Same Query' });
     await expect(toolFn({ query: '  same query ' })).resolves.toContain('serp.example');
     expect(calls(fetchStub, isSerpOrganic)).toBe(1);
+  });
+
+  // The billed routes charge only the provider that answered, so a cache hit must name none.
+  it('names the provider that answered, and none for a cache hit', async () => {
+    configure('serpapi', { searxng: false });
+    stubProviders({ serpOrganic: [serpHit, serpHit] });
+
+    const first = await performWebSearch(mockAdapters, { query: 'Same Query' });
+    const repeat = await performWebSearch(mockAdapters, { query: 'same query' });
+
+    expect(first.servedBy).toBe('serpapi');
+    expect(repeat.servedBy).toBeUndefined();
   });
 
   it('never serves a place search from an ordinary search for the same text', async () => {

@@ -22,6 +22,7 @@ personal information or secrets in campaign URLs.
 | Checkout consent         | Boolean `attributionConsent` in the checkout request                                             | Request only                                   | Permit or suppress reading attribution cookies |
 | Resolved consent         | App cookie `b4m_consent`, republished on every load                                              | 90 days, cleared when consent resolves unset   | Let the server read the browser's decision     |
 | Purchase attribution     | Stripe subscription metadata `acq_first_*` / `acq_last_*` and MongoDB `Subscription.acquisition` | No automatic expiry configured by this feature | Record the consenting buyer's checkout touches |
+| Purchase visit           | Random server-minted 30-minute visit id in MongoDB `PaymentAttempt.visitId` (not sent to Stripe) | 90 days, the payment attempt's TTL             | Name the visit a purchase was started in       |
 
 The app's three campaign cookies and `b4m_consent` use `path=/` and
 `SameSite=Lax`. They are JavaScript-readable and scoped to the app host. Lax,
@@ -58,6 +59,73 @@ prevents future collection; it does not delete existing Stripe or MongoDB record
 Configured GA conversion events can receive source, medium, and campaign fields
 through the shared consent-gated attribution reader.
 
+## Visits and pages
+
+The app counts visits, and the pages within them, with two first-party events sent
+as the host product's Overwatch events. Both are anonymous: their user is a fixed
+anonymous id, never an account or its pseudonym, even for a signed-in visitor.
+
+A visit is a browser holding the `b4m_vid` cookie. The server mints it on a page
+load that carries none, and sends it again on every page load, which restarts its
+30-minute inactivity window. Nothing else refreshes it, so a visit ends 30 minutes
+after its last page load however long the tab stays in use. A value the server did
+not mint is ignored and replaced. A browser that identifies itself as a bot, or
+sends no user agent, gets no cookie and records nothing.
+
+Each visit sends one `visit` event, with the visit id as its `sessionId`. With
+consent it also carries the referring site's origin (never its path or query), the
+landing path, and the session campaign from `b4m_utm`; without consent it carries
+none of them. While a visitor in the opt-in region has not answered the banner, the
+event is held, marked by the `b4m_vid_pending` cookie, and sent once they answer, or
+without a source if the page is hidden or closed first.
+
+Every page of a visit after its landing sends a `page_view` event with the same
+visit id and the page's path, and nothing else. That covers a page the app moves to
+without a page load, and a later page load in the same visit: a new tab, a typed
+URL, a bookmark, a link or a reload. A reload sends its page again, so a visit's
+`page_view` events can repeat a path. A `page_view` is sent only while consent is
+granted, never while it is declined or not yet given, and pages passed without
+consent are not sent later. A grant sends the page the visitor is on unless this
+page load has already sent it. So a visitor who declines at first, or leaves the
+banner unanswered until the page is hidden, and then grants on the page they landed
+on, records that page as a `page_view`. Within one page load, a change of query
+string or fragment alone, or the page just sent again, sends nothing, and the app
+sends at most 100.
+
+The server records a `page_view` only on a visit whose `visit` event was already
+sent. A page the app moves to is dropped when there is no visit cookie, while the
+visit is held for consent, or after the visit has lapsed, and recording one never
+sets or refreshes a cookie. A page load with no live visit starts a new visit
+instead, and its page is that visit's landing.
+
+The browser sends only the path, cut to 200 characters at a `/`. The server checks
+it again, because anyone can post to these routes: it keeps the path alone, cut at
+any `?` or `#`, replaces each segment shaped like a secret (a UUID, a long hex id,
+or a long letter-and-digit token such as a share or invite link carries) with
+`:token`, and drops a path that holds an address (`@`, or `%40` encoded) entirely.
+
+When a signed-in event is sent during a visit (the daily `active` event, or the
+funnel events of a signup), it carries that visit's id as its `sessionId` beside the
+user's pseudonym. So a visit's landing and pages can be joined to the pseudonymous
+user who was signed in, or signed up, during that visit.
+
+Query strings, fragments, IP addresses and user agents are never sent on these
+events. The server reads the user agent to filter bots, and the client IP for a
+per-IP rate limit whose counter expires with its one-minute window.
+
+| Data       | Storage                                                                  | Lifetime                                            | Purpose                                     |
+| ---------- | ------------------------------------------------------------------------ | --------------------------------------------------- | ------------------------------------------- |
+| Visit id   | App cookie `b4m_vid`: 16 random bytes in hex, `HttpOnly`, `SameSite=Lax` | 30 minutes, refreshed only by a page load           | Tell one visit from the next                |
+| Visit hold | App cookie `b4m_vid_pending`: `1`, no id, `HttpOnly`, `SameSite=Lax`     | Until the `visit` event is sent or the visit lapses | Hold the `visit` event for a consent answer |
+
+| Data  | Sent as                                                                                                                          | Purpose                                             |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| Visit | `visit`: anonymous user, visit id as `sessionId`; with consent, referrer origin, `metadata.landingPath` and the campaign (`utm`) | Count visits and where they came from               |
+| Page  | `page_view`: anonymous user, visit id as `sessionId`, `metadata.path`; only with consent, and only on a recorded visit           | Know a visit's later pages and the page it ended on |
+
+Both cookies use `path=/`, and `Secure` outside local development. Unlike the
+campaign cookies, they are not readable by JavaScript.
+
 ## Cross-product signup reporting (self-reported)
 
 Account creation emits a `signup` event to each Overwatch product named by the
@@ -77,10 +145,26 @@ checkout user's signup source is not the organization's acquisition source.
 Zero-amount invoices, refunds, disputes, and synthetic users send nothing. Each
 event carries the amount collected in the currency's major unit (dollars, or whole
 yen), the currency, whether it was a subscription or credits, and the invoice
-billing reason. It is
+billing reason. A subscription payment also carries `periodEnd`: the end of the
+period it paid for, in ISO 8601 UTC, taken from the invoice's subscription lines.
+It is left out when the invoice's lines show no subscription period. Each event is
 keyed on the Stripe invoice or payment intent, so a redelivered webhook does not
 count twice. Overwatch has no purchase stage in its funnel yet, so these events
 are stored as raw events only.
+
+The host product's copy of a credit-pack purchase, and of the invoice that opened
+a subscription, also names the browser visit the payment was started in. It sends
+the id from the app's visit cookie (`b4m_vid`) as the event's session id, the same
+way the host's `signup_completed` names the visit a signup happened in.
+
+The webhook and the invoice worker have no browser, so the app stores that id in
+its own payment-attempt record (`PaymentAttempt.visitId`) when the payment starts:
+under the payment intent for a credit pack, and under the Checkout session for a
+subscription. It is never sent to Stripe.
+
+Renewals, seat changes and other invoices Stripe raises on its own name no visit.
+The copies sent to credited products never carry a visit, since only the host's
+stream holds the visit it names.
 
 The rest of an individual subscription's lifecycle, and the account's, goes to the
 host product and to the same products in the same way:
@@ -120,6 +204,32 @@ signup-funnel events (`signup_completed`, `email_verified`, `credits_granted`,
 they can be told apart from real accounts. Real users' events carry no lane. The
 billing and account events above, the cross-product `signup`, and the client-side GA4
 and ad-pixel conversions still send nothing for a synthetic account.
+
+Internal accounts (the team's own) are marked the same way, with
+`internal: true` in `metadata`, on every event above that names a user: the
+signup-funnel events, `first_value`, `active`, the billing and account events and
+the cross-product `signup`. An account is internal when `User.isInternal` is set or
+it is an admin. `isInternal` is set at signup for an email on a
+`NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS` domain (and for an admin an admin creates),
+by an admin from the user's internal toggle (`POST
+/api/admin/users/[userId]/internal`, audited), and for accounts that predate it
+by a one-off migration. A synthetic account carries only the synthetic lane, never
+both marks. Real users' events carry neither, and no event ever carries
+`internal: false`, so an absent mark means "not marked", not "verified customer".
+The flag is used for analytics only; nothing reads it to grant or deny access.
+
+For a marked account (synthetic or internal) the daily `active` event is sent once
+per visit rather than once per day, under that visit's id. The visit beacon
+(`POST /api/analytics/visit`) is unauthenticated and carries no user and no lane:
+the browser sends it without the session's bearer token, so the only inputs are a
+body and cookies the visitor controls, and a mark read from them would let anyone
+take a real visit out of the count. A visit is set apart downstream only when a
+marked event of its user arrives under the same visit id, which the per-visit
+`active` provides for every visit a marked account makes while signed in. A visit
+made signed out stays unmarked. The verified-hop events below (`hop_minted` and
+`hop`) name no user either, so they carry no internal mark: a source declares only
+the synthetic lane, for a test persona's run, and with consent a `hop` names the
+visit it was redeemed in, so it joins that visit as described above.
 
 Because the touches were recorded with consent at signup, a purchase is credited
 from them even if the visitor later withdraws cookie consent: the webhook has no
@@ -180,6 +290,120 @@ site is still attributed by signup until the app loads again and republishes,
 while checkout, which resolves consent in the browser at request time, would
 already see the denial.
 
+## Verified hops
+
+A verified hop records that a visitor clicked through from another Overwatch
+product to this app, as the source product's own server saw it. Unlike the
+campaign touches above, nothing in it comes from the browser: the source is the
+product whose Overwatch ingest key minted the hop, so no link or parameter can
+name another product as the source.
+
+1. The source's server calls `POST /api/overwatch/v1/hops` with its ingest key
+   when a visitor follows one of its links to this app. The app stores the hop
+   and returns a token that redeems once, within 10 minutes.
+2. The source redirects the browser straight to the app with the token in the
+   `b4m_hop` query parameter.
+3. The page takes the token off its URL at once (`history.replaceState`) and
+   sends it with the visit beacon, which redeems it: the token must carry a valid
+   signature for this app and be unexpired, and the stored hop must be this
+   app's and not yet redeemed. A landing that carries a token is served with
+   `Referrer-Policy: strict-origin`, so the token is not sent as a Referer
+   before the page removes it.
+
+| Data               | Storage                                                                                                                                                                                                                                                         | Lifetime                                                                           | Purpose                                                                      |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Hop record         | MongoDB `analytics_hops`: hop id, source product, destination, landing path, lane, minted and redeemed times; the source's session id and visitor hash when the source may send them; the visit it was redeemed in, with consent; when a signup was bound to it | 90 days after minting (TTL on `expiresAt`); no expiry once a signup is bound to it | Single-use redeem; check counts against records; evidence a payment may cite |
+| Redeemed hop       | App cookie `b4m_hop` holding the hop id, HttpOnly, `SameSite=Lax`, set only with consent                                                                                                                                                                        | 24 hours                                                                           | Lets a signup that follows find its hop                                      |
+| Verified touch     | User record `acquisition.verifiedTouch`: source product, hop id, redeem time                                                                                                                                                                                    | Account lifetime; deleted with the account                                         | Which product a new account came from, as that product proved                |
+| `hop_minted`       | Overwatch event under the source product: hop id, destination, lane; the source's session id when sent                                                                                                                                                          | Overwatch retention                                                                | Hops minted, per source                                                      |
+| `hop`              | Overwatch event under this app: hop id, source, destination, `verified: true`, lane; the visit id with consent                                                                                                                                                  | Overwatch retention                                                                | Hops redeemed, joined to the visit                                           |
+| `signup_completed` | Overwatch event under this app; for an account with a verified touch, also its `hopId` and `srcProductId`                                                                                                                                                       | Overwatch retention                                                                | Verified hop to signup                                                       |
+
+The cookie and every link between the hop and the visitor (the visit stored on
+the hop, and the `hop` event's session id) use the same server-side gate as
+signup attribution: an explicit `granted` decision. The page publishes its
+resolved decision just before the beacon that carries a token, so the server
+reads that page load's answer. Without consent the hop is still redeemed and
+the `hop` event is still sent, with no visit and no cookie: it is counted in
+aggregate only and links nothing. While the visitor is still being asked, the
+page holds the token and sends it with the beacon that follows the answer, or
+with the one it sends when the tab is hidden or closed first. A tab hidden
+before the answer (on a phone, switching apps while the banner is up) therefore
+redeems the hop with no visit and no cookie, and a grant given on returning
+cannot link it. A token held past its 10 minutes no longer redeems. The source
+follows the same rule on its side and sends no session id or visitor hash
+without its own visitor's consent.
+
+A new account gets a verified touch only when its signup happens in the same
+session as the hop's redeem. Concretely, the signup request carries:
+
+- the `b4m_hop` cookie naming the hop;
+- the visit id (`b4m_vid`) the hop was redeemed in, so a hop from an earlier
+  visit does not bind a later signup (a visit ends after 30 minutes without a
+  page load);
+- a granted consent decision, so a visitor who withdrew consent after landing is
+  not linked.
+
+The hop must also have been redeemed in the last 24 hours and never bound
+before. One hop binds at most one account, even when a browser signs up twice.
+The bind runs on every self-service signup: the OAuth, Okta and SAML callbacks
+and one-time-code verification. A SAML signup is usually not bound, because its
+IdP returns by a cross-site POST, which carries no Lax cookie. Accounts an admin
+creates never read the creator's cookies. A bound hop record has no expiry,
+because a payment may later cite it. The record names no account. What links it
+to one is the account's verified touch, deleted with the account, and the
+`hopId` on that account's `signup_completed` event, kept for that event's
+retention.
+
+The token is a bearer value. It is never rendered into a page, the app never
+logs it, and the recorded landing path never includes it. It is in the URL of
+the one landing request, so a CDN or firewall access log of that request can
+hold it; by then it is redeemed or within minutes of expiring.
+
+A verified hop says which product a click came from. It does not change the
+rule above: a count that money or a contract depends on still comes from
+host-owned, Stripe-reconciled paid conversions, and what weight a hop carries in
+that is a policy decision made outside this app. Minting, redeeming and lane
+stamping are treated as money-path code.
+
+The Overwatch ingest route (`POST /api/overwatch/v1/events`) refuses
+`hop_minted` from every key, and `hop` from every key but the host app's own,
+event by event.
+
+The two events leave this app by different paths. The mint route puts
+`hop_minted` straight onto the Overwatch ingest queue, as the ingest route does,
+so only `OVERWATCH_INGEST_ENABLED` switches it off. The redeem sends `hop` the
+way the app sends its own product events, to `OVERWATCH_INGEST_URL`, so
+`B4M_ANALYTICS_ENABLED=false` also stops it. With the app's analytics switched
+off, mints are still counted and redeems are not.
+
+### What a source site must do
+
+1. Point each link to this app at the source's own server endpoint, for example
+   `GET /out/b4m?path=/new`, so the click is a top-level navigation the visitor
+   made. Mint only there: not on page render, not for a prefetch
+   (`Sec-Purpose: prefetch`), and not for a known crawler.
+2. In that endpoint, call `POST /api/overwatch/v1/hops` with the source's ingest
+   key in `x-api-key` and a JSON body
+   `{ dest: "bike4mind", path, srcSessionId, srcVisitorHash, lane }`. Only
+   `dest` is required. Send `srcSessionId` and `srcVisitorHash` only with the
+   visitor's consent, and send a hash, never a raw identifier. Never send a
+   source product: the body is refused if it names one. A test persona's run
+   sends `lane: "synthetic"`.
+3. Answer the visitor with a 302 straight to the returned `url`
+   (`<app><path>?b4m_hop=<token>`), with `Cache-Control: no-store`. No
+   intermediate page and no second hop: a cached or bounced redirect would replay
+   one token to many visitors, and all but the first would be refused.
+4. Never put the token in HTML, a link, a log or analytics. It is returned to the
+   source's server only.
+5. If the mint fails (any non-201, including 429 and 503), redirect to the same
+   path on this app without a token. The visitor always arrives; only the hop is
+   lost.
+
+The endpoint allows 120 mints a minute per key, on top of the key's own request
+limits. It answers 400 for an invalid body, 401 or 403 for a missing, wrong-scope
+or unbound key, and 503 while ingest is switched off or hops are not configured.
+
 ## Troubleshooting missing attribution
 
 - Confirm consent was granted when checkout was requested. Cookie presence alone
@@ -195,6 +419,9 @@ already see the denial.
   warning in analytics logs. Organization subscriptions emit none of them.
 - For one missing from the host product, check the host's own ingest key: its copy
   needs no stored acquisition.
+- For a host `purchase` that names no visit, check that the payment was started
+  from a browser holding the visit cookie and that `PaymentAttempt.visitId` was
+  recorded under its payment intent or Checkout session. Renewals never name one.
 
 ## API-key usage log
 
@@ -216,6 +443,16 @@ A scheduled job, off by default behind the `usagePatternSignalsEnabled` admin se
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | ------------ |
 | Signals           | Per signal (API-key share, request cadence, balance polling, key-mint timing): value, triggered flag, weight, explanation | 30 days after last checked (TTL on `computedAt`) | Admin review |
 | Score and outcome | `score`, `needsReview`, `skipped` reason, `computedAt`, keyed by `userId`                                                 | 30 days after last checked (TTL on `computedAt`) | Admin review |
+
+## Advisory abuse assessments
+
+Off by default behind the `abuseAssessmentEnabled` and `abuseAssessmentConfig` admin settings, an admin action or an hourly job can ask a Decisions model to judge a shadow detection as abuse, legitimate automation or insufficient evidence. The model receives only a pseudonymous summary built from an allowlist: detector name, window, a hosting-network flag, per-signal counts and thresholds, and per-account ages and counts from the stored behavioral evidence, with accounts named `acct_1`, `acct_2` and so on. It never receives an IP, network number, country, email, user id, prompt, document or free text. Calls use the platform's provider key and a platform budget, never the assessed account's credits or keys. The result is for admin review only and triggers no automatic action on the account, its access, its credits or its review state.
+
+| Data              | Storage                                                                                                | Lifetime                       | Purpose                              |
+| ----------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------ | ------------------------------------ |
+| Summary sent      | `AbuseAssessment.featureSummary`, the exact pseudonymous summary the model received                    | 365 days (TTL on `assessedAt`) | Admin review, audit of what was sent |
+| Judgment          | `result`, probabilities, confidence, or an `unknown` result with a failure code                        | 365 days (TTL on `assessedAt`) | Admin review                         |
+| Versions and cost | Model id and reported version, policy and evidence versions, cost in USD, trigger, requesting admin id | 365 days (TTL on `assessedAt`) | Admin review, budget accounting      |
 
 ## Signup and login network metadata
 

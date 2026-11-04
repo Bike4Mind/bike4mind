@@ -1,10 +1,12 @@
 import { Logger } from '@bike4mind/observability';
-import { getSettingsMap } from '@bike4mind/utils';
-import { classifyStage, escapeSlackText, toAbsoluteUrl } from '@bike4mind/common';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { escapeSlackText, toAbsoluteUrl } from '@bike4mind/common';
 import { connectDB, counterLogRepository, adminSettingsRepository } from '@bike4mind/database';
 import type { YoungAccountSpendSummary, YoungAccountSpender } from '@bike4mind/database';
 import { resolveSlackWebhookUrl } from '@bike4mind/server-utils/integrations/slack/slack';
+import { stripeCustomerSlackLink } from '@server/integrations/slack/accountLinks';
 import { appUrlFromEnv } from '../events/alarmSlackMessage';
+import { recordYoungAccountSpendShadowDetections } from './youngAccountSpendShadowDetections';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import axios from 'axios';
 import { Resource } from 'sst';
@@ -54,23 +56,13 @@ function adminUserLink(userId: string, appUrl: string | undefined): string | nul
   return slackLink(toAbsoluteUrl(appUrl, `/admin/users/${encodeURIComponent(userId)}`), 'admin');
 }
 
-/** Non-production stages bill through Stripe test mode, whose dashboard lives under /test. */
-function stripeCustomerLink(stripeCustomerId: string | null, stage: string): string {
-  if (!stripeCustomerId) return 'no Stripe customer';
-  const modePrefix = classifyStage(stage) === 'production' ? '' : '/test';
-  return slackLink(
-    `https://dashboard.stripe.com${modePrefix}/customers/${encodeURIComponent(stripeCustomerId)}`,
-    'Stripe'
-  );
-}
-
 function formatSpenderLine(
   spender: YoungAccountSpender,
   rank: number,
   stage: string,
   appUrl: string | undefined
 ): string {
-  const links = [adminUserLink(spender.userId, appUrl), stripeCustomerLink(spender.stripeCustomerId, stage)];
+  const links = [adminUserLink(spender.userId, appUrl), stripeCustomerSlackLink(spender.stripeCustomerId, stage)];
   return (
     `${rank}. \`${escapeSlackText(spender.userId)}\` ${spender.creditsSpent.toLocaleString('en-US')} credits ` +
     `(created ${new Date(spender.accountCreatedAt).toISOString()}) - ` +
@@ -126,6 +118,17 @@ export async function handler(event: unknown) {
   }
 
   const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+  // Before the Slack step and never throws, so a delivery failure neither loses nor fails the record.
+  if (getSettingsValue('shadowDetectionRecordingEnabled', settings, true)) {
+    const recorded = await recordYoungAccountSpendShadowDetections({
+      summary,
+      thresholds,
+      window: { start, end },
+      logger,
+    });
+    // 0 with listed spenders means every claim was taken, i.e. this window was already recorded.
+    logger.log('young-account-spend-shadow-detections', { recorded, listed: summary.topSpenders.length });
+  }
   const webhookUrl = resolveSlackWebhookUrl('SlackLiveopsWebhookUrl', settings);
   if (!webhookUrl) {
     throw new Error('young-account spend alert breached but no Slack webhook is configured');

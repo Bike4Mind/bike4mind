@@ -48,6 +48,18 @@ vi.mock('@bike4mind/services', async orig => {
 });
 vi.mock('@bike4mind/services/llm/tools/implementation/websearch', () => ({
   performWebSearch: (...a: unknown[]) => mockSearch(...a),
+  resolveWebSearchProviders: async () => [null, null],
+}));
+// Billing has its own suite (billing.test.ts); here every call is free so the posture checks stay in focus.
+vi.mock('@server/billing/reserveRequestCredits', () => ({
+  reserveRequestCredits: async () => ({
+    ownerId: 'user-1',
+    ownerType: 'user',
+    reservedCredits: 0,
+    hold: null,
+    refund: async () => {},
+    settle: async () => 0,
+  }),
 }));
 
 vi.mock('@bike4mind/database', async orig => {
@@ -67,6 +79,7 @@ vi.mock('@bike4mind/database', async orig => {
       },
     },
     toolExecutionLogRepository: { create: (...a: unknown[]) => mockAuditCreate(...a) },
+    adminSettingsRepository: { findBySettingNames: async () => [], findBySettingName: async () => null },
   };
 });
 

@@ -17,6 +17,7 @@ const resources = vi.hoisted(() => {
       { logConfiguration: { options: { 'awslogs-group': 'chat-completion-logs' } } },
     ]) as string,
     topic: { arn: 'alarm-topic' } as { arn: string } | undefined,
+    cliCompletionLogGroup: { name: 'cli-completion-logs' } as { name: string } | undefined,
   };
 });
 
@@ -25,6 +26,15 @@ vi.mock('../chatCompletion', () => ({
     nodes: {
       get taskDefinition() {
         return resources.output({ containerDefinitions: resources.containerDefinitions });
+      },
+    },
+  },
+}));
+vi.mock('../websocket', () => ({
+  cliCompletionRoute: {
+    nodes: {
+      get function() {
+        return resources.output({ nodes: { logGroup: resources.cliCompletionLogGroup } });
       },
     },
   },
@@ -78,6 +88,7 @@ beforeEach(() => {
     { logConfiguration: { options: { 'awslogs-group': 'chat-completion-logs' } } },
   ]);
   resources.topic = { arn: 'alarm-topic' };
+  resources.cliCompletionLogGroup = { name: 'cli-completion-logs' };
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -135,7 +146,26 @@ describe('LLM spend metric filters', () => {
     expect(callFor(resources.filter, 'llmSpendYoungAccountUsdFilter')?.metricTransformation).not.toHaveProperty(
       'dimensions'
     );
-    expect(resources.filter).toHaveBeenCalledTimes(5);
+    expect(resources.filter).toHaveBeenCalledTimes(10);
+  });
+
+  it('applies every filter to the cli_completion_request log group into the same metrics', async () => {
+    await load();
+    const chatCompletionFilters = resources.filter.mock.calls.filter(
+      ([, args]) => (args.logGroupName as { value: string }).value === 'chat-completion-logs'
+    );
+    expect(chatCompletionFilters).toHaveLength(5);
+    for (const [logicalName, args] of chatCompletionFilters) {
+      expect(callFor(resources.filter, `${logicalName}-cli-completion`)).toEqual({
+        ...args,
+        name: String(args.name).replace('test-app-production-', 'test-app-production-cli-completion-'),
+        logGroupName: expect.objectContaining({ value: 'cli-completion-logs' }),
+      });
+    }
+    expect(callFor(resources.filter, 'completionCreditOverdraftFilter-cli-completion')).toMatchObject({
+      name: 'test-app-production-cli-completion-completion-credit-overdraft',
+      metricTransformation: { name: 'CompletionCreditOverdrafts', namespace: 'test-app/production/LLMSpend' },
+    });
   });
 
   it('counts completions charged down to zero', async () => {
@@ -330,6 +360,11 @@ describe('LLM spend alarms', () => {
   it('fails loudly when the ChatCompletion log group cannot be resolved', async () => {
     resources.containerDefinitions = JSON.stringify([{}]);
     await expect(load()).rejects.toThrow('ChatCompletion container log group');
+  });
+
+  it('fails loudly when the cli_completion_request log group cannot be resolved', async () => {
+    resources.cliCompletionLogGroup = undefined;
+    await expect(load()).rejects.toThrow('cli_completion_request function is missing its CloudWatch log group');
   });
 });
 

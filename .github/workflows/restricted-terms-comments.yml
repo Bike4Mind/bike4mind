@@ -45,9 +45,15 @@ jobs:
     # Public repo only, as in restricted-terms.yml. An issue_comment on a plain
     # issue has nothing to check and takes no runner slot; a review on a fork
     # PR has no secret to check with (see the header).
+    # The preview deployer edits its own status comment on every refresh, which
+    # was hundreds of runs a day, so bot preview comments skip. The only PR text
+    # it quotes is the head commit subject, which restricted-terms.yml already
+    # checks; keep it that way if the deployer starts quoting anything else.
     if: >-
       github.repository == (vars.OPEN_CORE_REPO || 'Bike4Mind/bike4mind') &&
-      ((github.event_name == 'issue_comment' && github.event.issue.pull_request) ||
+      ((github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+        !(github.event.sender.type == 'Bot' &&
+          startsWith(github.event.comment.body, '<!-- b4m-preview'))) ||
        (github.event_name != 'issue_comment' &&
         github.event.pull_request.head.repo.full_name == github.repository))
     runs-on: ubuntu-latest

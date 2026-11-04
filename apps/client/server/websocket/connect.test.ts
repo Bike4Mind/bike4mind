@@ -58,6 +58,13 @@ vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
 import { func } from './connect';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
+import { ACCOUNT_DELETION_PENDING_CODE } from '@bike4mind/common';
+
+const PENDING_DELETION = {
+  requestedAt: new Date('2026-11-01T00:00:00Z'),
+  scheduledFor: new Date('2026-12-01T00:00:00Z'),
+  source: 'self_serve',
+};
 
 const eventWithToken = (token = 'token-123') => ({
   requestContext: { connectionId: 'conn-1' },
@@ -170,6 +177,13 @@ describe('websocket connect - token gates', () => {
     });
 
     await expect(connect()).rejects.toThrow('blocked');
+    expect(mockConnectionCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a deletion-pending account before registering the connection', async () => {
+    mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 3, deletion: PENDING_DELETION });
+
+    await expect(connect()).rejects.toMatchObject({ additionalInfo: { code: ACCOUNT_DELETION_PENDING_CODE } });
     expect(mockConnectionCreate).not.toHaveBeenCalled();
   });
 

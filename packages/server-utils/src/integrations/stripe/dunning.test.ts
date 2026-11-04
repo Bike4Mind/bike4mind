@@ -51,6 +51,39 @@ describe('voidOpenSubscriptionInvoices', () => {
     expect(mockVoidInvoice).toHaveBeenCalledWith('in_a', undefined, { timeout: 5000, maxNetworkRetries: 0 });
   });
 
+  it('caps each request timeout to the time left before the deadline', async () => {
+    mockList.mockResolvedValue({ data: [openInvoice('in_a'), openInvoice('in_b')] });
+    const now = vi.spyOn(Date, 'now');
+    now.mockReturnValue(1_000);
+    mockVoidInvoice.mockImplementationOnce(async () => {
+      now.mockReturnValue(3_000);
+      return {};
+    });
+
+    await voidOpenSubscriptionInvoices('sub_1', { timeoutMs: 10_000, deadline: 5_000 });
+    now.mockRestore();
+
+    expect(mockList).toHaveBeenCalledWith(expect.anything(), { timeout: 4_000 });
+    expect(mockVoidInvoice).toHaveBeenNthCalledWith(1, 'in_a', undefined, { timeout: 4_000 });
+    expect(mockVoidInvoice).toHaveBeenNthCalledWith(2, 'in_b', undefined, { timeout: 2_000 });
+  });
+
+  it('stops voiding once the deadline passes and reports the rest as failed', async () => {
+    mockList.mockResolvedValue({ data: [openInvoice('in_a'), openInvoice('in_b')] });
+    const now = vi.spyOn(Date, 'now');
+    now.mockReturnValue(1_000);
+    mockVoidInvoice.mockImplementationOnce(async () => {
+      now.mockReturnValue(6_000);
+      return {};
+    });
+
+    const result = await voidOpenSubscriptionInvoices('sub_1', { deadline: 5_000 });
+    now.mockRestore();
+
+    expect(mockVoidInvoice).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ voided: ['in_a'], failed: ['in_b'] });
+  });
+
   it('queries only open invoices of that subscription', async () => {
     mockList.mockResolvedValue({ data: [] });
 

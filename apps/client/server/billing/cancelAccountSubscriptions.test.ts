@@ -61,7 +61,10 @@ describe('cancelAccountSubscriptions', () => {
       { customer: 'cus_user', limit: 100 },
       { timeout: expect.any(Number) }
     );
-    expect(mocks.voidOpenSubscriptionInvoices).toHaveBeenCalledWith('sub_org', { timeoutMs: expect.any(Number) });
+    expect(mocks.voidOpenSubscriptionInvoices).toHaveBeenCalledWith('sub_org', {
+      deadline: undefined,
+      timeoutMs: expect.any(Number),
+    });
     expect(logger.error).not.toHaveBeenCalled();
   });
 

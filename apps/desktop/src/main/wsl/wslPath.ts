@@ -1,0 +1,406 @@
+import { spawn, type ChildProcess } from 'node:child_process';
+import { win32 } from 'node:path';
+import { system32 } from '../chat/tools/gitBash';
+
+/** A folder inside a WSL distro, reached from Windows over `\\wsl.localhost\<distro>\...` or `\\wsl$\<distro>\...`. */
+export interface WslLocation {
+  /** The share name as written, so paths mapped back match the ones the user picked. */
+  host: 'wsl.localhost' | 'wsl$';
+  distro: string;
+  /** Absolute, with forward slashes. */
+  linuxPath: string;
+}
+
+/** Carries the distro user's PATH into a `wslCommand`; see `wslCommandEnv`. */
+const LINUX_PATH_ENV = 'B4M_DESKTOP_LINUX_PATH';
+
+const WSL_UNC = /^(?:[\\/]{2}[?.][\\/]UNC[\\/]|[\\/]{2})(wsl\.localhost|wsl\$)[\\/]+([^\\/]+)(?:[\\/]+(.*))?$/i;
+
+/** The characters a Linux name may hold and a Windows one may not. The share spells each as U+F000 plus its code. */
+// eslint-disable-next-line no-control-regex -- control characters are among them
+const NOT_IN_WINDOWS_NAMES = /[\x01-\x1f"*:<>?\\|]/g;
+const SHARE_SPELLED = /[\u{f001}-\u{f01f}\u{f022}\u{f02a}\u{f03a}\u{f03c}\u{f03e}\u{f03f}\u{f05c}\u{f07c}]/gu;
+/** One the share spells, or one a Linux name holds as itself, kept behind a NUL by `wslUncPath`. */
+const SPELLED_OR_KEPT = new RegExp(`\\0?${SHARE_SPELLED.source}`, 'gu');
+
+/** One Linux file name as the WSL share lists it and opens it, so a `\` in it is never a Windows separator. */
+export function shareName(name: string): string {
+  return name.replace(NOT_IN_WINDOWS_NAMES, char => String.fromCharCode(0xf000 + char.charCodeAt(0)));
+}
+
+function linuxName(name: string): string {
+  return name.replace(SPELLED_OR_KEPT, found =>
+    found.length === 2 ? found.slice(1) : String.fromCharCode(found.charCodeAt(0) - 0xf000)
+  );
+}
+
+const HOLDS_SHARE_SPELLING = new RegExp(SHARE_SPELLED.source, 'u');
+
+/**
+ * A relative path a Linux program printed, with `/` between names, spelled as the share spells it.
+ * Null when a name holds a character the share spells another with, which no Windows path reaches.
+ */
+export function shareRelativePath(path: string): string | null {
+  return HOLDS_SHARE_SPELLING.test(path) ? null : path.split('/').map(shareName).join('/');
+}
+
+/** Also reads the `\\?\UNC\...` and `\\.\UNC\...` spellings of the share. */
+export function parseWslPath(path: string): WslLocation | null {
+  const match = WSL_UNC.exec(path);
+  if (!match) return null;
+  const segments = (match[3] ?? '').split(/[\\/]+/).filter(Boolean);
+  return {
+    host: (match[1] as string).toLowerCase() === 'wsl$' ? 'wsl$' : 'wsl.localhost',
+    distro: match[2] as string,
+    linuxPath: `/${segments.map(linuxName).join('/')}`,
+  };
+}
+
+/** The WSL location of `directory`, or null for an ordinary folder or a host that is not Windows. */
+export function wslLocation(directory: string, platform: NodeJS.Platform = process.platform): WslLocation | null {
+  return platform === 'win32' ? parseWslPath(directory) : null;
+}
+
+/** The share path Windows is given for `linuxPath`, spelled as the share spells it. */
+function sharePath(location: Pick<WslLocation, 'host' | 'distro'>, linuxPath: string): string {
+  const rest = linuxPath.split('/').filter(Boolean).map(shareName).join('\\');
+  return `\\\\${location.host}\\${location.distro}\\${rest}`;
+}
+
+/**
+ * `linuxPath` as a share path that `parseWslPath` reads back unchanged. The share reads U+F05C as
+ * `\` (and so on), so a name holding one of those itself keeps it behind a NUL, which no Windows path holds.
+ */
+export function wslUncPath(location: Pick<WslLocation, 'host' | 'distro'>, linuxPath: string): string {
+  return sharePath(
+    location,
+    linuxPath.replace(SHARE_SPELLED, char => `\0${char}`)
+  );
+}
+
+/**
+ * `path` for UI text, where the NUL `wslUncPath` keeps a character behind draws nothing: that
+ * character is shown as `<U+F05C>`, which no Windows name can hold.
+ */
+export function shownPath(path: string): string {
+  return path.replace(/\0(.)/gu, (_, char: string) => `<U+${(char.codePointAt(0) ?? 0).toString(16).toUpperCase()}>`);
+}
+
+/** How an operand is read: by bash itself (`cd`, a redirect), by a program, or by a Windows program run through interop. */
+export type OperandReader = 'shell' | 'program' | 'windows';
+
+/**
+ * The places `operand` names for a command whose folder is `cwd`, each a share path with any `..`
+ * left for the distro to apply; the first is where bash lands. bash reads a share path as a Linux
+ * name, while a Windows program reads it, and with `windows` any operand, as Windows does. A UNC
+ * operand of a Windows program has only that Windows reading.
+ */
+export function wslOperandPlaces(cwd: WslLocation, operand: string, reader: OperandReader = 'program'): string[] {
+  const linux = operand.startsWith('/') ? operand : `${cwd.linuxPath.replace(/\/$/, '')}/${operand}`;
+  const places = reader === 'windows' && /^[\\/]{2}/.test(operand) ? [] : [wslUncPath(cwd, linux)];
+  if (reader === 'windows' || (reader === 'program' && parseWslPath(operand))) {
+    // A drive-relative `C:x` is relative to a per-drive folder no part of this app can see; its drive root stands in.
+    const windows = operand.replace(/^([A-Za-z]:)(?![\\/])/, '$1\\');
+    places.push(win32.resolve(sharePath(cwd, cwd.linuxPath), windows));
+  }
+  return places;
+}
+
+/** A path a Linux program printed, as `wslUncPath` spells it; anything not absolute is returned as is. */
+export function toWindowsPath(location: Pick<WslLocation, 'host' | 'distro'>, path: string): string {
+  return path.startsWith('/') ? wslUncPath(location, path) : path;
+}
+
+/** A Windows path to a folder in the same distro, as a Linux program there must be given it. */
+export function toLinuxArgument(location: WslLocation, argument: string): string {
+  const named = parseWslPath(argument);
+  return named && named.distro.toLowerCase() === location.distro.toLowerCase() ? named.linuxPath : argument;
+}
+
+/** wsl.exe writes its own messages as UTF-16 unless told otherwise. Set on every wsl.exe spawn. */
+export function wslSpawnEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return { ...env, WSL_UTF8: '1' };
+}
+
+/**
+ * `wsl.exe --cd` falls back to the home folder when the folder is missing, and plain `wsl.exe --`
+ * re-parses its arguments through the login shell. `--exec` with this script does neither.
+ */
+const ENTER_FOLDER = `cd -- "$1" || exit 125; shift; [ -z "$${LINUX_PATH_ENV}" ] || export PATH="$${LINUX_PATH_ENV}"; exec "$@"`;
+
+/** `file args...` run by the distro's own toolchain in `location`. Arguments reach Linux as given. */
+export function wslCommand(
+  location: WslLocation,
+  file: string,
+  args: readonly string[]
+): { file: string; args: string[] } {
+  return {
+    file: system32('wsl.exe'),
+    args: [
+      '-d',
+      location.distro,
+      '--exec',
+      '/bin/sh',
+      '-c',
+      ENTER_FOLDER,
+      'b4m-wsl',
+      location.linuxPath,
+      file,
+      ...args,
+    ],
+  };
+}
+
+export interface WslUserEnvironment {
+  path: string;
+  /** The distro user's home, as a Linux path. */
+  home: string;
+}
+
+const USER_ENV_TIMEOUT_MS = 20_000;
+/** A failed probe is asked again after this long, so a distro that was starting up is not given up on. */
+const USER_ENV_RETRY_MS = 30_000;
+/** A probe that timed out is likely held by a startup file, so it is asked again only after this long. */
+const USER_ENV_TIMEOUT_RETRY_MS = 10 * 60_000;
+/** How long a caller waits on a probe another caller started before going on without it. */
+const USER_ENV_JOIN_MS = 2_000;
+const MARKER = '__B4M_ENV__';
+
+/**
+ * Asks the user's login shell from the passwd entry, as a terminal in the distro would start it.
+ * The printf is quoted to work in sh, bash, zsh and fish alike.
+ */
+export const USER_ENV_SCRIPT = `shell=$(getent passwd "$(id -un)" | cut -d: -f7); [ -x "$shell" ] || shell=/bin/sh; exec "$shell" -ilc "$1"`;
+export const USER_ENV_PRINT = `printf '%s' '${MARKER}' "$PATH" '${MARKER}' "$HOME" '${MARKER}'`;
+
+/** What `USER_ENV_PRINT` wrote, past whatever the shell's startup files printed around it. */
+export function parseUserEnvironment(stdout: string): WslUserEnvironment | null {
+  const [, path, home] = stdout.split(MARKER);
+  return path && home?.startsWith('/') ? { path, home } : null;
+}
+
+export interface UserEnvironmentProbe {
+  found: WslUserEnvironment | null;
+  timedOut: boolean;
+}
+
+function probeUserEnvironment(distro: string): Promise<UserEnvironmentProbe> {
+  return new Promise(resolve => {
+    // stdin is closed so a startup file that reads it gets end of input instead of waiting.
+    const child = spawn(
+      system32('wsl.exe'),
+      ['-d', distro, '--exec', '/bin/sh', '-c', USER_ENV_SCRIPT, 'b4m-env', USER_ENV_PRINT],
+      {
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true,
+        env: wslSpawnEnv(),
+      }
+    );
+    let stdout = '';
+    let timedOut = false;
+    let settled = false;
+    const finish = (found: WslUserEnvironment | null) => {
+      if (settled) return;
+      settled = true;
+      resolve({ found, timedOut });
+    };
+    // Also ends a wsl.exe that answered but is still held open by something a startup file left running.
+    const timer = setTimeout(() => {
+      timedOut = !settled;
+      child.kill('SIGKILL');
+    }, USER_ENV_TIMEOUT_MS);
+    child.stdout?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk: string) => {
+      stdout += chunk;
+      // The answer is whole at the third marker, whenever and however the shell exits after it.
+      if (stdout.split(MARKER).length > 3) finish(parseUserEnvironment(stdout));
+    });
+    const ended = () => {
+      clearTimeout(timer);
+      finish(null);
+    };
+    child.on('error', ended);
+    child.on('close', ended);
+  });
+}
+
+interface UserEnvironmentEntry {
+  found: Promise<WslUserEnvironment | null>;
+  settled: boolean;
+  /** When the probe may be run again; Infinity once it succeeded, or while it runs. */
+  retryAt: number;
+}
+
+/** wsl.exe and the share both match a distro name without regard to case, so state is kept per lowercase name. */
+const distroKey = (distro: string): string => distro.toLowerCase();
+
+const userEnvironments = new Map<string, UserEnvironmentEntry>();
+
+function within<T>(promise: Promise<T | null>, ms: number): Promise<T | null> {
+  return new Promise(resolve => {
+    const timer = setTimeout(() => resolve(null), ms);
+    timer.unref?.();
+    void promise.then(value => {
+      clearTimeout(timer);
+      resolve(value);
+    });
+  });
+}
+
+/**
+ * The PATH and home the user's login shell in the distro has, where nvm and similar put node and
+ * pnpm; `--exec` alone starts with the bare system PATH. Null when the shell cannot be asked, and
+ * for a caller that joins a probe still running after `USER_ENV_JOIN_MS`.
+ */
+export function wslUserEnvironment(
+  distro: string,
+  now: () => number = Date.now,
+  probe: (distro: string) => Promise<UserEnvironmentProbe> = probeUserEnvironment
+): Promise<WslUserEnvironment | null> {
+  const cached = userEnvironments.get(distroKey(distro));
+  if (cached && now() < cached.retryAt) return cached.settled ? cached.found : within(cached.found, USER_ENV_JOIN_MS);
+  const entry: UserEnvironmentEntry = { found: Promise.resolve(null), settled: false, retryAt: Infinity };
+  entry.found = probe(distro).then(({ found, timedOut }) => {
+    entry.settled = true;
+    if (!found) entry.retryAt = now() + (timedOut ? USER_ENV_TIMEOUT_RETRY_MS : USER_ENV_RETRY_MS);
+    return found;
+  });
+  userEnvironments.set(distroKey(distro), entry);
+  return entry.found;
+}
+
+/** A WSLENV entry with the `w` flag only crosses from Linux back to Windows. */
+const crossesIntoLinux = (entry: string): boolean => !(entry.split('/')[1] ?? '').includes('w');
+
+/** The names of the Windows variables wsl.exe passes into Linux, as WSLENV in `env` lists them. */
+export function wslEnvNames(env: NodeJS.ProcessEnv): string[] {
+  return (env.WSLENV ?? '')
+    .split(':')
+    .filter(entry => entry && crossesIntoLinux(entry))
+    .map(entry => entry.split('/')[0] as string);
+}
+
+/** Adds names to WSLENV so they cross into Linux, dropping a `w` flag that would keep a listed one out. */
+export function withWslEnv(env: NodeJS.ProcessEnv, names: readonly string[]): NodeJS.ProcessEnv {
+  const needed = new Set(names);
+  const listed = (env.WSLENV ?? '').split(':').filter(Boolean);
+  const kept = listed.map(entry => {
+    const [name = '', flags = ''] = entry.split('/');
+    if (!needed.has(name) || crossesIntoLinux(entry)) return entry;
+    const rest = flags.replaceAll('w', '');
+    return rest ? `${name}/${rest}` : name;
+  });
+  const known = new Set(listed.map(entry => entry.split('/')[0]));
+  return { ...env, WSLENV: [...kept, ...[...needed].filter(name => !known.has(name))].join(':') };
+}
+
+/**
+ * The env for a `wslCommand`. Only WSLENV names cross into Linux, so the Windows PATH stays
+ * behind and the distro user's PATH goes in its place, absolute entries only: the command starts
+ * in the project folder, where an empty or relative entry would find a program the project holds.
+ * `names` are passed through as well.
+ */
+export async function wslCommandEnv(
+  env: NodeJS.ProcessEnv,
+  distro: string,
+  names: readonly string[] = []
+): Promise<NodeJS.ProcessEnv> {
+  const user = await wslUserEnvironment(distro);
+  const path = user?.path
+    .split(':')
+    .filter(entry => entry.startsWith('/'))
+    .join(':');
+  if (!path) return wslSpawnEnv(withWslEnv(env, names));
+  return wslSpawnEnv(withWslEnv({ ...env, [LINUX_PATH_ENV]: path }, [...names, LINUX_PATH_ENV]));
+}
+
+const REALPATH_TIMEOUT_MS = 5_000;
+/** The first lookup of a session can include starting the distro. */
+const REALPATH_START_TIMEOUT_MS = 30_000;
+const REALPATH_IDLE_MS = 10_000;
+
+/**
+ * Answers each NUL-terminated path with its physical form, NUL-terminated, or an empty answer when
+ * it has none. No command substitution, which would strip a trailing newline from the answer.
+ */
+export const REALPATH_SCRIPT = `while IFS= read -r -d '' p; do realpath -zm -- "$p" 2>/dev/null || printf '\\0'; done`;
+
+interface RealpathSession {
+  child: ChildProcess;
+  /** Each gets the answer, null for none, or undefined when the session ended first. */
+  pending: ((path: string | null | undefined) => void)[];
+  buffered: string;
+  answered: boolean;
+  idle?: NodeJS.Timeout;
+}
+
+const realpathSessions = new Map<string, RealpathSession>();
+
+function endSession(distro: string, session: RealpathSession): void {
+  if (realpathSessions.get(distroKey(distro)) === session) realpathSessions.delete(distroKey(distro));
+  if (session.idle) clearTimeout(session.idle);
+  for (const answer of session.pending.splice(0)) answer(undefined);
+  session.child.kill('SIGKILL');
+}
+
+function realpathSession(distro: string): RealpathSession {
+  const open = realpathSessions.get(distroKey(distro));
+  if (open) return open;
+  const child = spawn(system32('wsl.exe'), ['-d', distro, '--exec', 'bash', '-c', REALPATH_SCRIPT], {
+    stdio: ['pipe', 'pipe', 'ignore'],
+    windowsHide: true,
+    env: wslSpawnEnv(),
+  });
+  const session: RealpathSession = { child, pending: [], buffered: '', answered: false };
+  child.stdout?.setEncoding('utf8');
+  child.stdout?.on('data', (chunk: string) => {
+    session.buffered += chunk;
+    let end = session.buffered.indexOf('\0');
+    while (end !== -1) {
+      const answer = session.buffered.slice(0, end);
+      session.buffered = session.buffered.slice(end + 1);
+      session.answered = true;
+      session.pending.shift()?.(answer.startsWith('/') ? answer : null);
+      end = session.buffered.indexOf('\0');
+    }
+  });
+  child.on('error', () => endSession(distro, session));
+  child.on('exit', () => endSession(distro, session));
+  child.stdin?.on('error', () => endSession(distro, session));
+  child.unref();
+  realpathSessions.set(distroKey(distro), session);
+  return session;
+}
+
+/**
+ * Where `linuxPath` lands inside `distro` with every symlink followed, as a Linux path; null when
+ * it cannot be resolved. Windows cannot follow a Linux symlink over the share, so the distro is
+ * asked. One wsl.exe per distro answers every lookup until it has been idle for a while; a lookup
+ * cut short by the session ending is asked once more of a new one.
+ */
+export async function wslRealpath(distro: string, linuxPath: string): Promise<string | null> {
+  if (linuxPath.includes('\0')) return null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const answer = await askSession(distro, linuxPath);
+    if (answer !== undefined) return answer;
+  }
+  return null;
+}
+
+function askSession(distro: string, linuxPath: string): Promise<string | null | undefined> {
+  const session = realpathSession(distro);
+  if (session.idle) clearTimeout(session.idle);
+  return new Promise(resolve => {
+    const timeout = session.answered ? REALPATH_TIMEOUT_MS : REALPATH_START_TIMEOUT_MS;
+    const timer = setTimeout(() => endSession(distro, session), timeout);
+    session.pending.push(path => {
+      clearTimeout(timer);
+      resolve(path);
+      if (session.pending.length === 0 && realpathSessions.get(distroKey(distro)) === session) {
+        session.idle = setTimeout(() => endSession(distro, session), REALPATH_IDLE_MS);
+        session.idle.unref?.();
+      }
+    });
+    session.child.stdin?.write(`${linuxPath}\0`);
+  });
+}

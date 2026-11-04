@@ -9,12 +9,16 @@ import {
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import {
   AuthSessionModel,
+  McpConnection as McpConnectionModel,
   McpServer,
   OAuthGrantModel,
   OAuthRefreshTokenModel,
   Organization,
+  TrustedDeviceModel,
   User,
   UserApiKey,
+  mcpConnectionRepository,
+  oauthGrantRepository,
 } from '@bike4mind/database';
 import { ACCOUNT_DELETION_GRACE_DAYS, ACCOUNT_DELETION_ORG_OWNER_CODE, ApiKeyStatus } from '@bike4mind/common';
 
@@ -104,6 +108,27 @@ async function seedAccount() {
     expiresAt: future,
   });
   await McpServer.create({ name: 'github', userId, enabled: true, env: [] });
+  await TrustedDeviceModel.create({
+    userId,
+    tokenHash: `td-${tag}`,
+    label: 'Laptop',
+    expiresAt: future,
+  });
+  await mcpConnectionRepository.create({
+    ownerType: 'user',
+    ownerKey: userId,
+    userId,
+    slug: 'linear',
+    displayName: 'Linear',
+    urlEnc: 'enc:url',
+    displayUrl: 'https://mcp.linear.app/mcp',
+    urlHost: 'mcp.linear.app',
+    transport: 'auto',
+    auth: { kind: 'none' },
+    status: 'connected',
+    tools: [],
+    enabled: true,
+  });
   return userId;
 }
 
@@ -138,6 +163,37 @@ describe('requestAccountDeletion', () => {
     expect(h.purgeArtifacts).toHaveBeenCalledWith(userId, { deletedBy: userId, logger });
     expect(h.withdrawListings).toHaveBeenCalledWith(userId);
     expect(h.sendEmail).toHaveBeenCalledWith(expect.stringContaining('@example.test'), user!.deletion.scheduledFor);
+  });
+
+  it('drops the trusted devices and MCP connections along with the rest of the lockdown', async () => {
+    const userId = await seedAccount();
+    expect(await TrustedDeviceModel.countDocuments({ userId })).toBe(1);
+
+    await requestAccountDeletion(requestFor(userId));
+
+    expect(await TrustedDeviceModel.countDocuments({ userId })).toBe(0);
+    expect(await McpConnectionModel.countDocuments({ ownerType: 'user', ownerKey: userId })).toBe(0);
+  });
+
+  it('rolls the whole lockdown back when one revoke fails, and fails the request', async () => {
+    const userId = await seedAccount();
+    const revoke = vi.spyOn(oauthGrantRepository, 'revoke').mockRejectedValueOnce(new Error('revoke failed'));
+
+    await expect(requestAccountDeletion(requestFor(userId))).rejects.toThrow('revoke failed');
+    revoke.mockRestore();
+
+    const user = await User.findById(userId).lean<{ deletion?: unknown; tokenVersion: number }>();
+    expect(user!.deletion).toBeUndefined();
+    expect(user!.tokenVersion).toBe(3);
+    expect(await AuthSessionModel.countDocuments({ userId, revokedAt: null })).toBe(2);
+    expect(await UserApiKey.countDocuments({ userId, status: { $ne: ApiKeyStatus.DISABLED } })).toBe(1);
+    expect(await OAuthGrantModel.countDocuments({ userId, revokedAt: null })).toBe(1);
+    expect(await OAuthRefreshTokenModel.countDocuments({ userId, revokedAt: null })).toBe(1);
+    expect(await McpServer.countDocuments({ userId })).toBe(1);
+    expect(await McpConnectionModel.countDocuments({ ownerType: 'user', ownerKey: userId })).toBe(1);
+    expect(await TrustedDeviceModel.countDocuments({ userId })).toBe(1);
+    expect(h.cancelSubscriptions).not.toHaveBeenCalled();
+    expect(h.sendEmail).not.toHaveBeenCalled();
   });
 
   it('clears the blog key and the Slack identity and token but keeps Slack preferences', async () => {

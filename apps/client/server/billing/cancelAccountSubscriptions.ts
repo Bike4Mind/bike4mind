@@ -79,6 +79,9 @@ async function billedCustomerIds(user: { id: string; stripeCustomerId?: string |
 // so one hung call must not hold a chunk for Stripe's 80 s default.
 const STRIPE_REQUEST_TIMEOUT_MS = 10_000;
 
+// ms. The deadline window for a single-user admin action, well inside the web Lambda's 60 s timeout.
+export const SINGLE_USER_CANCEL_BUDGET_MS = 30_000;
+
 const TIME_BUDGET_EXHAUSTED = 'time budget exhausted';
 
 // A request may not outlive the caller's deadline, but is always given at least 1 ms.
@@ -126,12 +129,14 @@ async function cancelCustomerSubscriptions(
       result.failed.push({ customerId, subscriptionId: subscription.id, reason: reasonOf(error) });
       continue;
     }
-    // An open invoice keeps Stripe's dunning retries running after the cancel. Best-effort: the
+    // An open invoice keeps Stripe's dunning retries running after the cancel; the
+    // customer.subscription.deleted webhook voids them too, as a backstop. Best-effort: the
     // subscription is already canceled, which is what this call is for.
     if (pastDeadline(deadline)) continue;
     try {
       const { voided, failed } = await voidOpenSubscriptionInvoices(subscription.id, {
-        timeoutMs: requestTimeout(deadline),
+        deadline,
+        timeoutMs: STRIPE_REQUEST_TIMEOUT_MS,
         ...(deadline === undefined ? {} : { maxNetworkRetries: 0 }),
       });
       if (voided.length > 0 || failed.length > 0) {
