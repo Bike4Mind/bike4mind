@@ -193,8 +193,17 @@ import {
   loadModelConfigurations,
   type ModelAdmission,
 } from './modelAdmission';
-import { conservativeRoundInputUsd } from './chatCreditCap';
-import { MIN_AFFORDABLE_OUTPUT_TOKENS, affordableRoundBudget, capRoundOutput } from '../completionCreditBudget';
+import {
+  OUT_OF_CREDITS_NOTICE,
+  TurnCreditLimiter,
+  accumulatedRoundsUsd,
+  adoptAccumulatedUsage,
+  cappedSettlementDelta,
+  completionOverdraftAllowance,
+  conservativeRoundInputUsd,
+  estimateAddedInputTokens,
+} from './chatCreditCap';
+import { capRoundOutput, gateEveryRound } from '../completionCreditBudget';
 import {
   executedModelFields,
   recordShadowTokenUsage,
@@ -1276,9 +1285,9 @@ export class ChatCompletionProcess {
   private reservedCreditsOwnerId: string = '';
   private reservedCreditsOwnerType: CreditHolderType = CreditHolderType.User;
   private reservedCreditHolder: ICreditHolder | null = null;
-  // The output ceiling this turn's balance can pay for, set at reservation for a personal account
-  // without a paid plan; null when no cap applies.
-  private creditOutputCap: number | null = null;
+  // Caps what the turn may spend at its hold plus the balance plus the overdraft allowance; null
+  // while credits are not enforced and on Research mode turns (see chatCreditCap.ts).
+  private turnCreditLimiter: TurnCreditLimiter | null = null;
   // The UserApiKey that authenticated the current turn (parsedBody.apiKeyId), stamped on its ledger rows.
   private turnApiKeyId: string | undefined;
   // What the reservation was priced on: a turn that ends on a thrown abort settles the tokens it
@@ -2027,6 +2036,21 @@ export class ChatCompletionProcess {
    * synchronously before the await, so a caller giving up on a stuck run and the run's own
    * error rollback cannot both refund it. A run that later reconciles bills the full actual.
    */
+  /**
+   * computeHolderSettlement, except that a credit-capped turn may not leave the balance below
+   * -allowance (TurnCreditLimiter.settlementFloorCredits); what would go further is written off.
+   */
+  private holderSettlement(
+    ownerType: CreditHolderType,
+    reservedCredits: number,
+    totalCreditsUsed: number,
+    balanceAfterHold: number
+  ): { delta: number; writtenOffCredits: number } {
+    const limiter = this.turnCreditLimiter;
+    if (!limiter) return computeHolderSettlement(ownerType, reservedCredits, totalCreditsUsed, balanceAfterHold);
+    return cappedSettlementDelta(reservedCredits, totalCreditsUsed, balanceAfterHold, limiter.settlementFloorCredits());
+  }
+
   public async releaseReservedCredits(questId: string, logger: Logger): Promise<void> {
     const amount = this.reservedCredits;
     const ownerId = this.reservedCreditsOwnerId;
@@ -4785,7 +4809,7 @@ export class ChatCompletionProcess {
         );
       }
 
-      this.creditOutputCap = null;
+      this.turnCreditLimiter = null;
       if (adminSettingsEnforceCredits) {
         const creditValidationStartTime = Date.now();
 
@@ -4949,41 +4973,50 @@ export class ChatCompletionProcess {
         this.reservedCreditHolder = holderAfterReservation;
         this.reservationBasis = { modelInfo, inputTokens, organization };
 
-        // The hold is a realistic estimate, not a bound. For a personal account without a paid plan,
-        // cap the answer so input plus a full-length reply costs no more than the balance held from,
-        // and refuse now if that cannot buy even a short answer. Same rule as cliCompletions.ts.
-        // Research mode runs several configurations off one hold and is left to the hold alone.
-        const hasPaidPlan =
-          !organization &&
-          (await this.resolveEntitlementKeys().then(
-            ({ keys, resolved }) => resolved && keys.includes(PAID_PLAN_ENTITLEMENT_KEY),
-            // Unknown plan: cap it. A paid account capped at its balance loses nothing it paid for.
-            () => false
-          ));
-        if (!isResearchMode && !organization && !hasPaidPlan) {
-          const balanceBeforeHold = holderAfterReservation.currentCredits + requiredCredits;
-          const budget = affordableRoundBudget({
-            modelInfo: chargedModelInfo,
-            inputUsd: conservativeRoundInputUsd(chargedModelInfo, inputTokens, sessionCacheTtlFor(modelInfo)),
-            inputTokens,
-            availableCredits: balanceBeforeHold,
-            minimumOutputTokens: Math.max(1, Math.min(MIN_AFFORDABLE_OUTPUT_TOKENS, sentMaxTokens)),
+        // The hold is a realistic estimate, not a bound: cap the turn at what this payer can pay
+        // (chatCreditCap.ts), and refuse it now if that cannot buy even a short answer. Research
+        // mode runs several configurations in parallel off one hold and is left to the hold alone.
+        if (!isResearchMode) {
+          const hasPaidPlan =
+            !organization &&
+            (await this.resolveEntitlementKeys().then(
+              ({ keys, resolved }) => resolved && keys.includes(PAID_PLAN_ENTITLEMENT_KEY),
+              () => false
+            ));
+          const allowanceCredits = completionOverdraftAllowance({
+            billedToOrganization: !!organization,
+            hasPaidPlan,
+            allowanceCredits: Number(getSettingsValue('paidCompletionOverdraftCredits', defaultAdminSettings)),
           });
-          if (!budget.affordable) {
+          const balanceBeforeHold = holderAfterReservation.currentCredits + requiredCredits;
+          const limiter = new TurnCreditLimiter(balanceBeforeHold + allowanceCredits, allowanceCredits);
+          const firstRound = limiter.beginRound({
+            modelInfo: chargedModelInfo,
+            inputTokens,
+            inputUsd: conservativeRoundInputUsd(chargedModelInfo, inputTokens, sessionCacheTtlFor(modelInfo)),
+            spentUsd: 0,
+            maxOutputTokens: sentMaxTokens,
+          });
+          if (!firstRound.affordable) {
             await this.releaseReservedCredits(questId, logger);
             throw new InsufficientCreditsError(
-              buildInsufficientCreditsMessage({ available: balanceBeforeHold, required: budget.minimumCredits }),
+              buildInsufficientCreditsMessage({
+                available: balanceBeforeHold,
+                required: firstRound.minimumCredits,
+                organizationName: organization?.name,
+              }),
               'insufficient_credits'
             );
           }
-          if (budget.outputTokens < sentMaxTokens) {
+          if (firstRound.outputTokens < sentMaxTokens) {
             logger.info('[CREDIT_CAP] Output budget lowered to what the balance can pay for', {
               model: modelInfo.id,
               maxTokens: sentMaxTokens,
-              affordableOutputTokens: budget.outputTokens,
+              affordableOutputTokens: firstRound.outputTokens,
+              allowanceCredits,
             });
           }
-          this.creditOutputCap = budget.outputTokens;
+          this.turnCreditLimiter = limiter;
         }
 
         logger.info(
@@ -5167,7 +5200,6 @@ export class ChatCompletionProcess {
         // The adapters append a model-identity line on their own; see resolveIdentityReminder.
         ...resolveIdentityReminder({ promptMode, offeredToolNames }),
       };
-      if (this.creditOutputCap !== null) Object.assign(options, capRoundOutput(options, this.creditOutputCap));
 
       // Create an AbortController to allow cancelling the request. Set up before the Research
       // Mode branch below, which returns early: both paths share one controller and one watcher,
@@ -5196,7 +5228,9 @@ export class ChatCompletionProcess {
       // A user Stop has already persisted 'stopped' (sessionOperations.ts), and an aborted
       // backend resolves rather than throws, so the success path must not overwrite it.
       const successStatus = (): 'done' | 'stopped' =>
-        stopSignalSent || abortController.signal.aborted ? 'stopped' : 'done';
+        stopSignalSent || (abortController.signal.aborted && !this.turnCreditLimiter?.stoppedForCredits)
+          ? 'stopped'
+          : 'done';
 
       // Set up a dedicated cancellation watcher that checks more frequently
       // than the regular status updates
@@ -5669,7 +5703,36 @@ export class ChatCompletionProcess {
                 ? { messages: outboundMessages, tools: hopTools }
                 : undoDeferredTools(outboundMessages, hopTools, deferredState);
 
-            await currentLlm.complete(
+            // Every provider round of this hop, tool-loop rounds included, gets an output budget the
+            // payer can afford, priced on this hop's model (a fallback can be dearer).
+            const creditLimiter = this.turnCreditLimiter;
+            const hopMessageCount = hopRequest.messages.length;
+            const hopLlm = creditLimiter
+              ? gateEveryRound(currentLlm, async (roundMessages, roundOptions, round) => {
+                  const roundInputTokens =
+                    inputTokens + (round === 0 ? 0 : estimateAddedInputTokens(roundMessages.slice(hopMessageCount)));
+                  const budget = creditLimiter.beginRound({
+                    modelInfo: attemptLedgerModel,
+                    inputTokens: roundInputTokens,
+                    inputUsd: conservativeRoundInputUsd(attemptLedgerModel, roundInputTokens, roundCacheTtl),
+                    spentUsd: round === 0 ? 0 : accumulatedRoundsUsd(attemptLedgerModel, roundOptions._internal),
+                    maxOutputTokens: roundOptions.maxTokens ?? safeMaxTokens,
+                  });
+                  if (budget.affordable) return capRoundOutput(roundOptions, budget.outputTokens);
+                  // The adapter reports earlier rounds' usage only on its terminal round, which a
+                  // stopped loop never reaches, so settlement takes it from here.
+                  adoptAccumulatedUsage(actualTokenUsage, roundOptions._internal, cacheTtlForSettlement);
+                  logger.info('[CREDIT_CAP] Turn stopped: the balance cannot pay for another round', {
+                    questId,
+                    model: currentModel.id,
+                    round,
+                    requiredCredits: budget.minimumCredits,
+                    limitCredits: creditLimiter.limitCredits,
+                  });
+                  return null;
+                })
+              : currentLlm;
+            await hopLlm.complete(
               currentModel.id,
               hopRequest.messages,
               {
@@ -5802,6 +5865,16 @@ export class ChatCompletionProcess {
                   visibleCharsAtLastToolCall = countVisibleChars(quest.replies);
                 }
 
+                const streamedChars = streamedTexts.reduce((sum, text) => sum + (text?.length ?? 0), 0);
+                if (creditLimiter?.recordStreamed(streamedChars) && !abortController.signal.aborted) {
+                  logger.info('[CREDIT_CAP] Stream stopped: the answer reached what the balance can pay for', {
+                    questId,
+                    model: currentModel.id,
+                    limitCredits: creditLimiter.limitCredits,
+                  });
+                  abortController.abort();
+                }
+
                 streamedTexts.forEach((streamedText, index) => {
                   if (!streamedText) return;
                   const text = reasoningWithholder
@@ -5883,6 +5956,11 @@ export class ChatCompletionProcess {
               } (attempt ${fallbackAttempt})`
             );
           } catch (attemptError) {
+            // Our own credit stop: keep what streamed and settle it, instead of retrying or falling back.
+            if (this.turnCreditLimiter?.stoppedForCredits && isAbortError(attemptError)) {
+              completionSuccess = true;
+              break;
+            }
             lastError = attemptError as Error;
             // Aborts (user cancel, client disconnect, or request/idle timeout) are
             // benign, and output-budget exhaustion is deterministic and settled as terminal
@@ -6316,7 +6394,11 @@ export class ChatCompletionProcess {
         // When the reply ended on a stripped call, say why in place of the generic notice. An answer
         // written after the call gets no notice: "try again" next to it would read as "you got nothing".
         const narratedCallLeftNoAnswer = narratedStrip.endsOnCall && statusAtEnd !== 'stopped';
-        const turnNotice = narratedCallLeftNoAnswer ? NARRATED_TOOL_CALL_NOTICE : incompleteAnswerNotice;
+        const turnNotice = this.turnCreditLimiter?.stoppedForCredits
+          ? OUT_OF_CREDITS_NOTICE
+          : narratedCallLeftNoAnswer
+            ? NARRATED_TOOL_CALL_NOTICE
+            : incompleteAnswerNotice;
         if (incompleteAnswerNotice && !narratedCallLeftNoAnswer) {
           logger.warn('[IncompleteAnswer] Turn ended without an answer after its last tool call', {
             questId,
@@ -6936,7 +7018,7 @@ export class ChatCompletionProcess {
           this.reservedCredits = 0;
           this.reservationBasis = null;
           const { delta: settlementDelta, writtenOffCredits } = this.reservedCreditsOwnerId
-            ? computeHolderSettlement(
+            ? this.holderSettlement(
                 this.reservedCreditsOwnerType,
                 reservedAtSettlement,
                 totalCreditsUsed,
@@ -7831,7 +7913,7 @@ export class ChatCompletionProcess {
       return { ...usage, ledgerModelInfo, costUsd, credits: usdToCreditsStochastic(chargedUsd) };
     });
     const totalCredits = priced.reduce((sum, usage) => sum + usage.credits, 0) + toolCredits;
-    const { delta, writtenOffCredits } = computeHolderSettlement(
+    const { delta, writtenOffCredits } = this.holderSettlement(
       ownerType,
       reserved,
       totalCredits,

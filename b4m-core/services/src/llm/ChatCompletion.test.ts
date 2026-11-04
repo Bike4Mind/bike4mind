@@ -25,6 +25,7 @@ import {
   OUTPUT_BUDGET_EXHAUSTED_REPLY,
   OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY,
 } from './ChatCompletionProcess';
+import { OUT_OF_CREDITS_NOTICE } from './chatCreditCap';
 import {
   buildAndSortMessages,
   calculateTotalTokenLength,
@@ -7534,13 +7535,24 @@ describe('ChatCompletionProcess', () => {
       const OVERSHOOT_OUTPUT_TOKENS = 1_000_000;
       const actual = realUsdToCreditsStochastic((OVERSHOOT_OUTPUT_TOKENS * 30) / 1_000_000, () => 0);
 
-      it('charges the whole overshoot into a negative balance instead of writing it off', async () => {
-        expect(actual).toBeGreaterThan(BALANCE);
-        const { state, incrementCredits } = fakeBalance(BALANCE);
-        const complete = vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+      const overdraftAllowance = (credits: number) => {
+        const prev = mockedGetSettingsValue.getMockImplementation();
+        mockedGetSettingsValue.mockImplementation(((key: string, settings: Record<string, string>) =>
+          key === 'paidCompletionOverdraftCredits' ? credits : prev?.(key as never, settings)) as typeof getSettingsValue);
+      };
+      const onPaidPlan = () =>
+        vi.spyOn(service, 'resolveEntitlementKeys').mockResolvedValue({ keys: [PAID_PLAN_ENTITLEMENT_KEY], resolved: true });
+      const overshootingComplete = () =>
+        vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
           await cb(['A long answer'], { inputTokens: 10, outputTokens: OVERSHOOT_OUTPUT_TOKENS });
         });
-        setupPersonalTurn(incrementCredits, complete);
+
+      // A provider count past the cap (drift, or an adapter that overshot it) is floored, never charged into debt.
+      it('floors an account without a paid plan at zero and writes off the overshoot', async () => {
+        expect(actual).toBeGreaterThan(BALANCE);
+        const { state, incrementCredits } = fakeBalance(BALANCE);
+        setupPersonalTurn(incrementCredits, overshootingComplete());
+        overdraftAllowance(500);
         const usageEventsRecord = vi.fn().mockResolvedValue(null);
         mockDb.usageEvents = { record: usageEventsRecord };
 
@@ -7548,23 +7560,54 @@ describe('ChatCompletionProcess', () => {
 
         const hold = -incrementCredits.mock.calls[0][1];
         expect(hold).toBeGreaterThan(0);
-        expect(incrementCredits).toHaveBeenNthCalledWith(2, 'user1', hold - actual);
-        expect(state.balance).toBe(BALANCE - actual);
+        expect(incrementCredits).toHaveBeenNthCalledWith(2, 'user1', hold - BALANCE);
+        expect(state.balance).toBe(0);
         expect(usageEventsRecord).toHaveBeenCalledWith(
-          expect.objectContaining({ creditsCharged: actual, writtenOffCredits: undefined })
+          expect.objectContaining({ creditsCharged: actual, writtenOffCredits: actual - BALANCE })
         );
         expect(mockLogger.warn).toHaveBeenCalledWith(
-          expect.stringContaining('[BILLING_SHORTFALL_DEBT]'),
-          expect.objectContaining({ ownerId: 'user1', balanceAfter: BALANCE - actual, shortfall: actual - hold })
+          expect.stringContaining('[BILLING_SHORTFALL_CLAMP]'),
+          expect.objectContaining({ ownerId: 'user1', writtenOff: actual - BALANCE })
         );
         expect(mockLogger.warn).not.toHaveBeenCalledWith(
-          expect.stringContaining('[BILLING_SHORTFALL_CLAMP]'),
+          expect.stringContaining('[BILLING_SHORTFALL_DEBT]'),
           expect.anything()
         );
       });
 
-      // The thrown-abort settlement (settleReservation) charges a personal account the same way.
-      it('charges a stopped turn past the balance in full too', async () => {
+      it('lets a paid account go no lower than minus its overdraft allowance', async () => {
+        const ALLOWANCE = 500;
+        const { state, incrementCredits } = fakeBalance(BALANCE);
+        setupPersonalTurn(incrementCredits, overshootingComplete());
+        overdraftAllowance(ALLOWANCE);
+        onPaidPlan();
+        const usageEventsRecord = vi.fn().mockResolvedValue(null);
+        mockDb.usageEvents = { record: usageEventsRecord };
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        expect(state.balance).toBe(-ALLOWANCE);
+        expect(usageEventsRecord).toHaveBeenCalledWith(
+          expect.objectContaining({ creditsCharged: actual, writtenOffCredits: actual - BALANCE - ALLOWANCE })
+        );
+      });
+
+      it('charges a usage the balance covers exactly, so settlement equals usage', async () => {
+        const { state, incrementCredits } = fakeBalance(BALANCE);
+        const OUTPUT_TOKENS = 50;
+        const used = realUsdToCreditsStochastic((OUTPUT_TOKENS * 30) / 1_000_000, () => 0);
+        const complete = vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+          await cb(['A short answer'], { inputTokens: 10, outputTokens: OUTPUT_TOKENS });
+        });
+        setupPersonalTurn(incrementCredits, complete);
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        expect(state.balance).toBe(BALANCE - used);
+      });
+
+      // The thrown-abort settlement (settleReservation) floors the same way.
+      it('floors a stopped turn past the balance at zero too', async () => {
         const { state, incrementCredits } = fakeBalance(BALANCE);
         const TOOL_CHARGE = BALANCE * 3;
         const complete = vi.fn().mockImplementation(async () => {
@@ -7580,15 +7623,53 @@ describe('ChatCompletionProcess', () => {
 
         const hold = -incrementCredits.mock.calls[0][1];
         expect(incrementCredits).toHaveBeenCalledTimes(2);
-        expect(incrementCredits).toHaveBeenNthCalledWith(2, 'user1', hold - TOOL_CHARGE);
-        expect(state.balance).toBe(BALANCE - TOOL_CHARGE);
-        expect(mockLogger.warn).toHaveBeenCalledWith(
-          expect.stringContaining('[BILLING_SHORTFALL_DEBT]'),
-          expect.objectContaining({ balanceAfter: BALANCE - TOOL_CHARGE })
-        );
+        expect(incrementCredits).toHaveBeenNthCalledWith(2, 'user1', hold - BALANCE);
+        expect(state.balance).toBe(0);
       });
 
-      describe('output cap for an account without a paid plan', () => {
+      it('sends the provider an output ceiling the balance can pay for', async () => {
+        const { incrementCredits } = fakeBalance(BALANCE);
+        const complete = vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+          await cb(['answer'], { inputTokens: 10, outputTokens: 5 });
+        });
+        setupPersonalTurn(incrementCredits, complete);
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        // Input is free on this model, so the whole balance (hold included) buys output.
+        const affordable = Math.floor(BALANCE / ((30 / 1_000_000) * CREDITS_PER_USD_COST) + 1e-9);
+        expect(complete).toHaveBeenCalledWith(
+          ChatModels.GPT4,
+          expect.anything(),
+          expect.objectContaining({ outputTokenCeiling: affordable }),
+          expect.any(Function)
+        );
+        expect(complete.mock.calls[0][2].maxTokens).toBeLessThanOrEqual(affordable);
+      });
+
+      it('refuses up front, without calling the model, when the balance cannot buy a short answer', async () => {
+        // The hold prices input at the plain rate, the cap at the cache-write rate (2x here), so
+        // a balance between the two passes the hold and fails the cap.
+        const inputUsdPerToken = BALANCE / 1.5 / 80 / CREDITS_PER_USD_COST;
+        const { state, incrementCredits } = fakeBalance(BALANCE);
+        const complete = vi.fn();
+        setupPersonalTurn(incrementCredits, complete);
+        mockedGetAvailableModels.mockResolvedValue([
+          {
+            ...overshootModel,
+            pricing: { 200000: { input: inputUsdPerToken, output: 1e-9, cache_write: inputUsdPerToken * 2 } },
+          },
+        ]);
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        expect(complete).not.toHaveBeenCalled();
+        expect(state.balance).toBe(BALANCE);
+        expect(mockQuest.type).toBe('error');
+        expect(mockQuest.reply).toMatch(/credits/i);
+      });
+
+      describe('cap pricing for an account without a paid plan', () => {
         const perOutputTokenCredits = (30 / 1_000_000) * CREDITS_PER_USD_COST;
         const answering = () =>
           vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
@@ -7596,21 +7677,6 @@ describe('ChatCompletionProcess', () => {
           });
         const sentOptions = (complete: ReturnType<typeof vi.fn>) =>
           complete.mock.calls[0][2] as { maxTokens?: number; outputTokenCeiling?: number };
-
-        it('sends the provider the largest output ceiling the balance can pay for', async () => {
-          const { incrementCredits } = fakeBalance(BALANCE);
-          const complete = answering();
-          setupPersonalTurn(incrementCredits, complete);
-
-          await service.process({ body: personalBody(), logger: mockLogger });
-
-          // Input is free on this model, so the whole balance (the hold included) buys output.
-          const { outputTokenCeiling, maxTokens } = sentOptions(complete);
-          expect(outputTokenCeiling).toBe(Math.floor(BALANCE / perOutputTokenCredits + 1e-9));
-          expect(outputTokenCeiling! * perOutputTokenCredits).toBeLessThanOrEqual(BALANCE);
-          expect((outputTokenCeiling! + 1) * perOutputTokenCredits).toBeGreaterThan(BALANCE);
-          expect(maxTokens).toBeLessThanOrEqual(outputTokenCeiling!);
-        });
 
         it('prices the input side into the cap at its cache-write rate', async () => {
           const inputUsdPerToken = 20 / 80 / CREDITS_PER_USD_COST;
@@ -7630,44 +7696,6 @@ describe('ChatCompletionProcess', () => {
           expect(sentOptions(complete).outputTokenCeiling).toBe(Math.floor((BALANCE - 40) / perOutputTokenCredits + 1e-9));
         });
 
-        it('refuses up front, without calling the model, when the balance cannot buy a short answer', async () => {
-          // The hold prices input at the plain rate and the cap at the cache-write rate (2x here),
-          // so a balance between the two passes the hold and fails the cap.
-          const inputUsdPerToken = BALANCE / 1.5 / 80 / CREDITS_PER_USD_COST;
-          const { state, incrementCredits } = fakeBalance(BALANCE);
-          const complete = vi.fn();
-          setupPersonalTurn(incrementCredits, complete);
-          mockedGetAvailableModels.mockResolvedValue([
-            {
-              ...overshootModel,
-              pricing: { 200000: { input: inputUsdPerToken, output: 1e-9, cache_write: inputUsdPerToken * 2 } },
-            },
-          ]);
-
-          await service.process({ body: personalBody(), logger: mockLogger });
-
-          expect(complete).not.toHaveBeenCalled();
-          // The hold went on and came straight back off.
-          expect(incrementCredits).toHaveBeenCalledTimes(2);
-          expect(state.balance).toBe(BALANCE);
-          expect(mockQuest.type).toBe('error');
-          expect(mockQuest.reply).toMatch(/credits/i);
-        });
-
-        it('leaves a paid account uncapped', async () => {
-          const { incrementCredits } = fakeBalance(BALANCE);
-          const complete = answering();
-          setupPersonalTurn(incrementCredits, complete);
-          vi.spyOn(service, 'resolveEntitlementKeys').mockResolvedValue({
-            keys: [PAID_PLAN_ENTITLEMENT_KEY],
-            resolved: true,
-          });
-
-          await service.process({ body: personalBody(), logger: mockLogger });
-
-          expect(sentOptions(complete).outputTokenCeiling).toBeUndefined();
-        });
-
         it('caps an account whose plan could not be read', async () => {
           const { incrementCredits } = fakeBalance(BALANCE);
           const complete = answering();
@@ -7678,20 +7706,62 @@ describe('ChatCompletionProcess', () => {
 
           expect(sentOptions(complete).outputTokenCeiling).toEqual(expect.any(Number));
         });
+      });
 
-        it('still settles exactly what was used', async () => {
-          const OUTPUT_TOKENS = 50;
-          const used = realUsdToCreditsStochastic((OUTPUT_TOKENS * 30) / 1_000_000, () => 0);
-          const { state, incrementCredits } = fakeBalance(BALANCE);
-          const complete = vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
-            await cb(['A short answer'], { inputTokens: 10, outputTokens: OUTPUT_TOKENS });
-          });
-          setupPersonalTurn(incrementCredits, complete);
-
-          await service.process({ body: personalBody(), logger: mockLogger });
-
-          expect(state.balance).toBe(BALANCE - used);
+      it('stops a tool loop before a round the balance cannot pay for, and bills the rounds it ran', async () => {
+        const { state, incrementCredits } = fakeBalance(BALANCE);
+        const ROUND_OUTPUT = 200;
+        const rounds: Array<Record<string, unknown>> = [];
+        // Recurses through this.complete like the real adapters, carrying usage in _internal.
+        const complete = vi.fn(async function (this: any, model: string, messages: any[], options: any, cb: any) {
+          rounds.push(options);
+          // A provider never answers past the ceiling it was sent.
+          const accum = (options._internal?.accumOutputTokens ?? 0) + Math.min(ROUND_OUTPUT, options.outputTokenCeiling);
+          await cb(['round text '], { toolsUsed: [] });
+          if (rounds.length > 50) throw new Error('loop was never stopped');
+          return this.complete(model, [...messages, { role: 'user', content: 'tool result' }], {
+            ...options,
+            _internal: { ...options._internal, accumInputTokens: 10 * rounds.length, accumOutputTokens: accum },
+          }, cb);
         });
+        setupPersonalTurn(incrementCredits, complete);
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        expect(rounds.length).toBeGreaterThan(1);
+        // Billed on the provider usage the stopped loop carried, every round it ran included.
+        const ranOutput = rounds.reduce(
+          (sum: number, round: any) => sum + Math.min(ROUND_OUTPUT, round.outputTokenCeiling as number),
+          0
+        );
+        const ranUsd = (ranOutput * 30) / 1_000_000;
+        expect(BALANCE - state.balance).toBe(realUsdToCreditsStochastic(ranUsd, () => 0));
+        // Each round after the first was sent with what was left.
+        expect(rounds[1]).toEqual(expect.objectContaining({ outputTokenCeiling: expect.any(Number) }));
+        expect(state.balance).toBeGreaterThanOrEqual(0);
+        expect(mockQuest.reply).toContain(OUT_OF_CREDITS_NOTICE);
+      });
+
+      it('keeps the partial answer and says why when the stream runs past the limit', async () => {
+        const { state, incrementCredits } = fakeBalance(BALANCE);
+        const complete = vi.fn().mockImplementation(async (_m, _ms, options: { abortSignal: AbortSignal }, cb) => {
+          for (let i = 0; i < 1_000; i++) {
+            if (options.abortSignal.aborted) {
+              const abort = new Error('The operation was aborted');
+              abort.name = 'AbortError';
+              throw abort;
+            }
+            await cb(['x'.repeat(600)], {});
+          }
+        });
+        setupPersonalTurn(incrementCredits, complete);
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        expect(mockQuest.status).toBe('done');
+        expect(mockQuest.reply).toMatch(/^x+/);
+        expect(mockQuest.reply).toContain(OUT_OF_CREDITS_NOTICE);
+        expect(state.balance).toBeGreaterThanOrEqual(0);
       });
 
       it('refuses the next turn while the balance is negative, without calling the model', async () => {
