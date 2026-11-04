@@ -4,7 +4,7 @@ import type { CompletionRequest } from '../chat/completions';
 import type { LocalChat } from '../chat/localChat';
 import type { OllamaLocal } from '../chat/OllamaLocal';
 import type { CompletionStreamEvent } from '../chat/streamEvents';
-import type { ModelServerRegistry } from './ModelServerRegistry';
+import type { ModelListOptions, ModelServerRegistry } from './ModelServerRegistry';
 
 /**
  * Every device-side model: this computer's Ollama, then each saved server's. A `local:srv-<id>:...`
@@ -16,8 +16,8 @@ export class LocalModels implements LocalChat {
     private readonly servers: Pick<ModelServerRegistry, 'models' | 'chatFor'>
   ) {}
 
-  async models(): Promise<ChatModelOption[]> {
-    const [own, remote] = await Promise.all([this.computer.models(), this.servers.models().catch(() => [])]);
+  async models(options?: ModelListOptions): Promise<ChatModelOption[]> {
+    const [own, remote] = await Promise.all([this.computer.models(), this.servers.models(options).catch(() => [])]);
     return [...own, ...remote];
   }
 

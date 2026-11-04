@@ -139,6 +139,7 @@ void app.whenReady().then(async () => {
     claudeImport,
     spareWorktrees,
     modelServers,
+    stopModelServers,
     localContext,
     capabilityLedger,
   } = registerChat(auth, {
@@ -229,6 +230,7 @@ void app.whenReady().then(async () => {
     fleet.dispose();
     models.dispose();
     chat.dispose();
+    stopModelServers();
     claudeImport.dispose();
     pullRequests.dispose();
     updates.dispose();

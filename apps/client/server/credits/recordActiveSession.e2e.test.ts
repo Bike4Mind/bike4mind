@@ -23,6 +23,7 @@ import * as dripPeriods from './signupDripPeriod';
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 let server: Awaited<ReturnType<typeof createMongoReplSet>>;
+const UNCAPPED = '1000000000';
 const config: Record<string, string | undefined> = {};
 const BASE = new Date('2030-03-01T10:00:00Z').getTime();
 const at = (seconds: number) => new Date(BASE + seconds * 1000);
@@ -63,7 +64,8 @@ beforeEach(async () => {
     stagedSignupGrantEnabled: 'true',
     signupGrantCredits: '1000',
     verifiedUnlockCredits: '9000',
-    signupGrantDailyBudget: '0',
+    signupGrantSignupPoolDaily: UNCAPPED,
+    signupGrantTricklePoolDaily: UNCAPPED,
     signupGrantActivityEnabled: 'true',
     signupGrantActivityMinActiveSeconds: '600',
     signupGrantActivityDailyCredits: '1000',
@@ -151,14 +153,14 @@ describe('active session heartbeat', () => {
   it('keeps preview windows inside the real UTC budget and retries withheld payouts', async () => {
     enablePreviewTestMode();
     const user = await createSignupStageUser();
-    config.signupGrantDailyBudget = '1500';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '1500';
     expect((await pingEvery60s(user.id, 0, 60)).creditsGranted).toBe(1000);
     expect(await pingEvery60s(user.id, 300, 360)).toMatchObject({ creditsGranted: 0, withheld: true });
     const budgets = await SignupGrantBudgetDayModel.find().lean();
-    expect(budgets.map(row => [row._id, row.spent])).toEqual([['2030-03-01', 1000]]);
-    config.signupGrantDailyBudget = '5000';
+    expect(budgets.map(row => [row._id, row.spent])).toEqual([['trickle:2030-03-01', 1000]]);
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '5000';
     expect((await ping(user.id, 420)).creditsGranted).toBe(1000);
-    expect((await SignupGrantBudgetDayModel.findById('2030-03-01'))?.spent).toBe(2000);
+    expect((await SignupGrantBudgetDayModel.findById('trickle:2030-03-01'))?.spent).toBe(2000);
   });
 
   it('requires activity in the new window on the eligibility fallback too', async () => {
@@ -342,28 +344,30 @@ describe('active session heartbeat', () => {
   it('withholds on an exhausted daily budget, keeps the day unpaid, and pays on a later ping once budget returns', async () => {
     const first = await createSignupStageUser(0);
     const second = await createSignupStageUser(1);
-    config.signupGrantDailyBudget = '1500';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '1500';
     expect(await pingEvery60s(first.id, 0, 600)).toMatchObject({ creditsGranted: 1000 });
     const blocked = await pingEvery60s(second.id, 0, 600);
     expect(blocked).toMatchObject({ creditsGranted: 0, paidToday: false, withheld: true });
     expect(await dripRows(second.id)).toHaveLength(0);
-    config.signupGrantDailyBudget = '5000';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '5000';
     expect(await ping(second.id, 660)).toMatchObject({ creditsGranted: 1000, paidToday: true });
   });
 
-  it('withholds while a held signup tranche exists, then pays on retry', async () => {
+  it('pays the drip from the trickle pool while a signup tranche is held on the signup pool', async () => {
     const user = await createSignupStageUser(0);
     const held = await User.create({
       username: 'held',
       name: 'Held',
       email: 'held@example.test',
+      emailVerified: true,
+      tags: ['pending-free-credits'],
       signupGrantHeldReason: 'budget_exhausted',
       signupGrantHeldAt: at(0),
       signupGrant: { ...(await newSignupGrant(adminSettingsRepository)), stage: 'pending_email' },
     });
-    expect(await pingEvery60s(user.id, 0, 600)).toMatchObject({ creditsGranted: 0, withheld: true });
-    await User.updateOne({ _id: held.id }, { $unset: { signupGrantHeldReason: 1 } });
-    expect(await ping(user.id, 660)).toMatchObject({ creditsGranted: 1000, paidToday: true });
+    expect(await pingEvery60s(user.id, 0, 600)).toMatchObject({ creditsGranted: 1000, paidToday: true });
+    expect(await dripRows(user.id)).toHaveLength(1);
+    expect((await User.findById(held.id).lean())?.signupGrantHeldReason).toBe('budget_exhausted');
   });
 
   it('accrues nothing at the lifetime cap and resumes once the cap rises', async () => {
