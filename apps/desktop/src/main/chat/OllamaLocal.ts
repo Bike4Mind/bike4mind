@@ -8,10 +8,14 @@ import {
   contextSizeLabel,
   type LocalContextFit,
   type LocalContextSetting,
+  type ModelContextSetting,
 } from '@shared/localContextSetting';
+import { MAX_DRAFT_TOKENS, type ModelLoadOffer, type ModelLoadSettings } from '@shared/modelSettings';
 import type { CompletionMessage, CompletionRequest } from './completions';
 import { configuredNumCtx, positiveTokenCount } from './localChatContext';
+import { draftFactsOf, draftTokensOf, ollamaDraft, ollamaLoadFields } from './loadOptions';
 import {
+  autoLimit,
   chatContextTokens,
   ContextOverflowError,
   estimateTokens,
@@ -220,6 +224,11 @@ const GROWTH_HINTS: Record<Exclude<ContextGrowth, { tokens: number }>['reason'],
     " Desktop could not measure this model's memory use, so it did not enlarge the context; Settings can set a larger one.",
 };
 const SLOWER_HINT = ' Part of the model now runs from system memory, so replies will be slower.';
+const OWN_FIXED_HINT = " The model's Settings on the Models screen can give it a larger context.";
+const OWN_CAP_HINT = " That is the most the model's Settings on the Models screen allow.";
+
+/** A model's load settings from the Models screen, read on every request; ModelSettingsStore.get in the app. */
+export type LoadSettingsReader = (modelId: string) => Promise<ModelLoadSettings>;
 
 /** A saved Ollama server on another machine; see main/modelServers. */
 export interface RemoteOllama {
@@ -249,7 +258,8 @@ export class OllamaLocal {
   constructor(
     private readonly chatFetch: ChatFetch = (url, init) => globalThis.fetch(url, init),
     private readonly sizing?: LocalContextSizing,
-    private readonly server?: RemoteOllama
+    private readonly server?: RemoteOllama,
+    private readonly loadSettings: LoadSettingsReader = async () => ({})
   ) {
     this.runtimeId = server?.runtimeId ?? OLLAMA_RUNTIME_ID;
   }
@@ -292,7 +302,10 @@ export class OllamaLocal {
     return this.resolveContext(modelId, showSchema.parse(await this.json('/api/show', { name }, signal)));
   }
 
-  /** The local models each Settings size may not fit, so Settings can say so beside it. */
+  /**
+   * The local models each Settings size may not fit, so Settings can say so beside it. A model with a
+   * context of its own is left out, since the Settings choice does not reach it.
+   */
   async contextFit(): Promise<LocalContextFit> {
     const sizing = this.sizing;
     const rows = sizing ? await this.tags().catch(() => null) : null;
@@ -301,7 +314,9 @@ export class OllamaLocal {
     for (const row of rows) {
       const inspection = await this.chatInspection(row.name);
       if (!inspection) continue;
-      const footprint = await sizing.footprint(await this.facts(row.name, inspection));
+      const load = await this.load(localModelId(this.runtimeId, row.name));
+      if (load.context) continue;
+      const footprint = await this.footprint(row.name, inspection, load);
       const { limit } = contextBounds(inspection);
       for (const size of LOCAL_CONTEXT_SIZES)
         if (loadsInMemory(footprint, Math.min(size, limit ?? size)) === false) (fit[size] ??= []).push(row.name);
@@ -326,6 +341,7 @@ export class OllamaLocal {
     if (!inspection.capabilities.includes('completion')) throw new Error('This Ollama model cannot answer chat.');
     knownInspections.set(this.key(model), inspection);
     let numCtx = await this.resolveContext(request.model, inspection);
+    const load = ollamaLoadFields(await this.load(request.model), draftFactsOf(inspection));
     const canThink = inspection.capabilities.includes('thinking');
     const prefilled = !canThink && opensThinkBlock(inspection.template);
     const offMode = canThink ? thinkingOffMode(inspection) : undefined;
@@ -359,9 +375,11 @@ export class OllamaLocal {
           // reply stops at num_ctx instead, as done_reason 'length' (a visible max_tokens stop).
           truncate: false,
           shift: false,
+          ...load.keepAlive,
           ...thinkField(inspection, request.thinking, request.reasoningEffort),
           options: {
             num_ctx: numCtx,
+            ...load.options,
             ...(maxTokens ? { num_predict: maxTokens } : {}),
             ...ollamaSampling(request.generation),
           },
@@ -464,17 +482,18 @@ export class OllamaLocal {
     const known = contextByModel.get(modelId);
     if (known !== undefined) return known;
     const generation = sizingGeneration;
-    const setting = await this.setting();
-    const sizing = setting.mode === 'auto' ? this.sizing : undefined;
-    const footprint = sizing
-      ? await sizing.footprint(await this.facts(ollamaModelName(modelId, this.runtimeId), inspection))
+    const load = await this.load(modelId);
+    const setting = load.context ?? (await this.setting());
+    const measured = setting.mode === 'auto' && !!this.sizing;
+    const footprint = measured
+      ? await this.footprint(ollamaModelName(modelId, this.runtimeId), inspection, load)
       : UNMEASURED;
     if (generation !== sizingGeneration) return this.resolveContext(modelId, inspection);
     const raced = contextByModel.get(modelId);
     if (raced !== undefined) return raced;
     const { limit, configured } = contextBounds(inspection);
     const tokens = chatContextTokens({ setting, footprint, modelLimit: limit, configured });
-    if (!sizing || (footprint.weightsBytes !== null && footprint.hardware !== null))
+    if (!measured || (footprint.weightsBytes !== null && footprint.hardware !== null))
       contextByModel.set(modelId, tokens);
     return tokens;
   }
@@ -483,15 +502,32 @@ export class OllamaLocal {
     return (await this.sizing?.setting()) ?? AUTO_LOCAL_CONTEXT;
   }
 
-  private async sized(inspection: Inspection, footprint: LocalModelFootprint): Promise<number> {
+  private load(modelId: string): Promise<ModelLoadSettings> {
+    return this.loadSettings(modelId).catch(() => ({}));
+  }
+
+  /** The model's own context setting from the Models screen, else the Settings choice. */
+  private async contextSetting(modelId: string): Promise<ModelContextSetting> {
+    return (await this.load(modelId)).context ?? (await this.setting());
+  }
+
+  /** What fit plans for: the model's measured shape with the draft it runs, waiting for both. */
+  private async footprint(name: string, inspection: Inspection, load: ModelLoadSettings): Promise<LocalModelFootprint> {
+    if (!this.sizing) return UNMEASURED;
+    const footprint = await this.sizing.footprint(await this.facts(name, inspection));
+    return { ...footprint, draftMax: draftTokensOf(load, draftFactsOf(inspection)) };
+  }
+
+  private async sized(modelId: string, inspection: Inspection, footprint: LocalModelFootprint): Promise<number> {
     const { limit, configured } = contextBounds(inspection);
-    return chatContextTokens({ setting: await this.setting(), footprint, modelLimit: limit, configured });
+    const setting = await this.contextSetting(modelId);
+    return chatContextTokens({ setting, footprint, modelLimit: limit, configured });
   }
 
   /** Auto, after a load failed: the last size that loaded, else the 16K floor, once per app run; undefined when there is nothing lower to try. */
   private async fallBack(modelId: string, inspection: Inspection, current: number): Promise<number | undefined> {
     const generation = sizingGeneration;
-    const setting = await this.setting();
+    const setting = await this.contextSetting(modelId);
     const { limit } = contextBounds(inspection);
     const floor = Math.min(LOCAL_CONTEXT_TARGET_TOKENS, limit ?? LOCAL_CONTEXT_TARGET_TOKENS);
     const loaded = loadedByModel.get(modelId) ?? 0;
@@ -513,6 +549,44 @@ export class OllamaLocal {
     return (await this.grow(modelId, inspection, tokens, undefined, current)).tokens;
   }
 
+  /**
+   * The load-time options this model takes, each context size rated for the draft count `draftTokens`
+   * (undefined: the model's own). Auto is offered only where Desktop measures the model, which a
+   * saved server it is not.
+   */
+  async loadOffer(modelId: string, draftTokens?: number): Promise<ModelLoadOffer> {
+    const name = ollamaModelName(modelId, this.runtimeId);
+    const inspection = await this.chatInspection(name);
+    if (!inspection) return { keepAlive: true };
+    const facts = draftFactsOf(inspection);
+    const draft = ollamaDraft(facts);
+    const footprint = await this.footprint(name, inspection, draftTokens === undefined ? {} : { draftTokens });
+    const { limit, configured } = contextBounds(inspection);
+    const sized = (setting: ModelContextSetting) =>
+      chatContextTokens({ setting, footprint, modelLimit: limit, configured });
+    const sizes = LOCAL_CONTEXT_SIZES.filter((size, index) => index === 0 || limit === undefined || size <= limit);
+    const measured = this.sizing !== undefined;
+    return {
+      context: {
+        kind: 'ollama',
+        settings: sized(await this.setting()),
+        ...(measured ? { auto: sized(AUTO_LOCAL_CONTEXT) } : {}),
+        sizes: sizes.map(size => {
+          const tokens = sized({ mode: 'fixed', tokens: size });
+          const loads = loadsInMemory(footprint, tokens);
+          return {
+            size,
+            tokens,
+            autoTokens: sized({ mode: 'auto', maxTokens: size }),
+            ...(loads !== undefined ? { loads } : {}),
+          };
+        }),
+      },
+      ...(draft ? { draft: { modelDefault: draft.modelDefault, max: MAX_DRAFT_TOKENS } } : {}),
+      keepAlive: true,
+    };
+  }
+
   /** Under Auto, the larger context a refused prompt needs when the model and memory hold it; else why not. */
   private async grow(
     modelId: string,
@@ -522,15 +596,15 @@ export class OllamaLocal {
     current: number
   ): Promise<{ tokens?: number; slower?: boolean; hint: string }> {
     const generation = sizingGeneration;
-    const setting = await this.setting();
+    const load = await this.load(modelId);
+    const setting = load.context ?? (await this.setting());
     const { limit } = contextBounds(inspection);
     if (setting.mode === 'fixed') {
       const larger = LOCAL_CONTEXT_SIZES.some(size => size > current) && (limit === undefined || current < limit);
-      return { hint: larger ? ' Settings can give local models a larger context.' : '' };
+      if (!larger) return { hint: '' };
+      return { hint: load.context ? OWN_FIXED_HINT : ' Settings can give local models a larger context.' };
     }
-    const footprint = this.sizing
-      ? await this.sizing.footprint(await this.facts(ollamaModelName(modelId, this.runtimeId), inspection))
-      : UNMEASURED;
+    const footprint = await this.footprint(ollamaModelName(modelId, this.runtimeId), inspection, load);
     // Settings changed while this was measured: the new choice decides the size.
     if (generation !== sizingGeneration) {
       const fresh = await this.resolveContext(modelId, inspection);
@@ -539,9 +613,13 @@ export class OllamaLocal {
     // Another conversation may have grown it while this request was out.
     const other = contextByModel.get(modelId) ?? 0;
     if (failedLoads.has(modelId)) return other > current ? { tokens: other, hint: '' } : { hint: GROWTH_HINTS.memory };
-    const growth = grownContext(footprint, measured, maxTokens, limit, current);
-    if (growth.tokens === undefined)
-      return other > current ? { tokens: other, hint: '' } : { hint: GROWTH_HINTS[growth.reason] };
+    const ceiling = autoLimit(setting, footprint, limit);
+    const growth = grownContext(footprint, measured, maxTokens, ceiling, current);
+    if (growth.tokens === undefined) {
+      if (other > current) return { tokens: other, hint: '' };
+      const capped = growth.reason === 'model-limit' && ceiling !== autoLimit(AUTO_LOCAL_CONTEXT, footprint, limit);
+      return { hint: capped ? OWN_CAP_HINT : GROWTH_HINTS[growth.reason] };
+    }
     const tokens = Math.max(growth.tokens, other);
     contextByModel.set(modelId, tokens);
     return { tokens, slower: growth.slower && tokens === growth.tokens, hint: '' };
@@ -613,8 +691,11 @@ export class OllamaLocal {
     const capabilities = inspection?.capabilities;
     const id = localModelId(this.runtimeId, name);
     // Advertised from what is known now; the context is settled on the model's first request.
-    const footprint = this.sizing ? this.sizing.cachedFootprint(await this.facts(name, known)) : UNMEASURED;
-    const contextWindow = contextByModel.get(id) ?? (await this.sized(known, footprint));
+    const draftMax = draftTokensOf(await this.load(id), draftFactsOf(known));
+    const footprint = this.sizing
+      ? { ...this.sizing.cachedFootprint(await this.facts(name, known)), draftMax }
+      : UNMEASURED;
+    const contextWindow = contextByModel.get(id) ?? (await this.sized(id, known, footprint));
     const canThink = capabilities?.includes('thinking') === true;
     const controls = ollamaControls({
       inspected: inspection !== undefined,
@@ -903,6 +984,12 @@ function forgetLocalContext(modelId: string): void {
   contextByModel.delete(modelId);
   failedLoads.delete(modelId);
   loadedByModel.delete(modelId);
+}
+
+/** After a model's own load settings change: it is sized again on its next request. */
+export function forgetLocalContextOf(modelId: string): void {
+  sizingGeneration++;
+  forgetLocalContext(modelId);
 }
 
 /** After the Settings choice changes: every model is sized again on its next request. */

@@ -1,11 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { parseModelSettingsFile, type ModelSettings } from '@shared/modelSettings';
-
-function isEmpty(settings: ModelSettings): boolean {
-  return settings.generation === undefined && settings.effort === undefined;
-}
+import { isEmptyModelSettings, parseModelSettingsFile, type ModelSettings } from '@shared/modelSettings';
 
 /** Per-model defaults from the Models screen, by chat model id; per machine, like local-context.json. */
 export class ModelSettingsStore {
@@ -68,7 +64,7 @@ export class ModelSettingsStore {
   set(modelId: string, settings: ModelSettings): Promise<ModelSettings> {
     const done = this.writing.then(async () => {
       const updated = new Map(await this.read());
-      if (isEmpty(settings)) updated.delete(modelId);
+      if (isEmptyModelSettings(settings)) updated.delete(modelId);
       else updated.set(modelId, settings);
       await mkdir(dirname(this.filePath), { recursive: true });
       const temporary = `${this.filePath}.${randomUUID()}.tmp`;

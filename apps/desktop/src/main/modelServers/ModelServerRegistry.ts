@@ -52,7 +52,7 @@ import {
   type ModelServerView,
 } from '@shared/modelServers';
 import type { LocalChat } from '../chat/localChat';
-import { OllamaLocal } from '../chat/OllamaLocal';
+import { OllamaLocal, type LoadSettingsReader } from '../chat/OllamaLocal';
 import type { ModelHubServer } from '../models/ModelHubService';
 import { ServerCredentialsError, ServerForbiddenError, ServerUnreachableError } from './errors';
 import { withLocalNetworkHint } from './localNetworkHint';
@@ -144,6 +144,8 @@ export interface ModelServerRegistryDeps {
   localSpecsChanged?(): void;
   /** Defaults to `process.platform`; decides whether a LAN failure gets the macOS Local Network hint. */
   platform?: NodeJS.Platform;
+  /** Each model's load settings from the Models screen, which every request for it carries. */
+  loadSettings?: LoadSettingsReader;
 }
 
 const UNKNOWN_HEALTH: ModelServerHealth = {
@@ -616,6 +618,11 @@ export class ModelServerRegistry {
         this.run(id, signal, entry => entry.client.stream(request, onEvent, signal, onTrimmed, onNotice)),
       contextTokens: (modelId, signal) => this.run(id, signal, entry => entry.client.contextTokens(modelId, signal)),
       growFor: (modelId, tokens) => this.run(id, undefined, entry => entry.client.growFor(modelId, tokens)),
+      // For the Models screen's dialog only, so a failure here says nothing about the server's health.
+      loadOffer: async (modelId, draftTokens) => {
+        await this.load();
+        return (await this.entries.get(id)?.client.loadOffer?.(modelId, draftTokens)) ?? {};
+      },
     };
   }
 
@@ -838,14 +845,19 @@ export class ModelServerRegistry {
     const product = previous?.record.kind === record.kind ? previous.product : null;
     const client: ServerClient =
       record.kind === 'ollama'
-        ? new OllamaLocal(undefined, undefined, {
-            runtimeId,
-            baseUrl: parsed.baseUrl,
-            label: record.name,
-            fetch,
-            hasCredentials,
-            redact: redactServerResponse,
-          })
+        ? new OllamaLocal(
+            undefined,
+            undefined,
+            {
+              runtimeId,
+              baseUrl: parsed.baseUrl,
+              label: record.name,
+              fetch,
+              hasCredentials,
+              redact: redactServerResponse,
+            },
+            this.deps.loadSettings
+          )
         : new OpenAICompatibleChat({
             runtimeId,
             baseUrl: parsed.baseUrl,
@@ -854,6 +866,7 @@ export class ModelServerRegistry {
             fetch,
             hasCredentials,
             redact: redactServerResponse,
+            loadSettings: this.deps.loadSettings,
             toolsChanged: () => this.toolsChanged(record.id),
             learnedThinkers: {
               read: () => this.deps.store.thinkers(record.id),

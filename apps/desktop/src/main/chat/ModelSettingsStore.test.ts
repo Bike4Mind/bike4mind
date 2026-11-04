@@ -52,6 +52,12 @@ describe('ModelSettingsStore', () => {
     expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ models: {} });
   });
 
+  it('keeps a model whose set holds only load settings', async () => {
+    const path = await fileIn();
+    await new ModelSettingsStore(path).set(QWEN, { draftTokens: 0, keepAlive: -1 });
+    expect(await new ModelSettingsStore(path).get(QWEN)).toEqual({ draftTokens: 0, keepAlive: -1 });
+  });
+
   it('runs concurrent writes one at a time, so neither is lost', async () => {
     const path = await fileIn();
     const store = new ModelSettingsStore(path);

@@ -1,18 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { HardwareProfile, ModelArch } from '@bike4mind/common';
+import { estimateFit, type HardwareProfile, type ModelArch } from '@bike4mind/common';
 import { AUTO_LOCAL_CONTEXT, type LocalContextSetting } from '@shared/localContextSetting';
+import type { ModelLoadSettings } from '@shared/modelSettings';
 import type { CompletionMessage } from './completions';
 import type { CompletionStreamEvent } from './streamEvents';
 import { cpuMachine, discreteMachine, GIB, lowConfidenceMachine, stubArch, unifiedMachine } from './fitStub.testHelper';
 import type { LocalModelFootprint } from './localContext';
 import { HardwareProbe, localContextSizing } from './localContextSizing';
-import { forgetLocalContexts, OllamaLocal, type LocalContextSizing } from './OllamaLocal';
+import { forgetLocalContextOf, forgetLocalContexts, OllamaLocal, type LocalContextSizing } from './OllamaLocal';
 import { createThinkFilter } from './thinkFilter';
 import { ServerCredentialsError, ServerForbiddenError } from '../modelServers/errors';
 
 vi.mock('@bike4mind/common', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/common')>()),
-  estimateFit: (await import('./fitStub.testHelper')).stubEstimateFit,
+  estimateFit: vi.fn((await import('./fitStub.testHelper')).stubEstimateFit),
 }));
 
 describe('OllamaLocal', () => {
@@ -1675,6 +1676,176 @@ describe('OllamaLocal context sizing', () => {
         20_000
       )
     ).toBeUndefined();
+  });
+
+  describe("with a model's own load settings", () => {
+    const own = (settings: ModelLoadSettings) => async (modelId: string) =>
+      modelId === 'local:ollama:llama' ? settings : {};
+    const mtp = (tokens: number) => ({
+      model_info: { 'llama.context_length': tokens, 'llama.nextn_predict_layers': 1 },
+    });
+    const chatBodies = () =>
+      vi
+        .mocked(fetch)
+        .mock.calls.filter(([input]) => String(input).endsWith('/api/chat'))
+        .map(([, init]) => JSON.parse(String(init?.body)) as { keep_alive?: number; options: Record<string, unknown> });
+
+    it('sends its fixed context in place of the Settings choice', async () => {
+      const sent = ollama(trainedFor(131072));
+      const local = new OllamaLocal(
+        undefined,
+        sizing(AUTO_LOCAL_CONTEXT, 64),
+        undefined,
+        own({ context: { mode: 'fixed', tokens: 32768 } })
+      );
+      expect((await local.models())[0].contextWindow).toBe(32768);
+      await local.stream(longTurn, () => undefined);
+      expect(sent()).toEqual([32768]);
+      expect(await local.contextTokens('local:ollama:llama')).toBe(32768);
+    });
+
+    it('stops Auto at its cap and says the cap is why a prompt was not given more room', async () => {
+      const sent = ollama(trainedFor(131072), () => overflow(40_000));
+      const local = new OllamaLocal(
+        undefined,
+        sizing(AUTO_LOCAL_CONTEXT, 64),
+        undefined,
+        own({ context: { mode: 'auto', maxTokens: 32768 } })
+      );
+      await expect(local.stream(longTurn, () => undefined)).rejects.toThrow(
+        "That is the most the model's Settings on the Models screen allow."
+      );
+      expect(sent()).toEqual([32768]);
+    });
+
+    it('points at the Models screen when its own fixed context is too small', async () => {
+      ollama(trainedFor(131072), () => overflow(20_000));
+      const local = new OllamaLocal(
+        undefined,
+        sizing(AUTO_LOCAL_CONTEXT, 64),
+        undefined,
+        own({ context: { mode: 'fixed', tokens: 16384 } })
+      );
+      await expect(local.stream(longTurn, () => undefined)).rejects.toThrow(
+        "The model's Settings on the Models screen can give it a larger context."
+      );
+    });
+
+    it('sizes it again once its settings change and it is forgotten', async () => {
+      const sent = ollama(trainedFor(131072));
+      let settings: ModelLoadSettings = { context: { mode: 'fixed', tokens: 32768 } };
+      const local = new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, 64), undefined, async () => settings);
+      await local.stream(longTurn, () => undefined);
+      settings = { context: { mode: 'fixed', tokens: 16384 } };
+      await local.stream(longTurn, () => undefined);
+      forgetLocalContextOf('local:ollama:llama');
+      await local.stream(longTurn, () => undefined);
+      expect(sent()).toEqual([32768, 32768, 16384]);
+    });
+
+    it('sends its draft count and keep-alive on every request, and the draft count only where Ollama can speculate', async () => {
+      ollama(mtp(131072));
+      const local = new OllamaLocal(undefined, undefined, undefined, own({ draftTokens: 2, keepAlive: -1 }));
+      await local.stream(longTurn, () => undefined);
+      await local.stream({ ...longTurn, maxTokens: 20 }, () => undefined);
+      expect(chatBodies().map(body => [body.keep_alive, body.options.draft_num_predict])).toEqual([
+        [-1, 2],
+        [-1, 2],
+      ]);
+
+      vi.unstubAllGlobals();
+      forgetLocalContexts();
+      ollama(trainedFor(131072));
+      await local.stream(longTurn, () => undefined);
+      expect(chatBodies()[0]).toMatchObject({ keep_alive: -1 });
+      expect(chatBodies()[0]?.options).not.toHaveProperty('draft_num_predict');
+    });
+
+    it('sends them to a saved Ollama server as well', async () => {
+      const serverFetch = vi.fn(async (input: unknown, _init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith('/api/tags')) return Response.json({ models: [{ name: 'llama' }] });
+        if (url.endsWith('/api/show')) return Response.json({ capabilities: ['completion'], ...mtp(131072) });
+        return new Response(`${JSON.stringify({ done: true })}\n`);
+      });
+      const server = new OllamaLocal(
+        undefined,
+        undefined,
+        {
+          runtimeId: 'srv-aaa111',
+          baseUrl: 'https://one.example.test',
+          label: 'gpu box',
+          fetch: serverFetch,
+          hasCredentials: () => false,
+          redact: text => text,
+        },
+        async modelId => (modelId === 'local:srv-aaa111:llama' ? { draftTokens: 0, keepAlive: 3600 } : {})
+      );
+      await server.stream({ ...longTurn, model: 'local:srv-aaa111:llama' }, () => undefined);
+      const body = serverFetch.mock.calls
+        .filter(([input]) => String(input).endsWith('/api/chat'))
+        .map(
+          ([, init]) => JSON.parse(String(init?.body)) as { keep_alive?: number; options: Record<string, unknown> }
+        )[0];
+      expect(body).toMatchObject({ keep_alive: 3600, options: { draft_num_predict: 0 } });
+    });
+
+    it('leaves a model with its own context out of the Settings fit list', async () => {
+      ollama(trainedFor(131072));
+      const fit = await new OllamaLocal(
+        undefined,
+        sizing(AUTO_LOCAL_CONTEXT, 16),
+        undefined,
+        own({ context: { mode: 'auto' } })
+      ).contextFit();
+      expect(fit).toEqual({});
+    });
+
+    it('offers each size up to the trained length, rated for memory, with Auto and the draft count', async () => {
+      ollama(mtp(131072));
+      const offer = await new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, 13)).loadOffer('local:ollama:llama');
+      expect(offer).toEqual({
+        context: {
+          kind: 'ollama',
+          settings: 65536,
+          auto: 65536,
+          sizes: [
+            { size: 16384, tokens: 16384, autoTokens: 16384, loads: true },
+            { size: 32768, tokens: 32768, autoTokens: 32768, loads: true },
+            { size: 65536, tokens: 65536, autoTokens: 65536, loads: true },
+            { size: 131072, tokens: 131072, autoTokens: 65536, loads: false },
+          ],
+        },
+        draft: { modelDefault: 0, max: 16 },
+        keepAlive: true,
+      });
+    });
+
+    it('rates the sizes for the draft count the dialog asks about', async () => {
+      ollama(mtp(131072));
+      const local = new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, 13));
+      vi.mocked(estimateFit).mockClear();
+      await local.loadOffer('local:ollama:llama', 3);
+      const runtimes = vi.mocked(estimateFit).mock.calls.map(([input]) => input.runtime);
+      expect(runtimes.length).toBeGreaterThan(0);
+      expect(runtimes.every(runtime => runtime.draftMax === 3 && runtime.speculative)).toBe(true);
+    });
+
+    it('offers no Auto and no rating where Desktop cannot measure the model, and no draft without a head', async () => {
+      ollama(trainedFor(32768));
+      const offer = await new OllamaLocal().loadOffer('local:ollama:llama');
+      expect(offer).toEqual({
+        context: {
+          kind: 'ollama',
+          settings: 16384,
+          sizes: [
+            { size: 16384, tokens: 16384, autoTokens: 16384 },
+            { size: 32768, tokens: 32768, autoTokens: 16384 },
+          ],
+        },
+        keepAlive: true,
+      });
+    });
   });
 });
 

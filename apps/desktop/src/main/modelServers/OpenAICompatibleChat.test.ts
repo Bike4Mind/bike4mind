@@ -675,6 +675,43 @@ describe('OpenAICompatibleChat on a server that fronts several models', () => {
     await client.contextTokens(MODEL_A);
     expect(server.listings()).toBe(1);
   });
+
+  describe("with a model's own context from the Models screen", () => {
+    const budgeted = (fetch: FetchLike) =>
+      new OpenAICompatibleChat({
+        runtimeId: 'srv-abc123',
+        baseUrl: BASE,
+        label: 'vllm box',
+        product: 'vllm',
+        fetch,
+        hasCredentials: () => false,
+        redact: text => text,
+        loadSettings: async modelId =>
+          modelId === MODEL_A ? { context: { mode: 'fixed', tokens: 32768 }, draftTokens: 3, keepAlive: -1 } : {},
+      });
+
+    it('compacts against a smaller size as a budget, lists it, and sends no Ollama-only field', async () => {
+      const server = proxy(65536);
+      const client = budgeted(server.fetch);
+      expect((await client.listModels()).map(model => [model.name, model.contextWindow, model.contextFixed])).toEqual([
+        ['a', 32768, true],
+        ['b', 65536, true],
+      ]);
+      expect(await client.contextTokens(MODEL_A)).toBe(32768);
+      expect(await client.contextTokens(MODEL_B)).toBe(65536);
+      await collect(client, { model: MODEL_A, messages: [{ role: 'user', content: 'hi' }] });
+      expect(server.bodies.at(-1)).not.toHaveProperty('keep_alive');
+      expect(JSON.stringify(server.bodies.at(-1))).not.toContain('draft');
+    });
+
+    it('offers only sizes below what the server runs, and nothing when it does not say', async () => {
+      expect(await budgeted(proxy(65536).fetch).loadOffer(MODEL_A)).toEqual({
+        context: { kind: 'budget', server: 65536, sizes: [16384, 32768] },
+      });
+      expect(await budgeted(proxy(16384).fetch).loadOffer(MODEL_A)).toEqual({});
+      expect(await budgeted(proxy().fetch).loadOffer(MODEL_A)).toEqual({});
+    });
+  });
 });
 
 describe('OpenAICompatibleChat max output on a context the server fixes', () => {

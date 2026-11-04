@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { HardwareProfile, ModelArch } from '@bike4mind/common';
+import { estimateFit, type HardwareProfile, type ModelArch } from '@bike4mind/common';
 import { AUTO_LOCAL_CONTEXT } from '@shared/localContextSetting';
 import { cpuMachine, discreteMachine, GIB, lowConfidenceMachine, stubArch, unifiedMachine } from './fitStub.testHelper';
 import {
@@ -21,7 +21,7 @@ import {
 
 vi.mock('@bike4mind/common', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/common')>()),
-  estimateFit: (await import('./fitStub.testHelper')).stubEstimateFit,
+  estimateFit: vi.fn((await import('./fitStub.testHelper')).stubEstimateFit),
 }));
 
 const UNMEASURED: LocalModelFootprint = { arch: null, weightsBytes: null, hardware: null };
@@ -232,6 +232,29 @@ describe('chatContextTokens', () => {
     expect(
       chatContextTokens({ setting: { mode: 'fixed', tokens: 262144 }, footprint: on(64), modelLimit: 32768 })
     ).toBe(32768);
+  });
+
+  it("stops Auto at a model's own cap, and never takes it below 16K", () => {
+    const footprint = on(unifiedMachine(40));
+    const capped = (maxTokens: 16384 | 65536) => chatContextTokens({ setting: { mode: 'auto', maxTokens }, footprint });
+    expect(capped(65536)).toBe(65536);
+    expect(capped(16384)).toBe(16384);
+    expect(chatContextTokens({ setting: { mode: 'auto', maxTokens: 65536 }, footprint: UNMEASURED })).toBe(16384);
+    expect(
+      chatContextTokens({ setting: { mode: 'auto', maxTokens: 65536 }, footprint: UNMEASURED, modelLimit: 8192 })
+    ).toBe(8192);
+  });
+
+  it('plans the draft tokens a speculating model runs with', () => {
+    vi.mocked(estimateFit).mockClear();
+    loadsInMemory({ ...on(9), draftMax: 3 }, 16384);
+    expect(vi.mocked(estimateFit).mock.calls.at(-1)?.[0].runtime).toEqual({
+      kind: 'ollama',
+      draftMax: 3,
+      speculative: true,
+    });
+    loadsInMemory({ ...on(9), draftMax: 0 }, 16384);
+    expect(vi.mocked(estimateFit).mock.calls.at(-1)?.[0].runtime).toEqual({ kind: 'ollama' });
   });
 
   it('gives a fixed Settings size past 32K on a machine without a GPU', () => {

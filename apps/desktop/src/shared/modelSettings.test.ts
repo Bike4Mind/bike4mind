@@ -58,9 +58,43 @@ describe('parseModelSettingsInput', () => {
   });
 });
 
+describe('load settings', () => {
+  it('accepts a context choice, a draft count and a keep-alive', () => {
+    expect(
+      parseModelSettingsInput({ context: { mode: 'auto', maxTokens: 65536 }, draftTokens: 0, keepAlive: -1 })
+    ).toEqual({ context: { mode: 'auto', maxTokens: 65536 }, draftTokens: 0, keepAlive: -1 });
+    expect(parseModelSettingsInput({ context: { mode: 'fixed', tokens: 16384 } })).toEqual({
+      context: { mode: 'fixed', tokens: 16384 },
+    });
+  });
+
+  it.each([
+    { context: { mode: 'fixed', tokens: 8192 } },
+    { context: { mode: 'fixed' } },
+    { context: { mode: 'auto', maxTokens: 50000 } },
+    { context: 'auto' },
+    { draftTokens: 17 },
+    { draftTokens: 1.5 },
+    { draftTokens: -1 },
+    { keepAlive: 60 },
+    { keepAlive: '1h' },
+    { generation: { temperature: 0.5 }, keepAlive: 7 },
+  ])('rejects %j', raw => {
+    expect(parseModelSettingsInput(raw)).toBeNull();
+  });
+
+  it('keeps the valid load fields of a stored entry and drops the rest', () => {
+    expect(
+      normalizeModelSettings({ context: { mode: 'fixed', tokens: 1000 }, draftTokens: 2, keepAlive: 3600 })
+    ).toEqual({ draftTokens: 2, keepAlive: 3600 });
+    expect(normalizeModelSettings({ context: { mode: 'auto' } })).toEqual({ context: { mode: 'auto' } });
+  });
+});
+
 describe('normalizeModelSettings', () => {
   it('is undefined once nothing valid is left', () => {
     expect(normalizeModelSettings({ generation: { temperature: -1 }, effort: 'x' })).toBeUndefined();
+    expect(normalizeModelSettings({ draftTokens: 99, keepAlive: 2 })).toBeUndefined();
   });
 });
 

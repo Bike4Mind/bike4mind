@@ -16,6 +16,8 @@ import {
 } from '@bike4mind/local-models/servers';
 import { localBackend, localModelId, parseLocalModelId, type ChatModelOption, type ChatTokenRate } from '@shared/chat';
 import { isChatCapable } from '@shared/models';
+import { LOCAL_CONTEXT_SIZES } from '@shared/localContextSetting';
+import type { ModelLoadOffer, ModelLoadSettings } from '@shared/modelSettings';
 import type { CompletionMessage, CompletionRequest } from '../chat/completions';
 import type { LocalChat } from '../chat/localChat';
 import { estimateTokens, LOCAL_CONTEXT_TARGET_TOKENS, replyLimit, toolReplyReserve } from '../chat/localContext';
@@ -43,6 +45,8 @@ export interface OpenAICompatibleServer {
     add(model: string, identity: string | undefined): Promise<void>;
     forget(model: string): Promise<void>;
   };
+  /** Each model's load settings from the Models screen; only a smaller context applies here, as a budget. */
+  loadSettings?: (modelId: string) => Promise<ModelLoadSettings>;
 }
 
 const DESKTOP_HINTS: HintApp = {
@@ -217,6 +221,8 @@ function tokenCount(value: unknown): number | undefined {
 export class OpenAICompatibleChat implements LocalChat {
   private readonly runtime: OpenAICompatibleRuntime;
   private readonly contexts = new Map<string, number>();
+  /** The listed name behind each alias, since a model's settings are kept under the name it is listed by. */
+  private readonly listedNames = new Map<string, string>();
   /**
    * Models whose requests declaring tools were refused, so their chats go without tools until a recheck sees
    * tools accepted again. Tool flags are server-wide on vLLM and llama-server, so one refusal turns tools off
@@ -269,8 +275,12 @@ export class OpenAICompatibleChat implements LocalChat {
     this.smallChanged(before);
     this.learnIdentities(models);
     this.effortModels.clear();
-    return chat.map(model => {
+    for (const model of chat) for (const alias of model.aliases ?? []) this.listedNames.set(alias, model.name);
+    const budgets = await Promise.all(chat.map(model => this.budget(model.name)));
+    return chat.map((model, index) => {
       const thinks = this.thinkers.has(model.name);
+      const served = this.contexts.get(model.name);
+      const window = served === undefined ? undefined : Math.min(served, budgets[index] ?? served);
       const effortLevels = takesReasoningEffort(model);
       if (effortLevels) for (const name of [model.name, ...(model.aliases ?? [])]) this.effortModels.add(name);
       const controls = openAICompatibleControls(this.server.product, {
@@ -283,7 +293,7 @@ export class OpenAICompatibleChat implements LocalChat {
         name: model.name,
         backend: localBackend(this.server.runtimeId),
         ...(model.capabilities.vision ? { supportsVision: true } : {}),
-        ...(this.contexts.has(model.name) ? { contextWindow: this.contexts.get(model.name), contextFixed: true } : {}),
+        ...(window !== undefined ? { contextWindow: window, contextFixed: true } : {}),
         ...(model.baseModel ? { baseModel: model.baseModel } : {}),
         ...(model.aliases?.length
           ? { aliasIds: model.aliases.map(alias => localModelId(this.server.runtimeId, alias)) }
@@ -302,8 +312,34 @@ export class OpenAICompatibleChat implements LocalChat {
     });
   }
 
+  /**
+   * The context ChatService compacts against: the server's, or a smaller one set for the model on the
+   * Models screen. Requests still size max_tokens against the server's own.
+   */
   async contextTokens(modelId: string, signal?: AbortSignal): Promise<number> {
     const name = this.modelName(modelId);
+    const served = await this.servedContext(name, signal);
+    if (served === undefined) return LOCAL_CONTEXT_TARGET_TOKENS;
+    return Math.min(served, (await this.budget(name)) ?? served);
+  }
+
+  /** The model's own context from the Models screen, which lowers the server's as a client budget. */
+  private async budget(name: string): Promise<number | undefined> {
+    const id = localModelId(this.server.runtimeId, this.listedNames.get(name) ?? name);
+    const load: ModelLoadSettings | undefined = await this.server.loadSettings?.(id).catch(() => ({}));
+    const context = load?.context;
+    if (!context) return undefined;
+    return context.mode === 'fixed' ? context.tokens : context.maxTokens;
+  }
+
+  /** Only a server that states its context can be given a smaller one; nothing else here is set per model. */
+  async loadOffer(modelId: string): Promise<ModelLoadOffer> {
+    const served = await this.servedContext(this.modelName(modelId)).catch(() => undefined);
+    const sizes = served === undefined ? [] : LOCAL_CONTEXT_SIZES.filter(size => size < served);
+    return served !== undefined && sizes.length > 0 ? { context: { kind: 'budget', server: served, sizes } } : {};
+  }
+
+  private async servedContext(name: string, signal?: AbortSignal): Promise<number | undefined> {
     const known = this.contexts.get(name);
     if (known !== undefined) return known;
     if (this.server.product === 'llama-server') {
@@ -316,7 +352,7 @@ export class OpenAICompatibleChat implements LocalChat {
         if (!this.contexts.has(name)) this.unlistedContexts.add(name);
       }
     }
-    return this.contexts.get(name) ?? LOCAL_CONTEXT_TARGET_TOKENS;
+    return this.contexts.get(name);
   }
 
   /** Why chats on this server run without tools; null while they have them. */

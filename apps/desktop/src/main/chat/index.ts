@@ -100,7 +100,7 @@ import { SessionStore } from './SessionStore';
 import { LocalHistory } from './LocalHistory';
 import { registerHistoryIpc } from './historyIpc';
 import { captureHistoryPage } from './captureHistoryPage';
-import { forgetLocalContexts, OllamaLocal } from './OllamaLocal';
+import { forgetLocalContexts, forgetLocalContextOf, OllamaLocal } from './OllamaLocal';
 import { registerModelServersIpc } from '../modelServers/ipc';
 import { LocalModels } from '../modelServers/LocalModels';
 import { ModelServerRegistry } from '../modelServers/ModelServerRegistry';
@@ -305,6 +305,8 @@ export interface RegisteredChat {
   stopModelServers(): void;
   /** The Settings choice of local model context, which the Models screen's fit badges also plan for. */
   localContext: LocalContextPreference;
+  /** Per-model defaults; the fit badges plan for each model's own context and draft too. */
+  modelSettings: ModelSettingsStore;
   /** The capability ledger, which the Models screen records approved downloads in. */
   capabilityLedger: CapabilityLedger;
 }
@@ -499,8 +501,11 @@ export function registerChat(
     models.forgetLocal();
     send(IPC_CHANNELS.chatModelsChanged, undefined);
   }, LATE_RELOAD_DEBOUNCE_MS);
+  const modelSettings = new ModelSettingsStore(join(userData, 'model-settings.json'), message => logger.warn(message));
+  const loadSettings = (modelId: string) => modelSettings.get(modelId);
   // safeStorage like the MCP secrets: a server's token or header value never goes to plain JSON.
   const modelServers = new ModelServerRegistry({
+    loadSettings,
     store: new ModelServerStore(safeStorage, privateFile(join(userData, 'model-servers.json')), logger),
     logger,
     changed: servers => {
@@ -517,9 +522,8 @@ export function registerChat(
   });
   localHardware.setOverride(probed => withEnteredSpecs(probed, modelServers.specs(LOCAL_SERVER_ID)));
   void modelServers.start().catch(error => logger.warn(`MODEL SERVERS: could not load: ${String(error)}`));
-  const modelSettings = new ModelSettingsStore(join(userData, 'model-settings.json'), message => logger.warn(message));
   const local = new LocalModels(
-    new OllamaLocal((url, init) => net.fetch(url, init), localSizing),
+    new OllamaLocal((url, init) => net.fetch(url, init), localSizing, undefined, loadSettings),
     modelServers,
     // Matched by name on every server; requestGeneration keeps each server to the fields it takes.
     option => hooks.catalogSampling?.(option.name)
@@ -810,7 +814,14 @@ export function registerChat(
     isPromptCacheTtl(ttl) ? service.setSessionPromptCacheTtl(sessionId, ttl) : null
   );
   registerGenerationIpc(ipcMain, service);
-  registerModelSettingsIpc(ipcMain, modelSettings);
+  registerModelSettingsIpc(ipcMain, modelSettings, {
+    offer: (modelId, draftTokens) => local.loadOffer(modelId, draftTokens),
+    changed: modelId => {
+      forgetLocalContextOf(modelId);
+      models.forgetLocal();
+      send(IPC_CHANNELS.chatModelsChanged, undefined);
+    },
+  });
   ipcMain.handle(IPC_CHANNELS.chatSetSessionPinned, (_event, sessionId: string, pinned: boolean) =>
     service.setSessionPinned(sessionId, pinned)
   );
@@ -1426,6 +1437,7 @@ export function registerChat(
       modelServers.stop();
     },
     localContext,
+    modelSettings,
     capabilityLedger,
   };
 }

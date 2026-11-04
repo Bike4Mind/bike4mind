@@ -80,3 +80,50 @@ describe('registerModelSettingsIpc', () => {
     expect(await set(id, { generation: { topK: 20 } })).toBeNull();
   });
 });
+
+describe('registerModelSettingsIpc load options', () => {
+  async function withHooks() {
+    const directory = await mkdtemp(join(tmpdir(), 'b4m-model-settings-ipc-'));
+    roots.push(directory);
+    const store = new ModelSettingsStore(join(directory, 'model-settings.json'));
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const offer = vi.fn(async () => ({ keepAlive: true as const }));
+    const changed = vi.fn();
+    registerModelSettingsIpc(
+      {
+        handle: (channel: string, listener: (...args: never[]) => unknown) =>
+          void handlers.set(channel, listener as never),
+      },
+      store,
+      { offer, changed }
+    );
+    const call =
+      (channel: string) =>
+      (...args: unknown[]) =>
+        handlers.get(channel)?.({ sender: {} }, ...args);
+    return {
+      offer,
+      changed,
+      set: call(IPC_CHANNELS.chatSetModelSettings),
+      getOffer: call(IPC_CHANNELS.chatGetModelLoadOffer),
+    };
+  }
+
+  it('tells main a model changed after a save, and not after a rejected one', async () => {
+    const { set, changed } = await withHooks();
+    expect(await set(QWEN, { draftTokens: 2, keepAlive: 3600 })).toEqual({ draftTokens: 2, keepAlive: 3600 });
+    expect(changed).toHaveBeenCalledExactlyOnceWith(QWEN);
+    expect(await set(QWEN, { draftTokens: 40 })).toBeNull();
+    expect(changed).toHaveBeenCalledOnce();
+  });
+
+  it('passes a valid draft count to the offer and drops an invalid one', async () => {
+    const { getOffer, offer } = await withHooks();
+    expect(await getOffer(QWEN, 3)).toEqual({ keepAlive: true });
+    expect(offer).toHaveBeenLastCalledWith(QWEN, 3);
+    await getOffer(QWEN, 99);
+    expect(offer).toHaveBeenLastCalledWith(QWEN, undefined);
+    expect(await getOffer('gpt-5', 3)).toBeNull();
+    expect(offer).toHaveBeenCalledTimes(2);
+  });
+});
