@@ -16,10 +16,12 @@ import { EmptyState } from './shared/EmptyState';
 import GrantPackagesTab from './InviteCenter/Packages/GrantPackagesTab';
 import { ViewTabs } from './shared/ViewTabs';
 
+type SectionLink = { label: string; tab: AdminTab; testId: string };
+
 type StubSection = {
   title: string;
   description: string;
-  links: ReadonlyArray<{ label: string; tab: AdminTab; testId: string }>;
+  links: ReadonlyArray<SectionLink>;
 };
 
 const SECTION_LABELS: Record<InviteCenterSectionId, string> = {
@@ -89,7 +91,7 @@ const StubSectionBody = ({ section }: { section: StubSection }) => {
   );
 };
 
-const PACKAGE_LINKS: StubSection['links'] = [
+const PACKAGE_LINKS: ReadonlyArray<SectionLink> = [
   { label: 'Open Invites', tab: AdminTab.RegistrationInvites, testId: 'invite-center-open-invites-btn' },
   { label: 'Open Partner signups', tab: AdminTab.PartnerSignupRules, testId: 'invite-center-open-partner-signups-btn' },
 ];

@@ -88,7 +88,9 @@ const columns: DataColumn<GrantPackageRow>[] = [
     width: '8.5rem',
     render: row =>
       row.usage ? (
-        <Tooltip title={`${formatCount(row.usage.partnerDomains)} linked, including disabled rules`}>
+        <Tooltip
+          title={`${formatCount(row.usage.enabledPartnerDomains)} enabled out of ${formatCount(row.usage.partnerDomains)} linked partner signup rules`}
+        >
           <span data-testid={`grant-package-domains-${row.id}`}>{formatCount(row.usage.enabledPartnerDomains)}</span>
         </Tooltip>
       ) : (
