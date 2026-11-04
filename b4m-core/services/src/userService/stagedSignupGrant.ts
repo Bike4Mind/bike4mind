@@ -248,7 +248,7 @@ async function releaseStage(
               throw new Error('Signup risk observation collection unavailable; retry the signup grant');
             }
           } else if (adapters.collectRiskSignals && parsedPolicy.success) {
-            // Shadow signals were gathered before the transaction (see below); a failed lookup there
+            // Shadow signals were gathered before the transaction (see above); a failed lookup there
             // leaves them undefined and records nothing.
             if (shadowSignals) {
               signals = shadowSignals;

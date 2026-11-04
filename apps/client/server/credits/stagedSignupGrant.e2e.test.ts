@@ -577,7 +577,7 @@ describe('staged signup ledger', () => {
   it('grants in full when a shadow collector query fails server-side', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const collectRiskSignals = vi.fn(async () => {
-      await User.collection.aggregate([{ $notAStage: 1 }]).toArray();
+      await User.aggregate([{ $match: { $unknownOperator: 1 } }]);
       return { datacenter: false };
     });
     const user = await createUser();
