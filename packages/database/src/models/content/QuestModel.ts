@@ -1071,6 +1071,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
    * Keyset twin of findPageBySessionId, oldest first by (timestamp, _id): pass the last row of the
    * previous page as `after` to continue strictly past it. Same filter and projection (plus the
    * fields the public listing needs), so the two cannot disagree on which turns a session holds.
+   * Served by the `sessionId_timestamp_id` index.
    */
   async findPageAfterBySessionId(
     sessionId: string,
@@ -1079,6 +1080,9 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     const { limit, after } = options;
     const filter: Record<string, unknown> = { sessionId, deletedAt: null };
     if (after) {
+      // Redundant with the $or, but it gives the planner a timestamp range to seek to; the $or
+      // alone leaves it scanning the session from its first turn on every page.
+      filter.timestamp = { $gte: after.timestamp };
       filter.$or = [
         { timestamp: { $gt: after.timestamp } },
         { timestamp: after.timestamp, _id: { $gt: convertId(after.id) } },
@@ -1709,6 +1713,11 @@ function initializeQuestModel() {
 
     // Index for findBySessionIdAndId operations
     ChatHistoryItemSchema.index({ sessionId: 1, _id: 1 }, { name: 'sessionId_id' });
+
+    // Serves findPageAfterBySessionId's keyset walk. The _id tie-break must be in the key: without
+    // it every page sorts the session's remaining turns in memory. Pre-built by
+    // 20260921239600_ensure-quest-session-keyset-index; keep the name and key in sync with it.
+    ChatHistoryItemSchema.index({ sessionId: 1, timestamp: 1, _id: 1 }, { name: 'sessionId_timestamp_id' });
     // Built in production by migration 20260921235966_ensure-quest-signup-activity-index; keep the
     // name and key in sync with it. Partial so the build and its entries cover only turns carrying
     // provenance, not every quest; the activity aggregate's equality on userId implies the filter.
