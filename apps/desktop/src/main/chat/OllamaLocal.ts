@@ -227,7 +227,7 @@ const SLOWER_HINT = ' Part of the model now runs from system memory, so replies 
 const OWN_FIXED_HINT = " The model's Settings on the Models screen can give it a larger context.";
 const OWN_CAP_HINT = " That is the most the model's Settings on the Models screen allow.";
 
-/** A model's load settings from the Models screen, read on every request; ModelSettingsStore.get in the app. */
+/** A model's load settings, read strictly on every request so a failed read never becomes cached defaults. */
 export type LoadSettingsReader = (modelId: string) => Promise<ModelLoadSettings>;
 
 /** A saved Ollama server on another machine; see main/modelServers. */
@@ -340,8 +340,9 @@ export class OllamaLocal {
     if (usesRemoteModel(inspection)) throw new Error('Cloud-backed Ollama models cannot be used as local models.');
     if (!inspection.capabilities.includes('completion')) throw new Error('This Ollama model cannot answer chat.');
     knownInspections.set(this.key(model), inspection);
-    let numCtx = await this.resolveContext(request.model, inspection);
-    const load = ollamaLoadFields(await this.load(request.model), draftFactsOf(inspection));
+    const settings = await this.requestSettings(request.model, inspection);
+    let numCtx = settings.numCtx;
+    const load = ollamaLoadFields(settings.load, draftFactsOf(inspection));
     const canThink = inspection.capabilities.includes('thinking');
     const prefilled = !canThink && opensThinkBlock(inspection.template);
     const offMode = canThink ? thinkingOffMode(inspection) : undefined;
@@ -478,11 +479,11 @@ export class OllamaLocal {
    * Sized on a model's first request, then kept for the app run so a late answer never reloads it;
    * a footprint missing the weights or the machine (a slow daemon or probe) is sized again next time.
    */
-  private async resolveContext(modelId: string, inspection: Inspection): Promise<number> {
+  private async resolveContext(modelId: string, inspection: Inspection, snapshot?: ModelLoadSettings): Promise<number> {
     const known = contextByModel.get(modelId);
     if (known !== undefined) return known;
     const generation = sizingGeneration;
-    const load = await this.load(modelId);
+    const load = snapshot ?? (await this.load(modelId));
     const setting = load.context ?? (await this.setting());
     const measured = setting.mode === 'auto' && !!this.sizing;
     const footprint = measured
@@ -498,12 +499,25 @@ export class OllamaLocal {
     return tokens;
   }
 
+  private async requestSettings(
+    modelId: string,
+    inspection: Inspection
+  ): Promise<{ numCtx: number; load: ModelLoadSettings }> {
+    const generation = sizingGeneration;
+    const load = await this.load(modelId);
+    if (generation !== sizingGeneration) return this.requestSettings(modelId, inspection);
+    const numCtx = await this.resolveContext(modelId, inspection, load);
+    // A save during either read invalidates the whole request's load settings together.
+    if (generation !== sizingGeneration) return this.requestSettings(modelId, inspection);
+    return { numCtx, load };
+  }
+
   private async setting(): Promise<LocalContextSetting> {
     return (await this.sizing?.setting()) ?? AUTO_LOCAL_CONTEXT;
   }
 
   private load(modelId: string): Promise<ModelLoadSettings> {
-    return this.loadSettings(modelId).catch(() => ({}));
+    return this.loadSettings(modelId);
   }
 
   private async contextSetting(modelId: string): Promise<ModelContextSetting> {

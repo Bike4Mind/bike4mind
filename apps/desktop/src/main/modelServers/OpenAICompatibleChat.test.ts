@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FetchLike, OpenAICompatibleProduct } from '@bike4mind/local-models';
 import type { CompletionStreamEvent } from '../chat/streamEvents';
+import type { ModelLoadSettings } from '@shared/modelSettings';
 import { ServerCredentialsError, ServerForbiddenError } from './errors';
 import type { LearnedThinker } from './ModelServerStore';
 import { OpenAICompatibleChat, toOpenAIMessages } from './OpenAICompatibleChat';
@@ -711,6 +712,40 @@ describe('OpenAICompatibleChat on a server that fronts several models', () => {
       const client = budgeted(fetch);
       await client.listModels();
       expect(await client.contextTokens('local:srv-abc123:a-alias')).toBe(32768);
+    });
+
+    it('forgets an alias mapping when that name becomes a separately listed model', async () => {
+      const entry = (id: string, root: string) => ({ id, root, object: 'model', max_model_len: 65536 });
+      const fetch = vi
+        .fn<FetchLike>()
+        .mockResolvedValueOnce(
+          Response.json({ object: 'list', data: [entry('a', '/models/a'), entry('b', '/models/a')] })
+        )
+        .mockResolvedValueOnce(Response.json({ object: 'list', data: [entry('b', '/models/b')] }));
+      const client = budgeted(fetch);
+      await client.listModels();
+      expect(await client.contextTokens(MODEL_B)).toBe(32768);
+      expect((await client.listModels())[0]?.contextWindow).toBe(65536);
+      expect(await client.contextTokens(MODEL_B)).toBe(65536);
+    });
+
+    it('rejects an unreadable budget and retries instead of treating it as unset', async () => {
+      const read = vi
+        .fn<() => Promise<ModelLoadSettings>>()
+        .mockRejectedValueOnce(new Error('settings unavailable'))
+        .mockResolvedValue({ context: { mode: 'fixed', tokens: 32768 } });
+      const client = new OpenAICompatibleChat({
+        runtimeId: 'srv-abc123',
+        baseUrl: BASE,
+        label: 'vllm box',
+        product: 'vllm',
+        fetch: proxy(65536).fetch,
+        hasCredentials: () => false,
+        redact: text => text,
+        loadSettings: read,
+      });
+      await expect(client.contextTokens(MODEL_A)).rejects.toThrow('settings unavailable');
+      expect(await client.contextTokens(MODEL_A)).toBe(32768);
     });
 
     it('offers only sizes below what the server runs, and nothing when it does not say', async () => {

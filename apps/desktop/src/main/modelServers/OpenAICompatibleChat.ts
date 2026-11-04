@@ -275,7 +275,9 @@ export class OpenAICompatibleChat implements LocalChat {
     this.smallChanged(before);
     this.learnIdentities(models);
     this.effortModels.clear();
+    this.listedNames.clear();
     for (const model of chat) for (const alias of model.aliases ?? []) this.listedNames.set(alias, model.name);
+    for (const model of chat) this.listedNames.set(model.name, model.name);
     const budgets = await Promise.all(chat.map(model => this.budget(model.name)));
     return chat.map((model, index) => {
       const thinks = this.thinkers.has(model.name);
@@ -326,7 +328,7 @@ export class OpenAICompatibleChat implements LocalChat {
   /** The model's own context from the Models screen, which lowers the server's as a client budget. */
   private async budget(name: string): Promise<number | undefined> {
     const id = localModelId(this.server.runtimeId, this.listedNames.get(name) ?? name);
-    const load: ModelLoadSettings | undefined = await this.server.loadSettings?.(id).catch(() => ({}));
+    const load: ModelLoadSettings | undefined = await this.server.loadSettings?.(id);
     const context = load?.context;
     if (!context) return undefined;
     return context.mode === 'fixed' ? context.tokens : context.maxTokens;

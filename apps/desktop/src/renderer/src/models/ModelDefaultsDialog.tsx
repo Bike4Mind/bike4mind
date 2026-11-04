@@ -159,18 +159,52 @@ export function contextSent(offer: ModelLoadOffer, context: ModelContextSetting 
   return context.maxTokens === undefined ? offered.auto : size?.autoTokens;
 }
 
-function listedContextValues(offered: NonNullable<ModelLoadOffer['context']>): string[] {
-  if (offered.kind === 'budget') return [SAME_AS_SETTINGS, ...offered.sizes.map(size => `fixed:${size}`)];
-  const auto =
+type ContextOption = { value: string; label: string; testId: string; warning?: string };
+
+function contextOptions(offered: NonNullable<ModelLoadOffer['context']>): ContextOption[] {
+  const settings: ContextOption = {
+    value: SAME_AS_SETTINGS,
+    label:
+      offered.kind === 'budget'
+        ? `Server's ${contextSizeLabel(offered.server)}`
+        : offered.auto === undefined
+          ? `Default (${contextSizeLabel(offered.settings)})`
+          : 'Same as Settings',
+    testId: 'model-defaults-context-option-settings',
+  };
+  if (offered.kind === 'budget') {
+    return [
+      settings,
+      ...offered.sizes.map(size => ({
+        value: `fixed:${size}`,
+        label: contextSizeLabel(size),
+        testId: `model-defaults-context-option-${size}`,
+      })),
+    ];
+  }
+  const auto: ContextOption[] =
     offered.auto === undefined
       ? []
       : [
-          'auto',
+          { value: 'auto', label: 'Auto', testId: 'model-defaults-context-option-auto' },
           ...offered.sizes
             .filter(candidate => offered.ceiling === undefined || capOf(candidate) < offered.ceiling)
-            .map(candidate => `auto:${capOf(candidate)}`),
+            .map(candidate => ({
+              value: `auto:${capOf(candidate)}`,
+              label: `Auto, up to ${contextSizeLabel(capOf(candidate))}`,
+              testId: `model-defaults-context-option-auto-${candidate.size}`,
+            })),
         ];
-  return [SAME_AS_SETTINGS, ...auto, ...offered.sizes.map(candidate => `fixed:${capOf(candidate)}`)];
+  return [
+    settings,
+    ...auto,
+    ...offered.sizes.map(candidate => ({
+      value: `fixed:${capOf(candidate)}`,
+      label: contextSizeLabel(candidate.tokens),
+      testId: `model-defaults-context-option-${candidate.size}`,
+      ...(candidate.loads === false ? { warning: "May not load in this computer's memory" } : {}),
+    })),
+  ];
 }
 
 function sameContext(a: ModelContextSetting | null, b: ModelContextSetting | null): boolean {
@@ -574,6 +608,7 @@ function LoadOptionRows({
 }) {
   const offered = offer.context;
   if (!offered && !offer.draft && !offer.keepAlive) return null;
+  const options = offered ? contextOptions(offered) : [];
   const sent = contextSent(offer, context);
   const reloads =
     loadedContext !== undefined &&
@@ -624,54 +659,21 @@ function LoadOptionRows({
               },
             }}
           >
-            <Option value={SAME_AS_SETTINGS} data-testid="model-defaults-context-option-settings">
-              {offered.kind === 'budget'
-                ? `Server's ${contextSizeLabel(offered.server)}`
-                : offered.auto === undefined
-                  ? `Default (${contextSizeLabel(offered.settings)})`
-                  : 'Same as Settings'}
-            </Option>
-            {offered.kind === 'ollama' && offered.auto !== undefined && (
-              <Option value="auto" data-testid="model-defaults-context-option-auto">
-                Auto
-              </Option>
-            )}
-            {offered.kind === 'ollama' &&
-              offered.auto !== undefined &&
-              offered.sizes
-                .filter(candidate => offered.ceiling === undefined || capOf(candidate) < offered.ceiling)
-                .map(candidate => (
-                  <Option
-                    key={`auto:${candidate.size}`}
-                    value={`auto:${capOf(candidate)}`}
-                    data-testid={`model-defaults-context-option-auto-${candidate.size}`}
-                  >
-                    {`Auto, up to ${contextSizeLabel(capOf(candidate))}`}
-                  </Option>
-                ))}
-            {offered.kind === 'ollama' &&
-              offered.sizes.map(({ size, tokens, loads }) => (
-                <Option
-                  key={`fixed:${size}`}
-                  value={`fixed:${capOf({ size, tokens })}`}
-                  label={contextSizeLabel(tokens)}
-                  data-testid={`model-defaults-context-option-${size}`}
-                >
+            {options.map(({ value, label, testId, warning }) => (
+              <Option key={value} value={value} label={label} data-testid={testId}>
+                {warning ? (
                   <Stack>
-                    {contextSizeLabel(tokens)}
-                    {loads === false && (
-                      <Typography
-                        level="body-xs"
-                        color="warning"
-                        data-testid={`model-defaults-context-option-${size}-note`}
-                      >
-                        May not load in this computer&apos;s memory
-                      </Typography>
-                    )}
+                    {label}
+                    <Typography level="body-xs" color="warning" data-testid={`${testId}-note`}>
+                      {warning}
+                    </Typography>
                   </Stack>
-                </Option>
-              ))}
-            {offered && context && !listedContextValues(offered).includes(contextValue(context)) && (
+                ) : (
+                  label
+                )}
+              </Option>
+            ))}
+            {offered && context && !options.some(option => option.value === contextValue(context)) && (
               <Option
                 value={contextValue(context)}
                 label={storedContextLabel(context)}
@@ -680,12 +682,6 @@ function LoadOptionRows({
                 {storedContextLabel(context)}
               </Option>
             )}
-            {offered.kind === 'budget' &&
-              offered.sizes.map(size => (
-                <Option key={size} value={`fixed:${size}`} data-testid={`model-defaults-context-option-${size}`}>
-                  {contextSizeLabel(size)}
-                </Option>
-              ))}
           </Select>
         </OptionRow>
       )}

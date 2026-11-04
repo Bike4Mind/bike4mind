@@ -1,5 +1,10 @@
 # @bike4mind/desktop
 
+## Unreleased
+
+- Add per-model context, draft token and keep-loaded settings on Models > Installed, shared
+  by chats, titles, suggestions and summaries, with context memory ratings where measurable.
+
 ## 0.1.12
 
 ### Patch Changes

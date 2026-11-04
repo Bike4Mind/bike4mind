@@ -502,7 +502,7 @@ export function registerChat(
     send(IPC_CHANNELS.chatModelsChanged, undefined);
   }, LATE_RELOAD_DEBOUNCE_MS);
   const modelSettings = new ModelSettingsStore(join(userData, 'model-settings.json'), message => logger.warn(message));
-  const loadSettings = (modelId: string) => modelSettings.get(modelId);
+  const loadSettings = (modelId: string) => modelSettings.getStrict(modelId);
   // safeStorage like the MCP secrets: a server's token or header value never goes to plain JSON.
   const modelServers = new ModelServerRegistry({
     loadSettings,

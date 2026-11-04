@@ -1704,6 +1704,54 @@ describe('OllamaLocal context sizing', () => {
       expect(await local.contextTokens('local:ollama:llama')).toBe(32768);
     });
 
+    it('does not cache defaults after a failed settings read, and retries the stored context', async () => {
+      ollama(trainedFor(131072));
+      const read = vi
+        .fn<() => Promise<ModelLoadSettings>>()
+        .mockRejectedValueOnce(new Error('settings unavailable'))
+        .mockResolvedValue({ context: { mode: 'fixed', tokens: 32768 } });
+      const local = new OllamaLocal(undefined, undefined, undefined, read);
+      await expect(local.contextTokens('local:ollama:llama')).rejects.toThrow('settings unavailable');
+      expect(await local.contextTokens('local:ollama:llama')).toBe(32768);
+      expect(read).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not send a request when its load settings cannot be read', async () => {
+      const sent = ollama(trainedFor(131072));
+      const read = vi
+        .fn<() => Promise<ModelLoadSettings>>()
+        .mockRejectedValueOnce(new Error('settings unavailable'))
+        .mockResolvedValue({ context: { mode: 'fixed', tokens: 32768 } });
+      const local = new OllamaLocal(undefined, undefined, undefined, read);
+      await expect(local.stream(longTurn, () => undefined)).rejects.toThrow('settings unavailable');
+      expect(sent()).toEqual([]);
+      await local.stream(longTurn, () => undefined);
+      expect(sent()).toEqual([32768]);
+    });
+
+    it.each(['before-save', 'after-save'] as const)(
+      'keeps context and draft together when an interrupted read returns the %s snapshot',
+      async snapshot => {
+        ollama(mtp(131072));
+        const pending = Promise.withResolvers<ModelLoadSettings>();
+        const original: ModelLoadSettings = { context: { mode: 'fixed', tokens: 32768 }, draftTokens: 2 };
+        const updated: ModelLoadSettings = { context: { mode: 'fixed', tokens: 16384 }, draftTokens: 4 };
+        const read = vi
+          .fn<() => Promise<ModelLoadSettings>>()
+          .mockResolvedValueOnce(original)
+          .mockReturnValueOnce(pending.promise)
+          .mockResolvedValue(updated);
+        const local = new OllamaLocal(undefined, undefined, undefined, read);
+        expect(await local.contextTokens(longTurn.model)).toBe(32768);
+        const request = local.stream(longTurn, () => undefined);
+        await vi.waitUntil(() => read.mock.calls.length === 2);
+        forgetLocalContextOf(longTurn.model);
+        pending.resolve(snapshot === 'before-save' ? original : updated);
+        await request;
+        expect(chatBodies().map(body => body.options)).toEqual([{ num_ctx: 16384, draft_num_predict: 4 }]);
+      }
+    );
+
     it('stops Auto at its cap and says the cap is why a prompt was not given more room', async () => {
       const sent = ollama(trainedFor(131072), () => overflow(40_000));
       const local = new OllamaLocal(
