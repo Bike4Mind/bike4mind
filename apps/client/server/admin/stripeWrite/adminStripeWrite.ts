@@ -28,9 +28,22 @@ import {
 } from '@server/utils/adminAudit';
 
 export const STRIPE_WRITE_CHANGED_MESSAGE = 'This subscription changed. Review and try again.';
-// 24h, matching how long Stripe retains an idempotency key.
+// 24h, matching how long Stripe retains an idempotency key. Set once at claim time and never extended by a rewrite,
+// so a parked claim cannot outlive the key Stripe would replay it under.
 const CLAIM_TTL_MS = 24 * 60 * 60 * 1000;
+// Per attempt, with one network retry: the worst case (~30s plus backoff) fits the 60s server function budget.
+const STRIPE_REQUEST_TIMEOUT_MS = 15_000;
+const STRIPE_MAX_NETWORK_RETRIES = 1;
 const LIVE_KEY_PREFIXES = ['sk_live_', 'rk_live_'];
+
+/**
+ * True when Stripe may have applied the write although the call failed: a connection error or timeout, or a 5xx.
+ * A 4xx (invalid request, card, rate limit) is a definite rejection.
+ */
+export const isUnknownStripeOutcome = (error: unknown): boolean => {
+  const { type, statusCode } = (error ?? {}) as { type?: string; statusCode?: number };
+  return type === 'StripeConnectionError' || (type === 'StripeAPIError' && (statusCode ?? 500) >= 500);
+};
 
 export type AdminStripeWriteAction = 'billing.subscription.cancel_scheduled' | 'billing.subscription.resumed';
 
@@ -102,14 +115,19 @@ const notifyOwner = async (req: GuardRequest, ids: { notifyUserId: string | null
 
 /**
  * The one path for an admin write to Stripe (docs/admin-subscriptions-spec.md section 7). Guards, in order: admin
- * only, no impersonation, no self-target, live-key refusal off production, a required reason, an idempotency claim
- * (a repeat of a finished write replays its response with no Stripe call), the business-state concurrency check,
- * then the Stripe call and, in one transaction, the mirror write plus its strict critical audit entry.
+ * only, no impersonation, live-key refusal off production, a required body and reason, the subscription lookup,
+ * no self-target, an idempotency claim (a repeat of a finished write replays its response with no Stripe call), the
+ * business-state concurrency check, then the Stripe call and, in one transaction, the mirror write plus its strict
+ * critical audit entry.
  *
- * Failure before the Stripe call releases the claim. Failure after it parks the claim as `stripe_done` with the
- * request params and audit changes; a same-key retry takes it over and skips the state check and precheck (our own
- * webhook has changed the row by then), replays the identical Stripe request, and writes the audit row. A claim
- * left `pending` by a crash mid-write expires with the 24h TTL; retries get "already in progress" until then.
+ * A definite failure before or at the Stripe call (a 4xx, a failed check) releases the claim. Failure after Stripe
+ * applied the write, or a Stripe error whose outcome is unknown (connection, timeout, 5xx), parks the claim as
+ * `stripe_done` with the request params, the audit changes (when known) and the pre-write row; a same-key retry
+ * takes it over, skips the state check and precheck (our own webhook has changed the row by then), replays the
+ * identical request under the same Stripe key, and writes the audit row. A recovered attempt does not write the
+ * mirror: Stripe replays its snapshot from the first attempt, which may be older than the webhook state, so the
+ * webhook owns the mirror. A failed recovery attempt re-parks the record. What a hard function kill still loses:
+ * the claim stays `pending` until its 24h expiry (retries get "already in progress"), and the write is never audited.
  * The 10 writes/admin/minute limit is the routes' `rateLimit` middleware.
  */
 export const runAdminStripeWrite = async ({
@@ -149,37 +167,46 @@ export const runAdminStripeWrite = async ({
   }
 
   const claimKey = `admin-stripe-write:${admin.id}:${id}:${action}:${idempotencyKey}`;
+  // Scoped like the claim, so one client key reused for another action or subscription is never a Stripe conflict.
+  const stripeIdempotencyKey = `${id}:${action}:${idempotencyKey}`;
   const token = randomUUID();
-  const requestParams = params(subscription);
-  type StripeSent = { params: Stripe.SubscriptionUpdateParams; changes: AuditChange[] };
+  // `before` is the row as plain JSON: a recovery that never saw Stripe's response rebuilds the audit from it.
+  type StripeSent = {
+    params: Stripe.SubscriptionUpdateParams;
+    changes: AuditChange[] | null;
+    before: ISubscription;
+  };
   // A holder, not a `let`: TS cannot see the catch block's reads of an assignment made inside the try.
-  const progress: { stripeDone: StripeSent | null } = { stripeDone: null };
+  const progress: { stripeDone: AuditChange[] | null } = { stripeDone: null };
   let recovered: StripeSent | null = null;
+  const requestParams = params(subscription);
+  const claimData = {
+    params: requestParams,
+    changes: null,
+    before: JSON.parse(JSON.stringify(subscription)) as ISubscription,
+  };
 
-  const claim = await cacheRepository.claimDedup(
-    claimKey,
-    { state: 'pending', token, params: requestParams },
-    CLAIM_TTL_MS
-  );
+  const claim = await cacheRepository.claimDedup(claimKey, { state: 'pending', token, ...claimData }, CLAIM_TTL_MS);
   if (!claim.claimed) {
     const existing = claim.existingData;
     if (existing?.state === 'done') return existing.response as AdminStripeWriteResponse;
     const takeover =
       existing?.state === 'stripe_done' &&
       typeof existing.token === 'string' &&
-      (await cacheRepository.casUpdateDedup(
-        claimKey,
-        'token',
-        existing.token,
-        { state: 'pending', token, params: existing.params },
-        CLAIM_TTL_MS
-      ));
+      (await cacheRepository.casUpdateDedup(claimKey, 'token', existing.token, {
+        ...existing,
+        state: 'pending',
+        token,
+      }));
     if (!takeover) throw new ConflictError('This change is already in progress.');
     recovered = {
       params: existing?.params as Stripe.SubscriptionUpdateParams,
-      changes: existing?.changes as AuditChange[],
+      changes: (existing?.changes as AuditChange[] | null) ?? null,
+      before: existing?.before as ISubscription,
     };
   }
+
+  const sentParams = recovered?.params ?? requestParams;
 
   try {
     if (!recovered) {
@@ -189,18 +216,23 @@ export const runAdminStripeWrite = async ({
 
     const stripeSubscriptionId = subscription.subscriptionId;
     if (!stripeSubscriptionId) throw new ConflictError('This subscription has no Stripe id.');
-    const sentParams = recovered?.params ?? requestParams;
-    const updated = await getStripe().subscriptions.update(stripeSubscriptionId, sentParams, { idempotencyKey });
-    const auditChanges = recovered?.changes ?? changes(subscription, updated);
-    progress.stripeDone = { params: sentParams, changes: auditChanges };
+    const updated = await getStripe().subscriptions.update(stripeSubscriptionId, sentParams, {
+      idempotencyKey: stripeIdempotencyKey,
+      timeout: STRIPE_REQUEST_TIMEOUT_MS,
+      maxNetworkRetries: STRIPE_MAX_NETWORK_RETRIES,
+    });
+    const auditChanges = recovered?.changes ?? changes(recovered?.before ?? subscription, updated);
+    progress.stripeDone = auditChanges;
     const syncedAt = new Date();
 
     await withTransaction(async () => {
-      // Newer-wins: our own customer.subscription.updated webhook may already have landed with a later stamp.
-      await Subscription.findOneAndUpdate(
-        { _id: id, $or: [{ lastSyncedAt: { $lte: syncedAt } }, { lastSyncedAt: null }] },
-        { $set: stripeMirrorFields(updated, syncedAt) }
-      );
+      if (!recovered) {
+        // Newer-wins: our own customer.subscription.updated webhook may already have landed with a later stamp.
+        await Subscription.findOneAndUpdate(
+          { _id: id, $or: [{ lastSyncedAt: { $lte: syncedAt } }, { lastSyncedAt: null }] },
+          { $set: stripeMirrorFields(updated, syncedAt) }
+        );
+      }
       await recordAdminActionFromRequest(req, {
         action,
         target: owner.target,
@@ -220,19 +252,19 @@ export const runAdminStripeWrite = async ({
     const { row, doc } = await readRow(id);
     const response: AdminStripeWriteResponse = { subscription: row, stripe: stripeStateOf(doc) };
     await cacheRepository
-      .casUpdateDedup(claimKey, 'token', token, { state: 'done', token, response }, CLAIM_TTL_MS)
+      .casUpdateDedup(claimKey, 'token', token, { state: 'done', token, response })
       .catch((error: unknown) => req.logger.error('Failed to store an admin Stripe write for replay', error));
     return response;
   } catch (error) {
-    const { stripeDone } = progress;
-    const settle = stripeDone
-      ? cacheRepository.casUpdateDedup(
-          claimKey,
-          'token',
+    const park = progress.stripeDone || recovered || isUnknownStripeOutcome(error);
+    const settle = park
+      ? cacheRepository.casUpdateDedup(claimKey, 'token', token, {
+          state: 'stripe_done',
           token,
-          { state: 'stripe_done', token, ...stripeDone },
-          CLAIM_TTL_MS
-        )
+          params: sentParams,
+          changes: progress.stripeDone ?? recovered?.changes ?? null,
+          before: recovered?.before ?? claimData.before,
+        })
       : cacheRepository.casDeleteDedup(claimKey, 'token', token);
     await settle.catch((settleError: unknown) => {
       req.logger.error('Failed to settle an admin Stripe write claim', settleError);

@@ -320,6 +320,17 @@ describe('CancelSubscriptionDialog', () => {
 });
 
 describe('ResumeSubscriptionDialog', () => {
+  it('previews a custom cancel date, not the period end, as the date being cancelled', () => {
+    open(
+      ResumeSubscriptionDialog,
+      buildDetail({
+        subscription: { ...STRIPE_ROW, periodEndsAt: '2026-12-01T00:00:00.000Z', cancelAt: '2027-03-01T00:00:00.000Z' },
+      })
+    );
+    expect(screen.getByTestId('resume-subscription-preview-before')).toHaveTextContent('Cancels 1 Mar 2027');
+    expect(screen.getByTestId('resume-subscription-preview-after')).toHaveTextContent('Renews 1 Dec 2026');
+  });
+
   it('previews the change and resumes against the reviewed state, reusing one key across a failed retry', async () => {
     mocks.resume.mockRejectedValueOnce(new Error('boom'));
     const { onClose } = open(

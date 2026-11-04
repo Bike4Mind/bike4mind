@@ -68,6 +68,21 @@ describe('subscriptionActionAvailability', () => {
     expect(noPeriodEnd.stripeResume).toBe(false);
   });
 
+  it('offers no Stripe action on a legacy comp row that reads as source stripe', () => {
+    const legacyComp = subscriptionActionAvailability(
+      buildDetail({ subscription: { ...STRIPE_ROW, source: 'stripe', subscriptionId: 'admin_granted_1' } })
+    );
+    expect([legacyComp.stripeCancel, legacyComp.stripeResume]).toEqual([false, false]);
+  });
+
+  it('reads a period-end schedule from the mirror flag when the row has no cancel date', () => {
+    const detail = buildDetail({
+      subscription: { ...STRIPE_ROW, periodEndsAt: null, cancelAt: null },
+      stripe: { lastSyncedAt: null, cancelAtPeriodEnd: true, stateToken: 't' },
+    });
+    expect(subscriptionActionAvailability(detail).stripeCancel).toBe(false);
+  });
+
   it('disables credits and remove when no account can act for the owner', () => {
     const available = subscriptionActionAvailability(buildDetail({ actingUserId: null }));
     expect(available.compActions).toBe(true);

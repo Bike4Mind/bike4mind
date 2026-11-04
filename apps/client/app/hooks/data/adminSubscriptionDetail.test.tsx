@@ -19,6 +19,8 @@ const ID = 'a'.repeat(24);
 const body = { reason: 'Customer request', idempotencyKey: 'idem-key-0001', expectedState: 'state-1' };
 const NEW_STRIPE = { lastSyncedAt: '2026-11-04T10:00:00.000Z', cancelAtPeriodEnd: true, stateToken: 'state-2' };
 
+const NEW_SUBSCRIPTION = { id: ID, status: 'active', cancelAt: '2026-12-01T00:00:00.000Z' };
+
 const setup = (hook: typeof useAdminSubscriptionCancel) => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   queryClient.setQueryData(adminSubscriptionDetailKey(ID), {
@@ -43,7 +45,7 @@ describe.each([
   });
 
   it('posts the body to its own endpoint and writes the response into the cached detail', async () => {
-    apiPost.mockResolvedValue({ data: { subscription: { id: ID, status: 'active' }, stripe: NEW_STRIPE } });
+    apiPost.mockResolvedValue({ data: { subscription: NEW_SUBSCRIPTION, stripe: NEW_STRIPE } });
     const { result, queryClient, invalidate } = setup(hook);
 
     await result.current.mutateAsync(body);
@@ -51,6 +53,7 @@ describe.each([
     expect(apiPost).toHaveBeenCalledWith(`/api/admin/subscriptions/${ID}/${path}`, body);
     const cached = queryClient.getQueryData<AdminSubscriptionDetail>(adminSubscriptionDetailKey(ID));
     expect(cached?.stripe).toEqual(NEW_STRIPE);
+    expect(cached?.subscription).toEqual(NEW_SUBSCRIPTION);
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'subscriptions'] });
   });
 

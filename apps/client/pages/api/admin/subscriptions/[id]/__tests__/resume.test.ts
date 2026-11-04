@@ -144,7 +144,10 @@ describe('POST /api/admin/subscriptions/[id]/resume', () => {
     expect(mockStripeUpdate).toHaveBeenCalledWith(
       'sub_test_1',
       { cancel_at_period_end: false },
-      { idempotencyKey: 'resume-happy-key' }
+      expect.objectContaining({
+        idempotencyKey: `${ID}:billing.subscription.resumed:resume-happy-key`,
+        timeout: expect.any(Number),
+      })
     );
     expect(mockRecordAdminAction.mock.calls[0][1]).toMatchObject({
       action: 'billing.subscription.resumed',
@@ -190,6 +193,7 @@ describe('POST /api/admin/subscriptions/[id]/resume', () => {
     mockFindById.mockResolvedValue(stripeRow());
     mockStripeUpdate.mockResolvedValueOnce(stripeSub());
     await call(cancelHandler);
+    const firstEntry = structuredClone(mockRecordAdminAction.mock.calls[0][1]);
     mockFindById.mockResolvedValue(stripeRow({ cancelAtPeriodEnd: true }));
     mockStripeUpdate.mockResolvedValueOnce(stripeSub({ cancel_at_period_end: false }));
     await call(handler);
@@ -198,6 +202,7 @@ describe('POST /api/admin/subscriptions/[id]/resume', () => {
       'billing.subscription.cancel_scheduled',
       'billing.subscription.resumed',
     ]);
+    expect(mockRecordAdminAction.mock.calls[0][1]).toEqual(firstEntry);
   });
 
   it.each([

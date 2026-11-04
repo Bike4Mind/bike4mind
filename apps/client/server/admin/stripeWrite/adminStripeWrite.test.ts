@@ -105,10 +105,15 @@ const makeReq = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+type Row = { cancelAtPeriodEnd?: boolean };
+const constantParams = () => ({ cancel_at_period_end: true });
+const constantChanges = () => [{ field: 'cancelAtPeriodEnd', before: false, after: true }];
+
 const run = (
   req: ReturnType<typeof makeReq>,
   precheck: (s: unknown) => void = () => undefined,
-  action: AdminStripeWriteAction = 'billing.subscription.cancel_scheduled'
+  action: AdminStripeWriteAction = 'billing.subscription.cancel_scheduled',
+  callbacks: { params?: (s: Row) => Record<string, unknown>; changes?: (b: Row, a: typeof stripeSub) => unknown[] } = {}
 ) =>
   runAdminStripeWrite({
     req: req as never,
@@ -116,9 +121,16 @@ const run = (
     action,
     summary: 'scheduled cancellation at period end',
     precheck,
-    params: () => ({ cancel_at_period_end: true }),
-    changes: () => [{ field: 'cancelAtPeriodEnd', before: false, after: true }],
+    params: (callbacks.params ?? constantParams) as never,
+    changes: (callbacks.changes ?? constantChanges) as never,
   });
+
+const STRIPE_KEY = `${ID}:billing.subscription.cancel_scheduled:${KEY}`;
+const stripeError = (type: string, statusCode?: number) => Object.assign(new Error(type), { type, statusCode });
+// The state our own webhook leaves after a cancel: the row now shows it, with a newer stamp.
+const webhookLanded = () =>
+  mockFindById.mockResolvedValue({ ...baseRow, cancelAtPeriodEnd: true, lastSyncedAt: new Date() });
+const auditCalls = () => mockRecordAdminAction.mock.calls.filter(([, entry]) => entry.action.startsWith('billing.'));
 
 describe('assertStripeKeyMatchesStage', () => {
   const check = (production: boolean, key: string, selfHost = false) =>
@@ -153,7 +165,11 @@ describe('runAdminStripeWrite', () => {
     const response = await run(makeReq());
 
     expect(mockStripeUpdate).toHaveBeenCalledTimes(1);
-    expect(mockStripeUpdate).toHaveBeenCalledWith('sub_123', { cancel_at_period_end: true }, { idempotencyKey: KEY });
+    expect(mockStripeUpdate).toHaveBeenCalledWith(
+      'sub_123',
+      { cancel_at_period_end: true },
+      { idempotencyKey: STRIPE_KEY, timeout: 15_000, maxNetworkRetries: 1 }
+    );
     expect(mockRecordAdminAction).toHaveBeenCalledTimes(1);
     expect(mockRecordAdminAction.mock.calls[0][1]).toMatchObject({
       action: 'billing.subscription.cancel_scheduled',
@@ -230,13 +246,100 @@ describe('runAdminStripeWrite', () => {
     expect(strictPrecheck).not.toHaveBeenCalled();
     expect(mockStripeUpdate).toHaveBeenCalledTimes(2);
     expect(mockStripeUpdate.mock.calls[1]).toEqual(mockStripeUpdate.mock.calls[0]);
-    const audits = mockRecordAdminAction.mock.calls.filter(([, entry]) => entry.action.startsWith('billing.'));
+    const audits = auditCalls();
     expect(audits).toHaveLength(2);
     expect(audits[1][1]).toMatchObject({
       action: 'billing.subscription.cancel_scheduled',
       changes: [{ field: 'cancelAtPeriodEnd', before: false, after: true }],
     });
     expect(response.subscription).toEqual({ id: 'row' });
+  });
+
+  describe('recovery of a write Stripe applied', () => {
+    // Row-dependent callbacks, so a recovery that recomputes from the post-webhook row instead of replaying the
+    // stored request and audit changes shows up as a different Stripe call or audit entry.
+    const flip = {
+      params: (s: Row) => ({ cancel_at_period_end: !s.cancelAtPeriodEnd }),
+      // Reads Stripe's response, which the second attempt below answers differently from the first.
+      changes: (b: Row, after: typeof stripeSub) => [
+        { field: 'cancelAtPeriodEnd', before: Boolean(b.cancelAtPeriodEnd), after: after.cancel_at_period_end },
+      ],
+    };
+    const runFlip = () => run(makeReq(), undefined, undefined, flip);
+
+    it('replays the stored request and audit changes, not ones recomputed from the changed row', async () => {
+      mockRecordAdminAction.mockRejectedValueOnce(new Error('audit down'));
+      await expect(runFlip()).rejects.toThrow('audit down');
+      webhookLanded();
+      mockStripeUpdate.mockResolvedValueOnce({ ...stripeSub, cancel_at_period_end: false });
+      await runFlip();
+
+      expect(mockStripeUpdate.mock.calls[0][1]).toEqual({ cancel_at_period_end: true });
+      expect(mockStripeUpdate.mock.calls[1]).toEqual(mockStripeUpdate.mock.calls[0]);
+      expect(auditCalls()[1][1].changes).toEqual([{ field: 'cancelAtPeriodEnd', before: false, after: true }]);
+    });
+
+    it('does not write the replayed Stripe snapshot over a newer mirror, but still audits', async () => {
+      mockRecordAdminAction.mockRejectedValueOnce(new Error('audit down'));
+      await expect(run(makeReq())).rejects.toThrow('audit down');
+      expect(mockFindOneAndUpdate).toHaveBeenCalledTimes(1);
+
+      webhookLanded();
+      await run(makeReq());
+
+      expect(mockFindOneAndUpdate).toHaveBeenCalledTimes(1);
+      expect(auditCalls()).toHaveLength(2);
+    });
+
+    it('keeps the record when the recovery attempt itself fails, so a third same-key call audits once', async () => {
+      mockRecordAdminAction.mockRejectedValueOnce(new Error('audit down'));
+      await expect(runFlip()).rejects.toThrow('audit down');
+      webhookLanded();
+      mockStripeUpdate.mockRejectedValueOnce(stripeError('StripeAPIError', 500));
+      await expect(runFlip()).rejects.toThrow('StripeAPIError');
+      expect(dedup.get(`admin-stripe-write:admin-1:${ID}:billing.subscription.cancel_scheduled:${KEY}`)).toMatchObject({
+        state: 'stripe_done',
+      });
+
+      await runFlip();
+
+      expect(mockStripeUpdate).toHaveBeenCalledTimes(3);
+      expect(mockStripeUpdate.mock.calls[2]).toEqual(mockStripeUpdate.mock.calls[0]);
+      expect(auditCalls()).toHaveLength(2); // the failed first attempt and the one that succeeded
+      expect(auditCalls()[1][1].changes).toEqual([{ field: 'cancelAtPeriodEnd', before: false, after: true }]);
+    });
+
+    it.each([
+      ['a timeout or connection error', stripeError('StripeConnectionError')],
+      ['a 5xx', stripeError('StripeAPIError', 503)],
+    ])('parks the claim on %s, then audits on a same-key retry after the webhook', async (_name, error) => {
+      mockStripeUpdate.mockRejectedValueOnce(error);
+      await expect(runFlip()).rejects.toThrow();
+      webhookLanded();
+      await runFlip();
+
+      expect(mockStripeUpdate).toHaveBeenCalledTimes(2);
+      expect(mockStripeUpdate.mock.calls[1]).toEqual(mockStripeUpdate.mock.calls[0]);
+      expect(auditCalls()).toHaveLength(1);
+      expect(auditCalls()[0][1].changes).toEqual([{ field: 'cancelAtPeriodEnd', before: false, after: true }]);
+    });
+
+    it.each([
+      ['a 4xx invalid request', stripeError('StripeInvalidRequestError', 400)],
+      ['a rate limit', stripeError('StripeRateLimitError', 429)],
+    ])('releases the claim on %s', async (_name, error) => {
+      mockStripeUpdate.mockRejectedValueOnce(error);
+      await expect(runFlip()).rejects.toThrow();
+      expect(dedup.size).toBe(0);
+    });
+  });
+
+  it('keeps one admin claim apart from another using the same key on the same subscription', async () => {
+    await run(makeReq());
+    await run(makeReq({ user: { id: 'admin-2', isAdmin: true } }));
+
+    expect(mockStripeUpdate).toHaveBeenCalledTimes(2);
+    expect(auditCalls()).toHaveLength(2);
   });
 
   it('releases the claim when Stripe itself fails so the retry starts clean', async () => {
@@ -290,6 +393,20 @@ describe('runAdminStripeWrite', () => {
       run(makeReq({ body: { reason: 'Customer request', idempotencyKey: 'short', expectedState: STATE } }))
     ).rejects.toMatchObject({ statusCode: 400 });
     expect(mockStripeUpdate).not.toHaveBeenCalled();
+  });
+
+  it('allows a live key on a self-hosted install, read from B4M_SELF_HOST', async () => {
+    production = false;
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    const config = await import('@bike4mind/server-utils/utils/config');
+    (config.Config as { STRIPE_SECRET_KEY: string }).STRIPE_SECRET_KEY = 'sk_live_abc';
+    try {
+      await run(makeReq());
+    } finally {
+      (config.Config as { STRIPE_SECRET_KEY: string }).STRIPE_SECRET_KEY = 'sk_test_123';
+      vi.unstubAllEnvs();
+    }
+    expect(mockStripeUpdate).toHaveBeenCalledTimes(1);
   });
 
   it('refuses a live key on a non-production stage before touching Stripe', async () => {

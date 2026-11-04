@@ -154,7 +154,10 @@ describe('POST /api/admin/subscriptions/[id]/cancel', () => {
     expect(mockStripeUpdate).toHaveBeenCalledWith(
       'sub_test_1',
       { cancel_at_period_end: true },
-      { idempotencyKey: 'cancel-happy-key' }
+      expect.objectContaining({
+        idempotencyKey: `${ID}:billing.subscription.cancel_scheduled:cancel-happy-key`,
+        timeout: expect.any(Number),
+      })
     );
     expect(mockRecordAdminAction).toHaveBeenCalledTimes(1);
     expect(mockRecordAdminAction.mock.calls[0][1]).toMatchObject({
@@ -164,9 +167,13 @@ describe('POST /api/admin/subscriptions/[id]/cancel', () => {
         { field: 'cancelAtPeriodEnd', before: false, after: true },
         { field: 'cancelAt', before: null, after: null },
       ],
-      details: { stripeRequestId: 'req_1' },
     });
-    expect(res._getJSONData().stripe).toMatchObject({ stateToken: expect.any(String), cancelAtPeriodEnd: false });
+    expect(mockRecordAdminAction.mock.calls[0][1].details).toEqual({
+      subscriptionId: 'sub_test_1',
+      subscriptionRecordId: ID,
+      stripeRequestId: 'req_1',
+    });
+    expect(res._getJSONData().stripe).toMatchObject({ stateToken: expect.any(String) });
   });
 
   it.each([

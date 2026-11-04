@@ -49,13 +49,17 @@ export type SubscriptionActionAvailability = {
 
 /** Which header actions a subscription offers (docs/admin-subscriptions-spec.md sections 5.2 and 7). */
 export const subscriptionActionAvailability = (
-  detail: Pick<AdminSubscriptionDetail, 'subscription' | 'actingUserId'>
+  detail: Pick<AdminSubscriptionDetail, 'subscription' | 'actingUserId'> & {
+    stripe?: { cancelAtPeriodEnd: boolean } | null;
+  }
 ): SubscriptionActionAvailability => {
   const { subscription, actingUserId } = detail;
   const terminal = isTerminalSubscriptionStatus(subscription.status);
   const noActor = actingUserId === null ? NO_ACTING_USER_REASON : null;
-  const live = isLiveStripeSubscription(subscription);
-  const scheduled = isScheduledToCancel(subscription);
+  // A legacy comp row can read as source 'stripe'; it is never a Stripe write target.
+  const live = isLiveStripeSubscription(subscription) && !isCompSubscription(subscription);
+  // The row's cancelAt is null when periodEndsAt is, so the mirror flag covers a period-end schedule without a date.
+  const scheduled = isScheduledToCancel(subscription) || Boolean(detail.stripe?.cancelAtPeriodEnd);
   const { periodEndsAt } = subscription;
   const periodRunning = periodEndsAt !== null && new Date(periodEndsAt).getTime() > Date.now();
   return {

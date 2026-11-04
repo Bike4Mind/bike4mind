@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Box, Link, Stack, Typography } from '@mui/joy';
 import type { AdminSubscriptionDetail } from '@client/app/utils/adminSubscriptionDetail';
+import { subscriptionActionAvailability } from './subscriptionDetailModel';
 import { SubscriptionDetailHeader } from './SubscriptionDetailHeader';
 import { SubscriptionDetailStats } from './SubscriptionDetailStats';
 import { SubscriptionDetailTabs, subscriptionDetailPanelId, subscriptionDetailTabId } from './SubscriptionDetailTabs';
@@ -61,6 +62,13 @@ export const SubscriptionDetailView: React.FC<SubscriptionDetailViewProps> = ({
   const [action, setAction] = useState<SubscriptionAction | null>(null);
   const closeAction = () => setAction(null);
   const openAdminLog = () => onTabChange('admin');
+
+  // A refetch (after a 409, or another admin's write) can make the open Stripe action moot; close it rather than
+  // leave a dialog whose retry can only 409 again.
+  const availability = subscriptionActionAvailability(detail);
+  const stale =
+    (action === 'cancel' && !availability.stripeCancel) || (action === 'resume' && !availability.stripeResume);
+  if (stale) setAction(null);
 
   const dialog = () => {
     switch (action) {
