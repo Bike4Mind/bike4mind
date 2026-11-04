@@ -269,8 +269,9 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
       scopes: fd.scopes.includes(value) ? fd.scopes.filter(s => s !== value) : [...fd.scopes, value],
     }));
 
-  // Only personal keys are trust-gated; picking an org to bill makes the key org-billed.
-  const blockedByTrust = eligibility?.canCreate === false && !formData.organizationId;
+  // A refusal covers personal keys; an org-billed key still passes when the server says one can.
+  const blockedByTrust =
+    eligibility?.canCreate === false && (!formData.organizationId || !eligibility.orgBillingMayPass);
   const canSubmit = !!formData.name.trim() && formData.scopes.length > 0 && !blockedByTrust;
 
   return (
@@ -290,7 +291,7 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
         <Stack spacing={2.5} className="project-api-keys-modal-content">
           {blockedByTrust && (
             <Alert color="warning" variant="soft" data-testid="api-key-trust-alert">
-              {canBillOrg
+              {canBillOrg && eligibility?.orgBillingMayPass
                 ? `${eligibility?.message} You can still create a key billed to an organization you manage.`
                 : eligibility?.message}
             </Alert>
@@ -1931,7 +1932,8 @@ export default function UserApiKeysTab() {
   const { data: billingOrgs } = useBillingOrganizations();
   const orgNameById = new Map((billingOrgs ?? []).map(org => [org.id, org.name]));
   const { data: eligibility } = useApiKeyEligibility();
-  const createBlockedByTrust = eligibility?.canCreate === false && (billingOrgs?.length ?? 0) === 0;
+  const createBlockedByTrust =
+    eligibility?.canCreate === false && (!eligibility.orgBillingMayPass || (billingOrgs?.length ?? 0) === 0);
   const [showNewKeyModal, setShowNewKeyModal] = useState(false);
   const [showKeyCreatedModal, setShowKeyCreatedModal] = useState(false);
   const [newlyCreatedKey, setNewlyCreatedKey] = useState('');

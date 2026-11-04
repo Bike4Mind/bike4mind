@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { CreditHolderType } from '@bike4mind/common';
 import { userApiKeyService } from '@bike4mind/services';
 
 const mockRefs = vi.hoisted(() => ({
@@ -21,6 +22,9 @@ vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: { countActive
 
 const resolveApiKeyTrust = vi.hoisted(() => vi.fn());
 vi.mock('@server/utils/apiKeyTrust', () => ({ resolveApiKeyTrust }));
+
+const findIdsAdministeredBy = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/database', () => ({ organizationRepository: { findIdsAdministeredBy } }));
 
 const isApiKeyAccessAllowed = vi.hoisted(() => vi.fn());
 vi.mock('@server/utils/apiKeyAccessGate', () => ({
@@ -50,34 +54,72 @@ const callEligibility = async (assessment: Assessment) => {
   const { req, res } = createMocks({ method: 'GET' });
   Object.assign(req, { user: { id: 'u1' } });
   await mockRefs.getHandler!(req, res);
-  return res._getJSONData() as { canCreate: boolean; message: string | null };
+  return res._getJSONData() as { canCreate: boolean; message: string | null; orgBillingMayPass: boolean };
 };
 
 describe('GET /api/user-api-keys/eligibility', () => {
   beforeEach(() => {
     countActiveByUserId.mockReset();
+    findIdsAdministeredBy.mockReset();
     resolveApiKeyTrust.mockReset();
     isApiKeyAccessAllowed.mockReset().mockResolvedValue(true);
   });
 
   it('refuses with the access message when the access switch refuses, before checking trust', async () => {
+    findIdsAdministeredBy.mockResolvedValue([]);
     isApiKeyAccessAllowed.mockResolvedValue(false);
     expect(await callEligibility({ status: 'trusted' })).toEqual({
       canCreate: false,
       message: 'API keys require an active paid subscription',
+      orgBillingMayPass: false,
     });
     expect(isApiKeyAccessAllowed).toHaveBeenCalledWith({ id: 'u1' }, undefined, expect.anything());
     expect(resolveApiKeyTrust).not.toHaveBeenCalled();
   });
 
+  it('reports org billing may pass when the switch admits a key billed to an administered org', async () => {
+    findIdsAdministeredBy.mockResolvedValue(['org-free', 'org-paid']);
+    isApiKeyAccessAllowed.mockImplementation(async (_user, billing?: { organizationId?: string }) => {
+      return billing?.organizationId === 'org-paid';
+    });
+    const result = await callEligibility({ status: 'trusted' });
+    expect(result).toMatchObject({ canCreate: false, orgBillingMayPass: true });
+    expect(findIdsAdministeredBy).toHaveBeenCalledWith('u1');
+    expect(isApiKeyAccessAllowed).toHaveBeenCalledWith(
+      { id: 'u1' },
+      { billingOwnerType: CreditHolderType.Organization, organizationId: 'org-free' },
+      expect.anything()
+    );
+  });
+
+  it('reports org billing cannot pass when the switch refuses every administered org', async () => {
+    findIdsAdministeredBy.mockResolvedValue(['org-free']);
+    isApiKeyAccessAllowed.mockResolvedValue(false);
+    expect(await callEligibility({ status: 'trusted' })).toMatchObject({ canCreate: false, orgBillingMayPass: false });
+  });
+
+  it('propagates an access-switch read failure without checking trust', async () => {
+    isApiKeyAccessAllowed.mockRejectedValue(new Error('settings read failed'));
+    await expect(callEligibility({ status: 'trusted' })).rejects.toThrow('settings read failed');
+    expect(resolveApiKeyTrust).not.toHaveBeenCalled();
+  });
+
   it('lets a trusted account create without counting keys', async () => {
-    expect(await callEligibility({ status: 'trusted' })).toEqual({ canCreate: true, message: null });
+    expect(await callEligibility({ status: 'trusted' })).toEqual({
+      canCreate: true,
+      message: null,
+      orgBillingMayPass: true,
+    });
     expect(countActiveByUserId).not.toHaveBeenCalled();
   });
 
   it('lets a not-yet-trusted account with room create, counting personal keys only', async () => {
     countActiveByUserId.mockResolvedValue(0);
-    expect(await callEligibility(notYetTrusted(1))).toEqual({ canCreate: true, message: null });
+    expect(await callEligibility(notYetTrusted(1))).toEqual({
+      canCreate: true,
+      message: null,
+      orgBillingMayPass: true,
+    });
     expect(countActiveByUserId).toHaveBeenCalledWith('u1', 'personal');
   });
 
@@ -88,6 +130,7 @@ describe('GET /api/user-api-keys/eligibility', () => {
     expect(await callEligibility(assessment)).toEqual({
       canCreate: false,
       message: userApiKeyService.describeApiKeyTrustRequirement(assessment),
+      orgBillingMayPass: true,
     });
   });
 

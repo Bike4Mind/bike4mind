@@ -54,7 +54,11 @@ const h = vi.hoisted(() => ({
     callbackSigningSecretCreatedAt: new Date('2026-03-01'),
   } as RotateCallbackSigningSecretResponse,
   hasOptiAccess: false,
-  eligibility: { canCreate: true, message: null } as { canCreate: boolean; message: string | null },
+  eligibility: { canCreate: true, message: null, orgBillingMayPass: true } as {
+    canCreate: boolean;
+    message: string | null;
+    orgBillingMayPass: boolean;
+  },
   billingOrgs: [] as { id: string; name: string }[],
 }));
 
@@ -572,11 +576,16 @@ describe('UserApiKeysTab - skills:write', () => {
 });
 
 describe('UserApiKeysTab - API key trust gate', () => {
-  const blocked = { canCreate: false, message: 'Verify your account to create API keys.' };
+  const blocked = { canCreate: false, message: 'Verify your account to create API keys.', orgBillingMayPass: true };
+  const accessDenied = {
+    canCreate: false,
+    message: 'API keys require an active paid subscription',
+    orgBillingMayPass: false,
+  };
 
   beforeEach(() => {
     h.keys = [activeKey];
-    h.eligibility = { canCreate: true, message: null };
+    h.eligibility = { canCreate: true, message: null, orgBillingMayPass: true };
     h.billingOrgs = [];
     h.createMutate.mockClear();
   });
@@ -618,6 +627,15 @@ describe('UserApiKeysTab - API key trust gate', () => {
 
     expect(screen.getByTestId('api-keys-create-btn')).toBeEnabled();
     expect(screen.queryByTestId('api-keys-trust-notice')).not.toBeInTheDocument();
+  });
+
+  it('disables create on the tab when the access switch refuses org billing too, even with an organization', () => {
+    h.eligibility = accessDenied;
+    h.billingOrgs = [{ id: 'org-1', name: 'Acme' }];
+    renderTab();
+
+    expect(screen.getByTestId('api-keys-create-btn')).toBeDisabled();
+    expect(screen.getByTestId('api-keys-trust-notice')).toHaveTextContent(accessDenied.message);
   });
 
   it('shows the alert with the org hint and disables submit while billing a personal account, then clears both on picking an org', async () => {
