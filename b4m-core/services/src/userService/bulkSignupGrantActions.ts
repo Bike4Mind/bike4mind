@@ -43,6 +43,9 @@ export async function previewSignupGrantAction(
   return { dryRun: true, results, undoUserIds: [] };
 }
 
+/** Accounts are independent (each has its own transaction), so a small fan-out keeps 100 ids from running serially. */
+const BULK_CONCURRENCY = 5;
+
 export type BulkSignupGrantBlockAdapters = Omit<SignupGrantBlockAdapters, 'audit'> & {
   /** Builds the per-account audit write, run in the same transaction as that account's flag change. */
   auditFor?: (userId: string) => () => Promise<void>;
@@ -50,7 +53,7 @@ export type BulkSignupGrantBlockAdapters = Omit<SignupGrantBlockAdapters, 'audit
 };
 
 /**
- * Blocks or unblocks each account in turn through the per-account action, so a bulk run has the same gates,
+ * Blocks or unblocks each account through the per-account action, a few at a time, so a bulk run has the same gates,
  * audit write and no-op reasons as a single one. One account failing does not stop the rest: it is reported as
  * failed and can be retried, since a repeat on an applied account is a no-op.
  */
@@ -59,19 +62,21 @@ export async function bulkSetSignupGrantBlock(
   adapters: BulkSignupGrantBlockAdapters
 ): Promise<BulkSignupGrantResult> {
   const act = input.action === 'block' ? blockSignupGrant : unblockSignupGrant;
-  const results: BulkSignupGrantRow[] = [];
-  for (const userId of dedupe(input.userIds)) {
+  const applyOne = async (userId: string): Promise<BulkSignupGrantRow> => {
     try {
       const result = await act(userId, { ...adapters, audit: adapters.auditFor?.(userId) });
-      results.push(
-        result.outcome === 'applied'
-          ? { userId, outcome: 'applied', rewardsAffected: result.rewardsAffected }
-          : { userId, outcome: 'noop', reason: result.reason, rewardsAffected: result.rewardsAffected }
-      );
+      return result.outcome === 'applied'
+        ? { userId, outcome: 'applied', rewardsAffected: result.rewardsAffected }
+        : { userId, outcome: 'noop', reason: result.reason, rewardsAffected: result.rewardsAffected };
     } catch (error) {
       adapters.logger.error(`Bulk signup grant ${input.action} failed for user ${userId}`, error);
-      results.push({ userId, outcome: 'failed' });
+      return { userId, outcome: 'failed' };
     }
+  };
+  const userIds = dedupe(input.userIds);
+  const results: BulkSignupGrantRow[] = [];
+  for (let i = 0; i < userIds.length; i += BULK_CONCURRENCY) {
+    results.push(...(await Promise.all(userIds.slice(i, i + BULK_CONCURRENCY).map(applyOne))));
   }
   return {
     dryRun: false,
