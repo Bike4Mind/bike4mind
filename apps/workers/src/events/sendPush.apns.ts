@@ -1,5 +1,5 @@
 import http2 from 'node:http2';
-import { createPrivateKey, sign } from 'node:crypto';
+import { createHash, createPrivateKey, sign } from 'node:crypto';
 import type { PushTokenEnvironment } from '@bike4mind/database';
 import { readApnsCredentials, type ApnsCredentials } from '@bike4mind/server-utils/utils/pushDelivery';
 
@@ -60,7 +60,9 @@ const TOKEN_TTL_MS = 45 * 60_000;
 let cachedToken: { cacheKey: string; token: string; issuedAtMs: number } | undefined;
 
 function providerToken(config: ApnsConfig, nowMs: number): string {
-  const cacheKey = `${config.teamId}:${config.keyId}`;
+  // The key hash makes a rotated APNS_KEY under an unchanged key id re-sign instead of reusing the old token.
+  const keyHash = createHash('sha256').update(config.key).digest('hex');
+  const cacheKey = `${config.teamId}:${config.keyId}:${keyHash}`;
   if (cachedToken && cachedToken.cacheKey === cacheKey && nowMs - cachedToken.issuedAtMs < TOKEN_TTL_MS) {
     return cachedToken.token;
   }

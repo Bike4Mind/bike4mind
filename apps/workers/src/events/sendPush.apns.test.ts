@@ -200,6 +200,23 @@ describe('createHttp2ApnsTransport', () => {
     expect(await authorizationAt(start + 45 * 60_000 + 2_000)).toBe(refreshed);
   });
 
+  it('signs a fresh provider token when APNS_KEY rotates under the same key id', async () => {
+    const nowMs = Date.UTC(2031, 0, 1);
+    const authorization = async (config: typeof CONFIG) => {
+      const transport = createHttp2ApnsTransport(config, () => nowMs);
+      await transport.send({ environment: 'production', deviceToken: 'tok', headers: {}, payload: '{}' });
+      const { requests } = sessions.get(APNS_HOSTS.production)!;
+      return requests[requests.length - 1].headers.authorization;
+    };
+    const rotatedKey = generateKeyPairSync('ec', { namedCurve: 'P-256' })
+      .privateKey.export({ type: 'pkcs8', format: 'pem' })
+      .toString();
+
+    const first = await authorization(CONFIG);
+    expect(await authorization(CONFIG)).toBe(first);
+    expect(await authorization({ ...CONFIG, key: rotatedKey })).not.toBe(first);
+  });
+
   it("returns APNs' status and reason", async () => {
     h.responses.set(`${APNS_HOSTS.production} /3/device/gone`, { status: 410, body: '{"reason":"Unregistered"}' });
     const transport = createHttp2ApnsTransport(CONFIG);
