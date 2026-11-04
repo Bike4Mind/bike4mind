@@ -1,4 +1,10 @@
-import { CreditHolderType, type IAdminSettingsRepository, type SignupProtection } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  isSignupGrantBlocked,
+  type IAdminSettingsRepository,
+  type SignupGrant,
+  type SignupProtection,
+} from '@bike4mind/common';
 import { accountBlockReasons, type AccountStateFields } from '../userService/accountState';
 import {
   drawnInRefundScope,
@@ -21,7 +27,11 @@ export type HeldCreditRewardInput = {
   metadata?: Record<string, unknown>;
 };
 
-export type HeldCreditRewardRow = HeldCreditRewardInput & { status: 'held' | 'paid' | 'void'; heldAt: Date };
+/** `paused` is a blocked account's reward, out of the queue until unblock restores it to `held`. */
+export type HeldCreditRewardRow = HeldCreditRewardInput & {
+  status: 'held' | 'paid' | 'void' | 'paused';
+  heldAt: Date;
+};
 
 /** Implemented by heldCreditRewardRepository in packages/database (models/billing/HeldCreditRewardModel.ts). */
 export interface HeldCreditRewardRepository {
@@ -34,18 +44,31 @@ export interface HeldCreditRewardRepository {
   settle(transactionId: string, status: 'paid' | 'void'): Promise<void>;
 }
 
-export type RewardPartyFields = AccountStateFields & { isSynthetic?: boolean | null; deletedAt?: Date | null };
+export type RewardPartyFields = AccountStateFields & {
+  isSynthetic?: boolean | null;
+  deletedAt?: Date | null;
+  signupGrant?: Pick<SignupGrant, 'blocked'> | null;
+};
 
 /**
  * The money-path account gate, stricter than accountBlockReasons: a deleted, synthetic or
- * suspend_pending account is not paid either. Hold time (apps/client/server/referrals/firstAnswerReward.ts)
- * and release time both use it, so a reward never pays on release what it would have refused up front.
+ * suspend_pending account is not paid either. It gates the invited friend of a referral reward on its own;
+ * the account a reward pays goes through isRewardRecipientBlocked.
  */
 export const isRewardPartyBlocked = (party: RewardPartyFields) =>
   !!party.deletedAt ||
   !!party.isSynthetic ||
   accountBlockReasons(party).length > 0 ||
   party.moderation?.status === 'suspend_pending';
+
+/**
+ * isRewardPartyBlocked plus an admin's grant block, for the account a reward pays. Hold time
+ * (apps/client/server/referrals/firstAnswerReward.ts, the gears catalog) and release time both use it, so a
+ * reward never pays on release what it would have refused up front. It never applies to the invited friend of a
+ * referral reward, so blocking a friend cannot hold the inviter's reward in the queue.
+ */
+export const isRewardRecipientBlocked = (party: RewardPartyFields) =>
+  isRewardPartyBlocked(party) || isSignupGrantBlocked(party);
 
 /** Metadata key naming the invited friend on a referral reward; that friend is re-checked before paying. */
 export const REFERRED_USER_ID_METADATA_KEY = 'referredUserId';
@@ -68,17 +91,18 @@ export type PayCreditRewardOutcome =
 
 /**
  * 'transient' covers states an account can leave (dispute pending, suspension or suspend_pending, both
- * appealable): the release keeps such a reward queued rather than voiding it, which would forfeit it for good.
+ * appealable, or an admin grant block on the recipient, which unblock lifts): the release keeps such a reward
+ * queued rather than voiding it, which would forfeit it for good.
  */
 type PartyBlock = 'terminal' | 'transient' | null;
 
-const partyBlock = (party: RewardPartyFields | null): PartyBlock => {
+const partyBlock = (party: RewardPartyFields | null, isRecipient = false): PartyBlock => {
   if (!party || party.deletedAt || party.isSynthetic || party.isBanned) return 'terminal';
-  return isRewardPartyBlocked(party) ? 'transient' : null;
+  return (isRecipient ? isRewardRecipientBlocked(party) : isRewardPartyBlocked(party)) ? 'transient' : null;
 };
 
 async function partiesBlock(reward: HeldCreditRewardInput, adapters: PayCreditRewardAdapters): Promise<PartyBlock> {
-  const userBlock = partyBlock(await adapters.users.findById(reward.userId));
+  const userBlock = partyBlock(await adapters.users.findById(reward.userId), true);
   if (userBlock === 'terminal') return userBlock;
   const friendId = reward.metadata?.[REFERRED_USER_ID_METADATA_KEY];
   if (reward.source !== 'referral_first_answer' || typeof friendId !== 'string') return userBlock;
@@ -159,7 +183,10 @@ export async function payCreditReward(
 
   const [own] = await adapters.heldRewards.findByTransactionIds([reward.transactionId]);
   // A voided row was refused at release; answering 'duplicate' would read as claimed and loop the user.
-  if (own) return { outcome: own.status === 'held' ? 'queued' : own.status === 'void' ? 'blocked' : 'duplicate' };
+  if (own) {
+    if (own.status === 'held') return { outcome: 'queued' };
+    return { outcome: own.status === 'void' || own.status === 'paused' ? 'blocked' : 'duplicate' };
+  }
 
   if (
     drawnInRefundScope(adapters, 'trickle', reward.transactionId) ||
