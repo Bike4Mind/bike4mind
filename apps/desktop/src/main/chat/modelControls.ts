@@ -45,7 +45,11 @@ function outputControl(min: number, reported: number, value?: number, thinks = f
   const max = Math.min(reported, GENERATION_BOUNDS.maxOutputTokens.max);
   if (!Number.isFinite(max) || max <= min) return undefined;
   const preset = value !== undefined ? Math.min(value, max) : undefined;
-  return { ...control({ min, max, step: OUTPUT_STEP }, preset), ...(thinks ? { includesThinking: true } : {}) };
+  return {
+    ...control({ min, max, step: OUTPUT_STEP }, preset),
+    ...(value !== undefined && value > max ? { unclampedDefault: value } : {}),
+    ...(thinks ? { includesThinking: true } : {}),
+  };
 }
 
 /** The levels in `values` that name a setting, lowest first. */
@@ -111,8 +115,18 @@ export function withOllamaContext(controls: ModelControls, contextWindow: number
   if (!output) return controls;
   const max = Math.min(contextWindow, GENERATION_BOUNDS.maxOutputTokens.max);
   if (max <= output.min) return rest;
-  const preset = output.default !== undefined ? Math.min(output.default, max) : undefined;
-  return { ...rest, maxOutputTokens: { ...output, max, ...(preset !== undefined ? { default: preset } : {}) } };
+  const { unclampedDefault, ...base } = output;
+  const wanted = unclampedDefault ?? output.default;
+  const preset = wanted !== undefined ? Math.min(wanted, max) : undefined;
+  return {
+    ...rest,
+    maxOutputTokens: {
+      ...base,
+      max,
+      ...(preset !== undefined ? { default: preset } : {}),
+      ...(wanted !== undefined && wanted > max ? { unclampedDefault: wanted } : {}),
+    },
+  };
 }
 
 /** Effort levels an OpenAI-compatible server's `reasoning_effort` takes for the gpt-oss templates. */

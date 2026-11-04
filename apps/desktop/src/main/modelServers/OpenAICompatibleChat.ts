@@ -289,7 +289,8 @@ export class OpenAICompatibleChat implements LocalChat {
           ? { aliasIds: model.aliases.map(alias => localModelId(this.server.runtimeId, alias)) }
           : {}),
         ...(this.toolsOffFor(model.name) ? { supportsTools: false } : {}),
-        // The server does not say which models think; one that has thought is marked always-on, or switchable where the product takes enable_thinking.
+        // The server does not say which models think; one that has thought is marked always-on, or switchable
+        // where the product takes enable_thinking.
         ...(thinks && !controls.effort
           ? supportsThinkingSwitch(this.server.product)
             ? { thinkingToggle: true, minimalThinks: true as const }

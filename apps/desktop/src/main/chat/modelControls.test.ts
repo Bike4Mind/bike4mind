@@ -69,6 +69,21 @@ describe('ollamaControls', () => {
     expect(withOllamaContext(settled, 2048).maxOutputTokens).toMatchObject({ max: 2048, default: 2048 });
   });
 
+  it('re-derives a clamped num_predict default from the model when the context grows', () => {
+    const listed = ollamaControls({ inspected: true, parameters: MODELFILE, contextWindow: 2048 });
+    const grown = withOllamaContext(listed, 8192).maxOutputTokens;
+    expect(grown).toMatchObject({ max: 8192, default: 4096 });
+    expect(grown).not.toHaveProperty('unclampedDefault');
+    expect(withOllamaContext(listed, 3000).maxOutputTokens).toMatchObject({ max: 3000, default: 3000 });
+  });
+
+  it('keeps re-deriving a clamped num_predict default across chained context changes', () => {
+    const listed = ollamaControls({ inspected: true, parameters: MODELFILE, contextWindow: 2048 });
+    const narrowed = withOllamaContext(listed, 3000);
+    expect(narrowed.maxOutputTokens).toMatchObject({ max: 3000, default: 3000 });
+    expect(withOllamaContext(narrowed, 8192).maxOutputTokens).toMatchObject({ max: 8192, default: 4096 });
+  });
+
   it('states no defaults before the model is inspected', () => {
     const controls = ollamaControls({ inspected: false, contextWindow: 8192 });
     expect(Object.keys(controls).sort()).toEqual(
