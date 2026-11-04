@@ -4,10 +4,12 @@ import { type MigrationFile } from './index';
 /**
  * Ensure the partial `{ productId, date }` index over `internal: true` rows exists on overwatchuserdays.
  *
- * Internal-account activity reads (that mark's DAU, WAU and MAU) match `{ productId, date range,
- * internal: true }`, or ask for either mark with one `$or` branch per mark. `internal` is in no index,
- * so on `{ productId, date, userId }` each one fetches every user-day of the product in the range to
- * keep the few marked rows.
+ * `internal` is in no other index, so on `{ productId, date, userId }` a read of internal-account
+ * activity fetches every user-day of the product in the range to keep the few marked rows.
+ * A read can use this index only when it names `internal: true` beside the product and dates, or, asking
+ * for either mark, when each branch of a rooted `$or` names its own mark with the product and dates.
+ * A mark inside a contained `$or`, next to top-level product and date predicates, selects neither
+ * partial index and stays on `{ productId, date, userId }`.
  * Partial on the mark, the index holds only those rows, as the synthetic-lane index
  * (20260921235978_ensure-overwatch-user-day-synthetic-lane-index) does for its mark.
  *
