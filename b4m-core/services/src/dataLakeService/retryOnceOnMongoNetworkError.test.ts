@@ -30,6 +30,13 @@ describe('retryOnceOnMongoNetworkError', () => {
     expect(read).toHaveBeenCalledTimes(2);
   });
 
+  it('rethrows a different error from the second attempt unchanged', async () => {
+    const serverError = Object.assign(new Error('bad query'), { name: 'MongoServerError', code: 2 });
+    const read = vi.fn().mockRejectedValueOnce(networkTimeout()).mockRejectedValueOnce(serverError);
+    await expect(retryOnceOnMongoNetworkError(read, { label: 'scan', delayMs: 0 })).rejects.toBe(serverError);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   it('does not retry a server selection timeout, which has already waited its full budget', async () => {
     const error = Object.assign(new Error('x'), { name: 'MongoServerSelectionError' });
     const read = vi.fn().mockRejectedValue(error);
