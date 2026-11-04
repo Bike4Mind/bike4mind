@@ -254,8 +254,8 @@ describe('invoicePaymentSucceeded - purchase credited to the source product', ()
     const periodEnds = () => vi.mocked(emitProductEvent).mock.calls.map(([c]) => [c.productId, c.metadata?.periodEnd]);
 
     it('sends the latest subscription line end, not the invoice period_end, on every copy', async () => {
-      // A move to a yearly plan that restarts the cycle: a line for the old monthly period and one
-      // for the new year. The one-off item's later end is not a subscription period and is skipped.
+      // A yearly tier upgrade that restarts the cycle: a credit proration for the rest of the old
+      // year, then the new year. The one-off item's later end is not a subscription period.
       // Stripe sets invoice.period_end to the START of the billed period.
       invoice({
         billing_reason: 'subscription_update',
@@ -263,7 +263,10 @@ describe('invoicePaymentSucceeded - purchase credited to the source product', ()
         lines: {
           has_more: false,
           data: [
-            line('2026-12-03T10:00:00Z'),
+            {
+              ...line('2026-12-03T10:00:00Z'),
+              parent: { type: 'subscription_item_details', subscription_item_details: { proration: true } },
+            },
             line('2027-11-03T10:00:00Z'),
             line('2028-01-01T00:00:00Z', 'invoice_item_details'),
           ],

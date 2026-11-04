@@ -145,11 +145,9 @@ checkout user's signup source is not the organization's acquisition source.
 Zero-amount invoices, refunds, disputes, and synthetic users send nothing. Each
 event carries the amount collected in the currency's major unit (dollars, or whole
 yen), the currency, whether it was a subscription or credits, and the invoice
-billing reason. A subscription payment also carries `periodEnd`: when the period
-it paid for ends, in ISO 8601 UTC, the latest period end over the invoice's
-subscription lines. Plans are billed monthly or yearly, so this, not the time
-since the last payment, says whether a subscriber is still covered. It is left
-out when the invoice's lines show no subscription period. Each event is
+billing reason. A subscription payment also carries `periodEnd`: the end of the
+period it paid for, in ISO 8601 UTC, taken from the invoice's subscription lines.
+It is left out when the invoice's lines show no subscription period. Each event is
 keyed on the Stripe invoice or payment intent, so a redelivered webhook does not
 count twice. Overwatch has no purchase stage in its funnel yet, so these events
 are stored as raw events only.

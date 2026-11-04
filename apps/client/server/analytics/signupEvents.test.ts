@@ -320,7 +320,6 @@ describe('emitPurchaseEvents', () => {
 
   describe('the end of the period a subscription payment bought', () => {
     it('sends it as an ISO 8601 UTC string on a subscription purchase', async () => {
-      // A yearly plan: "paid in the last month" would read this subscriber as gone after a month.
       await emitPurchaseEvents(invoice({ periodEnd: new Date(Date.UTC(2027, 10, 3, 10)) }));
       expect(mockEmit.mock.calls[0][0].metadata).toEqual({
         touch: 'first',

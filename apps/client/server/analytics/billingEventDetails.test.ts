@@ -91,6 +91,23 @@ describe('subscriptionPeriodEnd', () => {
     }
   });
 
+  it('prefers a full-period line over a proration that ends later, and uses prorations when there is no other', () => {
+    const proration = (end: number) => ({
+      parent: { type: 'subscription_item_details', subscription_item_details: { proration: true } },
+      period: { start: 0, end },
+    });
+    const newPeriodEnd = Date.parse('2026-12-03T10:00:00Z') / 1000;
+    const oldPeriodEnd = Date.parse('2027-03-01T00:00:00Z') / 1000;
+    expect(
+      subscriptionPeriodEnd(invoiceWith({ data: [proration(oldPeriodEnd), line(newPeriodEnd)] }))?.toISOString()
+    ).toBe('2026-12-03T10:00:00.000Z');
+    expect(
+      subscriptionPeriodEnd(
+        invoiceWith({ data: [proration(oldPeriodEnd), { ...line(newPeriodEnd), period: null }] })
+      )?.toISOString()
+    ).toBe('2027-03-01T00:00:00.000Z');
+  });
+
   it('has none without a subscription line that has a period', () => {
     expect(subscriptionPeriodEnd(invoiceWith(undefined))).toBeUndefined();
     expect(subscriptionPeriodEnd(invoiceWith({ data: [] }))).toBeUndefined();

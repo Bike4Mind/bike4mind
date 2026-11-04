@@ -248,10 +248,9 @@ export async function emitBillingEvent(opts: {
  * `visitId` (see billingEventDetails.ts) is sent only for a credit pack or the invoice that opened
  * a subscription; a renewal or seat change happened in no visit, so it names none.
  *
- * `periodEnd` is when the period a subscription payment bought ends, sent as `metadata.periodEnd`
- * in ISO 8601 UTC. Plans are billed monthly or yearly, so the time since the last payment cannot
- * say whether a subscriber is still covered; this can. Sent for a subscription only (a credit pack
- * buys no period), and left out when the caller has none or passes an invalid date.
+ * `periodEnd` is the end of the period a subscription payment paid for, sent as `metadata.periodEnd`
+ * in ISO 8601 UTC. Sent for a subscription only (a credit pack buys no period), and left out when
+ * the caller has none or passes an invalid date.
  */
 export async function emitPurchaseEvents(opts: {
   user: PurchaseCreditUser | null | undefined;
