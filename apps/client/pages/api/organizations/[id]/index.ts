@@ -21,6 +21,7 @@ import { creditService, organizationService } from '@bike4mind/services';
 import {
   canAdministerOrganization,
   CreditHolderType,
+  isOrgMember,
   MAX_STORAGE_LIMIT_MB,
   toSafeOrganization,
 } from '@bike4mind/common';
@@ -122,7 +123,8 @@ const handler = baseApi()
       // appointed admins (see findUpdateAccessById).
       if (loopsGreenCiMergeDisabled !== undefined) {
         const org = await organizationRepository.findById(orgId);
-        if (!org) throw new NotFoundError('Organization not found');
+        // A non-member gets the same 404 as for a missing org.
+        if (!org || !isOrgMember(req.user!, org)) throw new NotFoundError('Organization not found');
         if (!canAdministerOrganization(req.user!, org)) {
           throw new ForbiddenError('Only an organization admin can change its loop merge setting');
         }
