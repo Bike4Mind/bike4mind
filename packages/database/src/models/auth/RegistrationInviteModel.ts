@@ -31,10 +31,10 @@ export class RegistrationInviteRepository
     return result.modifiedCount === 1;
   }
 
-  async releaseClaim(inviteId: string, usedAt: Date): Promise<void> {
+  async releaseClaim(inviteId: string, usedAt: Date, status: RegInviteStatusType): Promise<void> {
     await this.model.updateOne(
       { _id: inviteId, used: usedAt, usedbyId: null },
-      { $unset: { used: 1 }, $set: { status: RegInviteStatusType.open } }
+      { $unset: { used: 1 }, $set: { status } }
     );
   }
   async createMany(invites: Omit<IRegInviteDocument, 'id'>[]) {

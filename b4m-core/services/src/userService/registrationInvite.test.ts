@@ -81,7 +81,17 @@ describe('claimRegistrationInvite', () => {
       { claimUnused, releaseClaim }
     );
     await claim?.release();
-    expect(releaseClaim).toHaveBeenCalledWith('invite-1', claimUnused.mock.calls[0][1]);
+    expect(releaseClaim).toHaveBeenCalledWith('invite-1', claimUnused.mock.calls[0][1], invite().status);
+  });
+
+  it('restores a waiting code to waiting, not open, on release', async () => {
+    const releaseClaim = vi.fn();
+    const claim = await claimRegistrationInvite(
+      { invite: invite({ status: RegInviteStatusType.waiting }), isUnlimited: false },
+      { claimUnused: vi.fn().mockResolvedValue(true), releaseClaim }
+    );
+    await claim?.release();
+    expect(releaseClaim).toHaveBeenCalledWith('invite-1', expect.any(Date), RegInviteStatusType.waiting);
   });
 
   it('returns null when another signup claimed the code first', async () => {

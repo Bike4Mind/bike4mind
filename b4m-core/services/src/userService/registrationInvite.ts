@@ -14,8 +14,8 @@ export interface RegistrationInviteRepository {
   ) => Promise<unknown>;
   /** Sets `used` on a code that has none; false when another signup set it first. */
   claimUnused: (inviteId: string, usedAt: Date) => Promise<boolean>;
-  /** Reopens a code claimed at `usedAt` that no account has redeemed yet. */
-  releaseClaim: (inviteId: string, usedAt: Date) => Promise<void>;
+  /** Reopens a code claimed at `usedAt` that no account has redeemed yet, restoring its prior status. */
+  releaseClaim: (inviteId: string, usedAt: Date, status: RegInviteStatusType) => Promise<void>;
 }
 
 export interface ResolvedRegistrationInvite {
@@ -82,8 +82,9 @@ export async function claimRegistrationInvite(
 ): Promise<{ release: () => Promise<void> } | null> {
   if (isUnlimited) return { release: async () => undefined };
   const usedAt = new Date();
+  const priorStatus = invite.status ?? RegInviteStatusType.open;
   if (!(await registrationInvites.claimUnused(invite.id, usedAt))) return null;
-  return { release: () => registrationInvites.releaseClaim(invite.id, usedAt) };
+  return { release: () => registrationInvites.releaseClaim(invite.id, usedAt, priorStatus) };
 }
 
 /** Records `userId`'s use of the invite: closes a single-use code, appends history for an unlimited one. */

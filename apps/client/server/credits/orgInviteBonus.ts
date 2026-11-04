@@ -49,9 +49,11 @@ export async function recordOrgSignupInvite(userId: string, inviteId: string): P
 /**
  * Pays the bonus to an account marked with `organizationId`'s invite, once its standing is confirmed.
  * Each payout holds one of the organization's seats on its own counter, so a paying organization
- * cannot fund more bonuses than it has seats; a hold that pays nothing is handed back.
+ * cannot fund more bonuses than it has seats; a hold that pays nothing is handed back. An account not
+ * yet eligible takes no hold, so its retries cannot crowd out an eligible one at the last seat.
  */
 async function payForPayingOrganization(userId: string, organizationId: string): Promise<number> {
+  if (!userService.isInviteBonusEligible(await userRepository.findById(userId), true)) return 0;
   if (!(await isPayingOrganization(organizationId))) return 0;
   const reservation = await Organization.updateOne(
     {
@@ -81,7 +83,7 @@ async function payForPayingOrganization(userId: string, organizationId: string):
       await Organization.updateOne(
         { _id: organizationId, signupInviteBonusCount: { $gt: 0 } },
         { $inc: { signupInviteBonusCount: -1 } }
-      );
+      ).catch(() => console.warn('[org-invite-bonus] seat hand-back failed; one bonus seat stays held'));
     }
   }
 }

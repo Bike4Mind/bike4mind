@@ -566,14 +566,6 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return result.modifiedCount === 1;
   }
 
-  /**
-   * Claim the one free-credit grant allowed per inbox (canonicalizeEmail of the account's email).
-   * True when this account holds the claim, including from an earlier attempt, so a retried grant
-   * stays idempotent; false when another account already holds it. The unique
-   * freeCreditClaimEmail_1 index makes the claim atomic across concurrent signups; the pre-check
-   * covers a deployment whose index has not been built yet. An account without a usable email has
-   * nothing to dedupe on and is allowed.
-   */
   async markInviteBonusPaid(userId: string, credits: number): Promise<boolean> {
     const result = await this.model.updateOne(
       { _id: userId, signupGrant: { $type: 'object' }, 'signupGrant.inviteBonusPaid': { $exists: false } },
@@ -582,6 +574,14 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return result.modifiedCount === 1;
   }
 
+  /**
+   * Claim the one free-credit grant allowed per inbox (canonicalizeEmail of the account's email).
+   * True when this account holds the claim, including from an earlier attempt, so a retried grant
+   * stays idempotent; false when another account already holds it. The unique
+   * freeCreditClaimEmail_1 index makes the claim atomic across concurrent signups; the pre-check
+   * covers a deployment whose index has not been built yet. An account without a usable email has
+   * nothing to dedupe on and is allowed.
+   */
   async claimFreeCreditGrant(userId: string): Promise<boolean> {
     const user = await this.model.findById(userId, { email: 1, freeCreditClaimEmail: 1 }).lean();
     if (!user) return false;

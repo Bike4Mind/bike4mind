@@ -22,7 +22,7 @@ class InviteBonusAlreadyMarkedError extends Error {}
 export const inviteBonusTransactionId = (userId: string) => `invite-bonus:${userId}`;
 
 /** An invited account whose signup tranche was paid in full and that has not had its bonus yet. */
-function isInviteBonusEligible(
+export function isInviteBonusEligible(
   user: IUserDocument | null | undefined,
   orgStandingVerified: boolean
 ): user is IUserDocument & { signupGrant: SignupGrant } {

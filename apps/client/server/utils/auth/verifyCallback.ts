@@ -313,7 +313,11 @@ const authenticateUser = async (
         inviteCode && pendingFreeCredits && emailForNewAccount
           ? await resolveOAuthReferral(inviteCode, emailForNewAccount)
           : null;
-      // Taken before the account exists so a concurrent signup cannot redeem the same code.
+      const referralGrantCredits = referral
+        ? await userService.referralInviteCredits(referral.invite, adminSettingsRepository)
+        : 0;
+      // Taken before the account exists so a concurrent signup cannot redeem the same code; nothing
+      // that can throw sits between the claim and the create, whose failure releases it.
       const referralClaim = referral
         ? await userService.claimRegistrationInvite(referral, registrationInviteRepository)
         : null;
@@ -323,7 +327,7 @@ const authenticateUser = async (
           ? {
               inviteId: referral.invite.id,
               inviterId: referral.invite.userId ?? null,
-              grantCredits: await userService.referralInviteCredits(referral.invite, adminSettingsRepository),
+              grantCredits: referralGrantCredits,
             }
           : undefined;
       try {

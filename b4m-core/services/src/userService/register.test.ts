@@ -716,7 +716,7 @@ describe('registerUser', () => {
         mockAdapters.db.users.create.mockRejectedValue(Object.assign(new Error('dup'), { code: 11000 }));
         await expect(registerUser(baseParams, mockAdapters)).rejects.toThrow('Email already in use');
         const [id, usedAt] = mockAdapters.db.registrationInvites.claimUnused.mock.calls[0];
-        expect(mockAdapters.db.registrationInvites.releaseClaim).toHaveBeenCalledWith(id, usedAt);
+        expect(mockAdapters.db.registrationInvites.releaseClaim).toHaveBeenCalledWith(id, usedAt, expect.any(String));
       });
 
       it('does not record a signup invite for an admin code or an unlimited referral code', async () => {

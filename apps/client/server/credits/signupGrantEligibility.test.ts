@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ organization: vi.fn(), activity: vi.fn() }));
+const mocks = vi.hoisted(() => ({ organization: vi.fn(), activity: vi.fn(), bonus: vi.fn() }));
 vi.mock('./orgInviteUnlock', () => ({ unlockSignupGrantFromAcceptedOrgInvite: mocks.organization }));
+vi.mock('./orgInviteBonus', () => ({ retryOrgInviteBonus: mocks.bonus }));
 vi.mock('./activityUnlock', () => ({ unlockSignupGrantFromActivity: mocks.activity }));
 import { checkSignupGrantEligibility } from './signupGrantEligibility';
 
@@ -10,6 +11,20 @@ describe('signup grant eligibility', () => {
     vi.clearAllMocks();
     mocks.organization.mockResolvedValue({ creditsGranted: 0, currentCredits: null });
     mocks.activity.mockResolvedValue({ creditsGranted: 0, currentCredits: null });
+    mocks.bonus.mockResolvedValue(0);
+  });
+
+  it('retries the organization invite bonus after the unlock that can pay its tranche', async () => {
+    mocks.organization.mockResolvedValue({ creditsGranted: 28, currentCredits: 40 });
+    await checkSignupGrantEligibility('user-1');
+    expect(mocks.bonus).toHaveBeenCalledExactlyOnceWith('user-1');
+    expect(mocks.organization.mock.invocationCallOrder[0]).toBeLessThan(mocks.bonus.mock.invocationCallOrder[0]);
+  });
+
+  it('keeps the release result when the bonus retry fails', async () => {
+    mocks.activity.mockResolvedValue({ creditsGranted: 28, currentCredits: 40 });
+    mocks.bonus.mockRejectedValue(new Error('pool read failed'));
+    expect(await checkSignupGrantEligibility('user-1')).toEqual({ creditsGranted: 28, currentCredits: 40 });
   });
 
   it('retries accepted organization evidence before activity and returns its successful release', async () => {

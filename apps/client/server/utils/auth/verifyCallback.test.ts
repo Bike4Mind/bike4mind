@@ -1791,7 +1791,7 @@ describe('OAuth signup with an invite code carried through state', () => {
     await runSelfServe();
 
     const [claimedId, claimedAt] = mockClaimInvite.mock.calls[0];
-    expect(mockReleaseInviteClaim).toHaveBeenCalledWith(claimedId, claimedAt);
+    expect(mockReleaseInviteClaim).toHaveBeenCalledWith(claimedId, claimedAt, expect.any(String));
     expect(mockUpdateInvite).not.toHaveBeenCalled();
   });
 
