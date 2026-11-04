@@ -6,13 +6,15 @@ vi.mock('@bike4mind/server-utils/utils/pushDelivery', () => ({
   isPushDeliveryConfigured: () => pushDelivery.configured,
 }));
 
+import type { WatchedConnectionRow } from '@server/utils/pushNotifications';
 import { publishChatCompletedPush } from './questProcessor.push';
 
 const logger = { warn: vi.fn() };
+const liveWebRow = { source: 'web', authExpiresAt: new Date(Date.now() + 10 * 60_000) };
 const turn = { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', sessionName: 'Q3 plan' };
 
 function makeDeps({
-  connections = [] as unknown[] | Error,
+  connections = [] as WatchedConnectionRow[] | Error,
   quest = { status: 'done', type: 'chat', reply: 'Here is   the\nsummary.' } as unknown,
 } = {}) {
   return {
@@ -60,7 +62,7 @@ describe('publishChatCompletedPush connection gating', () => {
   });
 
   it('does not push a user whose client is connected and already streamed the reply', async () => {
-    const deps = makeDeps({ connections: [{ connectionId: 'c1' }] });
+    const deps = makeDeps({ connections: [liveWebRow] });
     await publishChatCompletedPush(turn, deps, logger);
     expect(deps.findQuest).not.toHaveBeenCalled();
     expect(deps.publish).not.toHaveBeenCalled();
@@ -88,6 +90,23 @@ describe('publishChatCompletedPush connection gating', () => {
     const deps = makeDeps({ quest });
     await publishChatCompletedPush(turn, deps, logger);
     expect(deps.publish).not.toHaveBeenCalled();
+  });
+
+  it('sends approval_needed instead of chat_completed for a turn parked on a Confirm card', async () => {
+    const deps = makeDeps({
+      quest: { status: 'done', type: 'chat', reply: 'Preview ready.', pendingAction: { tool: 'github_create_issue' } },
+    });
+    await publishChatCompletedPush(turn, deps, logger);
+    expect(deps.publish).toHaveBeenCalledExactlyOnceWith({
+      userId: 'user-1',
+      category: 'approval_needed',
+      title: 'Approval needed',
+      body: 'An agent wants to run github_create_issue and is waiting for your confirmation.',
+      deepLink: '/notebooks/session-1',
+      collapseId: 'approval:quest-1',
+      questId: 'quest-1',
+      sessionId: 'session-1',
+    });
   });
 
   it('falls back to generic copy without a session name or reply', async () => {

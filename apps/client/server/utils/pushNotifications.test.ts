@@ -7,7 +7,15 @@ vi.mock('@bike4mind/server-utils/utils/pushDelivery', () => ({
   isPushDeliveryConfigured: () => pushDelivery.configured,
 }));
 
-import { appRootDeepLink, publishPushNotification, sessionDeepLink, truncateForPush } from './pushNotifications';
+import {
+  appRootDeepLink,
+  hasLiveConnection,
+  isWatchingConnection,
+  publishPushNotification,
+  sessionDeepLink,
+  truncateForPush,
+  type WatchedConnectionRow,
+} from './pushNotifications';
 
 const event = {
   userId: 'user-1',
@@ -75,5 +83,59 @@ describe('truncateForPush', () => {
   it('keeps short text and ellipsizes long text to the limit', () => {
     expect(truncateForPush('short', 10)).toBe('short');
     expect(truncateForPush('abcdefghijkl', 8)).toBe('abcde...');
+  });
+});
+
+const now = new Date('2026-01-01T12:00:00Z');
+const inFuture = new Date(now.getTime() + 5 * 60_000);
+const inPast = new Date(now.getTime() - 1);
+const logger = { warn: vi.fn() };
+
+function lookup(rows: WatchedConnectionRow[]) {
+  return { findByUserId: vi.fn(async () => rows) };
+}
+
+describe('isWatchingConnection', () => {
+  it('counts a web socket whose auth is still current', () => {
+    expect(isWatchingConnection({ source: 'web', authExpiresAt: inFuture }, now)).toBe(true);
+  });
+
+  it.each<[string, WatchedConnectionRow]>([
+    ['a CLI session', { source: 'cli', authExpiresAt: inFuture }],
+    ['an API-key socket', { source: 'web', apiKeyId: 'key-1', authExpiresAt: inFuture }],
+    ['a stale web row nobody reauthed', { source: 'web', authExpiresAt: inPast }],
+    ['a web row expiring exactly now', { source: 'web', authExpiresAt: now }],
+    ['a legacy row without authExpiresAt', { source: 'web' }],
+    ['a row without a source', { authExpiresAt: inFuture }],
+  ])('does not count %s', (_label, row) => {
+    expect(isWatchingConnection(row, now)).toBe(false);
+  });
+});
+
+describe('hasLiveConnection', () => {
+  it('is false when only CLI and stale rows exist', async () => {
+    const rows = lookup([
+      { source: 'cli', authExpiresAt: inFuture },
+      { source: 'web', authExpiresAt: inPast },
+    ]);
+    await expect(hasLiveConnection('user-1', rows, logger, now)).resolves.toBe(false);
+  });
+
+  it('is true when any row is a live web session', async () => {
+    const rows = lookup([
+      { source: 'cli', authExpiresAt: inFuture },
+      { source: 'web', authExpiresAt: inFuture },
+    ]);
+    await expect(hasLiveConnection('user-1', rows, logger, now)).resolves.toBe(true);
+  });
+
+  it('fails toward pushing when the lookup throws', async () => {
+    const rows = {
+      findByUserId: vi.fn(async (): Promise<WatchedConnectionRow[]> => {
+        throw new Error('db down');
+      }),
+    };
+    await expect(hasLiveConnection('user-1', rows, logger, now)).resolves.toBe(false);
+    expect(logger.warn).toHaveBeenCalled();
   });
 });

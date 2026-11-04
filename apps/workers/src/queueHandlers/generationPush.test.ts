@@ -87,6 +87,8 @@ describe('publishGenerationJobReadyPush', () => {
   });
 });
 
+const liveWebRow = { source: 'web', authExpiresAt: new Date(Date.now() + 10 * 60_000) };
+
 describe('publishImageQuestReadyPush', () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -94,7 +96,7 @@ describe('publishImageQuestReadyPush', () => {
 
   function imageDeps({ connected = false, quest = { status: 'done', images: ['a.png'] } as unknown } = {}) {
     return {
-      connections: { findByUserId: vi.fn(async () => (connected ? [{ id: 'c1' }] : [])) },
+      connections: { findByUserId: vi.fn(async () => (connected ? [liveWebRow] : [])) },
       findQuest: vi.fn(async () => quest as never),
       sessionDeepLink: (id: string) => `/notebooks/${id}`,
       publish: vi.fn(async () => undefined),

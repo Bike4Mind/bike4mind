@@ -42,21 +42,42 @@ export async function publishPushNotification(
   }
 }
 
-type ConnectionLookup = { findByUserId(userId: string): Promise<unknown[]> };
+/** The Connection row fields that decide whether a socket means "the user is watching". */
+export type WatchedConnectionRow = {
+  source?: string;
+  apiKeyId?: string | null;
+  authExpiresAt?: Date | string | null;
+};
+
+export type ConnectionLookup = { findByUserId(userId: string): Promise<WatchedConnectionRow[]> };
 
 /**
- * Whether the user has a live websocket row, read the way ClientMessageSender
- * (b4m-core/utils/src/ws/ClientMessageSender.ts) finds its recipients. A user who is connected sees
- * the result live, so quest-shaped work (chat, image generation) skips the push.
+ * Whether a Connection row is a browser session that is still being kept alive. CLI sockets and
+ * API-key sockets never render quest results, so they do not count. Nothing heartbeats a row mid-
+ * session, so freshness comes from authExpiresAt: a web client moves it forward through
+ * reauth_connection before its access token lapses, so a row past it is a socket nobody is keeping
+ * alive (left for realtimeConnectionSweep to end). A row without it predates the field and is stale.
+ */
+export function isWatchingConnection(row: WatchedConnectionRow, now: Date = new Date()): boolean {
+  if (row.source !== 'web' || row.apiKeyId) return false;
+  if (!row.authExpiresAt) return false;
+  return new Date(row.authExpiresAt).getTime() > now.getTime();
+}
+
+/**
+ * Whether the user has a live browser connection (isWatchingConnection) among the rows
+ * ClientMessageSender (b4m-core/utils/src/ws/ClientMessageSender.ts) finds. A user who is watching
+ * sees the result live, so quest-shaped work (chat, image generation) skips the push.
  * Fails toward pushing: an unreadable connection table must not silence notifications.
  */
 export async function hasLiveConnection(
   userId: string,
   connections: ConnectionLookup,
-  logger: Pick<Logger, 'warn'>
+  logger: Pick<Logger, 'warn'>,
+  now: Date = new Date()
 ): Promise<boolean> {
   try {
-    return (await connections.findByUserId(userId)).length > 0;
+    return (await connections.findByUserId(userId)).some(row => isWatchingConnection(row, now));
   } catch (error) {
     logger.warn('[Push] connection lookup failed; treating the user as offline', {
       error: error instanceof Error ? error.message : String(error),

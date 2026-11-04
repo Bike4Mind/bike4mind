@@ -95,12 +95,16 @@ export class PushTokenRepository {
   /**
    * Returns whether a row was removed; an unknown token is not an error. Pass `userId` to remove only
    * a token that user owns (the API route does, so one account cannot unregister another's device).
+   * Pass `sid` to remove the row only while it is still bound to the session it was read under: push
+   * delivery prunes with the read-time sid, so a token re-registered under a new session meanwhile
+   * keeps its row (the same race removeBySids guards).
    */
-  async removeByToken(token: string, options?: { userId?: string }): Promise<boolean> {
+  async removeByToken(token: string, options?: { userId?: string; sid?: string }): Promise<boolean> {
     if (options?.userId !== undefined && !mongoose.isObjectIdOrHexString(options.userId)) return false;
     const result = await PushTokenModel.deleteOne({
       token,
       ...(options?.userId !== undefined && { userId: new Types.ObjectId(options.userId) }),
+      ...(options?.sid !== undefined && { sid: options.sid }),
     }).exec();
     return result.deletedCount > 0;
   }

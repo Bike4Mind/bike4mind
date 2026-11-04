@@ -32,8 +32,13 @@ import { apnsSigningKeyError, createHttp2ApnsTransport, readApnsConfig, type Apn
  * instead of stacking a duplicate.
  */
 
-/** Responses meaning the token will never work again; the row is deleted. */
-const PRUNE_REASONS = new Set(['Unregistered', 'BadDeviceToken']);
+/**
+ * Responses meaning the token will never work again; the row is deleted. BadDeviceToken is not one:
+ * APNs also returns it for a valid token sent to the wrong gateway (a sandbox token on production or
+ * the reverse), so it is logged with the stored environment and the row is kept.
+ */
+const isUnregistered = (response: { status: number; reason?: string }) =>
+  response.status === 410 || response.reason === 'Unregistered';
 
 /**
  * Rejections caused by this server's APNs configuration rather than by the device token, with the
@@ -82,7 +87,8 @@ export type SendPushDeps = {
       userId: string,
       kind: 'device'
     ): Promise<ReadonlyArray<{ token: string; sid: string; environment: PushTokenEnvironment }>>;
-    removeByToken(token: string): Promise<boolean>;
+    /** `sid` is the read-time session: a token re-registered under another session meanwhile is kept. */
+    removeByToken(token: string, options: { sid: string }): Promise<boolean>;
     removeBySids(sids: readonly string[]): Promise<number>;
   };
   sessions: {
@@ -135,7 +141,7 @@ export async function deliverPush(
   let retryable = 0;
   const configErrors = new Map<string, { status: number; hint: string }>();
   await Promise.all(
-    tokens.map(async ({ token, environment }) => {
+    tokens.map(async ({ token, sid, environment }) => {
       try {
         const response = await deps.transport.send({ environment, deviceToken: token, headers, payload });
         if (response.status === 200) {
@@ -148,8 +154,14 @@ export async function deliverPush(
           configErrors.set(response.reason ?? String(response.status), { status: response.status, hint });
           return;
         }
-        if (response.status === 410 || (response.reason && PRUNE_REASONS.has(response.reason))) {
-          if (await deps.tokens.removeByToken(token)) pruned++;
+        if (isUnregistered(response)) {
+          if (await deps.tokens.removeByToken(token, { sid })) pruned++;
+          return;
+        }
+        if (response.reason === 'BadDeviceToken') {
+          logger.warn('[Push] APNs reported BadDeviceToken; keeping the token (likely a sandbox/production mismatch)', {
+            environment,
+          });
           return;
         }
         if (response.status === 429 || response.status >= 500) retryable++;
@@ -179,11 +191,12 @@ export async function deliverPush(
     });
   }
   logger.info('[Push] delivery finished', { category: event.category, delivered, pruned, failed });
-  // Retry (and finally dead-letter) only when nothing landed and every failure may be transient. A
-  // partial success is not retried: collapse-id would absorb the repeat, but APNs would still bill the
-  // quota and the user's other devices would re-alert.
-  if (delivered === 0 && retryable > 0 && retryable === failed) {
-    throw new Error(`APNs delivery failed transiently for all ${failed} device(s)`);
+  // Retry (and finally dead-letter) when nothing landed and at least one device may still be
+  // reachable: pruned, config-error and permanently rejected tokens fail the same way on redelivery and
+  // must not mask a transient failure. A partial success is not retried: collapse-id would absorb the
+  // repeat, but APNs would still bill the quota and the user's other devices would re-alert.
+  if (delivered === 0 && retryable > 0) {
+    throw new Error(`APNs delivery failed transiently for ${retryable} of ${failed} device(s)`);
   }
   return { status: 'sent', delivered, pruned, failed };
 }

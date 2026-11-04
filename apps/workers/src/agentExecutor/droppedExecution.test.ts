@@ -8,6 +8,8 @@ const repo = vi.hoisted(() => ({
 const settleStrandedQuests = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database', () => ({ agentExecutionRepository: repo }));
 vi.mock('@bike4mind/server-utils/utils/settleStrandedQuests', () => ({ settleStrandedQuests }));
+const push = vi.hoisted(() => ({ publishAgentTerminalPush: vi.fn(), createAgentPushDeps: vi.fn(() => ({})) }));
+vi.mock('@workers/queueHandlers/agentExecutor.push', () => push);
 
 import { settleDroppedExecution } from './droppedExecution';
 
@@ -27,12 +29,18 @@ describe('settleDroppedExecution', () => {
     expect(repo.markFailed).toHaveBeenCalledWith(target.executionId, expect.objectContaining({ callerSafe: true }));
     expect(settleStrandedQuests).toHaveBeenCalledWith([target.executionId], logger, expect.any(String));
     expect(repo.markQuestSettlementFailed).not.toHaveBeenCalled();
+    expect(push.publishAgentTerminalPush).toHaveBeenCalledExactlyOnceWith(
+      { executionId: target.executionId, outcome: 'failed' },
+      expect.anything(),
+      logger
+    );
   });
   it('leaves an execution that already moved on untouched', async () => {
     repo.claimExecution.mockResolvedValue(false);
     await expect(settleDroppedExecution(target, logger)).resolves.toBe(false);
     expect(repo.markFailed).not.toHaveBeenCalled();
     expect(settleStrandedQuests).not.toHaveBeenCalled();
+    expect(push.publishAgentTerminalPush).not.toHaveBeenCalled();
   });
   it('marks a failed quest settlement for the sweep to retry', async () => {
     repo.claimExecution.mockResolvedValue(true);

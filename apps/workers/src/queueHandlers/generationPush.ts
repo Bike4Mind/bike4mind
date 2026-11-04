@@ -1,6 +1,11 @@
 import type { IGenerationJobDocument, PushNotificationEvent } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { hasLiveConnection, isPushDeliveryConfigured, truncateForPush } from '@server/utils/pushNotifications';
+import {
+  type ConnectionLookup,
+  hasLiveConnection,
+  isPushDeliveryConfigured,
+  truncateForPush,
+} from '@server/utils/pushNotifications';
 
 /**
  * `generation_ready` pushes from the generation queue handlers (generationJob.ts, imageGeneration.ts,
@@ -58,7 +63,7 @@ export async function publishGenerationJobReadyPush(
 }
 
 export type ImageQuestPushDeps = {
-  connections: { findByUserId(userId: string): Promise<unknown[]> };
+  connections: ConnectionLookup;
   findQuest(questId: string): Promise<{ status?: string; images?: unknown[] | null } | null>;
   sessionDeepLink(sessionId: string): string;
   publish: Publish;

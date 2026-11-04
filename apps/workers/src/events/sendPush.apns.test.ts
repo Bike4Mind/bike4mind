@@ -181,6 +181,25 @@ describe('createHttp2ApnsTransport', () => {
     expect(sessions.get(APNS_HOSTS.production)!.close).toHaveBeenCalled();
   });
 
+  it('reuses the provider token until 45 minutes and signs a fresh one after', async () => {
+    // Far from Date.now() so a token cached by an earlier test cannot match.
+    let nowMs = Date.UTC(2030, 0, 1);
+    const transport = createHttp2ApnsTransport(CONFIG, () => nowMs);
+    const authorizationAt = async (atMs: number) => {
+      nowMs = atMs;
+      await transport.send({ environment: 'production', deviceToken: 'tok', headers: {}, payload: '{}' });
+      const { requests } = sessions.get(APNS_HOSTS.production)!;
+      return requests[requests.length - 1].headers.authorization;
+    };
+    const start = nowMs;
+
+    const first = await authorizationAt(start);
+    expect(await authorizationAt(start + 44 * 60_000 + 59_000)).toBe(first);
+    const refreshed = await authorizationAt(start + 45 * 60_000 + 1_000);
+    expect(refreshed).not.toBe(first);
+    expect(await authorizationAt(start + 45 * 60_000 + 2_000)).toBe(refreshed);
+  });
+
   it("returns APNs' status and reason", async () => {
     h.responses.set(`${APNS_HOSTS.production} /3/device/gone`, { status: 410, body: '{"reason":"Unregistered"}' });
     const transport = createHttp2ApnsTransport(CONFIG);

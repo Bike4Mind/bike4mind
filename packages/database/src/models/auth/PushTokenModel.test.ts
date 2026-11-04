@@ -77,6 +77,13 @@ describe('PushTokenModel repository', () => {
     expect(await pushTokenRepository.removeByToken('token-1', { userId: USER_A })).toBe(true);
   });
 
+  it('removeByToken scoped to a sid keeps a token re-registered under another session', async () => {
+    await pushTokenRepository.upsert(registration({ sid: 'sid-2' }));
+    expect(await pushTokenRepository.removeByToken('token-1', { sid: 'sid-1' })).toBe(false);
+    expect(await PushTokenModel.countDocuments({})).toBe(1);
+    expect(await pushTokenRepository.removeByToken('token-1', { sid: 'sid-2' })).toBe(true);
+  });
+
   it("removeBySid only removes that session's tokens", async () => {
     await pushTokenRepository.upsert(registration());
     await pushTokenRepository.upsert(registration({ token: 'token-2', sid: 'sid-2' }));

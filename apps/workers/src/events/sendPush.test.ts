@@ -202,12 +202,12 @@ describe('deliverPush', () => {
     expect(sent[0].headers['apns-collapse-id']).toBe('agent_completed:quest-1');
   });
 
-  it.each([[{ status: 410, reason: 'Unregistered' }], [{ status: 400, reason: 'BadDeviceToken' }]])(
-    'prunes a token APNs reports dead (%o) and does not retry',
+  it.each([[{ status: 410, reason: 'Unregistered' }], [{ status: 410 }], [{ status: 400, reason: 'Unregistered' }]])(
+    'prunes a token APNs reports unregistered (%o) under its read-time sid and does not retry',
     async response => {
       const { deps, removed } = makeDeps(
         [
-          { token: 'dead', environment: 'production' },
+          { token: 'dead', environment: 'production', sid: 'sid-dead' },
           { token: 'live', environment: 'production' },
         ],
         { respond: request => (request.deviceToken === 'dead' ? response : { status: 200 }) }
@@ -220,8 +220,27 @@ describe('deliverPush', () => {
         failed: 1,
       });
       expect(removed).toEqual(['dead']);
+      expect(deps.tokens.removeByToken).toHaveBeenCalledExactlyOnceWith('dead', { sid: 'sid-dead' });
     }
   );
+
+  it('keeps a BadDeviceToken token: APNs also returns it for a sandbox/production mismatch', async () => {
+    const { deps, removed } = makeDeps([{ token: 'mismatched', environment: 'production' }], {
+      respond: () => ({ status: 400, reason: 'BadDeviceToken' }),
+    });
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toEqual({
+      status: 'sent',
+      delivered: 0,
+      pruned: 0,
+      failed: 1,
+    });
+    expect(removed).toEqual([]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('BadDeviceToken'),
+      expect.objectContaining({ environment: 'production' })
+    );
+  });
 
   it('does not prune on DeviceTokenNotForTopic: it is a wrong APNS_TOPIC, reported once at error', async () => {
     const { deps, removed } = makeDeps(
@@ -312,6 +331,41 @@ describe('deliverPush', () => {
       { respond: request => (request.deviceToken === 'ok' ? { status: 200 } : { status: 503 }) }
     );
     await expect(deliverPush(EVENT, partial.deps, logger)).resolves.toMatchObject({ delivered: 1, failed: 1 });
+  });
+
+  it.each([
+    ['an unregistered token', { status: 410, reason: 'Unregistered' }],
+    ['a config error', { status: 400, reason: 'DeviceTokenNotForTopic' }],
+    ['a permanent rejection', { status: 400, reason: 'BadDeviceToken' }],
+  ])('still retries a transient failure that sits next to %s', async (_label, response) => {
+    const { deps } = makeDeps(
+      [
+        { token: 'other', environment: 'production' },
+        { token: 'busy', environment: 'production' },
+      ],
+      { respond: request => (request.deviceToken === 'busy' ? { status: 503 } : response) }
+    );
+    await expect(deliverPush(EVENT, deps, logger)).rejects.toThrow(/failed transiently for 1 of 2/);
+  });
+
+  it('caps the collapse id at 64 characters', async () => {
+    const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+    await deliverPush({ ...EVENT, collapseId: 'c'.repeat(64) }, deps, logger);
+    await deliverPush({ ...EVENT, collapseId: 'c'.repeat(65) }, deps, logger);
+    expect(sent.map(request => request.headers['apns-collapse-id'])).toEqual(['c'.repeat(64), 'c'.repeat(64)]);
+  });
+
+  it.each([
+    ['title', 80],
+    ['body', 240],
+  ] as const)('keeps a %s of exactly %i characters and ellipsizes one longer', async (field, max) => {
+    const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+    await deliverPush({ ...EVENT, [field]: 'x'.repeat(max) }, deps, logger);
+    await deliverPush({ ...EVENT, [field]: 'x'.repeat(max + 1) }, deps, logger);
+    const [atCap, overCap] = sent.map(request => payloadOf(request).aps.alert[field] as string);
+    expect(atCap).toBe('x'.repeat(max));
+    expect(overCap).toHaveLength(max);
+    expect(overCap.endsWith('...')).toBe(true);
   });
 
   it('does not retry a permanent rejection', async () => {

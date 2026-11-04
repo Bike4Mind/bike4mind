@@ -258,7 +258,7 @@ import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-uti
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
 import { publishRunPendingAction } from './agentExecutor.pendingAction';
-import { withAgentTerminalPush, publishAgentTerminalPush, type AgentPushDeps } from './agentExecutor.push';
+import { createAgentPushDeps, withAgentTerminalPush, publishAgentTerminalPush } from './agentExecutor.push';
 import { publishPushNotification, sessionDeepLink } from '@server/utils/pushNotifications';
 import { createAgentToolEchoMarker, persistedExecutionSteps } from '@bike4mind/server-utils/utils/markAgentToolEchoes';
 import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
@@ -372,15 +372,6 @@ const sqsClient = new SQSClient({});
 // ---------------------------------------------------------------------------
 // WebSocket streaming helpers
 // ---------------------------------------------------------------------------
-
-function createAgentPushDeps(logger: Logger): AgentPushDeps {
-  return {
-    findExecution: executionId => agentExecutionRepository.findById(executionId),
-    findSessionName: async sessionId => (await sessionRepository.findById(sessionId))?.name,
-    sessionDeepLink,
-    publish: event => publishPushNotification(event, logger),
-  };
-}
 
 /**
  * Exported for `agentExecutor.headless.test.ts`: the headless short-circuit below is

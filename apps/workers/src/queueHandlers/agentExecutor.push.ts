@@ -1,6 +1,12 @@
 import type { PushNotificationEvent } from '@bike4mind/common';
+import { agentExecutionRepository, sessionRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
-import { isPushDeliveryConfigured, truncateForPush } from '@server/utils/pushNotifications';
+import {
+  isPushDeliveryConfigured,
+  publishPushNotification,
+  sessionDeepLink,
+  truncateForPush,
+} from '@server/utils/pushNotifications';
 
 /**
  * Agent-run push notifications (`agent_completed` / `agent_failed`), published from the run's terminal
@@ -23,6 +29,16 @@ export type AgentPushDeps = {
   sessionDeepLink(sessionId: string): string;
   publish(event: PushNotificationEvent): Promise<void>;
 };
+
+/** The production wiring of AgentPushDeps. */
+export function createAgentPushDeps(logger: Pick<Logger, 'warn'>): AgentPushDeps {
+  return {
+    findExecution: executionId => agentExecutionRepository.findById(executionId),
+    findSessionName: async sessionId => (await sessionRepository.findById(sessionId))?.name,
+    sessionDeepLink,
+    publish: event => publishPushNotification(event, logger),
+  };
+}
 
 /** One collapse id per run, so repeated failure frames and a late completion replace each other on the device. */
 export const agentRunCollapseId = (executionId: string) => `agent-run:${executionId}`;

@@ -96,7 +96,7 @@ describe('publishRunPendingAction', () => {
     ).rejects.toThrow('db down');
     expect(sendWs).not.toHaveBeenCalled();
   });
-  it('publishes an approval_needed push once the card is on the run quest', async () => {
+  it('publishes an approval_needed push after the card is on the run quest and sent to the client', async () => {
     const calls: string[] = [];
     const quests = { setPendingAction: vi.fn(async () => void calls.push('write')) };
     const publish = vi.fn(async () => void calls.push('push'));
@@ -105,7 +105,7 @@ describe('publishRunPendingAction', () => {
       questId: QUEST_ID,
       action,
       questRepository: quests,
-      sendWs: vi.fn(async () => undefined),
+      sendWs: vi.fn(async () => void calls.push('frame')),
       logger: makeLogger(),
       approvalPush: {
         userId: 'user-1',
@@ -114,7 +114,7 @@ describe('publishRunPendingAction', () => {
         publish,
       },
     });
-    expect(calls.slice(0, 2)).toEqual(['write', 'push']);
+    expect(calls).toEqual(['write', 'frame', 'push']);
     expect(publish).toHaveBeenCalledExactlyOnceWith({
       userId: 'user-1',
       category: 'approval_needed',
