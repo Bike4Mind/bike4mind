@@ -78,7 +78,7 @@ const AccountDataExportPage = () => {
               </Typography>
             )}
             {download.isError && !download.isFetching && (
-              <Typography level="body-md" color="danger" data-testid="account-data-export-error">
+              <Typography level="body-md" textColor="danger.plainColor" data-testid="account-data-export-error">
                 {failureMessage(download.error)}
               </Typography>
             )}
