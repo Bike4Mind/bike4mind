@@ -299,6 +299,18 @@ class AdminAuditLogRepository implements IAdminAuditLogRepository {
     return this.listPage([ownerClause, { 'details.subscriptionId': { $in: subscriptionIds } }], page);
   }
 
+  async listForSubscriptionOrOwner(
+    scope: { owner: { kind: 'user' | 'organization'; id: string }; subscriptionIds: string[] },
+    page: { limit: number; cursor?: AuditLogCursor }
+  ): Promise<{ entries: AuditEntry[]; nextCursor: AuditLogCursor | null }> {
+    const { owner, subscriptionIds } = scope;
+    const ownerClauses: FilterClause[] =
+      owner.kind === 'user'
+        ? [{ 'target.kind': 'user', 'target.id': owner.id }]
+        : [{ organizationId: owner.id }, { 'target.kind': 'organization', 'target.id': owner.id }];
+    return this.listPage([{ $or: [...ownerClauses, { 'details.subscriptionId': { $in: subscriptionIds } }] }], page);
+  }
+
   private async listPage(
     baseClauses: FilterClause[],
     page: { limit: number; cursor?: AuditLogCursor }

@@ -104,6 +104,11 @@ export interface IAdminAuditLogRepository {
     scope: { owner: { kind: 'user' | 'organization'; id: string }; subscriptionIds: string[] },
     page: { limit: number; cursor?: AuditLogCursor }
   ): Promise<{ entries: AuditEntry[]; nextCursor: AuditLogCursor | null }>;
+  /** Entries about one subscription or anything else about its owner, newest first (the subscription Timeline). */
+  listForSubscriptionOrOwner(
+    scope: { owner: { kind: 'user' | 'organization'; id: string }; subscriptionIds: string[] },
+    page: { limit: number; cursor?: AuditLogCursor }
+  ): Promise<{ entries: AuditEntry[]; nextCursor: AuditLogCursor | null }>;
   findById(id: string): Promise<AuditEntry | null>;
   /** One round trip; ids that are not ObjectId hex or match nothing are left out. */
   findByIds(ids: string[]): Promise<AuditEntry[]>;
