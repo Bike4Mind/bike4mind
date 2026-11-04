@@ -91,7 +91,8 @@ export async function blockSignupGrant(
   adapters: SignupGrantBlockAdapters
 ): Promise<SignupGrantBlockResult> {
   const { users, heldRewards } = adapters;
-  // Same transaction as the payout writes, so a payout racing this block conflicts and re-reads the flag.
+  // The staged-grant and reward payouts re-read the flag inside their own transaction, so one racing this
+  // block conflicts and sees it; the other reward paths check it once before paying and are best-effort.
   const state = await withTransaction<'blocked' | 'already_blocked' | 'no_grant'>(async () => {
     const user = await users.findById(userId);
     if (!user?.signupGrant) return 'no_grant';
