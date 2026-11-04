@@ -690,6 +690,22 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     }));
   }
 
+  async findAdminTargetsByIds(ids: string[]) {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
+    const docs = await this.model
+      .find({ _id: { $in: convertIds(validIds) } })
+      .select('email username isAdmin adminPermissions')
+      .lean();
+    return docs.map(d => ({
+      id: String(d._id),
+      email: d.email ?? undefined,
+      username: d.username ?? undefined,
+      isAdmin: d.isAdmin ?? undefined,
+      adminPermissions: d.adminPermissions ? [...d.adminPermissions] : undefined,
+    }));
+  }
+
   /**
    * Emailed users among `ids`, excluding any that carry `deletedAt` (mirrors the same guard
    * `findBySlackUserId` applies) - narrower than `findByIds` so a notification addressee
