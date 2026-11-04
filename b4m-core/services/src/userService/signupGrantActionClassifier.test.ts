@@ -55,6 +55,12 @@ describe('classifySignupGrantAction', () => {
     ).toEqual({ eligible: false, reason: 'blocked' });
   });
 
+  it('reads held from any hold reason plus the pending tag, the same test the real release applies', () => {
+    expect(classifySignupGrantAction(held({ signupGrantHeldReason: 'risk_review' as never }), 'release_held')).toEqual({
+      eligible: true,
+    });
+  });
+
   it('treats a held tranche on an account with no signup grant as releasable, like the bulk release', () => {
     expect(classifySignupGrantAction(held({ signupGrant: undefined }), 'release_held')).toEqual({ eligible: true });
   });
