@@ -10,6 +10,9 @@ const INDEX_NAME = 'sessionId_timestamp_id';
 const SESSION_ID = 'keyset-session';
 const TURNS = 300;
 const LIMIT = 20;
+// Turns per shared timestamp. Not a divisor of LIMIT, so page boundaries fall inside a group and
+// the next page must resume via the _id tie-break.
+const GROUP = 3;
 
 let mongod: MongoMemoryServer;
 
@@ -41,14 +44,13 @@ describe('Quest session keyset index', () => {
   // profiler, so a regression in either the index or the cursor filter shows up here.
   it('examines about one page of documents per page across a 300-turn session', async () => {
     const base = new Date('2026-01-01T00:00:00Z').getTime();
-    // Pairs of turns share a timestamp so the _id tie-break is exercised on every page.
     await Quest.collection.insertMany(
       Array.from({ length: TURNS }, (_, i) => ({
         sessionId: SESSION_ID,
         type: 'message',
         status: 'done',
         deletedAt: null,
-        timestamp: new Date(base + Math.floor(i / 2) * 1000),
+        timestamp: new Date(base + Math.floor(i / GROUP) * 1000),
       }))
     );
     // Another session's turns sit in the same index; they must not be scanned either.
@@ -95,8 +97,9 @@ describe('Quest session keyset index', () => {
     for (const op of finds) {
       expect(op.planSummary).toBe('IXSCAN { sessionId: 1, timestamp: 1, _id: 1 }');
       expect(op.hasSortStage).toBeFalsy();
-      // One page, plus the turns at the cursor's own timestamp the $gte bound re-reads (a pair here).
-      expect(op.docsExamined).toBeLessThanOrEqual(LIMIT + 2);
+      // One page, plus the already-returned turns (the cursor's own included) that the $gte bound
+      // re-reads at the cursor's timestamp.
+      expect(op.docsExamined).toBeLessThanOrEqual(LIMIT + GROUP);
     }
   });
 });
