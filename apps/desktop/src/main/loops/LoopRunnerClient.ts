@@ -1,45 +1,14 @@
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
+import type { LoopProgressFrame, RunnerClaim, RunnerOutcome, RunnerTicket } from '@bike4mind/common';
 import { isAxiosError } from 'axios';
-import type { LoopMergePolicy, LoopStageGuards } from '@shared/loopRunner';
-import type { LoopProgressFrame } from './progress';
 
 /**
- * The server side of the loop runner: the only file that knows its paths and shapes. Every
- * route is first-party (the device-flow token), behind the server's EnableLoops setting.
+ * The server side of the loop runner (apps/client/pages/api/loops/runner, shapes in
+ * @bike4mind/common LoopTypes): the only file that knows its paths. Every route is first-party
+ * (the device-flow token), behind the server's EnableLoops setting.
  */
 
-/** A ticket in a desktop-run stage that this user may claim. */
-export interface RunnerTicket {
-  ticketId: string;
-  title: string;
-  loopId: string;
-  loopName: string;
-  stage: string;
-  /** `owner/name` of the repository the loop works in, when the server knows it. */
-  repoHint?: string;
-}
-
-/** What the server says about the stage, already resolved (an org without green-ci gets 'review'). */
-export interface RunnerStageConfig {
-  mergePolicy: LoopMergePolicy;
-  guards?: LoopStageGuards;
-}
-
-export interface RunnerClaim {
-  ticket: RunnerTicket;
-  /** The run record the web run view shows; tagged on this run's completions. */
-  runId: string;
-  leaseExpiresAt: string;
-  /** Built by the server from the stage instructions, the ticket and the loop's memory. */
-  prompt: string;
-  stage: RunnerStageConfig;
-}
-
-export type RunnerOutcome =
-  | { outcome: 'advanced'; answer: string }
-  | { outcome: 'blocked'; reason: string; answer?: string }
-  | { outcome: 'failed'; reason: string }
-  | { outcome: 'released'; reason?: string };
+export type { RunnerClaim, RunnerOutcome, RunnerTicket };
 
 export interface RunnerPresence {
   lanesBusy: number;
@@ -47,29 +16,47 @@ export interface RunnerPresence {
   waitingReason?: string;
 }
 
-/** The run's lease is gone (expired, or the ticket was taken back): stop working on it. */
+/** A claim the server turned down, with its `reason` (e.g. `claimed`, `lanes_full`, `credits`). */
+export interface ClaimRefused {
+  refused: string;
+}
+
+/** Refusals that hold for every ticket this poll, so the runner stops trying until the next one. */
+export const USER_WIDE_REFUSALS: ReadonlySet<string> = new Set(['lanes_full', 'user_budget']);
+
+/**
+ * The run has ended on the server (410: completed, `aborted` from the web run view, `credit_cap`,
+ * or the lease lapsed), or is not this user's (404). Stop working on it; there is nothing to report.
+ */
 export class LeaseLost extends Error {
-  constructor(runId: string) {
-    super(`The lease on run ${runId} was lost.`);
+  constructor(
+    runId: string,
+    readonly reason: string
+  ) {
+    super(`Run ${runId} ended on the server (${reason}).`);
     this.name = 'LeaseLost';
   }
 }
 
 export interface LoopRunnerApi {
   listTickets(): Promise<RunnerTicket[]>;
-  /** Null when the ticket is no longer claimable (taken by another runner, or moved on). */
-  claim(ticketId: string): Promise<RunnerClaim | null>;
+  claim(ticketId: string): Promise<RunnerClaim | ClaimRefused>;
   heartbeat(runId: string): Promise<void>;
   progress(runId: string, frames: LoopProgressFrame[]): Promise<void>;
   /** `durationMs` is recorded for every run; credits are attributed server-side by run id. */
-  complete(runId: string, outcome: RunnerOutcome & { durationMs: number }): Promise<void>;
+  complete(runId: string, outcome: RunnerOutcome): Promise<void>;
   presence(presence: RunnerPresence): Promise<void>;
 }
 
 const BASE = '/api/loops/runner';
 
-function conflict(err: unknown): boolean {
-  return isAxiosError(err) && (err.response?.status === 409 || err.response?.status === 410);
+/** A refusal's status and `reason`, or null for any other failure. */
+function refusal(err: unknown): { status: number; reason: string } | null {
+  if (!isAxiosError(err)) return null;
+  const status = err.response?.status;
+  if (status !== 404 && status !== 409 && status !== 410) return null;
+  const body = err.response?.data as { reason?: unknown } | undefined;
+  return { status, reason: typeof body?.reason === 'string' ? body.reason : String(status) };
 }
 
 /** The HTTP client over the signed-in session; throws when signed out. */
@@ -87,11 +74,12 @@ export class HttpLoopRunnerClient implements LoopRunnerApi {
     return body.tickets ?? [];
   }
 
-  async claim(ticketId: string): Promise<RunnerClaim | null> {
+  async claim(ticketId: string): Promise<RunnerClaim | ClaimRefused> {
     try {
       return await this.client().post<RunnerClaim>(`${BASE}/claim`, { ticketId });
     } catch (err) {
-      if (conflict(err)) return null;
+      const refused = refusal(err);
+      if (refused) return { refused: refused.reason };
       throw err;
     }
   }
@@ -100,7 +88,8 @@ export class HttpLoopRunnerClient implements LoopRunnerApi {
     try {
       await this.client().post(`${BASE}/runs/${encodeURIComponent(runId)}/${action}`, body);
     } catch (err) {
-      if (conflict(err)) throw new LeaseLost(runId);
+      const refused = refusal(err);
+      if (refused && refused.status !== 409) throw new LeaseLost(runId, refused.reason);
       throw err;
     }
   }
@@ -113,7 +102,7 @@ export class HttpLoopRunnerClient implements LoopRunnerApi {
     return this.onRun(runId, 'progress', { frames });
   }
 
-  complete(runId: string, outcome: RunnerOutcome & { durationMs: number }): Promise<void> {
+  complete(runId: string, outcome: RunnerOutcome): Promise<void> {
     return this.onRun(runId, 'complete', outcome);
   }
 

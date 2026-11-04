@@ -1,4 +1,5 @@
 import { StringDecoder } from 'node:string_decoder';
+import { LOOP_RUN_HEADER } from '@bike4mind/common';
 import type { Readable } from 'node:stream';
 import { createParser } from 'eventsource-parser';
 import { isAxiosError, type AxiosInstance, type AxiosResponse } from 'axios';
@@ -127,8 +128,8 @@ export interface CompletionRequest {
   loopRunId?: string;
 }
 
-/** Must match the header the server's loop runner credit attribution reads. */
-export const LOOP_RUN_HEADER = 'X-B4M-Loop-Run';
+/** The contract's header; the server adds the call's credits to that loop run. */
+export { LOOP_RUN_HEADER };
 
 /**
  * Stream one completion, calling `onEvent` for each decoded SSE event.

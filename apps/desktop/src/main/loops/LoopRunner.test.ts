@@ -5,7 +5,14 @@ import { check, snapshot } from '../pr/prTestSupport';
 import type { MachineSample } from './budget';
 import { LoopPolicyStore } from './LoopPolicyStore';
 import { LoopRunner, type LoopRunnerDeps } from './LoopRunner';
-import { LeaseLost, type LoopRunnerApi, type RunnerClaim, type RunnerTicket } from './LoopRunnerClient';
+import {
+  LeaseLost,
+  type ClaimRefused,
+  type LoopRunnerApi,
+  type RunnerClaim,
+  type RunnerOutcome,
+  type RunnerTicket,
+} from './LoopRunnerClient';
 
 const GB = 1024 ** 3;
 const PR = 'https://github.com/example-org/widgets/pull/611';
@@ -18,7 +25,9 @@ const ticket = (id: string, loopId = 'loop-1'): RunnerTicket => ({
   stage: 'build',
 });
 
-function harness(options: { guards?: LoopStageGuards; mergePolicy?: 'review' | 'green-ci' | 'never' } = {}) {
+function harness(
+  options: { guards?: LoopStageGuards; mergePolicy?: 'review' | 'green-ci' | 'never'; model?: string } = {}
+) {
   const sample: MachineSample = {
     cores: 16,
     freeBytes: 16 * GB,
@@ -29,24 +38,25 @@ function harness(options: { guards?: LoopStageGuards; mergePolicy?: 'review' | '
     idleSeconds: 600,
   };
   const tickets: RunnerTicket[] = [ticket('t1')];
-  const completed: { runId: string; outcome: Record<string, unknown> }[] = [];
+  const completed: { runId: string; outcome: RunnerOutcome }[] = [];
   const progress: unknown[][] = [];
   let runs = 0;
   const client: LoopRunnerApi = {
     listTickets: vi.fn(async () => tickets),
-    claim: vi.fn(async (ticketId: string): Promise<RunnerClaim> => {
+    claim: vi.fn(async (ticketId: string): Promise<RunnerClaim | ClaimRefused> => {
       runs++;
       return {
         ticket: tickets.find(entry => entry.ticketId === ticketId) as RunnerTicket,
         runId: `run-${runs}`,
         leaseExpiresAt: '',
         prompt: 'Work the ticket.',
+        ...(options.model ? { model: options.model } : {}),
         stage: { mergePolicy: options.mergePolicy ?? 'review', ...(options.guards ? { guards: options.guards } : {}) },
       };
     }),
     heartbeat: vi.fn(async () => undefined),
     progress: vi.fn(async (_runId: string, frames: unknown[]) => void progress.push(frames)),
-    complete: vi.fn(async (runId: string, outcome: Record<string, unknown>) => void completed.push({ runId, outcome })),
+    complete: vi.fn(async (runId: string, outcome: RunnerOutcome) => void completed.push({ runId, outcome })),
     presence: vi.fn(async () => undefined),
   };
 
@@ -73,6 +83,7 @@ function harness(options: { guards?: LoopStageGuards; mergePolicy?: 'review' | '
       return { ok: true as const, session: { id } as never };
     }),
     setApprovalMode: vi.fn(async () => null),
+    setLoopRunModel: vi.fn(async () => null),
     startAutomaticTurn: vi.fn(async (sessionId: string, _text: string, automatic: ChatAutomaticOrigin) => {
       if (automatic.kind === 'loop-runner') runOf.set(sessionId, automatic.runId);
       return { ok: true as const };
@@ -211,6 +222,25 @@ describe('LoopRunner claiming', () => {
     expect(h.runner.state().waitingReason).toBe('on battery');
     expect(h.client.presence).toHaveBeenCalledWith({ lanesBusy: 0, lanesFree: 4, waitingReason: 'on battery' });
   });
+
+  it('moves past a ticket-only refusal, and stops claiming at a user-wide one', async () => {
+    await h.approve();
+    h.tickets.push(ticket('t2'), ticket('t3'));
+    vi.mocked(h.client.claim)
+      .mockResolvedValueOnce({ refused: 'claimed' })
+      .mockResolvedValueOnce({ refused: 'lanes_full' });
+    await h.runner.tick();
+    expect(vi.mocked(h.client.claim).mock.calls).toEqual([['t1'], ['t2']]);
+    expect(h.chat.createCodeSession).not.toHaveBeenCalled();
+    expect(h.runner.state().waitingReason).toBe('your desktop runs are at their limit');
+  });
+
+  it("runs on the claim's model", async () => {
+    h = harness({ model: 'claude-sonnet-5-5' });
+    await h.approve();
+    await h.runner.tick();
+    expect(h.chat.setLoopRunModel).toHaveBeenCalledWith('s1', 'claude-sonnet-5-5');
+  });
 });
 
 describe('LoopRunner runs', () => {
@@ -288,9 +318,36 @@ describe('LoopRunner runs', () => {
     expect(h.completed[0].outcome).toMatchObject({ outcome: 'failed', reason: 'model unavailable' });
   });
 
+  it('releases the ticket at the credit cap, shows it, and does not claim that loop again', async () => {
+    await h.runner.tick();
+    h.emit({ type: 'error', sessionId: 's1', messageId: 'm', message: 'Insufficient credits (status 422)' });
+    await h.settled();
+    expect(h.completed[0].outcome).toMatchObject({ outcome: 'released', reason: 'out of credits' });
+    expect(h.runner.state().error).toMatch(/Out of credits/);
+    await h.runner.tick();
+    expect(h.client.claim).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases the claim when the session cannot be set up', async () => {
+    h.chat.setApprovalMode.mockRejectedValueOnce(new Error('store locked'));
+    await h.runner.tick();
+    expect(h.completed[0].outcome).toMatchObject({ outcome: 'released' });
+    expect(h.runner.busy).toBe(0);
+  });
+
+  it('stops without reporting when the web run view aborts the run', async () => {
+    vi.useFakeTimers();
+    vi.mocked(h.client.heartbeat).mockRejectedValue(new LeaseLost('run-1', 'aborted'));
+    await h.runner.tick();
+    await vi.advanceTimersByTimeAsync(45_000);
+    expect(h.chat.stop).toHaveBeenCalledWith('s1');
+    expect(h.runner.busy).toBe(0);
+    expect(h.client.complete).not.toHaveBeenCalled();
+  });
+
   it('drops the work without reporting when the lease is lost', async () => {
     vi.useFakeTimers();
-    vi.mocked(h.client.progress).mockRejectedValue(new LeaseLost('run-1'));
+    vi.mocked(h.client.progress).mockRejectedValue(new LeaseLost('run-1', 'lease_expired'));
     await h.runner.tick();
     h.emit({ type: 'delta', sessionId: 's1', messageId: 'm', text: 'x' });
     await vi.advanceTimersByTimeAsync(1_500);
@@ -392,6 +449,18 @@ describe('LoopRunner merges', () => {
     h.done();
     await h.settled();
     expect(h.completed[0].outcome).toMatchObject({ outcome: 'advanced' });
+  });
+
+  it('blocks rather than leaving the claim open when a post-merge check throws', async () => {
+    await started({ guards: { deployWorkflow: 'deploy.yml' } });
+    await h.runner.merge('s1', PR);
+    h.gh.mockRejectedValue(new Error('gh not found'));
+    h.done();
+    await h.settled();
+    expect(h.completed[0].outcome).toMatchObject({
+      outcome: 'blocked',
+      reason: expect.stringMatching(/post-merge check failed/),
+    });
   });
 });
 

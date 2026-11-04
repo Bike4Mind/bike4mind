@@ -12,7 +12,13 @@ import type { AutomaticTurnResult } from '../chat/ChatService';
 import type { GhRunner } from '../pr/gh';
 import { admit, hardFloorBreached, laneCapFor, type MachineSample } from './budget';
 import { mergeDecision, readLabels, runDeployCheck, runSmoke, type SmokeDeps } from './guards';
-import { LeaseLost, type LoopRunnerApi, type RunnerClaim, type RunnerOutcome } from './LoopRunnerClient';
+import {
+  LeaseLost,
+  USER_WIDE_REFUSALS,
+  type LoopRunnerApi,
+  type RunnerClaim,
+  type RunnerOutcome,
+} from './LoopRunnerClient';
 import type { LoopPolicyStore } from './LoopPolicyStore';
 import { ProgressBatcher } from './progress';
 
@@ -20,6 +26,7 @@ import { ProgressBatcher } from './progress';
 export interface RunnerChat {
   createCodeSession(request: CreateCodeSessionRequest): Promise<CreateCodeSessionResult>;
   setApprovalMode(sessionId: string, mode: ChatApprovalMode): Promise<unknown>;
+  setLoopRunModel(sessionId: string, model: string): Promise<unknown>;
   startAutomaticTurn(sessionId: string, text: string, automatic: ChatAutomaticOrigin): Promise<AutomaticTurnResult>;
   stop(sessionId: string): void;
   isSessionBusy(sessionId: string): boolean;
@@ -69,6 +76,19 @@ export const RUNNER_MS = {
   stopWait: 10_000,
 } as const;
 
+/** An outcome as the runner decides it; `durationMs` is added when it is reported. */
+type Outcome = WithoutDuration<RunnerOutcome>;
+type WithoutDuration<T> = T extends unknown ? Omit<T, 'durationMs'> : never;
+
+/** What the Settings panel says for a refusal that holds every claim this poll. */
+const USER_WIDE_REASON: Record<string, string> = {
+  lanes_full: 'your desktop runs are at their limit',
+  user_budget: 'your loops have spent their daily budget',
+};
+
+/** A completions refusal at the credit cap: the run stops and the ticket goes back, never retried. */
+const CREDIT_STOP = /\(status 422\)/;
+
 interface Lane {
   claim: RunnerClaim;
   policy: LoopPolicy;
@@ -113,6 +133,8 @@ export class LoopRunner {
   private running = false;
   private ticking = false;
   private waitingReason: string | undefined;
+  /** loopId -> until when its tickets are not claimed, after a run stopped at its credit cap. */
+  private readonly creditStops = new Map<string, number>();
   private error: string | undefined;
   private pendingApprovals: LoopRunnerState['pendingApprovals'] = [];
   private cap = 1;
@@ -127,6 +149,7 @@ export class LoopRunner {
   /** Start polling. Safe to call again; a second call only polls sooner. */
   start(): void {
     this.running = true;
+    this.creditStops.clear();
     this.gcTimer ??= setInterval(() => void this.collectWorktrees(), RUNNER_MS.gcEvery);
     void this.collectWorktrees();
     this.schedule(0);
@@ -211,8 +234,15 @@ export class LoopRunner {
           this.waitingReason = admission.reason;
           break;
         }
+        if ((this.creditStops.get(ticket.loopId) ?? 0) > this.now()) continue;
         const claim = await this.deps.client.claim(ticket.ticketId);
-        if (claim) await this.run(claim, policy);
+        if ('refused' in claim) {
+          // Any other refusal is about this ticket only (taken, not open, its loop's budget).
+          if (!USER_WIDE_REFUSALS.has(claim.refused)) continue;
+          this.waitingReason = USER_WIDE_REASON[claim.refused] ?? claim.refused;
+          break;
+        }
+        await this.run(claim, policy);
       }
     }
 
@@ -233,15 +263,26 @@ export class LoopRunner {
     return this.idleDelay;
   }
 
+  /**
+   * Work one claimed ticket. Whatever happens, the claim ends in a complete or a release: the
+   * server never moves a desktop-stage ticket for us, and a lapsed lease is only the backstop.
+   */
   private async run(claim: RunnerClaim, policy: LoopPolicy): Promise<void> {
     const { runId } = claim;
-    const created = await this.deps.chat.createCodeSession({ directory: policy.directory, workspace: true });
-    if (!created.ok) {
-      await this.report(runId, this.now(), { outcome: 'failed', reason: created.error });
+    let sessionId: string;
+    try {
+      const created = await this.deps.chat.createCodeSession({ directory: policy.directory, workspace: true });
+      if (!created.ok) {
+        await this.report(runId, this.now(), { outcome: 'failed', reason: created.error });
+        return;
+      }
+      sessionId = created.session.id;
+      await this.deps.chat.setApprovalMode(sessionId, policy.approvalMode);
+      if (claim.model) await this.deps.chat.setLoopRunModel(sessionId, claim.model);
+    } catch (err) {
+      await this.report(runId, this.now(), { outcome: 'released', reason: `could not start: ${String(err)}` });
       return;
     }
-    const sessionId = created.session.id;
-    await this.deps.chat.setApprovalMode(sessionId, policy.approvalMode);
     const lane: Lane = {
       claim,
       policy,
@@ -251,25 +292,27 @@ export class LoopRunner {
       batcher: new ProgressBatcher(
         frames => this.deps.client.progress(runId, frames),
         err => {
-          if (err instanceof LeaseLost) void this.abandon(lane);
+          if (err instanceof LeaseLost) void this.abandon(lane, err.reason);
         }
       ),
       heartbeat: setInterval(() => {
         this.deps.client.heartbeat(runId).catch(err => {
-          if (err instanceof LeaseLost) void this.abandon(lane);
+          if (err instanceof LeaseLost) void this.abandon(lane, err.reason);
         });
       }, RUNNER_MS.heartbeat),
     };
     this.lanes.set(runId, lane);
     this.updateBlocker();
 
-    const started = await this.deps.chat.startAutomaticTurn(sessionId, claim.prompt, {
-      kind: 'loop-runner',
-      loopId: claim.ticket.loopId,
-      ticketId: claim.ticket.ticketId,
-      runId,
-      summary: claim.ticket.title,
-    });
+    const started = await this.deps.chat
+      .startAutomaticTurn(sessionId, claim.prompt, {
+        kind: 'loop-runner',
+        loopId: claim.ticket.loopId,
+        ticketId: claim.ticket.ticketId,
+        runId,
+        summary: claim.ticket.title,
+      })
+      .catch((err: unknown) => ({ ok: false as const, error: String(err) }));
     if (!started.ok) await this.finish(lane, { outcome: 'failed', reason: started.error });
   }
 
@@ -287,7 +330,10 @@ export class LoopRunner {
     if (pending) lane.pending = pending;
     if (event.sessionId !== lane.sessionId) return;
     lane.batcher.push(event);
-    if (event.type === 'error') void this.finish(lane, { outcome: 'failed', reason: event.message });
+    if (event.type === 'error' && CREDIT_STOP.test(event.message)) {
+      this.creditStop(lane.claim.ticket.loopId);
+      void this.finish(lane, { outcome: 'released', reason: 'out of credits' });
+    } else if (event.type === 'error') void this.finish(lane, { outcome: 'failed', reason: event.message });
     if (event.type === 'done') void this.turnDone(lane, event.content);
   }
 
@@ -303,9 +349,20 @@ export class LoopRunner {
     const children = this.deps.chat.loopRunSessions(lane.claim.runId).filter(id => id !== lane.sessionId);
     if (children.some(id => this.deps.chat.isSessionBusy(id))) return;
     if (lane.finished) return;
+    lane.finished = true;
+    // The heartbeat keeps running through the checks, so a long deploy wait holds the lease.
+    const outcome = await this.postTurnChecks(lane, answer).catch((err: unknown): Outcome => ({
+      outcome: 'blocked',
+      reason: `post-merge check failed: ${String(err)}`,
+      answer,
+    }));
+    await this.finish(lane, outcome, true);
+  }
+
+  /** After a merge: the stage's deploy workflow, then its smoke check. Either failing blocks the ticket. */
+  private async postTurnChecks(lane: Lane, answer: string): Promise<Outcome> {
     const guards = lane.claim.stage.guards ?? lane.policy.guards;
     if (lane.merged && guards?.deployWorkflow) {
-      lane.finished = true;
       const deployed = await runDeployCheck(
         this.deps.gh,
         {
@@ -316,16 +373,26 @@ export class LoopRunner {
         },
         { now: this.now, sleep: this.sleep }
       );
-      if (!deployed.ok) return this.finish(lane, { outcome: 'blocked', reason: deployed.reason, answer }, true);
+      if (!deployed.ok) return { outcome: 'blocked', reason: deployed.reason, answer };
     }
     if (lane.merged && guards?.smoke) {
-      lane.finished = true;
       const session = await this.deps.chat.getSession(lane.sessionId);
       const cwd = session?.project?.workingDirectory ?? lane.policy.directory;
       const smoked = await runSmoke(guards.smoke, cwd, this.deps.smoke);
-      if (!smoked.ok) return this.finish(lane, { outcome: 'blocked', reason: smoked.reason, answer }, true);
+      if (!smoked.ok) return { outcome: 'blocked', reason: smoked.reason, answer };
     }
-    await this.finish(lane, { outcome: 'advanced', answer }, true);
+    return { outcome: 'advanced', answer };
+  }
+
+  private creditStopped(): boolean {
+    return [...this.creditStops.values()].some(until => until > this.now());
+  }
+
+  /** Hold the loop's tickets until the next UTC day, when its budgets reset; a restart clears it. */
+  private creditStop(loopId: string): void {
+    const now = new Date(this.now());
+    this.creditStops.set(loopId, Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+    this.deps.onChange();
   }
 
   /** loop_merge_pr: merge under the stage's policy, or block the ticket with why not. */
@@ -374,7 +441,7 @@ export class LoopRunner {
    * Report the outcome once, stop whatever of the run is still going, then clean up. `force`
    * lets the post-turn checks, which already claimed the outcome, report it.
    */
-  private async finish(lane: Lane, outcome: RunnerOutcome, force = false): Promise<void> {
+  private async finish(lane: Lane, outcome: Outcome, force = false): Promise<void> {
     if (lane.finished && !force) return;
     lane.finished = true;
     clearInterval(lane.heartbeat);
@@ -388,15 +455,19 @@ export class LoopRunner {
     await this.retire(lane).catch(err => this.deps.logger.warn(`LOOPS: cleanup failed: ${String(err)}`));
   }
 
-  private async report(runId: string, startedAt: number, outcome: RunnerOutcome): Promise<void> {
+  private async report(runId: string, startedAt: number, outcome: Outcome): Promise<void> {
     await this.deps.client
       .complete(runId, { ...outcome, durationMs: this.now() - startedAt })
       .catch(err => this.deps.logger.warn(`LOOPS: could not report run ${runId}: ${String(err)}`));
   }
 
-  /** The lease is gone: someone else owns the ticket now, so stop without reporting anything. */
-  private async abandon(lane: Lane): Promise<void> {
+  /**
+   * The run ended on the server (the web run view's Stop, the credit cap, a lapsed lease): stop
+   * without reporting, since a complete would only get another 410.
+   */
+  private async abandon(lane: Lane, reason: string): Promise<void> {
     if (lane.finished) return;
+    if (reason === 'credit_cap') this.creditStop(lane.claim.ticket.loopId);
     lane.finished = true;
     clearInterval(lane.heartbeat);
     lane.batcher.dispose();
@@ -512,7 +583,13 @@ export class LoopRunner {
       })),
       ...(this.waitingReason ? { waitingReason: this.waitingReason } : {}),
       pendingApprovals: this.pendingApprovals,
-      ...(this.error ? { error: this.error } : {}),
+      ...(this.error || this.creditStopped()
+        ? {
+            error:
+              this.error ??
+              'Out of credits: a loop run stopped at its credit cap. Its tickets wait until tomorrow (UTC).',
+          }
+        : {}),
     };
   }
 }

@@ -3,23 +3,13 @@
  * Main drives it (main/loops), the renderer shows it in Settings > Loop runner.
  */
 
-/**
- * How a stage's PR may be merged by loop_merge_pr. The server serves the EFFECTIVE policy, so an
- * org that turned green-ci off already arrives here as 'review'.
- */
-export type LoopMergePolicy = 'review' | 'green-ci' | 'never';
+import type { RunnerClaim } from '@bike4mind/common';
 
-/** A post-merge check: a URL that must answer 2xx, or a command that must exit 0 in the worktree. */
-export type LoopSmokeCheck = { url: string } | { command: string };
+/** The server resolves the policy: an org with green-ci merges off is served 'review'. */
+export type { LoopMergePolicy, LoopSmokeCheck } from '@bike4mind/common';
 
-/** The guards a stage applies after the turn. All optional; see main/loops/guards.ts. */
-export interface LoopStageGuards {
-  /** A GitHub Actions workflow (name or file) whose run on the merge commit must succeed. */
-  deployWorkflow?: string;
-  smoke?: LoopSmokeCheck;
-  /** Labels that stop a merge. Defaults to DEFAULT_HOLD_LABELS. */
-  holdLabels?: string[];
-}
+/** The guards a stage applies after the turn, as the claim serves them. See main/loops/guards.ts. */
+export type LoopStageGuards = NonNullable<RunnerClaim['stage']['guards']>;
 
 export const DEFAULT_HOLD_LABELS: readonly string[] = ['hold', 'human-merge', 'needs-approval'];
 

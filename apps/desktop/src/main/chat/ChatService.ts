@@ -1486,6 +1486,11 @@ export class ChatService {
     return updated;
   }
 
+  /** A loop run's model, from its claim. Unlike setSessionModel it is not remembered as the user's pick. */
+  setLoopRunModel(sessionId: string, model: string): Promise<ChatSessionSummary | null> {
+    return this.deps.store.setModel(sessionId, model);
+  }
+
   /** Reasoning effort, or thinking On/Off for an Ollama model with a thinking switch. */
   setSessionReasoningEffort(sessionId: string, effort: ReasoningEffortSetting): Promise<ChatSessionSummary | null> {
     return this.deps.store.setReasoningEffort(sessionId, effort);
