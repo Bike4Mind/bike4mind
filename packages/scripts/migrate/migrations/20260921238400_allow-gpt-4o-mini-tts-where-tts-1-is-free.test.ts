@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { TTS_DEFAULT_MODEL } from '@bike4mind/common';
 
-import { withNewTtsDefault } from './20260921238300_allow-gpt-4o-mini-tts-where-tts-1-is-free';
+import { withNewTtsDefault } from './20260921238400_allow-gpt-4o-mini-tts-where-tts-1-is-free';
 
 describe('allow-gpt-4o-mini-tts-where-tts-1-is-free', () => {
   // The migration's literal must be the model admission actually checks for OpenAI TTS.

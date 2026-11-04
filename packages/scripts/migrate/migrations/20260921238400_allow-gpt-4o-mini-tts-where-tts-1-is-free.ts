@@ -34,7 +34,7 @@ export const withNewTtsDefault = (value: unknown): string | string[] | null => {
  * platform one. Idempotent.
  */
 const migration: MigrationFile = {
-  id: 20260921238300,
+  id: 20260921238400,
   name: 'allow-gpt-4o-mini-tts-where-tts-1-is-free',
   up: async () => {
     const rows = await AdminSettings.find({ settingName: SETTING_NAME }).lean();
