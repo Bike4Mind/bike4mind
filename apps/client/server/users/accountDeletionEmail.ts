@@ -1,13 +1,16 @@
-import { requireEnv } from '@bike4mind/common';
+import { ACCOUNT_DELETION_RETAINED_RECORDS, requireEnv, type AccountDeletionRetainedRecord } from '@bike4mind/common';
 import { buildEmailLogoImg, escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
+import { PURGED_USER_DATA } from '@server/services/purgeDeletedUserData';
 import { EmailEvents } from '@server/utils/eventBus';
+
+// The copy below describes what requestAccountDeletion and cancelAccountDeletion
+// (apps/client/server/users/accountDeletion.ts) do - keep in sync.
 
 export const formatDeletionDate = (date: Date): string =>
   `${date.toLocaleDateString('en-US', { dateStyle: 'long', timeZone: 'UTC' })} (UTC)`;
 
-export function accountDeletionScheduledEmailBody(scheduledFor: Date, signInUrl: string): string {
+const layout = (heading: string, content: string): string => {
   const brand = process.env.APP_NAME || '';
-  const date = escapeHtml(formatDeletionDate(scheduledFor));
   return `
 <!DOCTYPE html>
 <html>
@@ -23,17 +26,26 @@ export function accountDeletionScheduledEmailBody(scheduledFor: Date, signInUrl:
   <body>
     <div class="content">
       ${buildEmailLogoImg(brand)}
-      <h2>Your account is scheduled for deletion</h2>
+      <h2>${heading}</h2>
+      ${content}
+    </div>
+  </body>
+</html>`;
+};
+
+export function accountDeletionScheduledEmailBody(scheduledFor: Date, signInUrl: string): string {
+  const date = escapeHtml(formatDeletionDate(scheduledFor));
+  return layout(
+    'Your account is scheduled for deletion',
+    `
       <p>Your account and its data will be permanently deleted on <strong>${date}</strong>. Until then you have been
       signed out everywhere, your API keys and connected apps have been revoked, and your subscriptions have been
       canceled.</p>
       <p>Changed your mind? <a href="${escapeHtml(signInUrl)}">Sign in</a> before that date and choose Cancel deletion.</p>
       <div class="warning">
         <strong>If this wasn't you</strong>, sign in to cancel the deletion, then change your password.
-      </div>
-    </div>
-  </body>
-</html>`;
+      </div>`
+  );
 }
 
 export async function sendAccountDeletionScheduledEmail(to: string, scheduledFor: Date): Promise<void> {
@@ -42,5 +54,68 @@ export async function sendAccountDeletionScheduledEmail(to: string, scheduledFor
     to,
     subject: `Your account is scheduled for deletion on ${formatDeletionDate(scheduledFor)}`,
     body: accountDeletionScheduledEmailBody(scheduledFor, signInUrl),
+  });
+}
+
+/** Cancelling restores access only, so the email says what the request turned off stays off. */
+export function accountDeletionCancelledEmailBody(): string {
+  return layout(
+    'Your account deletion was cancelled',
+    `
+      <p>Your account is active again and will not be deleted.</p>
+      <p>Cancelling restores access only. Your subscriptions stay canceled, your API keys, connected apps and
+      integrations stay revoked, and the pages and Skill Market listings you published stay offline. Subscribe,
+      reconnect and publish again to turn them back on.</p>
+      <div class="warning">
+        <strong>If this wasn't you</strong>, change your password.
+      </div>`
+  );
+}
+
+export async function sendAccountDeletionCancelledEmail(to: string): Promise<void> {
+  await EmailEvents.Send.publish({
+    to,
+    subject: 'Your account deletion was cancelled',
+    body: accountDeletionCancelledEmailBody(),
+  });
+}
+
+/** What the purge removed, what is kept and why, and what outside providers hold. */
+export function accountDeletionCompleteEmailBody(
+  retained: readonly AccountDeletionRetainedRecord[] = ACCOUNT_DELETION_RETAINED_RECORDS
+): string {
+  const removedItems = PURGED_USER_DATA.map(item => `<li>${escapeHtml(item)}</li>`).join('');
+  const retainedItems = retained
+    .map(
+      item =>
+        `<li><strong>${escapeHtml(item.category)}</strong>: ${escapeHtml(item.reason)}. Kept for ${escapeHtml(item.retention)}.</li>`
+    )
+    .join('');
+  const retainedSection = retained.length
+    ? `<p>A few records are kept after deletion:</p><ul>${retainedItems}</ul>`
+    : '<p>No records are kept after deletion.</p>';
+  return layout(
+    'Your account has been deleted',
+    `
+      <p>Your account has been permanently deleted.</p>
+      <p>What we removed:</p>
+      <ul>${removedItems}</ul>
+      ${retainedSection}
+      <p>Some data sits with outside providers. AI model providers already received the prompts you sent, and their
+      own retention policies apply to them. Payment records are held by our payment processor and follow its
+      retention.</p>`
+  );
+}
+
+/**
+ * Sent by the purge once the account is gone, to the address it read before the delete. Nothing
+ * calls it yet: the purge job that deletes an account once `deletion.scheduledFor` passes is a
+ * follow-up to the self-serve deletion request.
+ */
+export async function sendAccountDeletionCompleteEmail(to: string): Promise<void> {
+  await EmailEvents.Send.publish({
+    to,
+    subject: 'Your account has been deleted',
+    body: accountDeletionCompleteEmailBody(),
   });
 }
