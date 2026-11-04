@@ -1,4 +1,5 @@
 import { UsageEvent, User } from '@bike4mind/database';
+import { UnprocessableEntityError } from '@bike4mind/common';
 import {
   isActiveEligible,
   isCountedUser,
@@ -10,6 +11,8 @@ import {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const USER_BATCH = 1000;
+/** Largest created-window cohort the users list's verdict filter classifies live, like FUNNEL_COHORT_MAX. */
+export const VERDICT_COHORT_MAX = 20_000;
 
 /**
  * Days after account creation in which an AI request makes a signup real: exactly 7x24h from createdAt.
@@ -41,18 +44,20 @@ export type RealSignupCohort = { legitIds: string[]; suspectedIds: string[] };
 
 /**
  * Splits the counted accounts created in [start, end) into real and suspected. Reads the cohort straight
- * from User in _id batches with no cap, so the split is exact for any window size. The nightly rollup and the
- * users list's verdict filter both decide here.
+ * from User in _id batches, so the split is exact for any window size; with `maxUsers`, a window holding
+ * more accounts than that is refused instead. The nightly rollup and the users list's verdict filter both
+ * decide here.
  */
 export async function classifyRealSignups(
   start: Date,
   end: Date,
-  { deadlineMs, ctx }: { deadlineMs: number; ctx?: CountingContext }
+  { deadlineMs, ctx, maxUsers }: { deadlineMs: number; ctx?: CountingContext; maxUsers?: number }
 ): Promise<RealSignupCohort> {
   const counting = ctx ?? (await loadCountingContext());
   const legitIds: string[] = [];
   const suspectedIds: string[] = [];
   let after: unknown;
+  let scanned = 0;
   for (;;) {
     const batch = await User.find({ createdAt: { $gte: start, $lt: end }, ...(after ? { _id: { $gt: after } } : {}) })
       .sort({ _id: 1 })
@@ -61,6 +66,12 @@ export async function classifyRealSignups(
       .maxTimeMS(deadlineMs)
       .lean<(UserFlags & { createdAt: Date })[]>();
     if (batch.length === 0) break;
+    scanned += batch.length;
+    if (maxUsers !== undefined && scanned > maxUsers) {
+      throw new UnprocessableEntityError(
+        `More than ${maxUsers.toLocaleString('en-US')} signups in this window. Narrow the created range.`
+      );
+    }
     after = batch[batch.length - 1]._id;
 
     const counted = batch.filter(user => isCountedUser(user, counting));
@@ -95,6 +106,9 @@ export async function signupVerdictUserIds(
   { start, end, verdict }: { start: Date; end: Date; verdict: RealSignupVerdict },
   { deadlineMs }: { deadlineMs: number }
 ): Promise<string[]> {
-  const { legitIds, suspectedIds } = await classifyRealSignups(start, end, { deadlineMs });
+  const { legitIds, suspectedIds } = await classifyRealSignups(start, end, {
+    deadlineMs,
+    maxUsers: VERDICT_COHORT_MAX,
+  });
   return verdict === 'legit' ? legitIds : suspectedIds;
 }

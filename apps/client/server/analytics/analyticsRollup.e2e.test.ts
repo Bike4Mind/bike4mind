@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { AnalyticsDaily, AnalyticsUserDay, UsageEvent, User, UserApiKey } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
-import { signupVerdictUserIds } from './realSignup';
+import { classifyRealSignups, signupVerdictUserIds } from './realSignup';
 import { reevaluateRecentSignups, rollupDay, runNightlyRollup } from './analyticsRollup';
 import { UNCLASSIFIED_SOURCE } from '@bike4mind/common';
 import { TIMESERIES_SCAN_LIMIT } from '../users/signupTimeseries';
@@ -339,6 +339,14 @@ describe('rollupDay', () => {
     expect(real).toEqual([String(ids.real)]);
     expect(suspected.sort()).toEqual([ids.system, ids.failed, ids.late, ids.unverified, ids.banned].map(String).sort());
     expect((await AnalyticsDaily.findOne({ day: DAY }).lean())?.signups).toMatchObject({ legit: 1, suspected: 5 });
+  });
+
+  it('refuses a window holding more accounts than maxUsers, counting every account it scans', async () => {
+    const window = [new Date('2026-01-01T00:00:00Z'), new Date('2026-01-02T00:00:00Z')] as const;
+    await expect(classifyRealSignups(...window, { deadlineMs: 30_000, maxUsers: 2 })).rejects.toThrow(
+      'More than 2 signups in this window'
+    );
+    await expect(classifyRealSignups(...window, { deadlineMs: 30_000, maxUsers: 100 })).resolves.toBeDefined();
   });
 
   it('a request after the signup day flips a suspected signup to real on re-evaluation', async () => {

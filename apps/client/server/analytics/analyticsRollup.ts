@@ -52,9 +52,10 @@ export async function classifyCohort(
   { now = new Date(), logger = console, maxTimeMS = QUERY_DEADLINE_MS }: RollupOptions
 ): Promise<CohortResult> {
   const { start, end } = dayBounds(day);
+  const ctx = await loadCountingContext();
   const [{ legitIds, suspectedIds }, { counted, signalsById, truncated }] = await Promise.all([
-    classifyRealSignups(start, end, { deadlineMs: maxTimeMS }),
-    classifySignupWindow(start, end, { now, deadlineMs: maxTimeMS }),
+    classifyRealSignups(start, end, { deadlineMs: maxTimeMS, ctx }),
+    classifySignupWindow(start, end, { now, deadlineMs: maxTimeMS, ctx }),
   ]);
   // The scan only feeds bySignal; truncation cannot change the real/suspected split.
   if (truncated) logger.warn(`analytics rollup: signup candidate scan truncated for ${day}`);

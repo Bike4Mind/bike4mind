@@ -110,13 +110,13 @@ export type SignupWindowCohort = {
 };
 
 /**
- * Classifies the counted accounts created in [start, end) as one cohort. The nightly rollup (one UTC day)
- * and the users list's verdict filter (a chart bucket) both classify through here.
+ * Classifies the counted accounts created in [start, end) as one cohort for the nightly rollup's bySignal
+ * counts. Pass `ctx` to reuse a counting context the caller already loaded.
  */
 export async function classifySignupWindow(
   start: Date,
   end: Date,
-  { now, deadlineMs }: { now: Date; deadlineMs: number }
+  { now, deadlineMs, ctx: given }: { now: Date; deadlineMs: number; ctx?: CountingContext }
 ): Promise<SignupWindowCohort> {
   // A one-day margin each side lets cohort signals (bursts, shared network) see accounts across the edges.
   const scanSince = new Date(start.getTime() - DAY_MS);
@@ -128,7 +128,7 @@ export async function classifySignupWindow(
   ]);
 
   const inWindow = candidates.filter(c => c.createdAt >= start && c.createdAt < end);
-  const ctx = await loadCountingContext();
+  const ctx = given ?? (await loadCountingContext());
   const users = await loadUserFlags(
     inWindow.map(c => c.id),
     deadlineMs
