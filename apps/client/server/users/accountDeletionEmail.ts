@@ -38,7 +38,7 @@ export function accountDeletionScheduledEmailBody(scheduledFor: Date, signInUrl:
   return layout(
     'Your account is scheduled for deletion',
     `
-      <p>Your account and its data will be permanently deleted on <strong>${date}</strong>. Until then you have been
+      <p>Your account will be permanently deleted on <strong>${date}</strong>. Until then you have been
       signed out everywhere, your API keys and connected apps have been revoked, and your subscriptions have been
       canceled.</p>
       <p>Changed your mind? <a href="${escapeHtml(signInUrl)}">Sign in</a> before that date and choose Cancel deletion.</p>

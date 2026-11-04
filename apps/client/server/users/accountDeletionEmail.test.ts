@@ -27,6 +27,8 @@ describe('deletion-scheduled email', () => {
     expect(message.to).toBe('dev@example.test');
     expect(message.subject).toBe('Your account is scheduled for deletion on November 18, 2026 (UTC)');
     expect(message.body).toContain('<strong>November 18, 2026 (UTC)</strong>');
+    // The purge removes the account, not all of its data; the complete email lists what goes.
+    expect(message.body).toContain('Your account will be permanently deleted on');
     expect(message.body).toContain('href="https://app.example.test/login"');
   });
 
