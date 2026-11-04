@@ -32,6 +32,7 @@ import ExperimentalFeatureToggle from '../ExperimentalFeatureToggle';
 import SettingsActionButton from './SettingsActionButton';
 import { useExperimentalFeatureSettings, useSettingsFromServer } from '@client/app/hooks/data/settings';
 import { useState } from 'react';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 
 const GeneralSettingsTab = () => {
   const { settings, updatePreferences } = useUserSettings();
@@ -39,6 +40,7 @@ const GeneralSettingsTab = () => {
   const { data: experimentalSettingsWithDefaults } = useExperimentalFeatureSettings();
 
   const { t } = useTranslation();
+  const impersonating = useAccessToken(s => s.impersonating);
 
   // Check if any experimental features are enabled at server level (uses defaults)
   const hasExperimentalFeatures =
@@ -484,15 +486,17 @@ const GeneralSettingsTab = () => {
             >
               Delete all knowledge files
             </Button>
-            <Button
-              color="danger"
-              variant="solid"
-              startDecorator={<DeleteOutline />}
-              onClick={() => toggleDeleteAccountModal()}
-              data-testid="settings-delete-account-btn"
-            >
-              Delete account
-            </Button>
+            {!impersonating && (
+              <Button
+                color="danger"
+                variant="solid"
+                startDecorator={<DeleteOutline />}
+                onClick={() => toggleDeleteAccountModal()}
+                data-testid="settings-delete-account-btn"
+              >
+                Delete account
+              </Button>
+            )}
           </Box>
         </Box>
       </SectionContainer>
