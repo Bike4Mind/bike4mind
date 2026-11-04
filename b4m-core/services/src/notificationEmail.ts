@@ -1,7 +1,6 @@
 /** Shared helpers for notification emails. */
 
-// Re-exported so the email builders in this package keep a single import; the escaper
-// itself is shared monorepo-wide.
+// Re-exported so the email builders in this package keep a single import.
 export { escapeHtml } from '@bike4mind/utils/escapeHtml';
 
 /** Shared shell for a notification email: a div wrapping the body plus a small grey footer line. */

@@ -4,9 +4,7 @@
 import { requireEnv } from '@bike4mind/common';
 import { escapeHtml } from '@bike4mind/utils/escapeHtml';
 
-// Re-exported so the ~13 email builders that import their escaper from here keep working;
-// the implementation is shared monorepo-wide. Apply it to anything a user or operator can
-// influence (usernames, names, emails, org and file names); never to a plain-text subject.
+// Re-exported so the email builders keep importing their escaper from here.
 export { escapeHtml };
 
 /**
