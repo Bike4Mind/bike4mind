@@ -1287,6 +1287,7 @@ describe('extraction output caps', () => {
 
   afterEach(() => {
     chunker.freeEncoder();
+    vi.restoreAllMocks();
   });
 
   const allText = (chunks: Chunk[]): string => chunks.map(c => c.text).join(' ');
@@ -1339,6 +1340,31 @@ describe('extraction output caps', () => {
     const sheetPath = 'xl/worksheets/sheet1.xml';
     const xml = await zip.file(sheetPath)!.async('string');
     zip.file(sheetPath, xml.replace(/<dimension ref="[^"]*"/, `<dimension ref="${ref}"`));
+    return Buffer.from(await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }));
+  }
+
+  type DeclaredRange = { s: { r: number; c: number }; e: { r: number; c: number } };
+
+  /**
+   * An .xlsb with one sheet per entry, each declaring `range` in its BrtWsDim record. Unlike the
+   * xlsx `<dimension>` tag, SheetJS keeps a reversed BrtWsDim as the sheet's `!ref`.
+   */
+  async function buildXlsbWithDeclaredRanges(sheets: { rows: unknown[][]; range: DeclaredRange }[]): Promise<Buffer> {
+    const { utils, write } = await import('xlsx');
+    const workbook = utils.book_new();
+    sheets.forEach(({ rows }, i) => utils.book_append_sheet(workbook, utils.aoa_to_sheet(rows), `Sheet${i + 1}`));
+    const zip = await JSZip.loadAsync(write(workbook, { type: 'buffer', bookType: 'xlsb' }) as ArrayBuffer);
+    for (const [i, { range }] of sheets.entries()) {
+      const path = `xl/worksheets/sheet${i + 1}.bin`;
+      const bin = await zip.file(path)!.async('nodebuffer');
+      // Record type 0x94 (BrtWsDim) as a varint, then its 16-byte size: rwFirst, rwLast, colFirst, colLast.
+      const at = bin.indexOf(Buffer.from([0x94, 0x01, 0x10]));
+      expect(at).toBeGreaterThanOrEqual(0);
+      [range.s.r, range.e.r, range.s.c, range.e.c].forEach((value, field) =>
+        bin.writeUInt32LE(value, at + 3 + field * 4)
+      );
+      zip.file(path, bin);
+    }
     return Buffer.from(await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }));
   }
 
@@ -1425,6 +1451,19 @@ describe('extraction output caps', () => {
       expect(await chunker.chunkFile(mangled, XLSX_MIME)).toEqual([]);
     });
 
+    it('hands a non-zip workbook to SheetJS without opening it as a zip', async () => {
+      const { utils, write } = await import('xlsx');
+      const workbook = utils.book_new();
+      utils.book_append_sheet(workbook, utils.aoa_to_sheet([['CELL_MARKER']]), 'Sheet1');
+      const xls = Buffer.from(write(workbook, { type: 'buffer', bookType: 'biff8' }) as ArrayBuffer);
+      const loadAsync = vi.spyOn(JSZip, 'loadAsync');
+      const chunks = await chunker.chunkFile(xls, 'application/vnd.ms-excel');
+      expect(allText(chunks)).toContain('CELL_MARKER');
+      // The one open is readWorkbookDocumentDate, which tries every workbook on purpose; the size
+      // bound no longer hands JSZip bytes that SheetJS will not read as a zip.
+      expect(loadAsync).toHaveBeenCalledTimes(1);
+    });
+
     it('keeps every row of a sparse sheet whose declared range overstates its columns', async () => {
       // 50k rows of one column declared as 52 columns wide: 2.6M declared cells against a 2M-cell
       // budget. Trimming to the populated columns keeps all rows; counting declared cells would not.
@@ -1439,11 +1478,33 @@ describe('extraction output caps', () => {
     it('clamps a spoofed sheet dimension to the cell budget instead of walking it', async () => {
       // Two real cells, but the dimension tag claims the whole 16384 x 1048576 grid (~17B cells).
       // Unclamped, SheetJS walks every one of them; the cap stops it at 2M cells.
+      const { utils } = await import('xlsx');
+      const sheetToJson = vi.spyOn(utils, 'sheet_to_json');
       const xlsx = await withDeclaredDimension(await buildXlsx([['CELL_MARKER', 'Revenue']]), 'A1:XFD1048576');
       const start = Date.now();
       const chunks = await chunker.chunkFile(xlsx, XLSX_MIME);
       expect(allText(chunks)).toContain('CELL_MARKER');
       expect(Date.now() - start).toBeLessThan(20_000);
+      // Trimmed to the populated extent: the declared grid would not fit, so its empty rows go too.
+      expect(sheetToJson).toHaveBeenCalledTimes(1);
+      expect(sheetToJson.mock.calls[0][1]).toMatchObject({ range: { s: { r: 0, c: 0 }, e: { r: 0, c: 1 } } });
+    }, 60_000);
+
+    it('charges a reversed sheet range nothing, so it cannot refund the next sheet a bigger walk', async () => {
+      // Sheet1 declares its rows end-before-start: a negative area that, subtracted, used to add
+      // ~1M cells to the budget. Sheet2's declared full-width grid (2 populated columns x 1048576
+      // rows) then fit the inflated budget and was walked row by row instead of being trimmed.
+      const xlsb = await buildXlsbWithDeclaredRanges([
+        { rows: [['REVERSED_MARKER']], range: { s: { r: 1_048_575, c: 0 }, e: { r: 0, c: 16_383 } } },
+        { rows: [['CELL_MARKER', 'Revenue']], range: { s: { r: 0, c: 0 }, e: { r: 1_048_575, c: 16_383 } } },
+      ]);
+      const { utils } = await import('xlsx');
+      const sheetToJson = vi.spyOn(utils, 'sheet_to_json');
+      // No xlsb MIME is supported; SheetJS sniffs the binary workbook on the spreadsheet path.
+      await chunker.chunkFile(xlsb, XLSX_MIME);
+      expect(chunker.getExtractedText()).toContain('CELL_MARKER');
+      expect(sheetToJson).toHaveBeenCalledTimes(1);
+      expect(sheetToJson.mock.calls[0][1]).toMatchObject({ range: { s: { r: 0, c: 0 }, e: { r: 0, c: 1 } } });
     }, 60_000);
 
     it('stops at the first row that would cross the character cap', async () => {

@@ -700,16 +700,16 @@ export class SmartChunker {
    * JSZip against MAX_OOXML_INFLATED_BYTES and SheetJS is handed a STORE repack of exactly the
    * entries JSZip measured: whatever its reader would accept beyond them (other signatures,
    * duplicate names, misdeclared sizes) never reaches it. Entries that failed to inflate are dropped
-   * from the repack. Anything JSZip cannot open passes through unchanged only when SheetJS would not
-   * read it as a zip either (`PK` lead bytes): a legacy OLE .xls or a CSV is not compressed, so what
-   * SheetJS holds is bounded by the upload itself.
+   * from the repack. Bytes without the `PK` lead pass through unchanged and never reach JSZip:
+   * SheetJS will not read them as a zip, and a legacy OLE .xls or a CSV is not compressed, so what
+   * SheetJS holds is bounded by the upload itself. A `PK`-led container JSZip cannot open is refused.
    */
   private async boundedWorkbookBytes(content: Buffer): Promise<Buffer | undefined> {
+    if (!startsLikeZip(content)) return content;
     let zip: JSZip;
     try {
       zip = await JSZip.loadAsync(content);
     } catch (error) {
-      if (!startsLikeZip(content)) return content;
       this.logger.warn(`Workbook zip could not be opened to bound its size; not chunked: ${(error as Error).message}`);
       return undefined;
     }
@@ -747,7 +747,14 @@ export class SmartChunker {
         sheets.push({ name, rows: [] });
         continue;
       }
-      const range = this.budgetedSheetRange(sheet, utils.decode_range(ref), cellBudget, utils);
+      const declared = utils.decode_range(ref);
+      // A reversed range (a malformed dimension record) holds no cells. Charged as walked, its
+      // negative area would refund the budget and let the next sheet walk its whole grid.
+      if (declared.e.r < declared.s.r || declared.e.c < declared.s.c) {
+        sheets.push({ name, rows: [] });
+        continue;
+      }
+      const range = this.budgetedSheetRange(sheet, declared, cellBudget, utils);
       if (!range) {
         this.logger.warn(
           `Workbook reached the ${MAX_XLSX_CELLS}-cell cap at sheet "${name}"; remaining sheets are not chunked`
@@ -762,11 +769,13 @@ export class SmartChunker {
         // Skip non-array rows (shouldn't happen with header: 1)
         if (!Array.isArray(cells)) continue;
         const json = JSON.stringify(cells);
-        if (json.length > charBudget) {
+        // Plus the newline that joins it to the next row in the extracted text.
+        const rowChars = json.length + 1;
+        if (rowChars > charBudget) {
           charCapReached = true;
           break;
         }
-        charBudget -= json.length;
+        charBudget -= rowChars;
         rows.push({ cells, json });
       }
       sheets.push({ name, rows });
