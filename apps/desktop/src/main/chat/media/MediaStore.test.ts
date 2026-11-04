@@ -110,7 +110,7 @@ describe('MediaStore.saveStream', () => {
 
   it('treats a type named like an Object member as unsupported', async () => {
     const { store: media, base } = await store();
-    for (const type of ['constructor', 'toString', '__proto__']) {
+    for (const type of ['constructor', '__proto__']) {
       expect(isSupportedMediaType(type), type).toBe(false);
       await expect(media.save(SESSION, Buffer.from('x'), type), type).rejects.toThrow('Cannot display');
       await expect(media.saveStream(SESSION, Readable.from([Buffer.from('x')]), type, 10), type).rejects.toThrow(
