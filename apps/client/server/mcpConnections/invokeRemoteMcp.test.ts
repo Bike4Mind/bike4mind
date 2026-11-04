@@ -96,10 +96,12 @@ vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
 const tokenManager = vi.hoisted(() => ({
   getOAuthAccessToken: vi.fn(),
   OAuthReconnectRequiredError: class extends Error {} as unknown as new () => Error,
+  OAuthRefreshUnavailableError: class extends Error {} as unknown as new (message: string) => Error,
 }));
 vi.mock('./oauth/tokenManager', async importOriginal => {
   const actual = await importOriginal<typeof import('./oauth/tokenManager')>();
   tokenManager.OAuthReconnectRequiredError = actual.OAuthReconnectRequiredError;
+  tokenManager.OAuthRefreshUnavailableError = actual.OAuthRefreshUnavailableError;
   return { ...actual, getOAuthAccessToken: tokenManager.getOAuthAccessToken };
 });
 vi.mock('./customMcpAccess', async importOriginal => ({
@@ -475,6 +477,29 @@ describe('invokeRemoteMcp - round trips against the fixture', () => {
         expect.objectContaining({ force: true })
       );
       expect(repo.setStatus).not.toHaveBeenCalled();
+    });
+
+    it('a refresh the authorization server cannot answer is a timeout that neither records a status nor trips the breaker', async () => {
+      const id = seed('/mcp', { auth: oauthAuth(true) });
+      tokenManager.getOAuthAccessToken.mockImplementation(async (_c: unknown, opts: { force?: boolean }) => {
+        if (opts.force) throw new tokenManager.OAuthRefreshUnavailableError('The authorization server did not answer');
+        return 'stale';
+      });
+      const rejecting = vi.fn(async () => {
+        throw new RemoteMcpAuthRequiredError({});
+      });
+      // Far past any breaker threshold: every call must still reach the token manager, never `circuit_open`.
+      for (let attempt = 0; attempt < 20; attempt++) {
+        await expectRemoteCode(
+          invokeRemoteMcp(
+            { action: 'listTools', connectionId: id, userId: 'user-1' },
+            { runner: rejecting, context: context() }
+          ),
+          'timeout'
+        );
+      }
+      expect(repo.setStatus).not.toHaveBeenCalled();
+      expect(repo.setPendingAuth).not.toHaveBeenCalled();
     });
 
     it('a second 401 after the refresh leaves the connection needing reconnect', async () => {

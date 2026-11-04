@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => ({ get: (fn: (req: unknown, res: unknown) => unknown) => fn }),
@@ -7,6 +7,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
 import handler from '../client-metadata';
 
 describe('GET /api/mcp-connections/oauth/client-metadata', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   it('serves a public-client metadata document whose client_id is its own URL', () => {
     vi.stubEnv('APP_URL', 'https://app.example.com');
     let body: Record<string, unknown> | undefined;
@@ -19,6 +21,5 @@ describe('GET /api/mcp-connections/oauth/client-metadata', () => {
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],
     });
-    vi.unstubAllEnvs();
   });
 });
