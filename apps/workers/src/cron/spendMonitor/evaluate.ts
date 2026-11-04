@@ -6,7 +6,7 @@ import {
   type SpendAlertRecord,
 } from '@bike4mind/common';
 import type { SlackAlarmMessage } from '../../events/alarmSlackMessage';
-import { platformBaseline, scopeBaseline, windowSums } from './baselines';
+import { platformBaseline, scopeBaseline, SPEND_WINDOW_MS, windowSums } from './baselines';
 import { decideIncidents, type IncidentDecision } from './incidents';
 import {
   evaluatePlatform,
@@ -18,10 +18,8 @@ import {
 import { resolveScopes, scopeMapKey, type ResolvedScope, type ResolveScopeDeps, type ScopeKey } from './resolveScope';
 import { buildSpendAlertMessage, type SpendAlertMessageInput } from './slackMessage';
 
-const WINDOW_BUCKETS = 3;
-const WINDOW_MS = WINDOW_BUCKETS * SPEND_BUCKET_MS;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const WINDOWS_PER_DAY = DAY_MS / WINDOW_MS;
+const WINDOWS_PER_DAY = DAY_MS / SPEND_WINDOW_MS;
 const SAME_SLOT_DAYS = [7, 14, 21, 28] as const;
 const SCOPE_BASELINE_DAYS = 7;
 const ACCOUNT_SCOPE_TYPES = ['User', 'Organization', 'Agent', 'apiKey'] as const;
@@ -74,7 +72,7 @@ async function platformBreaches(
   const total = current.get(PLATFORM_SCOPE_ID);
 
   const observe = (field: 'credits' | 'costUsd'): ScopeObservation => {
-    // Index 0 is the current window, so the window ending d days ago is d * 96 windows back.
+    // Index 0 is the current window, so the window ending d days ago is d * WINDOWS_PER_DAY windows back.
     const everyWindow = windowSums(series, windowEnd, SAME_SLOT_DAYS[SAME_SLOT_DAYS.length - 1] + 1, field);
     // An empty slot is indistinguishable from missing history, so only populated slots count as samples.
     const sameSlot = SAME_SLOT_DAYS.map(days => everyWindow[days * WINDOWS_PER_DAY]).filter(sum => sum > 0);
@@ -260,9 +258,10 @@ async function buildMessages(
 }
 
 /**
- * Posts best effort. Only a successful post records lastNotifiedValue, so a failed one re-notifies next run.
- * A failed post is logged only; a failed bookkeeping write after a post is returned so the run fails loudly,
- * since the next run would otherwise announce the same incident again.
+ * Posts, then stamps the lastNotified* fields: delivery is at-least-once. A failed open or escalate post
+ * leaves the stamp unset, so the next run announces it again; a failed resolve post is not retried. A
+ * failed stamp after a landed post is returned so the run fails, and the next window re-announces the
+ * same incident: a duplicate post is preferred over a missed one.
  */
 async function announce(
   notifications: Notification[],
@@ -293,7 +292,12 @@ async function announce(
     posted += 1;
     if (kind === 'resolve') continue;
     try {
-      await deps.alerts.update({ id: alert.id, lastNotifiedValue: alert.lastValue, lastNotifiedAt: now });
+      await deps.alerts.update({
+        id: alert.id,
+        lastNotifiedValue: alert.lastValue,
+        lastNotifiedSeverity: alert.severity,
+        lastNotifiedAt: now,
+      });
     } catch (error) {
       errors.push(error);
       deps.logger.error('spend-monitor-notify-bookkeeping-failed', { kind, alertId: alert.id, error });
@@ -311,7 +315,7 @@ export async function evaluateSpend(
   if (!latestBucket) return { breaches: 0, posted: 0 };
 
   const windowEnd = new Date(latestBucket.getTime() + SPEND_BUCKET_MS);
-  const windowStart = new Date(windowEnd.getTime() - WINDOW_MS);
+  const windowStart = new Date(windowEnd.getTime() - SPEND_WINDOW_MS);
   const active = await deps.alerts.findActive();
 
   const breaches = await platformBreaches(windowStart, windowEnd, deps, thresholds);

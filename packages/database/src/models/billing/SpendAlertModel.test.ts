@@ -128,4 +128,22 @@ describe('SpendAlertRepository.applyEvaluation', () => {
     expect(stored).toMatchObject({ status: 'resolved', lastEvaluatedWindowEnd: nextWindowEnd });
     expect(stored).not.toHaveProperty('openKey');
   });
+
+  it('no-ops on an incident that resolved since the run read it', async () => {
+    const alert = await spendAlertRepository.create(
+      alertFor('u1', { status: 'resolved', openKey: undefined, lastEvaluatedWindowEnd: firstWindowEnd })
+    );
+
+    const applied = await spendAlertRepository.applyEvaluation({
+      id: alert.id,
+      severity: 'critical',
+      lastEvaluatedWindowEnd: nextWindowEnd,
+    });
+
+    expect(applied).toBe(false);
+    expect(await SpendAlert.findById(alert.id).lean()).toMatchObject({
+      severity: 'warning',
+      lastEvaluatedWindowEnd: firstWindowEnd,
+    });
+  });
 });

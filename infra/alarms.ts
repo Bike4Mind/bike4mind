@@ -1964,6 +1964,27 @@ if (isMonitoredStage) {
         Severity: 'High',
       },
     });
+
+    // A failed invocation still counts as an Invocation, so the heartbeat stays green while every run
+    // throws (missing thresholds, DB or rollup errors). Three failing runs in a row filters a one-off retry.
+    new aws.cloudwatch.MetricAlarm('spendMonitorLambdaErrors', {
+      name: `${$app.name}-${$app.stage}-spend-monitor-lambda-errors`,
+      alarmDescription: 'The spend monitor cron is erroring; credit spend alerting is stalled',
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 3,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 300, // 5 minutes, the run cadence
+      statistic: 'Sum',
+      threshold: 1,
+      treatMissingData: 'notBreaching',
+      dimensions: { FunctionName: spendMonitor.nodes.function.name },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'SpendMonitor',
+        Severity: 'High',
+      },
+    });
   }
 
   /**

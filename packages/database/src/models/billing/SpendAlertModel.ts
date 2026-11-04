@@ -7,9 +7,12 @@ import {
   SPEND_ROLLUP_SCOPE_TYPES,
   SPEND_RULE_IDS,
   SpendAlertRecord,
+  SpendAlertStatus,
 } from '@bike4mind/common';
 
 export type ISpendAlertDocument = ISpendAlert & IMongoDocument;
+
+const ACTIVE_STATUSES: SpendAlertStatus[] = ['open', 'acknowledged'];
 
 const SpendAlertSchema = new Schema<ISpendAlertDocument>(
   {
@@ -24,6 +27,7 @@ const SpendAlertSchema = new Schema<ISpendAlertDocument>(
     lastValue: { type: Number, required: true },
     lastNotifiedValue: { type: Number },
     lastNotifiedAt: { type: Date },
+    lastNotifiedSeverity: { type: String, enum: ['warning', 'critical'] },
     clearRuns: { type: Number, required: true, default: 0 },
     acknowledgedBy: { type: String },
     acknowledgedAt: { type: Date },
@@ -47,7 +51,7 @@ export class SpendAlertRepository extends BaseRepository<ISpendAlertDocument> im
   }
 
   async findActive(): Promise<SpendAlertRecord[]> {
-    const docs = await this.model.find({ status: { $in: ['open', 'acknowledged'] } });
+    const docs = await this.model.find({ status: { $in: ACTIVE_STATUSES } });
     return docs.map(doc => doc.toJSON() as SpendAlertRecord);
   }
 
@@ -59,6 +63,7 @@ export class SpendAlertRepository extends BaseRepository<ISpendAlertDocument> im
     const result = await this.model.updateOne(
       {
         _id: id,
+        status: { $in: ACTIVE_STATUSES },
         $or: [
           { lastEvaluatedWindowEnd: { $exists: false } },
           { lastEvaluatedWindowEnd: { $lt: fields.lastEvaluatedWindowEnd } },

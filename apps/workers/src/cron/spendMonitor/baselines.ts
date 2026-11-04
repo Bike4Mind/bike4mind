@@ -1,6 +1,8 @@
-import { type ISpendRollup, SPEND_BUCKET_MS } from '@bike4mind/common';
+import { SPEND_BUCKET_MS, type SpendSeriesPoint } from '@bike4mind/common';
 
-const WINDOW_MS = 3 * SPEND_BUCKET_MS;
+/** The evaluated window; the slot lookup in evaluate.ts and the Slack labels both derive from it. */
+const SPEND_WINDOW_BUCKETS = 3;
+export const SPEND_WINDOW_MS = SPEND_WINDOW_BUCKETS * SPEND_BUCKET_MS;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export function median(values: number[]): number | null {
@@ -19,24 +21,24 @@ export function percentile(values: number[], p: number): number | null {
 }
 
 /**
- * Sums of every consecutive non-overlapping 15-minute window ending at `windowEnd`, going back `days`.
+ * Sums of every consecutive non-overlapping evaluation window ending at `windowEnd`, going back `days`.
  * Windows are [start, end); buckets absent from the series count as 0. Newest window first.
  */
 export function windowSums(
-  series: ISpendRollup[],
+  series: SpendSeriesPoint[],
   windowEnd: Date,
   days: number,
   field: 'credits' | 'costUsd'
 ): number[] {
-  const windowCount = Math.floor((days * DAY_MS) / WINDOW_MS);
+  const windowCount = Math.floor((days * DAY_MS) / SPEND_WINDOW_MS);
   const sums = new Array<number>(windowCount).fill(0);
   const endMs = windowEnd.getTime();
-  const earliestMs = endMs - windowCount * WINDOW_MS;
+  const earliestMs = endMs - windowCount * SPEND_WINDOW_MS;
 
   for (const rollup of series) {
     const bucketMs = rollup.bucketStart.getTime();
     if (bucketMs < earliestMs || bucketMs >= endMs) continue;
-    const windowIndex = Math.floor((endMs - 1 - bucketMs) / WINDOW_MS);
+    const windowIndex = Math.floor((endMs - 1 - bucketMs) / SPEND_WINDOW_MS);
     sums[windowIndex] += rollup[field];
   }
   return sums;

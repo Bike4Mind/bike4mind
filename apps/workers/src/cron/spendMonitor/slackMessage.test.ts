@@ -46,6 +46,9 @@ describe('buildSpendAlertMessage', () => {
     expect(out).toContain('jane@example.com');
     expect(out).toContain('6,000 credits (~$60.00)');
     expect(out).toContain('x3.8');
+    expect(out).toContain('Last 15m');
+    expect(out).toContain('Normal (15m)');
+    expect(out).toContain('in the last 15m');
     expect(out).toContain('<!channel>');
     expect(out).toContain(`${appUrl}/admin/users/u1`);
     expect(out).toContain(`${appUrl}/admin?tab=credit-analytics`);

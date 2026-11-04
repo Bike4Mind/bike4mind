@@ -33,9 +33,9 @@ const windowBuckets = (scopeType: SpendRollupScopeType, scopeId: string, credits
   [0, 1, 2].map(i => rollup(scopeType, scopeId, new Date(WINDOW_START.getTime() + i * BUCKET_MS), creditsPerBucket));
 
 /** A quiet previous 24h on the platform scope, so the platform has a baseline. */
-const quietPlatformHistory = (): ISpendRollup[] =>
+const quietPlatformHistory = (creditsPerBucket = 100): ISpendRollup[] =>
   Array.from({ length: DAY_MS / BUCKET_MS }, (_, i) =>
-    rollup('platform', 'all', new Date(WINDOW_START.getTime() - (i + 1) * BUCKET_MS), 100)
+    rollup('platform', 'all', new Date(WINDOW_START.getTime() - (i + 1) * BUCKET_MS), creditsPerBucket)
   );
 
 function createFakes() {
@@ -350,6 +350,67 @@ describe('evaluateSpend', () => {
     expect(fakes.posts).toHaveLength(1);
     expect(fakes.deps.logger.error).toHaveBeenCalledWith('spend-monitor-notify-bookkeeping-failed', expect.anything());
     expect(fakes.deps.logger.error).not.toHaveBeenCalledWith('spend-monitor-post-failed', expect.anything());
+
+    // At-least-once: the stamp never landed, so the next window announces the incident again, still as an open.
+    fakes.nextWindow();
+    await expect(run(fakes)).resolves.toEqual({ breaches: 1, posted: 1 });
+    expect(fakes.posts).toHaveLength(2);
+    expect(JSON.stringify(fakes.posts[1])).not.toContain('escalated');
+    expect(fakes.alerts[0]).toMatchObject({ lastNotifiedValue: 15000, lastNotifiedAt: fakes.now() });
+
+    fakes.nextWindow();
+    await expect(run(fakes)).resolves.toEqual({ breaches: 1, posted: 0 });
+    expect(fakes.posts).toHaveLength(2);
+  });
+
+  it('retries a critical escalation whose post failed on the next window', async () => {
+    const fakes = createFakes();
+    // Baseline 1200 per window: 5100 is a x4.25 warning, 7500 a x6.25 critical, below 2x the announced 5100.
+    fakes.setRollups([...quietPlatformHistory(400), ...windowBuckets('platform', 'all', 1700)]);
+    await expect(run(fakes)).resolves.toEqual({ breaches: 1, posted: 1 });
+    expect(fakes.alerts[0]).toMatchObject({ severity: 'warning', lastNotifiedSeverity: 'warning' });
+
+    fakes.nextWindow();
+    fakes.setRollups([...quietPlatformHistory(400), ...windowBuckets('platform', 'all', 2500)]);
+    fakes.post.mockRejectedValueOnce(new Error('slack down'));
+    await expect(run(fakes)).resolves.toEqual({ breaches: 1, posted: 0 });
+    expect(fakes.alerts[0]).toMatchObject({ severity: 'critical', lastNotifiedSeverity: 'warning' });
+
+    fakes.nextWindow();
+    await expect(run(fakes)).resolves.toEqual({ breaches: 1, posted: 1 });
+    expect(JSON.stringify(fakes.posts.at(-1))).toContain('escalated, critical');
+    expect(fakes.alerts[0]).toMatchObject({ lastNotifiedSeverity: 'critical', lastNotifiedValue: 7500 });
+
+    fakes.nextWindow();
+    await expect(run(fakes)).resolves.toEqual({ breaches: 1, posted: 0 });
+  });
+
+  describe('same-weekday slot baseline', () => {
+    const SLOT_CREDITS_PER_BUCKET: Record<number, number> = { 7: 1000, 14: 2000, 21: 4000, 28: 8000 };
+    const NEIGHBOUR_CREDITS = 1_000_000;
+
+    /** 29 days of quiet platform buckets, with the slot windows and the buckets either side of them overridden. */
+    const slotHistory = (): ISpendRollup[] => {
+      const credits = new Map<number, number>();
+      const totalBuckets = (29 * DAY_MS) / BUCKET_MS;
+      for (let i = 1; i <= totalBuckets; i++) credits.set(WINDOW_START.getTime() - i * BUCKET_MS, 100);
+      for (const [days, perBucket] of Object.entries(SLOT_CREDITS_PER_BUCKET)) {
+        const slotStart = WINDOW_START.getTime() - Number(days) * DAY_MS;
+        for (const i of [0, 1, 2]) credits.set(slotStart + i * BUCKET_MS, perBucket);
+        credits.set(slotStart - BUCKET_MS, NEIGHBOUR_CREDITS);
+        credits.set(slotStart + 3 * BUCKET_MS, NEIGHBOUR_CREDITS);
+      }
+      return [...credits].map(([bucketMs, value]) => rollup('platform', 'all', new Date(bucketMs), value));
+    };
+
+    it('takes the median of the 7/14/21/28-day slot windows and ignores their neighbours', async () => {
+      const fakes = createFakes();
+      // Slot sums 3000, 6000, 12000, 24000: median 9000, so 36000 is a x4 spike.
+      fakes.setRollups([...slotHistory(), ...windowBuckets('platform', 'all', 12000)]);
+
+      await expect(run(fakes)).resolves.toEqual({ breaches: 1, posted: 1 });
+      expect(fakes.alerts[0].context).toEqual({ baseline: 9000, ratio: 4 });
+    });
   });
 
   it('lists the top 5 accounts and top 3 models, reusing the account totals already summed', async () => {

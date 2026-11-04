@@ -29,17 +29,16 @@ function decideForBreach(alert: SpendAlertRecord, breach: SpendBreach, windowEnd
     lastEvaluatedWindowEnd: windowEnd,
     context: { baseline: breach.baseline, ratio: breach.ratio },
   };
-  const severityRose = SEVERITY_RANK[breach.severity] > SEVERITY_RANK[alert.severity];
+  const severity = higherSeverity(alert.severity, breach.severity);
+  // Compared against what was announced, not the stored severity, so a critical whose post failed is retried.
+  const severityRose =
+    alert.lastNotifiedSeverity === undefined || SEVERITY_RANK[severity] > SEVERITY_RANK[alert.lastNotifiedSeverity];
   // lastNotifiedValue is undefined after a failed post, so 2 * 0 <= value re-notifies on the next run.
   const grewEnough = breach.value >= ESCALATION_MULTIPLE * (alert.lastNotifiedValue ?? 0);
   const escalates = alert.status === 'acknowledged' ? severityRose : severityRose || grewEnough;
 
   if (!escalates) return { kind: 'update', id: alert.id, patch };
-  return {
-    kind: 'escalate',
-    id: alert.id,
-    patch: { ...patch, severity: higherSeverity(alert.severity, breach.severity) },
-  };
+  return { kind: 'escalate', id: alert.id, patch: { ...patch, severity } };
 }
 
 function decideForClearRun(alert: SpendAlertRecord, now: Date, windowEnd: Date): IncidentDecision {

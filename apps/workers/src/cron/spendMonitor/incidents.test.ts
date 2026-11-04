@@ -30,6 +30,7 @@ const active = (overrides: Partial<SpendAlertRecord> = {}): SpendAlertRecord => 
   peakValue: 100,
   lastValue: 100,
   lastNotifiedValue: 100,
+  lastNotifiedSeverity: 'warning',
   clearRuns: 0,
   lastEvaluatedWindowEnd: previousWindowEnd,
   context: {},
@@ -120,7 +121,7 @@ describe('decideIncidents', () => {
 
   it('never lowers severity or peak on a silent update', () => {
     const [decision] = decideIncidents(
-      [active({ severity: 'critical', peakValue: 400 })],
+      [active({ severity: 'critical', lastNotifiedSeverity: 'critical', peakValue: 400 })],
       [breach({ value: 120, severity: 'warning' })],
       now,
       windowEnd
@@ -141,8 +142,19 @@ describe('decideIncidents', () => {
 
   it('does not lower severity when escalating on growth', () => {
     const [decision] = decideIncidents(
-      [active({ severity: 'critical' })],
+      [active({ severity: 'critical', lastNotifiedSeverity: 'critical' })],
       [breach({ value: 250, severity: 'warning' })],
+      now,
+      windowEnd
+    );
+
+    expect(decision).toMatchObject({ kind: 'escalate', patch: { severity: 'critical' } });
+  });
+
+  it('re-escalates a stored critical whose announcement never landed, even below 2x', () => {
+    const [decision] = decideIncidents(
+      [active({ severity: 'critical', lastNotifiedSeverity: 'warning' })],
+      [breach({ value: 110, severity: 'critical' })],
       now,
       windowEnd
     );

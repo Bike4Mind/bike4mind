@@ -6,6 +6,7 @@ import {
   type AlarmLevel,
   type SlackAlarmMessage,
 } from '../../events/alarmSlackMessage';
+import { SPEND_WINDOW_MS } from './baselines';
 import type { ResolvedScope } from './resolveScope';
 
 export type SpendAlertMessageInput = {
@@ -46,6 +47,8 @@ function formatDuration(ms: number): string {
   const rest = minutes % 60;
   return rest === 0 ? `${Math.floor(minutes / 60)}h` : `${Math.floor(minutes / 60)}h ${rest}m`;
 }
+
+const WINDOW_LABEL = formatDuration(SPEND_WINDOW_MS);
 
 const numberOrNull = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;
@@ -92,8 +95,8 @@ export function buildSpendAlertMessage(input: SpendAlertMessageInput): SlackAlar
 
   const fields = [
     `*Scope*\n${safe(scope.label)}`,
-    `*Last 15m*\n${formatAmount(alert.rule, alert.lastValue, creditUsd)}`,
-    `*Normal (15m)*\n${baseline === null ? 'no history' : formatAmount(alert.rule, baseline, creditUsd)}`,
+    `*Last ${WINDOW_LABEL}*\n${formatAmount(alert.rule, alert.lastValue, creditUsd)}`,
+    `*Normal (${WINDOW_LABEL})*\n${baseline === null ? 'no history' : formatAmount(alert.rule, baseline, creditUsd)}`,
     `*Ratio*\n${ratio === null ? 'n/a' : `x${ratio.toFixed(1)}`}`,
   ];
   if (scope.paidBy) fields.push(`*Paid by*\n${safe(scope.paidBy)}`);
@@ -133,6 +136,6 @@ export function buildSpendAlertMessage(input: SpendAlertMessageInput): SlackAlar
     sections,
     buttons,
     context,
-    summary: `${scope.label}, ${formatAmount(alert.rule, alert.lastValue, creditUsd)} in the last 15m`,
+    summary: `${scope.label}, ${formatAmount(alert.rule, alert.lastValue, creditUsd)} in the last ${WINDOW_LABEL}`,
   });
 }
