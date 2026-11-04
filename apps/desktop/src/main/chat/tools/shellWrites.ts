@@ -1,10 +1,12 @@
 import { readFile, stat } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 import type { Node } from 'web-tree-sitter';
+import { resolveOperand } from './paths';
 
 /**
  * Paths a command rewrites in place: `files` are single files, `trees` are folders whose
- * contents may all have changed. Relative paths resolve against the command's folder.
+ * contents may all have changed. Relative paths resolve against the command's folder, by Linux
+ * rules in a WSL folder.
  */
 export interface InPlaceWrites {
   files: string[];
@@ -78,6 +80,9 @@ function treeOf(path: string): string {
   const prefix = path.slice(0, /[?*[]/.exec(path)?.index);
   return prefix.endsWith('/') ? prefix.slice(0, -1) || '/' : dirname(prefix);
 }
+
+/** An archive member under the folder it is extracted to, joined with `/` so a WSL folder's command reads it by Linux rules. */
+const memberIn = (base: string, member: string): string => `${base}/${treeOf(member)}`;
 
 interface EditOptions {
   /** Options that give the program, so the first operand is a file. */
@@ -225,7 +230,7 @@ function tarTrees(args: readonly string[]): string[] {
   }
   if (!extract) return [];
   const base = directory ?? '.';
-  return members.length > 0 ? members.map(member => join(base, treeOf(member))) : [base];
+  return members.length > 0 ? members.map(member => memberIn(base, member)) : [base];
 }
 
 function unzipTrees(args: readonly string[]): string[] {
@@ -243,7 +248,7 @@ function unzipTrees(args: readonly string[]): string[] {
   }
   const base = directory ?? '.';
   const members = words.slice(1);
-  return members.length > 0 ? members.map(member => join(base, treeOf(member))) : [base];
+  return members.length > 0 ? members.map(member => memberIn(base, member)) : [base];
 }
 
 function decompressed(program: string, args: readonly string[]): string[] {
@@ -297,7 +302,7 @@ async function stdinText(node: Node, cwd: string): Promise<string | null> {
     if (child.type === 'herestring_redirect') return child.namedChildren.at(-1)?.text ?? null;
     if (child.type === 'file_redirect' && child.text.trimStart().startsWith('<')) {
       const target = child.childForFieldName('destination')?.text;
-      if (target) return readSmall(resolve(cwd, target.replace(/^(['"])(.*)\1$/, '$2')));
+      if (target) return readSmall(resolveOperand(cwd, target.replace(/^(['"])(.*)\1$/, '$2')));
     }
   }
   return null;
@@ -318,10 +323,10 @@ async function patchWrites(args: readonly string[], node: Node, cwd: string): Pr
   // patch moves into `-d` before it reads its own arguments; a `<` redirect is the shell's.
   const files = [original, output].filter((path): path is string => !!path && path !== '-');
   const source = optionValue(args, '-i', '--input') ?? patchFile;
-  const diff = source ? await readSmall(resolve(cwd, directory, source)) : await stdinText(node, cwd);
+  const diff = source ? await readSmall(resolveOperand(cwd, directory, source)) : await stdinText(node, cwd);
   const named = diff ? patchedPaths(diff) : [];
   return {
-    files: [...files, ...named].map(path => resolve(cwd, directory, path)),
+    files: [...files, ...named].map(path => resolveOperand(cwd, directory, path)),
     trees: named.length === 0 && files.length === 0 ? [directory] : [],
   };
 }
@@ -339,16 +344,16 @@ async function gitApplyWrites(args: readonly string[], node: Node, cwd: string):
   const reportOnly = args.some(arg => ['--check', '--stat', '--numstat', '--summary'].includes(arg));
   if ((reportOnly && !args.includes('--apply')) || args.includes('--cached')) return { files: [], trees: [] };
   const prefix = optionValue(args, null, '--directory') ?? '';
-  const root = await repositoryRoot(resolve(cwd));
+  const root = await repositoryRoot(resolveOperand(cwd));
   const patches = operands(args, '');
   const diffs =
     patches.length > 0
-      ? await Promise.all(patches.map(path => readSmall(resolve(cwd, path))))
+      ? await Promise.all(patches.map(path => readSmall(resolveOperand(cwd, path))))
       : [await stdinText(node, cwd)];
   if (diffs.some(diff => diff === null)) return { files: [], trees: [root] };
   const named = diffs.flatMap(diff => patchedPaths(diff ?? ''));
   return {
-    files: named.flatMap(path => [resolve(root, prefix, path), resolve(cwd, prefix, path)]),
+    files: named.flatMap(path => [resolveOperand(root, prefix, path), resolveOperand(cwd, prefix, path)]),
     trees: named.length === 0 ? [root] : [],
   };
 }
@@ -374,7 +379,7 @@ function gitSubcommand(args: readonly string[], cwd: string): { sub: string; res
   let directory = cwd;
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
-    if (arg === '-C') directory = resolve(directory, args[++index] ?? '.');
+    if (arg === '-C') directory = resolveOperand(directory, args[++index] ?? '.');
     else if (['-c', '--git-dir', '--work-tree', '--namespace', '--config-env'].includes(arg)) index++;
     else if (!arg.startsWith('-')) return { sub: arg, rest: args.slice(index + 1), cwd: directory };
   }
@@ -412,7 +417,7 @@ async function writesOf(tokens: readonly string[], node: Node, cwd: string): Pro
   if (program === 'git') {
     const git = gitSubcommand(args, cwd);
     if (!git) return none;
-    const relocate = (path: string): string => resolve(git.cwd, path);
+    const relocate = (path: string): string => resolveOperand(git.cwd, path);
     if (git.sub === 'apply') return gitApplyWrites(git.rest, node, git.cwd);
     if (git.sub === 'checkout' || git.sub === 'restore') {
       return { files: [], trees: gitRestoreTrees(git.sub, git.rest).map(relocate) };

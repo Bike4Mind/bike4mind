@@ -75,6 +75,47 @@ describe('OverwatchUserDay lane', () => {
   });
 });
 
+describe('internal mark', () => {
+  it("keeps the consumer's internal mark on the user-day and the first-seen row, and writes none unmarked", async () => {
+    await OverwatchUserDay.updateOne(KEY, { $set: { ...KEY, internal: true } }, { upsert: true });
+    await OverwatchUserDay.updateOne(KEY, { $set: { ...KEY, userType: 'free' } }, { upsert: true });
+    expect((await OverwatchUserDay.collection.findOne(KEY))?.internal).toBe(true);
+
+    const firstSeen = { productId: 'blog', userId: 'u-1' };
+    await OverwatchUserFirstSeen.updateOne(
+      firstSeen,
+      { $min: { firstSeenDate: '2026-10-01' }, $setOnInsert: firstSeen, $set: { internal: true } },
+      { upsert: true }
+    );
+    expect((await OverwatchUserFirstSeen.collection.findOne(firstSeen))?.internal).toBe(true);
+
+    const other = { ...KEY, userId: 'u-2' };
+    await OverwatchUserDay.updateOne(other, { $set: other }, { upsert: true });
+    expect(await OverwatchUserDay.collection.findOne(other)).not.toHaveProperty('internal');
+  });
+
+  it('keeps the internal counts set by the rollup upsert, and adds none to an older rollup', async () => {
+    const rollup = { productId: 'blog', date: '2026-10-01' };
+    await OverwatchRollup.updateOne(
+      rollup,
+      { $set: { ...rollup, dau: 5, wau: 5, mau: 5, internalDau: 1, internalWau: 2, internalMau: 3 } },
+      { upsert: true }
+    );
+    expect(await OverwatchRollup.collection.findOne(rollup)).toMatchObject({
+      internalDau: 1,
+      internalWau: 2,
+      internalMau: 3,
+    });
+
+    const older = { productId: 'blog', date: '2026-09-01' };
+    await OverwatchRollup.collection.insertOne({ ...older, dau: 1, wau: 1, mau: 1 } as never);
+    const doc = await OverwatchRollup.findOne(older);
+    doc!.dau = 2;
+    await doc!.save();
+    expect(await OverwatchRollup.collection.findOne(older)).not.toHaveProperty('internalDau');
+  });
+});
+
 describe('OverwatchUserFirstSeen lane', () => {
   const FIRST_SEEN = { productId: 'blog', userId: 'u-1' };
 

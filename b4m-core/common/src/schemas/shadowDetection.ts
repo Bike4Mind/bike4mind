@@ -9,7 +9,7 @@ import { accountCampaignGroupSchema } from './accountCampaign';
  * detectors write it, the admin Detections page reads and grades it.
  */
 
-export const SHADOW_DETECTORS = ['signupNetworkBurst', 'accountCampaign'] as const;
+export const SHADOW_DETECTORS = ['signupNetworkBurst', 'accountCampaign', 'youngAccountSpend'] as const;
 export type ShadowDetector = (typeof SHADOW_DETECTORS)[number];
 
 /**

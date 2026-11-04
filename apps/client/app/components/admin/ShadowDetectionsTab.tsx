@@ -48,6 +48,7 @@ import { getErrorMessage } from '@client/app/utils/error';
 export const DETECTOR_LABELS: Record<ShadowDetector, string> = {
   signupNetworkBurst: 'Signup network burst',
   accountCampaign: 'Account campaign',
+  youngAccountSpend: 'Young-account spend',
 };
 
 const RELATIONSHIP_LABELS: Record<AccountCampaignRelationship, string> = {

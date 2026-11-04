@@ -12,6 +12,7 @@ import {
   parseWorktreePorcelain,
   readableGitMessage,
   uncommittedChanges,
+  worktreeRecordsFrom,
 } from './git';
 
 async function repository(): Promise<string> {
@@ -120,6 +121,21 @@ describe('parseWorktreePorcelain', () => {
     expect(parseWorktreePorcelain('worktree /repo/main\nbranch refs/heads/main')).toEqual([
       { path: '/repo/main', branch: 'main' },
     ]);
+  });
+
+  it('maps the Linux paths git prints in a WSL folder onto the share the folder was opened from', () => {
+    const porcelain =
+      'worktree /home/me/repo/.bare\nbare\n\nworktree /home/me/repo/main\nbranch refs/heads/main\n\n' +
+      'worktree /home/me/repo/fix+x\nbranch refs/heads/fix/x\nprunable gitdir file points to non-existent location\n';
+    expect(worktreeRecordsFrom('\\\\wsl$\\Ubuntu\\home\\me\\repo\\main', porcelain, 'win32')).toEqual([
+      { path: '\\\\wsl$\\Ubuntu\\home\\me\\repo\\.bare', bare: true },
+      { path: '\\\\wsl$\\Ubuntu\\home\\me\\repo\\main', branch: 'main' },
+      { path: '\\\\wsl$\\Ubuntu\\home\\me\\repo\\fix+x', branch: 'fix/x', prunable: true },
+    ]);
+    expect(worktreeRecordsFrom('/home/me/repo/main', porcelain, 'linux')[1]).toEqual({
+      path: '/home/me/repo/main',
+      branch: 'main',
+    });
   });
 });
 

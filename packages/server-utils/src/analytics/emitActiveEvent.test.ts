@@ -139,6 +139,31 @@ describe('emitActiveEvent', () => {
     expect(metadata).toEqual([{ userType: 'free', lane: 'synthetic' }, { userType: 'free' }, { userType: 'free' }]);
   });
 
+  it("stamps internal: true on an internal account's or an admin's event, and the lane alone on a synthetic one", async () => {
+    resetConfig();
+    await emitActiveEvent({ pseudoUserId: 'p1', sessionId: 's1', userType: 'free', isInternal: true });
+    await emitActiveEvent({ pseudoUserId: 'p2', sessionId: 's2', userType: 'free', isAdmin: true });
+    await emitActiveEvent({
+      pseudoUserId: 'p3',
+      sessionId: 's3',
+      userType: 'free',
+      isSynthetic: true,
+      isInternal: true,
+    });
+    await emitActiveEvent({ pseudoUserId: 'p4', sessionId: 's4', userType: 'free', isInternal: false, isAdmin: false });
+
+    const metadata = mockFetch.mock.calls.map(
+      ([, init]) =>
+        (JSON.parse((init as RequestInit).body as string) as { event: { metadata: unknown } }).event.metadata
+    );
+    expect(metadata).toEqual([
+      { userType: 'free', internal: true },
+      { userType: 'free', internal: true },
+      { userType: 'free', lane: 'synthetic' },
+      { userType: 'free' },
+    ]);
+  });
+
   it('sends x-api-key header and no Authorization header', async () => {
     resetConfig();
     await emitActiveEvent({ pseudoUserId: 'pseudo-123', sessionId: 'sess-abc', userType: 'free' });

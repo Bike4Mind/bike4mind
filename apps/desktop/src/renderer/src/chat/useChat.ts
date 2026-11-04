@@ -535,8 +535,19 @@ export interface ConversationController {
   setOrchestrate: (orchestrate: boolean) => Promise<void>;
   /** Where this Code session is grounded, for the chip row. Inert on a Chat session. */
   project: ProjectBindingController;
+  /**
+   * Share `path`, or what main's picker returns, into the chat `target`, open or not. Once `target` is not open, a
+   * refusal throws and a warning is returned rather than shown; an IPC failure always throws.
+   */
+  addContextDirectoryTo: (target: string, path?: string) => Promise<string | undefined>;
   /** Answer a tool call waiting at the approval gate. Nothing has run until this is called. */
   respondToApproval: (approvalId: string, answer: ChatApprovalAnswer) => void;
+}
+
+/** A session read in flight, and whether main wrote a summary for that session while it was. */
+interface SessionRead {
+  sessionId: string;
+  stale: boolean;
 }
 
 /**
@@ -548,7 +559,8 @@ export interface ConversationController {
  */
 export function useConversation(
   sessionId: string | null,
-  onSummaryChanged: (summary: ChatSessionSummary) => void
+  onSummaryChanged: (summary: ChatSessionSummary) => void,
+  onShared?: (sessionId: string) => void
 ): ConversationController {
   const [session, setSession] = useState<ChatSession | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -578,6 +590,13 @@ export function useConversation(
   // change: a rebuild between 'start' and the first 'delta' would drop tokens.
   const activeSessionId = useRef<string | null>(sessionId);
   activeSessionId.current = sessionId;
+  const onSharedRef = useRef(onShared);
+  onSharedRef.current = onShared;
+
+  // The open chat's read in flight, done again if main writes that chat a summary meanwhile, as it may predate it.
+  const openRead = useRef<SessionRead | null>(null);
+  // The chat the reset below last ran for. A share result that lands before then would be wiped by it.
+  const resetFor = useRef<string | null>(null);
 
   /** Replies this window has seen end; see the session load, which must not reopen one. */
   const settledReplies = useRef(new Set<string>());
@@ -598,6 +617,7 @@ export function useConversation(
     setCommandProgress(null);
     setPreparing(null);
     setPhase(null);
+    resetFor.current = sessionId;
     if (!sessionId) {
       setSession(null);
       setMessages([]);
@@ -608,17 +628,21 @@ export function useConversation(
 
     let current = true;
     const load = (): void => {
+      const read: SessionRead = { sessionId, stale: false };
+      openRead.current = read;
       const preparationBeforeRead = workspaceVersion.current;
       const historyBeforeRead = historyVersion.current;
       void window.b4m.chat.getSession(sessionId).then(loaded => {
         if (!current) return;
         if (preparationBeforeRead !== workspaceVersion.current) return load();
         if (historyBeforeRead !== historyVersion.current) return load();
+        if (read.stale) return load();
         // A reply already running arrives as main's live copy, and the events from now on
         // extend it. One that settled while this read was in flight is stale: read again
         // rather than put back a turn the 'done' already closed.
         const live = loaded?.replyInFlight;
         if (live && settledReplies.current.has(live.messageId)) return load();
+        openRead.current = null;
         setSession(loaded);
         setMessages(loaded?.messages ?? []);
         // A started session opened while its worktree is still being cut: no event is coming
@@ -769,6 +793,7 @@ export function useConversation(
           const granted = event.sessionId;
           void window.b4m.chat.getSession(granted).then(loaded => {
             if (!loaded || activeSessionId.current !== granted) return;
+            onSharedRef.current?.(granted);
             setSession(current =>
               current?.id === granted
                 ? { ...current, project: loaded.project, grantedDirectories: loaded.grantedDirectories }
@@ -1020,40 +1045,45 @@ export function useConversation(
     if (!result.ok) setSendError(result.error);
   }, [sessionId]);
 
-  // A summary main just wrote, folded into both the open conversation and the sidebar row.
+  // A summary main just wrote, folded into both the open conversation and the sidebar row. The
+  // open conversation only when it is that session: a share can return after the user moved on.
   const applySummary = useCallback(
     (updated: ChatSessionSummary) => {
+      const read = openRead.current;
+      if (read && read.sessionId === updated.id) read.stale = true;
       setSession(current =>
-        current ? { ...current, project: updated.project, grantedDirectories: updated.grantedDirectories } : current
+        current?.id === updated.id
+          ? { ...current, project: updated.project, grantedDirectories: updated.grantedDirectories }
+          : current
       );
       onSummaryChanged(updated);
     },
     [onSummaryChanged]
   );
 
-  /**
-   * The chip's picker when `path` is absent, `/add-dir <path>` when present. Both go through the
-   * one main-side share, so neither can grant what the other would refuse. A refusal lands in
-   * `sendError`; `confirm` adds a line for an addition the user typed, since a typed command has
-   * no button whose result they are already looking at.
-   */
+  // One main-side share for the chip's picker (no `path`), /add-dir and Add folder; `confirm` echoes a typed addition.
+  // Results show only while `target` is open; with `keep`, a refusal elsewhere throws and a warning is returned.
   const shareDirectory = useCallback(
-    async (path: string | undefined, confirm: boolean) => {
-      if (!sessionId) return;
-      const result = await window.b4m.chat.addContextDirectory(sessionId, path);
+    async (path: string | undefined, confirm: boolean, target = sessionId, keep = false) => {
+      if (!target) return;
+      const result = await window.b4m.chat.addContextDirectory(target, path);
       if (result.status === 'cancelled') return;
+      const stillOpen = activeSessionId.current === target && resetFor.current === target;
       if (result.status === 'refused') {
-        setSendError(result.error);
+        if (stillOpen) setSendError(result.error);
+        else if (keep) throw new Error(result.error);
         return;
       }
       if (result.status === 'already') {
-        setNotice(`${result.path} is already shared with this conversation.`);
+        if (stillOpen) setNotice(`${result.path} is already shared with this conversation.`);
         return;
       }
       applySummary(result.session);
-      if (confirm || result.warning) {
-        setNotice([`Shared ${result.path} with this conversation.`, result.warning].filter(Boolean).join(' '));
-      }
+      onSharedRef.current?.(target);
+      if (!confirm && !result.warning) return;
+      const said = [`Shared ${result.path} with this conversation.`, result.warning].filter(Boolean).join(' ');
+      if (stillOpen) setNotice(said);
+      else if (keep) return said;
     },
     [sessionId, applySummary]
   );
@@ -1319,6 +1349,19 @@ export function useConversation(
     await shareDirectory(undefined, false);
   }, [shareDirectory]);
 
+  // As addContextDirectory, for a chat named by id: it clears the open chat's messages only when that is the chat.
+  const addContextDirectoryTo = useCallback(
+    async (target: string, path?: string) => {
+      if (activeSessionId.current === target) {
+        setProjectError(null);
+        setSendError(null);
+        setNotice(null);
+      }
+      return await shareDirectory(path, false, target, true);
+    },
+    [shareDirectory]
+  );
+
   const removeContextDirectory = useCallback(
     async (directory: string) => {
       if (!sessionId) return;
@@ -1389,6 +1432,7 @@ export function useConversation(
     setApprovalMode,
     setOrchestrate,
     project,
+    addContextDirectoryTo,
     respondToApproval,
   };
 }

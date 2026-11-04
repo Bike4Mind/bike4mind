@@ -466,107 +466,120 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
       let user = null;
 
+      // Deferred so a failing reversal cannot block the idempotent payer-side steps; rethrown below so Stripe redelivers.
+      let reversalError: unknown;
       if (paymentIntentId) {
-        await reverseSubscriptionRewardForRefund({
-          paymentIntentId,
-          amountRefunded: dispute.amount,
-          amountCaptured: dispute.amount,
-          reason: 'disputed',
-        });
-
-        const originalTx = await creditTransactionRepository.findByPaymentIntentId(paymentIntentId);
-        if (originalTx) {
-          user = await userRepository.findById(originalTx.ownerId);
-          if (user) {
-            // Clawback the disputed credits (idempotent via stripeDisputeId unique index)
-            try {
-              await creditService.subtractCredits(
-                {
-                  type: 'generic_deduct',
-                  ownerId: user.id, // Always clawback from user, not org
-                  ownerType: CreditHolderType.User,
-                  credits: originalTx.credits,
-                  reason: 'dispute_clawback',
-                  stripeDisputeId: dispute.id,
-                  description: `Dispute clawback: Stripe dispute ${dispute.id}`,
-                },
-                {
-                  db: { creditTransactions: creditTransactionRepository },
-                  creditHolderMethods: userRepository,
-                }
-              );
-              req.logger.info(`Clawback of ${originalTx.credits} credits completed for dispute ${dispute.id}`);
-
-              // Kill the matching pack lot's remaining balance. No-op if no lot
-              // matches (e.g. a subscription grant stamped with an invoice-id ref).
-              await creditService.clawbackCreditLotsByStripeRef(paymentIntentId, 'full', originalTx.credits, {
-                db: { creditLots: creditLotRepository },
-              });
-            } catch (err: unknown) {
-              // Duplicate key (code 11000) = already processed - idempotent no-op
-              if (err && typeof err === 'object' && 'code' in err && (err as { code: number }).code === 11000) {
-                req.logger.info(`Dispute ${dispute.id} already processed (duplicate key), skipping clawback`);
-              } else {
-                throw err;
-              }
-            }
-          }
+        try {
+          await reverseSubscriptionRewardForRefund({
+            paymentIntentId,
+            amountRefunded: dispute.amount,
+            amountCaptured: dispute.amount,
+            reason: 'disputed',
+          });
+        } catch (err: unknown) {
+          reversalError = err;
         }
       }
 
-      // Fall back to customer-ID lookup if payment intent didn't resolve a user
-      if (!user) {
-        const chargeId = typeof dispute.charge === 'string' ? dispute.charge : dispute.charge?.id;
-        if (chargeId) {
-          const charge = await stripe.charges.retrieve(chargeId);
-          const customerId = typeof charge.customer === 'string' ? charge.customer : charge.customer?.id;
-          if (customerId) {
-            user = await userRepository.findByStripeCustomerId(customerId);
-            if (!user) {
-              // Check if it belongs to an org (subscription dispute)
-              const org = await organizationRepository.findByStripeCustomerId(customerId);
-              if (org) {
-                await postMessageToSlack(
-                  `\u26A0\uFE0F *Stripe Dispute (Subscription/Org)* \u2014 dispute ${dispute.id}\n*Organization:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.Organization, ownerId: org.id })}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nNo automatic clawback for org subscription disputes. Admin action required.`
+      let payerError: unknown;
+      disputePayer: try {
+        if (paymentIntentId) {
+          const originalTx = await creditTransactionRepository.findByPaymentIntentId(paymentIntentId);
+          if (originalTx) {
+            user = await userRepository.findById(originalTx.ownerId);
+            if (user) {
+              // Clawback the disputed credits (idempotent via stripeDisputeId unique index)
+              try {
+                await creditService.subtractCredits(
+                  {
+                    type: 'generic_deduct',
+                    ownerId: user.id, // Always clawback from user, not org
+                    ownerType: CreditHolderType.User,
+                    credits: originalTx.credits,
+                    reason: 'dispute_clawback',
+                    stripeDisputeId: dispute.id,
+                    description: `Dispute clawback: Stripe dispute ${dispute.id}`,
+                  },
+                  {
+                    db: { creditTransactions: creditTransactionRepository },
+                    creditHolderMethods: userRepository,
+                  }
                 );
-                req.logger.warn(`Dispute ${dispute.id} linked to org ${org.id}, manual review needed`);
-                break;
+                req.logger.info(`Clawback of ${originalTx.credits} credits completed for dispute ${dispute.id}`);
+
+                // Kill the matching pack lot's remaining balance. No-op if no lot
+                // matches (e.g. a subscription grant stamped with an invoice-id ref).
+                await creditService.clawbackCreditLotsByStripeRef(paymentIntentId, 'full', originalTx.credits, {
+                  db: { creditLots: creditLotRepository },
+                });
+              } catch (err: unknown) {
+                // Duplicate key (code 11000) = already processed - idempotent no-op
+                if (err && typeof err === 'object' && 'code' in err && (err as { code: number }).code === 11000) {
+                  req.logger.info(`Dispute ${dispute.id} already processed (duplicate key), skipping clawback`);
+                } else {
+                  throw err;
+                }
               }
             }
           }
         }
+
+        // Fall back to customer-ID lookup if payment intent didn't resolve a user
+        if (!user) {
+          const chargeId = typeof dispute.charge === 'string' ? dispute.charge : dispute.charge?.id;
+          if (chargeId) {
+            const charge = await stripe.charges.retrieve(chargeId);
+            const customerId = typeof charge.customer === 'string' ? charge.customer : charge.customer?.id;
+            if (customerId) {
+              user = await userRepository.findByStripeCustomerId(customerId);
+              if (!user) {
+                // Check if it belongs to an org (subscription dispute)
+                const org = await organizationRepository.findByStripeCustomerId(customerId);
+                if (org) {
+                  await postMessageToSlack(
+                    `\u26A0\uFE0F *Stripe Dispute (Subscription/Org)* \u2014 dispute ${dispute.id}\n*Organization:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.Organization, ownerId: org.id })}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nNo automatic clawback for org subscription disputes. Admin action required.`
+                  );
+                  req.logger.warn(`Dispute ${dispute.id} linked to org ${org.id}, manual review needed`);
+                  break disputePayer;
+                }
+              }
+            }
+          }
+        }
+
+        const disputeRadarLine = await radarRiskLine(dispute.charge);
+        const disputeRadarSuffix = disputeRadarLine ? `\n${disputeRadarLine}` : '';
+
+        if (user) {
+          const { deactivatedKeys } = await userService.flagDisputePending(user, {
+            db: {
+              users: userRepository,
+              userApiKeys: userApiKeyRepository,
+              realtimeConnections: realtimeConnectionRepository,
+            },
+          });
+          // Cancels a signup bonus still held for this payment to settle.
+          await forfeitSignupUnlock(user.id, 'dispute', req.logger);
+
+          await postMessageToSlack(
+            `\u{1F6A8} *Stripe Dispute Created* \u2014 dispute ${dispute.id}\n*User:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.User, ownerId: user.id })}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nAccount flagged, credits clawback initiated${deactivatedKeys ? ', API keys deactivated' : ''}.${disputeRadarSuffix}`
+          );
+          req.logger.info(`User ${user.id} flagged disputePending=true for dispute ${dispute.id}`);
+          // Never throws; keyed by the dispute so a redelivery alerts once.
+          await propagateAccountRisk(
+            { sourceUserId: user.id, trigger: 'dispute', key: `dispute:${dispute.id}:linked` },
+            req.logger
+          );
+        } else {
+          await postMessageToSlack(
+            `\u26A0\uFE0F *Stripe Dispute Created \u2014 No User Found* \u2014 dispute ${dispute.id}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nCould not identify user. Manual review required.${disputeRadarSuffix}`
+          );
+          req.logger.warn(`Could not find user for dispute ${dispute.id}`);
+        }
+      } catch (err: unknown) {
+        payerError = err;
       }
-
-      const disputeRadarLine = await radarRiskLine(dispute.charge);
-      const disputeRadarSuffix = disputeRadarLine ? `\n${disputeRadarLine}` : '';
-
-      if (user) {
-        const { deactivatedKeys } = await userService.flagDisputePending(user, {
-          db: {
-            users: userRepository,
-            userApiKeys: userApiKeyRepository,
-            realtimeConnections: realtimeConnectionRepository,
-          },
-        });
-        // Cancels a signup bonus still held for this payment to settle.
-        await forfeitSignupUnlock(user.id, 'dispute', req.logger);
-
-        await postMessageToSlack(
-          `\u{1F6A8} *Stripe Dispute Created* \u2014 dispute ${dispute.id}\n*User:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.User, ownerId: user.id })}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nAccount flagged, credits clawback initiated${deactivatedKeys ? ', API keys deactivated' : ''}.${disputeRadarSuffix}`
-        );
-        req.logger.info(`User ${user.id} flagged disputePending=true for dispute ${dispute.id}`);
-        // Never throws; keyed by the dispute so a redelivery alerts once.
-        await propagateAccountRisk(
-          { sourceUserId: user.id, trigger: 'dispute', key: `dispute:${dispute.id}:linked` },
-          req.logger
-        );
-      } else {
-        await postMessageToSlack(
-          `\u26A0\uFE0F *Stripe Dispute Created \u2014 No User Found* \u2014 dispute ${dispute.id}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nCould not identify user. Manual review required.${disputeRadarSuffix}`
-        );
-        req.logger.warn(`Could not find user for dispute ${dispute.id}`);
-      }
-
+      if (payerError ?? reversalError) throw payerError ?? reversalError;
       break;
     }
 
@@ -622,61 +635,72 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         typeof charge.payment_intent === 'string' ? charge.payment_intent : charge.payment_intent?.id;
 
       // Runs before the refund-list guard: newer webhook API versions omit charge.refunds, and the reward only needs the cumulative amount.
+      // Deferred so a failing reversal cannot block the idempotent payer-side steps; rethrown below so Stripe redelivers.
+      let reversalError: unknown;
       if (refundPaymentIntentId) {
-        await reverseSubscriptionRewardForRefund({
-          paymentIntentId: refundPaymentIntentId,
-          amountRefunded: charge.amount_refunded,
-          amountCaptured: charge.amount_captured || charge.amount,
-        });
-      }
-
-      const refunds = charge.refunds?.data ?? [];
-      if (refunds.length === 0) {
-        req.logger.debug(`charge.refunded has no refund objects, skipping`);
-        break;
-      }
-
-      // Before the purchase lookup: a refunded subscription charge has no credit purchase row.
-      await forfeitHeldUnlockForRefund(charge, req.logger);
-
-      if (!refundPaymentIntentId) {
-        req.logger.debug(`charge.refunded has no payment_intent, skipping`);
-        break;
-      }
-
-      const originalTx = await creditTransactionRepository.findByPaymentIntentId(refundPaymentIntentId);
-      if (!originalTx) {
-        req.logger.debug(`No credit purchase found for refunded charge ${charge.id}, skipping`);
-        break;
-      }
-
-      const user = await userRepository.findById(originalTx.ownerId);
-      if (!user) {
-        req.logger.warn(`User ${originalTx.ownerId} not found for refunded charge ${charge.id}`);
-        break;
-      }
-
-      // Each refund is clawed back independently; idempotent per refund (see clawbackRefundCredits).
-      // A refund the early fraud warning response issued was already clawed back there.
-      const originalAmount = charge.amount_captured || charge.amount;
-      for (const refund of refunds) {
-        const clawback = await clawbackRefundCredits({
-          userId: user.id,
-          paymentIntentId: refundPaymentIntentId,
-          purchasedCredits: originalTx.credits,
-          chargeAmount: originalAmount,
-          refund,
-        });
-        if (!clawback) {
-          req.logger.info(`Refund ${refund.id} already processed or nothing to claw back, skipping`);
-          continue;
+        try {
+          await reverseSubscriptionRewardForRefund({
+            paymentIntentId: refundPaymentIntentId,
+            amountRefunded: charge.amount_refunded,
+            amountCaptured: charge.amount_captured || charge.amount,
+          });
+        } catch (err: unknown) {
+          reversalError = err;
         }
-        req.logger.info(`Clawback of ${clawback.credits} credits completed for refund ${refund.id}`);
-        await postMessageToSlack(
-          `\u2139\uFE0F *Stripe Refund* \u2014 refund ${refund.id}\n*User:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.User, ownerId: user.id })}\n*Refund Amount:* $${(refund.amount / 100).toFixed(2)}\n*Credits Clawed Back:* ${clawback.credits} (${Math.round(clawback.ratio * 100)}% of purchase)`
-        );
       }
 
+      let payerError: unknown;
+      refundPayer: try {
+        const refunds = charge.refunds?.data ?? [];
+        if (refunds.length === 0) {
+          req.logger.debug(`charge.refunded has no refund objects, skipping`);
+          break refundPayer;
+        }
+
+        // Before the purchase lookup: a refunded subscription charge has no credit purchase row.
+        await forfeitHeldUnlockForRefund(charge, req.logger);
+
+        if (!refundPaymentIntentId) {
+          req.logger.debug(`charge.refunded has no payment_intent, skipping`);
+          break refundPayer;
+        }
+
+        const originalTx = await creditTransactionRepository.findByPaymentIntentId(refundPaymentIntentId);
+        if (!originalTx) {
+          req.logger.debug(`No credit purchase found for refunded charge ${charge.id}, skipping`);
+          break refundPayer;
+        }
+
+        const user = await userRepository.findById(originalTx.ownerId);
+        if (!user) {
+          req.logger.warn(`User ${originalTx.ownerId} not found for refunded charge ${charge.id}`);
+          break refundPayer;
+        }
+
+        // Each refund is clawed back independently; idempotent per refund (see clawbackRefundCredits).
+        // A refund the early fraud warning response issued was already clawed back there.
+        const originalAmount = charge.amount_captured || charge.amount;
+        for (const refund of refunds) {
+          const clawback = await clawbackRefundCredits({
+            userId: user.id,
+            paymentIntentId: refundPaymentIntentId,
+            purchasedCredits: originalTx.credits,
+            chargeAmount: originalAmount,
+            refund,
+          });
+          if (!clawback) {
+            req.logger.info(`Refund ${refund.id} already processed or nothing to claw back, skipping`);
+            continue;
+          }
+          req.logger.info(`Clawback of ${clawback.credits} credits completed for refund ${refund.id}`);
+          await postMessageToSlack(
+            `\u2139\uFE0F *Stripe Refund* \u2014 refund ${refund.id}\n*User:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.User, ownerId: user.id })}\n*Refund Amount:* $${(refund.amount / 100).toFixed(2)}\n*Credits Clawed Back:* ${clawback.credits} (${Math.round(clawback.ratio * 100)}% of purchase)`
+          );
+        }
+      } catch (err: unknown) {
+        payerError = err;
+      }
+      if (payerError ?? reversalError) throw payerError ?? reversalError;
       break;
     }
 

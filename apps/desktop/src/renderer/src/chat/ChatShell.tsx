@@ -223,6 +223,34 @@ function renderOrchestratorView(view: OrchestratorViewId, props: OrchestratorVie
   }
 }
 
+/** Key of the Add folder alert for a failure before any chat existed. */
+const NO_CHAT = '';
+
+/** How long Add folder waits on the first-run chat before it makes its own, so a hung seed cannot block it (ms). */
+const SEED_WAIT_MS = 3000;
+
+/** What `promise` resolves to, or null once it rejects or `ms` pass without it settling. */
+function settledWithin<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>(resolve => {
+    timer = setTimeout(() => resolve(null), ms);
+  });
+  return Promise.race([promise.catch(() => null), timeout]).finally(() => clearTimeout(timer));
+}
+
+/** An Add folder failure, or the warning that came back from a share into a chat that was not open. */
+interface AddFolderAlert {
+  text: string;
+  color: 'danger' | 'warning';
+}
+
+/** A danger alert: `lead`, plus the main-side reason with Electron's IPC wrapper stripped, when there is one. */
+function failure(lead: string, error: unknown): AddFolderAlert {
+  const reason = error instanceof Error ? error.message : String(error);
+  const detail = reason.replace(/^Error invoking remote method '[^']*': (?:Error(?:: |$))?/, '');
+  return { text: detail ? `${lead}: ${detail}` : lead, color: 'danger' };
+}
+
 export function ChatShell({
   auth,
   account,
@@ -273,7 +301,17 @@ export function ChatShell({
   const settling = loading || restoring;
   const [importedInline] = useImportedInline();
 
-  const conversation = useConversation(activeId, apply);
+  const [addFolderAlerts, setAddFolderAlerts] = useState<Record<string, AddFolderAlert>>({});
+  const clearAddFolderAlert = useCallback(
+    (chatId: string) =>
+      setAddFolderAlerts(current => {
+        if (!(chatId in current)) return current;
+        const { [chatId]: _dropped, ...rest } = current;
+        return rest;
+      }),
+    []
+  );
+  const conversation = useConversation(activeId, apply, clearAddFolderAlert);
   // The header follows the sidebar's copy of the title, so a rename from any row - including
   // its optimistic title and any rollback - shows above the thread too.
   const activeSummary = useMemo(() => sessions.find(session => session.id === activeId), [sessions, activeId]);
@@ -808,6 +846,154 @@ export function ChatShell({
     if (created) setActiveId(created);
   }, [startSession, markSessionStart]);
 
+  /**
+   * The Chat composer's Add folder. With no conversation open it picks first, so a dismissed picker
+   * creates nothing, then shares by id, open or not, into the first-run chat still being made or one it creates.
+   */
+  const shareFolderTo = conversation.addContextDirectoryTo;
+  const addingFolder = useRef(false);
+  // A Code session can be open in Chat mode for one commit, until the reselect effect replaces it.
+  const openChatId = useRef(activeId);
+  openChatId.current = activeSummary?.mode === 'chat' ? activeId : null;
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
+  // The open chat's local count includes a message still being sent, which the summary count lacks until it lands.
+  const openMessageCount = useRef(0);
+  openMessageCount.current = conversation.session?.id === activeId ? conversation.messages.length : 0;
+  const unmounted = useRef(false);
+  useEffect(() => {
+    unmounted.current = false;
+    return () => {
+      unmounted.current = true;
+    };
+  }, []);
+  // The first-run Chat seed's create while it is in flight, so Add folder joins it instead of making a second chat.
+  const seedInFlight = useRef<Promise<string | null> | null>(null);
+  const deletedChats = useRef(new Set<string>());
+  const shareInto = useCallback(async (chatId: string, share: () => Promise<string | undefined>) => {
+    try {
+      const warning = await share();
+      if (warning) setAddFolderAlerts(current => ({ ...current, [chatId]: { text: warning, color: 'warning' } }));
+    } catch (error) {
+      setAddFolderAlerts(current => ({
+        ...current,
+        [chatId]: failure('Desktop could not share the folder, so the folder was not added', error),
+      }));
+    }
+  }, []);
+  const addFolder = useCallback(async () => {
+    clearAddFolderAlert(activeId ?? NO_CHAT);
+    if (activeId) {
+      await shareInto(activeId, () => shareFolderTo(activeId));
+      return;
+    }
+    if (addingFolder.current) return;
+    addingFolder.current = true;
+    // Taken before the pick: the ref clears as the seed settles, which can be before the render that opens its chat.
+    const seedAtClick = seedInFlight.current;
+    let picked = false;
+    try {
+      const path = await window.b4m.chat.pickProjectDirectory();
+      picked = true;
+      if (!path || modeRef.current !== 'chat') return;
+      // The first-run seed can land while the picker is open; share into that chat instead of making another.
+      const open = openChatId.current;
+      if (open && !deletedChats.current.has(open)) {
+        await shareInto(open, () => shareFolderTo(open, path));
+        return;
+      }
+      const seeded = seedAtClick && (await settledWithin(seedAtClick, SEED_WAIT_MS));
+      const joined = seeded && !deletedChats.current.has(seeded) ? seeded : null;
+      if (unmounted.current || (!joined && modeRef.current !== 'chat')) return;
+      // A chat the user opened during the wait cannot be the seed, which has not landed.
+      const openNow = openChatId.current;
+      if (!joined && openNow && !deletedChats.current.has(openNow)) {
+        await shareInto(openNow, () => shareFolderTo(openNow, path));
+        return;
+      }
+      // A seed that lands after the wait opens empty; the chat made here replaces it unless it has messages.
+      const late = { id: null as string | null };
+      if (seedAtClick && !seeded)
+        void seedAtClick.then(
+          id => (late.id = id),
+          () => undefined
+        );
+      if (!joined) markSessionStart('new');
+      let created: string;
+      try {
+        created = joined || (await create());
+      } catch (error) {
+        // The seed's own chain is longer than create()'s, so give a seed that landed in the same tick a turn to report.
+        const seed = late.id ?? (seedAtClick ? await settledWithin(seedAtClick, 0) : null);
+        if (
+          !unmounted.current &&
+          modeRef.current === 'chat' &&
+          seed &&
+          (openChatId.current ?? seed) === seed &&
+          !deletedChats.current.has(seed)
+        ) {
+          await shareInto(seed, () => shareFolderTo(seed, path));
+          return;
+        }
+        throw error;
+      }
+      if (unmounted.current) return;
+      const lateOpen = late.id && openChatId.current === late.id ? late.id : null;
+      const lateHasMessages =
+        lateOpen &&
+        ((sessionsRef.current.find(session => session.id === lateOpen)?.messageCount ?? 0) > 0 ||
+          openMessageCount.current > 0);
+      if (lateOpen && lateHasMessages) {
+        const removed = remove(created).then(
+          () => true,
+          () => false
+        );
+        await shareInto(lateOpen, () => shareFolderTo(lateOpen, path));
+        if ((await removed) || unmounted.current) return;
+        const warning = 'Desktop could not remove the empty conversation it made. Delete it from the sidebar.';
+        setAddFolderAlerts(current => {
+          const existing = current[lateOpen];
+          const joiner = existing && /[.!?]$/.test(existing.text) ? ' ' : '. ';
+          return {
+            ...current,
+            [lateOpen]: {
+              text: existing ? `${existing.text}${joiner}${warning}` : warning,
+              color: existing?.color ?? 'warning',
+            },
+          };
+        });
+        return;
+      }
+      void shareInto(created, () => shareFolderTo(created, path));
+      // Opened in Code mode, a chat would be remembered as the session to reopen there.
+      if (modeRef.current === 'chat')
+        setActiveId(current => (current === null || current === late.id ? created : current));
+    } catch (error) {
+      if (openChatId.current || modeRef.current !== 'chat') return;
+      setAddFolderAlerts(current => ({
+        ...current,
+        [NO_CHAT]: failure(
+          picked
+            ? 'Desktop could not start a conversation, so the folder was not added'
+            : 'Desktop could not open the folder picker, so the folder was not added',
+          error
+        ),
+      }));
+    } finally {
+      addingFolder.current = false;
+    }
+  }, [activeId, shareFolderTo, shareInto, clearAddFolderAlert, create, remove, markSessionStart]);
+  // A failure from before any chat existed retires when a chat opens or the mode switches; the rest stay with their chat.
+  useEffect(() => {
+    clearAddFolderAlert(NO_CHAT);
+  }, [mode, clearAddFolderAlert]);
+  useEffect(() => {
+    if (activeId) clearAddFolderAlert(NO_CHAT);
+  }, [activeId, clearAddFolderAlert]);
+  const addFolderAlert = addFolderAlerts[activeId ?? NO_CHAT];
+
   /** "Use in chat" on the Models screen: a new Chat conversation already on that model. */
   const [chatOnError, setChatOnError] = useState<string | null>(null);
   useEffect(() => {
@@ -900,9 +1086,20 @@ export function ChatShell({
   useEffect(() => {
     const empty = !sessions.some(session => session.mode === mode);
     if (!seedOnArrival(arrived.current, { loading: settling, mode, hasSessionInMode: !empty })) return;
-    void startSession().then(created => {
-      if (created) setActiveId(created);
-    });
+    const seeding = startSession();
+    if (mode === 'chat') seedInFlight.current = seeding;
+    void seeding
+      .then(
+        created => {
+          // A slow seed must not replace a chat the user opened or created while it was in flight, nor open in the other mode.
+          if (created && modeRef.current === mode) setActiveId(current => current ?? created);
+        },
+        // Failing leaves the empty pane, as firstRunSeed.ts describes; Add folder then makes its own chat.
+        () => undefined
+      )
+      .finally(() => {
+        if (seedInFlight.current === seeding) seedInFlight.current = null;
+      });
   }, [settling, sessions, mode, startSession]);
 
   /**
@@ -934,9 +1131,11 @@ export function ChatShell({
   const onDelete = useCallback(
     async (sessionId: string, removeWorktree: boolean) => {
       await remove(sessionId, removeWorktree);
+      deletedChats.current.add(sessionId);
+      clearAddFolderAlert(sessionId);
       setActiveId(current => (current === sessionId ? null : current));
     },
-    [remove]
+    [remove, clearAddFolderAlert]
   );
 
   const thread = opening ? (
@@ -1456,6 +1655,21 @@ export function ChatShell({
             </Box>
           )}
 
+          {addFolderAlert && (
+            <Box sx={contentColumnSx}>
+              <Alert
+                size="sm"
+                color={addFolderAlert.color}
+                variant="soft"
+                sx={{ cursor: 'pointer' }}
+                onClick={() => clearAddFolderAlert(activeId ?? NO_CHAT)}
+                data-testid={addFolderAlert.color === 'danger' ? 'chat-add-folder-error' : 'chat-add-folder-notice'}
+              >
+                {addFolderAlert.text}
+              </Alert>
+            </Box>
+          )}
+
           {codeError && (
             <Box sx={contentColumnSx}>
               <Alert
@@ -1543,6 +1757,13 @@ export function ChatShell({
             onStop={conversation.stop}
             onRunCommand={(name, args) => void conversation.runCommand(name, args)}
             onBrowseSkillMarket={() => openSkillMarket()}
+            // A Code session shares folders from its workspace controls instead. Both must say
+            // Chat: for a frame after a mode switch, the open session is still the old mode's.
+            addFolder={
+              mode === 'chat' && (conversation.session?.mode ?? 'chat') === 'chat'
+                ? { onClick: () => void addFolder(), disabled: opening }
+                : null
+            }
             sessionMode={conversation.session?.mode ?? 'chat'}
             suggestion={nextPrompt.suggestion}
             onSuggestionDismissed={nextPrompt.dismiss}
