@@ -43,7 +43,7 @@ const runner = vi.hoisted(() => ({
 }));
 vi.mock('@server/utils/loopRunner', () => ({
   ...runner,
-  isRefusal: (value: unknown) => !!value && typeof value === 'object' && 'status' in value && 'reason' in value,
+  isRefusal: (value: unknown) => !!value && typeof value === 'object' && 'refused' in value,
 }));
 
 currentModule.name = 'tickets';
@@ -97,7 +97,12 @@ describe('/api/loops/runner', () => {
   });
 
   it('answers a refused claim with its status and reason, and a good one with the claim', async () => {
-    runner.claimRunnerTicket.mockResolvedValueOnce({ status: 409, reason: 'claimed', error: 'Claimed already' });
+    runner.claimRunnerTicket.mockResolvedValueOnce({
+      refused: true,
+      status: 409,
+      reason: 'claimed',
+      error: 'Claimed already',
+    });
     const refused = await call('claim', 'post', { body: { ticketId: 't1' } });
     expect(refused._getStatusCode()).toBe(409);
     expect(refused._getJSONData()).toEqual({ error: 'Claimed already', reason: 'claimed' });
@@ -108,7 +113,12 @@ describe('/api/loops/runner', () => {
   });
 
   it('maps heartbeat, progress and complete, and answers a lost lease with 410', async () => {
-    runner.heartbeatRunnerRun.mockResolvedValue({ status: 410, reason: 'lease_lost', error: 'The lease lapsed' });
+    runner.heartbeatRunnerRun.mockResolvedValue({
+      refused: true,
+      status: 410,
+      reason: 'lease_lost',
+      error: 'The lease lapsed',
+    });
     const lost = await call('run', 'post', { query: { runId: 'r1', action: 'heartbeat' }, body: {} });
     expect(lost._getStatusCode()).toBe(410);
     expect(lost._getJSONData()).toEqual({ error: 'The lease lapsed', reason: 'lease_lost' });

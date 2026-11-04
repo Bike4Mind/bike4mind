@@ -1145,9 +1145,19 @@ const MAX_VIEWER_CONNECTIONS = 10;
 /**
  * A loop run paused at the confidence gate is parked by the loop scheduler and waits on its owner,
  * possibly for days, so the stale sweeps must not abort it (see `reconcileLoop` in `loopScheduler.ts`).
+ * A desktop loop run is ended by its lease instead (`releaseExpiredRunnerLeases`), which also reopens its ticket.
  */
 const NOT_LOOP_PARKED = {
-  $nor: [{ status: 'paused', loopId: { $exists: true }, pendingGate: { $exists: true } }],
+  $nor: [{ status: 'paused', loopId: { $exists: true }, pendingGate: { $exists: true } }, { runner: 'desktop' }],
+};
+
+/** A run's credits, or its `creditCap` while it is still in flight and that is higher (a budget reservation). */
+const RESERVED_CREDITS = {
+  $cond: [
+    { $in: ['$status', [...ACTIVE_AGENT_EXECUTION_STATUSES]] },
+    { $max: ['$totalCreditsUsed', '$creditCap'] },
+    '$totalCreditsUsed',
+  ],
 };
 
 const activeRunnerRun = (id: string, userId: string) => ({
@@ -1214,9 +1224,15 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * background children carry no loopId, so they are not counted. `sessionIds` are the loops' notebooks:
    * they narrow the scan to the {sessionId, status} index, while `loopId` leaves out any chat a user starts
    * by hand in a loop's notebook. With `since`, only runs created since then count, so a run that crosses
-   * midnight counts toward the day it started.
+   * midnight counts toward the day it started. `reserveInFlight` as in `sumLoopCreditsForUser`: a loop's
+   * desktop runs run in parallel with each other and with its cloud run.
    */
-  async sumCreditsByLoop(loopIds: string[], sessionIds: string[], since?: Date): Promise<Record<string, number>> {
+  async sumCreditsByLoop(
+    loopIds: string[],
+    sessionIds: string[],
+    since?: Date,
+    reserveInFlight = false
+  ): Promise<Record<string, number>> {
     if (loopIds.length === 0) return {};
     const rows = await this.model.aggregate<{ _id: string; credits: number }>([
       {
@@ -1227,7 +1243,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
           ...(since && { createdAt: { $gte: since } }),
         },
       },
-      { $group: { _id: '$loopId', credits: { $sum: '$totalCreditsUsed' } } },
+      { $group: { _id: '$loopId', credits: { $sum: reserveInFlight ? RESERVED_CREDITS : '$totalCreditsUsed' } } },
     ]);
     return Object.fromEntries(rows.map(row => [row._id, row.credits]));
   }
@@ -1238,15 +1254,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * that is higher, so parallel capped runs cannot each be admitted against the same remaining budget.
    */
   async sumLoopCreditsForUser(userId: string, since: Date, reserveInFlight = false): Promise<number> {
-    const credits = reserveInFlight
-      ? {
-          $cond: [
-            { $in: ['$status', [...ACTIVE_AGENT_EXECUTION_STATUSES]] },
-            { $max: ['$totalCreditsUsed', '$creditCap'] },
-            '$totalCreditsUsed',
-          ],
-        }
-      : '$totalCreditsUsed';
+    const credits = reserveInFlight ? RESERVED_CREDITS : '$totalCreditsUsed';
     const [row] = await this.model.aggregate<{ credits: number }>([
       { $match: { userId, createdAt: { $gte: since }, loopId: { $exists: true }, parentExecutionId: null } },
       { $group: { _id: null, credits: { $sum: credits } } },
@@ -1338,23 +1346,24 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
 
   /**
    * Appends a desktop run's progress steps (the last 500 kept) and renews its lease, conditional on
-   * `checkpoint.iteration` still being `expectedIteration` so two concurrent posts never interleave.
-   * False when the run is gone, its lease lapsed, or another post won.
+   * `checkpoint.seq` (bumped by every append) still being `expected.seq`, so two concurrent posts never
+   * interleave. False when the run is gone, its lease lapsed, or another post won.
    */
   async appendRunnerSteps(
     id: string,
     userId: string,
     now: Date,
-    expected: { iteration: number },
+    expected: { seq: number },
     next: { steps: unknown[]; iteration: number; pendingText: string; leaseUntil: Date }
   ): Promise<boolean> {
     const result = await this.model.updateOne(
       {
         ...activeRunnerRun(id, userId),
         runnerLeaseUntil: { $gte: now },
-        'checkpoint.iteration': expected.iteration,
+        'checkpoint.seq': expected.seq,
       },
       {
+        $inc: { 'checkpoint.seq': 1 },
         $push: { 'checkpoint.steps': { $each: next.steps, $slice: -500 } },
         $set: {
           'checkpoint.iteration': next.iteration,
@@ -1366,10 +1375,13 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     return result.modifiedCount > 0;
   }
 
-  /** Tallies a desktop run's completion credits for its loop budgets; the user was already billed for them. */
+  /**
+   * Tallies a desktop run's completion credits for its loop budgets; the user was already billed for them.
+   * Any status: a call still streaming when its run ended still spent them.
+   */
   async addRunnerCredits(id: string, userId: string, credits: number): Promise<IAgentExecution | null> {
     const doc = await this.model.findOneAndUpdate(
-      activeRunnerRun(id, userId),
+      { _id: id, userId, runner: 'desktop' },
       { $inc: { totalCreditsUsed: credits } },
       { new: true }
     );

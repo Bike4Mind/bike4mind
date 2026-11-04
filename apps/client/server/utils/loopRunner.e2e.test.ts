@@ -260,6 +260,23 @@ describe('claimRunnerTicket', () => {
     expect(await AgentExecution.countDocuments({ runner: 'desktop' })).toBe(0);
   });
 
+  it("reserves an in-flight desktop run's cap against the loop budget", async () => {
+    const loop = await createLoop({ budgetCreditsPerDay: 10 });
+    const first = await claim((await createTicket(loop.id)).id);
+    expect((await runOf(first.runId)).creditCap).toBeGreaterThan(0);
+
+    expect(await claimRunnerTicket(USER, (await createTicket(loop.id)).id, NOW, logger)).toMatchObject({ status: 409 });
+  });
+
+  it('releases the ticket and ends the run when creating the run fails', async () => {
+    const loop = await createLoop();
+    const ticket = await createTicket(loop.id);
+    vi.spyOn(agentExecutionRepository, 'createRunnerRun').mockRejectedValueOnce(new Error('timeout'));
+
+    await expect(claimRunnerTicket(USER, ticket.id, NOW, logger)).rejects.toThrow('timeout');
+    expect(await ticketOf(ticket.id)).toMatchObject({ status: 'open', runCount: 0 });
+  });
+
   it('blocks a ticket that used up its runs', async () => {
     const loop = await createLoop();
     const ticket = await createTicket(loop.id, { runCount: 9 });
@@ -290,6 +307,18 @@ describe('heartbeat and progress', () => {
     expect(await ticketOf(ticket.id)).toMatchObject({ status: 'open', runCount: 0 });
     expect((await loopOf(loop.id)).statusReason).toBe('Last desktop run stopped at its credit cap (3 credits)');
     expect(await heartbeatRunnerRun(USER, runId, later, logger)).toMatchObject({ status: 410, reason: 'run_ended' });
+  });
+
+  it('ends a run stopped from the web run view and blocks its ticket, as a cloud abort does', async () => {
+    const loop = await createLoop();
+    const ticket = await createTicket(loop.id);
+    const { runId } = await claim(ticket.id);
+    await agentExecutionRepository.setAbortFlag(runId);
+
+    expect(await resolveLoopRunTag(runId, USER, false, logger)).toBeUndefined();
+    expect(await heartbeatRunnerRun(USER, runId, NOW, logger)).toMatchObject({ status: 410, reason: 'aborted' });
+    expect(await runOf(runId)).toMatchObject({ status: 'aborted' });
+    expect(await ticketOf(ticket.id)).toMatchObject({ status: 'blocked', statusReason: 'Run aborted' });
   });
 
   it('returns 410 once the lease lapsed', async () => {
@@ -477,6 +506,12 @@ describe('resolveLoopRunTag', () => {
     expect(await agentExecutionRepository.sumCreditsByLoop([loop.id], ['session-1'], today)).toEqual({
       [loop.id]: 2.5,
     });
+  });
+
+  it('ignores a tag it cannot look up rather than failing the call', async () => {
+    vi.spyOn(agentExecutionRepository, 'findRunnerRun').mockRejectedValueOnce(new Error('db down'));
+
+    expect(await resolveLoopRunTag(new mongoose.Types.ObjectId().toString(), USER, false, logger)).toBeUndefined();
   });
 
   it('refuses a call for a run at its credit cap as out of credits', async () => {

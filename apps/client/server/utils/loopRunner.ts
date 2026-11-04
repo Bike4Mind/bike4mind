@@ -21,6 +21,7 @@ import {
   type RunnerClaim,
   type RunnerOutcome,
   type RunnerTicket,
+  type WorkItemPatch,
 } from '@bike4mind/common';
 import {
   adminSettingsRepository,
@@ -46,14 +47,15 @@ export const RUNNER_SWEEP_LIMIT = 100;
 const REASON_MAX = 1000;
 
 /** A refusal the routes answer as `{ error, reason }`: 409 not claimable, 410 lease or run gone, 404 not yours. */
-export type RunnerRefusal = { status: 404 | 409 | 410; reason: string; error: string };
+export type RunnerRefusal = { refused: true; status: 404 | 409 | 410; reason: string; error: string };
 const refuse = (status: RunnerRefusal['status'], reason: string, error: string): RunnerRefusal => ({
+  refused: true,
   status,
   reason,
   error,
 });
 export const isRefusal = (value: unknown): value is RunnerRefusal =>
-  !!value && typeof value === 'object' && 'status' in value && 'reason' in value;
+  !!value && typeof value === 'object' && (value as { refused?: unknown }).refused === true;
 
 const ACTIVE = new Set(['pending', 'running', 'continuing']);
 const isLive = (run: IAgentExecution) => ACTIVE.has(run.status);
@@ -150,6 +152,7 @@ export async function claimRunnerTicket(
     return refuse(409, 'lanes_full', `You have ${MAX_DESKTOP_RUNS_PER_USER} desktop runs active`);
   }
 
+  const org = loop.organizationId ? await organizationRepository.findById(loop.organizationId) : null;
   const runId = new Types.ObjectId().toString();
   const claimed = await workItemRepository.claimForRunner(ticket.id, userId, loop.id, stages, runId);
   if (!claimed) return refuse(409, 'claimed', 'The ticket was claimed by another run');
@@ -174,10 +177,9 @@ export async function claimRunnerTicket(
       childExecutionIds: [],
       loopId: loop.id,
       ...(admitted.creditCap !== undefined && { creditCap: admitted.creditCap }),
-      checkpoint: { steps: [], iteration: 0, pendingText: '' },
+      checkpoint: { steps: [], iteration: 0, pendingText: '', seq: 0 },
       runnerLeaseUntil: leaseUntil,
     });
-    const org = loop.organizationId ? await organizationRepository.findById(loop.organizationId) : null;
     logger.info(`[Loops] Desktop run ${runId} claimed ticket ${ticket.id} of loop ${loop.id}`);
     return {
       ticket: runnerTicket(loop, claimed),
@@ -198,9 +200,11 @@ export async function claimRunnerTicket(
       },
     };
   } catch (error) {
-    await workItemRepository
-      .foldTicketRun(ticket.id, runId, { status: 'open', executionId: null }, true)
-      .catch(releaseError => logger.warn(`[Loops] Could not release ticket ${ticket.id}`, { releaseError }));
+    // The create may have landed before it threw (a timeout), so its run is ended too.
+    await Promise.all([
+      agentExecutionRepository.finishRunnerRun(runId, userId, { status: 'failed' }),
+      workItemRepository.foldTicketRun(ticket.id, runId, { status: 'open', executionId: null }, true),
+    ]).catch(releaseError => logger.warn(`[Loops] Could not release ticket ${ticket.id}`, { releaseError }));
     throw error;
   }
 }
@@ -225,11 +229,18 @@ async function loopPrompt(loop: ILoop, ticket: IWorkItem, stage: Omit<ILoopStage
   );
 }
 
-/** The caller's desktop run while it is still active; a refusal otherwise. Folds a run at its credit cap. */
+/**
+ * The caller's desktop run while it is still active; a refusal otherwise. Folds a run stopped from the web run
+ * view (no executor polls its abort flag) and one at its credit cap.
+ */
 async function liveRun(userId: string, runId: string, logger: Logger): Promise<IAgentExecution | RunnerRefusal> {
   const run = await agentExecutionRepository.findRunnerRun(runId, userId);
   if (!run) return refuse(404, 'not_found', 'Run not found');
   if (!isLive(run)) return refuse(410, 'run_ended', 'The run is no longer active');
+  if (run.abortedAt) {
+    await stopAborted(run, logger);
+    return refuse(410, 'aborted', 'The run was stopped');
+  }
   if (run.creditCap !== undefined && run.totalCreditsUsed >= run.creditCap) {
     await stopAtCreditCap(run, logger);
     return refuse(410, 'credit_cap', 'The run reached its credit cap');
@@ -240,20 +251,37 @@ async function liveRun(userId: string, runId: string, logger: Logger): Promise<I
 /** As the scheduler folds a cloud run stopped at its cap: the ticket reopens uncounted and the loop says why. */
 async function stopAtCreditCap(run: IAgentExecution, logger: Logger): Promise<void> {
   const cap = Math.round((run.creditCap ?? 0) * 100) / 100;
+  await foldRunTicket(run.id, { status: 'open', executionId: null }, true);
   const stopped = await agentExecutionRepository.finishRunnerRun(run.id, run.userId, {
     status: 'failed',
     failureReason: 'credit_cap',
     error: { message: `The run reached its credit cap (${cap} credits)`, callerSafe: true },
   });
   if (!stopped) return;
-  const ticket = await workItemRepository.findByExecutionId(run.id);
-  if (ticket) await workItemRepository.foldTicketRun(ticket.id, run.id, { status: 'open', executionId: null }, true);
   if (run.loopId) {
     await loopRepository.updateForUser(run.loopId, run.userId, {
       statusReason: `Last desktop run stopped at its credit cap (${cap} credits)`,
     });
   }
   await relayToViewers(run.id, [failedFrame(run.id, 'credit_cap', 'The run reached its credit cap')], logger);
+}
+
+/** As the scheduler folds an aborted cloud run: its ticket is blocked, so no runner picks it up again. */
+async function stopAborted(run: IAgentExecution, logger: Logger): Promise<void> {
+  await foldRunTicket(run.id, { status: 'blocked', statusReason: 'Run aborted' });
+  if (await agentExecutionRepository.finishRunnerRun(run.id, run.userId, { status: 'aborted' })) {
+    await relayToViewers(run.id, [failedFrame(run.id, 'aborted', 'Run aborted')], logger);
+  }
+}
+
+/**
+ * Folds the ticket still `in_progress` under a desktop run. Every end of a run folds its ticket BEFORE it
+ * ends the run: a crash in between leaves the run active, so a retry or the lease sweep folds again (a no-op
+ * on the ticket), where the other order would strand the ticket under an ended run no sweep looks at.
+ */
+async function foldRunTicket(runId: string, patch: WorkItemPatch, uncount?: boolean): Promise<void> {
+  const ticket = await workItemRepository.findByExecutionId(runId);
+  if (ticket?.status === 'in_progress') await workItemRepository.foldTicketRun(ticket.id, runId, patch, uncount);
 }
 
 /** Renews the lease of the caller's active desktop run. */
@@ -270,7 +298,7 @@ export async function heartbeatRunnerRun(
   return { leaseExpiresAt: new Date(renewed.runnerLeaseUntil).toISOString() };
 }
 
-type RunnerCheckpoint = { steps?: unknown[]; iteration?: number; pendingText?: string };
+type RunnerCheckpoint = { steps?: unknown[]; iteration?: number; pendingText?: string; seq?: number };
 
 /** A persisted progress step, in the executor's checkpoint step shape (AgentStep, b4m-core/agents/src/types.ts). */
 type RunnerStep = {
@@ -334,7 +362,8 @@ function parseInput(input: string): unknown {
 
 /**
  * Persists a batch of progress (renewing the lease) and relays it to the run's viewers. Concurrent posts
- * for one run are serialized by a compare-and-set on the iteration; a post that loses retries once.
+ * for one run are serialized by a compare-and-set on the checkpoint's append sequence; a post that loses
+ * retries once.
  */
 export async function progressRunnerRun(
   userId: string,
@@ -350,12 +379,18 @@ export async function progressRunnerRun(
     const checkpoint = (run.checkpoint ?? {}) as RunnerCheckpoint;
     const before = { iteration: checkpoint.iteration ?? 0, pendingText: checkpoint.pendingText ?? '' };
     const mapped = runnerFramesToSteps(run.id, frames, before, now.getTime());
-    const saved = await agentExecutionRepository.appendRunnerSteps(run.id, userId, now, before, {
-      steps: mapped.steps,
-      iteration: mapped.iteration,
-      pendingText: mapped.pendingText,
-      leaseUntil,
-    });
+    const saved = await agentExecutionRepository.appendRunnerSteps(
+      run.id,
+      userId,
+      now,
+      { seq: checkpoint.seq ?? 0 },
+      {
+        steps: mapped.steps,
+        iteration: mapped.iteration,
+        pendingText: mapped.pendingText,
+        leaseUntil,
+      }
+    );
     if (saved) {
       await relayToViewers(run.id, mapped.relay, logger);
       return { leaseExpiresAt: leaseUntil.toISOString() };
@@ -385,6 +420,21 @@ export async function completeRunnerRun(
 ): Promise<{ ok: true } | RunnerRefusal> {
   const run = await agentExecutionRepository.findRunnerRun(runId, userId);
   if (!run) return refuse(404, 'not_found', 'Run not found');
+  if (!isLive(run)) return refuse(410, 'run_ended', 'The run is no longer active');
+  const loop = run.loopId ? await loopRepository.findByIdAndUserId(run.loopId, userId) : null;
+  const ticket = await workItemRepository.findByExecutionId(run.id);
+  if (ticket?.status === 'in_progress' && loop) {
+    const patch: WorkItemPatch =
+      body.outcome === 'advanced'
+        ? advancePatch(loop, ticket)
+        : body.outcome === 'blocked'
+          ? { status: 'blocked', statusReason: clip(body.reason) }
+          : body.outcome === 'failed'
+            ? { status: 'blocked', statusReason: clip(`Desktop run failed: ${body.reason}`) }
+            : { status: 'open', executionId: null };
+    await workItemRepository.foldTicketRun(ticket.id, run.id, patch, body.outcome === 'released');
+  }
+
   const answer = body.outcome === 'advanced' || body.outcome === 'blocked' ? body.answer : undefined;
   const set: Partial<IAgentExecution> =
     body.outcome === 'failed'
@@ -396,22 +446,6 @@ export async function completeRunnerRun(
     !(await agentExecutionRepository.finishRunnerRun(run.id, userId, { ...set, runnerDurationMs: body.durationMs }))
   ) {
     return refuse(410, 'run_ended', 'The run is no longer active');
-  }
-
-  const [ticket, loop] = await Promise.all([
-    workItemRepository.findByExecutionId(run.id),
-    run.loopId ? loopRepository.findByIdAndUserId(run.loopId, userId) : null,
-  ]);
-  if (ticket && loop) {
-    const patch =
-      body.outcome === 'advanced'
-        ? advancePatch(loop, ticket)
-        : body.outcome === 'blocked'
-          ? { status: 'blocked' as const, statusReason: clip(body.reason) }
-          : body.outcome === 'failed'
-            ? { status: 'blocked' as const, statusReason: clip(`Desktop run failed: ${body.reason}`) }
-            : { status: 'open' as const, executionId: null };
-    await workItemRepository.foldTicketRun(ticket.id, run.id, patch, body.outcome === 'released');
   }
   if (loop && answer !== undefined) {
     await loopRepository.foldRunnerRun(
@@ -451,14 +485,13 @@ export async function releaseExpiredRunnerLeases(now: Date, logger: Logger): Pro
   for (const run of await agentExecutionRepository.listExpiredRunnerRuns(now, RUNNER_SWEEP_LIMIT)) {
     try {
       const message = 'The desktop runner stopped responding';
+      await foldRunTicket(run.id, { status: 'open', executionId: null });
       const failed = await agentExecutionRepository.finishRunnerRun(run.id, run.userId, {
         status: 'failed',
         failureReason: 'abandoned',
         error: { message, callerSafe: true },
       });
       if (!failed) continue;
-      const ticket = await workItemRepository.findByExecutionId(run.id);
-      if (ticket) await workItemRepository.foldTicketRun(ticket.id, run.id, { status: 'open', executionId: null });
       await relayToViewers(run.id, [failedFrame(run.id, 'abandoned', message)], logger);
       logger.info(`[Loops] Released desktop run ${run.id}: its lease lapsed`);
     } catch (error) {
@@ -480,9 +513,8 @@ export async function resolveLoopRunTag(
   logger: Logger
 ): Promise<string | undefined> {
   if (!runId || viaApiKey) return undefined;
-  if ((await adminSettingsRepository.getSettingsValue('EnableLoops')) !== true) return undefined;
-  const run = await agentExecutionRepository.findRunnerRun(runId, userId);
-  if (!run || !isLive(run)) {
+  const run = await activeTaggedRun(runId, userId, logger);
+  if (!run) {
     logger.info('[Loops] Ignoring a loop run tag that is not an active desktop run of the caller', { runId });
     return undefined;
   }
@@ -491,4 +523,16 @@ export async function resolveLoopRunTag(
     throw new HTTPError(422, 'This loop run reached its credit cap', { errorCode: 'insufficient_credits' });
   }
   return run.id;
+}
+
+/** A lookup failure counts as no tag: the tag only tallies budgets, so it must never fail the completion. */
+async function activeTaggedRun(runId: string, userId: string, logger: Logger): Promise<IAgentExecution | null> {
+  try {
+    if ((await adminSettingsRepository.getSettingsValue('EnableLoops')) !== true) return null;
+    const run = await agentExecutionRepository.findRunnerRun(runId, userId);
+    return run && isLive(run) && !run.abortedAt ? run : null;
+  } catch (error) {
+    logger.warn('[Loops] Could not resolve a loop run tag; ignoring it', { runId, error });
+    return null;
+  }
 }

@@ -2080,11 +2080,11 @@ describe('AgentExecutionRepository', () => {
       const base = makeBaseExecution({ status: 'running' });
       await agentExecutionRepository.createRunnerRun(id, {
         ...base,
-        checkpoint: { steps: [], iteration: 0 },
+        checkpoint: { steps: [], iteration: 0, seq: 0 },
         runnerLeaseUntil: LATER,
         ...overrides,
       });
-      return { id, userId: base.userId };
+      return { id, userId: (overrides.userId as string | undefined) ?? base.userId };
     };
 
     it('leaves desktop runs out of the interactive slot count and counts them on their own', async () => {
@@ -2112,13 +2112,16 @@ describe('AgentExecutionRepository', () => {
       expect(await agentExecutionRepository.finishRunnerRun(id, userId, { status: 'completed' })).toBe(false);
     });
 
-    it('appends steps under a compare-and-set on the iteration, keeping the last 500', async () => {
+    it('appends steps under a compare-and-set on the append sequence, keeping the last 500', async () => {
       const { id, userId } = await createRun();
       const steps = Array.from({ length: 501 }, (_, i) => ({ type: 'thought', content: `s${i}` }));
       const next = { steps, iteration: 1, pendingText: 'tail', leaseUntil: LATER };
+      // A text-only batch leaves the iteration where it was; the sequence still serializes it.
+      const textOnly = { steps: [], iteration: 0, pendingText: 'x', leaseUntil: LATER };
 
-      expect(await agentExecutionRepository.appendRunnerSteps(id, userId, NOW, { iteration: 0 }, next)).toBe(true);
-      expect(await agentExecutionRepository.appendRunnerSteps(id, userId, NOW, { iteration: 0 }, next)).toBe(false);
+      expect(await agentExecutionRepository.appendRunnerSteps(id, userId, NOW, { seq: 0 }, textOnly)).toBe(true);
+      expect(await agentExecutionRepository.appendRunnerSteps(id, userId, NOW, { seq: 0 }, textOnly)).toBe(false);
+      expect(await agentExecutionRepository.appendRunnerSteps(id, userId, NOW, { seq: 1 }, next)).toBe(true);
 
       const checkpoint = (await agentExecutionRepository.findRunnerRun(id, userId))?.checkpoint as {
         steps: Array<{ content: string }>;
@@ -2128,6 +2131,37 @@ describe('AgentExecutionRepository', () => {
       expect(checkpoint.steps).toHaveLength(500);
       expect(checkpoint.steps[0].content).toBe('s1');
       expect(checkpoint).toMatchObject({ iteration: 1, pendingText: 'tail' });
+    });
+
+    it('tallies credits on a run that already ended', async () => {
+      const { id, userId } = await createRun();
+      await agentExecutionRepository.finishRunnerRun(id, userId, { status: 'completed' });
+
+      expect((await agentExecutionRepository.addRunnerCredits(id, userId, 2))?.totalCreditsUsed).toBe(2);
+      expect(await agentExecutionRepository.addRunnerCredits(id, 'someone-else', 2)).toBeNull();
+    });
+
+    it("reserves an in-flight run's cap in a loop's daily sum only when asked", async () => {
+      const loopId = new mongoose.Types.ObjectId().toString();
+      const { userId } = await createRun({ loopId, sessionId: 'loop-notebook', creditCap: 10, totalCreditsUsed: 1 });
+      await createRun({ userId, loopId, sessionId: 'loop-notebook', status: 'completed', totalCreditsUsed: 3 });
+
+      expect(await agentExecutionRepository.sumCreditsByLoop([loopId], ['loop-notebook'])).toEqual({ [loopId]: 4 });
+      expect(await agentExecutionRepository.sumCreditsByLoop([loopId], ['loop-notebook'], undefined, true)).toEqual({
+        [loopId]: 13,
+      });
+    });
+
+    it('is never swept by the stale-execution sweeps (its lease ends it)', async () => {
+      const { id, userId } = await createRun();
+      await (agentExecutionRepository as unknown as { model: mongoose.Model<unknown> }).model.updateOne(
+        { _id: id },
+        { $set: { updatedAt: new Date(Date.now() - 24 * 3600_000) } },
+        { timestamps: false }
+      );
+
+      expect(await agentExecutionRepository.cleanupStaleActive(userId, 60_000)).toEqual([]);
+      expect(await agentExecutionRepository.findStaleActiveIds({ olderThan: new Date() })).not.toContain(id);
     });
 
     it('lists active runs whose lease lapsed', async () => {
