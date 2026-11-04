@@ -352,7 +352,8 @@ describe('customerSubscriptionUpdated — stage guard', () => {
         trialEndsAt: new Date(1700604800 * 1000),
         stripeCustomerId: 'cus_u',
         lastSyncedAt: expect.any(Date),
-      })
+      }),
+      undefined
     );
   });
 });
