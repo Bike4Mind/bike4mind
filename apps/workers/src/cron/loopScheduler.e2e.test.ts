@@ -1046,7 +1046,8 @@ describe('runLoopSchedulerTick - stage config', () => {
     expect(byLoop[todo.id].query).not.toContain('Instructions for the');
   });
 
-  it("prices admission on the ticket's stage model and releases the ticket when it does not admit", async () => {
+  it("prices admission on the ticket's stage model and leaves the ticket unclaimed when it does not admit", async () => {
+    const claim = vi.spyOn(workItemRepository, 'claimForRun');
     h.getAvailableModels.mockResolvedValue([{ id: 'claude-sonnet-5' }, { id: 'm2' }]);
     h.nextIterationCredits.mockImplementation((model: { id: string }) => (model.id === 'm2' ? 20 : 5));
     const stageConfig = [{ stage: 'review', model: 'm2' }];
@@ -1058,6 +1059,7 @@ describe('runLoopSchedulerTick - stage config', () => {
     expect(h.startAgentExecution).not.toHaveBeenCalled();
     expect(await reload(pricey.id)).toMatchObject({ status: 'paused', statusReason: BUDGET_PAUSE_REASON });
     expect(await ticketOf(ticket.id)).toMatchObject({ status: 'open', runCount: 0 });
+    expect(claim).not.toHaveBeenCalled();
 
     const cheap = await createLoop({
       stages: STAGES,
@@ -1073,6 +1075,35 @@ describe('runLoopSchedulerTick - stage config', () => {
     expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
     expect(h.startAgentExecution.mock.calls[0][0]).toMatchObject({ model: 'claude-sonnet-5', loopId: cheap.id });
     expect(h.startAgentExecution.mock.calls[0][0].creditCap).toBeGreaterThan(0);
+  });
+
+  it("keeps a credit pause until the balance covers the next ticket's stage model", async () => {
+    vi.mocked(adminSettingsRepository.getSettingsValue).mockImplementation(
+      (async (key: string) => key === 'EnableLoops' || key === 'enforceCredits') as never
+    );
+    h.getAvailableModels.mockResolvedValue([{ id: 'claude-sonnet-5' }, { id: 'm2' }]);
+    h.nextIterationCredits.mockImplementation((model: { id: string }) => (model.id === 'm2' ? 20 : 5));
+    vi.mocked(userRepository.findById).mockResolvedValue({ currentCredits: 10 } as never);
+    const loop = await createLoop({
+      stages: STAGES,
+      stageConfig: [{ stage: 'review', model: 'm2' }],
+      status: 'paused',
+      autoResume: 'credits',
+      lastExecutionId: 'exec-0',
+    });
+    await createTicket(loop.id, { stage: 'review' });
+
+    await runLoopSchedulerTick(NOW, logger);
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(await reload(loop.id)).toMatchObject({ status: 'paused', autoResume: 'credits' });
+    expect(await LoopEvent.find({ loopId: loop.id }).lean()).toHaveLength(0);
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
+
+    vi.mocked(userRepository.findById).mockResolvedValue({ currentCredits: 20 } as never);
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution.mock.calls[0][0]).toMatchObject({ model: 'm2', loopId: loop.id });
   });
 
   it('keeps the loop tools for a stage that sets only a model', async () => {
