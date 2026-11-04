@@ -137,6 +137,27 @@ describe('getAnalyticsOverview', () => {
     expect((liveSignups?.legit ?? 0) + (liveSignups?.suspected ?? 0) + (liveSignups?.unclassified ?? 0)).toBe(1);
   });
 
+  it("counts yesterday's users in today's WAU/MAU before the nightly rollup has written yesterday", async () => {
+    await seedEvent(users.a, '2026-06-10T10:00:00Z');
+    await rollupDay('2026-06-10', { now: NOW });
+    await seedEvent(users.b, '2026-06-14T22:00:00Z');
+    await seedEvent(users.admin, '2026-06-14T23:00:00Z');
+    await seedEvent(users.c, `${TODAY}T08:00:00Z`);
+    const today = (accounts: 'external' | 'internal' | 'all') =>
+      getAnalyticsOverview({ range: '7d', compare: 'off', signups: 'legit', accounts }, NOW).then(overview =>
+        overview.activeUsers.days.at(-1)
+      );
+
+    expect(await today('external')).toMatchObject({ day: TODAY, partial: true, dau: 1, wau: 3, mau: 3 });
+    expect(await today('internal')).toMatchObject({ dau: 0, wau: 1, mau: 1 });
+    expect(await today('all')).toMatchObject({ dau: 1, wau: 4, mau: 4 });
+
+    await rollupDay('2026-06-14', { now: NOW });
+    expect(await today('external')).toMatchObject({ dau: 1, wau: 3, mau: 3 });
+    expect(await today('internal')).toMatchObject({ dau: 0, wau: 1, mau: 1 });
+    expect(await today('all')).toMatchObject({ dau: 1, wau: 4, mau: 4 });
+  });
+
   it('leaves today as a gap when the live slice fails, keeping the rolled-up days', async () => {
     await seedEvent(users.a, '2026-06-10T10:00:00Z');
     await rollupDay('2026-06-10', { now: NOW });

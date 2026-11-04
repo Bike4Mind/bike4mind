@@ -1,4 +1,9 @@
-import { ADMIN_AUDIT_LOG_TAB_SLUG, ADMIN_FEEDBACK_TAB_SLUG, ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
+import {
+  ADMIN_AUDIT_LOG_TAB_SLUG,
+  ADMIN_FEEDBACK_TAB_SLUG,
+  ADMIN_MODERATION_INCIDENTS_TAB_SLUG,
+  ADMIN_USERS_TAB_SLUG,
+} from '@bike4mind/common';
 import { AdminTab } from './adminSidebarConfig';
 import {
   ADMIN_ANALYTICS_TAB_SLUG,
@@ -11,6 +16,7 @@ import {
   ADMIN_SHADOW_DETECTIONS_TAB_SLUG,
   ADMIN_SIGNUP_RISK_REVIEW_TAB_SLUG,
   ADMIN_SUBSCRIPTIONS_TAB_SLUG,
+  ADMIN_WAITLIST_TAB_SLUG,
   ADMIN_WEBHOOK_AUDIT_LOGS_TAB_SLUG,
 } from './adminTabParams';
 
@@ -36,7 +42,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.Documentation]: 'documentation',
   [AdminTab.WorldTime]: 'world-time',
   [AdminTab.Analysts]: 'analysts',
-  [AdminTab.Waitlist]: 'waitlist',
+  [AdminTab.Waitlist]: ADMIN_WAITLIST_TAB_SLUG,
   [AdminTab.Subscriptions]: ADMIN_SUBSCRIPTIONS_TAB_SLUG,
   [AdminTab.Revenue]: 'revenue',
   [AdminTab.Organizations]: ADMIN_ORGANIZATIONS_TAB_SLUG,
@@ -83,6 +89,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.SignupDomainHolds]: 'signup-domain-holds',
   [AdminTab.SignupRiskReview]: ADMIN_SIGNUP_RISK_REVIEW_TAB_SLUG,
   [AdminTab.ShadowDetections]: ADMIN_SHADOW_DETECTIONS_TAB_SLUG,
+  [AdminTab.ModerationIncidents]: ADMIN_MODERATION_INCIDENTS_TAB_SLUG,
   [AdminTab.HeldSignupGrants]: 'held-signup-grants',
   [AdminTab.EmbedKeys]: 'embed-keys',
   [AdminTab.ModelLifecycle]: 'model-lifecycle',

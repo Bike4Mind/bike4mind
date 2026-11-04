@@ -136,9 +136,9 @@ export function FolderPlusIcon() {
 }
 
 /** Which b4m backend answers. A server, not a laptop: this app's agent always runs here. */
-export function ServerIcon() {
+export function ServerIcon({ size }: { size?: number } = {}) {
   return (
-    <Glyph>
+    <Glyph size={size}>
       <rect x="2.5" y="3" width="11" height="4" rx="1.2" />
       <rect x="2.5" y="9" width="11" height="4" rx="1.2" />
       <path d="M5 5h.01M5 11h.01" />
@@ -316,6 +316,15 @@ export function GlobeIcon() {
       <circle cx="8" cy="8" r="5.5" />
       <path d="M2.5 8h11" />
       <path d="M8 2.5c1.7 1.6 2.6 3.5 2.6 5.5S9.7 12.4 8 13.5C6.3 11.9 5.4 10 5.4 8S6.3 3.6 8 2.5z" />
+    </Glyph>
+  );
+}
+
+export function PhoneIcon() {
+  return (
+    <Glyph>
+      <rect x="4.5" y="1.75" width="7" height="12.5" rx="1.75" />
+      <path d="M7 12h2" />
     </Glyph>
   );
 }
@@ -516,6 +525,24 @@ export function AskIcon() {
       <path d="M3.5 3h9a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H7l-3 2.5V11h-.5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />
       <path d="M6.6 5.9a1.45 1.45 0 1 1 2 1.35c-.4.2-.6.45-.6.9" />
       <path d="M8 9.4v.05" />
+    </Glyph>
+  );
+}
+
+export function DocumentIcon({ size }: { size?: number } = {}) {
+  return (
+    <Glyph size={size}>
+      <path d="M4 1.75h5l3 3v9.5H4z" />
+      <path d="M9 1.75v3h3M6 8h4M6 10.5h4" />
+    </Glyph>
+  );
+}
+
+/** A hosted model, as opposed to one on this computer or a saved server (ServerIcon). */
+export function CloudIcon({ size }: { size?: number } = {}) {
+  return (
+    <Glyph size={size}>
+      <path d="M4.75 12.5h6.75a2.75 2.75 0 0 0 .4-5.47 4 4 0 0 0-7.6-.9A3.2 3.2 0 0 0 4.75 12.5z" />
     </Glyph>
   );
 }

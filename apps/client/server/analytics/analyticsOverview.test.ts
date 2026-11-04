@@ -102,6 +102,17 @@ describe('resolveOverviewWindow', () => {
     );
   });
 
+  it('accepts a custom range of exactly 366 days, both ends included', () => {
+    const window = resolveOverviewWindow(query({ range: 'custom', from: '2025-06-01', to: '2026-06-01' }), NOW);
+    expect(window.completeDays).toBe(366);
+  });
+
+  it('rejects a custom range of 367 days, both ends included', () => {
+    expect(() => resolveOverviewWindow(query({ range: 'custom', from: '2025-05-31', to: '2026-06-01' }), NOW)).toThrow(
+      new AnalyticsOverviewQueryError('A custom range can cover at most 366 days.')
+    );
+  });
+
   it('has no complete days and no comparison when a custom range is only today', () => {
     const window = resolveOverviewWindow(query({ range: 'custom', from: '2026-06-15', to: '2026-06-15' }), NOW);
     expect(window).toMatchObject({ completeDays: 0, previous: null, partialDay: '2026-06-15' });
@@ -330,5 +341,13 @@ describe('buildOverview', () => {
       rowsFor('2026-06-09', '2026-06-12', () => ({ computedAt: new Date('2026-06-14T05:59:00Z') }))
     );
     expect(old.stale).toBe(true);
+  });
+
+  it('never flags a fully past custom range stale, however old its rollup', () => {
+    const past = build(
+      query({ range: 'custom', from: '2026-01-01', to: '2026-01-31', compare: 'off' }),
+      rowsFor('2026-01-01', '2026-01-31', () => ({ computedAt: new Date('2026-02-01T04:00:00Z') }))
+    );
+    expect(past.stale).toBe(false);
   });
 });

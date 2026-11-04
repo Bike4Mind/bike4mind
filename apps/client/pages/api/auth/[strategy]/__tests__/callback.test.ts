@@ -3,11 +3,16 @@ import { createMocks } from 'node-mocks-http';
 
 // Middleware: collapse the baseApi chain so `.get(fn)` yields the raw handler,
 // mirroring apps/client/pages/api/auth/okta/__tests__/callback.test.ts.
-const mockChain = vi.hoisted(() => ({ order: [] as string[] }));
+const mockChain = vi.hoisted(() => ({ order: [] as string[], post: undefined as undefined | ((...a: unknown[]) => void) }));
 vi.mock('@server/middlewares/baseApi', () => {
-  type Chain = { use: () => Chain; get: (fn: unknown) => unknown };
+  type Chain = { use: () => Chain; post: (fn: (...a: unknown[]) => void) => Chain; get: (fn: unknown) => unknown };
   const chain: Chain = {
     use: () => chain,
+    post: fn => {
+      mockChain.order.push('post');
+      mockChain.post = fn;
+      return chain;
+    },
     get: fn => {
       mockChain.order.push('get');
       return fn;
@@ -31,6 +36,7 @@ const { rateLimitOptions } = vi.hoisted(() => ({ rateLimitOptions: [] as unknown
 vi.mock('@server/middlewares/rateLimit', () => ({
   rateLimit: (opts: unknown) => {
     rateLimitOptions.push(opts);
+    mockChain.order.push('rateLimit');
     return (_req: any, _res: any, next: any) => next?.();
   },
 }));
@@ -39,12 +45,12 @@ vi.mock('@server/middlewares/rateLimit', () => ({
 // the mock lets each test drive the (err, user, info) triple passport would normally supply.
 const mockAuthenticate = vi.fn();
 vi.mock('passport', () => ({
-  default: { authenticate: (...args: any[]) => mockAuthenticate(...args) },
+  default: { authenticate: (...args: unknown[]) => mockAuthenticate(...args) },
 }));
 
 const mockAuthFailCreate = vi.fn();
 vi.mock('@bike4mind/database', () => ({
-  authFailLogRepository: { create: (...a: any[]) => mockAuthFailCreate(...a) },
+  authFailLogRepository: { create: (...a: unknown[]) => mockAuthFailCreate(...a) },
 }));
 
 vi.mock('@server/auth/tokenGenerator', () => ({
@@ -57,26 +63,26 @@ vi.mock('@bike4mind/server-utils/auth/jwtStateStore', () => ({ verifyStateToken:
 const mockResolveSecondFactor = vi.fn();
 const mockLogSignInSuccess = vi.fn().mockResolvedValue(undefined);
 vi.mock('@server/auth/signInSecondFactor', () => ({
-  resolveSecondFactor: (...a: any[]) => mockResolveSecondFactor(...a),
-  logSignInSuccess: (...a: any[]) => mockLogSignInSuccess(...a),
+  resolveSecondFactor: (...a: unknown[]) => mockResolveSecondFactor(...a),
+  logSignInSuccess: (...a: unknown[]) => mockLogSignInSuccess(...a),
 }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));
 
 const mockEmitSignup = vi.fn().mockResolvedValue([]);
 vi.mock('@server/analytics/signupEvents', () => ({
-  emitSignupForSourceProducts: (...a: any[]) => mockEmitSignup(...a),
+  emitSignupForSourceProducts: (...a: unknown[]) => mockEmitSignup(...a),
 }));
 const mockRecordSignupAcquisition = vi.fn().mockResolvedValue({ isSynthetic: false });
 const mockEmitSignupFunnelEvents = vi.fn().mockResolvedValue(undefined);
 vi.mock('@server/analytics/funnel', () => ({
-  recordSignupAcquisition: (...a: any[]) => mockRecordSignupAcquisition(...a),
-  emitSignupFunnelEvents: (...a: any[]) => mockEmitSignupFunnelEvents(...a),
+  recordSignupAcquisition: (...a: unknown[]) => mockRecordSignupAcquisition(...a),
+  emitSignupFunnelEvents: (...a: unknown[]) => mockEmitSignupFunnelEvents(...a),
 }));
 
 const mockRecordSignupNetwork = vi.fn().mockResolvedValue(undefined);
 vi.mock('@server/auth/networkMeta', () => ({
-  recordSignupNetwork: (...a: any[]) => mockRecordSignupNetwork(...a),
+  recordSignupNetwork: (...a: unknown[]) => mockRecordSignupNetwork(...a),
 }));
 
 const mockRefreshSignupRiskScore = vi.fn().mockResolvedValue(undefined);
@@ -87,7 +93,7 @@ vi.mock('@server/auth/signupRiskScore', () => ({
 
 const mockIssueBrowserSession = vi.fn().mockResolvedValue({ accessToken: 'jwt-access', sid: 'sid' });
 vi.mock('@server/auth/issueSession', () => ({
-  issueBrowserSession: (...a: any[]) => mockIssueBrowserSession(...a),
+  issueBrowserSession: (...a: unknown[]) => mockIssueBrowserSession(...a),
 }));
 
 const mockStampSourceTag = vi.fn().mockResolvedValue(undefined);
@@ -325,8 +331,8 @@ describe('[strategy]/callback - banned user gate', () => {
 });
 
 describe('[strategy]/callback - guards and refusal metric line', () => {
-  it('registers the block check and the per-IP limit ahead of the get handler', () => {
-    expect(mockChain.order).toEqual(['checkBlockedIP', 'oauthIpRateLimit:oauth-callback', 'get']);
+  it('registers the Apple POST hop ahead of the rate limiters so only the GET is limited', () => {
+    expect(mockChain.order).toEqual(['checkBlockedIP', 'post', 'rateLimit', 'oauthIpRateLimit:oauth-callback', 'get']);
   });
 
   it.each([
@@ -640,5 +646,51 @@ describe('[strategy]/callback - second factor gate', () => {
       trustedDevice,
     });
     expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+  });
+});
+
+describe('POST /api/auth/apple/callback (form_post bounce)', () => {
+  const post = (strategy: string, body: Record<string, unknown>) => {
+    const { req, res } = createMocks({ method: 'POST', query: { strategy }, body });
+    return { run: () => mockChain.post!(req, res), res };
+  };
+
+  it('303-redirects the form fields to the GET callback and maps a cancelled consent to access_denied', () => {
+    const { run, res } = post('apple', { code: 'c', state: 's', user: '{"name":{}}', junk: 'x' });
+    run();
+    expect(res._getStatusCode()).toBe(303);
+    expect(res._getRedirectUrl()).toBe('/api/auth/apple/callback?code=c&state=s&user=%7B%22name%22%3A%7B%7D%7D');
+
+    const cancelled = post('apple', { error: 'user_cancelled_authorize', state: 's' });
+    cancelled.run();
+    expect(cancelled.res._getRedirectUrl()).toBe('/api/auth/apple/callback?state=s&error=access_denied');
+  });
+
+  it('forwards only the name from the user field, never the email', () => {
+    const user = JSON.stringify({ name: { firstName: 'Ada', lastName: 'L' }, email: 'ada@example.com' });
+    const { run, res } = post('apple', { code: 'c', state: 's', user });
+    run();
+    const forwarded = new URL(res._getRedirectUrl(), 'http://localhost').searchParams.get('user');
+    expect(forwarded).toBe(JSON.stringify({ name: { firstName: 'Ada', lastName: 'L' } }));
+    expect(res._getRedirectUrl()).not.toContain('example.com');
+
+    const malformed = post('apple', { code: 'c', state: 's', user: 'not-json' });
+    malformed.run();
+    expect(malformed.res._getRedirectUrl()).toBe('/api/auth/apple/callback?code=c&state=s');
+  });
+
+  it('drops an oversized user field and truncates oversized name parts', () => {
+    const huge = post('apple', { code: 'c', state: 's', user: JSON.stringify({ name: { firstName: 'a'.repeat(3000) } }) });
+    huge.run();
+    expect(huge.res._getRedirectUrl()).toBe('/api/auth/apple/callback?code=c&state=s');
+
+    const long = post('apple', { code: 'c', state: 's', user: JSON.stringify({ name: { firstName: 'b'.repeat(500) } }) });
+    long.run();
+    const forwarded = new URL(long.res._getRedirectUrl(), 'http://localhost').searchParams.get('user');
+    expect(JSON.parse(forwarded!).name.firstName).toHaveLength(120);
+  });
+
+  it('refuses a POST for any other strategy', () => {
+    expect(post('github', { code: 'c' }).run).toThrow(/Invalid auth strategy/);
   });
 });

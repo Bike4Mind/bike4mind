@@ -35,6 +35,7 @@ const mockSendToClient = vi.fn();
 const mockStripeChargesRetrieve = vi.fn();
 const mockConstructEvent = vi.fn();
 const mockDeactivateAll = vi.fn();
+const mockFindVisitId = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
@@ -53,6 +54,7 @@ vi.mock('@bike4mind/database', () => ({
     update: (...args: unknown[]) => mockUserUpdate(...args),
     incrementCredits: vi.fn(),
   },
+  paymentAttemptRepository: { findVisitId: (...args: unknown[]) => mockFindVisitId(...args) },
 }));
 
 vi.mock('@bike4mind/database/auth', () => ({
@@ -155,12 +157,13 @@ vi.mock('@server/billing/linkedAccounts', () => ({
 }));
 
 // The real source-product emitter runs (signupEvents.ts); only the network edge is mocked, with an
-// ingest key for one made-up product.
+// ingest key for one made-up product, and for the host where a test gives it one.
 const mockEmitProductEvent = vi.fn();
+const ingestKeys = new Set(['widgets']);
 vi.mock('@bike4mind/server-utils/analytics/emitActiveEvent', () => ({
   HOST_PRODUCT_ID: 'bike4mind',
   emitProductEvent: (...args: unknown[]) => mockEmitProductEvent(...args),
-  ingestKeyFor: (p: string) => (p === 'widgets' ? 'key' : undefined),
+  ingestKeyFor: (p: string) => (ingestKeys.has(p) ? 'key' : undefined),
 }));
 
 const mockEmitMetric = vi.fn();
@@ -292,6 +295,7 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
     mockVoidOpenSubscriptionInvoices.mockResolvedValue({ voided: [], failed: [] });
     mockEmitProductEvent.mockResolvedValue(undefined);
     mockRadarRiskLine.mockResolvedValue(null);
+    mockFindVisitId.mockResolvedValue(null);
   });
 
   describe('payment risk wiring', () => {
@@ -697,6 +701,38 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
         });
 
         expect(mockEmitProductEvent).not.toHaveBeenCalled();
+      });
+
+      it('names the visit start-payment recorded for the intent, on the host copy only', async () => {
+        const visitId = 'a'.repeat(32);
+        mockFindByStripeCustomerId.mockResolvedValue({ ...buyer });
+        mockFindVisitId.mockResolvedValue(visitId);
+        ingestKeys.add('bike4mind');
+        try {
+          const { res } = await invokeWebhookWithEvent(paidPack);
+          expect(res.status).toHaveBeenCalledWith(200);
+        } finally {
+          ingestKeys.delete('bike4mind');
+        }
+
+        expect(mockFindVisitId).toHaveBeenCalledWith('pi_pack');
+        expect(Object.fromEntries(mockEmitProductEvent.mock.calls.map(([c]) => [c.productId, c.sessionId]))).toEqual({
+          bike4mind: visitId,
+          widgets: undefined,
+        });
+      });
+
+      it('still credits the pack when the visit lookup fails', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        mockFindByStripeCustomerId.mockResolvedValue({ ...buyer });
+        mockFindVisitId.mockRejectedValue(new Error('db down'));
+
+        const { res } = await invokeWebhookWithEvent(paidPack);
+
+        expect(mockEmitProductEvent).toHaveBeenCalledOnce();
+        expect(mockEmitProductEvent.mock.calls[0][0]).not.toHaveProperty('sessionId');
+        expect(res.status).toHaveBeenCalledWith(200);
+        warn.mockRestore();
       });
 
       it('still acknowledges the delivery when the emit rejects', async () => {

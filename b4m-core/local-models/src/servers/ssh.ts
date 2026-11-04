@@ -175,19 +175,32 @@ function lastLine(stderr: string): string | null {
 }
 
 /** What ssh's stderr and exit code mean, in words that say what to do. */
-export function describeSshFailure(stderr: string, code: number | null, destination: string, app = 'Desktop'): Error {
+export function describeSshFailure(
+  stderr: string,
+  code: number | null,
+  destination: string,
+  app = 'Desktop',
+  platform: NodeJS.Platform = process.platform
+): Error {
   const terminal = `\`ssh ${destination}\``;
+  // Windows ssh.exe keeps its own known_hosts and keys, so a WSL terminal does not help, and BatchMode cannot prompt.
+  const windows = platform === 'win32';
+  const shell = windows ? 'a Windows terminal (PowerShell or Command Prompt, not WSL)' : 'a terminal';
+  const connectOnce = `${shell} with ${terminal}`;
+  const passphrase = windows
+    ? ` ${app} cannot ask for a passphrase, so a key that has one must be loaded into ssh-agent.`
+    : '';
   if (/REMOTE HOST IDENTIFICATION HAS CHANGED/i.test(stderr)) {
     return new SshRefusedError(
-      `The host key of ${destination} has changed since this computer last connected. Check why, then connect once from a terminal with ${terminal} to trust the new key.`
+      `The host key of ${destination} has changed since this computer last connected. Check why, then connect once from ${connectOnce} to trust the new key.`
     );
   }
   if (/Host key verification failed|host key is known|No .* host key is known/i.test(stderr)) {
-    return new SshRefusedError(`Connect once from a terminal with ${terminal} to trust this server's host key.`);
+    return new SshRefusedError(`Connect once from ${connectOnce} to trust this server's host key.${passphrase}`);
   }
   if (/open failed: connect failed/i.test(stderr)) {
     return new SshConnectionError(
-      `SSH to ${destination} works, but nothing answers at ${FORWARD_TARGET} there. Start Ollama on that machine.`
+      `SSH to ${destination} works, but Ollama is not running on it: nothing answers at ${FORWARD_TARGET} there. Start Ollama on that machine.`
     );
   }
   if (/administratively prohibited/i.test(stderr)) {
@@ -197,7 +210,7 @@ export function describeSshFailure(stderr: string, code: number | null, destinat
   }
   if (/: Permission denied \(|Too many authentication failures|no more authentication methods/i.test(stderr)) {
     return new SshRefusedError(
-      `${destination} refused the SSH login. Check that ${terminal} works in a terminal. ${app} cannot ask for a password or passphrase, so load a key that has one into ssh-agent with ssh-add.`
+      `${destination} refused the SSH login. Check that ${terminal} works in ${shell}. ${app} cannot ask for a password or passphrase, so load a key that has one into ssh-agent with ssh-add.`
     );
   }
   // Over a shared connection ssh reports every refused forward the same way, so name both causes.
@@ -435,7 +448,7 @@ export function createSshFetch(endpoint: SshEndpoint, deps: SshDeps = {}): Fetch
       }
       return new SshForward(
         child,
-        (stderr, code) => describeSshFailure(stderr, code, destination as string, app),
+        (stderr, code) => describeSshFailure(stderr, code, destination as string, app, platform),
         spawnFailed
       );
     },

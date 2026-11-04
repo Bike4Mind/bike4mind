@@ -28,6 +28,7 @@ import {
   HandCoins,
   Handshake,
   Hash,
+  ImageOff,
   HeartPulse,
   Inbox,
   Key,
@@ -142,6 +143,7 @@ export enum AdminTab {
   PreferenceArena = 71,
   Revenue = 72,
   ShadowDetections = 73,
+  ModerationIncidents = 74,
 }
 
 /**
@@ -159,6 +161,8 @@ export type SidebarItem = {
   tab: AdminTab;
   /** One line in a 248 px sidebar: keep it short ("Credits", not "Credit Analytics"). */
   label: string;
+  /** Former names the sidebar filter still matches, so a renamed page stays findable. */
+  aliases?: readonly string[];
   testid?: string;
   gate?: SidebarGate;
   badge?: SidebarBadge;
@@ -199,7 +203,14 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     items: [
       { Icon: Users, tab: AdminTab.Users, label: 'Users', testid: 'admin-users-tab-btn' },
       { Icon: Building2, tab: AdminTab.Organizations, label: 'Organizations', testid: 'admin-organizations-tab-btn' },
-      { Icon: Inbox, tab: AdminTab.Waitlist, label: 'Waitlist', badge: 'waitingSubscribers' },
+      {
+        Icon: Inbox,
+        tab: AdminTab.Waitlist,
+        label: 'Invite Center',
+        aliases: ['Waitlist'],
+        testid: 'admin-waitlist-tab-btn',
+        badge: 'waitingSubscribers',
+      },
       { Icon: Megaphone, tab: AdminTab.EmailMarketing, label: 'Email marketing' },
       { Icon: UsersRound, tab: AdminTab.Team, label: 'Team' },
       { Icon: UserPlus, tab: AdminTab.RegistrationInvites, label: 'Invites', testid: 'admin-invite-center-tab-btn' },
@@ -241,6 +252,12 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     items: [
       { Icon: ShieldCheck, tab: AdminTab.SecurityDashboard, label: 'Security', testid: 'admin-security-dashboard-btn' },
       { Icon: ShieldAlert, tab: AdminTab.SecOpsTriage, label: 'SecOps triage', testid: 'admin-secops-triage-btn' },
+      {
+        Icon: ImageOff,
+        tab: AdminTab.ModerationIncidents,
+        label: 'Moderation review',
+        testid: 'admin-moderation-incidents-btn',
+      },
       { Icon: ScrollText, tab: AdminTab.AuditLog, label: 'Audit log', testid: 'admin-audit-log-btn' },
       { Icon: Fingerprint, tab: AdminTab.IdentityProviders, label: 'Identity providers' },
       { Icon: KeyRound, tab: AdminTab.OAuthClients, label: 'OAuth clients', testid: 'admin-oauth-clients-btn' },
@@ -305,7 +322,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     label: 'Settings',
     items: [
       { Icon: Settings, tab: AdminTab.AdminSettings, label: 'General', testid: 'admin-settings-btn' },
-      { Icon: AppWindow, tab: AdminTab.Modals, label: 'Modals' },
+      { Icon: AppWindow, tab: AdminTab.Modals, label: 'Modals', testid: 'admin-modals-tab-btn' },
       { Icon: Newspaper, tab: AdminTab.WhatsNewModals, label: "What's new" },
       { Icon: NotebookText, tab: AdminTab.ReleaseNotes, label: 'Release notes', testid: 'admin-release-notes-btn' },
       { Icon: BookOpen, tab: AdminTab.Documentation, label: 'Docs' },
@@ -348,13 +365,15 @@ export const splitSectionItems = (
 };
 
 /**
- * The sections an admin can see: gated items dropped, then (when `query` is non-blank) only the
- * items whose label or section label contains it. Sections left empty are omitted.
+ * The sections an admin can see: gated items and tabs `canOpenTab` refuses dropped, then (when
+ * `query` is non-blank) only the items whose label or section label contains it. Sections left
+ * empty are omitted.
  */
 export const filterSidebarSections = (
   sections: SidebarSection[],
   gates: Record<SidebarGate, boolean>,
-  query: string
+  query: string,
+  canOpenTab: (tab: AdminTab) => boolean = () => true
 ): SidebarSection[] => {
   const needle = query.trim().toLowerCase();
   return sections
@@ -363,7 +382,10 @@ export const filterSidebarSections = (
       const items = section.items.filter(
         item =>
           (!item.gate || gates[item.gate]) &&
-          (needle === '' || sectionMatches || item.label.toLowerCase().includes(needle))
+          canOpenTab(item.tab) &&
+          (needle === '' ||
+            sectionMatches ||
+            [item.label, ...(item.aliases ?? [])].some(name => name.toLowerCase().includes(needle)))
       );
       return { ...section, items };
     })

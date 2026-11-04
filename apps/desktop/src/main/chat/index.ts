@@ -49,6 +49,7 @@ import {
   type BrowserGoAction,
   type BrowserGoRequest,
   type BrowserNavigateRequest,
+  type BrowserOpenArtifactRequest,
   type BrowserPaneBounds,
   type BrowserPaneRequest,
   type BrowserPaneState,
@@ -61,10 +62,12 @@ import { createMainLogger } from '../logger';
 import { ApprovalModePreference } from './ApprovalModePreference';
 import { PromptCacheTtlPreference } from './PromptCacheTtlPreference';
 import { LocalContextPreference } from './LocalContextPreference';
+import { createLateReload } from './lateReload';
 import { registerLocalContextIpc } from './localContextIpc';
 import { localContextSizing, localHardware } from './localContextSizing';
 import { SidebarSectionStore } from './SidebarSectionStore';
 import { registerImageMenuIpc } from './imageMenuIpc';
+import { registerSessionExportIpc } from './sessionExportIpc';
 import { registerSessionCreateIpc } from './sessionCreateIpc';
 import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
 import { AttachmentStore } from './AttachmentStore';
@@ -138,6 +141,8 @@ import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
 import { keepSessionWritesIn } from './tools/sessionScripts';
 import type { PreparedImage } from './tools/types';
 import { desktopScreenCapturer } from './screen/desktopScreen';
+import { parsePaneInput, SimulatorLiveView } from './simulator/SimulatorLiveView';
+import { XcodeSimulatorDriver } from './simulator/XcodeSimulatorDriver';
 import { devLog } from '../devlog/DevLogSink';
 import { registerPullRequests } from '../pr';
 import type { PrMonitor } from '../pr/PrMonitor';
@@ -183,6 +188,9 @@ const DEFERRED_TOOLS_OVERRIDE = parseDeferredToolsOverride(
 
 /** How much of a background process's output the panel asks for when it rejoins after a reload. */
 const PANEL_TAIL_CHARS = 20_000;
+
+/** Window (ms) that gathers late server listings into one chat model list reload; see lateReload.ts. */
+const LATE_RELOAD_DEBOUNCE_MS = 250;
 
 /** Re-encode quality for a downscaled screenshot. Text in a UI stays legible well below this. */
 const SHRUNK_JPEG_QUALITY = 82;
@@ -279,6 +287,8 @@ export interface RegisteredChat {
   mcp: McpManager;
   /** The agent's hidden browser windows, closed with the last app window and on quit. */
   browser: BrowserManager;
+  /** The live iOS Simulator view, whose stream is stopped on quit. */
+  simulatorView: SimulatorLiveView;
   /** Each conversation's pull request, and the timers that watch it. */
   pullRequests: PrMonitor;
   /** Import from Claude; started once the window is up so it never delays launch. */
@@ -287,6 +297,8 @@ export interface RegisteredChat {
   spareWorktrees: SpareWorktrees;
   /** Saved model servers, which the Models screen also pulls to and removes from. */
   modelServers: ModelServerRegistry;
+  /** Stops their health checks and any pending model list reload, on quit. */
+  stopModelServers(): void;
   /** The Settings choice of local model context, which the Models screen's fit badges also plan for. */
   localContext: LocalContextPreference;
   /** The capability ledger, which the Models screen records approved downloads in. */
@@ -477,14 +489,20 @@ export function registerChat(
     setting: () => localContext.read(),
     pinnedProjectors: () => hooks.pinnedProjectors?.() ?? new Map(),
   });
+  const lateReload = createLateReload(() => {
+    models.forgetLocal();
+    send(IPC_CHANNELS.chatModelsChanged, undefined);
+  }, LATE_RELOAD_DEBOUNCE_MS);
   // safeStorage like the MCP secrets: a server's token or header value never goes to plain JSON.
   const modelServers = new ModelServerRegistry({
     store: new ModelServerStore(safeStorage, privateFile(join(userData, 'model-servers.json')), logger),
     logger,
     changed: servers => {
-      models.forgetLocal();
+      models.expireLocal();
       send(IPC_CHANNELS.modelServersChanged, servers);
     },
+    edited: () => models.forgetLocal(),
+    listedLate: lateReload.notify,
     localSpecsChanged: () => {
       forgetLocalContexts();
       localSizing.forget?.();
@@ -621,6 +639,19 @@ export function registerChat(
       })
   );
 
+  const simulatorDriver = new XcodeSimulatorDriver();
+  const simulatorView = new SimulatorLiveView(
+    simulatorDriver,
+    {
+      state: state => send(IPC_CHANNELS.simulatorState, state),
+      // Not through `send`: it logs every payload, and these are frames at 10 a second.
+      frame: (udid, jpeg) => {
+        for (const window of appWindows()) window.webContents.send(IPC_CHANNELS.simulatorFrame, { udid, bytes: jpeg });
+      },
+    },
+    { available: process.platform === 'darwin' }
+  );
+
   const service = new ChatService({
     store,
     access,
@@ -655,6 +686,7 @@ export function registerChat(
     browser,
     pullRequests,
     screen: desktopScreenCapturer(app.getName()),
+    ...(process.platform === 'darwin' ? { simulator: { driver: simulatorDriver, view: simulatorView } } : {}),
     prepareImage: prepareToolImage,
     history,
     local,
@@ -683,7 +715,9 @@ export function registerChat(
     releaseSessionTerminals: hooks.releaseSessionTerminals,
   });
 
-  ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: boolean) => service.listModels(force));
+  ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: unknown) =>
+    service.listModels(force === 'local' ? 'local' : force === true)
+  );
   registerModelServersIpc(ipcMain, modelServers, async () => {
     const probed = await localHardware.probed();
     return probed && machineView(probed);
@@ -1101,6 +1135,17 @@ export function registerChat(
     downloadsDirectory: () => app.getPath('downloads'),
   });
 
+  registerSessionExportIpc(ipcMain, {
+    sessions: store,
+    pickSavePath: async (sender, options) => {
+      const window = BrowserWindow.fromWebContents(sender);
+      const picked = await (window ? dialog.showSaveDialog(window, options) : dialog.showSaveDialog(options));
+      return picked.canceled || !picked.filePath ? null : picked.filePath;
+    },
+    writeFile: (path, content) => writeFile(path, content, 'utf8'),
+    downloadsDirectory: () => app.getPath('downloads'),
+  });
+
   ipcMain.handle(IPC_CHANNELS.chatListArtifacts, () => artifactLibrary.list());
   ipcMain.handle(IPC_CHANNELS.chatReadArtifact, (_event, artifactId: string) => artifactLibrary.read(artifactId));
   ipcMain.handle(IPC_CHANNELS.chatPublishArtifact, (_event, request: ChatArtifactPublishRequest) =>
@@ -1146,6 +1191,21 @@ export function registerChat(
     return mcp.state();
   });
 
+  ipcMain.handle(IPC_CHANNELS.simulatorGetState, () => simulatorView.current());
+  ipcMain.handle(IPC_CHANNELS.simulatorListDevices, async () =>
+    process.platform === 'darwin' ? (await simulatorDriver.devices()).devices : []
+  );
+  ipcMain.handle(IPC_CHANNELS.simulatorAttach, (_event, udid: unknown) => {
+    if (typeof udid !== 'string' || !udid) throw new Error('No simulator was named.');
+    return simulatorView.attach(udid);
+  });
+  ipcMain.handle(IPC_CHANNELS.simulatorDetach, () => simulatorView.detach());
+  ipcMain.handle(IPC_CHANNELS.simulatorInput, (_event, value: unknown) => {
+    const input = parsePaneInput(value);
+    if (!input) throw new Error('That simulator input is not one the pane sends.');
+    return simulatorView.input(input);
+  });
+
   // The view is attached to the window that asked, so the request carries no window id: a
   // second app window asking puts the page in ITS pane, and the first one's pane falls back to
   // its empty state on its next report.
@@ -1168,6 +1228,16 @@ export function registerChat(
       throw new Error('A conversation and a url are required.');
     }
     return browser.navigate(request.sessionId, request.url);
+  });
+  ipcMain.handle(IPC_CHANNELS.browserOpenArtifact, (_event, request: BrowserOpenArtifactRequest) => {
+    if (
+      typeof request?.sessionId !== 'string' ||
+      typeof request?.title !== 'string' ||
+      typeof request?.content !== 'string'
+    ) {
+      throw new Error('A conversation, a title and the artifact content are required.');
+    }
+    return browser.openArtifact(request.sessionId, request.title, request.content);
   });
   ipcMain.handle(IPC_CHANNELS.browserGo, (_event, request: BrowserGoRequest): BrowserPaneState => {
     const actions: readonly BrowserGoAction[] = ['back', 'forward', 'reload'];
@@ -1326,10 +1396,15 @@ export function registerChat(
     background,
     mcp,
     browser,
+    simulatorView,
     pullRequests,
     claudeImport,
     spareWorktrees,
     modelServers,
+    stopModelServers: () => {
+      lateReload.stop();
+      modelServers.stop();
+    },
     localContext,
     capabilityLedger,
   };

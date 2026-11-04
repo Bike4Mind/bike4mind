@@ -26,6 +26,12 @@ export const secrets = {
   GOOGLE_CLIENT_SECRET: new sst.Secret('GOOGLE_CLIENT_SECRET', 'not-configured'),
   GITHUB_CLIENT_ID: new sst.Secret('GITHUB_CLIENT_ID', 'not-configured'),
   GITHUB_CLIENT_SECRET: new sst.Secret('GITHUB_CLIENT_SECRET', 'not-configured'),
+  // Sign in with Apple. Client id is the Services ID; the private key is the .p8 PEM (newlines kept or
+  // escaped as \n) used to sign the JWT client secret. Unconfigured = the Apple strategy is not registered.
+  APPLE_CLIENT_ID: new sst.Secret('APPLE_CLIENT_ID', 'not-configured'),
+  APPLE_TEAM_ID: new sst.Secret('APPLE_TEAM_ID', 'not-configured'),
+  APPLE_KEY_ID: new sst.Secret('APPLE_KEY_ID', 'not-configured'),
+  APPLE_PRIVATE_KEY: new sst.Secret('APPLE_PRIVATE_KEY', 'not-configured'),
   // Read-only GitHub App that feeds data lakes (contents:read + metadata:read, installed on selected
   // repositories only). Separate from the MCP OAuth app and OrgGitHubConnection automation on purpose.
   // The client id/secret are the App's own OAuth credentials, used to prove the installer can see the

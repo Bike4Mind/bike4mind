@@ -19,6 +19,11 @@ export interface IChatHistoryItemRepository extends IBaseRepository<IChatHistory
     sessionId: string,
     options: { limit: number; page: number; sort?: 'asc' | 'desc' }
   ) => Promise<{ data: IChatHistoryItemDocument[]; hasMore: boolean }>;
+  // Keyset twin of findPageBySessionId: oldest first, strictly after the `after` position, at most `limit` rows.
+  findPageAfterBySessionId: (
+    sessionId: string,
+    options: { limit: number; after?: { timestamp: Date; id: string } }
+  ) => Promise<IChatHistoryItemDocument[]>;
   findAllBySessionIdAndLessThanOrEqualToTimestamp(
     sessionId: string,
     timestamp: Date

@@ -61,6 +61,7 @@ describe('SIDEBAR_SECTIONS', () => {
     // Spot-check the testids referenced by existing E2E flows.
     expect(testidByTab.get(AdminTab.Users)).toBe('admin-users-tab-btn');
     expect(testidByTab.get(AdminTab.RegistrationInvites)).toBe('admin-invite-center-tab-btn');
+    expect(testidByTab.get(AdminTab.Waitlist)).toBe('admin-waitlist-tab-btn');
     expect(testidByTab.get(AdminTab.SecOpsTriage)).toBe('admin-secops-triage-btn');
     expect(testidByTab.get(AdminTab.SecurityDashboard)).toBe('admin-security-dashboard-btn');
     expect(testidByTab.get(AdminTab.DlqReplay)).toBe('admin-dlq-replay-btn');
@@ -73,6 +74,10 @@ describe('SIDEBAR_SECTIONS', () => {
     expect(gatedByTab.get(AdminTab.LiveOpsTriage)).toBe('liveOpsTriage');
     // Nothing else should be gated.
     expect(gatedByTab.size).toBe(2);
+  });
+
+  it('labels the Waitlist item Invite Center', () => {
+    expect(allItems.find(i => i.tab === AdminTab.Waitlist)?.label).toBe('Invite Center');
   });
 
   it('only badges the Waitlist and Subscriptions tabs', () => {

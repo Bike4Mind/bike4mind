@@ -63,6 +63,10 @@ vi.mock('sst', () => ({
     SLACK_ERROR_REPORTING_WEBHOOK_URL: { value: 'https://hooks.slack.com/test-error' },
     GOOGLE_CLIENT_ID: { value: 'test-google-client-id' },
     GOOGLE_CLIENT_SECRET: { value: 'test-google-client-secret' },
+    APPLE_CLIENT_ID: { value: 'not-configured' },
+    APPLE_TEAM_ID: { value: 'not-configured' },
+    APPLE_KEY_ID: { value: 'not-configured' },
+    APPLE_PRIVATE_KEY: { value: 'not-configured' },
     GITHUB_CLIENT_ID: { value: 'test-github-client-id' },
     GITHUB_CLIENT_SECRET: { value: 'test-github-client-secret' },
     GITHUB_LAKE_APP_CLIENT_ID: { value: 'test-github-lake-app-client-id' },
@@ -141,6 +145,13 @@ vi.mock('@/app/contexts/WebsocketContext', () => ({
 // would hang on it. Pass through by default; its own suite unmocks it.
 vi.mock('@server/middlewares/defaultWriteRateLimit', () => ({
   defaultWriteRateLimit: (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+
+// The per-user upload allowance (fileUploadBudget.ts) resolves the caller's tier and a Mongo counter on
+// every upload door, so route suites that stub the database would hang on it. Pass through by default;
+// its own suite unmocks it.
+vi.mock('@server/files/fileUploadBudget', () => ({
+  consumeFileUploadBudget: async () => undefined,
 }));
 
 // The `app` surface of the IP-block gate (checkBlockedIP.ts, mounted on every authenticated write

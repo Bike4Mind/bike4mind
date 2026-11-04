@@ -7,6 +7,7 @@ import { MessageThread } from './MessageThread';
 import { TurnStatus } from './TurnStatus';
 import { presentReply } from './codeStream';
 import { roundsOf } from './replyRounds';
+import { setShowTokenRate } from './tokenRate';
 import { STALL_AFTER_MS, describeActivity, writingProse } from './statusLine';
 import { useConversation } from './useChat';
 
@@ -215,6 +216,37 @@ describe('the live thread, driven by stream events', () => {
     // to click for a sentence about why a stream is empty.
     expect(container.querySelector('[data-testid="chat-turn-status-toggle"]')).toBeNull();
     expect(container.querySelector('[data-testid="chat-turn-status-detail"]')).toBeNull();
+  });
+
+  it("shows a self-hosted turn's rate on the line, with its detail in the title", async () => {
+    const usage = { inputTokens: 100, outputTokens: 48, rate: { evalTokens: 48, evalMs: 2000 } };
+    await act(async () =>
+      root.render(
+        <TurnStatus turn={{ startedAt: Date.now(), tokens: 148, usage }} activity={describeActivity([], true)} />
+      )
+    );
+
+    const line = container.querySelector('[data-testid="chat-turn-status-text"]');
+    expect(statusText()).toContain('24.0 tok/s');
+    expect(line?.getAttribute('title')).toBe('100 new input, 48 output\nGeneration: 24.0 tok/s (48 tokens in 2.0s)');
+  });
+
+  it('leaves the rate off the line and its title when the setting is off', async () => {
+    const usage = { inputTokens: 100, outputTokens: 48, rate: { evalTokens: 48, evalMs: 2000 } };
+    act(() => setShowTokenRate(false));
+    try {
+      await act(async () =>
+        root.render(
+          <TurnStatus turn={{ startedAt: Date.now(), tokens: 148, usage }} activity={describeActivity([], true)} />
+        )
+      );
+
+      const line = container.querySelector('[data-testid="chat-turn-status-text"]');
+      expect(statusText()).not.toContain('tok/s');
+      expect(line?.getAttribute('title') ?? '').not.toContain('tok/s');
+    } finally {
+      act(() => setShowTokenRate(true));
+    }
   });
 
   it('moves the reasoning from the line into the transcript when the turn ends', async () => {

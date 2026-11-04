@@ -9,15 +9,22 @@ import {
   questRepository,
   Connection,
 } from '@bike4mind/database';
-import { apiKeyService } from '@bike4mind/services';
+import { apiKeyService, meterCompletionBackend } from '@bike4mind/services';
 import { StatusManager } from '@bike4mind/services/llm/StatusManager';
 import { ClientMessageSender, getSettingsByNames } from '@bike4mind/utils';
 import { buildApiKeyTable, getAvailableModels } from '@bike4mind/llm-adapters';
 import { resolveRapidModel } from '@server/rapidReply/resolveRapidModel';
 import { assertSessionAccess } from '@bike4mind/server-utils/utils/sessionAccess';
-import { ChatModels, NotFoundError } from '@bike4mind/common';
+import { ChatModels, NotFoundError, getQuestErrorCode } from '@bike4mind/common';
 import { Resource } from 'sst';
+import { z } from 'zod';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+
+// 4,000 chars (~1k tokens): the 50-token ack only needs the gist of the request, and the UI sends the
+// whole prompt, so truncate rather than reject.
+const RAPID_REPLY_MAX_MESSAGE_CHARS = 4_000;
+const rapidReplyMessageSchema = z.string().transform(m => m.slice(0, RAPID_REPLY_MAX_MESSAGE_CHARS));
 
 // OptiHashi sessions get the instant ack even when RapidReply is globally off. When no DB
 // mapping is configured for the main model, fall back to a fast Haiku + this prompt so the
@@ -38,7 +45,7 @@ const OPTI_RAPID_SYSTEM_PROMPT =
  * This endpoint only saves to the database. The main quest processor
  * handles WebSocket notifications when it detects the rapid reply result.
  */
-// SPA-only and not credit-metered, so it stays off the API-key surface.
+// SPA-only, so it stays off the API-key surface.
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(
     rateLimit({
@@ -49,7 +56,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
   .post(async (req, res) => {
     assertAiAccessAllowed(req.user);
     const startTime = Date.now();
-    const { questId, sessionId, message, model: mainModel, processStartTime, isOpti: isOptiHint } = req.body;
+    const { questId, sessionId, model: mainModel, processStartTime, isOpti: isOptiHint } = req.body;
     // Security: never trust a body-supplied userId - it drives API-key resolution, websocket
     // routing, and DB persistence, so a spoofed id could consume another user's keys or send
     // updates to the wrong user. Always use the authenticated user.
@@ -154,13 +161,20 @@ const handler = baseApi({ auth: 'jwtOnly' })
         `IMPORTANT: Provide a quick, friendly acknowledgment (1 sentence max). ` +
           `The main AI is loading full context and will provide the complete answer.`;
 
+      const parsedMessage = rapidReplyMessageSchema.safeParse(req.body.message);
+      if (!parsedMessage.success) {
+        return res.json({ success: false, reason: 'invalid_message' });
+      }
+
       const rapidMessages = [
         { role: 'system' as const, content: rapidSystemPrompt },
-        { role: 'user' as const, content: message },
+        { role: 'user' as const, content: parsedMessage.data },
       ];
 
+      // maxTokens, not max_tokens: the adapters only read the camelCase key, and the credit hold is
+      // sized from this same value.
       const rapidOptions = {
-        max_tokens: Math.min(rapidReplyMapping.maxTokens || 50, 50),
+        maxTokens: Math.min(rapidReplyMapping.maxTokens || 50, 50),
         temperature: 0.9,
         stream: false,
       };
@@ -170,7 +184,18 @@ const handler = baseApi({ auth: 'jwtOnly' })
       // 6. Generate completion
       let accumulatedText = '';
 
-      await rapidLlm.complete(
+      // Admin-mapped model on platform keys: reserve before the call, settle after, refund on a throw.
+      const rapidModelInfo = models.find(m => m.id === rapidModelId);
+      if (!rapidModelInfo) {
+        return res.json({ success: false, reason: 'model_unavailable' });
+      }
+      const meteredRapidLlm = meterCompletionBackend(
+        rapidLlm,
+        createRequestCompletionMeter(req, 'rapid reply', { systemModel: true }),
+        rapidModelInfo
+      );
+
+      await meteredRapidLlm.complete(
         rapidModelId as any,
         rapidMessages,
         rapidOptions,
@@ -268,6 +293,12 @@ const handler = baseApi({ auth: 'jwtOnly' })
         latency: Date.now() - startTime,
       });
     } catch (error) {
+      // Best-effort like every other refusal here: the chat proceeds without the ack.
+      if (getQuestErrorCode(error) === 'insufficient_credits') {
+        req.logger.info('[RapidReply] Insufficient credits, skipping');
+        return res.json({ success: false, reason: 'insufficient_credits' });
+      }
+
       // Deliberately error-severity: everything routinely-degradable (no mapping, a sunset or
       // disabled rapid model, no reachable fallback) now returns early at info/warn above, so
       // only genuine faults reach here - a DB write failure, an unexpected throw from the

@@ -46,9 +46,10 @@ const ACCOUNTS_OPTIONS = [
   { value: 'all', label: 'All' },
 ] as const;
 const FOOTERS: Record<AnalyticsAccounts, string> = {
-  external: 'Counts exclude staff, system and test accounts. Days are UTC.',
-  internal: 'Active users count only staff, system and test accounts; signups always exclude them. Days are UTC.',
-  all: 'Active users include staff, system and test accounts; signups always exclude them. Days are UTC.',
+  external: 'Counts exclude admin, system, flagged test and staff-domain accounts. Days are UTC.',
+  internal:
+    'Active users count only admin, system, flagged test and staff-domain accounts; signups always exclude them. Days are UTC.',
+  all: 'Active users include admin, system, flagged test and staff-domain accounts; signups always exclude them. Days are UTC.',
 };
 
 const todayUtc = () => new Date().toISOString().slice(0, 10);

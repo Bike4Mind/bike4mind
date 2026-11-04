@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { setupMongoTest } from '../../__test__/utils';
-import { SignupDomainReviewModel, SignupObservationModel, signupProtectionRepository } from './SignupProtectionModel';
+import {
+  SignupDomainReviewModel,
+  signupDomainReviewRepository,
+  SignupObservationModel,
+  signupProtectionRepository,
+} from './SignupProtectionModel';
 import { PartnerSignupRule } from './PartnerSignupRuleModel';
 import type { SignupDomainReview } from '@bike4mind/common';
 
@@ -31,6 +36,42 @@ describe('signup protection persistence', () => {
     await SignupDomainReviewModel.updateOne({ domain: hold.domain }, { $set: { status: 'released' } });
     expect(await signupProtectionRepository.createHold(hold)).toBe(false);
     expect((await signupProtectionRepository.findReview(hold.domain))?.status).toBe('released');
+  });
+  it('lists only pending holds with the given reason, oldest first', async () => {
+    await SignupDomainReviewModel.create([
+      { ...hold, domain: 'newer.test', reason: 'disposable-aggregate', triggeredAt: new Date('2026-01-03') },
+      { ...hold, domain: 'older.test', reason: 'disposable-aggregate', triggeredAt: new Date('2026-01-01') },
+      { ...hold, domain: 'young.test', reason: 'young-domain (<30 days)' },
+      { ...hold, domain: 'done.test', reason: 'disposable-aggregate', status: 'blocked' },
+    ]);
+    const pending = await signupDomainReviewRepository.listPending('disposable-aggregate', 10);
+    expect(pending.map(review => review.domain)).toEqual(['older.test', 'newer.test']);
+  });
+  it('auto-confirms only a still-pending hold with the matching reason', async () => {
+    const decidedAt = new Date('2026-02-01');
+    await SignupDomainReviewModel.create([
+      { ...hold, domain: 'rule.test', reason: 'disposable-aggregate' },
+      { ...hold, domain: 'young.test', reason: 'young-domain (<30 days)' },
+      { ...hold, domain: 'released.test', reason: 'disposable-aggregate', status: 'released', reviewedBy: 'admin-1' },
+    ]);
+    const confirm = (domain: string) =>
+      signupDomainReviewRepository.autoConfirm(domain, 'disposable-aggregate', 'disposable-aggregate-rule', decidedAt);
+    expect(await confirm('rule.test')).toBe(true);
+    expect(await confirm('rule.test')).toBe(false);
+    expect(await confirm('young.test')).toBe(false);
+    expect(await confirm('released.test')).toBe(false);
+    const confirmed = await signupProtectionRepository.findReview('rule.test');
+    expect(confirmed).toMatchObject({
+      status: 'blocked',
+      reviewedAt: decidedAt,
+      autoDecision: { policy: 'disposable-aggregate-rule', decidedAt },
+    });
+    expect(confirmed?.reviewedBy).toBeUndefined();
+    expect((await signupProtectionRepository.findReview('young.test'))?.status).toBe('held_pending_review');
+    expect(await signupProtectionRepository.findReview('released.test')).toMatchObject({
+      status: 'released',
+      reviewedBy: 'admin-1',
+    });
   });
   it('deduplicates observations by user and preserves the first verification timestamp', async () => {
     const first = {

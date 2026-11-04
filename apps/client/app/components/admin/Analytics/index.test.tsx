@@ -213,7 +213,7 @@ describe('AnalyticsTab', () => {
     });
     await renderPage('/admin?tab=analytics&accounts=internal');
     expect(await screen.findByTestId('analytics-footer')).toHaveTextContent(
-      'Active users count only staff, system and test accounts; signups always exclude them.'
+      'Active users count only admin, system, flagged test and staff-domain accounts; signups always exclude them.'
     );
     expect(await screen.findByTestId('analytics-missing-rollup')).toHaveTextContent(
       'Rollup is missing for 1 day; those days show as gaps.'
@@ -252,7 +252,7 @@ describe('AnalyticsTab', () => {
     expect(within(strip).getByText('Coming soon')).toBeInTheDocument();
     expect(screen.getByTestId('analytics-last-updated')).toHaveTextContent('Last updated');
     expect(screen.getByTestId('analytics-footer')).toHaveTextContent(
-      'Counts exclude staff, system and test accounts. Days are UTC.'
+      'Counts exclude admin, system, flagged test and staff-domain accounts. Days are UTC.'
     );
     expect(screen.getByTestId('analytics-active-users-chart')).toHaveAttribute('aria-label');
   });

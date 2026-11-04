@@ -7,6 +7,7 @@ import type {
   LakeConfigChangeField,
 } from '@bike4mind/common';
 import {
+  ConflictError,
   CreateDataLakeRequestInput,
   DATA_LAKES,
   MAX_DATA_LAKE_SLUG_LENGTH,
@@ -38,6 +39,13 @@ interface CreateDataLakeAdapters {
  * and the org id and join meta-tag are internal ids an owner cannot act on.
  */
 const CREATE_ROW_OMITTED_FIELDS = new Set<LakeConfigChangeField>(['createdByUserId', 'organizationId', 'datalakeTag']);
+
+/**
+ * `additionalInfo.code` on the 409 a unique slug or `datalakeTag` index answers with. A caller that
+ * generated the slug itself (a connector placeholder) keys a retry on it, rather than re-reading the
+ * raw duplicate-key error this service already classified.
+ */
+export const DATA_LAKE_SLUG_UNAVAILABLE_CODE = 'DATA_LAKE_SLUG_UNAVAILABLE';
 
 /**
  * Builds the unique join meta-tag. Org-scoped lakes get `datalake:<org>:<slug>`;
@@ -270,24 +278,58 @@ export const createDataLake = async (
 
     return dataLake;
   } catch (err) {
-    // A concurrent create by the same user can win the { createdByUserId, fileTagPrefix }
-    // unique index between the assertPrefixAvailable read above and this write (that race is
-    // this index's whole reason to exist) - map the raw duplicate-key to the same friendly
-    // error the read-arm check produces, rather than surfacing a 500. (Same pattern as
-    // setLakeVisibility.ts's slug-index race.) Keyed on `keyPattern.fileTagPrefix`, not a bare
-    // code check: this collection also has unique indexes on `datalakeTag` and
-    // { organizationId, slug } - disambiguateSlug's pre-check makes hitting either of those
-    // here vanishingly rare, but a bare code===11000 would still mislabel that rare collision
-    // as a prefix overlap.
-    if ((err as { code?: number; keyPattern?: Record<string, unknown> })?.code === 11000) {
-      const keyPattern = (err as { keyPattern?: Record<string, unknown> }).keyPattern;
-      if (keyPattern && 'fileTagPrefix' in keyPattern) {
-        throw new BadRequestError(
-          `Tag prefix "${params.fileTagPrefix}" overlaps an existing data lake - choose a different prefix.`,
-          { code: TAG_PREFIX_UNAVAILABLE_CODE }
-        );
-      }
-    }
-    throw err;
+    throw mapCreateDuplicateKeyError(err, { slug, fileTagPrefix: params.fileTagPrefix }, logger);
   }
 };
+
+/**
+ * Turns a unique-index rejection of the insert into the error the caller should see, so a collision
+ * the pre-checks above missed answers 4xx instead of 500. Anything else is returned unchanged.
+ *
+ * Dispatched on `keyPattern`, not on the bare code, because this collection carries several unique
+ * indexes and each collision means something different to the user:
+ *
+ * - `fileTagPrefix` ({ createdByUserId, fileTagPrefix }): a concurrent create by the same user won
+ *   the race against assertPrefixAvailable. Same friendly error the read-arm check produces.
+ * - `slug` or `datalakeTag`: disambiguateSlug cleared this slug, yet an index rejected it. Either a
+ *   concurrent create in the same scope took it first (a resubmit then sees the winner and suffixes
+ *   past it), or the collection still carries an index wider than the per-scope one the model
+ *   declares (the legacy global `slug_1`, which the 20260529000000 migration drops; there a resubmit
+ *   computes the same slug and only another name gets through). Answer 409 rather than guess which.
+ *   The holder may sit in another org, so it is never named.
+ *
+ * The slug arm logs the index's key pattern: a recurring warning means an environment still has the
+ * legacy index, and that is fixed by running the migration, not here.
+ */
+function mapCreateDuplicateKeyError(
+  err: unknown,
+  attempted: { slug: string; fileTagPrefix: string },
+  logger?: CreateDataLakeAdapters['logger']
+): unknown {
+  const keyPattern = duplicateKeyPattern(err);
+  if (!keyPattern) return err;
+  if ('fileTagPrefix' in keyPattern) {
+    return new BadRequestError(
+      `Tag prefix "${attempted.fileTagPrefix}" overlaps an existing data lake - choose a different prefix.`,
+      { code: TAG_PREFIX_UNAVAILABLE_CODE }
+    );
+  }
+  if ('slug' in keyPattern || 'datalakeTag' in keyPattern) {
+    logger?.warn('[dataLakes] create rejected by a unique index the slug pre-check cleared', {
+      slug: attempted.slug,
+      keyPattern,
+    });
+    return new ConflictError(`The data lake slug "${attempted.slug}" is already taken - choose a different name.`, {
+      code: DATA_LAKE_SLUG_UNAVAILABLE_CODE,
+    });
+  }
+  return err;
+}
+
+/** The violated index's key pattern when `err` is a duplicate-key error that names one. */
+function duplicateKeyPattern(err: unknown): Record<string, unknown> | undefined {
+  if (typeof err !== 'object' || err === null) return undefined;
+  const { code, keyPattern } = err as { code?: unknown; keyPattern?: unknown };
+  if (code !== 11000 || typeof keyPattern !== 'object' || keyPattern === null) return undefined;
+  return keyPattern as Record<string, unknown>;
+}

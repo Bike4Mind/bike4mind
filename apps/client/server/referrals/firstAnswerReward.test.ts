@@ -1,23 +1,25 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockFindById, mockCountDocuments, mockAddCredits, mockGetSettingsMap, mockSlack } = vi.hoisted(() => ({
-  mockFindById: vi.fn(),
-  mockCountDocuments: vi.fn(),
-  mockAddCredits: vi.fn(),
-  mockGetSettingsMap: vi.fn(),
-  mockSlack: vi.fn(),
-}));
+const { mockFindById, mockCountDocuments, mockAddCredits, mockGetSettingsMap, mockSlack, mockBuildAdapters } =
+  vi.hoisted(() => ({
+    mockFindById: vi.fn(),
+    mockCountDocuments: vi.fn(),
+    mockAddCredits: vi.fn(),
+    mockGetSettingsMap: vi.fn(),
+    mockSlack: vi.fn(),
+    mockBuildAdapters: vi.fn(),
+  }));
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
-  creditLotRepository: {},
-  creditTransactionRepository: {},
-  userRepository: {},
   CreditTransaction: { countDocuments: mockCountDocuments },
   User: { findById: mockFindById },
 }));
-vi.mock('@bike4mind/services', () => ({ creditService: { addCreditsWithLedgerRow: mockAddCredits } }));
+vi.mock('@bike4mind/services', () => ({ creditService: { payCreditReward: mockAddCredits } }));
+vi.mock('@server/credits/creditRewardAdapters', () => ({
+  buildCreditRewardAdapters: (...a: unknown[]) => mockBuildAdapters(...a),
+}));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: mockGetSettingsMap,
   getSettingsValue: (key: string, settings: Record<string, string>, fallback = 0) => Number(settings[key] ?? fallback),
@@ -25,7 +27,11 @@ vi.mock('@bike4mind/utils', () => ({
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: mockSlack }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { error: vi.fn() } }));
 
-import { REFERRAL_REWARD_REASON, rewardInviterForFirstAnswer } from './firstAnswerReward';
+import {
+  alertForReleasedReferralRewards,
+  REFERRAL_REWARD_REASON,
+  rewardInviterForFirstAnswer,
+} from './firstAnswerReward';
 
 const lean = (value: unknown) => ({ select: () => ({ lean: () => Promise.resolve(value) }) });
 const verifiedFriend = {
@@ -40,8 +46,9 @@ const givenUsers = (friend: unknown, inviter: unknown = {}) =>
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetSettingsMap.mockResolvedValue({ ReferralFirstAnswerCredits: '1000', ReferralAlertRewardsPerDay: '50' });
-  mockAddCredits.mockResolvedValue({ creditTransactionId: 'tx1' });
+  mockAddCredits.mockResolvedValue({ outcome: 'paid', creditTransactionId: 'tx1' });
   mockCountDocuments.mockResolvedValue(1);
+  mockBuildAdapters.mockReturnValue({ rewardAdapters: true });
   givenUsers(verifiedFriend);
 });
 
@@ -51,14 +58,23 @@ describe('rewardInviterForFirstAnswer', () => {
 
     expect(mockAddCredits).toHaveBeenCalledTimes(1);
     expect(mockAddCredits.mock.calls[0][0]).toMatchObject({
-      ownerId: 'inviter1',
-      ownerType: 'User',
+      userId: 'inviter1',
       credits: 1000,
-      type: 'generic_add',
+      source: 'referral_first_answer',
       reason: REFERRAL_REWARD_REASON,
       transactionId: 'referral-first-answer:inviter1:friend1',
     });
-    expect(mockAddCredits.mock.calls[0][1].db.creditLots).toBeDefined();
+    // No arguments: the default adapters open the payout's own transaction and answer a duplicate quietly.
+    expect(mockBuildAdapters).toHaveBeenCalledExactlyOnceWith();
+    expect(mockAddCredits.mock.calls[0][1]).toEqual({ rewardAdapters: true });
+  });
+
+  it('neither counts nor alerts on a reward queued for the trickle pool', async () => {
+    mockAddCredits.mockResolvedValue({ outcome: 'queued' });
+    await rewardInviterForFirstAnswer('friend1');
+    expect(mockAddCredits).toHaveBeenCalledTimes(1);
+    expect(mockCountDocuments).not.toHaveBeenCalled();
+    expect(mockSlack).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -101,7 +117,7 @@ describe('rewardInviterForFirstAnswer', () => {
   });
 
   it('does not count or alert on a replay that wrote no transaction', async () => {
-    mockAddCredits.mockResolvedValue({ creditTransactionId: undefined });
+    mockAddCredits.mockResolvedValue({ outcome: 'duplicate' });
     await rewardInviterForFirstAnswer('friend1');
     expect(mockCountDocuments).not.toHaveBeenCalled();
     expect(mockSlack).not.toHaveBeenCalled();
@@ -140,5 +156,23 @@ describe('rewardInviterForFirstAnswer', () => {
   it('never throws when a dependency fails', async () => {
     mockAddCredits.mockRejectedValue(new Error('db down'));
     await expect(rewardInviterForFirstAnswer('friend1')).resolves.toBeUndefined();
+  });
+});
+
+describe('alertForReleasedReferralRewards', () => {
+  it('runs the spike alert for each reward the held release paid', async () => {
+    mockCountDocuments.mockImplementation(async (filter: { _id: { $lt: string } }) =>
+      filter._id.$lt === 'released2' ? 50 : 10
+    );
+    await alertForReleasedReferralRewards(['released1', 'released2']);
+    expect(mockCountDocuments).toHaveBeenCalledTimes(2);
+    expect(mockSlack).toHaveBeenCalledTimes(1);
+    expect(mockSlack.mock.calls[0][0]).toContain('51');
+  });
+
+  it('reads nothing when the release paid no referral reward', async () => {
+    await alertForReleasedReferralRewards([]);
+    expect(mockGetSettingsMap).not.toHaveBeenCalled();
+    expect(mockSlack).not.toHaveBeenCalled();
   });
 });

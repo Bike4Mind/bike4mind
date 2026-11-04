@@ -284,7 +284,10 @@ export function buildOverview({
     signupsMode,
     accounts,
     lastUpdated: lastUpdated?.toISOString() ?? null,
-    stale: !lastUpdated || now.getTime() - lastUpdated.getTime() > ANALYTICS_STALE_AFTER_MS,
+    // A fully past range is complete history; only a window reaching the latest rollup can be stale.
+    stale:
+      window.to >= shiftDay(window.today, -1) &&
+      (!lastUpdated || now.getTime() - lastUpdated.getTime() > ANALYTICS_STALE_AFTER_MS),
     missingDays: completeDays.filter(day => !byDay.has(day)),
     internalMissingDays:
       accounts === 'external' ? [] : completeDays.filter(day => byDay.has(day) && !usableInternal(byDay.get(day))),
@@ -320,13 +323,27 @@ async function distinctUsersBefore(today: string, windowDays: number): Promise<s
   }).maxTimeMS(LIVE_QUERY_DEADLINE_MS);
 }
 
+/**
+ * Yesterday's active users when its rollup has not run yet (the nightly rollup lands at 04:00 UTC),
+ * so today's windows do not drop users seen only yesterday. Empty once the daily row exists.
+ */
+async function unrolledYesterdayUsers(today: string): Promise<{ external: string[]; internal: string[] }> {
+  const yesterday = shiftDay(today, -1);
+  if (await AnalyticsDaily.exists({ day: yesterday }).maxTimeMS(LIVE_QUERY_DEADLINE_MS)) {
+    return { external: [], internal: [] };
+  }
+  const usage = await collectDayUsage(yesterday, { maxTimeMS: LIVE_QUERY_DEADLINE_MS });
+  return { external: [...usage.perUser.keys()], internal: usage.internal.userIds };
+}
+
 /** Today so far, with collectDayUsage and classifyCohort so it counts exactly what the nightly rollup will. */
 export async function loadLiveDay(today: string, now: Date): Promise<LiveDay> {
-  const [usage, cohort, weekIds, monthIds] = await Promise.all([
+  const [usage, cohort, weekIds, monthIds, yesterdayIds] = await Promise.all([
     collectDayUsage(today, { maxTimeMS: LIVE_QUERY_DEADLINE_MS }),
     classifyCohort(today, { now, maxTimeMS: LIVE_QUERY_DEADLINE_MS }),
     distinctUsersBefore(today, WAU_WINDOW_DAYS),
     distinctUsersBefore(today, MAU_WINDOW_DAYS),
+    unrolledYesterdayUsers(today),
   ]);
   const todayIds = [...usage.perUser.keys()];
   const internal = await internalWindowIds(
@@ -334,18 +351,23 @@ export async function loadLiveDay(today: string, now: Date): Promise<LiveDay> {
     { day: today, userIds: usage.internal.userIds },
     { maxTimeMS: LIVE_QUERY_DEADLINE_MS }
   );
+  // A missing yesterday row adds nothing to internalWindowIds, so its live internal ids are added here.
+  for (const id of yesterdayIds.internal) {
+    internal.week.add(id);
+    internal.month.add(id);
+  }
   return {
     dau: todayIds.length,
-    wau: new Set([...weekIds, ...todayIds]).size,
-    mau: new Set([...monthIds, ...todayIds]).size,
+    wau: unionSize(weekIds, yesterdayIds.external, todayIds),
+    mau: unionSize(monthIds, yesterdayIds.external, todayIds),
     signups: cohort.signups,
     requestsBySource: Object.fromEntries(usage.bySource),
     internal: {
       dau: usage.internal.userIds.length,
       wau: internal.week.size,
       mau: internal.month.size,
-      allWau: unionSize(weekIds, todayIds, internal.week),
-      allMau: unionSize(monthIds, todayIds, internal.month),
+      allWau: unionSize(weekIds, yesterdayIds.external, todayIds, internal.week),
+      allMau: unionSize(monthIds, yesterdayIds.external, todayIds, internal.month),
       windowComplete: internal.complete,
       requestsBySource: Object.fromEntries(usage.internal.bySource),
     },

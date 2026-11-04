@@ -26,6 +26,7 @@ describe('loadApiKeyTrustSettings', () => {
     await expect(loadApiKeyTrustSettings(database([]))).resolves.toEqual({
       gateEnabled: true,
       minAccountAgeDays: 7,
+      accountAgeTrustsKeys: true,
       maxActiveKeysUntrusted: 1,
       untrustedRateLimitPerMinute: 20,
       untrustedRequestsPerDay: 0,
@@ -38,6 +39,7 @@ describe('loadApiKeyTrustSettings', () => {
     const db = database([
       setting('apiKeyTrustGateEnabled', 'false'),
       setting('apiKeyMinAccountAgeDays', '14'),
+      setting('apiKeyAccountAgeTrustsKeys', 'false'),
       setting('maxActiveKeysUntrusted', '3'),
       setting('apiKeyUntrustedRateLimitPerMin', '31'),
       setting('apiKeyUntrustedRequestsPerDay', '503'),
@@ -47,6 +49,7 @@ describe('loadApiKeyTrustSettings', () => {
     await expect(loadApiKeyTrustSettings(db)).resolves.toEqual({
       gateEnabled: false,
       minAccountAgeDays: 14,
+      accountAgeTrustsKeys: false,
       maxActiveKeysUntrusted: 3,
       untrustedRateLimitPerMinute: 31,
       untrustedRequestsPerDay: 503,

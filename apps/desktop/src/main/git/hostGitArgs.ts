@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { hostProgram } from '../chat/tools/userPath';
 const EMPTY_HOOKS_PATH = process.platform === 'win32' ? 'NUL' : '/dev/null';
 
 /** Config overrides so a repo's own `.git/config` cannot run hooks or a file-system monitor on the host. */
@@ -18,10 +19,12 @@ export type ScopedConfigReader = (cwd: string) => Promise<ConfigEntry[]>;
 
 const NETWORK_KEYS = '^(credential\\.(.*\\.)?helper|core\\.sshcommand|core\\.askpass)$';
 
-const readScopedConfig: ScopedConfigReader = cwd =>
-  new Promise(resolve => {
+const readScopedConfig: ScopedConfigReader = async cwd => {
+  const git = await hostProgram('git');
+  return new Promise(resolve => {
+    if (!git) return resolve([]);
     execFile(
-      'git',
+      git,
       ['config', '--show-scope', '-z', '--get-regexp', NETWORK_KEYS],
       { cwd, timeout: 2000 },
       (error, stdout) => {
@@ -42,6 +45,7 @@ const readScopedConfig: ScopedConfigReader = cwd =>
       }
     );
   });
+};
 
 // Apple Git reports its bundled config (which sets the osxkeychain helper) as `unknown`.
 const TRUSTED_SCOPES = new Set(['system', 'global', 'unknown']);

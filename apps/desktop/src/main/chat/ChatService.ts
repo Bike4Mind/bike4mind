@@ -67,6 +67,7 @@ import {
 import { AUTO_COMPACT_PERCENT, inputSide, occupiedTokens, shouldAutoCompact } from '@shared/contextLimit';
 import { estimateContextOverhead, type ContextSnapshot } from '@shared/contextBreakdown';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
+import { serverIdOfRuntime } from '@shared/modelServers';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
 import type { AppWorktree } from '@shared/worktreeRemoval';
 import { ASK_USER_TOOL_NAME, parseQuestions, sanitizeAnswers, type ChatQuestionOutcome } from '@shared/questions';
@@ -122,6 +123,7 @@ import {
   type WorkspaceOutcome,
 } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
+import type { PdfPromptText } from './pdfText';
 import type { AttachmentStore } from './AttachmentStore';
 import type { SidebarSectionStore } from './SidebarSectionStore';
 import { childOutcomeDisplay, classifyChildOutcome } from './childOutcome';
@@ -223,6 +225,8 @@ import {
   type ImageContext,
   type ScreenCapturer,
   type ScreenContext,
+  type SimulatorContext,
+  type SimulatorDriver,
   type ToolContext,
   type ToolDefinition,
   type ToolReporter,
@@ -492,6 +496,14 @@ export interface ChatServiceDeps {
   pullRequests?: Pick<PrMonitor, 'bindForAgent' | 'dismiss'>;
   /** Other apps' windows, for screen_capture. Absent in tests that do not exercise it; the tool is then not declared. */
   screen?: ScreenCapturer;
+  /**
+   * The iOS Simulator and the user's live view of it. Wired on macOS only, so on any other
+   * platform (and in tests that do not exercise it) the simulator tools are not declared.
+   */
+  simulator?: {
+    driver: SimulatorDriver;
+    view: { attach(udid: string): Promise<unknown>; detach(): void; attachedUdid(): string | undefined };
+  };
   /** Fits an image a tool shows the model. Absent in tests, where file_read then describes an image in text. */
   prepareImage?: ImageContext['prepare'];
   history?: LocalHistory;
@@ -581,6 +593,8 @@ interface ResumedReply {
   artifacts: ChatArtifact[];
   usage?: ChatUsage;
   contextSnapshot?: ContextSnapshot;
+  /** The model the reply started on, which a resumed run keeps stamping it with. */
+  model?: string;
 }
 
 /** One round as it is produced, before its artifact markup is parsed out of the text. */
@@ -913,7 +927,7 @@ export class ChatService {
     this.deps.sessionClosed?.(sessionId);
   }
 
-  listModels(force = false): Promise<ChatModelCatalog> {
+  listModels(force: boolean | 'local' = false): Promise<ChatModelCatalog> {
     return this.deps.models?.list(force) ?? Promise.resolve({ models: [] });
   }
 
@@ -2176,15 +2190,24 @@ export class ChatService {
 
     // Reached only from the Continue button, so whoever clicked it is there to answer a card.
     this.attendedTurns.add(sessionId);
+    // A reply stored before it was stamped still says what it started on in its context snapshot.
+    const startedOn = last.model ?? last.contextSnapshot?.model;
     const replyId = this.startReply(session, api, historyScope, {
       id: last.id,
       content: last.content,
       // A message stored before rounds were recorded resumes as one round holding everything it
       // said and everything it ran, which is the most the flat shape supports: the turn carries
       // on correctly, and only the ordering of what came BEFORE stays unrecoverable.
-      rounds: last.rounds ?? [{ text: last.content, toolCallIds: (last.toolCalls ?? []).map(call => call.id) }],
+      rounds: last.rounds ?? [
+        {
+          text: last.content,
+          toolCallIds: (last.toolCalls ?? []).map(call => call.id),
+          ...(startedOn ? { model: startedOn } : {}),
+        },
+      ],
       toolCalls: last.toolCalls ?? [],
       artifacts: last.artifacts ?? [],
+      ...(startedOn ? { model: startedOn } : {}),
       ...(last.usage ? { usage: last.usage } : {}),
       ...(last.contextSnapshot ? { contextSnapshot: last.contextSnapshot } : {}),
     });
@@ -2516,13 +2539,18 @@ export class ChatService {
   }
 
   /**
-   * The last local list when it still has `model`, so a turn costs Ollama no discovery; otherwise one forced
-   * read. A model removed outside the app since that list fails its turn, which forgets the list.
+   * The last local list while its row for `model` is ready; otherwise one forced read, which for a turn waits out
+   * its own server's listing. A row listed while its server was down or still listing lacks the model's settings.
    */
-  private async localModelsFor(model: string): Promise<ChatModelOption[]> {
+  private async localModelsFor(model: string, turn = false): Promise<ChatModelOption[]> {
     const last = this.deps.models?.lastLocal?.();
-    if (last && findModelOption(last, model)) return last;
-    return (await this.deps.models?.listLocal?.(true)) ?? [];
+    const cached = findModelOption(last ?? undefined, model);
+    if (last && cached && cached.unavailable === undefined) return last;
+    const runtimeId = parseLocalModelId(model)?.runtimeId;
+    const serverId = turn && runtimeId ? serverIdOfRuntime(runtimeId) : null;
+    const models = this.deps.models;
+    const listed = serverId ? models?.listLocal?.(true, { untilListed: serverId }) : models?.listLocal?.(true);
+    return (await listed) ?? [];
   }
 
   /** Saves the model a send would use, so the picker shows it before the user sends. Null when nothing changed. */
@@ -2685,10 +2713,21 @@ export class ChatService {
       let mcpServers = (await this.deps.mcp?.state())?.servers ?? [];
       const catalog =
         localTurn && this.deps.models?.listLocal
-          ? { models: await this.localModelsFor(session.model) }
+          ? {
+              models: controller.signal.aborted
+                ? []
+                : await unlessStopped(this.localModelsFor(session.model, true), controller.signal, []),
+            }
           : await this.deps.models?.list();
       const cacheable = supportsPromptCache(catalog?.models ?? [], session.model);
       const modelOption = findModelOption(catalog?.models, session.model);
+      if (localTurn && modelOption?.unavailable !== undefined) {
+        if (modelOption.wantsCredentials && modelOption.server) {
+          throw new ServerCredentialsError(modelOption.server.name, modelOption.wantsCredentials === 'rejected');
+        }
+        const reason = modelOption.unavailable.replace(/\.$/, '');
+        throw new Error(`${reason}. Pick another model, or check the server under Settings, Model servers.`);
+      }
       const maxTokens = modelOption?.maxOutputTokens;
       const thinkingToggle =
         modelOption?.thinkingToggle ??
@@ -2711,6 +2750,18 @@ export class ChatService {
         ? {
             capturer: screenCapturer,
             keepScreenshot: (bytes, caption) => this.keepScreenshot(sessionId, bytes, caption),
+          }
+        : undefined;
+      const simulatorDeps = this.deps.simulator;
+      const simulator: SimulatorContext | undefined = simulatorDeps
+        ? {
+            driver: simulatorDeps.driver,
+            keepScreenshot: (bytes, caption) => this.keepScreenshot(sessionId, bytes, caption),
+            attached: () => simulatorDeps.view.attachedUdid(),
+            attach: async udid => {
+              await simulatorDeps.view.attach(udid);
+            },
+            detach: () => simulatorDeps.view.detach(),
           }
         : undefined;
       const offerExplore = shouldOfferExplore(catalog?.models ?? [], session.model);
@@ -2759,6 +2810,7 @@ export class ChatService {
               explore: !!explore,
               browser: !!browser,
               screen: !!screen,
+              simulator: !!simulator,
               memory: !!memory,
               skills: !!skills,
               web: !!web,
@@ -2792,8 +2844,7 @@ export class ChatService {
       const contextBlock = this.projectContext.get(session.id, project?.workingDirectory, project?.directory);
       const skillsBlock = this.skillsPrompt?.get(session.id, skillRoot) ?? Promise.resolve('');
       if (!resume) await this.reportSuggestionOutcomes(session);
-      const readAttachment = (attachment: ChatAttachment) =>
-        this.deps.attachments?.read(session.id, attachment.id) ?? Promise.resolve(null);
+      const readAttachment = this.attachmentReader(session.id);
       const projectContext = await contextBlock;
       const skillsSection = await skillsBlock;
       let toolsSupported = modelOption?.supportsTools !== false && (!localTurn || !!modelOption);
@@ -2822,6 +2873,7 @@ export class ChatService {
           memory: !!memory,
           ask,
           screen: !!screen,
+          simulator: !!simulator,
         }),
       });
       const schemaFor = (name: string): ToolSchema | undefined =>
@@ -2895,7 +2947,8 @@ export class ChatService {
           toolsSupported && ask,
           session.model,
           toolsSupported && !!web,
-          toolsSupported && !!screen
+          toolsSupported && !!screen,
+          toolsSupported && !!simulator
         );
       wire.unshift(
         deferred ? buildDeferredSystemMessage(session.project, projectContext, skillsSection) : systemMessage()
@@ -2941,22 +2994,15 @@ export class ChatService {
 
         const rounds = [
           ...(resume?.rounds ?? []),
-          ...parsed
-            // Trimmed so the join below lands exactly one blank line between rounds, and so a
-            // round does not draw a gap under itself where the model happened to end on newlines.
-            .map(entry => ({
-              text: entry.content.trim(),
-              toolCallIds: entry.round.toolCallIds,
-              timing: entry.round.timing,
-              ...(entry.round.usage ? { usage: entry.round.usage } : {}),
-              ...(entry.round.reasoning.trim() ? { reasoning: entry.round.reasoning.trim() } : {}),
-              sent: entry.round.sent,
-            }))
-            // A round with only usage is kept: it is the measured size of a trimmed round stopped early.
-            .filter(round => round.text.length > 0 || round.toolCallIds.length > 0 || round.reasoning || round.usage),
+          ...storedRounds(
+            parsed.map(entry => ({ round: entry.round, text: entry.content })),
+            session.model
+          ),
         ];
-        // A plain reply keeps no rounds, but one that reasoned needs them to carry the reasoning.
-        const keepRounds = toolCalls.length > 0 || rounds.some(round => round.reasoning);
+        // A plain reply keeps no rounds, but one that reasoned needs them to carry the reasoning,
+        // and one continued on another model needs them to say which model spent what.
+        const continuedOnOther = resume?.model !== undefined && resume.model !== session.model;
+        const keepRounds = toolCalls.length > 0 || continuedOnOther || rounds.some(round => round.reasoning);
         const finalContent = joinRounds(rounds.map(round => round.text));
         const lastTiming = produced[produced.length - 1]?.timing;
         const promptCache: ChatPromptCacheStamp | undefined =
@@ -2969,6 +3015,7 @@ export class ChatService {
           role: 'assistant',
           content: finalContent,
           createdAt: new Date().toISOString(),
+          model: resume ? resume.model : session.model,
           stopReason,
           ...(toolCalls.length > 0 ? { toolCalls } : {}),
           ...(keepRounds ? { rounds } : {}),
@@ -2999,6 +3046,7 @@ export class ChatService {
       const screenshotTurns: number[] = [];
 
       for (let roundIndex = 0; roundIndex < limits.rounds; roundIndex++) {
+        if (controller.signal.aborted) break;
         if (liveState && roundIndex > 0) {
           const next = toolState();
           if (!sameToolState(liveState, next)) {
@@ -3230,6 +3278,7 @@ export class ChatService {
                 explore,
                 browser,
                 screen,
+                simulator,
                 images,
                 memory,
                 skills,
@@ -3451,8 +3500,23 @@ export class ChatService {
         role: 'assistant',
         content,
         createdAt: new Date().toISOString(),
+        model: resume ? resume.model : session.model,
         error: message,
         ...stop,
+        // A resumed reply is rewritten in place, so whatever it already held must be passed back
+        // or the write clears it: its artifact markup is long gone from `content`.
+        ...(resume
+          ? {
+              rounds: [
+                ...resume.rounds,
+                ...storedRounds(
+                  produced.map(round => ({ round, text: round.text })),
+                  session.model
+                ),
+              ],
+              ...(resume.artifacts.length > 0 ? { artifacts: resume.artifacts } : {}),
+            }
+          : {}),
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
         ...(usage ? { usage } : {}),
         ...(contextSnapshot ? { contextSnapshot } : {}),
@@ -3536,6 +3600,7 @@ export class ChatService {
     // must clear the budget stop the previous one left behind, and `Partial` would keep it.
     const updated = await this.deps.store.updateMessage(sessionId, message.id, {
       content: message.content,
+      model: message.model,
       stopReason: message.stopReason,
       error: message.error,
       toolCalls: message.toolCalls,
@@ -3707,6 +3772,13 @@ export class ChatService {
     for (const entry of [...entries].reverse()) this.deps.queue?.restore(sessionId, entry);
   }
 
+  private attachmentReader(sessionId: string): AttachmentReader {
+    return {
+      bytes: attachment => this.deps.attachments?.read(sessionId, attachment.id) ?? Promise.resolve(null),
+      pdfText: attachment => this.deps.attachments?.readPdfText(sessionId, attachment.id) ?? Promise.resolve(null),
+    };
+  }
+
   /**
    * One arrival as the next request carries it: built by the same code a replay uses, so this
    * turn's wire and the next turn's rebuild agree. Text goes as a one-block array rather than a
@@ -3714,10 +3786,7 @@ export class ChatService {
    * already holds text (this round's screenshot turn) and drops it there.
    */
   private async arrivalWire(session: ChatSession, message: ChatMessage): Promise<CompletionMessage | null> {
-    const [turn] = await toCompletionMessages(
-      { ...session, messages: [message] },
-      (attachment: ChatAttachment) => this.deps.attachments?.read(session.id, attachment.id) ?? Promise.resolve(null)
-    );
+    const [turn] = await toCompletionMessages({ ...session, messages: [message] }, this.attachmentReader(session.id));
     if (!turn) return null;
     return typeof turn.content === 'string' ? { ...turn, content: [{ type: 'text', text: turn.content }] } : turn;
   }
@@ -3799,6 +3868,7 @@ export class ChatService {
       explore: ExploreContext | undefined;
       browser: BrowserContext | undefined;
       screen: ScreenContext | undefined;
+      simulator: SimulatorContext | undefined;
       images: ImageContext | undefined;
       memory: MemoryStore | undefined;
       skills: SkillContext | undefined;
@@ -3833,6 +3903,7 @@ export class ChatService {
       explore,
       browser,
       screen,
+      simulator,
       images,
       memory,
       skills,
@@ -3982,6 +4053,7 @@ export class ChatService {
           ...(explore ? { explore } : {}),
           ...(browser ? { browser } : {}),
           ...(screen ? { screen } : {}),
+          ...(simulator ? { simulator } : {}),
           ...(images ? { images } : {}),
           ...(memory ? { memory } : {}),
           ...(skills ? { skills } : {}),
@@ -6095,7 +6167,8 @@ export function buildSystemMessage(
   ask = false,
   modelId = '',
   web = false,
-  screen = false
+  screen = false,
+  simulator = false
 ): CompletionMessage {
   if (roots.length === 0) {
     return {
@@ -6106,6 +6179,7 @@ export function buildSystemMessage(
         // read nothing on disk can still open a page, and needs to be told how.
         ...(browser ? BROWSER_GUIDANCE : []),
         ...(screen ? SCREEN_GUIDANCE : []),
+        ...(simulator ? SIMULATOR_GUIDANCE : []),
         ...(web ? WEB_GUIDANCE : []),
         ...(media ? MEDIA_GUIDANCE : []),
         ...(host ? HOST_GUIDANCE : []),
@@ -6133,6 +6207,7 @@ export function buildSystemMessage(
       ...localToolLines(ask, projectContext ? 'below' : null, explore, patchEdits),
       ...(browser ? BROWSER_GUIDANCE : []),
       ...(screen ? SCREEN_GUIDANCE : []),
+      ...(simulator ? SIMULATOR_GUIDANCE : []),
       ...(web ? WEB_GUIDANCE : []),
       ...HONESTY_LINES,
       ...(media ? MEDIA_GUIDANCE : []),
@@ -6327,6 +6402,7 @@ export function buildToolStateText(state: {
   memory: boolean;
   ask: boolean;
   screen: boolean;
+  simulator?: boolean;
 }): string {
   const { roots, ask, mcpServers } = state;
   const mcp = mcpServers ? (ask ? 'manage' : 'read') : null;
@@ -6344,6 +6420,7 @@ export function buildToolStateText(state: {
         ]),
     ...(state.browser ? BROWSER_GUIDANCE : []),
     ...(state.screen ? SCREEN_GUIDANCE : []),
+    ...(state.simulator ? SIMULATOR_GUIDANCE : []),
     ...(state.media ? MEDIA_GUIDANCE : []),
     ...(state.host ? HOST_GUIDANCE : []),
     ...(state.memory ? MEMORY_GUIDANCE : []),
@@ -6447,6 +6524,16 @@ const SCREEN_GUIDANCE: readonly string[] = [
   'see. To check a desktop app - an Electron dev build you started with bash_background, say -',
   'wait for its window to open, then capture it by title instead of guessing how it looks. Each',
   'capture asks the user first. For web pages use the browser tools.',
+];
+
+const SIMULATOR_GUIDANCE: readonly string[] = [
+  'The simulator_* tools run and drive iOS apps in the iOS Simulator on this Mac. When the user',
+  'wants to see or try their iOS app, call simulator_view to open their live panel first, then',
+  'simulator_build (xcodebuild for a scheme) and simulator_launch with the .app it returns. Check',
+  'the app with simulator_screenshot rather than predicting it from the code: the image is in',
+  'points, so read tap coordinates straight off it for simulator_input. Each device asks the user',
+  'once. A failure that names a Fix (no Xcode, an unaccepted license, the wrong xcode-select, a',
+  'missing runtime or AXe) is for the user to run: tell them the exact fix and do not retry.',
 ];
 
 const WEB_GUIDANCE: readonly string[] = [
@@ -6960,6 +7047,13 @@ function resumedUntrusted(calls: readonly ChatToolCall[]): { untrusted?: string 
   return source ? { untrusted: source.name } : {};
 }
 
+/** `work`'s result, or `stopped` once `signal` aborts; a later result or rejection then goes nowhere. */
+async function unlessStopped<T>(work: Promise<T>, signal: AbortSignal, stopped: T): Promise<T> {
+  const outcome = await untilStopped(work, signal, () => false, 0);
+  if (outcome.kind === 'threw') throw outcome.error;
+  return outcome.kind === 'returned' ? outcome.value : stopped;
+}
+
 function untrustedReason(tool: string): string {
   const source = tool.startsWith('browser_')
     ? 'a web page in the browser'
@@ -7036,7 +7130,7 @@ function parseArguments(raw: string | undefined): Record<string, unknown> {
  */
 async function toCompletionMessages(
   session: ChatSession,
-  readAttachment: ReadAttachment,
+  readAttachment: AttachmentReader,
   /** Deferred-tools turns only: tool-state reminders are rendered and each one's position is pushed here. */
   toolStateMarks?: ToolStateMark[],
   /** Deferred-tools turns only: the wire index of every assistant message a deferred turn sent. */
@@ -7155,6 +7249,26 @@ function sentRounds(message: ChatMessage): CompletionMessage[] | undefined {
   return out;
 }
 
+/** Stored rounds from a run's raw ones; `text` is whatever prose the caller stores, artifact markup included or not. */
+function storedRounds(runs: { round: RawRound; text: string }[], model: string): ChatReplyRound[] {
+  return (
+    runs
+      // Trimmed so the join lands exactly one blank line between rounds, and so a round does not
+      // draw a gap under itself where the model happened to end on newlines.
+      .map(({ round, text }) => ({
+        text: text.trim(),
+        toolCallIds: round.toolCallIds,
+        timing: round.timing,
+        ...(round.usage ? { usage: round.usage } : {}),
+        model,
+        ...(round.reasoning.trim() ? { reasoning: round.reasoning.trim() } : {}),
+        sent: round.sent,
+      }))
+      // A round with only usage is kept: it is the measured size of a trimmed round stopped early.
+      .filter(round => round.text.length > 0 || round.toolCallIds.length > 0 || round.reasoning || round.usage)
+  );
+}
+
 /** The rounds minus `sent`, which only replay reads, for the renderer: it roughly doubles a tool turn. */
 function withoutSent(rounds: ChatReplyRound[]): ChatReplyRound[] {
   return rounds.map(round => {
@@ -7269,8 +7383,11 @@ function automaticDisplay(automatic: ChatAutomaticOrigin): string {
     : `Auto-fix: ${automatic.summary}`;
 }
 
-/** Reads one attachment's stored bytes, or null when the file is gone. */
-type ReadAttachment = (attachment: ChatAttachment) => Promise<Buffer | null>;
+/** Reads one attachment's stored content; null when the file is gone or, for a PDF, unreadable. */
+interface AttachmentReader {
+  bytes(attachment: ChatAttachment): Promise<Buffer | null>;
+  pdfText(attachment: ChatAttachment): Promise<PdfPromptText | null>;
+}
 
 /**
  * A user turn that carried attachments, as provider-shaped content blocks.
@@ -7278,7 +7395,8 @@ type ReadAttachment = (attachment: ChatAttachment) => Promise<Buffer | null>;
  * Images go FIRST and as real image blocks: the point of this feature is that a screenshot
  * arrives as pixels rather than as a filename the model then invents contents for. Text files
  * are inlined into the single text block ahead of the user's own words, so the question they
- * are asking is the last thing the model reads.
+ * are asking is the last thing the model reads. A PDF goes the same way as its extracted text:
+ * not every model, and no local server, can read a document block.
  *
  * An attachment whose bytes have vanished is skipped rather than faked - a placeholder saying
  * "image.png" is exactly the filename-instead-of-image failure this exists to avoid.
@@ -7286,13 +7404,23 @@ type ReadAttachment = (attachment: ChatAttachment) => Promise<Buffer | null>;
 async function toAttachedContent(
   prompt: string,
   attachments: readonly ChatAttachment[],
-  readAttachment: ReadAttachment
+  readAttachment: AttachmentReader
 ): Promise<unknown[]> {
   const blocks: unknown[] = [];
   const sections: string[] = [];
 
   for (const attachment of attachments) {
-    const bytes = await readAttachment(attachment);
+    if (attachment.kind === 'pdf') {
+      const pdf = await readAttachment.pdfText(attachment);
+      if (pdf) {
+        sections.push(
+          textAttachmentBlock({ ...attachment, pages: pdf.pages, truncated: pdf.truncated || undefined }, pdf.text)
+        );
+      }
+      continue;
+    }
+
+    const bytes = await readAttachment.bytes(attachment);
     if (!bytes) continue;
 
     if (attachment.kind === 'image') {

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import {
@@ -9,7 +9,7 @@ import { handler } from './invoicePaymentSucceeded';
 import { unlockSignupGrantFromSubscription } from '@server/credits/subscriptionUnlock';
 import { emitProductEvent } from '@bike4mind/server-utils/analytics/emitActiveEvent';
 import { stableEventId } from '@server/analytics/signupEvents';
-import { userRepository } from '@bike4mind/database';
+import { paymentAttemptRepository, userRepository } from '@bike4mind/database';
 import { recordSubscriptionPaymentReward } from '@server/referrals/subscriptionReward';
 import { postNewPaidSubscriptionToSlack } from '@server/integrations/slack/subscriptionLifecycle';
 
@@ -17,6 +17,7 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   stripe: {
     invoices: { retrieve: vi.fn() },
     subscriptions: { retrieve: vi.fn() },
+    checkout: { sessions: { list: vi.fn().mockResolvedValue({ data: [] }) } },
   },
 }));
 
@@ -50,11 +51,12 @@ vi.mock('@server/integrations/slack/subscriptionLifecycle', () => ({
 }));
 
 // The real source-product emitter runs (signupEvents.ts); only the network edge is mocked, with
-// ingest keys for two made-up products.
+// ingest keys for two made-up products, and for the host where a test gives it one.
+const ingestKeys = new Set(['widgets', 'gadgets']);
 vi.mock('@bike4mind/server-utils/analytics/emitActiveEvent', () => ({
   HOST_PRODUCT_ID: 'bike4mind',
   emitProductEvent: vi.fn().mockResolvedValue(undefined),
-  ingestKeyFor: (p: string) => (p === 'widgets' || p === 'gadgets' ? 'key' : undefined),
+  ingestKeyFor: (p: string) => (ingestKeys.has(p) ? 'key' : undefined),
 }));
 
 vi.mock('@server/credits/subscriptionUnlock', () => ({
@@ -63,6 +65,7 @@ vi.mock('@server/credits/subscriptionUnlock', () => ({
 
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: vi.fn().mockResolvedValue(null) },
+  paymentAttemptRepository: { findVisitId: vi.fn().mockResolvedValue(null) },
 }));
 
 vi.mock('@server/referrals/subscriptionReward', () => ({ recordSubscriptionPaymentReward: vi.fn() }));
@@ -190,6 +193,56 @@ describe('invoicePaymentSucceeded - purchase credited to the source product', ()
       ]);
     }
   );
+
+  describe('the visit Checkout was opened in', () => {
+    const visitId = 'a'.repeat(32);
+    const sessions = () =>
+      Object.fromEntries(vi.mocked(emitProductEvent).mock.calls.map(([c]) => [c.productId, c.sessionId]));
+
+    beforeEach(() => {
+      ingestKeys.add('bike4mind');
+      vi.mocked(stripe.checkout.sessions.list).mockResolvedValue({ data: [{ id: 'cs_1' }] } as never);
+      vi.mocked(paymentAttemptRepository.findVisitId).mockResolvedValue(visitId);
+    });
+    afterEach(() => {
+      ingestKeys.delete('bike4mind');
+      vi.mocked(stripe.checkout.sessions.list).mockResolvedValue({ data: [] } as never);
+      vi.mocked(paymentAttemptRepository.findVisitId).mockResolvedValue(null);
+    });
+
+    it("names it on the host copy of the opening invoice, found through the subscription's session", async () => {
+      invoice();
+
+      await run();
+
+      expect(stripe.checkout.sessions.list).toHaveBeenCalledExactlyOnceWith({ subscription: 'sub_inv_u', limit: 1 });
+      expect(paymentAttemptRepository.findVisitId).toHaveBeenCalledExactlyOnceWith('cs_1');
+      expect(sessions()).toEqual({ bike4mind: visitId, widgets: undefined, gadgets: undefined });
+    });
+
+    it.each(['subscription_cycle', 'subscription_update'])(
+      'looks none up for a %s invoice, which happened in no visit',
+      async billingReason => {
+        invoice({ billing_reason: billingReason });
+
+        await run();
+
+        expect(stripe.checkout.sessions.list).not.toHaveBeenCalled();
+        expect(sessions()).toEqual({ bike4mind: undefined, widgets: undefined, gadgets: undefined });
+      }
+    );
+
+    it('still reports the purchase when the lookup fails', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      invoice();
+      vi.mocked(stripe.checkout.sessions.list).mockRejectedValue(new Error('stripe down'));
+
+      await expect(run()).resolves.toBeUndefined();
+
+      expect(sessions()).toEqual({ bike4mind: undefined, widgets: undefined, gadgets: undefined });
+      warn.mockRestore();
+    });
+  });
 
   it('sends nothing for a zero-amount invoice (a trial)', async () => {
     invoice({ amount_paid: 0 });

@@ -65,6 +65,7 @@ const AgentExecutionsTab = dynamic(() => import('./AgentExecutionsTab'), { ssr: 
 const WaitlistTab = dynamic(() => import('./WaitlistTab'), { ssr: false });
 const SignupDomainHoldsTab = dynamic(() => import('./SignupDomainHoldsTab'), { ssr: false });
 const SignupRiskReviewTab = dynamic(() => import('./SignupRiskReviewTab'), { ssr: false });
+const ModerationIncidentsTab = dynamic(() => import('./ModerationIncidentsTab'), { ssr: false });
 const ShadowDetectionsTab = dynamic(() => import('./ShadowDetectionsTab'), { ssr: false });
 const HeldSignupGrantsTab = dynamic(() => import('./HeldSignupGrantsTab'), { ssr: false });
 const PartnerSignupRulesTab = dynamic(() => import('./PartnerSignupRulesTab'), { ssr: false });
@@ -106,7 +107,7 @@ interface AdminPageProps {
 }
 
 const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
-  const [activeTab, setActiveTab] = useAdminModal(useShallow(state => [state.activeTab, state.setActiveTab]));
+  const [storedActiveTab, setActiveTab] = useAdminModal(useShallow(state => [state.activeTab, state.setActiveTab]));
   const { currentUser } = useUser();
 
   // LiveOps Triage tab visibility - show everywhere except fork production environments
@@ -118,13 +119,18 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   const isAdminTabRenderable = useCallback(
     (tab: AdminTab) =>
       canRenderAdminTab(tab, {
+        user: currentUser,
         enableUserMigration,
         liveOpsTriage: isLiveOpsEnvError ? false : liveopsEnvData?.showTab,
       }),
-    [enableUserMigration, liveopsEnvData, isLiveOpsEnvError]
+    [currentUser, enableUserMigration, liveopsEnvData, isLiveOpsEnvError]
   );
 
-  useAdminTabUrlSync(activeTab, setActiveTab, isAdminTabRenderable);
+  useAdminTabUrlSync(storedActiveTab, setActiveTab, isAdminTabRenderable);
+  // The sync corrects a tab this user cannot see only in an effect, so hide it meanwhile: the store
+  // outlives the page, and a panel committed once would already have fired its requests.
+  const activeTab =
+    typeof storedActiveTab === 'number' && !isAdminTabRenderable(storedActiveTab) ? null : storedActiveTab;
 
   // Admin Floating Chat (docked-session floating chat pattern)
   const adminSessionId = useAdminAssistantSession(!!currentUser?.isAdmin);
@@ -137,7 +143,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   return (
     <UndoToastProvider>
       <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-        <AdminCommandPalette onNavigate={setActiveTab} onOpenHelp={openHelpPanel} />
+        <AdminCommandPalette onNavigate={setActiveTab} canOpenTab={isAdminTabRenderable} onOpenHelp={openHelpPanel} />
         <Tabs
           aria-label="Admin tabs"
           value={activeTab}
@@ -197,6 +203,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           </TabPanel>
           <TabPanel value={AdminTab.SignupRiskReview} sx={{ padding: 0 }}>
             {activeTab === AdminTab.SignupRiskReview && <SignupRiskReviewTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.ModerationIncidents} sx={{ padding: 0 }}>
+            {activeTab === AdminTab.ModerationIncidents && <ModerationIncidentsTab />}
           </TabPanel>
           <TabPanel value={AdminTab.ShadowDetections} sx={{ padding: 0 }}>
             {activeTab === AdminTab.ShadowDetections && <ShadowDetectionsTab />}

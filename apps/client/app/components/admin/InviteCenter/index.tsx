@@ -36,7 +36,7 @@ const InviteCenter = () => {
     <Sheet sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <Box sx={{ px: '10px', pt: 1, pb: 0.5 }}>
         <Typography level="h3" sx={{ mb: 1 }}>
-          Invite Center
+          Invites
         </Typography>
         <Typography level="body-sm" sx={{ mb: 2, color: 'text.secondary' }}>
           Get people into{APP_NAME ? ` ${APP_NAME}` : ' the app'}. Send personalized invites or generate registration

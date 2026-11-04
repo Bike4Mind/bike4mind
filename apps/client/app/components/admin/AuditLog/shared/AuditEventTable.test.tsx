@@ -62,6 +62,19 @@ describe('AuditEventTable', () => {
     expect(screen.getByTestId('audit-table-row-entry-25')).toBeVisible();
   });
 
+  it('puts the full reason on the clamped cell title, and none on a missing reason', () => {
+    const longReason = 'Escalated after repeated failed sign-ins from a new region. '.repeat(6).trim();
+    const entries = [
+      makeAuditEntry({ id: 'entry-long', reason: longReason }),
+      makeAuditEntry({ id: 'entry-none', reason: undefined }),
+    ];
+    render(<AuditEventTable {...baseProps} entries={entries} />, { wrapper: TestWrapper });
+    const [withReason, withoutReason] = screen.getAllByTestId('audit-table-reason');
+    expect(withReason).toHaveAttribute('title', longReason);
+    expect(withoutReason.textContent).toBe('No reason recorded');
+    expect(withoutReason).not.toHaveAttribute('title');
+  });
+
   it('retries a failed query rather than loading the next cursor', () => {
     const onRetry = vi.fn();
     const onLoadMore = vi.fn();
