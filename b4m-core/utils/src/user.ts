@@ -48,8 +48,8 @@ export const checkOrganizationStorageLimit = async (
  * @bike4mind/common): the org named by `organizationId` when set, else `user`. Pass the org the new
  * row will be STAMPED with (pickOwnerOrganizationId over the lakes it is written into), never the
  * user's selected org - that is a display preference and would gate personal files on the org's pool.
- * `pendingBytes` is that pool's in-flight upload bytes, counted as used so a burst of presigns cannot
- * each pass against a counter that only moves once bytes land.
+ * `pendingBytes` is that pool's in-flight upload bytes, counted as used: currentStorageSize only moves
+ * once bytes land.
  */
 export const checkStorageLimitForOwner = async (
   owner: { user: IUserDocument; organizationId?: string; pendingBytes?: number },

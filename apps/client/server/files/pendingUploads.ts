@@ -85,7 +85,7 @@ async function loadPendingGroups(userId: string, organizationIds: string[]): Pro
  * then returns the in-flight snapshot the quota check reserves against. Run it after the door's
  * admission gates and before consumeFileUploadBudget, so a refusal costs no hourly allowance.
  * `ownerOrganizationIds` are the org pools the new files bill to (undefined for personal files).
- * Two concurrent presigns can both read the same count; the overshoot is bounded by one request.
+ * The count is read, not reserved, so concurrent requests are each judged on the same reading.
  */
 export async function admitPendingUploads(
   req: ActiveSubscriptionsRequest,

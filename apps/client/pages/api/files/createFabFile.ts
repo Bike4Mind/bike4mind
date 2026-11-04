@@ -164,9 +164,8 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
         });
       }
 
-      // Without content the service presigns a PUT and leaves a pending client upload, so it is capped
-      // and its owner's in-flight bytes are reserved like the presign doors. The owner org follows the
-      // service's own rule, over the lakes just authorized.
+      // Without content the service presigns a PUT and leaves a pending client upload, so it is admitted
+      // like the presign doors, against the pool the service will bill (same owner rule, same lakes).
       let pending: PendingUploads | undefined;
       if (!('content' in params && params.content)) {
         pending = await admitPendingUploads(req, 1, [fabFilesService.pickOwnerOrganizationId(targetLakes)]);
