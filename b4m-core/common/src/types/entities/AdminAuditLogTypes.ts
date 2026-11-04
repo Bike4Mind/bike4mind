@@ -105,6 +105,8 @@ export interface IAdminAuditLogRepository {
     page: { limit: number; cursor?: AuditLogCursor }
   ): Promise<{ entries: AuditEntry[]; nextCursor: AuditLogCursor | null }>;
   findById(id: string): Promise<AuditEntry | null>;
+  /** One round trip; ids that are not ObjectId hex or match nothing are left out. */
+  findByIds(ids: string[]): Promise<AuditEntry[]>;
   /** Critical entries joined to their reviews: see adminAuditReview.ts. */
   listReviewQueue: ListAuditReviewQueue;
   summarize(since: Date): Promise<Omit<AuditSummary, 'windowDays' | 'since'>>;

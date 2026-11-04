@@ -281,3 +281,22 @@ describe('AdminAuditLogRepository.listReviewQueue', () => {
     ).rejects.toThrow('from is required');
   });
 });
+
+describe('AdminAuditLogRepository.findByIds', () => {
+  setupMongoTest();
+
+  it('returns the matching entries and ignores unknown and malformed ids', async () => {
+    const first = await adminAuditLogRepository.append(entry({ summary: 'first' }, new Date('2026-03-01T00:00:00Z')));
+    const second = await adminAuditLogRepository.append(entry({ summary: 'second' }, new Date('2026-03-02T00:00:00Z')));
+
+    const found = await adminAuditLogRepository.findByIds([
+      first.id,
+      second.id,
+      new Types.ObjectId().toHexString(),
+      'not-an-id',
+    ]);
+
+    expect(found.map(item => item.id).sort()).toEqual([first.id, second.id].sort());
+    await expect(adminAuditLogRepository.findByIds(['not-an-id'])).resolves.toEqual([]);
+  });
+});

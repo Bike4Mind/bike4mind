@@ -32,7 +32,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
-  adminAuditLogRepository: { findById: (...a: unknown[]) => mockFindById(...a) },
+  adminAuditLogRepository: {
+    findByIds: async (ids: string[]) => (await Promise.all(ids.map(id => mockFindById(id)))).filter(Boolean),
+  },
   adminAuditReviewRepository: {
     findByEntryIds: (...a: unknown[]) => mockFindByEntryIds(...a),
     createMany: (...a: unknown[]) => mockCreateMany(...a),

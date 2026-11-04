@@ -50,15 +50,16 @@ const handler = adminApi({
     const uniqueIds = [...new Set(entryIds)];
 
     const [entries, existingReviews] = await Promise.all([
-      Promise.all(uniqueIds.map(id => adminAuditLogRepository.findById(id))),
+      adminAuditLogRepository.findByIds(uniqueIds),
       adminAuditReviewRepository.findByEntryIds(uniqueIds),
     ]);
+    const entryById = new Map(entries.map(entry => [entry.id, entry]));
     const alreadyReviewed = new Set(existingReviews.map(review => review.auditEntryId));
 
     const skipped: MarkAuditReviewedResult['skipped'] = [];
     const eligible: string[] = [];
-    uniqueIds.forEach((id, index) => {
-      const entry = entries[index];
+    uniqueIds.forEach(id => {
+      const entry = entryById.get(id);
       const skip = (reason: MarkAuditReviewedSkipReason) => skipped.push({ id, reason });
       if (!entry) return skip('not_found');
       if (entry.severity !== 'critical') return skip('not_critical');
