@@ -361,7 +361,7 @@ describe('ModelCatalog', () => {
     catalog = new ModelCatalog(
       {
         logger: { debug: vi.fn(), warn: vi.fn() },
-        getApiClient: () => ({ get }) as unknown as AuthenticatedApiClient,
+        getApiClient: client,
         getEnvironmentUrl: () => environmentUrl,
       },
       local as never
@@ -530,7 +530,7 @@ describe('ModelCatalog', () => {
     catalog = new ModelCatalog(
       {
         logger: { debug: vi.fn(), warn: vi.fn() },
-        getApiClient: () => ({ get }) as unknown as AuthenticatedApiClient,
+        getApiClient: client,
         getEnvironmentUrl: () => environmentUrl,
       },
       local as never
