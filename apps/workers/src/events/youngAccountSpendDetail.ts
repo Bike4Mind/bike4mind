@@ -1,7 +1,7 @@
 /**
  * Names the accounts behind a young-account spend alarm. The alarm's metric is a filter over the
- * `llm-usage-settled` lines in the ChatCompletion log group (infra/llmSpend.ts), so a Logs
- * Insights query over the same group and window splits the very number the alarm measured by
+ * `llm-usage-settled` lines in every log group that settles completions (infra/llmSpendLogGroups.ts),
+ * so a Logs Insights query over the same groups and window splits the very number the alarm measured by
  * account and model. Slack gets account ids, spend, age, model mix and an admin link; never an
  * email or a name. Every failure degrades to a one-line note so the alarm itself still posts.
  */
@@ -13,8 +13,8 @@ import { rowToObject, runLogsInsightsQuery, type LogsClient } from '../utils/log
 import { escapeMrkdwn, parseReason, parseStateChangeTime } from './alarmSlackMessage';
 import type { CloudWatchAlarmPayload } from './cloudwatchAlarmTypes';
 
-/** Set by infra/dlqAlarms.ts on the relay; the ChatCompletion container log group. */
-export const LLM_SPEND_LOG_GROUP_ENV = 'LLM_SPEND_LOG_GROUP';
+/** Set by infra/dlqAlarms.ts on the relay; comma-separated, the groups infra/llmSpend.ts filters. */
+export const LLM_SPEND_LOG_GROUPS_ENV = 'LLM_SPEND_LOG_GROUPS';
 
 export const TOP_ACCOUNT_LIMIT = 5;
 const MODELS_PER_ACCOUNT = 3;
@@ -63,7 +63,7 @@ export interface SpendWindow {
 export type { LogsClient };
 
 export interface FetchOptions {
-  logGroup: string;
+  logGroups: string[];
   client?: LogsClient;
   deadlineMs?: number;
   sleep?: (ms: number) => Promise<void>;
@@ -114,9 +114,9 @@ export async function fetchYoungAccountSpenders(
   window: SpendWindow,
   options: FetchOptions
 ): Promise<YoungAccountSpend> {
-  const { logGroup, ...queryOptions } = options;
+  const { logGroups, ...queryOptions } = options;
   const rows = await runLogsInsightsQuery(
-    { logGroup, window, queryString: YOUNG_ACCOUNT_SPEND_QUERY, limit: RESULT_ROW_LIMIT },
+    { logGroups, window, queryString: YOUNG_ACCOUNT_SPEND_QUERY, limit: RESULT_ROW_LIMIT },
     { deadlineMs: QUERY_DEADLINE_MS, ...queryOptions }
   );
   return { spenders: aggregateSpenders(rows), truncated: rows.length >= RESULT_ROW_LIMIT };
@@ -196,18 +196,20 @@ const fallback = (reason: string) => `${SECTION_TITLE}\n${escapeMrkdwn(reason)}`
  */
 export async function youngAccountSpendSection(
   alarm: CloudWatchAlarmPayload,
-  options: { appUrl?: string; logGroup?: string; fetch?: typeof fetchYoungAccountSpenders } = {}
+  options: { appUrl?: string; logGroups?: string[]; fetch?: typeof fetchYoungAccountSpenders } = {}
 ): Promise<string> {
-  const logGroup = (options.logGroup ?? process.env[LLM_SPEND_LOG_GROUP_ENV])?.trim();
-  if (!logGroup) return fallback('Not available: the alarm relay has no spend log group configured.');
+  const logGroups = (options.logGroups ?? (process.env[LLM_SPEND_LOG_GROUPS_ENV] ?? '').split(','))
+    .map(name => name.trim())
+    .filter(Boolean);
+  if (logGroups.length === 0) return fallback('Not available: the alarm relay has no spend log group configured.');
   const window = alarmWindow(alarm);
   if (!window) return fallback('Not available: the alarm did not say which window breached.');
   try {
-    const { spenders, truncated } = await (options.fetch ?? fetchYoungAccountSpenders)(window, { logGroup });
+    const { spenders, truncated } = await (options.fetch ?? fetchYoungAccountSpenders)(window, { logGroups });
     return formatYoungAccountSpenders(spenders, { windowEnd: window.end, appUrl: options.appUrl, truncated });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     console.warn(`[youngAccountSpendDetail] could not list accounts for ${alarm.AlarmName}: ${reason}`);
-    return fallback(`Could not be loaded (${reason}). Query the ChatCompletion log group for the window instead.`);
+    return fallback(`Could not be loaded (${reason}). Query the LLM spend log groups for the window instead.`);
   }
 }

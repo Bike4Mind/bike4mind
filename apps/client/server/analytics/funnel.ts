@@ -1,7 +1,9 @@
 import type { Request } from 'express';
 import {
   FirstRunEvents,
+  isInternalIdentity,
   isSyntheticIdentity,
+  parseInternalStaffDomains,
   parseSyntheticDomainList,
   type IUserAcquisition,
   type IUserVerifiedTouch,
@@ -21,7 +23,7 @@ import { rewardInviterForFirstAnswer } from '@server/referrals/firstAnswerReward
 // app/utils/funnelEvents.ts. Users flagged isSynthetic are handled differently by each: the client
 // half feeds GA4 and ad pixels, which have no way to set a test persona aside, so it skips them;
 // this half feeds Overwatch, which can tell them apart, so it sends them marked with the synthetic
-// lane (lane.ts).
+// lane (lane.ts). Internal accounts (isInternal, or an admin) are sent too, marked `internal: true`.
 
 async function syntheticTestDomains(): Promise<string[]> {
   try {
@@ -31,20 +33,53 @@ async function syntheticTestDomains(): Promise<string[]> {
   }
 }
 
-/** Classify and persist a synthetic account without reading acquisition cookies from its creator. */
-export async function recordSyntheticIdentity(user: {
-  id: string;
-  username?: string | null;
-  email?: string | null;
-}): Promise<boolean> {
-  const isSynthetic = isSyntheticIdentity(user, await syntheticTestDomains());
-  if (!isSynthetic) return false;
+/** The internal staff domains, the list the analytics reports and the entitlement layer read. */
+function internalStaffDomains(): string[] {
+  return parseInternalStaffDomains(process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS);
+}
+
+/** A new account's analytics flags: decided once, at creation, and stored on the user. */
+export type AccountLane = { isSynthetic: boolean; isInternal: boolean };
+
+type NewAccount = { id: string; username?: string | null; email?: string | null; isAdmin?: boolean | null };
+
+/**
+ * Classify a new account as synthetic (syntheticIdentity.ts) and as internal (isInternalIdentity: a
+ * staff-domain email, or an admin an admin created). Both are decided at signup so every later
+ * event can be stamped from the user record, and the backfill migration applies the same rules to
+ * accounts made before they existed. Never throws: a lookup failure decides "not synthetic".
+ */
+async function classifyAccount(user: NewAccount): Promise<AccountLane> {
+  return {
+    isSynthetic: isSyntheticIdentity(user, await syntheticTestDomains()),
+    isInternal: isInternalIdentity(user, internalStaffDomains()),
+  };
+}
+
+/** Only the flags that are set, so an unmarked account's record gains no `false` fields. */
+function laneFlagsToStore(lane: AccountLane): { isSynthetic?: true; isInternal?: true } {
+  return {
+    ...(lane.isSynthetic && { isSynthetic: true as const }),
+    ...(lane.isInternal && { isInternal: true as const }),
+  };
+}
+
+/**
+ * Classify and persist an admin-created account's flags without reading acquisition cookies from
+ * its creator. Resolves to what was decided, kept through a failed write, so the caller's funnel
+ * events carry the right mark either way. Never throws.
+ */
+export async function recordAccountLane(user: NewAccount): Promise<AccountLane> {
+  let lane: AccountLane = { isSynthetic: false, isInternal: false };
   try {
-    await userRepository.update({ id: user.id, isSynthetic: true });
+    lane = await classifyAccount(user);
+    if (lane.isSynthetic || lane.isInternal) {
+      await userRepository.update({ id: user.id, ...laneFlagsToStore(lane) });
+    }
   } catch (err) {
-    console.warn('[b4m-analytics] synthetic identity not persisted', err instanceof Error ? err.message : err);
+    console.warn('[b4m-analytics] account lane not persisted', err instanceof Error ? err.message : err);
   }
-  return true;
+  return lane;
 }
 
 /** The user-record shape of the touches, or undefined when there is no touch to keep. */
@@ -65,8 +100,8 @@ export function toUserAcquisition(
 }
 
 /**
- * Persist the signup's consented acquisition touches and the synthetic flag on the new user.
- * Consent is the same server-side gate signup pixels and Overwatch signup credit use
+ * Persist the signup's consented acquisition touches and the synthetic and internal flags on the
+ * new user. Consent is the same server-side gate signup pixels and Overwatch signup credit use
  * (readConsentedAcquisitionTouches), so a declined or unanswered consent stores no touch.
  *
  * A signup that follows a verified hop redeemed in this same visit also gets `verifiedTouch`: the
@@ -79,15 +114,15 @@ export function toUserAcquisition(
  */
 export async function recordSignupAcquisition(opts: {
   req: Pick<Request, 'headers'>;
-  user: { id: string; username?: string | null; email?: string | null };
+  user: NewAccount;
   method: string;
-}): Promise<{ acquisition?: IUserAcquisition; isSynthetic: boolean }> {
+}): Promise<{ acquisition?: IUserAcquisition } & AccountLane> {
   // Decided first and kept through a failed write: callers gate the signup pixel, the
-  // cross-product credit and the synthetic lane on it, so a write error must not turn a persona
-  // into a real signup.
-  let isSynthetic = false;
+  // cross-product credit and the lane marks on it, so a write error must not turn a persona or a
+  // staff account into a real signup.
+  let lane: AccountLane = { isSynthetic: false, isInternal: false };
   try {
-    isSynthetic = isSyntheticIdentity(opts.user, await syntheticTestDomains());
+    lane = await classifyAccount(opts.user);
     const verifiedTouch = await bindSignupHop(opts.req);
     const acquisition = toUserAcquisition(
       readConsentedAcquisitionTouches(opts.req),
@@ -95,23 +130,23 @@ export async function recordSignupAcquisition(opts: {
       new Date(),
       verifiedTouch
     );
-    if (acquisition || isSynthetic) {
-      await userRepository.update({
-        id: opts.user.id,
-        ...(acquisition && { acquisition }),
-        ...(isSynthetic && { isSynthetic: true }),
-      });
+    const flags = laneFlagsToStore(lane);
+    if (acquisition || Object.keys(flags).length > 0) {
+      await userRepository.update({ id: opts.user.id, ...(acquisition && { acquisition }), ...flags });
     }
-    return { ...(acquisition && { acquisition }), isSynthetic };
+    return { ...(acquisition && { acquisition }), ...lane };
   } catch (err) {
     console.warn('[b4m-analytics] signup acquisition not recorded', err instanceof Error ? err.message : err);
-    return { isSynthetic };
+    return lane;
   }
 }
 
+/** The user an emit is about: its id, the flags its mark is read from (lane.ts) and its touches. */
 export type FunnelUser = {
   id: string;
   isSynthetic?: boolean | null;
+  isInternal?: boolean | null;
+  isAdmin?: boolean | null;
   acquisition?: Pick<IUserAcquisition, 'firstTouch' | 'verifiedTouch'> | null;
 };
 
@@ -136,8 +171,9 @@ export type FunnelEvent = 'credits_granted' | 'email_verified' | 'first_value' |
  *
  * A synthetic user's stages are sent with `lane: 'synthetic'` rather than skipped. Skipped, a
  * persona's signup was indistinguishable from no signup at all; marked, it can be counted apart
- * from real signups and a persona run can still be checked. The lane is spread last so caller
- * metadata cannot unmark a synthetic user.
+ * from real signups and a persona run can still be checked. An internal account's carry
+ * `internal: true` the same way (lane.ts). The mark is spread last so caller metadata cannot
+ * unmark a user.
  *
  * `signup_completed` of an account with a verified touch also carries its `hopId` and
  * `srcProductId`, so Overwatch can count verified hop -> signup. Spread after the caller's metadata,
@@ -157,8 +193,10 @@ export async function emitFunnelEvent(opts: {
 }): Promise<boolean> {
   const utm = opts.user.acquisition?.firstTouch;
   const verifiedTouch = opts.event === 'signup_completed' ? opts.user.acquisition?.verifiedTouch : undefined;
+  // Dropped, as emitBillingEvent drops them: only the user record marks a stage.
+  const { internal: _internal, lane: _lane, ...callerMetadata } = opts.metadata ?? {};
   const metadata = {
-    ...opts.metadata,
+    ...callerMetadata,
     ...(verifiedTouch && { hopId: verifiedTouch.hopId, srcProductId: verifiedTouch.srcProductId }),
     ...laneMetadata(opts.user),
   };

@@ -3,7 +3,10 @@ import { createMocks } from 'node-mocks-http';
 
 // Middleware: collapse the baseApi chain so `.get(fn)` yields the raw handler,
 // mirroring apps/client/pages/api/auth/okta/__tests__/callback.test.ts.
-const mockChain = vi.hoisted(() => ({ order: [] as string[], post: undefined as undefined | ((...a: unknown[]) => void) }));
+const mockChain = vi.hoisted(() => ({
+  order: [] as string[],
+  post: undefined as undefined | ((...a: unknown[]) => void),
+}));
 vi.mock('@server/middlewares/baseApi', () => {
   type Chain = { use: () => Chain; post: (fn: (...a: unknown[]) => void) => Chain; get: (fn: unknown) => unknown };
   const chain: Chain = {
@@ -402,6 +405,7 @@ describe('[strategy]/callback - signup credited to the source product', () => {
       userId: 'u-new',
       touches: { lastTouch: { source: 'widgets', medium: 'landing' } },
       method: 'github',
+      account: { isSynthetic: false },
     });
     expect(res._getRedirectUrl()).toMatch(/isNewUser=1/);
     expect(res._getRedirectUrl()).toContain('firstSignupSession=1');
@@ -456,6 +460,18 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     expect(mockRefreshSignupRiskScore.mock.calls.map(([userId]) => userId)).toEqual(['u-new']);
     expect(mockRecordSignupNetwork.mock.invocationCallOrder[0]).toBeLessThan(
       mockRefreshSignupRiskScore.mock.invocationCallOrder[0]
+    );
+  });
+
+  it("passes an internal new account's flag to its funnel stages and its product credit", async () => {
+    mockRecordSignupAcquisition.mockResolvedValueOnce({ isSynthetic: false, isInternal: true });
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, { cookie: touchCookie });
+
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'u-new', isSynthetic: false, isInternal: true }) })
+    );
+    expect(mockEmitSignup).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u-new', account: { isSynthetic: false, isInternal: true } })
     );
   });
 
@@ -518,6 +534,7 @@ describe('[strategy]/callback - signup credited to the source product', () => {
       userId: 'u-new',
       touches: { lastTouch: { source: 'widgets', medium: 'landing' } },
       method: 'github',
+      account: { isSynthetic: false },
     });
   });
 
@@ -529,7 +546,12 @@ describe('[strategy]/callback - signup credited to the source product', () => {
       cookie: `${touch}; b4m_consent=denied; b4m-consent-decision=granted`,
     });
 
-    expect(mockEmitSignup).toHaveBeenCalledWith({ userId: 'u-new', touches: {}, method: 'github' });
+    expect(mockEmitSignup).toHaveBeenCalledWith({
+      userId: 'u-new',
+      touches: {},
+      method: 'github',
+      account: { isSynthetic: false },
+    });
   });
 
   // The gate fails closed, so each of these is a separate way of NOT saying granted. Absent is
@@ -547,7 +569,12 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     // way: with no touches there is no source product, so this stream sends nothing at all for
     // a suppressed visitor. The account is recorded in Mongo by the REGISTER log above, which
     // is a different system.
-    expect(mockEmitSignup).toHaveBeenCalledWith({ userId: 'u-new', touches: {}, method: 'github' });
+    expect(mockEmitSignup).toHaveBeenCalledWith({
+      userId: 'u-new',
+      touches: {},
+      method: 'github',
+      account: { isSynthetic: false },
+    });
   });
 });
 
@@ -697,11 +724,19 @@ describe('POST /api/auth/apple/callback (form_post bounce)', () => {
   });
 
   it('drops an oversized user field and truncates oversized name parts', () => {
-    const huge = post('apple', { code: 'c', state: 's', user: JSON.stringify({ name: { firstName: 'a'.repeat(3000) } }) });
+    const huge = post('apple', {
+      code: 'c',
+      state: 's',
+      user: JSON.stringify({ name: { firstName: 'a'.repeat(3000) } }),
+    });
     huge.run();
     expect(huge.res._getRedirectUrl()).toBe('/api/auth/apple/callback?code=c&state=s');
 
-    const long = post('apple', { code: 'c', state: 's', user: JSON.stringify({ name: { firstName: 'b'.repeat(500) } }) });
+    const long = post('apple', {
+      code: 'c',
+      state: 's',
+      user: JSON.stringify({ name: { firstName: 'b'.repeat(500) } }),
+    });
     long.run();
     const forwarded = new URL(long.res._getRedirectUrl(), 'http://localhost').searchParams.get('user');
     expect(JSON.parse(forwarded!).name.firstName).toHaveLength(120);

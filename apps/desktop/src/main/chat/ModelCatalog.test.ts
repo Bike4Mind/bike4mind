@@ -191,6 +191,109 @@ describe('ModelCatalog', () => {
     expect(catalog.lastLocal()).toBeNull();
   });
 
+  it('keeps a local list read after forgetLocal over one that started before it', async () => {
+    const finishes: ((models: unknown[]) => void)[] = [];
+    const local = { models: vi.fn(() => new Promise<unknown[]>(resolve => finishes.push(resolve))) };
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => null,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      local as never
+    );
+    const older = catalog.listLocal(true);
+    catalog.forgetLocal();
+    const newer = catalog.listLocal(true);
+    finishes[1]([{ id: 'local:srv-a:qwen', name: 'qwen' }]);
+    await newer;
+    finishes[0]([
+      { id: 'local:srv-a:qwen', name: 'qwen', unavailable: 'a is still listing its models', pending: true },
+    ]);
+    await older;
+    expect(catalog.lastLocal()).toEqual([{ id: 'local:srv-a:qwen', name: 'qwen' }]);
+  });
+
+  it('does not cache a local read that a forgetLocal interrupted', async () => {
+    let finish: (models: unknown[]) => void = () => undefined;
+    const local = { models: vi.fn(() => new Promise<unknown[]>(resolve => (finish = resolve))) };
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => null,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      local as never
+    );
+    const read = catalog.listLocal();
+    catalog.forgetLocal();
+    finish([{ id: 'local:ollama:qwen', name: 'qwen' }]);
+    await read;
+    expect(catalog.lastLocal()).toBeNull();
+    const again = catalog.listLocal();
+    finish([]);
+    await again;
+    expect(local.models).toHaveBeenCalledTimes(2);
+  });
+
+  it('caches a local read during which the cache was only expired', async () => {
+    const local = {
+      models: vi.fn(async () => {
+        catalog.expireLocal();
+        return [{ id: 'local:srv-a:qwen', name: 'qwen' }];
+      }),
+    };
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => null,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      local as never
+    );
+    await catalog.listLocal();
+    expect(catalog.lastLocal()?.map(model => model.id)).toEqual(['local:srv-a:qwen']);
+    await catalog.listLocal();
+    expect(local.models).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the last local list for turns once expired, while the next list reads again', async () => {
+    const local = { models: vi.fn().mockResolvedValue([{ id: 'local:srv-a:qwen', name: 'qwen' }]) };
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => null,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      local as never
+    );
+    await catalog.listLocal();
+    catalog.expireLocal();
+    expect(catalog.lastLocal()?.map(model => model.id)).toEqual(['local:srv-a:qwen']);
+    expect(catalog.cached()).toBeNull();
+    await catalog.listLocal();
+    expect(local.models).toHaveBeenCalledTimes(2);
+  });
+
+  it('merges the local list it read, even when forgetLocal runs during the hosted read', async () => {
+    let finishHosted: (value: unknown) => void = () => undefined;
+    get.mockImplementation(() => new Promise(resolve => (finishHosted = resolve)));
+    const local = { models: vi.fn().mockResolvedValue([{ id: 'local:ollama:qwen', name: 'qwen' }]) };
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => ({ get }) as unknown as AuthenticatedApiClient,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      local as never
+    );
+    const listed = catalog.list();
+    await vi.waitFor(() => expect(catalog.lastLocal()).not.toBeNull(), { timeout: 5_000 });
+    catalog.forgetLocal();
+    finishHosted({ models: [wireModel()] });
+    expect((await listed).models.map(model => model.id)).toEqual(['claude-sonnet-4-5-20250929', 'local:ollama:qwen']);
+  });
+
   it('discovers a newly started local runtime without expiring or refetching the hosted list', async () => {
     const local = { models: vi.fn().mockResolvedValue([]) };
     catalog = new ModelCatalog(
@@ -230,7 +333,7 @@ describe('ModelCatalog', () => {
       local as never
     );
     const listed = catalog.list();
-    await vi.waitFor(() => expect(get).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(get).toHaveBeenCalledOnce(), { timeout: 5_000 });
     finishLocal([{ id: 'local:ollama:qwen', name: 'qwen' }]);
     expect((await listed).models.map(model => model.id)).toEqual(['claude-sonnet-4-5-20250929', 'local:ollama:qwen']);
   });

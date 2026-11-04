@@ -1534,6 +1534,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // Written by userService.refreshRiskEvidence - see IUser.riskEvidence.
     riskEvidence: { type: RiskEvidenceSchema, required: false, default: undefined },
     isSynthetic: { type: Boolean, required: false },
+    // See IUser.isInternal. No default, like isSynthetic: absent reads as "not marked".
+    isInternal: { type: Boolean, required: false },
     firstValueAt: { type: Date, required: false },
   },
   {
@@ -1691,6 +1693,8 @@ UserSchema.index(
     name: 'user_signupGrant_heldUnlock_releaseAt',
   }
 );
+// Serves the inviter's referral counts (invited, active). Built by the ensure-referral-inviter-indexes migration.
+UserSchema.index({ referredByUserId: 1 }, { name: 'user_referredByUserId' });
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
 
 // Add text index for fast user search in admin panel

@@ -139,6 +139,7 @@ void app.whenReady().then(async () => {
     claudeImport,
     spareWorktrees,
     modelServers,
+    stopModelServers,
     localContext,
     capabilityLedger,
   } = registerChat(auth, {
@@ -229,6 +230,7 @@ void app.whenReady().then(async () => {
     fleet.dispose();
     models.dispose();
     chat.dispose();
+    stopModelServers();
     claudeImport.dispose();
     pullRequests.dispose();
     updates.dispose();
@@ -241,9 +243,8 @@ void app.whenReady().then(async () => {
     simulatorView.dispose();
   });
 
-  // Ctrl-C in a dev terminal, or a `kill` of the app. Our children are detached into their own
-  // process groups precisely so one signal can reach a whole command tree - which also means a
-  // terminal interrupt never reaches them on its own.
+  // Ctrl-C in a dev terminal, or a `kill` of the app. Children other than WSL commands lead their own
+  // process groups, so a terminal interrupt does not reach them on its own (see `spawnsDetached`).
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
     process.on(signal, () => {
       background.shutdownSync();

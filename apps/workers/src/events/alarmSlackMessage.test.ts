@@ -395,6 +395,18 @@ describe('ALARM_CATALOG', () => {
     expect(alarmCatalogEntry(sample, 'production')?.detail).toBeUndefined();
   });
 
+  it('describes the image moderation review alarms by their CloudWatch names', () => {
+    for (const suffix of [
+      'image-moderation-incident-unalerted',
+      'image-moderation-incident-unreviewed',
+      'image-moderation-no-reviewers',
+    ]) {
+      const entry = alarmCatalogEntry({ ...sample, AlarmName: `bike4mind-production-${suffix}` }, 'production');
+      expect(entry?.level).toBe('page');
+      expect(entry?.category).toBe('security');
+    }
+  });
+
   it('only names admin links that exist', () => {
     for (const entry of Object.values(ALARM_CATALOG)) {
       for (const key of entry.links ?? []) expect(ADMIN_LINKS[key]).toBeDefined();

@@ -21,6 +21,7 @@ import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from '../chat/l
 import { missingFromCatalog } from './catalogSync';
 import { CuratedTab } from './CuratedTab';
 import { ExploreTab, rememberExploreRepo } from './ExploreTab';
+import { serverIdentity } from './installedCache';
 import { InstalledTab, type ModelsInUse } from './InstalledTab';
 import { manageNote, type ChatWith, type ModelTarget } from './modelTarget';
 import { pullLabel, pullPercent } from './pullDisplay';
@@ -295,7 +296,8 @@ export function ModelsScreen({
   const [chosenServer, setChosenServer] = useState(rememberedServer);
   // A server removed in Settings falls back to this computer.
   const serverId = servers && !servers.some(server => server.id === chosenServer) ? LOCAL_SERVER_ID : chosenServer;
-  const hub = useModelHub(serverId);
+  const shownServer = servers?.find(server => server.id === serverId);
+  const hub = useModelHub(serverId, shownServer ? serverIdentity(shownServer) : null);
   const [tab, setTab] = useState<ModelsTab>(rememberedTab);
   const choose = (next: ModelsTab) => {
     rememberedTab = next;
@@ -313,7 +315,8 @@ export function ModelsScreen({
     // Settings changed the server's access or kind: what main reports about it changes too.
     if (statusManagement && statusManagement !== target.management) void refresh();
   }, [statusManagement, target.management, refresh]);
-  const installedCount = status && hub.installed?.ok ? hub.installed.models.length : null;
+  const installedCount =
+    status && hub.installed?.ok ? hub.installed.models.length : (hub.lastInstalled?.models.length ?? null);
   const note = manageNote(target);
   const chatOn = (name: string) => chatWith?.(serverId, name) ?? null;
 
@@ -503,6 +506,7 @@ export function ModelsScreen({
               status={status}
               target={target}
               installed={status ? hub.installed : null}
+              lastInstalled={hub.lastInstalled}
               inUse={inUse}
               chatOn={chatOn}
               onRetry={() => void hub.refresh()}

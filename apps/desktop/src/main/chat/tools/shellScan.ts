@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { basename, dirname, isAbsolute, join, parse, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, parse, posix, sep } from 'node:path';
 import type { Node } from 'web-tree-sitter';
 import {
   PACKAGE_VALUE_OPTIONS,
@@ -12,8 +12,17 @@ import {
 import { parseBash } from './bashParser';
 import { isEnvFile } from './envFiles';
 import { ghReadFiles, repositoryWrite, type RepositoryWrite } from './ownRepository';
-import { realpathNearest, resolveWithinRootsPhysically } from './paths';
+import {
+  PathAccessDenied,
+  onAnotherComputer,
+  operandPlaces,
+  operandTargets,
+  realpathNearest,
+  resolveWithinRootsPhysically,
+  type OperandReader,
+} from './paths';
 import { inPlaceWrites } from './shellWrites';
+import { wslLocation, wslUncPath, wslUserEnvironment } from '../../wsl/wslPath';
 
 export interface ShellCommand {
   /** The command's tokens with options before the subcommand dropped: what a remembered pattern is matched against. */
@@ -40,6 +49,8 @@ export interface ShellScan {
   paths?: string[];
   /** Directories the command reaches outside every granted root and the temp dirs. */
   directories: string[];
+  /** Paths in a WSL distro no root is in, named without reading them: asked every time, never offered as a grant. */
+  ungranted: string[];
   /** `.env` files named as an argument or an input redirect, which auto mode must not read unasked. */
   envFiles: string[];
   /** Why a command can send data off this computer, e.g. `curl --data`, which auto mode must not run unasked. */
@@ -70,10 +81,10 @@ export interface ShellScan {
 const CHANGES_DIRECTORY = new Set(['cd', 'chdir', 'pushd', 'popd']);
 const COPIES = new Set(['cp', 'mv', 'install', 'ln', 'rsync', 'scp']);
 // The short flag may close a cluster (`-fsSLo`, `-qO`); curl's `-O` names no path, so case matters.
-const DOWNLOAD_OUTPUT: Record<string, { long: string; short: RegExp }> = {
-  curl: { long: '--output', short: /^-[a-zA-Z]*?o(.*)$/ },
-  wget: { long: '--output-document', short: /^-[a-zA-Z]*?O(.*)$/ },
-};
+const DOWNLOAD_OUTPUT = new Map<string, { long: string; short: RegExp }>([
+  ['curl', { long: '--output', short: /^-[a-zA-Z]*?o(.*)$/ }],
+  ['wget', { long: '--output-document', short: /^-[a-zA-Z]*?O(.*)$/ }],
+]);
 const GIT_CONFIG_SETS =
   /^(set|unset|edit|-e|--edit|--add|--unset|--unset-all|--replace-all|--rename-section|--remove-section|rename-section|remove-section)$/;
 
@@ -85,8 +96,20 @@ const READ_PROBES = new Set(['ls', 'cat', 'head', 'tail', 'stat', 'file', 'wc', 
  * to find which node or pnpm a project runs on; they hold binaries and package code, not secrets.
  * Deliberately narrow: `~/.local/share` as a whole also holds keyrings and app data.
  */
-function toolchainLocations(): string[] {
-  const home = homedir();
+function toolchainLocations(home: string, joinIn: (...parts: string[]) => string): string[] {
+  const system = [
+    '/etc/profiles',
+    '/nix/store',
+    '/nix/var/nix/profiles',
+    '/run/current-system/sw',
+    '/opt/homebrew/bin',
+    '/opt/homebrew/opt',
+    '/opt/homebrew/Cellar',
+    '/usr/local/bin',
+    '/usr/local/lib/node_modules',
+    '/usr/bin',
+    '/bin',
+  ];
   return [
     ...[
       '.nvm',
@@ -106,31 +129,26 @@ function toolchainLocations(): string[] {
       '.local/share/fnm',
       '.local/share/mise/installs',
       'Library/pnpm',
-    ].map(path => join(home, path)),
-    '/etc/profiles',
-    '/nix/store',
-    '/nix/var/nix/profiles',
-    '/run/current-system/sw',
-    '/opt/homebrew/bin',
-    '/opt/homebrew/opt',
-    '/opt/homebrew/Cellar',
-    '/usr/local/bin',
-    '/usr/local/lib/node_modules',
-    '/usr/bin',
-    '/bin',
+    ].map(path => joinIn(home, path)),
+    ...system,
   ];
 }
 
 // Credential files a package manager or a shell keeps beside its toolchain.
 const SECRET_NAME = /^\.?(npmrc|netrc|pypirc|git-credentials|yarnrc(\.yml)?)$|credential|secret|token/i;
 
-const namesSecret = (path: string): boolean => path.split('/').some(part => SECRET_NAME.test(part)) || isEnvFile(path);
+const namesSecret = (path: string): boolean =>
+  path.split(/[\\/]/).some(part => SECRET_NAME.test(part)) || isEnvFile(path);
 
 /**
  * Whether a path outside the project is a toolchain install that a read-only probe may look at
  * unasked, both as written and with every symlink followed, so `~/.nvm/link -> ~/.ssh` still asks.
+ * In a WSL folder the toolchains are the distro's, and `home` is the distro user's Linux home.
  */
-export async function isToolchainPath(path: string, cwd: string): Promise<boolean> {
+export async function isToolchainPath(path: string, cwd: string, home: string = homedir()): Promise<boolean> {
+  const wsl = wslLocation(cwd);
+  const named = toolchainLocations(home, wsl ? posix.join : join);
+  const locations = wsl ? named.map(location => wslUncPath(wsl, location)) : named;
   // Only the part below a toolchain root is checked: the root is trusted, and folders above it
   // (the home folder, a checkout path) may legitimately be named like a secret.
   const below = (candidate: string, roots: string[]): string => {
@@ -139,12 +157,12 @@ export async function isToolchainPath(path: string, cwd: string): Promise<boolea
       .map(root => candidate.slice(root.length));
     return rest.length ? rest.reduce((a, b) => (a.length >= b.length ? a : b)) : candidate;
   };
-  if (namesSecret(below(resolve(cwd, path), toolchainLocations()))) return false;
+  if (operandTargets(cwd, path).some(target => namesSecret(below(target, locations)))) return false;
   try {
     // Each root is resolved the way the path is: a root that does not exist under a linked
     // parent (macOS `/etc` -> `/private/etc`) must still match the path's physical form.
     const roots = await Promise.all(
-      toolchainLocations().map(root => resolveWithinRootsPhysically(root, [parse(root).root], root))
+      locations.map((root, index) => resolveWithinRootsPhysically(named[index] ?? root, [parse(root).root], root))
     );
     return !namesSecret(below(await resolveWithinRootsPhysically(path, roots, cwd), roots));
   } catch {
@@ -243,15 +261,44 @@ export function unquote(text: string): string {
   return (first === '"' || first === "'") && text.at(-1) === first ? text.slice(1, -1) : text;
 }
 
-/** `~` and `$HOME` are the user's home, which the shell expands before the program sees it. */
-export function expandHome(text: string): string {
-  const home = homedir();
+/** A word as bash hands it to the program, with its quotes removed and its backslash escapes applied. */
+function wordValue(word: string): string {
+  let value = '';
+  for (let at = 0; at < word.length; at++) {
+    const char = word[at] as string;
+    if (char === "'") {
+      const end = word.indexOf("'", at + 1);
+      value += word.slice(at + 1, end === -1 ? word.length : end);
+      at = end === -1 ? word.length : end;
+    } else if (char === '"') {
+      for (at++; at < word.length && word[at] !== '"'; at++) {
+        const next = word[at + 1];
+        if (word[at] === '\\' && next !== undefined && '$`"\\\n'.includes(next)) {
+          at++;
+          if (next !== '\n') value += next;
+        } else {
+          value += word[at];
+        }
+      }
+    } else if (char === '\\' && at + 1 < word.length) {
+      at++;
+      if (word[at] !== '\n') value += word[at];
+    } else {
+      value += char;
+    }
+  }
+  return value;
+}
+
+/** `~` and `$HOME` are the user's home, which the shell expands before the program sees it. A Linux home is joined by Linux rules. */
+export function expandHome(text: string, home: string = homedir()): string {
+  const rules = home.startsWith('/') ? posix : { join, dirname };
   if (text === '~') return home;
-  if (text.startsWith('~/')) return join(home, text.slice(2));
+  if (text.startsWith('~/')) return rules.join(home, text.slice(2));
   const named = /^~([^/]+)(\/.*)?$/.exec(text);
-  if (named) return join(dirname(home), named[1], named[2] ?? '');
+  if (named) return rules.join(rules.dirname(home), named[1], named[2] ?? '');
   const variable = /^\$(?:HOME|\{HOME\})(\/.*)?$/.exec(text);
-  if (variable) return join(home, variable[1] ?? '');
+  if (variable) return rules.join(home, variable[1] ?? '');
   return text;
 }
 
@@ -266,18 +313,367 @@ function globPrefix(text: string): string | null {
   return match.index === 0 ? null : text.slice(0, match.index);
 }
 
-// ponytail: a wrapper's own option values (`sudo -u bob`, `xargs -I {}`) are read as the program;
-// a full per-wrapper option table if that matters.
-const WRAPPERS = new Set(['sudo', 'env', 'command', 'exec', 'nohup', 'time', 'nice', 'timeout', 'xargs']);
+/**
+ * A Windows path split into a device prefix Windows takes literally and the rest: `\\?\C:\x` and
+ * `\\.\UNC\server\share` name `C:\x` and `\\server\share`, and `\\?\Volume{...}\x` keeps its `\\?\`.
+ */
+function windowsDevicePath(text: string): [string, string] {
+  if (!/^[\\/]{2}[?.][\\/]/.test(text)) return ['', text];
+  const rest = text.slice(4);
+  if (/^UNC[\\/]/i.test(rest)) return ['', `\\\\${rest.slice(4)}`];
+  return /^[A-Za-z]:/.test(rest) ? ['', rest] : [text.slice(0, 4), rest];
+}
 
-/** The command a wrapper (`sudo`, `env X=1`, `timeout 5`) runs, with the wrapper's own words dropped. */
-function withoutWrappers(tokens: readonly string[]): string[] {
-  let start = 0;
-  while (start < tokens.length && WRAPPERS.has(basename(unquote(tokens[start])))) {
-    start++;
-    while (start < tokens.length && /^(-|\d)|=/.test(tokens[start])) start++;
+/**
+ * A program that runs the command after its own words. Any option letter not listed is a flag that
+ * takes no value.
+ */
+interface Wrapper {
+  /** Letters whose value is the rest of their word, or the next word when they end it. */
+  values: string;
+  /** Letters whose optional value is only ever the rest of their word. */
+  glued?: string;
+  /** Long options whose value is the next word unless written with `=`. */
+  long?: readonly string[];
+  /** Long options that take no value in the next word, so an abbreviation can be told from one of `long`. */
+  flags?: readonly string[];
+  /** Whether `NAME=value` words after the options set the command's environment. */
+  assignments?: boolean;
+  /** Words after the options that come before the command: timeout's duration. */
+  operands?: number;
+  /** Option letters that make it describe the command instead of running it: `command -v`. */
+  describes?: string;
+}
+
+const WRAPPERS: ReadonlyMap<string, Wrapper> = new Map([
+  [
+    'sudo',
+    {
+      values: 'aCcDgpRrTtUu',
+      glued: 'h',
+      long: [
+        'auth-type',
+        'chdir',
+        'chroot',
+        'close-from',
+        'command-timeout',
+        'group',
+        'host',
+        'login-class',
+        'other-user',
+        'prompt',
+        'role',
+        'type',
+        'user',
+      ],
+      flags: [
+        'askpass',
+        'background',
+        'bell',
+        'edit',
+        'help',
+        'list',
+        'login',
+        'no-update',
+        'non-interactive',
+        'preserve-env',
+        'preserve-groups',
+        'remove-timestamp',
+        'reset-timestamp',
+        'set-home',
+        'shell',
+        'stdin',
+        'validate',
+        'version',
+      ],
+      assignments: true,
+    },
+  ],
+  [
+    'env',
+    {
+      values: 'CPSafu',
+      long: ['argv0', 'chdir', 'file', 'split-string', 'unset'],
+      flags: [
+        'block-signal',
+        'debug',
+        'default-signal',
+        'help',
+        'ignore-environment',
+        'ignore-signal',
+        'list-signal-handling',
+        'null',
+        'version',
+      ],
+      assignments: true,
+    },
+  ],
+  ['command', { values: '', describes: 'vV' }],
+  ['exec', { values: 'a' }],
+  ['nohup', { values: '', flags: ['help', 'version'] }],
+  // bash's `time` keyword times a whole simple command, assignments included.
+  [
+    'time',
+    {
+      values: 'fo',
+      long: ['format', 'output'],
+      flags: ['append', 'help', 'portability', 'quiet', 'verbose', 'version'],
+      assignments: true,
+    },
+  ],
+  ['nice', { values: 'n', long: ['adjustment'], flags: ['help', 'version'] }],
+  [
+    'timeout',
+    {
+      values: 'ks',
+      long: ['kill-after', 'signal'],
+      flags: ['foreground', 'help', 'preserve-status', 'verbose', 'version'],
+      operands: 1,
+    },
+  ],
+  [
+    'xargs',
+    {
+      // `J`, `R` and `S` are macOS xargs; GNU refuses them.
+      values: 'EIJLPRSadns',
+      glued: 'eil',
+      long: ['arg-file', 'delimiter', 'max-args', 'max-chars', 'max-procs', 'process-slot-var'],
+      flags: [
+        'eof',
+        'exit',
+        'help',
+        'interactive',
+        'max-lines',
+        'no-run-if-empty',
+        'null',
+        'open-tty',
+        'replace',
+        'show-limits',
+        'verbose',
+        'version',
+      ],
+    },
+  ],
+  [
+    'wsl',
+    {
+      values: 'du',
+      long: ['cd', 'distribution', 'distribution-id', 'shell-type', 'user'],
+      flags: ['exec', 'system'],
+    },
+  ],
+]);
+
+const NO_OPTIONS: Wrapper = { values: '' };
+
+/** Launchers that take wsl's own arguments, so the scan reads them as `wsl`. */
+const WSL_ALIASES = new Set(['wslg']);
+
+/** A program's name as the scan looks it up: `/usr/bin/curl`, `curl.exe` and `CURL.EXE` are all `curl`; so is `npx.cmd` `npx`, and `wslg.exe` is `wsl`. */
+export const programName = (executable: string): string => {
+  const name = basename(executable)
+    .toLowerCase()
+    .replace(/\.(exe|cmd|bat)$/, '');
+  return WSL_ALIASES.has(name) ? 'wsl' : name;
+};
+
+/** Whether a word names a wrapper (`sudo`, `/usr/bin/env`). */
+export const isWrapper = (word: string): boolean => WRAPPERS.has(programName(unquote(word)));
+
+/** The long option `given` names, read as getopt_long reads it: an exact name, or an abbreviation of exactly one. */
+function longOptionName(wrapper: Wrapper, given: string): string | undefined {
+  const names = [...(wrapper.long ?? []), ...(wrapper.flags ?? [])];
+  if (names.includes(given)) return given;
+  const named = names.filter(option => option.startsWith(given));
+  return named.length === 1 ? named[0] : undefined;
+}
+
+/**
+ * Whether long option `given` takes the next word. getopt_long refuses an ambiguous abbreviation; it
+ * is read as a flag, so a program named right after it is still found.
+ */
+function longTakesValue(wrapper: Wrapper, given: string): boolean {
+  const name = longOptionName(wrapper, given);
+  return name !== undefined && (wrapper.long ?? []).includes(name);
+}
+
+/** How many words one of a wrapper's options spans: two when its value is the next word. */
+function optionWords(wrapper: Wrapper, word: string): 1 | 2 {
+  if (word.startsWith('--')) return !word.includes('=') && longTakesValue(wrapper, word.slice(2)) ? 2 : 1;
+  // A value letter ends the cluster: `-Eu bob` and `-ubob` are both `-E -u bob`.
+  for (let at = 1; at < word.length; at++) {
+    if (wrapper.glued?.includes(word[at])) return 1;
+    if (wrapper.values.includes(word[at])) return at === word.length - 1 ? 2 : 1;
   }
-  return tokens.slice(start);
+  return 1;
+}
+
+/**
+ * The words of `name`'s options that start at `from`, as indices into `tokens`, and where its own words
+ * (options, their values and, for env and sudo, assignments) end.
+ */
+function wrapperWords(name: string, tokens: readonly string[], from: number): { options: number[]; end: number } {
+  const wrapper = WRAPPERS.get(name) ?? NO_OPTIONS;
+  const options: number[] = [];
+  let at = from;
+  let reading = true;
+  while (at < tokens.length) {
+    const word = unquote(tokens[at]);
+    if (reading && word === '--') {
+      reading = false;
+      at++;
+    } else if (reading && word.startsWith('-')) {
+      options.push(at);
+      at += optionWords(wrapper, word);
+    } else if (wrapper.assignments && /^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) {
+      at++;
+    } else {
+      break;
+    }
+  }
+  return { options, end: Math.min(at, tokens.length) };
+}
+
+/**
+ * The index past the wrapper at `tokens[at]` and its own words: options and their values, assignments, timeout's
+ * duration. The end of `tokens` when the wrapper runs nothing.
+ */
+export function pastWrapper(tokens: readonly string[], at: number): number {
+  const name = programName(unquote(tokens[at] ?? ''));
+  const wrapper = WRAPPERS.get(name);
+  const { options, end } = wrapperWords(name, tokens, at + 1);
+  const describes = wrapper?.describes ?? '';
+  const describing = options
+    .map(index => unquote(tokens[index]))
+    .some(word => /^-[^-]/.test(word) && [...word.slice(1)].some(letter => describes.includes(letter)));
+  return describing ? tokens.length : Math.min(end + (wrapper?.operands ?? 0), tokens.length);
+}
+
+/** Where the command a run of leading wrappers (`sudo`, `env X=1`, `timeout 5`) runs starts in `tokens`. */
+function wrappedStart(tokens: readonly string[]): number {
+  let start = 0;
+  while (start < tokens.length && isWrapper(tokens[start])) start = pastWrapper(tokens, start);
+  return start;
+}
+
+/** Whether one of env's option words is `-S` (`--split-string`), which reads its value as a command line. */
+function splitsString(word: string): boolean {
+  const env = WRAPPERS.get('env') ?? NO_OPTIONS;
+  if (word.startsWith('--')) return longOptionName(env, word.slice(2).split('=')[0]) === 'split-string';
+  return [...word.slice(1)].find(letter => env.values.includes(letter)) === 'S';
+}
+
+export interface SplitString {
+  /** The index of the `env` in the tokens. */
+  env: number;
+  /** The index of its `-S` word. */
+  option: number;
+  /** The command line env runs: itself, the value it splits, and the words after that value. */
+  command: string;
+}
+
+/**
+ * The value given to the wrapper option at `tokens[at]`, as written, and the index past it: after its `=`, after
+ * `letter` in a short cluster, or the next word.
+ */
+function optionArgument(
+  tokens: readonly string[],
+  at: number,
+  letter: string
+): { value: string | undefined; next: number } {
+  const word = unquote(tokens[at]);
+  const glued = word.startsWith('--')
+    ? word.includes('=')
+      ? word.slice(word.indexOf('=') + 1)
+      : undefined
+    : word.slice(word.indexOf(letter) + 1) || undefined;
+  return glued === undefined ? { value: tokens[at + 1], next: at + 2 } : { value: glued, next: at + 1 };
+}
+
+/** wsl's options that report on WSL itself instead of starting a distro. */
+const WSL_REPORTS = new Set(['-l', '--list', '-v', '--version', '--status', '--help']);
+
+/** What `ungranted` holds for a wsl run in a distro the command does not name: the default one, or one by id. */
+export const UNNAMED_DISTRO = 'a WSL distro the command does not name';
+
+/** What `ungranted` holds for a wsl run with `--system`, which starts the WSL system distro. */
+export const SYSTEM_DISTRO = 'the WSL system distro';
+
+/** What `ungranted` holds for a wsl run with an option that manages WSL itself, such as `--shutdown`. */
+export const WSL_MANAGEMENT = 'a wsl option that manages WSL itself';
+
+/** wsl's options that run a command in a distro; any other, such as `--shutdown`, manages WSL itself. */
+const WSL_RUNS = new Set([
+  'd',
+  'u',
+  'e',
+  'cd',
+  'distribution',
+  'distribution-id',
+  'user',
+  'exec',
+  'shell-type',
+  'system',
+]);
+
+interface WslRun {
+  /** The index of the `wsl` word, and the index past its own options. */
+  at: number;
+  end: number;
+  /** The distro each `-d` names, undefined for one the text does not name; none given reads as the default distro. */
+  distros: (string | undefined)[];
+  /** Whether `-e` hands the words after its options to a program, not to the distro's shell as a command line. */
+  exec: boolean;
+  /** Whether `--system` starts the system distro, and whether an option outside `WSL_RUNS` is given. */
+  system: boolean;
+  managing: boolean;
+}
+
+/** Each `wsl` in a run of leading wrappers that starts a distro. */
+function wslRuns(tokens: readonly string[]): WslRun[] {
+  const wsl = WRAPPERS.get('wsl') ?? NO_OPTIONS;
+  const runs: WslRun[] = [];
+  for (let at = 0; at < tokens.length && isWrapper(tokens[at]); at = pastWrapper(tokens, at)) {
+    if (programName(unquote(tokens[at])) !== 'wsl') continue;
+    const { options, end } = wrapperWords('wsl', tokens, at + 1);
+    if (WSL_REPORTS.has(unquote(tokens[options[0]] ?? ''))) break;
+    const distros: (string | undefined)[] = [];
+    let exec = false;
+    let system = false;
+    let managing = false;
+    for (const index of options) {
+      if (exec) break;
+      const word = unquote(tokens[index]);
+      const name = word.startsWith('--') ? longOptionName(wsl, word.slice(2).split('=')[0]) : word.slice(1, 2);
+      if (name === undefined || !WSL_RUNS.has(name)) managing = true;
+      if (name === 'e' || name === 'exec') exec = true;
+      if (name === 'system') system = true;
+      if (name === 'distribution-id') distros.push(undefined);
+      if (name !== 'd' && name !== 'distribution') continue;
+      const { value } = optionArgument(tokens, index, 'd');
+      distros.push(value === undefined || isDynamic(value) ? undefined : unquote(value));
+    }
+    runs.push({ at, end, distros: distros.length > 0 ? distros : [undefined], exec, system, managing });
+  }
+  return runs;
+}
+
+/** The `env -S 'bash run.sh'` in a run of leading wrappers, which runs its value as a command line; null when none. */
+export function splitString(tokens: readonly string[]): SplitString | null {
+  for (let at = 0; at < tokens.length && isWrapper(tokens[at]); at = pastWrapper(tokens, at)) {
+    if (programName(unquote(tokens[at])) !== 'env') continue;
+    const option = wrapperWords('env', tokens, at + 1).options.find(index => splitsString(unquote(tokens[index])));
+    if (option === undefined) continue;
+    const { value, next } = optionArgument(tokens, option, 'S');
+    // env reads options and assignments in the value too, as `env -S '-i FOO=1 make'`.
+    return { env: at, option, command: [tokens[at], unquote(value ?? ''), ...tokens.slice(next)].join(' ') };
+  }
+  return null;
+}
+
+/** The command a wrapper runs, with the wrapper's own words dropped. */
+function withoutWrappers(tokens: readonly string[]): string[] {
+  return tokens.slice(wrappedStart(tokens));
 }
 
 /** A wrapper can change the executable, and these clients can start sending data just by changing flags. */
@@ -285,16 +681,16 @@ export function requiresExactShellRule(command: string): boolean {
   const head = /^(?:"([^"]*)"|'([^']*)'|(\S+))(?:\s+|$)/.exec(command);
   if (!head) return true;
   const executable = head[1] ?? head[2] ?? head[3];
-  const program = basename(executable);
+  const name = programName(executable);
   const argumentsText = command.slice(head[0].length);
   return (
     // Quoting or an absolute executable defeats arityPrefix's bare-program lookup.
     head[1] !== undefined ||
     head[2] !== undefined ||
-    executable !== program ||
-    WRAPPERS.has(program) ||
-    /^(curl|wget|rsync|aws|gsutil|gcloud|docker|podman)$/.test(program) ||
-    (program === 'gh' &&
+    executable !== basename(executable) ||
+    WRAPPERS.has(name) ||
+    /^(curl|wget|rsync|aws|gsutil|gcloud|docker|podman)$/.test(name) ||
+    (name === 'gh' &&
       (/^(?:api|"api"|'api')(?:\s|$)/.test(argumentsText) || !/^[A-Za-z]+\s+[A-Za-z]+(?:\s|$)/.test(argumentsText)))
   );
 }
@@ -311,66 +707,200 @@ const WGET_SENDS = /^--(post|body)/;
 const DASH_C = /^-[a-zA-Z]*c/;
 // Shells read `+c` like `-c` (`bash +ec '...'` runs the script); python reads `+c` as a file name.
 const SHELL_C = /^[+-][a-zA-Z]*c/;
-const INLINE_SCRIPT: Record<string, RegExp> = {
-  node: /^(-[a-zA-Z]*[ep]|--eval|--print)(=|$)/,
-  ruby: /^-[a-zA-Z]*e/,
-  perl: /^-[a-zA-Z]*[eE]/,
-  php: /^-r/,
-  bun: /^(-[a-zA-Z]*[ep]|--eval|--print)(=|$)/,
-  osascript: /^-e/,
-  sh: SHELL_C,
-  bash: SHELL_C,
-  zsh: SHELL_C,
-  dash: SHELL_C,
-};
+const INLINE_SCRIPT = new Map<string, RegExp>([
+  ['node', /^(-[a-zA-Z]*[ep]|--eval|--print)(=|$)/],
+  ['ruby', /^-[a-zA-Z]*e/],
+  ['perl', /^-[a-zA-Z]*[eE]/],
+  ['php', /^-r/],
+  ['bun', /^(-[a-zA-Z]*[ep]|--eval|--print)(=|$)/],
+  ['osascript', /^-e/],
+  ['sh', SHELL_C],
+  ['bash', SHELL_C],
+  ['zsh', SHELL_C],
+  ['dash', SHELL_C],
+]);
+
+/** The option that makes interpreter `name` run a script given inline, as `-c` for python. */
+const inlineScriptOption = (name: string): RegExp | undefined =>
+  /^python[\d.]*$/.test(name) ? DASH_C : INLINE_SCRIPT.get(name);
+
+/** A command line a Windows shell runs. */
+interface WindowsRun {
+  /** How many of its arguments the opaque form names: through `-Command`, or up to the command text. */
+  words: number;
+  /** What it runs, for the outbound reason. */
+  shown: string;
+  /** Whether it reads that command line from stdin. */
+  stdin: boolean;
+}
+
+const READS_STDIN: WindowsRun = { words: 0, shown: 'reading a script from stdin', stdin: true };
+
+/** cmd's `/c`, `/k` or `/r` (`//c` as Git Bash needs it); without one, cmd runs what it reads from stdin. */
+function cmdRun(args: readonly string[]): WindowsRun | null {
+  const at = args.findIndex(arg => /^\/(.*\/)?[ckr]/i.test(arg));
+  if (at !== -1) return { words: at + 1, shown: args[at], stdin: false };
+  return args.some(arg => /^\/(.*\/)?\?/.test(arg)) ? null : READS_STDIN;
+}
+
+type PowershellParameter = 'command' | 'file' | 'value' | 'flag' | 'help';
+
+/**
+ * PowerShell's parameters as [name, shortest prefix it accepts, meaning to Windows PowerShell 5.1, to
+ * PowerShell 7], null where that version has no such parameter. The first match wins, as in PowerShell.
+ */
+const POWERSHELL_PARAMETERS: readonly (readonly [
+  string,
+  string,
+  PowershellParameter | null,
+  PowershellParameter | null,
+])[] = [
+  ['?', '?', 'help', 'help'],
+  ['help', 'h', 'help', 'help'],
+  ['login', 'l', null, 'flag'],
+  ['version', 'v', null, 'flag'],
+  ['noexit', 'noe', 'flag', 'flag'],
+  ['noprofile', 'nop', 'flag', 'flag'],
+  ['nologo', 'nol', 'flag', 'flag'],
+  ['noninteractive', 'noni', 'flag', 'flag'],
+  ['noprofileloadtime', 'noprofileloadtime', null, 'flag'],
+  ['socketservermode', 'so', 'flag', 'flag'],
+  ['servermode', 's', 'flag', 'flag'],
+  ['namedpipeservermode', 'nam', 'flag', 'flag'],
+  ['sshservermode', 'sshs', null, 'flag'],
+  ['interactive', 'i', null, 'flag'],
+  ['configurationname', 'config', 'value', 'value'],
+  ['configurationfile', 'configurationfile', null, 'value'],
+  ['custompipename', 'cus', null, 'value'],
+  ['command', 'c', 'command', 'command'],
+  ['commandwithargs', 'commandwithargs', null, 'command'],
+  ['cwa', 'cwa', null, 'command'],
+  ['windowstyle', 'w', 'value', 'value'],
+  ['workingdirectory', 'wo', null, 'value'],
+  ['wd', 'wd', null, 'value'],
+  ['file', 'f', 'file', 'file'],
+  ['executionpolicy', 'ex', 'value', 'value'],
+  ['ep', 'ep', 'value', 'value'],
+  ['encodedcommand', 'e', 'command', 'command'],
+  ['ec', 'ec', 'command', 'command'],
+  ['encodedarguments', 'encodeda', 'value', 'value'],
+  ['ea', 'ea', 'value', 'value'],
+  ['settingsfile', 'settings', null, 'value'],
+  ['sta', 'st', 'flag', 'flag'],
+  ['mta', 'mta', 'flag', 'flag'],
+  ['inputformat', 'i', 'value', 'value'],
+  ['if', 'if', 'value', 'value'],
+  ['outputformat', 'o', 'value', 'value'],
+  ['of', 'of', 'value', 'value'],
+];
+
+/** String.Trim as .NET reads it: JS trim() plus U+0085. A loop, as a two-sided regex is quadratic on a long run of spaces. */
+function trimDotNet(text: string): string {
+  const isSpace = (char: string) => char === '\u0085' || char.trim() === '';
+  let start = 0;
+  let end = text.length;
+  while (start < end && isSpace(text[start])) start += 1;
+  while (end > start && isSpace(text[end - 1])) end -= 1;
+  return text.slice(start, end);
+}
+
+/** The name a PowerShell switch gives after its dash (two for PowerShell 7) or slash, lowercased; undefined for other words. */
+function powershellSwitch(arg: string, seven: boolean): string | undefined {
+  const leader = seven ? /^(?:[-\u{2013}-\u{2015}]{1,2}|\/)/u : /^[-\u{2013}-\u{2015}/]/u;
+  // .NET's String.Trim also removes U+0085, which JS trim() keeps.
+  const trimmed = trimDotNet(arg);
+  const match = leader.exec(trimmed);
+  return match ? trimmed.slice(match[0].length).toLowerCase() : undefined;
+}
+
+function powershellParameter(name: string, seven: boolean): PowershellParameter | undefined {
+  for (const [full, shortest, older, newer] of POWERSHELL_PARAMETERS) {
+    const meaning = seven ? newer : older;
+    if (meaning && name.length >= shortest.length && full.startsWith(name)) return meaning;
+  }
+  return undefined;
+}
+
+/**
+ * Whether `arg` is a parameter that starts a command. A value parameter takes the next word whatever
+ * it is, but one that would run a command is not skipped, so `-wd -c` still reads the command.
+ */
+function isCommandParameter(arg: string, seven: boolean): boolean {
+  const name = powershellSwitch(arg, seven);
+  return name !== undefined && powershellParameter(name, seven) === 'command';
+}
+
+/** What PowerShell (`seven` for pwsh) runs given `args`; null when it runs a script file or only prints help. */
+function powershellRun(args: readonly string[], seven: boolean): WindowsRun | null {
+  for (let at = 0; at < args.length; at++) {
+    const name = powershellSwitch(args[at], seven);
+    if (name === '') return READS_STDIN;
+    const meaning = name === undefined ? undefined : powershellParameter(name, seven);
+    if (meaning === 'command') return { words: at + 1, shown: args[at], stdin: false };
+    if (meaning === 'help') return null;
+    if (meaning === 'file') return args[at + 1] === '-' ? READS_STDIN : null;
+    if (meaning === 'value' && args[at + 1] !== undefined && !isCommandParameter(args[at + 1], seven)) at++;
+    if (meaning !== undefined) continue;
+    // 5.1 runs the first word it does not know, and every word after it, as a command; 7 runs it as a script.
+    return seven ? null : { words: at, shown: 'running its arguments as a command', stdin: false };
+  }
+  return READS_STDIN;
+}
+
+/** Windows shells, named as the scan looks them up, and what each runs given its arguments. */
+const WINDOWS_SHELLS = new Map<string, (args: readonly string[]) => WindowsRun | null>([
+  ['cmd', cmdRun],
+  ['powershell', args => powershellRun(args, false)],
+  ['pwsh', args => powershellRun(args, true)],
+]);
 
 /**
  * The option letters whose value is glued to the flag, so a letter after one is that value rather
  * than another flag: `ruby -rset` loads the library `set`, it does not run `-e`. Only list letters
  * the interpreter documents as taking a value.
  */
-const OPTION_VALUE_LETTERS: Record<string, string> = {
-  python: 'WX',
-  node: 'rC',
-  bun: 'rld',
-  perl: 'IMmx',
-  ruby: 'rICEKFx',
-  osascript: 'ls',
-  zsh: 'oO',
-};
+const OPTION_VALUE_LETTERS = new Map([
+  ['python', 'WX'],
+  ['node', 'rC'],
+  ['bun', 'rld'],
+  ['perl', 'IMmx'],
+  ['ruby', 'rICEKFx'],
+  ['osascript', 'ls'],
+  ['zsh', 'oO'],
+]);
 
 /**
  * Value letters that take only a glued value (`ruby -xdir`): even at the end of a cluster they do
  * not swallow the next word, so a script's own `-e` after `ruby -x script.rb` is not ruby's option.
  */
-const GLUED_ONLY_LETTERS: Record<string, string> = {
-  perl: 'x',
-  ruby: 'xKF',
-};
+const GLUED_ONLY_LETTERS = new Map([
+  ['perl', 'x'],
+  ['ruby', 'xKF'],
+]);
 
 /** The long forms of the above whose value is the next argument rather than glued to the flag. */
-const OPTION_VALUE_WORDS: Record<string, readonly string[]> = {
-  node: ['--require', '--import'],
-  bun: ['--require', '--preload'],
-  bash: ['--rcfile', '--init-file'],
-};
+const OPTION_VALUE_WORDS = new Map<string, readonly string[]>([
+  ['node', ['--require', '--import']],
+  ['bun', ['--require', '--preload']],
+  ['bash', ['--rcfile', '--init-file']],
+]);
 
 /** Common long options that take no value, so the word after one is not assumed to be its value. */
-const OPTION_FLAG_WORDS: Record<string, readonly string[]> = {
-  node: ['--inspect', '--inspect-brk', '--watch', '--enable-source-maps', '--no-warnings', '--trace-warnings'],
-  bun: ['--watch', '--hot', '--smol'],
-};
+const OPTION_FLAG_WORDS = new Map<string, readonly string[]>([
+  ['node', ['--inspect', '--inspect-brk', '--watch', '--enable-source-maps', '--no-warnings', '--trace-warnings']],
+  ['bun', ['--watch', '--hot', '--smol']],
+]);
 
 /** Shells where -o/-O (and +o/+O) name an option in the next word, leaving the rest of the cluster as flags. */
 const SHELL_OPTION_WORD = new Set(['sh', 'bash', 'dash']);
 
 function optionValueLetters(program: string): string {
-  return /^python[\d.]*$/.test(program) ? OPTION_VALUE_LETTERS.python : (OPTION_VALUE_LETTERS[program] ?? '');
+  return OPTION_VALUE_LETTERS.get(/^python[\d.]*$/.test(program) ? 'python' : program) ?? '';
 }
 
 /** The value letters that take the next word when they end a cluster; glued-only letters do not. */
 function nextWordLetters(program: string): string {
-  const glued = GLUED_ONLY_LETTERS[program] ?? '';
+  const glued = GLUED_ONLY_LETTERS.get(program) ?? '';
   return [...optionValueLetters(program)].filter(letter => !glued.includes(letter)).join('');
 }
 
@@ -383,7 +913,7 @@ function flagRun(arg: string, letters: string): string {
 
 /** Whether an option takes its value in the next argument rather than glued to its flag. */
 function takesNextArgument(program: string, arg: string): boolean {
-  if (arg.startsWith('--')) return !arg.includes('=') && (OPTION_VALUE_WORDS[program] ?? []).includes(arg);
+  if (arg.startsWith('--')) return !arg.includes('=') && (OPTION_VALUE_WORDS.get(program) ?? []).includes(arg);
   const cluster = arg.slice(1);
   const letters = nextWordLetters(program);
   const at = [...cluster].findIndex(char => letters.includes(char));
@@ -407,7 +937,7 @@ function interpreterOptions(program: string, args: readonly string[]): { options
   const letters = optionValueLetters(program);
   const shellWord = SHELL_OPTION_WORD.has(program);
   // Shells also take flags as `+e`, which turn an option off rather than ending the options.
-  const plusFlags = INLINE_SCRIPT[program] === SHELL_C;
+  const plusFlags = INLINE_SCRIPT.get(program) === SHELL_C;
   const options: string[] = [];
   let i = 0;
   for (; i < args.length; i++) {
@@ -427,7 +957,7 @@ function interpreterOptions(program: string, args: readonly string[]): { options
       arg.startsWith('--') &&
       arg !== '--' &&
       !arg.includes('=') &&
-      !(OPTION_FLAG_WORDS[program] ?? []).includes(arg) &&
+      !(OPTION_FLAG_WORDS.get(program) ?? []).includes(arg) &&
       plainWord(args[i + 1])
     ) {
       i++;
@@ -448,23 +978,28 @@ const STDIN_SCRIPT = /^(python[\d.]*|node|ruby|perl|php|bun|osascript|sh|bash|zs
  */
 export function opaqueForm(tokens: readonly string[]): string | null {
   const normalised = tokens.map(unquote);
-  let start = 0;
-  while (start < normalised.length && WRAPPERS.has(basename(normalised[start]))) {
-    start++;
-    while (start < normalised.length && /^(-|\d|[A-Za-z_][A-Za-z0-9_]*=)/.test(normalised[start])) start++;
-  }
+  const split = splitString(normalised);
+  if (split) return tokens.slice(0, split.option + 1).join(' ');
+  const wslShell = wslRuns(normalised).find(run => !run.exec);
+  if (wslShell) return tokens.slice(0, wslShell.end).join(' ');
+  const start = wrappedStart(normalised);
   const executable = normalised[start];
   if (executable === undefined) return null;
-  const program = basename(executable);
+  const name = programName(executable);
   const args = normalised.slice(start + 1);
   const head = (count: number) => tokens.slice(0, start + count).join(' ');
-  if (program === 'eval' || program === 'source' || program === '.') return head(1);
-  if (program === 'deno' && args[0] === 'eval') return head(2);
-  const inline = /^python[\d.]*$/.test(program) ? DASH_C : INLINE_SCRIPT[program];
-  if (!inline && !STDIN_SCRIPT.test(program)) return null;
-  const { options, operands } = interpreterOptions(program, args);
+  if (name === 'eval' || name === 'source' || name === '.') return head(1);
+  if (name === 'deno' && args[0] === 'eval') return head(2);
+  const windowsShell = WINDOWS_SHELLS.get(name);
+  if (windowsShell) {
+    const run = windowsShell(args);
+    return run ? head(1 + run.words) : null;
+  }
+  const inline = inlineScriptOption(name);
+  if (!inline && !STDIN_SCRIPT.test(name)) return null;
+  const { options, operands } = interpreterOptions(name, args);
   if (inline && options.some(option => inline.test(option))) {
-    return head(2 + args.findIndex(arg => inline.test(flagRun(arg, optionValueLetters(program)))));
+    return head(2 + args.findIndex(arg => inline.test(flagRun(arg, optionValueLetters(name)))));
   }
   return operands.length === 0 || operands[0] === '-' || STDIN_SCRIPT_ARG.test(operands[0]) ? head(1) : null;
 }
@@ -533,19 +1068,34 @@ function sendsBody(method: string | undefined): boolean {
  */
 export function outboundReason(raw: readonly string[], stdin = false): string | null {
   const tokens = raw.map(unquote);
-  let start = 0;
-  while (start < tokens.length && WRAPPERS.has(basename(tokens[start]))) {
-    start++;
-    while (start < tokens.length && /^(-|\d)|=/.test(tokens[start])) start++;
+  const split = splitString(tokens);
+  if (split) {
+    const option = tokens[split.option];
+    const shown = option.startsWith('--') ? option.split('=')[0] : option.slice(0, option.indexOf('S') + 1);
+    return `${basename(tokens[split.env])} ${shown}`;
   }
+  // Without `-e`, wsl hands the words after its options to the distro's shell as one command line.
+  const wslShell = wslRuns(tokens).find(run => !run.exec);
+  if (wslShell) {
+    const wsl = basename(tokens[wslShell.at]);
+    if (wslShell.managing) {
+      // Only words after a `--` are a command; an option's own operand (`--unregister Ubuntu`) is not.
+      return unquote(tokens[wslShell.end - 1] ?? '') === '--' ? outboundReason(raw.slice(wslShell.end), stdin) : null;
+    }
+    if (wslShell.end < tokens.length) return `${wsl} running its arguments as a command`;
+    return stdin ? `${wsl} reading a script from stdin` : null;
+  }
+  const start = wrappedStart(tokens);
   if (start >= tokens.length) return null;
+  // As written, for the reason shown; `name` is what the program is looked up by.
   const program = basename(tokens[start]);
+  const name = programName(tokens[start]);
   const args = tokens.slice(start + 1);
   // Any computed argument: `curl https://x/$(base64 a)` sends the file in a GET.
   const computed = raw.slice(start + 1).some(isDynamic);
 
-  if (ALWAYS_OUTBOUND.has(program)) return program;
-  if (program === 'curl') {
+  if (ALWAYS_OUTBOUND.has(name)) return program;
+  if (name === 'curl') {
     const flag = args.find(
       arg => CURL_SENDS.test(arg.split('=')[0]) || (!/^-[a-zA-Z]*X/.test(arg) && /^-[a-zA-Z]*[dFTK]/.test(arg))
     );
@@ -570,18 +1120,18 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
     if (sendsBody(method)) return 'curl --request';
     return computed ? 'curl with a computed argument' : null;
   }
-  if (program === 'wget') {
+  if (name === 'wget') {
     const flag = args.find(arg => WGET_SENDS.test(arg.split('=')[0]));
     if (flag) return `wget ${flag.split('=')[0]}`;
     if (sendsBody(optionValue(args, ['--method']))) return 'wget --method';
     return computed ? 'wget with a computed argument' : null;
   }
-  if (program === 'rsync') {
+  if (name === 'rsync') {
     return args.some(arg => !arg.startsWith('-') && (/^[^/]*:/.test(arg) || arg.startsWith('rsync://')))
       ? 'rsync to a remote host'
       : null;
   }
-  if (program === 'git') {
+  if (name === 'git') {
     const words: string[] = [];
     for (let i = 0; i < args.length; i++) {
       if (args[i] === '-C' || args[i] === '-c') i++;
@@ -594,7 +1144,7 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
     if (sub === 'remote' && (action === 'add' || action === 'set-url')) return `git remote ${action}`;
     return null;
   }
-  if (program === 'gh') {
+  if (name === 'gh') {
     const [sub, action] = args.filter(arg => !arg.startsWith('-'));
     if ((sub === 'gist' && (action === 'create' || action === 'edit')) || (sub === 'release' && action === 'upload')) {
       return `gh ${sub} ${action}`;
@@ -613,35 +1163,37 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
     const fields = apiArgs.some(arg => /^-[fF]|^--(field|raw-field|input)(=|$)/.test(arg));
     return fields && !(action === 'graphql' && graphqlReadOnly(apiArgs)) ? 'gh api' : null;
   }
-  if (program === 'aws' || program === 'gsutil' || program === 'gcloud') {
+  if (name === 'aws' || name === 'gsutil' || name === 'gcloud') {
     const positional = args.filter(arg => !arg.startsWith('-'));
     const copies = positional.some(arg => /^(cp|mv|sync|rsync)$/.test(arg));
     if (copies && /^(s3|gs):\/\//.test(positional.at(-1) ?? '')) return `${program} upload`;
     return positional.includes('put-object') ? `${program} put-object` : null;
   }
-  if (program === 'docker' || program === 'podman') {
+  if (name === 'docker' || name === 'podman') {
     return args.find(arg => !arg.startsWith('-')) === 'push' ? `${program} push` : null;
   }
-  if (program === 'deno') return args[0] === 'eval' ? 'deno eval' : null;
-  if (program === 'eval') return 'eval';
+  if (name === 'deno') return args[0] === 'eval' ? 'deno eval' : null;
+  if (name === 'eval') return 'eval';
   // A name built from a command substitution carries what it read into the lookup itself.
-  if (RESOLVERS.has(program) && computed) return `${program} with a computed argument`;
-  const inlineScript = /^python[\d.]*$/.test(program) ? DASH_C : INLINE_SCRIPT[program];
+  if (RESOLVERS.has(name) && computed) return `${program} with a computed argument`;
+  const windowsRun = WINDOWS_SHELLS.get(name)?.(args);
+  if (windowsRun && (stdin || !windowsRun.stdin)) return `${program} ${windowsRun.shown}`;
+  const inlineScript = inlineScriptOption(name);
   // A script's own arguments are not options: `python3 x.py -config` never runs an inline script.
-  const { options, operands } = interpreterOptions(program, args);
+  const { options, operands } = interpreterOptions(name, args);
   const inline = inlineScript ? options.find(arg => inlineScript.test(arg)) : undefined;
   if (inline) return `${program} ${(inlineScript?.exec(inline)?.[0] ?? inline.split('=')[0]).replace(/=$/, '')}`;
   // `bash -s` reads its script from stdin even when operands follow, as `curl ... | bash -s -- arg`.
   const scriptOperand =
-    INLINE_SCRIPT[program] === SHELL_C && options.some(arg => /^[+-][a-zA-Z]*s/.test(arg)) ? '-' : operands[0];
+    INLINE_SCRIPT.get(name) === SHELL_C && options.some(arg => /^[+-][a-zA-Z]*s/.test(arg)) ? '-' : operands[0];
   if (
     stdin &&
-    STDIN_SCRIPT.test(program) &&
+    STDIN_SCRIPT.test(name) &&
     (scriptOperand === undefined || scriptOperand === '-' || STDIN_SCRIPT_ARG.test(scriptOperand))
   ) {
     return `${program} reading a script from stdin`;
   }
-  if ((program === 'npm' || program === 'pnpm' || program === 'yarn') && args.includes('publish')) {
+  if ((name === 'npm' || name === 'pnpm' || name === 'yarn') && args.includes('publish')) {
     return `${program} publish`;
   }
   return null;
@@ -752,19 +1304,12 @@ function sortRunsOrWrites(args: readonly string[]): boolean {
   return false;
 }
 
-/** Option arguments of `timeout` that take a value of their own. */
-const TIMEOUT_VALUE_OPTIONS = /^(-s|-k|--signal|--kill-after)$/;
-
 /**
  * The command `timeout [options] DURATION command...` runs, or null when it cannot be read off
  * the text. The duration and option values are inert; only the wrapped command matters.
  */
 function timeoutCommand(raw: readonly string[]): string[] | null {
-  let at = 0;
-  while (at < raw.length && unquote(raw[at]).startsWith('-')) {
-    if (TIMEOUT_VALUE_OPTIONS.test(unquote(raw[at]))) at++;
-    at++;
-  }
+  const at = wrapperWords('timeout', raw, 0).end;
   const duration = raw[at];
   if (duration === undefined || !/^\d+(\.\d+)?[smhd]?$/.test(unquote(duration))) return null;
   const command = raw.slice(at + 1);
@@ -1088,6 +1633,38 @@ export function words(node: Node): string[] {
   return out;
 }
 
+/** Nodes whose assignments are already accounted for: a command's prefix, or a flagged declaration. */
+const ASSIGNMENT_OWNERS = new Set(['command', 'declaration_command', 'variable_assignments']);
+
+/**
+ * The home folder `~` and a bare `cd` reach, and the temp folders a command may use freely. A
+ * command in a WSL folder runs in Linux, so they are the distro user's: `home` is its Linux path,
+ * and the temp folder is on the share. When the distro cannot say (yet), `known` is false and
+ * `home` is the distro's root: a path built from it is not where the command will run, so
+ * `scanShell` gives no scan for a script that uses it.
+ */
+export async function shellHome(startDirectory: string): Promise<{ home: string; known: boolean; temp: string[] }> {
+  const wsl = wslLocation(startDirectory);
+  if (!wsl) return { home: homedir(), known: true, temp: [tmpdir(), '/tmp', '/private/tmp'] };
+  const user = await wslUserEnvironment(wsl.distro);
+  return { home: user?.home ?? '/', known: !!user, temp: [wslUncPath(wsl, '/tmp')] };
+}
+
+/** `join`, `basename` and `dirname` for operands of a command in `cwd`: Linux ones in a WSL folder. */
+const operandRules = (cwd: string) => (wslLocation(cwd) ? posix : { join, basename, dirname });
+
+/**
+ * A program a WSL command runs through Windows interop: one named as Windows runs it, or any file
+ * on a Windows drive, since interop runs a Windows executable by its content whatever its name.
+ */
+const WINDOWS_PROGRAM = /\.(exe|com|bat|cmd)$|^\/mnt\/[A-Za-z]\//i;
+
+/** A path in a WSL distro that none of `roots` is in. */
+export function inUngrantedDistro(path: string, roots: readonly string[]): boolean {
+  const distro = wslLocation(path)?.distro.toLowerCase();
+  return distro !== undefined && !roots.some(root => wslLocation(root)?.distro.toLowerCase() === distro);
+}
+
 /**
  * Every simple command a shell script would run, and every directory outside the project it
  * names. Null when the script does not parse, which the caller treats as a reason to ask.
@@ -1097,9 +1674,6 @@ export function words(node: Node): string[] {
  * variable or a command substitution is skipped, as opencode does: it cannot be read off the
  * text, and a `cd` to one leaves the tracked directory where it was.
  */
-/** Nodes whose assignments are already accounted for: a command's prefix, or a flagged declaration. */
-const ASSIGNMENT_OWNERS = new Set(['command', 'declaration_command', 'variable_assignments']);
-
 export async function scanShell(
   command: string,
   startDirectory: string,
@@ -1109,11 +1683,18 @@ export async function scanShell(
   if (!tree) return null;
 
   try {
-    const temp = [tmpdir(), '/tmp', '/private/tmp'];
+    const { home, known: homeKnown, temp } = await shellHome(startDirectory);
+    let homeGuessed = false;
+    const expand = (text: string): string => {
+      const expanded = expandHome(text, home);
+      if (!homeKnown && expanded !== text) homeGuessed = true;
+      return expanded;
+    };
     const allowed = [...roots, ...temp];
     const commands: ShellCommand[] = [];
     const paths = new Set<string>([await realpathNearest(startDirectory)]);
     const directories = new Set<string>();
+    const ungranted = new Set<string>();
     const envFiles = new Set<string>();
     const outbound = new Set<string>();
     const sends: ShellScan['sends'] = [];
@@ -1125,31 +1706,50 @@ export async function scanShell(
     let readOnly = true;
 
     const noteEnvFile = (raw: string): void => {
-      const path = expandHome(unquote(raw));
+      const path = expand(unquote(raw));
       if (isDynamic(path)) return;
       if (globPrefix(path) === path ? isEnvFile(path) : globMayMatchEnvFile(path)) envFiles.add(path);
     };
 
-    /** A `probe` only reads, so a toolchain folder it names is recorded as a path, not an outside folder to grant. */
-    const check = async (raw: string, cwd: string, probe = false): Promise<string | null> => {
-      const text = expandHome(unquote(raw));
-      const prefix = globPrefix(text);
-      if (!prefix || isDynamic(prefix)) return null;
+    /**
+     * A `probe` only reads, so a toolchain folder it names is recorded as a path, not an outside folder to grant.
+     * Returns where the command lands, which is what a `cd` moves to.
+     */
+    const check = async (
+      raw: string,
+      cwd: string,
+      probe = false,
+      reader: OperandReader = 'program'
+    ): Promise<string | null> => {
+      const written = expand(unquote(raw));
+      const [device, text] = reader === 'windows' ? windowsDevicePath(written) : ['', written];
+      const glob = globPrefix(text);
+      if (!glob || isDynamic(glob)) return null;
+      const prefix = device + glob;
       // A glob can expand to `..` (`~/.nvm*/../.ssh`, `~/.nvm/.?/.ssh`), so a dot after the glob never stays inside.
-      const stays = text === prefix || (!text.slice(prefix.length).includes('.') && !prefix.endsWith('.'));
-      try {
-        const physical = await resolveWithinRootsPhysically(prefix, allowed, cwd);
-        paths.add(physical);
-        return physical;
-      } catch {
-        const target = resolve(cwd, prefix);
-        paths.add(target);
-        paths.add(await realpathNearest(target));
-        if (probe && stays && (await isToolchainPath(prefix, cwd))) return target;
-        const isDirectory = (await stat(target).catch(() => null))?.isDirectory() === true;
-        directories.add(isDirectory ? target : dirname(target));
-        return target;
+      const stays = text === glob || (!text.slice(glob.length).includes('.') && !glob.endsWith('.'));
+      const places = await operandPlaces(prefix, allowed, cwd, reader);
+      for (const { lexical, physical, inside } of places) {
+        if (inUngrantedDistro(lexical, allowed)) {
+          // Outside without a look: reading it over the share would start that distro.
+          ungranted.add(lexical);
+        } else if (inside && physical !== null) {
+          paths.add(physical);
+        } else {
+          paths.add(lexical);
+          // Named without a look, so the scan opens no connection to that computer.
+          if (physical === null && onAnotherComputer(lexical)) {
+            directories.add(dirname(lexical));
+            continue;
+          }
+          paths.add(await realpathNearest(lexical));
+          if (probe && stays && (await isToolchainPath(prefix, cwd, home))) continue;
+          const isDirectory = (await stat(lexical).catch(() => null))?.isDirectory() === true;
+          directories.add(isDirectory ? lexical : dirname(lexical));
+        }
       }
+      const landed = places[0];
+      return landed?.inside && landed.physical !== null ? landed.physical : (landed?.lexical ?? null);
     };
 
     const state = { cwd: startDirectory, previous: startDirectory, stack: [] as string[] };
@@ -1211,6 +1811,22 @@ export async function scanShell(
         const computed = tokens.some(isDynamic);
         sends.push({ reason, target: assigns || computed ? null : repositoryWrite(tokens.map(unquote), state.cwd) });
       }
+      // wslconfig is the legacy tool for WSL itself (`/u` unregisters a distro, `/t` stops one).
+      if (programName(unquote(withoutWrappers(tokens)[0] ?? '')) === 'wslconfig') ungranted.add(WSL_MANAGEMENT);
+      for (const { distros, system, managing } of wslRuns(tokens)) {
+        if (managing) {
+          ungranted.add(WSL_MANAGEMENT);
+          continue;
+        }
+        if (system) {
+          ungranted.add(SYSTEM_DISTRO);
+          continue;
+        }
+        for (const distro of distros) {
+          const root = distro === undefined ? UNNAMED_DISTRO : wslUncPath({ host: 'wsl.localhost', distro }, '/');
+          if (distro === undefined || inUngrantedDistro(root, allowed)) ungranted.add(root);
+        }
+      }
       for (const file of ghReadFiles(tokens.map(unquote))) await check(file, state.cwd);
       if (reason || assigns || arithmetic || !containedCommand(tokens)) contained = false;
       if (
@@ -1227,16 +1843,42 @@ export async function scanShell(
       for (const arg of rest) if (!arg.startsWith('-')) noteEnvFile(arg);
       for (const directory of directoryOptionValues(tokens)) await check(directory, state.cwd);
       if (!TOUCHES_FILES.has(program)) {
+        const here = wslLocation(state.cwd);
+        const windowsProgram = here !== null && WINDOWS_PROGRAM.test(wordValue(wrapped ?? ''));
         // Programs outside the folder-discovery list can still name permission files (sed,
         // awk, dd, ...). Record static operands for the permission-file floor too, including
         // option values, without treating every ordinary argument as an outside folder grant.
         for (const arg of rest) {
+          // A Windows program run through interop opens a Windows path where Windows would, so that place is
+          // judged, for the word bash passes and for the part after an `=` in it.
+          if (windowsProgram) {
+            const word = wordValue(arg);
+            const passed = [...new Set([word, word.slice(word.indexOf('=') + 1)])].filter(
+              part => !part.startsWith('-') && /^[A-Za-z]:|^[\\/]{2}|\\/.test(part)
+            );
+            for (const part of passed) await check(part, state.cwd, false, 'windows');
+            if (passed.length > 0) continue;
+          }
           const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : arg;
           if (value.startsWith('-')) continue;
-          const prefix = globPrefix(expandHome(unquote(value)));
+          const prefix = globPrefix(expand(unquote(value)));
           if (!prefix || isDynamic(prefix)) continue;
-          const filesystemRoot = parse(resolve(state.cwd, prefix)).root;
-          paths.add(await resolveWithinRootsPhysically(prefix, [filesystemRoot], state.cwd));
+          const targets = operandTargets(state.cwd, prefix);
+          const unreachable = targets.filter(target => inUngrantedDistro(target, allowed));
+          for (const target of unreachable) ungranted.add(target);
+          if (!here) {
+            if (unreachable.length === 0) {
+              paths.add(await resolveWithinRootsPhysically(prefix, [parse(targets[0] ?? prefix).root], state.cwd));
+            }
+            continue;
+          }
+          // A WSL folder's command reads its operands against its own distro. A Windows path or a granted other
+          // distro is not on that filesystem and is left unread; one that is and fails fails the scan.
+          for (const { lexical, physical, inside } of await operandPlaces(prefix, [wslUncPath(here, '/')], state.cwd)) {
+            if (wslLocation(lexical)?.distro.toLowerCase() !== here.distro.toLowerCase()) continue;
+            if (!inside || physical === null) throw new PathAccessDenied(prefix);
+            paths.add(physical);
+          }
         }
         return;
       }
@@ -1257,23 +1899,26 @@ export async function scanShell(
         return;
       }
       const target = rest.find(arg => arg === '-' || !arg.startsWith('-'));
-      const next = target === '-' ? state.previous : await check(target ?? homedir(), state.cwd);
+      const next = target === '-' ? state.previous : await check(target ?? '~', state.cwd, false, 'shell');
       if (next === null) return;
       if (program === 'pushd') state.stack.push(state.cwd);
       state.previous = state.cwd;
       state.cwd = next;
     };
 
+    // Every reading is kept: a write recorded at a place the command never wrote only asks more often.
     const noteWrite = (raw: string, into = writes): void => {
-      const text = expandHome(unquote(raw));
-      if (text && !isDynamic(text) && !HARMLESS_REDIRECT_TARGETS.has(text)) into.add(resolve(state.cwd, text));
+      const text = expand(unquote(raw));
+      if (!text || isDynamic(text) || HARMLESS_REDIRECT_TARGETS.has(text)) return;
+      for (const target of operandTargets(state.cwd, text)) into.add(target);
     };
 
     const noteWrites = (program: string, rest: string[]): void => {
+      const rules = operandRules(state.cwd);
       const operands = rest.filter(arg => !arg.startsWith('-'));
       if (program === 'tee') for (const operand of operands) noteWrite(operand);
       for (const [index, arg] of rest.entries()) {
-        const output = DOWNLOAD_OUTPUT[program];
+        const output = DOWNLOAD_OUTPUT.get(program);
         const value = !output
           ? undefined
           : arg === output.long
@@ -1292,7 +1937,7 @@ export async function scanShell(
         (setsConfig || [verb, ...after].some(a => GIT_CONFIG_SETS.test(a ?? '')))
       ) {
         const repository = directoryOptionValues([program, ...rest])[0] ?? '.';
-        noteWrite(rest.includes('--global') ? '~/.gitconfig' : join(repository, '.git/config'));
+        noteWrite(rest.includes('--global') ? '~/.gitconfig' : rules.join(repository, '.git/config'));
       }
       if ((program === 'npm' || program === 'pnpm') && sub === 'pkg' && verb !== 'get') noteWrite('package.json');
       if (!COPIES.has(program)) return;
@@ -1300,7 +1945,9 @@ export async function scanShell(
       const target = option === -1 ? operands.at(-1) : (rest[option].split('=')[1] ?? rest[option + 1]);
       if (target === undefined) return;
       noteWrite(target);
-      for (const source of operands) if (source !== target) noteWrite(join(unquote(target), basename(unquote(source))));
+      for (const source of operands) {
+        if (source !== target) noteWrite(rules.join(unquote(target), rules.basename(unquote(source))));
+      }
       const recursive =
         program === 'rsync' ||
         ((program === 'cp' || program === 'scp') &&
@@ -1374,10 +2021,12 @@ export async function scanShell(
     };
 
     await visit(tree.rootNode);
+    if (homeGuessed) return null;
     return {
       commands,
       paths: [...paths],
       directories: [...directories],
+      ungranted: [...ungranted],
       envFiles: [...envFiles],
       outbound: [...outbound],
       sends: setsEnvironment ? sends.map(({ reason }) => ({ reason, target: null })) : sends,
