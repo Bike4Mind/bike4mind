@@ -1842,6 +1842,16 @@ describe('OllamaLocal context sizing', () => {
       expect(runtimes.every(runtime => runtime.draftMax === 3 && runtime.speculative)).toBe(true);
     });
 
+    it('sizes the listed Auto context for the draft count the model runs at', async () => {
+      ollama(mtp(131072));
+      const local = new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, 13), undefined, own({ draftTokens: 3 }));
+      vi.mocked(estimateFit).mockClear();
+      await local.models();
+      const runtimes = vi.mocked(estimateFit).mock.calls.map(([input]) => input.runtime);
+      expect(runtimes.length).toBeGreaterThan(0);
+      expect(runtimes.every(runtime => runtime.draftMax === 3 && runtime.speculative)).toBe(true);
+    });
+
     it('offers no Auto and no rating where Desktop cannot measure the model, and no draft without a head', async () => {
       ollama(trainedFor(32768));
       const offer = await new OllamaLocal().loadOffer('local:ollama:llama');

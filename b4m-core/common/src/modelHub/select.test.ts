@@ -635,6 +635,10 @@ describe('pickForMachine runtimes', () => {
     expect(pick('mac-64', 'vision', { runtimes }).best!.fit.kv).toEqual({ k: 'f16', v: 'f16' });
   });
 
+  it("pins Ollama's draft count for a DRAFT layer at 4", () => {
+    expect(OLLAMA_DRAFT_LAYER_DEFAULT).toBe(4);
+  });
+
   it("prices Ollama's draft snapshots of recurrent state, from the Modelfile or Ollama's default", () => {
     const withDraft = (draftNumPredict?: number, sidecar = true) =>
       withManifest(m => {

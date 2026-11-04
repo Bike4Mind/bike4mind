@@ -1341,6 +1341,43 @@ describe('ModelHubService fit', () => {
     expect(runtimes.every(fit => fit.draftMax === 3 && fit.speculative)).toBe(true);
   });
 
+  it('rates an installed model for a DRAFT layer at Ollama default draft count', async () => {
+    const { service, runtime } = harness();
+    runtime.list.mockResolvedValue([installed({ name: 'drafted:latest' })]);
+    const base = await runtime.inspect('x');
+    runtime.inspect.mockResolvedValue({
+      ...base,
+      contents: { template: null, license: null, modelBlob: SHA, draftBlobs: [SHA] },
+    });
+    vi.mocked(estimateFit).mockClear();
+    await service.installed();
+    const drafts = vi.mocked(estimateFit).mock.calls.map(([input]) => input.runtime.draftMax);
+    expect(drafts.length).toBeGreaterThan(0);
+    expect(drafts.every(draftMax => draftMax === 4)).toBe(true);
+  });
+
+  it('rates a curated row and the same installed model with the same draft count and context', async () => {
+    const entry = CURATED.entries.find(candidate => candidate.id === 'qwen3-5-0-8b');
+    const reviewed = entry?.builds[0];
+    const source = reviewed && libraryOf(reviewed);
+    if (!entry || !reviewed || !source) throw new Error('bundled catalog lost qwen3-5-0-8b');
+    const drafts = () => new Set(vi.mocked(estimateFit).mock.calls.map(([input]) => input.runtime.draftMax));
+
+    const curated = harness({ curated: { ...CURATED, entries: [entry] } });
+    vi.mocked(estimateFit).mockClear();
+    const row = (await curated.service.curated()).entries[0].builds[0];
+    expect(drafts()).toEqual(new Set([2]));
+
+    const { service, runtime } = harness();
+    runtime.list.mockResolvedValue([installed({ name: source.ref, sizeBytes: source.sizeBytes })]);
+    const base = await runtime.inspect(source.ref);
+    runtime.inspect.mockResolvedValue({ ...base, arch: entry.arch as ModelArch, parameters: 'draft_num_predict 2' });
+    vi.mocked(estimateFit).mockClear();
+    const result = await service.installed();
+    expect(drafts()).toEqual(new Set([2]));
+    expect(result.ok && result.models[0].fit?.context).toBe(row.fit.context);
+  });
+
   it('rates an installed model at its own context from the Models screen, and the rest at the Settings one', async () => {
     const { service, runtime } = harness({
       setting: { mode: 'fixed', tokens: 32768 },

@@ -54,6 +54,7 @@ import {
 import {
   activeParamsFraction,
   ollamaBuildBytes,
+  ollamaBuildDraftMax,
   type HubBuild,
   type HubEntry,
   type HubManifest,
@@ -663,12 +664,15 @@ function chatContext(
 /** A reviewed build's fit from its layer shapes, pinned projector and num_ctx; its row and its pull dialog share it. */
 function reviewedFit(entry: HubEntry, build: HubBuild, sizing: Sizing): ModelFit {
   const { weightsBytes, mmprojBytes } = ollamaBuildBytes(build);
+  const draftMax = ollamaBuildDraftMax(entry, build);
   const context = chatContext(sizing, entry.arch, weightsBytes + mmprojBytes, {
     configured: pinsOf(build)?.numCtx ?? undefined,
     projectorBytes: mmprojBytes,
+    draftMax,
   });
   return fitFromArch(entry.arch, weightsBytes, sizing.hardware, context, {
     mmprojBytes,
+    draftMax,
     where: sizing.where,
     expertBytesPerLayer: build.tensorStats?.expertBytesPerLayer,
     activeParamsFraction: activeParamsFraction(entry.params),

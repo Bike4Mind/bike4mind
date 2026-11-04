@@ -420,6 +420,24 @@ describe('ModelDefaultsDialog load options', () => {
     expect(byTestId('model-defaults-context-note')?.textContent).toBe('Runs at 40K tokens.');
   });
 
+  it('shows a stored size past the trained length as the clamped size chat sends', async () => {
+    offer = {
+      context: {
+        kind: 'ollama',
+        settings: 16384,
+        ceiling: 40960,
+        sizes: [
+          { size: 16384, tokens: 16384, autoTokens: 16384 },
+          { size: 65536, tokens: 40960, autoTokens: 40960 },
+        ],
+      },
+    };
+    stored = { context: { mode: 'fixed', tokens: 131072 } };
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-note')?.textContent).toBe('Runs at 40K tokens.');
+    expect(contextSent(offer, { mode: 'fixed', tokens: 131072 })).toBe(40960);
+  });
+
   it('validates the draft text itself: whole numbers 0 to the maximum, blank for unset', async () => {
     offer = OLLAMA_OFFER;
     await render(QWEN);

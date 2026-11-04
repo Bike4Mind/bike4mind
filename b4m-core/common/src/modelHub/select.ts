@@ -126,6 +126,19 @@ export function ollamaBuildBytes(build: HubBuild): { weightsBytes: number; mmpro
   return { weightsBytes: build.weights.reduce((sum, w) => sum + w.sizeBytes, 0), mmprojBytes };
 }
 
+/** The draft count Ollama runs a build at untouched: its pinned num predict, else 4 for a DRAFT layer, else 0. */
+export function ollamaBuildDraftMax(entry: Pick<HubEntry, 'arch'>, build: HubBuild): number {
+  const source = build.ollama;
+  const layers = source && source.kind !== 'create' ? source.layers : undefined;
+  const hasDraft = build.draft !== undefined || entry.arch.mtpLayers > 0 || !!layers?.draft;
+  const draftLayer = (build.draft !== undefined && build.draft.kind !== 'mtp-embedded') || !!layers?.draft;
+  const draftNumPredict =
+    source?.kind === 'library'
+      ? layers?.draftNumPredict
+      : (layers?.draftNumPredict ?? source?.modelfile.draftNumPredict);
+  return hasDraft ? (draftNumPredict ?? (draftLayer ? OLLAMA_DRAFT_LAYER_DEFAULT : 0)) : 0;
+}
+
 function fitInputs(entry: HubEntry, build: HubBuild, runtime: HubRuntime, options: PickOptions) {
   const weights = build.weights.reduce((sum, w) => sum + w.sizeBytes, 0);
   const expertBytesPerLayer = build.tensorStats?.expertBytesPerLayer;
@@ -136,14 +149,7 @@ function fitInputs(entry: HubEntry, build: HubBuild, runtime: HubRuntime, option
     const family = options.manifest.families[entry.family];
     const source = build.ollama;
     const library = source?.kind === 'library';
-    const layers = source && source.kind !== 'create' ? source.layers : undefined;
-    const hasDraft = build.draft !== undefined || entry.arch.mtpLayers > 0 || !!layers?.draft;
-    const draftLayer = (build.draft !== undefined && build.draft.kind !== 'mtp-embedded') || !!layers?.draft;
-    const draftNumPredict =
-      source?.kind === 'library'
-        ? layers?.draftNumPredict
-        : (layers?.draftNumPredict ?? source?.modelfile.draftNumPredict);
-    const draftMax = hasDraft ? (draftNumPredict ?? (draftLayer ? OLLAMA_DRAFT_LAYER_DEFAULT : 0)) : 0;
+    const draftMax = ollamaBuildDraftMax(entry, build);
     // Ollama loads a model's projector whenever it has one.
     const model: FitModel = {
       arch: entry.arch,

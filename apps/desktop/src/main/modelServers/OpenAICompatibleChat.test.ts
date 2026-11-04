@@ -704,6 +704,15 @@ describe('OpenAICompatibleChat on a server that fronts several models', () => {
       expect(JSON.stringify(server.bodies.at(-1))).not.toContain('draft');
     });
 
+    it('applies a model budget to a request that names it by an alias', async () => {
+      const entry = (id: string) => ({ id, object: 'model', root: '/models/a', max_model_len: 65536 });
+      const fetch: FetchLike = async () =>
+        new Response(JSON.stringify({ object: 'list', data: [entry('a'), entry('a-alias')] }), { status: 200 });
+      const client = budgeted(fetch);
+      await client.listModels();
+      expect(await client.contextTokens('local:srv-abc123:a-alias')).toBe(32768);
+    });
+
     it('offers only sizes below what the server runs, and nothing when it does not say', async () => {
       expect(await budgeted(proxy(65536).fetch).loadOffer(MODEL_A)).toEqual({
         context: { kind: 'budget', server: 65536, sizes: [16384, 32768] },
