@@ -287,6 +287,9 @@ describe('POST /api/admin/subscriptions/[id]/sync', () => {
       { field: 'status', before: 'active', after: 'canceled' },
       { field: 'canceledAt', before: null, after: expect.any(String) },
     ]);
+    expect(mocks.audit.mock.calls[0][1].summary).toBe(
+      'synced subscription from Stripe (gone from Stripe, marked canceled)'
+    );
     expect(mocks.audit.mock.calls[0][1].details).toMatchObject({ stripeMissing: true });
   });
 
@@ -299,7 +302,9 @@ describe('POST /api/admin/subscriptions/[id]/sync', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.updateReturningBefore).not.toHaveBeenCalled();
     expect(mocks.audit.mock.calls[0][1].changes).toEqual([]);
-    expect(mocks.audit.mock.calls[0][1].summary).toContain('already finished');
+    expect(mocks.audit.mock.calls[0][1].summary).toBe(
+      'synced subscription from Stripe (gone from Stripe, already finished)'
+    );
   });
 
   it('leaves an incomplete_expired row untouched when Stripe has no such subscription', async () => {
@@ -311,6 +316,9 @@ describe('POST /api/admin/subscriptions/[id]/sync', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.updateReturningBefore).not.toHaveBeenCalled();
     expect(mocks.audit.mock.calls[0][1].changes).toEqual([]);
+    expect(mocks.audit.mock.calls[0][1].summary).toBe(
+      'synced subscription from Stripe (gone from Stripe, already finished)'
+    );
   });
 
   it('is a 409, with no seat write or audit, when the row changed after the precheck', async () => {

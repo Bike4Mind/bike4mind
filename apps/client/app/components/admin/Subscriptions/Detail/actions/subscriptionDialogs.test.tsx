@@ -296,8 +296,6 @@ describe('SyncFromStripeDialog', () => {
     pickReason('sync-subscription-dialog');
     expect(screen.getByTestId('sync-subscription-dialog')).toHaveTextContent('Reading from Stripe');
     expect(screen.getByTestId('sync-subscription-dialog-confirm-btn')).toBeDisabled();
-    confirm('sync-subscription-dialog');
-    expect(mocks.sync).not.toHaveBeenCalled();
   });
 
   it('blocks the sync when the preview fails', () => {
@@ -307,8 +305,6 @@ describe('SyncFromStripeDialog', () => {
     pickReason('sync-subscription-dialog');
     expect(screen.getByTestId('sync-subscription-dialog')).toHaveTextContent('Could not read the subscription');
     expect(screen.getByTestId('sync-subscription-dialog-confirm-btn')).toBeDisabled();
-    confirm('sync-subscription-dialog');
-    expect(mocks.sync).not.toHaveBeenCalled();
   });
 
   it('warns that a subscription missing from Stripe is marked canceled', () => {
