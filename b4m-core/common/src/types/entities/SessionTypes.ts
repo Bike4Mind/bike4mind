@@ -20,6 +20,15 @@ export interface IPendingAction {
   params: Record<string, unknown>;
   /** Unix timestamp in milliseconds for 15-min expiration check */
   ts: number;
+  /** Set when `tool` is a custom connector tool: names the connection the confirm call runs against. */
+  customConnector?: CustomConnectorPendingRef;
+}
+
+export interface CustomConnectorPendingRef {
+  connectionId: string;
+  slug: string;
+  displayName: string;
+  urlHost: string;
 }
 
 /**
