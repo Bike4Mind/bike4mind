@@ -64,7 +64,10 @@ export async function deepResearchIntoQuest(
 
   const settle = async (patch: { status: 'done'; type?: 'error'; reply: string; replies: string[] }) => {
     const settled = await quests.settleIfUnfinished(questId, patch);
-    if (settled) await push({ id: questId, sessionId, ...patch, deepResearchState: lastState ?? undefined });
+    if (!settled) return;
+    await push({ id: questId, sessionId, ...patch, deepResearchState: lastState ?? undefined }).catch(err =>
+      logger.warn('deepResearchIntoQuest: final push failed', err)
+    );
   };
 
   const settleFailed = () =>
@@ -103,7 +106,11 @@ export async function deepResearchIntoQuest(
         report += chunks.filter(Boolean).join('');
       }
     );
-    if (lastState) await writeProgress({ ...lastState, completed: true }, true);
+    if (lastState) {
+      await writeProgress({ ...lastState, completed: true }, true).catch(err =>
+        logger.warn('deepResearchIntoQuest: final progress write failed', err)
+      );
+    }
     await settle({ status: 'done', reply: report, replies: [report] });
   } catch (err) {
     logger.error('deepResearchIntoQuest: failed', { questId, err });

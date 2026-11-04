@@ -56,6 +56,9 @@ function setup(over: Partial<DeepResearchIntoQuestAdapters> = {}) {
 const writes = (quests: { updateIfUnfinished: ReturnType<typeof vi.fn> }) =>
   quests.updateIfUnfinished.mock.calls.map(c => c[0]);
 
+const beatsOf = (quests: { updateIfUnfinished: ReturnType<typeof vi.fn> }) =>
+  writes(quests).filter(w => !w.deepResearchState && w.updatedAt instanceof Date);
+
 describe('deepResearchIntoQuest', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
@@ -74,19 +77,22 @@ describe('deepResearchIntoQuest', () => {
   it('heartbeats at least every 30s while research runs', async () => {
     const { adapters, quests } = setup();
     await deepResearchIntoQuest({ questId: 'q1', topic: 't' }, adapters);
-    const beats = writes(quests).filter(w => w.updatedAt instanceof Date);
+    const beats = beatsOf(quests);
     expect(beats.length).toBeGreaterThanOrEqual(3);
   });
 
   it('heartbeats during the report call too', async () => {
     const { adapters, quests, complete } = setup();
+    let beatsDuringReport = 0;
     complete.mockImplementation(async (_m, _msgs, _opts, cb) => {
-      const before = writes(quests).length;
+      const before = beatsOf(quests).length;
       await vi.advanceTimersByTimeAsync(DEEP_RESEARCH_HEARTBEAT_MS + 1);
-      expect(writes(quests).length).toBeGreaterThan(before);
+      beatsDuringReport = beatsOf(quests).length - before;
       await cb(['done']);
     });
     await deepResearchIntoQuest({ questId: 'q1', topic: 't' }, adapters);
+    expect(beatsDuringReport).toBeGreaterThan(0);
+    expect(quests.settleIfUnfinished).toHaveBeenCalledWith('q1', { status: 'done', reply: 'done', replies: ['done'] });
   });
 
   it('writes the report through the given model and settles done', async () => {
@@ -137,8 +143,23 @@ describe('deepResearchIntoQuest', () => {
   it('stops the heartbeat once settled', async () => {
     const { adapters, quests } = setup();
     await deepResearchIntoQuest({ questId: 'q1', topic: 't' }, adapters);
-    const after = writes(quests).length;
+    const after = beatsOf(quests).length;
+    expect(after).toBeGreaterThan(0);
     await vi.advanceTimersByTimeAsync(DEEP_RESEARCH_HEARTBEAT_MS * 4);
-    expect(writes(quests).length).toBe(after);
+    expect(beatsOf(quests).length).toBe(after);
+  });
+
+  it('keeps the report when the final progress push fails', async () => {
+    const { adapters, quests, push } = setup();
+    push.mockImplementation(async (q: Record<string, unknown>) => {
+      if ((q.deepResearchState as { completed?: boolean } | undefined)?.completed) throw new Error('ws down');
+    });
+    await deepResearchIntoQuest({ questId: 'q1', topic: 't' }, adapters);
+    expect(quests.settleIfUnfinished).toHaveBeenCalledTimes(1);
+    expect(quests.settleIfUnfinished).toHaveBeenCalledWith('q1', {
+      status: 'done',
+      reply: '# Report\nbody',
+      replies: ['# Report\nbody'],
+    });
   });
 });
