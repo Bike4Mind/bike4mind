@@ -24,7 +24,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:a
         });
       },
     });
-    if (result.outcome === 'applied') await rerunDomainGrantAfterUnblock(userId);
+    if (result.outcome === 'applied') await rerunDomainGrantAfterUnblock(userId, req.logger);
     return res.json(result);
   });
 
