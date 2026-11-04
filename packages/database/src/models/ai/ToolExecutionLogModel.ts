@@ -14,7 +14,8 @@ export interface IToolExecutionLogDocument extends IMongoDocument {
   updatedAt: Date;
 }
 
-interface IToolExecutionLogMethods {}
+interface IToolExecutionLogMethods {
+}
 
 interface IToolExecutionLogModel extends Model<IToolExecutionLogDocument, {}, IToolExecutionLogMethods> {}
 
