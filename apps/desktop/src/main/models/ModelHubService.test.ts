@@ -197,7 +197,10 @@ function harness(
     setting?: LocalContextSetting;
     checkBackoffMs?: number[];
     token?: string | null;
-    deps?: Pick<ModelHubServiceDeps, 'onPullStarted' | 'freeSpace' | 'defaultStoreDir' | 'pathExists'>;
+    deps?: Pick<
+      ModelHubServiceDeps,
+      'onPullStarted' | 'freeSpace' | 'defaultStoreDir' | 'pathExists' | 'modelSettings'
+    >;
   } = {}
 ) {
   const pulls: Deferred[] = [];
@@ -1314,6 +1317,22 @@ describe('ModelHubService fit', () => {
       ['huge:latest', 16384],
       ['long:latest', 16384],
       ['small:latest', 16384],
+    ]);
+  });
+
+  it('rates an installed model at its own context from the Models screen, and the rest at the Settings one', async () => {
+    const { service, runtime } = harness({
+      setting: { mode: 'fixed', tokens: 32768 },
+      deps: {
+        modelSettings: async (modelId: string) =>
+          modelId === 'local:ollama:own:latest' ? { context: { mode: 'fixed', tokens: 16384 } } : {},
+      },
+    });
+    runtime.list.mockResolvedValue([installed({ name: 'own:latest' }), installed({ name: 'other:latest' })]);
+    const result = await service.installed();
+    expect(result.ok ? result.models.map(model => [model.name, model.fit?.context]) : []).toEqual([
+      ['other:latest', 32768],
+      ['own:latest', 16384],
     ]);
   });
 

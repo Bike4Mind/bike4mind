@@ -111,6 +111,20 @@ describe('fitFromArch', () => {
     );
   });
 
+  it('plans the draft a speculating model runs with, and none when it does not', () => {
+    stub(6);
+    fitFromArch(DENSE, 4 * GIB, cpu(16), 16384, { draftMax: 3 });
+    expect(vi.mocked(estimateFit).mock.calls[0]?.[0].runtime).toMatchObject({ draftMax: 3, speculative: true });
+    expect(vi.mocked(estimateFit).mock.calls[0]?.[0].model).not.toHaveProperty('draftMax');
+    fitFromArch(DENSE, 4 * GIB, cpu(16), 16384, {});
+    expect(vi.mocked(estimateFit).mock.calls[1]?.[0].runtime).toEqual({
+      kind: 'ollama',
+      flashAttn: 'auto',
+      slots: 1,
+      draftMax: 0,
+    });
+  });
+
   it('fits, names the context, and sets what the runtime allocates against the budget less the margin', () => {
     stub(5);
     const fit = fitFromArch(DENSE, 4 * GIB, cpu(16), 16384);
