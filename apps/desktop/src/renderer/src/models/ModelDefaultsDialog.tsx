@@ -250,10 +250,16 @@ function ModelDefaultsForm({ option, onClose }: { option: ChatModelOption | null
                       }}
                       onBlur={event => {
                         // A number input reads text it cannot parse, such as "1e" or "-", as blank, which is not a clear.
-                        if (!event.currentTarget.validity.badInput) return;
-                        const restored = lastGood.current[field] ?? '';
-                        event.currentTarget.value = restored;
-                        setDrafts(current => ({ ...current, [field]: restored }));
+                        const text = event.currentTarget.validity.badInput
+                          ? (lastGood.current[field] ?? '')
+                          : event.currentTarget.value.trim();
+                        const value = text
+                          ? requestGeneration({ [field]: Number(text) }, { [field]: control })[field]
+                          : undefined;
+                        const shown = value !== undefined ? String(value) : text;
+                        event.currentTarget.value = shown;
+                        lastGood.current[field] = shown;
+                        setDrafts(current => ({ ...current, [field]: shown }));
                       }}
                       sx={{
                         width: 112,

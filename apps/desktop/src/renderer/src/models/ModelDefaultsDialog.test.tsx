@@ -151,6 +151,16 @@ describe('ModelDefaultsDialog', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it('shows a typed value clamped into range once its field loses focus', async () => {
+    await render(QWEN);
+    await fill('topK', '500');
+    await act(async () => {
+      input('topK').focus();
+      input('topK').blur();
+    });
+    expect(input('topK').value).toBe('200');
+  });
+
   it('keeps a stored default when its field holds text it cannot parse', async () => {
     stored = { generation: { temperature: 0.6 } };
     await render(QWEN);
