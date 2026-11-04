@@ -84,7 +84,11 @@ export function advertisedDripCredits({
     | undefined;
 }): number {
   // A verification unlock closes the drip for good; pending_email still advertises what verifying will start.
-  if (grant?.stage === 'unlocked' && !signupGrantDripOpen(grant)) return 0;
+  if (
+    grant?.stage === 'unlocked' &&
+    !signupGrantDripOpen({ stage: grant.stage, unlockedBy: grant.unlockedBy, unlockForfeited: grant.unlockForfeited })
+  )
+    return 0;
   return dailyCredits > 0 ? Math.min(dailyCredits, signupGrantDripRemaining(grant ?? {}, dripCap)) : 0;
 }
 
