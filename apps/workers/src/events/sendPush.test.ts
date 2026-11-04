@@ -224,7 +224,7 @@ describe('deliverPush', () => {
     }
   );
 
-  it('keeps a BadDeviceToken token: APNs also returns it for a sandbox/production mismatch', async () => {
+  it('keeps a BadDeviceToken token and reports it at error: APNs also returns it for a sandbox/production mismatch', async () => {
     const { deps, removed } = makeDeps([{ token: 'mismatched', environment: 'production' }], {
       respond: () => ({ status: 400, reason: 'BadDeviceToken' }),
     });
@@ -236,7 +236,7 @@ describe('deliverPush', () => {
       failed: 1,
     });
     expect(removed).toEqual([]);
-    expect(logger.warn).toHaveBeenCalledWith(
+    expect(logger.error).toHaveBeenCalledWith(
       expect.stringContaining('BadDeviceToken'),
       expect.objectContaining({ environment: 'production' })
     );

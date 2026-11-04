@@ -159,9 +159,12 @@ export async function deliverPush(
           return;
         }
         if (response.reason === 'BadDeviceToken') {
-          logger.warn('[Push] APNs reported BadDeviceToken; keeping the token (likely a sandbox/production mismatch)', {
-            environment,
-          });
+          logger.error(
+            '[Push] APNs reported BadDeviceToken; keeping the token (likely a sandbox/production mismatch)',
+            {
+              environment,
+            }
+          );
           return;
         }
         if (response.status === 429 || response.status >= 500) retryable++;
