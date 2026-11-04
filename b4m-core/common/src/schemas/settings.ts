@@ -494,6 +494,7 @@ export const SettingKeySchema = z.enum([
   'enableDomainIntelligence',
   'holdSignupsFromDomainsYoungerThanDays',
   'autoConfirmDisposableAggregateHolds',
+  'signupDomainHoldsSettledVisibleDays',
   'signupDomainHoldAssessmentEnabled',
   'signupDomainHoldAssessmentConfig',
   'domainIntelligenceTimeoutMs',
@@ -2486,6 +2487,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'enableDomainIntelligence', order: 29 },
       { key: 'holdSignupsFromDomainsYoungerThanDays', order: 30 },
       { key: 'autoConfirmDisposableAggregateHolds', order: 30.5 },
+      { key: 'signupDomainHoldsSettledVisibleDays', order: 30.55 },
       { key: 'signupDomainHoldAssessmentEnabled', order: 30.6 },
       { key: 'signupDomainHoldAssessmentConfig', order: 30.7 },
       { key: 'domainIntelligenceTimeoutMs', order: 31 },
@@ -5714,6 +5716,18 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
       'Confirm Signup Domain Holds whose reason is disposable-aggregate without waiting for an admin, keeping their free credits held. Runs every 10 minutes on stages with scheduled jobs. Each one is recorded in the Admin Audit Log as a system action, and an admin can still Release it from Signup Domain Holds.',
+  }),
+  signupDomainHoldsSettledVisibleDays: makeNumberSetting({
+    key: 'signupDomainHoldsSettledVisibleDays',
+    name: 'Signup Domain Holds: Show Settled Holds For (days)',
+    defaultValue: 90,
+    int: true,
+    min: 1,
+    max: 3650,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'How long a confirmed or released hold stays in the Signup Domain Holds lists after its decision. Older settled holds are only hidden: they are never deleted and keep withholding (confirmed) or exempting (released) the domain. Turn on Include older to see them.',
   }),
   signupDomainHoldAssessmentEnabled: makeBooleanSetting({
     key: 'signupDomainHoldAssessmentEnabled',

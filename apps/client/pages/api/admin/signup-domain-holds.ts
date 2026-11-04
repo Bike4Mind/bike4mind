@@ -1,13 +1,22 @@
 import { respond } from '@server/utils/respond';
 import { z } from 'zod';
-import { ApiKeyScope, PENDING_FREE_CREDITS_TAG, signupDomainReviewSchema } from '@bike4mind/common';
 import {
+  ApiKeyScope,
+  PENDING_FREE_CREDITS_TAG,
+  SIGNUP_DOMAIN_HOLD_REASON_FILTER_KEYS,
+  SIGNUP_DOMAIN_HOLD_STATUS_FILTERS,
+  signupDomainReviewSchema,
+} from '@bike4mind/common';
+import {
+  adminSettingsRepository,
   disposableDomainRepository,
   DomainIntelligenceModel,
+  signupDomainHoldListRepository,
   SignupDomainReviewModel,
   User,
   withTransaction,
 } from '@bike4mind/database';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -24,6 +33,24 @@ const decisionSchema = z.object({
     .optional(),
 });
 
+const PAGE_SIZE = 25;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const listQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).max(10000).default(1),
+  // Pending by default: those are the rows that still need a decision.
+  status: z.enum(SIGNUP_DOMAIN_HOLD_STATUS_FILTERS).default('pending'),
+  reason: z.enum(SIGNUP_DOMAIN_HOLD_REASON_FILTER_KEYS).optional(),
+  includeOlder: z.enum(['true', 'false']).default('false'),
+});
+
+const statusCountsSchema = z.object(
+  Object.fromEntries(SIGNUP_DOMAIN_HOLD_STATUS_FILTERS.map(status => [status, z.number()])) as Record<
+    (typeof SIGNUP_DOMAIN_HOLD_STATUS_FILTERS)[number],
+    z.ZodNumber
+  >
+);
+
 const sourceStatusSchema = z.object({
   source: z.string(),
   count: z.number(),
@@ -36,16 +63,18 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
   .get(
     asyncHandler(async (req, res) => {
       ensureAdmin(req.user?.isAdmin);
-      const parsed = z.object({ page: z.coerce.number().int().min(1).max(10000).default(1) }).safeParse(req.query);
-      if (!parsed.success) throw new BadRequestError('Invalid page');
-      const limit = 25;
-      const [data, total, sources, intelCacheSize] = await Promise.all([
-        SignupDomainReviewModel.find()
-          .sort({ triggeredAt: -1, _id: -1 })
-          .skip((parsed.data.page - 1) * limit)
-          .limit(limit)
-          .lean(),
-        SignupDomainReviewModel.countDocuments(),
+      const parsed = listQuerySchema.safeParse(req.query);
+      if (!parsed.success) throw new BadRequestError('Invalid page, status, reason or includeOlder');
+      const { page, status, reason, includeOlder } = parsed.data;
+      const settings = await getSettingsMap(
+        { adminSettings: adminSettingsRepository },
+        { names: ['signupDomainHoldsSettledVisibleDays'] }
+      );
+      const settledVisibleDays = getSettingsValue('signupDomainHoldsSettledVisibleDays', settings, 90);
+      const settledSince = includeOlder === 'true' ? undefined : new Date(Date.now() - settledVisibleDays * DAY_MS);
+      const [data, counts, sources, intelCacheSize] = await Promise.all([
+        signupDomainHoldListRepository.list({ status, reason, settledSince }, page, PAGE_SIZE),
+        signupDomainHoldListRepository.countByStatus({ reason, settledSince }),
         disposableDomainRepository.getDisposableSourceStatus(),
         DomainIntelligenceModel.estimatedDocumentCount(),
       ]);
@@ -54,10 +83,12 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
         z.object({
           data: z.array(signupDomainReviewSchema),
           total: z.number(),
+          counts: statusCountsSchema,
+          settledVisibleDays: z.number(),
           sources: z.array(sourceStatusSchema),
           intelCacheSize: z.number(),
         }),
-        { data, total, sources, intelCacheSize }
+        { data, total: counts[status], counts, settledVisibleDays, sources, intelCacheSize }
       );
     })
   )

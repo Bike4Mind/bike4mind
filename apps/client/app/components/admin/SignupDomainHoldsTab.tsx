@@ -1,19 +1,62 @@
 import { useRef, useState } from 'react';
-import { Alert, Button, Stack, Typography } from '@mui/joy';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type {
-  DisposableSourceStatus,
-  SignupDomainHoldAssessment,
-  SignupDomainHoldAutoPolicy,
-  SignupDomainHoldJudgment,
-  SignupDomainReview,
+import { Alert, Button, Stack, Switch, Typography } from '@mui/joy';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  SIGNUP_DOMAIN_HOLD_REASON_FILTER_KEYS,
+  SIGNUP_DOMAIN_HOLD_STATUS_FILTERS,
+  type DisposableSourceStatus,
+  type SignupDomainHoldAssessment,
+  type SignupDomainHoldAutoPolicy,
+  type SignupDomainHoldJudgment,
+  type SignupDomainHoldReasonFilter,
+  type SignupDomainHoldStatusFilter,
+  type SignupDomainReview,
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
 import { DataTable } from './shared/DataTable';
+import { AdminPageHeader } from './shared/AdminPageHeader';
+import { FilterBar } from './shared/FilterBar';
+import { ViewTabs } from './shared/ViewTabs';
+import { useAdminListUrlState } from './shared/useAdminListUrlState';
+import { SIGNUP_DOMAIN_HOLDS_SEARCH_KEYS } from './signupDomainHoldsSearch';
 
 const QUERY_KEY = ['signup-domain-holds'];
 const ENDPOINT = '/api/admin/signup-domain-holds';
+const PAGE_SIZE = 25;
+const STATUS_LABELS: Record<SignupDomainHoldStatusFilter, string> = {
+  pending: 'Pending',
+  blocked: 'Blocked',
+  released: 'Released',
+  all: 'All',
+};
+const REASON_LABELS: Record<SignupDomainHoldReasonFilter, string> = {
+  'young-domain': 'Young domain',
+  'disposable-aggregate': 'Aggregate disposable list',
+  'disposable-list': 'Disposable list',
+  'burner-mx': 'Disposable mail provider',
+  'signup-burst': 'Signup burst',
+};
+const EMPTY_LABELS: Record<SignupDomainHoldStatusFilter, string> = {
+  pending: 'No holds are waiting for a decision.',
+  blocked: 'No confirmed holds in this view.',
+  released: 'No released holds in this view.',
+  all: 'No signup domains are held.',
+};
+
+type HoldsResponse = {
+  data: SignupDomainReview[];
+  total: number;
+  counts: Record<SignupDomainHoldStatusFilter, number>;
+  settledVisibleDays: number;
+  sources: DisposableSourceStatus[];
+  intelCacheSize: number;
+};
+
+const isStatusFilter = (value: string): value is SignupDomainHoldStatusFilter =>
+  (SIGNUP_DOMAIN_HOLD_STATUS_FILTERS as readonly string[]).includes(value);
+const isReasonFilter = (value: string): value is SignupDomainHoldReasonFilter =>
+  (SIGNUP_DOMAIN_HOLD_REASON_FILTER_KEYS as readonly string[]).includes(value);
 const AUTO_POLICY_LABELS: Record<SignupDomainHoldAutoPolicy, string> = {
   'disposable-aggregate-rule': 'Auto-confirmed by the disposable list rule',
   'advisory-decision': 'Auto-confirmed by the advisory assessment',
@@ -30,22 +73,32 @@ const assessmentCaption = (assessment: SignupDomainHoldAssessment): string =>
     : `Advisory assessment failed (${assessment.failure.replace(/_/g, ' ')}, attempt ${assessment.attempts})`;
 
 export default function SignupDomainHoldsTab() {
+  const [view, updateView] = useAdminListUrlState(SIGNUP_DOMAIN_HOLDS_SEARCH_KEYS);
+  const status: SignupDomainHoldStatusFilter = isStatusFilter(view.filters.status) ? view.filters.status : 'pending';
+  const reason = isReasonFilter(view.filters.reason) ? view.filters.reason : undefined;
+  const includeOlder = view.filters.older === 'true';
   const [page, setPage] = useState(1);
+  const filterKey = JSON.stringify([status, reason, includeOlder]);
+  const [pageKey, setPageKey] = useState(filterKey);
+  if (pageKey !== filterKey) {
+    setPageKey(filterKey);
+    setPage(1);
+  }
+  const setFilters = (patch: Partial<Record<'status' | 'reason' | 'older', string>>) =>
+    updateView({ filters: { ...view.filters, ...patch } });
   const [cursors, setCursors] = useState<Record<string, string | undefined>>({});
   // isPending only flips after a re-render, so a double-click would otherwise send two decisions.
   const decisionInFlight = useRef(false);
   const queryClient = useQueryClient();
   const query = useQuery({
-    queryKey: [...QUERY_KEY, page],
+    queryKey: [...QUERY_KEY, status, reason, includeOlder, page],
     queryFn: async () =>
       (
-        await api.get<{
-          data: SignupDomainReview[];
-          total: number;
-          sources: DisposableSourceStatus[];
-          intelCacheSize: number;
-        }>(ENDPOINT, { params: { page } })
+        await api.get<HoldsResponse>(ENDPOINT, {
+          params: { page, status, ...(reason ? { reason } : {}), includeOlder: String(includeOlder) },
+        })
       ).data,
+    placeholderData: keepPreviousData,
   });
   const decision = useMutation({
     mutationFn: async (input: { domain: string; action: 'confirm' | 'release'; afterUserId?: string }) =>
@@ -73,17 +126,70 @@ export default function SignupDomainHoldsTab() {
   };
   return (
     <Stack spacing={2} data-testid="signup-domain-holds-tab">
-      <Typography level="h3">Signup Domain Holds</Typography>
-      <Typography>
-        Patterned signup bursts, domains only on the aggregate disposable list, freshly registered domains and domains
-        whose mail runs through a disposable provider defer pending free credits. Confirm keeps credits held. Release
-        allows future grants and retries existing pending grants. Granted balances are never changed. Configure
-        detection in Users settings. Released domains stay exempt from automatic holds. Holds from domains only on the
-        aggregate disposable list are confirmed automatically on stages that run scheduled jobs unless that is turned
-        off in Users settings; each is recorded in the Admin Audit Log as a system action and can still be released
-        here. When the advisory assessment is on, a model judges young-domain holds from counts and flags; a confident
-        abuse verdict confirms the hold the same way, and any other verdict leaves it for you. It never releases a hold.
-      </Typography>
+      <AdminPageHeader
+        title="Signup domain holds"
+        count={query.data?.total}
+        description={
+          <>
+            A hold defers the free signup credits of new accounts from a domain that looks risky: a patterned signup
+            burst, a domain only on the aggregate disposable list, a freshly registered domain, or mail run by a
+            disposable provider. Confirm and Release only change free signup credits, never the account itself. Confirm
+            keeps pending credits held and future signups from the domain get none; it can still be released later.
+            Release pays out the held grants and exempts the domain from holds permanently; it cannot be re-blocked.
+            Granted balances are never changed. Configure detection in Users settings. Holds from domains only on the
+            aggregate disposable list are confirmed automatically on stages that run scheduled jobs unless that is
+            turned off in Users settings; each is recorded in the Admin Audit Log as a system action and can still be
+            released here. When the advisory assessment is on, a model judges young-domain holds from counts and flags;
+            a confident abuse verdict confirms the hold the same way, and any other verdict leaves it for you.
+            Young-domain holds are rechecked, and one whose domain has since passed the age threshold is marked so you
+            can release it. Nothing automated ever releases a hold. Settled holds older than{' '}
+            {query.data?.settledVisibleDays ?? 90} days are hidden, never deleted; turn on Include older to see them.
+          </>
+        }
+      />
+      <ViewTabs
+        aria-label="Hold status"
+        data-testid="signup-domain-holds-status"
+        activeId={status}
+        onSelect={id => {
+          if (isStatusFilter(id)) setFilters({ status: id === 'pending' ? '' : id });
+        }}
+        views={SIGNUP_DOMAIN_HOLD_STATUS_FILTERS.map(id => ({
+          id,
+          label: STATUS_LABELS[id],
+          count: query.data?.counts[id],
+        }))}
+      />
+      <Stack direction="row" flexWrap="wrap" alignItems="center" gap={2}>
+        <FilterBar
+          search={false}
+          state={{ ...view, filters: { reason: reason ?? '' } }}
+          onChange={patch => {
+            if (patch.filters) setFilters({ reason: patch.filters.reason ?? '' });
+          }}
+          filters={[
+            {
+              id: 'reason',
+              label: 'Reason',
+              options: SIGNUP_DOMAIN_HOLD_REASON_FILTER_KEYS.map(value => ({ value, label: REASON_LABELS[value] })),
+            },
+          ]}
+        />
+        <Typography
+          component="label"
+          level="body-sm"
+          startDecorator={
+            <Switch
+              size="sm"
+              checked={includeOlder}
+              onChange={event => setFilters({ older: event.target.checked ? 'true' : '' })}
+              slotProps={{ input: { 'data-testid': 'signup-domain-holds-include-older-toggle' } }}
+            />
+          }
+        >
+          Include older settled holds
+        </Typography>
+      </Stack>
       {decision.error && <Alert color="danger">{getErrorMessage(decision.error)}</Alert>}
       {decision.data?.status === 'blocked' && (
         <Alert color="success">Domain confirmed; pending credits remain held.</Alert>
@@ -104,7 +210,7 @@ export default function SignupDomainHoldsTab() {
         </Button>
         <Button
           data-testid="signup-domain-holds-next"
-          disabled={query.isPending || page * 25 >= (query.data?.total ?? 0)}
+          disabled={query.isPending || page * PAGE_SIZE >= (query.data?.total ?? 0)}
           onClick={() => setPage(current => current + 1)}
         >
           Next
@@ -120,7 +226,7 @@ export default function SignupDomainHoldsTab() {
           void query.refetch();
         }}
         pagination={false}
-        empty={<Typography>No signup domains are held.</Typography>}
+        empty={<Typography data-testid="signup-domain-holds-empty">{EMPTY_LABELS[status]}</Typography>}
         columns={[
           {
             id: 'domain',
@@ -154,6 +260,15 @@ export default function SignupDomainHoldsTab() {
                     {new Date(review.autoDecision.decidedAt).toLocaleString()}
                   </Typography>
                 )}
+                {review.status === 'held_pending_review' && review.domainAgedAt && (
+                  <Typography level="body-sm" color="success" data-testid={`signup-domain-aged-${review.domain}`}>
+                    Domain now aged
+                    {review.domainRegisteredAt
+                      ? ` (registered ${new Date(review.domainRegisteredAt).toLocaleDateString()})`
+                      : ''}
+                    : past the young-domain threshold. Release if nothing else looks wrong.
+                  </Typography>
+                )}
                 {review.assessment && (
                   <Typography level="body-sm" data-testid={`signup-domain-assessment-${review.domain}`}>
                     {assessmentCaption(review.assessment)}
@@ -178,6 +293,7 @@ export default function SignupDomainHoldsTab() {
                 </Button>
                 <Button
                   size="sm"
+                  color={review.status === 'held_pending_review' && review.domainAgedAt ? 'success' : 'primary'}
                   data-testid={`signup-domain-release-${review.domain}`}
                   disabled={decision.isPending}
                   onClick={() =>

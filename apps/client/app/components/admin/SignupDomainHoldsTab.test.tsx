@@ -6,8 +6,53 @@ import type { SignupDomainReview } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 import SignupDomainHoldsTab from './SignupDomainHoldsTab';
 
-const { getMock, postMock } = vi.hoisted(() => ({ getMock: vi.fn(), postMock: vi.fn() }));
-vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: getMock, post: postMock } }));
+const { getMock, postMock, router } = vi.hoisted(() => {
+  let search: Record<string, unknown> = {};
+  const listeners = new Set<() => void>();
+  return {
+    getMock: vi.fn(),
+    postMock: vi.fn(),
+    router: {
+      get: () => search,
+      set: (next: Record<string, unknown>) => {
+        search = next;
+        listeners.forEach(listener => listener());
+      },
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    },
+  };
+});
+// Fills the fields every list response carries, so each test only states the rows it cares about.
+vi.mock('@client/app/contexts/ApiContext', () => ({
+  api: {
+    get: async (...args: unknown[]) => {
+      const response = (await getMock(...args)) as { data: Record<string, unknown> };
+      return {
+        data: {
+          counts: { pending: 0, blocked: 0, released: 0, all: 0 },
+          settledVisibleDays: 90,
+          sources: [],
+          intelCacheSize: 0,
+          ...response.data,
+        },
+      };
+    },
+    post: postMock,
+  },
+}));
+vi.mock('@tanstack/react-router', async () => {
+  const { useSyncExternalStore } = await import('react');
+  return {
+    useSearch: () => useSyncExternalStore(router.subscribe, router.get),
+    useNavigate:
+      () =>
+      async ({ search }: { search: (previous: Record<string, unknown>) => Record<string, unknown> }) =>
+        router.set(search(router.get())),
+  };
+});
 
 const theme = extendTheme({ ...getThemeConfig() });
 const endpoint = '/api/admin/signup-domain-holds';
@@ -37,7 +82,12 @@ function renderTab() {
   );
 }
 
+const listParams = (overrides: Record<string, unknown> = {}) => ({
+  params: { page: 1, status: 'pending', includeOlder: 'false', ...overrides },
+});
+
 beforeEach(() => {
+  router.set({});
   getMock.mockReset();
   postMock.mockReset();
   getMock.mockResolvedValue({ data: { data: reviews, total: 50 } });
@@ -138,10 +188,10 @@ describe('SignupDomainHoldsTab', () => {
     expect(screen.queryByTestId('admin-table-page-size')).not.toBeInTheDocument();
     expect(screen.queryByTestId('admin-table-next-btn')).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId('signup-domain-holds-next'));
-    await waitFor(() => expect(getMock).toHaveBeenLastCalledWith(endpoint, { params: { page: 2 } }));
+    await waitFor(() => expect(getMock).toHaveBeenLastCalledWith(endpoint, listParams({ page: 2 })));
     await waitFor(() => expect(screen.getByTestId('signup-domain-holds-next')).toBeDisabled());
     fireEvent.click(screen.getByTestId('signup-domain-holds-previous'));
-    await waitFor(() => expect(getMock).toHaveBeenLastCalledWith(endpoint, { params: { page: 1 } }));
+    await waitFor(() => expect(getMock).toHaveBeenLastCalledWith(endpoint, listParams()));
   });
 
   it('sends one decision for a double-click', async () => {
@@ -177,5 +227,78 @@ describe('SignupDomainHoldsTab', () => {
         afterUserId: 'alpha-cursor',
       })
     );
+  });
+
+  it('asks for pending holds by default and switches status from the view tabs', async () => {
+    getMock.mockResolvedValue({
+      data: { data: [reviews[0]], total: 1, counts: { pending: 1, blocked: 4, released: 2, all: 7 } },
+    });
+    renderTab();
+    await waitFor(() => expect(getMock).toHaveBeenLastCalledWith(endpoint, listParams()));
+    expect(await screen.findByTestId('signup-domain-holds-status-pending-count')).toHaveTextContent('1');
+    expect(screen.getByTestId('signup-domain-holds-status-pending-btn')).toHaveAttribute('aria-pressed', 'true');
+    for (const status of ['blocked', 'released', 'all'] as const) {
+      fireEvent.click(screen.getByTestId(`signup-domain-holds-status-${status}-btn`));
+      await waitFor(() => expect(getMock).toHaveBeenLastCalledWith(endpoint, listParams({ status })));
+      expect(router.get().holdStatus).toBe(status);
+    }
+    fireEvent.click(screen.getByTestId('signup-domain-holds-status-pending-btn'));
+    await waitFor(() => expect(getMock).toHaveBeenLastCalledWith(endpoint, listParams()));
+    expect(router.get().holdStatus).toBeUndefined();
+  });
+
+  it('reads the reason filter and include-older toggle from the URL and goes back to page 1', async () => {
+    router.set({ holdStatus: 'released', holdReason: 'young-domain' });
+    renderTab();
+    await waitFor(() =>
+      expect(getMock).toHaveBeenLastCalledWith(endpoint, listParams({ status: 'released', reason: 'young-domain' }))
+    );
+    await waitFor(() => expect(screen.getByTestId('signup-domain-holds-next')).toBeEnabled());
+    fireEvent.click(screen.getByTestId('signup-domain-holds-next'));
+    await waitFor(() =>
+      expect(getMock).toHaveBeenLastCalledWith(
+        endpoint,
+        listParams({ status: 'released', reason: 'young-domain', page: 2 })
+      )
+    );
+    fireEvent.click(screen.getByTestId('signup-domain-holds-include-older-toggle'));
+    await waitFor(() =>
+      expect(getMock).toHaveBeenLastCalledWith(
+        endpoint,
+        listParams({ status: 'released', reason: 'young-domain', includeOlder: 'true' })
+      )
+    );
+    expect(router.get().holdOlder).toBe('true');
+  });
+
+  it('marks a pending young-domain hold whose domain has aged, but not a settled one', async () => {
+    const young = 'young-domain (<30 days)';
+    getMock.mockResolvedValue({
+      data: {
+        data: [
+          {
+            ...reviews[0],
+            reason: young,
+            domainRegisteredAt: new Date('2025-12-01'),
+            domainAgedAt: new Date('2026-01-05'),
+          },
+          { ...reviews[1], reason: young, domainAgedAt: new Date('2026-01-05') },
+          { ...reviews[2], domain: 'delta.test', status: 'held_pending_review', reason: young },
+        ],
+        total: 3,
+      },
+    });
+    renderTab();
+    expect(await screen.findByTestId('signup-domain-aged-alpha.test')).toHaveTextContent('Domain now aged');
+    expect(screen.getByTestId('signup-domain-release-alpha.test')).toBeEnabled();
+    expect(screen.queryByTestId('signup-domain-aged-beta.test')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('signup-domain-aged-delta.test')).not.toBeInTheDocument();
+  });
+
+  it('says that decisions only touch free signup credits and that Release is permanent', async () => {
+    renderTab();
+    const tab = await screen.findByTestId('signup-domain-holds-tab');
+    expect(tab).toHaveTextContent('Confirm and Release only change free signup credits, never the account itself.');
+    expect(tab).toHaveTextContent('exempts the domain from holds permanently; it cannot be re-blocked');
   });
 });
