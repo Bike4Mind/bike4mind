@@ -7778,6 +7778,111 @@ describe('ChatCompletionProcess', () => {
         expect(state.balance).toBeGreaterThanOrEqual(0);
       });
 
+      it('floors an org-billed turn at zero, as computeSettlementDelta did', async () => {
+        const user = fakeBalance(BALANCE);
+        const org = fakeBalance(BALANCE);
+        const complete = overshootingComplete();
+        setupPersonalTurn(user.incrementCredits, complete);
+        overdraftAllowance(500);
+        mockDb.organizations.findById.mockResolvedValue({
+          id: 'org1',
+          name: 'Acme',
+          currentCredits: BALANCE,
+          maxCreditsPerMember: null,
+          userDetails: [],
+        });
+        mockDb.organizations.incrementCredits = org.incrementCredits;
+        const usageEventsRecord = vi.fn().mockResolvedValue(null);
+        mockDb.usageEvents = { record: usageEventsRecord };
+
+        await service.process({ body: { ...personalBody(), organizationId: 'org1' }, logger: mockLogger });
+
+        expect(complete.mock.calls[0][2].outputTokenCeiling).toEqual(expect.any(Number));
+        expect(user.incrementCredits).not.toHaveBeenCalled();
+        expect(org.state.balance).toBe(0);
+        expect(usageEventsRecord).toHaveBeenCalledWith(
+          expect.objectContaining({ creditsCharged: actual, writtenOffCredits: actual - BALANCE })
+        );
+      });
+
+      it('leaves a Research Mode turn to the hold alone', async () => {
+        const { incrementCredits } = fakeBalance(BALANCE);
+        const complete = vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+          await cb(['answer'], { inputTokens: 10, outputTokens: 5 });
+        });
+        setupPersonalTurn(incrementCredits, complete);
+        const body = {
+          ...personalBody(),
+          researchMode: {
+            enabled: true,
+            configurations: [{ id: 'cfg-1', enabled: true, model: ChatModels.GPT4, parameters: {} }],
+          },
+        };
+
+        await service.process({ body: body as any, logger: mockLogger });
+
+        expect(incrementCredits).toHaveBeenCalled();
+        expect(complete).toHaveBeenCalled();
+        for (const call of complete.mock.calls) expect(call[2].outputTokenCeiling).toBeUndefined();
+        expect((service as any).turnCreditLimiter).toBeNull();
+      });
+
+      it('does nothing when credits are not enforced', async () => {
+        const { state, incrementCredits } = fakeBalance(BALANCE);
+        const complete = overshootingComplete();
+        setupPersonalTurn(incrementCredits, complete);
+        const prev = mockedGetSettingsValue.getMockImplementation();
+        mockedGetSettingsValue.mockImplementation(((key: string, settings: Record<string, string>) =>
+          key === 'enforceCredits' ? false : prev?.(key as never, settings)) as typeof getSettingsValue);
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        expect(complete.mock.calls[0][2].outputTokenCeiling).toBeUndefined();
+        expect((service as any).turnCreditLimiter).toBeNull();
+        expect(incrementCredits).not.toHaveBeenCalled();
+        expect(state.balance).toBe(BALANCE);
+        expect(mockQuest.status).toBe('done');
+        expect(mockQuest.replies).toEqual(['A long answer']);
+      });
+
+      it('prices a fallback hop on its own, dearer model', async () => {
+        const { incrementCredits } = fakeBalance(BALANCE);
+        const primaryComplete = vi.fn().mockRejectedValue(new Error('ServiceUnavailableException: primary down'));
+        setupPersonalTurn(incrementCredits, primaryComplete);
+        const dearModel = {
+          ...overshootModel,
+          id: 'dear-fallback',
+          name: 'Dear fallback',
+          pricing: { 200000: { input: 0, output: 90 / 1_000_000 } },
+        };
+        const fallbackComplete = vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+          await cb(['answer'], { inputTokens: 10, outputTokens: 5 });
+        });
+        mockedShouldTriggerFallback.mockReturnValue(true);
+        mockedIsOverloadedError.mockReturnValue(false);
+        mockedGetLlmWithFallback
+          .mockResolvedValueOnce({
+            model: dearModel,
+            backend: {
+              currentModel: dearModel.id,
+              complete: fallbackComplete,
+              getModelInfo: vi.fn().mockResolvedValue([dearModel]),
+              pushToolMessages: vi.fn(),
+            },
+            attempt: 1,
+          } as any)
+          .mockResolvedValue(null);
+        mockedGetAvailableModels.mockResolvedValue([overshootModel, dearModel]);
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        expect(fallbackComplete).toHaveBeenCalledTimes(1);
+        const primaryCeiling = primaryComplete.mock.calls[0][2].outputTokenCeiling;
+        const fallbackCeiling = fallbackComplete.mock.calls[0][2].outputTokenCeiling;
+        expect(fallbackCeiling).toBe(Math.floor(BALANCE / ((90 / 1_000_000) * CREDITS_PER_USD_COST) + 1e-9));
+        expect(fallbackCeiling).toBeLessThan(primaryCeiling);
+      });
+
       it('refuses the next turn while the balance is negative, without calling the model', async () => {
         const { state, incrementCredits } = fakeBalance(-250);
         const complete = vi.fn();
