@@ -52,6 +52,9 @@ export function useCancelAccountDeletion() {
       }
     },
     onSuccess: () => {
+      // The user (deletion included) is persisted, so clear it first or the reload boots locked again.
+      const { currentUser, setCurrentUser } = useUser.getState();
+      if (currentUser) setCurrentUser({ ...currentUser, deletion: null });
       window.location.replace('/');
     },
   });
