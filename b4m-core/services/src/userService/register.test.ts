@@ -211,6 +211,12 @@ describe('registerUser', () => {
       grantPackages.reserveRedemption.mockResolvedValue({ outcome: 'refused', reason });
       await expect(registerUser(baseParams, mockAdapters)).rejects.toThrow(new BadRequestError(message));
       expect(mockAdapters.db.registrationInvites.update).not.toHaveBeenCalled();
+      const [[claimedId, claimedAt]] = mockAdapters.db.registrationInvites.claimUnused.mock.calls;
+      expect(mockAdapters.db.registrationInvites.releaseClaim).toHaveBeenCalledWith(
+        claimedId,
+        claimedAt,
+        expect.any(String)
+      );
     });
 
     it('refuses an alias of an inbox that already took a signup grant before creating the account', async () => {
