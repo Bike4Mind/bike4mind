@@ -22,6 +22,12 @@ vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: { countActive
 const resolveApiKeyTrust = vi.hoisted(() => vi.fn());
 vi.mock('@server/utils/apiKeyTrust', () => ({ resolveApiKeyTrust }));
 
+const isApiKeyAccessAllowed = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/apiKeyAccessGate', () => ({
+  API_KEY_ACCESS_DENIED_MESSAGE: 'API keys require an active paid subscription',
+  isApiKeyAccessAllowed,
+}));
+
 import '@pages/api/user-api-keys/eligibility';
 
 type Assessment = userApiKeyService.ApiKeyTrustAssessment;
@@ -51,6 +57,17 @@ describe('GET /api/user-api-keys/eligibility', () => {
   beforeEach(() => {
     countActiveByUserId.mockReset();
     resolveApiKeyTrust.mockReset();
+    isApiKeyAccessAllowed.mockReset().mockResolvedValue(true);
+  });
+
+  it('refuses with the access message when the access switch refuses, before checking trust', async () => {
+    isApiKeyAccessAllowed.mockResolvedValue(false);
+    expect(await callEligibility({ status: 'trusted' })).toEqual({
+      canCreate: false,
+      message: 'API keys require an active paid subscription',
+    });
+    expect(isApiKeyAccessAllowed).toHaveBeenCalledWith({ id: 'u1' }, undefined, expect.anything());
+    expect(resolveApiKeyTrust).not.toHaveBeenCalled();
   });
 
   it('lets a trusted account create without counting keys', async () => {
