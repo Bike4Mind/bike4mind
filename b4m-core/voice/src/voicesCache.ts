@@ -81,8 +81,10 @@ export async function fetchElevenLabsVoices(
 
   _cache.delete(apiKey);
   _cache.set(apiKey, { voices, expiresAt: Date.now() + TTL_MS });
-  const oldest = _cache.keys().next().value;
-  if (_cache.size > MAX_ENTRIES && oldest !== undefined) _cache.delete(oldest);
+  if (_cache.size > MAX_ENTRIES) {
+    const oldest = _cache.keys().next().value;
+    if (oldest !== undefined) _cache.delete(oldest);
+  }
   return voices;
 }
 
