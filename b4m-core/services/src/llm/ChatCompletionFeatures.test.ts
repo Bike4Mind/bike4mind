@@ -823,6 +823,65 @@ describe('KnowledgeRetrievalFeature retrieval exclusion (4th ctor arg)', () => {
     expect(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls[0][0]).toEqual(['fileA']);
   });
 
+  describe('chunk page read on a Mongo network timeout', () => {
+    const networkTimeout = () =>
+      Object.assign(new Error('connection 1 to 10.0.0.1:27017 timed out'), {
+        name: 'MongoNetworkTimeoutError',
+        errorLabelSet: new Set(['RetryableWriteError']),
+      });
+    const loggedText = (fn: unknown) => JSON.stringify((fn as { mock: { calls: unknown[][] } }).mock.calls);
+
+    it('retries the page once and still grounds the turn', async () => {
+      const ctx = makeCtx();
+      const realRead = ctx.db.fabfilechunks.findVectorsByFabFileIds;
+      ctx.db.fabfilechunks.findVectorsByFabFileIds = vi
+        .fn()
+        .mockRejectedValueOnce(networkTimeout())
+        .mockImplementation(realRead);
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+      );
+      const quest = makeQuest();
+      const messages = await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'stage III NSCLC treatment'
+      );
+
+      expect(messages[0]?.content ?? '').toContain('(ID: fileA)');
+      expect(quest.promptMeta?.retrieval?.outcome).toBe('ok');
+      expect(ctx.db.fabfilechunks.findVectorsByFabFileIds).toHaveBeenCalledTimes(2);
+      // Same page both times: the retry must not advance the keyset cursor.
+      expect(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls[1]).toEqual(
+        ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls[0]
+      );
+      expect(loggedText(ctx.logger.warn)).toContain('MongoNetworkTimeoutError');
+      expect(ctx.logger.error).not.toHaveBeenCalled();
+    });
+
+    it('abstains after a second timeout, logging at warn with the error name only', async () => {
+      const ctx = makeCtx();
+      ctx.db.fabfilechunks.findVectorsByFabFileIds = vi.fn().mockImplementation(() => Promise.reject(networkTimeout()));
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+      );
+      const quest = makeQuest();
+      const messages = await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'stage III NSCLC treatment'
+      );
+
+      expect(messages).not.toEqual([]); // the abstention block
+      expect(quest.promptMeta?.retrieval?.outcome).toBe('failed');
+      expect(ctx.db.fabfilechunks.findVectorsByFabFileIds).toHaveBeenCalledTimes(2);
+      expect(ctx.logger.error).not.toHaveBeenCalled();
+      const warned = loggedText(ctx.logger.warn);
+      expect(warned).toContain('Forced retrieval failed: MongoNetworkTimeoutError');
+      expect(warned).not.toContain('10.0.0.1');
+    });
+  });
+
   it('no filter (default): both files are retrieved (opt-in only)', async () => {
     const ctx = makeCtx();
     const feature = new KnowledgeRetrievalFeature(
