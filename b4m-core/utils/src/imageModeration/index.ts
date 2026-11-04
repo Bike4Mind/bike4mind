@@ -79,10 +79,24 @@ const MAX_REKOGNITION_DIMENSION_PX = 10000;
  */
 const FRAME_CONCURRENCY = 2;
 
+/** USD per DetectModerationLabels call. */
+export const REKOGNITION_MODERATION_USD_PER_CALL = 0.001;
+
 export interface ModerationLabelHit {
   name: string;
   parentName: string;
   confidence: number;
+}
+
+export interface CheckImageOptions {
+  /**
+   * Called once with the number of detector calls the scan needs (1 for a still image, the sampled
+   * frame count for an animation), before the first one. False ends the scan with
+   * ModerationBudgetExceededError and no detector call.
+   */
+  reserveDetectorCalls?: (calls: number) => Promise<boolean>;
+  /** Called after each detector call that returned a response. */
+  onDetectorCall?: () => void;
 }
 
 export interface ImageModerationService {
@@ -91,7 +105,7 @@ export interface ImageModerationService {
    * `mimeType` is currently unused (Rekognition detects format from the bytes) - reserved
    * for a future S3Object-input path for images too large to downscale inline.
    */
-  checkImage(bytes: Buffer, mimeType: string): Promise<void>;
+  checkImage(bytes: Buffer, mimeType: string, options?: CheckImageOptions): Promise<void>;
 }
 
 export class ImageModerationBlockedError extends Error {
@@ -138,6 +152,16 @@ export class ModerationUnavailableError extends Error {
     });
     this.name = 'ModerationUnavailableError';
     this.throttled = throttled;
+  }
+}
+
+/** `reserveDetectorCalls` refused the scan; the image was not sent to the detector. */
+export class ModerationBudgetExceededError extends Error {
+  readonly calls: number;
+  constructor(calls: number) {
+    super(`[ImageModeration] moderation allowance exhausted; ${calls} detector call(s) not made`);
+    this.name = 'ModerationBudgetExceededError';
+    this.calls = calls;
   }
 }
 
@@ -271,15 +295,19 @@ export class RekognitionImageModerationService implements ImageModerationService
 
   /**
    * Rekognition reads only the first frame of an animated image, so an animated GIF, APNG or WebP is
-   * moderated frame by frame (see extractAnimationFrames): any flagged frame blocks the image, and
-   * one that cannot be split or is over the frame cap is unsupported, so blocked as well.
+   * moderated on at most MAX_SAMPLED_FRAMES sampled frames (see extractAnimationFrames): any flagged
+   * frame blocks the image, and one that cannot be split or is over the frame cap is unsupported, so
+   * blocked as well.
    */
-  async checkImage(bytes: Buffer, _mimeType: string): Promise<void> {
+  async checkImage(bytes: Buffer, _mimeType: string, options: CheckImageOptions = {}): Promise<void> {
     const deadline = Date.now() + this.deadlineMs;
     const frames = await extractAnimationFrames(bytes);
-    if (!frames) return this.checkStillImage(bytes, deadline);
+    const calls = frames?.length ?? 1;
+    if (options.reserveDetectorCalls && !(await options.reserveDetectorCalls(calls))) {
+      throw new ModerationBudgetExceededError(calls);
+    }
+    if (!frames) return this.checkStillImage(bytes, deadline, options.onDetectorCall);
 
-    // ponytail: up to MAX_MODERATED_FRAMES Rekognition calls per image; sample frames if cost matters.
     // Stops scheduling on the first failure: any one already fails the image closed.
     const errors: unknown[] = [];
     let next = 0;
@@ -287,7 +315,7 @@ export class RekognitionImageModerationService implements ImageModerationService
       Array.from({ length: Math.min(FRAME_CONCURRENCY, frames.length) }, async () => {
         while (next < frames.length && errors.length === 0) {
           const frame = frames[next++];
-          await this.checkStillImage(frame, deadline).catch(err => errors.push(err));
+          await this.checkStillImage(frame, deadline, options.onDetectorCall).catch(err => errors.push(err));
         }
       })
     );
@@ -299,7 +327,7 @@ export class RekognitionImageModerationService implements ImageModerationService
     if (error) throw error;
   }
 
-  private async checkStillImage(bytes: Buffer, deadline: number): Promise<void> {
+  private async checkStillImage(bytes: Buffer, deadline: number, onDetectorCall?: () => void): Promise<void> {
     let image = await this.fitForInlineDetection(bytes);
     let triedTranscode = false;
     for (let attempt = 1; ; attempt++) {
@@ -310,6 +338,7 @@ export class RekognitionImageModerationService implements ImageModerationService
             MinConfidence: EXPLICIT_NUDITY_CONFIDENCE,
           })
         );
+        onDetectorCall?.();
         const hits: ModerationLabelHit[] = (res.ModerationLabels ?? [])
           .map(l => ({
             name: l.Name ?? '',

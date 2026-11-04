@@ -732,6 +732,8 @@ export const SettingKeySchema = z.enum([
   'apiRateLimitDefaultWriteMode',
   'fileUploadLimitFreePerHour',
   'fileUploadLimitPaidPerHour',
+  'imageModerationLimitFreePerDay',
+  'imageModerationLimitPaidPerDay',
   'apiKeyAccess',
   'shadowTierModelAllowlist',
   'shadowTierRequestsPerMin',
@@ -1173,6 +1175,13 @@ export const DEFAULT_WRITE_RATE_LIMIT_PER_MIN = 120;
  */
 export const FILE_UPLOAD_LIMIT_FREE_PER_HOUR = 300;
 export const FILE_UPLOAD_LIMIT_PAID_PER_HOUR = 3000;
+
+/**
+ * Default daily uploaded-image moderation allowances, in detector calls. The free one is also the
+ * floor that apps/client/server/s3/imageModerationBudget.ts applies when the setting cannot be read.
+ */
+export const IMAGE_MODERATION_LIMIT_FREE_PER_DAY = 200;
+export const IMAGE_MODERATION_LIMIT_PAID_PER_DAY = 2000;
 
 /**
  * Data-lake semantic-search scan budgets. Declared here so the admin-settings default and the
@@ -2502,7 +2511,9 @@ export const API_SERVICE_GROUPS = {
       { key: 'apiRateLimitDefaultWriteMode', order: 6 },
       { key: 'fileUploadLimitFreePerHour', order: 7 },
       { key: 'fileUploadLimitPaidPerHour', order: 8 },
-      { key: 'apiKeyAccess', order: 9 },
+      { key: 'imageModerationLimitFreePerDay', order: 9 },
+      { key: 'imageModerationLimitPaidPerDay', order: 10 },
+      { key: 'apiKeyAccess', order: 11 },
     ],
   },
   API_KEY_TRUST: {
@@ -3598,6 +3609,33 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 8,
   }),
+  // Both read by apps/client/server/s3/imageModerationBudget.ts.
+  imageModerationLimitFreePerDay: makeNumberSetting({
+    key: 'imageModerationLimitFreePerDay',
+    name: 'Uploaded Image Moderation Limit - Free (scans/day)',
+    defaultValue: IMAGE_MODERATION_LIMIT_FREE_PER_DAY,
+    min: 0,
+    max: 1000000,
+    int: true,
+    description:
+      "Max content-moderation scans a Free-tier user's uploaded images may use per 24 hours. A still image is one scan; an animated image is one scan per sampled frame (at most 10). Images over the limit stay pending (not shown) until the window resets and they are scanned. Admin-restricted users get this limit too. Set to 0 to hold every uploaded image for these users.",
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.RATE_LIMITING.id,
+    order: 9,
+  }),
+  imageModerationLimitPaidPerDay: makeNumberSetting({
+    key: 'imageModerationLimitPaidPerDay',
+    name: 'Uploaded Image Moderation Limit - Basic and Pro (scans/day)',
+    defaultValue: IMAGE_MODERATION_LIMIT_PAID_PER_DAY,
+    min: 0,
+    max: 1000000,
+    int: true,
+    description:
+      "Max content-moderation scans a Basic or Pro subscriber's uploaded images may use per 24 hours, counted like the Free limit. Admins and developer-tagged users are not limited. Set to 0 to hold every uploaded image for these users.",
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.RATE_LIMITING.id,
+    order: 10,
+  }),
   // Enforced at mint AND on every key-authenticated request (apiKeyAccessGate.ts), so
   // tightening it also cuts off keys that already exist.
   apiKeyAccess: makeStringSetting({
@@ -3611,7 +3649,7 @@ export const settingsMap = {
     options: ['all', 'paid', 'disabled'],
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
-    order: 9,
+    order: 11,
   }),
   // Auto-block of IPs with repeated failed OAuth sign-ins, plus per-IP limits on the OAuth routes.
   oauthAbuseAutoBlockEnabled: makeBooleanSetting({

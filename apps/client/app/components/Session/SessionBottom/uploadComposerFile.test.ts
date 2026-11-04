@@ -186,6 +186,74 @@ describe('uploadComposerFile', () => {
     });
   });
 
+  describe('server refusal toast', () => {
+    const refuse = (status: number, data: unknown) =>
+      mockCreateFabFile.mockRejectedValue({
+        isAxiosError: true,
+        message: `Request failed with status code ${status}`,
+        response: { status, data },
+      });
+
+    it.each([
+      [400, 'File type .exe is not supported'],
+      [400, 'File size exceeds maximum file size'],
+      [429, 'Upload limit reached, try again later'],
+    ])('toasts the server message once for a %i refusal: %s', async (status, error) => {
+      refuse(status, { error });
+
+      await expect(
+        uploadComposerFile(makeFile('a.exe', 'application/octet-stream'), makeContext())
+      ).rejects.toBeDefined();
+
+      expect(toastMock.error).toHaveBeenCalledTimes(1);
+      expect(toastMock.error).toHaveBeenCalledWith(error, expect.objectContaining({ id: expect.any(String) }));
+      expect(pending()[0]).toMatchObject({ status: 'error', errorMessage: error });
+    });
+
+    it('keeps the refused tile removable', async () => {
+      refuse(400, { error: 'File type .exe is not supported' });
+
+      await expect(
+        uploadComposerFile(makeFile('a.exe', 'application/octet-stream'), makeContext())
+      ).rejects.toBeDefined();
+      setPendingMessageFiles(prev => prev.filter(item => item.status !== 'error'));
+
+      expect(pending()).toEqual([]);
+    });
+
+    it('falls back to a generic toast when the body is a raw string', async () => {
+      refuse(403, '<?xml version="1.0"?><Error><Code>AccessDenied</Code></Error>');
+
+      await expect(uploadComposerFile(pdf(), makeContext())).rejects.toBeDefined();
+
+      expect(toastMock.error).toHaveBeenCalledTimes(1);
+      expect(toastMock.error).toHaveBeenCalledWith('Failed to upload file', expect.anything());
+    });
+
+    it('gives identical refusals one toast id so a multi-file drop does not stack', async () => {
+      refuse(400, { error: 'File type .exe is not supported' });
+
+      await Promise.allSettled([
+        uploadComposerFile(makeFile('a.exe', 'application/octet-stream'), makeContext()),
+        uploadComposerFile(makeFile('b.exe', 'application/octet-stream'), makeContext()),
+      ]);
+
+      const ids = toastMock.error.mock.calls.map(([, opts]) => (opts as { id: string }).id);
+      expect(new Set(ids).size).toBe(1);
+    });
+
+    it('does not toast a cancelled upload', async () => {
+      holdUploadUntilAborted();
+
+      const upload = uploadComposerFile(pdf(), makeContext());
+      await vi.waitFor(() => expect(mockCreateFabFile).toHaveBeenCalled());
+      cancelComposerUpload(pending()[0]!.fabFile.id);
+
+      await expect(upload).rejects.toMatchObject({ name: 'AbortError' });
+      expect(toastMock.error).not.toHaveBeenCalled();
+    });
+  });
+
   describe('deferred file name', () => {
     it('shows the tile before the name resolves, then uploads under that name', async () => {
       mockCreateFabFile.mockResolvedValue({ id: 'f1', fileName: 'chart.png', mimeType: 'text/plain' });
@@ -291,6 +359,7 @@ describe('uploadComposerFile', () => {
       expect(mockCreateFabFile).not.toHaveBeenCalled();
       expect(refreshUser).toHaveBeenCalled();
       expect(pending()[0]!.errorMessage).toMatch(/Free up at least/);
+      expect(toastMock.error).toHaveBeenCalledTimes(1);
       expect(toastMock.error).toHaveBeenCalledWith(expect.stringMatching(/Free up at least/), expect.anything());
     });
 
@@ -328,6 +397,7 @@ describe('uploadComposerFile', () => {
       await expect(uploadComposerFile(notes(), makeContext())).rejects.toBeDefined();
 
       expect(pending()[0]!.errorMessage).toMatch(/800 kB of 1 MB.*Free up at least 100 kB/);
+      expect(toastMock.error).toHaveBeenCalledTimes(1);
       expect(toastMock.error).toHaveBeenCalledWith(
         expect.stringMatching(/800 kB of 1 MB.*Free up at least 100 kB/),
         expect.anything()
@@ -345,6 +415,7 @@ describe('uploadComposerFile', () => {
       await expect(uploadComposerFile(notes(), makeContext())).rejects.toBeDefined();
 
       expect(pending()[0]!.errorMessage).toBe('File size exceeds storage limit');
+      expect(toastMock.error).toHaveBeenCalledTimes(1);
       expect(toastMock.error).toHaveBeenCalledWith('File size exceeds storage limit', expect.anything());
     });
 

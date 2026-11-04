@@ -85,6 +85,10 @@ const newUser = (name: string, currentCredits = 0) =>
 async function seedDueReward() {
   const inviter = await newUser('inviter');
   const payer = await newUser('friend');
+  return seedRewardFor(inviter, payer);
+}
+
+async function seedRewardFor(inviter: { id: string }, payer: { id: string }) {
   await referralSubscriptionRewardRepository.create(
     {
       invoiceId: 'in_1',
@@ -131,6 +135,68 @@ describe('releaseDueSubscriptionRewards against a real replica set', () => {
     });
     expect((await User.findById(inviter.id))?.currentCredits).toBe(REWARD_CREDITS);
     expect(await CreditTransaction.countDocuments({ ownerId: inviter.id })).toBe(1);
+  });
+
+  describe('admin signup grant block', () => {
+    const block = (userId: string) => User.updateOne({ _id: userId }, { $set: { 'signupGrant.blocked': { at: NOW } } });
+    const reward = () => referralSubscriptionRewardRepository.findByInvoiceId('in_1');
+    const seedPair = async () => {
+      const inviter = await newUser('inviter');
+      const payer = await newUser('friend');
+      await seedRewardFor(inviter, payer);
+      return { inviter, payer };
+    };
+
+    it('keeps the reward pending while the inviter is grant-blocked, then pays it after unblock', async () => {
+      const { inviter } = await seedPair();
+      await block(inviter.id);
+
+      const blockedRun = await releaseDueSubscriptionRewards({ now: NOW, paymentOutcome: stillPaid });
+
+      expect(blockedRun).toMatchObject({ candidates: 1, released: 0, cancelled: 0, failed: 0 });
+      expect(await reward()).toMatchObject({ status: 'pending' });
+      expect((await User.findById(inviter.id))?.currentCredits).toBe(0);
+      expect(await CreditTransaction.countDocuments({ ownerId: inviter.id })).toBe(0);
+
+      await User.updateOne({ _id: inviter.id }, { $unset: { 'signupGrant.blocked': 1 } });
+
+      expect(await releaseDueSubscriptionRewards({ now: NOW, paymentOutcome: stillPaid })).toMatchObject({
+        released: 1,
+        cancelled: 0,
+      });
+      expect((await User.findById(inviter.id))?.currentCredits).toBe(REWARD_CREDITS);
+      expect(await reward()).toMatchObject({ status: 'released' });
+    });
+
+    it('still pays the inviter when only the payer is grant-blocked', async () => {
+      const { inviter, payer } = await seedPair();
+      await block(payer.id);
+
+      const result = await releaseDueSubscriptionRewards({ now: NOW, paymentOutcome: stillPaid });
+
+      expect(result).toMatchObject({ released: 1, cancelled: 0 });
+      expect((await User.findById(inviter.id))?.currentCredits).toBe(REWARD_CREDITS);
+    });
+
+    it('cancels as inviter_blocked when the inviter account is banned', async () => {
+      const { inviter } = await seedPair();
+      await User.updateOne({ _id: inviter.id }, { isBanned: true });
+
+      const result = await releaseDueSubscriptionRewards({ now: NOW, paymentOutcome: stillPaid });
+
+      expect(result).toMatchObject({ released: 0, cancelled: 1 });
+      expect(await reward()).toMatchObject({ status: 'cancelled', closeReason: 'inviter_blocked' });
+    });
+
+    it('cancels as payer_blocked when the payer account is banned', async () => {
+      const { payer } = await seedPair();
+      await User.updateOne({ _id: payer.id }, { isBanned: true });
+
+      const result = await releaseDueSubscriptionRewards({ now: NOW, paymentOutcome: stillPaid });
+
+      expect(result).toMatchObject({ released: 0, cancelled: 1 });
+      expect(await reward()).toMatchObject({ status: 'cancelled', closeReason: 'payer_blocked' });
+    });
   });
 
   describe('take-back after release', () => {
