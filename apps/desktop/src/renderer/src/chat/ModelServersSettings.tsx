@@ -336,8 +336,8 @@ function SpecsFields({
             ))}
           </Select>
           <FormHelperText>
-            What OLLAMA_KV_CACHE_TYPE is set to where this Ollama runs, which Desktop cannot read. It applies to every
-            model on the server. Ollama keeps f16 where flash attention is off.
+            What OLLAMA_KV_CACHE_TYPE is set to where this Ollama runs, which its API does not report. It applies to
+            every model on the server. With q8_0 or q4_0, Ollama fails to load models while flash attention is off.
           </FormHelperText>
         </FormControl>
       )}

@@ -85,7 +85,7 @@ function fitInput({
   if (!arch || !weightsBytes || !hardware?.totalMemoryBytes) return null;
   const mmprojBytes = projectorBytes < weightsBytes ? projectorBytes : 0;
   // Ollama's API reports none of its daemon settings: the cache type is the one entered in Settings, and flash
-  // attention off (Ollama then keeps f16) or num_parallel above 1 makes the real footprint larger.
+  // attention off (which fails a quantized cache's load) or num_parallel above 1 makes the real footprint larger.
   return {
     model: { arch, weightsBytes: weightsBytes - mmprojBytes, mmprojBytes },
     hardware,

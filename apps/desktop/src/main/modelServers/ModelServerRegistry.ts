@@ -50,6 +50,7 @@ import {
   type ModelServerSpecs,
   type ModelServerUpdateInput,
   type ModelServerView,
+  type QuantizedKvCacheType,
 } from '@shared/modelServers';
 import type { LocalChat } from '../chat/localChat';
 import { OllamaLocal, type LoadSettingsReader } from '../chat/OllamaLocal';
@@ -222,6 +223,11 @@ export class ModelServerRegistry {
   specs(id: string): ModelServerSpecs | null {
     if (id === LOCAL_SERVER_ID) return this.localSpecs;
     return this.entries.get(id)?.record.specs ?? null;
+  }
+
+  /** The OLLAMA_KV_CACHE_TYPE entered for this computer's Ollama; undefined is f16. */
+  localKvCacheType(): QuantizedKvCacheType | undefined {
+    return this.localSpecs?.kvCacheType;
   }
 
   /** Tests an address or SSH destination without saving it. */

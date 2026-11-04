@@ -308,6 +308,16 @@ describe('ModelServerStore', () => {
     expect(JSON.parse(file.contents!).localSpecs).toBeUndefined();
   });
 
+  it('drops a saved KV cache type when the server stops being Ollama', async () => {
+    const store = new ModelServerStore(cipher(), memoryFile(), logger);
+    const record = await store.add(base, { type: 'none' });
+    const specs = { ramGiB: 64, gpuMemoryGiB: null, bandwidthGBps: null, unified: false, kvCacheType: 'q8_0' as const };
+    await store.update(record.id, { specs });
+    const switched = await store.update(record.id, { kind: 'openai-compatible' });
+    expect(switched.specs).toEqual({ ...specs, kvCacheType: undefined });
+    expect(switched.specs).not.toHaveProperty('kvCacheType');
+  });
+
   it('remembers the models a server found thinking across a restart, and forgets them with the server', async () => {
     const file = memoryFile();
     const store = new ModelServerStore(cipher(), file, logger);

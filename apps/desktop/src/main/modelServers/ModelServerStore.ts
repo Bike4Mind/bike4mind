@@ -157,6 +157,10 @@ export class ModelServerStore {
       if (specs === null) delete stored.specs;
       else if (specs) stored.specs = specs;
       if (patch.kind !== undefined) stored.kind = patch.kind;
+      if (stored.kind !== 'ollama' && stored.specs?.kvCacheType) {
+        const { kvCacheType: _dropped, ...rest } = stored.specs;
+        stored.specs = rest;
+      }
       if (patch.access !== undefined) stored.access = patch.access;
       let applied: (() => void) | undefined;
       if (patch.credential) {
