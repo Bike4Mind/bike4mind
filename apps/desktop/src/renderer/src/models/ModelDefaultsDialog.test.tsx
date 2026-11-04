@@ -419,18 +419,62 @@ describe('ModelDefaultsDialog load options', () => {
     expect(byTestId('model-defaults-context-note')?.textContent).toBe('Runs at 40K tokens.');
   });
 
-  it('treats partial draft input such as "-", which reads as blank, as invalid', async () => {
+  it('validates the draft text itself: whole numbers 0 to the maximum, blank for unset', async () => {
     offer = OLLAMA_OFFER;
-    stored = { draftTokens: 3 };
     await render(QWEN);
     const field = input('draft');
-    Object.defineProperty(field, 'validity', { value: { badInput: true }, configurable: true });
+    const saveDisabled = () => byTestId<HTMLButtonElement>('model-defaults-save-btn')?.disabled;
+    for (const [text, invalid] of [
+      ['-', true],
+      ['1e', true],
+      ['17', true],
+      ['1.5', true],
+      ['4', false],
+      ['0', false],
+      ['16', false],
+    ] as const) {
+      await fill('draft', text);
+      expect(field.getAttribute('aria-invalid'), text).toBe(String(invalid));
+      if (invalid) expect(saveDisabled(), text).toBe(true);
+    }
+    await fill('draft', '-');
     await fill('draft', '');
-    expect(field.getAttribute('aria-invalid')).toBe('true');
-    expect(byTestId<HTMLButtonElement>('model-defaults-save-btn')?.disabled).toBe(true);
-    Object.defineProperty(field, 'validity', { value: { badInput: false }, configurable: true });
-    await fill('draft', '2');
     expect(field.getAttribute('aria-invalid')).toBe('false');
+    expect(field.type).toBe('text');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, {});
+  });
+
+  it('offers a model trained at 4096 its own size and keeps the choice', async () => {
+    offer = {
+      context: {
+        kind: 'ollama',
+        settings: 4096,
+        sizes: [{ size: 16384, tokens: 4096, autoTokens: 4096, loads: true }],
+      },
+    };
+    await render(QWEN);
+    await click('model-defaults-context-select');
+    expect(byTestId('model-defaults-context-option-16384')?.textContent).toBe('4K tokens');
+    await click('model-defaults-context-option-16384');
+    expect(byTestId('model-defaults-context-select')?.textContent).toBe('4K tokens');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, { context: { mode: 'fixed', tokens: 4096 } });
+  });
+
+  it('shows a stored size no option lists as its own choice, with its note', async () => {
+    offer = {
+      context: {
+        kind: 'ollama',
+        settings: 16384,
+        ceiling: 65536,
+        sizes: [{ size: 16384, tokens: 16384, autoTokens: 16384, loads: true }],
+      },
+    };
+    stored = { context: { mode: 'fixed', tokens: 40960 } };
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-select')?.textContent).toBe('40K tokens');
+    expect(byTestId('model-defaults-context-note')?.textContent).toBe('Runs at 40K tokens.');
   });
 
   it('labels the default of a saved Ollama server by the context it gets, not the Settings choice', async () => {

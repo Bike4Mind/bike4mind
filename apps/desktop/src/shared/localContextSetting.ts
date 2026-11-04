@@ -10,17 +10,19 @@ export const AUTO_LOCAL_CONTEXT: LocalContextSetting = { mode: 'auto' };
 /** One model's own choice from the Models screen, in place of the Settings one: Auto up to a cap, or one size. */
 export type ModelContextSetting = { mode: 'auto'; maxTokens?: number } | { mode: 'fixed'; tokens: number };
 
-// A model's trained length can fall between the offered sizes, so any whole number in their range is kept.
+const MIN_MODEL_CONTEXT_TOKENS = 512;
+
+// A model's trained length can fall between or below the offered sizes, so any whole number up to the top size is kept.
 function isContextTokens(value: unknown): value is number {
   return (
     typeof value === 'number' &&
     Number.isInteger(value) &&
-    value >= LOCAL_CONTEXT_SIZES[0] &&
+    value >= MIN_MODEL_CONTEXT_TOKENS &&
     value <= LOCAL_CONTEXT_SIZES[LOCAL_CONTEXT_SIZES.length - 1]
   );
 }
 
-/** Null when `value` is not one; a cap or size outside the offered range is not one either. */
+/** Null when `value` is not one; a cap or size outside 512 to the top offered size is not one either. */
 export function parseModelContextSetting(value: unknown): ModelContextSetting | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const { mode, tokens, maxTokens } = value as { mode?: unknown; tokens?: unknown; maxTokens?: unknown };

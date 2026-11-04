@@ -1326,7 +1326,7 @@
                             },
                             "draftNumPredict": {
                               "type": "integer",
-                              "minimum": 1,
+                              "minimum": 0,
                               "maximum": 16
                             },
                             "installedTemplate": {
@@ -1386,7 +1386,7 @@
                             },
                             "draftNumPredict": {
                               "type": "integer",
-                              "minimum": 1,
+                              "minimum": 0,
                               "maximum": 16
                             }
                           }
@@ -1470,7 +1470,7 @@
                             },
                             "draftNumPredict": {
                               "type": "integer",
-                              "minimum": 1,
+                              "minimum": 0,
                               "maximum": 16
                             },
                             "installedTemplate": {
@@ -1528,7 +1528,7 @@
                             },
                             "draftNumPredict": {
                               "type": "integer",
-                              "minimum": 1,
+                              "minimum": 0,
                               "maximum": 16
                             }
                           }

@@ -671,6 +671,33 @@ describe('pickForMachine runtimes', () => {
     expect(recurrent(library(null, 3))).toBe(150 * 1024 ** 2);
   });
 
+  it('plans an hf-pull build by its served draft_num_predict, then its Modelfile override', () => {
+    const pulled = (layerPredict?: number, modelfilePredict?: number) =>
+      withManifest(m => {
+        const iq3 = m.entries.find(e => e.id === 'hybrid-27b')!.builds[2];
+        iq3.ollama = {
+          kind: 'hf-pull',
+          modelfile: { dropStops: [], draftNumPredict: modelfilePredict },
+          layers: {
+            template: null,
+            params: null,
+            license: null,
+            numCtx: null,
+            projector: null,
+            draft: sha(8),
+            draftNumPredict: layerPredict,
+          },
+        };
+      });
+    const ollamaOnly = { ollama: { version: '0.40.11' } };
+    const recurrent = (manifest: HubManifestInput) =>
+      pick('nv-24+64', 'code', { manifest, runtimes: ollamaOnly }).alternates[0].fit.memory.recurrentBytes;
+    expect(recurrent(pulled(2))).toBe(150 * 1024 ** 2 * 3);
+    expect(recurrent(pulled(2, 5))).toBe(150 * 1024 ** 2 * 3);
+    expect(recurrent(pulled(undefined, 3))).toBe(150 * 1024 ** 2 * 4);
+    expect(recurrent(pulled(0))).toBe(150 * 1024 ** 2);
+  });
+
   it('offers a quantized cache under flash attention auto only for KV types a smoke loaded', () => {
     const manifest = withManifest(m => {
       for (const e of m.entries) for (const b of e.builds) for (const s of b.smoke) delete s.kv;

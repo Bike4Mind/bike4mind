@@ -16,10 +16,15 @@ import {
 import { CURATED_BACKOFF_BASE_MS, CURATED_CHECK_INTERVAL_MS, CuratedListSource } from './CuratedListSource';
 import { CuratedStore } from './CuratedStore';
 
-const BUNDLED_CURATED_TEXT = readFileSync(
-  new URL('../../../../catalog/model-hub/curated-v2.json', import.meta.url),
-  'utf8'
-);
+// Pinned at sequence 2 so these cases do not move each time the shipped catalog is revised.
+const BUNDLED_CURATED_TEXT = (() => {
+  const list = JSON.parse(
+    readFileSync(new URL('../../../../catalog/model-hub/curated-v2.json', import.meta.url), 'utf8')
+  ) as { sequence: number; changelog: { sequence: number }[] };
+  list.sequence = 2;
+  list.changelog = list.changelog.filter(entry => entry.sequence <= 2);
+  return JSON.stringify(list, null, 2);
+})();
 
 const URL_BASE = 'https://catalog.example.com/model-hub/curated-v2/';
 const LATEST = `${URL_BASE}latest.json`;

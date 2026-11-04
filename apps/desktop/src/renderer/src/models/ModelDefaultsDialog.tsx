@@ -147,22 +147,46 @@ export function contextSent(offer: ModelLoadOffer, context: ModelContextSetting 
   if (offered?.kind !== 'ollama') return undefined;
   if (!context) return offered.settings;
   const tokens = context.mode === 'fixed' ? context.tokens : context.maxTokens;
-  // A stored size from before the trained length was offered as its own choice still matches by size.
+  // A stored size no option lists (a re-pull changed the trained length) runs at itself, within the ceiling.
   const size =
     offered.sizes.find(candidate => capOf(candidate) === tokens) ??
     offered.sizes.find(candidate => candidate.size === tokens);
+  if (!size && tokens !== undefined) {
+    if (context.mode === 'fixed') return Math.min(tokens, offered.ceiling ?? tokens);
+    return offered.auto === undefined ? undefined : Math.min(tokens, offered.auto);
+  }
   if (context.mode === 'fixed') return size?.tokens;
   return context.maxTokens === undefined ? offered.auto : size?.autoTokens;
+}
+
+/** The context Select values the dialog lists for an Ollama offer. */
+function listedContextValues(offered: Extract<NonNullable<ModelLoadOffer['context']>, { kind: 'ollama' }>): string[] {
+  const auto =
+    offered.auto === undefined
+      ? []
+      : [
+          'auto',
+          ...offered.sizes
+            .filter(candidate => offered.ceiling === undefined || capOf(candidate) < offered.ceiling)
+            .map(candidate => `auto:${capOf(candidate)}`),
+        ];
+  return [SAME_AS_SETTINGS, ...auto, ...offered.sizes.map(candidate => `fixed:${capOf(candidate)}`)];
 }
 
 function sameContext(a: ModelContextSetting | null, b: ModelContextSetting | null): boolean {
   return contextValue(a) === contextValue(b);
 }
 
-/** A draft count as typed; undefined for a blank field or a value that is not a whole number within range. */
+/** A draft count as typed; undefined for a blank field or text that is not a whole number within range. */
 function draftOf(text: string, max: number): number | undefined {
-  const value = Number(text.trim());
-  return text.trim() && Number.isInteger(value) && value >= 0 && value <= max ? value : undefined;
+  const typed = text.trim();
+  const value = /^\d+$/.test(typed) ? Number(typed) : NaN;
+  return value <= max ? value : undefined;
+}
+
+function storedContextLabel(context: ModelContextSetting): string {
+  if (context.mode === 'fixed') return contextSizeLabel(context.tokens);
+  return `Auto, up to ${contextSizeLabel(context.maxTokens ?? 0)}`;
 }
 
 const KEEP_ALIVE_LABELS: Record<KeepAliveSeconds, string> = {
@@ -217,9 +241,7 @@ function ModelDefaultsForm({
   const [error, setError] = useState<string | null>(null);
   const modelId = option?.id ?? null;
   const draftTokens = draftOf(draftText, offer?.draft?.max ?? MAX_DRAFT_TOKENS);
-  // Chromium reports value '' for partial input such as "-" or "1e", so the field's own validity decides those.
-  const [draftBad, setDraftBad] = useState(false);
-  const draftInvalid = draftBad || (draftText.trim() !== '' && draftTokens === undefined);
+  const draftInvalid = draftText.trim() !== '' && draftTokens === undefined;
 
   useEffect(() => {
     setLoaded(null);
@@ -237,7 +259,6 @@ function ModelDefaultsForm({
         setEffort(current.effort ?? null);
         setContext(current.context ?? null);
         setDraftText(current.draftTokens !== undefined ? String(current.draftTokens) : '');
-        setDraftBad(false);
         setKeepAlive(current.keepAlive ?? null);
       },
       (reason: unknown) => {
@@ -323,7 +344,6 @@ function ModelDefaultsForm({
     effort !== null ||
     context !== null ||
     draftText.trim() !== '' ||
-    draftBad ||
     keepAlive !== null;
 
   return (
@@ -449,10 +469,7 @@ function ModelDefaultsForm({
                   context={context}
                   onContext={setContext}
                   draftText={draftText}
-                  onDraftText={(text, bad) => {
-                    setDraftText(text);
-                    setDraftBad(bad);
-                  }}
+                  onDraftText={setDraftText}
                   draftInvalid={draftInvalid}
                   keepAlive={keepAlive}
                   onKeepAlive={setKeepAlive}
@@ -491,7 +508,6 @@ function ModelDefaultsForm({
               setEffort(null);
               setContext(null);
               setDraftText('');
-              setDraftBad(false);
               setKeepAlive(null);
             }}
             sx={{ mr: 'auto' }}
@@ -548,7 +564,7 @@ function LoadOptionRows({
   context: ModelContextSetting | null;
   onContext: (context: ModelContextSetting | null) => void;
   draftText: string;
-  onDraftText: (text: string, badInput: boolean) => void;
+  onDraftText: (text: string) => void;
   draftInvalid: boolean;
   keepAlive: KeepAliveSeconds | null;
   onKeepAlive: (keepAlive: KeepAliveSeconds | null) => void;
@@ -656,6 +672,15 @@ function LoadOptionRows({
                   </Stack>
                 </Option>
               ))}
+            {offered.kind === 'ollama' && context && !listedContextValues(offered).includes(contextValue(context)) && (
+              <Option
+                value={contextValue(context)}
+                label={storedContextLabel(context)}
+                data-testid="model-defaults-context-option-stored"
+              >
+                {storedContextLabel(context)}
+              </Option>
+            )}
             {offered.kind === 'budget' &&
               offered.sizes.map(size => (
                 <Option key={size} value={`fixed:${size}`} data-testid={`model-defaults-context-option-${size}`}>
@@ -677,18 +702,16 @@ function LoadOptionRows({
         >
           <Input
             size="sm"
-            type="number"
+            type="text"
             value={draftText}
             placeholder={String(offer.draft.modelDefault)}
             disabled={disabled}
             color={draftInvalid ? 'danger' : 'neutral'}
-            onChange={event => onDraftText(event.target.value, event.target.validity.badInput)}
+            onChange={event => onDraftText(event.target.value)}
             sx={{ width: 112, flexShrink: 0, '& input::placeholder': { fontStyle: 'italic' } }}
             slotProps={{
               input: {
-                min: 0,
-                max: offer.draft.max,
-                step: 1,
+                inputMode: 'numeric',
                 'aria-label': 'Draft tokens',
                 'aria-invalid': draftInvalid,
                 'aria-describedby': 'model-defaults-draft-note',

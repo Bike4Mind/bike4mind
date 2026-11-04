@@ -139,7 +139,10 @@ function fitInputs(entry: HubEntry, build: HubBuild, runtime: HubRuntime, option
     const layers = source && source.kind !== 'create' ? source.layers : undefined;
     const hasDraft = build.draft !== undefined || entry.arch.mtpLayers > 0 || !!layers?.draft;
     const draftLayer = (build.draft !== undefined && build.draft.kind !== 'mtp-embedded') || !!layers?.draft;
-    const draftNumPredict = source?.kind === 'library' ? layers?.draftNumPredict : source?.modelfile.draftNumPredict;
+    const draftNumPredict =
+      source?.kind === 'library'
+        ? layers?.draftNumPredict
+        : (layers?.draftNumPredict ?? source?.modelfile.draftNumPredict);
     const draftMax = hasDraft ? (draftNumPredict ?? (draftLayer ? OLLAMA_DRAFT_LAYER_DEFAULT : 0)) : 0;
     // Ollama loads a model's projector whenever it has one.
     const model: FitModel = {
