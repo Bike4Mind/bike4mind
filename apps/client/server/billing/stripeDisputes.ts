@@ -1,11 +1,18 @@
 import {
   adminAuditLogRepository,
+  creditTransactionRepository,
   stripeDisputeRepository,
   userRepository,
   withTransaction,
   type StripeDisputeFacts,
 } from '@bike4mind/database';
-import type { AuditActor, StripeDisputeItem, StripeDisputeSubject } from '@bike4mind/common';
+import {
+  CREDIT_ADD_TRANSACTION_TYPES,
+  CreditHolderType,
+  type AuditActor,
+  type StripeDisputeItem,
+  type StripeDisputeSubject,
+} from '@bike4mind/common';
 import { adminAuditService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
 import { applyActionToUser } from '@server/admin/usersBulk/execute';
@@ -205,11 +212,20 @@ export class DisputeContainUndoRefused extends Error {
 /**
  * The snapshot adds back what the Contain removed, so replaying it over a later change would stack on
  * top of it (credits re-granted by hand would be granted twice). Only an account still in the Contain's
- * after-state is reverted; anything else is for an admin to adjust by hand.
+ * after-state is reverted; anything else is for an admin to adjust by hand. A balance below zero is
+ * still that state (usage in flight at the Contain settled afterwards), but any credits added since
+ * are not, even when they were spent back down.
  */
-function isStillContained(user: BulkUser, snapshot: UserUndoSnapshot): boolean {
+async function isStillContained(user: BulkUser, snapshot: UserUndoSnapshot, containedAt: Date): Promise<boolean> {
   if (snapshot.banned && !user.isBanned) return false;
-  return !snapshot.creditDelta || user.currentCredits === 0;
+  if (!snapshot.creditDelta) return true;
+  if (user.currentCredits > 0) return false;
+  const added = await creditTransactionRepository.findLedgerPage(user.id, CreditHolderType.User, {
+    types: CREDIT_ADD_TRANSACTION_TYPES,
+    createdFrom: containedAt,
+    limit: 1,
+  });
+  return added.length === 0;
 }
 
 /**
@@ -224,8 +240,8 @@ export async function undoDisputeContain(
   adminId: string,
   deps: RevertDeps
 ): Promise<StripeDisputeItem> {
-  if (!dispute.contain || dispute.contain.undoneAt)
-    throw new DisputeContainUndoRefused({ status: 'conflict', item: dispute });
+  const { contain } = dispute;
+  if (!contain || contain.undoneAt) throw new DisputeContainUndoRefused({ status: 'conflict', item: dispute });
   const parsed = UserUndoSnapshotSchema.safeParse(dispute.containSnapshot);
   // Written by resolveLostUserDispute: a snapshot that no longer parses is a bug, not a client error.
   if (!parsed.success) throw new Error(`Corrupt dispute Contain snapshot: ${parsed.error.message}`);
@@ -234,7 +250,7 @@ export async function undoDisputeContain(
   await revertUserSnapshot(
     parsed.data,
     {
-      batchId: dispute.contain.batchId,
+      batchId: contain.batchId,
       adminId,
       action: 'contain',
       undoExpiresAt: new Date().toISOString(),
@@ -242,8 +258,8 @@ export async function undoDisputeContain(
     },
     deps,
     {
-      assertRevertable: user => {
-        if (!isStillContained(user, parsed.data)) {
+      assertRevertable: async user => {
+        if (!(await isStillContained(user, parsed.data, contain.containedAt))) {
           throw new DisputeContainUndoRefused({ status: 'account_changed', item: dispute });
         }
       },

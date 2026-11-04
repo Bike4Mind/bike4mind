@@ -184,12 +184,12 @@ export async function revertUserSnapshot(
   snapshot: UserUndoSnapshot,
   record: UndoRecord,
   deps: RevertDeps,
-  hooks: { assertRevertable: (user: BulkUser) => void; onReverted: () => Promise<void> }
+  hooks: { assertRevertable: (user: BulkUser) => Promise<void> | void; onReverted: () => Promise<void> }
 ): Promise<void> {
   await deps.withTransaction(async () => {
     const user = await deps.db.findUser(snapshot.userId);
     if (!user) throw new Error('User not found');
-    hooks.assertRevertable(user);
+    await hooks.assertRevertable(user);
     await revertUser(snapshot, record, deps);
     await hooks.onReverted();
   });
