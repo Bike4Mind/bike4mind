@@ -401,7 +401,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
     category: 'abuse',
     unit: 'completions',
     meaning:
-      'A completion cost more credits than its account held, so the balance was charged down to zero and the rest went uncollected.',
+      'A completion cost more credits than its account held. On the CLI the balance was charged down to zero and the rest went uncollected; in web chat the balance was left negative until the account tops up.',
     action:
       'Find the account in the ChatCompletion log line, check its credit ledger and recent purchases on the admin users page, and review how the reservation let it through.',
     links: ['signup-activity'],
