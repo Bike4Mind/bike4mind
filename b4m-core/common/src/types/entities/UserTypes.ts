@@ -908,6 +908,8 @@ export interface IUserRepository
    * (now or from an earlier attempt), false when another account already does.
    */
   claimFreeCreditGrant: (userId: string) => Promise<boolean>;
+  /** Sets signupGrant.inviteBonusPaid only where it is unset; false when another write set it first. */
+  markInviteBonusPaid: (userId: string, credits: number) => Promise<boolean>;
   /**
    * Enable MFA only while the stored secret is still `totpSecret` and MFA is still disabled.
    * Returns null when a concurrent setup replaced the secret, so a code verified against a

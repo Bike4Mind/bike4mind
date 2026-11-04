@@ -315,6 +315,7 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     atomicClaimTotpStep: vi.fn(),
     atomicConsumeBackupCode: vi.fn(),
     claimFreeCreditGrant: vi.fn().mockResolvedValue(true),
+    markInviteBonusPaid: vi.fn().mockResolvedValue(true),
     atomicEnableMfa: vi.fn(),
     findOrCreateByEmail: vi.fn(),
     recordModerationHit: vi.fn(),

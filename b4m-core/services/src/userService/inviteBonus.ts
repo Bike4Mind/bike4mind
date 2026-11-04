@@ -8,18 +8,27 @@ import { reserveSignupGrantBudget, type SignupGrantBudgetReservation } from './s
 
 export type InviteBonusResult = { creditsGranted: number; budgetExhausted?: boolean };
 
-type InviteBonusAdapters = Pick<FreeCreditAdapters, 'db' | 'bypassBudget'>;
+type InviteBonusAdapters = Pick<FreeCreditAdapters, 'db' | 'bypassBudget'> & {
+  /**
+   * Set only by a caller that just confirmed the organization still pays
+   * (apps/client/server/credits/orgInviteBonus.ts); an organization invite's bonus is never paid without it.
+   */
+  orgStandingVerified?: boolean;
+};
 
 class InviteBonusClaimDeniedError extends Error {}
+class InviteBonusAlreadyMarkedError extends Error {}
 
 export const inviteBonusTransactionId = (userId: string) => `invite-bonus:${userId}`;
 
 /** An invited account whose signup tranche was paid in full and that has not had its bonus yet. */
 function isInviteBonusEligible(
-  user: IUserDocument | null | undefined
+  user: IUserDocument | null | undefined,
+  orgStandingVerified: boolean
 ): user is IUserDocument & { signupGrant: SignupGrant } {
   const grant = user?.signupGrant;
   if (!user?.signupInvite || !grant || grant.inviteBonusPaid != null) return false;
+  if (user.signupInvite.source === 'organization' && !orgStandingVerified) return false;
   if (grant.stage === 'pending_email' || user.signupGrantHeldReason) return false;
   if (accountBlockReasons(user).length || isAiAccessRevoked(user) || isSignupGrantHeldForReview(user)) return false;
   // A reviewed or reduced tranche earns no bonus.
@@ -33,9 +42,14 @@ function isInviteBonusEligible(
  */
 export async function payInviteBonus(userId: string, adapters: InviteBonusAdapters): Promise<InviteBonusResult> {
   const { db } = adapters;
-  if (!isInviteBonusEligible(await db.users.findById(userId))) return { creditsGranted: 0 };
+  const orgStandingVerified = adapters.orgStandingVerified === true;
+  if (!isInviteBonusEligible(await db.users.findById(userId), orgStandingVerified)) return { creditsGranted: 0 };
   const { inviteBonusCredits: amount } = await resolveSignupGrantSchedule(db.adminSettings);
-  if (!Number.isSafeInteger(amount) || amount <= 0) return { creditsGranted: 0 };
+  if (!Number.isSafeInteger(amount) || amount <= 0) {
+    // Settled at 0 so raising the setting later does not pay accounts that signed up while it was off.
+    await db.users.markInviteBonusPaid(userId, 0);
+    return { creditsGranted: 0 };
+  }
 
   const transactionId = inviteBonusTransactionId(userId);
   const reservations: SignupGrantBudgetReservation[] = [];
@@ -43,7 +57,7 @@ export async function payInviteBonus(userId: string, adapters: InviteBonusAdapte
   try {
     const result = await withTransaction<InviteBonusResult>(async () => {
       const user = await db.users.findById(userId);
-      if (!isInviteBonusEligible(user)) return { creditsGranted: 0 };
+      if (!isInviteBonusEligible(user, orgStandingVerified)) return { creditsGranted: 0 };
       if (!adapters.bypassBudget) {
         const reservation = await reserveSignupGrantBudget(db, transactionId, amount, { pool: 'signup' });
         reservations.push(reservation);
@@ -67,11 +81,8 @@ export async function payInviteBonus(userId: string, adapters: InviteBonusAdapte
           duplicateTransactionId: 'throw',
         }
       );
-      const updated = await db.users.update({
-        id: userId,
-        signupGrant: { ...user.signupGrant, inviteBonusPaid: amount },
-      });
-      if (!updated) throw new Error('Invite bonus account update failed');
+      // A path write, so a concurrent drip or unlock write to signupGrant cannot be overwritten here.
+      if (!(await db.users.markInviteBonusPaid(userId, amount))) throw new InviteBonusAlreadyMarkedError();
       return { creditsGranted: amount };
     });
     if (result.creditsGranted === 0) await releaseReservations();
@@ -80,7 +91,8 @@ export async function payInviteBonus(userId: string, adapters: InviteBonusAdapte
     // A duplicate ledger row means a concurrent call paid the bonus: its draw stays spent.
     if (error instanceof DuplicateCreditTransactionError) return { creditsGranted: 0 };
     await releaseReservations();
-    if (error instanceof InviteBonusClaimDeniedError) return { creditsGranted: 0 };
+    if (error instanceof InviteBonusClaimDeniedError || error instanceof InviteBonusAlreadyMarkedError)
+      return { creditsGranted: 0 };
     throw error;
   }
 }

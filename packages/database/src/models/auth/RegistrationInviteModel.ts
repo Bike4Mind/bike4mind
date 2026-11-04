@@ -22,6 +22,21 @@ export class RegistrationInviteRepository
   async findByCode(code: string) {
     return this.model.findOne({ code });
   }
+
+  async claimUnused(inviteId: string, usedAt: Date): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: inviteId, used: null },
+      { $set: { used: usedAt, status: RegInviteStatusType.used } }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  async releaseClaim(inviteId: string, usedAt: Date): Promise<void> {
+    await this.model.updateOne(
+      { _id: inviteId, used: usedAt, usedbyId: null },
+      { $unset: { used: 1 }, $set: { status: RegInviteStatusType.open } }
+    );
+  }
   async createMany(invites: Omit<IRegInviteDocument, 'id'>[]) {
     return this.model.insertMany(invites);
   }

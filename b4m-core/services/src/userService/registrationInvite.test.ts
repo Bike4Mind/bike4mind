@@ -1,7 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { RegInviteSource, RegInviteStatusType, type IRegInviteDocument } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
-import { redeemRegistrationInvite, referralInviteCredits, resolveRegistrationInvite } from './registrationInvite';
+import {
+  claimRegistrationInvite,
+  redeemRegistrationInvite,
+  referralInviteCredits,
+  resolveRegistrationInvite,
+} from './registrationInvite';
 
 const EMAIL = 'invitee@example.com';
 
@@ -64,6 +69,34 @@ describe('resolveRegistrationInvite', () => {
     expect(unlimited?.isReferral).toBe(false);
     const legacy = await resolveRegistrationInvite('X', EMAIL, repo(invite()));
     expect(legacy?.isReferral).toBe(false);
+  });
+});
+
+describe('claimRegistrationInvite', () => {
+  it('claims a single-use code and releases it at the same timestamp', async () => {
+    const claimUnused = vi.fn().mockResolvedValue(true);
+    const releaseClaim = vi.fn();
+    const claim = await claimRegistrationInvite(
+      { invite: invite(), isUnlimited: false },
+      { claimUnused, releaseClaim }
+    );
+    await claim?.release();
+    expect(releaseClaim).toHaveBeenCalledWith('invite-1', claimUnused.mock.calls[0][1]);
+  });
+
+  it('returns null when another signup claimed the code first', async () => {
+    const claimUnused = vi.fn().mockResolvedValue(false);
+    expect(
+      await claimRegistrationInvite({ invite: invite(), isUnlimited: false }, { claimUnused, releaseClaim: vi.fn() })
+    ).toBeNull();
+  });
+
+  it('never claims an unlimited code', async () => {
+    const claimUnused = vi.fn();
+    expect(
+      await claimRegistrationInvite({ invite: invite(), isUnlimited: true }, { claimUnused, releaseClaim: vi.fn() })
+    ).not.toBeNull();
+    expect(claimUnused).not.toHaveBeenCalled();
   });
 });
 

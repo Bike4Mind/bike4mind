@@ -4,6 +4,7 @@ import {
   creditLotRepository,
   creditTransactionRepository,
   inviteRepository,
+  Organization,
   User,
   userRepository,
 } from '@bike4mind/database';
@@ -26,7 +27,10 @@ export async function recordOrgSignupInvite(userId: string, inviteId: string): P
   // InviteModel sets timestamps, but the shared invite type does not declare createdAt.
   const invitedAt = (invite as { createdAt?: unknown }).createdAt;
   const createdAt = user.createdAt;
-  if (!(invitedAt instanceof Date) || !(createdAt instanceof Date)) return false;
+  if (!(invitedAt instanceof Date) || !(createdAt instanceof Date)) {
+    console.warn('[org-invite-bonus] invite or account has no creation date; leaving the account unmarked');
+    return false;
+  }
   if (createdAt.getTime() < invitedAt.getTime()) return false;
 
   const signupInvite: SignupInvite = {
@@ -43,6 +47,46 @@ export async function recordOrgSignupInvite(userId: string, inviteId: string): P
 }
 
 /**
+ * Pays the bonus to an account marked with `organizationId`'s invite, once its standing is confirmed.
+ * Each payout holds one of the organization's seats on its own counter, so a paying organization
+ * cannot fund more bonuses than it has seats; a hold that pays nothing is handed back.
+ */
+async function payForPayingOrganization(userId: string, organizationId: string): Promise<number> {
+  if (!(await isPayingOrganization(organizationId))) return 0;
+  const reservation = await Organization.updateOne(
+    {
+      _id: organizationId,
+      seats: { $gt: 0 },
+      $expr: { $lt: [{ $ifNull: ['$signupInviteBonusCount', 0] }, '$seats'] },
+    },
+    { $inc: { signupInviteBonusCount: 1 } }
+  );
+  if (reservation.modifiedCount !== 1) return 0;
+  let paid = 0;
+  try {
+    const result = await userService.payInviteBonus(userId, {
+      db: {
+        users: userRepository,
+        signupProtection,
+        adminSettings: adminSettingsRepository,
+        creditTransactions: creditTransactionRepository,
+        creditLots: creditLotRepository,
+      },
+      orgStandingVerified: true,
+    });
+    paid = result.creditsGranted;
+    return paid;
+  } finally {
+    if (paid <= 0) {
+      await Organization.updateOne(
+        { _id: organizationId, signupInviteBonusCount: { $gt: 0 } },
+        { $inc: { signupInviteBonusCount: -1 } }
+      );
+    }
+  }
+}
+
+/**
  * Marks and pays the invite bonus for a new account that accepted a paying organization's invite.
  * An unpaid organization's invite leaves the account uninvited. Returns the credits paid.
  */
@@ -51,14 +95,17 @@ export async function payOrgInviteBonus(userId: string, inviteId: string): Promi
   if (invite?.type !== InviteType.Organization || !invite.documentId) return 0;
   if (!(await isPayingOrganization(invite.documentId))) return 0;
   await recordOrgSignupInvite(userId, inviteId);
-  const result = await userService.payInviteBonus(userId, {
-    db: {
-      users: userRepository,
-      signupProtection,
-      adminSettings: adminSettingsRepository,
-      creditTransactions: creditTransactionRepository,
-      creditLots: creditLotRepository,
-    },
-  });
-  return result.creditsGranted;
+  return payForPayingOrganization(userId, invite.documentId);
+}
+
+/**
+ * Retries an organization invite bonus left unpaid at acceptance (an exhausted signup pool, a held
+ * tranche), re-checking that the organization still pays. Returns the credits paid.
+ */
+export async function retryOrgInviteBonus(userId: string): Promise<number> {
+  const user = await userRepository.findById(userId);
+  const signupInvite = user?.signupInvite;
+  if (signupInvite?.source !== 'organization' || !signupInvite.organizationId) return 0;
+  if (!user?.signupGrant || user.signupGrant.inviteBonusPaid != null) return 0;
+  return payForPayingOrganization(userId, signupInvite.organizationId);
 }

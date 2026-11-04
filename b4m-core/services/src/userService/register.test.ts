@@ -75,6 +75,8 @@ describe('registerUser', () => {
         registrationInvites: {
           findByCode: vi.fn().mockResolvedValue(mockInvite),
           update: vi.fn().mockResolvedValue(undefined),
+          claimUnused: vi.fn().mockResolvedValue(true),
+          releaseClaim: vi.fn().mockResolvedValue(undefined),
         },
         creditTransactions: {
           createTransaction: vi.fn().mockResolvedValue({ id: 'transactionId', type: 'generic_add' }),
@@ -687,6 +689,36 @@ describe('registerUser', () => {
         expect(created().signupInvite).toEqual({ source: 'referral', inviteId: 'invite-1', at: expect.any(Date) });
       });
 
+      it('enrolls the default grant for a no-credit referral where an uninvited signup would get it', async () => {
+        enableStaging();
+        const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
+        mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
+          if (name === 'ReferralCreditsAmount') return { settingValue: '0' };
+          if (name === 'allowOpenRegistration') return { settingValue: true };
+          return readSetting(name);
+        });
+        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite({ startingCredits: 0 }));
+        await registerUser(baseParams, mockAdapters);
+        expect(created().signupGrant).toMatchObject({ signupCredits: 4 });
+        expect(created().tags).toContain(PENDING_FREE_CREDITS_TAG);
+        expect(created().signupInvite).toMatchObject({ source: 'referral' });
+      });
+
+      it('rejects the code and creates no account when a concurrent signup claimed it first', async () => {
+        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite());
+        mockAdapters.db.registrationInvites.claimUnused.mockResolvedValue(false);
+        await expect(registerUser(baseParams, mockAdapters)).rejects.toThrow('Invite code already used');
+        expect(mockAdapters.db.users.create).not.toHaveBeenCalled();
+      });
+
+      it('reopens the claimed code when the account create fails', async () => {
+        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite());
+        mockAdapters.db.users.create.mockRejectedValue(Object.assign(new Error('dup'), { code: 11000 }));
+        await expect(registerUser(baseParams, mockAdapters)).rejects.toThrow('Email already in use');
+        const [id, usedAt] = mockAdapters.db.registrationInvites.claimUnused.mock.calls[0];
+        expect(mockAdapters.db.registrationInvites.releaseClaim).toHaveBeenCalledWith(id, usedAt);
+      });
+
       it('does not record a signup invite for an admin code or an unlimited referral code', async () => {
         await registerUser(baseParams, mockAdapters);
         expect(created().signupInvite).toBeUndefined();
@@ -780,7 +812,12 @@ describe('registerViaOTC', () => {
             return Promise.resolve(null);
           }),
         },
-        registrationInvites: { findByCode: vi.fn().mockResolvedValue(null), update: vi.fn() },
+        registrationInvites: {
+          findByCode: vi.fn().mockResolvedValue(null),
+          update: vi.fn(),
+          claimUnused: vi.fn().mockResolvedValue(true),
+          releaseClaim: vi.fn(),
+        },
         creditTransactions: {
           createTransaction: vi.fn().mockResolvedValue({ id: 'transactionId', type: 'generic_add' }),
           findOne: vi.fn().mockResolvedValue(null),

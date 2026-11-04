@@ -313,28 +313,39 @@ const authenticateUser = async (
         inviteCode && pendingFreeCredits && emailForNewAccount
           ? await resolveOAuthReferral(inviteCode, emailForNewAccount)
           : null;
-      const referralInvite = referral
-        ? {
-            inviteId: referral.invite.id,
-            inviterId: referral.invite.userId ?? null,
-            grantCredits: await userService.referralInviteCredits(referral.invite, adminSettingsRepository),
-          }
-        : undefined;
-      user = await createUniqueOAuthUser({
-        name,
-        baseUsername,
-        email: emailForNewAccount,
-        oauthCredentials,
-        pendingFreeCredits,
-        ...(signupNetwork ? { signupMeta: { ...signupNetwork, capturedAt: new Date(), challengeVerified } } : {}),
-        ...(referralInvite ? { referralInvite } : {}),
-      });
+      // Taken before the account exists so a concurrent signup cannot redeem the same code.
+      const referralClaim = referral
+        ? await userService.claimRegistrationInvite(referral, registrationInviteRepository)
+        : null;
+      if (referral && !referralClaim) console.warn('[oauth signup] invite already redeemed; signing up uninvited');
+      const referralInvite =
+        referral && referralClaim
+          ? {
+              inviteId: referral.invite.id,
+              inviterId: referral.invite.userId ?? null,
+              grantCredits: await userService.referralInviteCredits(referral.invite, adminSettingsRepository),
+            }
+          : undefined;
+      try {
+        user = await createUniqueOAuthUser({
+          name,
+          baseUsername,
+          email: emailForNewAccount,
+          oauthCredentials,
+          pendingFreeCredits,
+          ...(signupNetwork ? { signupMeta: { ...signupNetwork, capturedAt: new Date(), challengeVerified } } : {}),
+          ...(referralInvite ? { referralInvite } : {}),
+        });
+      } catch (e) {
+        await referralClaim?.release().catch(() => undefined);
+        throw e;
+      }
       const newUserId = String(user._id);
-      if (referral) {
+      if (referral && referralClaim) {
         try {
           await userService.redeemRegistrationInvite(referral, newUserId, registrationInviteRepository);
         } catch (e) {
-          // The account exists and is attributed; a failed close only leaves the code open.
+          // The code is already closed by the claim; this only loses its usedbyId/history entry.
           console.error('[oauth signup] invite redeem failed:', e);
         }
       }

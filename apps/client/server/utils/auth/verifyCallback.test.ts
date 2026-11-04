@@ -18,6 +18,8 @@ const mockClaimFreeCreditGrant = vi.fn();
 const mockEndConnections = vi.fn();
 const mockFindInviteByCode = vi.fn();
 const mockUpdateInvite = vi.fn();
+const mockClaimInvite = vi.fn();
+const mockReleaseInviteClaim = vi.fn();
 const mockInviteCodeFor = vi.fn();
 vi.mock('@server/auth/passportOAuthStateStore', () => ({
   readOAuthInviteCode: (req: object) => mockInviteCodeFor(req),
@@ -39,6 +41,8 @@ vi.mock('@bike4mind/database', () => ({
   registrationInviteRepository: {
     findByCode: (...args: unknown[]) => mockFindInviteByCode(...args),
     update: (...args: unknown[]) => mockUpdateInvite(...args),
+    claimUnused: (...args: unknown[]) => mockClaimInvite(...args),
+    releaseClaim: (...args: unknown[]) => mockReleaseInviteClaim(...args),
   },
   creditTransactionRepository: {},
   creditLotRepository: {},
@@ -77,6 +81,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
       shouldBlockDisposableEmail: (...args: unknown[]) => mockShouldBlockDisposableEmail(...args),
       // The real invite rules run against the registrationInviteRepository mock above.
       resolveRegistrationInvite: actual.userService.resolveRegistrationInvite,
+      claimRegistrationInvite: actual.userService.claimRegistrationInvite,
       redeemRegistrationInvite: actual.userService.redeemRegistrationInvite,
       referralInviteCredits: actual.userService.referralInviteCredits,
     },
@@ -184,6 +189,10 @@ beforeEach(() => {
   mockFindInviteByCode.mockResolvedValue(null);
   mockUpdateInvite.mockReset();
   mockUpdateInvite.mockResolvedValue(undefined);
+  mockClaimInvite.mockReset();
+  mockClaimInvite.mockResolvedValue(true);
+  mockReleaseInviteClaim.mockReset();
+  mockReleaseInviteClaim.mockResolvedValue(undefined);
   mockInviteCodeFor.mockReset();
   mockInviteCodeFor.mockReturnValue(null);
 });
@@ -1757,6 +1766,33 @@ describe('OAuth signup with an invite code carried through state', () => {
     expect(err).toBeNull();
     expect(user).toBeDefined();
     expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('signupInvite');
+  });
+
+  it('signs up uninvited when a concurrent signup claimed the code first', async () => {
+    mockFindInviteByCode.mockResolvedValue(referral());
+    mockClaimInvite.mockResolvedValue(false);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const { err, user } = await runSelfServe();
+
+    expect(err).toBeNull();
+    expect(user).toBeDefined();
+    expect(mockClaimInvite).toHaveBeenCalledWith('invite-1', expect.any(Date));
+    expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('signupInvite');
+    expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('referredByUserId');
+    expect(mockUpdateInvite).not.toHaveBeenCalled();
+  });
+
+  it('reopens the claimed code when the account create fails', async () => {
+    mockFindInviteByCode.mockResolvedValue(referral());
+    mockCreate.mockRejectedValue(new Error('db down'));
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await runSelfServe();
+
+    const [claimedId, claimedAt] = mockClaimInvite.mock.calls[0];
+    expect(mockReleaseInviteClaim).toHaveBeenCalledWith(claimedId, claimedAt);
+    expect(mockUpdateInvite).not.toHaveBeenCalled();
   });
 
   it('completes the login when closing the code fails after the account exists', async () => {

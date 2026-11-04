@@ -574,6 +574,14 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
    * covers a deployment whose index has not been built yet. An account without a usable email has
    * nothing to dedupe on and is allowed.
    */
+  async markInviteBonusPaid(userId: string, credits: number): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, signupGrant: { $type: 'object' }, 'signupGrant.inviteBonusPaid': { $exists: false } },
+      { $set: { 'signupGrant.inviteBonusPaid': credits } }
+    );
+    return result.modifiedCount === 1;
+  }
+
   async claimFreeCreditGrant(userId: string): Promise<boolean> {
     const user = await this.model.findById(userId, { email: 1, freeCreditClaimEmail: 1 }).lean();
     if (!user) return false;

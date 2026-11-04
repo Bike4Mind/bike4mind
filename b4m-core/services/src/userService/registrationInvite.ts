@@ -12,6 +12,10 @@ export interface RegistrationInviteRepository {
     invite: Partial<IRegInviteDocument>,
     options?: RepositoryUpdateOptions<IRegInviteDocument>
   ) => Promise<unknown>;
+  /** Sets `used` on a code that has none; false when another signup set it first. */
+  claimUnused: (inviteId: string, usedAt: Date) => Promise<boolean>;
+  /** Reopens a code claimed at `usedAt` that no account has redeemed yet. */
+  releaseClaim: (inviteId: string, usedAt: Date) => Promise<void>;
 }
 
 export interface ResolvedRegistrationInvite {
@@ -65,6 +69,21 @@ export async function referralInviteCredits(
   const setting = await adminSettings.findBySettingName('ReferralCreditsAmount');
   const parsed = parseInt(String(setting?.settingValue ?? '0'), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+/**
+ * Takes a single-use code before the account is created, so two concurrent signups that both
+ * passed resolveRegistrationInvite cannot both redeem it. Returns null when another signup took it
+ * first; otherwise `release` reopens the code if the account is then not created.
+ */
+export async function claimRegistrationInvite(
+  { invite, isUnlimited }: Pick<ResolvedRegistrationInvite, 'invite' | 'isUnlimited'>,
+  registrationInvites: Pick<RegistrationInviteRepository, 'claimUnused' | 'releaseClaim'>
+): Promise<{ release: () => Promise<void> } | null> {
+  if (isUnlimited) return { release: async () => undefined };
+  const usedAt = new Date();
+  if (!(await registrationInvites.claimUnused(invite.id, usedAt))) return null;
+  return { release: () => registrationInvites.releaseClaim(invite.id, usedAt) };
 }
 
 /** Records `userId`'s use of the invite: closes a single-use code, appends history for an unlimited one. */

@@ -26,6 +26,7 @@ import { shouldBlockDisposableEmail } from './disposableEmail';
 import { OAuthSourceClientLookup, resolveOAuthSourceTag } from './sourceTag';
 import { assertUsernameNotReserved } from './reservedUsername';
 import {
+  claimRegistrationInvite,
   redeemRegistrationInvite,
   type RegistrationInviteRepository,
   resolveRegistrationInvite,
@@ -261,9 +262,14 @@ export const registerUser = async (
     logger.info(`Open registration (no invite) for ${email}: free credits deferred until email verification`);
   }
 
+  const isReferralInvite = resolvedInvite?.isReferral ?? false;
+  // A referral that resolves no credits is never worse off than signing up without the code.
+  const referralTakesDefaultGrant =
+    isReferralInvite && freeCredits <= 0 && (allowOpenRegistration || Boolean(skipInviteCheck));
+
   // invite-resolved credits are deferred behind the same pending tag as the
   // open-registration grant; the amount travels on the user doc.
-  if (freeCredits > 0) {
+  if (freeCredits > 0 || referralTakesDefaultGrant) {
     tags = [...new Set([...tags, PENDING_FREE_CREDITS_TAG])];
   }
 
@@ -278,12 +284,12 @@ export const registerUser = async (
   }
 
   // Open signups and refer-a-friend invitees trickle their grant; admin and unlimited codes keep the flat grant.
-  const isReferralInvite = resolvedInvite?.isReferral ?? false;
-  const referralGrant = !hasInviteCode
-    ? await newSignupGrant(db.adminSettings)
-    : isReferralInvite && freeCredits > 0
-      ? await newSignupGrant(db.adminSettings, freeCredits)
-      : undefined;
+  const referralGrant =
+    !hasInviteCode || referralTakesDefaultGrant
+      ? await newSignupGrant(db.adminSettings)
+      : isReferralInvite && freeCredits > 0
+        ? await newSignupGrant(db.adminSettings, freeCredits)
+        : undefined;
 
   // Only an invite a user sent through the refer flow names an inviter. Admin bulk codes,
   // admin-issued subscriber invites and unlimited codes have no sender to credit, and invites
@@ -380,10 +386,14 @@ export const registerUser = async (
     updatedAt: new Date(),
   };
 
+  const inviteClaim = resolvedInvite ? await claimRegistrationInvite(resolvedInvite, db.registrationInvites) : null;
+  if (resolvedInvite && !inviteClaim) throw new BadRequestError('Invite code already used');
+
   let user: Awaited<ReturnType<typeof db.users.create>>;
   try {
     user = await db.users.create(buildUser);
   } catch (err: unknown) {
+    await inviteClaim?.release().catch(() => undefined);
     // E11000: concurrent registration race on the unique email index.
     if ((err as { code?: number }).code === 11000) {
       throw new BadRequestError('Email already in use');

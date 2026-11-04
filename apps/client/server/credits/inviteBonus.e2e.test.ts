@@ -121,9 +121,41 @@ describe('invite bonus', () => {
     expect(await bonusRows()).toBe(1);
   });
 
-  it('writes nothing when the bonus is 0', async () => {
+  it('pays nothing at bonus 0 and does not pay that account when the setting is raised later', async () => {
     config.signupGrantInviteBonusCredits = '0';
     const invited = await createUser(1, true);
+    await userService.releaseSignupTranche(invited.id, adapters);
+    expect(await creditsOf(invited.id)).toBe(1000);
+    expect((await User.findById(invited.id))?.signupGrant?.inviteBonusPaid).toBe(0);
+    expect(await bonusRows()).toBe(0);
+
+    config.signupGrantInviteBonusCredits = '2000';
+    expect((await userService.payInviteBonus(invited.id, adapters)).creditsGranted).toBe(0);
+    expect(await creditsOf(invited.id)).toBe(1000);
+    expect(await bonusRows()).toBe(0);
+  });
+
+  it('marks the bonus with a path write that keeps the rest of the grant and refuses a second mark', async () => {
+    const invited = await createUser(1, true);
+    await User.collection.updateOne({ _id: invited._id }, { $set: { 'signupGrant.creditsReleased': 4321 } });
+    expect(await adapters.db.users.markInviteBonusPaid(invited.id, 2000)).toBe(true);
+    expect(await adapters.db.users.markInviteBonusPaid(invited.id, 0)).toBe(false);
+    expect((await User.findById(invited.id))?.signupGrant).toMatchObject({
+      creditsReleased: 4321,
+      inviteBonusPaid: 2000,
+    });
+  });
+
+  it('does not pay an organization invite bonus without a confirmed paying organization', async () => {
+    const invited = await createUser(1, false);
+    await User.collection.updateOne(
+      { _id: invited._id },
+      {
+        $set: {
+          signupInvite: { source: 'organization', inviteId: 'invite-1', organizationId: 'org-1', at: new Date() },
+        },
+      }
+    );
     await userService.releaseSignupTranche(invited.id, adapters);
     expect(await creditsOf(invited.id)).toBe(1000);
     expect((await User.findById(invited.id))?.signupGrant?.inviteBonusPaid).toBeUndefined();
@@ -178,6 +210,8 @@ describe('invite bonus', () => {
     config.signupGrantInviteBonusCredits = '0';
     const invited = await createUser(1, true);
     await userService.releaseSignupTranche(invited.id, adapters);
+    // Stand in for a bonus left unpaid (an exhausted pool): bonus 0 settles the mark, so clear it.
+    await User.collection.updateOne({ _id: invited._id }, { $unset: { 'signupGrant.inviteBonusPaid': '' } });
     config.signupGrantInviteBonusCredits = '2000';
     const results = await Promise.all([
       userService.payInviteBonus(invited.id, adapters),

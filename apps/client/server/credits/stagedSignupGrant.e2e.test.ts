@@ -627,7 +627,12 @@ describe('staged signup ledger', () => {
                     } as never)
                   : adminSettings.findBySettingName(name),
           },
-          registrationInvites: { findByCode: async () => null, update: async () => undefined },
+          registrationInvites: {
+            findByCode: async () => null,
+            update: async () => undefined,
+            claimUnused: async () => true,
+            releaseClaim: async () => undefined,
+          },
         },
         logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never,
         collectRiskSignals,

@@ -15,6 +15,7 @@ import {
   creditLotRepository,
 } from '@bike4mind/database';
 import { registerViaOTC } from '../../../../b4m-core/services/src/userService/register';
+import { claimRegistrationInvite } from '../../../../b4m-core/services/src/userService/registrationInvite';
 import {
   createMongoReplSet,
   settleAutoIndexBuilds,
@@ -137,6 +138,24 @@ describe('OTC invite registration in a real transaction', () => {
     expect(invite?.used).toBeUndefined();
     expect(invite?.usageHistory).toHaveLength(0);
     await expect(register('first')).resolves.toMatchObject({ emailVerified: true });
+  });
+
+  it('lets one of two concurrent claims outside a transaction take a single-use code, and reopens it', async () => {
+    const invite = await RegistrationInvite.findOne({ code: 'ONE-INVITE' });
+    const resolved = { invite: invite!, isUnlimited: false };
+    const claims = await Promise.all([
+      claimRegistrationInvite(resolved, registrationInviteRepository),
+      claimRegistrationInvite(resolved, registrationInviteRepository),
+    ]);
+    const taken = claims.filter(Boolean);
+    expect(taken).toHaveLength(1);
+    expect(await RegistrationInvite.findOne({ code: 'ONE-INVITE' })).toMatchObject({
+      status: RegInviteStatusType.used,
+    });
+    await taken[0]!.release();
+    const reopened = await RegistrationInvite.findOne({ code: 'ONE-INVITE' });
+    expect(reopened?.used).toBeUndefined();
+    expect(reopened?.status).toBe(RegInviteStatusType.open);
   });
 
   it('persists the referral signup invite on the real schema when the referral pays no credits', async () => {

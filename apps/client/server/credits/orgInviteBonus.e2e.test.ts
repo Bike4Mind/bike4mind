@@ -6,7 +6,7 @@ import {
   MONGO_TEST_TIMEOUT_MS,
   settleAutoIndexBuilds,
 } from '../../../../packages/database/src/__test__/createMongoServer';
-import { payOrgInviteBonus, recordOrgSignupInvite } from './orgInviteBonus';
+import { retryOrgInviteBonus, payOrgInviteBonus, recordOrgSignupInvite } from './orgInviteBonus';
 
 // Without the signup protection wiring the budget is unmetered; signupGrantBudget covers the pools.
 vi.mock('@server/auth/signupProtection', () => ({ signupProtection: undefined }));
@@ -80,6 +80,16 @@ describe('recordOrgSignupInvite', () => {
     expect((await User.findById(user.id).lean())?.signupInvite).toBeUndefined();
   });
 
+  it('leaves the account unmarked, with a warning, when the invite has no creation date', async () => {
+    const invite = await createInvite();
+    await Invite.collection.updateOne({ _id: invite._id }, { $unset: { createdAt: '' } });
+    const user = await createUser('new');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(await recordOrgSignupInvite(user.id, invite.id)).toBe(false);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('no creation date'));
+    expect((await User.findById(user.id).lean())?.signupInvite).toBeUndefined();
+  });
+
   it('does not mark an account without a signup grant', async () => {
     const invite = await createInvite();
     const user = await createUser('sso', { signupGrant: undefined });
@@ -142,6 +152,39 @@ describe('payOrgInviteBonus', () => {
     const user = await createUser('new', released);
     expect(await payOrgInviteBonus(user.id, invite.id)).toBe(0);
     expect((await User.findById(user.id).lean())?.signupInvite).toBeUndefined();
+  });
+
+  it('pays no more bonuses than the organization has seats and hands back an unpaid hold', async () => {
+    await createOrganization(true);
+    await Organization.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(organizationId) },
+      { $set: { seats: 1 } }
+    );
+    const invite = await createInvite();
+    const pending = await createUser('pending', { ...released, signupGrant: { ...grant, stage: 'pending_email' } });
+    expect(await payOrgInviteBonus(pending.id, invite.id)).toBe(0);
+    const first = await createUser('first', released);
+    const second = await createUser('second', released);
+    expect(await payOrgInviteBonus(first.id, invite.id)).toBe(2000);
+    expect(await payOrgInviteBonus(second.id, invite.id)).toBe(0);
+    const org = await Organization.collection.findOne({ _id: new mongoose.Types.ObjectId(organizationId) });
+    expect(org?.signupInviteBonusCount).toBe(1);
+  });
+
+  it('retries a bonus left unpaid at acceptance only while the organization still pays', async () => {
+    await createOrganization(true);
+    const invite = await createInvite();
+    const user = await createUser('new', { ...released, signupGrant: { ...grant, stage: 'pending_email' } });
+    expect(await payOrgInviteBonus(user.id, invite.id)).toBe(0);
+    await User.collection.updateOne({ _id: user._id }, { $set: { 'signupGrant.stage': 'signup' } });
+
+    const orgFilter = { _id: new mongoose.Types.ObjectId(organizationId) };
+    await Organization.collection.updateOne(orgFilter, { $unset: { lastCreditsPurchasedAt: '' } });
+    expect(await retryOrgInviteBonus(user.id)).toBe(0);
+    await Organization.collection.updateOne(orgFilter, { $set: { lastCreditsPurchasedAt: new Date() } });
+    expect(await retryOrgInviteBonus(user.id)).toBe(2000);
+    expect(await retryOrgInviteBonus(user.id)).toBe(0);
+    expect(await CreditTransaction.countDocuments({ transactionId: `invite-bonus:${user.id}` })).toBe(1);
   });
 
   it('pays nothing to an account that existed before the invite', async () => {
