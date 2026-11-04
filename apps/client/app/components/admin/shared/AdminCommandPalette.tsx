@@ -99,7 +99,7 @@ function CommandPalette({
   }));
   const results: AdminCommand[] = [
     ...entityCommands,
-    ...(userId && !entitySearch
+    ...(userId
       ? [
           {
             id: 'user-id',
