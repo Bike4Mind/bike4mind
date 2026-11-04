@@ -190,6 +190,55 @@ describe('young-account spend message', () => {
   });
 });
 
+describe('young-account spend message size', () => {
+  const window = { start: new Date('2026-10-26T10:00:00.000Z'), end: new Date('2026-10-26T11:00:00.000Z') };
+  const thresholds = { credits: 5000, accounts: 25 };
+
+  it('caps each email and trims the list so the section stays under the Slack limit', () => {
+    const topSpenders = Array.from({ length: 10 }, (_, index) => ({
+      userId: `user-${index}`,
+      creditsSpent: 1000 - index,
+      accountCreatedAt: createdAt,
+      stripeCustomerId: `cus_${index}`,
+      email: `${'e'.repeat(300)}@example.com`,
+    }));
+    const message = buildYoungAccountSpendMessage(
+      { totalCredits: 9000, accountCount: 10, topSpenders },
+      thresholds,
+      window,
+      'production',
+      'https://app.example.com'
+    );
+    const sections = (message.attachments?.[0] as { blocks: { text?: { text: string } }[] }).blocks
+      .map(block => block.text?.text ?? '')
+      .filter(text => text.startsWith('*Top 10 by credits*'));
+    expect(sections).toHaveLength(1);
+    expect(sections[0].length).toBeLessThanOrEqual(2900);
+    expect(sections[0]).not.toContain('e'.repeat(65));
+    expect(sections[0]).toContain('1. ' + 'e'.repeat(64) + ' 1,000 credits');
+  });
+
+  it('says how many accounts were left off a trimmed list', () => {
+    const topSpenders = Array.from({ length: 10 }, (_, index) => ({
+      userId: `user-${index}`,
+      creditsSpent: 1000 - index,
+      accountCreatedAt: createdAt,
+      stripeCustomerId: null,
+      email: `${'e'.repeat(64)}@example.com`,
+    }));
+    const text = JSON.stringify(
+      buildYoungAccountSpendMessage(
+        { totalCredits: 9000, accountCount: 10, topSpenders },
+        thresholds,
+        window,
+        'production',
+        `https://app.example.com/${'p'.repeat(2000)}`
+      )
+    );
+    expect(text).toMatch(/and \d+ more/);
+  });
+});
+
 describe('young-account spend handler', () => {
   it('skips non-production stages before connecting', async () => {
     mocks.resource.App.stage = 'dev';

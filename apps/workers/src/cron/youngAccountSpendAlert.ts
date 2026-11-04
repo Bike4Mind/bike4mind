@@ -20,6 +20,9 @@ import { z } from 'zod';
 
 const HOUR_MS = 60 * 60 * 1000;
 const TOP_SPENDER_LIMIT = 10;
+/** Slack rejects a section over 3000 characters, which would drop the whole post. */
+const SECTION_TEXT_MAX = 2_900;
+const EMAIL_MAX = 64;
 
 export type YoungAccountSpendThresholds = {
   credits: number;
@@ -69,7 +72,9 @@ function formatSpenderLine(
   appUrl: string | undefined
 ): string {
   const links = [adminUserLink(spender.userId, appUrl), stripeCustomerSlackLink(spender.stripeCustomerId, stage)];
-  const who = spender.email ? escapeSlackLine(spender.email) : `\`${escapeSlackText(spender.userId)}\``;
+  const who = spender.email
+    ? escapeSlackLine(spender.email.slice(0, EMAIL_MAX))
+    : `\`${escapeSlackText(spender.userId)}\``;
   return (
     `${rank}. ${who} ${spender.creditsSpent.toLocaleString('en-US')} credits ` +
     `(created ${new Date(spender.accountCreatedAt).toISOString()}) - ` +
@@ -99,7 +104,13 @@ export function buildYoungAccountSpendMessage(
   ];
   if (summary.topSpenders.length > 0) {
     const lines = summary.topSpenders.map((spender, index) => formatSpenderLine(spender, index + 1, stage, appUrl));
-    sections.push(`*Top ${summary.topSpenders.length} by credits*\n${lines.join('\n')}`);
+    const title = `*Top ${summary.topSpenders.length} by credits*`;
+    let text = `${title}\n${lines.join('\n')}`;
+    while (text.length > SECTION_TEXT_MAX && lines.length > 1) {
+      lines.pop();
+      text = `${title}\n${lines.join('\n')}\nand ${summary.topSpenders.length - lines.length} more`;
+    }
+    sections.push(text);
   }
   const origin = appUrl?.replace(/\/+$/, '');
   const buttons = origin
