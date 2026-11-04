@@ -151,6 +151,22 @@ describe('ModelDefaultsDialog', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it('keeps a stored default when its field holds text it cannot parse', async () => {
+    stored = { generation: { temperature: 0.6 } };
+    await render(QWEN);
+    const temperature = input('temperature');
+    // A browser reports a number input holding "1e" or "-" as bad input with a blank value; jsdom cannot hold one.
+    Object.defineProperty(temperature, 'validity', { configurable: true, value: { badInput: true } });
+    await fill('temperature', '');
+    await act(async () => {
+      temperature.focus();
+      temperature.blur();
+    });
+    expect(temperature.value).toBe('0.6');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, { generation: { temperature: 0.6 } });
+  });
+
   it('saves a thinking level only for a model that lists levels', async () => {
     stored = { effort: 'high' };
     await render(GPT_OSS);

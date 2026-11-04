@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -129,6 +129,8 @@ function ModelDefaultsForm({ option, onClose }: { option: ChatModelOption | null
   const [loaded, setLoaded] = useState<ModelSettings | null>(null);
   const [readFailed, setReadFailed] = useState(false);
   const [drafts, setDrafts] = useState<Drafts>({});
+  // Each field's last parseable text, which a blur puts back over text the input cannot parse.
+  const lastGood = useRef<Drafts>({});
   const [effort, setEffort] = useState<ModelEffort | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -145,7 +147,8 @@ function ModelDefaultsForm({ option, onClose }: { option: ChatModelOption | null
         if (!live) return;
         const current = settings ?? {};
         setLoaded(current);
-        setDrafts(draftsOf(current.generation));
+        lastGood.current = draftsOf(current.generation);
+        setDrafts(lastGood.current);
         setEffort(current.effort ?? null);
       },
       (reason: unknown) => {
@@ -241,7 +244,17 @@ function ModelDefaultsForm({ option, onClose }: { option: ChatModelOption | null
                       value={drafts[field] ?? ''}
                       placeholder={placeholderFor(seeds)}
                       disabled={saving}
-                      onChange={event => setDrafts(current => ({ ...current, [field]: event.target.value }))}
+                      onChange={event => {
+                        if (!event.target.validity.badInput) lastGood.current[field] = event.target.value;
+                        setDrafts(current => ({ ...current, [field]: event.target.value }));
+                      }}
+                      onBlur={event => {
+                        // A number input reads text it cannot parse, such as "1e" or "-", as blank, which is not a clear.
+                        if (!event.currentTarget.validity.badInput) return;
+                        const restored = lastGood.current[field] ?? '';
+                        event.currentTarget.value = restored;
+                        setDrafts(current => ({ ...current, [field]: restored }));
+                      }}
                       sx={{
                         width: 112,
                         flexShrink: 0,
@@ -316,6 +329,7 @@ function ModelDefaultsForm({ option, onClose }: { option: ChatModelOption | null
             color="neutral"
             disabled={saving || loaded === null || !touched}
             onClick={() => {
+              lastGood.current = {};
               setDrafts({});
               setEffort(null);
             }}
