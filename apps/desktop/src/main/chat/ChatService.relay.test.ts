@@ -261,7 +261,10 @@ describe('ChatService session_send', () => {
     const stored = [...((await store.get(alpha.id))?.messages ?? []), ...((await store.get(beta.id))?.messages ?? [])];
     const notices = stored.filter(message => /finished the turn your message started/.test(message.content));
     expect(notices.some(message => message.relay?.kind === 'done')).toBe(true);
-    expect(notices.some(message => !message.relay)).toBe(true);
+    const landed = notices.filter(message => !message.relay);
+    expect(landed.length).toBeGreaterThan(0);
+    expect(landed.every(message => !message.content.includes('session_read'))).toBe(true);
+    expect(notices.some(message => message.relay && message.content.includes('"Alpha"'))).toBe(true);
   });
 
   it('caps how many messages one turn may send, so a single turn cannot fan out across the project', async () => {
@@ -805,7 +808,7 @@ describe('ChatService session_send', () => {
       const sender = await codeSession('Sender');
       const solo = await codeSession('Solo');
       await codeSession('Twin');
-      await codeSession('Twin', other);
+      await codeSession('Twin');
 
       await service.send(sender.id, 'go');
       await awaitStream(0);
@@ -818,6 +821,56 @@ describe('ChatService session_send', () => {
       expect(callById('t-solo')?.error).toBeUndefined();
       expect(callById('t-solo')?.preview).toContain(solo.id);
       expect(callById('t-twin')?.error).toMatch(/matches 2 conversations/);
+    });
+
+    it('resolves a title in the caller project first, and widens only when it is absent there', async () => {
+      const sender = await codeSession('Sender');
+      const local = await codeSession('Shared title');
+      await codeSession('Shared title', other);
+      const away = await codeSession('Only away', other);
+      await codeSession('Doubled');
+      await codeSession('Doubled');
+
+      await service.send(sender.id, 'go');
+      await awaitStream(0);
+      callTools(streams[0], [
+        { id: 'r-local', name: 'session_send', input: { session_id: 'Shared title', message: 'hi local' } },
+        { id: 'r-away', name: 'session_send', input: { session_id: 'Only away', message: 'hi away' } },
+      ]);
+      await vi.waitUntil(() => !!callById('r-local') && !!callById('r-away'), { timeout: 5000, interval: 5 });
+      expect(callById('r-local')?.error).toBeUndefined();
+      expect(callById('r-local')?.preview).toContain(local.id);
+      expect(callById('r-away')?.error).toBeUndefined();
+      expect(callById('r-away')?.preview).toMatch(/waiting for that conversation's/);
+      expect(service.heldRelaysFor(away.id)).toHaveLength(1);
+      expect(service.heldRelaysFor(local.id)).toHaveLength(0);
+
+      const second = await codeSession('Sender two');
+      const opened = streams.length;
+      await service.send(second.id, 'go');
+      await awaitStream(opened);
+      callTools(streams[opened], [
+        { id: 'r-twice', name: 'session_send', input: { session_id: 'Doubled', message: 'hi' } },
+      ]);
+      await vi.waitUntil(() => !!callById('r-twice'), { timeout: 5000, interval: 5 });
+      expect(callById('r-twice')?.error).toMatch(/matches 2 conversations/);
+    });
+
+    it('refuses a sixth message held for one conversation', async () => {
+      const target = await codeSession('Elsewhere', other);
+      const results: string[] = [];
+      for (let n = 0; n < 6; n++) {
+        const sender = await codeSession(`Sender ${n}`);
+        const opened = streams.length;
+        await service.send(sender.id, 'go');
+        await awaitStream(opened);
+        requestSend(streams[opened], target.id, `message ${n}`, `c${n}`);
+        await vi.waitUntil(() => !!callById(`c${n}`), { timeout: 5000, interval: 5 });
+        results.push(callById(`c${n}`)?.error ?? 'ok');
+      }
+      expect(results.slice(0, 5)).toEqual(['ok', 'ok', 'ok', 'ok', 'ok']);
+      expect(results[5]).toMatch(/already has 5 messages waiting/);
+      expect(service.heldRelaysFor(target.id)).toHaveLength(5);
     });
 
     it('lists every project with scope all, and reads another project only once the user mentions it', async () => {

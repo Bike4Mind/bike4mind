@@ -22,7 +22,10 @@ export interface SessionMention {
 
 /** A title made safe to sit inside the brackets: no `]`, no line breaks. */
 export function mentionTitle(title: string): string {
-  const flat = title.replace(/[\]\r\n]+/g, ' ').trim();
+  const flat = title
+    .replace(/[\]\r\n]+/g, ' ')
+    .trim()
+    .slice(0, 200);
   return flat || 'Untitled';
 }
 

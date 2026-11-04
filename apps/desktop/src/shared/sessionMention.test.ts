@@ -12,6 +12,13 @@ describe('session mentions', () => {
     expect(text.slice(mention.start, mention.end)).toBe(formatSessionMention(ID, 'Fix [login]\nbug'));
   });
 
+  it('caps a long title so the mention still parses', () => {
+    const text = formatSessionMention(ID, 'a'.repeat(300));
+    const [mention] = findSessionMentions(text);
+    expect(mention).toMatchObject({ sessionId: ID, title: 'a'.repeat(200) });
+    expect(text.slice(mention.start, mention.end)).toBe(text);
+  });
+
   it('ignores lookalikes that do not carry a session id', () => {
     expect(findSessionMentions('@[Docs](https://example.com) and @[x](session:not-an-id)')).toEqual([]);
   });

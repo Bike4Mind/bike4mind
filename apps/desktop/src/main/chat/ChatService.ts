@@ -4216,11 +4216,17 @@ export class ChatService {
     // Every conversation of the signed-in account: the store is already scoped to it, so this is
     // as wide as messaging reaches and no wider.
     // Matched and described by the title the caller is allowed to see, not the stored one.
-    const resolveAnywhere = async (ref: string) =>
-      resolveSessionRef(
+    // A ref is matched against the caller's own project first, so a title another project happens
+    // to share cannot make it ambiguous; only a miss widens to every project.
+    const resolveAnywhere = async (ref: string) => {
+      const all = (await this.deps.store.list()).map(entry => ({ ...entry, title: visibleTitle(entry) }));
+      const inProject = resolveSessionRef(
         ref,
-        (await this.deps.store.list()).map(entry => ({ ...entry, title: visibleTitle(entry) }))
+        all.filter(entry => entry.project?.directory === project.directory)
       );
+      if (!(inProject.ok === false && inProject.reason === 'no-target')) return inProject;
+      return resolveSessionRef(ref, all);
+    };
 
     return {
       spawn: (prompt, title, placement) => this.spawnSession(session, prompt, title, placement),
@@ -4798,7 +4804,7 @@ export class ChatService {
         sessionId,
         title,
         hops,
-        `[App notice: "${title}" (${sessionId}) ${ended} the turn your message started. ` +
+        `[App notice: ${JSON.stringify(title)} (${sessionId}) ${ended} the turn your message started. ` +
           'Use session_read on that id to see what it said.]',
         `${title} ${ended} the turn your message started`
       );
@@ -4817,7 +4823,9 @@ export class ChatService {
     const sender = await this.deps.store.get(relay.fromSessionId);
     if (!sender || sender.archived) return;
     if (hops >= MAX_MESSAGE_HOPS || !this.deps.queue || this.abandoning.has(sender.id)) {
-      await this.deliverChildReport(sender.id, { localOnly: false, content, display });
+      // No relay origin lands with this notice, so the sender cannot read the conversation back.
+      const unreadable = content.replace(/Use session_read on that id[^\]]*\]$/, 'Open that conversation to see it.]');
+      await this.deliverChildReport(sender.id, { localOnly: false, content: unreadable, display });
       return;
     }
     this.deps.queue.enqueueRelay(sender.id, content, {
@@ -4862,7 +4870,7 @@ export class ChatService {
           sessionId,
           title,
           queued.relay.hops + 1,
-          `[App notice: "${title}" (${sessionId}) did not run your message; it was not started as a turn there. ` +
+          `[App notice: ${JSON.stringify(title)} (${sessionId}) did not run your message; it was not started as a turn there. ` +
             'Use session_read on that id to see where it landed.]',
           `${title} did not run your message`
         );

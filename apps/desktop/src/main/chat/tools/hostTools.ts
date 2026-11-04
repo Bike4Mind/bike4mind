@@ -363,7 +363,8 @@ export const sessionSend: ToolDefinition = {
       properties: {
         session_id: {
           type: 'string',
-          description: 'The existing conversation: its id, a unique id prefix of at least 6 characters, or its exact title.',
+          description:
+            'The existing conversation: its id, a unique id prefix of at least 6 characters, or its exact title.',
         },
         notify_when_done: {
           type: 'boolean',
@@ -412,7 +413,7 @@ export const sessionSend: ToolDefinition = {
       return [
         `Your message to ${outcome.sessionId} ("${outcome.title}") is waiting for that conversation's`,
         'user to let it in, because it could do things there that this conversation cannot. Nothing',
-        'runs until they do, and they may decline - you are told either way. Carry on without it.',
+        'runs until they do, and they may decline - you are told if they decline. Carry on without it.',
       ].join('\n');
     }
     return [
