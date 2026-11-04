@@ -36,9 +36,8 @@ function setsOtherSampling(parameters: string | undefined, family: HubFamily): b
 
 /**
  * The family sampling for the curated build a server lists as `name` with weights blob `modelBlob`, matched as
- * curatedBuildForInstalled does; undefined for any other model, or a family that states none. A model found by
- * weights or file name rather than pull ref keeps its own sampling PARAMETERs over the seed when it sets any
- * that differ.
+ * curatedBuildForInstalled does; undefined for any other model, or a family that states none. A model keeps its
+ * own sampling PARAMETERs over the seed when it sets any that differ, whichever way it was matched.
  */
 export function catalogSampling(
   manifest: HubManifest,
@@ -49,7 +48,7 @@ export function catalogSampling(
   const reviewed = curatedBuildForInstalled(manifest, { name, modelBlob });
   const family = reviewed ? manifest.families[reviewed.entry.family] : undefined;
   if (!reviewed || !family) return undefined;
-  if (reviewed.via !== 'ref' && setsOtherSampling(parameters, family)) return undefined;
+  if (setsOtherSampling(parameters, family)) return undefined;
   const thinking = toGeneration(family.sampling.thinking);
   const nonThinking = toGeneration(family.sampling.nonThinking);
   if (!thinking && !nonThinking) return undefined;

@@ -48,7 +48,7 @@ describe('LocalModels', () => {
       modelBlob: 'b'.repeat(64),
       modelParameters: 'top_k 1',
     });
-    expect(hook).toHaveBeenCalledWith('x', 'b'.repeat(64), 'top_k 1');
+    expect(hook).toHaveBeenCalledWith({ name: 'x', modelBlob: 'b'.repeat(64), parameters: 'top_k 1' });
     expect(() => optionCatalogSampling(undefined)({ id: 'local:ollama:x', name: 'x' })).not.toThrow();
   });
 

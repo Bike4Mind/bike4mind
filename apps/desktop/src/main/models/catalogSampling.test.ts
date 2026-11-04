@@ -1,7 +1,8 @@
-import { curatedListing, curatedSource, ollamaRefAliases } from '@bike4mind/local-models';
+import { curatedLibrary, curatedListing, curatedSource, ollamaRefAliases } from '@bike4mind/local-models';
 import { describe, expect, it } from 'vitest';
 import { catalogSampling } from './catalogSampling';
 import { loadCuratedManifest } from './loadCuratedManifest';
+import paramsLayers from './ollamaParamsLayers.fixture.json';
 
 const manifest = loadCuratedManifest(() => undefined);
 
@@ -17,6 +18,26 @@ describe('catalogSampling', () => {
         expect(seed?.thinking?.temperature, name).toBe(family?.sampling.thinking?.temperature);
         expect(seed?.nonThinking?.temperature, name).toBe(family?.sampling.nonThinking?.temperature);
       }
+    }
+  });
+
+  it('seeds every curated library build as local Ollama reports it: weights blob plus its params layer', () => {
+    const libraryBuilds = curatedListing(manifest)
+      .flatMap(({ entry, builds }) => builds.map(build => ({ entry, library: curatedLibrary(build) })))
+      .flatMap(({ entry, library }) => (library ? [{ entry, library }] : []));
+    expect(libraryBuilds.length).toBeGreaterThan(0);
+    const layers: Record<string, { params: Record<string, number> | null }> = paramsLayers;
+    for (const { entry, library } of libraryBuilds) {
+      const layer = layers[library.ref];
+      expect(layer, library.ref).toBeDefined();
+      const parameters = Object.entries(layer?.params ?? {})
+        .map(([key, value]) => `${key.padEnd(20)}${value}`)
+        .join('\n');
+      const seed = catalogSampling(manifest, 'my-copy:latest', library.digest, parameters);
+      expect(seed, library.ref).toBeDefined();
+      expect(seed?.thinking?.temperature, library.ref).toBe(
+        manifest.families[entry.family]?.sampling.thinking?.temperature
+      );
     }
   });
 
@@ -58,8 +79,12 @@ describe('catalogSampling', () => {
     expect(catalogSampling(manifest, 'my-variant:latest', blob, 'temperature 1\ntop_k 40')).toBeUndefined();
     expect(catalogSampling(manifest, 'my-copy:latest', blob, library)).toEqual(seeded);
     expect(catalogSampling(manifest, 'my-copy:latest', blob, 'num_ctx 8192')).toEqual(seeded);
-    expect(catalogSampling(manifest, 'qwen3.5:4b', undefined, 'temperature 0.3')).toEqual(seeded);
+    expect(catalogSampling(manifest, 'qwen3.5:4b', undefined, library)).toEqual(seeded);
     expect(catalogSampling(manifest, `/models/${gsq?.weights[0].path}`, undefined, 'temperature 0.3')).toBeUndefined();
+  });
+
+  it('keeps the PARAMETER sampling of a model listed under a curated ref with no blob, as one with adapter layers is', () => {
+    expect(catalogSampling(manifest, 'qwen3.5:4b', undefined, 'temperature 0.3')).toBeUndefined();
   });
 
   it('gives no seed to a model that is not a reviewed build', () => {
