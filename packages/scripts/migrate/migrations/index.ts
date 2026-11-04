@@ -271,6 +271,12 @@ import SeedSignupGrantSchedule from './20260921237400_seed-signup-grant-schedule
 import SeedSignupGrantPools from './20260921237500_seed-signup-grant-pools';
 import EnsureHeldCreditRewardIndexes from './20260921237600_ensure-heldcreditreward-indexes';
 import EnsureAnalyticsHopIndexes from './20260921238200_ensure-analytics-hop-indexes';
+// Renumbered from 20260921237500 to 20260921238300 to resolve an id collision with
+// SeedSignupGrantPools above, which merged into main first. Rerunning under the new id is safe:
+// invites that already have a package are skipped and packages are upserted by name.
+// Deploy note: an environment that ran this migration under the old id has `20260921237500`
+// marked done and will skip SeedSignupGrantPools, which now owns it (its pools then read as
+// paused). Delete that environment's stale `20260921237500` row from the migrations collection.
 import GrantPackagesFromInvites from './20260921238300_grant-packages-from-invites';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
