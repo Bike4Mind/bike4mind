@@ -32,6 +32,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { findBySettingName: async () => null },
   creditTransactionRepository: {},
   creditLotRepository: {},
+  grantPackageRepository: {},
   organizationRepository: {},
   userRepository: {
     update: (...args: unknown[]) => mockUserRepositoryUpdate(...args),

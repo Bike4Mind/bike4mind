@@ -2,6 +2,7 @@ import {
   adminSettingsRepository,
   creditLotRepository,
   creditTransactionRepository,
+  grantPackageRepository,
   signupGrantReleaseRepository,
   userRepository,
 } from '@bike4mind/database';
@@ -21,6 +22,7 @@ export function buildHeldGrantAdapters(logger: Logger): userService.HeldGrantAda
         creditLots: creditLotRepository,
         users: userRepository,
         signupProtection,
+        grantPackages: grantPackageRepository,
       },
       reason: 'Held signup grant released',
       logger,
