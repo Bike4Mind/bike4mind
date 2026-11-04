@@ -110,7 +110,9 @@ export function withOllamaContext(controls: ModelControls, contextWindow: number
   const { maxOutputTokens: output, ...rest } = controls;
   if (!output) return controls;
   const max = Math.min(contextWindow, GENERATION_BOUNDS.maxOutputTokens.max);
-  return max > output.min ? { ...rest, maxOutputTokens: { ...output, max } } : rest;
+  if (max <= output.min) return rest;
+  const preset = output.default !== undefined ? Math.min(output.default, max) : undefined;
+  return { ...rest, maxOutputTokens: { ...output, max, ...(preset !== undefined ? { default: preset } : {}) } };
 }
 
 /** Effort levels an OpenAI-compatible server's `reasoning_effort` takes for the gpt-oss templates. */

@@ -429,6 +429,34 @@ describe('GenerationSettingsPicker', () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  it('does not save the shown value over a stored one after a bad entry and a plain focus', async () => {
+    await render(ADAPTIVE, { maxOutputTokens: 2048 });
+    await open();
+    const field = input('maxOutputTokens');
+    const bad = Object.defineProperty(field, 'validity', { configurable: true, value: { badInput: true } });
+    await fill('maxOutputTokens', '');
+    await blur('maxOutputTokens');
+    Object.defineProperty(bad, 'validity', { configurable: true, value: { badInput: false } });
+    await blur('maxOutputTokens');
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('does not save a typed value that equals the stored one when the model adjusts it', async () => {
+    await render(ADAPTIVE, { maxOutputTokens: 2048 });
+    await open();
+    await type('maxOutputTokens', '2048');
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('saves nothing for a blank field with no stored override', async () => {
+    await render(LOCAL);
+    await open();
+    await fill('temperature', '0.9');
+    await type('temperature', '');
+    await blur('temperature');
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it('draws nothing for a model with no numeric controls, or before the catalog loads', async () => {
     await render({ id: 'gpt-5', name: 'GPT-5', controls: { effort: { levels: ['low'], scope: 'request' } } });
     expect(container.textContent).toBe('');

@@ -62,6 +62,13 @@ describe('ollamaControls', () => {
     expect(withOllamaContext(controls, 128)).not.toHaveProperty('maxOutputTokens');
   });
 
+  it('clamps a Modelfile num_predict to the cap, at listing and once the context settles', () => {
+    const listed = ollamaControls({ inspected: true, parameters: MODELFILE, contextWindow: 2048 });
+    expect(listed.maxOutputTokens).toMatchObject({ max: 2048, default: 2048 });
+    const settled = ollamaControls({ inspected: true, parameters: MODELFILE, contextWindow: 8192 });
+    expect(withOllamaContext(settled, 2048).maxOutputTokens).toMatchObject({ max: 2048, default: 2048 });
+  });
+
   it('states no defaults before the model is inspected', () => {
     const controls = ollamaControls({ inspected: false, contextWindow: 8192 });
     expect(Object.keys(controls).sort()).toEqual(

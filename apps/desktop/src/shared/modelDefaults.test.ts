@@ -2,7 +2,7 @@ import type { ChatModelOption } from '@shared/chat';
 import { requestGeneration, type ModelControls } from '@shared/generation';
 import { describe, expect, it } from 'vitest';
 import { auxiliaryGeneration, turnEffortSetting, turnGeneration, turnThinks } from '@shared/modelDefaults';
-import { ollamaControls, openAICompatibleControls } from './modelControls';
+import { ollamaControls, openAICompatibleControls } from '../main/chat/modelControls';
 
 const controls: ModelControls = ollamaControls({ inspected: true, contextWindow: 32_768, thinks: true });
 
