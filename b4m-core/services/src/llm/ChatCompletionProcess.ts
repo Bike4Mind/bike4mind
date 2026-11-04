@@ -15,6 +15,7 @@ import {
   QueryComplexityType,
   getTextModelCost,
   getTurnsCost,
+  PAID_PLAN_ENTITLEMENT_KEY,
   buildUsagePriceStamp,
   DEFAULT_PROMPT_CACHE_TTL,
   type PromptCacheTtl,
@@ -192,6 +193,8 @@ import {
   loadModelConfigurations,
   type ModelAdmission,
 } from './modelAdmission';
+import { conservativeRoundInputUsd } from './chatCreditCap';
+import { MIN_AFFORDABLE_OUTPUT_TOKENS, affordableRoundBudget, capRoundOutput } from '../completionCreditBudget';
 import {
   executedModelFields,
   recordShadowTokenUsage,
@@ -1273,6 +1276,9 @@ export class ChatCompletionProcess {
   private reservedCreditsOwnerId: string = '';
   private reservedCreditsOwnerType: CreditHolderType = CreditHolderType.User;
   private reservedCreditHolder: ICreditHolder | null = null;
+  // The output ceiling this turn's balance can pay for, set at reservation for a personal account
+  // without a paid plan; null when no cap applies.
+  private creditOutputCap: number | null = null;
   // The UserApiKey that authenticated the current turn (parsedBody.apiKeyId), stamped on its ledger rows.
   private turnApiKeyId: string | undefined;
   // What the reservation was priced on: a turn that ends on a thrown abort settles the tokens it
@@ -4779,6 +4785,7 @@ export class ChatCompletionProcess {
         );
       }
 
+      this.creditOutputCap = null;
       if (adminSettingsEnforceCredits) {
         const creditValidationStartTime = Date.now();
 
@@ -4941,6 +4948,43 @@ export class ChatCompletionProcess {
         this.reservedCreditsOwnerType = reservationOwnerType;
         this.reservedCreditHolder = holderAfterReservation;
         this.reservationBasis = { modelInfo, inputTokens, organization };
+
+        // The hold is a realistic estimate, not a bound. For a personal account without a paid plan,
+        // cap the answer so input plus a full-length reply costs no more than the balance held from,
+        // and refuse now if that cannot buy even a short answer. Same rule as cliCompletions.ts.
+        // Research mode runs several configurations off one hold and is left to the hold alone.
+        const hasPaidPlan =
+          !organization &&
+          (await this.resolveEntitlementKeys().then(
+            ({ keys, resolved }) => resolved && keys.includes(PAID_PLAN_ENTITLEMENT_KEY),
+            // Unknown plan: cap it. A paid account capped at its balance loses nothing it paid for.
+            () => false
+          ));
+        if (!isResearchMode && !organization && !hasPaidPlan) {
+          const balanceBeforeHold = holderAfterReservation.currentCredits + requiredCredits;
+          const budget = affordableRoundBudget({
+            modelInfo: chargedModelInfo,
+            inputUsd: conservativeRoundInputUsd(chargedModelInfo, inputTokens, sessionCacheTtlFor(modelInfo)),
+            inputTokens,
+            availableCredits: balanceBeforeHold,
+            minimumOutputTokens: Math.max(1, Math.min(MIN_AFFORDABLE_OUTPUT_TOKENS, sentMaxTokens)),
+          });
+          if (!budget.affordable) {
+            await this.releaseReservedCredits(questId, logger);
+            throw new InsufficientCreditsError(
+              buildInsufficientCreditsMessage({ available: balanceBeforeHold, required: budget.minimumCredits }),
+              'insufficient_credits'
+            );
+          }
+          if (budget.outputTokens < sentMaxTokens) {
+            logger.info('[CREDIT_CAP] Output budget lowered to what the balance can pay for', {
+              model: modelInfo.id,
+              maxTokens: sentMaxTokens,
+              affordableOutputTokens: budget.outputTokens,
+            });
+          }
+          this.creditOutputCap = budget.outputTokens;
+        }
 
         logger.info(
           `⏱️ [${Date.now() - processStartTime}ms] Credit pre-reservation completed in ${
@@ -5123,6 +5167,7 @@ export class ChatCompletionProcess {
         // The adapters append a model-identity line on their own; see resolveIdentityReminder.
         ...resolveIdentityReminder({ promptMode, offeredToolNames }),
       };
+      if (this.creditOutputCap !== null) Object.assign(options, capRoundOutput(options, this.creditOutputCap));
 
       // Create an AbortController to allow cancelling the request. Set up before the Research
       // Mode branch below, which returns early: both paths share one controller and one watcher,

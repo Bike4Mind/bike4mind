@@ -74,6 +74,8 @@ import {
   ImageModels,
   ModelBackend,
   usdToCredits as realUsdToCredits,
+  CREDITS_PER_USD_COST,
+  PAID_PLAN_ENTITLEMENT_KEY,
   PREFLIGHT_RESERVATION_OUTPUT_TOKENS,
   PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS,
   REPLY_CHOICES_GUIDANCE,
@@ -7584,6 +7586,112 @@ describe('ChatCompletionProcess', () => {
           expect.stringContaining('[BILLING_SHORTFALL_DEBT]'),
           expect.objectContaining({ balanceAfter: BALANCE - TOOL_CHARGE })
         );
+      });
+
+      describe('output cap for an account without a paid plan', () => {
+        const perOutputTokenCredits = (30 / 1_000_000) * CREDITS_PER_USD_COST;
+        const answering = () =>
+          vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+            await cb(['answer'], { inputTokens: 10, outputTokens: 5 });
+          });
+        const sentOptions = (complete: ReturnType<typeof vi.fn>) =>
+          complete.mock.calls[0][2] as { maxTokens?: number; outputTokenCeiling?: number };
+
+        it('sends the provider the largest output ceiling the balance can pay for', async () => {
+          const { incrementCredits } = fakeBalance(BALANCE);
+          const complete = answering();
+          setupPersonalTurn(incrementCredits, complete);
+
+          await service.process({ body: personalBody(), logger: mockLogger });
+
+          // Input is free on this model, so the whole balance (the hold included) buys output.
+          const { outputTokenCeiling, maxTokens } = sentOptions(complete);
+          expect(outputTokenCeiling).toBe(Math.floor(BALANCE / perOutputTokenCredits + 1e-9));
+          expect(outputTokenCeiling! * perOutputTokenCredits).toBeLessThanOrEqual(BALANCE);
+          expect((outputTokenCeiling! + 1) * perOutputTokenCredits).toBeGreaterThan(BALANCE);
+          expect(maxTokens).toBeLessThanOrEqual(outputTokenCeiling!);
+        });
+
+        it('prices the input side into the cap at its cache-write rate', async () => {
+          const inputUsdPerToken = 20 / 80 / CREDITS_PER_USD_COST;
+          const { incrementCredits } = fakeBalance(BALANCE);
+          const complete = answering();
+          setupPersonalTurn(incrementCredits, complete);
+          mockedGetAvailableModels.mockResolvedValue([
+            {
+              ...overshootModel,
+              pricing: { 200000: { input: inputUsdPerToken, output: 30 / 1_000_000, cache_write: inputUsdPerToken * 2 } },
+            },
+          ]);
+
+          await service.process({ body: personalBody(), logger: mockLogger });
+
+          // 80 input tokens cost 20 credits plain and 40 as a cache write; the cap leaves room for the dearer.
+          expect(sentOptions(complete).outputTokenCeiling).toBe(Math.floor((BALANCE - 40) / perOutputTokenCredits + 1e-9));
+        });
+
+        it('refuses up front, without calling the model, when the balance cannot buy a short answer', async () => {
+          // The hold prices input at the plain rate and the cap at the cache-write rate (2x here),
+          // so a balance between the two passes the hold and fails the cap.
+          const inputUsdPerToken = BALANCE / 1.5 / 80 / CREDITS_PER_USD_COST;
+          const { state, incrementCredits } = fakeBalance(BALANCE);
+          const complete = vi.fn();
+          setupPersonalTurn(incrementCredits, complete);
+          mockedGetAvailableModels.mockResolvedValue([
+            {
+              ...overshootModel,
+              pricing: { 200000: { input: inputUsdPerToken, output: 1e-9, cache_write: inputUsdPerToken * 2 } },
+            },
+          ]);
+
+          await service.process({ body: personalBody(), logger: mockLogger });
+
+          expect(complete).not.toHaveBeenCalled();
+          // The hold went on and came straight back off.
+          expect(incrementCredits).toHaveBeenCalledTimes(2);
+          expect(state.balance).toBe(BALANCE);
+          expect(mockQuest.type).toBe('error');
+          expect(mockQuest.reply).toMatch(/credits/i);
+        });
+
+        it('leaves a paid account uncapped', async () => {
+          const { incrementCredits } = fakeBalance(BALANCE);
+          const complete = answering();
+          setupPersonalTurn(incrementCredits, complete);
+          vi.spyOn(service, 'resolveEntitlementKeys').mockResolvedValue({
+            keys: [PAID_PLAN_ENTITLEMENT_KEY],
+            resolved: true,
+          });
+
+          await service.process({ body: personalBody(), logger: mockLogger });
+
+          expect(sentOptions(complete).outputTokenCeiling).toBeUndefined();
+        });
+
+        it('caps an account whose plan could not be read', async () => {
+          const { incrementCredits } = fakeBalance(BALANCE);
+          const complete = answering();
+          setupPersonalTurn(incrementCredits, complete);
+          vi.spyOn(service, 'resolveEntitlementKeys').mockResolvedValue({ keys: [], resolved: false });
+
+          await service.process({ body: personalBody(), logger: mockLogger });
+
+          expect(sentOptions(complete).outputTokenCeiling).toEqual(expect.any(Number));
+        });
+
+        it('still settles exactly what was used', async () => {
+          const OUTPUT_TOKENS = 50;
+          const used = realUsdToCreditsStochastic((OUTPUT_TOKENS * 30) / 1_000_000, () => 0);
+          const { state, incrementCredits } = fakeBalance(BALANCE);
+          const complete = vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+            await cb(['A short answer'], { inputTokens: 10, outputTokens: OUTPUT_TOKENS });
+          });
+          setupPersonalTurn(incrementCredits, complete);
+
+          await service.process({ body: personalBody(), logger: mockLogger });
+
+          expect(state.balance).toBe(BALANCE - used);
+        });
       });
 
       it('refuses the next turn while the balance is negative, without calling the model', async () => {
