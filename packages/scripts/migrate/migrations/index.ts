@@ -272,6 +272,7 @@ import QueueHeldSignupGrantsForRiskReview from './20260921237300_queue-held-sign
 import SeedSignupGrantSchedule from './20260921237400_seed-signup-grant-schedule';
 import SeedSignupGrantPools from './20260921237500_seed-signup-grant-pools';
 import EnsureHeldCreditRewardIndexes from './20260921237600_ensure-heldcreditreward-indexes';
+import BackfillUserLaneFlags from './20260921238100_backfill-user-lane-flags';
 import EnsureAnalyticsHopIndexes from './20260921238200_ensure-analytics-hop-indexes';
 import EnsureSpendAlertIndexes from './20260921238300_ensure-spend-alert-indexes';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
@@ -479,6 +480,7 @@ const coreMigrations: MigrationFile[] = [
   SeedSignupGrantSchedule,
   SeedSignupGrantPools,
   EnsureHeldCreditRewardIndexes,
+  BackfillUserLaneFlags,
   EnsureAnalyticsHopIndexes,
   EnsureSpendAlertIndexes,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
