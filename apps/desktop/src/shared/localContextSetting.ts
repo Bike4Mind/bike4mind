@@ -8,21 +8,26 @@ export type LocalContextSetting = { mode: 'auto' } | { mode: 'fixed'; tokens: Lo
 export const AUTO_LOCAL_CONTEXT: LocalContextSetting = { mode: 'auto' };
 
 /** One model's own choice from the Models screen, in place of the Settings one: Auto up to a cap, or one size. */
-export type ModelContextSetting =
-  { mode: 'auto'; maxTokens?: LocalContextSize } | { mode: 'fixed'; tokens: LocalContextSize };
+export type ModelContextSetting = { mode: 'auto'; maxTokens?: number } | { mode: 'fixed'; tokens: number };
 
-function isContextSize(value: unknown): value is LocalContextSize {
-  return LOCAL_CONTEXT_SIZES.some(size => size === value);
+// A model's trained length can fall between the offered sizes, so any whole number in their range is kept.
+function isContextTokens(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= LOCAL_CONTEXT_SIZES[0] &&
+    value <= LOCAL_CONTEXT_SIZES[LOCAL_CONTEXT_SIZES.length - 1]
+  );
 }
 
-/** Null when `value` is not one; a cap or size outside the offered sizes is not one either. */
+/** Null when `value` is not one; a cap or size outside the offered range is not one either. */
 export function parseModelContextSetting(value: unknown): ModelContextSetting | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const { mode, tokens, maxTokens } = value as { mode?: unknown; tokens?: unknown; maxTokens?: unknown };
-  if (mode === 'fixed') return isContextSize(tokens) ? { mode, tokens } : null;
+  if (mode === 'fixed') return isContextTokens(tokens) ? { mode, tokens } : null;
   if (mode !== 'auto') return null;
   if (maxTokens === undefined) return { mode };
-  return isContextSize(maxTokens) ? { mode, maxTokens } : null;
+  return isContextTokens(maxTokens) ? { mode, maxTokens } : null;
 }
 
 /** For each size, the local models the memory estimate says it would not fit. */

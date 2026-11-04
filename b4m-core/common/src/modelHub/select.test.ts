@@ -648,6 +648,27 @@ describe('pickForMachine runtimes', () => {
     expect(recurrent(withDraft())).toBe(150 * 1024 ** 2 * (1 + OLLAMA_DRAFT_LAYER_DEFAULT));
     expect(recurrent(withDraft(2))).toBe(150 * 1024 ** 2 * 3);
     expect(recurrent(withDraft(undefined, false))).toBe(150 * 1024 ** 2);
+    expect(recurrent(withDraft(2, false))).toBe(150 * 1024 ** 2 * 3);
+  });
+
+  it('plans a library build by its DRAFT layer and its draft_num_predict param', () => {
+    const library = (draft: string | null, draftNumPredict?: number) =>
+      withManifest(m => {
+        const iq3 = m.entries.find(e => e.id === 'hybrid-27b')!.builds[2];
+        iq3.ollama = {
+          kind: 'library',
+          ref: 'hybrid:27b',
+          sizeBytes: iq3.weights[0].sizeBytes,
+          digest: sha(7),
+          layers: { template: null, params: null, license: null, numCtx: null, draft, draftNumPredict },
+        };
+      });
+    const ollamaOnly = { ollama: { version: '0.40.11' } };
+    const recurrent = (manifest: HubManifestInput) =>
+      pick('nv-24+64', 'code', { manifest, runtimes: ollamaOnly }).alternates[0].fit.memory.recurrentBytes;
+    expect(recurrent(library(sha(8)))).toBe(150 * 1024 ** 2 * (1 + OLLAMA_DRAFT_LAYER_DEFAULT));
+    expect(recurrent(library(sha(8), 2))).toBe(150 * 1024 ** 2 * 3);
+    expect(recurrent(library(null, 3))).toBe(150 * 1024 ** 2);
   });
 
   it('offers a quantized cache under flash attention auto only for KV types a smoke loaded', () => {

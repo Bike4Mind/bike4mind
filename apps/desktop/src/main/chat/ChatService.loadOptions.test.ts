@@ -37,7 +37,7 @@ const listed: ChatModelOption = {
   controls: ollamaControls({ inspected: true, contextWindow: 32768 }),
 };
 
-async function setup(load: ModelLoadSettings) {
+async function setup(load: ModelLoadSettings, trained = 262144) {
   const bodies: OllamaBody[] = [];
   vi.stubGlobal(
     'fetch',
@@ -46,7 +46,7 @@ async function setup(load: ModelLoadSettings) {
       if (String(input).endsWith('/api/show'))
         return Response.json({
           capabilities: ['completion'],
-          model_info: { 'qwen35.context_length': 262144, 'qwen35.nextn_predict_layers': 1 },
+          model_info: { 'qwen35.context_length': trained, 'qwen35.nextn_predict_layers': 1 },
         });
       bodies.push(JSON.parse(String(init?.body)) as OllamaBody);
       return new Response(
@@ -94,6 +94,14 @@ describe("a local model's load settings", () => {
       expect(body.keep_alive).toBe(3600);
       expect(body.options).toMatchObject({ num_ctx: 32768, draft_num_predict: 3 });
     }
+  });
+
+  it('send the trained length a model stores as its context', async () => {
+    const { service, bodies } = await setup({ context: { mode: 'fixed', tokens: 40960 } }, 40960);
+    const { id } = await service.createSession();
+    await service.send(id, 'how big is a widget?');
+    await vi.waitUntil(() => bodies.length > 0, { timeout: 3000, interval: 5 });
+    expect(bodies[0].options.num_ctx).toBe(40960);
   });
 
   it('send nothing extra for a model with none set', async () => {

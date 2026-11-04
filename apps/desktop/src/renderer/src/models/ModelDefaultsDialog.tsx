@@ -28,6 +28,7 @@ import { contextSizeLabel, parseModelContextSetting, type ModelContextSetting } 
 import {
   KEEP_ALIVE_CHOICES,
   MAX_DRAFT_TOKENS,
+  type ContextSizeOffer,
   type KeepAliveSeconds,
   type ModelEffort,
   type ModelLoadOffer,
@@ -135,13 +136,21 @@ function contextOf(value: string): ModelContextSetting | null {
   );
 }
 
+/** What a size stores: the size, or the trained length when that is less. */
+function capOf({ size, tokens }: ContextSizeOffer): number {
+  return Math.min(size, tokens);
+}
+
 /** The num_ctx a context choice sends, from the offer's ratings; undefined when the offer does not say. */
 export function contextSent(offer: ModelLoadOffer, context: ModelContextSetting | null): number | undefined {
   const offered = offer.context;
   if (offered?.kind !== 'ollama') return undefined;
   if (!context) return offered.settings;
   const tokens = context.mode === 'fixed' ? context.tokens : context.maxTokens;
-  const size = offered.sizes.find(candidate => candidate.size === tokens);
+  // A stored size from before the trained length was offered as its own choice still matches by size.
+  const size =
+    offered.sizes.find(candidate => capOf(candidate) === tokens) ??
+    offered.sizes.find(candidate => candidate.size === tokens);
   if (context.mode === 'fixed') return size?.tokens;
   return context.maxTokens === undefined ? offered.auto : size?.autoTokens;
 }
@@ -208,7 +217,9 @@ function ModelDefaultsForm({
   const [error, setError] = useState<string | null>(null);
   const modelId = option?.id ?? null;
   const draftTokens = draftOf(draftText, offer?.draft?.max ?? MAX_DRAFT_TOKENS);
-  const draftInvalid = draftText.trim() !== '' && draftTokens === undefined;
+  // Chromium reports value '' for partial input such as "-" or "1e", so the field's own validity decides those.
+  const [draftBad, setDraftBad] = useState(false);
+  const draftInvalid = draftBad || (draftText.trim() !== '' && draftTokens === undefined);
 
   useEffect(() => {
     setLoaded(null);
@@ -226,6 +237,7 @@ function ModelDefaultsForm({
         setEffort(current.effort ?? null);
         setContext(current.context ?? null);
         setDraftText(current.draftTokens !== undefined ? String(current.draftTokens) : '');
+        setDraftBad(false);
         setKeepAlive(current.keepAlive ?? null);
       },
       (reason: unknown) => {
@@ -311,6 +323,7 @@ function ModelDefaultsForm({
     effort !== null ||
     context !== null ||
     draftText.trim() !== '' ||
+    draftBad ||
     keepAlive !== null;
 
   return (
@@ -436,7 +449,10 @@ function ModelDefaultsForm({
                   context={context}
                   onContext={setContext}
                   draftText={draftText}
-                  onDraftText={setDraftText}
+                  onDraftText={(text, bad) => {
+                    setDraftText(text);
+                    setDraftBad(bad);
+                  }}
                   draftInvalid={draftInvalid}
                   keepAlive={keepAlive}
                   onKeepAlive={setKeepAlive}
@@ -475,6 +491,7 @@ function ModelDefaultsForm({
               setEffort(null);
               setContext(null);
               setDraftText('');
+              setDraftBad(false);
               setKeepAlive(null);
             }}
             sx={{ mr: 'auto' }}
@@ -531,7 +548,7 @@ function LoadOptionRows({
   context: ModelContextSetting | null;
   onContext: (context: ModelContextSetting | null) => void;
   draftText: string;
-  onDraftText: (text: string) => void;
+  onDraftText: (text: string, badInput: boolean) => void;
   draftInvalid: boolean;
   keepAlive: KeepAliveSeconds | null;
   onKeepAlive: (keepAlive: KeepAliveSeconds | null) => void;
@@ -548,7 +565,8 @@ function LoadOptionRows({
     sent !== loadedContext &&
     !sameContext(context, saved?.context ?? null);
   const fixedSize = offered?.kind === 'ollama' && context?.mode === 'fixed' ? context.tokens : undefined;
-  const tooLarge = offered?.kind === 'ollama' && offered.sizes.find(size => size.size === fixedSize)?.loads === false;
+  const tooLarge =
+    offered?.kind === 'ollama' && offered.sizes.find(candidate => capOf(candidate) === fixedSize)?.loads === false;
   return (
     <>
       <Divider sx={{ my: 1 }} />
@@ -595,7 +613,7 @@ function LoadOptionRows({
               {offered.kind === 'budget'
                 ? `Server's ${contextSizeLabel(offered.server)}`
                 : offered.auto === undefined
-                  ? `Server default (${contextSizeLabel(offered.settings)})`
+                  ? `Default (${contextSizeLabel(offered.settings)})`
                   : 'Same as Settings'}
             </Option>
             {offered.kind === 'ollama' && offered.auto !== undefined && (
@@ -605,20 +623,22 @@ function LoadOptionRows({
             )}
             {offered.kind === 'ollama' &&
               offered.auto !== undefined &&
-              offered.sizes.map(({ size, tokens }) => (
-                <Option
-                  key={`auto:${size}`}
-                  value={`auto:${size}`}
-                  data-testid={`model-defaults-context-option-auto-${size}`}
-                >
-                  {`Auto, up to ${contextSizeLabel(Math.min(size, tokens))}`}
-                </Option>
-              ))}
+              offered.sizes
+                .filter(candidate => offered.ceiling === undefined || capOf(candidate) < offered.ceiling)
+                .map(candidate => (
+                  <Option
+                    key={`auto:${candidate.size}`}
+                    value={`auto:${capOf(candidate)}`}
+                    data-testid={`model-defaults-context-option-auto-${candidate.size}`}
+                  >
+                    {`Auto, up to ${contextSizeLabel(capOf(candidate))}`}
+                  </Option>
+                ))}
             {offered.kind === 'ollama' &&
               offered.sizes.map(({ size, tokens, loads }) => (
                 <Option
                   key={`fixed:${size}`}
-                  value={`fixed:${size}`}
+                  value={`fixed:${Math.min(size, tokens)}`}
                   label={contextSizeLabel(tokens)}
                   data-testid={`model-defaults-context-option-${size}`}
                 >
@@ -662,7 +682,7 @@ function LoadOptionRows({
             placeholder={String(offer.draft.modelDefault)}
             disabled={disabled}
             color={draftInvalid ? 'danger' : 'neutral'}
-            onChange={event => onDraftText(event.target.value)}
+            onChange={event => onDraftText(event.target.value, event.target.validity.badInput)}
             sx={{ width: 112, flexShrink: 0, '& input::placeholder': { fontStyle: 'italic' } }}
             slotProps={{
               input: {

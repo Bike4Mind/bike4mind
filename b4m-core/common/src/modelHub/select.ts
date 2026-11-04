@@ -70,7 +70,7 @@ const OLLAMA_SINGLE_SLOT_ARCHS = new Set([
   'nemotron_h_moe',
   'nemotron_h_omni',
 ]);
-/** Ollama's draft count for a model with a DRAFT layer unless the Modelfile or request sets one; an embedded MTP head defaults to 0 (off). */
+/** Ollama's draft count for a DRAFT layer unless the Modelfile or a request sets one; an embedded MTP head is off. */
 export const OLLAMA_DRAFT_LAYER_DEFAULT = 4;
 
 const ROLE_MODE: Record<HubRole, FitMode> = { chat: 'chat', code: 'code', vision: 'chat', embeddings: 'embeddings' };
@@ -136,9 +136,10 @@ function fitInputs(entry: HubEntry, build: HubBuild, runtime: HubRuntime, option
     const family = options.manifest.families[entry.family];
     const source = build.ollama;
     const library = source?.kind === 'library';
-    const hasDraft = build.draft !== undefined || entry.arch.mtpLayers > 0;
-    const draftLayer = build.draft !== undefined && build.draft.kind !== 'mtp-embedded';
-    const draftNumPredict = source && source.kind !== 'library' ? source.modelfile.draftNumPredict : undefined;
+    const layers = source && source.kind !== 'create' ? source.layers : undefined;
+    const hasDraft = build.draft !== undefined || entry.arch.mtpLayers > 0 || !!layers?.draft;
+    const draftLayer = (build.draft !== undefined && build.draft.kind !== 'mtp-embedded') || !!layers?.draft;
+    const draftNumPredict = source?.kind === 'library' ? layers?.draftNumPredict : source?.modelfile.draftNumPredict;
     const draftMax = hasDraft ? (draftNumPredict ?? (draftLayer ? OLLAMA_DRAFT_LAYER_DEFAULT : 0)) : 0;
     // Ollama loads a model's projector whenever it has one.
     const model: FitModel = {

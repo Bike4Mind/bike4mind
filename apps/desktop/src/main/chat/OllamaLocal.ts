@@ -570,6 +570,7 @@ export class OllamaLocal {
         kind: 'ollama',
         settings: sized(await this.setting()),
         ...(measured ? { auto: sized(AUTO_LOCAL_CONTEXT) } : {}),
+        ceiling: sized({ mode: 'fixed', tokens: LOCAL_CONTEXT_SIZES[LOCAL_CONTEXT_SIZES.length - 1] }),
         sizes: sizes.map(size => {
           const tokens = sized({ mode: 'fixed', tokens: size });
           const loads = loadsInMemory(footprint, tokens);

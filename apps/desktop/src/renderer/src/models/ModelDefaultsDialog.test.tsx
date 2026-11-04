@@ -62,6 +62,7 @@ const OLLAMA_OFFER: ModelLoadOffer = {
       { size: 131072, tokens: 131072, autoTokens: 65536, loads: true },
       { size: 262144, tokens: 262144, autoTokens: 65536, loads: false },
     ],
+    ceiling: 262144,
   },
   draft: { modelDefault: 0, max: 16 },
   keepAlive: true,
@@ -379,12 +380,65 @@ describe('ModelDefaultsDialog load options', () => {
     expect(byTestId<HTMLButtonElement>('model-defaults-save-btn')?.disabled).toBe(false);
   });
 
+  it('offers the trained length as a size and stores it, with no Auto cap that repeats Auto', async () => {
+    offer = {
+      context: {
+        kind: 'ollama',
+        settings: 16384,
+        auto: 40960,
+        ceiling: 40960,
+        sizes: [
+          { size: 16384, tokens: 16384, autoTokens: 16384, loads: true },
+          { size: 32768, tokens: 32768, autoTokens: 32768, loads: true },
+          { size: 65536, tokens: 40960, autoTokens: 40960, loads: true },
+        ],
+      },
+    };
+    await render(QWEN);
+    await click('model-defaults-context-select');
+    expect(byTestId('model-defaults-context-option-65536')?.textContent).toBe('40K tokens');
+    expect(byTestId('model-defaults-context-option-auto-32768')?.textContent).toBe('Auto, up to 32K tokens');
+    expect(byTestId('model-defaults-context-option-auto-65536')).toBeNull();
+    await click('model-defaults-context-option-65536');
+    expect(byTestId('model-defaults-context-note')?.textContent).toBe('Runs at 40K tokens.');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, { context: { mode: 'fixed', tokens: 40960 } });
+  });
+
+  it('shows a stored trained length as its choice', async () => {
+    offer = {
+      context: {
+        kind: 'ollama',
+        settings: 16384,
+        sizes: [{ size: 65536, tokens: 40960, autoTokens: 40960 }],
+      },
+    };
+    stored = { context: { mode: 'fixed', tokens: 40960 } };
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-select')?.textContent).toBe('40K tokens');
+    expect(byTestId('model-defaults-context-note')?.textContent).toBe('Runs at 40K tokens.');
+  });
+
+  it('treats partial draft input such as "-", which reads as blank, as invalid', async () => {
+    offer = OLLAMA_OFFER;
+    stored = { draftTokens: 3 };
+    await render(QWEN);
+    const field = input('draft');
+    Object.defineProperty(field, 'validity', { value: { badInput: true }, configurable: true });
+    await fill('draft', '');
+    expect(field.getAttribute('aria-invalid')).toBe('true');
+    expect(byTestId<HTMLButtonElement>('model-defaults-save-btn')?.disabled).toBe(true);
+    Object.defineProperty(field, 'validity', { value: { badInput: false }, configurable: true });
+    await fill('draft', '2');
+    expect(field.getAttribute('aria-invalid')).toBe('false');
+  });
+
   it('labels the default of a saved Ollama server by the context it gets, not the Settings choice', async () => {
     offer = {
       context: { kind: 'ollama', settings: 16384, sizes: [{ size: 16384, tokens: 16384, autoTokens: 16384 }] },
     };
     await render(QWEN);
-    expect(byTestId('model-defaults-context-select')?.textContent).toBe('Server default (16K tokens)');
+    expect(byTestId('model-defaults-context-select')?.textContent).toBe('Default (16K tokens)');
   });
 
   it('calls onSaved after a successful save, and not after a failed one', async () => {
@@ -441,6 +495,11 @@ describe('contextSent', () => {
     expect(contextSent(OLLAMA_OFFER, { mode: 'auto' })).toBe(65536);
     expect(contextSent(OLLAMA_OFFER, { mode: 'auto', maxTokens: 32768 })).toBe(32768);
     expect(contextSent(OLLAMA_OFFER, { mode: 'fixed', tokens: 262144 })).toBe(262144);
+    const trained: ModelLoadOffer = {
+      context: { kind: 'ollama', settings: 16384, sizes: [{ size: 65536, tokens: 40960, autoTokens: 40960 }] },
+    };
+    expect(contextSent(trained, { mode: 'fixed', tokens: 40960 })).toBe(40960);
+    expect(contextSent(trained, { mode: 'fixed', tokens: 65536 })).toBe(40960);
     expect(contextSent({ context: { kind: 'budget', server: 65536, sizes: [16384] } }, null)).toBeUndefined();
   });
 });

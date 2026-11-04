@@ -1809,6 +1809,7 @@ describe('OllamaLocal context sizing', () => {
           kind: 'ollama',
           settings: 65536,
           auto: 65536,
+          ceiling: 131072,
           sizes: [
             { size: 16384, tokens: 16384, autoTokens: 16384, loads: true },
             { size: 32768, tokens: 32768, autoTokens: 32768, loads: true },
@@ -1848,6 +1849,7 @@ describe('OllamaLocal context sizing', () => {
         context: {
           kind: 'ollama',
           settings: 16384,
+          ceiling: 32768,
           sizes: [
             { size: 16384, tokens: 16384, autoTokens: 16384 },
             { size: 32768, tokens: 32768, autoTokens: 16384 },

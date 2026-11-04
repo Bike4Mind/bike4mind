@@ -53,6 +53,8 @@ export interface ModelLoadOffer {
         /** What Auto picks for it with no cap; Auto is offered only when Desktop can measure the model. */
         auto?: number;
         sizes: ContextSizeOffer[];
+        /** The most a fixed size can send for this model; an Auto cap at or past it is the same as Auto. */
+        ceiling?: number;
       }
     /** A context the server fixes: a smaller size here is a client budget that compacts sooner, never a reload. */
     | { kind: 'budget'; server: number; sizes: LocalContextSize[] };

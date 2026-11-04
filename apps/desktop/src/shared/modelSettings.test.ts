@@ -59,6 +59,18 @@ describe('parseModelSettingsInput', () => {
 });
 
 describe('load settings', () => {
+  it('keeps a trained length between the offered sizes, and loads a value stored before it was offered', () => {
+    expect(parseModelSettingsInput({ context: { mode: 'fixed', tokens: 40960 } })).toEqual({
+      context: { mode: 'fixed', tokens: 40960 },
+    });
+    expect(normalizeModelSettings({ context: { mode: 'auto', maxTokens: 40960 } })).toEqual({
+      context: { mode: 'auto', maxTokens: 40960 },
+    });
+    expect(normalizeModelSettings({ context: { mode: 'fixed', tokens: 65536 } })).toEqual({
+      context: { mode: 'fixed', tokens: 65536 },
+    });
+  });
+
   it('accepts a context choice, a draft count and a keep-alive', () => {
     expect(
       parseModelSettingsInput({ context: { mode: 'auto', maxTokens: 65536 }, draftTokens: 0, keepAlive: -1 })
@@ -71,7 +83,8 @@ describe('load settings', () => {
   it.each([
     { context: { mode: 'fixed', tokens: 8192 } },
     { context: { mode: 'fixed' } },
-    { context: { mode: 'auto', maxTokens: 50000 } },
+    { context: { mode: 'auto', maxTokens: 524288 } },
+    { context: { mode: 'fixed', tokens: 40960.5 } },
     { context: 'auto' },
     { draftTokens: 17 },
     { draftTokens: 1.5 },

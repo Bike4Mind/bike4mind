@@ -1324,6 +1324,11 @@
                                 }
                               ]
                             },
+                            "draftNumPredict": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 16
+                            },
                             "installedTemplate": {
                               "type": "string",
                               "pattern": "^[0-9a-f]{64}$"
@@ -1462,6 +1467,11 @@
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "draftNumPredict": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 16
                             },
                             "installedTemplate": {
                               "type": "string",

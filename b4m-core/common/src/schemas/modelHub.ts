@@ -214,6 +214,8 @@ const OllamaLayersSchema = z
     // The served projector's size, which Hugging Face weight sizes leave out.
     projectorBytes: ByteCountSchema.optional(),
     draft: Sha256Schema.nullable().default(null),
+    // The params layer's draft_num_predict, which Ollama speculates with unless a request sets one.
+    draftNumPredict: z.number().int().min(1).max(16).optional(),
     installedTemplate: Sha256Schema.optional(),
   })
   .refine(layers => layers.params !== null || layers.numCtx === null, { message: 'numCtx needs a params layer' })
