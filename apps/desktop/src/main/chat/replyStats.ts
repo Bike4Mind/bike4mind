@@ -57,7 +57,8 @@ export function roundGeneration(round: StatsRound): { tokens: number; ms: number
   const { startedAt, firstTokenAt, endedAt } = round.timing;
   if (round.usage?.rate || output === undefined || firstTokenAt === undefined) return null;
   const hidden = roundThinking(round)?.derived === true;
-  // From the first output, that token's own time is the prompt's, as in estimatedRate.
+  // From the first output, that token's own time is the prompt's. estimatedRate drops the whole
+  // first read; a round records no read sizes, so this drops one token.
   const tokens = hidden ? output : output - 1;
   const ms = endedAt - (hidden ? startedAt : firstTokenAt);
   return tokens > 0 && ms >= MIN_ESTIMATE_SPAN_MS ? { tokens, ms } : null;

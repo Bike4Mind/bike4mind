@@ -203,6 +203,15 @@ describe('replyStats', () => {
     expect(rows.find(row => row.id === 'thinkingTokens')?.value).toBe('50');
   });
 
+  it('notes on the speed how many output tokens were timed when some were not', () => {
+    const note = (evalTokens: number, outputTokens: number) =>
+      replyStats({ usage: { outputTokens, rate: { evalTokens, evalMs: 10_000 } } }).find(row => row.id === 'speed')
+        ?.note;
+
+    expect(note(480, 3000)).toBe('timed 480 of 3.0k output tokens');
+    expect(note(3000, 3000)).toBeUndefined();
+  });
+
   // Both as main stores them: a 3000-token call that arrived whole, then a 20-token answer
   // over 300ms; and 1900 tokens of thinking the server never streamed, then 100 of text.
   it('rates a hosted reply by its tokens over the time spent producing them', () => {

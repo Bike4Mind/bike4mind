@@ -1,6 +1,6 @@
 import type { ChatMessage, ChatReplyStats, ChatUsage, ModelPhase } from '@shared/chat';
 import { formatElapsed, formatTokens, type TurnProgress } from './statusLine';
-import { formatTokenRate } from './tokenRate';
+import { formatTokenRate, untimedOutputNote } from './tokenRate';
 
 /** Every stat a reply can show, in the order the rail, the footer and Settings list them. */
 export const REPLY_STATS = [
@@ -193,7 +193,8 @@ export function replyStats(source: ReplyStatsSource, { live = false }: { live?: 
     speed: stat(
       'speed',
       generation && formatTokenRate({ evalTokens: generation.tokens, evalMs: generation.ms }),
-      generation?.estimated && ESTIMATES.speed
+      generation?.estimated && ESTIMATES.speed,
+      (generation && untimedOutputNote(generation.tokens, usage?.outputTokens)) || undefined
     ),
     cacheShare: stat('cacheShare', cached !== null ? formatShare(cached) : null),
     promptSpeed: stat(

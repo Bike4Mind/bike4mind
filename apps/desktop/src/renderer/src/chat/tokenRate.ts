@@ -19,6 +19,12 @@ export function formatTokenRate(rate: ChatTokenRate | null | undefined): string 
   return `${rate.estimated ? '~' : ''}${formatPerSecond(perSecond(rate.evalTokens, rate.evalMs))}`;
 }
 
+/** "timed 480 of 3.0k output tokens" when part of the turn's output went untimed; null when all of it was timed. */
+export function untimedOutputNote(timedTokens: number, outputTokens: number | undefined): string | null {
+  if (outputTokens === undefined || outputTokens <= timedTokens) return null;
+  return `timed ${formatTokens(timedTokens)} of ${formatTokens(outputTokens)} output tokens`;
+}
+
 /**
  * The tooltip lines: generation, then prompt, load and draft acceptance where the server reported
  * them. `outputTokens` is the whole turn's; when it exceeds the timed tokens, the line says so.
@@ -26,10 +32,7 @@ export function formatTokenRate(rate: ChatTokenRate | null | undefined): string 
 export function describeTokenRate(rate: ChatTokenRate | null | undefined, outputTokens?: number): string | null {
   const headline = formatTokenRate(rate);
   if (!rate || !headline) return null;
-  const timed =
-    outputTokens !== undefined && outputTokens > rate.evalTokens
-      ? `timed ${formatTokens(rate.evalTokens)} of ${formatTokens(outputTokens)} output tokens`
-      : `${formatTokens(rate.evalTokens)} tokens`;
+  const timed = untimedOutputNote(rate.evalTokens, outputTokens) ?? `${formatTokens(rate.evalTokens)} tokens`;
   const lines = [`Generation: ${headline} (${timed} in ${formatSeconds(rate.evalMs)})`];
   if (rate.estimated) lines.push('Estimated from stream timing; the server reported no timings');
   if (rate.promptTokens !== undefined && rate.promptMs !== undefined && rate.promptMs > 0)
