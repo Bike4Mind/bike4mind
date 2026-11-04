@@ -107,9 +107,19 @@ export function evaluatePaymentRiskSignals(input: {
   return signals;
 }
 
+/** Minor-unit digits of an ISO currency (0 for JPY), falling back to 2 for a code Intl rejects. */
+export function currencyDecimals(currency: string): number {
+  try {
+    return new Intl.NumberFormat('en', { style: 'currency', currency }).resolvedOptions().maximumFractionDigits ?? 2;
+  } catch {
+    return 2;
+  }
+}
+
 export function formatAmount(amountMinor: number | null, currency: string | null): string {
   if (amountMinor === null || !currency) return 'unknown';
-  return `${(amountMinor / 100).toFixed(2)} ${currency.toUpperCase()}`;
+  const decimals = currencyDecimals(currency);
+  return `${(amountMinor / 10 ** decimals).toFixed(decimals)} ${currency.toUpperCase()}`;
 }
 
 function describeSignal(signal: PaymentRiskSignal, thresholds: PaymentRiskThresholds): string {
@@ -216,7 +226,9 @@ export function buildPaymentRiskShadowDetection(input: {
         ? null
         : { ip: null, asn: null, asnOrg: null, country: null, hosting: attempt.hostingNetwork },
     signals: signals.map(signal => toDetectionSignal(signal, thresholds)),
-    windowMinutes: thresholds.cardWindowMinutes,
+    windowMinutes: signals.some(signal => signal.type === 'manyCardsPerAccount' || signal.type === 'manyCardsPerNetwork')
+      ? thresholds.cardWindowMinutes
+      : null,
     group: null,
     payment: {
       paymentIntentId: attempt.paymentIntentId,
@@ -239,7 +251,10 @@ export function buildPaymentRiskShadowDetection(input: {
 const detectionClaimKey = (paymentIntentId: string, outcome: string, cardFingerprint: string | null): string =>
   `payment-risk-detection:${paymentIntentId}:${outcome}:${cardFingerprint ?? 'no-card'}`;
 
-/** Best-effort: a failed write is logged and never blocks the Slack alert or the webhook. */
+/**
+ * Best-effort: a failed write is logged and never blocks the Slack alert or the webhook. The claim
+ * is taken first and not released, so a write that fails is not retried on a later screening.
+ */
 async function recordPaymentRiskDetection(
   detection: PaymentRiskShadowDetection,
   cardFingerprint: string | null,

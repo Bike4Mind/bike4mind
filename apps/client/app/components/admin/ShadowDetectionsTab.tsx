@@ -121,10 +121,19 @@ export const formatNetwork = (network: ShadowDetectionNetwork): string =>
 export const stripePaymentUrl = (payment: Pick<ShadowDetectionPayment, 'paymentIntentId' | 'livemode'>): string =>
   `https://dashboard.stripe.com${payment.livemode ? '' : '/test'}/payments/${encodeURIComponent(payment.paymentIntentId)}`;
 
-const formatPaymentAmount = (payment: ShadowDetectionPayment): string =>
-  payment.amount === null || !payment.currency
-    ? 'Unknown amount'
-    : `${(payment.amount / 100).toFixed(2)} ${payment.currency.toUpperCase()}`;
+const currencyDecimals = (currency: string): number => {
+  try {
+    return new Intl.NumberFormat('en', { style: 'currency', currency }).resolvedOptions().maximumFractionDigits ?? 2;
+  } catch {
+    return 2;
+  }
+};
+
+export const formatPaymentAmount = (payment: Pick<ShadowDetectionPayment, 'amount' | 'currency'>): string => {
+  if (payment.amount === null || !payment.currency) return 'Unknown amount';
+  const decimals = currencyDecimals(payment.currency);
+  return `${(payment.amount / 10 ** decimals).toFixed(decimals)} ${payment.currency.toUpperCase()}`;
+};
 
 const StripePaymentLink: React.FC<{ payment: ShadowDetectionPayment; testId: string }> = ({ payment, testId }) => (
   <Typography

@@ -41,7 +41,7 @@ vi.mock('@tanstack/react-router', () => ({
   ),
 }));
 
-import ShadowDetectionsTab from './ShadowDetectionsTab';
+import ShadowDetectionsTab, { formatPaymentAmount } from './ShadowDetectionsTab';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -280,6 +280,38 @@ describe('ShadowDetectionsTab', () => {
     expect(within(evidence).getByTestId('shadow-detection-dialog-stripe-link').getAttribute('href')).toBe(
       'https://dashboard.stripe.com/test/payments/pi_123'
     );
+  });
+
+  it('links a live-mode payment to the live Stripe Dashboard', () => {
+    const payment = {
+      paymentIntentId: 'pi_123',
+      chargeId: 'ch_123',
+      kind: 'credits' as const,
+      outcome: 'succeeded' as const,
+      amount: 10000,
+      currency: 'usd',
+      riskLevel: 'elevated',
+      livemode: true,
+    };
+    m.useShadowDetections.mockReturnValue(
+      queryResult(
+        list({
+          data: [detection({ detector: 'paymentRisk', wouldAction: 'contain', network: null, payment })],
+          summary: [summaryRow({ detector: 'paymentRisk' })],
+        })
+      )
+    );
+    renderTab();
+    const row = screen.getByTestId(`shadow-detection-row-${DETECTION_ID}`);
+    expect(within(row).getByTestId(`shadow-detection-stripe-link-${DETECTION_ID}`).getAttribute('href')).toBe(
+      'https://dashboard.stripe.com/payments/pi_123'
+    );
+  });
+
+  it('formats a payment amount in the currency minor unit', () => {
+    expect(formatPaymentAmount({ amount: 10000, currency: 'usd' })).toBe('100.00 USD');
+    expect(formatPaymentAmount({ amount: 1500, currency: 'jpy' })).toBe('1500 JPY');
+    expect(formatPaymentAmount({ amount: null, currency: 'usd' })).toBe('Unknown amount');
   });
 
   const [direct1, direct2, direct3, transitive] = ['b', 'c', 'd', 'e'].map(char => char.repeat(24));

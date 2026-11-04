@@ -46,6 +46,7 @@ vi.mock('@server/billing/linkedAccounts', () => ({ lockIfPaidWithBlockedCard: mo
 import {
   alertStripeRiskEvent,
   evaluatePaymentRiskSignals,
+  formatAmount,
   formatPaymentRiskAlert,
   paymentNetworkOf,
   readPaymentRiskThresholds,
@@ -255,7 +256,7 @@ describe('screenPaymentOutcome', () => {
       wouldAction: 'contain',
       userIds: ['u1'],
       network: { ip: null, hosting: false },
-      windowMinutes: 60,
+      windowMinutes: null,
       group: null,
       payment: {
         paymentIntentId: 'pi_1',
@@ -277,6 +278,14 @@ describe('screenPaymentOutcome', () => {
       { key: 'sharedCard', label: 'Accounts that used this card', observed: 2, threshold: 1 },
     ]);
     expect(JSON.stringify(detection)).not.toContain('fp_1');
+  });
+
+  it('gives the detection the card window only when a card-count signal fired', async () => {
+    mocks.countRecentCards.mockResolvedValue({ userCards: 9, networkCards: 1 });
+
+    await screenPaymentOutcome(input, logger, now);
+
+    expect(mocks.recordShadowDetection.mock.calls[0][0].windowMinutes).toBe(60);
   });
 
   it('carries Stripe test mode through to the detection', async () => {
@@ -364,6 +373,7 @@ describe('screenPaymentOutcome', () => {
 
     expect(mocks.recordOutcome).toHaveBeenCalled();
     expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
+    expect(mocks.claimStep).not.toHaveBeenCalled();
     expect(mocks.recordShadowDetection).not.toHaveBeenCalled();
   });
 
@@ -394,6 +404,14 @@ describe('screenPaymentOutcome', () => {
 
     await expect(screenPaymentOutcome(input, logger, now)).resolves.toBeUndefined();
     expect(logger.error).toHaveBeenCalled();
+  });
+});
+
+describe('formatAmount', () => {
+  it('scales by the currency minor unit', () => {
+    expect(formatAmount(10000, 'usd')).toBe('100.00 USD');
+    expect(formatAmount(1500, 'jpy')).toBe('1500 JPY');
+    expect(formatAmount(null, 'usd')).toBe('unknown');
   });
 });
 
