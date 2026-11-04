@@ -2,18 +2,38 @@ import React, { useState } from 'react';
 import { Alert, Button, Typography, Stack } from '@mui/joy';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { MODERATION_INCIDENT_ID_PARAM } from '@bike4mind/common';
-import { AdminPageHeader, DataTable, EmptyState, StatusChip, formatUtc, relativeTime, type DataColumn } from './shared';
+import {
+  AdminPageHeader,
+  DataTable,
+  EmptyState,
+  SegmentedControl,
+  StatusChip,
+  formatUtc,
+  relativeTime,
+  type DataColumn,
+} from './shared';
 import ModerationIncidentDetail from './ModerationIncidentDetail';
-import { surfaceLabel } from './moderationIncidentLabels';
-import { useModerationIncidentQueue, type ModerationIncidentRow } from '@client/app/hooks/data/moderationIncidents';
+import { REVIEW_STATUS_LABELS, formatLabel, surfaceLabel } from './moderationIncidentLabels';
+import {
+  useModerationIncidentQueue,
+  type ModerationIncidentQueueStatus,
+  type ModerationIncidentRow,
+} from '@client/app/hooks/data/moderationIncidents';
+
+const QUEUE_STATUS_OPTIONS = [
+  { value: 'open', label: 'Needs review' },
+  { value: 'closed', label: 'Closed' },
+] as const;
 
 /**
  * Image moderation incidents waiting for a reviewer: unreviewed ones plus claims stuck mid-report,
- * oldest first. A row opens its detail, which is addressed by `incidentId` so the reviewer alert
- * can link straight to it.
+ * oldest first; or, under Closed, past verdicts newest first. A row opens its detail, which is
+ * addressed by `incidentId` so the reviewer alert can link straight to it.
  */
 export const ModerationIncidentsTab: React.FC = () => {
-  const queue = useModerationIncidentQueue();
+  const [queueStatus, setQueueStatus] = useState<ModerationIncidentQueueStatus>('open');
+  const queue = useModerationIncidentQueue(queueStatus);
+  const closed = queueStatus === 'closed';
   const navigate = useNavigate();
   const { [MODERATION_INCIDENT_ID_PARAM]: incidentId } = useSearch({ strict: false }) as { incidentId?: string };
   const [now] = useState(() => Date.now());
@@ -46,12 +66,33 @@ export const ModerationIncidentsTab: React.FC = () => {
       width: '14rem',
     },
     {
+      id: 'user',
+      label: 'User',
+      render: row => (
+        <Typography level="body-sm" noWrap sx={{ color: 'admin.ink' }}>
+          {row.userEmail ?? row.userId}
+        </Typography>
+      ),
+      sortValue: row => row.userEmail ?? row.userId,
+    },
+    {
+      id: 'label',
+      label: 'Top label',
+      render: row => (
+        <Typography level="body-sm" noWrap>
+          {row.topLabel ? formatLabel(row.topLabel) : '-'}
+        </Typography>
+      ),
+      sortValue: row => row.topLabel?.confidence ?? 0,
+    },
+    {
       id: 'surface',
-      label: 'Surface',
+      label: closed ? 'Surface / verdict' : 'Surface',
       render: row => (
         <Stack direction="row" gap={1} alignItems="center">
           <Typography level="body-sm">{surfaceLabel(row.surface)}</Typography>
           {row.stuck && <StatusChip tone="warn" label="Report stuck" />}
+          {closed && <StatusChip tone="neutral" label={REVIEW_STATUS_LABELS[row.reviewStatus]} />}
         </Stack>
       ),
       sortValue: row => row.surface ?? '',
@@ -78,17 +119,30 @@ export const ModerationIncidentsTab: React.FC = () => {
       <AdminPageHeader
         title="Moderation review"
         count={queue.data && !queue.data.truncated ? rows.length : undefined}
-        description="Image moderation incidents waiting for a verdict, oldest first. Opening one records a view in the audit log."
+        description={
+          closed
+            ? 'Image moderation incidents with a verdict, newest first. Opening one records a view in the audit log.'
+            : 'Image moderation incidents waiting for a verdict, oldest first. Opening one records a view in the audit log.'
+        }
+      />
+      <SegmentedControl
+        options={QUEUE_STATUS_OPTIONS}
+        value={queueStatus}
+        onChange={setQueueStatus}
+        aria-label="Which incidents to show"
+        data-testid="moderation-incidents-status"
       />
       {queue.data?.truncated && (
         <Alert color="warning" data-testid="moderation-incidents-truncated">
-          Showing the oldest {rows.length.toLocaleString()}; more are waiting. Decide these to see the rest.
+          {closed
+            ? `Showing the newest ${rows.length.toLocaleString()} closed incidents.`
+            : `Showing the oldest ${rows.length.toLocaleString()}; more are waiting. Decide these to see the rest.`}
         </Alert>
       )}
       <DataTable
         rows={rows}
         columns={columns}
-        label="Moderation incidents waiting for review"
+        label={closed ? 'Closed moderation incidents' : 'Moderation incidents waiting for review'}
         getRowId={row => row.id}
         testId="moderation-incidents-table"
         rowTestId={row => `moderation-incident-row-${row.id}`}
@@ -96,11 +150,15 @@ export const ModerationIncidentsTab: React.FC = () => {
         error={queue.error ? "Couldn't load the review queue." : undefined}
         onRetry={() => void queue.refetch()}
         onRowActivate={row => void open(row.id)}
-        minWidth="48rem"
+        minWidth="64rem"
         empty={
           <EmptyState
-            title="No incidents are waiting for review"
-            description="New incidents land here, and reviewers are alerted by email when one needs a verdict."
+            title={closed ? 'No incidents have a verdict yet' : 'No incidents are waiting for review'}
+            description={
+              closed
+                ? 'Incidents appear here once a reviewer records a verdict.'
+                : 'New incidents land here, and reviewers are alerted by email when one needs a verdict.'
+            }
             action={
               <Button
                 variant="outlined"

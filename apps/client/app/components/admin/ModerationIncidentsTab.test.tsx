@@ -30,9 +30,28 @@ const renderTab = () =>
     </CssVarsProvider>
   );
 
+const row = (over: Partial<ModerationIncidentRow>): ModerationIncidentRow => ({
+  id: 'inc',
+  createdAt: '2026-10-01T10:00:00.000Z',
+  userId: 'user-1',
+  userEmail: 'flagged@example.com',
+  topLabel: { name: 'Explicit Nudity', parentName: 'Explicit', confidence: 97.5 },
+  surface: 'upload',
+  reviewStatus: 'pending_review',
+  stuck: false,
+  ...over,
+});
 const rows: ModerationIncidentRow[] = [
-  { id: 'inc-old', createdAt: '2026-10-01T10:00:00.000Z', surface: 'upload', stuck: false },
-  { id: 'inc-stuck', createdAt: '2026-10-02T10:00:00.000Z', surface: 'generation', stuck: true },
+  row({ id: 'inc-old' }),
+  row({
+    id: 'inc-stuck',
+    createdAt: '2026-10-02T10:00:00.000Z',
+    surface: 'generation',
+    reviewStatus: 'confirmed_csam',
+    userEmail: null,
+    topLabel: null,
+    stuck: true,
+  }),
 ];
 const ready = (data: ModerationIncidentRow[], truncated = false) => ({
   data: { rows: data, truncated },
@@ -59,6 +78,23 @@ describe('ModerationIncidentsTab', () => {
     expect(first.textContent).toMatch(/ago/);
     expect(second.textContent).toContain('Report stuck');
     expect(screen.getByTestId('admin-page-header').textContent).toContain('(2)');
+    expect(m.queue).toHaveBeenCalledWith('open');
+  });
+
+  it('names the flagged user and the top label, falling back to the user id', () => {
+    renderTab();
+    const first = screen.getByTestId('moderation-incident-row-inc-old').textContent ?? '';
+    expect(first).toContain('flagged@example.com');
+    expect(first).toContain('Explicit Nudity (Explicit) 97.5%');
+    expect(screen.getByTestId('moderation-incident-row-inc-stuck').textContent).toContain('user-1');
+  });
+
+  it('switches to closed incidents and shows each verdict', () => {
+    renderTab();
+    m.queue.mockReturnValue(ready([row({ id: 'inc-closed', reviewStatus: 'no_action' })]));
+    fireEvent.click(screen.getByTestId('moderation-incidents-status-closed'));
+    expect(m.queue).toHaveBeenLastCalledWith('closed');
+    expect(screen.getByTestId('moderation-incident-row-inc-closed').textContent).toContain('No action');
   });
 
   it('opens an incident through the incidentId search param', () => {
