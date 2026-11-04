@@ -7,10 +7,13 @@ import { signupGrantAuditTarget } from '@server/credits/signupGrantAdminAction';
 import { rerunDomainGrantAfterUnblock } from '@server/credits/rerunDomainGrantAfterUnblock';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
+// Each re-run is a handful of reads and an idempotent grant, so a small fan-out keeps 100 ids from running serially.
+const RERUN_CONCURRENCY = 5;
+
 const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:adjust' } })
   .use(csrfProtection())
   .post(async (req, res) => {
-    const { userIds, reason, dryRun } = await readBulkSignupGrantAction(
+    const { userIds, reason, dryRun, targets } = await readBulkSignupGrantAction(
       req,
       'user.credits.grant_unblocked',
       'unblock signup credit grants for'
@@ -29,7 +32,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:a
         auditFor: userId => async () => {
           await recordAdminActionFromRequest(req, {
             action: 'user.credits.grant_unblocked',
-            target: signupGrantAuditTarget(userId),
+            target: targets.get(userId) ?? signupGrantAuditTarget(userId),
             summary: 'unblocked signup grants and rewards',
             reason,
             details: { bulk: true },
@@ -37,7 +40,13 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:a
         },
       }
     );
-    for (const userId of result.undoUserIds) await rerunDomainGrantAfterUnblock(userId, req.logger);
+    for (let i = 0; i < result.undoUserIds.length; i += RERUN_CONCURRENCY) {
+      await Promise.all(
+        result.undoUserIds
+          .slice(i, i + RERUN_CONCURRENCY)
+          .map(userId => rerunDomainGrantAfterUnblock(userId, req.logger))
+      );
+    }
     return res.json(result);
   });
 
