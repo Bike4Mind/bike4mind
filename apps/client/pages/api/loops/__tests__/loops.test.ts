@@ -847,6 +847,9 @@ describe('stageConfig', () => {
     [{ stage: 'review' }, /stageConfig/],
     [[{ stage: 'review', instructions: 5 }], /instructions must be a string/],
     [['review'], /stageConfig/],
+    [Array.from({ length: 21 }, () => ({ stage: 'review' })), /20 entries or fewer/],
+    [[{ stage: 'review', model: 'm'.repeat(201) }], /model/],
+    [[{ stage: 'review', tools: 'web_search' }], /tools must be an array/],
   ])('rejects an invalid stageConfig with a 400 (%#)', async (stageConfig, message) => {
     repo.findByIdAndUserId.mockResolvedValue(loop({ stages }));
     const result = patch({ stageConfig });
@@ -866,7 +869,9 @@ describe('stageConfig', () => {
 
     await patch({ stageConfig: null });
     await patch({ stageConfig: [{ stage: 'done', runner: 'desktop' }] });
+    await patch({ stageConfig: [{ stage: 'review', runner: null }] });
     expect(repo.updateForUser.mock.calls.slice(1).map(c => c[2])).toEqual([
+      { stageConfig: null },
       { stageConfig: null },
       { stageConfig: null },
     ]);

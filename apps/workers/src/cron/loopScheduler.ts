@@ -409,7 +409,9 @@ async function foldResumedRun(event: ILoopEvent, now: Date): Promise<void> {
  */
 async function resumeIfDue(loop: ILoop, now: Date): Promise<void> {
   const kind = loop.autoResume!;
-  if (kind === 'budget' ? !loop.nextRunAt || new Date(loop.nextRunAt) > now : !(await canPayAgain(loop))) return;
+  // Priced like admit, on the model the next run will use, so a stage-model loop does not resume only to re-pause.
+  const canPay = () => canPayAgain(loop, async () => iterationPrice(loop, await nextRunModel(loop)));
+  if (kind === 'budget' ? !loop.nextRunAt || new Date(loop.nextRunAt) > now : !(await canPay())) return;
   if (!(await loopRepository.resumeAutoPaused(loop.id, kind, now)) || !loop.lastExecutionId) return;
   await loopEventRepository.recordAutoResumed({
     loopId: loop.id,
@@ -532,9 +534,21 @@ async function admit(loop: ILoop, model: string, now: Date, logger: Logger): Pro
 }
 
 /**
+ * The model the loop's next run will use: the stage model of the ticket `claimNextTicket` would claim, else
+ * the loop's. Read-only, so pricing a run that does not start writes nothing.
+ */
+async function nextRunModel(loop: ILoop): Promise<string> {
+  if (!loop.stageConfig?.some(entry => entry.model)) return loop.model;
+  const limit = ticketRunLimit(loop.stages);
+  const ready = await workItemRepository.listReadyForLoop(loop.userId, loop.id, loop.stages, desktopStagesOf(loop));
+  const next = ready.find(ticket => (ticket.runCount ?? 0) < limit);
+  return (next && stageConfigOf(loop, next.stage).model) ?? loop.model;
+}
+
+/**
  * Claims the loop's next ready ticket for this run, never one in a desktop stage; null means a plain goal
- * run. A ticket that has used up
- * its runs (`ticketRunLimit`) is blocked for its owner instead, and the next one is tried.
+ * run. A ticket that has used up its runs (`ticketRunLimit`) is blocked for its owner instead, and the next
+ * one is tried.
  */
 async function claimNextTicket(loop: ILoop): Promise<IWorkItem | null> {
   const limit = ticketRunLimit(loop.stages);
@@ -574,16 +588,14 @@ async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<boo
   let ticket: IWorkItem | null = null;
   let result: Awaited<ReturnType<typeof startAgentExecution>>;
   try {
-    // Claimed before admission so a stage-model run is priced and capped on the model it will run.
+    // ponytail: priced on the ticket nextRunModel peeks at; an owner edit landing between the peek and the
+    // claim can start a run on a differently priced model. Claim first and release on refusal if that bites.
+    const admission = await admit(loop, await nextRunModel(loop), now, logger);
+    if (!admission) return false;
     ticket = await claimNextTicket(loop);
     // The stage's settings apply only to a run working a ticket in it; a plain goal run uses the loop's.
     const stage = ticket ? stageConfigOf(loop, ticket.stage) : {};
     const model = stage.model ?? loop.model;
-    const admission = await admit(loop, model, now, logger);
-    if (!admission) {
-      if (ticket) await releaseTicket(ticket, logger);
-      return false;
-    }
     const [directives, overseen, answered] = await Promise.all([
       loopDirectiveRepository.listOpenForLoop(loop.userId, loop.id, LOOP_PROMPT_DIRECTIVES),
       Promise.all((loop.oversees ?? []).map(id => loopRepository.findByIdAndUserId(id, loop.userId))),
